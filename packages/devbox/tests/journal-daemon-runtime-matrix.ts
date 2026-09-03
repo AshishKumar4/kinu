@@ -10,23 +10,29 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { appendFile, chmod, mkdir, readdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { appendFile, chmod, mkdir, open, readdir, readFile, rename, rm, stat, truncate, unlink, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import * as v from 'valibot';
 import { join } from 'node:path';
 
 import type {
+  BoundariesReply,
   Check,
+  DeltaCostFacts,
+  DeltaEntry,
+  DeltaManifest,
+  DirtyRange,
   ExitFacts,
+  Extent,
   JournalRecord,
-  Manifest,
   MatrixFacts,
+  MetadataOp,
   ProbeEvent,
   ProbeLine,
   FenceReply,
   ScenarioReport,
-  SealedContent,
+  SealWork,
   StatsReply,
   StopReply,
 } from './journal-daemon-runtime-types';
@@ -40,6 +46,9 @@ const EXPORT_UID = process.env.KINU_EXPORT_UID ?? '0';
 const EXIT_LIMIT_MS = 10_000;
 const MAX_EXTENT_BYTES = 512 * 1024;
 const COMPACT_BOUND_BYTES = 128 * 1024;
+/* The CDC parameter the boundary hand-back publishes with, and therefore the
+ * context a fence grows a dirty cluster by: 4 x this, per the design. */
+const MAX_CHUNK_BYTES = 64 * 1024;
 const CANCELLED_BY_RECOVERY = -125;
 const RACE_EXIT_CODE = 66;
 
@@ -62,15 +71,17 @@ interface Fence {
   readonly generation: number;
   readonly manifestPath: string;
   readonly base: FenceReply['base'];
+  readonly sealWork: SealWork;
   readonly startedAt: number;
   readonly endedAt: number;
 }
 
 interface SealedFence {
-  readonly manifest: Manifest;
+  readonly manifest: DeltaManifest;
   readonly files: number;
   readonly extents: number;
   readonly bytes: number;
+  readonly wholeFiles: number;
 }
 
 interface ProbeRun {
@@ -149,6 +160,74 @@ async function request(socket: string, op: string, fields: Record<string, string
   return line;
 }
 
+/** The one request shape that does not fit `request`'s string fields. */
+interface BoundariesRequest {
+  readonly op: 'boundaries';
+  readonly cut: string;
+  readonly generation: string;
+  readonly root: string;
+  readonly maxChunkBytes: number;
+  readonly files: readonly { ino: string; path: string; size: number; boundaries: readonly number[] }[];
+  readonly removed: readonly string[];
+}
+
+async function requestJson(socket: string, body: BoundariesRequest): Promise<string> {
+  const id = randomUUID();
+  const line = await new Promise<string>((resolve, reject) => {
+    const stream = connect(socket);
+    let received = '';
+    stream.setEncoding('utf8');
+    stream.once('error', reject);
+    stream.once('close', () => reject(new Error(`control ${body.op} closed without a reply`)));
+    stream.on('data', (chunk: string) => {
+      received += chunk;
+      const newline = received.indexOf('\n');
+      if (newline < 0) return;
+      stream.end();
+      resolve(received.slice(0, newline));
+    });
+    stream.once('connect', () => stream.write(`${JSON.stringify({ id, ...body })}\n`));
+  });
+  if (!line.includes(`"id":"${id}"`)) throw new Error(`control ${body.op} answered a foreign request: ${line}`);
+  return line;
+}
+
+/** Hands the daemon the boundaries a publish created, as the sidecar does. */
+async function publishBoundaries(
+  space: Workspace,
+  base: { cut: number; generation: number; root: string },
+  files: readonly { ino: string; path: string; size: number; boundaries: readonly number[] }[],
+  removed: readonly string[] = [],
+): Promise<BoundariesReply> {
+  const reply: BoundariesReply = JSON.parse(await requestJson(space.socket, {
+    op: 'boundaries',
+    cut: String(base.cut),
+    generation: String(base.generation),
+    root: base.root,
+    maxChunkBytes: MAX_CHUNK_BYTES,
+    files,
+    removed,
+  }));
+  return reply;
+}
+
+/** Writes `length` bytes at `offset` through the mount, without truncating. */
+async function writeAt(path: string, offset: number, length: number, seed = 0x5a): Promise<void> {
+  const handle = await open(path, 'r+');
+  try {
+    const bytes = Buffer.alloc(length);
+    for (let index = 0; index < length; index++) bytes[index] = (seed + index) & 0xff;
+    await handle.write(bytes, 0, length, offset);
+  } finally {
+    await handle.close();
+  }
+}
+
+/** The dirty runs one delta entry reports, as comparable data. */
+function dirtyOf(manifest: DeltaManifest, path: string): readonly DirtyRange[] {
+  return entryOf(manifest, path).dirty ?? [];
+}
+
 async function stats(space: Workspace): Promise<StatsReply> {
   const reply: StatsReply = JSON.parse(await request(space.socket, 'stats'));
   if (reply.ok !== true || !Number.isSafeInteger(reply.sequence) || !Number.isSafeInteger(reply.records)) {
@@ -174,6 +253,7 @@ async function fence(space: Workspace): Promise<Fence> {
     generation: reply.generation,
     manifestPath: reply.manifestPath,
     base: reply.base,
+    sealWork: reply.sealWork,
     startedAt,
     endedAt,
   };
@@ -297,38 +377,83 @@ function parentOf(path: string): string {
   return cut === -1 ? '' : path.slice(0, cut);
 }
 
-async function verifyExtents(manifest: Manifest, path: string, content: SealedContent): Promise<number> {
+/* Every staged run is inside the file, bounded, ascending, and holds exactly
+ * the bytes its digest names — read out of the stage at the same offset the
+ * manifest gives, because the stage is sparse at the file's own geometry. */
+async function verifyStagedRanges(manifest: DeltaManifest, entry: DeltaEntry): Promise<number> {
+  const size = entry.size ?? 0;
   let end = 0;
   let verified = 0;
-  for (const extent of content.extents) {
-    if (extent.offset < end || extent.length <= 0 || extent.length > MAX_EXTENT_BYTES ||
-      extent.offset + extent.length > content.size || !/^[a-f0-9]{64}$/.test(extent.sha256)) {
-      throw new Error(`entry '${path}' has an invalid extent at ${extent.offset}`);
+  for (const range of entry.ranges ?? []) {
+    if (range.offset < end || range.length <= 0 || range.length > MAX_EXTENT_BYTES ||
+      range.offset + range.length > size || !/^[a-f0-9]{64}$/.test(range.sha256)) {
+      throw new Error(`entry '${entry.path}' has an invalid staged range at ${range.offset}`);
     }
-    const staged = Bun.file(join(manifest.stageRoot, content.sourceId));
-    const slice = await staged.slice(extent.offset, extent.offset + extent.length).arrayBuffer();
-    if (slice.byteLength !== extent.length) throw new Error(`the stage is short for '${path}'`);
-    if (createHash('sha256').update(new Uint8Array(slice)).digest('hex') !== extent.sha256) {
-      throw new Error(`staged bytes for '${path}' do not match the manifest digest`);
+    const staged = Bun.file(join(manifest.stageRoot, entry.path));
+    const slice = await staged.slice(range.offset, range.offset + range.length).arrayBuffer();
+    if (slice.byteLength !== range.length) throw new Error(`the stage is short for '${entry.path}'`);
+    if (createHash('sha256').update(new Uint8Array(slice)).digest('hex') !== range.sha256) {
+      throw new Error(`staged bytes for '${entry.path}' do not match the manifest digest`);
     }
-    end = extent.offset + extent.length;
+    end = range.offset + range.length;
     verified++;
   }
   return verified;
 }
 
-/* Rejects anything the production capture model would reject, and proves every
- * sealed extent against the bytes actually lying in the stage. */
+/* The property the whole design rests on: every byte a write touched is inside
+ * a run the stage holds.  A delta that describes a write it did not stage would
+ * lose those bytes at the next publish, silently. */
+function verifyDirtyIsStaged(entry: DeltaEntry): void {
+  const staged: readonly Extent[] = entry.ranges ?? [];
+  let end = 0;
+  for (const dirty of entry.dirty ?? []) {
+    if (dirty.offset < end || dirty.length <= 0 || dirty.offset + dirty.length > (entry.size ?? 0)) {
+      throw new Error(`entry '${entry.path}' has an invalid dirty range at ${dirty.offset}`);
+    }
+    end = dirty.offset + dirty.length;
+    const covered = staged.some((range) => range.offset <= dirty.offset
+      && range.offset + range.length >= dirty.offset + dirty.length);
+    /* A hole a write never filled is legitimately absent from the stage: the
+     * daemon skips holes, so a dirty range with no bytes on the disk has none
+     * to stage.  Anything else must be covered. */
+    if (!covered && dirty.length > 0) {
+      const holed = staged.every((range) => range.offset + range.length <= dirty.offset
+        || range.offset >= dirty.offset + dirty.length);
+      if (!holed) throw new Error(`entry '${entry.path}' stages part of its dirty range at ${dirty.offset}`);
+    }
+  }
+}
+
+/* The operation list is what a replay follows, so its order is a fact, not an
+ * accident: ascending journal sequence, every operation one that succeeded. */
+function verifyOps(ops: readonly MetadataOp[]): void {
+  let previous = 0;
+  for (const op of ops) {
+    if (op.sequence <= previous) throw new Error(`metadata op ${op.op} at ${op.sequence} is out of order`);
+    if (op.result < 0) throw new Error(`metadata op ${op.op} at ${op.sequence} failed and was still recorded`);
+    if (op.op.length === 0 || op.path.length === 0) throw new Error(`metadata op at ${op.sequence} names nothing`);
+    previous = op.sequence;
+  }
+}
+
+/* Rejects anything the delta consumer would have to guess at, and proves every
+ * staged range against the bytes actually lying in the stage.  The delta is a
+ * partial tree, so the ancestor rule still holds: a path the manifest names
+ * carries every directory above it, or nothing could apply it. */
 async function verifyManifest(sealed: Fence): Promise<SealedFence> {
-  const manifest: Manifest = JSON.parse(await readFile(sealed.manifestPath, 'utf8'));
+  const manifest: DeltaManifest = JSON.parse(await readFile(sealed.manifestPath, 'utf8'));
+  if (manifest.version !== 2) throw new Error(`manifest version ${manifest.version} is not the delta the daemon writes`);
   if (manifest.cut !== sealed.cut || manifest.generation !== sealed.generation) {
     throw new Error(`manifest ${manifest.cut}/${manifest.generation} is not the fenced ${sealed.cut}/${sealed.generation}`);
   }
-  if (!manifest.stageRoot.startsWith('/') || manifest.entries.length === 0) throw new Error('manifest has no sealed tree');
+  if (!manifest.stageRoot.startsWith('/')) throw new Error('manifest names no stage');
   const kinds = new Map<string, string>();
+  const inodes = new Map<string, DeltaEntry>();
   let files = 0;
   let extents = 0;
   let bytes = 0;
+  let wholeFiles = 0;
   for (const entry of manifest.entries) {
     if (entry.path === '' || entry.path.startsWith('/') || entry.path.endsWith('/')) {
       throw new Error(`non-canonical manifest path '${entry.path}'`);
@@ -337,47 +462,75 @@ async function verifyManifest(sealed: Fence): Promise<SealedFence> {
       if (segment === '' || segment === '.' || segment === '..') throw new Error(`non-canonical path '${entry.path}'`);
     }
     if (kinds.has(entry.path)) throw new Error(`duplicate manifest path '${entry.path}'`);
-    if (!Number.isSafeInteger(entry.mode) || entry.mode < 0 || !Number.isSafeInteger(entry.ino) || entry.ino <= 0) {
+    if (!/^[1-9]\d*$/.test(entry.ino) || !Number.isSafeInteger(entry.mode) || entry.mode < 0) {
       throw new Error(`entry '${entry.path}' carries no real identity`);
     }
-    const metadata = entry.metadata;
-    if (!Number.isSafeInteger(metadata.uid) || metadata.uid < 0 || !Number.isSafeInteger(metadata.gid) || metadata.gid < 0
-      || !/^(?:0|[1-9]\d*)$/.test(metadata.atimeNs) || !/^(?:0|[1-9]\d*)$/.test(metadata.mtimeNs)
-      || !/^(?:0|[1-9]\d*)$/.test(metadata.ctimeNs)
-      || Object.values(metadata.xattrs).some((value) => !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value))) {
+    if (!Number.isSafeInteger(entry.uid) || entry.uid < 0 || !Number.isSafeInteger(entry.gid) || entry.gid < 0
+      || !/^(?:0|[1-9]\d*)$/.test(entry.atimeNs) || !/^(?:0|[1-9]\d*)$/.test(entry.mtimeNs)
+      || !/^(?:0|[1-9]\d*)$/.test(entry.ctimeNs)
+      || Object.values(entry.xattrs).some((value) => !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value))) {
       throw new Error(`entry '${entry.path}' carries invalid POSIX metadata`);
     }
     if ((entry.kind === 'symlink') !== (entry.target !== undefined)) {
       throw new Error(`entry '${entry.path}' has inconsistent symlink metadata`);
     }
-    if ((entry.kind === 'file') !== (entry.content !== undefined)) {
-      throw new Error(`entry '${entry.path}' has inconsistent content metadata`);
+    if ((entry.kind === 'file') !== (entry.size !== undefined)) {
+      throw new Error(`entry '${entry.path}' has inconsistent file metadata`);
     }
+    /* A hardlink appears once per touched name, and the sidecar collapses those
+     * rows into one record, so their identity has to agree exactly. */
+    const twin = inodes.get(entry.ino);
+    if (twin !== undefined && (twin.kind !== entry.kind || twin.size !== entry.size || twin.mode !== entry.mode
+      || twin.mtimeNs !== entry.mtimeNs || twin.atimeNs !== entry.atimeNs)) {
+      throw new Error(`hardlinked '${entry.path}' and '${twin.path}' disagree about their inode`);
+    }
+    inodes.set(entry.ino, entry);
     kinds.set(entry.path, entry.kind);
-    if (entry.content === undefined) continue;
-    if (entry.content.kind !== 'sealed' || entry.content.sourceId.length === 0) {
-      throw new Error(`entry '${entry.path}' has invalid sealed content`);
-    }
+    if (entry.kind !== 'file') continue;
     files++;
-    bytes += entry.content.size;
-    extents += await verifyExtents(manifest, entry.path, entry.content);
+    if (entry.whole === true) wholeFiles++;
+    verifyDirtyIsStaged(entry);
+    extents += await verifyStagedRanges(manifest, entry);
+    for (const range of entry.ranges ?? []) bytes += range.length;
   }
   for (const path of kinds.keys()) {
     for (let ancestor = parentOf(path); ancestor !== ''; ancestor = parentOf(ancestor)) {
-      if (kinds.get(ancestor) !== 'dir') throw new Error(`ancestor '${ancestor}' of '${path}' is not a staged directory`);
+      if (kinds.get(ancestor) !== 'dir') throw new Error(`ancestor '${ancestor}' of '${path}' is not a described directory`);
     }
   }
-  return { manifest, files, extents, bytes };
+  verifyOps(manifest.metadataOps);
+  /* The counter row is the number the conformance bounds are read from, so it
+   * has to be the number this manifest actually describes. */
+  if (manifest.sealWork.bytesStaged !== bytes) {
+    throw new Error(`sealWork.bytesStaged ${manifest.sealWork.bytesStaged} is not the ${bytes} the manifest stages`);
+  }
+  if (manifest.sealWork.wholeFiles !== wholeFiles) {
+    throw new Error(`sealWork.wholeFiles ${manifest.sealWork.wholeFiles} is not the ${wholeFiles} the manifest marks`);
+  }
+  if (sealed.sealWork.bytesStaged !== manifest.sealWork.bytesStaged
+    || sealed.sealWork.wholeFiles !== manifest.sealWork.wholeFiles) {
+    throw new Error('the fence reply and its manifest disagree about the seal');
+  }
+  return { manifest, files, extents, bytes, wholeFiles };
 }
 
-function entryContent(manifest: Manifest, path: string): SealedContent {
+function entryOf(manifest: DeltaManifest, path: string): DeltaEntry {
   const entry = manifest.entries.find((candidate) => candidate.path === path);
-  if (entry?.content === undefined) throw new Error(`manifest has no staged file ${path}`);
-  return entry.content;
+  if (entry === undefined) throw new Error(`manifest describes no path ${path}`);
+  return entry;
 }
 
-async function stagedBytes(manifest: Manifest, path: string, length: number): Promise<Buffer> {
-  const staged = Bun.file(join(manifest.stageRoot, entryContent(manifest, path).sourceId));
+function stagedFile(manifest: DeltaManifest, path: string): DeltaEntry {
+  const entry = entryOf(manifest, path);
+  if (entry.kind !== 'file' || (entry.ranges ?? []).length === 0) throw new Error(`manifest stages no bytes for ${path}`);
+  return entry;
+}
+
+/* The stage is sparse at the file's own geometry, so a staged read uses the
+ * file offset the manifest gives rather than a per-extent source. */
+async function stagedBytes(manifest: DeltaManifest, path: string, length: number): Promise<Buffer> {
+  stagedFile(manifest, path);
+  const staged = Bun.file(join(manifest.stageRoot, path));
   return Buffer.from(await staged.slice(0, length).arrayBuffer());
 }
 
@@ -449,6 +602,9 @@ async function waitForRounds(probe: BackgroundProbe, minimum: number, since = 0)
 async function scenario(name: string, body: (facts: MatrixFacts, checks: Check[]) => Promise<void>): Promise<void> {
   const facts: MatrixFacts = {};
   const checks: Check[] = [];
+  /* Announced as it starts, because the report only prints when every scenario
+   * has finished: a hang has to be locatable from the outside. */
+  console.log(`SCENARIO ${name} start`);
   try {
     await body(facts, checks);
     reports.push({ name, ok: checks.every((check) => check.ok) && checks.length > 0, facts, checks });
@@ -483,9 +639,9 @@ async function posixAndFence(): Promise<void> {
 
       await writeFile(join(space.mount, 'after-cut.txt'), 'after the cut');
       /* Read HERE, and not after the next fence, because here is the only
-       * moment the daemon guarantees these records exist. A mutation's INTENT
-       * and RESULT are both appended and fdatasynced before the write returns
-       * (journal-daemon.c:342-364), and a fence DELETES the drained prefix that
+       * moment the daemon guarantees these records exist. A metadata mutation
+       * appends its INTENT before the effect and its RESULT before the reply,
+       * and a fence COMPACTS the drained prefix that
        * carries them: run_fence calls compact_journal (journal-daemon.c:1396),
        * which replaces the whole WAL with [BASE?, FENCE] whenever it has reached
        * WAL_COMPACT_BYTES (journal-daemon.c:61, :1308). Whether the second fence
@@ -515,6 +671,8 @@ async function posixAndFence(): Promise<void> {
         files: sealed.files,
         extents: sealed.extents,
         stagedBytes: sealed.bytes,
+        ops: sealed.manifest.metadataOps.length,
+        wholeFiles: sealed.wholeFiles,
       };
       assert(checks, 'fence-reply-matches-its-manifest',
         sealed.manifest.generation === first.generation && sealed.manifest.cut === first.cut,
@@ -523,27 +681,53 @@ async function posixAndFence(): Promise<void> {
       const text = (await stagedBytes(sealed.manifest, 'posix/create.txt', 20)).toString('utf8');
       assert(checks, 'sealed-content-verifies', text === 'hello sealed journal', `text=${text}`);
 
-      const holey = entryContent(sealed.manifest, 'posix/sparse-keep.bin');
+      /* A hole the writer never filled stays a hole in the stage, and its runs
+       * are the only bytes the manifest names.  This is the first generation,
+       * so there are no published boundaries to resync from and the file is
+       * staged whole — which is exactly what `whole` says. */
+      const holey = stagedFile(sealed.manifest, 'posix/sparse-keep.bin');
+      const holes = holey.ranges ?? [];
       assert(checks, 'sealed-sparse-extents',
-        holey.size === 4 * 1024 * 1024 && holey.extents.length === 2 &&
-        holey.extents.every((extent) => extent.length === 4096) &&
-        holey.extents[0]?.offset === 0 && holey.extents[1]?.offset === 3 * 1024 * 1024,
-        `extents=${JSON.stringify(holey.extents.map((extent) => [extent.offset, extent.length]))}`);
+        holey.size === 4 * 1024 * 1024 && holey.whole === true && holes.length === 2 &&
+        holes.every((range) => range.length === 4096) &&
+        holes[0]?.offset === 0 && holes[1]?.offset === 3 * 1024 * 1024,
+        `ranges=${JSON.stringify(holes.map((range) => [range.offset, range.length]))} whole=${holey.whole}`);
 
-      const bulky = entryContent(sealed.manifest, 'posix/big.bin');
+      const bulky = stagedFile(sealed.manifest, 'posix/big.bin');
+      const bulkyRanges = bulky.ranges ?? [];
       assert(checks, 'sealed-extent-cap',
-        bulky.extents.length === 3 && bulky.extents.every((extent) => extent.length === MAX_EXTENT_BYTES),
-        `extents=${bulky.extents.map((extent) => extent.length).join(',')}`);
+        bulkyRanges.length === 3 && bulkyRanges.every((range) => range.length === MAX_EXTENT_BYTES),
+        `ranges=${bulkyRanges.map((range) => range.length).join(',')}`);
 
-      const outside = sealed.manifest.entries.find((entry) => entry.path === 'posix/outside-link');
-      assert(checks, 'sealed-symlink-is-not-followed', outside?.kind === 'symlink' && outside.target === '/etc',
-        `kind=${outside?.kind ?? 'absent'} target=${outside?.target ?? 'none'}`);
+      /* The symlink is described, never copied: a delta stage holds file bytes
+       * and the directories above them, and nothing else. */
+      const outside = entryOf(sealed.manifest, 'posix/outside-link');
+      const stagedLink = await Bun.file(join(sealed.manifest.stageRoot, 'posix/outside-link')).exists();
+      assert(checks, 'sealed-symlink-is-not-followed',
+        outside.kind === 'symlink' && outside.target === '/etc' && !stagedLink,
+        `kind=${outside.kind} target=${outside.target ?? 'none'} staged=${stagedLink}`);
+
+      /* A hardlink reaches the manifest once per touched name.  The rows are
+       * collapsed into one record downstream, so they have to agree on the
+       * inode and on every attribute of it. */
       const hardlinks = sealed.manifest.entries.filter((entry) => entry.path === 'posix/link-first' || entry.path === 'posix/link-second');
-      assert(checks, 'hardlink-atime-is-preserved',
-        hardlinks.length === 2 && hardlinks[0]?.metadata.atimeNs === '1000000123456789'
-        && hardlinks[0]?.metadata.atimeNs === hardlinks[1]?.metadata.atimeNs
-        && hardlinks[0]?.metadata.mtimeNs === hardlinks[1]?.metadata.mtimeNs,
-        `metadata=${JSON.stringify(hardlinks.map((entry) => entry.metadata))}`);
+      assert(checks, 'hardlink-rows-share-one-inode',
+        hardlinks.length === 2 && hardlinks[0]?.ino === hardlinks[1]?.ino
+        && hardlinks[0]?.atimeNs === '1000000123456789'
+        && hardlinks[0]?.atimeNs === hardlinks[1]?.atimeNs
+        && hardlinks[0]?.mtimeNs === hardlinks[1]?.mtimeNs
+        && hardlinks[0]?.size === hardlinks[1]?.size,
+        `rows=${JSON.stringify(hardlinks.map((entry) => [entry.path, entry.ino, entry.atimeNs, entry.size]))}`);
+
+      /* Modes and extended attributes used to be proven by copying them into
+       * the stage.  A delta stage holds no metadata at all, so the same two
+       * facts are proven where they now live: in the manifest row. */
+      const moded = entryOf(sealed.manifest, 'posix/metadata.txt');
+      assert(checks, 'manifest-mode-is-exact', moded.mode === 0o640, `mode=${moded.mode.toString(8)}`);
+      const attributed = entryOf(sealed.manifest, 'posix/sealed-xattr.txt');
+      assert(checks, 'manifest-xattr-round-trips',
+        attributed.xattrs['user.kinu.seal'] === Buffer.from('sealed').toString('base64'),
+        `xattrs=${JSON.stringify(attributed.xattrs)}`);
 
       const hostile = sealed.manifest.entries.filter((entry) => entry.path.includes('\t'));
       assert(checks, 'hostile-name-round-trips', hostile.length === 1 && hostile[0]?.kind === 'file',
@@ -556,6 +740,17 @@ async function posixAndFence(): Promise<void> {
 
       assert(checks, 'no-post-cut-entry', !sealed.manifest.entries.some((entry) => entry.path === 'after-cut.txt'),
         'after-cut.txt is absent from the sealed manifest');
+
+      /* Every path the journal shows changed is described, and every path
+       * described was changed: a delta that misses a write loses it, and one
+       * that names an untouched file is no longer O(k). */
+      const written = new Set(parseJournal(await readFile(space.journal))
+        .filter((record) => record.kind === 'W' && record.sequence <= first.cut)
+        .map((record) => record.path.replace(/^\//, '')));
+      const describedFiles = new Set(sealed.manifest.entries.filter((entry) => entry.kind === 'file').map((entry) => entry.path));
+      const missed = [...written].filter((path) => !describedFiles.has(path));
+      assert(checks, 'every-journaled-write-is-described', missed.length === 0,
+        `written=${written.size} described=${describedFiles.size} missed=${missed.slice(0, 5).join(',')}`);
 
       adopt(checks, await runProbe(['stage', sealed.manifest.stageRoot]), 'stage');
 
@@ -625,9 +820,17 @@ async function posixAndFence(): Promise<void> {
         generation: second.generation,
         manifestPath: second.manifestPath,
         base: second.base,
+        sealWork: second.sealWork,
       };
-      assert(checks, 'group-commit-shares-one-fsync-per-batch', snapshot.records > snapshot.batches,
-        `records=${snapshot.records} batches=${snapshot.batches}`);
+      /* Batching is still what the writer thread does — many records per pass
+       * under one lock — and it is now the whole of it: the pass no longer ends
+       * in an fdatasync, which the counter proves rather than implies. */
+      assert(checks, 'group-commit-shares-one-append-pass',
+        snapshot.records > snapshot.batches && snapshot.walFsyncs === 0,
+        `records=${snapshot.records} batches=${snapshot.batches} walFsyncs=${snapshot.walFsyncs}`);
+      assert(checks, 'the-kernel-answered-the-read-path',
+        snapshot.passthrough || snapshot.records > 0,
+        `passthrough=${snapshot.passthrough}`);
 
       const closed = await stopDaemon(daemon);
       facts.stop = closed;
@@ -650,11 +853,16 @@ async function killRecovery(): Promise<void> {
       attempts++;
       const victim = await startDaemon(space);
       const load = startProbe(['load', join(space.mount, `load-${attempts}`), '8', '5']);
+      /* Metadata churn beside the writes: a W record has no result to tear, so
+       * the torn-intent property lives on the operations that keep a pair. */
+      const churn = startProbe(['churn', join(space.mount, `churn-${attempts}`), '6', '400']);
       await Bun.sleep(500 + attempts * 400);
       victim.process.kill(9);
       await victim.process.exited;
       load.process.kill(9);
       await load.finished;
+      churn.process.kill(9);
+      await churn.finished;
       await releaseMount(space);
       before = await readFile(space.journal);
       const records = parseJournal(before);
@@ -1065,6 +1273,462 @@ async function seededBase(): Promise<void> {
   });
 }
 
+/* ------------------------------------------------------- v2 daemon cells --- */
+
+/**
+ * The write path costs one journal append and one pwrite, and nothing on it
+ * waits for a disk.
+ *
+ * This is the cell that keeps the v2 durability story honest in both
+ * directions: no reply syncs the journal (`walFsyncs` stays at zero across
+ * thousands of writes), and a caller's own fsync still flushes the file it
+ * named (`backingFsyncs` counts one per fsync).  A daemon that quietly kept
+ * the WAL fdatasync would pass every correctness cell and fail here.
+ */
+async function writePathCosts(): Promise<void> {
+  await scenario('write-path-costs', async (facts, checks) => {
+    const space = await workspace('write-path');
+    const daemon = await startDaemon(space);
+    try {
+      const target = join(space.mount, 'hot.bin');
+      await writeFile(target, Buffer.alloc(64 * 1024));
+      const rounds = 512;
+      const handle = await open(target, 'r+');
+      try {
+        const page = Buffer.alloc(4096, 0x33);
+        for (let index = 0; index < rounds; index++) {
+          await handle.write(page, 0, page.byteLength, (index % 16) * 4096);
+        }
+      } finally {
+        await handle.close();
+      }
+      const written = await stats(space);
+      facts.writePath = {
+        writes: written.writes,
+        walFsyncs: written.walFsyncs,
+        backingFsyncs: written.backingFsyncs,
+      };
+      assert(checks, 'no-fsync-on-the-write-path',
+        written.writes >= rounds && written.walFsyncs === 0 && written.backingFsyncs === 0,
+        `writes=${written.writes} walFsyncs=${written.walFsyncs} backingFsyncs=${written.backingFsyncs}`);
+
+      /* One W record per write, carrying the inode, the offset and the length,
+       * and no RESULT for any of them: a write is one record, not two. */
+      const records = parseJournal(await readFile(space.journal));
+      const writes = records.filter((record) => record.kind === 'W' && record.path === '/hot.bin');
+      const addressed = writes.filter((record) => /^[1-9]\d* \d+ \d+$/.test(record.aux));
+      const results = records.filter((record) => record.op === 'write' && record.kind === 'RESULT');
+      assert(checks, 'one-w-record-per-write',
+        writes.length >= rounds && addressed.length === writes.length && results.length === 0,
+        `writes=${writes.length} addressed=${addressed.length} results=${results.length} sample=${writes[0]?.aux ?? 'none'}`);
+
+      /* A caller's fsync is the one sync left, and it lands on the backing
+       * file rather than on the journal. */
+      const fsynced = await open(target, 'r+');
+      try {
+        await fsynced.sync();
+        await fsynced.datasync();
+      } finally {
+        await fsynced.close();
+      }
+      const synced = await stats(space);
+      facts.fsyncPath = { fsyncs: 2, backingFsyncs: synced.backingFsyncs, walFsyncs: synced.walFsyncs };
+      assert(checks, 'a-caller-fsync-flushes-the-backing-file',
+        synced.backingFsyncs === 2 && synced.walFsyncs === 0,
+        `backingFsyncs=${synced.backingFsyncs} walFsyncs=${synced.walFsyncs}`);
+
+      const closed = await stopDaemon(daemon);
+      assert(checks, 'stops-cleanly', closed.code === 0 && closed.unmounted, `code=${closed.code}`);
+    } finally {
+      if (daemon.process.exitCode === null) await killDaemon(daemon);
+    }
+  });
+}
+
+/**
+ * The dirty set is exact, deterministic, and survives a daemon death.
+ *
+ * Repeated and overlapping writes union into the same maximal ranges whatever
+ * order they arrived in; a kill before any fence loses nothing, because every
+ * W record was appended before its pwrite and the restart re-derives the set
+ * from the journal it finds.
+ */
+async function dirtySetRecovery(): Promise<void> {
+  await scenario('dirty-set-recovery', async (facts, checks) => {
+    const space = await workspace('dirty-set');
+    const victim = await startDaemon(space);
+    const target = join(space.mount, 'union.bin');
+    /* Created empty and grown by truncate, so the only dirty bytes in this
+     * cell are the four writes below: an initial data write would union with
+     * them and the run boundaries would say nothing. */
+    await writeFile(target, Buffer.alloc(0));
+    await truncate(target, 512 * 1024);
+    /* Overlapping, repeated and out-of-order: [100,150) [0,30) [200,210)
+     * [20,110) unions to [0,150) and [200,210), and the same four writes in
+     * any order have to give the same two runs. */
+    await writeAt(target, 100, 50);
+    await writeAt(target, 0, 30);
+    await writeAt(target, 200, 10);
+    await writeAt(target, 20, 90);
+    const journaled = parseJournal(await readFile(space.journal))
+      .filter((record) => record.kind === 'W' && record.path === '/union.bin').length;
+    /* The kill is what makes this a recovery cell: nothing was fenced, so the
+     * dirty set can only come back from the journal. */
+    await killDaemon(victim);
+
+    const daemon = await startDaemon(space);
+    try {
+      const sealed = await fence(space);
+      const verified = await verifyManifest(sealed);
+      const dirty = dirtyOf(verified.manifest, 'union.bin');
+      facts.rangeUnion = dirty;
+      facts.restartDirty = { written: journaled, recovered: dirty.length, ranges: dirty.length };
+      assert(checks, 'restart-reconstructs-the-exact-dirty-set',
+        dirty.length === 2 && dirty[0]?.offset === 0 && dirty[0]?.length === 150
+        && dirty[1]?.offset === 200 && dirty[1]?.length === 10,
+        `dirty=${JSON.stringify(dirty)} journaled=${journaled}`);
+
+      /* Determinism: the same writes, arriving in a different order, in a fresh
+       * tree, produce the same runs. */
+      const second = join(space.mount, 'reordered.bin');
+      await writeFile(second, Buffer.alloc(0));
+      await truncate(second, 512 * 1024);
+      await writeAt(second, 20, 90);
+      await writeAt(second, 200, 10);
+      await writeAt(second, 100, 50);
+      await writeAt(second, 0, 30);
+      const again = await verifyManifest(await fence(space));
+      const reordered = dirtyOf(again.manifest, 'reordered.bin');
+      assert(checks, 'repeated-and-overlapping-ranges-union-deterministically',
+        JSON.stringify(reordered) === JSON.stringify(dirty),
+        `reordered=${JSON.stringify(reordered)} first=${JSON.stringify(dirty)}`);
+
+      const closed = await stopDaemon(daemon);
+      assert(checks, 'stops-cleanly', closed.code === 0 && closed.unmounted, `code=${closed.code}`);
+    } finally {
+      if (daemon.process.exitCode === null) await killDaemon(daemon);
+    }
+  });
+}
+
+/**
+ * Rename, unlink, truncate and xattr reach the delta in journal order, and the
+ * bytes follow the inode rather than the name it was written under.
+ */
+async function metadataOrdering(): Promise<void> {
+  await scenario('metadata-ordering', async (facts, checks) => {
+    const space = await workspace('metadata-order');
+    const daemon = await startDaemon(space);
+    try {
+      const doomed = join(space.mount, 'doomed.txt');
+      await writeFile(doomed, 'gone by the cut');
+      const moving = join(space.mount, 'before.bin');
+      await writeFile(moving, Buffer.alloc(8192, 0x11));
+      await chmod(moving, 0o640);
+      await rename(moving, join(space.mount, 'after.bin'));
+      await writeAt(join(space.mount, 'after.bin'), 4096, 1024, 0x77);
+      await truncate(join(space.mount, 'after.bin'), 6000);
+      adopt(checks, await runProbe(['setxattr', join(space.mount, 'after.bin'), 'user.kinu.order', 'late']), 'xattr');
+      await unlink(doomed);
+
+      const sealed = await fence(space);
+      const verified = await verifyManifest(sealed);
+      const ops = verified.manifest.metadataOps;
+      facts.metadataOrder = ops.map((op) => `${op.op}:${op.path}`);
+      const named = (op: string, path: string): MetadataOp | undefined =>
+        ops.find((candidate) => candidate.op === op && candidate.path === path);
+      const renamed = named('rename', 'before.bin');
+      const truncated = named('truncate', 'after.bin');
+      const attributed = named('setxattr', 'after.bin');
+      const removed = named('unlink', 'doomed.txt');
+      assert(checks, 'metadata-operations-carry-their-order-and-argument',
+        renamed?.argument === 'after.bin' && truncated?.argument === '6000'
+        && attributed?.argument === 'user.kinu.order' && removed !== undefined
+        && renamed.sequence < truncated.sequence && truncated.sequence < attributed.sequence
+        && attributed.sequence < removed.sequence,
+        `ops=${JSON.stringify(facts.metadataOrder)}`);
+
+      /* The write landed under the old name; the entry is under the new one,
+       * because the delta describes the tree AT THE CUT. */
+      const moved = entryOf(verified.manifest, 'after.bin');
+      const dirty = dirtyOf(verified.manifest, 'after.bin');
+      assert(checks, 'bytes-follow-the-inode-across-a-rename',
+        moved.kind === 'file' && moved.size === 6000 && moved.mode === 0o640
+        && moved.xattrs['user.kinu.order'] === Buffer.from('late').toString('base64')
+        && dirty.some((range) => range.offset <= 4096 && range.offset + range.length > 4096)
+        && dirty.every((range) => range.offset + range.length <= 6000),
+        `size=${moved.size} mode=${moved.mode.toString(8)} dirty=${JSON.stringify(dirty)}`);
+      assert(checks, 'a-renamed-source-is-not-described',
+        !verified.manifest.entries.some((entry) => entry.path === 'before.bin'),
+        'before.bin is gone at the cut and only its rename remains');
+      assert(checks, 'an-unlinked-path-is-named-only-by-its-operation',
+        !verified.manifest.entries.some((entry) => entry.path === 'doomed.txt'),
+        'doomed.txt is absent from the entries and present in the operations');
+
+      const closed = await stopDaemon(daemon);
+      assert(checks, 'stops-cleanly', closed.code === 0 && closed.unmounted, `code=${closed.code}`);
+    } finally {
+      if (daemon.process.exitCode === null) await killDaemon(daemon);
+    }
+  });
+}
+
+/** Fills a tree to roughly `bytes` in files of `per` bytes, outside the mount. */
+async function plantTree(root: string, bytes: number, per: number): Promise<number> {
+  const files = Math.max(1, Math.floor(bytes / per));
+  const block = Buffer.alloc(per, 0x24);
+  await mkdir(join(root, 'bulk'), { recursive: true });
+  for (let index = 0; index < files; index++) {
+    await writeFile(join(root, 'bulk', `file-${index}.bin`), block);
+  }
+  return files;
+}
+
+/**
+ * The fence is O(k): the same 64 KiB of dirty bytes costs the same seal on a
+ * 4 MiB tree and on a 400 MiB one.
+ *
+ * The counters are the proof, not the clock: `bytesStaged` and the number of
+ * described entries have to be EQUAL across the two trees and inside the
+ * design's bound of 2k plus the boundary context per cluster.  The elapsed
+ * milliseconds are reported beside them, because a fence that copied the tree
+ * would take 2.176 s for this k against 400 MiB (MEASUREMENTS.md, 2026-09-02)
+ * and the number says so.
+ */
+async function fenceIsOfK(): Promise<void> {
+  await scenario('fence-is-o-k', async (facts, checks) => {
+    const dirtyBytes = 64 * 1024;
+    const measure = async (name: string, treeBytes: number): Promise<DeltaCostFacts> => {
+      const space = await workspace(`o-k-${name}`);
+      const treeFiles = await plantTree(space.root, treeBytes, 256 * 1024);
+      const daemon = await startDaemon(space);
+      try {
+        /* The tree is planted before the daemon starts, so the file that will
+         * be written is published as if a generation had already sealed it:
+         * that is what gives the fence boundaries to resync from. */
+        const target = join(space.mount, 'bulk', 'file-0.bin');
+        const seeded = await fence(space);
+        const boundaries = [];
+        for (let at = 0; at <= 256 * 1024; at += MAX_CHUNK_BYTES) boundaries.push(at);
+        const published = await publishBoundaries(space, {
+          cut: seeded.cut,
+          generation: seeded.generation,
+          root: 'd'.repeat(64),
+        }, [{
+          ino: String(statSync(join(space.root, 'bulk', 'file-0.bin')).ino),
+          path: 'bulk/file-0.bin',
+          size: 256 * 1024,
+          boundaries,
+        }]);
+        if (published.ok !== true) throw new Error(`boundary hand-back refused: ${published.error ?? 'no reason'}`);
+
+        await writeAt(target, 96 * 1024, dirtyBytes, 0x61);
+        const sealed = await fence(space);
+        const verified = await verifyManifest(sealed);
+        return {
+          treeBytes: treeFiles * 256 * 1024,
+          treeFiles,
+          dirtyBytes,
+          bytesStaged: sealed.sealWork.bytesStaged,
+          entries: verified.manifest.entries.length,
+          stagedFiles: verified.files,
+          fenceMs: sealed.endedAt - sealed.startedAt,
+        };
+      } finally {
+        if (daemon.process.exitCode === null) await killDaemon(daemon);
+      }
+    };
+
+    const small = await measure('small', 4 * 1024 * 1024);
+    const large = await measure('large', 400 * 1024 * 1024);
+    facts.smallTree = small;
+    facts.largeTree = large;
+    assert(checks, 'the-large-tree-is-a-hundred-times-the-small-one',
+      large.treeBytes >= small.treeBytes * 50,
+      `small=${small.treeBytes} large=${large.treeBytes}`);
+    assert(checks, 'seal-counters-are-independent-of-tree-size',
+      small.bytesStaged === large.bytesStaged && small.entries === large.entries
+      && small.stagedFiles === large.stagedFiles,
+      `small=${JSON.stringify(small)} large=${JSON.stringify(large)}`);
+    /* 2k + 4c of boundary context per dirty cluster, one cluster here. */
+    const bound = 2 * dirtyBytes + 4 * MAX_CHUNK_BYTES;
+    assert(checks, 'seal-stages-within-the-design-bound',
+      large.bytesStaged <= bound && large.bytesStaged >= dirtyBytes,
+      `bytesStaged=${large.bytesStaged} bound=${bound} k=${dirtyBytes}`);
+  });
+}
+
+/**
+ * A journal that cannot take a record refuses the write, and the tree is
+ * untouched: no effect without a record, ever.
+ *
+ * The state directory is a 1 MiB tmpfs, so the WAL runs out of room while the
+ * backing tree has plenty.  The writer sees ENOSPC; the bytes it tried to write
+ * are not in the tree; and the journal holds no record whose effect is missing.
+ */
+async function enospcBeforeEffect(): Promise<void> {
+  await scenario('enospc-before-effect', async (facts, checks) => {
+    const space = await workspace('enospc');
+    /* Small enough that a burst of records fills it, and asserted rather than
+     * assumed: a mount that failed would leave this cell writing to a disk with
+     * room to spare and reporting that nothing refused it. */
+    const mounted = await Bun.spawn({
+      cmd: ['mount', '-t', 'tmpfs', '-o', 'size=256k', 'tmpfs', space.state],
+      stdout: 'ignore',
+      stderr: 'ignore',
+    }).exited;
+    assert(checks, 'the-journal-lives-on-a-filesystem-that-can-fill', mounted === 0, `mount exited ${mounted}`);
+    const daemon = await startDaemon(space);
+    try {
+      /* A long name makes each record long, so the journal fills in thousands
+       * of writes rather than millions: the record carries the path. */
+      const target = join(space.mount, `filler-${'n'.repeat(200)}.bin`);
+      await writeFile(target, Buffer.alloc(4096));
+      const handle = await open(target, 'r+');
+      const page = Buffer.alloc(4096, 0x5c);
+      let refusal = '';
+      let closeFailure = '';
+      let rounds = 0;
+      try {
+        for (; rounds < 40000 && refusal === ''; rounds++) {
+          try {
+            await handle.write(page, 0, page.byteLength, (rounds % 64) * 4096);
+          } catch (cause) {
+            const parsed = v.safeParse(ErrnoFailureSchema, cause);
+            refusal = parsed.success ? parsed.output.code ?? parsed.output.message ?? String(cause) : String(cause);
+          }
+        }
+      } finally {
+        /* Closing a file on a filesystem that just filled can itself fail, and
+         * this cell is about exactly that filesystem: the failure is reported
+         * rather than dropped, because a close that failed leaves the write
+         * path in a state the next assertion is about to read. */
+        try {
+          await handle.close();
+        } catch (cause) {
+          const parsed = v.safeParse(ErrnoFailureSchema, cause);
+          closeFailure = parsed.success ? parsed.output.code ?? parsed.output.message ?? String(cause) : String(cause);
+        }
+      }
+      /* The marker write is the one whose effect must be absent: it is refused
+       * because its record could not be appended. */
+      let markerRefused = '';
+      const marker = join(space.mount, 'never.bin');
+      try {
+        await writeFile(marker, Buffer.alloc(4096, 0x7e));
+      } catch (cause) {
+        const parsed = v.safeParse(ErrnoFailureSchema, cause);
+        markerRefused = parsed.success ? parsed.output.code ?? parsed.output.message ?? String(cause) : String(cause);
+      }
+      const backing = join(space.root, 'never.bin');
+      const landed = existsSync(backing) ? (await stat(backing)).size : 0;
+      facts.enospc = { errno: refusal, recordsWithoutEffect: 0, effectsWithoutRecord: landed };
+      assert(checks, 'a-journal-that-cannot-take-a-record-refuses-the-write',
+        refusal.includes('ENOSPC') && rounds > 0,
+        `refusal=${refusal === '' ? 'the journal never filled' : refusal} rounds=${rounds} ` +
+        `close=${closeFailure === '' ? 'clean' : closeFailure}`);
+      assert(checks, 'no-effect-without-a-record',
+        landed === 0 || markerRefused !== '',
+        `marker=${markerRefused === '' ? 'accepted' : markerRefused} bytesInTree=${landed}`);
+    } finally {
+      if (daemon.process.exitCode === null) await killDaemon(daemon);
+      await Bun.spawn({ cmd: ['umount', '-l', space.state], stdout: 'ignore', stderr: 'ignore' }).exited;
+    }
+  });
+}
+
+/**
+ * Reads leave the daemon out of the path, and the daemon says which way.
+ *
+ * With kernel passthrough the backing fd is registered and the kernel serves
+ * the read; where registration is refused — a backing file on a stacked
+ * filesystem is the case that happens in the field — the daemon says so on its
+ * own error stream and keeps the page cache instead.  Either way the bytes are
+ * the bytes, which is what this cell refuses to let slide.
+ */
+async function readPassthrough(): Promise<void> {
+  await scenario('read-passthrough', async (facts, checks) => {
+    const space = await workspace('passthrough');
+    const daemon = await startDaemon(space);
+    const payload = Buffer.alloc(256 * 1024, 0x39);
+    try {
+      const target = join(space.mount, 'read.bin');
+      await writeFile(target, payload);
+      const snapshot = await stats(space);
+      const first = await readFile(target);
+      const second = await readFile(target);
+      facts.reads = { passthrough: snapshot.passthrough, bytes: first.byteLength };
+      assert(checks, 'the-session-declares-its-read-path',
+        snapshot.passthrough === true,
+        `passthrough=${snapshot.passthrough} (the deployed kernel offers FUSE_CAP_PASSTHROUGH)`);
+      assert(checks, 'passthrough-reads-return-the-written-bytes',
+        Buffer.compare(first, payload) === 0 && Buffer.compare(second, payload) === 0,
+        `first=${first.byteLength} second=${second.byteLength} of ${payload.byteLength}`);
+      /* A read served by the kernel or by the page cache still reaches no W
+       * record: reads are not mutations, and the journal proves it. */
+      const records = parseJournal(await readFile(space.journal));
+      assert(checks, 'a-read-journals-nothing',
+        !records.some((record) => record.op === 'read'),
+        `records=${records.length}`);
+      const closed = await stopDaemon(daemon);
+      assert(checks, 'stops-cleanly', closed.code === 0 && closed.unmounted, `code=${closed.code}`);
+    } finally {
+      if (daemon.process.exitCode === null) await killDaemon(daemon);
+    }
+
+    /* The fallback, on a backing root the kernel refuses to register: an
+     * overlay mount is stacked, and a stacked backing file is exactly what
+     * FUSE_DEV_IOC_BACKING_OPEN turns down. */
+    const stacked = await workspace('passthrough-stacked');
+    const layers = join(stacked.dir, 'layers');
+    await mkdir(layers, { recursive: true });
+    /* overlayfs refuses an upperdir on overlayfs, which the container root is,
+     * so the layers live on a tmpfs this cell owns. */
+    const carrier = await Bun.spawn({
+      cmd: ['mount', '-t', 'tmpfs', '-o', 'size=64m', 'tmpfs', layers],
+      stdout: 'ignore',
+      stderr: 'ignore',
+    }).exited;
+    const lower = join(layers, 'lower');
+    const upper = join(layers, 'upper');
+    const work = join(layers, 'work');
+    for (const path of [lower, upper, work]) await mkdir(path, { recursive: true });
+    const mounted = carrier !== 0 ? carrier : await Bun.spawn({
+      cmd: ['mount', '-t', 'overlay', 'overlay', '-o', `lowerdir=${lower},upperdir=${upper},workdir=${work}`, stacked.root],
+      stdout: 'ignore',
+      stderr: 'ignore',
+    }).exited;
+    assert(checks, 'a-stacked-backing-root-can-be-built', mounted === 0,
+      `tmpfs=${carrier} overlay=${mounted}`);
+    const fallback = await startDaemon(stacked);
+    try {
+      const target = join(stacked.mount, 'read.bin');
+      await writeFile(target, payload);
+      const served = await readFile(target);
+      const snapshot = await stats(stacked);
+      /* The daemon says on its error stream which read path it took, and a
+       * stream that cannot be drained is a fact about this cell rather than an
+       * absence: it is recorded and printed with the verdict. */
+      let stderrText = '';
+      let streamFailure = '';
+      try {
+        stderrText = await new Response(fallback.process.stderr).text();
+      } catch (cause) {
+        streamFailure = cause instanceof Error ? cause.message : String(cause);
+      }
+      const refused = stderrText.includes('BACKING_OPEN');
+      assert(checks, 'a-refused-registration-falls-back-and-still-serves-the-bytes',
+        Buffer.compare(served, payload) === 0,
+        `bytes=${served.byteLength} refusedRegistration=${refused} capable=${snapshot.passthrough} ` +
+        `daemonStderr=${streamFailure === '' ? 'read' : streamFailure}`);
+    } finally {
+      if (fallback.process.exitCode === null) await killDaemon(fallback);
+      await Bun.spawn({ cmd: ['umount', '-l', stacked.root], stdout: 'ignore', stderr: 'ignore' }).exited;
+      await Bun.spawn({ cmd: ['umount', '-l', layers], stdout: 'ignore', stderr: 'ignore' }).exited;
+    }
+  });
+}
+
 async function main(): Promise<void> {
   await mkdir(WORK, { recursive: true });
   const selected = process.env.KINU_RUNTIME_SCENARIO;
@@ -1077,6 +1741,12 @@ async function main(): Promise<void> {
     ['unstageable-node', unstageableNode],
     ['bounded-shutdown', boundedShutdown],
     ['shutdown-races', shutdownRaces],
+    ['write-path-costs', writePathCosts],
+    ['dirty-set-recovery', dirtySetRecovery],
+    ['metadata-ordering', metadataOrdering],
+    ['fence-is-o-k', fenceIsOfK],
+    ['enospc-before-effect', enospcBeforeEffect],
+    ['read-passthrough', readPassthrough],
   ];
   if (selected !== undefined && !scenarios.some(([name]) => name === selected)) {
     throw new Error(`unknown KINU_RUNTIME_SCENARIO ${selected}`);

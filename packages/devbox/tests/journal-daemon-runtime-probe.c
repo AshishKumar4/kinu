@@ -592,39 +592,27 @@ static int mode_posix(const char *dir) {
 
 /* ------------------------------------------------------------ stage ------ */
 
-/* Inspects a sealed stage directly: the copy must keep hardlink identity,
- * modes, extended attributes and holes, and must never have followed a symlink
- * that points outside the backing tree. */
+/*
+ * Inspects a sealed stage directly.
+ *
+ * A v2 stage holds FILE BYTES and the directories above them: modes, extended
+ * attributes, hardlink identity and symlink targets are facts of the manifest
+ * row now, not of a copied tree, and the matrix asserts each of them there
+ * (`manifest-mode-is-exact`, `manifest-xattr-round-trips`,
+ * `hardlink-rows-share-one-inode`, `sealed-symlink-is-not-followed`).  What
+ * remains a property of the stage itself is its geometry: a hole the writer
+ * never filled is never materialized, so a 4 MiB file with two 4 KiB runs
+ * still occupies well under a megabyte and still reports two extents.
+ */
 static int mode_stage(const char *root) {
-  char first[PATH_MAX];
-  char second[PATH_MAX];
-  char metadata[PATH_MAX];
-  char attributed[PATH_MAX];
   char sparse[PATH_MAX];
   char outside[PATH_MAX];
-  if (join_path(first, sizeof(first), root, "posix/link-first") != 0 ||
-      join_path(second, sizeof(second), root, "posix/link-second") != 0 ||
-      join_path(metadata, sizeof(metadata), root, "posix/metadata.txt") != 0 ||
-      join_path(attributed, sizeof(attributed), root, "posix/sealed-xattr.txt") != 0 ||
-      join_path(sparse, sizeof(sparse), root, "posix/sparse-keep.bin") != 0 ||
+  if (join_path(sparse, sizeof(sparse), root, "posix/sparse-keep.bin") != 0 ||
       join_path(outside, sizeof(outside), root, "posix/outside-link") != 0) {
     check("stage-paths", false, "paths too long");
     return summary("stage");
   }
-  struct stat a;
-  struct stat b;
-  bool linked = stat(first, &a) == 0 && stat(second, &b) == 0 && a.st_ino == b.st_ino && a.st_nlink == 2;
-  check("stage-hardlink", linked, "ino=%llu/%llu links=%lu", (unsigned long long)a.st_ino,
-        (unsigned long long)b.st_ino, (unsigned long)a.st_nlink);
-
   struct stat st;
-  bool moded = stat(metadata, &st) == 0 && (st.st_mode & 07777) == 0640;
-  check("stage-mode", moded, "mode=%o", (unsigned)(st.st_mode & 07777));
-
-  char value[32] = {0};
-  ssize_t got = getxattr(attributed, "user.kinu.seal", value, sizeof(value));
-  check("stage-xattr", got == 6 && strcmp(value, "sealed") == 0, "got=%zd value=%s", got, value);
-
   int fd = open(sparse, O_RDONLY);
   unsigned extents = fd < 0 ? 0 : count_extents(fd, 4 * 1024 * 1024);
   bool holey = fd >= 0 && fstat(fd, &st) == 0 && st.st_size == 4 * 1024 * 1024 &&
@@ -633,11 +621,62 @@ static int mode_stage(const char *root) {
   check("stage-sparse", holey, "extents=%u blocks=%lld size=%lld", extents, (long long)st.st_blocks,
         (long long)st.st_size);
 
-  char target[PATH_MAX] = {0};
-  ssize_t length = readlink(outside, target, sizeof(target) - 1);
-  bool unfollowed = lstat(outside, &st) == 0 && S_ISLNK(st.st_mode) && length == 4 && strcmp(target, "/etc") == 0;
-  check("stage-symlink-unfollowed", unfollowed, "target=%s isLink=%d", target, S_ISLNK(st.st_mode) ? 1 : 0);
+  /* And what a delta stage must NOT hold: a node that carries no bytes. */
+  bool absent = lstat(outside, &st) != 0 && errno == ENOENT;
+  check("stage-holds-only-bytes", absent, "errno=%d", errno);
   return summary("stage");
+}
+
+/* ----------------------------------------------------------- xattr ------ */
+
+/* Sets one extended attribute through the mount.  The image carries no
+ * `setfattr`, and a metadata-ordering cell needs an xattr op in the journal
+ * between two others, so the probe performs it where the syscall is. */
+static int mode_setxattr(const char *path, const char *name, const char *value) {
+  int fd = open(path, O_RDONLY | O_NOFOLLOW);
+  bool set = fd >= 0 && fsetxattr(fd, name, value, strlen(value), 0) == 0;
+  int failure = set ? 0 : errno;
+  if (fd >= 0) close(fd);
+  check("setxattr", set, "errno=%d name=%s", failure, name);
+  return summary("setxattr");
+}
+
+/* ----------------------------------------------------------- churn ------- */
+
+/* Metadata churn: create, rename, chmod and unlink in a loop.  A write is one
+ * journal record with no result, so a kill in the middle of one tears nothing;
+ * the INTENT/RESULT pair the recovery cell is about belongs to the operations
+ * below, which is why they need a load of their own. */
+static int mode_churn(const char *dir, long fan, long rounds) {
+  if (mkdir(dir, 0755) != 0 && errno != EEXIST) {
+    check("churn-root", false, "mkdir failed errno=%d", errno);
+    return summary("churn");
+  }
+  long failures = 0;
+  for (long round = 0; round < rounds; round++) {
+    for (long index = 0; index < fan; index++) {
+      char from[PATH_MAX];
+      char to[PATH_MAX];
+      char name[64];
+      snprintf(name, sizeof(name), "churn-%ld-%ld", index, round);
+      if (join_path(from, sizeof(from), dir, name) != 0) return summary("churn");
+      snprintf(name, sizeof(name), "moved-%ld-%ld", index, round);
+      if (join_path(to, sizeof(to), dir, name) != 0) return summary("churn");
+      int fd = open(from, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+      if (fd < 0) {
+        failures++;
+        continue;
+      }
+      close(fd);
+      if (chmod(from, 0600) != 0) failures++;
+      if (rename(from, to) != 0) failures++;
+      if (unlink(to) != 0) failures++;
+    }
+  }
+  /* A kill lands in the middle of this on purpose, so a refused operation is
+   * not a failure of the probe: what it reports is how far it got. */
+  check("churn-progressed", rounds > 0, "rounds=%ld failures=%ld", rounds, failures);
+  return summary("churn");
 }
 
 /* -------------------------------------------------------- truncation ----- */
@@ -938,6 +977,7 @@ int main(int argc, char **argv) {
   if (strcmp(mode, "posix") == 0) return mode_posix(argv[2]);
   if (strcmp(mode, "stage") == 0) return mode_stage(argv[2]);
   if (strcmp(mode, "truncate-open") == 0) return mode_truncate_open(argv[2]);
+  if (strcmp(mode, "setxattr") == 0 && argc == 5) return mode_setxattr(argv[2], argv[3], argv[4]);
   if (strcmp(mode, "escape") == 0 && argc == 4) return mode_escape(argv[2], argv[3]);
   if (strcmp(mode, "mmap") == 0 && argc == 5) return mode_mmap(argv[2], strtol(argv[3], NULL, 10), argv[4]);
   if (strcmp(mode, "fork") == 0 && argc == 5) {
@@ -945,6 +985,9 @@ int main(int argc, char **argv) {
   }
   if (strcmp(mode, "threads") == 0 && argc == 5) {
     return mode_threads(argv[2], strtol(argv[3], NULL, 10), strtol(argv[4], NULL, 10));
+  }
+  if (strcmp(mode, "churn") == 0 && argc == 5) {
+    return mode_churn(argv[2], strtol(argv[3], NULL, 10), strtol(argv[4], NULL, 10));
   }
   if (strcmp(mode, "load") == 0 && argc == 5) {
     return mode_load(argv[2], strtol(argv[3], NULL, 10), strtol(argv[4], NULL, 10));

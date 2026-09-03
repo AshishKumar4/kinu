@@ -5,16 +5,29 @@
  * is retained for the lifetime of the daemon, so a swapped symlink or a ".."
  * component can never reach outside the backing tree.
  *
- * Every mutation records a durable INTENT before its effect and a durable
- * RESULT before its reply.  Records are appended by one writer thread that
- * group-commits: records queued concurrently share a single fdatasync.
+ * Every write records one W record naming its inode, path, offset and length
+ * BEFORE the pwrite it describes; every metadata mutation records an INTENT
+ * before its effect and a RESULT before its reply.  One writer thread appends
+ * all of them with write(2), and no mutation reply waits for a disk: the WAL
+ * only has to survive a DAEMON death on this instance, where the written pages
+ * are still in the page cache, and an instance death takes the backing root
+ * and the WAL together.  A caller's own fsync still flushes the backing file
+ * it named.
  *
  * A fence arrives out of band on an AF_UNIX socket.  It closes admission,
- * drains the mutations already in flight (which makes the journal durable
- * through the cut), syncs the backing filesystem, copies the tree into a
- * generation-local sealed stage, records the fence, compacts the journal up to
- * the published generation, reopens admission and replies with the cut, the
- * sealed generation and the manifest path.
+ * drains the mutations already in flight (which makes the journal complete
+ * through the cut), syncs the backing filesystem, and hands the journal above
+ * the previous fence to journal-delta.c, which derives the exact dirty ranges
+ * and the ordered metadata operations, stages only the dirty clusters plus
+ * their previous CDC-boundary context, and writes the delta manifest.  The
+ * fence then records itself, compacts the journal to the published head plus
+ * the unfenced tail, reopens admission, and replies with the cut, the sealed
+ * generation, the manifest path and its SealWork row.
+ *
+ * After a successful head CAS the sidecar sends `boundaries`: the files whose
+ * published chunk boundaries changed, the paths the generation dropped, and
+ * the head they belong to.  That hand-back is what keeps the next fence O(k)
+ * rather than O(file).
  */
 
 #define FUSE_USE_VERSION 317
@@ -39,6 +52,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -48,6 +62,8 @@
 #include <sys/xattr.h>
 #include <unistd.h>
 
+#include "journal-delta.h"
+
 #ifndef FUSE_CAP_DIRECT_IO_ALLOW_MMAP
 #error "libfuse 3.17.1 with FUSE_CAP_DIRECT_IO_ALLOW_MMAP is required"
 #endif
@@ -56,20 +72,21 @@ _Static_assert(FUSE_DIRECT_IO_ALLOW_MMAP == (1ULL << 36), "unexpected FUSE ABI")
 #define PATH_CAP 4096
 #define FIELD_CAP (2 * PATH_CAP)
 #define RECORD_CAP (2 * FIELD_CAP + 256)
-#define EXTENT_CAP (512 * 1024)
-#define COPY_CHUNK (128 * 1024)
 #define WAL_COMPACT_BYTES (128 * 1024)
-#define STAGE_DEPTH_CAP 256
-#define STAGE_ATTEMPT_CAP 4096
-#define CONTROL_REQUEST_CAP 1024
+/* A boundaries request carries one entry per file whose chunk boundaries moved,
+ * so it is bounded by the seal and not by the tree.  The ceiling only stops a
+ * runaway peer from growing this process without limit. */
+#define CONTROL_REQUEST_CAP (64u * 1024u * 1024u)
+/* Backing files the kernel may read directly, indexed by their backing fd. */
+#define BACKING_CAP 65536
 #define CONTROL_TIMEOUT_SECONDS 5
 #define WAL_NAME "wal.log"
 #define WAL_COMPACT_NAME "wal.compact"
 
 typedef unsigned long long counter;
 
-enum record_kind { REC_INTENT, REC_RESULT, REC_FENCE, REC_RECOVER, REC_BASE };
-static const char *const record_names[] = {"INTENT", "RESULT", "FENCE", "RECOVER", "BASE"};
+enum record_kind { REC_INTENT, REC_RESULT, REC_WRITE, REC_FENCE, REC_RECOVER, REC_BASE };
+static const char *const record_names[] = {"INTENT", "RESULT", "W", "FENCE", "RECOVER", "BASE"};
 
 struct flush_request {
   char line[RECORD_CAP];
@@ -105,6 +122,10 @@ struct journal {
   char fence_manifest[PATH_CAP];
   counter records;
   counter batches;
+  counter wal_bytes;
+  counter wal_fsyncs;
+  counter backing_fsyncs;
+  counter writes;
   unsigned active;
   bool admitted;
   bool stopping;
@@ -113,6 +134,11 @@ struct journal {
   bool mmap_negotiated;
   bool has_base;
   bool has_fence;
+  bool passthrough;
+  /* The CDC parameter the published boundaries were cut with, and the map
+   * itself.  Both are the sidecar's to set and are read under `lock`. */
+  uint64_t max_chunk;
+  struct journal_boundaries boundaries;
   pthread_mutex_t lock;       /* admission, sequence, generation, active, teardown */
   pthread_mutex_t queue_lock; /* record queue, counters */
   pthread_mutex_t wal_lock;   /* wal_fd identity and its appends */
@@ -223,26 +249,6 @@ static bool escape_field(const char *in, char *out, size_t cap) {
   return true;
 }
 
-static void unescape_field(char *field) {
-  char *write_at = field;
-  for (const char *read_at = field; *read_at != '\0'; read_at++) {
-    if (*read_at != '\\') {
-      *write_at++ = *read_at;
-      continue;
-    }
-    read_at++;
-    if (*read_at == 't') *write_at++ = '\t';
-    else if (*read_at == 'n') *write_at++ = '\n';
-    else if (*read_at == '\\') *write_at++ = '\\';
-    else if (*read_at == '\0') break;
-    else {
-      *write_at++ = '\\';
-      *write_at++ = *read_at;
-    }
-  }
-  *write_at = '\0';
-}
-
 static int format_record(char *out, size_t cap, enum record_kind kind, uint64_t sequence, uint64_t generation,
                          const char *op, int outcome, const char *path, const char *aux) {
   char escaped_path[FIELD_CAP];
@@ -268,7 +274,7 @@ static int append_all(int fd, const char *bytes, size_t length) {
 }
 
 /* One writer owns the journal file.  Whatever is queued while the previous
- * batch is in flight becomes the next batch and shares its fdatasync. */
+ * batch is in flight becomes the next batch and shares its one append pass. */
 static void *writer_loop(void *unused) {
   (void)unused;
   for (;;) {
@@ -285,16 +291,22 @@ static void *writer_loop(void *unused) {
 
     int rc = 0;
     counter written = 0;
+    counter bytes = 0;
     pthread_mutex_lock(&state.wal_lock);
     for (struct flush_request *request = batch; request != NULL && rc == 0; request = request->next) {
       rc = append_all(state.wal_fd, request->line, request->length);
-      if (rc == 0) written++;
+      if (rc == 0) {
+        written++;
+        bytes += request->length;
+      }
     }
-    if (rc == 0 && fdatasync(state.wal_fd) != 0) rc = neg_errno();
+    /* No fdatasync here, by design: see the file header.  `walFsyncs` stays at
+     * zero across every mutation, and the matrix asserts that. */
     pthread_mutex_unlock(&state.wal_lock);
 
     pthread_mutex_lock(&state.queue_lock);
     state.records += written;
+    state.wal_bytes += bytes;
     state.batches++;
     for (struct flush_request *request = batch; request != NULL;) {
       struct flush_request *next = request->next;
@@ -339,7 +351,7 @@ static void release_mutation(struct mutation *m) {
 
 /* Mutations arriving while a fence holds admission closed wait for it rather
  * than failing, so a fence is invisible to a writer other than as latency. */
-static int begin_mutation(const char *op, const char *path, const char *aux, struct mutation *m) {
+static int admit_mutation(struct mutation *m) {
   pthread_mutex_lock(&state.lock);
   while (!state.admitted && !state.stopping) pthread_cond_wait(&state.admit, &state.lock);
   if (state.stopping) {
@@ -351,8 +363,28 @@ static int begin_mutation(const char *op, const char *path, const char *aux, str
   m->active = true;
   state.active++;
   pthread_mutex_unlock(&state.lock);
+  return 0;
+}
 
-  int rc = durable(REC_INTENT, m->sequence, m->generation, op, 0, path, aux);
+static int begin_mutation(const char *op, const char *path, const char *aux, struct mutation *m) {
+  int rc = admit_mutation(m);
+  if (rc != 0) return rc;
+  rc = durable(REC_INTENT, m->sequence, m->generation, op, 0, path, aux);
+  if (rc != 0) release_mutation(m);
+  return rc;
+}
+
+/* One W record per write, appended BEFORE the pwrite it describes.  A journal
+ * that cannot take the record — a full state filesystem is the case that
+ * matters — refuses the write without touching a byte of the tree, so a
+ * restart's dirty set covers every write that returned. */
+static int begin_write(uint64_t ino, const char *path, off_t offset, size_t size, struct mutation *m) {
+  char aux[96];
+  int formatted = journal_write_record(aux, sizeof(aux), ino, (uint64_t)offset, (uint64_t)size);
+  if (formatted < 0) return formatted;
+  int rc = admit_mutation(m);
+  if (rc != 0) return rc;
+  rc = durable(REC_WRITE, m->sequence, m->generation, "write", 0, path, aux);
   if (rc != 0) release_mutation(m);
   return rc;
 }
@@ -373,9 +405,14 @@ struct dir_handle {
 
 static void *pass_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
   cfg->use_ino = 1;
-  cfg->entry_timeout = 0;
-  cfg->attr_timeout = 0;
-  cfg->negative_timeout = 0;
+  /* The daemon is the only mutator of the backing root, so the kernel may hold
+   * a name and an attribute for thirty seconds; every change that invalidates
+   * one arrives through these callbacks.  Zero cost a round trip per path
+   * component: `small-stat-1k` measured 163.1 ms against 3.6 ms native
+   * (bench/measure-first/MEASUREMENTS.md, 2026-09-02). */
+  cfg->entry_timeout = 30;
+  cfg->attr_timeout = 30;
+  cfg->negative_timeout = 30;
   /* The high level API owns conn->want; libfuse refuses a session that mixes it
    * with the extended field. */
   bool negotiated = (conn->capable & FUSE_CAP_DIRECT_IO_ALLOW_MMAP) != 0;
@@ -383,9 +420,22 @@ static void *pass_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
   /* Truncation then arrives inside the open that asked for it, in one round trip
    * and on the one path the journal records. */
   if ((conn->capable & FUSE_CAP_ATOMIC_O_TRUNC) != 0) conn->want |= FUSE_CAP_ATOMIC_O_TRUNC;
+  /* Read passthrough where the kernel offers it: after open the kernel reads
+   * the backing fd itself, measured at 518,891 4 KiB random reads/s against
+   * 556,067 native.  Where it does not, read-only opens keep the page cache
+   * instead, measured at 601,647/s on the same box.  Writes take neither path:
+   * every byte has to reach a W record. */
+  bool passthrough = (conn->capable & FUSE_CAP_PASSTHROUGH) != 0;
+  if (passthrough) {
+    conn->want |= FUSE_CAP_PASSTHROUGH;
+    conn->max_backing_stack_depth = FUSE_BACKING_STACKED_OVER;
+  } else {
+    fprintf(stderr, "journal-daemon: kernel offers no FUSE_CAP_PASSTHROUGH; read-only opens keep the page cache\n");
+  }
   /* This runs on a worker thread and the control socket reports it. */
   pthread_mutex_lock(&state.lock);
   state.mmap_negotiated = negotiated;
+  state.passthrough = passthrough;
   pthread_mutex_unlock(&state.lock);
   if (!negotiated) {
     fprintf(stderr, "journal-daemon: kernel refuses FUSE_CAP_DIRECT_IO_ALLOW_MMAP\n");
@@ -505,6 +555,43 @@ static int pass_fsyncdir(const char *path, int datasync, struct fuse_file_info *
   return finish_mutation(&m, op, path, "", result);
 }
 
+/* Backing files the kernel reads directly, indexed by the fd they were opened
+ * on.  An fd is unique while it is open and its entry is cleared on release,
+ * so two handles can never share a slot. */
+static int32_t backing_ids[BACKING_CAP];
+
+/* A read-only handle leaves the daemon out of the read path: with kernel
+ * passthrough the kernel reads the backing fd, and without it the page cache
+ * answers a re-read.  Neither weakens write interception. */
+static void open_for_reading(int fd, struct fuse_file_info *fi) {
+  pthread_mutex_lock(&state.lock);
+  bool passthrough = state.passthrough;
+  pthread_mutex_unlock(&state.lock);
+  if (passthrough && fd >= 0 && fd < BACKING_CAP) {
+    struct fuse_backing_map map = {.fd = fd, .flags = 0, .padding = 0};
+    int backing_id = ioctl(fuse_session_fd(fuse_get_session(state.fuse)), FUSE_DEV_IOC_BACKING_OPEN, &map);
+    if (backing_id > 0) {
+      backing_ids[fd] = backing_id;
+      fi->backing_id = backing_id;
+      fi->direct_io = 0;
+      fi->keep_cache = 0;
+      return;
+    }
+    fprintf(stderr, "journal-daemon: FUSE_DEV_IOC_BACKING_OPEN failed: %s\n", strerror(errno));
+  }
+  fi->direct_io = 0;
+  fi->keep_cache = 1;
+}
+
+static void close_for_reading(int fd) {
+  if (fd < 0 || fd >= BACKING_CAP || backing_ids[fd] <= 0) return;
+  uint32_t backing_id = (uint32_t)backing_ids[fd];
+  backing_ids[fd] = 0;
+  if (ioctl(fuse_session_fd(fuse_get_session(state.fuse)), FUSE_DEV_IOC_BACKING_CLOSE, &backing_id) < 0) {
+    fprintf(stderr, "journal-daemon: FUSE_DEV_IOC_BACKING_CLOSE failed: %s\n", strerror(errno));
+  }
+}
+
 /* O_DIRECT alignment on the backing file is the daemon's concern, never the
  * caller's, so it is dropped while every other open flag is honoured. */
 static int open_handle(const char *path, int flags, struct fuse_file_info *fi) {
@@ -515,6 +602,7 @@ static int open_handle(const char *path, int flags, struct fuse_file_info *fi) {
   if (fd < 0) return fd;
   fi->fh = (uint64_t)fd;
   fi->direct_io = 1;
+  if ((flags & O_ACCMODE) == O_RDONLY) open_for_reading(fd, fi);
   return 0;
 }
 
@@ -550,6 +638,7 @@ static int pass_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
 static int pass_release(const char *path, struct fuse_file_info *fi) {
   (void)path;
+  close_for_reading((int)fi->fh);
   return close((int)fi->fh) == 0 ? 0 : neg_errno();
 }
 
@@ -568,13 +657,21 @@ static int pass_read(const char *path, char *buffer, size_t size, off_t offset, 
 }
 
 static int pass_write(const char *path, const char *buffer, size_t size, off_t offset, struct fuse_file_info *fi) {
+  struct stat st;
+  if (fstat((int)fi->fh, &st) != 0) return neg_errno();
   struct mutation m;
-  int rc = begin_mutation("write", path, "", &m);
+  int rc = begin_write((uint64_t)st.st_ino, path, offset, size, &m);
   if (rc != 0) return rc;
   ssize_t n = pwrite((int)fi->fh, buffer, size, offset);
-  return finish_mutation(&m, "write", path, "", n < 0 ? neg_errno() : (int)n);
+  release_mutation(&m);
+  pthread_mutex_lock(&state.queue_lock);
+  state.writes++;
+  pthread_mutex_unlock(&state.queue_lock);
+  return n < 0 ? neg_errno() : (int)n;
 }
 
+/* A caller's fsync still flushes the file it named: that is the durability the
+ * caller asked for, and it is the only sync left on a reply path. */
 static int pass_fsync(const char *path, int datasync, struct fuse_file_info *fi) {
   const char *op = datasync ? "fdatasync" : "fsync";
   struct mutation m;
@@ -582,6 +679,9 @@ static int pass_fsync(const char *path, int datasync, struct fuse_file_info *fi)
   if (rc != 0) return rc;
   int fd = (int)fi->fh;
   int result = (datasync ? fdatasync(fd) : fsync(fd)) == 0 ? 0 : neg_errno();
+  pthread_mutex_lock(&state.queue_lock);
+  state.backing_fsyncs++;
+  pthread_mutex_unlock(&state.queue_lock);
   return finish_mutation(&m, op, path, "", result);
 }
 
@@ -608,14 +708,18 @@ static int handle_or_open(const char *path, struct fuse_file_info *fi, int flags
   return rc != 0 ? rc : open_beneath(rel, flags, 0);
 }
 
+/* A metadata record carries the argument its replay needs: the delta manifest
+ * describes the tree at the cut, and the operation list says how it got there. */
 static int pass_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
+  char aux[32];
+  if (snprintf(aux, sizeof(aux), "%llu", (counter)size) >= (int)sizeof(aux)) return -ENAMETOOLONG;
   struct mutation m;
-  int rc = begin_mutation("truncate", path, "", &m);
+  int rc = begin_mutation("truncate", path, aux, &m);
   if (rc != 0) return rc;
   int fd = handle_or_open(path, fi, O_WRONLY);
   int result = fd < 0 ? fd : (ftruncate(fd, size) == 0 ? 0 : neg_errno());
   if (fi == NULL && fd >= 0) close(fd);
-  return finish_mutation(&m, "truncate", path, "", result);
+  return finish_mutation(&m, "truncate", path, aux, result);
 }
 
 static int reject_root_metadata(const char *path) {
@@ -669,20 +773,24 @@ static bool valid_utf8(const char *text) {
 static int pass_chmod(const char *path, mode_t mode, struct fuse_file_info *fi) {
   int root = reject_root_metadata(path);
   if (root != 0) return root;
+  char aux[16];
+  if (snprintf(aux, sizeof(aux), "%u", (unsigned)(mode & 07777)) >= (int)sizeof(aux)) return -ENAMETOOLONG;
   struct mutation m;
-  int rc = begin_mutation("chmod", path, "", &m);
+  int rc = begin_mutation("chmod", path, aux, &m);
   if (rc != 0) return rc;
   int fd = handle_or_open(path, fi, O_RDONLY | O_NOFOLLOW);
   int result = fd < 0 ? fd : (fchmod(fd, mode) == 0 ? 0 : neg_errno());
   if (fi == NULL && fd >= 0) close(fd);
-  return finish_mutation(&m, "chmod", path, "", result);
+  return finish_mutation(&m, "chmod", path, aux, result);
 }
 
 static int pass_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi) {
   int root = reject_root_metadata(path);
   if (root != 0) return root;
+  char aux[32];
+  if (snprintf(aux, sizeof(aux), "%u %u", (unsigned)uid, (unsigned)gid) >= (int)sizeof(aux)) return -ENAMETOOLONG;
   struct mutation m;
-  int rc = begin_mutation("chown", path, "", &m);
+  int rc = begin_mutation("chown", path, aux, &m);
   if (rc != 0) return rc;
   int result;
   if (fi != NULL) {
@@ -693,14 +801,20 @@ static int pass_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_i
     result = parent < 0 ? parent : (fchownat(parent, name, uid, gid, AT_SYMLINK_NOFOLLOW) == 0 ? 0 : neg_errno());
     if (parent >= 0) close(parent);
   }
-  return finish_mutation(&m, "chown", path, "", result);
+  return finish_mutation(&m, "chown", path, aux, result);
 }
 
 static int pass_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi) {
   int root = reject_root_metadata(path);
   if (root != 0) return root;
+  char aux[64];
+  if (snprintf(aux, sizeof(aux), "%llu %llu",
+               (counter)((uint64_t)tv[0].tv_sec * 1000000000ULL + (uint64_t)tv[0].tv_nsec),
+               (counter)((uint64_t)tv[1].tv_sec * 1000000000ULL + (uint64_t)tv[1].tv_nsec)) >= (int)sizeof(aux)) {
+    return -ENAMETOOLONG;
+  }
   struct mutation m;
-  int rc = begin_mutation("utimens", path, "", &m);
+  int rc = begin_mutation("utimens", path, aux, &m);
   if (rc != 0) return rc;
   int result;
   if (fi != NULL) {
@@ -711,7 +825,7 @@ static int pass_utimens(const char *path, const struct timespec tv[2], struct fu
     result = parent < 0 ? parent : (utimensat(parent, name, tv, AT_SYMLINK_NOFOLLOW) == 0 ? 0 : neg_errno());
     if (parent >= 0) close(parent);
   }
-  return finish_mutation(&m, "utimens", path, "", result);
+  return finish_mutation(&m, "utimens", path, aux, result);
 }
 
 static int pass_mkdir(const char *path, mode_t mode) {
@@ -896,412 +1010,47 @@ static const struct fuse_operations operations = {
   .removexattr = pass_removexattr,
 };
 
-/* --------------------------------------------------------------- stage --- */
-
-struct inode_copy {
-  dev_t dev;
-  ino_t ino;
-  char path[PATH_CAP];
-  struct inode_copy *next;
-};
-
-struct stage_ctx {
-  FILE *out;
-  int stage_root;
-  unsigned char *extent;
-  char *chunk;
-  struct inode_copy *copies;
-  bool first;
-};
-
-
-static void json_string(FILE *out, const char *text) {
-  fputc('"', out);
-  for (const unsigned char *p = (const unsigned char *)text; *p != '\0'; p++) {
-    if (*p == '"' || *p == '\\') fputc('\\', out);
-    if (*p >= 0x20) fputc((int)*p, out);
-    else fprintf(out, "\\u%04x", (unsigned)*p);
-  }
-  fputc('"', out);
-}
-
-static void json_base64(FILE *out, const unsigned char *bytes, size_t length) {
-  static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  fputc('"', out);
-  for (size_t i = 0; i < length; i += 3) {
-    unsigned value = (unsigned)bytes[i] << 16;
-    if (i + 1 < length) value |= (unsigned)bytes[i + 1] << 8;
-    if (i + 2 < length) value |= bytes[i + 2];
-    fputc(alphabet[(value >> 18) & 63], out);
-    fputc(alphabet[(value >> 12) & 63], out);
-    fputc(i + 1 < length ? alphabet[(value >> 6) & 63] : '=', out);
-    fputc(i + 2 < length ? alphabet[value & 63] : '=', out);
-  }
-  fputc('"', out);
-}
-
-static int json_xattrs(FILE *out, int parent, const char *name) {
-  int fd = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NOATIME);
-  if (fd < 0) return neg_errno();
-  ssize_t names_size = flistxattr(fd, NULL, 0);
-  if (names_size < 0) {
-    int rc = errno == ENOTSUP ? 0 : neg_errno();
-    close(fd);
-    if (rc == 0) fputs("{}", out);
-    return rc;
-  }
-  char *names = names_size == 0 ? NULL : malloc((size_t)names_size);
-  if (names_size > 0 && names == NULL) {
-    close(fd);
-    return -ENOMEM;
-  }
-  int rc = names_size == 0 || flistxattr(fd, names, (size_t)names_size) >= 0 ? 0 : neg_errno();
-  fputc('{', out);
-  bool first = true;
-  for (char *item = names; rc == 0 && item != NULL && item < names + names_size; item += strlen(item) + 1) {
-    if (!valid_utf8(item)) {
-      rc = -EILSEQ;
-      break;
-    }
-    ssize_t value_size = fgetxattr(fd, item, NULL, 0);
-    if (value_size < 0) { rc = neg_errno(); break; }
-    unsigned char *value = value_size == 0 ? NULL : malloc((size_t)value_size);
-    if (value_size > 0 && value == NULL) { rc = -ENOMEM; break; }
-    if (value_size > 0 && fgetxattr(fd, item, value, (size_t)value_size) != value_size) rc = neg_errno();
-    if (rc == 0) {
-      if (!first) fputc(',', out);
-      first = false;
-      json_string(out, item);
-      fputc(':', out);
-      json_base64(out, value, (size_t)value_size);
-    }
-    free(value);
-  }
-  fputc('}', out);
-  free(names);
-  close(fd);
-  return rc;
-}
-
-static void digest_hex(const unsigned char digest[SHA256_DIGEST_LENGTH], char out[65]) {
-  static const char alphabet[] = "0123456789abcdef";
-  for (size_t i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-    out[i * 2] = alphabet[digest[i] >> 4];
-    out[i * 2 + 1] = alphabet[digest[i] & 0x0f];
-  }
-  out[64] = '\0';
-}
-
-static int copy_xattrs(int from, int to, char *scratch, size_t scratch_size) {
-  ssize_t names_size = flistxattr(from, NULL, 0);
-  if (names_size < 0) return errno == ENOTSUP ? 0 : neg_errno();
-  if (names_size == 0) return 0;
-  char *names = malloc((size_t)names_size);
-  if (names == NULL) return -ENOMEM;
-  int rc = flistxattr(from, names, (size_t)names_size) < 0 ? neg_errno() : 0;
-  for (char *name = names; rc == 0 && name < names + names_size; name += strlen(name) + 1) {
-    if (!valid_utf8(name)) {
-      rc = -EILSEQ;
-      break;
-    }
-    ssize_t value_size = fgetxattr(from, name, scratch, scratch_size);
-    if (value_size < 0) {
-      rc = neg_errno();
-      break;
-    }
-    if (fsetxattr(to, name, scratch, (size_t)value_size, 0) != 0) rc = neg_errno();
-  }
-  free(names);
-  return rc;
-}
-
-static int copy_sparse(struct stage_ctx *ctx, int from, int to, off_t size) {
-  if (ftruncate(to, size) != 0) return neg_errno();
-  for (off_t position = 0; position < size;) {
-    off_t data = lseek(from, position, SEEK_DATA);
-    if (data < 0) {
-      if (errno == ENXIO) break;
-      return neg_errno();
-    }
-    off_t hole = lseek(from, data, SEEK_HOLE);
-    if (hole < 0) return neg_errno();
-    for (off_t at = data; at < hole;) {
-      size_t want = (size_t)(hole - at > COPY_CHUNK ? COPY_CHUNK : hole - at);
-      ssize_t got = pread(from, ctx->chunk, want, at);
-      if (got <= 0) return got < 0 ? neg_errno() : -EIO;
-      ssize_t put = pwrite(to, ctx->chunk, (size_t)got, at);
-      if (put != got) return put < 0 ? neg_errno() : -EIO;
-      at += got;
-    }
-    position = hole;
-  }
-  return 0;
-}
-
-/* Content is described, never carried: each populated extent contributes an
- * offset, a length bounded by EXTENT_CAP and the digest of its staged bytes. */
-static int manifest_content(struct stage_ctx *ctx, int fd, const char *source, off_t size) {
-  fprintf(ctx->out, ",\"content\":{\"kind\":\"sealed\",\"size\":%llu,\"sourceId\":", (counter)size);
-  json_string(ctx->out, source);
-  fputs(",\"extents\":[", ctx->out);
-  bool first = true;
-  for (off_t position = 0; position < size;) {
-    off_t data = lseek(fd, position, SEEK_DATA);
-    if (data < 0) {
-      if (errno == ENXIO) break;
-      return neg_errno();
-    }
-    off_t hole = lseek(fd, data, SEEK_HOLE);
-    if (hole < 0) return neg_errno();
-    for (off_t at = data; at < hole;) {
-      size_t want = (size_t)(hole - at > EXTENT_CAP ? EXTENT_CAP : hole - at);
-      ssize_t got = pread(fd, ctx->extent, want, at);
-      if (got <= 0) return got < 0 ? neg_errno() : -EIO;
-      unsigned char digest[SHA256_DIGEST_LENGTH];
-      SHA256(ctx->extent, (size_t)got, digest);
-      char hex[65];
-      digest_hex(digest, hex);
-      fprintf(ctx->out, "%s{\"offset\":%llu,\"length\":%llu,\"sha256\":\"%s\"}", first ? "" : ",", (counter)at,
-              (counter)got, hex);
-      first = false;
-      at += got;
-    }
-    position = hole;
-  }
-  fputs("]}", ctx->out);
-  return 0;
-}
-
-static struct inode_copy *find_copy(struct inode_copy *head, dev_t dev, ino_t ino) {
-  for (; head != NULL; head = head->next) {
-    if (head->dev == dev && head->ino == ino) return head;
-  }
-  return NULL;
-}
-
-static int remember_copy(struct stage_ctx *ctx, const struct stat *st, const char *path) {
-  struct inode_copy *copy = calloc(1, sizeof(*copy));
-  if (copy == NULL) return -ENOMEM;
-  copy->dev = st->st_dev;
-  copy->ino = st->st_ino;
-  int written = snprintf(copy->path, sizeof(copy->path), "%s", path);
-  if (written < 0 || (size_t)written >= sizeof(copy->path)) {
-    free(copy);
-    return -ENAMETOOLONG;
-  }
-  copy->next = ctx->copies;
-  ctx->copies = copy;
-  return 0;
-}
-
-static int stage_file(struct stage_ctx *ctx, int src, int dst, const char *name, const char *rel,
-                      const struct stat *st) {
-  struct inode_copy *known = find_copy(ctx->copies, st->st_dev, st->st_ino);
-  if (known != NULL) {
-    if (linkat(ctx->stage_root, known->path, dst, name, 0) != 0) return neg_errno();
-  } else {
-    int from = openat(src, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NOATIME);
-    if (from < 0) return neg_errno();
-    int to = openat(dst, name, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, st->st_mode & 07777);
-    if (to < 0) {
-      int rc = neg_errno();
-      close(from);
-      return rc;
-    }
-    int rc = copy_sparse(ctx, from, to, st->st_size);
-    if (rc == 0) rc = copy_xattrs(from, to, ctx->chunk, COPY_CHUNK);
-    if (rc == 0 && fchmod(to, st->st_mode & 07777) != 0) rc = neg_errno();
-    close(from);
-    close(to);
-    if (rc != 0) return rc;
-    rc = remember_copy(ctx, st, rel);
-    if (rc != 0) return rc;
-  }
-  int staged = openat(dst, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-  if (staged < 0) return neg_errno();
-  fputs(",\"kind\":\"file\"", ctx->out);
-  int rc = manifest_content(ctx, staged, rel, st->st_size);
-  close(staged);
-  return rc;
-}
-
-static int stage_tree(struct stage_ctx *ctx, int src, int dst, const char *rel, unsigned depth) {
-  if (depth > STAGE_DEPTH_CAP) return -ELOOP;
-  /* A fresh handle, never a dup: a duplicate shares the retained root fd's
-   * directory offset and would leave the next fence reading an exhausted one. */
-  int scan = openat(src, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOATIME);
-  if (scan < 0) return neg_errno();
-  DIR *dir = fdopendir(scan);
-  if (dir == NULL) {
-    int rc = neg_errno();
-    close(scan);
-    return rc;
-  }
-  int rc = 0;
-  struct dirent *entry;
-  errno = 0;
-  while (rc == 0 && (entry = readdir(dir)) != NULL) {
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
-    struct stat st;
-    if (fstatat(src, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
-      rc = neg_errno();
-      break;
-    }
-    char child[PATH_CAP];
-    int written = rel[0] == '\0' ? snprintf(child, sizeof(child), "%s", entry->d_name)
-                                 : snprintf(child, sizeof(child), "%s/%s", rel, entry->d_name);
-    if (written < 0 || (size_t)written >= sizeof(child)) {
-      rc = -ENAMETOOLONG;
-      break;
-    }
-    if (!ctx->first) fputc(',', ctx->out);
-    ctx->first = false;
-    fputs("{\"path\":", ctx->out);
-    json_string(ctx->out, child);
-    fprintf(ctx->out,
-            ",\"mode\":%u,\"ino\":%llu,\"metadata\":{\"uid\":%u,\"gid\":%u,"
-            "\"atimeNs\":\"%lld\",\"mtimeNs\":\"%lld\",\"ctimeNs\":\"%lld\",\"xattrs\":",
-            (unsigned)(st.st_mode & 07777), (counter)st.st_ino, (unsigned)st.st_uid, (unsigned)st.st_gid,
-            (long long)st.st_atim.tv_sec * 1000000000LL + st.st_atim.tv_nsec,
-            (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec,
-            (long long)st.st_ctim.tv_sec * 1000000000LL + st.st_ctim.tv_nsec);
-    if (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode)) {
-      rc = json_xattrs(ctx->out, src, entry->d_name);
-      if (rc != 0) break;
-    } else {
-      fputs("{}", ctx->out);
-    }
-    fputc('}', ctx->out);
-
-    if (S_ISDIR(st.st_mode)) {
-      if (mkdirat(dst, entry->d_name, st.st_mode & 07777) != 0) {
-        rc = neg_errno();
-        break;
-      }
-      fputs(",\"kind\":\"dir\"}", ctx->out);
-      int from = openat(src, entry->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NOATIME);
-      int to = openat(dst, entry->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-      if (from < 0 || to < 0) rc = neg_errno();
-      else rc = stage_tree(ctx, from, to, child, depth + 1);
-      if (from >= 0) close(from);
-      if (to >= 0) close(to);
-    } else if (S_ISLNK(st.st_mode)) {
-      char target[PATH_CAP];
-      ssize_t length = readlinkat(src, entry->d_name, target, sizeof(target) - 1);
-      if (length < 0) {
-        rc = neg_errno();
-        break;
-      }
-      target[length] = '\0';
-      if (symlinkat(target, dst, entry->d_name) != 0) {
-        rc = neg_errno();
-        break;
-      }
-      fputs(",\"kind\":\"symlink\",\"target\":", ctx->out);
-      json_string(ctx->out, target);
-      fputc('}', ctx->out);
-    } else if (S_ISREG(st.st_mode)) {
-      rc = stage_file(ctx, src, dst, entry->d_name, child, &st);
-      fputc('}', ctx->out);
-    } else {
-      rc = -EOPNOTSUPP;
-    }
-    errno = 0;
-  }
-  if (rc == 0 && errno != 0) rc = neg_errno();
-  closedir(dir);
-  return rc;
-}
-
-/* A crashed fence leaves an unreferenced stage behind; the next attempt takes a
- * fresh name rather than reusing a directory whose contents it cannot trust. */
-static int create_stage(uint64_t cut, uint64_t generation, char name[64]) {
-  for (unsigned attempt = 0; attempt < STAGE_ATTEMPT_CAP; attempt++) {
-    if (attempt == 0) snprintf(name, 64, "stage-g%llu-c%llu", (counter)generation, (counter)cut);
-    else snprintf(name, 64, "stage-g%llu-c%llu-a%u", (counter)generation, (counter)cut, attempt);
-    if (mkdirat(state.state_fd, name, 0700) == 0) {
-      int fd = openat(state.state_fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-      return fd < 0 ? neg_errno() : fd;
-    }
-    if (errno != EEXIST) return neg_errno();
-  }
-  return -EEXIST;
-}
-
-static int write_manifest(uint64_t cut, uint64_t generation, char manifest_path[PATH_CAP]) {
-  char stage_name[64];
-  int stage = create_stage(cut, generation, stage_name);
-  if (stage < 0) return stage;
-
-  char manifest_name[80];
-  char temp_name[96];
-  snprintf(manifest_name, sizeof(manifest_name), "fence-c%llu-g%llu.json", (counter)cut, (counter)generation);
-  snprintf(temp_name, sizeof(temp_name), ".fence-c%llu-g%llu.tmp", (counter)cut, (counter)generation);
-
-  int temp = openat(state.state_fd, temp_name, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-  if (temp < 0) {
-    int rc = neg_errno();
-    close(stage);
-    return rc;
-  }
-  FILE *out = fdopen(temp, "w");
-  if (out == NULL) {
-    int rc = neg_errno();
-    close(temp);
-    close(stage);
-    return rc;
-  }
-  struct stage_ctx ctx = {
-    .out = out,
-    .stage_root = stage,
-    .extent = malloc(EXTENT_CAP),
-    .chunk = malloc(COPY_CHUNK),
-    .copies = NULL,
-    .first = true,
-  };
-  int rc = ctx.extent == NULL || ctx.chunk == NULL ? -ENOMEM : 0;
-  if (rc == 0) {
-    char stage_abs[PATH_CAP];
-    int written = snprintf(stage_abs, sizeof(stage_abs), "%s/%s", state.state_path, stage_name);
-    if (written < 0 || (size_t)written >= sizeof(stage_abs)) {
-      rc = -ENAMETOOLONG;
-    } else {
-      fprintf(out, "{\"cut\":%llu,\"generation\":%llu,\"stageRoot\":", (counter)cut, (counter)generation);
-      json_string(out, stage_abs);
-      fputs(",\"entries\":[", out);
-      rc = stage_tree(&ctx, state.root_fd, stage, "", 0);
-      if (rc == 0) fputs("]}\n", out);
-    }
-  }
-  for (struct inode_copy *copy = ctx.copies; copy != NULL;) {
-    struct inode_copy *next = copy->next;
-    free(copy);
-    copy = next;
-  }
-  free(ctx.extent);
-  free(ctx.chunk);
-  if (rc == 0 && ferror(out) != 0) rc = -EIO;
-  /* Sealed bytes reach the disk before the manifest that names them. */
-  if (rc == 0 && fflush(out) != 0) rc = neg_errno();
-  if (rc == 0 && syncfs(stage) != 0) rc = neg_errno();
-  if (rc == 0 && fsync(temp) != 0) rc = neg_errno();
-  fclose(out);
-  close(stage);
-  if (rc == 0 && renameat(state.state_fd, temp_name, state.state_fd, manifest_name) != 0) rc = neg_errno();
-  if (rc == 0 && fsync(state.state_fd) != 0) rc = neg_errno();
-  if (rc != 0) {
-    unlinkat(state.state_fd, temp_name, 0);
-    return rc;
-  }
-  int written = snprintf(manifest_path, PATH_CAP, "%s/%s", state.state_path, manifest_name);
-  return written < 0 || written >= PATH_CAP ? -ENAMETOOLONG : 0;
-}
-
 /* ------------------------------------------------------------- control --- */
 
-/* A compact WAL keeps both identities that recovery needs: the immutable head
- * the daemon authenticated, and the latest sealed watermark it reached after
- * that head. */
+/* Copies every record above `since` from the live journal into `fd`.  Those
+ * are the mutations no fence has sealed yet and the next fence derives its
+ * dirty set from them, so compaction may never drop them. */
+static int copy_unfenced_tail(int fd, uint64_t since) {
+  int source = openat(state.state_fd, WAL_NAME, O_RDONLY | O_CLOEXEC);
+  if (source < 0) return errno == ENOENT ? 0 : neg_errno();
+  FILE *journal = fdopen(source, "r");
+  if (journal == NULL) {
+    int rc = neg_errno();
+    close(source);
+    return rc;
+  }
+  char line[RECORD_CAP];
+  char scratch[RECORD_CAP];
+  int rc = 0;
+  while (rc == 0 && fgets(line, sizeof(line), journal) != NULL) {
+    size_t length = strlen(line);
+    memcpy(scratch, line, length + 1);
+    char *fields[JOURNAL_RECORD_FIELDS];
+    if (journal_record_split(scratch, fields) != 0) {
+      rc = -EUCLEAN;
+      break;
+    }
+    uint64_t sequence = 0;
+    if (!journal_parse_counter(fields[0], &sequence)) {
+      rc = -EUCLEAN;
+      break;
+    }
+    bool published = strcmp(fields[1], "FENCE") == 0 || strcmp(fields[1], "BASE") == 0;
+    if (sequence > since && !published) rc = append_all(fd, line, length);
+  }
+  if (rc == 0 && ferror(journal) != 0) rc = -EIO;
+  fclose(journal);
+  return rc;
+}
+
+/* A compact WAL keeps every identity recovery needs — the immutable head the
+ * daemon authenticated and the latest sealed watermark after it — plus the
+ * unfenced tail the next fence has to see. */
 static int compact_journal(void) {
   struct stat st;
   if (fstat(state.wal_fd, &st) != 0) return neg_errno();
@@ -1348,7 +1097,15 @@ static int compact_journal(void) {
   for (size_t index = 0; rc == 0 && index < count; index++) {
     rc = append_all(fd, records[index], strlen(records[index]));
   }
+  if (rc == 0) rc = copy_unfenced_tail(fd, has_fence ? fence_cut : 0);
+  /* The compact journal replaces the live one, so it is on the disk before the
+   * rename that names it: the one sync outside a fence, and never on a reply. */
   if (rc == 0 && fsync(fd) != 0) rc = neg_errno();
+  if (rc == 0) {
+    pthread_mutex_lock(&state.queue_lock);
+    state.wal_fsyncs++;
+    pthread_mutex_unlock(&state.queue_lock);
+  }
   close(fd);
   if (rc != 0) {
     unlinkat(state.state_fd, WAL_COMPACT_NAME, 0);
@@ -1371,7 +1128,11 @@ static int compact_journal(void) {
   return rc;
 }
 
-static int run_fence(uint64_t *cut_out, uint64_t *generation_out, char manifest[PATH_CAP]) {
+/* The fence body.  Admission is closed, the mutations in flight have drained
+ * and the backing root is synced, so the journal above the previous fence is an
+ * exact account of what changed and journal-delta.c stages exactly that. */
+static int run_fence(uint64_t *cut_out, uint64_t *generation_out, char manifest[PATH_CAP],
+                     struct journal_seal_work *work) {
   pthread_mutex_lock(&state.lock);
   if (state.stopping) {
     pthread_mutex_unlock(&state.lock);
@@ -1381,10 +1142,26 @@ static int run_fence(uint64_t *cut_out, uint64_t *generation_out, char manifest[
   while (state.active != 0) pthread_cond_wait(&state.drained, &state.lock);
   uint64_t cut = state.sequence;
   uint64_t generation = state.generation;
+  struct journal_delta_request delta = {
+    .root_fd = state.root_fd,
+    .state_fd = state.state_fd,
+    .state_path = state.state_path,
+    .wal_name = WAL_NAME,
+    .cut = cut,
+    .generation = generation,
+    .since = state.has_fence ? state.fence_cut : 0,
+    .max_chunk = state.max_chunk,
+    .boundaries = &state.boundaries,
+    .has_base = state.has_base,
+    .base_cut = state.base_cut,
+    .base_generation = state.base_generation,
+    .base_root = state.base_root,
+  };
   pthread_mutex_unlock(&state.lock);
 
+  memset(work, 0, sizeof(*work));
   int rc = syncfs(state.root_fd) == 0 ? 0 : neg_errno();
-  if (rc == 0) rc = write_manifest(cut, generation, manifest);
+  if (rc == 0) rc = journal_delta_stage(&delta, manifest, work);
   if (rc == 0) rc = durable(REC_FENCE, cut, generation, "fence", 0, "", manifest);
   if (rc == 0) {
     pthread_mutex_lock(&state.lock);
@@ -1406,16 +1183,6 @@ static int run_fence(uint64_t *cut_out, uint64_t *generation_out, char manifest[
   *cut_out = cut;
   *generation_out = generation;
   return rc;
-}
-
-static bool parse_counter(const char *text, uint64_t *out) {
-  if (text == NULL || *text == '\0') return false;
-  char *end = NULL;
-  errno = 0;
-  unsigned long long value = strtoull(text, &end, 10);
-  if (errno != 0 || end == text || *end != '\0') return false;
-  *out = (uint64_t)value;
-  return true;
 }
 
 static bool is_root_id(const char *root) {
@@ -1478,6 +1245,29 @@ static int run_base(uint64_t cut, uint64_t generation, const char *root) {
   return rc;
 }
 
+/* The sidecar's post-CAS hand-back.  It reseeds the base exactly as `base`
+ * does — the head it names must be the fence this daemon sealed — and, inside
+ * the same admission-closed window, merges the boundaries of the files whose
+ * chunk layout the publish changed.  One request, so the map and the head it
+ * belongs to can never be observed apart. */
+static int run_boundaries(const char *request, size_t *merged) {
+  struct journal_boundaries_update update;
+  int rc = journal_boundaries_parse(request, &update);
+  if (rc == 0) rc = run_base(update.cut, update.generation, update.root);
+  if (rc == 0) {
+    pthread_mutex_lock(&state.lock);
+    rc = journal_boundaries_merge(&state.boundaries, update.files, update.count,
+                                  (const char *const *)update.removed, update.removed_count);
+    if (rc == 0) {
+      state.max_chunk = update.max_chunk;
+      *merged = update.count;
+    }
+    pthread_mutex_unlock(&state.lock);
+  }
+  journal_boundaries_update_release(&update);
+  return rc;
+}
+
 /* Detaching the mount is what makes the FUSE workers return, so the thread that
  * asks for a shutdown has to do it rather than wait for main.  It happens once:
  * fuse_session_unmount frees the mountpoint it also reads, so a second caller
@@ -1520,29 +1310,54 @@ static bool json_field(const char *request, const char *key, char *out, size_t c
   return *at == '"';
 }
 
-/* Answers one control request and reports whether it asked the daemon to stop. */
-static bool handle_control(int fd) {
-  char request[CONTROL_REQUEST_CAP];
+/* Reads one newline-terminated request, growing the buffer as it arrives.  A
+ * `boundaries` payload is one entry per file whose chunk layout moved, so it is
+ * bounded by the seal rather than by the tree. */
+static char *read_request(int fd, bool *complete) {
+  size_t capacity = 8192;
   size_t filled = 0;
-  bool complete = false;
-  while (filled + 1 < sizeof(request)) {
-    ssize_t n = read(fd, request + filled, sizeof(request) - 1 - filled);
+  char *request = malloc(capacity);
+  *complete = false;
+  if (request == NULL) return NULL;
+  for (;;) {
+    if (filled + 1 == capacity) {
+      if (capacity >= CONTROL_REQUEST_CAP) break;
+      char *grown = realloc(request, capacity * 2);
+      if (grown == NULL) {
+        free(request);
+        return NULL;
+      }
+      request = grown;
+      capacity *= 2;
+    }
+    ssize_t n = read(fd, request + filled, capacity - 1 - filled);
     if (n <= 0) break;
     filled += (size_t)n;
     request[filled] = '\0';
-    if (strchr(request, '\n') != NULL) {
-      complete = true;
+    if (memchr(request, '\n', filled) != NULL) {
+      *complete = true;
       break;
     }
   }
   request[filled] = '\0';
+  return request;
+}
+
+/* Answers one control request and reports whether it asked the daemon to stop. */
+static bool handle_control(int fd) {
+  bool complete = false;
+  char *request = read_request(fd, &complete);
+  if (request == NULL) return false;
 
   char id[128] = "";
   char op[32] = "";
   char *body = NULL;
   size_t length = 0;
   FILE *out = open_memstream(&body, &length);
-  if (out == NULL) return false;
+  if (out == NULL) {
+    free(request);
+    return false;
+  }
   bool stop = false;
 
   if (!complete || !json_field(request, "id", id, sizeof(id)) || !json_field(request, "op", op, sizeof(op))) {
@@ -1557,25 +1372,38 @@ static bool handle_control(int fd) {
       json_field(request, "cut", cut_text, sizeof(cut_text))
       && json_field(request, "generation", generation_text, sizeof(generation_text))
       && json_field(request, "root", root, sizeof(root))
-      && parse_counter(cut_text, &cut)
-      && parse_counter(generation_text, &generation)
+      && journal_parse_counter(cut_text, &cut)
+      && journal_parse_counter(generation_text, &generation)
     ) ? run_base(cut, generation, root) : -EINVAL;
     fputs("{\"id\":", out);
-    json_string(out, id);
+    journal_json_string(out, id);
     if (rc == 0) {
       fputs(",\"ok\":true}\n", out);
     } else {
       fputs(",\"ok\":false,\"error\":", out);
-      json_string(out, strerror(-rc));
+      journal_json_string(out, strerror(-rc));
+      fputs("}\n", out);
+    }
+  } else if (strcmp(op, "boundaries") == 0) {
+    size_t merged = 0;
+    int rc = run_boundaries(request, &merged);
+    fputs("{\"id\":", out);
+    journal_json_string(out, id);
+    if (rc == 0) {
+      fprintf(out, ",\"ok\":true,\"boundaryFiles\":%zu}\n", merged);
+    } else {
+      fputs(",\"ok\":false,\"error\":", out);
+      journal_json_string(out, strerror(-rc));
       fputs("}\n", out);
     }
   } else if (strcmp(op, "fence") == 0) {
     uint64_t cut = 0;
     uint64_t generation = 0;
     char manifest[PATH_CAP] = "";
-    int rc = run_fence(&cut, &generation, manifest);
+    struct journal_seal_work work;
+    int rc = run_fence(&cut, &generation, manifest, &work);
     fputs("{\"id\":", out);
-    json_string(out, id);
+    journal_json_string(out, id);
     if (rc == 0) {
       pthread_mutex_lock(&state.lock);
       bool has_base = state.has_base;
@@ -1586,16 +1414,20 @@ static bool handle_control(int fd) {
       pthread_mutex_unlock(&state.lock);
       fprintf(out, ",\"ok\":true,\"cut\":%llu,\"generation\":%llu,\"manifestPath\":", (counter)cut,
               (counter)generation);
-      json_string(out, manifest);
+      journal_json_string(out, manifest);
       if (has_base) {
         fprintf(out, ",\"baseCut\":\"%llu\",\"baseGeneration\":\"%llu\",\"baseRoot\":", (counter)base_cut,
                 (counter)base_generation);
-        json_string(out, base_root);
+        journal_json_string(out, base_root);
       }
-      fputs("}\n", out);
+      fprintf(out,
+              ",\"sealWork\":{\"bytesStaged\":%llu,\"bytesChunked\":%llu,\"chunksHashed\":%llu,"
+              "\"nodesRewritten\":%llu,\"wholeFiles\":%llu}}\n",
+              (counter)work.bytes_staged, (counter)work.bytes_chunked, (counter)work.chunks_hashed,
+              (counter)work.nodes_rewritten, (counter)work.whole_files);
     } else {
       fputs(",\"ok\":false,\"error\":", out);
-      json_string(out, strerror(-rc));
+      journal_json_string(out, strerror(-rc));
       fputs("}\n", out);
     }
   } else if (strcmp(op, "stats") == 0) {
@@ -1605,36 +1437,46 @@ static bool handle_control(int fd) {
     unsigned active = state.active;
     bool admitted = state.admitted;
     bool mmap_negotiated = state.mmap_negotiated;
+    bool passthrough = state.passthrough;
+    size_t boundary_files = state.boundaries.count;
     pthread_mutex_unlock(&state.lock);
     pthread_mutex_lock(&state.queue_lock);
     counter records = state.records;
     counter batches = state.batches;
+    counter wal_bytes = state.wal_bytes;
+    counter wal_fsyncs = state.wal_fsyncs;
+    counter backing_fsyncs = state.backing_fsyncs;
+    counter writes = state.writes;
     pthread_mutex_unlock(&state.queue_lock);
     struct stat st;
     long long journal_bytes = fstat(state.wal_fd, &st) == 0 ? (long long)st.st_size : -1;
     fputs("{\"id\":", out);
-    json_string(out, id);
+    journal_json_string(out, id);
     fprintf(out,
             ",\"ok\":true,\"sequence\":%llu,\"generation\":%llu,\"active\":%u,\"admitted\":%s,\"records\":%llu,"
-            "\"batches\":%llu,\"journalBytes\":%lld,\"directIoAllowMmap\":%s}\n",
+            "\"batches\":%llu,\"journalBytes\":%lld,\"directIoAllowMmap\":%s,\"passthrough\":%s,"
+            "\"writes\":%llu,\"walBytes\":%llu,\"walFsyncs\":%llu,\"backingFsyncs\":%llu,"
+            "\"boundaryFiles\":%zu}\n",
             (counter)sequence, (counter)generation, active, admitted ? "true" : "false", records, batches,
-            journal_bytes, mmap_negotiated ? "true" : "false");
+            journal_bytes, mmap_negotiated ? "true" : "false", passthrough ? "true" : "false", writes, wal_bytes,
+            wal_fsyncs, backing_fsyncs, boundary_files);
   } else if (strcmp(op, "stop") == 0) {
     pthread_mutex_lock(&state.lock);
     uint64_t sequence = state.sequence;
     pthread_mutex_unlock(&state.lock);
     fputs("{\"id\":", out);
-    json_string(out, id);
+    journal_json_string(out, id);
     fprintf(out, ",\"ok\":true,\"sequence\":%llu}\n", (counter)sequence);
     stop = true;
   } else {
     fputs("{\"id\":", out);
-    json_string(out, id);
+    journal_json_string(out, id);
     fputs(",\"ok\":false,\"error\":\"unknown operation\"}\n", out);
   }
   fclose(out);
   if (body != NULL) append_all(fd, body, length);
   free(body);
+  free(request);
   return stop;
 }
 
@@ -1744,21 +1586,18 @@ static int compare_pending(const void *left, const void *right) {
 }
 
 static int parse_record(char *line, struct recovery *r) {
-  char *cursor = line;
-  char *fields[7];
-  for (size_t index = 0; index < 7; index++) {
-    fields[index] = cursor;
-    char *end = strchr(cursor, index == 6 ? '\n' : '\t');
-    if (end == NULL) return -EUCLEAN;
-    *end = '\0';
-    cursor = end + 1;
-  }
+  char *fields[JOURNAL_RECORD_FIELDS];
+  int split = journal_record_split(line, fields);
+  if (split != 0) return split;
   uint64_t sequence = 0;
   uint64_t generation = 0;
-  if (!parse_counter(fields[0], &sequence) || !parse_counter(fields[4], &generation)) return -EUCLEAN;
+  if (!journal_parse_counter(fields[0], &sequence) || !journal_parse_counter(fields[4], &generation)) return -EUCLEAN;
   if (sequence > r->max_sequence) r->max_sequence = sequence;
 
   const char *kind = fields[1];
+  /* A W record carries no result, so there is nothing to reconcile: the next
+   * fence re-derives the range from it and stages the bytes the disk holds. */
+  if (strcmp(kind, "W") == 0) return 0;
   if (strcmp(kind, "FENCE") == 0) {
     if (strcmp(fields[2], "fence") != 0 || strcmp(fields[3], "0") != 0 || fields[5][0] != '\0'
         || fields[6][0] != '/' || strlen(fields[6]) >= sizeof(r->fence_manifest)) return -EUCLEAN;
@@ -1794,8 +1633,8 @@ static int parse_record(char *line, struct recovery *r) {
     return 0;
   }
   if (strcmp(kind, "INTENT") != 0) return -EUCLEAN;
-  unescape_field(fields[5]);
-  unescape_field(fields[6]);
+  journal_field_unescape(fields[5]);
+  journal_field_unescape(fields[6]);
   struct pending_intent intent;
   memset(&intent, 0, sizeof(intent));
   intent.sequence = sequence;
@@ -1889,6 +1728,11 @@ int main(int argc, char **argv) {
   memset(&state, 0, sizeof(state));
   state.admitted = true;
   state.generation = 1;
+  journal_boundaries_init(&state.boundaries);
+  /* Until the sidecar publishes a generation there is nothing to resync from,
+   * so the first fence stages whole files.  Every later fence uses whatever
+   * `maxChunkBytes` the publish reported. */
+  state.max_chunk = 64 * 1024;
   if (snprintf(state.state_path, sizeof(state.state_path), "%s", argv[6]) >= (int)sizeof(state.state_path)) return 2;
   if (snprintf(state.socket_path, sizeof(state.socket_path), "%s", argv[8]) >= (int)sizeof(state.socket_path)) return 2;
 
@@ -1969,6 +1813,7 @@ int main(int argc, char **argv) {
   pthread_mutex_unlock(&state.queue_lock);
   pthread_join(state.writer_thread, NULL);
 
+  journal_boundaries_release(&state.boundaries);
   close(state.wal_fd);
   close(state.wake_fd);
   close(state.state_fd);

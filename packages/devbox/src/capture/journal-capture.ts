@@ -1,7 +1,8 @@
 /**
  * Mechanism three: replay an ordered mutation journal up to a named seq.
  *
- * The capture linearizes at the successful `fdatasync` of the FENCE record.
+ * The capture linearizes at the FENCE record, which the daemon appends only
+ * after the sealed stage and its delta manifest are on the disk.
  * Before that record is acknowledged, the daemon has closed mutation
  * admission, drained every admitted mutation, syncfs'd the captured root, and
  * sealed its generation-local stage. Writers admitted after the fence are
@@ -29,8 +30,8 @@ export const JOURNAL_CAPTURE_PLATFORM_ASSUMPTIONS = [
   'mounted-open-fds-remain-intercepted',
   'mmap-writes-are-intercepted',
   'rename-and-unlink-are-intercepted',
-  'intent-fdatasync-precedes-effect',
-  'result-fdatasync-precedes-reply',
+  'intent-write-precedes-effect',
+  'result-write-precedes-reply',
   'fence-closes-admission-and-drains',
   'root-syncfs-precedes-stage',
   'sealed-stage-and-manifest-are-durable',

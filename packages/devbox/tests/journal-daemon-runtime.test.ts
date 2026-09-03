@@ -3,8 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 
 import { afterAll, describe, expect, test } from 'bun:test';
 
-import { captureFromJournalFence } from '../src/capture/journal/client';
-import { readCaptureRange, requireAuditedCapture } from '../src/capture/model';
+import { readJournalDelta } from '../src/capture/journal/client';
 import type { ExportedFence, MatrixReport, ScenarioReport } from './journal-daemon-runtime-types';
 
 const packageRoot = resolve(dirname(new URL(import.meta.url).pathname), '..');
@@ -111,24 +110,33 @@ function assertMatrixOk(report: MatrixReport): void {
   throw new Error(`journal matrix failed: ${failed.join('; ')}`);
 }
 
-/** Re-reads one real fence with the production client the daemon serves. */
+/**
+ * Re-reads one real fence with the production client the daemon serves.
+ *
+ * The client is the seam the sidecar consumes the delta through, so this is
+ * where a manifest the daemon can write but the product cannot parse would
+ * show up: every field is schema-checked, and the staged read is verified
+ * against the digest the fence recorded before any byte is returned.
+ */
 async function auditExportedFence(fence: ExportedFence): Promise<string> {
-  const capture = requireAuditedCapture(await captureFromJournalFence(fence, {
-    captureId: `capture-${fence.cut}`,
-    epoch: String(fence.generation),
-    baseRevision: String(fence.generation),
-    stableStageHandle: `fence-c${fence.cut}-g${fence.generation}`,
-  }));
-  expect(capture.capturedCut.cut).toBe(String(fence.cut));
-  const entry = capture.entries.find((candidate) => candidate.path === 'posix/create.txt');
-  if (entry === undefined) throw new Error('the exported capture has no posix/create.txt');
-  return new TextDecoder().decode(await readCaptureRange(capture, entry, 6, 6));
+  const delta = await readJournalDelta(fence);
+  expect(delta.manifest.cut).toBe(fence.cut);
+  expect(delta.manifest.version).toBe(2);
+  expect(delta.manifest.sealWork.bytesStaged).toBe(fence.sealWork.bytesStaged);
+  const entry = delta.manifest.entries.find((candidate) => candidate.path === 'posix/create.txt');
+  if (entry === undefined) throw new Error('the exported delta has no posix/create.txt');
+  const range = (entry.ranges ?? [])[0];
+  if (range === undefined) throw new Error('the exported delta stages no bytes for posix/create.txt');
+  const bytes = await delta.stage.read(entry, range);
+  return new TextDecoder().decode(bytes.subarray(6, 12));
 }
 
 /** The matrix's scenarios, in the order it runs them. */
 const SCENARIOS = [
   'posix-fence-continuity', 'kill-intent-recovery', 'kill-after-fence', 'journal-compaction',
   'seeded-base', 'unstageable-node', 'bounded-shutdown', 'shutdown-races',
+  'write-path-costs', 'dirty-set-recovery', 'metadata-ordering', 'fence-is-o-k',
+  'enospc-before-effect', 'read-passthrough',
 ] as const;
 type ScenarioName = (typeof SCENARIOS)[number];
 
@@ -178,6 +186,51 @@ const SCENARIO_FACTS = {
     /* A cell that stopped after its first entry would report no failure at all. */
     const raced = scenarioNamed(report, 'shutdown-races');
     expect(Object.keys(raced.facts.racedShutdowns ?? {})).toEqual(['stop', 'fence-stop', 'sigterm']);
+  },
+  'write-path-costs': async (report) => {
+    /* The whole v2 durability trade, as two numbers: the journal is never
+     * synced on a reply, and a caller's fsync still syncs its own file. */
+    const costs = scenarioNamed(report, 'write-path-costs');
+    expect(costs.facts.writePath?.walFsyncs).toBe(0);
+    expect(costs.facts.writePath?.writes ?? 0).toBeGreaterThanOrEqual(512);
+    expect(costs.facts.fsyncPath?.backingFsyncs).toBe(2);
+    expect(costs.facts.fsyncPath?.walFsyncs).toBe(0);
+  },
+  'dirty-set-recovery': async (report) => {
+    const recovered = scenarioNamed(report, 'dirty-set-recovery');
+    expect(recovered.facts.rangeUnion).toEqual([{ offset: 0, length: 150 }, { offset: 200, length: 10 }]);
+    expect(recovered.facts.restartDirty?.written ?? 0).toBeGreaterThan(0);
+  },
+  'metadata-ordering': async (report) => {
+    const ordered = scenarioNamed(report, 'metadata-ordering');
+    const ops = ordered.facts.metadataOrder ?? [];
+    expect(ops).toContain('rename:before.bin');
+    expect(ops).toContain('unlink:doomed.txt');
+    /* Ordering, on the host, out of the report: the rename has to precede the
+     * unlink or a replay would apply them the wrong way round. */
+    expect(ops.indexOf('rename:before.bin')).toBeLessThan(ops.indexOf('unlink:doomed.txt'));
+  },
+  'fence-is-o-k': async (report) => {
+    /* The ratio the design's cell 6.12 asks for, read off the two rows: the
+     * tree grew by two orders of magnitude and the seal did not move. */
+    const bounded = scenarioNamed(report, 'fence-is-o-k');
+    const small = bounded.facts.smallTree;
+    const large = bounded.facts.largeTree;
+    if (small === undefined || large === undefined) throw new Error('the O(k) cell reported no cost rows');
+    expect(large.treeBytes / small.treeBytes).toBeGreaterThanOrEqual(50);
+    expect(large.bytesStaged).toBe(small.bytesStaged);
+    expect(large.entries).toBe(small.entries);
+    expect(large.bytesStaged).toBeLessThanOrEqual(2 * large.dirtyBytes + 4 * 64 * 1024);
+  },
+  'enospc-before-effect': async (report) => {
+    const full = scenarioNamed(report, 'enospc-before-effect');
+    expect(full.facts.enospc?.errno ?? '').toContain('ENOSPC');
+    expect(full.facts.enospc?.effectsWithoutRecord).toBe(0);
+  },
+  'read-passthrough': async (report) => {
+    const reads = scenarioNamed(report, 'read-passthrough');
+    expect(reads.facts.reads?.passthrough).toBe(true);
+    expect(reads.facts.reads?.bytes).toBe(256 * 1024);
   },
 } satisfies Readonly<Record<ScenarioName, (report: MatrixReport) => Promise<void>>>;
 

@@ -39,8 +39,8 @@ function journalEvidence(
     'mounted-open-fds-remain-intercepted': true,
     'mmap-writes-are-intercepted': true,
     'rename-and-unlink-are-intercepted': true,
-    'intent-fdatasync-precedes-effect': true,
-    'result-fdatasync-precedes-reply': true,
+    'intent-write-precedes-effect': true,
+    'result-write-precedes-reply': true,
     'fence-closes-admission-and-drains': true,
     'root-syncfs-precedes-stage': true,
     'sealed-stage-and-manifest-are-durable': true,
@@ -515,8 +515,8 @@ describe('mechanism three — ordered mutation journal', () => {
     expect(stateEquals(prefixState(log.entries, cut), atCut)).toBe(true);
     expect(text(atCut.get('j/renamed-open-fd.txt')?.content)).toBe('z!zz');
     expect(atCut.has('j/unlink-me.txt')).toBe(false);
-    expect(result.soundness.linearizationPoint.evidence['intent-fdatasync-precedes-effect']).toBe(true);
-    expect(result.soundness.linearizationPoint.evidence['result-fdatasync-precedes-reply']).toBe(true);
+    expect(result.soundness.linearizationPoint.evidence['intent-write-precedes-effect']).toBe(true);
+    expect(result.soundness.linearizationPoint.evidence['result-write-precedes-reply']).toBe(true);
     expect(result.soundness.linearizationPoint.evidence['private-state-and-mount-are-excluded']).toBe(true);
 
     await Promise.all([

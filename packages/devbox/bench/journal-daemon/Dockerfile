@@ -18,11 +18,17 @@ RUN curl --fail --location --silent --show-error \
  && cp /tmp/libfuse/include/fuse_kernel.h /usr/local/include/fuse3/fuse_kernel.h \
  && ldconfig
 COPY journal-daemon.c /usr/local/src/kinu-journal-daemon.c
+COPY journal-delta.c /usr/local/src/journal-delta.c
+COPY journal-delta.h /usr/local/src/journal-delta.h
 RUN cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O2 \
-      /usr/local/src/kinu-journal-daemon.c -o /usr/local/bin/kinu-journal-daemon \
+      -I/usr/local/src \
+      /usr/local/src/kinu-journal-daemon.c /usr/local/src/journal-delta.c \
+      -o /usr/local/bin/kinu-journal-daemon \
       $(pkg-config --cflags --libs fuse3) -lcrypto -pthread
 # The shutdown races the matrix asserts on resolve cleanly most of the time, so
 # the matrix reruns the same shutdowns against this build, which reports them.
 RUN cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O1 -g -fsanitize=thread \
-      /usr/local/src/kinu-journal-daemon.c -o /usr/local/bin/kinu-journal-daemon-tsan \
+      -I/usr/local/src \
+      /usr/local/src/kinu-journal-daemon.c /usr/local/src/journal-delta.c \
+      -o /usr/local/bin/kinu-journal-daemon-tsan \
       $(pkg-config --cflags --libs fuse3) -lcrypto -pthread
