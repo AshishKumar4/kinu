@@ -130,13 +130,39 @@ export const PROJECT_MARKERS = [
  * is reported inside that finding and on the success line, and it is never a
  * verdict of its own. */
 
+/** The engine whose walk this check is about. Read rather than imported: the
+ *  question is what the SHIPPED source does, and a gate that imports the
+ *  function it is judging cannot tell a present bound from a removed one. */
+const ENGINE = 'packages/cli-backend/src/checkpoints.ts';
+
+/**
+ * Whether `workdirForPath` stops its ancestor walk at the temp directory.
+ *
+ * With the bound, a marker at or above the temp directory claims nothing: the
+ * walk breaks before it probes there, so a stray `pyproject.toml` in a shared
+ * `/tmp` is harmless and refusing a push for it is a false blocker. Without
+ * the bound, that marker owns every host write beneath it — measured at
+ * 24,483 ms for one `laptop.writeFile`, which surfaces as a 5,000 ms timeout
+ * in whichever suite wrote first. So the marker is a FINDING only while the
+ * bound is missing, and this is the half that decides which.
+ */
+export function engineBoundsTempWalk(source: string): boolean {
+  const walk = source.slice(source.indexOf('workdirForPath(path: string): string {'));
+  const body = walk.slice(0, walk.indexOf('\n    },'));
+  return body.includes('resolve(tmpdir())')
+    && /if \(probe === temp \|\| real === realTemp\) break;/u.test(body);
+}
+
 export interface Environment {
   readonly temp: string;
   readonly freeInodes: number;
   readonly freeBytes: number;
-  /** Directories between the temp dir and `/` that carry a project marker, so a
-   *  checkpoint working directory resolves to them. Nearest first. */
-  readonly unboundedWorkdirs: readonly string[];
+  /** Directories between the temp dir and `/` that carry a project marker.
+   *  Nearest first. Harmless while the engine bounds its walk; each one owns
+   *  every host write beneath it once that bound is gone. */
+  readonly markedAncestors: readonly string[];
+  /** Whether the shipped engine still stops its walk at the temp directory. */
+  readonly workdirWalkBounded: boolean;
   readonly scratchOrphans: number;
   readonly tempEntries: number;
   /** The commit being merged in, when a merge is half-resolved. A tree in that
@@ -172,7 +198,8 @@ export function observe(): Environment {
     temp,
     freeInodes: fs.ffree,
     freeBytes: fs.bavail * fs.bsize,
-    unboundedWorkdirs: unboundedWorkdirsAbove(temp, process.env.HOME ?? '/root'),
+    markedAncestors: unboundedWorkdirsAbove(temp, process.env.HOME ?? '/root'),
+    workdirWalkBounded: engineBoundsTempWalk(readFileSync(join(repo, ENGINE), 'utf8')),
     scratchOrphans: orphans,
     tempEntries: entries.length,
     mergeInProgress: existsSync(join(repo, '.git/MERGE_HEAD'))
@@ -214,18 +241,21 @@ export function judge(env: Environment): string[] {
     }));
   }
 
-  for (const dir of env.unboundedWorkdirs) {
-    problems.push(finding({
-      at: `${dir} (marker for a checkpoint working directory)`,
-      invariant: 'no directory above the temp directory looks like a project root',
-      found: `${dir} carries `
-        + `${PROJECT_MARKERS.filter((m) => existsSync(join(dir, m))).join(', ')}`,
-      silently: `every host write under ${env.temp} resolves its checkpoint working `
-        + `directory to ${dir} and shadow-git-adds the whole of it — measured at 24,483 ms `
-        + 'for one laptop.writeFile, which lands as a 5,000 ms test timeout elsewhere',
-      fix: `rm ${join(dir, 'package.json')}  (or whichever marker above is stray) — and see `
-        + 'packages/cli-backend/src/checkpoints.ts workdirForPath, whose walk is unbounded',
-    }));
+  if (!env.workdirWalkBounded) {
+    for (const dir of env.markedAncestors) {
+      problems.push(finding({
+        at: `${dir} (marker for a checkpoint working directory)`,
+        invariant: `${ENGINE} workdirForPath stops its walk at the temp directory`,
+        found: `the walk carries no temp bound, and ${dir} carries `
+          + `${PROJECT_MARKERS.filter((m) => existsSync(join(dir, m))).join(', ')}`,
+        silently: `every host write under ${env.temp} resolves its checkpoint working `
+          + `directory to ${dir} and shadow-git-adds the whole of it — measured at 24,483 ms `
+          + 'for one laptop.writeFile, which lands as a 5,000 ms test timeout elsewhere',
+        fix: `restore the temp bound in ${ENGINE} workdirForPath (a scratch directory is `
+          + 'never a project root), which packages/cli-backend/tests/'
+          + 'checkpoint-workdir-bound.test.ts proves in both directions',
+      }));
+    }
   }
 
   // Repo-scale version of the same fault the checkpoint-workdir check catches:
@@ -313,6 +343,19 @@ if (import.meta.main) {
     ['entries in the temp directory', env.tempEntries],
     ['project markers probed per ancestor', PROJECT_MARKERS.length],
   ]);
+  // On the SUCCESS path, because a limitation visible only in red output is
+  // invisible exactly when the tree is green: markers above a shared temp
+  // directory are tolerated solely because the engine bounds its own walk.
+  // Deliberately NOT one of the counts above: zero marked ancestors is a clean
+  // machine, and `assertMeasured` rightly refuses a zero it would read as a
+  // gate that scanned nothing. The probe's own denominator is the marker count.
+  if (env.markedAncestors.length > 0 && env.workdirWalkBounded) {
+    process.stdout.write(
+      `preflight: tolerated — ${env.markedAncestors.join(', ')} `
+      + `${env.markedAncestors.length === 1 ? 'carries' : 'carry'} a project marker, `
+      + `harmless while ${ENGINE} bounds its walk at the temp directory\n`,
+    );
+  }
   const problems = judge(env);
   if (problems.length === 0) {
     console.log(`preflight: ok — ${measured}, `

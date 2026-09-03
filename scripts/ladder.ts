@@ -629,7 +629,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether the gates it enumerates pass.',
   },
   {
-    run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts',
+    run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts',
     tier: 'push',
     seconds: 1,
     catches: 'a secret scanner that stopped matching, an exact historical adjudication that '
