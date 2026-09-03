@@ -172,7 +172,7 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
       )}
       {kind === "text" && file?.truncated && draft === null && (
         <div className="px-3 py-1.5 text-[11px] p-text-4 border-b p-border">
-          Only the first part of this file is shown, so it cannot be edited here. Download it for the whole file.
+          Preview truncated. Download the full file to edit it.
         </div>
       )}
       <div data-files-preview-body className="flex-1 min-h-0 overflow-auto">
@@ -216,7 +216,7 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
           ) : (
             <pre className="p-3 text-[11px] leading-relaxed font-mono p-text-2 whitespace-pre-wrap break-words">
               {content}
-              {file.truncated && <span className="p-text-4">{"\n… truncated for preview — download for the whole file"}</span>}
+              {file.truncated && <span className="p-text-4">{"\n… preview truncated. Download the full file."}</span>}
             </pre>
           )
         )}

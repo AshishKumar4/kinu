@@ -142,7 +142,7 @@ export function ConnectedModelPicker({
         type="button"
         onClick={fetchModels}
         className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-1 text-[11px] p-text-3 hover:p-text-2"
-        title="Couldn't load the model list. Click to retry."
+        title="Could not load the model list. Click to retry."
       >
         <ArrowsClockwiseIcon size={11} />
         models unavailable
@@ -201,7 +201,7 @@ function ProviderFailureNotice({ failures }: { failures?: ProviderFailure[] }) {
         <p key={failure.provider} className="p-warning flex items-start gap-1.5 text-[11px] leading-snug">
           <WarningCircleIcon size={12} className="mt-0.5 shrink-0" />
           <span className="min-w-0">
-            <span className="font-medium">{failure.label ?? failure.provider}</span> unavailable — {failure.reason}
+            <span className="font-medium">{failure.label ?? failure.provider}</span> unavailable: {failure.reason}
           </span>
         </p>
       ))}

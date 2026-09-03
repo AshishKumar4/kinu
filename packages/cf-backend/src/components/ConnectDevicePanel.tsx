@@ -168,8 +168,8 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
     return (
       <div data-connect-state="handed" className="space-y-3">
         <p className="text-xs p-text-2">
-          Run this on the machine you want to connect. It installs the CLI, signs in as you, and
-          starts the local daemon:
+          Run this on the machine you want to connect. It installs the CLI, signs you in, and starts
+          the daemon:
         </p>
         <div className="flex items-start gap-2 rounded-md p-fill border p-border p-3">
           <code data-connect-command className="font-mono p-meta p-text flex-1 break-all select-all leading-relaxed">
@@ -179,12 +179,12 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
         </div>
         {state.confirmable ? (
           <div data-connect-waiting className="flex items-center gap-2 text-xs p-text-3">
-            <Loader size="sm" /> Waiting for this machine to report in. This panel closes itself when it does.
+            <Loader size="sm" /> Waiting for this machine. This panel closes when it connects.
           </div>
         ) : (
           <p data-connect-unconfirmable className="text-xs p-text-3">
-            Your device list could not be read, so this panel cannot confirm the connection.
-            Check Account settings → Devices once the command finishes.
+            Your device list is unavailable. Check Account settings → Devices after the command
+            finishes.
           </p>
         )}
         {/* The icon is the only flex item; the prose is one, because a `code`
@@ -193,9 +193,9 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
         <p className="p-meta p-text-3 flex items-start gap-1.5">
           <WarningIcon size={11} className="mt-0.5 shrink-0" />
           <span>
-            Device secrets are written on that machine by <code className="font-mono">kinu connect</code>;
-            they are not in this command. Closing this panel keeps the machine's place — it appears
-            under Account settings → Devices as soon as it connects.
+            <code className="font-mono">kinu connect</code> writes the device secrets on that machine.
+            You can close this panel. The machine appears under Account settings → Devices when it
+            connects.
           </span>
         </p>
       </div>

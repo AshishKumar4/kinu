@@ -163,7 +163,7 @@ export function ProfileCatalogSettings() {
   return (
     <Card title="Agent roles and model tiers" icon={IdentificationCardIcon}>
       <p className="text-xs p-text-3">
-        Roles select instructions, tools, skills, a tier, and a swarm preset. Tier changes apply account-wide on the next turn.
+        Roles select instructions, tools, skills, a tier, and a swarm preset. Tier changes apply account-wide next turn.
       </p>
       {error && <div className="rounded-md border border-[var(--c-danger)]/30 bg-[var(--c-danger)]/5 px-3 py-2 text-xs p-danger">{error}</div>}
       {!draft || !envelope ? (

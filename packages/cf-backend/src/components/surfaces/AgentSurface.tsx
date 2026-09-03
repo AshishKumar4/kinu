@@ -70,10 +70,10 @@ export interface AgentSurfaceProps {
 function ExposureBadge({ exposure, wired }: { exposure: ToolInfo["exposure"]; wired: boolean }) {
   const label = exposure === "both" ? "native · code mode" : exposure === "native" ? "native" : "code mode";
   const reach = exposure === "both"
-    ? "Passed to the model as a tool definition, and reachable inside an execute_tools program."
+    ? "The model can call this tool, and so can an execute_tools program."
     : exposure === "native"
-      ? "Passed to the model as a tool definition."
-      : "Reachable only from inside an execute_tools program.";
+      ? "The model can call this tool."
+      : "Only an execute_tools program can call this tool.";
   return (
     <>
       <span
@@ -87,7 +87,7 @@ function ExposureBadge({ exposure, wired }: { exposure: ToolInfo["exposure"]; wi
       {!wired && (
         <span
           className="p-meta p-text-3"
-          title="This capability exists, but this agent does not wire it — so it is on none of its surfaces this turn."
+          title="This agent does not use this capability on any surface this turn."
         >
           not on this agent
         </span>
@@ -322,8 +322,8 @@ function SubordinatesCard({ rpc, workspaceName }: { rpc: Rpc; workspaceName: str
         <LoadFailure what="the agent roster" message={resource.message} onRetry={reload} />
       ) : roster.length === 0 ? (
         <p className="text-xs leading-relaxed p-text-4">
-          No standing helpers. Each one outlives the turn and runs its own loop, sharing this
-          workspace's files — the agent can hire them itself, or you can from the chat tab strip.
+          No standing helpers. Each runs its own loop, outlives the turn, and shares workspace files.
+          Hire one from the chat tabs.
         </p>
       ) : (
         <div className="p-group">

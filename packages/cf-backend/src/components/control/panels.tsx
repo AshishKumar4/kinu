@@ -89,7 +89,7 @@ export function Panel<Value>(
     case 'forbidden':
       return (
         <Notice tone="muted" icon={<LockKeyIcon size={14} />}>
-          This account is not on the control-plane operator list, so there is nothing here to show.
+          This account is not a control-plane operator.
         </Notice>
       );
     case 'stale-auth':

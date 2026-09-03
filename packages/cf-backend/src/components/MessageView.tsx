@@ -535,7 +535,7 @@ function WorkspaceCreatedCard({ state }: { state: CardState }) {
     <div className="flex justify-center animate-fade-in py-1">
       <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
         <SparkleIcon size={13} className="p-accent" weight="fill" />
-        <span>Workspace created — acting on its mission</span>
+        <span>Workspace created. The agent starts its mission.</span>
         <span className="flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
       </div>
     </div>
@@ -684,7 +684,7 @@ function SteeredMark({ state }: { state: "queued" | "landed" }) {
   return (
     <span className="mt-1 inline-flex items-center gap-1 text-[10px] p-text-3">
       <ArrowBendUpRightIcon size={10} weight="bold" />
-      {state === "queued" ? "queued — lands at the next step" : "steered mid-turn"}
+      {state === "queued" ? "queued for the next step" : "steered mid-turn"}
     </span>
   );
 }
@@ -902,7 +902,7 @@ function MessageFeedback({
         className={`text-[11px] p-1 rounded-sm p-card-hover transition-colors ${
           current === 'positive' ? 'p-text' : 'p-text-3'
         }`}
-        title="Mark this response as helpful (feeds evolution scoring)"
+        title="Mark this response helpful. Feeds evolution scoring."
       >👍</button>
       <button
         type="button"
@@ -911,7 +911,7 @@ function MessageFeedback({
         className={`text-[11px] p-1 rounded-sm p-card-hover transition-colors ${
           current === 'negative' ? 'p-text' : 'p-text-3'
         }`}
-        title="Mark this response as poor (feeds evolution scoring)"
+        title="Mark this response poor. Feeds evolution scoring."
       >👎</button>
       {failed && <span className="text-[10px] p-danger">couldn't save, try again</span>}
     </div>

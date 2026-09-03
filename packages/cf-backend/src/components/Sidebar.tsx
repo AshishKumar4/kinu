@@ -262,7 +262,7 @@ export default function Sidebar() {
           <button
             onClick={refreshWorkspaces}
             className="w-full text-left px-5 py-2 text-xs p-warning rounded-md p-card-hover transition-colors"
-          >Couldn't load workspaces. Tap to retry.</button>
+          >Could not load workspaces. Tap to retry.</button>
         )}
         <ul>
           {workspaces.map((a) => {
@@ -424,8 +424,8 @@ export default function Sidebar() {
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">
-            Remove <span className="font-medium p-text">{deleteTarget.displayName}</span> and clear its
-            server-side state? This cannot be undone.
+            Remove <span className="font-medium p-text">{deleteTarget.displayName}</span> and everything
+            in it? This cannot be undone.
           </p>
           {deleteError && (
             <div className="p-notice-danger text-xs rounded-md px-3 py-2">Could not remove: {deleteError}</div>

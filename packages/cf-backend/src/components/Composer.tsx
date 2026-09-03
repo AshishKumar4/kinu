@@ -118,8 +118,8 @@ function ModeSegment({ value, onChange, locked, disabled }: {
         const title = build && locked
           ? "Approve the active plan before starting an Auto turn."
           : build
-            ? "Auto — the agent implements the change and shows you what it ran."
-            : "Plan — review a plan before anything changes.";
+            ? "Auto. The agent makes the change and shows what it ran."
+            : "Plan. Review a plan before anything changes.";
         return (
           <button
             key={mode}
@@ -336,7 +336,7 @@ export function Composer({
               <button type="button" onClick={onStop}
                 className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2"
                 aria-label="Stop this turn"
-                title="Stop: abandon this turn. Anything you have queued comes back to the composer.">
+                title="Stop this turn. Queued text returns to the composer.">
                 <StopIcon size={14} weight="fill" />
                 <span className="hidden @[30rem]:inline p-meta">Stop</span>
               </button>
@@ -345,7 +345,7 @@ export function Composer({
               <button type="button" onClick={onBranch}
                 className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2"
                 aria-label="Run the draft as a parallel branch"
-                title="Branch: answer this beside the live turn, then compare. Neither one interrupts the other.">
+                title="Answer beside the live turn, then compare. Neither turn interrupts the other.">
                 <GitBranchIcon size={15} />
                 <span className="hidden @[30rem]:inline p-meta">Branch</span>
               </button>
@@ -354,7 +354,7 @@ export function Composer({
               ? <button type="button" onClick={onSteer} disabled={empty || disabled || !onSteer}
                   className="p-btn inline-flex h-[30px] cursor-pointer items-center justify-center gap-1.5 rounded-full px-[18px] text-[12.5px]"
                   aria-label="Steer the running turn"
-                  title="Steer: give this to the turn already running. It lands at the agent's next step — nothing is interrupted.">
+                  title="Send this to the running turn. It arrives at the agent's next step.">
                   <ArrowBendUpRightIcon size={14} weight="bold" />
                   Steer
                 </button>

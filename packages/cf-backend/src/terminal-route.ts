@@ -140,11 +140,11 @@ export async function handleTerminalRequest(
   const scope = { workspace: agentName, executor };
 
   const lane = terminalLane(executor);
-  // A refusal a UI can render as a labelled mode rather than as a failure: it
-  // names the environment's missing primitive, which is what the pane shows
-  // instead of pretending to be a shell.
+  // A refusal a UI can render as a labelled mode rather than as a failure. The
+  // body carries the mode and nothing else: what an environment lacks is not a
+  // sentence anyone is shown.
   if (lane.mode === "line") {
-    return json({ error: `${executor} has no terminal`, lane: "line", missing: lane.missing }, { status: 409 });
+    return json({ error: `${executor} has no terminal`, lane: "line" }, { status: 409 });
   }
   if (!env.Sandbox) return err(503, "no Sandbox binding is configured on this deployment");
 

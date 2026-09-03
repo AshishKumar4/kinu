@@ -19,7 +19,7 @@ import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { LineTerminalState, terminalLane } from '../src/lib/terminal-lane';
+import { LINE_MODE_LABEL, LineTerminalState, terminalLane } from '../src/lib/terminal-lane';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
 
@@ -43,6 +43,10 @@ await mock.module('@cloudflare/sandbox', () => ({
 mockAgentsSdk();
 
 const { handleTerminalRequest } = await import('../src/terminal-route');
+
+/** The vocabulary a person is never shown: our primitives, our transports, our
+ *  missing methods. Read by the label case and by the route's refusal body. */
+const FORBIDDEN_IN_COPY = /pty|pseudo-terminal|JSON-RPC|daemon|Nimbus|startProcess|stdin|resize|socket/i;
 
 interface SandboxProbe {
   idFromName(name: string): string;
@@ -181,27 +185,24 @@ describe('which environments can have a terminal', () => {
     expect(terminalLane('sandbox')).toEqual({ mode: 'pty' });
   });
 
-  // The point of the whole lane table: a lane with no pseudo-terminal says what
-  // it is missing instead of emulating one. An empty or generic reason is the
-  // fake-shell defect wearing a label.
+  // THE CONTRACT CHANGED HERE, and this case is what enforces the new one.
+  // Until 2026-09-02 a line lane carried a `missing` sentence and the pane
+  // printed it, so the bar read "the device daemon's JSON-RPC surface has no
+  // pty method …" next to the mode. The owner's product rule forbids that: a
+  // label states what a person is in, never our missing methods. A device PTY
+  // is also being built, so any sentence about what the device cannot do is
+  // wrong the day it lands. So the lane carries a mode and nothing else, and
+  // there is no field a sentence can reach the screen through.
   test.each(['workspace', 'laptop', 'parent', 'something-invented'])(
-    '%s is line mode and names the primitive it lacks',
+    '%s is line mode, and its lane carries no sentence to render',
     (executor) => {
-      const lane = terminalLane(executor);
-      expect(lane.mode).toBe('line');
-      if (lane.mode !== 'line') return;
-      expect(lane.missing.length).toBeGreaterThan(20);
-      expect(lane.missing).not.toBe('unsupported');
+      expect(terminalLane(executor)).toEqual({ mode: 'line' });
     },
   );
 
-  test('the missing primitive is specific to the environment', () => {
-    const workspace = terminalLane('workspace');
-    const laptop = terminalLane('laptop');
-    if (workspace.mode !== 'line' || laptop.mode !== 'line') throw new Error('both are line lanes');
-    expect(workspace.missing).not.toBe(laptop.missing);
-    expect(workspace.missing).toContain('pseudo-terminal');
-    expect(laptop.missing).toContain('pty');
+  test('the line-mode label states the mode and no implementation detail', () => {
+    expect(LINE_MODE_LABEL).toContain('line mode');
+    expect(LINE_MODE_LABEL).not.toMatch(FORBIDDEN_IN_COPY);
   });
 });
 
@@ -311,13 +312,14 @@ describe('attaching a terminal', () => {
     expect(trace.calls).toEqual([]);
   });
 
-  test('an executor with no terminal is refused with what it is missing', async () => {
+  test('an executor with no terminal is refused as line mode, carrying no implementation detail', async () => {
     const { env, trace } = harness();
     const response = await terminalRequest(attachRequest('executor=laptop'), env);
     expect(response?.status).toBe(409);
     const payload = await body(response);
     expect(payload.lane).toBe('line');
-    expect(String(payload.missing)).toContain('pty');
+    expect(payload.missing).toBeUndefined();
+    expect(JSON.stringify(payload)).not.toMatch(FORBIDDEN_IN_COPY);
     expect(trace.calls).toEqual([]);
   });
 

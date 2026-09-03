@@ -16,14 +16,19 @@
  */
 
 /**
- * A `line` lane names the primitive the environment is missing, because a
- * refusal that only says "unsupported" is what leaves a user typing `htop`
- * into something that cannot run it. Line mode is a real mode — a command in,
- * its output back — and it is labelled as one.
+ * A lane is a mode and nothing else. The pane labels the mode it is in and
+ * says nothing about primitives an environment lacks: what a person can do
+ * here is run one command at a time, and that is the whole label. The
+ * capability evidence for each environment is the comment on
+ * {@link terminalLane}, which is engineering provenance rather than product
+ * copy.
  */
 export type TerminalLane =
   | { mode: 'pty' }
-  | { mode: 'line'; missing: string };
+  | { mode: 'line' };
+
+/** The line-mode label, beside the pane so a test can read it without xterm. */
+export const LINE_MODE_LABEL = 'line mode · one command at a time';
 
 /** What the line driver writes to. xterm's `Terminal` satisfies it. Declaring
  *  the one method keeps this module import-free and lets a test hold the bytes
@@ -466,29 +471,5 @@ export function writeOutputRow(term: TerminalWriter, out: TerminalPaneOutput) {
  *   with no session of its own to attach to.
  */
 export function terminalLane(executor: string): TerminalLane {
-  switch (executor) {
-    case 'sandbox':
-      return { mode: 'pty' };
-    case 'workspace':
-      return {
-        mode: 'line',
-        missing:
-          'the Nimbus session exposes exec and startProcess only — no pseudo-terminal, ' +
-          'no streaming stdin, no resize',
-      };
-    case 'laptop':
-      return {
-        mode: 'line',
-        missing:
-          "the device daemon's JSON-RPC surface has no pty method — it would need a " +
-          'pseudo-terminal binding and a streaming frame type on the device socket',
-      };
-    case 'parent':
-      return {
-        mode: 'line',
-        missing: "a fork runs commands on its origin's exec plane and holds no session of its own",
-      };
-    default:
-      return { mode: 'line', missing: `no terminal capability is declared for "${executor}"` };
-  }
+  return executor === 'sandbox' ? { mode: 'pty' } : { mode: 'line' };
 }

@@ -259,7 +259,7 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
         <div className="max-w-sm text-center">
           <NotePencilIcon size={30} className="mx-auto mb-3 text-muted-foreground" />
           <h3 className="text-sm font-medium text-foreground">No plan submitted yet</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Choose Plan in the composer. The agent will investigate and submit its plan here for review.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Choose Plan in the composer. The agent investigates and submits a plan for your review.</p>
         </div>
       </div>
     );
@@ -425,9 +425,9 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
           ) : (
             <p className="p-meta p-text-3 sm:mr-auto">
               {editable
-                ? "Approve this revision, or annotate the exact text that needs work."
+                ? "Approve this revision, or annotate the text that needs work."
                 : handoffPending
-                  ? plan.status === "approved" ? "Approval is saved; implementation has not started." : "Your review is saved; the revision turn has not started."
+                  ? plan.status === "approved" ? "Kinu saved your approval. Implementation has not started." : "Kinu saved your review. The revision has not started."
                   : plan.status === "approved" ? "Implementation started from this revision." : "The agent is preparing the next revision."}
             </p>
           )}

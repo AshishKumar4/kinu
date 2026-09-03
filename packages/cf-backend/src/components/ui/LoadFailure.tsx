@@ -18,7 +18,7 @@ export function LoadFailure({ what, message, onRetry, className }: LoadFailurePr
     <div className={`flex items-center gap-2 text-xs p-danger ${className ?? ""}`}>
       <WarningCircleIcon size={13} className="shrink-0" />
       <span className="min-w-0 truncate" title={message}>
-        Couldn't load {what}{message ? ` — ${message}` : ""}
+        Could not load {what}{message ? `: ${message}` : ""}
       </span>
       <button
         type="button"

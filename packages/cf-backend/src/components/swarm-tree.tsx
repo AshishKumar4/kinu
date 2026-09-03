@@ -1414,7 +1414,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 				<div className="mt-1.5 flex items-baseline gap-1.5 p-accent-fg">
 					<span className="font-mono text-[10px]">⋈{fanIn}</span>
 					<span className="leading-snug">
-						fan-in vertex — aggregated {fanIn} parents. The edge drawn above it is the
+						fan-in vertex, aggregating {fanIn} parents. The edge above it is the
 						selection parent; the other {fanIn - 1} are not in this tree.
 					</span>
 				</div>

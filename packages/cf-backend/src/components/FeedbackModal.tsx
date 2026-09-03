@@ -114,7 +114,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
           setShot(tooLarge(capture.blob.size)
             ? {
               phase: "failed",
-              reason: `it came to ${String(Math.ceil(capture.blob.size / (1024 * 1024)))} MiB, over the ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB limit — narrow the window and take it again, or send the note on its own`,
+              reason: `it came to ${String(Math.ceil(capture.blob.size / (1024 * 1024)))} MiB, over the ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB limit. Narrow the window and take it again, or send the note alone`,
             }
             : { phase: "ready", capture });
         },
@@ -292,7 +292,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
         <Modal title="Feedback sent" onClose={onClose} icon={<MegaphoneIcon size={16} className="p-accent" />}
           footer={<FilledButton onClick={onClose} data-feedback-done>Done</FilledButton>}>
           <p className="text-sm p-text-2" data-feedback-sent={send.id}>
-            Thank you — the report is with us{send.id.length > 0 ? ` as ${send.id.slice(0, 8)}` : ""}.
+            Thank you. Your report is with us{send.id.length > 0 ? ` as ${send.id.slice(0, 8)}` : ""}.
           </p>
         </Modal>
       </div>
@@ -401,15 +401,14 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
 
         {send.phase === "failed" && (
           <p className="text-xs p-warn" data-feedback-error>
-            Not sent: {send.reason}. The screenshot and note are still here — press Retry.
+            Not sent: {send.reason}. Your screenshot and note are still here. Press Retry.
           </p>
         )}
 
         <p className="text-[11px] p-text-3" data-feedback-consent>
-          Sending shares your note, the page address, and — when you include it — the screenshot above,
-          with your account email so we can reply. Password fields are blacked out before the image
-          leaves your browser; use <span className="p-text-2">Hide</span> for anything else you would
-          rather not send.
+          Sending shares your note, the page address, your account email, and the screenshot if you
+          include one. Your browser blacks out password fields before upload. Use
+          <span className="p-text-2">Hide</span> for anything else.
         </p>
       </Modal>
     </div>

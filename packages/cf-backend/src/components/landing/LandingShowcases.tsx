@@ -241,7 +241,7 @@ function TuiPreview(): ReactElement {
     <div data-tui-agent={agentId} aria-label="Kinu terminal interface preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
       <div className="grid h-10 grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--c-border-strong)] p-sidebar px-4 font-mono text-[10px] p-text-4">
         <div className="flex gap-2"><span className="size-2 rounded-full bg-[var(--c-danger)] opacity-70" /><span className="size-2 rounded-full bg-[var(--c-warning)] opacity-70" /><span className="size-2 rounded-full bg-[var(--c-success)] opacity-70" /></div>
-        <span className="uppercase tracking-[.14em]">kinu tui — {agent.label}</span>
+        <span className="uppercase tracking-[.14em]">kinu tui · {agent.label}</span>
         <span className="justify-self-end uppercase tracking-[.1em]">terminal</span>
       </div>
       <div className="flex min-h-12 items-center justify-between gap-4 border-b border-[var(--c-border-strong)] p-recessed px-4 py-2 font-mono text-[11px] uppercase tracking-[.06em] p-text-4">
@@ -378,7 +378,7 @@ export function LandingShowcases({
       <section data-showcase="workspace" className="pt-24">
         <div className="mx-auto mb-11 max-w-[760px] text-center">
           <h2 className="mb-3 text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Have your agents <span className="p-gold">live in the cloud.</span></h2>
-          <p className="mx-auto max-w-[700px] text-base leading-[1.65] p-text-3">Each workspace keeps durable files, memory, and one conversation per agent. Attach isolated Linux for heavier work, or connect your own machine.</p>
+          <p className="mx-auto max-w-[700px] text-base leading-[1.65] p-text-3">Each workspace keeps files, memory, and one conversation per agent. Attach Linux or your own machine.</p>
           <div className="mt-5 flex flex-wrap justify-center gap-2 font-mono text-[10.5px] p-text-3">
             <span className="rounded-full border p-border p-recessed px-3 py-1.5">{String(storageGb)} GB durable workspace</span>
             <span className="rounded-full border p-border p-recessed px-3 py-1.5">{String(sandboxVcpu)} vCPU · {String(sandboxMemoryGb)} GB RAM · {String(sandboxDiskGb)} GB disk sandbox</span>
@@ -390,21 +390,21 @@ export function LandingShowcases({
       <section data-showcase="bugfix" className="pt-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
           <div><div className="mb-3.5 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />One bug, end to end</div><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">From bug report <span className="p-gold">to green tests.</span></h2></div>
-          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">A replay of one workspace session. Kinu reproduces a coupon failure, you annotate and approve its plan, three candidate patches race, and the focused suite picks the winner.</p>
+          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Watch Kinu reproduce a failure, revise its plan, compare three patches, and run the focused suite.</p>
         </div>
         <BugFixDemo />
       </section>
       <section data-showcase="tui" className="pt-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
           <div><div className="mb-3.5 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />The terminal</div><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Let your agents live <span className="p-gold">locally.</span></h2></div>
-          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Create local workspaces in the full-featured TUI, or connect to cloud workspaces from your favorite terminal.</p>
+          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Create local workspaces or open cloud workspaces from your terminal.</p>
         </div>
         <TuiPreview />
       </section>
       <section data-showcase="cli" className="py-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
           <div><div className="mb-3.5 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />The CLI</div><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Automate focused work <span className="p-gold">from any shell.</span></h2></div>
-          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Use <code className="font-mono text-[.9em] p-text-2">kinu run</code> for one-shot tasks in scripts and CI. It streams tool activity, returns the final answer, and exits with the run status.</p>
+          <p className="max-w-[580px] text-base leading-[1.65] p-text-3"><code className="font-mono text-[.9em] p-text-2">kinu run</code> streams one task for scripts or CI, returns the answer, then exits with its status.</p>
         </div>
         <CliPreview />
       </section>

@@ -176,7 +176,7 @@ describe('the panel settles on the machine that arrived', () => {
     await flow.start(undefined, []);
     flow.observe([device('dev-new', false)]);
     expect(settled).toEqual([]);
-    expect(render(flow, [])).toContain('Waiting for this machine to report in');
+    expect(render(flow, [])).toContain('Waiting for this machine.');
   });
 
   test('it settles once; later rosters do not re-fire it', async () => {
@@ -200,7 +200,7 @@ describe('an unreadable roster is stated, never guessed around', () => {
     const { flow, settled } = recorder();
     await flow.start(undefined, null);
     const html = render(flow, null);
-    expect(html).toContain('cannot confirm the connection');
+    expect(html).toContain('Your device list is unavailable');
     expect(html).not.toContain('Waiting for this machine');
     flow.observe([device('dev-new', true)]);
     expect(settled).toEqual([]);

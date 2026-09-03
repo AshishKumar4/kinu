@@ -321,7 +321,7 @@ describe('the control plane in a browser', () => {
       await openControl(browserPage, origin, 'Users');
 
       const text = await browserPage.evaluate(() => document.body.innerText);
-      expect(text).toContain('not on the control-plane operator list');
+      expect(text).toContain('This account is not a control-plane operator.');
       expect(text).not.toContain('No accounts have been observed yet');
       await browserPage.close();
     });

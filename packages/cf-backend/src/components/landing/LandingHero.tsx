@@ -361,7 +361,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
             </span>
           </h1>
           <p className="mb-8 max-w-[520px] text-[17.5px] leading-[1.65] text-pretty p-text-3">
-            Kinu gives AI agents a durable computer of their own. It adapts and improves with use, runs locally or fully in the cloud, and solves hard tasks by exploring multiple approaches and letting executable checks choose the winner.
+            Give each agent a durable computer. Run it locally or in the cloud. Executable checks choose among competing approaches.
           </p>
           <div className="flex max-w-[540px] items-center justify-between gap-4 rounded-xl border p-border p-recessed px-4 py-3.5">
             <code className="min-w-0 flex-1 truncate font-mono text-[12.5px] p-text-2"><span className="p-gold">$</span> <span data-install-command>{install}</span></code>

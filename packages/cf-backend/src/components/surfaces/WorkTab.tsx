@@ -143,7 +143,7 @@ export function WorkTab({
   if (nothingAtAll) {
     return (
       <EmptyState title="Nothing has happened yet"
-        hint="The plan the agent writes for itself, the work it detaches, and the changes it makes to itself all land here, with anything waiting on you at the top." />
+        hint="This tab collects plans, background jobs, agent changes, and anything waiting on you." />
     );
   }
 
@@ -188,8 +188,7 @@ export function WorkTab({
             )}
             {openTasks.length === 0 && runningJobs.length === 0 && (
               <p className="text-[12.5px] leading-[1.6] p-text-3">
-                Nothing in flight. When the agent takes on work with more than a step or two it writes
-                the steps down here, and a tool call over 30s detaches as a job beside them.
+                Nothing in flight. A multi-step plan or a tool call over 30 seconds lands here.
               </p>
             )}
           </div>
@@ -227,7 +226,7 @@ export function WorkTab({
             changelog !== null && (
               <p className="text-xs p-text-3">
                 {journal.length === 0
-                  ? "Nothing has settled yet. Finished jobs, closed plan items and the agent's own changes land here."
+                  ? "Nothing has settled yet. Finished jobs and closed plan items collect here."
                   : "Nothing under this filter."}
               </p>
             )
@@ -312,7 +311,7 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
       setDecided(decision === "denied"
         ? "Denied. The agent will be told, and nothing runs."
         : decision === "always"
-          ? "Approved, and Kinu will stop asking about these checks on that environment. It runs when the agent picks the decision up."
+          ? "Approved. Kinu will stop asking about these checks in this environment."
           : "Approved. It runs when the agent picks the decision up.");
     } catch (e) {
       const message = renderThrownChain({ cause: e });
@@ -331,8 +330,7 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
             {actions.length} command{actions.length === 1 ? "" : "s"} waiting on your approval
           </div>
           <div className="text-[11px] leading-[16px] p-text-3 mt-0.5">
-            None of these have run. The agent was told they are queued and carried on. Approving lets it
-            run them when it picks the decision up.
+            These checks are queued. Approve them so the agent can run them when it resumes.
           </div>
         </div>
       </div>
@@ -364,7 +362,7 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
         </Button>
         <Button size="sm" variant="secondary" disabled={busy || chosen.size === 0}
           onClick={() => decide("always")}
-          title="Approve these, and stop asking about the same checks on the same environment. Manage or revoke in Settings → Standing approvals.">
+          title="Approve these checks for this environment. Revoke under Settings → Standing approvals.">
           Always allow {countLabel(chosen.size, actions.length)}
         </Button>
         <Button size="sm" variant="ghost" disabled={busy || chosen.size === 0}

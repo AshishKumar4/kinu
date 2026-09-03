@@ -171,7 +171,7 @@ describe('a run that reached nothing reads as a refusal', () => {
   test('a failed run whose journal recorded no message says so instead of inventing one', () => {
     const refusal = runRefusal({ status: 'failed', branches: 0 }, null);
     expect(refusal?.reason).toBe('failed');
-    expect(refusal?.error).toContain('no branch carried a cause');
+    expect(refusal?.error).toContain('no branch recorded a cause');
   });
 
   test('stopping without an answer is a different reason from failing', () => {

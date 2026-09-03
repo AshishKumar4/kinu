@@ -121,8 +121,8 @@ function Source({ kind }: { kind: "API" | "local" }) {
     <span
       className={`text-[9px] px-1 py-px rounded-sm uppercase tracking-wide ${kind === "API" ? "p-badge-info" : "p-badge-neutral"}`}
       title={kind === "API"
-        ? "The provider's authoritative count for this step."
-        : "Exact character counts measured from the locally composed prompt content; not provider token attribution."}
+        ? "The provider's own count for this step."
+        : "Character counts from the prompt Kinu composed, not provider tokens."}
     >{kind}</span>
   );
 }
@@ -150,7 +150,7 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
     return (
       <section>
         <BlockHeader icon={GaugeIcon} title="Context" />
-        <Empty>No model step has reported usage yet. This fills in on the first step of the next turn.</Empty>
+        <Empty>No model step has reported usage yet. The next turn fills this in.</Empty>
       </section>
     );
   }
@@ -192,8 +192,8 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
       ) : (
         <p className="text-[10px] p-text-3 mt-1">
           {input === undefined
-            ? "This step's provider reported no input count, so no share of the window is shown."
-            : "Context window unknown. The model catalog has not answered, so no share is shown."}
+            ? "This provider reported no input count."
+            : "Context window unknown."}
         </p>
       )}
 
@@ -217,8 +217,7 @@ function Breakdown({ context }: { context: ContextComposition | null }) {
     return (
       <div className="mt-4">
         <Empty>
-          No breakdown was recorded for this step. Steps recorded before this panel existed carry
-          usage but no composition.
+          This step recorded no breakdown.
         </Empty>
       </div>
     );
@@ -247,9 +246,7 @@ function Breakdown({ context }: { context: ContextComposition | null }) {
       </table>
 
       <p className="text-[10px] p-text-3 leading-relaxed mt-2.5 pt-2.5 border-t p-border">
-        These rows are exact character counts for the prompt content Kinu composed. Cloudflare
-        reports the request&apos;s total tokens but not how those tokens divide across sections, so no
-        per-section token counts are inferred.
+        These rows count characters in the prompt content Kinu composed.
       </p>
     </div>
   );
@@ -267,7 +264,7 @@ function StackedBar(
           <div
             key={row.plane}
             style={{ width: `${(row.chars / span) * 100}%`, background: planeFill(row.plane) }}
-            title={`${PLANE_LABEL[row.plane]} — ${row.chars.toLocaleString()} composed-content characters`}
+            title={`${PLANE_LABEL[row.plane]}: ${row.chars.toLocaleString()} composed characters`}
           />
         ))}
       </div>
@@ -332,13 +329,12 @@ function CostBlock({ snap }: { snap: ActivitySnapshot }) {
         <div className="flex items-end gap-2">
           <Num className="text-[20px] leading-none p-text">{fmtUsd(telemetry.usd)}</Num>
           <span className="text-[11px] p-text-2 pb-px">
-            over {telemetry.pricedSteps} priced steps — this agent&apos;s own turns, not the workspace
+            over {telemetry.pricedSteps} priced steps from this agent&apos;s turns
           </span>
         </div>
       ) : (
         <Empty>
-          No step of this agent&apos;s own turns carried a catalog price, so no cost is shown here.
-          Nothing here is estimated from a blended rate.
+          No step of this agent&apos;s turns carried a catalog price.
         </Empty>
       )}
 
@@ -352,8 +348,7 @@ function CostBlock({ snap }: { snap: ActivitySnapshot }) {
       {telemetry.stepsWithoutUsage > 0 && (
         <Warning>
           {telemetry.stepsWithoutUsage} step{telemetry.stepsWithoutUsage === 1 ? "" : "s"} reported no
-          usage at all, so the token totals below under-count the window — those steps were not free,
-          they were unmeasured.
+          usage. The token totals below are a floor.
         </Warning>
       )}
 
@@ -414,7 +409,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
         <h4 className="text-[11px] font-semibold p-text-2">Workspace spend</h4>
         <span
           className="ml-auto text-[10px] p-text-3"
-          title="Every step_finish and model_call row this workspace ever wrote, summed. No row bound stands between this table and the log."
+          title="Every recorded call in this workspace, summed over the whole log."
         >
           {coverage.calls} call{coverage.calls === 1 ? "" : "s"} · whole log
         </span>
@@ -422,10 +417,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
 
       {reported === null ? (
         <Empty>
-          No model call has been attributed yet, so there is no coverage fraction — absent, not 0%:
-          a call nobody made is not a call a provider failed to report.{" "}
-          {sourceList(["judge", "fast", "compaction", "head"])} and the rest all report through this
-          one sink, so these rows fill in on the first call of any kind.
+          No model call has reported yet. The first call fills these rows.
         </Empty>
       ) : (
         <>
@@ -435,18 +427,18 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                 <th className="text-left font-normal pb-1">Producer</th>
                 <th
                   className="text-right font-normal pb-1 w-20"
-                  title="Input plus output, as the provider reported them. Cache reads are already inside input."
+                  title="Input plus output, as the provider reported them. Cache reads are inside input."
                 >Tokens</th>
                 <th className="text-right font-normal pb-1 w-12" title="Share of the tokens this workspace measured.">Share</th>
                 {neurons && (
                   <th
                     className="text-right font-normal pb-1 w-16"
-                    title="Cloudflare's own billing unit, reported by the provider on every Workers AI call. A measurement, not a rate anyone applied."
+                    title="Cloudflare's billing unit, reported on every Workers AI call."
                   >Neurons</th>
                 )}
                 <th
                   className="text-right font-normal pb-1 w-16"
-                  title="Priced from the models.dev catalog by Kinu, not reported by any provider. Absent means unpriced, never free."
+                  title="Priced from the models.dev catalog. Absent means unpriced."
                 >USD</th>
               </tr>
             </thead>
@@ -486,7 +478,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                   <th
                     colSpan={neurons ? 5 : 4}
                     className="text-left font-normal pt-3 pb-1 text-[10px] p-text-3 uppercase tracking-wide"
-                    title="Read from mission_budget, the ledger the caps are enforced against. Every label's whole life, not the window above — a cap is cumulative, so a windowed figure would be one no cap is read against."
+                    title="Each mission's whole life, because a cap is cumulative."
                   >
                     By mission · whole life
                   </th>
@@ -518,7 +510,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                     <td className="py-1 text-right w-12">
                       <Num
                         className="text-[11px] p-text-3"
-                        title="A share of the windowed total above would be wrong here: this row is cumulative and that one is a window."
+                        title="This row is cumulative; the total above is a window."
                       >—</Num>
                     </td>
                     {neurons && <td className="py-1 text-right w-16"><Num className="text-[11px] p-text-3">—</Num></td>}
@@ -527,7 +519,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                         className="text-[11px] p-text-2"
                         title={mission.pricing.source === "catalog"
                           ? "Every token priced from the models.dev catalog."
-                          : `${mission.pricing.blendedTokens.toLocaleString()} of these tokens were priced at the blended fallback rate, not catalog rates.`}
+                          : `${mission.pricing.blendedTokens.toLocaleString()} of these tokens used the blended fallback rate, not catalog rates.`}
                       >
                         {fmtUsd(mission.spent.usd)}
                         {mission.limits.usd !== undefined && (
@@ -545,27 +537,23 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
             <Num className="p-text-2">{fmtPct(reported, reported === 1 ? 0 : 1)}</Num> of the{" "}
             {coverage.calls} known call{coverage.calls === 1 ? "" : "s"} reported usage.{" "}
             {reported === 1
-              ? "Every producer Kinu can see measured what it spent."
-              : `The other ${coverage.calls - coverage.measured} spent tokens nothing counted — unmeasured, not free.`}
+              ? "Every call reported usage."
+              : `The other ${coverage.calls - coverage.measured} reported none.`}
             {caveat === null
-              && " Nothing qualifies these totals: they are the workspace's whole spend over its whole log."}
+              && " These totals cover the whole log."}
           </p>
 
           {spend.offTurnShare !== null && (
             <p className="text-[10px] p-text-3 leading-relaxed mt-1.5">
               <Num className="p-text-2">{fmtPct(spend.offTurnShare, 1)}</Num> of the measured tokens
-              went on work no turn of this agent ran — judges, the fast tier, the evolution engine,
-              heads, rollouts. The hero figure above this block counts none of it.
+              went on work outside this agent&apos;s turns. The figure above counts none of it.
             </p>
           )}
 
           {neurons && (
             <p className="text-[10px] p-text-3 leading-relaxed mt-1.5">
-              Neurons are Cloudflare&apos;s own billing unit, returned by the provider on every
-              Workers AI call — the one cost figure here that was measured rather than computed. The
-              dollar column is priced from the models.dev catalog, which need not even carry the
-              model that served the call, so on this workspace the neurons are what was billed and
-              the dollars are an estimate of it.
+              Neurons are Cloudflare&apos;s billing unit, reported on every Workers AI call. The
+              dollar column is priced from the models.dev catalog, so it is an estimate.
             </p>
           )}
 
@@ -574,8 +562,8 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
               These totals are a floor: {caveat}.
               {(total.callsWithoutUsage > 0 || total.unpricedCalls > 0) && (
                 <>
-                  {" "}A trailing <Num className="p-warning">+</Num> marks a figure that some of its
-                  own calls are missing from.
+                  {" "}A trailing <Num className="p-warning">+</Num> means some of that figure&apos;s
+                  own calls reported nothing.
                 </>
               )}
             </Warning>
@@ -667,7 +655,7 @@ function SpendCells(
             className={`text-[11px] ${className}`}
             title={countNote(
               row.usage.neurons, row,
-              "No call from this producer reported neurons — not every provider bills in them.",
+              "No call from this producer reported neurons.",
             )}
           >
             {fmtTokens(row.usage.neurons)}
@@ -705,7 +693,7 @@ function countNote(
 ): string | undefined {
   if (value === undefined) {
     return row.callsWithoutUsage === row.calls
-      ? `The provider reported no usage at all for any of these ${row.calls} calls — counted, never measured.`
+      ? `The provider reported no usage for these ${row.calls} calls.`
       : missing;
   }
   return row.callsWithoutUsage === 0
@@ -722,7 +710,7 @@ function usdNote(row: Omit<ProducerSpend, "source">): string | undefined {
   if (row.callsWithoutUsage > 0) gaps.push(`${row.callsWithoutUsage} reported no usage to price`);
   if (gaps.length === 0) return undefined;
   const missing = `Of ${row.calls} calls, ${gaps.join(" and ")}.`;
-  return row.usd === undefined ? `${missing} Unpriced, never free.` : `${missing} This figure is a floor.`;
+  return row.usd === undefined ? `${missing} Unpriced.` : `${missing} This figure is a floor.`;
 }
 
 /** Producer names for prose, from the one label map — a second list here is how
@@ -752,9 +740,8 @@ function CacheBlock({ snap }: { snap: ActivitySnapshot }) {
       />
       {cacheHit.samples === 0 ? (
         <Empty>
-          No step in the window reported BOTH an input count and a cache-read count, so there is no
-          hit rate to show. A provider that never mentions its cache has no measured hit rate — 0%
-          would claim a total miss on evidence that does not exist.
+          No step in the window reported both an input count and a cache-read count, so there is no
+          hit rate.
         </Empty>
       ) : (
         <>
@@ -765,10 +752,9 @@ function CacheBlock({ snap }: { snap: ActivitySnapshot }) {
             <Stat label="p95" value={fmtPct(cacheHit.p95, 1)} />
           </dl>
           <p className="text-[10px] p-text-3 mt-2 leading-relaxed">
-            Cached input over total input, per step. The cached tokens are a subset of the input the
-            provider billed. The EMA weights recent steps at α={cacheHit.emaAlpha}; the mean and p95
-            are over the {cacheHit.samples} step{cacheHit.samples === 1 ? "" : "s"} retained in the
-            run-event log, not all time.
+            Cached input over total input, per step. Cached tokens are a subset of the billed input.
+            The EMA weights recent steps at α={cacheHit.emaAlpha}. The mean and p95 cover the
+            {" "}{cacheHit.samples} retained step{cacheHit.samples === 1 ? "" : "s"}.
           </p>
         </>
       )}
@@ -815,8 +801,7 @@ export function LogBlock({ log }: { log: readonly ActivityLogEntry[] }) {
       />
       {log.length === 0 ? (
         <Empty>
-          Nothing has been logged for this workspace yet. The runtime writes a row per notable
-          thing it does, so the first turn fills this in.
+          Nothing has been logged yet. The first turn starts the log.
         </Empty>
       ) : (
         <ol className="max-h-72 overflow-y-auto rounded-lg border p-border p-surface m-0 list-none p-0">
@@ -843,7 +828,7 @@ function LogRow({ row }: { row: ActivityLogEntry }) {
       <Num
         className={`text-[10px] shrink-0 ${row.detail === null ? "ml-auto" : ""} ${outsideTurn ? "p-text-3" : "p-text-2"}`}
         title={outsideTurn
-          ? "Written outside a turn, so there is no turn-relative elapsed time to report."
+          ? "Written outside a turn, so there is no elapsed time to report."
           : "Milliseconds into the turn that wrote this row."}
       >{outsideTurn ? "—" : `${String(row.elapsedMs)} ms`}</Num>
     </li>

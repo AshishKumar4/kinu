@@ -122,8 +122,7 @@ function EvolutionCard({ rpc }: { rpc: Rpc }) {
           : <div className="flex justify-center py-6"><Loader size="sm" /></div>
       ) : runs.length === 0 ? (
         <p className="text-xs leading-relaxed p-text-3">
-          No optimisation passes yet. GEPA proposes scaffold candidates from graded turns;
-          each lands here with its measured verdict.
+          No optimisation passes yet. GEPA proposals and measured verdicts appear here.
         </p>
       ) : (
         <div className="p-group">
@@ -187,14 +186,14 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
         <Button size="sm" variant="secondary" className="ml-auto" disabled={busy} onClick={propose}
           icon={busy ? <Loader size="sm" /> : undefined}>Propose tasks</Button>
       </div>
-      <p className="text-xs p-text-3 mb-3">Tasks the agent proposed for itself (Voyager-style). Predicted-success ≈ 0.5 is the ideal "barely succeeds" frontier. Accept &amp; run to grow its skills.</p>
+      <p className="text-xs p-text-3 mb-3">Tasks your agent proposes. A 50% prediction marks the target difficulty.</p>
       {actionErr && <div className="p-meta p-danger mb-2">{actionErr}</div>}
       {tasks === null ? (
         resource.status === "error"
           ? <LoadFailure what="the curriculum" message={resource.message} onRetry={reload} />
           : <div className="flex justify-center py-6"><Loader size="sm" /></div>
         )
-        : tasks.length === 0 ? <EmptyState icon={<GraduationCapIcon size={28} />} title="No proposed tasks" hint="Click “Propose tasks” to have the agent author its own next challenges." />
+        : tasks.length === 0 ? <EmptyState icon={<GraduationCapIcon size={28} />} title="No proposed tasks" hint="Choose “Propose tasks” to get a new set." />
         : (
           <div className="space-y-2">
             {tasks.map((t) => (
@@ -290,13 +289,13 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
     <section className="min-w-0">
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <ClockIcon size={16} className="p-accent" />
-        <h2 className="text-sm font-semibold p-text">Run history &amp; budget</h2>
+        <h2 className="text-sm font-semibold p-text">Run history and budget</h2>
         {runs && <Badge variant="secondary">{exhausted ? `${runs.length}` : `${runs.length}+`}</Badge>}
         <span className="ml-auto flex flex-wrap items-center gap-2">
-          {hitRate !== null && <span className="p-meta p-success" title={`prompt-cache hit rate (cache-read input / total input) over the ${runs?.length ?? 0} runs loaded`}>{fmtPct(hitRate)} cached{covers}</span>}
-          {totalTokens !== undefined && <span className="p-meta p-text-3" title={exhausted ? "tokens in+out across every recorded run" : "tokens in+out across the runs loaded — scroll for more"}>{fmtTokens(totalTokens)} tokens{covers}</span>}
+          {hitRate !== null && <span className="p-meta p-success" title={`Cache-read input divided by total input across ${runs?.length ?? 0} loaded runs`}>{fmtPct(hitRate)} cached{covers}</span>}
+          {totalTokens !== undefined && <span className="p-meta p-text-3" title={exhausted ? "input and output tokens across all recorded runs" : "input and output tokens across loaded runs; scroll for more"}>{fmtTokens(totalTokens)} tokens{covers}</span>}
           {silentRuns > 0 && (
-            <span className="p-meta p-text-3" title="These runs are not in the totals: their provider reported no usage, which is not the same as costing nothing.">
+            <span className="p-meta p-text-3" title="The provider reported no usage, so these runs are not in the totals.">
               {silentRuns} unreported
             </span>
           )}
@@ -319,8 +318,8 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
                   <span className="p-text-2 truncate flex-1" title={r.userMessage ?? r.runId}>{r.userMessage ?? r.runId}</span>
                   <span className="p-text-3 shrink-0 tabular-nums"
                     title={tokens === undefined
-                      ? `no usage reported — ${r.turnsWithoutUsage} turn${r.turnsWithoutUsage === 1 ? "" : "s"} ended without the provider counting anything`
-                      : "tokens in+out"}>{fmtTokens(tokens)} tok</span>
+                      ? `provider reported no usage for ${r.turnsWithoutUsage} turn${r.turnsWithoutUsage === 1 ? "" : "s"}`
+                      : "input and output tokens"}>{fmtTokens(tokens)} tok</span>
                   <span className="p-text-3 shrink-0 tabular-nums">{new Date(r.startedAt).toLocaleDateString()}</span>
                 </div>
               );
@@ -350,7 +349,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
 
   const revoke = useCallback(async (triggerId: string) => {
     if (!agentId) return;
-    if (!confirm("Revoke this trigger? The URL stops working immediately.")) return;
+    if (!confirm("Revoke this trigger? Its URL will stop working.")) return;
     setErr(null);
     try { await cancelTrigger(agentId, triggerId); } catch (e) { setErr(renderThrownChain({ cause: e })); }
     reload();
@@ -371,7 +370,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
         <Button size="sm" variant="secondary" className="ml-auto" icon={<PlusIcon size={12} />}
           onClick={() => { setShowCreate(true); setCreated(null); }}>New webhook</Button>
       </div>
-      <p className="text-xs p-text-3 mb-3">External systems that can wake this agent: webhooks (GitHub, Stripe, your CI) and timers.</p>
+      <p className="text-xs p-text-3 mb-3">Webhooks and timers let external systems wake this agent.</p>
       {err && <div className="text-xs p-danger mb-2">{err}</div>}
       {created && <NewWebhookCard result={created} onDismiss={() => setCreated(null)} />}
       {triggers === null ? (
@@ -379,7 +378,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
           ? <LoadFailure what="automations" message={resource.message} onRetry={reload} />
           : <div className="flex justify-center py-6"><Loader size="sm" /></div>
         )
-        : triggers.length === 0 ? <p className="text-xs p-text-3">No triggers registered. Create a webhook to let external systems wake this agent.</p>
+        : triggers.length === 0 ? <p className="text-xs p-text-3">No triggers. Create a webhook to wake this agent from another system.</p>
         : (
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {triggers.map((t) => (
@@ -420,7 +419,7 @@ function TriggerLine({ trigger, onRevoke }: {
           className="p-1 rounded-sm p-card-hover p-text-3 shrink-0" />
       ) : isWebhook ? (
         <span className="p-text-3 shrink-0"
-          title="This deployment cannot sign webhook URLs, so deliveries are refused. WEBHOOK_ROUTE_SECRET is not set.">
+          title="Set WEBHOOK_ROUTE_SECRET on this deployment to deliver webhooks.">
           no URL
         </span>
       ) : null}
@@ -478,7 +477,7 @@ curl -X POST '${url}' \\
   -d '{"hello":"world"}'`,
     };
     case "mtls": return {
-      before: `# mTLS — present your client certificate via your HTTP client
+      before: `# mTLS: present your client certificate through your HTTP client
 curl -X POST '${url}' --cert client.pem --key client.key \\
   -H "content-type: application/json" -d '{"hello":"world"}'`,
       secret: null,
@@ -502,7 +501,7 @@ export function NewWebhookCard({ result, onDismiss }: {
         <button className="ml-auto text-xs p-text-3 hover:p-text" onClick={onDismiss}>Dismiss</button>
       </div>
       <p className="text-xs p-text-2">
-        Save the secret now: it's shown only once. The URL is permanent until you revoke the trigger.
+        Save the secret now. It appears once. The URL works until you revoke the trigger.
       </p>
       <div className="space-y-2">
         <div>
@@ -568,7 +567,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
     } catch (e) {
       const msg = renderThrownChain({ cause: e });
       if (msg.includes("step-up")) {
-        if (confirm("A fresh login is required to create webhook URLs. Redirect to sign in?")) {
+        if (confirm("Your login is too old. Sign in again?")) {
           const login = new URL("/login", window.location.origin);
           login.searchParams.set("prompt", "login");
           login.searchParams.set("return_to", window.location.pathname + window.location.search);
@@ -628,7 +627,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
       {err && <div className="text-xs p-danger">{err}</div>}
       <p className="p-meta p-text-3 flex items-start gap-1.5">
         <WarningIcon size={11} className="mt-0.5 shrink-0" />
-        <span>Webhook creation requires a recent login (within 5 minutes). If it fails, you'll be prompted to sign in again.</span>
+        <span>Creating a webhook needs a sign-in from the last five minutes. Sign in again if it fails.</span>
       </p>
     </Modal>
   );

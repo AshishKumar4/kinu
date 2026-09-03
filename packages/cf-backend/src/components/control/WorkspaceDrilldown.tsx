@@ -146,7 +146,7 @@ export function WorkspaceDrilldown(
     <div className="space-y-4">
       <SectionHeader
         title={workspace}
-        hint="Read live from this workspace's own Durable Object, resolved through the account that owns it. Every control below calls the same RPC the owner's UI does."
+        hint="Live from this workspace's Durable Object. Every control below calls the owner's own RPC."
         onRefresh={reload}
       />
 
@@ -193,7 +193,7 @@ export function WorkspaceDrilldown(
                   onClick={() => confirm({
                     action: { action: 'workspace.remove', userId, workspace, confirm: '' },
                     title: 'Remove this workspace',
-                    body: "This tears down the workspace's Durable Object — its conversation, its model choice, its scaffold, its triggers and its sandbox — and drops it from its owner's registry. It belongs to another account and it cannot be undone.",
+                    body: "This removes the workspace's Durable Object, including its conversation, model, scaffold, triggers, and sandbox. It belongs to another account and cannot be undone.",
                     danger: true,
                   })}
                   className="text-xs p-danger hover:underline flex items-center gap-1 px-2 py-1"
@@ -288,7 +288,7 @@ function JobRows(
   },
 ): ReactNode {
   if (rows === null) {
-    return <div className="text-xs p-text-3">This job list is in a shape this page cannot read.</div>;
+    return <div className="text-xs p-text-3">This job list could not be read.</div>;
   }
   if (rows.length === 0) return <div className="text-xs p-text-3">No background jobs.</div>;
   return (
@@ -322,7 +322,7 @@ function JobRows(
               onClick={() => onPick({
                 action: { action: 'job.retry', userId, workspace, jobId: job.id },
                 title: 'Retry this job',
-                body: `Re-drive ${job.kind} (${job.id}) in ${workspace} as a new job. A job that already succeeded is refused.`,
+                body: `Re-drive ${job.kind} (${job.id}) in ${workspace} as a new job. Kinu refuses to retry a job that succeeded.`,
                 danger: false,
               })}
             >
@@ -359,7 +359,7 @@ function ApprovalRows(
   },
 ): ReactNode {
   if (rows === null) {
-    return <div className="text-xs p-text-3">This approval list is in a shape this page cannot read.</div>;
+    return <div className="text-xs p-text-3">This approval list could not be read.</div>;
   }
   if (rows.length === 0) return <div className="text-xs p-text-3">Nothing is parked on the owner.</div>;
   return (
@@ -407,7 +407,7 @@ const APPROVAL_ANSWERS = [
   { decision: 'denied', label: 'Deny', body: 'Refuse this command:' },
   {
     decision: 'always', label: 'Always',
-    body: 'Approve this command AND leave a standing grant, so commands tripping the same rules on this executor run without asking again:',
+    body: 'Approve this command and grant standing approval for the same rules on this executor:',
   },
 ] as const satisfies readonly {
   decision: Extract<ControlAction, { action: 'approvals.decide' }>['decision'];

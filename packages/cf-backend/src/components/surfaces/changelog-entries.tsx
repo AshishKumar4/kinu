@@ -131,7 +131,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
     setNotice(null);
     try {
       const r = await rpc<{ ok: boolean; detail?: string; error?: string }>("revertChangelogEntry", [entry.id]);
-      setNotice({ text: r.ok ? `Reverted — ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
+      setNotice({ text: r.ok ? `Reverted: ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
       if (r.ok) onReverted();
     } catch (e) {
       setNotice({ text: renderThrownChain({ cause: e }), ok: false });
@@ -334,8 +334,7 @@ function StagedSkillDecision(
           </div>
           {!staged.value.intact && (
             <div className="px-3 py-1.5 border-b p-border text-[11px] p-danger">
-              These bytes are not the ones the refinement recorded — something rewrote the staging.
-              Approving is refused until the refinement is re-run.
+              These bytes differ from the refinement's record. Re-run the refinement before approving.
             </div>
           )}
           {/* The WHOLE file. No clamp, deliberately: see the note above. */}
@@ -373,7 +372,7 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Rpc;
     setNotice(null);
     try {
       const r = await rpc<{ ok: boolean; detail?: string; error?: string }>("revertChangelogEntry", [entry.id]);
-      setNotice({ text: r.ok ? `Reverted — ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
+      setNotice({ text: r.ok ? `Reverted: ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
       if (r.ok) onReverted();
     } catch (e) {
       setNotice({ text: renderThrownChain({ cause: e }), ok: false });

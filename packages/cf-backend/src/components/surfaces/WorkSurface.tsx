@@ -189,7 +189,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           const kind = agentViewSurface(view.slug);
           return (
             <button key={view.slug} onClick={() => onSurface(kind)}
-              title={`${view.title} — written by Kinu`}
+              title={`${view.title}, written by Kinu`}
               aria-current={surface === kind ? "true" : undefined}
               className={`${tabCls} ${surface === kind ? "p-tab-active" : ""}`}>
               <SparkleIcon size={14} />
@@ -201,7 +201,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
         <button
           onClick={() => onSurface(ACTIVITY_SURFACE)}
           aria-label="Activity"
-          title="Activity: context, cost and cache"
+          title="Context, cost, and cache"
           className={`${tabCls} mr-2 px-2.5 ${surface === ACTIVITY_SURFACE ? "p-tab-active" : ""}`}>
           <GaugeIcon size={14} />
         </button>

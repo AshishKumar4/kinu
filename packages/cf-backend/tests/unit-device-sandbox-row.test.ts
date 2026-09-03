@@ -36,9 +36,9 @@ import type { PendingConsent } from '../src/lib/protocol';
 const AT = Date.UTC(2026, 8, 1, 9, 0, 0);
 
 const SANDBOXED_COPY =
-  'Commands run in a sandbox: agent home + the folders you consented, your own files invisible, GPU and network available';
-const RAW_COPY = 'Off: the agent runs as you with full access to this machine';
-const CANNOT_COPY = 'This machine cannot sandbox, so no commands run on it.';
+  'Commands can use the agent home, selected folders, GPU, and network. Other files stay hidden.';
+const RAW_COPY = 'Off. The agent runs as you with full access.';
+const CANNOT_COPY = 'No sandbox. Nothing runs here.';
 
 function device(sandbox: UserDevice['sandbox'], label = 'workstation'): UserDevice {
   return {
@@ -163,7 +163,7 @@ describe('the bind card asks one question and offers one binding', () => {
     for (const gone of ['Allow once', 'Grant', 'full filesystem', 'full access', 'connected folder', 'shell access', 'Deny']) {
       expect(html).not.toContain(gone);
     }
-    expect(html).toContain("under that machine's Sandbox setting");
+    expect(html).toContain("Commands use ashish-laptop's Sandbox setting");
     expect(html).toContain('Account settings → Devices');
   });
 });

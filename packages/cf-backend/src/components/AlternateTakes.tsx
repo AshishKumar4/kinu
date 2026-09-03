@@ -38,7 +38,7 @@ export function TakesChip({ set, onPick }: {
         type="button"
         onClick={() => setOpen(true)}
         className="inline-flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm border p-border p-card-hover transition-colors"
-        title="The agent explored near-tied approaches for this answer. Compare and pick."
+        title="The agent explored near-tied approaches. Compare and pick one."
       >
         <GitBranchIcon size={11} />
         {takeChipLabel(set)}
@@ -83,7 +83,7 @@ function TakesComparison({ set, onPick, onClose }: {
     try {
       const result = await onPick(set.id, candidate.nodeId);
       if (result.continuationQueued) {
-        setNotice("Preference recorded. The agent will continue with this take.");
+        setNotice("Saved. The agent continues with this take.");
       } else {
         onClose();
       }
@@ -116,7 +116,7 @@ function TakesComparison({ set, onPick, onClose }: {
           <>The agent explored {count} near-tied approaches for{" "}
             <span className="p-text-2">{set.task.length > 120 ? `${set.task.slice(0, 120)}…` : set.task}</span>.</>
         )}{" "}
-        Your pick becomes a real preference signal it learns from.
+        Your pick becomes a preference signal the agent learns from.
       </p>
 
       <div className="flex items-center justify-between">

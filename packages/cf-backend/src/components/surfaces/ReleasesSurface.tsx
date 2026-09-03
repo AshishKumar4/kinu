@@ -117,8 +117,7 @@ function SubstrateNotice({ executors }: { executors: ExecutorInfo[] }) {
           <div className="text-xs font-medium p-text">The release pipeline cannot run here</div>
           <div className="text-[11px] p-text-3 leading-relaxed">{substrate.reason}</div>
           <div className="text-[11px] p-text-3 leading-relaxed">
-            The agent can still draft changes and you can still decide approvals; apply, checks, previews and
-            deploys will fail until the sandbox is configured.
+            You can draft changes and decide approvals. Apply, checks, previews, and deploys need a configured sandbox.
           </div>
         </div>
       </div>
@@ -426,7 +425,7 @@ export function ReleasesSurface({ rpc, executors }: { rpc: Rpc; executors: Execu
       {changes.length === 0 ? (
         <>
           <EmptyState icon={<GitDiffIcon size={28} />} title="No release changes"
-            hint="The agent drives this lane: it binds a source, drafts the change, applies and checks the patch in its sandbox, then brings the approval here. Ask it in chat to ship something." />
+            hint="Ask the agent in chat to prepare a release. It returns here for approval after applying and checking the patch." />
           {bindings.length > 0 && <SourceList bindings={bindings} />}
         </>
       ) : (

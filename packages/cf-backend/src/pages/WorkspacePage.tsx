@@ -158,7 +158,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
               Connect a device
             </Link>
             <div className="mt-1 text-[10px] p-text-3">
-              Connecting states what access it grants and asks you to confirm. Nothing runs here until you do.
+              You will review the access before anything runs.
             </div>
           </div>
         </div>
@@ -182,8 +182,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
           </div>
           <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-fill rounded-sm px-2 py-1">{consent.command || "(command)"}</code>
           <div className="mt-1 text-[10px] p-text-3">
-            Approving lets this workspace run commands on {consent.deviceLabel} under that machine's
-            Sandbox setting. You can revoke it under Account settings → Devices.
+            Commands use {consent.deviceLabel}'s Sandbox setting. Revoke access under Account settings → Devices.
           </div>
         </div>
       </div>
@@ -244,8 +243,8 @@ export function ChatErrorCard({ message, replayed, streaming, onRetry, onDismiss
           <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-card rounded-sm px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
           <div className="text-[10px] p-text-3 mt-1.5">
             {replayed
-              ? "Nothing is failing right now — this is the outcome the server kept from the last turn that ran here, and it will keep reporting it until another turn does. Retrying re-runs that turn."
-              : "Retrying runs the same turn again against the same conversation. It does not send your message a second time."}
+              ? "This is the last turn's result. Retry runs that turn again."
+              : "Retry reuses this message in the same conversation."}
           </div>
         </div>
       </div>
@@ -584,7 +583,7 @@ function SubordinateChatColumn({
               : []),
             ...(state.newerDeployedBuild ? [{
               id: "version", tone: "info" as const,
-              text: "A new version was just deployed — this tab is running the old one.",
+              text: "A new version is ready. Reload this tab to use it.",
               action: { label: "Reload", icon: <ArrowsClockwiseIcon size={11} />, onClick: () => window.location.reload() },
             }] : []),
             ...(steerNotice ? [steerNotice] : []),
@@ -998,8 +997,7 @@ export default function WorkspacePage() {
       // directory for this turn and holds no checkpoint for it.
       if (entries.length === 0) {
         setRestoreNotice(
-          'This turn changed no files on your machine. File history covers your own device only — '
-          + 'changes the agent made in its workspace or in a sandbox are not restorable here.',
+          'This turn changed no files on your device. Workspace and sandbox changes cannot be restored here.',
         );
         return;
       }
@@ -1010,7 +1008,7 @@ export default function WorkspacePage() {
       }
       const files = plans.flatMap((p) => p.files);
       if (files.length === 0) {
-        setRestoreNotice('Files already match the state before this turn. Nothing to restore.');
+        setRestoreNotice('Your files already match the state before this turn.');
         return;
       }
       setRestorePlan({ entries: matches, dirs: plans.map((p) => p.dir), files });
@@ -1028,7 +1026,7 @@ export default function WorkspacePage() {
       for (const entry of restorePlan.entries) {
         await state.rpc('restoreFileCheckpoint', [entry.dir, entry.id]);
       }
-      setRestoreNotice(`Restored ${restorePlan.files.length} file(s) to before this turn. Restoring again undoes the undo.`);
+      setRestoreNotice(`Restored ${restorePlan.files.length} ${restorePlan.files.length === 1 ? "file" : "files"}. Run restore again to undo it.`);
       setRestorePlan(null);
     } catch (err) {
       setRestoreNotice(`Restore failed: ${renderThrownChain({ cause: err })}`);
@@ -1288,7 +1286,7 @@ export default function WorkspacePage() {
                     action: { label: "Retry", icon: <ArrowsClockwiseIcon size={11} />, onClick: state.retryLoad } }] : []),
                   ...(state.newerDeployedBuild ? [{
                     id: "version", tone: "info" as const,
-                    text: "A new version was just deployed — this tab is running the old one.",
+                    text: "A new version is ready. Reload this tab to use it.",
                     action: { label: "Reload", icon: <ArrowsClockwiseIcon size={11} />, onClick: () => window.location.reload() },
                   }] : []),
                   ...(attachments.refusal ? [{ id: "attach", tone: "warning" as const, text: attachments.refusal }] : []),
@@ -1409,8 +1407,7 @@ export default function WorkspacePage() {
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">
-            This permanently clears this agent's entire conversation history. It cannot be undone.
-            The agent's memory, SOUL.md, crafted tools, and evolution state are kept.
+            This cannot be undone. Memory, SOUL.md, crafted tools, and evolution stay unchanged.
           </p>
         </Modal>
       )}
@@ -1455,8 +1452,8 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
     >
       <div className="space-y-2">
         <p className="text-xs p-text-2 leading-relaxed">
-          This rewrites files under <span className="font-mono p-text">{plan.dirs.join(", ")}</span> on your
-          device: {counts}. A safety snapshot is taken first, so restoring again undoes the undo.
+          This changes files under <span className="font-mono p-text">{plan.dirs.join(", ")}</span> on your
+          device: {counts}. Kinu creates a safety snapshot first. Restore again to undo this change.
         </p>
         <ul className="rounded-md border p-border p-elevated max-h-52 overflow-y-auto text-[11px] font-mono">
           {shown.map((f) => (

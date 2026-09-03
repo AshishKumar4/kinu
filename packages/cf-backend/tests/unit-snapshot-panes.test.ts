@@ -101,7 +101,7 @@ describe('panes fed by the workspace snapshot', () => {
     const markup = render({ status: 'error', message: CONNECTION_LOST, last: null });
 
     expect(markup).not.toContain('No memories yet');
-    expect(markup).toContain("Couldn't load memory");
+    expect(markup).toContain('Could not load memory');
     expect(markup).toContain('Retry');
   });
 
@@ -109,7 +109,7 @@ describe('panes fed by the workspace snapshot', () => {
     const markup = render({ status: 'error', message: CONNECTION_LOST, last: null });
 
     expect(markup).not.toContain('No tools discovered yet');
-    expect(markup).toContain("Couldn't load tools");
+    expect(markup).toContain('Could not load tools');
   });
 
   test('no pane repeats the reason the banner already gives once', () => {
@@ -123,7 +123,7 @@ describe('panes fed by the workspace snapshot', () => {
 
     expect(markup).not.toContain('No memories yet');
     expect(markup).not.toContain('No tools discovered yet');
-    expect(markup).not.toContain("Couldn't load");
+    expect(markup).not.toContain('Could not load');
   });
 
   test('a workspace that loaded and holds nothing does say so', () => {
@@ -131,7 +131,7 @@ describe('panes fed by the workspace snapshot', () => {
 
     expect(markup).toContain('No memories yet');
     expect(markup).toContain('No tools discovered yet');
-    expect(markup).not.toContain("Couldn't load memory");
+    expect(markup).not.toContain('Could not load memory');
   });
 
   test('a dropped connection keeps the last snapshot on screen rather than emptying it', () => {
@@ -143,7 +143,7 @@ describe('panes fed by the workspace snapshot', () => {
     expect(markup).toContain('/api/cart/apply');
     expect(markup).toContain(TOOL.name);
     expect(markup).not.toContain('No memories yet');
-    expect(markup).not.toContain("Couldn't load memory");
+    expect(markup).not.toContain('Could not load memory');
     expect(markup).toContain(STATUS.displayName);
   });
 
@@ -151,6 +151,6 @@ describe('panes fed by the workspace snapshot', () => {
     const markup = render({ status: 'error', message: CONNECTION_LOST, last: STATUS });
 
     expect(markup).toContain('No memories yet');
-    expect(markup).not.toContain("Couldn't load memory");
+    expect(markup).not.toContain('Could not load memory');
   });
 });

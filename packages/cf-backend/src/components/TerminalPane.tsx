@@ -18,8 +18,8 @@
  *           one-shot exec that looked like a shell and could not run one.
  *
  * The lane decides which driver runs, and the route agrees with it because both
- * read the same table. lib/terminal-lane.ts holds the table, what each
- * environment is missing, and the line editor and painter this file mounts —
+ * read the same table. lib/terminal-lane.ts holds the table, the line-mode
+ * label, and the line editor and painter this file mounts —
  * everything that is decided over strings rather than over the DOM.
  */
 
@@ -32,7 +32,7 @@ import { describeError } from "@/hooks/use-async-resource";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { useTheme, type ThemeMode } from "@/hooks/use-theme";
 import {
-  BUSY, LineTerminalState, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
+  BUSY, LINE_MODE_LABEL, LineTerminalState, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
   type TerminalPaneOutput,
 } from "@/lib/terminal-lane";
 import type { ExecutorCommandResult } from "@/lib/protocol";
@@ -70,7 +70,7 @@ export function TerminalPane({ workspace, executor, outputs, onExecute }: Termin
   const lane = terminalLane(executor);
   return lane.mode === "pty"
     ? <PtyTerminal workspace={workspace} executor={executor} />
-    : <LineTerminal executor={executor} missing={lane.missing} outputs={outputs ?? []} onExecute={onExecute} />;
+    : <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} />;
 }
 
 /* ── PTY ──────────────────────────────────────────────────────────────── */
@@ -248,7 +248,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
           }
         }}
           className="ml-auto shrink-0 underline decoration-dotted hover:p-text-2 cursor-pointer"
-          title="Destroy this shell and open a new one. The only way back from a shell that exited.">
+          title="Destroy this shell and open a new one. Use this after a shell exits.">
           restart shell
         </button>
         {/* What the chords actually do here. `⌃C` reaches a full-screen program
@@ -256,7 +256,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
             this container: the PTY's shell is not a session leader with the
             terminal as its controlling tty, so the kernel has no foreground
             group to signal. Saying "⌃C interrupts" would be the fake. */}
-        <span className="shrink-0" title="The container's shell has no controlling terminal, so bash job control (interrupt, suspend, fg/bg) is unavailable. A full-screen program still receives ⌃C as a keystroke.">
+        <span className="shrink-0" title="⌃C reaches a full-screen program. Suspend, fg and bg do not work here.">
           ⇧⌃C copies · no job control
         </span>
       </div>
@@ -268,9 +268,8 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
 /* ── line mode ────────────────────────────────────────────────────────── */
 
 function LineTerminal(
-  { executor, missing, outputs, onExecute }: {
+  { executor, outputs, onExecute }: {
     executor: string;
-    missing: string;
     outputs: readonly TerminalPaneOutput[];
     onExecute?: (cmd: string) => Promise<ExecutorCommandResult>;
   },
@@ -387,14 +386,14 @@ function LineTerminal(
 
   return (
     <div className="w-full h-full flex flex-col">
-      {/* What this pane is, and why it is not a shell. A user who types `htop`
-          here deserves the reason on screen rather than a hung command. */}
+      {/* The mode this pane is in. It never explains what an environment
+          cannot do: a device PTY is being built, and a label about a missing
+          primitive would be wrong the day it lands. */}
       <div className="flex items-center gap-2 px-3 py-1 shrink-0 text-[10px] p-text-3">
         <span className="font-mono">{executor}</span>
         <span>·</span>
-        <span>line mode — one command at a time, no interactive programs</span>
-        {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
-        <span className="ml-auto truncate" title={missing}>{missing}</span>
+        <span>{LINE_MODE_LABEL}</span>
+        {failure !== null && <span className="ml-auto p-danger truncate" title={failure}>{failure}</span>}
       </div>
       <div ref={hostRef} className="p-bg flex-1 min-h-0 rounded-lg border p-border overflow-hidden" />
     </div>

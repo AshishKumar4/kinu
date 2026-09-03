@@ -206,11 +206,9 @@ export interface RunRefusal {
 }
 
 const REFUSAL_PROSE = {
-  failed: "The ledger recorded this search as failed and no branch carried a cause.",
-  stopped: "The search stopped without settling on an answer — no branch reached a terminal "
-    + "state, and no ledger row is left to say why.",
-  no_branch: "The root was written and no branch ever was, so there is nothing to compare. "
-    + "The search was cut off before its first expansion landed.",
+  failed: "The search failed and no branch recorded a cause.",
+  stopped: "The search stopped without an answer.",
+  no_branch: "The search stopped before its first branch, so there is nothing to compare.",
 } as const satisfies Record<RunRefusal["reason"], string>;
 
 /**

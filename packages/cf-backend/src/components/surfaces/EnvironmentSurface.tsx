@@ -47,9 +47,9 @@ import { EmptyState } from "./shared";
 
 /** Durability, in the words a user decides with. */
 const CONSISTENCY_HINT = {
-  durable: "Durable — survives everything",
-  ephemeral: "Ephemeral — dies with the container",
-  "live-shared": "Your machine — files stay on it",
+  durable: "Durable. Survives restarts.",
+  ephemeral: "Ephemeral. Ends with the container.",
+  "live-shared": "Files stay on your machine.",
 } satisfies Record<MountInfo["policy"]["consistency"], string>;
 
 export interface EnvironmentSurfaceProps {
@@ -263,7 +263,7 @@ function UnavailableMount({ mount, exec, onConnectDevice }: {
   // mount name left this branch — the whole connect call-to-action — dead.
   if (mount.name === "laptop") return <PcConnectCta onConnectDevice={onConnectDevice} />;
   const docs = mount.name === "sandbox"
-      ? { text: "The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on this deployment. Your agent can still use the Workspace shell.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
+      ? { text: "This deployment has no Linux sandbox. Use the Workspace shell instead.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
       : { text: mount.reason ?? exec?.reason ?? "This environment isn't enabled on this deployment.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
   return (
     <div className="h-full flex items-center justify-center p-6">
@@ -304,10 +304,10 @@ function PcConnectCta({ onConnectDevice }: { onConnectDevice: () => void }) {
           title={registered ? "Device offline" : "Connect your PC"}
           hint={registered
             ? <>
-                {labels} {live.length > 1 ? "are" : "is"} registered but the daemon is not running.
-                Restart it on that machine with <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code>.
+                {labels} {live.length > 1 ? "are" : "is"} offline. Run
+                <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code> on {live.length > 1 ? "those machines" : "that machine"}.
               </>
-            : "Link a laptop or PC to your account so your agents can run commands, read files, and serve previews on it, with your consent. One device serves all your agents."}
+            : "Connect a laptop or PC. Every agent can use it after you approve workspace access."}
         >
           <button
             data-env-connect-cta

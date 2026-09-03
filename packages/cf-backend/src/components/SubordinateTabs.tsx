@@ -156,7 +156,7 @@ export function SubordinateTabs({
           </>}
         >
           <p className="text-xs leading-relaxed p-text-2">
-            This archives the agent and removes its tab. Its conversation and private state are preserved.
+            Archiving removes the tab. The conversation and private state remain.
           </p>
           {dismissError && <div role="alert" className="rounded-md px-2.5 py-2 text-xs p-notice-danger">{dismissError}</div>}
         </Modal>

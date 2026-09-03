@@ -30,8 +30,8 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
       {truncated && (
         <div className="p-text-3 px-3 italic">
           {lines.length === 0
-            ? `File is over ${MAX_LINES_PER_FILE} lines — too long to diff line by line. The +/− totals above count every line.`
-            : `… diff truncated at ${MAX_LINES_PER_FILE} lines. The +/− totals above cover the whole file.`}
+            ? `File exceeds ${MAX_LINES_PER_FILE} lines. The totals include every line.`
+            : `… diff ends at ${MAX_LINES_PER_FILE} lines. The totals cover the full file.`}
         </div>
       )}
     </pre>
@@ -159,9 +159,9 @@ export function EmptyState({ icon, title, hint, children }: {
 /** Default hints for empty surfaces. */
 export const EMPTY_HINTS = {
   memory: "Ask your agent to remember something and it keeps it here.",
-  tools: "Tools your agent learns appear here, extracted from successful conversations.",
-  forks: "When the agent searches a tree of approaches, each search appears here, one branch per candidate, scored against the measure it declared.",
-  preview: "When the agent exposes a Workspace or Sandbox port, the running app appears here as a live preview.",
+  tools: "Your agent writes a tool when a pattern repeats, and scores it against later runs.",
+  forks: "A search shows one scored branch per candidate.",
+  preview: "Your agent can expose a Workspace or Sandbox port, and the running app shows as a preview.",
 };
 
 /* ── small readouts shared by the fork tree's inspector and the evolution

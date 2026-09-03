@@ -108,9 +108,7 @@ export default function UserMcpPage() {
             <div>
               <h1 className="p-display text-2xl">MCP servers</h1>
               <p className="text-xs p-text-3 mt-1">
-                Model Context Protocol servers add hosted
-                tools (GitHub, Notion, your own internal MCP, …). Connect once; every agent you
-                own picks them up automatically.
+                Connect an MCP server once. Every agent you own can use its hosted tools.
               </p>
             </div>
             <button
@@ -148,8 +146,7 @@ export default function UserMcpPage() {
             <PlugIcon size={28} className="p-text-3 mx-auto" />
             <div className="text-sm font-medium">No MCP servers yet</div>
             <p className="text-xs p-text-3 max-w-md mx-auto">
-              Connect a server to expose its tools to every agent you own. Most MCP servers use
-              OAuth; you'll be redirected to authorize on the provider's site.
+              Connect a server to give every agent its tools. Most servers redirect you to their OAuth page.
             </p>
           </section>
         ) : (
@@ -281,7 +278,7 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
       </div>
       <div className="space-y-1">
         <label className="text-xs p-text-3">
-          Static headers (optional JSON, for private or bearer-protected servers)
+          Static headers for private servers (optional JSON)
         </label>
         {/* A credential region, not a hint: what a person types here is
             `{"Authorization": "Bearer …"}`, and a textarea cannot be a password
@@ -292,7 +289,7 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
           placeholder='{"Authorization": "Bearer xyz"}' />
       </div>
       <div className="space-y-1">
-        <label className="text-xs p-text-3">Allowed tools (optional, comma-separated; empty = all)</label>
+        <label className="text-xs p-text-3">Allowed tools (optional, comma-separated; leave empty for all)</label>
         <input value={allowedTools} onChange={(e) => setAllowedTools(e.target.value)} className={inputCls}
           placeholder="create_issue, list_pulls" />
       </div>

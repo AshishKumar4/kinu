@@ -57,7 +57,7 @@ describe('the Activity log pane renders the rows the snapshot already carried', 
     const html = render([LOG[0]!]);
     expect(html).toContain('—');
     expect(html).not.toContain('0 ms');
-    expect(html).toContain('no turn-relative elapsed time');
+    expect(html).toContain('no elapsed time to report');
   });
 
   test('a null detail renders the row without inventing prose for it', () => {

@@ -150,7 +150,7 @@ export default function UserSettingsPage() {
       </Link>
       <h1 className="p-display text-2xl">Account settings</h1>
       <p className="text-xs p-text-3 mt-1">
-        Account-level: credentials apply to every agent you own.
+        Credentials apply to every agent you own.
       </p>
     </header>
   );
@@ -190,11 +190,11 @@ export default function UserSettingsPage() {
                 <div className="grid grid-cols-2 gap-3 text-xs">
                   <div className="space-y-1">
                     <div className="p-text-3">Email</div>
-                    <div className="font-mono">{p?.email ?? '—'}</div>
+                    <div className="font-mono">{p?.email ?? 'Not available'}</div>
                   </div>
                   <div className="space-y-1">
                     <div className="p-text-3">Member since</div>
-                    <div>{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : '—'}</div>
+                    <div>{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</div>
                   </div>
                 </div>
               )}
@@ -206,7 +206,7 @@ export default function UserSettingsPage() {
           <Card title="CLI" icon={TerminalIcon}>
             <div className="space-y-3">
               <p className="text-xs p-text-2">
-                Install the CLI, sign in through the browser, and configure local execution from one terminal command.
+                Install the CLI, sign in, and configure local execution with one command.
               </p>
               <CommandCopy label="Setup" command={cliSetup?.installCommand ?? `curl -fsSL '${window.location.origin}/install.sh' | bash`} />
             </div>
@@ -239,7 +239,7 @@ export default function UserSettingsPage() {
                 ) : (
                   <CloudflareAIConnectNotice
                     returnTo="/user/settings"
-                    message="Connect Cloudflare so your workspaces can use your Workers AI quota and your own AI Gateway."
+                    message="Connect Cloudflare to use your Workers AI quota and AI Gateway."
                   />
                 )}
               </CardSlot>
@@ -264,9 +264,7 @@ export default function UserSettingsPage() {
             <Card title="MCP servers" icon={PlugIcon}>
               <div className="space-y-2 text-xs">
                 <p className="p-text-2">
-                  Connect Model Context Protocol servers (GitHub, Notion, your own…) so every agent
-                  you own can call their tools. One OAuth grant per server; shared across all your
-                  agents.
+                  Connect an MCP server once. Every agent you own can use its tools.
                 </p>
                 <Link
                   to="/user/settings/mcp"
@@ -299,7 +297,7 @@ export default function UserSettingsPage() {
                           placeholder="(use system default)"
                         />
                         <p className="p-meta p-text-3">
-                          New workspaces pick this up at creation. Existing workspaces keep their own choice (change per-workspace under "Workspace settings").
+                          New workspaces use this default. Change an existing workspace under Workspace settings.
                         </p>
                       </div>
                     )}
@@ -368,7 +366,7 @@ function DevicesCard() {
   }));
 
   const revoke = useCallback(async (id: string, label: string) => {
-    if (!confirm(`Revoke "${label}"? Agents lose access to this device immediately.`)) return;
+    if (!confirm(`Revoke "${label}"? Agents will lose access.`)) return;
     setErr(null);
     try {
       const result = await revokeDevice(id);
@@ -403,8 +401,7 @@ function DevicesCard() {
       {/* What a link MEANS is stated once, by the connect panel below, in the
           words `kinu connect` prints. This line is about the list. */}
       <p className="text-xs p-text-2">
-        The machines linked to your account, and which of your workspaces holds a grant on each.
-        Revoking one takes effect immediately.
+        Your linked machines, and which workspaces can use them.
       </p>
 
       {devices.length > 0 && (
@@ -433,13 +430,13 @@ function DevicesCard() {
       {devices.some((device) => device.revokedAt === null)
         && !devices.some((device) => device.revokedAt === null && device.connected) && (
         <p className="p-meta p-text-3">
-          Offline device? Restart the daemon on that machine with <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code>.
+          Offline. Run <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code> on that machine.
         </p>
       )}
       {lapsing.length > 0 && (
         <p className="p-meta p-text-3">
           {lapsing.map((d) => d.label).join(", ")} {lapsing.length > 1 ? "links lapse" : "link lapses"} soon.
-          Connecting from {lapsing.length > 1 ? "those machines" : "that machine"} renews it automatically.
+          Run <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code> on {lapsing.length > 1 ? "those machines" : "that machine"} to renew {lapsing.length > 1 ? "them" : "it"}.
         </p>
       )}
 
@@ -450,7 +447,7 @@ function DevicesCard() {
       </div>
 
       <p className="p-meta p-text-3">
-        A workspace's access to a machine is a yes/no binding, revoked from that machine's row.
+        Revoke workspace access from the machine's row.
       </p>
     </Card>
   );
@@ -460,9 +457,9 @@ function DevicesCard() {
  *  mode; the hub enforces the same function, so the row explains exactly what
  *  the hub will do. The first two are the owner's own words. */
 const SANDBOX_MODE_COPY = {
-  sandboxed: "Commands run in a sandbox: agent home + the folders you consented, your own files invisible, GPU and network available",
-  raw: "Off: the agent runs as you with full access to this machine",
-  files_only: "This machine cannot sandbox, so no commands run on it.",
+  sandboxed: "Commands can use the agent home, selected folders, GPU, and network. Other files stay hidden.",
+  raw: "Off. The agent runs as you with full access.",
+  files_only: "No sandbox. Nothing runs here.",
 } satisfies Record<DeviceMode, string>;
 
 /** A fix from core carries its commands in backticks, as `kinu connect` prints
@@ -517,9 +514,9 @@ export function DeviceRow({
           <WarningIcon size={14} className="mt-0.5 shrink-0" />
           <div className="min-w-0 flex-1 space-y-1">
             <div className="font-medium">{device.label}</div>
-            <p>A command could not be confirmed stopped when you revoked this device.</p>
+            <p>Kinu could not confirm that every command stopped after revocation.</p>
             <p>{countLine}</p>
-            <p className="p-meta">Acknowledgement records that you saw this warning. It does not stop a command.</p>
+            <p className="p-meta">Acknowledge clears this warning. It does not stop commands.</p>
           </div>
           <button type="button" disabled={acknowledging}
             onClick={() => {
@@ -568,7 +565,7 @@ export function DeviceRow({
   // Off is the one direction that asks: it names the machine and what "off"
   // means. On needs no confirmation — it only ever narrows what a command reaches.
   const setSandbox = async (on: boolean) => {
-    if (!on && !confirm(`Turn Sandbox off for "${device.label}"? The agent will run as you with full access to this machine.`)) return;
+    if (!on && !confirm(`Turn Sandbox off for "${device.label}"? The agent will run as you with full access.`)) return;
     setSwitching(true);
     try { await setDeviceSandboxTier(device.id, on ? "sandboxed" : "raw"); }
     catch (e) { onError(`Could not change the Sandbox setting: ${renderThrownChain({ cause: e })}`); }
@@ -640,7 +637,7 @@ export function DeviceRow({
       </p>
       <div className="mt-1 flex flex-wrap items-center gap-1.5 p-meta p-text-3">
         {grants.length === 0 ? (
-          <span>No workspace has access yet — the first one to ask will prompt you.</span>
+          <span>No workspace uses it yet.</span>
         ) : (
           <>
             <span>Granted:</span>
@@ -659,8 +656,8 @@ export function DeviceRow({
         {device.lastIp && <span>Last connected from <code className="font-mono">{device.lastIp}</code></span>}
         {device.replacedAt !== null && (
           <span className="p-danger">
-            Another connection took this device's place on {new Date(device.replacedAt).toLocaleString()} —
-            if that was not you, revoke it and run <code className="font-mono">kinu connect</code> again.
+            Another connection replaced this device on {new Date(device.replacedAt).toLocaleString()}.
+            If that was not you, revoke it and run <code className="font-mono">kinu connect</code> again.
           </span>
         )}
       </div>
@@ -724,8 +721,7 @@ function CloudflareAccountSection({ status, onChanged }: {
         ))}
       </select>
       <p className="p-meta p-text-3">
-        Which Cloudflare account serves this workspace's Workers AI. Changing it clears the AI
-        Gateway selection below, because gateways belong to an account.
+        Changing this account clears the AI Gateway selection.
       </p>
       {error && <p className="text-xs p-danger">{error}</p>}
     </div>
@@ -761,8 +757,8 @@ function CloudflareGatewaySection({ status, onChanged }: {
   if (status.gateways.length === 0) {
     return (
       <p className="p-meta p-text-3">
-        No AI Gateway found in your Cloudflare account. Create one under AI &gt; AI Gateway in the
-        Cloudflare dashboard to use your own provider keys (BYOK) or Unified Billing credits here.
+        No AI Gateway found in this account. Create one under AI &gt; AI Gateway in Cloudflare to use
+        provider keys or Unified Billing credits.
       </p>
     );
   }
@@ -788,8 +784,8 @@ function CloudflareGatewaySection({ status, onChanged }: {
         </select>
       )}
       <p className="p-meta p-text-3">
-        Third-party models (spec <code className="p-card px-1">my-gateway/&lt;provider&gt;/&lt;model&gt;</code>) route
-        through this gateway using its stored provider keys or your Unified Billing credits.
+        Models matching <code className="p-card px-1">my-gateway/&lt;provider&gt;/&lt;model&gt;</code> use this
+        gateway's provider keys or Unified Billing credits.
       </p>
       {error && <p className="text-xs p-danger">{error}</p>}
     </div>
@@ -845,7 +841,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
   }, [onChanged]);
 
   const disconnect = useCallback(async () => {
-    if (!confirm('Disconnect ChatGPT? All your agents will lose access to Codex models.')) return;
+    if (!confirm('Disconnect ChatGPT? Your agents will lose access to Codex models.')) return;
     try { await disconnectCodex(); onChanged(); } catch (e) { setError(renderThrownChain({ cause: e })); }
   }, [onChanged]);
 
@@ -890,8 +886,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
   return (
     <div className="space-y-3">
       <p className="text-xs p-text-2">
-        Use your ChatGPT subscription as Kinu's chat backend.
-        Authorize a device once. Every agent you create can pick a Codex model afterward.
+        Authorize once. Every agent can then use your ChatGPT subscription and its Codex models.
       </p>
       <button
         onClick={start}
@@ -989,7 +984,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       <div className="space-y-2">
         <div className="text-xs font-medium">Connect a provider</div>
         <p className="p-meta p-text-3">
-          Paste an API key for any of the {catalog.length} supported providers. Every agent you own can use its models.
+          Paste an API key for any of {catalog.length} providers. Every agent you own can use it.
         </p>
         <Combobox
           items={catalog}
@@ -1000,7 +995,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
         >
           <Combobox.TriggerInput placeholder="Search providers (Groq, DeepSeek, Fireworks, …)" />
           <Combobox.Content>
-            <Combobox.Empty>No matching provider. Add it below as an OpenAI-compatible endpoint.</Combobox.Empty>
+            <Combobox.Empty>No match. Add an OpenAI-compatible endpoint below.</Combobox.Empty>
             <Combobox.List>
               {(item: ProviderCatalogEntry) => (
                 <Combobox.Item key={item.id} value={item}>
@@ -1016,7 +1011,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
         {selected && (
           <div className="space-y-2">
             <p className="p-meta p-text-3">
-              {selected.envVar && <>Usually stored as <code className="p-card px-1">{selected.envVar}</code>. </>}
+              {selected.envVar && <>Environment variable: <code className="p-card px-1">{selected.envVar}</code>. </>}
               {selected.doc && (
                 <a href={selected.doc} target="_blank" rel="noopener noreferrer" className="p-accent underline">
                   {selected.name} docs <ArrowSquareOutIcon size={10} className="inline" />
@@ -1044,7 +1039,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       {/* OpenAI-compat slot */}
       <div className="pt-3 border-t p-border space-y-2">
         <div className="text-xs font-medium">OpenAI-compatible (Groq, Together, …)</div>
-        <p className="p-meta p-text-3">Each named entry stores baseURL + apiKey. Use model spec <code className="p-card px-1">openai-compat:&lt;name&gt;/&lt;modelId&gt;</code>.</p>
+        <p className="p-meta p-text-3">Each endpoint stores a base URL and API key. Use model spec <code className="p-card px-1">openai-compat:&lt;name&gt;/&lt;modelId&gt;</code>.</p>
         <div className="grid grid-cols-3 gap-2">
           <input
             value={compatName}

@@ -79,9 +79,8 @@ export default function ControlPage(): ReactNode {
         <header className="space-y-1">
           <h1 className="p-display text-2xl">Control plane</h1>
           <p className="text-xs p-text-3">
-            Every account, every workspace, and what the operators of this deployment have done.
-            Actions call the same RPCs a workspace's owner calls, and each one is written to the
-            audit log before you see its result.
+            View every account and workspace. Operator actions use owner RPCs and enter the audit log
+            before results appear.
           </p>
         </header>
 
@@ -113,8 +112,7 @@ export default function ControlPage(): ReactNode {
               // Reached only by a hand-edited URL: every row that opens this view
               // carries its owner.
               <Notice tone="warn">
-                A workspace has to be opened from a list row, which is what names the
-                account that owns it. Pick it from Workspaces or from an account.
+                Open a workspace from the Workspaces tab or an account row.
               </Notice>
             ) : (
               <WorkspaceDrilldown workspace={workspace} ownerUserId={user} />
@@ -156,7 +154,7 @@ function OverviewView(): ReactNode {
     <div className="space-y-3">
       <SectionHeader
         title="Fleet"
-        hint="Counts from the control-plane index. Every row in it is a copy of state a UserDO owns, so a fresh workspace can appear here a moment after it is created."
+        hint="Counts come from the control-plane index. New workspaces can take a moment to appear."
         onRefresh={reload}
       />
       <Panel load={load}>
@@ -216,8 +214,8 @@ function UsersView({ onOpen }: { onOpen: (userId: string) => void }): ReactNode 
  *  off the server's own report rather than derived, so a continuation page does
  *  not claim a reconcile it did not run. */
 const RECONCILE_HINT = {
-  ok: 'Reconciled against this account\u2019s own registry on open, so these rows are the registry\u2019s.',
-  failed: 'The registry could not be read, so these rows are the index\u2019s own belief.',
+  ok: 'Matched to this account\u2019s registry when opened.',
+  failed: 'The account registry was unavailable. These rows come from the index.',
   skipped: 'A later page of the walk that reconciled on its first page.',
 } satisfies Record<ReconcileReport['status'], string>;
 
@@ -349,7 +347,7 @@ function IncidentsView(): ReactNode {
     <div className="space-y-3">
       <SectionHeader
         title="Open incidents"
-        hint="The synthetic monitor's ledger. Until now it was readable only as email, so an outage nobody saw the mail for was invisible."
+        hint="Synthetic monitor probes, newest first."
         onRefresh={reload}
       />
       <Panel load={load}>
@@ -386,7 +384,7 @@ function FeedbackView(): ReactNode {
     <div className="space-y-3">
       <SectionHeader
         title="Feedback"
-        hint="In-product reports, newest first. Screenshot bytes live in R2; the row carries only the object key."
+        hint="Reports, newest first."
         onRefresh={reload}
       />
       <Panel load={load}>
@@ -437,7 +435,7 @@ function MetricsView(): ReactNode {
     <div className="space-y-3">
       <SectionHeader
         title="Fleet metrics"
-        hint="From Analytics Engine, sample-interval weighted — an unweighted count under-reports by exactly the sample rate."
+        hint="Analytics Engine weights samples by interval. Raw counts under-report by the sample rate."
         onRefresh={reload}
         actions={
           <select
@@ -514,7 +512,7 @@ function AuditView(): ReactNode {
     <div className="space-y-3">
       <SectionHeader
         title="Admin audit"
-        hint="Append-only. Every mutation lands here before its result reaches the operator, including the ones that were refused."
+        hint="Append-only. Kinu logs every action, including refusals."
         onRefresh={reload}
       />
       <Panel load={load}>
@@ -535,7 +533,7 @@ function AuditView(): ReactNode {
                   <span className="p-text-2 text-xs">{a.detail}</span>,
                 ],
               }))}
-              empty="No admin action has been taken on this deployment."
+              empty="No operator has acted on this deployment."
             />
             <PageWalker
               status={answer.status} page={page}

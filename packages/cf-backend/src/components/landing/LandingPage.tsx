@@ -28,10 +28,10 @@ const SECTION = 'border-t p-border py-20 lg:py-[104px] lg:pb-24';
 const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
 
 const FEATURES = [
-  ['Learns from feedback', 'Your corrections become corroborated lessons. Tool-only reflections stay provisional.'],
-  ['Crafts its own tools', 'Recurring patterns become tools it builds, scores, and calls on its own.'],
-  ['Builds subagent DAGs', 'Complex work branches across specialists that pass evidence to each dependent step.'],
-  ['Your cloud, or yours alone', 'Run it on kinu.run today, or deploy the same platform into your own Cloudflare account.'],
+  ['Learns from feedback', 'Your corrections become corroborated lessons.'],
+  ['Crafts its own tools', 'Recurring patterns become tools it builds and scores.'],
+  ['Builds subagent DAGs', 'Specialists work in parallel and pass evidence onward.'],
+  ['Your cloud, or ours', 'Use kinu.run or deploy to your Cloudflare account.'],
 ] as const;
 
 function RuleLabel({ children }: { children: ReactNode }): ReactElement {
@@ -67,18 +67,18 @@ function PlatformSection(): ReactElement {
     <section id="platform" className={SECTION}>
       <RuleLabel>01 · The platform</RuleLabel>
       <SectionTitle>Close the laptop. <span className="p-gold">The agent keeps working.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[660px] text-[17px] leading-[1.6] p-text-3">Kinu runs durable cloud workspaces and fully local agents through the same core. Cloud workspaces open from every client. Local agents stay on your terminal.</p>
+      <p className="mb-10 mt-3.5 max-w-[660px] text-[17px] leading-[1.6] p-text-3">Run durable workspaces in the cloud or keep agents on your terminal.</p>
       <div className="mb-10 overflow-hidden rounded-2xl border p-border p-surface">
         <div className="grid md:grid-cols-2">
           <article className="min-w-0 p-7 sm:p-8">
             <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-gold">Cloud</span><span className="font-mono text-[10px] p-text-4">Durable · cloud hosted</span></div>
             <h3 className="mb-3 text-[24px] font-semibold tracking-[-.025em]">Hosted workspaces and sandboxes</h3>
-            <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Start a task, close the browser, and return to the result. Schedules and webhooks keep the workspace active while you are away.</p>
+            <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Start a task and close the browser. Schedules and webhooks keep it running.</p>
           </article>
           <article className="min-w-0 border-t p-border p-7 sm:p-8 md:border-l md:border-t-0">
             <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-gold">Local</span><span className="font-mono text-[10px] p-text-4">Files stay on your machine</span></div>
             <h3 className="mb-3 text-[24px] font-semibold tracking-[-.025em]">TUI, CLI, or your editor</h3>
-            <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Create a local workspace in the terminal, or connect the TUI to a cloud workspace. The same agents, conversations, and tools follow.</p>
+            <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Create a local workspace, or open a cloud workspace from the TUI.</p>
           </article>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t p-border p-recessed px-7 py-4 font-mono text-[11px] p-text-4"><span>ONE CORE · CLOUD AND LOCAL</span><span>web · TUI · CLI · ACP</span></div>
@@ -92,19 +92,19 @@ function PlatformSection(): ReactElement {
 
 function QuickstartSection(): ReactElement {
   const clients = [
-    ['In the browser', 'Web', 'Sign in and create a cloud workspace. Nothing to install, and the same workspace opens from every client.', <a key="web" href="/login" className="text-[13px] font-semibold p-gold">Sign in →</a>],
+    ['In the browser', 'Web', 'Sign in and create a cloud workspace. Open it from any client.', <a key="web" href="/login" className="text-[13px] font-semibold p-gold">Sign in →</a>],
     ['In the terminal', 'TUI', 'kinu chat opens the full-screen app for cloud or local workspaces.', <code key="tui" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs p-text-2"><span className="p-gold">$</span> kinu chat triage</code>],
-    ['In the terminal', 'CLI', 'One command installs Kinu on Linux. Create a cloud or local workspace, then hand it a task.', <code key="cli" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs leading-[1.9] p-text-2"><span className="p-gold">$</span> kinu create triage</code>],
+    ['In the terminal', 'CLI', 'Install Kinu on Linux, create a workspace, and run a task.', <code key="cli" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs leading-[1.9] p-text-2"><span className="p-gold">$</span> kinu create triage</code>],
   ] as const;
   return (
     <section id="quickstart" className={SECTION}>
       <RuleLabel>02 · Quickstart</RuleLabel>
       <SectionTitle>Start in the cloud, <span className="p-gold">or entirely on your own machines.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[620px] text-[17px] leading-[1.6] p-text-3">Cloud workspaces open in the browser, TUI, and CLI. Local workspaces use the terminal clients.</p>
+      <p className="mb-10 mt-3.5 max-w-[620px] text-[17px] leading-[1.6] p-text-3">Use cloud workspaces from any client. Use local workspaces from the terminal.</p>
       <div className="grid gap-5 md:grid-cols-3">
         {clients.map(([eyebrow, title, body, action]) => <div key={title} className={`${CARD} flex flex-col gap-3 p-7`}><div className="text-xs p-text-4">{eyebrow}</div><h3 className="text-xl font-semibold tracking-[-.02em]">{title}</h3><p className="flex-1 text-sm leading-[1.65] p-text-3">{body}</p>{action}</div>)}
       </div>
-      <p className="mt-7 text-[13px] p-text-4">A cloud workspace keeps its files, agents, conversations, and search history across every client.</p>
+      <p className="mt-7 text-[13px] p-text-4">Cloud workspaces keep their files, agents, conversations, and search history.</p>
     </section>
   );
 }
@@ -120,7 +120,7 @@ function ClientsSection(): ReactElement {
     <section id="clients" className={SECTION}>
       <RuleLabel>03 · One workspace, every client</RuleLabel>
       <SectionTitle>Work from the browser, the terminal, <span className="p-gold">or your editor.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[660px] text-[17px] leading-[1.6] p-text-3">Every client opens the same workspace with the same files and history. Start at your desk and check the result over SSH or from your editor.</p>
+      <p className="mb-10 mt-3.5 max-w-[660px] text-[17px] leading-[1.6] p-text-3">Open the same files and history from a browser, terminal, editor, or SSH session.</p>
       <div className="mb-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         {clients.map(([title, body]) => <div key={title} className={`${CARD} p-6`}><h3 className="mb-2.5 text-[12.5px] font-semibold p-gold">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}
       </div>
@@ -265,7 +265,7 @@ function SwarmSection(): ReactElement {
     <section id="swarm" className={SECTION}>
       <RuleLabel>05 · Subagent DAGs</RuleLabel>
       <SectionTitle>Your agent can assemble <span className="p-gold">the specialists a task needs.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[780px] text-[17px] leading-[1.6] p-text-3">For complex work, the agent can build a DAG of subagents for research, optimization, ideation, planning, audit, and implementation. Nodes work in parallel and pass evidence to each dependent step.</p>
+      <p className="mb-10 mt-3.5 max-w-[780px] text-[17px] leading-[1.6] p-text-3">Your agent can build a DAG for research, optimisation, planning, review, and implementation. Nodes work in parallel and pass evidence onward.</p>
       <SwarmDag />
     </section>
   );
@@ -279,16 +279,16 @@ function DeploySection(): ReactElement {
     ['Step four', 'Prove the account.', 'The infra gate checks every declared resource and binding.', 'bun run gate:infra'],
   ] as const;
   const values = [
-    ['Isolated workspaces', 'Each workspace owns its files and agents. Idle workspaces use no compute; stored data still uses storage.'],
-    [`${String(STORAGE_GB)} GB file plane, each`, `Each paid-plan workspace can keep up to ${String(STORAGE_GB)} GB of durable files and shell state (do.storage.bytes).`],
-    ['Linux on demand', 'An agent can attach a full Linux sandbox through Cloudflare Containers.'],
-    ['Your own devices', 'Connect a PC. Kinu asks once per workspace, then remembers the access decision.'],
+    ['Isolated workspaces', 'Each workspace owns its files and agents. Idle workspaces use no compute.'],
+    [`${String(STORAGE_GB)} GB file plane, each`, `Each paid-plan workspace stores up to ${String(STORAGE_GB)} GB of durable files and shell state (do.storage.bytes).`],
+    ['Linux on demand', 'Attach a Linux sandbox through Cloudflare Containers.'],
+    ['Your own devices', 'Connect a PC once per workspace. Kinu remembers your choice.'],
   ] as const;
   return (
     <section id="deploy" className={SECTION}>
       <RuleLabel>06 · Self-host</RuleLabel>
       <div className="mb-5 grid items-start gap-10 lg:grid-cols-[1fr_1.12fr] lg:gap-14">
-        <div><SectionTitle>Host Kinu agents <span className="p-gold">yourself.</span></SectionTitle><p className="mb-7 mt-3.5 text-[17px] leading-[1.6] p-text-3">The cloud platform deploys into your Cloudflare account. Your agents, files, and model spend stay with you.</p><div className="flex flex-wrap gap-3"><LandingActionLink external primary href="https://deploy.workers.cloudflare.com/?url=https://github.com/AshishKumar4/kinu">Deploy to Cloudflare →</LandingActionLink><LandingActionLink external href={`${REPOSITORY}/blob/main/docs/SELF-HOSTING.md`}>Self-hosting guide</LandingActionLink></div></div>
+        <div><SectionTitle>Host Kinu agents <span className="p-gold">yourself.</span></SectionTitle><p className="mb-7 mt-3.5 text-[17px] leading-[1.6] p-text-3">Deploy Kinu to your Cloudflare account. Your agents, files, and model spend stay there.</p><div className="flex flex-wrap gap-3"><LandingActionLink external primary href="https://deploy.workers.cloudflare.com/?url=https://github.com/AshishKumar4/kinu">Deploy to Cloudflare →</LandingActionLink><LandingActionLink external href={`${REPOSITORY}/blob/main/docs/SELF-HOSTING.md`}>Self-hosting guide</LandingActionLink></div></div>
         <div className={`${CARD} overflow-hidden`}>{steps.map(([step, title, body, command], index) => <div key={step} className={`grid gap-2 px-5 py-5 sm:grid-cols-[96px_1fr] sm:gap-[18px] sm:px-[26px] ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-4">{step}</span><div><p className="text-sm leading-[1.6] p-text-3"><strong className="p-text">{title}</strong> {body}</p><code className="mt-2 block text-xs p-gold">{command}</code></div></div>)}</div>
       </div>
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">{values.map(([title, body]) => <div key={title} className={`${CARD} p-6`}><h3 className="mb-2.5 text-[12.5px] font-semibold p-gold">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}</div>

@@ -240,7 +240,7 @@ export default function SettingsPage() {
           <><Loader size="base" /><span>Connecting to {agentId}…</span></>
         ) : (
           <>
-            <span className="p-danger">Not connected to this workspace. Settings can't be read or saved.</span>
+            <span className="p-danger">No connection. Settings cannot load or save.</span>
             <Link to={`/workspace/${agentId}`} className="text-xs p-accent underline">Back to chat</Link>
           </>
         )}
@@ -323,7 +323,7 @@ export default function SettingsPage() {
                     ))}
                   </div>
                   <p className="p-meta p-text-3">
-                    Off by default. When on, a second model reads each finished turn and can add one note. This adds one model call per turn.
+                    Off by default. A second model can add one note after each turn. This uses one model call.
                   </p>
                 </div>
                 <div className="space-y-1.5">
@@ -338,7 +338,7 @@ export default function SettingsPage() {
                     ))}
                   </div>
                   <p className="p-meta p-text-3">
-                    Notes at or above this severity reach the conversation. Notes below it become Changelog rows. The default is concern.
+                    Notes at or above this severity reach the conversation. Lower notes appear in the Changelog. The default is concern.
                   </p>
                 </div>
               </>
@@ -443,8 +443,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
   return (
     <Card title="Standing approvals" icon={ShieldIcon}>
       <p className="p-meta p-text-3">
-        Answers you gave with “Always”. Each one stops Kinu asking about that check on that
-        environment again. None of them gives it access it did not already have.
+        “Always” stops Kinu asking about this check in this environment. It does not grant more access.
       </p>
       {resource.status === "error" && grants === null ? (
         <LoadFailure what="your standing approvals" message={resource.message} onRetry={reload} />
@@ -531,7 +530,7 @@ export function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
         const opened = open?.path === row.path
           ? open
           : await rpc<InstructionSourceView | null>("readInstructionApproval", [row.path]);
-        if (!opened) { setErr("That file could not be read, so nothing was approved."); return; }
+        if (!opened) { setErr("Kinu could not read that file, so it approved nothing."); return; }
         await rpc("approveInstruction", [row.path, opened.digest]);
       } else {
         await rpc("revokeInstruction", [row.path]);
@@ -550,9 +549,8 @@ export function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
   return (
     <Card title="Workspace instruction files" icon={ShieldIcon}>
       <p className="p-meta p-text-3">
-        The agent can write these files itself, so only the exact contents you approve are
-        followed as instructions. Everything else is passed to it as reference material.
-        Editing an approved file drops it back to reference until you approve it again.
+        Your agent can write these files. Kinu follows only the contents you approve as instructions.
+        Edits return them to reference material until you approve them again.
       </p>
       {resource.status === "error" && rows === null ? (
         <LoadFailure what="this workspace's instruction files" message={resource.message} onRetry={reload} />
@@ -686,11 +684,9 @@ function WorkspaceBackupCard({
   return (
     <Card title="Backup" icon={DownloadSimpleIcon}>
       <p className="p-meta p-text-3">
-        Download everything this workspace holds (transcripts, memory, files, evolution
-        history) as a portable archive. Restore it on any machine with{" "}
-        <code className="font-mono">kinu import &lt;file&gt;</code>. Take one before you
-        delete a workspace: deletion is permanent. The archive contains your workspace's
-        full contents, so keep it somewhere you'd keep a password.
+        Download a portable archive of transcripts, memory, files, and evolution history. Restore it
+        with <code className="font-mono">kinu import &lt;file&gt;</code>. Create one before deleting a
+        workspace. The archive contains the full workspace, so store it like a password.
       </p>
       <button
         type="button"
@@ -725,7 +721,7 @@ function GepaOptimizationCard({
 
   const run = useCallback(async () => {
     setRunning(true);
-    setMsg('Optimising: running candidate scaffolds against recent tasks (this can take a few minutes)…');
+    setMsg('Optimising candidate scaffolds against recent tasks. This can take a few minutes…');
     try {
       // No evalSize override — the agent's configured budget is the one
       // tuned against cost, and a smaller one cannot resolve a winner.
@@ -740,7 +736,7 @@ function GepaOptimizationCard({
       const caveat = r.selectionWarning ? ` Caveat: ${r.selectionWarning}.` : '';
       if (!r.ok) setMsg(`No run: ${r.error}`);
       else if (r.proposed) {
-        setMsg(`Improved scaffold proposed as v${r.pendingVersion} (${scores}). It will shadow-eval, then you can promote it from the agent's Self surface.${scoredOn}${caveat}`);
+        setMsg(`Proposed scaffold v${r.pendingVersion} (${scores}). Promote it under Agent → Evolution after shadow evaluation.${scoredOn}${caveat}`);
       } else {
         setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; ${scores}).${scoredOn}${caveat}`);
       }
@@ -755,9 +751,8 @@ function GepaOptimizationCard({
   return (
     <Card title="Scaffold self-tuning" icon={SparkleIcon}>
       <p className="p-meta p-text-3">
-        Offline genetic-Pareto optimisation: runs candidate inference loops against your
-        agent's recent tasks, judges each, and proposes an improved scaffold for shadow eval.
-        Costs several LLM calls per run.
+        Tests candidate agent loops against recent tasks and can propose an improved one for shadow
+        evaluation. Each run uses several model calls.
       </p>
       <button
         type="button"
@@ -839,8 +834,8 @@ function AlwaysActiveSkillsCard({
   return (
     <Card title="Always-active skills" icon={KeyIcon}>
       <p className="p-meta p-text-3">
-        Skills pinned here are activated every turn for this agent. Use to lock-in
-        workflow conventions (e.g., <code className="font-mono">audit-implementation</code>) without typing /name.
+        Pin a workflow skill, such as <code className="font-mono">audit-implementation</code>, to run it
+        every turn without typing /name.
       </p>
       <div className="flex flex-wrap gap-1.5">
         {names.length === 0

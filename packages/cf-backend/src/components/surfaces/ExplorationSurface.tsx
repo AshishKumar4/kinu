@@ -561,7 +561,7 @@ function RunNodeList({ journal, tree, activity, onOpen }: {
     return (
       <div className="min-h-0 flex-1 flex items-center justify-center p-4">
         <EmptyState icon={<TreeStructureIcon size={24} />} title="No node has been journalled yet"
-          hint="Nodes appear here as the search spawns them, before any of them reports." />
+          hint="The search lists each node as it creates them, before any of them reports." />
       </div>
     );
   }
@@ -814,8 +814,8 @@ function ForkCanvas({
                   first expansion landed" was printed over runs that were working,
                   which is the sentence the liveness panel replaces. */}
               {focused?.status === "running"
-                ? "No branch has been written yet. The first expansion has not landed."
-                : "No branch was ever written for these searches. Each stopped before its first expansion landed."}
+                ? "The search has not written a branch yet."
+                : "These searches wrote no branches. Each stopped before its first expansion."}
             </div>
           ) : size.w > 0 && canvasH > 0 ? (
             <SwarmTree
@@ -870,7 +870,7 @@ export function SwarmConfigDisclosure(
     <details data-swarm-config className="group shrink-0 min-w-0">
       <summary
         className="flex cursor-pointer list-none items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] p-text-3 hover:p-text transition-colors [&::-webkit-details-marker]:hidden"
-        title="The preset this run resolved, the axes it resolved to, and what it was dispatched with">
+        title="The preset this run resolved, its axes, and its dispatch arguments.">
         <CaretRightIcon size={9} className="shrink-0 transition-transform group-open:rotate-90" />
         <span className="font-mono p-text-2 truncate max-w-[10rem]">{name}</span>
         <span className="shrink-0">config</span>
@@ -925,7 +925,7 @@ function SwarmResolutionBody(
         </span>
         {resolution.kind === "preset" && (
           <span className="ml-auto shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[10px] p-badge-neutral"
-            title="Derived from the score and advance axes rather than chosen — settleOf(config), the same total function the engine reads.">
+            title="Derived from the score and advance axes.">
               settle {resolution.settle}
           </span>
         )}
@@ -950,8 +950,7 @@ function SwarmResolutionBody(
 
       {resolution.kind === "custom" && (
         <p className="mt-1.5 text-[10px] p-text-3 leading-snug">
-          A composition's resolved axes are digested into its records row, which has no
-          read model, so only the provenance label reached this surface.
+          This composition recorded only its provenance label.
         </p>
       )}
         </>
@@ -960,7 +959,7 @@ function SwarmResolutionBody(
       {(caps !== null || judges !== null) && (
         <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[10px] p-text-3">
           {caps !== null && (
-            <span className="whitespace-nowrap" title="The caps the preset resolved, not the caps this run spent.">
+            <span className="whitespace-nowrap" title="The caps the preset resolved.">
               caps <span className="p-text-2">{caps}</span>
             </span>
           )}
@@ -998,7 +997,7 @@ function SwarmResolutionBody(
 const AXIS_MEANING = {
   unit: "what one node produces",
   context: "what a child starts from",
-  expand: "how children are produced — `aggregate` is fan-in, k parents into one child",
+  expand: "how children are produced; `aggregate` is fan-in, k parents into one child",
   score: "how a node is valued",
   advance: "where the next unit of budget goes",
   carry: "what survives across iterations",

@@ -46,7 +46,7 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
     if (resource.status === "error") return <LoadFailure what="the self-tuning runs" message={resource.message} onRetry={reload} />;
     return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
   }
-  if (runs.length === 0) return <EmptyState icon={<DatabaseIcon size={28} />} title="No self-tuning runs yet" hint="Trigger a scaffold self-tuning pass (GEPA) from Settings; its candidates + Pareto front appear here." />;
+  if (runs.length === 0) return <EmptyState icon={<DatabaseIcon size={28} />} title="No self-tuning runs yet" hint="Run scaffold self-tuning from Settings. Candidates and the Pareto front appear here." />;
 
   const loadedDetail = lastValue(detail);
   const paretoIds = new Set((loadedDetail?.pareto ?? []).map((p) => p.candidateId));
@@ -148,7 +148,7 @@ export function QualityView({ rpc }: { rpc: Rpc }) {
   const hasAlignment = loadedAlignment !== null && loadedAlignment.align.overall.turns > 0;
   const bothEmpty = loadedRows !== null && loadedRows.length === 0
     && loadedAlignment !== null && !hasAlignment;
-  if (bothEmpty) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay-eval runs (fired by lifetime evolution; browsable via agent.replayEvals) re-score the live scaffold against graded turns. The loss curve, K_align, and latest aggregate appear here." />;
+  if (bothEmpty) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay evaluations score the live scaffold against graded turns. This panel shows loss, K_align, and the latest result." />;
 
   return (
     <div className="space-y-4 animate-fade-in overflow-y-auto h-full">
@@ -294,8 +294,8 @@ function CalibrationNote({ report }: { report: CalibrationReport }) {
     return (
       <div className="text-[10px] p-text-3">
         <span className="p-warning">{reason}.</span>
-        {" The rate above is what the classifier counted, not a measured one. "}
-        Check ~100 turns by hand with <span className="font-mono">kinu label export</span>.
+        {" The classifier counted this rate. "}
+        Check about 100 turns by hand with <span className="font-mono">kinu label export</span>.
       </div>
     );
   }

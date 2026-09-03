@@ -220,7 +220,7 @@ function EmptyTrace({ view }: { view: NodeTranscriptView }) {
   if (view.origin === "rollout") {
     return (
       <EmptyState icon={<GitForkIcon size={24} />} title="A rollout has no step trace"
-        hint="This branch made one proposal and was scored against its siblings — the proposal above is everything it produced. Only merged forks run a tool loop worth replaying." />
+        hint="This branch made one proposal. The search scored it against its siblings." />
     );
   }
   if (view.status === "running") {
@@ -228,8 +228,8 @@ function EmptyTrace({ view }: { view: NodeTranscriptView }) {
       <div className="flex items-center gap-2 py-8 justify-center text-[12px] p-text-2">
         <Loader size="sm" />
         {view.lastStepAt === null
-          ? "Working — this branch has started but has not finished its first step."
-          : "Working — waiting on the next step."}
+          ? "Working. This branch has not finished its first step."
+          : "Working. Waiting on the next step."}
       </div>
     );
   }
@@ -594,7 +594,7 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, headDeltas
     return (
       <div className="min-h-0 flex-1 flex items-center justify-center rounded-lg border p-border p-surface">
         <EmptyState icon={<TreeStructureIcon size={28} />} title="Pick a branch"
-          hint="Select a node to read what that agent was given, every step it took, and the answer it reached." />
+          hint="Select a node to read its input, every step, and its answer." />
       </div>
     );
   }
@@ -620,7 +620,7 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, headDeltas
           // a node that recorded nothing, which returns a view with no steps.
           <div className="flex-1 flex items-center justify-center">
             <EmptyState icon={<TreeStructureIcon size={28} />} title="This branch is no longer in the run"
-              hint={`Nothing is recorded for ${drawnLabel} — it was pruned, or the run was rewritten while you were reading it.`} />
+              hint={`Nothing is recorded for ${drawnLabel}. The search pruned it, or the run was rewritten.`} />
           </div>
         ) : null}
     </div>
