@@ -171,6 +171,13 @@ interface FenceReply {
   readonly base?: { readonly cut: string; readonly generation: string; readonly root: string };
 }
 
+/** The counted work a real fence reports beside its manifest. Staged bytes and
+ *  whole files are the daemon's own; the chunk and node fields belong to the
+ *  sidecar and a daemon reply leaves them at zero. */
+const FENCE_SEAL_WORK = {
+  bytesStaged: 0, bytesChunked: 0, chunksHashed: 0, nodesRewritten: 0, wholeFiles: 0,
+} as const;
+
 async function journalControl(socket: string, reply: FenceReply): Promise<() => Promise<void>> {
   const server = createServer((connection) => {
     let text = '';
@@ -184,7 +191,9 @@ async function journalControl(socket: string, reply: FenceReply): Promise<() => 
       const base = seededBase === undefined
         ? {}
         : { baseCut: seededBase.cut, baseGeneration: seededBase.generation, baseRoot: seededBase.root };
-      connection.end(`${JSON.stringify({ ...fence, ...base, id: request.id, ok: true })}\n`);
+      connection.end(`${JSON.stringify({
+        ...fence, ...base, sealWork: FENCE_SEAL_WORK, id: request.id, ok: true,
+      })}\n`);
     });
   });
   await new Promise<void>((resolve, reject) => server.once('error', reject).listen(socket, resolve));
