@@ -2,13 +2,13 @@
  * Evolution Changelog — the "what I changed about myself" digest.
  *
  * The transparency layer that lets the autonomy defaults ship ON: evolution
- * acts first, this reports honestly, and every line is revertable. It is a
+ * acts first, this reports honestly, and every line with a real undo path is revertable. It is a
  * READ MODEL over the durable ledgers that already exist (scaffold_versions +
  * shadow record, crafted_tools + its EMA columns, agent_facts, gepa_runs,
  * replay_evals, turn_outcomes) — no parallel event system, no new write path.
  * The only state it owns is the `changelog_seen_at` config marker (unseen
  * badge), and reverts dispatch to the REAL existing paths: scaffold rollback,
- * craft retire, fact forget.
+ * fact forget.
  */
 
 import * as v from 'valibot';
@@ -50,7 +50,6 @@ export type ChangelogEntryKind =
 
 export type ChangelogRevertAction =
   | { type: 'scaffold_rollback'; target: string }
-  | { type: 'craft_retire'; target: string }
   | { type: 'view_revert'; target: string }
   | { type: 'fact_forget'; target: string }
   | { type: 'fact_forget_many'; targets: string[] }
@@ -176,13 +175,15 @@ function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
     // Every tool is born scored at the neutral prior, so the EMA line is
     // always real — there is no unscored case to label.
     const score = `EMA ${r.score.toFixed(2)} over ${r.uses} uses`;
+    // A crafted tool is not something the owner approves: the entry is
+    // informational, with no revert. Retiring a tool stays on the Tools
+    // surface's own path, not the Journal.
     return {
       id: `tool:${r.name}:${at}`,
       kind: 'tool' as const,
       at,
       summary: `${verb === 'Crafted tool' ? 'Created' : 'Updated'} a tool: ${readableName}`,
       evidence: `${verb} ${r.name}${r.description ? ` — ${r.description}` : ''} · ${score}`,
-      revert: { type: 'craft_retire' as const, target: r.name },
     };
   });
 }
@@ -709,14 +710,6 @@ export async function executeChangelogRevert(
         return { ok: false, error: `invalid prompt-section target: ${action.target}` };
       }
       return revertPromptSection(ctx.rt.storage.sql, sectionId, version);
-    }
-    case 'craft_retire': {
-      if (!ctx.rt.craftStore.get(action.target)) {
-        return { ok: false, error: `crafted tool ${action.target} is already retired` };
-      }
-      ctx.rt.craftStore.delete(action.target);
-      // One DELETE removes the tool AND its quality — they are the same row.
-      return { ok: true, detail: `retired crafted tool ${action.target}` };
     }
     case 'view_revert': {
       const result = await revertView(

@@ -24,7 +24,7 @@ import {
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, SignalDelivery,
   backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage,
   JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
-  profileCatalogDigest, BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
+  profileCatalogDigest,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
   type ModelCallSink, type ProfileCatalogEnvelope, type SqlExecutor, type SqlValue,
@@ -3090,10 +3090,10 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
     await session.end();
   });
 
-  test('revert by id retires the crafted tool and forgets the fact for real', async () => {
+  test('revert by id forgets the fact for real; a crafted tool is informational and has no revert', async () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
-      name: 'doomed_tool', description: 'soon retired', code: 'async () => 2', params: null, scope: 'local',
+      name: 'kept_tool', description: 'stays', code: 'async () => 2', params: null, scope: 'local',
     });
     void rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
                         VALUES ('stale', '"value"', 1.0, NULL, ${Date.now()})`;
@@ -3102,14 +3102,18 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
     const tool = view.entries.find((e) => e.kind === 'tool')!;
     const facts = view.entries.find((e) => e.kind === 'fact')!;
 
-    expect((await session.revertChangelogEntry(tool.id)).ok).toBe(true);
-    expect(rt.craftStore.get('doomed_tool')).toBeFalsy();
+    // A crafted tool is not something the owner approves or reverts from the
+    // Journal: the entry reports it and carries no revert action.
+    expect(tool.revert).toBeUndefined();
+    expect((await session.revertChangelogEntry(tool.id)).ok).toBe(false);
+    expect(rt.craftStore.get('kept_tool')).toBeTruthy();
+
     expect((await session.revertChangelogEntry(facts.id)).ok).toBe(true);
     expect(rt.storage.sql`SELECT * FROM agent_facts WHERE key = 'stale'`).toHaveLength(0);
 
-    // Both rows are gone from the next digest, and re-reverting refuses.
+    // The fact is gone from the next digest, and re-reverting refuses.
     expect(session.getEvolutionChangelog().entries.filter((e) => e.revert)).toHaveLength(0);
-    const again = await session.revertChangelogEntry(tool.id);
+    const again = await session.revertChangelogEntry(facts.id);
     expect(again.ok).toBe(false);
     await session.end();
   });
@@ -3811,12 +3815,12 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(runs[0]!.eventCount).toBeGreaterThan(0);
 
     const events = session.getRunEvents(runs[0]!.runId);
-    // Profile resolution lands before the step. This is also the session's
-    // first turn, so the step-0 delegation hint fires and the settle spine
-    // records both the hint and its conversion opportunity.
+    // Profile resolution lands before the step. A first turn records no
+    // steering row: the step-0 delegation hint is gone, so nothing is spliced
+    // and nothing is counted.
     expect(events.map((e) => e.type)).toEqual([
       'run_start', 'turn_start', 'profile_resolution', 'step_finish',
-      'turn_steering', 'delegation_opportunity', 'turn_end', 'run_end',
+      'turn_end', 'run_end',
     ]);
 
     const start = events[0];
@@ -3830,10 +3834,10 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(end.error).toBeUndefined();
 
     // Monotonic indices are what makes a resume possible at all.
-    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5]);
     // …and `since` replays the tail, exactly as an SSE Last-Event-ID does.
     expect(session.getRunEvents(runs[0]!.runId, { since: 4 }).map((e) => e.type))
-      .toEqual(['turn_steering', 'delegation_opportunity', 'turn_end', 'run_end']);
+      .toEqual(['turn_end', 'run_end']);
 
     await session.end();
   });
@@ -4378,15 +4382,12 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
 });
 
 describe('LocalAgentSession — delegation roles + head-runtime root wiring', () => {
-  test('a turn-start opportunity stamps every role id the active catalog offers', async () => {
+  test('a fresh multi-part ask is steered toward nothing', async () => {
     const { session } = setup('ok', fakeModel('ok'));
-    // A fresh ask delivers the turn-start hint through the real step pipeline;
-    // the row's roles come from the orchestrator's roleCatalog callback — the
-    // active envelope's ids, whatever they resolve to at stamp time.
+    // The turn-start delegation hint is gone (2026-09-03): the real step
+    // pipeline runs and records no steering row on a first ask.
     await session.send('add caching to the api and update the docs');
-    const rows = session.steering.delegationSnapshot();
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows[0]!.roles).toEqual(Object.keys(effectiveRoleCatalog(BUILTIN_PROFILE_CATALOG)));
+    expect(session.steering.snapshot()).toEqual([]);
     await session.end();
   });
 

@@ -37,7 +37,7 @@ function noticeFor(steerRuns: readonly InlineSteer[], hasAttachments = false): s
   function Probe() {
     const deps: SteerActionsDeps = {
       steerChat: async () => 'mid-turn',
-      abortChat: async () => [],
+      abortChat: async () => {},
       draft: '',
       setDraft: () => {},
       hasAttachments,

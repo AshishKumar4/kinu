@@ -4,7 +4,7 @@
  *
  * Two subjects:
  *
- *   1. The tool the model reads. `createExecuteToolsTool` is the real one:
+ *   1. The tool the model reads. `createExecuteToolsFactory` is the real one:
  *      @cloudflare/codemode composes the sandbox type block from each
  *      provider's declaration, so the assertions here are on what the model is
  *      literally told it can call — and on the actor kinds that are told
@@ -22,12 +22,11 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { MockLanguageModelV3 } from 'ai/test';
+import { jsonSchema, tool } from 'ai';
 import {
   decodeJsonValue,
   BUILTIN_TOOL_DESCRIPTIONS,
   createAgentsCodemodeProvider,
-  createProviderRegistry,
   parseJsonValue,
   initCraftQualityColumns,
   type AgentsToolDeps,
@@ -37,7 +36,6 @@ import {
 } from '@kinu.run/core';
 import { ROOT_DELEGATION_BUDGET } from '@kinu.run/core';
 import * as v from 'valibot';
-import type { AgentProviderRegistry } from '../src/providers/agent-registry';
 
 /** The admission facts every handoff carries back to the sender. */
 const codemodeHandoff: SubordinateHandoff = {
@@ -51,7 +49,7 @@ mockAgentsSdk();
 // Every one of these reaches `cloudflare:workers` at module load, so they are
 // imported after the mock is registered.
 const { resolveProvider } = await import('@cloudflare/codemode/ai');
-const { createExecuteToolsTool } = await import('../src/execute-tools');
+const { createExecuteToolsFactory } = await import('../src/execute-tools');
 
 /** A search's answer, narrowed to what the round-trip is read back off. */
 const SearchResultSchema = v.object({
@@ -69,20 +67,6 @@ function workerLoader(): WorkerLoader {
   };
 }
 
-function providerRegistry(): AgentProviderRegistry {
-  const model = new MockLanguageModelV3();
-  return {
-    registry: createProviderRegistry(),
-    deps: {
-      env: {},
-      getAuth: async () => null,
-      hasCredential: async () => false,
-    },
-    resolveModel: () => model,
-    normalizeSpecSync: (spec?: string | null) => spec ?? 'test/model',
-  };
-}
-
 function webSearchProvider(): WebSearchProvider {
   return {
     search: async (query: string) => ({ query, results: [], source: 'duckduckgo' }),
@@ -95,25 +79,35 @@ function webSearchProvider(): WebSearchProvider {
   };
 }
 
-/** The cf construction with only the pieces `createExecuteToolsTool` reaches:
- *  a craft store with nothing in it, no executors, and stub model/web seams. */
+/** The cf construction with only the pieces `createExecuteToolsFactory` reaches:
+ *  a craft store with nothing in it, no executors, and stub model/web seams.
+ *  The native surface handed to `toolFor` is one `file` tool, so the `tools`
+ *  declaration has a native member to assert on. */
 function executeToolsDescription(agents?: () => AgentsToolDeps): string {
   const { rt, testSql } = createTestRuntime();
   initCraftQualityColumns(testSql.execRaw, testSql.sql);
   const options = {
     loader: workerLoader(),
+    egress: null,
     rt,
     sql: testSql.sql,
-    registry: providerRegistry(),
-    modelSpec: () => null,
+    workspace: 'test-workspace',
     webSearch: webSearchProvider(),
   };
-  const built = createExecuteToolsTool(options);
-  if (agents) {
-    const withAgents = createExecuteToolsTool({ ...options, agents });
-    if (!withAgents.description) throw new Error('execute_tools description is missing');
-    return withAgents.description;
-  }
+  const native = {
+    file: tool({
+      description: 'The file plane.',
+      inputSchema: jsonSchema<{ action: string; path: string }>({
+        type: 'object',
+        properties: { action: { type: 'string' }, path: { type: 'string' } },
+        required: ['action', 'path'],
+      }),
+      execute: async () => 'x',
+    }),
+  };
+  const built = agents
+    ? createExecuteToolsFactory({ ...options, agents }).toolFor(native)
+    : createExecuteToolsFactory(options).toolFor(native);
   if (!built.description) throw new Error('execute_tools description is missing');
   return built.description;
 }
@@ -191,13 +185,12 @@ function fullDeps(): AgentsToolDeps {
 
 // ── The execute_tools docstring itself ──────────────────────────────────────
 // This tool's description used to be @cloudflare/codemode's DEFAULT_DESCRIPTION:
-// createExecuteToolsTool passed none, so the model received "Execute code to
+// the cf construction passed none, so the model received "Execute code to
 // achieve a goal." and NOTHING from BUILTIN_TOOL_SPECS.execute_tools — no
 // Use-when, no Avoid-when, no workspace doctrine, no Returns — plus a worked
-// example calling `codemode.searchWeb(...)`, the exact shape
-// craftedDispatcherEntry is written to throw on. Both halves are asserted here
-// because both were absent from any test: the registry's doctrine, and the
-// namespace declarations it wraps.
+// example calling `codemode.searchWeb(...)`, a member no sandbox here binds.
+// Both halves are asserted here because both were absent from any test: the
+// registry's doctrine, and the namespace declarations it wraps.
 
 describe('the execute_tools docstring the model receives', () => {
   test('carries the registry doctrine, not the vendor default', () => {
@@ -214,12 +207,16 @@ describe('the execute_tools docstring the model receives', () => {
     expect(description).not.toContain('codemode.searchWeb');
   });
 
-  test('states what the sandbox is without constraining the code shape', () => {
-    // The shape is deliberately unconstrained now that injectPreamble reaches
-    // every shape; the two facts that remain are runtime facts.
+  test('states what the sandbox is: a Node-like isolate with every tool under tools.*', () => {
     const description = executeToolsDescription();
-    expect(description).toContain('JavaScript isolate');
-    expect(description).toContain('Type annotations, interfaces and generics do not parse');
+    expect(description).toContain('fresh JavaScript isolate per program, written like a Node script');
+    expect(description).toContain('`require()` resolves the Node builtins');
+    expect(description).toContain('Type annotations do not parse there');
+    // The native surface handed to the factory is declared under `tools`, with
+    // its input type, beside the `state` store that outlives a program.
+    expect(description).toContain('export declare const tools: {');
+    expect(description).toContain('file(input: { action: string; path: string }): Promise<unknown>;');
+    expect(description).toContain('export declare const state: {');
   });
 
   test('web.* is declared with its real positional signature', () => {
@@ -258,7 +255,7 @@ describe('agents.* in the cf codemode tool', () => {
   });
 
   test('an actor with no delegation deps has no agents namespace at all', () => {
-    // The head shape: `createExecuteToolsTool` without `agents`. Containment
+    // The head shape: `createExecuteToolsFactory` without `agents`. Containment
     // is the absent dep, exactly as it is for the top-level tool.
     const description = executeToolsDescription();
     expect(description).not.toContain('const agents');

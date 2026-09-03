@@ -506,9 +506,18 @@ describe('the refiner — bounded references, prior history, strict typed answer
     expect(secondRequests[0]!.task).toContain(first.id);
   });
 
-  test('the refiner reads context refs itself — the bytes never enter the brief', async () => {
+  test('the refiner reads context refs itself — only the files this workspace has, at their real paths', async () => {
+    // PRODUCTION, 2026-09-03 (hardy-stone-a905df14): every automatic refinement
+    // was refused before the refiner started, because the lane named `MEMORY.md`
+    // at the root (genesis writes `memory/MEMORY.md`) and `AGENTS.md` in a
+    // workspace that had none, and the temporary-agent port refuses an absent
+    // path by name. The scripted refiner here never ran that port, which is how
+    // a test asserting the string `AGENTS.md` stayed green over a lane that
+    // could not run.
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
+    await fx.rt.storage.vfs.mkdir('memory', { recursive: true });
+    await fx.rt.storage.vfs.writeFile('memory/MEMORY.md', '# memory\n');
     const { port, requests } = scriptedRefiner(proposalText({
       scope: 'workspace', summary: 'none', edits: [],
     }));
@@ -516,8 +525,20 @@ describe('the refiner — bounded references, prior history, strict typed answer
     await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    expect(requests[0]!.contextRefs).toContain('AGENTS.md');
+    expect(requests[0]!.contextRefs).toEqual(['memory/MEMORY.md']);
     expect(requests[0]!.mode).toBe('plan');
+
+    // With an AGENTS.md in place it is offered too; nothing absent ever is.
+    const withAgentsMd = fixture();
+    seedGradedTurns(withAgentsMd.rt, 3);
+    await withAgentsMd.rt.storage.vfs.mkdir('memory', { recursive: true });
+    await withAgentsMd.rt.storage.vfs.writeFile('memory/MEMORY.md', '# memory\n');
+    await withAgentsMd.rt.storage.vfs.writeFile('AGENTS.md', '# project\n');
+    const second = scriptedRefiner(proposalText({ scope: 'workspace', summary: 'none', edits: [] }));
+    const secondDeps = withAgentsMd.deps(second.port);
+    await requestRefinement(secondDeps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(secondDeps);
+    expect(second.requests[0]!.contextRefs).toEqual(['memory/MEMORY.md', 'AGENTS.md']);
   });
 
   test('an unparsable or off-schema answer refuses the request — it never half-applies', async () => {

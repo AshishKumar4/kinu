@@ -104,6 +104,10 @@ export default defineConfig({
         // registers these under; miniflare spells the same thing `useSQLite`.
         // Without it `ctx.storage.sql` throws and the init-gate read would
         // measure an error path instead of the gate.
+        // The dynamic-Worker loader `execute_tools` runs programs through
+        // (`wrangler.jsonc` `worker_loaders`), so the sandbox test below runs
+        // the real @cloudflare/codemode executor over the real module graph.
+        workerLoaders: { LOADER: {} },
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
           NEIGHBOUR: { className: 'NeighbourDO', useSQLite: true },

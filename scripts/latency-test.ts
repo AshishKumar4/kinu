@@ -52,8 +52,8 @@ Write JavaScript to accomplish tasks. Your code runs in a sandboxed Worker with 
   workspace.listTools() → tool list
   workspace.createTool(name, description, code) → "ok"
 
-**codemode.*** — your learned tools from the CraftStore (improves over time):
-  codemode.<name>(args) — call any crafted tool by name
+**tools.*** — the native tools plus your learned ones from the CraftStore:
+  tools.<name>(args) — call any native or crafted tool by name
 
 Use Promise.all for parallel operations. Return a value to see the result.
 

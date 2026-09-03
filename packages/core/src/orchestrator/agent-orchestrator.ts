@@ -124,11 +124,6 @@ export interface AgentOrchestratorDeps {
   /** The actor's mission budget governor. Absent = this backend wires no
    *  governor at all; present-but-unscoped is the normal uncapped turn. */
   budget?: MissionGovernor;
-  /** The delegatable role ids as the active catalog offers them, read lazily.
-   *  Stamped onto every delegation-opportunity row, because a zero conversion
-   *  under an empty catalog is a wiring fact and one under a full catalog is
-   *  behaviour. Absent reads as an empty list — stated, never guessed. */
-  roleCatalog?: () => readonly string[] | undefined;
   /** This host runs ONE task turn and exits (`kinu exec` / `kinu run`),
    *  so it cannot finish the cadence lane and never STARTS it — see the exit
    *  contract above. Its window stays open and the local scheduler daemon runs
@@ -160,8 +155,7 @@ export class AgentOrchestrator {
    *  background-job wakes, overflow retries, take picks, MCP tasks — at the ONE
    *  time anything reaches it: its next step. Producers state intent only. */
   readonly signals: SignalDelivery;
-  /** Per-turn mechanical steering — turn start, repeat, repeated failure, no
-   *  progress, long turn.
+  /** Per-turn mechanical steering — repeat, repeated failure, no progress.
    *  Observed through {@link turnExtension} and handed to closeTurnRun for the
    *  durable `turn_steering` rows. */
   readonly steering = new TurnSteering();
@@ -239,9 +233,6 @@ export class AgentOrchestrator {
       (e, d) => deps.sinks?.logActivity?.(e, d),
       () => this.activeWorkMode,
     );
-    // Read per opportunity, never cached: the catalog can change between turns,
-    // and the row must name what was available when the hint was delivered.
-    if (deps.roleCatalog) this.steering.observeRoles(deps.roleCatalog);
     this.drains = new DrainScheduler(
       () => this.drainPendingEvents(),
       (fn, ms) => deps.host.setTimer(fn, ms),

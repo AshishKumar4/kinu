@@ -3,9 +3,10 @@
  *
  * This is the bridge that makes a WORKFLOW an ordinary crafted tool: LLM-authored
  * JS inside `execute_tools` already reaches `llm.*`, `workspace.*`, `web.*` and
- * `codemode.*`, so once it can also delegate, a deterministic script over
- * nondeterministic agent calls is just code — savable via `workspace.createTool`,
- * callable as `codemode.<name>()`, schedulable via `agent.schedule`, EMA-scored
+ * every crafted tool in `tools.*`, so once it can also delegate, a deterministic
+ * script over nondeterministic agent calls is just code — savable via
+ * `workspace.createTool`, callable as `tools.<name>()`, schedulable via
+ * `agent.schedule`, EMA-scored
  * and shareable like every other craft. No workflow DSL, graph engine, step store
  * or scheduler is needed, because each of those already exists here under a
  * different name.

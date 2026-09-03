@@ -76,14 +76,22 @@ function scene() {
 
   const broadcasts: string[] = [];
   const activeToolControllers = new Set<AbortController>();
+  /** The framework abort, in call order with the device sweep below. */
+  const calls: string[] = [];
+  /** Whether a foreground controller was already aborted when chats went. */
+  let chatsSawAborted: boolean | null = null;
   const stop = () => cancelCurrentWork({
+    cancelChats: () => {
+      chatsSawAborted = [...activeToolControllers].some((c) => c.signal.aborted);
+      calls.push('chats');
+    },
     activeToolControllers,
     broadcast: (payload) => { broadcasts.push(payload); },
+    stopDeviceCommands: async () => { calls.push('devices'); return []; },
   });
 
-  return { store, runner, settled, detachHeldJob, activeToolControllers, stop, broadcasts };
+  return { store, runner, settled, detachHeldJob, activeToolControllers, stop, broadcasts, calls, chatsSawAborted: () => chatsSawAborted };
 }
-
 describe('Stop scopes to the displayed turn', () => {
   test('a detached job held at its settlement boundary survives Stop and completes', async () => {
     const s = scene();
@@ -96,7 +104,11 @@ describe('Stop scopes to the displayed turn', () => {
     // job's own signal before the foreground abort it was asked for.
     const outcome = await s.stop();
 
-    expect(outcome).toEqual({ ok: true, abortedTools: 1, deviceCommands: [], returnedSteers: [] });
+    expect(outcome).toEqual({ ok: true, abortedTools: 1, deviceCommands: [] });
+    // The framework abort ran, and it ran BEFORE the tool abort: the foreground
+    // controller was still live when chats went, and the device sweep ran after.
+    expect(s.calls).toEqual(['chats', 'devices']);
+    expect(s.chatsSawAborted()).toBe(false);
     expect(foreground.signal.aborted).toBe(true);
     // The job's own handle is untouched, and its row still reads running: the
     // work has not been told to stop and nothing has settled it.

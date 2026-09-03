@@ -232,7 +232,7 @@ export function profileCatalogDigest(catalog: ProfileCatalog): string {
 export const BUILTIN_ROLE_DEFINITIONS = {
   general: {
     description: 'The everyday agent for open-ended work in this workspace.',
-    instructions: 'Take the request directly. Work in small verified steps and say what you did. When a task fans out into independent lines of work, hand the breadth to a swarm and weigh the results yourself.',
+    instructions: 'Take the request directly. Work in small verified steps and say what you did.',
     tier: 'default',
     preset: 'ideate',
   },

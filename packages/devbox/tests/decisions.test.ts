@@ -597,15 +597,21 @@ describe('every self-re-arming schedule needs a first link', () => {
     expect([...source.matchAll(/this\.#restoreNow\(/g)]).toHaveLength(1);
   });
 
-  test('the sweep of unreachable schedule rows runs BEFORE anything is armed', () => {
-    // MEASURED IN PRODUCTION: `Callback snapshotWorkspaceIfDue not found or is
-    // not a function`, every three minutes for ever, because the alarm loop logs
-    // a dead callback and keeps its row. The sweep is bounded — one SELECT over
-    // this object's own table — and it runs first, so the arming below cannot be
-    // starved by rows nothing can execute.
+  test('the sweep of unreachable schedule rows runs at activation, before any arming', () => {
+    // MEASURED IN PRODUCTION (build 6d19d50e7): `Callback
+    // snapshotWorkspaceIfDue not found or is not a function`, twice a second
+    // per sandbox object, with the alarm re-arming for ever. The sweep used to
+    // run first inside `#armContainerSchedules`, but the container-start hook
+    // never fires on a wake whose container is asleep, while the alarm loop
+    // still runs — so a start-gated sweep could never reach the rows that spin
+    // the loop. The sweep runs in the constructor's activation gate instead,
+    // which settles before the runtime delivers any event, alarm included; the
+    // start hook arms and nothing else.
     const schedules = bodyOf('async #armContainerSchedules(');
-    expect(schedules.indexOf('this.#sweepUnknownSchedules()'))
-      .toBeLessThan(schedules.indexOf('this.kickStartup()'));
+    expect(schedules).not.toContain('#sweepUnknownSchedules');
+    const activation = bodyOf('constructor(ctx: DurableObjectState<{}>, env: Env) {');
+    expect(activation).toContain('ctx.blockConcurrencyWhile(');
+    expect(activation).toContain('this.#sweepUnknownSchedules()');
     const sweep = bodyOf('async #sweepUnknownSchedules(');
     expect(sweep).toContain('SELECT DISTINCT callback FROM container_schedules');
     expect(sweep).toContain('this.deleteSchedules(callback)');

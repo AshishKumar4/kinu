@@ -90,13 +90,15 @@ const nodeExecFactory: CreateExecuteToolFactory = (opts) => {
     }),
     execute: async (a: { code: string }) => {
       try {
-        // Resolved per execute, exactly as the cli-backend factory does.
-        const codemode: Record<string, (arg: JsonValue) => Promise<JsonValue | undefined>> = {};
+        // Resolved per execute, exactly as the cli-backend factory does, and
+        // bound under the ONE namespace core declares. A double that also bound
+        // `codemode` would keep passing after the alias was removed.
+        const crafted: Record<string, (arg: JsonValue) => Promise<JsonValue | undefined>> = {};
         for (const [name, entry] of Object.entries(opts.craftedTools())) {
-          codemode[name] = entry.execute;
+          crafted[name] = entry.execute;
         }
-        const fn = new Function('workspace', 'codemode', 'tools', 'return (async () => { ' + a.code + ' })()');
-        const rawResult = await fn({}, codemode, codemode);
+        const fn = new Function('workspace', 'tools', 'return (async () => { ' + a.code + ' })()');
+        const rawResult = await fn({}, crafted);
         const result = v.safeParse(v.undefined(), rawResult).success
           ? undefined
           : projectJsonValue({ value: rawResult });
@@ -229,14 +231,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     }
   });
 
-  test('descriptions document both codemode.* and tools.<name> namespaces', () => {
-    // Preamble-pattern invariant: both namespaces are real.
-    //   codemode.* dispatches over RPC into host-side provider fns.
-    //   tools.<name> resolves locally inside the preamble-injected object
-    //     literal (crafted tools, via PreambleCraftedExecutor).
-    // Either can invoke a crafted tool; the prompt must advertise both.
-    expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('codemode.*');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('tools.');
+  test('descriptions document the one tools.<name> namespace and the state store', () => {
+    // ONE namespace for every tool the program can call, native and crafted;
+    // `codemode.*` is gone (it used to be a refusing alias the model kept
+    // reaching for). `state.*` is what outlives a program.
+    expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).not.toContain('codemode.*');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('`tools.<name>(input)`');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('`state.*`');
     expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('canonical durable workspace');
     expect(BUILTIN_TOOL_DESCRIPTIONS.run).toContain('shell over the canonical durable workspace');
     expect(BUILTIN_TOOL_DESCRIPTIONS.run).not.toContain('small fixed command set');
@@ -566,17 +567,17 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(result).not.toContain('setShellApprovalMode');
   });
 
-  test('execute_tools exposes workspace and codemode globals', async () => {
+  test('execute_tools exposes the workspace and tools globals', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
     const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.execute_tools) };
     const result = await tool.execute({
-      code: "return typeof workspace + ',' + typeof codemode;",
+      code: "return typeof workspace + ',' + typeof tools;",
     });
     expect(result.result).toBe('object,object');
   });
 
-  test('crafted tools become bare callables under codemode.<name>', async () => {
+  test('crafted tools become bare callables under tools.<name>', async () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
       name: 'double', description: 'doubles a number', params: null,
@@ -587,12 +588,12 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const tool = {
       execute: toolExecute<{ code: string }, { result: JsonValue | undefined; error?: string }>(t.execute_tools),
     };
-    const result = await tool.execute({ code: 'return await codemode.double(21);' });
+    const result = await tool.execute({ code: 'return await tools.double(21);' });
     expect(result.error).toBeUndefined();
     expect(result.result).toBe(42);
   });
 
-  test('low-scoring crafted tools filtered out of codemode namespace', async () => {
+  test('low-scoring crafted tools filtered out of the tools namespace', async () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
       name: 'weak', description: 'low quality', params: null,
@@ -602,13 +603,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     const t = tools(rt);
     const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.execute_tools) };
-    const result = await tool.execute({ code: 'return typeof codemode.weak;' });
+    const result = await tool.execute({ code: 'return typeof tools.weak;' });
     expect(result.result).toBe('undefined');
   });
 
-  // v2.1(E): same-turn codemode.<name> for a NEW tool is no longer supported.
-  // The Proxy live-lookup path used host-side new Function and was removed.
-  // Tools created this turn become available next turn (getTools rebuilds).
+  // v2.1(E): same-turn `tools.<name>` for a NEW tool is not supported. The
+  // Proxy live-lookup path used host-side new Function and was removed. Tools
+  // created this turn become available next turn (getTools rebuilds).
 });
 
 /**

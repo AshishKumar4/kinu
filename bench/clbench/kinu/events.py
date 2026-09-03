@@ -274,7 +274,7 @@ def run_events(events: list[Event], *kinds: str) -> list[Event]:
     """The durable run-event ledger carried on the stream, in order.
 
     Each `run_event` line wraps one row of the agent's own `run_events` table —
-    delegation nudges, the turn's context budget, refused mission budgets, the
+    mechanical steers, the turn's context budget, refused mission budgets, the
     run bracket. The table lives in the agent's database, which a benchmark
     container destroys on exit, so the stream is the only copy a harness gets.
     Filter with `kinds` (the row's own `type`); no argument returns everything.

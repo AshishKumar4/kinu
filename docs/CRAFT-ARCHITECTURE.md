@@ -6,16 +6,16 @@ A crafted tool is a model-authored async arrow function, stored in `crafted_tool
 
 Both backends craft tools on different platforms behind the same call surface.
 
-- **Cloudflare.** `PreambleCraftedExecutor` (`cf-backend/src/crafted-tool-registry.ts`) holds one upstream `DynamicWorkerExecutor({ loader })` for the Durable Object's lifetime. Only `loader` is passed, so the sandbox inherits every codemode default: no `fetch`, no `fs`, no `require`, a `Proxy` per provider namespace, console logs captured for the host. The no-network constraint is recorded at `core/src/types/primitives.ts:116`.
+- **Cloudflare.** `KinuSandboxExecutor` (`cf-backend/src/codemode-sandbox.ts`) holds one upstream `DynamicWorkerExecutor` for the Durable Object's lifetime and adds three things to it: the `kinu-node.js` module (`codemode-node-shim.ts`) loaded beside the program, a prelude on the `tools` namespace that defines `require`, `fetch`, `env` and every crafted tool, and `globalOutbound` set to the Worker's own loopback entrypoint (`CodemodeEgress`), so `fetch()` inside the sandbox reaches the network. Console logs are captured for the host.
 - **CLI.** `createNodeCraftedExecute` (`cli-backend/src/craft-executor.ts`) compiles each stored body in-process with `new Function`. No child Worker, no loader.
 
 No Cloudflare path calls `new Function`. Four host call sites exist, all local: `cli-backend/src/craft-executor.ts:48` compiles a crafted body, `cli-backend/src/execute-tools-factory.ts:151` compiles the model's own `execute_tools` code, `cli-backend/src/executor.ts:241` runs a local JavaScript command, and `createInlineExecutor` (`core/src/identity/inline-primitives.ts:169`) serves a local workspace. One more site passes the words as a string into `rt.executor.execute` (`core/src/scaffold/modify.ts:66`, the parse gate), so that codegen happens inside whatever sandbox the runtime owns.
 
 ## 2. Error propagation
 
-A crafted-tool failure comes back as a flat envelope, `{ error: true, message, stack?, toolName?, providerName? }`, produced over every resolved provider by `StructuredExecutionError` and `wrapProvidersWithStructuredErrors` (`cf-backend/src/crafted-tool-registry.ts`). The stack truncates to its first ten lines; `renderThrownChain` keeps a `cause` chain's message. The envelope is flat because the Vercel AI SDK stringifies `tool-output-available` into activity logs, and a nested payload does not survive that intact.
+A crafted tool that throws rejects with `[crafted:<name>] <message>` (`defineCrafted` in `cf-backend/src/codemode-node-shim.ts`), so the program's own `try`/`catch` sees it and the in-episode fitness can blame the right artifact (`craftFailureMarker`, `core/src/craft/in-episode.ts`). A stored body that does not parse, throws when evaluated, or evaluates to a non-function poisons only its own name: its `tools.<name>` throws the reason on first call, and every other tool in the program keeps working. Host tool failures cross the boundary the same way: the dispatcher turns a rejection into `{error}` and the sandbox proxy rethrows it with the namespace and member in front of the message (`attributeProviders`, `codemode-sandbox.ts`).
 
-Errors come back as values, so a failing crafted tool does not abort the surrounding arrow and codemode reports the call as having returned. Executor-level failure behaves differently: a sandbox spawn or timeout arrives as a non-empty `error` string, which `createCodeTool` turns into a thrown AI SDK error.
+An uncaught throw ends the program, and its message comes back as the `execute_tools` result's `error` string, with `explainNativeToolReferenceError` rewriting the one shape that means "the model reached for a native tool as a bare identifier". Executor-level failure behaves the same way: a sandbox spawn failure arrives as a non-empty `error` string, which `createCodeTool` turns into a thrown AI SDK error.
 
 Logs ride their own channel. Codemode's module stubs override `console.log`, `console.warn` and `console.error`, and the host reads the captured array back as `logs`. A model can `console.log` inside a crafted tool and read the output on the next step.
 
@@ -31,35 +31,37 @@ SQL is the single source of truth. No in-memory registry, no subscription.
 
 Crafted tools are reachable only from inside `execute_tools`; they are not top-level AI SDK tools, and `BUILTIN_TOOLS` is a fixed list of eight names. The full namespace contract is the `Namespace contract` comment above `BUILTIN_TOOL_SPECS` in `core/src/tools/registry.ts`.
 
-## 4. The preamble
+## 4. The prelude
 
-Neither backend owns a sandbox Worker module; on Cloudflare all loader plumbing flows through upstream codemode, and `env.LOADER.get(` is never called directly. The only platform-owned piece is the string work producing the arrow body before `DynamicWorkerExecutor.execute` sees it, done by two exported functions in `cf-backend/src/crafted-tool-registry.ts` so their behaviour is testable without a sandbox.
+On Cloudflare all loader plumbing flows through upstream codemode, and `env.LOADER.get(` is never called directly. Codemode declares one `const` proxy per provider namespace and then runs each provider's `prelude` string in that scope, ahead of the model's program. Kinu's `tools` provider carries the one prelude, rendered by `renderToolsPrelude` (`cf-backend/src/codemode-sandbox.ts`) so its text is testable without a sandbox:
 
-- `buildToolsPreamble` produces the `const tools = { … }` object literal, one wrapped entry per tool. Each body sits alone between parentheses on its own lines, because a body ending in a `//` comment would otherwise swallow the rest of the wrapper and syntax-error the whole preamble.
-- `injectPreamble` normalizes the model's code with codemode's own `normalizeCode`, then wraps it: `async () => { <preamble>return await (<normalized>)(); }`. A wrap rather than a regex splice: the splice silently dropped the preamble whenever the model's code was not already an `async (…) => {` arrow, which is exactly what `BUILTIN_TOOL_SPECS.execute_tools.example` teaches, and on every such call the whole crafted-tool surface was undefined with no error naming why.
+- It imports `kinu-node.js`, the module `KinuSandboxExecutor` loads beside the program (`codemode-node-shim.ts`), and from it defines `require` (Node builtins under `nodejs_compat`, plus `fs/promises` and `child_process` shimmed over the `workspace` namespace), `fetch` (the platform's own, through the loopback egress entrypoint) and a frozen `env` (`workspace` name, the `state` namespace, and the builtins the runtime lacked).
+- It assigns every injectable crafted tool onto `tools` as `__kinu.defineCrafted(name, () => (<stored source>))`. The stored source is checked on the host with the same parser the admission gate uses (`parsesAsExpression`); a body that does not parse becomes a factory that throws the parse error, so one bad row cannot be a `SyntaxError` for every program in the workspace.
 
-Because the preamble sits inside the arrow, a crafted body shares its lexical scope: it can call `workspace.readFile`, any wired `codemode.*` provider, and another crafted tool by name. Property lookup happens at call time, so authoring order does not matter. Normalization of a stored body is a single `.trim()`.
+Own properties assigned by the prelude take precedence over the host dispatch proxy, so `tools.<crafted>` runs inside the sandbox while `tools.<native>` crosses to the host. A crafted body runs in the prelude's scope: it can call `workspace.readFile`, `require`, `fetch`, and another tool as `tools.<other>`. Property lookup happens at call time, so authoring order does not matter. Normalization of a stored body is a single `.trim()`.
+
+The same executor runs the model's program on the CLI in-process (`cli-backend/src/execute-tools-factory.ts`), with the crafted set compiled by `createNodeCraftedExecute`.
 
 ## 5. The call contract
 
-`tools.<name>(args)` is the one canonical form, on every backend.
+`tools.<name>(args)` is the one canonical form, on every backend, and it is the form for a NATIVE tool as much as a crafted one. There is no alias and no second spelling: `CRAFTED_TOOL_NAMESPACE` in `core/src/tools/sandbox-contract.ts` is the single constant both sandboxes build from, so a name outside `tools` is not a tool.
 
-`codemode.<name>` stays declared so the model can discover the tool, but calling it throws `craftedNamespaceCorrection(name)`; it never returns an error value. A returned error is a value the model reads as a result and the runtime reads as a successful call, which would let an in-episode fitness observation land on a call that never ran.
+The one near-miss the sandbox answers for is a bare identifier naming a native tool. `explainNativeToolReferenceError` (`core/src/execution/sandbox-errors.ts`) turns V8's `ReferenceError` into a sentence naming `tools.<name>(input)` and the input object that call takes, on both backends — Cloudflare in `cf-backend/src/codemode-sandbox.ts`, the CLI in `cli-backend/src/execute-tools-factory.ts`.
 
-Both backends build the refusal from the same `craftedDispatcherEntry`: Cloudflare in `cf-backend/src/execute-tools.ts`, the CLI in `cli-backend/src/execute-tools-factory.ts`. The declaration is not symmetric yet. Cloudflare hands `createCodeTool` a named provider of alias entries, which puts crafted names in the types the model reads. The CLI never calls `createCodeTool`; it injects the crafted set as sandbox arguments instead, so crafted names reach the local model as a refusing binding without reaching its types. docs/TOOLS.md carries that nuance; `core/src/tools/sandbox-contract.ts` is the source both sides read for the refusal.
+The DECLARATION is not symmetric yet. Cloudflare renders `renderToolsDeclaration(native, crafted)` into the types the model reads, so a crafted name is discoverable there. The CLI never calls `createCodeTool`; it binds the crafted set as a sandbox argument, so crafted names are callable without reaching its types. docs/TOOLS.md carries that nuance.
 
-`workspace.createTool`'s docstring agrees with all of this: it names `tools.<name>(args)` on the next `execute_tools` call and names the alias as refused. Read it from source, in `core/src/execution/inline.ts`; a quote here would rot the next time the file moves.
+`workspace.createTool`'s docstring agrees with all of this: it names `tools.<name>(args)` on the next `execute_tools` call. Read it from source, in `core/src/execution/inline.ts`; a quote here would rot the next time the file moves.
 
 ## 6. Wiring
 
-`ActorAgent.getExecuteToolsTool()` (`cf-backend/src/actor-agent.ts`) is the entry every actor shares, memoized per work mode and tool profile. It calls `createExecuteToolsTool` (`cf-backend/src/execute-tools.ts`), which owns the `createCodeTool` assembly and seeds the alias namespace with one entry per injectable crafted tool.
+`ActorAgent.getExecuteToolsTool()` (`cf-backend/src/actor-agent.ts`) is the entry every actor shares, memoized per work mode and tool profile. It calls `createExecuteToolsTool` (`cf-backend/src/execute-tools.ts`), which owns the `createCodeTool` assembly and builds the one `tools` provider: native tools as host-dispatched functions, and a prelude defining every injectable crafted tool.
 
 `core/src/tools/crafted-executor.ts` is the platform contract both adapters satisfy: `CraftedToolSource`, `CraftedToolExecuteFn`, the `CraftedToolExecute` factory type, plus `toCraftedToolSource`, which drops null and comment-only bodies so no executor has to special-case them. Core's `buildCraftedToolSetFromExecute` (`core/src/tools/builtins.ts`) serves the CLI's `createExecuteTool` factory; Cloudflare bypasses it through `preBuiltExecuteTool`.
 
 ## 7. Open questions
 
-1. **Outbound `fetch` from a crafted tool.** `PreambleCraftedExecutor` takes codemode's default, which grants none. Whether a crafted tool may reach the network at all, and under what allow-list, is undecided.
+1. **An allow-list for outbound `fetch`.** The sandbox reaches the network through `CodemodeEgress` (`cf-backend/src/codemode-egress.ts`), which forwards every request. Whether a crafted tool should be held to a host allow-list is undecided.
 2. **No signature gate.** `workspace.createTool` validates argument presence, identifier sanitization, case collision and the misevolution gate, but not the async-arrow shape, so a non-arrow body fails later, at first call, as a compile error. The check would be a `.trim()`, `startsWith('async')` and `includes('=>')` test in `createTool.execute` (`core/src/execution/inline.ts`), returning the shape it wanted.
 3. **Top-level surfacing.** Crafted tools could also appear as direct AI SDK tools, letting the model call `double({n: 7})` without `execute_tools`. Deferred: every extra top-level tool grows the system-message tool schema, and no agent-side failure mode justifying the cost is on record.
 
-Two questions are settled. Same-arrow visibility stays out, because the preamble is built once per call and frozen for that arrow. The error payload stays flat, for the stringification reason in §2.
+One question is settled. Same-program visibility stays out: the prelude is rendered once per call, so a tool crafted inside a program is callable from the next `execute_tools` call, not the one that created it.

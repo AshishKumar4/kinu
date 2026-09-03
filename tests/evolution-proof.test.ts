@@ -63,7 +63,7 @@ const ToolListResultSchema = v.object({
   })),
 });
 
-/** How far one direct `codemode.<name>()` call got. `unbound` is the adapter not
+/** How far one direct `tools.<name>()` call got. `unbound` is the adapter not
  *  wired and is a harness fault; `threw` is the model-authored body's own
  *  business and still proves the binding executed. Keeping them apart is what
  *  stops a de-parity reading as a bad artifact. */
@@ -82,7 +82,7 @@ interface ExposureTally {
   readonly inherited: number;
   /** Of those, how many `workspace.listTools()` projected. */
   readonly discovered: number;
-  /** Of those, how many a direct `codemode.<name>()` call reached the body of. */
+  /** Of those, how many a direct `tools.<name>()` call reached the body of. */
   readonly reachedBody: number;
   /** Names that did not resolve to a callable at all — the wiring failure. */
   readonly unbound: readonly string[];
@@ -658,7 +658,7 @@ describe('Evolution Proof', () => {
     console.log(`    Tools available: ${Object.keys(surface.tools).join(', ')}`);
 
     // What session 2 inherits, from the store it inherits it in. Crafted tools
-    // are codemode-only — reached as `codemode.<name>` inside `execute_tools`,
+    // are sandbox-only — reached as `tools.<name>` inside `execute_tools`,
     // never as SDK tools (evolution/engine.ts:433-436) — so subtracting a
     // hardcoded builtin count from the list above measures nothing: it printed
     // `Crafted tools loaded: -1` beside a correct `Crafted tools: 3` as soon as
@@ -684,7 +684,7 @@ describe('Evolution Proof', () => {
     //     projection.
     //   binding   — a listed name still has to RESOLVE inside the sandbox.
     //     Measured with `craftedToolExecute` absent: three rows listed, and
-    //     `codemode.doubleIt` was `undefined`. The reuse metric read 1/1.
+    //     `tools.doubleIt` was `undefined`. The reuse metric read 1/1.
     //   invocation — a resolved binding still has to reach the tool BODY. This is
     //     the row that separates a wiring fault from the tool's own contract: an
     //     unbound name is the harness's failure, and a body that threw on absent
@@ -703,15 +703,15 @@ describe('Evolution Proof', () => {
     const invocations = v.parse(InvocationReportSchema, await execute({
       code: `const report = [];
 for (const name of ${JSON.stringify(inheritedToolNames)}) {
-  if (typeof codemode[name] !== 'function') { report.push({ name, phase: 'unbound' }); continue; }
-  try { await codemode[name](); report.push({ name, phase: 'returned' }); }
+  if (typeof tools[name] !== 'function') { report.push({ name, phase: 'unbound' }); continue; }
+  try { await tools[name](); report.push({ name, phase: 'returned' }); }
   catch (err) { report.push({ name, phase: 'threw' }); }
 }
 return report;`,
     }));
     const unbound = invocations.result.filter((row) => row.phase === 'unbound').map((row) => row.name);
     const reachedBody = invocations.result.filter((row) => row.phase !== 'unbound');
-    for (const row of invocations.result) console.log(`      codemode.${row.name}: ${row.phase}`);
+    for (const row of invocations.result) console.log(`      tools.${row.name}: ${row.phase}`);
 
     // One invocation with a KNOWN signature, so "an invocation succeeded" is a
     // returned VALUE and not only a body that ran. Crafted through
@@ -722,7 +722,7 @@ return report;`,
       code: 'await workspace.createTool("parityProbe", "returns its input doubled", '
         + '"async (n) => n * 2"); return "made";',
     });
-    const probe = await execute({ code: 'return await codemode.parityProbe(21);' });
+    const probe = await execute({ code: 'return await tools.parityProbe(21);' });
 
     exposure = {
       inherited: inheritedToolNames.length,
@@ -830,7 +830,7 @@ return report;`,
     expect(s1Tools).toBeGreaterThan(0);
     // THREE metrics, three denominators, PRD §9.3. Exposure is not a kind of
     // reuse: it is whether the mechanism was reachable at all, and folding it in
-    // is what let a run report reuse over a surface where `codemode.<name>` was
+    // is what let a run report reuse over a surface where `tools.<name>` was
     // undefined. Reuse then splits by population, because these challenge
     // prompts explicitly command `use execute_tools` — so this proof measures
     // INSTRUCTED transfer, and the behaviour eval's corpus, which mechanically

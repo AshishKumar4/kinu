@@ -163,9 +163,9 @@ describe('workspace provider (InlineExecutor)', () => {
     expect(noCode.ok).toBe(false);
   });
 
-  // v2.1(E): invokeCrafted removed. Same-turn codemode.<name>() access is
+  // v2.1(E): invokeCrafted removed. Same-turn `tools.<name>()` access is
   // unsupported by design — the LLM must use two turns (createTool, then
-  // codemode.<name>). Tests for createTool alone remain above.
+  // `tools.<name>`). Tests for createTool alone remain above.
 });
 
 /**

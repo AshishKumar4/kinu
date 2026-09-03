@@ -19,10 +19,8 @@
 //     deadline killed the caller of long work — after the 30s detach had already
 //     told the model the work was "still running, not cancelled".
 import { describe, test, expect, mock } from "bun:test";
-import type { CraftedTool, CraftStore } from "@kinu.run/core";
 import type { KinuSandbox } from "../src/kinu-sandbox";
-import { initCraftQualityColumns, NO_TIMER_DEADLINE_MS } from "@kinu.run/core";
-import { createTestSql } from "@kinu.run/test-utils";
+import { NO_TIMER_DEADLINE_MS } from "@kinu.run/core";
 import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
 
 // codemode reaches `cloudflare:workers` at load, so that specifier must be
@@ -42,7 +40,7 @@ await mock.module("cloudflare:workers", () => ({
   DurableObject: class {},
 }));
 
-const { PreambleCraftedExecutor } = await import("../src/crafted-tool-registry");
+const { KinuSandboxExecutor } = await import("../src/codemode-sandbox");
 
 interface ProcessDouble {
   id: string;
@@ -262,19 +260,8 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
 // moved into the object all of them reach, and its tests moved with it:
 // packages/devbox/tests/resource-lane.test.ts.
 
-function emptyCraftStore(): CraftStore {
-  const rows: CraftedTool[] = [];
-  const unsupported = (): never => { throw new Error("unused CraftStore operation"); };
-  return {
-    create: unsupported, update: unsupported, get: () => undefined, delete: unsupported,
-    list: () => rows, search: () => [], getAll: () => rows,
-  };
-}
-
 describe("the codemode program carries no execution deadline of its own", () => {
   test("the generated dynamic Worker gets no 60s kill", async () => {
-    const { db, sql } = createTestSql();
-    initCraftQualityColumns((ddl: string) => db.exec(ddl), sql);
     let generated = "";
     // The real generated program is the evidence: codemode races it against a
     // `setTimeout(… "Execution timed out")` built from its `timeout` option.
@@ -288,7 +275,7 @@ describe("the codemode program carries no execution deadline of its own", () => 
     // constructible form; codemode reaches only `load`. The double rides the
     // prototype the way helpers/jsrpc-stub.ts builds stubs.
     const workerLoader: WorkerLoader = Object.create(loader);
-    const executor = new PreambleCraftedExecutor(workerLoader, emptyCraftStore(), sql);
+    const executor = new KinuSandboxExecutor({ loader: workerLoader, egress: null });
 
     await executor.execute("return 1", []);
 

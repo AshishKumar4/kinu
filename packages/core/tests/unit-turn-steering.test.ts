@@ -1,7 +1,7 @@
 // Mechanical turn steering (orchestrator/turn-steering.ts) — the harness
 // saying, in the turn, the one thing it can see about the turn that the model
-// cannot: it is repeating itself, it is stuck, or it is long and undelegated.
-// Prose alone moved the model 0 times in 10 bench tasks.
+// cannot: it is repeating itself, it is stuck on one approach, or it is
+// spending without moving. Prose alone moved the model 0 times in 10 bench tasks.
 //
 // These are behaviour tests through the public seams: the orchestrator's turn
 // extension both backends register (the steer is delivered as a turn-local
@@ -17,8 +17,8 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
-  AgentOrchestrator, TurnSteering, isFailingToolResult, runChat, AGENTS_TOOL_ACTIONS,
-  IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER, LONG_TURN_STEPS_BEFORE_STEER,
+  AgentOrchestrator, TurnSteering, isFailingToolResult, runChat,
+  IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER,
   STEPS_WITHOUT_PROGRESS_BEFORE_STEER,
   TURN_STEERING_HEADER, ExtensionHost, EvolutionEngine, EventLog, initEventsHubTables,
   type BackendHost,
@@ -27,31 +27,28 @@ import type { JsonObject } from '../src/utils/json';
 import { makeSqlExec } from './helpers';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
-/** The session's first ask — the turn-start hint's own fixture, shared with the
- *  delegation-opportunity block below. */
+/** The session's first ask — a fresh multi-part request, the shape that used
+ *  to draw a delegation hint and now must draw nothing. */
 const fresh = 'add caching to the api and update the docs';
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
 
 /** A FOLLOW-UP turn's opening context: an ask with this agent's own work behind
- *  it. The turn-start hint fires only on a fresh ask (nothing of this agent's in
- *  the window), so this is the fixture for every test about the four reactive
- *  triggers — it keeps the hint out of the way of what is under test. */
+ *  it. The generic fixture for every trigger test below. */
 const followUp = (text: string): ModelMessage[] => [user('earlier'), assistant('handled'), user(text)];
 
-/** The turn's steering rows, and the last of them: the reactive steer on every
- *  turn where one fired, the turn-start hint on a turn that only got the hint. */
+/** The turn's steering rows, and the last of them: the one reactive steer on
+ *  every turn where one fired. */
 const rows = (orch: AgentOrchestrator) => orch.steering.snapshot();
 const lastSteer = (orch: AgentOrchestrator) => orch.steering.snapshot().at(-1) ?? null;
 
-/** Every delegation action a steer names must exist on the `agents` surface.
- *  The repeated-failure steer told the model to pass `settle=mcts` for a whole
- *  release after that field left the tool, so the nudge fired on the exact turn
- *  the model was already failing and bought it a refusal. Derived from the enum
- *  rather than from prose, so the next rename fails here instead of in a run. */
-function expectOnlyRealActions(text: string): void {
-  const named = [...text.matchAll(/action[=:]'?(\w+)/g)].map((m) => m[1]!);
-  expect(named.length).toBeGreaterThan(0);
-  expect(named.filter((action) => !AGENTS_TOOL_ACTIONS.some((real) => real === action))).toEqual([]);
+/** The loop steers never name the delegation ladder: no `agents`, no swarm,
+ *  no delegation. A steer that did would reintroduce the nudge this cutover
+ *  removed, through prose rather than a trigger. */
+function expectNoDelegationNudge(text: string): void {
+  expect(text).not.toContain('agents');
+  expect(text).not.toContain('swarm');
+  expect(text).not.toMatch(/delegat/i);
+  expect(text).not.toContain('search');
 }
 
 /** Steering as production wires it: the orchestrator's turn extension on a
@@ -187,13 +184,9 @@ describe('repeated-failure trigger', () => {
     expect(injected(nudged)).toHaveLength(1);
     const text = injected(nudged)[0]!;
     expect(text).toContain('`run` has failed 3 times in a row');
-    expect(text).toContain('agents` action=swarm');
-    // Both halves the steer always offered, spelled with the one verb that
-    // carries them now: measure the candidates, or sample when there is nothing
-    // to measure yet.
-    expect(text).toContain('`objective`');
-    expect(text).toContain("preset:'ideate'");
-    expectOnlyRealActions(text);
+    expect(text).toContain('read the failure text for the actual cause');
+    expect(text).toContain('a different command, a different file');
+    expectNoDelegationNudge(text);
     expect(text).toContain('hint, not an instruction');
     expect(lastSteer(orch)).toEqual({ trigger: 'repeated_failure', step: 2, tool: 'run', converted: false });
   });
@@ -247,7 +240,7 @@ describe('repeated-call trigger', () => {
     expect(text).toContain('`run` has run 3 times with the same arguments');
     expect(text).toContain('make');
     expect(text).toContain('change the approach');
-    expectOnlyRealActions(text);
+    expectNoDelegationNudge(text);
     expect(text).toContain('hint, not an instruction');
     expect(lastSteer(orch)).toEqual({
       trigger: 'repeated_call', step: 2, tool: 'run', converted: false,
@@ -364,7 +357,7 @@ describe('no-progress trigger', () => {
     expect(steered).toHaveLength(1);
     expect(steered[0]).toContain('steps in a row with nothing new');
     expect(steered[0]).toContain('Steps that succeed are not the same as steps that get somewhere');
-    expectOnlyRealActions(steered[0]!);
+    expectNoDelegationNudge(steered[0]!);
     expect(steered[0]).toContain('hint, not an instruction');
     expect(lastSteer(orch)).toEqual({
       trigger: 'no_progress', step: STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1, converted: false,
@@ -373,10 +366,10 @@ describe('no-progress trigger', () => {
 
   test('a turn making new calls is never steered by this trigger', async () => {
     // Information-gathering is work. A trigger that fired on a long read-only
-    // investigation would be spam, and the owner's rule is no spam. (Kept
-    // under the long-turn threshold so THAT steer is not what is measured.)
+    // investigation would be spam, and the owner's rule is no spam. A fresh
+    // command every step keeps the frontier moving past the stall threshold.
     const orch = newTurn();
-    for (let s = 1; s < LONG_TURN_STEPS_BEFORE_STEER; s++) {
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 5; s++) {
       await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: `grep pattern${s} src/` }, result: 'no match', success: true,
       });
@@ -445,23 +438,22 @@ describe('no-progress trigger', () => {
     expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });
 
-  test('…and it outranks the long-turn steer, because it can say why', async () => {
-    // Both would be true at once on a long circling turn. The one that names
-    // the problem is worth more than the one that names the length — and it
-    // gets there first, at half the step count.
+  test('a long circling turn is steered for stalling, at the stall threshold', async () => {
+    // A turn that re-covers the same ground for dozens of steps is told it is
+    // spending and not moving — at the stall count, not after some length.
     const orch = newTurn();
     await orch.turnExtension.onToolResult!({
       toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
     });
     let fired: string[] = [];
-    for (let s = 1; s <= LONG_TURN_STEPS_BEFORE_STEER + 1 && fired.length === 0; s++) {
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 5 && fired.length === 0; s++) {
       fired = injected(step(orch, s, [user('q')]));
       await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
       });
     }
     expect(lastSteer(orch)?.trigger).toBe('no_progress');
-    expect(lastSteer(orch)!.step).toBeLessThan(LONG_TURN_STEPS_BEFORE_STEER);
+    expect(lastSteer(orch)).toMatchObject({ step: STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1 });
   });
 
   test('converted means the turn went somewhere it had not been', async () => {
@@ -500,64 +492,21 @@ describe('no-progress trigger', () => {
   });
 });
 
-describe('long-turn trigger', () => {
-  test('a long turn with no delegation is nudged once, naming the search rung', () => {
+// There is no turn-start steering and no length steering: step 0 carries no
+// hint whatever the ask looks like, and a long turn that keeps moving draws
+// nothing. What follows pins that absence — a steer that reappeared here
+// would be the delegation nudge through prose rather than a trigger.
+describe('no turn-start or length steering', () => {
+  test('a fresh ask draws no steer at step 0', () => {
     const orch = newTurn();
-    expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER - 1, [user('q')]))).toEqual([]);
-    const nudged = step(orch, LONG_TURN_STEPS_BEFORE_STEER, [user('q')]);
-    expect(injected(nudged)).toHaveLength(1);
-    expect(injected(nudged)[0]).toContain('25 steps into this turn with no delegation');
-    expect(injected(nudged)[0]).toContain('agents` action=swarm');
-    expect(lastSteer(orch)).toEqual({
-      trigger: 'long_turn_no_delegation', step: LONG_TURN_STEPS_BEFORE_STEER, converted: false,
-    });
-    // Every later step of a 130-step turn stays silent — a nudge that repeats
-    // is spam.
-    for (let s = LONG_TURN_STEPS_BEFORE_STEER + 1; s < LONG_TURN_STEPS_BEFORE_STEER + 10; s++) {
-      expect(injected(step(orch, s, [user('q')]))).toHaveLength(1);
-    }
+    expect(injected(step(orch, 0, [user(fresh)]))).toEqual([]);
+    expect(rows(orch)).toEqual([]);
+    // …and none arrives on the steps after it either, without loop evidence.
+    expect(injected(step(orch, 1, [user(fresh)]))).toEqual([]);
+    expect(rows(orch)).toEqual([]);
   });
 
-  test('a turn that already delegated is never nudged for length', async () => {
-    const orch = newTurn();
-    await orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
-    expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER + 5, [user('q')]))).toEqual([]);
-    expect(lastSteer(orch)).toBeNull();
-  });
-
-  test('one nudge per turn, whichever trigger fires first', async () => {
-    const orch = newTurn();
-    await fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
-    expect(injected(step(orch, 1, [user('q')]))).toHaveLength(1);
-    // Long and undelegated as well — still one line in the conversation.
-    expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER + 1, [user('q')]))).toHaveLength(1);
-    expect(lastSteer(orch)?.trigger).toBe('repeated_failure');
-  });
-});
-
-// The trigger the other four cannot be: they all read the turn's own traffic,
-// and the decision this one is about — how the work splits — is made in the
-// model's FIRST reply, before there is any traffic to read. The 25-step steer
-// above arrives after the shape is already a fact, which is what a 24%
-// conversion rate at step 25 is a rate of.
-describe('turn-start trigger', () => {
-
-  test('a fresh ask is nudged at step 0, naming the search rung, as a hint', () => {
-    const orch = newTurn();
-    const nudged = step(orch, 0, [user(fresh)]);
-    expect(injected(nudged)).toHaveLength(1);
-    const text = injected(nudged)[0]!;
-    expect(text).toContain('Settle the shape first');
-    expect(text).toContain('agents` action=swarm');
-    expectOnlyRealActions(text);
-    expect(text).toContain('hint, not an instruction');
-    expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: false }]);
-    // Step 0 only: a hint that re-arrived every step would be the nagging the
-    // one-per-turn rule exists to prevent.
-    expect(injected(step(orch, 1, [user(fresh)]))).toHaveLength(1);
-  });
-
-  test('a question is answered and an exclamation is a correction — neither is work to split', () => {
+  test('a question, an exclamation and a follow-up draw nothing either', () => {
     const asked = newTurn();
     expect(injected(step(asked, 0, [user('where does the retry budget come from?')]))).toEqual([]);
     expect(rows(asked)).toEqual([]);
@@ -565,250 +514,42 @@ describe('turn-start trigger', () => {
     const told = newTurn();
     expect(injected(step(told, 0, [user('revert that last change!')]))).toEqual([]);
     expect(rows(told)).toEqual([]);
-  });
 
-  test('an ask with this agent\'s own work behind it is not a fresh shape', () => {
     const orch = newTurn();
     expect(injected(step(orch, 0, followUp(fresh)))).toEqual([]);
     expect(rows(orch)).toEqual([]);
   });
 
-  test('it does not spend the reactive slot: the 25-step recovery steer still fires, and both rows are recorded', () => {
-    // The whole reason the hint has its own slot. A one-shot `kinu exec` run
-    // is ONE turn and it is always the session's first, so a shared slot would
-    // have cost that run every recovery steer it has.
+  test('a long turn that keeps moving is never steered for length', async () => {
+    // Twenty-five steps of new ground used to draw the long-turn hint. Now a
+    // turn that keeps reaching new calls draws nothing at any step count.
     const orch = newTurn();
-    expect(injected(step(orch, 0, [user(fresh)]))).toHaveLength(1);
-    const late = step(orch, LONG_TURN_STEPS_BEFORE_STEER, [user(fresh)]);
-    expect(injected(late)).toHaveLength(2);
-    expect(injected(late)[1]).toContain('25 steps into this turn with no delegation');
-    expect(rows(orch)).toEqual([
-      { trigger: 'turn_start_no_delegation', step: 0, converted: false },
-      { trigger: 'long_turn_no_delegation', step: LONG_TURN_STEPS_BEFORE_STEER, converted: false },
-    ]);
+    for (let s = 0; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 15; s++) {
+      await orch.turnExtension.onToolResult!({
+        toolName: 'run', args: { command: `grep pattern${s} src/` }, result: 'no match', success: true,
+      });
+      expect(injected(step(orch, s, [user('q')]))).toEqual([]);
+    }
+    expect(lastSteer(orch)).toBeNull();
   });
 
-  test('a search after the hint converts it, and leaves the length steer nothing to say', async () => {
+  test('one steer per turn, whichever loop trigger fires first', async () => {
     const orch = newTurn();
-    step(orch, 0, [user(fresh)]);
-    expect(rows(orch)[0]?.converted).toBe(false);
-    await orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
-    expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: true }]);
-    expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER, [user(fresh)]))).toHaveLength(1);
+    await fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
+    expect(injected(step(orch, 1, [user('q')]))).toHaveLength(1);
+    // Still one line in the conversation however long the turn then runs.
+    for (let s = 2; s < STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 10; s++) {
+      expect(injected(step(orch, s, [user('q')]))).toHaveLength(1);
+    }
+    expect(lastSteer(orch)?.trigger).toBe('repeated_failure');
   });
 
-  // R6. THE DEFECT. A codemode delegation is one native `execute_tools` call
-  // whose name is `execute_tools`, so a meter reading the name scored the
-  // production turn that delegated five times as `converted: false`. Every
-  // delegation-conversion figure was under-reported by however much of the
-  // surface the model reached through the sandbox.
-  test('a codemode agents.swarm converts the hint — the sandbox is not a different verb', async () => {
-    const orch = newTurn();
-    step(orch, 0, [user(fresh)]);
-    expect(rows(orch)[0]?.converted).toBe(false);
-    await orch.turnExtension.onToolCall!({
-      toolName: 'execute_tools',
-      args: { code: "const r = await agents.swarm({ preset: 'ideate', branches: 3 });" },
-    });
-    expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: true }]);
-  });
-
-  test('the unprompted arm sees it too, so the autonomous denominator is not short either', async () => {
-    const orch = newTurn();
-    await orch.turnExtension.onToolCall!({
-      toolName: 'execute_tools',
-      args: { code: 'await agents.swarm({ objective })' },
-    });
-    expect(orch.steering.delegationSnapshot()[0]).toMatchObject({ surface: 'unprompted', converted: true });
-  });
-
-  // The controls. Without these, the arms above would pass on a predicate that
-  // called every sandbox program a delegation.
-  test('a sandbox program that delegates nowhere does not convert the hint', async () => {
-    const orch = newTurn();
-    step(orch, 0, [user(fresh)]);
-    await orch.turnExtension.onToolCall!({
-      toolName: 'execute_tools',
-      args: { code: 'const files = await workspace.list("."); return files.length;' },
-    });
-    expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: false }]);
-  });
-
-  test('`agents` named in a comment or a string is not a call', async () => {
-    const orch = newTurn();
-    step(orch, 0, [user(fresh)]);
-    await orch.turnExtension.onToolCall!({
-      toolName: 'execute_tools',
-      args: { code: '// next time try agents.swarm({})\nreturn "agents.swarm(" + 1;' },
-    });
-    expect(rows(orch)[0]?.converted).toBe(false);
-  });
-
-  test('a sandbox call with no code argument is no program, never a throw', async () => {
-    const orch = newTurn();
-    step(orch, 0, [user(fresh)]);
-    await orch.turnExtension.onToolCall!({ toolName: 'execute_tools', args: {} });
-    expect(rows(orch)[0]?.converted).toBe(false);
-  });
-
-  test('a new turn starts with a clean hint slot', () => {
+  test('a new turn starts with clean steering state', () => {
     const orch = newTurn();
     step(orch, 0, [user(fresh)]);
     orch.beginTurn(Date.now());
     expect(rows(orch)).toEqual([]);
-    expect(injected(step(orch, 0, [user(fresh)]))).toHaveLength(1);
-  });
-});
-
-describe('delegation opportunities — which hint reached which step, and what came of it', () => {
-  const roles = ['general', 'researcher', 'auditor'];
-  const delegationRows = (orch: AgentOrchestrator) => orch.steering.delegationSnapshot();
-
-  /** A turn whose role catalog the steering object can read, as a backend with
-   *  an active profile catalog wires it. */
-  function newTurnWithRoles(): AgentOrchestrator {
-    const orch = newTurn();
-    orch.steering.observeRoles(() => roles);
-    return orch;
-  }
-
-  test('a delivered hint leaves one row carrying step, hint id and the roles at that moment', () => {
-    const orch = newTurnWithRoles();
-    expect(injected(step(orch, 0, [user(fresh)]))).toHaveLength(1);
-
-    const opportunity = delegationRows(orch);
-    expect(opportunity).toHaveLength(1);
-    const row = opportunity[0]!;
-    expect(row.surface).toBe('hint');
-    expect(row.trigger).toBe('turn_start_no_delegation');
-    expect(row.step).toBe(0);
-    expect(row.roles).toEqual(roles);
-    // Not yet converted: the row exists at delivery, before any call followed.
-    expect(row.converted).toBe(false);
-    // The hint id names the wording (trigger + digest), stable across turns;
-    // the opportunity id names THIS occasion, unique per delivery.
-    expect(row.hintId).toMatch(/^turn_start_no_delegation:[0-9a-f]+$/);
-    expect(row.opportunityId).toMatch(/^dop-/);
-    const second = newTurnWithRoles();
-    step(second, 0, [user(fresh)]);
-    expect(delegationRows(second)[0]!.hintId).toBe(row.hintId);
-    expect(delegationRows(second)[0]!.opportunityId).not.toBe(row.opportunityId);
-  });
-
-  test('a converted opportunity is distinguishable from an ignored one', async () => {
-    const converted = newTurnWithRoles();
-    step(converted, 0, [user(fresh)]);
-    await converted.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
-
-    const ignored = newTurnWithRoles();
-    step(ignored, 0, [user(fresh)]);
-
-    expect(delegationRows(converted)[0]).toMatchObject({ surface: 'hint', converted: true });
-    expect(delegationRows(ignored)[0]).toMatchObject({ surface: 'hint', converted: false });
-  });
-
-  test('the long-turn recovery steer records its own occasion, at its own step', () => {
-    const orch = newTurnWithRoles();
-    step(orch, 0, [user(fresh)]);
-    step(orch, LONG_TURN_STEPS_BEFORE_STEER, followUp(fresh));
-    const rows = delegationRows(orch);
-    expect(rows).toHaveLength(2);
-    expect(rows[1]).toMatchObject({
-      surface: 'hint', trigger: 'long_turn_no_delegation',
-      step: LONG_TURN_STEPS_BEFORE_STEER, converted: false,
-    });
-    expect(rows[1]!.opportunityId).not.toBe(rows[0]!.opportunityId);
-  });
-
-  test('an agents call on a turn no hint reached records the autonomous arm separately', async () => {
-    const orch = newTurnWithRoles();
-    expect(injected(step(orch, 0, followUp(fresh)))).toEqual([]);
-    await orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'hire' } });
-
-    const rows = delegationRows(orch);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.surface).toBe('unprompted');
-    expect(rows[0]!.trigger).toBeUndefined();
-    expect(rows[0]!.hintId).toBeUndefined();
-    expect(rows[0]!.roles).toEqual(roles);
-    expect(rows[0]!.converted).toBe(true);
-    // One occasion per turn even when the tool is reached for repeatedly.
-    await orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
-    expect(delegationRows(orch)).toHaveLength(1);
-  });
-
-  test('an absent role catalog reads as empty — stated, never guessed', () => {
-    const orch = newTurn();
-    step(orch, 0, [user(fresh)]);
-    expect(delegationRows(orch)[0]!.roles).toEqual([]);
-  });
-
-  test('the roles a row carries are the ones live WHEN IT WAS DELIVERED', () => {
-    // The distinction this instrument exists to draw is "ignored under an empty
-    // catalog" (a wiring gap) against "ignored under a full one" (behaviour).
-    // Read at turn end, a catalog that changed after delivery rewrites history
-    // and answers the wrong question — and the catalog CAN change, which is why
-    // the read is a callback rather than a constructor argument.
-    let live: readonly string[] = ['general', 'researcher'];
-    const orch = newTurn();
-    orch.steering.observeRoles(() => live);
-    step(orch, 0, [user(fresh)]);
-    expect(delegationRows(orch)[0]!.roles).toEqual(['general', 'researcher']);
-
-    live = ['general', 'auditor', 'implementer'];
-    expect(delegationRows(orch)[0]!.roles).toEqual(['general', 'researcher']);
-  });
-
-  test('each opportunity keeps its OWN moment, not the last one', () => {
-    // Two deliveries in one turn, with the catalog moving between them: the
-    // turn-start hint and, much later, the long-turn recovery steer. One shared
-    // read at settle would give both rows the same list and lose the fact that
-    // the second was offered more than the first.
-    let live: readonly string[] = ['general'];
-    const orch = newTurn();
-    orch.steering.observeRoles(() => live);
-    step(orch, 0, [user(fresh)]);
-    live = ['general', 'auditor'];
-    step(orch, LONG_TURN_STEPS_BEFORE_STEER, followUp(fresh));
-
-    const rows = delegationRows(orch);
-    expect(rows).toHaveLength(2);
-    expect(rows[0]!.roles).toEqual(['general']);
-    expect(rows[1]!.roles).toEqual(['general', 'auditor']);
-  });
-
-  test('an autonomous delegation stamps the roles live when the call landed', async () => {
-    // The unprompted arm reads at the same moment for the same reason: what the
-    // agent could have chosen among is a fact about when it chose.
-    let live: readonly string[] = ['general', 'researcher'];
-    const orch = newTurn();
-    orch.steering.observeRoles(() => live);
-    step(orch, 0, followUp(fresh));
-    await orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'hire' } });
-    live = [];
-
-    const rows = delegationRows(orch);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.surface).toBe('unprompted');
-    expect(rows[0]!.roles).toEqual(['general', 'researcher']);
-  });
-
-  test('a captured list cannot be mutated through the row it was reported on', () => {
-    // The rows cross a JSON boundary as evidence. Handing out the stored array
-    // would let a consumer edit the record of what was offered.
-    const roleList = ['general', 'researcher'];
-    const orch = newTurn();
-    orch.steering.observeRoles(() => roleList);
-    step(orch, 0, [user(fresh)]);
-    delegationRows(orch)[0]!.roles.push('smuggled');
-    expect(delegationRows(orch)[0]!.roles).toEqual(['general', 'researcher']);
-  });
-
-  test('a new turn starts with clean opportunity state', () => {
-    const orch = newTurnWithRoles();
-    step(orch, 0, [user(fresh)]);
-    orch.beginTurn(Date.now());
-    expect(delegationRows(orch)).toEqual([]);
+    expect(injected(step(orch, 0, [user(fresh)]))).toEqual([]);
   });
 });
 
@@ -864,16 +605,16 @@ describe('execution-recovery detection (the failure ledger\'s second reader)', (
 });
 
 describe('conversion + turn boundaries', () => {
-  test('converted counts delegation AFTER the nudge, not before it', async () => {
+  test('converted counts a changed call AFTER the nudge, not before it', async () => {
     const before = newTurn();
-    await before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
+    await before.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'make' } });
     await fail(before, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
     step(before, 1, [user('q')]);
     expect(lastSteer(before)).toEqual({
       trigger: 'repeated_failure', step: 1, tool: 'run', converted: false,
     });
 
-    await before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
+    await before.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'cat config.log' } });
     expect(lastSteer(before)?.converted).toBe(true);
   });
 
@@ -1057,11 +798,10 @@ describe('through a real runChat turn', () => {
     expect(lastSteer(orch)).toBeNull();
   });
 
-  test('a fresh ask carries the turn-start hint in the FIRST request the model ever sees', async () => {
-    // The decisive one. Everything above proves a steer reaches the model
-    // eventually; this proves the delegation hint is in request #1, which is
-    // the only request in which the shape of the work is still undecided. Cut
-    // the step === 0 branch in turn-steering.ts and this fails.
+  test('a fresh ask carries no steering in the FIRST request the model ever sees', async () => {
+    // The inverse of the loop tests above: step 0 has no traffic to read, so
+    // the harness stays quiet — and with no turn-start hint left, nothing
+    // reaches the model until a loop detector has evidence.
     const prompts: PromptMessage[][] = [];
     const orch = newTurn();
     const tools = {
@@ -1080,17 +820,10 @@ describe('through a real runChat turn', () => {
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
 
-    const first = promptText(prompts[0] ?? []);
-    expect(first).toContain(TURN_STEERING_HEADER);
-    expect(first).toContain('Settle the shape first');
-    expect(first).toContain('agents` action=swarm');
-    expectOnlyRealActions(first);
-    expect(first).toContain('hint, not an instruction');
-    // Once, however long the turn then runs.
     for (const prompt of prompts) {
-      expect(promptText(prompt).split(TURN_STEERING_HEADER)).toHaveLength(2);
+      expect(promptText(prompt)).not.toContain(TURN_STEERING_HEADER);
     }
-    expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: false }]);
+    expect(rows(orch)).toEqual([]);
   });
 });
 

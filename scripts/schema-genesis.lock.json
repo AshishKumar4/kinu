@@ -97,6 +97,11 @@
     "expires_at",
     "used_at"
   ],
+  "codemode_state@packages/core/src/tools/state-codemode.ts": [
+    "key",
+    "value",
+    "updated_at"
+  ],
   "codex_device_flow@packages/cf-backend/src/user/schema.ts": [
     "id",
     "device_auth_id",

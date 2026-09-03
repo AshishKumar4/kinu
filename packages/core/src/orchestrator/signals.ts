@@ -31,8 +31,8 @@
  * yet) and moves that same card to 'shown' where the agent actually takes it
  * in: the step that splices it, or the turn a queued signal started (which
  * names its card through the `signalId` the seam stamped on it). Nothing else
- * broadcasts a card, so it cannot drift from what the model received. The
- * delegation nudge has none, structurally — it is not delivered, so there is
+ * broadcasts a card, so it cannot drift from what the model received. A
+ * mechanical steer has none, structurally — it is not delivered, so there is
  * no moment at which it "arrived"; its record is the `turn_steering` run
  * event on the turn that derived it.
  *

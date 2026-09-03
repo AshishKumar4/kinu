@@ -401,6 +401,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // unused table.
     agent_views: EVERYWHERE,
 
+    // ── execute_tools state ──
+    // The `state.*` sandbox namespace: what one program saved for the next.
+    // In `initActorTables` beside `agent_views`, for the same reason: every root
+    // that can run a program can keep something between two of them.
+    codemode_state: EVERYWHERE,
+
     // ── release change ──
     // The board's home differs by backend and nothing recorded that until this
     // manifest: on cf it lives in the owner's UserDO (user-do.ts calls

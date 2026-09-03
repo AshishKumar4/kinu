@@ -19,9 +19,11 @@ import { initCraftQualityColumns } from '../src/craft/schemas';
 import { feedbackToQuality } from '../src/evolution/outcomes';
 
 describe('craftInvocationSites — what the runtime saw called', () => {
-  test('finds a call under either sandbox namespace', () => {
+  test('finds a call under the one sandbox namespace, and nowhere else', () => {
     expect(craftInvocationSites('await tools.summarize({a:1})', ['summarize'])).toEqual(['summarize']);
-    expect(craftInvocationSites('return codemode.summarize(x)', ['summarize'])).toEqual(['summarize']);
+    // `tools` is the only namespace a crafted tool is callable in, so a call
+    // written against any other name reached nothing and credits nothing.
+    expect(craftInvocationSites('return codemode.summarize(x)', ['summarize'])).toEqual([]);
   });
 
   test('a mention that is not a call is not a call', () => {

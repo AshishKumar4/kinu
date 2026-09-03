@@ -8,7 +8,7 @@ Two files this page names live in the workspace filesystem, not in this reposito
 
 The other three timescales are conversational: the next user message grades a turn, five turns close a window, five windows close a lifetime.
 
-The step clock fires on every settled `execute_tools` call, read off the tool-result hook. The hook carries the call's own args, so the code graded is the code that ran. Creation is credited only to a call that itself invoked `workspace.createTool`. Invocation means call sites (`tools.<name>(` or `codemode.<name>(`) in the submitted code, strings and comments blanked first, so a tool body passed to `createTool` is not read as a call.
+The step clock fires on every settled `execute_tools` call, read off the tool-result hook. The hook carries the call's own args, so the code graded is the code that ran. Creation is credited only to a call that itself invoked `workspace.createTool`. Invocation means call sites (`tools.<name>(`, the one namespace a crafted tool is callable in) in the submitted code, strings and comments blanked first, so a tool body passed to `createTool` is not read as a call.
 
 The fitness signal is execution, observed at the host. A crafted tool that raised is stamped with its own name leaving the sandbox, so the failure lands on the artifact whether or not the model caught it; a call that broke on its own account blames nobody. A completed call credits only tools that already existed when it started, so a tool cannot certify itself on the call that created it. A call moved to the background is not a result and credits nothing.
 

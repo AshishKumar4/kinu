@@ -202,8 +202,9 @@ export async function observeSpans(): Promise<SpanObservations> {
   const sinkScript = 'export default { tail() {} };';
 
   // miniflare 5: a worker is `{ config }` with compat + modules per worker
-  // (`manifest`), and a tail attachment is `tailConsumers: [{ workerName }]`.
-  const worker = (name: string, code: string, tailConsumers?: { workerName: string }[]): WorkerOptions => {
+  // (`manifest`), and a tail attachment is `tailConsumers: [{ worker }]`
+  // (`workerName` until miniflare 5.20260903).
+  const worker = (name: string, code: string, tailConsumers?: { worker: string }[]): WorkerOptions => {
     const options: WorkerOptions = {
       config: {
         name,
@@ -222,7 +223,7 @@ export async function observeSpans(): Promise<SpanObservations> {
   };
   const run = async (attachSink: boolean): Promise<readonly RuntimeObservation[]> => {
     const workers: WorkerOptions[] = attachSink
-      ? [worker('traced', script, [{ workerName: 'sink' }]), worker('sink', sinkScript)]
+      ? [worker('traced', script, [{ worker: 'sink' }]), worker('sink', sinkScript)]
       : [worker('traced', script)];
     const mf = new Miniflare({
       log: new NoOpLog(),

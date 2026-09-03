@@ -146,6 +146,7 @@
         "@kinu.run/agent-utils": "workspace:*",
         "@nimbus-sh/core": "0.6.0",
         "@nimbus-sh/fabric": "0.2.0",
+        "acorn": "^8.17.0",
       },
       "devDependencies": {
         "@kinu.run/test-utils": "workspace:*",

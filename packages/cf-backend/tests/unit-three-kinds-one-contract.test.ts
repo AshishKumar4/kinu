@@ -769,7 +769,10 @@ describe('C11 mechanical steering rides the actor loop\'s one extension, never t
   const REPEATED = { command: 'wc -l reference.ts' };
 
   for (const kind of ACTOR_LOOP_KINDS) {
-    test(`${kind}: the turn-start hint splices at step 0 through the loop's own extension`, async () => {
+    test(`${kind}: a fresh ask at step 0 is steered toward nothing`, async () => {
+      // The turn-start delegation hint is gone (2026-09-03): the model decides
+      // whether to delegate from the `agents` tool description alone. The
+      // extension still runs at step 0 and must splice no runtime message.
       const orch = fixtureFor(kind).turnLoopSeam();
       expect(orch, `${kind}: the loop has no orchestrator seam to steer through`).not.toBeNull();
       orch!.steering.reset();
@@ -778,10 +781,9 @@ describe('C11 mechanical steering rides the actor loop\'s one extension, never t
         messages: [{ role: 'user', content: 'Refactor the ingestion path.' }],
       });
       const text = textOfMessages(spliced);
-      expect(text, `${kind}: the fresh-ask hint never reached the step`).toContain('Settle the shape first');
-      // Runtime-authored, never user-authored — the same rule the completion
-      // gate and the wake splice follow.
-      expect(text).toContain(TURN_STEERING_HEADER);
+      expect(text).not.toContain(TURN_STEERING_HEADER);
+      expect(text).not.toContain('action=swarm');
+      expect(orch!.steering.snapshot()).toEqual([]);
     });
 
     test(`${kind}: a repeat loop is steered, and conversion is recorded on the durable row`, async () => {

@@ -25,7 +25,7 @@ export const SOUL_PATH = 'SOUL.md';
  *  They describe Kinu itself, so nothing workspace-specific — a title, a
  *  summary — can be derived from them. */
 const PLACEHOLDER_MISSIONS = [
-  'Help the user by reading real context, using available tools, coordinating parallel heads for breadth and hiring subordinates for multi-part or long-running work, saving durable facts and memory, and improving reusable capabilities over time.',
+  'Help the user by reading real context, using the available tools, saving durable facts and memory, and improving reusable capabilities over time.',
   'Help the user with the work they assign.',
 ] as const;
 

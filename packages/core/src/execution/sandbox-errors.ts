@@ -1,32 +1,24 @@
 /**
  * Codemode sandbox error enrichment.
  *
- * Both `execute_tools` sandboxes (CF: PreambleCraftedExecutor over
- * DynamicWorkerExecutor; CLI: the Node `new Function` factory) bind a fixed
- * set of namespaces — `workspace`, `codemode`, `tools`, plus whatever
- * ExecutionRouter/CodemodeProvider namespaces the actor registers. Kinu's
- * OWN top-level tool NAMES are not in that scope: they are separate tool
- * calls, not codemode members. But a model reaching for one from inside a code
- * block is an easy, recurring mistake — `run` in particular reads as a
- * plausible global because it IS a tool the model can see in its own list.
+ * Both `execute_tools` sandboxes bind a fixed set of namespaces — `tools`,
+ * `state`, `workspace`, plus whatever ExecutionRouter/CodemodeProvider
+ * namespaces the actor registers. Kinu's OWN top-level tool NAMES are not bare
+ * identifiers in that scope: a native tool is `tools.<name>(input)` there. A
+ * model reaching for a bare `run(...)` from inside a program is an easy,
+ * recurring mistake — `run` in particular reads as a plausible global because
+ * it IS a tool the model can see in its own list.
  *
  * When that happens the sandbox throws a bare V8 ReferenceError
- * (`"run is not defined"`), which both executors propagate verbatim as
- * `Code execution failed: run is not defined` — accurate, and useless: it
- * names the missing identifier but never says WHY it's missing or what to do
- * instead. This rewrites exactly that one error shape into an actionable
- * correction; every other error (a real bug in the model's code, a thrown
- * provider error, a timeout) passes through untouched.
- *
- * Where the capability actually IS comes from the registry's declared reach,
- * not from a list here. It used to be a hardcoded `name === 'run'` branch
- * naming `workspace.exec`, with every other native tool told "it is not
- * reachable from inside execute_tools" — false for the six that own a codemode
- * namespace and for `file`, whose bytes are `workspace.readFile`/`writeFile`/
- * `editFile`. One read of TOOL_REACH makes the sentence true for all eight.
+ * (`"run is not defined"`), which both executors propagate verbatim — accurate,
+ * and useless: it names the missing identifier but never says what to write
+ * instead. This rewrites exactly that one error shape into the correction;
+ * every other error (a real bug in the model's code, a thrown provider error)
+ * passes through untouched.
  */
 
 import { isBuiltinToolName, TOOL_REACH } from '../tools/registry';
+import { CRAFTED_TOOL_NAMESPACE } from '../tools/sandbox-contract';
 
 /** V8's ReferenceError message for a bare undefined identifier — the exact,
  *  stable shape Node/workerd/browsers all emit, so matching it precisely
@@ -41,10 +33,11 @@ const UNDEFINED_IDENTIFIER = /^([A-Za-z_$][\w$]*) is not defined$/;
 export function explainNativeToolReferenceError(error: string): string {
   const name = UNDEFINED_IDENTIFIER.exec(error)?.[1];
   if (!name || !isBuiltinToolName(name)) return error;
+  // execute_tools IS the sandbox; a program cannot call it from inside itself.
+  if (name === 'execute_tools') return error;
   const namespace = TOOL_REACH[name].codemode;
-  // execute_tools declares no codemode reach because it IS the sandbox; it
-  // names no other tool, so there is nothing to correct toward.
-  if (!namespace) return error;
-  return `${error} — "${name}" is a native Kinu tool, not a codemode member.`
-    + ` Call \`${name}\` directly as its own top-level tool call, or reach the same capability from in here through the \`${namespace}\` namespace — its members are declared in this sandbox's type block.`;
+  const projection = namespace
+    ? ` or through the \`${namespace}\` namespace declared in this sandbox's type block`
+    : '';
+  return `${error} — "${name}" is a native Kinu tool. In a program call it as \`${CRAFTED_TOOL_NAMESPACE}.${name}(input)\` with the same input object the native call takes${projection}.`;
 }

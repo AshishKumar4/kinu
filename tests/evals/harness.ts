@@ -598,7 +598,7 @@ export class DegenerateRuntimeError extends Error {
   constructor(readonly taskId: string, readonly reason: string) {
     super(`degenerate runtime for ${taskId}: ${reason}. The eval must not run: `
       + '`execute_tools` would be built with an empty provider surface, so every '
-      + '`workspace.*`/`codemode.*` call fails with "is not a function" and scores '
+      + '`workspace.*`/`tools.*` call fails with "is not a function" and scores '
       + 'as an ordinary tool result. Open the workspace through `openWorkspaceCLI` '
       + '(cli-backend/src/open.ts), which registers the inline ExecutorProvider — '
       + 'the runtime `createWorkspace` returns is the BIRTH runtime and registers none.');

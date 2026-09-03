@@ -47,7 +47,7 @@
 import * as v from "valibot";
 import { Agent, callable, type AgentContext, type SubAgentClass } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
-import { generateText } from "ai";
+import { generateText, type ToolSet } from "ai";
 import {
   beginModelOperation, explorePrompt, formatInheritedContext, isWorkMode, normalizeUsage,
   reflectionPrompt, resolveModelRoute,
@@ -100,7 +100,8 @@ import {
   type CFRuntime, type CFRuntimeHooks, type HostedNodeHome,
 } from "./runtime";
 import { createWorkspaceBoxClient, workspaceBoxOwner } from "./workspace-box-rpc";
-import { createExecuteToolsTool } from "./execute-tools";
+import { createExecuteToolsFactory } from "./execute-tools";
+import { codemodeEgress } from "./codemode-egress";
 import { buildHeadToolSet } from "@kinu.run/core";
 import {
   createAgentTracing, createConsoleLogger, diagnostics, renderThrownChain, toKinuError,
@@ -881,14 +882,19 @@ export class ExplorationAgent extends Agent<Env> {
 
   /** The `execute_tools` surface a facet's mode gets over its own runtime. ONE
    *  builder for a head and a node: they differ in nothing this tool can see,
-   *  now that a crafted script has no model of its own to call. */
+   *  now that a crafted script has no model of its own to call. Handed to the
+   *  head surface as a function of the finished set, so its `tools.*`
+   *  declaration lists exactly the head's own tools. */
   private facetExecuteTool(rt: CFRuntime, webSearch: WebSearchProvider) {
-    return createExecuteToolsTool({
+    const factory = createExecuteToolsFactory({
       loader: this.env.LOADER,
+      egress: codemodeEgress(),
       rt,
       sql: this.boundSql,
+      workspace: this.identity.parentWorkspace() ?? this.name,
       webSearch,
     });
+    return (finished: ToolSet) => factory.toolFor(finished);
   }
 
   // ── Recursive split — head spawns more heads (itself ExplorationAgent facets)

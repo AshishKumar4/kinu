@@ -377,7 +377,7 @@ export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 
 /** The one question the ladder asks. Prefixes the doctrine in both surfaces. */
 export const DELEGATION_FRAME =
-  'One delegation ladder, three rungs, and they differ on lifetime and on who decides: a search is ephemeral and its candidates are SCORED against each other and ranked — by your own verifier running in this workspace when you declare an `objective`, and by a judge ensemble when you do not — settling into this turn; a temporary agent lives for one question and hands you back one answer nobody grades; a subordinate is persistent, starts from a blank context, and answers in its own words.';
+  'One delegation ladder, three rungs, keyed on lifetime: a search is ephemeral and settles into this turn, a temporary agent lives for one question, and a subordinate persists across turns.';
 
 /**
  * The CONTEXT axis, one entry per rung — the half of the ladder that decides
@@ -434,34 +434,18 @@ export const DELEGATION_INHERITANCE = {
  *  section indexes the same rungs in its own words and carries only the operational
  *  doctrine no schema does (prompt.ts). */
 export const DELEGATION_RUNGS = {
-  // Opens on the payoff in the CALLER'S currency, which nothing in the delegation
-  // surface said before: the section's only use of "cheapest" argued for NOT
-  // reaching for the ladder. Literally true of a node — it runs on its own window
-  // and only its settled report comes back into this one (strategy/node-agent.ts) —
-  // so it is a fact about the mechanism and not a sales line, which is the one idea
-  // worth taking from the deepseek harness's `so it does not consume this
-  // conversation's context`.
-  //
-  // The payoff-before-limitation ORDER is deliberate and preserved: opening on
-  // deterrents ("only… do NOT…") drew 0/10 uses in a shell corpus.
+  // Factual and flat: what a search IS, what each sentence costs, and what it
+  // refuses to do. No triggers, no payoff framing — whether to search is the
+  // caller's judgement against the mechanism stated here.
   swarm:
-    'Run a search (action=swarm) to spend someone else\'s context instead of your own — each node reads, searches and runs its own multi-step tool loop in its own window over this same workspace, and hands you back only what it found. Two triggers. Breadth: work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. '
-    + 'Doubt: your first attempt failed, two approaches are both plausible, the step ahead is expensive to undo, or you cannot check your own output — being unsure is itself a reason to search. '
+    'Run a search (action=swarm): N nodes each running its own tool loop over this workspace in parallel, handing you back only what they found. '
+    + 'Candidates are scored by your verifier running in this workspace when you declare an `objective`, and ranked by a judge ensemble when you do not. '
     // The CONTEXT axis reads from DELEGATION_INHERITANCE.swarm above, which the
     // `task` field also composes, so the rung and the field cannot disagree about
     // what a node can see.
     + `${DELEGATION_INHERITANCE.swarm.rung} `
     // What separates this from every other way of spawning several things and
     // picking one: WHO DECIDES. A judge has an opinion; a verifier runs.
-    //
-    // WHICH scorer runs when is DELEGATION_FRAME's sentence, and the frame
-    // always prefixes this rung (renderAgentsToolDescription composes it
-    // first, unconditionally), so this line stopped restating it: the two
-    // carried "by your own verifier running in this workspace when you declare
-    // an `objective` … and by a judge ensemble when you do not" verbatim, ~150
-    // chars twice in the largest tool description on the surface. What is only
-    // here is who NAMES the shape, and that a verifier is a mechanism rather
-    // than an opinion.
     + 'You name the shape with `preset`, and a verifier is CODE that runs here rather than a model\'s opinion of the answer. '
     // The preset enumeration is NOT here. Which presets exist is read at the
     // moment `preset` is filled, so it rides that field (SWARM_PRESET_DOCTRINE in
@@ -485,7 +469,7 @@ export const DELEGATION_RUNGS = {
     + 'Name material by `context_ref` (workspace paths) rather than pasting it: the agent reads those bytes itself and they never enter your window, which is the whole saving. '
     + 'It is not in your roster, you cannot send it a follow-up, and it is released the moment it answers — its transcript is kept. So state the whole question once; a second exchange is a hire.',
   hire:
-    'Hire a subordinate (action=hire) whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
+    'Hire a subordinate (action=hire), creating one subordinate per independent workstream and running them in parallel. A subordinate outlives this turn and keeps its own context; it starts fresh, so its mission is the whole brief. ' +
     // The other half of the CONTEXT axis, from the same per-action source the
     // `mission` field composes.
     `${DELEGATION_INHERITANCE.hire.rung} ` +
@@ -666,21 +650,15 @@ export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolActi
  * Canonical descriptions. These are what the LLM sees as tool docstrings and
  * what the UI shows in the Tools tab.
  *
- * Namespace contract (preamble-injection pattern — see docs/CRAFT-ARCHITECTURE.md):
+ * Namespace contract (see docs/CRAFT-ARCHITECTURE.md):
  *   - `workspace.*` — filesystem / shell / memory primitives, including
  *     `editFile` — the exact-match edit reachable natively as `file`'s `edit`
  *     action (tools/file-tool.ts's createFileDispatcher, shared by both).
- *   - `codemode.*` — every provider exposed via createCodeTool. Crafted tools
- *     are type-DECLARED in this namespace so the model can discover them, but
- *     the alias REFUSES at call time with one shared correction (tools/
- *     sandbox-contract.ts). Declaring a name the model cannot call is
- *     deliberate: a crafted tool absent from these types is a tool it cannot
- *     find, and a refusal that throws is readable where a returned error
- *     object would read as a successful call twice over.
- *   - `tools.<name>` — the ONE callable form for a crafted tool, on every
- *     backend, injected as a local object property inside the execute_tools
- *     async arrow. Crafted-tool bodies may call `workspace.*`, the
- *     `codemode.*` PROVIDERS, and `tools.<other>` interchangeably.
+ *   - `tools.<name>` — the ONE callable form for every tool, native and
+ *     crafted, on every backend (tools/sandbox-contract.ts). Native members
+ *     dispatch to the host; crafted members are defined by the sandbox
+ *     prelude from their stored source. Crafted-tool bodies may call
+ *     `workspace.*`, `tools.<other>` and the namespaces below interchangeably.
  *   - `agents.*` / `memory.*` / `tasks.*` / `report.*` — the same-named
  *     native tool, projected into the sandbox over its own dispatcher
  *     (tools/agents-codemode.ts, memory-codemode.ts, tasks-codemode.ts,
@@ -704,16 +682,16 @@ export const BUILTIN_TOOL_SPECS = {
   execute_tools: {
     name: 'execute_tools',
     summary:
-      'Run JavaScript against active executor namespaces, codemode.* providers, tools.<name> crafted tools, and agent helpers.',
-    whenToUse: 'Use when a step needs real logic: loops, branching, several calls whose results feed each other, crafted tool calls, and anything that has to hold state between calls.',
-    whenNotToUse: 'Do not use for a single shell command when `run` is enough, or to read and edit a file when `file` is enough.',
+      'Run a JavaScript program in a Node-like sandbox where every tool you have is callable as `tools.<name>(input)`, files and shells are namespaces, and `state.*` keeps values between programs.',
+    whenToUse: 'Use when a step needs real logic: loops, branching, several calls whose results feed each other, calling a tool you crafted, fetching over HTTP, or holding state between calls.',
+    whenNotToUse: 'Do not use for a single shell command when `run` is enough, or to read and edit one file when `file` is enough.',
     // Other runtimes still own their own paths. The workspace namespace is the
     // stable anchor: the same canonical bytes as `file` and `run` workspace.
     doctrine:
       'workspace.* is the agent\'s canonical durable workspace: the same files addressed by the `file` tool and `run` with runtime "workspace". '
       + 'A separate container or machine keeps its commands behind its own runtime; when live, its files also sit in the workspace plane at /pc or /sandbox.',
-    result: 'Returns whatever the code returns, as a structured result, or a structured error.',
-    example: "execute_tools({code:\"const files = await workspace.readdir('reports'); return files.slice(0, 5)\"})",
+    result: 'Returns whatever the program returns, plus everything it logged with console.*, or the error it threw.',
+    example: "execute_tools({code:\"// List the newest reports\\nconst fs = require('fs/promises');\\nconst files = await fs.readdir('reports');\\nreturn files.slice(0, 5)\"})",
   },
   run: {
     name: 'run',
@@ -884,34 +862,36 @@ export const BUILTIN_TOOL_DESCRIPTIONS = {
   report: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.report),
 } satisfies Record<BuiltinToolName, string>;
 
+/** Which substrate runs the program, because the two differ in what `require`
+ *  and `fs` mean: hosted programs get shims over the workspace; a local CLI
+ *  program runs in-process with the machine's own Node builtins. */
+export type SandboxSubstrate = 'hosted' | 'local';
+
+const SANDBOX_FACTS = {
+  hosted:
+    'The sandbox is a fresh JavaScript isolate per program, written like a Node script: statements at the top level, `await` anywhere, and `return` (or a trailing expression) to hand back the result. Type annotations do not parse there. '
+    + '`require()` resolves the Node builtins (`path`, `url`, `util`, `crypto`, `buffer`, `events`, `stream`, …) plus `fs`, `fs/promises` and `child_process` implemented over your workspace files and shell: `await require("fs/promises").readFile("notes.md", "utf8")`, `await require("child_process").exec("ls -la")`. '
+    + '`fetch` reaches the internet. `console.log` output comes back beside the result. `env.workspace` is your workspace name and `env.state` is the `state` namespace.',
+  local:
+    'The sandbox runs the program in-process, written like a Node script: statements at the top level, `await` anywhere, and `return` (or a trailing expression) to hand back the result. Type annotations do not parse there. '
+    + 'The Node builtins, `require` and `fetch` are the machine\'s own; the `workspace` namespace is the durable workspace, which is not the machine\'s filesystem. `console.log` output comes back beside the result.',
+} satisfies Record<SandboxSubstrate, string>;
+
 /**
  * The `execute_tools` docstring the model actually receives: this registry's
- * doctrine for the tool, the two standing facts about the sandbox itself, then
- * the TypeScript declaration of every namespace that sandbox binds.
- * BOTH backends compose it here, because until they did they described one tool
- * two incompatible ways and neither was complete. The CF backend passed no
- * description to @cloudflare/codemode's createCodeTool, so production shipped
- * the vendor's generic DEFAULT_DESCRIPTION — "Execute code to achieve a goal."
- * — with none of BUILTIN_TOOL_SPECS.execute_tools reaching the model at all,
- * and with a worked example calling `codemode.searchWeb(...)`, a shape
- * cf-backend/execute-tools.ts is coded to throw on. The CLI passed the
- * doctrine and discarded every provider's `types`, so its model was never told
- * that `agents.swarm`, `agents.ask`, `memory.save` or `tasks.add` are callable.
+ * doctrine for the tool, the standing facts about the sandbox itself, then the
+ * TypeScript declaration of every namespace that sandbox binds. BOTH backends
+ * compose it here so one tool is described one way.
  *
  * `typeBlock` is the namespace declarations, assembled per backend: CF hands
- * codemode its own `{{types}}` placeholder and lets it substitute (it can
- * generate a declaration from a tool's input schema, which the CLI cannot);
- * the CLI joins its providers' declared `types`.
+ * codemode its own `{{types}}` placeholder and lets it substitute; the CLI
+ * joins its providers' declared `types`.
  */
-export function renderExecuteToolsDescription(typeBlock: string): string {
+export function renderExecuteToolsDescription(typeBlock: string, substrate: SandboxSubstrate = 'hosted'): string {
   return [
     BUILTIN_TOOL_DESCRIPTIONS.execute_tools,
-    // Two facts about the sandbox, not advice: it is a JavaScript isolate, and
-    // it returns the value your code produces. The code SHAPE is deliberately
-    // not constrained — the crafted-tool preamble reaches every shape now
-    // (cf-backend/crafted-tool-registry.ts injectPreamble), so a statement
-    // body, a trailing expression and an async arrow are all equally correct.
-    'The sandbox is a JavaScript isolate: write statements, a single trailing expression, or one `async (...) => { … }` arrow — whichever fits — and the value your code produces comes back as the result. Type annotations, interfaces and generics do not parse there.',
+    SANDBOX_FACTS[substrate],
+    'Every tool you can call natively is `tools.<name>(input)` here with the same input object, and every tool you crafted with `workspace.createTool` is `tools.<name>(...)` too — the declaration below lists both. Variables do not survive between programs; `state.set`/`state.get` do.',
     'Start every program with exactly one `//` comment on the first nonblank line. State the operation and target in plain language, for example `// Read package.json to inspect its scripts`. The interface shows this line to the user as the call intent.',
     `Namespaces bound in this sandbox:\n${typeBlock}`,
   ].join('\n\n');

@@ -24,6 +24,7 @@ import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
 import { formatExecResult, refusalText } from './exec-result';
 import { KinuError, refusalOf, toKinuError } from '../obs/index';
+import { admitCraftedSource } from '../craft/source';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
 import { createView, deleteView, viewSlug } from '../views/store';
 import { VIEW_DATA_SOURCES } from '../views/sources';
@@ -70,8 +71,8 @@ export interface InlineExecutorDeps {
   sql?: SqlExecutor;
   /**
    * Optional mid-turn notification — fires synchronously from workspace.createTool
-   * after a successful create/update. The PreambleCraftedExecutor does not need
-   * it because it reads craftStore.list() fresh on every execute; other adapters
+   * after a successful create/update. The hosted sandbox does not need it
+   * because it reads craftStore.list() fresh on every execute; other adapters
    * can use it for eager notification.
    */
   onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
@@ -300,9 +301,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     createTool: {
       description:
         'Create or update a reusable tool in CraftStore. ' +
-        'Code must be an async arrow: `async (args) => { ... }`. ' +
-        'Inside the body you may call `workspace.*`, `codemode.*`, and other crafted tools as `tools.<name>(args)`. ' +
-        'Callable as `tools.<name>(args)` on the NEXT execute_tools call in the same turn — not `codemode.<name>`, which the hosted dispatcher refuses by name. ' +
+        'Code is JavaScript that denotes an async function: `async (args) => { ... }`, `async function name(args) { ... }`, or `const name = async (args) => { ... }` (helpers may precede it). ' +
+        'Inside the body you may call `workspace.*`, `state.*`, other tools as `tools.<name>(...)`, `require(...)` and `fetch`. ' +
+        'Callable as `tools.<name>(...)` from the NEXT execute_tools call on. ' +
         'Returns { ok, name, action: "created"|"updated" }.',
       execute: async (...args: unknown[]): Promise<JsonValue> => {
         const name = parseInput(StringSchema, { value: args[0] });
@@ -318,13 +319,23 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             'Tool name must contain at least one identifier character.')) };
         }
         if (/^[0-9]/.test(toolName)) toolName = '_' + toolName;
+        // Admission BEFORE any write: the source is normalized to one expression
+        // and proven to parse, so a `const name = …` body can no longer be stored
+        // verbatim and turn every later program in the workspace into a
+        // SyntaxError. What parses but does not evaluate to a function is caught
+        // per tool at load, and blamed on that tool alone.
+        const admitted = admitCraftedSource(code, toolName);
+        if (!admitted.ok) {
+          return { ok: false, ...refusalOf(new KinuError('bad_input',
+            `createTool("${toolName}"): ${admitted.error}`)) };
+        }
         try {
           // Exact-name update is an upsert. A different name that matches
           // case-insensitively is a collision — reject with an actionable
           // error so the LLM picks a distinct identity.
           const existing = craftStore.get(toolName);
           const desc = description;
-          const codeStr = code;
+          const codeStr = admitted.code;
           // The misevolution gate, before any write, on the `craft_tool`
           // surface — the safety-machinery criteria in full, deliberately
           // without `network-egress` (the same fetch runs unrestricted in an
@@ -366,7 +377,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
               ...refusalOf(new KinuError('bad_input',
                 `A tool named "${caseHit.name}" already exists `
                 + `(case-insensitive match with "${toolName}"). `
-                + `Either call that tool as codemode.${caseHit.name}(...) or `
+                + `Either call that tool as tools.${caseHit.name}(...) or `
                 + `pick a genuinely different name.`)),
             };
           }
@@ -380,8 +391,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           // The column defaults seed the neutral prior inside the same INSERT,
           // so the decay + injection floor can see the new tool at all — one
           // statement, no second write to race it.
-          // Optional eager notification; PreambleCraftedExecutor reads
-          // craftStore.list() live, so CF leaves this as a no-op.
+          // Optional eager notification; the hosted sandbox reads
+          // craftStore.list() live on every program, so CF leaves this a no-op.
           onToolRegistered?.({ name: toolName, description: desc, code: codeStr });
           return { ok: true, name: toolName, action: 'created' };
         } catch (err) {
@@ -478,8 +489,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   /**
    * Create or update a crafted tool. Callable as \`tools.<name>(args)\` on the NEXT
    * execute_tools call in this turn: the sandbox that created it is already built,
-   * so the new tool is not in it. \`codemode.<name>(args)\` is NOT the spelling —
-   * the hosted dispatcher throws on it by design and names \`tools.<name>\` instead.
+   * so the new tool is not in it. \`tools\` is the only namespace it is callable
+   * in — the same one the native tools are in.
    * Name is sanitized to a valid JS identifier; original case preserved.
    */
   function createTool(

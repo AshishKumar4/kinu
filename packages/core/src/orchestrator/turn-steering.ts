@@ -2,18 +2,8 @@
  * Mechanical turn steering — the harness saying, IN the turn, the one thing it
  * can see about the turn that the model cannot.
  *
- * Everything here exists because prose does not work. Kinu's doctrine tells
- * the model to delegate on breadth and on doubt, and to stop and re-read when a
- * command keeps failing; across a 10-task Terminal-Bench slice the model
- * delegated on 0 tasks with that doctrine written in, and re-ran the same
- * failing command up to 34 times.
- * The same conditions are trivially detectable from the turn's
- * own tool traffic, so they are detected here and stated to the model at the
- * step boundary where the decision is still open. Measured: doctrine 0%, a
- * mechanical splice 24%.
- *
- * Five triggers, all cheap and deterministic. Four are REACTIVE — they read
- * the turn's own tool traffic, in priority order:
+ * Three triggers, all cheap and deterministic, all REACTIVE — they read the
+ * turn's own tool traffic, in priority order:
  *
  *   repeated_call             {@link IDENTICAL_CALLS_BEFORE_STEER} calls of the
  *                             SAME tool with the SAME arguments that returned
@@ -30,54 +20,28 @@
  *                             in a row in which the turn's frontier did not
  *                             move at all: no call it had not already made, no
  *                             file it had not already touched, no edit that
- *                             landed. The trigger the other three cannot see,
- *                             because none of them is about SPEND: a turn can
+ *                             landed. The trigger the other two cannot see,
+ *                             because neither of them is about SPEND: a turn can
  *                             burn forty steps whose every call SUCCEEDS and
  *                             still be circling, and three of those steps
  *                             failing is not what was wrong with it.
- *   long_turn_no_delegation   past {@link LONG_TURN_STEPS_BEFORE_STEER} steps
- *                             with no `agents` call — the doctrine's "work
- *                             splits into 2+ angles" made observable: a turn
- *                             that has taken this many steps IS multi-part, and
- *                             the step count is the only evidence of that the
- *                             runtime can read without guessing at intent.
  *
- * and the fifth is not reactive at all, because the decision it is about is
- * made before the turn has any traffic to read:
- *
- *   turn_start_no_delegation  step 0 of a turn whose context holds no work of
- *                             this agent's yet and whose ask is not a question
- *                             — the session's first ask, and again after a
- *                             compaction that folded the whole transcript. The
- *                             doctrine's shape test, stated at the one moment
- *                             the shape is still open. The 25-step steer above
- *                             is recovery from a shape already chosen wrong,
- *                             which prompt.ts conceded in prose and could not
- *                             fix from there.
- *
- * ONE reactive steer per turn, whichever trigger fires first. A second one
- * carries almost no new information and reads as nagging; the owner's rule is
- * no spam and no silence, and one line in a turn that is already 25 steps or 3
- * failures or 3 identical calls or 12 stalled steps deep is the honest middle.
- * That is also why this is one object and not four detectors: four independent
+ * ONE steer per turn, whichever trigger fires first. A second one carries
+ * almost no new information and reads as nagging; the owner's rule is no spam
+ * and no silence, and one line in a turn that is already 3 failures or 3
+ * identical calls or 12 stalled steps deep is the honest middle. That is also
+ * why this is one object and not three detectors: three independent
  * mechanisms would each fire on the same thrash loop.
- *
- * The turn-start hint holds its OWN slot, so a turn can carry two rows: the
- * hint at step 0 and, twenty-five steps later, the recovery steer for the
- * shape the hint failed to prevent. One shared slot would have cost either the
- * recovery steer on the session's first turn — the only turn a one-shot
- * `kinu exec` run has — or the count of hints that did NOT convert, which
- * is the number the whole comparison rests on.
  *
  * Every steer is a HINT. The message says so, nothing gates on it, and the
  * model is free to push on — but it can no longer end the turn having never
  * been told. Whether it converted is the point of the durable `turn_steering`
  * run event ({@link TurnSteering.snapshot}), which the settle spine writes
  * exactly as it writes `context_budget`. What "converted" means is per trigger:
- * the delegation steers ask for a search, the repeat steer asks for anything
- * other than the call it named, and the progress steer asks for a call the turn
- * has not made before — so whether a trigger EARNS its place is a query over
- * `turn_steering` rows, not an opinion.
+ * the repeat and failure steers ask for anything other than the call they
+ * named, and the progress steer asks for a call the turn has not made before —
+ * so whether a trigger EARNS its place is a query over `turn_steering` rows,
+ * not an opinion.
  *
  * The failure ledger has a second reader: {@link TurnSteering.onToolResult}
  * reports the moment a steer-worthy streak is BROKEN by a changed call that
@@ -102,24 +66,11 @@
  * the rest of the turn's accounting.
  */
 
-import * as v from 'valibot';
-import type { ModelMessage } from 'ai';
 import type { TurnSteeringRecord, TurnSteeringTrigger } from '../events/types';
 import type { PrepareStepContext, ToolCallContext, ToolResultContext } from '../extension';
 import type { AgentSignal } from '../types/signals';
-import type { BuiltinToolName } from '../tools/registry';
-import { codemodeProgramOf, codemodeReaches } from '../tools/codemode-reach';
 import type { RecoveryFinding } from '../evolution/recovery';
 import { fnv1a64 } from '../prompting/volatile-context';
-import { nanoid } from '../utils/nanoid';
-import type { DelegationOpportunityRecord } from '../events/types';
-
-/** The two hints whose delivery PRD §9.6 records as delegation opportunities.
- *  Derived from the durable row's own picklist rather than re-declared, so the
- *  producer cannot drift from what the recorder accepts. */
-type DelegationHintTrigger = NonNullable<
-  DelegationOpportunityRecord['trigger']
->;
 import {
   isJsonObject,
   type JsonObject,
@@ -138,13 +89,6 @@ export const IDENTICAL_CALLS_BEFORE_STEER = 3;
  *  approach. */
 export const CONSECUTIVE_FAILURES_BEFORE_STEER = 3;
 
-/** Steps into a turn with no delegation before the turn is told the work
- *  splits. Observed turns run to 130 steps, and the navigation-plus-edit shape
- *  of ordinary single-part work settles well inside 25 — so a turn still going
- *  at 25 has enough parts to be worth splitting, while the threshold stays far
- *  enough above normal work that a coherent single change never trips it. */
-export const LONG_TURN_STEPS_BEFORE_STEER = 25;
-
 /**
  * Consecutive steps whose {@link TurnSteering.progressScore} did not move
  * before the turn is told it is spending without getting anywhere.
@@ -155,10 +99,7 @@ export const LONG_TURN_STEPS_BEFORE_STEER = 25;
  * moves it on very nearly every step: each new command is a first, each new
  * file read is a first. A step that moves NOTHING is a step that re-issued
  * something already issued against ground already covered, and twelve of those
- * back to back is not a plateau, it is a circuit. Half of
- * {@link LONG_TURN_STEPS_BEFORE_STEER} on purpose: the two triggers answer
- * different questions ("this is going nowhere" vs "this is long enough to
- * split") and the one that can say WHY should get there first.
+ * back to back is not a plateau, it is a circuit.
  *
  * The clock is steps rather than tokens even though the insight is about spend,
  * because a step IS one full request against the whole context: steps burned
@@ -173,25 +114,6 @@ export const STEPS_WITHOUT_PROGRESS_BEFORE_STEER = 12;
  *  name a command; never a whole `execute_tools` program. */
 const ARGS_ECHO_MAX_CHARS = 200;
 
-/** The tool the delegation steers name — the whole delegation ladder is one tool. */
-const DELEGATION_TOOL: BuiltinToolName = 'agents';
-
-/**
- * Did this call delegate?
- *
- * Two ways to do it and both count. `agents(…)` is the native call. A codemode
- * `agents.swarm({…})` arrives as one `execute_tools` call whose NAME is
- * `execute_tools`, so reading the name alone scored it as no delegation at all —
- * measured on the production turn that prompted this: five sandbox `agents.swarm`
- * calls, and a durable `turn_steering` row reading `converted: false`. Every
- * delegation-conversion number was under-reported by however much of the surface
- * the model reached through the sandbox, which is most of it.
- */
-function isDelegating(ctx: ToolCallContext): boolean {
-  return ctx.toolName === DELEGATION_TOOL
-    || codemodeReaches(codemodeProgramOf(ctx.toolName, ctx.args), DELEGATION_TOOL);
-}
-
 /** Marks the line as runtime-authored, exactly as the ephemeral context and
  *  turn context blocks do: the model must never read a harness steer as
  *  something the user typed. */
@@ -202,14 +124,15 @@ function repeatedCallText(tool: string, args: string, calls: number): string {
   return `\`${tool}\` has run ${calls} times with the same arguments and returned the same output every time — ${args}. `
     + 'Repeating it cannot tell you anything new; the output you already have is everything it has to say. '
     + 'Read that output again for the actual cause, or change the approach: a different command, a different file, '
-    + `or \`${DELEGATION_TOOL}\` action=swarm to run competing approaches in parallel. `
+    + 'a different approach. '
     + 'This is a hint, not an instruction — push on if you know why the repeat is right.';
 }
 
 function repeatedFailureText(tool: string, failures: number): string {
   return `\`${tool}\` has failed ${failures} times in a row. Running the same approach again is the least likely thing to work: `
-    + `search now (\`${DELEGATION_TOOL}\` action=swarm) to try competing approaches in parallel — say what counts in \`objective\` and each candidate is measured by your own verifier, or take \`preset:'ideate'\` when there is nothing to measure yet. `
-    + 'This is a hint, not an instruction — push on alone if you already know the fix.';
+    + 'read the failure text for the actual cause and change something real — a different command, a different file, '
+    + 'a different approach. '
+    + 'This is a hint, not an instruction — push on if you already know the fix.';
 }
 
 function noProgressText(steps: number): string {
@@ -217,84 +140,8 @@ function noProgressText(steps: number): string {
     + 'no file was touched for the first time, and no edit landed. '
     + 'Steps that succeed are not the same as steps that get somewhere — this turn is spending and not moving. '
     + 'Stop and say what is actually blocking you, then change something real: a different file, a different command, '
-    + `or \`${DELEGATION_TOOL}\` action=swarm to run competing approaches in parallel. `
+    + 'a different approach. '
     + 'This is a hint, not an instruction — push on if the ground you are re-covering is the right ground.';
-}
-
-/** The long-turn hint's body with the step number factored out. The id below
- *  digests THIS string, so it names the wording rather than one rendering of
- *  it — a hint delivered at step 25 and one at step 40 are the same
- *  instrument, and a conversion rate must be able to say so. The zero never
- *  reaches the model: only the digest reads this form. */
-const LONG_TURN_HINT_BODY =
-  '{steps} steps into this turn with no delegation. Work this long is work that splits: '
-  + `search now (\`${DELEGATION_TOOL}\` action=swarm) to run the independent parts in parallel instead of grinding them one at a time. `
-  + 'This is a hint, not an instruction — push on alone if the rest is genuinely sequential.';
-
-function longTurnText(steps: number): string {
-  return LONG_TURN_HINT_BODY.replace('{steps}', String(steps));
-}
-
-/**
- * The turn-start hint: the one decision that is the model's own — how the work
- * splits — named at the only step where making it is still free, then the call
- * that runs the parts.
- *
- * Worded as a hint in the same register as the other four, and deliberately
- * carries no number: nothing here is evidence about THIS turn, only about when
- * the decision is open.
- */
-const TURN_START_HINT_BODY =
-  'Settle the shape first: what the parts are, and what each one owes the others. That decision is yours. '
-  + `Then run the independent parts as one search (\`${DELEGATION_TOOL}\` action=swarm) in one call, and carry on with what is left. `
-  + 'This is a hint, not an instruction — work alone if the whole thing is one coherent change.';
-
-function turnStartDelegationText(): string {
-  return TURN_START_HINT_BODY;
-}
-
-/** A user message's parts, read for their text alone: an image or a file part
- *  carries none, so it contributes nothing to read. */
-const TextPartsSchema = v.array(v.looseObject({ text: v.optional(v.string()) }));
-
-/** A user message's readable text — the string form, or its text parts joined.
- *  Narrowed with a parse rather than a shape check, the same way the context
- *  meter reads a message's content (prompting/context-meter.ts). */
-function askText(message: ModelMessage): string {
-  if (message.role !== 'user') return '';
-  const flat = v.safeParse(v.string(), message.content);
-  if (flat.success) return flat.output;
-  const parts = v.safeParse(TextPartsSchema, message.content);
-  return parts.success ? parts.output.map((part) => part.text ?? '').join('') : '';
-}
-
-/**
- * The turn-start hint's whole predicate: a fresh ask with no work behind it.
- *
- * Read off the messages the step is about to send, the one thing both backends
- * agree on — and at THIS hook they are the durable history plus the turn-local
- * tail, before the prune and before the dynamic-context weave
- * (prompting/prepare-step.ts runs extensions first), so nothing runtime-authored
- * is in them yet.
- *
- * Two facts, the same two oh-my-pi's eager prelude reads
- * (session/todo-tracker.ts): no assistant message anywhere, so this agent has
- * said nothing here and the shape of the work is still open; and an ask that
- * does not end in `?` or `!`, because a question wants an answer and an
- * exclamation is a correction — neither is a body of work to split. The FIRST
- * user message is the ask: the turn-local tail is appended after it.
- *
- * One predicate covers both of oh-my-pi's two mechanisms. A continuation turn,
- * a background wake and every later turn all carry the assistant side of work
- * that already happened, so none of them fires; a compaction that folded the
- * whole transcript leaves no assistant message either, and the shape of what
- * remains is open again for exactly the reason it was open at session start.
- */
-function freshAsk(messages: readonly ModelMessage[]): boolean {
-  if (messages.some((message) => message.role === 'assistant')) return false;
-  const ask = messages.find((message) => message.role === 'user');
-  const text = ask ? askText(ask).trimEnd() : '';
-  return text.length > 0 && !text.endsWith('?') && !text.endsWith('!');
 }
 
 /**
@@ -314,7 +161,7 @@ export function isFailingToolResult(ctx: ToolResultContext): boolean {
 /** One tool called one way. Hashed rather than stored: an `execute_tools`
  *  program is tens of kilobytes and a turn runs hundreds of steps. */
 function callSignature(toolName: string, args: JsonObject): string {
-  return `${toolName} ${fnv1a64(stableArgs(args))}`;
+  return `${toolName}${fnv1a64(stableArgs(args))}`;
 }
 
 /** Key-order-independent serialization, so `{a,b}` and `{b,a}` are one call. */
@@ -382,108 +229,31 @@ export class TurnSteering {
   private readonly failures = new Map<string, FailureStreak>();
   /** Identical calls with an unchanged answer, by call signature. */
   private readonly repeats = new Map<string, RepeatedCall>();
-  private delegated = false;
   private fired: { trigger: TurnSteeringTrigger; step: number; tool?: string } | null = null;
   private converted = false;
-  /** The turn-start hint's own slot. Separate from {@link fired} because the
-   *  hint fires before any reactive trigger can have evidence, and spending the
-   *  reactive slot on it would cost the recovery steer on the session's first
-   *  turn (see the header). */
-  private startFired = false;
-  private startConverted = false;
-  /** The signature the repeat steer named — anything else is a changed
-   *  approach, which is what that steer asked for. Set by that trigger alone;
-   *  the other three judge conversion without it (see answersTheSteer). */
-  private repeating: string | null = null;
+  /** The signature the steer named — anything else is a changed approach,
+   *  which is what the repeat and failure steers asked for. Set by those two
+   *  triggers alone; the progress trigger judges conversion without it (see
+   *  answersTheSteer). */
+  private namedCall: string | null = null;
   /** {@link progressScore} at the last step boundary, and how many boundaries
    *  in a row it has been that. -1 so the very first step is a change rather
    *  than a stall against a score of zero. */
   private lastProgress = -1;
   private stalledSteps = 0;
 
-  // ── The delegation-opportunity ledger ────────────────────────────
-  //
-  // The `turn_steering` rows above answer "did a steer convert". These fields
-  // record the OPPORTUNITY itself — which hint text reached the model, at
-  // which step, with which role catalog behind it — because PRD §9.6's
-  // question needs more than `converted`: an ignored hint under an empty role
-  // catalog is a wiring gap, and one under a full catalog is behaviour, and
-  // without the roles those two observations are indistinguishable.
-
-  /** Where the agent's delegatable roles come from, read at the moment a hint
-   *  is delivered or an unprompted delegation lands — not at construction,
-   *  because the catalog can change between turns, and NOT at turn end, because
-   *  by then the catalog may no longer be the one the agent was offered. Each
-   *  row keeps the list captured at its own creation. Absent reads as an empty
-   *  list, which the row states honestly rather than guessing. */
-  private roleCatalog?: () => readonly string[] | undefined;
-
-  /** Bind where the role catalog is read from. Called once when the host wires
-   *  the steering object up; re-calling replaces it. */
-  observeRoles(read: () => readonly string[] | undefined): void {
-    this.roleCatalog = read;
-  }
-
-  private currentRoles(): string[] {
-    return [...(this.roleCatalog?.() ?? [])];
-  }
-
-  /** Every delivered delegation hint, held until turn end so each row can
-   *  carry whether anything came of it. A LIST, because a turn can carry two —
-   *  the turn-start hint and, much later, the recovery steer for the shape it
-   *  failed to prevent — and folding them into one slot would silently drop
-   *  the first delivery's record.
-   *
-   *  `roles` is captured HERE, at delivery, not read at turn end. What the
-   *  agent could have delegated into is a fact about the moment the hint
-   *  reached it: a catalog that changes later — a role added mid-turn, an
-   *  envelope swapped between the hint and the settle — would otherwise
-   *  rewrite history and make an ignored hint under an empty catalog
-   *  indistinguishable from one under a full catalog, which is the exact
-   *  distinction this row exists to draw. */
-  private opportunities: Array<{
-    id: string; trigger: DelegationHintTrigger; step: number; hintId: string;
-    roles: readonly string[]; converted: boolean;
-  }> = [];
-  /** The autonomous arm: an `agents` call on a turn no hint was delivered to.
-   *  Recorded as its own fact rather than folded into the instructed rows, so
-   *  each arm keeps its own denominator (`delegation_opportunity.surface`).
-   *  Its roles are captured when the call lands, for the reason above. */
-  private unpromptedDelegation: { step: number; roles: readonly string[] } | null = null;
-  /** The most recent step boundary {@link steerFor} saw; -1 before the first.
-   *  The step an unprompted delegation is stamped with. */
-  private lastBoundaryStep = -1;
-
   /** Clear for a new turn. */
   reset(): void {
     this.failures.clear();
     this.repeats.clear();
-    this.delegated = false;
     this.fired = null;
     this.converted = false;
-    this.startFired = false;
-    this.startConverted = false;
-    this.repeating = null;
+    this.namedCall = null;
     this.lastProgress = -1;
     this.stalledSteps = 0;
-    this.opportunities = [];
-    this.unpromptedDelegation = null;
-    this.lastBoundaryStep = -1;
   }
 
   onToolCall(ctx: ToolCallContext): void {
-    const delegating = isDelegating(ctx);
-    if (delegating) this.delegated = true;
-    if (this.startFired && delegating) this.startConverted = true;
-    if (delegating) {
-      for (const opportunity of this.opportunities) opportunity.converted = true;
-    }
-    if (this.opportunities.length === 0 && delegating && this.unpromptedDelegation === null) {
-      // The model reached for delegation with no hint behind it. That is the
-      // autonomous arm doing exactly what the instructed arm is measured for —
-      // recorded once, at its first call, so a swarm plus its children's calls
-      this.unpromptedDelegation = { step: this.lastBoundaryStep, roles: this.currentRoles() };
-    }
     if (this.fired && this.answersTheSteer(ctx)) this.converted = true;
   }
 
@@ -535,16 +305,12 @@ export class TurnSteering {
     return recovery;
   }
 
-  /** The turn's steers and whether each converted — at most two, the turn-start
-   *  hint and the one reactive steer, in the order they were spliced. Empty on
-   *  a turn that was never steered: no row, `turn_end` being the denominator. */
+  /** The turn's steer and whether it converted — at most one, the one reactive
+   *  steer, in the order it was spliced. Empty on a turn that was never
+   *  steered: no row, `turn_end` being the denominator. */
   snapshot(): TurnSteeringRecord[] {
-    const rows: TurnSteeringRecord[] = [];
-    if (this.startFired) {
-      rows.push({ trigger: 'turn_start_no_delegation', step: 0, converted: this.startConverted });
-    }
-    if (this.fired) rows.push({ ...this.fired, converted: this.converted });
-    return rows;
+    if (this.fired) return [{ ...this.fired, converted: this.converted }];
+    return [];
   }
 
   /**
@@ -582,12 +348,8 @@ export class TurnSteering {
 
   /**
    * The step-boundary trigger check: the signal to deliver into THIS step, or
-   * null. At most one per step, and at most one REACTIVE one per turn — the
-   * first of those to fire owns the turn.
-   *
-   * Takes the step's own context because the turn-start trigger reads the
-   * messages the request is about to carry ({@link freshAsk}); the other
-   * four read only the tool traffic this object has been observing.
+   * null. At most one per step, and at most one per turn — the first of the
+   * three to fire owns the turn.
    *
    * `files` is the turn's file ledger reading, supplied by the caller that owns
    * it (the AgentOrchestrator, which owns both). Absent means no file work was
@@ -595,9 +357,6 @@ export class TurnSteering {
    */
   steerFor(ctx: PrepareStepContext, files: TurnProgressInputs = NO_FILE_PROGRESS): AgentSignal | null {
     const step = ctx.stepNumber;
-    // The boundary the NEXT tool call is observed from — what an unprompted
-    // delegation row stamps, since onToolCall sees no step of its own.
-    this.lastBoundaryStep = step;
     // Sampled on every boundary, including ones where a steer has already
     // fired: this is the turn's own accounting, and letting it drift would
     // make the number meaningless if the trigger order ever changes.
@@ -609,12 +368,13 @@ export class TurnSteering {
     const looping = [...this.repeats].find(([, call]) => call.count >= IDENTICAL_CALLS_BEFORE_STEER);
     if (looping) {
       const [signature, call] = looping;
-      this.repeating = signature;
+      this.namedCall = signature;
       this.fired = { trigger: 'repeated_call', step, tool: call.tool };
       return signal(repeatedCallText(call.tool, call.args, call.count));
     }
     const stuck = [...this.failures].find(([, streak]) => streak.count >= CONSECUTIVE_FAILURES_BEFORE_STEER);
     if (stuck) {
+      this.namedCall = stuck[1].signature;
       this.fired = { trigger: 'repeated_failure', step, tool: stuck[0] };
       return signal(repeatedFailureText(stuck[0], stuck[1].count));
     }
@@ -622,90 +382,17 @@ export class TurnSteering {
       this.fired = { trigger: 'no_progress', step };
       return signal(noProgressText(this.stalledSteps));
     }
-    if (step >= LONG_TURN_STEPS_BEFORE_STEER && !this.delegated) {
-      this.fired = { trigger: 'long_turn_no_delegation', step };
-      this.recordOpportunity('long_turn_no_delegation', step, LONG_TURN_HINT_BODY);
-      return signal(longTurnText(step));
-    }
-    // Last, and only ever at step 0 — where none of the four above can have
-    // evidence yet, so a reactive steer that DID fire on this step is about
-    // this turn and outranks a hint that is about every turn.
-    if (step === 0 && !this.startFired && freshAsk(ctx.messages)) {
-      this.startFired = true;
-      this.recordOpportunity('turn_start_no_delegation', 0, TURN_START_HINT_BODY);
-      return signal(turnStartDelegationText());
-    }
     return null;
   }
 
-  /**
-   * One delivered hint = one recorded opportunity. The id pair is minted here,
-   * at the moment of delivery: `hintId` digests the hint's TEMPLATE so it names
-   * the wording rather than one rendering (a step-25 and a step-40 long-turn
-   * hint are the same instrument), and `opportunityId` is unique to THIS
-   * occasion. The role list is read NOW, because "what could the agent have
-   * delegated into" is a question about that moment, not about turn end.
-   */
-  private recordOpportunity(
-    trigger: DelegationHintTrigger,
-    step: number,
-    template: string,
-  ): void {
-    this.opportunities.push({
-      id: `dop-${nanoid(10)}`,
-      trigger,
-      step,
-      hintId: `${trigger}:${fnv1a64(template)}`,
-      roles: this.currentRoles(),
-      converted: false,
-    });
-  }
-
-  /**
-   * The turn's delegation opportunities, for `closeTurnRun` — the instructed
-   * arm's rows when hints were delivered, plus the autonomous arm's row when
-   * an `agents` call arrived on a turn no hint reached. Empty on a turn with
-   * neither, which keeps each arm's denominator its own.
-   *
-   * The unprompted row's `step` is the last step boundary before the delegating
-   * call was observed; -1 means it landed before any boundary ran, which only a
-   * tool call outside any step can produce and which the row states rather
-   * than hides.
-   */
-  delegationSnapshot(): DelegationOpportunityRecord[] {
-    const rows: DelegationOpportunityRecord[] = [];
-    for (const opportunity of this.opportunities) {
-      rows.push({
-        opportunityId: opportunity.id,
-        surface: 'hint',
-        hintId: opportunity.hintId,
-        trigger: opportunity.trigger,
-        step: opportunity.step,
-        roles: [...opportunity.roles],
-        converted: opportunity.converted,
-      });
-    }
-    if (this.unpromptedDelegation) {
-      rows.push({
-        opportunityId: `dop-${nanoid(10)}`,
-        surface: 'unprompted',
-        step: this.unpromptedDelegation.step,
-        roles: [...this.unpromptedDelegation.roles],
-        converted: true,
-      });
-    }
-    return rows;
-  }
-
   /** Did this call do the thing the fired steer asked for? Per trigger,
-   *  because the steers ask for different things: the repeat steer asks for
-   *  anything but the call it named, the progress steer asks for ground the
-   *  turn has not covered, and the delegation steers ask for a search. */
+   *  because the steers ask for different things: the repeat and failure
+   *  steers ask for anything but the call they named, and the progress steer
+   *  asks for ground the turn has not covered. */
   private answersTheSteer(ctx: ToolCallContext): boolean {
     const signature = callSignature(ctx.toolName, ctx.args);
-    if (this.fired?.trigger === 'repeated_call') return signature !== this.repeating;
     if (this.fired?.trigger === 'no_progress') return !this.repeats.has(signature);
-    return isDelegating(ctx);
+    return signature !== this.namedCall;
   }
 }
 

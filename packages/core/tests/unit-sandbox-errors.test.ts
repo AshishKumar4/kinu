@@ -20,18 +20,18 @@ import { explainNativeToolReferenceError } from '../src/execution/sandbox-errors
 import { BUILTIN_TOOLS, TOOL_REACH } from '../src/tools/registry';
 
 describe('explainNativeToolReferenceError', () => {
-  test('every native tool is pointed at the namespace its reach declares', () => {
+  test('every native tool is pointed at tools.<name>, and at the namespace its reach declares', () => {
     for (const name of BUILTIN_TOOLS) {
       const namespace = TOOL_REACH[name].codemode;
       const out = explainNativeToolReferenceError(`${name} is not defined`);
-      if (!namespace) {
-        // execute_tools IS the sandbox; it names no other tool to correct toward.
+      if (name === 'execute_tools') {
+        // execute_tools IS the sandbox; a program cannot call it from inside itself.
         expect(out).toBe(`${name} is not defined`);
         continue;
       }
-      expect(out).toContain(`"${name}" is a native Kinu tool, not a codemode member`);
-      expect(out).toContain(`Call \`${name}\` directly as its own top-level tool call`);
-      expect(out).toContain(`through the \`${namespace}\` namespace`);
+      expect(out).toContain(`"${name}" is a native Kinu tool`);
+      expect(out).toContain(`call it as \`tools.${name}(input)\``);
+      if (namespace) expect(out).toContain(`through the \`${namespace}\` namespace`);
     }
   });
 

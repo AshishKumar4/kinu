@@ -970,9 +970,6 @@ export class LocalAgentSession implements BackendHost {
       // promotion gate's trials — the same drive site the cloud backend uses,
       // so the two cannot disagree about when a refinement happens.
       refinementLane: () => this.runRefinementLane(),
-      roleCatalog: () => this.turnProfileInputs
-        ? Object.keys(effectiveRoleCatalog(this.turnProfileInputs.envelope.catalog))
-        : undefined,
       sinks: {
         onToolCallEvent: (ev) => this.recordRunEvent({ type: 'tool_call_end', ...ev }),
         onStepEvent: (ev) => this.recordRunEvent({ type: 'step_finish', ...ev }),
@@ -2438,7 +2435,6 @@ export class LocalAgentSession implements BackendHost {
       files: this.orch.acc.files,
       escalations: this.orch.acc.escalations,
       steering: this.orch.steering.snapshot(),
-      delegation: this.orch.steering.delegationSnapshot(),
       completionGate: this.completionGate.take(),
       craft: this.orch.craft.snapshot(),
       recoveries: this.orch.recoverySnapshot(),
