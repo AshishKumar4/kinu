@@ -13,14 +13,18 @@
 | `uname -r` (deployed container) | `6.18.36-cloudflare-firecracker-2026.6.17` |
 | kernel build | Firecracker guest, gcc 16.1.0, PREEMPT_DYNAMIC |
 | FUSE protocol | 7.45 |
-| `FUSE_CAP_PASSTHROUGH` in `conn->capable` | **offered** (bit 29 set in `capable` = 2143289307; verified again by the probe's `fuse-caps` binary) |
+| `FUSE_CAP_PASSTHROUGH` in `conn->capable` | **offered** (bit 29 set in `capable` = 2143289307; verified again by the probe's `fuse-caps` binary) — offered, negotiated, and UNUSABLE here; see the correction below |
 | `FUSE_CAP_DIRECT_IO_ALLOW_MMAP` | offered |
 | `WRITEBACK_CACHE`, `SPLICE_*`, `AUTO_INVAL_DATA`, `EXPIRE_ONLY`, `SETXATTR_EXT` | all offered |
 | backing filesystem of `/var/tmp` | ext2/ext3 (the instance disk, 8 GB) |
 | instance | 2 vCPU, 6,339,212 KiB RAM |
 | daemon binary | libfuse 3.17.1, digest of `kinu-journal-daemon` in the artifact |
 
-Passthrough is offered by the deployed kernel. The design's risk 1 (passthrough absent on the platform kernel) does not materialise.
+Passthrough is offered by the deployed kernel, so the design's risk 1
+(passthrough absent on the platform kernel) does not materialise. A different
+one does: the capability is offered and still cannot ship. The correction is at
+the end of this document, and the numbers in the `v2-passthrough` column below
+stand as measured — they describe a configuration this daemon may not use.
 
 ## (b) The section 5 table
 
@@ -143,10 +147,55 @@ Removing the WAL's group-committed fdatasync recovers 6.0×. The write path with
 
 Lanes 2 and 4 may proceed **as designed**, with two amendments the numbers force and one band re-baselined:
 
-1. **Passthrough is offered.** `uname -r` is a 6.18 Firecracker kernel, `FUSE_CAP_PASSTHROUGH` is in `conn->capable`, and the passthrough build compiles and runs against the stock high-level API through the `fi->backing_id` route. Lane 2 should implement read passthrough first and keep `keep_cache` + 30 s attr timeouts as the fallback, which the same run measures at parity for cache-hot reads (601,647 vs 518,891 ops/s; both columns beat native's own direct_io-free number today).
+1. **Passthrough is offered — and RETIRED. See the correction below.** `uname -r` is a 6.18 Firecracker kernel, `FUSE_CAP_PASSTHROUGH` is in `conn->capable`, and the passthrough build compiles and runs against the stock high-level API through the `fi->backing_id` route. This item first read "implement read passthrough first, keep `keep_cache` + 30 s attr timeouts as the fallback". Lane 2 then measured what successful registration costs, and the order is reversed: `keep_cache` + attr timeouts is the shipped read path and passthrough is not a fallback anybody keeps.
 2. **The WAL fsync removal is worth 6× on the write path and 4× on the fsync pair**, and the durability argument (the WAL only ever needs to survive daemon death, not instance death) is exactly the design's § 1.3. Lane 2's `no-fsync-on-write-path` cell is well-founded by these numbers.
 3. **`small-stat-1k` within 20 % of native is unreachable on this platform** — 9× is the floor with every caching knob on, and the residual is the FUSE path walk itself. Re-baseline the band for the deciding metric to "within 10× with attr timeouts" (as measured: 32.7 ms for 1,000 stats, 50 k stats/s) and publish the gap, per the design's own fallback sentence. The decisive driver's `small-stat-1k` ranks arms against each other, not against native, so the ladder is unaffected.
 4. **The publish path must not trust the intercepted PUT for integrity.** The receipt is ETag-only and the checksum headers are dropped by the transport; lane 3's `verify only fresh receipts` needs a HEAD-through-binding check (or content addressing) rather than an echoed sha256. Direct HTTP remains the right payload transport: 1 MiB windows at 16-64 in flight sustain 95-146 MiB/s, and 32 MiB single PUTs complete in 1.2-1.4 s.
 5. **The fence baseline confirms the O(tree) cost is the whole-tree copy** (2.2 s for 64 KiB dirty against a 400 MiB tree) and is flat in dirty bytes; the O(k) fence of lane 2 is the fix and its matrix cell, not this table, is the proof.
 
-The fallback the numbers select, if lane 2 cannot land passthrough: keep_cache + attr timeouts (the `v2-keep-cache` column), which already meets the sequential and cache-hot read intent and whose only measured deficit is the write path it shares with the passthrough build.
+The read path the numbers select is `keep_cache` + attr timeouts (the
+`v2-keep-cache` column), which meets the sequential and cache-hot read intent
+and whose only measured deficit is the write path it shares with the
+passthrough build.
+
+## (e) Correction: read passthrough cannot ship
+
+- date measured: 2026-09-02, after the table above
+- where: image `kinu-journal-daemon:matrix`, libfuse 3.17.1, privileged with `/dev/fuse`, host kernel 7.0.10-tkg-bore-llvm
+- daemon: the passthrough build at commit `09e290606`, `cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O2`
+- control: the shipped read path at commit `96d6a9c5d`, same image
+
+Registration is not the problem. `FUSE_CAP_PASSTHROUGH` was capable AND
+negotiated (`max_backing_stack_depth = FUSE_BACKING_STACKED_OVER`), every
+`FUSE_DEV_IOC_BACKING_OPEN` succeeded, and the daemon's error stream was empty.
+The failures below are what SUCCESSFUL registration costs, because passthrough
+is exclusive per inode. A mixed open is not a slow path; it is a failed open.
+
+| sequence, all through the mount | result |
+| --- | --- |
+| A: `open(O_RDWR\|O_CREAT\|O_TRUNC)`, `ftruncate` 64 KiB, `mmap(MAP_SHARED)` + dirty a page, then `open("a.bin", O_RDONLY)` | the read-only open fails, `errno=5` (EIO) |
+| B: `open("b.bin", O_RDONLY)` whose backing fd the kernel registered, then `open("b.bin", O_RDWR)` | the write open fails, `errno=5` (EIO) |
+| C: the contrast — sequence A with NO mapping | both opens succeed, `errno=0` |
+
+Sequence A is not a constructed case. Matrix scenario `posix-fence-continuity`
+failed with `EIO: i/o error, open '/export/mnt/mmap.bin'`: the mmap probe held
+the file mapped while the scenario opened it read-only to compare live bytes
+against the staged copy. Ordinary work produced it.
+
+Writes must stay intercepted — the journal is the whole product — so the
+mixture is unavoidable, and passthrough is therefore out. The shipped read path
+keeps the page cache instead: on the same image, sequences A, B and C are all
+legal, and coherency holds where it matters. A cached reader read `AAAAAAAA`, a
+second handle wrote `BBBBBBBB` through the daemon, and the SAME cached handle
+then re-read `BBBBBBBB`, as did a fresh open. The cache is real rather than
+nominal: a 256 KiB file read twice cost the daemon 1 read on the first pass and
+0 on the second (`readPath={"bytes":262144,"firstPassReads":1,"secondPassReads":0}`).
+
+Two consequences for this document. The `v2-passthrough` column measures a
+configuration that cannot ship, and every band row citing it is superseded by
+the `v2-keep-cache` column, which is faster for cache-hot reads anyway
+(601,647 against 518,891 4 KiB reads/s — lane 0's own row, quoted rather than
+re-measured). And the knob generator that produced the four `jd-*` builds is
+deleted with its `Dockerfile.tail` block: the question it existed to answer is
+answered, the answers are the shipped daemon's defaults, and one of its arms
+measured a path the product may not take.

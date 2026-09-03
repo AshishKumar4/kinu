@@ -12,9 +12,12 @@
  * signal and is part of the artifact: the container application, Worker,
  * bucket and temp build directory are each probed absent.
  *
- * The probe makes no product change. Candidate binaries are the checked-in
- * journal daemon transformed by exact anchors in `candidate-daemon.ts` and
- * compiled beside today's unchanged binary inside the throwaway image.
+ * The probe makes no product change. It measures the SHIPPED daemon against
+ * the same filesystem without FUSE. The four knob builds this file used to
+ * compile from an anchor-transformed source are retired: their question —
+ * which read and WAL settings to keep — is answered, the answers are the
+ * shipped defaults, and the passthrough arm measured a configuration that
+ * cannot ship (see MEASUREMENTS.md, the passthrough correction).
  */
 
 import { execFileSync } from 'node:child_process';
@@ -39,7 +42,6 @@ import {
   runWrangler,
   wranglerProvesAbsence,
 } from '../../../../scripts/fixtures/r2-bench/deploy-substrate';
-import { candidateDaemonSource } from './candidate-daemon';
 
 const FIXTURE_DIR = dirname(new URL(import.meta.url).pathname);
 const REPO_ROOT = resolve(FIXTURE_DIR, '../../../..');
@@ -259,7 +261,7 @@ interface BuildOutput {
   readonly buildDir: string;
   readonly configPath: string;
   readonly dockerfileSha256: string;
-  readonly candidateDaemonSha256: string;
+  readonly daemonSourceSha256: string;
   readonly containerHelperSha256: string;
 }
 
@@ -271,9 +273,6 @@ function prepareBuild(runId: string, worker: string, bucket: string, token: stri
     copyFileSync(join(FIXTURE_DIR, name), join(buildDir, name));
   }
   copyFileSync(DAEMON_SOURCE, join(buildDir, 'journal-daemon.c'));
-  const original = readFileSync(DAEMON_SOURCE, 'utf8');
-  const candidate = candidateDaemonSource(original);
-  writeFileSync(join(buildDir, 'journal-daemon-candidate.c'), candidate);
   const recipe = readFileSync(DAEMON_DOCKERFILE, 'utf8');
   const firstLine = `FROM ${IMAGE_TAG}\n`;
   if (!recipe.startsWith(firstLine)) throw new Error(`daemon recipe must start with ${firstLine.trim()}`);
@@ -283,7 +282,8 @@ function prepareBuild(runId: string, worker: string, bucket: string, token: stri
   const configPath = join(buildDir, 'wrangler.jsonc');
   writeFileSync(configPath, configFor(worker, bucket, token, dockerfilePath));
   return {
-    buildDir, configPath, dockerfileSha256: sha256(dockerfile), candidateDaemonSha256: sha256(candidate),
+    buildDir, configPath, dockerfileSha256: sha256(dockerfile),
+    daemonSourceSha256: sha256(readFileSync(DAEMON_SOURCE)),
     containerHelperSha256: sha256(readFileSync(CONTAINER_SOURCE)),
   };
 }
@@ -354,12 +354,6 @@ interface FsSample {
   readonly writeFsyncPairP50Us: number;
 }
 
-interface WritePathSample {
-  readonly variant: string;
-  readonly run: number;
-  readonly randomWriteIops: number;
-}
-
 interface FenceSample {
   readonly variant: string;
   readonly dirtyBytes: number;
@@ -415,12 +409,11 @@ interface Artifact {
     containerApp: string;
     workerVersion: string | null;
     dockerfileSha256: string | null;
-    candidateDaemonSha256: string | null;
+    daemonSourceSha256: string | null;
     containerHelperSha256: string | null;
   };
   identity: Identity | null;
   filesystem: FsSample[];
-  writePath: WritePathSample[];
   fence: FenceSample[];
   directPut32MiB: PutSample[];
   rangeGets: RangeSample[];
@@ -566,24 +559,6 @@ async function measureFilesystem(
   }
 }
 
-async function measureNoFsyncWritePath(deployment: Deployment, output: WritePathSample[]): Promise<void> {
-  const variant = 'no-wal-fsync';
-  const started = await startDaemon(deployment, variant, '/usr/local/bin/jd-nofsync');
-  try {
-    await exec(deployment, `truncate -s 64M '${started.root}/randwrite.bin'`);
-    for (let run = 1; run <= RUNS; run += 1) {
-      const result = await fio(deployment, `${variant}-${String(run)}`, `${started.mount}/randwrite.bin`,
-        '--rw=randwrite --bs=4k --size=64m --time_based=1 --runtime=10 --ramp_time=1 --direct=0 --norandommap=1 --randrepeat=0 --allow_file_create=0');
-      const job = result.jobs[0];
-      if (job === undefined) throw new Error('no-fsync fio returned no job');
-      output.push({ variant, run, randomWriteIops: job.write.iops });
-    }
-  } finally {
-    await stopDaemon(deployment, variant, started.socket);
-    await exec(deployment, `rm -rf '${ROOT}/${variant}'`);
-  }
-}
-
 async function measureFence(deployment: Deployment, output: FenceSample[]): Promise<void> {
   const variant = 'today-400m-tree';
   const started = await startDaemon(deployment, variant, '/usr/local/bin/kinu-journal-daemon');
@@ -670,7 +645,7 @@ async function collectIdentity(deployment: Deployment): Promise<Identity> {
     + 'printf "fio="; fio --version; printf "s3fs="; s3fs --version 2>&1 | head -1; '
     + 'printf "backing-fs="; stat -f -c %T /var/tmp; printf "cpus="; nproc; '
     + 'printf "memory-kib="; awk \'/MemTotal/{print $2}\' /proc/meminfo; '
-    + 'sha256sum /usr/local/bin/kinu-journal-daemon /usr/local/bin/jd-v2 /usr/local/bin/jd-pt',
+    + 'sha256sum /usr/local/bin/kinu-journal-daemon',
   );
   await exec(deployment, `mkdir -p '${ROOT}/caps'`);
   const capabilities = await execJson(deployment,
@@ -796,9 +771,9 @@ async function main(): Promise<number> {
       runId: selected.runId, startedAt: new Date().toISOString(), finishedAt: null,
       repoCommit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim(),
       image: IMAGE, imageDigest: IMAGE_DIGEST, worker, bucket, containerApp, workerVersion: null,
-      dockerfileSha256: null, candidateDaemonSha256: null, containerHelperSha256: null,
+      dockerfileSha256: null, daemonSourceSha256: null, containerHelperSha256: null,
     },
-    identity: null, filesystem: [], writePath: [], fence: [], directPut32MiB: [], rangeGets: [],
+    identity: null, filesystem: [], fence: [], directPut32MiB: [], rangeGets: [],
     rangeFixturePut: null, cleanup: null, errors: [],
   };
   const settle = (): void => { writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`); };
@@ -817,7 +792,7 @@ async function main(): Promise<number> {
     build = started.build;
     artifact.meta.workerVersion = deployment.workerVersion;
     artifact.meta.dockerfileSha256 = build.dockerfileSha256;
-    artifact.meta.candidateDaemonSha256 = build.candidateDaemonSha256;
+    artifact.meta.daemonSourceSha256 = build.daemonSourceSha256;
     artifact.meta.containerHelperSha256 = build.containerHelperSha256;
     settle();
     log(`deployed ${deployment.origin} at Worker version ${deployment.workerVersion}`);
@@ -828,12 +803,10 @@ async function main(): Promise<number> {
     if (selected.onlyR2 && selected.r2Artifact !== null) {
       const imported = v.parse(v.looseObject({
         filesystem: v.array(v.any()),
-        writePath: v.array(v.any()),
         fence: v.array(v.any()),
       }), JSON.parse(readFileSync(selected.r2Artifact, 'utf8')));
       if (selected.r2Artifact !== null) {
         artifact.filesystem.push(...imported.filesystem);
-        artifact.writePath.push(...imported.writePath);
         artifact.fence.push(...imported.fence);
       }
       try {
@@ -845,9 +818,7 @@ async function main(): Promise<number> {
     } else {
     for (const [variant, binary] of [
       ['native', null],
-      ['today', '/usr/local/bin/kinu-journal-daemon'],
-      ['v2-keep-cache', '/usr/local/bin/jd-v2'],
-      ['v2-passthrough', '/usr/local/bin/jd-pt'],
+      ['shipped', '/usr/local/bin/kinu-journal-daemon'],
     ] as const) {
       try {
         await measureFilesystem(deployment, variant, binary, artifact.filesystem);
@@ -856,12 +827,6 @@ async function main(): Promise<number> {
       }
       settle();
     }
-    try {
-      await measureNoFsyncWritePath(deployment, artifact.writePath);
-    } catch (error) {
-      artifact.errors.push(`no-fsync write path: ${describeThrown({ cause: error })}`);
-    }
-    settle();
     try {
       await measureFence(deployment, artifact.fence);
     } catch (error) {
