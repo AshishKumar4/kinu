@@ -871,6 +871,22 @@ body { background: var(--c-bg); color: var(--c-text); }
   animation: p-shimmer 1.8s linear infinite;
 }
 
+/* Streaming reasoning-text shimmer — while a reasoning part is live, the
+   thinking text itself carries the light wave, not only the "Thinking"
+   label. Text-clipped like .p-shimmer with a slower sweep so the words stay
+   readable. It lands on the collapsed excerpt span and on the expanded body,
+   which is a block element so one gradient spans the whole paragraph and the
+   wave sweeps across it instead of restarting on every line. */
+.p-shimmer-text {
+  background: linear-gradient(90deg, var(--c-text-3) 0%, var(--c-text) 50%, var(--c-text-3) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: p-shimmer 2.2s linear infinite;
+  will-change: background-position;
+}
+
 /* Transcript skeleton — the shape of a conversation that has not arrived yet,
    so a pane waiting for its messages reads as loading rather than as a
    workspace with nothing in it.
@@ -973,7 +989,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .p-shimmer { animation: none; color: var(--c-text-2); -webkit-text-fill-color: currentColor; }
+  .p-shimmer, .p-shimmer-text { animation: none; color: var(--c-text-2); -webkit-text-fill-color: currentColor; }
   .animate-fade-in, .animate-scale-in { animation: none; }
   /* The skeleton still marks where the transcript will land; it just holds. */
   .p-skeleton-bar { animation: none; }

@@ -89,9 +89,6 @@ export class UserSteerDrain {
   /** The prefix currently crossing the durable drain boundary. It remains
    * queued until onDrain succeeds and the provider-visible injection exists. */
   private landing: UserSteer[] = [];
-  /** The complete prepareStep operation for the prefix above. Stop waits on
-   * this before deciding which steers remain returnable. */
-  private landingTask: Promise<ModelMessage[] | undefined> | null = null;
   private readonly injections = new StepInjections<DrainedSteers>();
 
   constructor(private readonly deps: UserSteerDrainDeps) {}
@@ -122,26 +119,9 @@ export class UserSteerDrain {
     this.pending = [...steers];
   }
 
-  /** Roll an interrupted prefix back after its durable delete failed. Earlier
-   * landed injections may exist; only an active landing blocks the rollback.
-   * The caller must use exactly the array returned by the preceding interrupt. */
-  restoreInterrupted(steers: readonly UserSteer[]): void {
-    if (this.landing.length > 0) {
-      throw new Error('cannot restore interrupted steers while a drain is landing');
-    }
-    this.pending = [...steers, ...this.pending];
-  }
-
   /** How many steers have not reached the provider. */
   get pendingCount(): number {
     return this.landing.length + this.pending.length;
-  }
-
-  /** Wait until a prefix has either become a durable provider-visible
-   * injection or returned to pending after failure. Cancellation uses this
-   * barrier before deleting and returning the exact remaining rows. */
-  async waitForLanding(): Promise<void> {
-    await this.landingTask;
   }
 
   /** Start of a turn: the previous turn's splice coordinates mean nothing to
@@ -161,13 +141,7 @@ export class UserSteerDrain {
     const drained = this.pending.splice(0);
     if (drained.length === 0) return this.injections.drain(ctx, []);
     this.landing = drained;
-    const task = this.persistDrain(ctx, drained);
-    this.landingTask = task;
-    try {
-      return await task;
-    } finally {
-      if (this.landingTask === task) this.landingTask = null;
-    }
+    return await this.persistDrain(ctx, drained);
   }
 
   private async persistDrain(

@@ -171,16 +171,16 @@ describe('the reconnect snapshot answers from durable rows, not from RAM', () =>
       .toEqual({ steers: [], branches: [] });
   });
 
-  test('a steer dropped by Stop leaves no chip, across the reconnect', async () => {
-    // Stop hands the operator's words back to the composer, so the queue is
-    // empty and the chip goes with it. Asserted across the reactivation because
-    // the RAM queue and the SQL rows are cleared by two different lines, and
-    // only the durable one survives to answer a reconnect.
+  test('a steer Stop kept stays queued, across the reconnect', async () => {
+    // Stop leaves the operator's words queued — the turn settle path reruns
+    // what the model never saw as the next turn — so the chip survives.
+    // Asserted across the reactivation because the RAM queue is gone by
+    // construction there and only the durable row can answer.
     const seeded = await workspaceWithQueuedWork();
     await seeded.agent.cancelCurrentWork();
 
     const reconnected = await reactivateOrchestratorHarness(seeded.db);
 
-    expect(chips(await reconnected.agent.getWorkspaceSnapshot()).steers).toEqual([]);
+    expect(chips(await reconnected.agent.getWorkspaceSnapshot()).steers).toEqual([STEER]);
   });
 });

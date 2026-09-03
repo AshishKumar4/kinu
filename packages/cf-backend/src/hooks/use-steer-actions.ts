@@ -2,11 +2,11 @@
  * The composer's two mid-turn actions, for every chat surface: Steer and Stop.
  *
  * Both chat columns (the workspace conversation and a subordinate's) mount the
- * same `Composer`, and both need the same three answers a user is owed after
- * typing to a working agent — "queued for the next step", "that turn had ended
- * so this went as a new message", "stopped, and here is your text back". This
- * hook owns those, so neither column can drift into a different account of what
- * happened.
+ * same `Composer`, and both need the same two answers a user is owed after
+ * typing to a working agent — "queued for the next step" and "that turn had
+ * ended so this went as a new message". Stop aborts the turn while queued
+ * steers stay queued and run as the next turn. This hook owns those, so
+ * neither column can drift into a different account of what happened.
  *
  * A steer carries TEXT only. Attachments stay in the composer for the next real
  * send rather than being silently dropped into a splice that cannot hold them.
@@ -20,7 +20,7 @@
  * line exists exactly while a steer is queued in it and disappears on the
  * `landed` broadcast, with nothing to forget to clear.
  *
- * What IS stored is the other three: each is a one-shot statement about an
+ * What IS stored is the other two: each is a one-shot statement about an
  * action the user just took, true at the moment it was made and about nothing
  * the server will later contradict.
  */
@@ -39,8 +39,9 @@ export interface SteerActionsDeps {
    *  the next ordinary turn. The actor decides atomically in its own turn
    *  queue, so nothing is ever left with this hook to re-send. */
   steerChat: (text: string) => Promise<"mid-turn" | "queued">;
-  /** `useKinu().abortChat` — resolves with the steers the abort dropped. */
-  abortChat: () => Promise<string[]>;
+  /** `useKinu().abortChat` — aborts the running turn. Queued steers stay queued
+   *  and run as the next turn. */
+  abortChat: () => Promise<void>;
   draft: string;
   setDraft: (update: (current: string) => string) => void;
   /** Whether the draft carries attachments a steer cannot take. */
@@ -55,7 +56,7 @@ export interface SteerActions {
   notice: ComposerNotice | null;
   /** Hand the draft to the running turn. */
   steer: () => void;
-  /** Abandon the turn and take back whatever the agent never saw. */
+  /** Abort the running turn. Queued steers stay queued and run next. */
   stop: () => void;
 }
 
@@ -119,18 +120,11 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
       }
     });
   }, [draft, setDraft, steerChat]);
-
   const stop = useCallback(() => {
     setSettled(null);
     startTransition(async () => {
       try {
-        const returned = await abortChat();
-        if (returned.length === 0) return;
-        setDraft((current) => current.trim() === "" ? returned.join("\n\n") : current);
-        setSettled({
-          id: NOTICE_ID, tone: "warning",
-          text: "Stopped. What you had queued is back in the composer — the agent never saw it.",
-        });
+        await abortChat();
       } catch (cause) {
         setSettled({
           id: NOTICE_ID, tone: "danger",
@@ -138,7 +132,7 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
         });
       }
     });
-  }, [abortChat, setDraft]);
+  }, [abortChat]);
 
   return { notice, steer, stop };
 }

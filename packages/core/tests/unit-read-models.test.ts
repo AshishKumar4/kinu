@@ -638,7 +638,7 @@ describe('background-job control plane', () => {
       onCancelled: () => order.push('settled'),
     });
 
-    expect(outcome).toEqual({ ok: true, abortedTools: 1, deviceCommands: [], returnedSteers: [] });
+    expect(outcome).toEqual({ ok: true, abortedTools: 1, deviceCommands: [] });
     expect(live.signal.aborted).toBe(true);
     // The backend settles its own turn state BEFORE clients hear about it.
     expect(order).toEqual(['settled', 'broadcast']);
@@ -646,22 +646,21 @@ describe('background-job control plane', () => {
     db.close();
   });
 
-  test('an interrupt hands the pending mid-turn steers back instead of eating them', async () => {
+  test('the framework turn is aborted FIRST, so the model request stops even when the client cancel frame is lost', async () => {
     const { db } = jobPlane();
     const order: string[] = [];
 
     const outcome = await cancelCurrentWork({
+      cancelChats: () => { order.push('cancelChats'); },
       activeToolControllers: new Set(),
       broadcast: () => order.push('broadcast'),
-      // What UserSteerDrain.interrupt() returns: what the model never saw.
-      interruptSteers: async () => { order.push('interrupt'); return ['also check staging', 'and the logs']; },
-      onCancelled: (settled) => order.push(`settled:${settled.returnedSteers.length}`),
+      onCancelled: () => order.push('settled'),
     });
 
-    expect(outcome.returnedSteers).toEqual(['also check staging', 'and the logs']);
-    // The drop happens before the backend settles, so the settle hook — the
-    // place a backend broadcasts the return — already has the texts.
-    expect(order).toEqual(['interrupt', 'settled:2', 'broadcast']);
+    expect(outcome).toEqual({ ok: true, abortedTools: 0, deviceCommands: [] });
+    // Queued steers are NOT part of the outcome: they stay queued and run as
+    // the next turn once this one settles.
+    expect(order).toEqual(['cancelChats', 'settled', 'broadcast']);
     db.close();
   });
 

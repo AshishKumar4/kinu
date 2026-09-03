@@ -1180,20 +1180,19 @@ export function useKinu(target?: string | KinuActorAddress) {
   }, []);
 
   /**
-   * Stop this turn. Resolves with the mid-turn steers the abort DROPPED, so the
-   * surface that clicked Stop can put them back in its composer — the server
-   * hands them over rather than eating them, and only the tab that asked for
-   * the stop should end up with the text in its draft (every other tab learns
-   * they were returned from the `steer_status` broadcast).
+   * Stop this turn. Aborts the live LLM request through the SDK and the server
+   * turn through the RPC in parallel; queued steers stay queued and run as the
+   * next turn. Releases the send latch on settle, success or failure, so the
+   * next Send is admitted at once.
    */
-  const abortChat = useCallback(async (): Promise<string[]> => {
+  const abortChat = useCallback(async (): Promise<void> => {
     try {
-      const [, outcome] = await Promise.all([
+      await Promise.all([
         stop(),
-        rpc<{ returnedSteers?: string[] }>("cancelCurrentWork", []),
+        rpc("cancelCurrentWork", []),
       ]);
-      return outcome.returnedSteers ?? [];
     } finally {
+      abandonTurn(sendLatch.current);
       if (!isSubordinate) {
         try {
           await refreshBackgroundJobs();

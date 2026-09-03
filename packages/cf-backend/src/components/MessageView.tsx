@@ -103,13 +103,13 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
     <div className={`border-l-2 border-[var(--c-dash)] py-0.5 pl-3.5 text-[12.5px] leading-[1.7] p-text-4`}>
       <button onClick={() => setExpanded(!expanded)} className="group/reason w-full text-left cursor-pointer" aria-expanded={expanded}>
         <span className={live ? "p-shimmer" : ""}>Thinking</span>
-        {!expanded && <span className="opacity-80"> · {text.slice(0, 120)}</span>}
+        {!expanded && <span className={live ? "p-shimmer-text opacity-80" : "opacity-80"}> · {text.slice(0, 120)}</span>}
         {text.length > 120 && (
           <span className="ml-1.5 font-medium p-gold">{expanded ? "collapse" : "expand"}</span>
         )}
       </button>
       {expanded && (
-        <div className="mt-1 whitespace-pre-wrap">{text}</div>
+        <div className={live ? "mt-1 whitespace-pre-wrap p-shimmer-text" : "mt-1 whitespace-pre-wrap"}>{text}</div>
       )}
     </div>
   );

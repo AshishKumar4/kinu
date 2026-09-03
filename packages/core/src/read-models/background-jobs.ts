@@ -145,21 +145,17 @@ export interface CancelWorkOutcome {
   ok: true;
   abortedTools: number;
   deviceCommands: readonly DeviceStopOutcome[];
-  /** Mid-turn steers the abort dropped, handed back verbatim. An interrupt
-   *  means "stop", not "stop and then do what I typed" — but the surface
-   *  already rendered these as sent, so they return to the composer instead of
-   *  vanishing. Empty when nothing was pending. */
-  returnedSteers: string[];
 }
 
 export interface CancelWorkDeps {
+  /** Abort the in-flight LLM request itself, before the Kinu-level abort below.
+   *  The framework holds the stream behind its own registry, so tool controllers
+   *  alone cannot stop a model that is still writing. Absent on surfaces with
+   *  no framework turn to abort. */
+  readonly cancelChats?: () => void | Promise<void>;
   /** The foreground tool calls currently holding an abort handle. */
   readonly activeToolControllers: Set<AbortController>;
   readonly broadcast: (payload: string) => void;
-  /** Drop the in-flight turn's pending user steers and return their texts —
-   *  the backend's UserSteerDrain.interrupt(). Absent on surfaces with no
-   *  steer drain. */
-  readonly interruptSteers?: () => Promise<string[]>;
   /** Cancel the device commands owned by this durable turn. Absent on hosts
    *  with no device authority; the caller receives the daemon's actual outcome
    *  for every command it did ask to stop. */
@@ -169,10 +165,11 @@ export interface CancelWorkDeps {
    *  broadcast so a client that reacts to it reads settled state. */
   readonly onCancelled?: (outcome: Omit<CancelWorkOutcome, 'ok'>) => void;
 }
-
 /**
- * Stop the DISPLAYED turn: abort the foreground tool calls it is holding and
- * drop its pending steers. Detached background jobs are deliberately untouched.
+ * Stop the DISPLAYED turn: abort the in-flight LLM request, then the foreground
+ * tool calls it is holding. Queued steers stay queued — the turn settle path
+ * re-queues what the model never saw as the next user-origin turn, so nothing
+ * returns to the composer. Detached background jobs are deliberately untouched.
  *
  * This used to open with `jobRunner.cancelRunning()`, so pressing Stop on one
  * conversation killed every job that had detached from any earlier turn — a
@@ -186,6 +183,7 @@ export interface CancelWorkDeps {
  * That is the whole property: a caller who names no job stops no job.
  */
 export async function cancelCurrentWork(deps: CancelWorkDeps): Promise<CancelWorkOutcome> {
+  await deps.cancelChats?.();
   let abortedTools = 0;
   for (const controller of deps.activeToolControllers) {
     if (!controller.signal.aborted) {
@@ -194,18 +192,17 @@ export async function cancelCurrentWork(deps: CancelWorkDeps): Promise<CancelWor
     }
     deps.activeToolControllers.delete(controller);
   }
-  const returnedSteers = await deps.interruptSteers?.() ?? [];
   // ONE awaited sweep before ONE frame. A foreground Stop that said "done"
   // while its turn-owned laptop commands were still running was a split-brain
   // result; device unavailability is an honest empty/failed outcome, never a
   // reason to throw Stop or to sweep commands outside this turn.
   const deviceCommands = await deps.stopDeviceCommands?.() ?? [];
-  deps.onCancelled?.({ abortedTools, deviceCommands, returnedSteers });
+  deps.onCancelled?.({ abortedTools, deviceCommands });
   deps.broadcast(JSON.stringify({
     type: 'work_cancelled',
     abortedTools,
     deviceCommands,
     timestamp: Date.now(),
   }));
-  return { ok: true, abortedTools, deviceCommands, returnedSteers };
+  return { ok: true, abortedTools, deviceCommands };
 }

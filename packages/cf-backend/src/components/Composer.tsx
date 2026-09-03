@@ -336,7 +336,7 @@ export function Composer({
               <button type="button" onClick={onStop}
                 className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2"
                 aria-label="Stop this turn"
-                title="Stop this turn. Queued text returns to the composer.">
+                title="Stop this turn. Queued messages run next.">
                 <StopIcon size={14} weight="fill" />
                 <span className="hidden @[30rem]:inline p-meta">Stop</span>
               </button>

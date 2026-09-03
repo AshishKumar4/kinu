@@ -263,32 +263,54 @@ describe('a message typed while the agent is working', () => {
 });
 
 describe('stopping a turn with a steer still pending', () => {
-  test('hands the text back to the caller instead of eating it', async () => {
+  test('keeps the text queued instead of handing it back', async () => {
     const h = steerHarness();
     h.startTurn();
     await h.agent.steerTurn('change of plans');
 
     const outcome = await h.agent.cancelCurrentWork();
 
-    // Stop means stop — it does not mean "stop and then do what I typed". But
-    // the chat already rendered it as sent, so losing it silently is the one
-    // outcome that cannot be explained to the person who typed it.
-    expect(outcome.returnedSteers).toEqual(['change of plans']);
-    // Every other open tab learns the same thing from the broadcast.
-    expect(steerFrames(h.frames).map((f) => f.status)).toEqual(['queued', 'returned']);
-    // And it was DROPPED: a later step must not splice a steer the user took back.
-    expect(await stepMessages(h.agent, 1, HISTORY)).toEqual(HISTORY);
-    expect(h.appended).toEqual([]);
+    // queued words stay queued: nothing returns to the composer, no `returned`
+    // frame goes out, and a later step still splices the steer (it was kept,
+    // not dropped).
+    expect(outcome).not.toHaveProperty('returnedSteers');
+    expect(steerFrames(h.frames).map((f) => f.status)).toEqual(['queued']);
+    expect(await stepMessages(h.agent, 1, HISTORY)).toEqual([
+      ...HISTORY,
+      { role: 'user', content: 'change of plans' },
+    ]);
   });
 
-  test('leaves a steer the model already read alone — an interrupt cannot un-send it', async () => {
+  test('leaves a steer the model already read alone', async () => {
     const h = steerHarness();
     h.startTurn();
     await h.agent.steerTurn('also check staging');
     await stepMessages(h.agent, 0, HISTORY);
 
-    expect((await h.agent.cancelCurrentWork()).returnedSteers).toEqual([]);
+    expect(await h.agent.cancelCurrentWork()).not.toHaveProperty('returnedSteers');
     expect(h.appended).toHaveLength(1);
+  });
+
+  test('two queued steers become the next turn text in order once the abort settles', async () => {
+    const h = steerHarness();
+    h.startTurn();
+    await h.agent.steerTurn('first');
+    await h.agent.steerTurn('second');
+    await h.agent.cancelCurrentWork();
+
+    await h.agent.onChatResponse({
+      status: 'aborted',
+      requestId: 'req-stop',
+      continuation: false,
+      message: { id: 'assistant-stop', role: 'assistant', parts: [{ type: 'text', text: 'partial' }] },
+    });
+    await h.agent.harnessJoinDetachedFibers();
+
+    expect(h.enqueued).toHaveLength(1);
+    expect(h.enqueued[0]).toMatchObject({
+      text: 'first\n\nsecond',
+      metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
+    });
   });
 });
 

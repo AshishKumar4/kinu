@@ -151,12 +151,9 @@ describe('UserSteerDrain — draining into the step', () => {
       returned = true;
       return messages;
     });
-    let barrierSettled = false;
-    const barrier = d.waitForLanding().then(() => { barrierSettled = true; });
     await Promise.resolve();
 
     expect(returned).toBe(false);
-    expect(barrierSettled).toBe(false);
     expect(d.pendingSteers()).toEqual([{ id: 's1', text: 'wait for storage' }]);
     expect(d.recordedMessages()).toEqual([]);
 
@@ -165,8 +162,6 @@ describe('UserSteerDrain — draining into the step', () => {
       ...HISTORY,
       { role: 'user', content: 'wait for storage' },
     ]);
-    await barrier;
-    expect(barrierSettled).toBe(true);
     expect(d.pendingSteers()).toEqual([]);
   });
 
@@ -231,27 +226,13 @@ describe('UserSteerDrain — the three load-bearing semantics', () => {
     d.beginTurn();
     d.accept({ id: 's1', text: 'change of plans' });
 
-    // Returned, not swallowed: the surface already rendered it as sent, so it
-    // goes back to the composer.
+    // Returned, not swallowed: the CLI surface already rendered it as sent, so
+    // it goes back rather than vanishing.
     expect(d.interrupt()).toEqual([{ id: 's1', text: 'change of plans' }]);
     expect(d.pendingCount).toBe(0);
     // And it must NOT then reappear in the next step or as a leftover turn.
     expect(await d.prepareStep(step(1, HISTORY))).toBeUndefined();
     expect(d.takeLeftover()).toEqual([]);
-  });
-
-  test('a failed durable interrupt delete can restore its exact prefix after earlier landings', async () => {
-    const { drain: d } = drain();
-    d.beginTurn();
-    d.accept({ id: 'landed', text: 'already seen' });
-    await d.prepareStep(step(0, HISTORY));
-    d.accept({ id: 'queued', text: 'return only this' });
-
-    const interrupted = d.interrupt();
-    d.restoreInterrupted(interrupted);
-
-    expect(d.pendingSteers()).toEqual([{ id: 'queued', text: 'return only this' }]);
-    expect(d.drainedTexts()).toEqual(['already seen']);
   });
 
   test('an interrupt leaves a steer the model already read in the durable record', async () => {

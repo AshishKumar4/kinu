@@ -10,8 +10,8 @@
  *     the needs-you queue and the journal are one ledger read twice
  *   - renderChangelogText (the one CLI/TUI text form)
  *   - reverts go through the real machinery: scaffold rollback round-trip
- *     (pending discard AND promoted-version rollback), craft retire,
- *     fact forget; informational entries refuse to revert
+ *     (pending discard AND promoted-version rollback), fact forget;
+ *     informational entries (including crafted tools) refuse to revert
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -97,7 +97,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(scaffold!.evidence).toContain(`targets ${describePathology('no_action/prose')}`);
   });
 
-  test('crafted tool entry shows the EMA score and is revertable', () => {
+  test('crafted tool entry shows the EMA score and is informational (no revert)', () => {
     const { rt } = setup();
     rt.craftStore.create({
       name: 'fetch_and_summarize', description: 'Fetch a URL and summarize it',
@@ -111,7 +111,9 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(entry.evidence).toContain('Crafted tool fetch_and_summarize');
     expect(entry.evidence).toContain('Fetch a URL and summarize it');
     expect(entry.evidence).toContain('EMA 0.82 over 5 uses');
-    expect(entry.revert).toEqual({ type: 'craft_retire', target: 'fetch_and_summarize' });
+    // A crafted tool is not something the owner approves: no Keep/Revert
+    // action rides along, so the Journal renders it as information only.
+    expect(entry.revert).toBeUndefined();
   });
 
   test('fact aggregate humanizes rows while retaining raw evidence and reverts', () => {
@@ -446,22 +448,6 @@ describe('renderChangelogText — the one text form', () => {
 });
 
 describe('reverts — real paths only', () => {
-  test('craft retire removes the tool and its score; double-revert errors', async () => {
-    const { rt, facts } = setup();
-    rt.craftStore.create({ name: 'tmp_tool', description: 'temp', code: 'async () => 1', params: null, scope: 'local' });
-    void rt.storage.sql`UPDATE crafted_tools SET score = 0.5, uses = 2, last_used_at = ${Date.now()}
-        WHERE name = 'tmp_tool'`;
-
-    const result = await executeChangelogRevert({ rt, facts }, { type: 'craft_retire', target: 'tmp_tool' });
-    expect(result.ok).toBe(true);
-    expect(rt.craftStore.get('tmp_tool')).toBeFalsy();
-    expect(rt.storage.sql`SELECT name FROM crafted_tools WHERE name = 'tmp_tool'`).toHaveLength(0);
-
-    const again = await executeChangelogRevert({ rt, facts }, { type: 'craft_retire', target: 'tmp_tool' });
-    expect(again.ok).toBe(false);
-    expect(again.error).toContain('already retired');
-  });
-
   test('fact forget removes the fact; double-revert errors', async () => {
     const { rt, facts } = setup();
     facts.upsert('volatile', 42);
