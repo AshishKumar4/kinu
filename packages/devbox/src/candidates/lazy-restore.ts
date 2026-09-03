@@ -189,6 +189,17 @@ export class LazyRestore {
     this.#residency.forget(path);
   }
 
+  /** Does this path still page in through this restore — a live placeholder
+   *  or an already-registered resident file — or has the container's own
+   *  write path taken it over (or has nothing ever named it)? A caller that
+   *  wants to mark a path resident checks this first: re-registering one the
+   *  residency ALREADY tracks would overwrite its real geometry with
+   *  whatever the caller's local bytes currently look like, which for an
+   *  unhydrated placeholder is zeros. */
+  holds(path: string): boolean {
+    return this.#residency.holds(path);
+  }
+
   /** One file of the tree is clean and whole again: what a publish leaves. */
   registerResident(path: string, geometry: FileGeometry): void {
     this.#residency.registerResident(path, geometry);

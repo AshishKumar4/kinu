@@ -85,8 +85,8 @@ function expectCommitted(outcome: CheckpointOutcome, what: string): void {
  * generation nobody committed. It throws rather than matching so the message
  * carries the tree that was actually served — the diagnosis is the difference.
  */
-function expectOneGeneration(arm: ConformanceArm, what: string): void {
-  const served = canonical(tree(arm));
+async function expectOneGeneration(arm: ConformanceArm, what: string): Promise<void> {
+  const served = canonical(await tree(arm));
   if (served === canonical(OLD) || served === canonical(MERGED)) return;
   throw new Error(
     `${arm.name} served neither generation after ${what}: ${served}`
@@ -106,8 +106,10 @@ function canonical(rows: Record<string, string | undefined>): string {
 /** The tree a caller sees, as comparable data: path to file text, `undefined`
  *  for a path the workspace lists but cannot read. Inferred, not annotated —
  *  the entries ARE the contract. */
-function tree(arm: ConformanceArm) {
-  return Object.fromEntries(arm.workspace.paths().map((path) => [path, arm.workspace.read(path)]));
+async function tree(arm: ConformanceArm) {
+  const paths = await arm.workspace.paths();
+  const rows = await Promise.all(paths.map(async (path) => [path, await arm.workspace.read(path)] as const));
+  return Object.fromEntries(rows);
 }
 
 /** Attach a box, and answer what it said. */
@@ -162,7 +164,7 @@ async function commit(
   arm: ConformanceArm,
   content: Record<string, string>,
 ): Promise<CheckpointOutcome> {
-  for (const [path, text] of Object.entries(content)) arm.workspace.write(path, text);
+  for (const [path, text] of Object.entries(content)) await arm.workspace.write(path, text);
   return await arm.storage().checkpoint('quiesce');
 }
 
@@ -206,7 +208,7 @@ for (const [name, open] of armEntries) {
       // NEVER `empty`: a box that has committed and reports an empty attach is
       // the silent-blank-workspace defect wearing a success.
       expect(woken.kind).toBe('attached');
-      expect(tree(arm)).toEqual(OLD);
+      expect(await tree(arm)).toEqual(OLD);
     });
 
     test('a quiesce with pending changes publishes exactly once and returns', async () => {
@@ -219,7 +221,7 @@ for (const [name, open] of armEntries) {
       // publication rather than a suite that hangs and gets its timeout raised.
       const arm = open();
       await attach(arm);
-      for (const [path, text] of Object.entries(OLD)) arm.workspace.write(path, text);
+      for (const [path, text] of Object.entries(OLD)) await arm.workspace.write(path, text);
       arm.deaths.limit(arm.publishSeam, 1);
 
       expectCommitted(await arm.storage().checkpoint('quiesce'), 'a quiesce with pending changes');
@@ -229,7 +231,7 @@ for (const [name, open] of armEntries) {
       // pass by publishing nothing.
       const woken = await wake(arm);
       expect(woken.kind).toBe('attached');
-      expect(tree(arm)).toEqual(OLD);
+      expect(await tree(arm)).toEqual(OLD);
     });
 
     test('generation after generation, each replacement carries every commit before it', async () => {
@@ -248,7 +250,7 @@ for (const [name, open] of armEntries) {
         Object.assign(seen, generation);
         const woken = await wake(arm);
         expect(woken.kind).toBe('attached');
-        expect(tree(arm)).toEqual(seen);
+        expect(await tree(arm)).toEqual(seen);
       }
     });
 
@@ -286,7 +288,7 @@ for (const [name, open] of armEntries) {
         // Named rather than matched, so a failure reports the tree that was
         // actually served: a blank tree, a blended tree and a lost generation
         // are three different defects and a bare `toContain` names none of them.
-        expectOneGeneration(arm, `a death at ${seam}`);
+        await expectOneGeneration(arm, `a death at ${seam}`);
       });
     }
 
@@ -332,7 +334,7 @@ for (const [name, open] of armEntries) {
         expect(after.head).toBe(null);
         const woken = await wake(arm);
         expect(woken.detail).toContain('0 objects');
-        expect(tree(arm)).toEqual({});
+        expect(await tree(arm)).toEqual({});
         return;
       }
       // The head is still named, and it is the same head: the control plane
@@ -362,7 +364,7 @@ for (const [name, open] of armEntries) {
       // pending state where its OWN read path still has to verify it; a quiesce
       // folds that away into a materialized tree the mount serves unverified.
       // Corrupting what nothing verifies would test nothing.
-      for (const [path, text] of Object.entries(OLD)) arm.workspace.write(path, text);
+      for (const [path, text] of Object.entries(OLD)) await arm.workspace.write(path, text);
       expectCommitted(await arm.storage().checkpoint('tick'), 'the tick before the corruption');
 
       const declared = await arm.declaredPayload();
@@ -381,7 +383,7 @@ for (const [name, open] of armEntries) {
         const woken = await wake(arm);
         const stored = arm.durable.get(key);
         expect(stored).not.toBe(null);
-        expect(Object.values(tree(arm))).toContain(new TextDecoder().decode(stored!));
+        expect(Object.values(await tree(arm))).toContain(new TextDecoder().decode(stored!));
         expect(woken.detail).toContain(
           String(arm.durable.inventory(arm.payloadPrefixes()[0]!).bytes),
         );
@@ -392,7 +394,13 @@ for (const [name, open] of armEntries) {
       arm.durable.corrupt(target.key, 'flip');
 
       arm.replaceContainer();
-      const refusal = await thrownBy(async () => { await arm.storage().attach(); });
+      // NAMED, WHEREVER IT IS CAUGHT. An eager arm refuses inside attach,
+      // because attach is the read. A lazy arm's attach touches only the
+      // root and the ledger — that is the whole of this lane — so a
+      // corruption anywhere else surfaces at the first read that needs
+      // those bytes, which a full-tree read forces without picking a path.
+      let refusal = await thrownBy(async () => { await arm.storage().attach(); });
+      if (refusal === null) refusal = await thrownBy(async () => { await tree(arm); });
       expect(refusal).toBeInstanceOf(Error);
       // NAMED. A refusal that cannot say which object is unsound is a refusal
       // nobody can act on.
@@ -408,7 +416,7 @@ for (const [name, open] of armEntries) {
       expectCommitted(await commit(arm, NEW), 'the commit after discard');
       const woken = await wake(arm);
       expect(woken.kind).toBe('attached');
-      expect(tree(arm)).toEqual(NEW);
+      expect(await tree(arm)).toEqual(NEW);
     });
 
     // ── 5. a commit racing a replacement ───────────────────────────────────
@@ -433,7 +441,7 @@ for (const [name, open] of armEntries) {
       expect((await arm.committedHeads()).length).toBe(1);
       const woken = await wake(arm);
       expect(woken.kind).toBe('attached');
-      expectOneGeneration(arm, 'a commit that raced a replacement');
+      await expectOneGeneration(arm, 'a commit that raced a replacement');
     });
 
     // ── 6. teardown after the container stopped ────────────────────────────
@@ -531,14 +539,15 @@ function refusedProperties(arm: ConformanceArm): Set<TreeProperty> {
 
 /** The served tree must be the planted tree, property by property, then byte
  *  for byte through the product's own canonical manifest encoder. */
-function expectTreeExact(arm: ConformanceArm, expected: readonly NodeEntry[], what: string): void {
+async function expectTreeExact(arm: ConformanceArm, expected: readonly NodeEntry[], what: string): Promise<void> {
   const refused = refusedProperties(arm);
-  const mismatches = compareTrees(expected, arm.workspace.snapshot(), refused);
+  const served = await arm.workspace.snapshot();
+  const mismatches = compareTrees(expected, served, refused);
   if (mismatches.length > 0) {
     throw new Error(`${arm.name} ${what}: ${mismatches.length} mismatches: ${describeMismatches(mismatches).slice(0, 600)}`);
   }
   const want = canonicalTreeBytes(expected, refused);
-  const have = canonicalTreeBytes(arm.workspace.snapshot(), refused);
+  const have = canonicalTreeBytes(served, refused);
   if (Buffer.compare(want, have) !== 0) throw new Error(`${arm.name} ${what}: canonical manifest bytes differ`);
 }
 
@@ -554,7 +563,7 @@ async function settledCheckpoint(run: Promise<CheckpointOutcome>): Promise<Check
 }
 
 async function commitTree(arm: ConformanceArm, entries: readonly NodeEntry[], what: string): Promise<void> {
-  arm.workspace.plant(entries);
+  await arm.workspace.plant(entries);
   expectCommitted(await arm.storage().checkpoint('quiesce'), what);
 }
 
@@ -620,7 +629,8 @@ const CELLS: readonly Cell[] = [
             if (woken.kind === 'empty') problems.push(`${point}: the attach after the fault answered empty`);
           });
           if (again !== null) problems.push(`${point}: the attach after the fault refused: ${describeThrown({ cause: again })}`);
-          if (canonical(tree(fresh)) !== canonical(MERGED)) problems.push(`${point}: the attach after the fault served ${canonical(tree(fresh))}`);
+          const wokenTree = canonical(await tree(fresh));
+          if (wokenTree !== canonical(MERGED)) problems.push(`${point}: the attach after the fault served ${wokenTree}`);
           continue;
         }
         fresh.faultAt(point);
@@ -636,7 +646,7 @@ const CELLS: readonly Cell[] = [
         if (fresh.awaitVisits(point) === 0) problems.push(`${point}: declared used, never visited`);
         const woken = await wake(fresh);
         if (woken.kind !== 'attached') problems.push(`${point}: wake answered ${woken.kind}`);
-        const served = canonical(tree(fresh));
+        const served = canonical(await tree(fresh));
         if (group === 'pre-cas' && served !== canonical(OLD) && served !== canonical(MERGED)) problems.push(`${point}: wake served a blend or a blank`);
         if (group === 'post-cas' && served !== canonical(MERGED)) problems.push(`${point}: the head was durable and the wake served ${served}`);
         const redriven = await fresh.storage().checkpoint('quiesce');
@@ -671,7 +681,7 @@ const CELLS: readonly Cell[] = [
         arm.resetIsolate();
         const woken = await arm.storage().attach();
         if (woken.kind === 'empty') problems.push(`${seam}: the second isolate answered empty`);
-        const mismatches = compareTrees(fixture, arm.workspace.snapshot(), refusedProperties(arm));
+        const mismatches = compareTrees(fixture, await arm.workspace.snapshot(), refusedProperties(arm));
         if (mismatches.length > 0) problems.push(`${seam}: ${describeMismatches(mismatches).slice(0, 200)}`);
         const mounts = arm.disk().mountCalls;
         if (mounts !== baselineMounts) problems.push(`${seam}: ${mounts} mounts across both isolates, an uninterrupted wake makes ${baselineMounts}`);
@@ -690,7 +700,7 @@ const CELLS: readonly Cell[] = [
       await attach(arm);
       expectCommitted(await commit(arm, OLD), 'the commit before the race');
       const old = { storage: arm.storage(), workspace: arm.workspace };
-      for (const [path, text] of Object.entries(NEW)) old.workspace.write(path, text);
+      for (const [path, text] of Object.entries(NEW)) await old.workspace.write(path, text);
       const hold = arm.holdFinalize();
       const late = old.storage.checkpoint('quiesce');
       await hold.entered;
@@ -701,7 +711,7 @@ const CELLS: readonly Cell[] = [
       hold.release();
       const outcome = await settledCheckpoint(late);
       const heads = await arm.committedHeads();
-      const served = canonical(tree(arm));
+      const served = canonical(await tree(arm));
       const problems: string[] = [];
       if (outcome.kind === 'committed') problems.push('the late finalize reported committed');
       if (heads.length !== 1) problems.push(`${heads.length} heads`);
@@ -715,7 +725,8 @@ const CELLS: readonly Cell[] = [
       if (!served.includes(JSON.stringify(Object.entries(THIRD)[0]![1]))) problems.push(`the new boot's commit is absent from the tree it served: ${served}`);
       const afterWake = await wake(arm);
       if (afterWake.kind !== 'attached') problems.push(`wake answered ${afterWake.kind}`);
-      if (canonical(tree(arm)) !== served) problems.push(`the wake served ${canonical(tree(arm))}, the new boot served ${served}`);
+      const wokenTree = canonical(await tree(arm));
+      if (wokenTree !== served) problems.push(`the wake served ${wokenTree}, the new boot served ${served}`);
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
@@ -728,7 +739,7 @@ const CELLS: readonly Cell[] = [
       await commitTree(arm, fixture, 'the fidelity commit');
       const woken = await wake(arm);
       expect(woken.kind).toBe('attached');
-      expectTreeExact(arm, fixture, 'after the wake');
+      await expectTreeExact(arm, fixture, 'after the wake');
     },
   },
   {
@@ -741,7 +752,7 @@ const CELLS: readonly Cell[] = [
         await attach(fresh);
         await commitTree(fresh, generatedTree({ seed: 3, files, bytesPerFile: 4096 }), `the ${files}-file base`);
         const k = new Seeded(files).fill(new Uint8Array(4096));
-        fresh.workspace.plant([...textTree({}), { path: 'touched.bin', kind: 'file', mode: 0o644, ino: 999_999, content: { kind: 'dense', bytes: k }, metadata: { uid: 1, gid: 1, atimeNs: '1', mtimeNs: '1', ctimeNs: '1', xattrs: {} } }]);
+        await fresh.workspace.plant([...textTree({}), { path: 'touched.bin', kind: 'file', mode: 0o644, ino: 999_999, content: { kind: 'dense', bytes: k }, metadata: { uid: 1, gid: 1, atimeNs: '1', mtimeNs: '1', ctimeNs: '1', xattrs: {} } }]);
         const putsBefore = fresh.durable.ops.filter((op) => op.op === 'put').length;
         expectCommitted(await fresh.storage().checkpoint('quiesce'), 'the k commit');
         const puts = fresh.durable.ops.filter((op) => op.op === 'put').length - putsBefore;
@@ -783,8 +794,15 @@ const CELLS: readonly Cell[] = [
         await commitTree(fresh, fixture, `the ${files}-file commit`);
         const woken = await wake(fresh);
         if (woken.kind !== 'attached') throw new Error(`${files} files: wake answered ${woken.kind}`);
-        expectTreeExact(fresh, fixture, `${files} files after the wake`);
-        return fresh.work().restore;
+        await expectTreeExact(fresh, fixture, `${files} files after the wake`);
+        const restore = fresh.work().restore;
+        // EVICT, RE-READ, BYTES IDENTICAL. A page an eviction sweep can reach
+        // came out of an immutable object and is held to the digest the head
+        // declares for it, so dropping it can risk nothing but a re-read —
+        // and this is that re-read, at both tree sizes.
+        fresh.evictCleanBytes?.();
+        await expectTreeExact(fresh, fixture, `${files} files after eviction and re-read`);
+        return restore;
       };
       const small = await restoreOf(1_000);
       const large = await restoreOf(100_000);
@@ -808,11 +826,15 @@ const CELLS: readonly Cell[] = [
       if (first.publish.bytesPut > 2 * data) problems.push(`commit put ${first.publish.bytesPut} bytes for ${data} data bytes`);
       const woken = await wake(arm);
       if (woken.kind !== 'attached') problems.push(`wake answered ${woken.kind}`);
-      expectTreeExact(arm, fixture, 'after the wake');
+      await expectTreeExact(arm, fixture, 'after the wake');
       const restore = arm.work().restore;
       if (restore.totalRemoteOps > 3) problems.push(`wake made ${restore.totalRemoteOps} remote ops; O(1) is 3`);
+      // EVICT, RE-READ, BYTES IDENTICAL — on the 1 GiB sparse file and the
+      // 64 MiB dense one, the pair this cell exists to bound.
+      arm.evictCleanBytes?.();
+      await expectTreeExact(arm, fixture, 'after eviction and re-read');
       const patch = new Seeded(21).fill(new Uint8Array(64 * 1024));
-      arm.workspace.pwrite('vol/dense.bin', 8 * 1024 * 1024, patch);
+      await arm.workspace.pwrite('vol/dense.bin', 8 * 1024 * 1024, patch);
       expectCommitted(await arm.storage().checkpoint('quiesce'), 'the 64 KiB in-place commit');
       const second = arm.work();
       const c = 16 * 1024;
@@ -833,15 +855,15 @@ const CELLS: readonly Cell[] = [
       const pages = 64;
       const dirty = new Set<number>();
       while (dirty.size < pages) dirty.add(seed.below(db.byteLength / 4096));
-      for (const page of dirty) arm.workspace.pwrite('app.db', page * 4096, seed.fill(new Uint8Array(4096)));
+      for (const page of dirty) await arm.workspace.pwrite('app.db', page * 4096, seed.fill(new Uint8Array(4096)));
       expectCommitted(await arm.storage().checkpoint('quiesce'), 'the page-write commit');
       const c = 16 * 1024;
       const bound = 4 * pages * c;
       const put = arm.work().publish.bytesPut;
-      const expected = arm.workspace.snapshot();
+      const expected = await arm.workspace.snapshot();
       const woken = await wake(arm);
       expect(woken.kind).toBe('attached');
-      expectTreeExact(arm, expected, 'after the wake');
+      await expectTreeExact(arm, expected, 'after the wake');
       if (put > bound) throw new Error(`bytesPut ${put} > 4 × ${pages} dirty pages × ${c} = ${bound}`);
     },
   },
@@ -854,8 +876,8 @@ const CELLS: readonly Cell[] = [
       expectCommitted(await commit(arm, OLD), 'the base commit');
       const woken = await second.storage().attach();
       expect(woken.kind).toBe('attached');
-      arm.workspace.write('a.txt', 'written by boot A');
-      second.workspace.write('b.txt', 'written by boot B');
+      await arm.workspace.write('a.txt', 'written by boot A');
+      await second.workspace.write('b.txt', 'written by boot B');
       const hold = arm.holdFinalize();
       const raceA = arm.storage().checkpoint('quiesce');
       await hold.entered;
@@ -870,10 +892,10 @@ const CELLS: readonly Cell[] = [
       const winnerIsB = outcomeB.kind === 'committed';
       const loser: ArmBoot = winnerIsB ? arm : second;
       if (loser.failures.length === 0) problems.push('the loser recorded no failure');
-      const served = tree(arm);
+      const served = await tree(arm);
       arm.replaceContainer();
       await arm.storage().attach();
-      const after = tree(arm);
+      const after = await tree(arm);
       if (after['a.txt'] !== undefined && after['b.txt'] !== undefined) problems.push(`both dirty sets were merged: ${canonical(after)}`);
       if (winnerIsB ? after['b.txt'] === undefined : after['a.txt'] === undefined) problems.push(`the winner's file is absent: ${canonical(after)} (pre-wake ${canonical(served)})`);
       if (problems.length > 0) throw new Error(problems.join('; '));
@@ -892,7 +914,7 @@ const CELLS: readonly Cell[] = [
       for (let index = 0; index < 64 && refusal === null; index += 1) {
         const text = `fill ${index} `.repeat(200);
         try {
-          arm.workspace.write(`fill-${index}.txt`, text);
+          await arm.workspace.write(`fill-${index}.txt`, text);
           acknowledged.set(`fill-${index}.txt`, text);
         } catch (error) {
           refusal = error instanceof Error ? error : new Error(String(error));
@@ -901,10 +923,10 @@ const CELLS: readonly Cell[] = [
       const problems: string[] = [];
       if (refusal === null) problems.push('the quota never refused a write');
       else if (!(refusal instanceof DiskFull) || !refusal.message.includes('ENOSPC')) problems.push(`the refusal was not ENOSPC: ${refusal.message}`);
-      if (canonical(tree(arm)) !== canonical(Object.fromEntries(acknowledged))) problems.push('the tree differs from the acknowledged writes');
+      if (canonical(await tree(arm)) !== canonical(Object.fromEntries(acknowledged))) problems.push('the tree differs from the acknowledged writes');
       const journal = arm.journalFacts?.();
       if (journal !== undefined) {
-        const paths = new Set(arm.workspace.paths());
+        const paths = new Set(await arm.workspace.paths());
         for (const record of journal.records) {
           const path = record.split(' ')[1] ?? '';
           if (!paths.has(path)) problems.push(`WAL record without an effect: ${record}`);
@@ -912,13 +934,13 @@ const CELLS: readonly Cell[] = [
         if (journal.failedWrites.length === 0) problems.push('the refused write left no cancelled record');
       }
       const outcome = await arm.storage().checkpoint('quiesce');
-      if (outcome.kind === 'committed' && canonical(tree(arm)) !== canonical(Object.fromEntries(acknowledged))) problems.push('a commit under quota changed the tree');
+      if (outcome.kind === 'committed' && canonical(await tree(arm)) !== canonical(Object.fromEntries(acknowledged))) problems.push('a commit under quota changed the tree');
       if (outcome.kind === 'failed') problems.push(`the checkpoint under quota failed: ${outcome.reason}`);
       const freed = arm.evictCleanBytes?.() ?? 0;
       if (freed === 0) problems.push('nothing evicted clean bytes to make room');
       const woken = await wake(arm);
       if (woken.kind !== 'attached') problems.push(`wake answered ${woken.kind}`);
-      if (canonical(tree(arm)) !== canonical(Object.fromEntries(acknowledged))) problems.push(`the wake served ${canonical(tree(arm)).slice(0, 200)}`);
+      if (canonical(await tree(arm)) !== canonical(Object.fromEntries(acknowledged))) problems.push(`the wake served ${canonical(await tree(arm)).slice(0, 200)}`);
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
@@ -1022,7 +1044,7 @@ function blankWakeArm(): ConformanceArm {
         ...raw,
         attach: async () => {
           const outcome = await raw.attach();
-          for (const path of arm.workspace.paths()) arm.workspace.remove(path);
+          for (const path of await arm.workspace.paths()) await arm.workspace.remove(path);
           return outcome;
         },
       };
@@ -1133,8 +1155,12 @@ describe('red direction — every new cell fails against a deliberately broken a
   });
 
   test('6.13 fails when the wake serves a blank tree', async () => {
+    // runCellOn, NOT runCell: 6.13's restoreOf opens a FRESH arm per trial
+    // through CONFORMANCE_ARMS[arm.name](), never the arm this test hands
+    // it, so only overriding the factory (what runCellOn does) puts the
+    // blank-wake wrapper in the loop the cell actually drives.
     const cell = CELLS.find((row) => row.id === '6.13')!;
-    const outcome = await runCell(cell, blankWakeArm());
+    const outcome = await runCellOn(cell, blankWakeArm());
     expect(outcome.kind).toBe('fail');
   }, 120_000);
 
@@ -1176,14 +1202,37 @@ describe('red direction — every new cell fails against a deliberately broken a
     await attach(arm);
     expectCommitted(await commit(arm, OLD), 'the commit');
     const facts = arm.journalFacts!();
-    arm.workspace.write('recorded.txt', 'x');
+    await arm.workspace.write('recorded.txt', 'x');
     expect(facts.records.some((record) => record.includes('recorded.txt'))).toBe(true);
     // An effect with no record: the tree gains a file the WAL never saw.
-    arm.workspace.plant(textTree({ 'unrecorded.txt': 'y' }));
-    const paths = new Set(arm.workspace.paths());
+    await arm.workspace.plant(textTree({ 'unrecorded.txt': 'y' }));
+    const paths = new Set(await arm.workspace.paths());
     const recorded = new Set(facts.records.map((record) => record.split(' ')[1]));
     expect([...paths].filter((path) => path.endsWith('.txt') && !recorded.has(path) && !(path in OLD))).toEqual(['unrecorded.txt']);
   });
+
+  test('6.13 fails when eviction cannot be trusted for the re-read', async () => {
+    // THE EVICTION DIRECTION. Dropping a clean page is safe only because the
+    // re-read that follows is a digest-verified fetch of the SAME bytes; a
+    // broken transport that returns something else after the drop is the one
+    // failure mode the whole bet depends on never happening. This corrupts
+    // every payload object right after the sweep runs, so the drop already
+    // happened when the bytes underneath it stop matching what was dropped.
+    const cell = CELLS.find((row) => row.id === '6.13')!;
+    const arm = CONFORMANCE_ARMS['merkle-pack']();
+    const broken: ConformanceArm = Object.create(arm);
+    Object.defineProperty(broken, 'evictCleanBytes', {
+      value: () => {
+        const freed = arm.evictCleanBytes?.() ?? 0;
+        for (const prefix of arm.payloadPrefixes()) {
+          for (const key of arm.durable.list(prefix)) arm.durable.corrupt(key, 'flip');
+        }
+        return freed;
+      },
+    });
+    const outcome = await runCellOn(cell, broken);
+    expect(outcome.kind).toBe('fail');
+  }, 120_000);
 });
 
 afterAll(() => {

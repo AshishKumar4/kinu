@@ -17,7 +17,7 @@
  */
 
 import type { LazyRestore, LazyRestorePorts } from '../../src/candidates/lazy-restore';
-import type { GcWork } from '../../src/durability/contracts';
+import type { GcWork, HydrateWork } from '../../src/durability/contracts';
 import type { FileGeometry } from '../../src/candidates/residency';
 import type { NodeEntry } from '../../src/capture/model';
 import { contentSize } from '../../src/capture/model';
@@ -129,6 +129,17 @@ export class LazyContainer {
    */
   async readAll(): Promise<void> {
     if (this.#restore === null) return;
+    await this.listAll();
+    for (const path of this.tree.filePaths()) await this.#restore.hydrateWhole(path);
+  }
+
+  /**
+   * Every directory, listed — no file's bytes. What `paths()` owes: the
+   * names, not the content, so a caller that reads only some of them pays
+   * only for those.
+   */
+  async listAll(): Promise<void> {
+    if (this.#restore === null) return;
     await this.enter();
     for (;;) {
       const pending = this.tree.paths().filter((path) => {
@@ -138,7 +149,6 @@ export class LazyContainer {
       if (pending.length === 0) break;
       for (const dir of pending) await this.#list(dir);
     }
-    for (const path of this.tree.filePaths()) await this.#restore.hydrateWhole(path);
   }
 
   /**
@@ -159,9 +169,17 @@ export class LazyContainer {
   }
 
   /**
-   * Every file in the tree is a cache of the head again: what a publish
-   * leaves behind. Until this is said, nothing the container wrote is
-   * evictable — and after it, all of it is.
+   * Every file THIS BOOT PUT THERE is a cache of the head again: what a
+   * publish leaves behind. Every OTHER file is left exactly as it was.
+   *
+   * THE SKIP IS THE FIX. A path the residency still tracks is a live
+   * placeholder or an already-hydrated entry from an earlier wake — its own
+   * geometry is already correct, and re-deriving one from THIS tree's bytes
+   * would describe an unhydrated placeholder's zeros as its whole content,
+   * poisoning every future read of a file nothing in this boot ever touched.
+   * Only a path the residency does NOT track — because a write forgot it, or
+   * because no lazy restore existed yet when this tree was built — gets
+   * registered from what the tree actually holds.
    */
   notePublished(): void {
     const restore = this.#restore;
@@ -169,6 +187,7 @@ export class LazyContainer {
     this.#owned.clear();
     for (const entry of this.tree.snapshot()) {
       if (entry.kind !== 'file' || entry.content === undefined) continue;
+      if (restore.holds(entry.path)) continue;
       restore.registerResident(entry.path, geometryOfContent(entry.content));
     }
   }
@@ -177,6 +196,11 @@ export class LazyContainer {
   evict(idleMs?: number): GcWork {
     if (this.#restore === null) return { deletes: 0, markPages: 0, markBytes: 0 };
     return this.#restore.evict(idleMs === undefined ? {} : { idleMs });
+  }
+
+  /** What page-in has cost since this container's current restore opened. */
+  work(): HydrateWork {
+    return this.#restore?.work() ?? { rangeGets: 0, bytesFetched: 0, bytesRequested: 0 };
   }
 
   /** Plant one directory's children, hardlinks shared with the names already

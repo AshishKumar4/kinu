@@ -78,7 +78,7 @@ import { sha256Hex } from '../../src/cas/hash';
 import { byApplyOrder } from '../../src/cas/pending-state';
 import {
   build as buildBoundedLayers,
-  isHoleExtent,
+  headFilesystemOf,
   open as openBoundedLayers,
 } from '../../src/candidates/bounded-layers';
 import {
@@ -108,6 +108,8 @@ import { parseEnvelopeV2Bytes } from './sidecar-fixture';
 import { parsePackLedger } from '../../src/candidates/merkle-pack/ledger';
 import { contentSize, issueVerifiedJournalCapture, manifestSha256 } from '../../src/capture/model';
 import type { AuditedCapture, Capture, FileContent, NodeEntry, PosixMetadata } from '../../src/capture/model';
+import { LazyRestore } from '../../src/candidates/lazy-restore';
+import { LazyContainer } from './lazy-container';
 import { SidecarCore, md5Of } from '../../bench/sidecar/core';
 import type { CandidatePayloadStore } from '../../src/candidates/publication';
 import { ModeledDaemon } from './sidecar-fixture';
@@ -116,6 +118,8 @@ import type {
   CandidateControlStateV1,
   CandidateRunControlV1,
   DurabilityAwaitPoint,
+  GcWork,
+  HydrateWork,
   ImmutableObjectRef,
   ObjectReceipt,
   PayloadGrant,
@@ -848,24 +852,39 @@ const decoder = new TextDecoder();
 
 // ── the uniform arm ─────────────────────────────────────────────────────────
 
-/** What a caller does to the work directory, whatever serves it. */
+/**
+ * What a caller does to the work directory, whatever serves it.
+ *
+ * ASYNC BY CONTRACT, not by every arm's implementation: a strategy that keeps
+ * everything resident answers from memory, wrapped in an already-resolved
+ * promise, and a lazy one pages in on first touch. The signature carries the
+ * one true fact about a real workspace — that a read can fault — so a battery
+ * cell exercising a lazy arm and one exercising an eager arm write the same
+ * line of code.
+ */
 export interface Workspace {
-  write(path: string, text: string): void;
-  read(path: string): string | undefined;
-  remove(path: string): void;
-  /** File paths only, sorted: the listing a text fixture compares against. */
-  paths(): readonly string[];
+  write(path: string, text: string): Promise<void>;
+  read(path: string): Promise<string | undefined>;
+  remove(path: string): Promise<void>;
+  /** File paths only, sorted: the listing a text fixture compares against.
+   *  Lists structure only — every directory, no file's bytes — so pairing it
+   *  with `read` per path pays for exactly the files a caller names. */
+  paths(): Promise<readonly string[]>;
   /**
    * Plant a complete tree at full fidelity: directories, files, symlinks,
    * hardlinks (entries that share an `ino` share one inode), sparse content
    * as runs, and every metadata field. Existing paths are replaced.
    */
-  plant(entries: readonly NodeEntry[]): void;
+  plant(entries: readonly NodeEntry[]): Promise<void>;
   /** The tree the workspace serves, as capture entries, at the fidelity the
-   *  arm serves it. Inode ids share exactly where the served inodes share. */
-  snapshot(): readonly NodeEntry[];
-  /** `pwrite(2)`: overwrite bytes in place at an offset. The sqlite pattern. */
-  pwrite(path: string, offset: number, bytes: Uint8Array): void;
+   *  arm serves it, every byte resident. Inode ids share exactly where the
+   *  served inodes share. A lazy arm pages in everything to answer this. */
+  snapshot(): Promise<readonly NodeEntry[]>;
+  /** `pwrite(2)`: overwrite bytes in place at an offset. The sqlite pattern.
+   *  A lazy arm pages the target in first: the bytes outside the write are
+   *  still the head's, and a fence that staged a placeholder's zeros would
+   *  publish them as content. */
+  pwrite(path: string, offset: number, bytes: Uint8Array): Promise<void>;
 }
 
 /** One object a strategy's own record DECLARES a size and identity for. */
@@ -945,6 +964,13 @@ export interface WorkRows {
   readonly publish: PublishWork;
   /** The last attach's restore. */
   readonly restore: RestoreWork;
+  /** Every page-in since this arm opened. An arm with no lazy restore reports
+   *  the zero row: it never misses because it never holds a placeholder. */
+  readonly hydrate: HydrateWork;
+  /** Every eviction sweep since this arm opened, ledger deletes included
+   *  where an arm's GC and its page eviction share one row, as the shipped
+   *  sidecar's does. */
+  readonly gc: GcWork;
 }
 
 /**
@@ -1143,6 +1169,19 @@ const NO_PUBLISH: PublishWork = { objectsPut: 0, bytesPut: 0, casAttempts: 0 };
 const NO_RESTORE: RestoreWork = {
   serialRemoteOps: 0, totalRemoteOps: 0, metadataBytes: 0, payloadBytes: 0, cpuSteps: 0, mounts: 0, replayUnits: 0,
 };
+const NO_HYDRATE: HydrateWork = { rangeGets: 0, bytesFetched: 0, bytesRequested: 0 };
+const NO_GC: GcWork = { deletes: 0, markPages: 0, markBytes: 0 };
+
+/** One eviction sweep folded onto the row an arm has accumulated so far: an
+ *  arm's `GcWork` is the total across every sweep since it opened, not just
+ *  the last one, matching the shipped sidecar's own `#gc` accumulation. */
+function mergeGc(total: GcWork, swept: GcWork): GcWork {
+  return {
+    deletes: total.deletes + swept.deletes,
+    markPages: total.markPages + swept.markPages,
+    markBytes: total.markBytes + swept.markBytes,
+  };
+}
 
 /**
  * The seal row for a whole-tree fence: what every shipped arm does today. The
@@ -1478,29 +1517,29 @@ function snapshotChainArm(): ConformanceArm {
     #seedStamp: string | undefined;
     #publishing: { readonly at: string; readonly prefix: string } | undefined;
     #finalizeGate = new OneShotGate();
-    #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE };
+    #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE, hydrate: NO_HYDRATE, gc: NO_GC };
 
     constructor() {
       this.workspace = {
-        write: (path, text) => {
+        write: async (path, text) => {
           if (!this.disk.overlays.has(DEVBOX_WORKDIR)) {
             throw new Error('the chain workspace is not attached, so a write has nowhere to land');
           }
           this.disk.writeFile(`${DEVBOX_WORKDIR}/${path}`, encoder.encode(text));
         },
-        read: (path) => {
+        read: async (path) => {
           const bytes = this.disk.readFile(`${DEVBOX_WORKDIR}/${path}`);
           return bytes === undefined ? undefined : decoder.decode(bytes);
         },
-        remove: (path) => this.disk.removeFile(`${DEVBOX_WORKDIR}/${path}`),
-        paths: () => this.disk.entries(DEVBOX_WORKDIR),
-        plant: (entries) => {
+        remove: async (path) => this.disk.removeFile(`${DEVBOX_WORKDIR}/${path}`),
+        paths: async () => this.disk.entries(DEVBOX_WORKDIR),
+        plant: async (entries) => {
           const overlay = this.disk.overlays.get(DEVBOX_WORKDIR);
           if (overlay === undefined) throw new Error('the chain workspace is not attached');
           this.disk.tree(overlay.upper).plant(entries);
         },
-        snapshot: () => this.disk.snapshot(DEVBOX_WORKDIR),
-        pwrite: (path, offset, bytes) => {
+        snapshot: async () => this.disk.snapshot(DEVBOX_WORKDIR),
+        pwrite: async (path, offset, bytes) => {
           const overlay = this.disk.overlays.get(DEVBOX_WORKDIR);
           if (overlay === undefined) throw new Error('the chain workspace is not attached');
           const upper = this.disk.tree(overlay.upper);
@@ -1560,7 +1599,7 @@ function snapshotChainArm(): ConformanceArm {
             ...this.#rows,
             restore: restoreWorkSince(durable, window, payloadPrefixes(), {
               mounts: this.disk.mountCalls - mounts,
-              cpuSteps: this.workspace.snapshot().length,
+              cpuSteps: (await this.workspace.snapshot()).length,
               replayUnits: this.disk.layerMountCalls - layers,
             }),
           };
@@ -1568,7 +1607,7 @@ function snapshotChainArm(): ConformanceArm {
         },
         checkpoint: async (kind) => {
           const window = { from: durable.ops.length };
-          const snapshot = this.workspace.snapshot();
+          const snapshot = await this.workspace.snapshot();
           const outcome = await raw.checkpoint(kind);
           this.#rows = {
             ...this.#rows,
@@ -1770,16 +1809,16 @@ function r2fsArm(): ConformanceArm {
     readonly #tombstones = new Set<string>();
     #finalizeGate = new OneShotGate();
     #storage: DevboxStorage;
-    #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE };
+    #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE, hydrate: NO_HYDRATE, gc: NO_GC };
     #publishFrom = durable.ops.length;
 
     constructor() {
       this.workspace = {
-        write: (path, text) => {
+        write: async (path, text) => {
           this.#dirty.writeFile(path, encoder.encode(text));
           this.#tombstones.delete(path);
         },
-        read: (path) => {
+        read: async (path) => {
           const local = this.#dirty.node(path);
           if (local?.kind === 'file' && local.content?.kind === 'dense') return decoder.decode(local.content.bytes);
           if (this.#tombstones.has(path)) return undefined;
@@ -1787,11 +1826,11 @@ function r2fsArm(): ConformanceArm {
           const meta = durable.meta(`${prefixWithSlash}${path}`);
           return bytes === null || meta?.['kinu-kind'] !== 'file' ? undefined : decoder.decode(bytes);
         },
-        remove: (path) => {
+        remove: async (path) => {
           this.#dirty.remove(path);
           this.#tombstones.add(path);
         },
-        paths: () => {
+        paths: async () => {
           const files = new Set<string>();
           for (const [key, held] of durable.objects) {
             if (key.startsWith(prefixWithSlash) && held.meta['kinu-kind'] === 'file') {
@@ -1802,12 +1841,12 @@ function r2fsArm(): ConformanceArm {
           for (const path of this.#tombstones) files.delete(path);
           return [...files].sort();
         },
-        plant: (entries) => {
+        plant: async (entries) => {
           this.#dirty.plant(entries);
           for (const entry of entries) this.#tombstones.delete(entry.path);
         },
-        snapshot: () => this.#snapshot(),
-        pwrite: (path, offset, bytes) => {
+        snapshot: async () => this.#snapshot(),
+        pwrite: async (path, offset, bytes) => {
           if (!this.#dirty.has(path)) {
             const durableEntries = this.#durableEntries();
             const entry = durableEntries.find((row) => row.path === path);
@@ -1816,7 +1855,6 @@ function r2fsArm(): ConformanceArm {
             this.#dirty.plant(durableEntries.filter((row) => names.has(row.path)));
           }
           this.#dirty.pwrite(path, offset, bytes);
-          this.#tombstones.delete(path);
         },
       };
       this.#storage = this.#build();
@@ -2097,7 +2135,7 @@ function overlayCasArm(): ConformanceArm {
   const fidelityRefusal = 'overlay-cas tree objects carry mode and mtime only; they do not preserve uid/gid, xattrs, hardlink inode sharing or holes';
   const largeSparseRefusal = 'overlay-cas scans a file as dense 512 KiB chunks; it has no sparse-hole scan protocol';
   let row: OverlayCasState | null = null;
-  let rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE };
+  let rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE, hydrate: NO_HYDRATE, gc: NO_GC };
   const failures: string[] = [];
   let finalizeGate = new OneShotGate();
   let container = freshContainer();
@@ -2264,7 +2302,7 @@ function overlayCasArm(): ConformanceArm {
       },
       checkpoint: async (kind) => {
         const window = { from: durable.ops.length };
-        const snapshot = workspace.snapshot();
+        const snapshot = await workspace.snapshot();
         const outcome = await raw.checkpoint(kind);
         rows = {
           ...rows,
@@ -2349,26 +2387,26 @@ function overlayCasArm(): ConformanceArm {
    *  serves. A read that misses the upper reads the tree object, exactly as
    *  s3fs would — no verification, because the mount does none. */
   const workspace: Workspace = {
-    write: (path, text) => {
+    write: async (path, text) => {
       if (!container.overlay) throw new Error('the overlay-cas workspace is not attached');
       const bytes = encoder.encode(text);
       container.tree.writeFile(path, bytes);
       container.upper.set(path, bytes);
       container.whiteouts.delete(path);
     },
-    read: (path) => {
+    read: async (path) => {
       const held = container.upper.get(path);
       if (held !== undefined) return decoder.decode(held);
       if (container.whiteouts.has(path) || !container.overlay) return undefined;
       const lower = durable.get(`${prefix}/${treeKey(path)}`);
       return lower === null ? undefined : decoder.decode(lower);
     },
-    remove: (path) => {
+    remove: async (path) => {
       container.upper.delete(path);
       container.tree.remove(path);
       container.whiteouts.add(path);
     },
-    paths: () => {
+    paths: async () => {
       const found = new Set<string>(container.upper.keys());
       if (container.overlay) {
         for (const key of durable.list(`${prefix}/${PREFIX_TREE}`)) {
@@ -2380,7 +2418,7 @@ function overlayCasArm(): ConformanceArm {
       for (const path of container.whiteouts) found.delete(path);
       return [...found].sort();
     },
-    plant: (entries) => {
+    plant: async (entries) => {
       for (const entry of entries) {
         if (entry.content?.kind === 'sparse' && entry.content.size > 128 * 1024 * 1024) {
           throw new ArmRefused('6.14', largeSparseRefusal);
@@ -2399,7 +2437,7 @@ function overlayCasArm(): ConformanceArm {
         container.upper.set(entry.path, bytes);
       }
     },
-    snapshot: () => {
+    snapshot: async () => {
       const merged = new Map<string, NodeEntry>();
       let ino = 1;
       const treePrefix = `${prefix}/${PREFIX_TREE}`;
@@ -2425,7 +2463,7 @@ function overlayCasArm(): ConformanceArm {
       for (const path of container.whiteouts) merged.delete(path);
       return sortedByPath([...merged.values()]);
     },
-    pwrite: (path, offset, bytes) => {
+    pwrite: async (path, offset, bytes) => {
       if (!container.tree.has(path)) {
         const lower = durable.get(`${prefix}/${treeKey(path)}`);
         if (lower === null) throw new Error(`pwrite: no file at ${path}`);
@@ -2602,6 +2640,9 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
   const control = new MemoryControlStore();
   let casAttempts = 0;
   let bootSequence = 0;
+  /** The residency's idle clock. Monotonic milliseconds is all a page-in ever
+   *  needs from it; nothing here depends on wall time. */
+  let clock = 1_000;
 
   const awaitPoints: AwaitPointUse = {
     // Register order, not execution order: this is the same ordering rule as
@@ -2709,25 +2750,46 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
     #storage: DevboxStorage;
     #rootUploadKey: string | null = null;
     #finalizeGate = new OneShotGate();
-    #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE };
+    #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE, hydrate: NO_HYDRATE, gc: NO_GC };
     #restoreWindow: { from: number; mounts: number } | null = null;
+    /** The lazy restore over the currently attached head, once one exists.
+     *  Null before the first commit (nothing to restore from) and right
+     *  after a replacement, until the next attach opens one. */
+    #lazy: LazyContainer | null = null;
 
     constructor() {
       this.workspace = {
-        write: (path, text) => {
+        write: async (path, text) => {
           if (!this.journal) throw new Error('the candidate workspace has no journal daemon');
+          await this.#lazy?.beforeWrite(path);
           this.#journaled(`W ${path} ${encoder.encode(text).byteLength}`, () => this.tree.writeFile(path, encoder.encode(text)));
         },
-        read: (path) => {
+        read: async (path) => {
+          if (this.#lazy !== null) {
+            const bytes = await this.#lazy.read(path);
+            return bytes === undefined ? undefined : decoder.decode(bytes);
+          }
           const entry = this.tree.node(path);
           if (entry?.kind !== 'file' || entry.content?.kind !== 'dense') return undefined;
           return decoder.decode(entry.content.bytes);
         },
-        remove: (path) => this.tree.remove(path),
-        paths: () => this.tree.filePaths(),
-        plant: (entries) => this.tree.plant(entries),
-        snapshot: () => this.tree.snapshot(),
-        pwrite: (path, offset, bytes) => this.#journaled(`W ${path} ${offset}+${bytes.byteLength}`, () => this.tree.pwrite(path, offset, bytes)),
+        remove: async (path) => {
+          await this.#lazy?.beforeWrite(path);
+          this.tree.remove(path);
+        },
+        paths: async () => {
+          await this.#lazy?.listAll();
+          return this.tree.filePaths();
+        },
+        plant: async (entries) => this.tree.plant(entries),
+        snapshot: async () => {
+          await this.#lazy?.readAll();
+          return this.tree.snapshot();
+        },
+        pwrite: async (path, offset, bytes) => {
+          await this.#lazy?.beforeWrite(path);
+          this.#journaled(`W ${path} ${offset}+${bytes.byteLength}`, () => this.tree.pwrite(path, offset, bytes));
+        },
       };
       this.#storage = this.#build();
     }
@@ -2751,9 +2813,16 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
     }
 
     evictCleanBytes(): number {
-      // Today's candidate keeps every clean byte resident: nothing evicts, and
-      // a full disk stays full. That fact is what cell 6.18 records as red.
-      return 0;
+      // Disk pressure: every clean page goes, whatever its age. A page this
+      // sweep can reach came out of an immutable object and is held to the
+      // digest the head declares, so dropping it risks nothing but a re-read
+      // — which is the whole reason a full disk buys room instead of a
+      // refusal. `markBytes` at `idleMs: 0` IS bytes freed: nothing resident
+      // survives the sweep at a zero window.
+      if (this.#lazy === null) return 0;
+      const swept = this.#lazy.evict(0);
+      this.#rows = { ...this.#rows, gc: mergeGc(this.#rows.gc, swept) };
+      return swept.markBytes;
     }
 
     storage(): DevboxStorage {
@@ -2781,6 +2850,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       this.actionStarts = { restore: 0, checkpoint: 0, seed: 0 };
       this.daemonStarts = 0;
       this.#restoreWindow = null;
+      this.#lazy = null;
       this.#finalizeGate = new OneShotGate();
       this.#storage = this.#build();
     }
@@ -2801,7 +2871,21 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       return new MountedPayloadStore(durable, paths.payloadPrefix, deaths, () => this.#rootUploadKey);
     }
 
-    #capture(input: { operationId: string; epoch: string; baseRevision: string }): AuditedCapture {
+    /**
+     * The audited capture the fence builds from: the whole tree, exactly as
+     * `build()` has always read it.
+     *
+     * A LAZY TREE MUST BE WHOLE BEFORE THIS RUNS. `build()` hashes every
+     * file's CONTENT to diff it against the parent, and a placeholder's
+     * content is zeros — so a fence that read one unhydrated would see a
+     * file that changed to all-zero bytes and stage that lie. This is not a
+     * new cost this lane adds: `build()` has always read every file
+     * (`bytesStaged`/`bytesChunked` already scale with the tree, the
+     * `bounded-layers`/6.12 row on the bug list), so paying to page in what
+     * it is about to read anyway regresses nothing.
+     */
+    async #capture(input: { operationId: string; epoch: string; baseRevision: string }): Promise<AuditedCapture> {
+      await this.#lazy?.readAll();
       const entries = this.tree.snapshot();
       const cut = Number(input.baseRevision) + 1;
       const captured: Capture = {
@@ -2873,7 +2957,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       const store = this.#payload();
       const sink = new MemoryCandidateObjectSink();
       const head = run.head;
-      const audited = this.#capture(identity);
+      const audited = await this.#capture(identity);
       let plan;
       if (format === 'bounded-layers') {
         const parent = head === null
@@ -2922,8 +3006,14 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       });
     }
 
-    async #boundedEntries(run: CandidateRunControlV1): Promise<NodeEntry[]> {
-      const head = run.head!;
+    /**
+     * The lazy restore over `head`: open the root and its layers — O(#layers),
+     * never one read per file — and hand back the container that pages
+     * bytes in on first touch. Reused across a wake AND a same-boot commit,
+     * so `evictCleanBytes` has something to evict even when the box that
+     * just published never replaced its container.
+     */
+    async #ensureLazy(head: NonNullable<CandidateRunControlV1['head']>): Promise<LazyContainer> {
       const identity = {
         operationId: `restore-${head.pointer.lastOperationId}`,
         attemptId: '1',
@@ -2932,41 +3022,15 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
         expiresAt: '99999999999999',
       };
       const view = await openBoundedLayers(head.envelope.rootObject, this.#payload(), identity);
-      const entries: NodeEntry[] = [];
-      const contentByIno = new Map<number, FileContent>();
-      for (const path of [...view.entryPaths()].sort()) {
-        const stat = view.stat(path);
-        if (stat === null) continue;
-        const metadata = stat.metadata ?? fallbackMetadata;
-        if (stat.kind === 'dir') {
-          entries.push({ path, kind: 'dir', mode: stat.mode, ino: stat.ino, metadata });
-          continue;
-        }
-        if (stat.kind === 'symlink') {
-          entries.push({ path, kind: 'symlink', mode: stat.mode, ino: stat.ino, metadata, target: stat.target });
-          continue;
-        }
-        let content = contentByIno.get(stat.ino);
-        if (content === undefined) {
-          const doc = view.entryAt(path);
-          if (doc?.kind !== 'file') throw new Error(`bounded layer has no file row for ${path}`);
-          const hasHole = doc.chunks.some(isHoleExtent);
-          if (!hasHole) {
-            content = { kind: 'dense', bytes: await view.readRange(path, 0, doc.size) };
-          } else {
-            let offset = 0;
-            const runs: Array<{ offset: number; bytes: Uint8Array }> = [];
-            for (const part of doc.chunks) {
-              if (!isHoleExtent(part)) runs.push({ offset, bytes: await view.readRange(path, offset, part.size) });
-              offset += part.size;
-            }
-            content = { kind: 'sparse', size: doc.size, runs };
-          }
-          contentByIno.set(stat.ino, content);
-        }
-        entries.push({ path, kind: 'file', mode: stat.mode, ino: stat.ino, metadata, content });
-      }
-      return entries;
+      const restore = new LazyRestore(headFilesystemOf(view), {
+        place: (path, offset, bytes) => this.tree.hydrate(path, offset, bytes),
+        drop: (path, offset, length) => this.tree.dehydrate(path, offset, length),
+        now: () => clock,
+      });
+      const container = this.#lazy ?? new LazyContainer(this.tree, () => clock);
+      container.adopt(restore);
+      this.#lazy = container;
+      return container;
     }
 
     async #merkleEntries(run: CandidateRunControlV1): Promise<NodeEntry[]> {
@@ -3036,12 +3100,23 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
 
     async #runRestore(run: CandidateRunControlV1): Promise<string> {
       const head = run.head;
-      if (head === null) return JSON.stringify({ ok: true, rootId: null });
-      const entries = format === 'bounded-layers'
-        ? await this.#boundedEntries(run)
-        : await this.#merkleEntries(run);
-      this.tree.clear();
-      this.tree.plant(entries);
+      if (head === null) {
+        this.#lazy = null;
+        return JSON.stringify({ ok: true, rootId: null });
+      }
+      if (format === 'bounded-layers') {
+        this.tree.clear();
+        // ROOT AND LAYERS ONLY: no directory is listed here, so a wake's
+        // remote ops stay fixed at whatever `open()` reads regardless of how
+        // many files or directories the tree holds. The first `paths`,
+        // `snapshot` or `read` on the workspace lists on demand, and that
+        // cost lands in HydrateWork, never in this restore's window.
+        await this.#ensureLazy(head);
+      } else {
+        const entries = await this.#merkleEntries(run);
+        this.tree.clear();
+        this.tree.plant(entries);
+      }
       return JSON.stringify({ ok: true, rootId: head.pointer.rootEnvelopeId });
     }
 
@@ -3072,6 +3147,16 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
             ...this.#rows,
             publish: publishWorkSince(durable, window, casAttempts - casBefore),
           };
+          // Every byte this boot just wrote is now a cache of the head it
+          // published: mark it resident and evictable, the same fact a wake
+          // establishes for a container that paged it in instead of writing
+          // it. Bounded-layers only: the v1 merkle-pack branch here is
+          // unreachable through the exported arms (`CONFORMANCE_ARMS` never
+          // opens `format: 'merkle-pack'`) and carries no lazy restore.
+          if (outcome.kind === 'committed' && format === 'bounded-layers') {
+            const run = await candidateRunControl(controlStore, envelopes, verifyObject);
+            if (run.head !== null) (await this.#ensureLazy(run.head)).notePublished();
+          }
           return outcome;
         },
         discard: async () => await raw.discard(),
@@ -3381,10 +3466,16 @@ function merklePackV2Arm(): ConformanceArm {
     actionStarts = { restore: 0, checkpoint: 0, seed: 0 };
     daemonStarts = 0;
     #finalizeGate = new OneShotGate();
-    #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE };
+    #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE, hydrate: NO_HYDRATE, gc: NO_GC };
     #restoreWindow: { from: number; mounts: number } | null = null;
     #restored = false;
     #core: SidecarCore;
+    /** The lazy restore over the currently attached head, once one exists:
+     *  established by the first wake-style attach, or by the first same-boot
+     *  publish for a box no wake has touched yet. Stays bound to the view it
+     *  opened for the rest of this boot — an unchanged file's bytes are the
+     *  same in every generation, so a stale view still answers it right. */
+    #lazy: LazyContainer | null = null;
 
     constructor() {
       this.daemon = new ModeledDaemon(this.tree);
@@ -3464,19 +3555,34 @@ function merklePackV2Arm(): ConformanceArm {
         now: () => clock,
       });
       this.workspace = {
-        write: (path, text) => {
+        write: async (path, text) => {
+          await this.#lazy?.beforeWrite(path);
           this.#journaled(`W ${path} ${encoder.encode(text).byteLength}`, () => this.daemon.write(path, encoder.encode(text)));
         },
-        read: (path) => {
+        read: async (path) => {
+          if (this.#lazy !== null) {
+            const bytes = await this.#lazy.read(path);
+            return bytes === undefined ? undefined : decoder.decode(bytes);
+          }
           const entry = this.tree.node(path);
           if (entry?.kind !== 'file' || entry.content?.kind !== 'dense') return undefined;
           return decoder.decode(entry.content.bytes);
         },
-        remove: (path) => this.daemon.remove(path),
-        paths: () => this.tree.filePaths(),
-        plant: (entries) => this.daemon.plant(entries),
-        snapshot: () => this.tree.snapshot(),
-        pwrite: (path, offset, bytes) => {
+        remove: async (path) => {
+          await this.#lazy?.beforeWrite(path);
+          this.daemon.remove(path);
+        },
+        paths: async () => {
+          await this.#lazy?.listAll();
+          return this.tree.filePaths();
+        },
+        plant: async (entries) => this.daemon.plant(entries),
+        snapshot: async () => {
+          await this.#lazy?.readAll();
+          return this.tree.snapshot();
+        },
+        pwrite: async (path, offset, bytes) => {
+          await this.#lazy?.beforeWrite(path);
           this.#journaled(`W ${path} ${offset}+${bytes.byteLength}`, () => this.daemon.pwrite(path, offset, bytes));
         },
       };
@@ -3504,18 +3610,13 @@ function merklePackV2Arm(): ConformanceArm {
     }
 
     evictCleanBytes(): number {
-      // AFTER A PUBLISH every byte in the tree is a cache of the head: the
-      // next boot pages it all back from the packs it names. Dropping the
-      // cache is what disk pressure buys, and this is the drop.
-      let freed = 0;
-      for (const entry of this.tree.snapshot()) {
-        if (entry.kind === 'dir' || entry.kind === 'symlink') continue;
-        const content = entry.content;
-        if (content === undefined) continue;
-        freed += runBytes(content);
-        this.tree.remove(entry.path);
-      }
-      return freed;
+      // Disk pressure: every clean page goes. A page this sweep can reach is
+      // a cache of an immutable pack, held to the digest the head declares,
+      // so dropping it risks nothing but a re-read.
+      if (this.#lazy === null) return 0;
+      const swept = this.#lazy.evict(0);
+      this.#rows = { ...this.#rows, gc: mergeGc(this.#rows.gc, swept) };
+      return swept.markBytes;
     }
 
     storage(): DevboxStorage {
@@ -3538,17 +3639,20 @@ function merklePackV2Arm(): ConformanceArm {
           const opened = this.#restoreWindow ?? { from: durable.ops.length, mounts: this.disk.mountCalls };
           const status = await this.#core.attach();
           if (status.kind === 'attached' && !this.#restored) {
-            // THE EAGER RESTORE IS THE SHIPPED MATERIALIZE: one whole-pack
-            // read per pack the ledger names, then the tree, written back.
+            // THE LAZY RESTORE: the root, whatever the tree holds. No
+            // directory is listed here, so the wake's remote ops stay fixed
+            // regardless of how many files or directories the tree holds;
+            // the first `paths`, `snapshot` or `read` on the workspace lists
+            // on demand, and that cost lands in HydrateWork.
             this.actionStarts.restore += 1;
             restoreStartsTotal += 1;
             this.#restored = true;
-            await this.#core.materialize((entries) => {
-              this.tree.clear();
-              this.tree.plant(entries);
-            });
+            this.tree.clear();
+            const container = new LazyContainer(this.tree, () => clock);
+            container.adopt(this.#core.restoreLazily(container.ports()));
+            this.#lazy = container;
             // The DO reset the runner slot when its restore process exited;
-            // the sidecar's equivalent is the materialized tree landing.
+            // the sidecar's equivalent is the placeholder tree landing.
             deaths.reset('attach:after-restore-process');
           }
           this.#rows = {
@@ -3579,6 +3683,16 @@ function merklePackV2Arm(): ConformanceArm {
               seal: this.#core.status().work.seal,
               publish: publishWorkSince(durable, window, casAttempts - casBefore),
             };
+            // Every byte this boot just wrote is now a cache of the head it
+            // published. A box a wake never touched has no lazy restore to
+            // mark it through; open one over the view `seal`'s own re-attach
+            // just left current, at no extra remote cost.
+            if (this.#lazy === null) {
+              const container = new LazyContainer(this.tree, () => clock);
+              container.adopt(this.#core.restoreLazily(container.ports()));
+              this.#lazy = container;
+            }
+            this.#lazy.notePublished();
             return { kind: 'committed', reason: outcome.rootEnvelopeId, bytes: 0, movedBytes: 0 };
           }
           if (outcome.kind === 'no-change') {
@@ -3594,6 +3708,7 @@ function merklePackV2Arm(): ConformanceArm {
           await controlStore.clear();
           this.daemon.reset();
           this.tree.clear();
+          this.#lazy = null;
           this.disk.unmount(CANDIDATE_STORE_MOUNT);
           this.storeMounted = false;
           this.journal = false;
@@ -3638,6 +3753,7 @@ function merklePackV2Arm(): ConformanceArm {
       this.daemonStarts = 0;
       this.#restoreWindow = null;
       this.#restored = false;
+      this.#lazy = null;
       this.#finalizeGate = new OneShotGate();
     }
 

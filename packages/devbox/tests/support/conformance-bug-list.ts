@@ -20,7 +20,14 @@ export interface KnownRed {
   readonly reason: string;
 }
 
-/** Recorded from the matrix on origin/main 6d19d50e7 with this battery, 2026-09-02. */
+/**
+ * Recorded from the matrix on origin/main 6d19d50e7 with this battery,
+ * 2026-09-02. Rows dated 2026-09-03 were re-measured by the lane-4 lazy
+ * page-in and eviction work: `bounded-layers`/6.13, `merkle-pack`/6.13 and
+ * `merkle-pack`/6.14 cleared and were deleted; `bounded-layers`/6.18 cleared
+ * and was deleted; `bounded-layers`/6.14 improved (266 remote ops to 5) but
+ * stays red against the O(1)=3 bound, for reasons stated in its own row.
+ */
 export const KNOWN_RED: readonly KnownRed[] = [
   {
     arm: 'snapshot-chain',
@@ -41,18 +48,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     reason: "bytesStaged 823296 > 2k + 4c for k=4 KiB; nodesRewritten 206 > p(d+2) = 3; objectsPut 5 > ceil(k/P)+2 = 3; seal.bytesStaged: n gives 823296, 10n gives 8196096; seal.bytesChunked: n gives 823296, 10n gives 8196096; seal.nodesRewritten: n gives 206, 10n gives 2034; publish.bytesPut: n gives 77016, 10n gives 707021; restore.totalRemoteOps: n gives 410, 10n gives 4010",
   },
   {
-    arm: 'bounded-layers',
-    cell: '6.13',
-    since: '2026-09-02',
-    reason: "RestoreWork.totalRemoteOps is 200006 for 1e5 files and 2006 for 1e3 (the commit, the wake and the exact tree pass since the control snapshot moved off argv; what remains is one object per file on restore plus a HEAD per closure object at attach, the lane-4 lazy-restore property)",
-  },
-  {
-    arm: 'merkle-pack',
-    cell: '6.13',
-    since: '2026-09-02',
-    reason: "RestoreWork.totalRemoteOps is 5 for 1e5 files and 4 for 1e3 (the commit, the wake and the exact tree pass since the v2 sidecar materializes with one whole-pack read per ledger pack; what remains is that attach reads one pack per pack, the lane-4 lazy-restore property)",
-  },
-  {
     arm: 'snapshot-chain',
     cell: '6.14',
     since: '2026-09-02',
@@ -61,14 +56,8 @@ export const KNOWN_RED: readonly KnownRed[] = [
   {
     arm: 'bounded-layers',
     cell: '6.14',
-    since: '2026-09-02',
-    reason: "wake made 266 remote ops; O(1) is 3; the 64 KiB write chunked 68157440 bytes",
-  },
-  {
-    arm: 'merkle-pack',
-    cell: '6.14',
-    since: '2026-09-02',
-    reason: "wake made 6 remote ops; O(1) is 3 (the 1 GiB commit, the exact tree and the 64 KiB in-place seal are within every O(data)/O(k) bound; what remains is attach reading one pack per ledger pack, the lane-4 lazy-restore property)",
+    since: '2026-09-03',
+    reason: "wake made 5 remote ops; O(1) is 3 (the lane-4 lazy restore brought this from 266 to 5: the v1 control plane's attach-time verifyObject on rootObject and closureObject, plus openBoundedLayers' own root-plus-one-base-layer read, floor at 4; the 64 KiB write chunked and put bytes both now pass. closureObject verification is GC bookkeeping integrity, not the read path lazy restore covers, so removing it is out of this lane's scope)",
   },
   {
     arm: 'snapshot-chain',
@@ -108,12 +97,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
   },
   {
     arm: 'overlay-cas',
-    cell: '6.18',
-    since: '2026-09-02',
-    reason: "nothing evicted clean bytes to make room",
-  },
-  {
-    arm: 'bounded-layers',
     cell: '6.18',
     since: '2026-09-02',
     reason: "nothing evicted clean bytes to make room",
