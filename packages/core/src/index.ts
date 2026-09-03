@@ -979,6 +979,8 @@ export {
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_CANCEL_VERSION_REFUSAL, DEVICE_EXEC_ACK_METHOD,
   DEVICE_DUPLICATE_REQUEST, DeviceCancelResultSchema, nextDeviceRequestId,
   DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
+  DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE, DEVICE_PTY_CLOSE,
+  DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_FRAMES, DEVICE_PTY_MAX_AXIS,
   type DeviceCancelResult,
   createNimbusExecutor, createNimbusWorkspaceExecutor, nimbusSessionShell,
   type NimbusExecutorOpts, type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
@@ -1226,6 +1228,7 @@ export {
 export {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   DEVICE_CONNECT_PATH,
+  DEVICE_TERMINAL_PATH,
   ORCHESTRATOR_AGENT_SLUG,
   SUBORDINATE_AGENT_SLUG,
 } from './cloud-wire';

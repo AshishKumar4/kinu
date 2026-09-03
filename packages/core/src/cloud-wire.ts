@@ -12,6 +12,13 @@ export const SUBORDINATE_AGENT_SLUG = 'subordinate-agent';
 // must all agree on it — it lives once here.
 export const DEVICE_CONNECT_PATH = '/pc/connect';
 
+// A browser's terminal socket for a device reaches the SAME Durable Object the
+// device's own socket terminates in, so the bytes cross between the two
+// sockets inside one object. The terminal route forwards the upgrade here
+// after it has settled who is asking; the UserDO's in-fetch matcher answers
+// it. One spelling, both sides.
+export const DEVICE_TERMINAL_PATH = '/pc/terminal';
+
 // Per-message AGGREGATE cap on raw attachment bytes inlined into a chat
 // message as data-URL file parts, for agents hosted on THIS backend — the web
 // composer and a CLI in cloud mode. The number is a Cloudflare fact, not an

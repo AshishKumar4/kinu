@@ -42,7 +42,13 @@ import {
 } from "agents/mcp/do-oauth-client-provider";
 import {
   DEVICE_CONNECT_PATH,
+  DEVICE_TERMINAL_PATH,
+  DEVICE_PTY_OPEN_METHOD,
+  DEVICE_PTY_OUTPUT,
+  DEVICE_PTY_EXIT,
+  DEVICE_PTY_MAX_AXIS,
   NO_DEVICE_CONNECTED,
+  isDeviceUnknownMethodError,
   ORCHESTRATOR_AGENT_SLUG,
   nanoid,
   createExperienceLibrary,
@@ -107,6 +113,7 @@ import {
   type ResolvedCaller,
 } from './workspace-capability';
 import { DeviceSocketHub, deviceIdFromSocket } from './device-hub';
+import { DeviceTerminalHub, terminalFromSocket } from './device-terminal';
 import {
   DeviceRequestLedger,
   type ClaimedDeviceRequest, type DeviceCancelOutcome,
@@ -310,6 +317,42 @@ function absolutePathOrNull(value: string | undefined): string | null {
   return parsed.output.length > 1 ? parsed.output.replace(/\/+$/, '') : parsed.output;
 }
 const DeviceRotationAckSchema = v.object({ type: v.literal(DEVICE_TOKEN_ROTATION_ACK) });
+
+/**
+ * What a device says about a terminal it is holding: bytes, or the status the
+ * program ended with.
+ *
+ * Read before the RPC correlator, because neither frame carries a request id.
+ * A correlator handed one drops it silently, which would leave a pane waiting
+ * on a shell that had already answered.
+ */
+const DeviceTerminalFrameSchema = v.variant('type', [
+  v.object({ type: v.literal(DEVICE_PTY_OUTPUT), session: v.string(), data: v.string() }),
+  v.object({ type: v.literal(DEVICE_PTY_EXIT), session: v.string(), exitCode: v.number() }),
+]);
+
+/** The window a pane gets when it names none. 80x24 is what a terminal has
+ *  been since DEC sold one, and every program still assumes it. */
+const TERMINAL_DEFAULT_AXIS = { cols: 80, rows: 24 } as const;
+
+/**
+ * How long the hub waits for the machine to answer that a terminal is open.
+ *
+ * This is a control round trip, not the terminal's life: the shell then runs
+ * for as long as the person keeps the window. A machine that cannot answer in
+ * this long is a machine the pane should stop waiting on, and the same default
+ * covers every other control call on this socket.
+ */
+const TERMINAL_OPEN_TIMEOUT_MS = 10_000;
+
+/** Base64 back to bytes. The device socket carries JSON, so a keystroke and a
+ *  screen repaint both ride as text and become bytes again here. */
+function bytesFromBase64(data: string): Uint8Array {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let at = 0; at < binary.length; at += 1) bytes[at] = binary.charCodeAt(at);
+  return bytes;
+}
 const LooseObjectSchema = v.looseObject({});
 const NullableStringArraySchema = v.nullable(v.array(v.string()));
 const NullableStringRecordSchema = v.nullable(v.record(v.string(), v.string()));
@@ -1793,16 +1836,23 @@ export class UserDO extends Agent<Env> {
   // DO-to-DO call.
   private readonly _devices = new DeviceSocketHub(this.ctx);
 
+  /** The terminals open on this user's machines, each pairing one pane socket
+   *  with one session on one device. Both sockets live in this object because
+   *  the device's socket does: bytes cross between them here, with no second
+   *  transport and nothing dialling in to the machine. */
+  private readonly _terminals = new DeviceTerminalHub(this.ctx, this._devices);
+
   /** The durable record of commands running on the user's machines, and the
    *  precedence protocol over it (see ./device-inflight.ts). This object owns
    *  the sockets and the consent boundary; the ledger owns the table. */
   private readonly _inflight = new DeviceRequestLedger(this.ctx.storage.sql);
 
-  /** Intercept device-daemon WebSocket upgrades; everything else (agents-SDK
-   *  routing, sub-agents) flows to the SDK untouched. */
+  /** Intercept device-daemon and terminal WebSocket upgrades; everything else
+   *  (agents-SDK routing, sub-agents) flows to the SDK untouched. */
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === DEVICE_CONNECT_PATH) return this.acceptDeviceSocket(request, url);
+    if (url.pathname === DEVICE_TERMINAL_PATH) return this.acceptTerminalSocket(request, url);
     return super.fetch(request);
   }
 
@@ -1854,6 +1904,41 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
+   * Accept a pane's WebSocket for a terminal this object just opened.
+   *
+   * The authority is the session name. It was minted here, handed to exactly
+   * one caller that had already passed the workspace's ownership check and the
+   * device's consent gate, and it is spent by the first attach — the same
+   * shape as the daemon's own connect ticket. No second identity check is
+   * possible at this point anyway: an upgrade carries no `UserCaller`, which
+   * is why the decision is made in {@link openDeviceTerminal} before the
+   * socket exists rather than here.
+   */
+  private acceptTerminalSocket(request: Request, url: URL): Response {
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+      return new Response('Expected WebSocket', { status: 426 });
+    }
+    const session = url.searchParams.get('session') ?? '';
+    const pair = new WebSocketPair();
+    const [client, server] = [pair[0], pair[1]];
+    let attached: { device: string; workspace: string };
+    try {
+      attached = this._terminals.attach(session, server);
+    } catch (cause) {
+      // An unknown or already-taken session is a value here, not a fault: the
+      // shell may have ended, or this object may have been evicted between the
+      // open and this upgrade. The pane opens a new one.
+      return new Response(renderThrownChain({ cause }), { status: 409 });
+    }
+    // The pane may paint as soon as it sees this, and the shell is already
+    // running: its first bytes are on the way from the machine.
+    server.send(JSON.stringify({ type: 'ready' }));
+    diagnostics.event('device.terminal_attached', { device: attached.device, workspace: attached.workspace });
+    const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
+    return new Response(null, init);
+  }
+
+  /**
    * Mint this device's next long-lived token.
    *
    * `keepGrace` is the whole of the grace policy. The superseded hash is held
@@ -1890,6 +1975,15 @@ export class UserDO extends Agent<Env> {
   }
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer | ArrayBufferView): Promise<void> {
+    // A pane's socket first. Its bytes are keystrokes for a machine, not a
+    // frame anything here parses: an arrow key is three bytes that are not a
+    // character, and decoding them as text would corrupt them.
+    const terminal = terminalFromSocket(ws);
+    if (terminal) {
+      this.ensureInit();
+      this._terminals.fromPane(terminal.session, terminal.device, message);
+      return;
+    }
     const deviceId = deviceIdFromSocket(ws);
     if (!deviceId) return super.webSocketMessage(ws, message);
     this.ensureInit();
@@ -1919,7 +2013,89 @@ export class UserDO extends Agent<Env> {
         Date.now(), deviceId);
       return;
     }
+    // A live terminal's own frames, read before the RPC correlator: they carry
+    // a session name and no request id, and a correlator handed one would drop
+    // it without a word.
+    if (this.handleTerminalFrame(data)) return;
     this._devices.handleMessage(deviceId, data);
+  }
+
+  /**
+   * A frame about a live terminal, on its way to the pane watching it.
+   *
+   * Answers whether this was such a frame, so the caller knows not to hand it
+   * to the RPC correlator. Output is bytes and goes as bytes; an exit is the
+   * one thing worth a word, and it closes the pane's socket after it.
+   */
+  private handleTerminalFrame(data: string): boolean {
+    const frame = v.safeParse(DeviceTerminalFrameSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+    if (!frame.success) return false;
+    if (frame.output.type === DEVICE_PTY_OUTPUT) {
+      this._terminals.toPane(frame.output.session, bytesFromBase64(frame.output.data));
+      return true;
+    }
+    this._terminals.paneExit(frame.output.session, frame.output.exitCode);
+    return true;
+  }
+
+  /**
+   * Open a terminal on the owner's machine for one workspace, and answer with
+   * the session its pane may attach to.
+   *
+   * This is where a terminal becomes device access, so it goes through
+   * `deviceRpc` like every other call: the workspace's capability tier, the
+   * per-(workspace, device) grant — which raises the consent card when nothing
+   * is remembered — and the owner's Sandbox switch, which decides whether the
+   * shell runs inside the sandbox with the agent's own home and the folders
+   * they consented to. A session that opened any other way would be a shell on
+   * their machine with none of that, so there is no other way to open one.
+   */
+  async openDeviceTerminal(
+    caller: UserCaller,
+    agentName: string,
+    window: { cols: number; rows: number },
+    deviceId?: string,
+  ): Promise<{ session: string }> {
+    const bounded = (axis: number, fallback: number): number => (
+      Number.isInteger(axis) && axis >= 1 && axis <= DEVICE_PTY_MAX_AXIS ? axis : fallback
+    );
+    const session = `pty-${nanoid(16)}`;
+    const target = this._devices.connectedDeviceId(deviceId);
+    if (!target) throw new Error(NO_DEVICE_CONNECTED);
+    try {
+      await this.deviceRpc(
+        caller,
+        DEVICE_PTY_OPEN_METHOD,
+        [session, bounded(window.cols, TERMINAL_DEFAULT_AXIS.cols), bounded(window.rows, TERMINAL_DEFAULT_AXIS.rows)],
+        { agentName, deviceId: target, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
+      );
+    } catch (cause) {
+      // An install too old to hold terminals is a VALUE here: the owner can
+      // fix it, and the fix is one command. Every other failure — a refused
+      // grant, a machine that cannot sandbox, a dropped socket — already
+      // carries its own words and is passed through with the chain intact.
+      if (isDeviceUnknownMethodError(cause)) {
+        throw new Error(`${this.deviceLabel(target)} runs an older Kinu. Run \`kinu update\` on that machine.`, { cause });
+      }
+      throw new Error('opening a terminal on this machine', { cause });
+    }
+    this._terminals.register(session, target, agentName);
+    // A session nobody attached to is a shell with no window on it. The sweep
+    // runs on the next open rather than on a timer: this object has one alarm
+    // and it belongs to work the owner is waiting for.
+    for (const stale of this._terminals.expired()) this.closeDeviceTerminal(stale.session, stale.device);
+    return { session };
+  }
+
+  /** Close one terminal on a device, whatever it is doing. */
+  private closeDeviceTerminal(session: string, device: string): void {
+    try {
+      this._terminals.paneClosed(session, device);
+    } catch (cause) {
+      // The machine's socket dropped, which already ended every terminal on
+      // it: the shells died with the daemon's own close handler.
+      diagnostics.event('device.terminal_close_unsent', { device, error: renderThrownChain({ cause }) });
+    }
   }
 
   /**
@@ -1966,10 +2142,24 @@ export class UserDO extends Agent<Env> {
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+    // A pane's socket closing is a person closing a terminal, so the shell on
+    // their machine is hung up rather than left running behind no window.
+    const terminal = terminalFromSocket(ws);
+    if (terminal) {
+      this.ensureInit();
+      this.closeDeviceTerminal(terminal.session, terminal.device);
+      return;
+    }
     const deviceId = deviceIdFromSocket(ws);
     if (!deviceId) return super.webSocketClose(ws, code, reason, wasClean);
     this.ensureInit();
     this._devices.handleClose(deviceId, ws);
+    // Every terminal on this machine went with its socket: the daemon hangs up
+    // its own shells when the socket drops, so the panes are told rather than
+    // left waiting on bytes that will never come.
+    for (const session of this._terminals.panesForDevice(deviceId)) {
+      this._terminals.endPane(session, NO_DEVICE_CONNECTED);
+    }
     // A replacing socket may already be live — only then keep connected_at.
     if (!this._devices.isConnected(deviceId)) {
       this.sqlx(`UPDATE user_devices SET connected_at = NULL WHERE id = ?`, deviceId);
@@ -2164,15 +2354,23 @@ export class UserDO extends Agent<Env> {
       );
       if (!consent.allowed) throw new Error(consent.reason);
     }
-    // A command is the one call that RUNS something, so it is the one call the
-    // sandbox decides. The file plane stays open in every mode — the daemon
-    // shows it the same view — and a cancellation is never gated at all.
+    // A command and a terminal are the two calls that RUN something, so they
+    // are the two the sandbox decides. The file plane stays open in every mode
+    // — the daemon shows it the same view — and a cancellation is never gated
+    // at all.
+    //
+    // A terminal takes this branch for the same reason a command does, and
+    // taking it is the whole of the claim that a terminal is not a way around
+    // the owner's Sandbox switch: same tier, same agent home, same consented
+    // folders, same refusal on a machine that cannot sandbox. A shell is the
+    // most open-ended thing a workspace can ask a machine for, so it may not
+    // be the one call that skips this.
     //
     // `agentHome` is empty ONLY under the raw tier, where there is no sandbox
     // and the daemon has no use for one. A sandboxed command with nowhere to
     // put its home is refused three lines above instead of being sent.
     let execSandbox: JsonObject | null = null;
-    if (method === 'exec') {
+    if (method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) {
       const workspace = resolved.kind === 'workspace' ? resolved.workspace : null;
       const sandbox = this.deviceSandboxFor(deviceId, workspace);
       const mode = effectiveDeviceMode(sandbox);

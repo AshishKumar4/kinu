@@ -1,35 +1,46 @@
 /**
  * The environment terminal.
  *
- * One xterm instance, two drivers:
+ * One xterm instance, two families of driver:
  *
- *   PTY   — the sandbox container. A real pseudo-terminal: `htop`, `vim` and
- *           anything else that paints a screen works, arrow keys and Ctrl-C
- *           reach the foreground process, and a resize reaches the shell.
- *           `SandboxAddon` (shipped by @cloudflare/sandbox/xterm) is the client
- *           half of the container's own PTY protocol — binary frames of
- *           terminal bytes each way, `{type:'resize'}` out, `ready`/`exit`/
- *           `error` in — so the wire format is the SDK's, not ours, and
- *           reconnect/replay come with it.
+ *   PTY   — a real pseudo-terminal: `htop`, `vim` and anything else that
+ *           paints a screen works, arrow keys and Ctrl-C reach the foreground
+ *           process, and a resize reaches the shell. Two environments have
+ *           one, so there are two PTY drivers built on the same xterm
+ *           construction — open, fit, keep-fitted, copy chord — factored into
+ *           `mountPtyTerminal` so neither repeats it:
+ *
+ *             sandbox — the container. `SandboxAddon` (shipped by
+ *             @cloudflare/sandbox/xterm) is the client half of the container's
+ *             own PTY protocol — binary frames of terminal bytes each way,
+ *             `{type:'resize'}` out, `ready`/`exit`/`error` in — so the wire
+ *             format is the SDK's, not ours, and reconnect/replay come with it.
+ *
+ *             device — the user's own machine. `SandboxAddon` is addressed by
+ *             container id and cannot reach it, so this file opens its own
+ *             WebSocket and speaks the same shape by hand: binary frames each
+ *             way, `{type:'resize'}` out, `ready`/`exit`/`error` in.
  *
  *   LINE  — every environment with no pseudo-terminal. A command in, its
  *           output back, and the pane SAYS it is line mode. This is the honest
  *           version of what the whole pane used to be: an emulated prompt over
  *           one-shot exec that looked like a shell and could not run one.
  *
- * The lane decides which driver runs, and the route agrees with it because both
- * read the same table. lib/terminal-lane.ts holds the table, the line-mode
- * label, and the line editor and painter this file mounts —
- * everything that is decided over strings rather than over the DOM.
+ * The lane decides PTY or line, and the route agrees with it because both read
+ * the same table. Which PTY driver runs inside that family is this file's own
+ * call, by executor. lib/terminal-lane.ts holds the lane table, the line-mode
+ * label, and the line editor and painter this file mounts — everything that is
+ * decided over strings rather than over the DOM.
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SandboxAddon } from "@cloudflare/sandbox/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { describeError } from "@/hooks/use-async-resource";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, tolerate } from "@kinu.run/core/obs";
+import * as v from "valibot";
 import { useTheme, type ThemeMode } from "@/hooks/use-theme";
 import {
   BUSY, LINE_MODE_LABEL, LineTerminalState, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
@@ -47,8 +58,8 @@ export interface TerminalPaneProps {
   workspace: string;
   /** Executor namespace: `sandbox`, `workspace`, `laptop`, `parent`. */
   executor: string;
-  /** Line-mode inputs. Unused by the PTY driver, which streams from the
-   *  container instead of reading broadcast exec rows. */
+  /** Line-mode inputs. Unused by either PTY driver, which streams live from
+   *  its own transport instead of reading broadcast exec rows. */
   outputs?: readonly TerminalPaneOutput[];
   onExecute?: (cmd: string) => Promise<ExecutorCommandResult>;
 }
@@ -68,9 +79,10 @@ const SCROLLBACK_LINES = 5_000;
 
 export function TerminalPane({ workspace, executor, outputs, onExecute }: TerminalPaneProps) {
   const lane = terminalLane(executor);
-  return lane.mode === "pty"
-    ? <PtyTerminal workspace={workspace} executor={executor} />
-    : <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} />;
+  if (lane.mode !== "pty") return <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} />;
+  return executor === "laptop"
+    ? <DeviceTerminal workspace={workspace} executor={executor} />
+    : <PtyTerminal workspace={workspace} executor={executor} />;
 }
 
 /* ── PTY ──────────────────────────────────────────────────────────────── */
@@ -79,6 +91,81 @@ type PtyState = "connecting" | "connected" | "disconnected";
 
 interface TerminalOperation {
   promise: Promise<void> | null;
+}
+
+/**
+ * What every PTY driver needs before it speaks a byte to its transport: an
+ * xterm instance opened into the host, kept fitted to it as the host resizes,
+ * and the copy chord that works whether or not the shell owns Ctrl-C. Each
+ * driver loads its own transport on top of the returned terminal and folds its
+ * own teardown around the returned `dispose`.
+ */
+/** One xterm, fitted and wired, and the way to take it down again. Both
+ *  pty drivers mount through this so neither repeats the construction. */
+interface MountedPty {
+  term: Terminal;
+  dispose: () => void;
+}
+
+function mountPtyTerminal(
+  host: HTMLDivElement,
+  mode: ThemeMode,
+  copyOperation: { current: TerminalOperation | null },
+  setFailure: (message: string | null) => void,
+): MountedPty {
+  const term = newTerminal(mode);
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  term.open(host);
+  fit.fit();
+
+  // Copy needs a chord that is not Ctrl-C, because Ctrl-C is a byte the
+  // foreground program must receive (a full-screen app reads it as a
+  // keystroke). Ctrl/Cmd-Shift-C copies the selection; paste is left to
+  // xterm's own handling of the browser paste event, which Ctrl-V and Cmd-V
+  // already produce.
+  term.attachCustomKeyEventHandler((event) => {
+    const copyChord = (event.ctrlKey || event.metaKey) && event.shiftKey && event.code === "KeyC";
+    if (!copyChord || event.type !== "keydown") return true;
+    const selection = term.getSelection();
+    if (!selection) return true;
+    if (copyOperation.current !== null) return false;
+    const owner: TerminalOperation = { promise: null };
+    // The key handler must return its boolean synchronously, so install the
+    // owner before the browser action starts and cleanup can fence its result.
+    copyOperation.current = owner;
+    owner.promise = (async () => {
+      try {
+        await navigator.clipboard.writeText(selection);
+      } catch (cause) {
+        if (copyOperation.current === owner) {
+          // The pane's failure line is the reader: the header advertises the
+          // chord, so a refused clipboard write must not vanish.
+          setFailure(`clipboard refused the copy: ${renderThrownChain({ cause })}`);
+        }
+      } finally {
+        if (copyOperation.current === owner) copyOperation.current = null;
+      }
+    })();
+    return false;
+  });
+
+  // The pane resizes with the layout, not only with the window: a sidebar
+  // opening changes the element and nothing else. Re-fitting keeps xterm's
+  // internal geometry in sync; each driver turns the resulting resize event
+  // into its own control frame.
+  const observer = new ResizeObserver(() => {
+    if (host.clientWidth > 0 && host.clientHeight > 0) fit.fit();
+  });
+  observer.observe(host);
+
+  return {
+    term,
+    dispose: () => {
+      observer.disconnect();
+      term.dispose();
+    },
+  };
 }
 
 function PtyTerminal({ workspace, executor }: { workspace: string; executor: string }) {
@@ -95,11 +182,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     const host = hostRef.current;
     if (!host) return;
 
-    const term = newTerminal(theme.mode);
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(host);
-    fit.fit();
+    const { term, dispose: disposeChrome } = mountPtyTerminal(host, theme.mode, copyOperation, setFailure);
     termRef.current = term;
 
     const addon = new SandboxAddon({
@@ -120,51 +203,11 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     addonRef.current = addon;
     addon.connect({ sandboxId: workspace });
 
-    // Copy needs a chord that is not Ctrl-C, because Ctrl-C is a byte the
-    // foreground program must receive (a full-screen app reads it as a
-    // keystroke). Ctrl/Cmd-Shift-C copies the selection; paste is left to
-    // xterm's own handling of the browser paste event, which Ctrl-V and Cmd-V
-    // already produce.
-    term.attachCustomKeyEventHandler((event) => {
-      const copyChord = (event.ctrlKey || event.metaKey) && event.shiftKey && event.code === "KeyC";
-      if (!copyChord || event.type !== "keydown") return true;
-      const selection = term.getSelection();
-      if (!selection) return true;
-      if (copyOperation.current !== null) return false;
-      const owner: TerminalOperation = { promise: null };
-      // The key handler must return its boolean synchronously, so install the
-      // owner before the browser action starts and cleanup can fence its result.
-      copyOperation.current = owner;
-      owner.promise = (async () => {
-        try {
-          await navigator.clipboard.writeText(selection);
-        } catch (cause) {
-          if (copyOperation.current === owner) {
-            // The pane's failure line is the reader: the header advertises the
-            // chord, so a refused clipboard write must not vanish.
-            setFailure(`clipboard refused the copy: ${renderThrownChain({ cause })}`);
-          }
-        } finally {
-          if (copyOperation.current === owner) copyOperation.current = null;
-        }
-      })();
-      return false;
-    });
-
-    // The pane resizes with the layout, not only with the window: a sidebar
-    // opening changes the element and nothing else. xterm's own resize event
-    // is what the addon turns into a control frame, so fitting is enough.
-    const observer = new ResizeObserver(() => {
-      if (host.clientWidth > 0 && host.clientHeight > 0) fit.fit();
-    });
-    observer.observe(host);
-
     return () => {
       copyOperation.current = null;
       keepaliveOperations.current.clear();
-      observer.disconnect();
       addon.dispose();
-      term.dispose();
+      disposeChrome();
       termRef.current = null;
       addonRef.current = null;
     };
@@ -258,6 +301,139 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
             group to signal. Saying "⌃C interrupts" would be the fake. */}
         <span className="shrink-0" title="⌃C reaches a full-screen program. Suspend, fg and bg do not work here.">
           ⇧⌃C copies · no job control
+        </span>
+      </div>
+      <div ref={hostRef} className="p-bg flex-1 min-h-0 rounded-lg border p-border overflow-hidden" />
+    </div>
+  );
+}
+
+/**
+ * The wire this driver speaks, verbatim: binary frames of terminal bytes each
+ * way, `{type:'resize'}` out, and these three control frames in. Not the
+ * SDK's own shape (`code`/`signal`/`message` — see PtyTerminal above): this
+ * environment has no vendored client to match, so the shape is the one the
+ * route promises instead.
+ */
+/** The three control frames the route sends, and nothing else. A frame that
+ *  is none of them is dropped: the pane and the route ship together. */
+const DeviceTerminalMessageSchema = v.variant("type", [
+  v.object({ type: v.literal("ready") }),
+  v.object({ type: v.literal("exit"), exitCode: v.number() }),
+  v.object({ type: v.literal("error"), error: v.string() }),
+]);
+
+function DeviceTerminal({ workspace, executor }: { workspace: string; executor: string }) {
+  const theme = useTheme();
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const copyOperation = useRef<TerminalOperation | null>(null);
+  const [state, setState] = useState<PtyState>("connecting");
+  const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    setState("connecting");
+    setFailure(null);
+
+    const { term, dispose: disposeChrome } = mountPtyTerminal(host, theme.mode, copyOperation, setFailure);
+    termRef.current = term;
+
+    // The terminal's own socket, on the app's own origin under the same
+    // authenticated workspace path the sandbox driver uses — the cookie and
+    // `Origin` the handshake carries are what authorize it. Geometry rides the
+    // query so the device's first paint is already the right size instead of
+    // an 80x24 frame that reflows. The scheme has to be spelled out: a
+    // relative URL would resolve against `http(s):` and the constructor
+    // rejects that.
+    const origin = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
+    const socket = new WebSocket(
+      `${origin}/api/workspaces/${encodeURIComponent(workspace)}/terminal`
+      + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`,
+    );
+    // Output arrives as bytes rather than the default Blob, so it can go
+    // straight into xterm with no read step in between.
+    socket.binaryType = "arraybuffer";
+    const encoder = new TextEncoder();
+    let dataSubscription: IDisposable | null = null;
+    let resizeSubscription: IDisposable | null = null;
+
+    socket.onopen = () => {
+      dataSubscription = term.onData((data) => {
+        if (socket.readyState === WebSocket.OPEN) socket.send(encoder.encode(data));
+      });
+      resizeSubscription = term.onResize(({ cols, rows }) => {
+        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", cols, rows }));
+      });
+    };
+
+    socket.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        term.write(new Uint8Array(event.data));
+        return;
+      }
+      if (event.data instanceof Blob) return;
+      // A frame that is not JSON is the one failure tolerated here by name;
+      // the socket carries what the server wrote. Anything else propagates.
+      const parsed = v.safeParse(DeviceTerminalMessageSchema, tolerate(() => JSON.parse(String(event.data)), "malformed-input"));
+      if (!parsed.success) return;
+      const message = parsed.output;
+      switch (message.type) {
+        case "ready":
+          setState("connected");
+          term.focus();
+          break;
+        case "exit":
+          setState("disconnected");
+          setFailure(`the shell exited (code ${message.exitCode})`);
+          break;
+        case "error":
+          setState("disconnected");
+          setFailure(message.error);
+          break;
+      }
+    };
+    socket.onclose = () => setState("disconnected");
+    socket.onerror = () => {
+      setState("disconnected");
+      setFailure("the connection dropped");
+    };
+
+    return () => {
+      copyOperation.current = null;
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onclose = null;
+      socket.onerror = null;
+      dataSubscription?.dispose();
+      resizeSubscription?.dispose();
+      socket.close();
+      disposeChrome();
+      termRef.current = null;
+    };
+  }, [workspace, executor]);
+
+  // xterm cannot read CSS custom properties, so the palette is applied
+  // imperatively on every theme change — both axes, since either can move.
+  useEffect(() => {
+    const term = termRef.current;
+    if (term) term.options.theme = terminalTheme(theme.mode);
+  }, [theme]);
+
+  return (
+    <div className="w-full h-full flex flex-col">
+      <div className="flex items-center gap-2 px-3 py-1 shrink-0 text-[10px] p-text-3">
+        <span className="font-mono">{executor}</span>
+        <span>·</span>
+        <span>{state === "connected" ? "interactive shell" : state}</span>
+        {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
+        {/* Copy needs the same chord here, and for the same reason: Ctrl-C is
+            a byte the foreground program must receive. On this driver that
+            program is a real shell, so Ctrl-C keeps its ordinary meaning
+            instead of merely reaching a full-screen program's raw input. */}
+        <span className="ml-auto shrink-0" title="⌃C interrupts the foreground program.">
+          ⇧⌃C copies
         </span>
       </div>
       <div ref={hostRef} className="p-bg flex-1 min-h-0 rounded-lg border p-border overflow-hidden" />

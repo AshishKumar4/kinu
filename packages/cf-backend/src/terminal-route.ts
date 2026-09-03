@@ -34,6 +34,7 @@ import { diagnostics, renderCauseChain, toKinuError } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
 import type { KinuSandbox } from "./kinu-sandbox";
 import { err, json } from "./lib/http";
+import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
 import { terminalLane } from "./lib/terminal-lane";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 
@@ -49,6 +50,36 @@ import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 type SandboxPty = {
   getSession(sessionId: string): Promise<{ terminal(request: Request, options?: PtyOptions): Promise<Response> }>;
 };
+
+/** The executor name for the owner's own machine. */
+const DEVICE_EXECUTOR = "laptop";
+
+/** The window a pane gets when it names none. 80x24 is what a terminal has
+ *  been since DEC sold one, and every program still assumes it. */
+const DEFAULT_WINDOW = { cols: 80, rows: 24 } as const;
+
+/** The object that holds a user's device sockets, narrowed to the one thing
+ *  this route does with it: hand an upgrade to the DO the machine is attached
+ *  to. */
+interface DeviceHolderNamespace {
+  idFromName(name: string): DurableObjectId;
+  get(id: DurableObjectId): { fetch(request: Request): Promise<Response> };
+}
+
+/**
+ * The window the pane asked for, bounded.
+ *
+ * The numbers reach a real terminal on someone's machine, and a query string
+ * is the caller's to write. `Number(null)` and `Number("")` are both 0, which
+ * the same bound rejects, so an absent parameter needs no separate arm.
+ */
+function paneWindow(url: URL) {
+  const axis = (name: "cols" | "rows"): number => {
+    const value = Number(url.searchParams.get(name));
+    return Number.isInteger(value) && value > 0 && value <= DEVICE_PTY_MAX_AXIS ? value : DEFAULT_WINDOW[name];
+  };
+  return { cols: axis("cols"), rows: axis("rows") };
+}
 
 /**
  * The session a user's terminal lives in: ONE per workspace, stable, and NOT
@@ -145,6 +176,78 @@ export async function handleTerminalRequest(
   // sentence anyone is shown.
   if (lane.mode === "line") {
     return json({ error: `${executor} has no terminal`, lane: "line" }, { status: 409 });
+  }
+
+  // THE DEVICE'S OWN LANE, settled before the container is touched at all.
+  //
+  // A machine's terminal has no container to prepare and no lease to beat: the
+  // shell runs on the owner's own computer, reached over the one socket its
+  // agent dialled out on. So the workspace opens a session — which is where
+  // the grant for that machine and the owner's Sandbox switch are settled —
+  // and the pane's socket is then handed to the object that already holds the
+  // machine's socket, so the bytes cross between the two inside it. Nothing
+  // here opens a port on that machine or dials into it.
+  if (executor === DEVICE_EXECUTOR) {
+    // These two verbs are GUARDS, not features. The device pane calls neither
+    // — it has no lease to renew and it restarts by opening a new session —
+    // and their only job is to keep a device request off the container path
+    // below, which would beat the lease of a container this terminal is not
+    // running in.
+    if (keepalive || reset) {
+      if (request.method !== "POST") return err(405, "use POST");
+      // A container quiesces when nobody is typing, so it needs telling that
+      // somebody is. A machine is simply on, and its own socket is the
+      // liveness this would have reported.
+      return json({ ok: true });
+    }
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return err(400, "the terminal endpoint is a WebSocket; send an Upgrade: websocket request");
+    }
+    let opened: { session: string; user: string } | { error: string };
+    try {
+      const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+      const ready = await agent.prepareTerminal(executor);
+      if ("error" in ready) {
+        diagnostics.failure("terminal.not_ready", toKinuError({
+          doing: "reaching this workspace's machine for a terminal",
+          cause: ready.error,
+          otherwise: "unavailable",
+        }), scope);
+        return err(503, ready.error);
+      }
+      opened = await agent.openDeviceTerminal(paneWindow(url));
+    } catch (cause) {
+      const error = toKinuError({
+        doing: "reaching this workspace to open a terminal",
+        cause,
+        otherwise: "unavailable",
+      });
+      diagnostics.failure("terminal.device_open_failed", error, scope);
+      return err(503, renderCauseChain(error));
+    }
+    if ("error" in opened) {
+      // Already a rendered chain from the other side of the RPC, so it rides
+      // as the cause rather than being restated. A declined grant and a
+      // machine that cannot sandbox are different problems with different
+      // answers, and the pane shows which.
+      diagnostics.failure("terminal.device_refused", toKinuError({
+        doing: "opening a terminal on this machine",
+        cause: opened.error,
+        otherwise: "unavailable",
+      }), scope);
+      return err(503, opened.error);
+    }
+    if (request.signal.aborted) return abandonedAttach();
+    // The upgrade crosses into the Durable Object that holds the machine's
+    // socket. A WebSocket cannot cross an RPC boundary, but an upgrade request
+    // can — the same move the machine's own connect makes. Only the session
+    // name travels: it was minted for this caller a moment ago and the first
+    // attach spends it.
+    const socketUrl = new URL(request.url);
+    socketUrl.pathname = DEVICE_TERMINAL_PATH;
+    socketUrl.search = `?session=${encodeURIComponent(opened.session)}`;
+    const namespace: DeviceHolderNamespace = env.UserDO;
+    return namespace.get(namespace.idFromName(opened.user)).fetch(new Request(socketUrl, request));
   }
   if (!env.Sandbox) return err(503, "no Sandbox binding is configured on this deployment");
 

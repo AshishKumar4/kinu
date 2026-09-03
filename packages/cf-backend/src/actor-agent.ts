@@ -393,6 +393,12 @@ export interface UserHubClient extends UserHubCoreClient {
   readonly transferDeviceRequestToBackgroundJob: UserDO['transferDeviceRequestToBackgroundJob'];
   readonly cancelDeviceRequestsForBackgroundJob: UserDO['cancelDeviceRequestsForBackgroundJob'];
 
+  /** Open a terminal on one of this user's machines for a workspace, and
+   *  answer the session its pane attaches to. The hub decides whether it may
+   *  exist — the workspace's grant for that machine, and the owner's Sandbox
+   *  switch — exactly as it decides a command. */
+  readonly openDeviceTerminal: UserDO['openDeviceTerminal'];
+
   /** Establish this user's MCP connections. The ONE establishment authority
    *  (UserDO.hydrateUserMcp behind it), shared with the HTTP first-hit warmup —
    *  the turn's settle calls the same method rather than a second one. */

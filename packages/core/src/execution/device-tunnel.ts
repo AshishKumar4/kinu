@@ -183,6 +183,51 @@ export const DEVICE_CANCEL_METHOD = 'execCancel';
 export const DEVICE_EXEC_ACK_METHOD = 'execAck';
 
 /**
+ * The daemon method that OPENS a terminal on the device, named by the session
+ * the hub minted for it: `ptyOpen(session, cols, rows)`.
+ *
+ * Opening is a call and not a frame, because opening is the moment device
+ * access is decided. It carries a request id, it answers once, and the hub
+ * composes the same `sandbox` block onto it that it composes onto `exec` — so
+ * a terminal is confined by the owner's own Sandbox switch, the agent home the
+ * hub computed, and the folders they consented to. A session that skipped this
+ * call would be a shell on the owner's machine with none of that.
+ *
+ * Pinned against the daemon's own dispatch (`packages/pc-agent/src/index.js`),
+ * which ships dependency-free and cannot import this.
+ */
+export const DEVICE_PTY_OPEN_METHOD = 'ptyOpen';
+
+/**
+ * The session frames, which carry a session name and no request id.
+ *
+ * A terminal is the one thing on this socket that is not a correlated call:
+ * bytes arrive from a program nobody asked, at a time nobody chose. So input,
+ * a new window and a close go out as frames, and output and the exit status
+ * come back as frames. Every one names a session the hub already opened, so
+ * none of them can start work on the machine.
+ *
+ * `PTY_IN` and `PTY_OUT` carry base64 because this socket carries JSON and a
+ * keystroke is bytes rather than text: an arrow key is three bytes that are
+ * not a character.
+ */
+export const DEVICE_PTY_INPUT = 'PTY_IN';
+export const DEVICE_PTY_RESIZE = 'PTY_RESIZE';
+export const DEVICE_PTY_CLOSE = 'PTY_CLOSE';
+export const DEVICE_PTY_OUTPUT = 'PTY_OUT';
+export const DEVICE_PTY_EXIT = 'PTY_EXIT';
+
+/** The frames a device sends about a live terminal. The hub reads these before
+ *  the RPC correlator sees them: they have no id to correlate, and a
+ *  correlator handed one would drop it without a word. */
+export const DEVICE_PTY_FRAMES: readonly string[] = [DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT];
+
+/** A window a terminal can actually have. The kernel carries each axis as an
+ *  `unsigned short`, and a thousand cells on a side is past any real display,
+ *  so the hub and the daemon both refuse anything larger. */
+export const DEVICE_PTY_MAX_AXIS = 1000;
+
+/**
  * The cancellation protocol this build speaks, sent as the second parameter of
  * every {@link DEVICE_CANCEL_METHOD} call.
  *
@@ -345,6 +390,22 @@ export class DeviceTunnel {
         reject(err instanceof Error ? err : new Error(String(err)));
       }
     });
+  }
+
+  /**
+   * Send a frame the device will not answer.
+   *
+   * A terminal's keystrokes, its new window and its close are not questions,
+   * so they carry no request id and register nothing to correlate. Waiting for
+   * a reply to a keystroke would put a round trip between a key and the letter
+   * on the screen, which is the one thing a terminal may not do.
+   *
+   * Throws when the socket is gone, so a caller learns the frame went nowhere
+   * rather than assuming it landed.
+   */
+  notify(frame: JsonObject): void {
+    if (!this.isConnected()) throw new Error(TUNNEL_DISCONNECTED);
+    this.socket.send(JSON.stringify(frame));
   }
 
   /** Feed an incoming socket message; resolves/rejects the matching pending call.

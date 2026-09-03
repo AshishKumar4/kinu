@@ -112,6 +112,7 @@
   "movable packages/cf-backend/src/user/credential-headers.ts",
   "movable packages/cf-backend/src/user/device-hub.ts",
   "movable packages/cf-backend/src/user/device-inflight.ts",
+  "movable packages/cf-backend/src/user/device-terminal.ts",
   "movable packages/cf-backend/src/user/egress-vault.ts",
   "movable packages/cf-backend/src/user/schema.ts",
   "movable packages/cf-backend/src/user/validate.ts",

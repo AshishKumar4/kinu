@@ -181,19 +181,23 @@ async function body(response: Response | null | undefined) {
 }
 
 describe('which environments can have a terminal', () => {
-  test('the sandbox container is the one PTY lane', () => {
+  test('the container and the owner machine are the PTY lanes', () => {
     expect(terminalLane('sandbox')).toEqual({ mode: 'pty' });
+    expect(terminalLane('laptop')).toEqual({ mode: 'pty' });
   });
 
   // THE CONTRACT CHANGED HERE, and this case is what enforces the new one.
   // Until 2026-09-02 a line lane carried a `missing` sentence and the pane
   // printed it, so the bar read "the device daemon's JSON-RPC surface has no
   // pty method …" next to the mode. The owner's product rule forbids that: a
-  // label states what a person is in, never our missing methods. A device PTY
-  // is also being built, so any sentence about what the device cannot do is
-  // wrong the day it lands. So the lane carries a mode and nothing else, and
-  // there is no field a sentence can reach the screen through.
-  test.each(['workspace', 'laptop', 'parent', 'something-invented'])(
+  // label states what a person is in, never our missing methods. So the lane
+  // carries a mode and nothing else, and there is no field a sentence can
+  // reach the screen through.
+  //
+  // `laptop` left this list on 2026-09-03, when the machine's own agent grew a
+  // real terminal. The lane table states what an ENVIRONMENT can give; whether
+  // one particular machine is attached right now is the route's preflight.
+  test.each(['workspace', 'parent', 'something-invented'])(
     '%s is line mode, and its lane carries no sentence to render',
     (executor) => {
       expect(terminalLane(executor)).toEqual({ mode: 'line' });
@@ -314,7 +318,7 @@ describe('attaching a terminal', () => {
 
   test('an executor with no terminal is refused as line mode, carrying no implementation detail', async () => {
     const { env, trace } = harness();
-    const response = await terminalRequest(attachRequest('executor=laptop'), env);
+    const response = await terminalRequest(attachRequest('executor=workspace'), env);
     expect(response?.status).toBe(409);
     const payload = await body(response);
     expect(payload.lane).toBe('line');
@@ -460,7 +464,7 @@ describe('a terminal failure names the workspace and the executor', () => {
     const { env } = harness();
 
     const { logs } = await recorded(
-      async () => await terminalRequest(attachRequest('executor=laptop'), env),
+      async () => await terminalRequest(attachRequest('executor=workspace'), env),
     );
 
     // The negative control, and a deliberate boundary: routing to line mode is a

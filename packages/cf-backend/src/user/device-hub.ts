@@ -39,8 +39,14 @@ const PROBE_TIMEOUT_MS = 3_000;
 
 const WhichResultSchema = v.object({ present: v.array(v.string()) });
 
-/** The socket surface the hub needs — satisfied by the platform WebSocket. */
+/** The socket surface the hub needs — satisfied by the platform WebSocket.
+ *
+ *  `send` widens core's text-only `TunnelSocket`, because one of these sockets
+ *  carries a terminal's output and that is BYTES: decoding a screen repaint as
+ *  text would corrupt every escape sequence in it. The device protocol itself
+ *  stays JSON, so the tunnel keeps the narrower view. */
 export interface DeviceSocket extends TunnelSocket {
+  send(data: string | ArrayBuffer | ArrayBufferView): void;
   close(code?: number, reason?: string): void;
   serializeAttachment(attachment: JsonValue): void;
   deserializeAttachment(): JsonValue | undefined;

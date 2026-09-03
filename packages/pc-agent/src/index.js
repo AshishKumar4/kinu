@@ -8,6 +8,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawn, spawnSync, execFileSync } = require('node:child_process');
 const sandbox = require('./sandbox.js');
+const pty = require('./pty.js');
 
 const DEVICE_HOME = path.resolve(process.env.KINU_HOME?.trim() || path.join(os.homedir(), '.kinu'));
 const CONFIG_PATH = path.join(DEVICE_HOME, 'device.json');
@@ -100,6 +101,43 @@ const CANCEL_PROTOCOL = 1;
  * receive ceiling even after worst-case JSON escaping. The daemon drains bytes
  * past the cap without retaining them, so a noisy process cannot grow its heap. */
 const EXEC_STREAM_MAX_BYTES = 512 * 1024;
+
+/**
+ * The terminal protocol, which is the one thing on this socket that is not a
+ * correlated call.
+ *
+ * Opening IS a call: it is the moment consent is decided, so it carries a
+ * request id, it answers once, and the hub composes the same `sandbox` block
+ * onto it that it composes onto `exec`. Everything after it is a stream —
+ * keystrokes in, bytes and an exit status out — and a stream has nothing to
+ * correlate, so those frames carry a session name instead of an id.
+ *
+ * The names are pinned against core's own constants by cf-backend's pc-agent
+ * test, as `execCancel` is: this daemon ships as three dependency-free files
+ * and cannot import them.
+ */
+const PTY_OPEN_METHOD = 'ptyOpen';
+const PTY_INPUT_FRAME = 'PTY_IN';
+const PTY_RESIZE_FRAME = 'PTY_RESIZE';
+const PTY_CLOSE_FRAME = 'PTY_CLOSE';
+const PTY_OUTPUT_FRAME = 'PTY_OUT';
+const PTY_EXIT_FRAME = 'PTY_EXIT';
+/** The frames the hub sends a live session. Each names a session this daemon
+ *  already opened, so none of them is a way to start work. */
+const PTY_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, PTY_CLOSE_FRAME]);
+
+/**
+ * How far behind the socket may fall before a terminal's output is dropped
+ * rather than queued.
+ *
+ * A terminal is unlike a command: its output has no end to wait for, so a
+ * program writing faster than the socket drains would grow this daemon's heap
+ * without bound. Queueing does not help a display — the newest bytes ARE the
+ * picture, and the pane repaints — so past this backlog the newest frame is
+ * dropped and counted. A full repaint of a large window is tens of kilobytes,
+ * so this holds several of them and a brief stall stays invisible.
+ */
+const PTY_BACKLOG_MAX_BYTES = 256 * 1024;
 
 
 function log(...a) { console.log(new Date().toISOString(), ...a); }
@@ -1325,8 +1363,12 @@ function waitForSupervisorState(dir, child) {
  * it cannot sandbox is REFUSED, never run raw. The hub refuses it too; this is
  * the second of the two, because the machine is the only party that knows
  * whether its kernel will cooperate.
+ *
+ * `source` is the environment the tier's own allow-list filters. A command
+ * takes this daemon's; a terminal session takes the same with `TERM` set to
+ * the terminal it was just given, which is the only difference between them.
  */
-function planFromFrame(msg, command) {
+function planFromFrame(msg, command, source = process.env) {
   const requested = parseRecord(msg.sandbox ?? {}, 'exec sandbox options must be an object');
   // Only an EXPLICIT 'sandboxed' enters the sandbox. The hub decides the tier
   // and its default is on, but the hub and this daemon ship separately: a
@@ -1341,7 +1383,7 @@ function planFromFrame(msg, command) {
     throw error;
   }
   if (tier === 'raw') {
-    return sandbox.plan({ tier: 'raw', deviceHome: DEVICE_HOME, command, cwd: process.cwd(), source: process.env });
+    return sandbox.plan({ tier: 'raw', deviceHome: DEVICE_HOME, command, cwd: process.cwd(), source });
   }
   const agentHome = path.resolve(parseString(requested.agentHome, 'exec sandbox options must name an agent home'));
   if (!agentHome.startsWith(`${AGENT_ROOT}/`)) {
@@ -1364,7 +1406,7 @@ function planFromFrame(msg, command) {
     roots,
     cwd: msg.cwd === undefined ? agentHome : path.resolve(parseString(msg.cwd, 'exec cwd must be a path')),
     command,
-    source: process.env,
+    source,
     statusFd: 3,
   });
 }
@@ -1409,11 +1451,116 @@ function confinedDeviceViewPath(msg, requested, mode) {
   return viewFromFrame(msg).resolvePath(parseString(requested, 'device paths must be strings'), mode);
 }
 
+/**
+ * The program a terminal session runs.
+ *
+ * `plan()` builds `bash -c <command>` for every tier, and this is that command:
+ * become an interactive shell. The `exec` makes it one process rather than a
+ * shell inside a shell, and going through `plan` unchanged is the point — a
+ * session is confined by exactly the argv, environment and mounts a command
+ * on this device is confined by, computed by the same function, with no second
+ * policy for terminals to drift from.
+ */
+const SESSION_COMMAND = `exec ${COMMAND_SHELL} -i`;
+
+/**
+ * The environment the session's plan is built from.
+ *
+ * One name is added to this daemon's own: the terminal it is about to be given.
+ * `TERM` is already on the sandbox environment's allow-list, so both tiers
+ * carry it through the same filter, and a full-screen program is told the
+ * truth about what it is drawing on. A daemon started by a launcher has no
+ * `TERM` of its own to inherit.
+ */
+function sessionSource() {
+  return { ...process.env, TERM: pty.TERMINAL_NAME };
+}
+
+/**
+ * The environment the session LEADER runs with.
+ *
+ * The leader becomes the planned program, and finding it means resolving a
+ * bare name — `bwrap`, or the shell — on a PATH. A sandboxed plan deliberately
+ * hands the command no environment at all, because bwrap re-establishes it
+ * with `--setenv`, so PATH here reaches the leader and never the command. A
+ * raw plan already carries its own allow-listed PATH, which wins.
+ */
+function leaderEnvironment(plan) {
+  return { PATH: process.env.PATH, ...plan.env };
+}
+
+/**
+ * One frame from a live terminal to the hub, and whether the socket took it.
+ *
+ * `false` is not a failure: it means this socket is too far behind to be
+ * caught up by queueing, and the session counts what it dropped.
+ *
+ * The backlog rule covers OUTPUT alone. A terminal's newest bytes are its
+ * picture, and a dropped repaint is repaired by the next one — but the frame
+ * saying the shell ended repairs nothing and repeats never. Dropping that one
+ * leaves the hub holding a terminal that no longer exists, so it goes out even
+ * when the socket is behind: it is one small frame, once per session.
+ */
+function sendPtyFrame(ws, frame) {
+  const droppable = frame.type === PTY_OUTPUT_FRAME;
+  if (droppable && Number.isFinite(ws.bufferedAmount) && ws.bufferedAmount > PTY_BACKLOG_MAX_BYTES) return false;
+  try {
+    ws.send(JSON.stringify(frame));
+  } catch (err) {
+    // The socket closed between this terminal's read and this write. Its own
+    // close handler ends every session; this frame has nowhere left to go.
+    log('device.terminal_frame_unsent', frame.type, frame.session, err.message || err);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * A frame for a session already open.
+ *
+ * There is no request id to answer on, so a frame naming a terminal this
+ * machine no longer holds is recorded and dropped. That is the ordinary race
+ * and not an error: the program exited, and its exit frame is already on its
+ * way to the hub that sent this.
+ */
+function handlePtyFrame(msg, ctx) {
+  const sessions = ctx && ctx.sessions;
+  if (!sessions) return log('device.terminal_frame_dropped', msg.type, 'this daemon holds no terminals');
+  try {
+    if (msg.type === PTY_INPUT_FRAME) sessions.write(msg.session, msg.data);
+    else if (msg.type === PTY_RESIZE_FRAME) sessions.resize(msg.session, msg.cols, msg.rows);
+    else sessions.close(msg.session);
+  } catch (err) {
+    log('device.terminal_frame_dropped', msg.type, msg.session, err.message || err);
+  }
+}
+
 function handle(msg, ws, ctx) {
   const { id, method, params } = msg;
   const checkpoints = ctx && ctx.checkpoints;
+  // A session frame first: it carries a terminal's name rather than a request
+  // id, so the method dispatch below has nothing to match it on.
+  if (PTY_FRAMES.has(msg.type)) return handlePtyFrame(msg, ctx);
   try {
-    if (method === 'exec') {
+    if (method === PTY_OPEN_METHOD) {
+      assertSupervisionSupported();
+      assertCommandShellPresent();
+      if (!ctx || !ctx.sessions) throw new Error('this daemon was started without terminal support');
+      // The SAME derivation `exec` uses, from the same frame: the tier the
+      // owner set, the agent home the hub computed, the roots they consented
+      // to, and a refusal when the machine cannot honour a sandboxed frame.
+      // A terminal is device access, so it is confined exactly as a command is.
+      const plan = planFromFrame(msg, SESSION_COMMAND, sessionSource());
+      const opened = ctx.sessions.open({
+        session: params[0],
+        cols: params[1],
+        rows: params[2],
+        argv: plan.argv,
+        env: leaderEnvironment(plan),
+        send: (frame) => sendPtyFrame(ws, frame),
+      });
+      rpc(ws, id, { session: params[0], pid: opened.pid, cols: opened.cols, rows: opened.rows });
+    } else if (method === 'exec') {
       const cmd = parseString(params[0], 'exec expects a command string');
       assertSupervisionSupported();
       assertCommandShellPresent();
@@ -1957,7 +2104,13 @@ function main() {
   const USER = cfg.user;
   const HTTP_ORIGIN = (cfg.origin || 'https://kinu.run').replace(/\/+$/, '');
   const WS_ORIGIN = HTTP_ORIGIN.replace(/^http/, 'ws');
-  const ctx = { checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }) };
+  const ctx = {
+    checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }),
+    // The terminals this daemon holds. Live state, never durable: a terminal
+    // is something a person is watching, so one whose socket is gone has
+    // nobody to draw for.
+    sessions: pty.createSessions({ log }),
+  };
 
   // The daemon's one WebSocket: the runtime's global. Kinu launches this
   // daemon only under its own Bun, whose WebSocket is the implementation the
@@ -2000,6 +2153,11 @@ function main() {
       // here is what keeps a dropped socket from leaving work running that
       // nothing can name, stop or observe.
       inFlight.terminateUnanswered();
+      // A terminal outlives nothing: the socket that carried its bytes is the
+      // socket that carried its keystrokes, so the shell is hung up here
+      // rather than left running with no way to reach it.
+      const ended = ctx.sessions.closeAll();
+      if (ended.length > 0) log('device.terminals_closed_with_socket', ended.join(' '));
     },
     dial(ticket) {
       const wsUrl = `${WS_ORIGIN}/pc/connect?user=${encodeURIComponent(USER)}&ticket=${encodeURIComponent(ticket)}`;
@@ -2028,6 +2186,10 @@ function main() {
             gpu: sandbox.gpuNodes(),
           },
           agentRoot: AGENT_ROOT,
+          // Terminals are deliberately NOT advertised here. A hub that asks a
+          // daemon too old to hold them gets `unknown method: ptyOpen`, which
+          // is the same answer and cannot go stale — where a recorded
+          // capability outlives the build that proved it.
         }));
       });
       ws.addEventListener('message', (ev) => {
@@ -2083,6 +2245,13 @@ module.exports = {
   CANCEL_METHOD,
   CANCEL_PROTOCOL,
   EXEC_ACK_METHOD,
+  PTY_OPEN_METHOD,
+  PTY_INPUT_FRAME,
+  PTY_RESIZE_FRAME,
+  PTY_CLOSE_FRAME,
+  PTY_OUTPUT_FRAME,
+  PTY_EXIT_FRAME,
+  SESSION_COMMAND,
   createInFlight,
   INFLIGHT_ROOT,
   requestDirectory,

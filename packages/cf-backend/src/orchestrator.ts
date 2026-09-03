@@ -4354,6 +4354,17 @@ export class OrchestratorAgent extends ActorAgent {
    *  the caller is the terminal's HTTP route, which then upgrades the socket
    *  the chat rail cannot carry (see terminal-route.ts). */
   async prepareTerminal(executorId: string): Promise<{ ok: true } | { error: string }> {
+    // The owner's own machine has no container to warm. What a terminal needs
+    // there is a machine that is actually attached, and each answer below is
+    // one a person can act on: a machine that was linked and is now offline
+    // needs one command, and an account with none linked needs a different
+    // one. "laptop has no terminal" was true until its agent grew one.
+    if (executorId === 'laptop') {
+      const device = this.rt.deviceTransport.status();
+      if (device.connected) return { ok: true };
+      if (device.registered) return { error: 'That machine is offline. Run `kinu connect` on it.' };
+      return { error: 'No machine is linked to this account yet. Run `kinu connect` on the one you want.' };
+    }
     if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
     const handle = this.rt.sandboxHandle;
     if (!handle) return { error: 'the sandbox container is not configured for this workspace' };
@@ -4368,6 +4379,46 @@ export class OrchestratorAgent extends ActorAgent {
       return {
         error: renderCauseChain(toKinuError({
           doing: 'preparing the sandbox container for a terminal',
+          cause,
+          otherwise: 'unavailable',
+        })),
+      };
+    }
+  }
+
+  /**
+   * Open a terminal on the owner's machine for THIS workspace, and answer the
+   * session its pane attaches to.
+   *
+   * The workspace asks, so the workspace's own confinement applies: the hub
+   * composes the tier the owner set, the agent home under this workspace's
+   * name, and the folders they consented to — the same block it composes for a
+   * command. That is why this hop exists rather than the route calling the hub
+   * itself: only this object holds the workspace's capability token, and a
+   * terminal opened under any weaker identity would get no agent home and be
+   * refused.
+   *
+   * `user` is the object that holds both sockets. The route needs it to send
+   * the pane's upgrade to the same place the machine's own socket lives.
+   */
+  async openDeviceTerminal(
+    window: { cols: number; rows: number },
+  ): Promise<{ session: string; user: string } | { error: string }> {
+    const user = this.getOwnerUserId();
+    if (!user) return { error: 'this workspace has no owner yet' };
+    try {
+      const opened = await this.requireOwnerUserDO().openDeviceTerminal(
+        await this.userCaller(), this.workspaceName(), window,
+      );
+      return { session: opened.session, user };
+    } catch (cause) {
+      // The chain, so the pane can show WHY. A declined grant, a machine that
+      // cannot sandbox, an install too old to hold terminals and a machine
+      // that went offline are four different problems with four different
+      // answers, and each already carries its own words.
+      return {
+        error: renderCauseChain(toKinuError({
+          doing: 'opening a terminal on this machine',
           cause,
           otherwise: 'unavailable',
         })),
