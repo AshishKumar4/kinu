@@ -5,7 +5,7 @@
 // double whose snapshot is the fleet the hub would serve.
 import { describe, expect, test } from 'bun:test';
 import {
-  createDeviceTunnelExecutor, deviceFleetFiles, deviceMountSegment,
+  createDeviceTunnelExecutor, deviceMountSegment,
   type DeviceTransport,
 } from '../src/execution/device-tunnel-executor';
 import { deviceFleetAsk, type DeviceFleetEntry, type DeviceStatus } from '../src/execution/device-status';
@@ -164,13 +164,17 @@ describe('the device fleet at the executor surface', () => {
 describe('the composite file plane', () => {
   test('one live machine keeps /pc as its own root, byte for byte', async () => {
     const t = fleetTransport([STUDIO, SPARE]);
-    const plane = deviceFleetFiles(t, {
+    const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => '/home/dev', deviceHome: async () => '/home/dev', unconfined: async () => true,
     });
+    // The composite plane is the provider's own public `files`; the test
+    // reaches it the way the mount table does, never a private builder.
+    const plane = provider.files;
+    if (plane === undefined) throw new Error('the device executor exposes no file plane');
 
     expect(await plane.readFile('/home/dev/notes.md', { encoding: 'utf8' })).toBe('bytes of dev-studio');
     expect(await plane.readdir('/home/dev')).toEqual(['entry-of-dev-studio']);
-    expect(await plane.homeDir()).toBe('/home/dev');
+    expect(await provider.homeDir()).toBe('/home/dev');
     expect(t.sent.map((frame) => [frame.params[0], frame.deviceId])).toEqual([
       ['/home/dev/notes.md', 'dev-studio'], ['/home/dev', 'dev-studio'],
     ]);
@@ -178,15 +182,19 @@ describe('the composite file plane', () => {
 
   test('a fleet serves each machine under /pc/<name>, and its root lists them', async () => {
     const t = fleetTransport([STUDIO, RIG, SPARE]);
-    const plane = deviceFleetFiles(t, {
+    const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
     });
+    // The composite plane is the provider's own public `files`; the test
+    // reaches it the way the mount table does, never a private builder.
+    const plane = provider.files;
+    if (plane === undefined) throw new Error('the device executor exposes no file plane');
 
     expect(await plane.readdir('/')).toEqual(['ashish@studio', 'mrwhite@rig']);
     expect(await plane.stat('/')).toMatchObject({ isDir: true });
     expect(await plane.readFile('/mrwhite@rig/etc/hosts', { encoding: 'utf8' })).toBe('bytes of dev-rig');
     expect(await plane.readdir('/ashish@studio/home')).toEqual(['entry-of-dev-studio']);
-    expect(await plane.homeDir()).toBe('/');
+    expect(await provider.homeDir()).toBe('/');
     // The segment is stripped: the machine sees its own native path.
     expect(t.sent.map((frame) => [frame.params[0], frame.deviceId])).toEqual([
       ['/etc/hosts', 'dev-rig'], ['/home', 'dev-studio'],
@@ -195,9 +203,13 @@ describe('the composite file plane', () => {
 
   test('a path under no live machine is a stated absence naming the fleet', async () => {
     const t = fleetTransport([STUDIO, RIG]);
-    const plane = deviceFleetFiles(t, {
+    const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
     });
+    // The composite plane is the provider's own public `files`; the test
+    // reaches it the way the mount table does, never a private builder.
+    const plane = provider.files;
+    if (plane === undefined) throw new Error('the device executor exposes no file plane');
 
     await expect(plane.readFile('/home/dev/a.txt')).rejects.toMatchObject({ code: 'ENXIO' });
     await expect(plane.readFile('/home/dev/a.txt')).rejects.toThrow('no connected machine is named "home"');

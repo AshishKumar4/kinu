@@ -23,6 +23,7 @@ import {
   SWARM_PRESET_DOCTRINE,
   skillIndexLine,
   type SkillHeader,
+  type PromptExecutorInfo,
 } from '../src/index';
 import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
 import { DELEGATION_SECTION } from '../src/prompting/section-templates';
@@ -717,7 +718,7 @@ describe('buildSystemPromptSync', () => {
     // in the agent's own plane at /pc (and /sandbox where a container binds),
     // while the shell stays over workspace bytes only.
     const { rt } = createTestRuntime();
-    const executors = [
+    const executors: PromptExecutorInfo[] = [
       { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
       { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
     ];

@@ -201,6 +201,38 @@ describe('an optional field production reads', () => {
       .toEqual([PROVISION_HOME, LOGGER]);
   });
 
+  test('is NOT reported when a literal annotated with an INTERSECTION alias supplies it', () => {
+    // `type CFRuntime = AgentRuntime & { … }` is `extends` spelled as a type
+    // alias, declared in ONE file while the literal it annotates sits in
+    // another — exactly how cf-backend/runtime.ts fills AgentRuntime. Every
+    // field that literal supplied read as unsupplied until the walk resolved
+    // the alias to its named members across files. In-file, the same alias
+    // was already caught by another path, which is why this case splits them.
+    // No `runIt(deps)`: passing the NAME to a RunDeps-typed parameter is its
+    // own supply arm (the `Parameters<typeof …>` case below) and would credit
+    // the fields whatever the alias did. Production's runtime literal is
+    // RETURNED, never passed, so the alias is its only route to AgentRuntime.
+    // `runIt` stays reached through a second, plain call so the case measures
+    // field supply and not reachability.
+    const alias = `${BASE}strategy/wide.ts`;
+    const body = "  const deps: Wide = { rt: 'x', mission: 'm', extra: 1 };\n  void deps;\n"
+      + "  runIt({ rt: 'r' });";
+    const corpus = fixture(body, [[alias, "import type { RunDeps } from './run';\nexport type Wide = RunDeps & { extra: number };\n"]]);
+    expect(census(corpus)).toEqual([PROVISION_HOME, LOGGER]);
+  });
+
+  test('an intersection alias that does not name the interface supplies nothing of it', () => {
+    // The failing direction of the arm above: the walk must resolve to the
+    // members actually NAMED, never to every interface in scope. RunDeps is
+    // supplied the ordinary way with `rt` only, so `mission` and `logger` are
+    // reported — and a second literal under an alias that names no interface
+    // must not quietly supply them.
+    const body = `${SUPPLY(`{ rt: 'x' }`)}\n`
+      + "  type Other = { rt: string; mission: string } & { extra: number };\n"
+      + "  const other: Other = { rt: 'y', mission: 'm', extra: 1 };\n  void other;";
+    expect(census(fixture(body))).toEqual([PROVISION_HOME, LOGGER, MISSION]);
+  });
+
   test('is NOT reported when `Object.assign` supplies it', () => {
     // Two fields of the real `SwarmRunDeps` are wired exactly this way, and were
     // false positives until this arm existed.

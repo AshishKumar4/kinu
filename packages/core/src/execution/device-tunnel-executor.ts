@@ -253,7 +253,7 @@ const DeviceSelectionSchema = v.union([
  *  string or an options object are both accepted, because codemode callers
  *  write `laptop.exec(cmd, 'studio')` and in-process callers write
  *  `execute(cmd, { device: 'studio', signal })`. */
-export function readDeviceSelection(input: { context: unknown }): string | undefined {
+function readDeviceSelection(input: { context: unknown }): string | undefined {
   const parsed = v.safeParse(DeviceSelectionSchema, input.context);
   if (!parsed.success) return undefined;
   const named = v.is(v.string(), parsed.output) ? parsed.output : parsed.output.device;
@@ -885,7 +885,7 @@ interface DeviceRoute {
  * names — the stated absence the mount law requires, never an empty listing
  * that could read as "this machine has no files".
  */
-export function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent): DeviceVFS {
+function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent): DeviceVFS {
   /** The one view a path reaches WITHOUT a segment: the sole live machine, or
    *  the unnamed view when the fleet is unknown or empty here (the hub then
    *  answers for a one-machine account or refuses, exactly as before). Null

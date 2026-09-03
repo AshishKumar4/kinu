@@ -6,8 +6,7 @@ import {
   type BuiltinToolName,
 } from '../tools/registry';
 import { isMcpToolKey } from '../tools/mcp-naming';
-import type { ExecutorLifecycleStatus, ResourceLimits } from '../execution/types';
-import type { DeviceSandboxStatus } from '../execution/device-status';
+import type { ExecutorInfo, ExecutorLifecycleStatus } from '../execution/types';
 import {
   resolvePromptModelProfile,
   type PromptModelContext,
@@ -86,32 +85,20 @@ export function workModeForTurnMetadata<Metadata>(metadata: Metadata): WorkMode 
   return parsed.output.kinuMode === 'plan' ? 'plan' : 'build';
 }
 
-export interface PromptExecutorInfo {
-  name: string;
-  kind?: string;
-  capabilities?: readonly string[];
-  /** Capabilities the environment can neither claim nor rule out. Rendered
-   *  separately from the declared set: a model that reads an omission as an
-   *  absence never tries the one thing the machine may have been attached for. */
-  unmeasuredCapabilities?: readonly string[];
-  available?: boolean;
-  configured?: boolean;
-  active?: boolean;
-  status?: ExecutorLifecycleStatus | string;
-  reason?: string;
-  /** Measured limits of the environment this executor's processes run in,
-   *  when its environment declares any. Rendered as a live status suffix. */
-  resourceLimits?: ResourceLimits;
-  /** The machine's own user-chosen name, when the environment has one. */
-  label?: string;
-  /** Whether this agent holds the environment's access grant already — what
-   *  tells the model whether its first call runs or raises a consent card. */
-  granted?: boolean;
-  /** How the machine behind this row runs a command, when it is a device with
-   *  a Sandbox switch: the owner's setting, what the machine proved, this
-   *  workspace's own home on it, and the directories it may write. */
-  sandbox?: DeviceSandboxStatus;
-}
+/**
+ * One executor row as the prompt reads it: the router's own row, loosened.
+ *
+ * DERIVED, not restated. The field list was a copy of ExecutorInfo with six
+ * fields made optional and `status` widened to any string, because the prompt
+ * also builds rows from bare names (`uniqueExecutors`) and renders whatever
+ * word a backend's status carries. Writing that as a derivation keeps ONE
+ * source for the row and lets the field-supply census see that production
+ * supplies these fields at the router, which a second interface hid.
+ */
+export type PromptExecutorInfo =
+  & Partial<Pick<ExecutorInfo, 'kind' | 'capabilities' | 'available' | 'configured' | 'active'>>
+  & Omit<ExecutorInfo, 'kind' | 'capabilities' | 'available' | 'configured' | 'active' | 'status'>
+  & { status?: ExecutorLifecycleStatus | string };
 
 export interface PromptExternalToolInfo {
   name: string;

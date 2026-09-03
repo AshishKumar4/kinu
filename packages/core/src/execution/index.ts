@@ -85,4 +85,4 @@ export {
 export { sandboxFiles } from './sandbox';
 export { nimbusSessionFiles } from './nimbus';
 export { AGENT_FS_CHUNK_BYTES } from './nimbus-agent-files';
-export { deviceFiles, deviceFleetFiles, type DeviceFileConsent } from './device-tunnel-executor';
+export { deviceFiles, type DeviceFileConsent } from './device-tunnel-executor';

@@ -1014,6 +1014,21 @@ export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts
         if (name !== undefined && extended.length > 0) bases.set(name, extended);
         return;
       }
+      // `type CFRuntime = AgentRuntime & { … }` is `extends` spelled as an
+      // intersection: a literal annotated with the alias supplies every named
+      // member's fields. Without this, AgentRuntime.deviceTransport read as
+      // unsupplied while the one production runtime literal that fills it was
+      // annotated `CFRuntime` — an alias this walk never resolved.
+      if (node.type === 'TSTypeAliasDeclaration') {
+        const name = declaredName(node);
+        const body = node.children.find((child) => child.raw.type === 'TSIntersectionType');
+        if (name === undefined || body === undefined) return;
+        const members = body.children
+          .map((child) => (child.raw.type === 'TSTypeReference' ? identifierText(child.children[0] ?? child) : undefined))
+          .filter((member): member is string => member !== undefined);
+        if (members.length > 0) bases.set(name, members);
+        return;
+      }
       if (!isFunctionLike(node)) return;
       const name = declaredName(node) ?? declaredName(node.parent ?? node);
       if (name === undefined) return;
