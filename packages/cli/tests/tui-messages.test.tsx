@@ -198,9 +198,9 @@ describe('TUI transcript rendering', () => {
         // The well is a box, not a painted line: its own rounded rule frames the block.
         expect(hex(rule.bg)).toBe(theme.colors.well.fill);
         expect(hex(rule.fg)).toBe(theme.colors.well.border);
-        // Prose keeps the canvas and the prose register.
+        // Prose keeps the canvas and the ink register.
         expect(hex(prose.bg)).not.toBe(theme.colors.well.fill);
-        expect(hex(prose.fg)).toBe(theme.colors.text.primary);
+        expect(hex(prose.fg)).toBe(theme.colors.text.strong);
       } finally {
         flushSync(() => { root.unmount(); });
         renderer.destroy();

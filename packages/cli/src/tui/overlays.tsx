@@ -282,9 +282,6 @@ export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverla
           }}
         />
       )}
-      {!compact && (
-        <PaletteLine text="Changes use the same config path as slash commands." width={innerWidth} color={colors.text.muted} />
-      )}
     </PaletteFrame>
   );
 }
@@ -723,8 +720,8 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
       {prompt.phase === 'ask' ? (
         <>
           <PaletteLine text={prompt.statusLine} width={innerWidth} color={colors.text.primary} />
-          <PaletteLine text={`Links this machine as "${prompt.deviceName}".`} width={innerWidth} color={colors.text.muted} />
-          <PaletteLine text="A workspace you grant runs commands here as you; revoke any time." width={innerWidth} color={colors.text.muted} />
+          <PaletteLine text={`Linking registers this machine as "${prompt.deviceName}".`} width={innerWidth} color={colors.text.muted} />
+          <PaletteLine text="A workspace you approve runs commands here in a sandbox. Revoke it in Account settings → Devices." width={innerWidth} color={colors.text.muted} />
           <PaletteLine text={`${keybindings.hint('device.connect')} connect and keep connected`} width={innerWidth} color={colors.intent.accentStrong} />
           <PaletteLine text={`${keybindings.hint('device.ssh')} use this session only`} width={innerWidth} color={colors.intent.accentStrong} />
           <PaletteLine text={`${keybindings.hint('device.dismiss')} don't ask again · ${keybindings.hint('device.not-now')} not now`} width={innerWidth} color={colors.text.muted} />
@@ -737,7 +734,7 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
             color={colors.text.primary}
           />
           <PaletteLine
-            text={`Waiting for the daemon to connect${'.'.repeat(1 + (prompt.ticks % 3))}`}
+            text={`Waiting for this PC to answer${'.'.repeat(1 + (prompt.ticks % 3))}`}
             width={innerWidth}
             color={colors.intent.accent}
           />
@@ -995,7 +992,7 @@ export function PhaseLine({ label }: { label: string | null }) {
   if (!label) return null;
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text><span fg={colors.intent.accent}>{SPINNER_FRAMES[frame]} </span><span fg={colors.text.muted}>{label}</span></text>
+      <text><span fg={colors.intent.accent}>{SPINNER_FRAMES[frame]} </span><i fg={colors.text.muted}>{label}</i></text>
     </box>
   );
 }

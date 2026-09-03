@@ -784,7 +784,7 @@ describe('CLI TUI layout', () => {
         </box>,
       );
       await renderSettled(renderOnce);
-      expect(captureCharFrame()).toContain('Waiting for the daemon to connect..');
+      expect(captureCharFrame()).toContain('Waiting for this PC to answer..');
 
       root.render(
         <box style={{ width: '100%', height: '100%' }}>

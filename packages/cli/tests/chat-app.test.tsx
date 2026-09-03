@@ -344,11 +344,11 @@ describe('ChatApp terminal interaction', () => {
     expect(screen.frame()).not.toContain('Mission:');
 
     // Reopened, the hub lists the workspace's members with the untitled peer
-    // as "New agent" — the current, open conversation.
+    // as "Untitled agent" — the current, open conversation.
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the refreshed hub roster', () => screen.frame().includes('New agent'));
+    await screen.waitFor('the refreshed hub roster', () => screen.frame().includes('Untitled agent'));
     expect(screen.frame()).toContain('Checkout · main');
-    expect(screen.frame()).toContain('New agent · main');
+    expect(screen.frame()).toContain('Untitled agent · main');
     expect(screen.frame()).toContain('· open');
     screen.mockInput.pressEscape();
   });

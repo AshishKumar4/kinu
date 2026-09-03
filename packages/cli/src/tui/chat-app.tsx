@@ -510,7 +510,7 @@ function ChatScene({
     }
     if (!onWorkspaceSelect && !preparedClient) {
       setNavigationOpen(false);
-      addMessage({ role: 'system', content: 'Workspace switching is unavailable in this host.' });
+      addMessage({ role: 'system', content: 'Exit to the home screen to open another workspace.' });
       return;
     }
     if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
@@ -529,7 +529,7 @@ function ChatScene({
     try {
       if (preparedClient) candidate = preparedClient;
       else if (onWorkspaceSelect) candidate = await onWorkspaceSelect(workspace.name);
-      else throw new Error('Workspace switching is unavailable in this host.');
+      else throw new Error('Exit to the home screen to open another workspace.');
       stopBuffering = candidate.subscribe((event) => { bufferedEvents.push(event); });
       await candidate.connect();
       let history: DisplayMessage[] = [];
@@ -1448,15 +1448,17 @@ function ChatScene({
               : inputState.walkbackOpen
                 ? 'Walk back ›'
                 : null;
-  const composerTitle = isProcessing
-    ? '⟳ processing…'
-    : surfaceTitle
-      ?? `${client.agentName} · ${keybindings.hint('palette.toggle')} commands · ${keybindings.hint('workspace.toggle')} workspaces · ${keybindings.hint('settings.toggle')} settings`;
+  // The composer's border says one thing: the surface that is open over it,
+  // or that a turn is running. The workspace name is the status bar's, and
+  // the global keys have the command palette; neither belongs on the input.
+  const composerTitle = isProcessing ? '⟳ processing…' : surfaceTitle ?? undefined;
+  // The placeholder is the one line a person reads before typing. While a
+  // turn runs, what typing does is the one thing worth saying.
   const composerPlaceholder = !ready
     ? 'Connecting…'
     : isProcessing
-      ? `Type to steer · ${keybindings.hint('queue.add')} queues · ${keybindings.hint('conversation.branch')} branches · ${keybindings.hint('conversation.cancel')} interrupts`
-      : `${TUI_COMPOSER_PLACEHOLDER} · ${keybindings.hint('editor.newline')} newline`;
+      ? 'Type to steer the running turn'
+      : TUI_COMPOSER_PLACEHOLDER;
   useEffect(() => {
     if (inputFocused) inputRef.current?.focus();
   }, [inputFocused]);

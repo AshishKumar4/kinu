@@ -106,7 +106,8 @@ function useCodeWellRenderer(): NonNullable<MarkdownOptions['renderNode']> {
   }, []);
 }
 
-/** Prose on the canvas, in the body register, as the web's `prose-chat`. */
+/** Prose on the canvas, in the ink register: the agent's body must read as
+ * neither thinking (muted, italic) nor a system annotation (muted). */
 function AssistantMessage({ content, live }: { content: string; live?: boolean }) {
   const { colors, markdownSyntax } = useTuiTheme();
   const renderCodeWell = useCodeWellRenderer();
@@ -119,7 +120,7 @@ function AssistantMessage({ content, live }: { content: string; live?: boolean }
         internalBlockMode="top-level"
         tableOptions={{ style: 'grid', widthMode: 'content' }}
         content={live ? (content || ' ') : content}
-        fg={colors.text.primary}
+        fg={colors.text.strong}
         renderNode={renderCodeWell}
       />
       {live ? <text><span fg={colors.intent.accent}>▌</span></text> : null}

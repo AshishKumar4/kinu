@@ -265,7 +265,7 @@ export function GuidedOnboarding(props: {
         {activeStep === 'location' && (
           <>
             <text><strong fg={colors.text.strong}>Where will your workspaces live?</strong></text>
-            <text><span fg={colors.text.muted}>Choose cloud, local, or both. You can change this later.</span></text>
+            <text><span fg={colors.text.muted}>Choose cloud, local, or both.</span></text>
             {choices.map((choice, index) => <ChoiceRow key={choice} label={choice} selected={index === selectedIndex} />)}
           </>
         )}
@@ -287,7 +287,7 @@ export function GuidedOnboarding(props: {
         {activeStep === 'theme' && (
           <>
             <text><strong fg={colors.text.strong}>Choose a theme</strong></text>
-            <text><span fg={colors.text.muted}>Following the terminal picks the ink for your terminal's own background. /theme changes it later.</span></text>
+            <text><span fg={colors.text.muted}>Follow the terminal takes the light or dark set to match it. /theme changes it later.</span></text>
             {themeChoices.map((choice, index) => <ChoiceRow key={choice.label} label={choice.label} selected={index === selectedIndex} />)}
           </>
         )}

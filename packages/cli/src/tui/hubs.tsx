@@ -217,7 +217,7 @@ function RoleHubRows({ data }: { readonly data: TuiProfileHubData }) {
           </box>
         );
       })}
-      <text><span fg={colors.text.muted}>Roles narrow capabilities. They never widen owner permissions.</span></text>
+      <text><span fg={colors.text.muted}>A role sets an agent's instructions and tier. /role changes this agent's.</span></text>
     </box>
   );
 }
@@ -240,7 +240,7 @@ function TierHubRows({ data }: { readonly data: TuiProfileHubData }) {
           </box>
         );
       })}
-      <text><span fg={colors.text.muted}>Tier names are configured routes. They do not infer price, speed, or quality.</span></text>
+      <text><span fg={colors.text.muted}>A tier is a model and an effort you named. /model and /effort change the default tier.</span></text>
     </box>
   );
 }

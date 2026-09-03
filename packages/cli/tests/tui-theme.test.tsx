@@ -1,12 +1,14 @@
 /** @jsxImportSource @opentui/react */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { TextAttributes } from '@opentui/core';
 import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import { scratchDir } from '@kinu.run/test-utils';
 
 import { MessageList } from '../src/tui/messages';
+import { PhaseLine } from '../src/tui/overlays';
 import { createFileTuiPreferenceStore } from '../src/tui/preferences';
 import {
   BUILTIN_TUI_THEMES,
@@ -39,11 +41,18 @@ function contrast(foreground: string, background: string): number {
 }
 
 describe('TUI theme', () => {
-  test('a missing preference file follows the terminal; an existing file keeps its choice', () => {
+  test('a missing preference file follows the terminal onto a painted canvas; an existing file keeps its choice', () => {
     const path = join(scratchDir('tui-theme-prefs'), 'tui.json');
     const store = createFileTuiPreferenceStore(path);
-    expect(store.read().theme).toEqual({ mode: 'system', darkThemeId: 'kinu-dark', lightThemeId: 'kinu-light' });
+    // A fresh install paints: a panel has an edge and a fill on any terminal.
+    expect(store.read().theme).toEqual({ mode: 'system', darkThemeId: 'kinu-dark-solid', lightThemeId: 'kinu-light-solid' });
     expect(DEFAULT_TUI_THEME_SELECTION).toEqual(store.read().theme);
+    for (const id of ['kinu-dark-solid', 'kinu-light-solid']) {
+      const { background } = BUILTIN_TUI_THEMES.find((theme) => theme.id === id)!.colors;
+      expect(background.canvas, `${id} canvas`).toBeDefined();
+      expect(background.chrome, `${id} chrome`).toBeDefined();
+      expect(background.surface, `${id} surface`).toBeDefined();
+    }
 
     store.write({ ...store.read(), theme: { mode: 'theme', themeId: 'kinu-dusk' } });
     expect(createFileTuiPreferenceStore(path).read().theme).toEqual({ mode: 'theme', themeId: 'kinu-dusk' });
@@ -56,7 +65,7 @@ describe('TUI theme', () => {
     // the green path because a floor says nothing about the margin.
     const registry = createThemeRegistry(BUILTIN_TUI_THEMES);
     expect(registry.themes.map((theme) => theme.id)).toEqual([
-      'kinu-light', 'kinu-dark', 'kinu-dusk', 'kinu-light-solid', 'kinu-dark-solid', 'kinu-paper', 'high-contrast',
+      'kinu-light-solid', 'kinu-dark-solid', 'kinu-light', 'kinu-dark', 'kinu-dusk', 'kinu-paper', 'high-contrast',
     ]);
     const lines: string[] = [];
     for (const theme of registry.themes) {
@@ -124,10 +133,58 @@ describe('TUI theme', () => {
       expect(hex(user.bg)).toBe(light.colors.background.user);
       expect(hex(user.fg)).toBe(light.colors.text.strong);
       expect(hex(assistant.bg)).not.toBe(light.colors.background.user);
-      expect(hex(assistant.fg)).toBe(light.colors.text.primary);
+      expect(hex(assistant.fg)).toBe(light.colors.text.strong);
       // The tool card is the dark well, even under the light theme.
       expect(hex(tool.bg)).toBe(light.colors.well.fill);
       expect(hex(tool.fg)).toBe(light.colors.well.ink);
+    } finally {
+      flushSync(() => { root.unmount(); });
+      renderer.destroy();
+    }
+  });
+
+  test('each transcript role resolves its own ink: prose in ink, thinking muted and italic, notes muted', async () => {
+    const dark = BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-dark-solid')!;
+    const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 20, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <TuiThemeProvider selection={{ mode: 'theme', themeId: 'kinu-dark-solid' }} terminalAppearance="dark" colorCapability="truecolor">
+          <box style={{ width: '100%', height: '100%' }}>
+            <MessageList
+              messages={[
+                { id: 'u1', role: 'user', content: 'USERTURN' },
+                { id: 'a1', role: 'assistant', content: 'PROSETURN' },
+                { id: 's1', role: 'system', content: 'SYSTEMNOTE' },
+              ]}
+            />
+            <PhaseLine label="THINKINGLABEL" />
+          </box>
+        </TuiThemeProvider>,
+      );
+      const wanted = ['USERTURN', 'PROSETURN', 'SYSTEMNOTE', 'THINKINGLABEL'];
+      let spans = captureSpans().lines.flatMap((line) => line.spans);
+      for (let index = 0; index < 60; index += 1) {
+        await renderOnce();
+        spans = captureSpans().lines.flatMap((line) => line.spans);
+        if (wanted.every((text) => spans.some((span) => span.text.includes(text)))) break;
+        await Bun.sleep(20);
+      }
+      const hex = (color: { toInts(): [number, number, number, number] }) => {
+        const [red, green, blue] = color.toInts();
+        return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
+      };
+      const span = (text: string) => spans.find((candidate) => candidate.text.includes(text))!;
+      const { text } = dark.colors;
+      expect(hex(span('USERTURN').fg)).toBe(text.strong);
+      // The agent's body is ink, so it reads as prose and not as one more
+      // grey register beside the thinking line and the annotations.
+      expect(hex(span('PROSETURN').fg)).toBe(text.strong);
+      expect(hex(span('SYSTEMNOTE').fg)).toBe(text.muted);
+      const thinking = span('THINKINGLABEL');
+      expect(hex(thinking.fg)).toBe(text.muted);
+      expect(thinking.attributes & TextAttributes.ITALIC).not.toBe(0);
+      expect(text.strong).not.toBe(text.muted);
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();

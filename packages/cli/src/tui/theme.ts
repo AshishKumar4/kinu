@@ -23,9 +23,12 @@ export type TerminalColorCapability = 'truecolor' | 'ansi256' | 'ansi16';
  *    `components/tool-execution.ts`) and the status line. Thinking is
  *    `thinkingText: gray`, italic (`components/assistant-message.ts`).
  *    Markdown code fences take `mdCodeBlock` ink and no fill
- *    (`tui-adapters.ts` `getMarkdownTheme`). Here the canvas, the chrome and
- *    the cards are transparent by default; the bubble, the composer, the
- *    tool/code well and the dialogs are painted.
+ *    (`tui-adapters.ts` `getMarkdownTheme`). Here that canvas model is one
+ *    PICKER PRESET, not the default: a fresh install paints the web app's
+ *    canvas, chrome and cards (see DEFAULT_TUI_THEME_SELECTION), and the
+ *    transparent presets keep the omp behaviour for terminals that want
+ *    their own background to show through. The bubble, the composer, the
+ *    tool/code well and the dialogs are painted either way.
  *
  *    One deliberate difference: opentui paints unset text `#FFFFFF` rather
  *    than emitting `39m` (measured on a pty, 2026-09-01), so prose takes the
@@ -162,11 +165,14 @@ export interface ThemeRegistry {
   get(themeId: string): TuiThemeDefinition;
 }
 
-const DEFAULT_DARK_TUI_THEME_ID = 'kinu-dark';
-const DEFAULT_LIGHT_TUI_THEME_ID = 'kinu-light';
+const DEFAULT_DARK_TUI_THEME_ID = 'kinu-dark-solid';
+const DEFAULT_LIGHT_TUI_THEME_ID = 'kinu-light-solid';
 /**
- * What a fresh install paints: the ink set the terminal's own background
- * calls for, on that background. The same rule as omp's `getDefaultTheme`.
+ * What a fresh install paints: the web app's own canvas, chrome and cards,
+ * whole. A panel keeps its edge and fill on every terminal, including one
+ * whose background the ink set was never designed for. The transparent
+ * presets stay in the picker for terminals that want their own background
+ * to show through.
  */
 export const DEFAULT_TUI_THEME_SELECTION: ThemeSelection = Object.freeze({
   mode: 'system',
@@ -268,9 +274,9 @@ const KINU_DARK_COLORS: TuiThemeColors = {
 
 /** The web's light ink set on the terminal's own background. */
 const KINU_LIGHT: TuiThemeDefinition = {
-  id: DEFAULT_LIGHT_TUI_THEME_ID,
-  label: 'Kinu light',
-  description: 'Ink and brass on your terminal\'s light background.',
+  id: 'kinu-light',
+  label: 'Kinu light, transparent',
+  description: 'Ink and brass on your terminal\'s own light background.',
   appearance: 'light',
   source: 'kinu',
   colors: KINU_LIGHT_COLORS,
@@ -278,9 +284,9 @@ const KINU_LIGHT: TuiThemeDefinition = {
 
 /** The web's dark ink set on the terminal's own background. */
 const KINU_DARK: TuiThemeDefinition = {
-  id: DEFAULT_DARK_TUI_THEME_ID,
-  label: 'Kinu dark',
-  description: 'Ink and brass on your terminal\'s dark background.',
+  id: 'kinu-dark',
+  label: 'Kinu dark, transparent',
+  description: 'Ink and brass on your terminal\'s own dark background.',
   appearance: 'dark',
   source: 'kinu',
   colors: KINU_DARK_COLORS,
@@ -334,10 +340,10 @@ const KINU_DUSK: TuiThemeDefinition = {
   },
 };
 
-/** The web's `[data-mode="light"]` block painted whole: canvas, chrome and cards. */
+/** The web's `[data-mode="light"]` block painted whole: canvas, chrome and cards. The light default. */
 const KINU_LIGHT_SOLID: TuiThemeDefinition = {
-  id: 'kinu-light-solid',
-  label: 'Kinu light, painted',
+  id: DEFAULT_LIGHT_TUI_THEME_ID,
+  label: 'Kinu light',
   description: 'The web app\'s light face, canvas included.',
   appearance: 'light',
   source: 'kinu',
@@ -352,10 +358,10 @@ const KINU_LIGHT_SOLID: TuiThemeDefinition = {
   },
 };
 
-/** The web's `:root` dark block painted whole: canvas, chrome and cards. */
+/** The web's `:root` dark block painted whole: canvas, chrome and cards. The dark default. */
 const KINU_DARK_SOLID: TuiThemeDefinition = {
-  id: 'kinu-dark-solid',
-  label: 'Kinu dark, painted',
+  id: DEFAULT_DARK_TUI_THEME_ID,
+  label: 'Kinu dark',
   description: 'The web app\'s dark face, canvas included.',
   appearance: 'dark',
   source: 'kinu',
@@ -449,14 +455,14 @@ const HIGH_CONTRAST: TuiThemeDefinition = {
 /**
  * Order matters twice: the picker lists themes in it, and `themeOrDefault`
  * takes the first theme of the terminal's appearance when a selection names
- * a theme that is gone, so Kinu light and Kinu dark lead their appearances.
+ * a theme that is gone, so the painted default of each appearance leads it.
  */
 export const BUILTIN_TUI_THEMES: readonly TuiThemeDefinition[] = Object.freeze([
+  KINU_LIGHT_SOLID,
+  KINU_DARK_SOLID,
   KINU_LIGHT,
   KINU_DARK,
   KINU_DUSK,
-  KINU_LIGHT_SOLID,
-  KINU_DARK_SOLID,
   KINU_PAPER,
   HIGH_CONTRAST,
 ].map(freezeTheme));
@@ -729,9 +735,12 @@ function projectTheme(theme: TuiThemeDefinition, capability: TerminalColorCapabi
 
 
 /**
- * Assistant markdown in the web's registers: prose in `--c-text-2`, headings
- * and bold in ink, inline code as silk (`.p-code-inline`), links as silk
- * (`--text-color-kumo-link`), quotes in the dim register.
+ * Assistant markdown in the terminal's registers: prose in ink
+ * (`text.strong`), inline code as silk (`.p-code-inline`), links as silk
+ * (`--text-color-kumo-link`), quotes in the dim register. The web keeps its
+ * body one step dimmer than ink (`--c-text-2`); a terminal body needs the
+ * full ink, or the agent's prose reads as another grey register beside
+ * thinking and the annotations.
  *
  * A fenced block takes no colour from here. opentui gives each fenced block a
  * renderable of its own and paints it in the markdown renderable's own ink, so
@@ -746,18 +755,21 @@ function projectTheme(theme: TuiThemeDefinition, capability: TerminalColorCapabi
  */
 function markdownSyntaxForTheme(theme: TuiThemeDefinition): SyntaxStyle {
   const { border, text, intent } = theme.colors;
+  // Prose takes the bright ink: the body register sits beside thinking
+  // (`text.muted`, italic, `messages.tsx` PhaseLine) and beside the dim
+  // system annotations, and a grey body read as neither.
   return SyntaxStyle.fromStyles({
-    text: { fg: text.primary },
-    paragraph: { fg: text.primary },
+    text: { fg: text.strong },
+    paragraph: { fg: text.strong },
     heading: { fg: text.strong, bold: true },
     strong: { fg: text.strong, bold: true },
-    emphasis: { fg: text.primary, italic: true },
+    emphasis: { fg: text.strong, italic: true },
     codespan: { fg: intent.accentStrong },
     link: { fg: intent.accentStrong, underline: true },
     blockquote: { fg: text.muted, italic: true },
-    list: { fg: text.primary },
-    list_item: { fg: text.primary },
-    table: { fg: text.primary },
+    list: { fg: text.strong },
+    list_item: { fg: text.strong },
+    table: { fg: text.strong },
     hr: { fg: border.default },
   });
 }

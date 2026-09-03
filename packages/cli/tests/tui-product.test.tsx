@@ -17,6 +17,7 @@ import {
 } from '../src/tui/actions';
 import {
   BUILTIN_TUI_THEMES,
+  DEFAULT_TUI_THEME_SELECTION,
   TuiThemeProvider,
   createThemeRegistry,
   parseCustomTheme,
@@ -168,8 +169,8 @@ describe('TUI product registries', () => {
     expect(() => createThemeRegistry([invisible])).toThrow(/text\.primary\/background\.overlay contrast/);
   });
 
-  test('a system theme selection follows the terminal appearance', async () => {
-    for (const [appearance, expected] of [['dark', 'kinu-dark'], ['light', 'kinu-light']] as const) {
+  test('a system theme selection follows the terminal appearance onto the painted default', async () => {
+    for (const [appearance, expected] of [['dark', 'kinu-dark-solid'], ['light', 'kinu-light-solid']] as const) {
       const themeId = await renderedThemeId(appearance);
       expect(themeId).toBe(expected);
     }
@@ -181,9 +182,9 @@ describe('TUI product registries', () => {
     // selection pointing at nothing. That threw inside the provider's useMemo
     // and took the whole TUI down at first render.
     expect(await renderedThemeId('dark', { mode: 'theme', themeId: 'deleted-custom-theme' }))
-      .toBe('kinu-dark');
+      .toBe('kinu-dark-solid');
     expect(await renderedThemeId('light', { mode: 'theme', themeId: 'deleted-custom-theme' }))
-      .toBe('kinu-light');
+      .toBe('kinu-light-solid');
   });
 
   test('custom themes reject malformed colors and unknown fields', () => {
@@ -222,7 +223,7 @@ describe('adaptive TUI shell', () => {
  *  provider, so the terminal-appearance resolution really runs. */
 async function renderedThemeId(
   appearance: ThemeAppearance,
-  selection: ThemeSelection = { mode: 'system', darkThemeId: 'kinu-dark', lightThemeId: 'kinu-light' },
+  selection: ThemeSelection = DEFAULT_TUI_THEME_SELECTION,
 ): Promise<string> {
   const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
     width: 40,
