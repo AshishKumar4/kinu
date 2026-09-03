@@ -5,27 +5,43 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  AwaitPointDeclarationSchema,
   CandidateControlStateV1Schema,
   CandidateRunControlV1Schema,
+  CompactionWorkSchema,
   DURABILITY_AWAIT_POINTS,
   DURABILITY_OPERATION_PHASES,
+  DURABLE_ROOT_FORMATS,
   CapturedCutSchema,
+  GcWorkSchema,
+  HydrateWorkSchema,
   ImmutableObjectRefSchema,
   HeadPointerV1Schema,
+  MERKLE_PACK_V2_AWAIT_POINT_DECLARATION,
   ObjectReceiptSchema,
   OperationRecordSchema,
+  PackLedgerSchema,
   PayloadGrantSchema,
+  PublishWorkSchema,
   RangeReadIntentSchema,
   RestoreWorkSchema,
   RootEnvelopeV1Schema,
+  RootEnvelopeV2Schema,
+  SIDECAR_ATTACH_KINDS,
+  SealWorkSchema,
+  SidecarStatusV1Schema,
   UploadIntentSchema,
+  unreachedAwaitPoints,
 } from '../src/durability/contracts';
 import type {
   CandidateControlStateV1,
   CandidateRunControlV1,
   HeadPointerV1,
+  PackLedger,
   RestoreWork,
   RootEnvelopeV1,
+  RootEnvelopeV2,
+  SidecarStatusV1,
 } from '../src/durability/contracts';
 import { runOverlayRunner } from '../src/cas/overlay-runner';
 import { overlayCasStorage, type OverlayCasPorts } from '../src/overlay-cas';
@@ -327,6 +343,226 @@ describe('durability v1 wire contracts', () => {
       'cleanup-resource',
     ]);
     expect(new Set(DURABILITY_AWAIT_POINTS).size).toBe(DURABILITY_AWAIT_POINTS.length);
+  });
+});
+
+
+// ── v2: delta envelope, pack ledger and counted work ─────────────────────────
+
+const PACK_SHA = 'b'.repeat(64);
+const pack = {
+  key: `v1/merkle-pack/pack/${PACK_SHA}`,
+  byteLength: '4096',
+  sha256: PACK_SHA,
+};
+const ledgerObject = {
+  key: 'v1/boxes/box/ledgers/9',
+  byteLength: '512',
+  sha256: 'c'.repeat(64),
+};
+const envelopeV2: RootEnvelopeV2 = {
+  version: 2,
+  format: 'merkle-pack/v2',
+  boxId: 'box-1',
+  epoch: '7',
+  generation: '9',
+  parentRootId: null,
+  cut: capturedCut,
+  rootObject: { key: pack.key, byteOffset: '128', byteLength: '256', sha256: SHA },
+  added: [pack],
+  retired: [],
+  ledger: ledgerObject,
+};
+const ledger: PackLedger = {
+  version: 1,
+  format: 'merkle-pack/v2',
+  boxId: 'box-1',
+  generation: '9',
+  packs: [{ ...pack, liveBytes: '3072', addedInGeneration: '9' }],
+};
+
+const ZERO_WORK = {
+  restore: {
+    serialRemoteOps: 0,
+    totalRemoteOps: 0,
+    metadataBytes: 0,
+    payloadBytes: 0,
+    cpuSteps: 0,
+    mounts: 0,
+    replayUnits: 0,
+  },
+  seal: { bytesStaged: 0, bytesChunked: 0, chunksHashed: 0, nodesRewritten: 0, wholeFiles: 0 },
+  publish: { objectsPut: 0, bytesPut: 0, casAttempts: 0 },
+  hydrate: { rangeGets: 0, bytesFetched: 0, bytesRequested: 0 },
+  compaction: { packsRead: 0, bytesRewritten: 0, nodesRewritten: 0 },
+  gc: { deletes: 0, markPages: 0, markBytes: 0 },
+};
+const sidecarStatus: SidecarStatusV1 = {
+  version: 1,
+  format: 'merkle-pack/v2',
+  boxId: 'box-1',
+  epoch: '7',
+  bootId: 'boot-1',
+  attach: { kind: 'attached', rootEnvelopeId: SHA, generation: '9' },
+  lag: { unsealedBytes: 8192, unsealedMs: 1750, unpublishedGenerations: 1, unpublishedMs: 500 },
+  hydration: { residentBytes: 1024, treeBytes: 4096, placeholders: 3 },
+  work: ZERO_WORK,
+};
+
+describe('durability v2 wire contracts', () => {
+  test('a valid v2 envelope carries only delta publication facts', () => {
+    expect(v.parse(RootEnvelopeV2Schema, envelopeV2)).toEqual(envelopeV2);
+    expect(Object.keys(v.parse(RootEnvelopeV2Schema, envelopeV2))).toEqual([
+      'version',
+      'format',
+      'boxId',
+      'epoch',
+      'generation',
+      'parentRootId',
+      'cut',
+      'rootObject',
+      'added',
+      'retired',
+      'ledger',
+    ]);
+  });
+
+  test('a v1 envelope carrying closure is refused under v2', () => {
+    expect(() => v.parse(RootEnvelopeV2Schema, envelope)).toThrow();
+    expect(() => v.parse(RootEnvelopeV2Schema, {
+      ...envelopeV2,
+      closure: [pack],
+    })).toThrow();
+    expect(() => v.parse(RootEnvelopeV2Schema, {
+      ...envelopeV2,
+      closureObject,
+    })).toThrow();
+  });
+
+  test('a v2 envelope without its ledger is refused', () => {
+    const { ledger: omitted, ...withoutLedger } = envelopeV2;
+    expect(omitted).toEqual(ledgerObject);
+    expect(() => v.parse(RootEnvelopeV2Schema, withoutLedger)).toThrow();
+  });
+
+  test('the root is an authenticated range inside a pack this generation added', () => {
+    expect(() => v.parse(RootEnvelopeV2Schema, {
+      ...envelopeV2,
+      rootObject: { ...envelopeV2.rootObject, key: pack.key + '-other' },
+    })).toThrow(/root record/u);
+    expect(() => v.parse(RootEnvelopeV2Schema, {
+      ...envelopeV2,
+      rootObject: { ...envelopeV2.rootObject, byteOffset: '4000', byteLength: '128' },
+    })).toThrow(/root record/u);
+    expect(() => v.parse(RootEnvelopeV2Schema, {
+      ...envelopeV2,
+      rootObject: { ...envelopeV2.rootObject, sha256: 'short' },
+    })).toThrow(/SHA-256/u);
+    expect(() => v.parse(RootEnvelopeV2Schema, {
+      ...envelopeV2,
+      rootObject: { ...envelopeV2.rootObject, byteLength: '0' },
+    })).toThrow(/positive decimal/u);
+  });
+
+  test('added packs preserve packing order while keys remain unique and disjoint from retired packs', () => {
+    const later = { key: `v1/merkle-pack/pack/${'d'.repeat(64)}`, byteLength: '1', sha256: 'd'.repeat(64) };
+    expect(v.parse(RootEnvelopeV2Schema, { ...envelopeV2, added: [later, pack] }).added).toEqual([later, pack]);
+    expect(() => v.parse(RootEnvelopeV2Schema, { ...envelopeV2, added: [pack, pack] })).toThrow(/same pack twice/u);
+    expect(() => v.parse(RootEnvelopeV2Schema, { ...envelopeV2, retired: ['z', 'a'] })).toThrow(/sorted/u);
+    expect(() => v.parse(RootEnvelopeV2Schema, { ...envelopeV2, retired: [pack.key] })).toThrow(/cannot retire/u);
+  });
+
+  test('the pack ledger binds immutable rows and preserves generation and packing order', () => {
+    expect(v.parse(PackLedgerSchema, ledger)).toEqual(ledger);
+    expect(() => v.parse(PackLedgerSchema, {
+      ...ledger,
+      packs: [{ ...ledger.packs[0], liveBytes: '4097' }],
+    })).toThrow(/more live bytes/u);
+    expect(() => v.parse(PackLedgerSchema, {
+      ...ledger,
+      packs: [{ ...ledger.packs[0], addedInGeneration: '10' }],
+    })).toThrow(/after its own generation/u);
+    const older = {
+      key: `v1/merkle-pack/pack/${'d'.repeat(64)}`,
+      byteLength: '1',
+      sha256: 'd'.repeat(64),
+      liveBytes: '1',
+      addedInGeneration: '8',
+    };
+    expect(v.parse(PackLedgerSchema, { ...ledger, packs: [older, ledger.packs[0]] }).packs)
+      .toEqual([older, ledger.packs[0]]);
+    expect(() => v.parse(PackLedgerSchema, { ...ledger, packs: [ledger.packs[0], older] }))
+      .toThrow(/added-generation order/u);
+    expect(() => v.parse(PackLedgerSchema, { ...ledger, packs: [ledger.packs[0], ledger.packs[0]] }))
+      .toThrow(/repeat a pack key/u);
+    expect(() => v.parse(PackLedgerSchema, {
+      ...ledger,
+      packs: [{ ...ledger.packs[0], sha256: 'D'.repeat(64) }],
+    })).toThrow(/SHA-256/u);
+    expect(() => v.parse(PackLedgerSchema, { ...ledger, packs: [] })).toThrow();
+  });
+
+  test('each counted-work row accepts safe counts and refuses unsafe counts or extra state', () => {
+    const rows = [
+      [SealWorkSchema, { bytesStaged: 64, bytesChunked: 64, chunksHashed: 2, nodesRewritten: 3, wholeFiles: 0 }],
+      [PublishWorkSchema, { objectsPut: 3, bytesPut: 4096, casAttempts: 1 }],
+      [HydrateWorkSchema, { rangeGets: 1, bytesFetched: 1024, bytesRequested: 64 }],
+      [CompactionWorkSchema, { packsRead: 2, bytesRewritten: 2048, nodesRewritten: 4 }],
+      [GcWorkSchema, { deletes: 2, markPages: 3, markBytes: 4096 }],
+    ] as const;
+    for (const [schema, row] of rows) expect(v.parse(schema, row)).toEqual(row);
+    expect(() => v.parse(SealWorkSchema, { ...rows[0][1], bytesStaged: -1 })).toThrow();
+    expect(() => v.parse(PublishWorkSchema, { ...rows[1][1], objectsPut: 1.5 })).toThrow();
+    expect(() => v.parse(HydrateWorkSchema, { ...rows[2][1], payloadBytes: 1 })).toThrow();
+    expect(() => v.parse(CompactionWorkSchema, { ...rows[3][1], bytesRewritten: Number.MAX_SAFE_INTEGER + 1 })).toThrow();
+    expect(() => v.parse(GcWorkSchema, { ...rows[4][1], closureWalks: 1 })).toThrow();
+  });
+
+  test('sidecar status binds attach state, lag, hydration and every work row', () => {
+    expect(SIDECAR_ATTACH_KINDS).toEqual(['attaching', 'empty', 'attached', 'refused']);
+    expect(v.parse(SidecarStatusV1Schema, sidecarStatus)).toEqual(sidecarStatus);
+    expect(() => v.parse(SidecarStatusV1Schema, {
+      ...sidecarStatus,
+      hydration: { ...sidecarStatus.hydration, residentBytes: 4097 },
+    })).toThrow(/more resident bytes/u);
+    expect(() => v.parse(SidecarStatusV1Schema, {
+      ...sidecarStatus,
+      attach: { kind: 'attached' },
+    })).toThrow();
+    expect(() => v.parse(SidecarStatusV1Schema, {
+      ...sidecarStatus,
+      attach: { ...sidecarStatus.attach, stale: true },
+    })).toThrow();
+    expect(() => v.parse(SidecarStatusV1Schema, {
+      ...sidecarStatus,
+      work: { ...sidecarStatus.work, seal: { ...sidecarStatus.work.seal, closureObjects: 1 } },
+    })).toThrow();
+  });
+
+  test('the v2 arm declares exactly the await points it can reach', () => {
+    expect(DURABLE_ROOT_FORMATS).toContain('merkle-pack/v2');
+    expect(v.parse(AwaitPointDeclarationSchema, MERKLE_PACK_V2_AWAIT_POINT_DECLARATION))
+      .toEqual(MERKLE_PACK_V2_AWAIT_POINT_DECLARATION);
+    expect(unreachedAwaitPoints(MERKLE_PACK_V2_AWAIT_POINT_DECLARATION)).toEqual([
+      'create-multipart',
+      'upload-multipart-part',
+      'complete-multipart',
+      'create-pin',
+      'renew-pin',
+      'release-pin',
+    ]);
+    expect(() => v.parse(AwaitPointDeclarationSchema, {
+      format: 'merkle-pack/v2',
+      uses: ['publish-head', 'verify-upload'],
+    })).toThrow(/register order/u);
+    expect(() => v.parse(AwaitPointDeclarationSchema, {
+      format: 'merkle-pack/v2',
+      uses: ['verify-upload', 'verify-upload'],
+    })).toThrow(/without repeats/u);
+    expect(() => v.parse(AwaitPointDeclarationSchema, {
+      format: 'merkle-pack/v2',
+      uses: ['not-a-real-point'],
+    })).toThrow();
   });
 });
 

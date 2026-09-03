@@ -41,12 +41,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     reason: "bytesStaged 823296 > 2k + 4c for k=4 KiB; nodesRewritten 206 > p(d+2) = 3; objectsPut 5 > ceil(k/P)+2 = 3; seal.bytesStaged: n gives 823296, 10n gives 8196096; seal.bytesChunked: n gives 823296, 10n gives 8196096; seal.nodesRewritten: n gives 206, 10n gives 2034; publish.bytesPut: n gives 77016, 10n gives 707021; restore.totalRemoteOps: n gives 410, 10n gives 4010",
   },
   {
-    arm: 'merkle-pack',
-    cell: '6.12',
-    since: '2026-09-02',
-    reason: "bytesStaged 823296 > 2k + 4c for k=4 KiB; nodesRewritten 207 > p(d+2) = 3; objectsPut 5 > ceil(k/P)+2 = 3; seal.bytesStaged: n gives 823296, 10n gives 8196096; seal.bytesChunked: n gives 823296, 10n gives 8196096; seal.nodesRewritten: n gives 207, 10n gives 2035; publish.bytesPut: n gives 123700, 10n gives 1143382; restore.totalRemoteOps: n gives 503, 10n gives 4839",
-  },
-  {
     arm: 'bounded-layers',
     cell: '6.13',
     since: '2026-09-02',
@@ -56,7 +50,7 @@ export const KNOWN_RED: readonly KnownRed[] = [
     arm: 'merkle-pack',
     cell: '6.13',
     since: '2026-09-02',
-    reason: "the 100000-file commit did not commit: failed — index is 47217175 bytes, above maxPackBytes 4194304",
+    reason: "RestoreWork.totalRemoteOps is 5 for 1e5 files and 4 for 1e3 (the commit, the wake and the exact tree pass since the v2 sidecar materializes with one whole-pack read per ledger pack; what remains is that attach reads one pack per pack, the lane-4 lazy-restore property)",
   },
   {
     arm: 'snapshot-chain',
@@ -74,7 +68,7 @@ export const KNOWN_RED: readonly KnownRed[] = [
     arm: 'merkle-pack',
     cell: '6.14',
     since: '2026-09-02',
-    reason: "wake made 11292 remote ops; O(1) is 3; the 64 KiB write chunked 68157440 bytes; the 64 KiB write put 3728247 bytes",
+    reason: "wake made 6 remote ops; O(1) is 3 (the 1 GiB commit, the exact tree and the 64 KiB in-place seal are within every O(data)/O(k) bound; what remains is attach reading one pack per ledger pack, the lane-4 lazy-restore property)",
   },
   {
     arm: 'snapshot-chain',
@@ -101,12 +95,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     reason: "bytesPut 26798013 > 4 × 64 dirty pages × 16384 = 4194304",
   },
   {
-    arm: 'merkle-pack',
-    cell: '6.15',
-    since: '2026-09-02',
-    reason: "bytesPut 4539046 > 4 × 64 dirty pages × 16384 = 4194304",
-  },
-  {
     arm: 'snapshot-chain',
     cell: '6.18',
     since: '2026-09-02',
@@ -126,12 +114,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
   },
   {
     arm: 'bounded-layers',
-    cell: '6.18',
-    since: '2026-09-02',
-    reason: "nothing evicted clean bytes to make room",
-  },
-  {
-    arm: 'merkle-pack',
     cell: '6.18',
     since: '2026-09-02',
     reason: "nothing evicted clean bytes to make room",

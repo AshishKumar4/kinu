@@ -96,8 +96,10 @@ import {
   finalizeCandidateOperation,
   redriveCandidateOperation,
   settleCandidateNoChange,
+  candidateRunControlV2,
   type CandidateControlStore,
   type CandidateEnvelopeStore,
+  type CandidateEnvelopeStoreV2,
 } from '../../src/candidates/control';
 import {
   buildMerklePack,
@@ -106,12 +108,14 @@ import {
 } from '../../src/candidates/merkle-pack';
 import {
   MemoryCandidateObjectSink,
+  stageCandidatePayload,
   envelopeBytes,
   parseEnvelopeBytes,
   recoverPublishedParent,
-  stageCandidatePayload,
-  type CandidatePayloadStore,
+  envelopeV2Bytes,
+  parseEnvelopeV2Bytes,
 } from '../../src/candidates/publication';
+import { parsePackLedger } from '../../src/candidates/merkle-pack/ledger';
 import {
   contentSize,
   issueVerifiedJournalCapture,
@@ -122,6 +126,11 @@ import {
   type NodeEntry,
   type PosixMetadata,
 } from '../../src/capture/model';
+import { SidecarCore, md5Of } from '../../bench/sidecar/core';
+import type { CandidatePayloadStore } from '../../src/candidates/publication';
+import {
+  ModeledDaemon,
+} from './sidecar-fixture';
 import { paintedSegments } from '../../src/candidates/merkle-pack/chunk';
 import type {
   CandidateControlStateV1,
@@ -3314,6 +3323,435 @@ function valueOf(argv: readonly string[], flag: string): string {
   return argv[at + 1]!;
 }
 
+// ── the merkle-pack/v2 arm ───────────────────────────────────────────────────
+
+/**
+ * The smart container's incremental codec, as the sidecar runs it.
+ *
+ * WHAT REPLACED THE RUNNER. A v2 seal is one long-lived runtime: the daemon
+ * fences the dirty windows, {@link SidecarCore} builds a delta against the
+ * authenticated parent, the store takes single PUTs whose ETags the local MD5
+ * proves, and the Durable Object's control record holds the one CAS. So this
+ * arm wires the shipped sidecar — fence, delta build, publish, finalize —
+ * in-process, with the daemon modeled over the container's own disk tree: the
+ * disk quota an ENOSPC cell fills is the SAME tree the fence stages from.
+ *
+ * THE FAULT SEAMS ARE THE SHIPPED DURABLE EFFECTS. Phase transitions go
+ * through the one control record the way the DO drives them, so `after-sealed`
+ * is the CAS write and `after-published` the completion mark, exactly where
+ * the shipped control code makes them.
+ */
+function merklePackV2Arm(): ConformanceArm {
+  const durable = new DurableStore();
+  const deaths = new DeathWatch();
+  const boxId = 'box-conformance';
+  const paths = candidateStorePaths(`boxes/${boxId}`, 'merkle-pack');
+  const control = new MemoryControlStore();
+  let casAttempts = 0;
+  let bootSequence = 0;
+  let clock = 1_000;
+  /** Starts across the whole container: an isolate reset keeps the daemon and
+   *  the restore it performed, which is what cell 6.9 counts. */
+  let daemonStartsTotal = 0;
+  let restoreStartsTotal = 0;
+
+  const awaitPoints: AwaitPointUse = {
+    uses: [
+      'issue-payload-grant',
+      'verify-upload',
+      'upload-root',
+      'publish-head',
+      'complete-mark',
+      'mount-root',
+      'cleanup-resource',
+    ],
+  };
+
+  /** The one durable row the head lives in, with the seams its phase
+   *  transitions make: the same effect-for-seam mapping the v1 arm drives. */
+  const controlStore: CandidateControlStore = {
+    read: async () => await control.read(),
+    update: async (apply) => {
+      let phase: string | undefined;
+      const result = await control.update((current) => {
+        const update = apply(current);
+        phase = update.next?.operation?.phase;
+        return update;
+      });
+      if (phase !== undefined) deaths.reset(`after-${phase}`);
+      if (phase === 'completion-pending') {
+        casAttempts += 1;
+        deaths.reset(awaitPointSeam('publish-head'));
+      }
+      if (phase === 'published') deaths.reset(awaitPointSeam('complete-mark'));
+      return result;
+    },
+    clear: async () => await control.clear(),
+  };
+
+  class V2Boot implements ArmBoot {
+    disk = new ContainerDisk();
+    tree = this.disk.tree(CANDIDATE_JOURNAL_ROOT);
+    readonly daemon: ModeledDaemon;
+    readonly workspace: Workspace;
+    readonly failures: string[] = [];
+    journal = false;
+    storeMounted = false;
+    bootId = `boot-${++bootSequence}`;
+    actionStarts = { restore: 0, checkpoint: 0, seed: 0 };
+    daemonStarts = 0;
+    #finalizeGate = new OneShotGate();
+    #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE };
+    #restoreWindow: { from: number; mounts: number } | null = null;
+    #restored = false;
+    #core: SidecarCore;
+
+    constructor() {
+      this.daemon = new ModeledDaemon(this.tree);
+      const envelopes: CandidateEnvelopeStoreV2 = {
+        write: async (envelope, rootEnvelopeId) => {
+          await this.#finalizeGate.cross();
+          const bytes = envelopeV2Bytes(envelope);
+          const existing = durable.get(`${paths.envelopePrefix}/${rootEnvelopeId}.json`);
+          if (existing !== null) {
+            parseEnvelopeV2Bytes(existing, rootEnvelopeId);
+            return;
+          }
+          durable.put(`${paths.envelopePrefix}/${rootEnvelopeId}.json`, bytes);
+          deaths.at('after-envelope');
+          const committed = durable.get(`${paths.envelopePrefix}/${rootEnvelopeId}.json`);
+          if (committed === null) throw new Error(`candidate v2 envelope write did not verify: ${rootEnvelopeId}`);
+          parseEnvelopeV2Bytes(committed, rootEnvelopeId);
+        },
+        read: async (rootEnvelopeId) => {
+          const bytes = durable.get(`${paths.envelopePrefix}/${rootEnvelopeId}.json`);
+          if (bytes === null) throw new Error(`candidate v2 envelope is absent: ${rootEnvelopeId}`);
+          return parseEnvelopeV2Bytes(bytes, rootEnvelopeId);
+        },
+      };
+      this.#core = new SidecarCore({
+        boxId,
+        bootId: this.bootId,
+        snapshot: async () => await candidateRunControlV2(controlStore, envelopes),
+        head: { control: controlStore, envelopes },
+        payload: {
+          issuePayloadGrant: async (intent: UploadIntent) => {
+            deaths.at(awaitPointSeam('issue-payload-grant'));
+            return {
+              operationId: intent.operationId,
+              attemptId: intent.attemptId,
+              expiresAt: intent.expiresAt,
+              opaque: intent.exactKey,
+            };
+          },
+          uploadObject: async (grant: PayloadGrant, body: ReadableStream<Uint8Array>) => {
+            const bytes = await drain(body);
+            durable.put(`${paths.payloadPrefix}/${grant.opaque}`, bytes);
+            deaths.at('after-payload');
+            // THE ROOT RECORD TRAVELS IN THE LAST PACK — the deterministic
+            // layout puts it there — so the upload that precedes the ledger's
+            // is the one the mount names.
+            deaths.at(awaitPointSeam('upload-root'));
+            deaths.at(awaitPointSeam('verify-upload'));
+            return {
+              operationId: grant.operationId,
+              attemptId: grant.attemptId,
+              key: grant.opaque,
+              byteLength: String(bytes.byteLength),
+              sha256: sha256Hex(bytes),
+              etag: `"${md5Of(bytes)}"`,
+              verified: true,
+            };
+          },
+          readRange: async (intent: RangeReadIntent) => {
+            const bytes = durable.get(`${paths.payloadPrefix}/${intent.exactKey}`);
+            if (bytes === null) throw new Error(`missing candidate object: ${intent.exactKey}`);
+            const offset = Number(intent.byteOffset);
+            return bytes.slice(offset, offset + Number(intent.byteLength));
+          },
+          deleteObject: async (key: string) => {
+            durable.delete(`${paths.payloadPrefix}/${key}`);
+          },
+        },
+        stage: this.daemon.stage,
+        daemon: {
+          fence: async () => {
+            this.#alive('fence');
+            return await this.daemon.fence();
+          },
+          manifest: async (path) => await this.daemon.manifest(path),
+          boundaries: async (handback) => await this.daemon.boundaries(handback),
+        },
+        now: () => clock,
+      });
+      this.workspace = {
+        write: (path, text) => {
+          this.#journaled(`W ${path} ${encoder.encode(text).byteLength}`, () => this.daemon.write(path, encoder.encode(text)));
+        },
+        read: (path) => {
+          const entry = this.tree.node(path);
+          if (entry?.kind !== 'file' || entry.content?.kind !== 'dense') return undefined;
+          return decoder.decode(entry.content.bytes);
+        },
+        remove: (path) => this.daemon.remove(path),
+        paths: () => this.tree.filePaths(),
+        plant: (entries) => this.daemon.plant(entries),
+        snapshot: () => this.tree.snapshot(),
+        pwrite: (path, offset, bytes) => {
+          this.#journaled(`W ${path} ${offset}+${bytes.byteLength}`, () => this.daemon.pwrite(path, offset, bytes));
+        },
+      };
+    }
+
+    #alive(what: string): void {
+      if (this.disk.dead) throw new ContainerDied(`${what} on a dead container`);
+      if (this.disk.stopped) throw new ContainerStopped(what);
+    }
+
+    /** INTENT BEFORE EFFECT: the WAL record lands before the write it names. */
+    #journaled(line: string, effect: () => void): void {
+      this.daemon.wal.push(line);
+      try {
+        effect();
+      } catch (error) {
+        this.daemon.wal.pop();
+        this.daemon.cancelledWal.push(line);
+        throw error;
+      }
+    }
+
+    journalFacts(): JournalFacts {
+      return { records: this.daemon.wal, failedWrites: this.daemon.cancelledWal };
+    }
+
+    evictCleanBytes(): number {
+      // AFTER A PUBLISH every byte in the tree is a cache of the head: the
+      // next boot pages it all back from the packs it names. Dropping the
+      // cache is what disk pressure buys, and this is the drop.
+      let freed = 0;
+      for (const entry of this.tree.snapshot()) {
+        if (entry.kind === 'dir' || entry.kind === 'symlink') continue;
+        const content = entry.content;
+        if (content === undefined) continue;
+        freed += runBytes(content);
+        this.tree.remove(entry.path);
+      }
+      return freed;
+    }
+
+    storage(): DevboxStorage {
+      const storage: DevboxStorage = {
+        attach: async () => {
+          this.#alive('attach');
+          if (!this.journal) {
+            this.journal = true;
+            daemonStartsTotal += 1;
+          }
+          if (!this.storeMounted) {
+            this.disk.mount(CANDIDATE_STORE_MOUNT, {
+              source: `s3fs:${paths.payloadPrefix}`,
+              fstype: 'fuse.s3fs',
+              options: 'rw',
+            });
+            this.storeMounted = true;
+            deaths.at(awaitPointSeam('mount-root'));
+          }
+          const opened = this.#restoreWindow ?? { from: durable.ops.length, mounts: this.disk.mountCalls };
+          const status = await this.#core.attach();
+          if (status.kind === 'attached' && !this.#restored) {
+            // THE EAGER RESTORE IS THE SHIPPED MATERIALIZE: one whole-pack
+            // read per pack the ledger names, then the tree, written back.
+            this.actionStarts.restore += 1;
+            restoreStartsTotal += 1;
+            this.#restored = true;
+            await this.#core.materialize((entries) => {
+              this.tree.clear();
+              this.tree.plant(entries);
+            });
+            // The DO reset the runner slot when its restore process exited;
+            // the sidecar's equivalent is the materialized tree landing.
+            deaths.reset('attach:after-restore-process');
+          }
+          this.#rows = {
+            ...this.#rows,
+            restore: restoreWorkSince(durable, { from: opened.from }, [`${paths.payloadPrefix}/`], {
+              mounts: this.disk.mountCalls - opened.mounts,
+              cpuSteps: this.tree.size,
+              replayUnits: 0,
+            }),
+          };
+          this.#restoreWindow = null;
+          if (status.kind !== 'attached') return { kind: 'empty', detail: 'no committed head' };
+          return { kind: 'attached', detail: `merkle-pack/v2 head ${status.rootEnvelopeId}` };
+        },
+        checkpoint: async (kind) => {
+          this.#alive('checkpoint');
+          if (!this.journal) throw new Error('the candidate workspace has no journal daemon');
+          this.actionStarts.checkpoint += 1;
+          const window = { from: durable.ops.length };
+          const casBefore = casAttempts;
+          const outcome = await this.#core.seal(kind);
+          // The runner's attempt slot is reused across checkpoints; the
+          // sidecar's equivalent rotation is the seal outcome being filed.
+          deaths.at(awaitPointSeam('cleanup-resource'));
+          if (outcome.kind === 'published') {
+            this.#rows = {
+              ...this.#rows,
+              seal: this.#core.status().work.seal,
+              publish: publishWorkSince(durable, window, casAttempts - casBefore),
+            };
+            return { kind: 'committed', reason: outcome.rootEnvelopeId, bytes: 0, movedBytes: 0 };
+          }
+          if (outcome.kind === 'no-change') {
+            return { kind: 'skipped', reason: 'the fence found nothing to seal', bytes: 0, movedBytes: 0 };
+          }
+          this.failures.push(outcome.reason);
+          return { kind: 'failed', reason: outcome.reason, bytes: 0, movedBytes: 0 };
+        },
+        discard: async () => {
+          this.#alive('discard');
+          durable.deletePrefix(`${paths.payloadPrefix}/`);
+          durable.deletePrefix(`${paths.envelopePrefix}/`);
+          await controlStore.clear();
+          this.daemon.reset();
+          this.tree.clear();
+          this.disk.unmount(CANDIDATE_STORE_MOUNT);
+          this.storeMounted = false;
+          this.journal = false;
+          deaths.at(awaitPointSeam('cleanup-resource'));
+        },
+        detach: async () => {
+          this.#alive('detach');
+          this.disk.unmount(CANDIDATE_STORE_MOUNT);
+          this.storeMounted = false;
+          this.journal = false;
+          deaths.at(awaitPointSeam('cleanup-resource'));
+        },
+      };
+      return withOptionalMembers(storage, {
+        attach: storage.attach,
+        checkpoint: storage.checkpoint,
+        discard: storage.discard,
+      });
+    }
+
+    holdFinalize(): HeldFinalize {
+      return this.#finalizeGate.hold();
+    }
+
+    resetIsolate(): void {
+      // An isolate reset keeps the disk, the daemon and the sidecar; the next
+      // attach re-opens the view from the same control row without starting
+      // anything again, which is what the counts assert.
+    }
+
+    replaceContainer(): void {
+      daemonStartsTotal = 0;
+      restoreStartsTotal = 0;
+      this.disk.dead = true;
+      this.disk = new ContainerDisk();
+      this.tree = this.disk.tree(CANDIDATE_JOURNAL_ROOT);
+      this.daemon.adopt(this.tree);
+      this.journal = false;
+      this.storeMounted = false;
+      this.bootId = `boot-${++bootSequence}`;
+      this.actionStarts = { restore: 0, checkpoint: 0, seed: 0 };
+      this.daemonStarts = 0;
+      this.#restoreWindow = null;
+      this.#restored = false;
+      this.#finalizeGate = new OneShotGate();
+    }
+
+    work(): WorkRows {
+      return this.#rows;
+    }
+
+    lifecycleCounts(): LifecycleCounts {
+      return { daemonStarts: daemonStartsTotal, restoreStarts: restoreStartsTotal };
+    }
+
+    /** The objects the head DECLARES, first the pack its root record lives in:
+     *  the order a corruption cell reads them in. */
+    async declaredPayload(): Promise<readonly DeclaredObject[]> {
+      const record: CandidateControlStateV1 = await control.read();
+      if (record.head === null) return [];
+      const envelopeBytesHeld = durable.get(`${paths.envelopePrefix}/${record.head.rootEnvelopeId}.json`);
+      if (envelopeBytesHeld === null) throw new Error(`candidate v2 envelope is absent: ${record.head.rootEnvelopeId}`);
+      const envelope = parseEnvelopeV2Bytes(envelopeBytesHeld, record.head.rootEnvelopeId);
+      const declared: DeclaredObject[] = [{
+        key: `${paths.payloadPrefix}/${envelope.rootObject.key}`,
+        byteLength: Number(envelope.rootObject.byteLength),
+        names: [envelope.rootObject.key, envelope.rootObject.sha256],
+      }];
+      const ledgerBytes = durable.get(`${paths.payloadPrefix}/${envelope.ledger.key}`);
+      if (ledgerBytes !== null) {
+        declared.push({
+          key: `${paths.payloadPrefix}/${envelope.ledger.key}`,
+          byteLength: Number(envelope.ledger.byteLength),
+          names: [envelope.ledger.key, envelope.ledger.sha256],
+        });
+      }
+      const ledger = parsePackLedger(ledgerBytes ?? new Uint8Array(0));
+      for (const row of ledger.packs) {
+        if (row.key === envelope.rootObject.key) continue;
+        declared.push({ key: `${paths.payloadPrefix}/${row.key}`, byteLength: Number(row.byteLength), names: [row.key] });
+      }
+      return declared;
+    }
+  }
+
+  let current = new V2Boot();
+  return {
+    name: 'merkle-pack',
+    storage: () => current.storage(),
+    get workspace() { return current.workspace; },
+    get failures() { return current.failures; },
+    durable,
+    deaths,
+    holdFinalize: () => current.holdFinalize(),
+    replaceContainer: () => current.replaceContainer(),
+    stopContainer: () => current.disk.stopped = true,
+    resetIsolate: () => current.resetIsolate(),
+    secondBoot: () => new V2Boot(),
+    disk: () => current.disk,
+    commitSeams: [
+      'after-transferring',
+      'after-payload',
+      'after-envelope',
+      'after-sealed',
+      'after-completion-pending',
+      'after-published',
+    ],
+    publishSeam: 'after-published',
+    attachSeams: ['attach:after-restore-process'],
+    dieAt: (seam) => deaths.arm(seam),
+    faultAt: (point) => deaths.arm(awaitPointSeam(point)),
+    awaitVisits: (point) => deaths.visits(awaitPointSeam(point)),
+    payloadPrefixes: () => [`${paths.payloadPrefix}/`],
+    controlPlane: async () => {
+      const record: CandidateControlStateV1 = await control.read();
+      return {
+        objectKeys: durable.list(`${paths.envelopePrefix}/`),
+        rows: ['candidate-control'],
+        head: record.head?.rootEnvelopeId ?? null,
+      };
+    },
+    declaredPayload: () => current.declaredPayload(),
+    refusesCorruptPayload: true,
+    committedHeads: async () => {
+      const record: CandidateControlStateV1 = await control.read();
+      return record.head === null ? [] : [record.head.rootEnvelopeId];
+    },
+    work: () => current.work(),
+    awaitPoints,
+    lifecycleCounts: () => current.lifecycleCounts(),
+    journalFacts: () => current.journalFacts(),
+    evictCleanBytes: () => current.evictCleanBytes(),
+    refusedProperties: {},
+    refusedCells: HARNESS_OWNED_CELLS,
+  };
+}
+
 // ── shared plumbing ────────────────────────────────────────────────────────
 
 async function drain(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
@@ -3348,5 +3786,5 @@ export const CONFORMANCE_ARMS = {
   r2fs: r2fsArm,
   'overlay-cas': overlayCasArm,
   'bounded-layers': () => candidateArm('bounded-layers'),
-  'merkle-pack': () => candidateArm('merkle-pack'),
+  'merkle-pack': merklePackV2Arm,
 } satisfies Record<DevboxStrategyName, () => ConformanceArm>;

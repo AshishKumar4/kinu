@@ -148,6 +148,16 @@ export interface EmittedChunk {
 }
 
 /**
+ * Where one emitted chunk run goes, and whether the pass should end there.
+ *
+ * `'stop'` is what makes an INCREMENTAL pass O(k): a caller re-chunking the
+ * window around a dirty cluster stops at the first cut that lands on a
+ * previous chunk boundary, because every byte past that cut is already an
+ * extent of the parent generation.
+ */
+export type EmitChunk = (offset: number, chunk: EmittedChunk, count: number) => void | 'stop';
+
+/**
  * Buzhash table from a fixed xorshift32 sequence: deterministic across runs and
  * machines without shipping 256 magic constants.
  */
@@ -192,7 +202,7 @@ export function chunkLogical(
   layout: LogicalLayout,
   params: ChunkParams,
   zeroCache: Map<number, EmittedChunk>,
-  emit: (offset: number, chunk: EmittedChunk, count: number) => void,
+  emit: EmitChunk,
 ): number {
   validateChunkParams(params);
   const bits = maskBits(params);
@@ -258,7 +268,7 @@ export function chunkLogical(
  */
 class StreamingDataChunker {
   readonly #params: ChunkParams;
-  readonly #emit: (offset: number, chunk: EmittedChunk, count: number) => void;
+  readonly #emit: EmitChunk;
   readonly #bits: number;
   readonly #mask: number;
   readonly #window: Uint8Array;
@@ -270,10 +280,12 @@ class StreamingDataChunker {
   #chunkLength = 0;
   #chunkStart = 0;
   #nextOffset: number | undefined;
+  /** The cut a `'stop'` verdict ended this pass at, or null while it runs. */
+  #stopped: number | null = null;
 
   constructor(
     params: ChunkParams,
-    emit: (offset: number, chunk: EmittedChunk, count: number) => void,
+    emit: EmitChunk,
   ) {
     this.#params = params;
     this.#emit = emit;
@@ -286,6 +298,11 @@ class StreamingDataChunker {
     }
   }
 
+  /** The offset this pass stopped at, or null when it never stopped. */
+  get stoppedAt(): number | null {
+    return this.#stopped;
+  }
+
   #ensureChunkCapacity(required: number): void {
     if (this.#chunk.byteLength >= required) return;
     const capacity = Math.min(this.#params.maxBytes, Math.max(required, this.#chunk.byteLength * 2));
@@ -295,11 +312,12 @@ class StreamingDataChunker {
   }
 
   #cut(nextStart: number): void {
-    this.#emit(
+    const verdict = this.#emit(
       this.#chunkStart,
       { digest: sha256Hex(this.#chunk.subarray(0, this.#chunkLength)), bytes: this.#chunk.subarray(0, this.#chunkLength) },
       1,
     );
+    if (verdict === 'stop') this.#stopped = nextStart;
     this.#hash = 0;
     this.#filled = 0;
     this.#head = 0;
@@ -309,6 +327,7 @@ class StreamingDataChunker {
   }
 
   push(offset: number, bytes: Uint8Array): void {
+    if (this.#stopped !== null) return;
     if (this.#nextOffset !== undefined && this.#nextOffset !== offset) {
       throw new MerklePackError('invalid-parameter', 'sealed data CDC input is not contiguous');
     }
@@ -333,13 +352,17 @@ class StreamingDataChunker {
         (this.#filled === this.#params.minBytes && (this.#hash & this.#mask) === 0)
       ) {
         this.#cut(next);
+        if (this.#stopped !== null) {
+          this.#nextOffset = next;
+          return;
+        }
       }
     }
     this.#nextOffset = offset + bytes.byteLength;
   }
 
   finish(): void {
-    if (this.#chunkLength > 0) this.#cut(this.#chunkStart + this.#chunkLength);
+    if (this.#stopped === null && this.#chunkLength > 0) this.#cut(this.#chunkStart + this.#chunkLength);
     this.#nextOffset = undefined;
   }
 }
@@ -354,7 +377,7 @@ export async function chunkCaptureContent(
   entry: NodeEntry,
   params: ChunkParams,
   zeroCache: Map<number, EmittedChunk>,
-  emit: (offset: number, chunk: EmittedChunk, count: number) => void,
+  emit: EmitChunk,
 ): Promise<number> {
   if (entry.kind !== 'file' || entry.content === undefined) {
     throw new MerklePackError('invalid-parameter', 'chunking requires a file entry with content');
@@ -394,4 +417,95 @@ export async function chunkCaptureContent(
   data.finish();
   if (cursor < entry.content.size) emitHole(cursor, entry.content.size - cursor);
   return entry.content.size;
+}
+
+/** One present byte range of a staged file, in file-absolute offsets. */
+export interface StagedRange {
+  readonly offset: number;
+  readonly length: number;
+}
+
+/**
+ * One window of a staged file: the logical span to chunk, the data the stage
+ * really holds inside it, and a bounded reader for those bytes. Whatever the
+ * window covers and the runs do not is a hole, and a hole stays arithmetic.
+ */
+export interface StagedRegion {
+  readonly from: number;
+  readonly to: number;
+  /** Ascending, non-overlapping present ranges; anything else is a hole. */
+  readonly runs: readonly StagedRange[];
+  read(offset: number, length: number): Promise<Uint8Array>;
+}
+
+/**
+ * Chunk one window of a staged file, resuming the CDC exactly at `from`.
+ *
+ * A window BEGINS at a previous chunk boundary and the rolling hash restarts
+ * at every cut, so the cuts this pass makes over unchanged bytes are the cuts
+ * the previous generation made over them. That is what lets a caller stop the
+ * pass the moment a cut lands on a previous boundary: every byte past that cut
+ * is already an extent of the parent, so it is neither re-hashed nor
+ * re-uploaded. Returns the offset the pass ended at — `to` when it ran to the
+ * end of the window, or the cut a `'stop'` verdict ended it on.
+ */
+export async function chunkStagedRegion(
+  region: StagedRegion,
+  params: ChunkParams,
+  zeroCache: Map<number, EmittedChunk>,
+  emit: EmitChunk,
+): Promise<number> {
+  validateChunkParams(params);
+  if (
+    !Number.isSafeInteger(region.from) || !Number.isSafeInteger(region.to)
+    || region.from < 0 || region.to < region.from
+  ) {
+    throw new MerklePackError(
+      'invalid-parameter',
+      `staged region [${region.from}, ${region.to}) is not a bounded span`,
+    );
+  }
+  let stopped: number | null = null;
+  const emitHole = (offset: number, length: number): void => {
+    const whole = Math.floor(length / params.targetBytes);
+    if (whole > 0 && emit(offset, zeroChunk(params.targetBytes, zeroCache), whole) === 'stop') {
+      stopped = offset + whole * params.targetBytes;
+      return;
+    }
+    const tail = length % params.targetBytes;
+    if (tail > 0 && emit(offset + whole * params.targetBytes, zeroChunk(tail, zeroCache), 1) === 'stop') {
+      stopped = offset + length;
+    }
+  };
+
+  const data = new StreamingDataChunker(params, emit);
+  let cursor = region.from;
+  for (const run of region.runs) {
+    if (stopped !== null) break;
+    const start = Math.max(run.offset, region.from);
+    const end = Math.min(run.offset + run.length, region.to);
+    if (end <= start) continue;
+    if (start > cursor) {
+      data.finish();
+      stopped = data.stoppedAt;
+      if (stopped !== null) break;
+      emitHole(cursor, start - cursor);
+      if (stopped !== null) break;
+    }
+    for (let offset = start; offset < end;) {
+      const length = Math.min(params.maxBytes, end - offset);
+      data.push(offset, await region.read(offset, length));
+      stopped = data.stoppedAt;
+      if (stopped !== null) break;
+      offset += length;
+    }
+    if (stopped !== null) break;
+    cursor = end;
+  }
+  if (stopped === null) {
+    data.finish();
+    stopped = data.stoppedAt;
+  }
+  if (stopped === null && cursor < region.to) emitHole(cursor, region.to - cursor);
+  return stopped ?? region.to;
 }
