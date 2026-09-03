@@ -14,7 +14,14 @@
 //      pressure may drop them at all.
 import { describe, expect, test } from 'bun:test';
 
-import { denseGeometry, Residency, type FileGeometry } from '../src/candidates/residency';
+import { Residency, type FileGeometry } from '../src/candidates/residency';
+
+/** The geometry of a file with no holes: one span over everything. Local to
+ *  this suite; production builds geometry from the manifest, never from a
+ *  size alone. */
+function denseGeometry(size: number): FileGeometry {
+  return { size, data: size === 0 ? [] : [{ offset: 0, length: size }] };
+}
 import { HYDRATE_PAGE_BYTES } from '../src/durability/contracts';
 
 /** One immutable object per path, and the local file the container holds. */

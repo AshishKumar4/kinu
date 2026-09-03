@@ -350,7 +350,3 @@ export class Residency {
   }
 }
 
-/** The geometry of a file with no holes: one span over everything. */
-export function denseGeometry(size: number): FileGeometry {
-  return { size, data: size === 0 ? [] : [{ offset: 0, length: size }] };
-}

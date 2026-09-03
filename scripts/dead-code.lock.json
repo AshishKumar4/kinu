@@ -11,6 +11,7 @@
   "packages/cf-backend/src/user/mcp.ts#McpServerConfig (unreferenced)",
   "packages/cf-backend/src/user/workspace-capability.ts#setWorkspaceTier (test-only)",
   "packages/devbox/package.json#@cloudflare/containers (unused-dependency)",
+  "packages/devbox/src/candidates/bounded-layers.ts#headFilesystemOf (test-only)",
   "packages/devbox/src/candidates/publication.ts#PublicationInterrupted (test-only)",
   "packages/devbox/src/candidates/publication.ts#publishedParentOf (test-only)",
   "packages/devbox/src/candidates/publication.ts#readStagedCandidateObjectForTest (test-only)",
