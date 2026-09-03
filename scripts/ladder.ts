@@ -1964,6 +1964,24 @@ function printMatrix(deploy: readonly string[]): void {
 }
 
 if (import.meta.main) {
+  // A CLOSED REPORTING CHANNEL IS NOT A FAILED TIER.
+  //
+  // Gates run with `stdout: 'inherit'`, so under `git push` the whole tier
+  // writes into the pipe git gives its pre-push hook — 16,650 lines, measured
+  // 2026-09-03. Git stops reading before the end, the next write raises EPIPE,
+  // and the process dies of SIGPIPE with status 141. That refused a push whose
+  // 42 gates had all just passed, three times in one evening, and it read as a
+  // gate failure with no failing gate named.
+  //
+  // The tier's verdict lives in the gate exit codes below. Losing the reader
+  // for the transcript is a value: reporting stops, the verdict stands.
+  process.stdout.on('error', (cause: NodeJS.ErrnoException) => {
+    if (cause.code !== 'EPIPE') throw cause;
+  });
+  process.stderr.on('error', (cause: NodeJS.ErrnoException) => {
+    if (cause.code !== 'EPIPE') throw cause;
+  });
+
   const deploy = deployGates();
 
   if (process.argv.includes('--matrix')) {
