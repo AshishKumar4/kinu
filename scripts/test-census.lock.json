@@ -1,5 +1,5 @@
 {
-  "measured": "682812de5: 846 test files, 780 runnable suites, 11448 tests, 34 runners, 62 non-public product members",
+  "measured": "042fddd98: 859 test files, 789 runnable suites, 11531 tests, 34 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -1480,6 +1480,10 @@
     {
       "key": "tautology_suspect :: packages/devbox/tests/journal-daemon.test.ts :: refuses a journal manifest that omits POSIX metadata :: weak-only test",
       "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/devbox/tests/merkle-pack-wire.test.ts :: directory entries and xattr names encode identically under any input order :: expected side computed by the code under test",
+      "count": 3
     },
     {
       "key": "tautology_suspect :: packages/devbox/tests/merkle-pack.test.ts :: the root is identical under any input order permutation :: expected side computed by the code under test",

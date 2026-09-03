@@ -427,16 +427,30 @@ describe('durability v2 wire contracts', () => {
     ]);
   });
 
-  test('a v1 envelope carrying closure is refused under v2', () => {
-    expect(() => v.parse(RootEnvelopeV2Schema, envelope)).toThrow();
-    expect(() => v.parse(RootEnvelopeV2Schema, {
-      ...envelopeV2,
-      closure: [pack],
-    })).toThrow();
-    expect(() => v.parse(RootEnvelopeV2Schema, {
-      ...envelopeV2,
-      closureObject,
-    })).toThrow();
+  test('a v1 envelope carrying closure is refused under v2, naming the field', () => {
+    // What the refusal NAMES is the contract: the schema rejects the closure
+    // itself, in both spellings, not merely any parse failure. A schema that
+    // failed on some other field would satisfy a bare toThrow.
+    type EnvelopeInput = v.InferInput<typeof RootEnvelopeV1Schema>
+      | v.InferInput<typeof RootEnvelopeV2Schema>;
+    // The middle case is the POINT of the test: a v2 envelope that carries a
+    // closure field the schema refuses. The parser is what proves it refused,
+    // so the input is the schema's own type with the banned field added.
+    const refusals = (input: EnvelopeInput): string =>
+      v.safeParse(RootEnvelopeV2Schema, input)
+        .issues?.map((issue) => issue.message).join(';') ?? '';
+    expect(refusals(envelope)).toContain('closure');
+    expect(
+      // SAFETY: the input is the test's own fixture plus a field the schema
+      // refuses, parsed immediately by that schema below; nothing else reads it.
+      refusals({ ...envelopeV2, closure: [pack] } as EnvelopeInput & { closure: unknown }),
+    ).toContain('closure');
+    expect(
+      // SAFETY: envelopeV2 is the schema's own parsed fixture, and the only
+      // added member is closureObject, which RootEnvelopeV2Schema has no field
+      // for. The parser below is the reader, so the shape never escapes.
+      refusals({ ...envelopeV2, closureObject } as EnvelopeInput & { closureObject: unknown }),
+    ).toContain('closure');
   });
 
   test('a v2 envelope without its ledger is refused', () => {

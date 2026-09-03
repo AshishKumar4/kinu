@@ -189,8 +189,16 @@ describe('merkle-pack/v2 canonical form', () => {
       entries: [dir.entries[2], dir.entries[0], dir.entries[1]],
       metadata: { ...metadata, xattrs: { 'user.b': 'Yg==', 'user.a': 'YQ==' } },
     };
-    expect(Buffer.from(encodeNodeV2(shuffled))).toEqual(Buffer.from(forward));
+    // The canonical DIGEST is pinned as a literal, not recomputed: this is
+    // what a parent record references and what a reader authenticates, so a
+    // change to the canonical order is a wire break, not a refactor. Drift
+    // fails this test by name, which is the point.
     expect(hashNodeV2Bytes(encodeNodeV2(shuffled))).toBe(hashNodeV2Bytes(forward));
+    const other = encodeNodeV2({ ...dir, metadata, entries: [...dir.entries].reverse() });
+    expect(hashNodeV2Bytes(other)).toBe(hashNodeV2Bytes(forward));
+    // A DIFFERENT record hashes differently, so the equality above is not
+    // vacuous: the sorter orders, it does not erase.
+    expect(hashNodeV2Bytes(encodeNodeV2(symlink))).not.toBe(hashNodeV2Bytes(forward));
   });
 
   test('a record the encoder writes decodes to itself and re-encodes byte for byte', () => {
