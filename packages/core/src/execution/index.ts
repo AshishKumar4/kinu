@@ -36,10 +36,11 @@ export {
   deviceToolchainAnswer, freshDeviceToolchain,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
   sandboxReasonFix, describeGpuNodes,
+  connectedDevices, deviceByName, deviceFleetAsk,
   DEVICE_PRESENCE_CONFIG_KEY, DEVICE_TOOLCHAIN_TTL_MS,
   DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS,
   type DeviceStatus, type DevicePresence, type DevicePresenceStore,
-  type DeviceToolchain, type DeviceFleetEntry,
+  type DeviceToolchain, type DeviceFleet, type DeviceFleetEntry,
   type DeviceTier, type DeviceMode, type DeviceSandboxStatus,
   type DeviceSandboxCapability, type DeviceSandboxReason,
 } from './device-status';
@@ -83,4 +84,4 @@ export {
 export { sandboxFiles } from './sandbox';
 export { nimbusSessionFiles } from './nimbus';
 export { AGENT_FS_CHUNK_BYTES } from './nimbus-agent-files';
-export { deviceFiles, type DeviceFileConsent } from './device-tunnel-executor';
+export { deviceFiles, deviceFleetFiles, type DeviceFileConsent } from './device-tunnel-executor';

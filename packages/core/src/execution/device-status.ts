@@ -13,11 +13,18 @@
  * (`execution/toolchain.ts`), because the `laptop` capability row is otherwise
  * only what the tunnel's existence establishes: honest, and useless for routing
  * language work to a machine that may well have node, bun and python on it.
+ *
+ * The account is a FLEET. The user's account holds one device row per machine,
+ * several of which can be live at once, so a single "the connected device" is
+ * a question with several answers — the same shape as the one-device question,
+ * asked per machine. DeviceFleetEntry is that per-machine row, and the
+ * helpers below aggregate across the fleet.
  */
 
 import * as v from 'valibot';
 import type { ExecutorCapability } from './types';
 import { TOOLCHAIN_PROBED_CAPABILITIES, toolchainCapabilities } from './toolchain';
+import { NO_DEVICE_CONNECTED } from './device-tunnel';
 
 /**
  * What an attached machine answered when asked what it can run.
@@ -77,6 +84,51 @@ export interface DeviceFleetEntry {
   readonly os: string | null;
   readonly hostname: string | null;
   readonly connected: boolean;
+  /** Whether THIS caller's workspace holds an action grant on THIS machine —
+   *  the per-(workspace, device) binding, carried per device because two
+   *  machines answer that question independently. Populated for connected
+   *  devices when the caller is a workspace; absent = unknown / not a
+   *  workspace caller. Seeing it grants nothing — every call still crosses
+   *  the consent chokepoint. */
+  readonly granted?: boolean;
+  /** How THIS machine runs a command for THIS caller's workspace: the owner's
+   *  Sandbox switch, what the machine proved, and this workspace's own home
+   *  and roots on it. Populated for connected devices; absent when the
+   *  machine is offline or the caller is not a workspace. */
+  readonly sandbox?: DeviceSandboxStatus;
+  /** The machine's own toolchain answer, or null when it was never asked or
+   *  could not answer — an old daemon with no probe method is not a machine
+   *  without python. Populated for connected devices. */
+  readonly toolchain?: DeviceToolchain | null;
+}
+
+/** The fleet as one flat list — every registered machine with its liveness. */
+export type DeviceFleet = readonly DeviceFleetEntry[];
+
+/** Every machine in the fleet that is live right now, fleet order preserved. */
+export function connectedDevices(fleet: DeviceFleet | undefined): DeviceFleetEntry[] {
+  return (fleet ?? []).filter((device) => device.connected);
+}
+
+/**
+ * The classified ask the executor surface returns when a command did not name
+ * a device and the fleet makes the question real. No internals, no
+ * apologetics: what is wanted, and the names it can be answered with.
+ */
+export function deviceFleetAsk(fleet: DeviceFleet | undefined): string {
+  const live = connectedDevices(fleet);
+  if (live.length === 0) return NO_DEVICE_CONNECTED;
+  const names = live.map((device) => `${device.name}${device.os ? ` (${device.os})` : ''}`).join(', ');
+  return `name the machine this command runs on — connected: ${names}. Pass it as device: "<name>".`;
+}
+
+/** A connected device by name, or null — the lookup the executor's per-call
+ *  device option resolves against. A name that matches none or several live
+ *  machines answers null; the caller states why. */
+export function deviceByName(fleet: DeviceFleet | undefined, name: string): DeviceFleetEntry | null {
+  const live = connectedDevices(fleet);
+  const matches = live.filter((device) => device.name === name);
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 /**
@@ -247,8 +299,8 @@ export interface DeviceStatus {
    *  command on the machine to learn a path. */
   deviceHome?: string | null;
   /** How the connected device runs a command for THIS caller's workspace: the
-   *  owner's tier, what the machine proved, and the workspace's own home and
-   *  roots on it. Absent when no device is connected. */
+   *  owner's tier, what the machine proved, and the workspace's own home on it.
+   *  Absent when no device is connected. */
   sandbox?: DeviceSandboxStatus;
 }
 
