@@ -1,0 +1,187 @@
+# Devbox storage strategies: the decisive run, 2026-09-03
+
+One five-arm comparison, deployed, on integration `1ffe8ea4f` plus the
+driver fix it forced (`2f3b3f81`, same tree otherwise clean; the
+`journal-daemon-source` provenance row records every daemon source
+after that fix). Run `kinu-devbox-bench-20260903140046`, artifact
+`bench-artifacts/devbox-strategies-20260903140046.json` (gitignored,
+machine-local), started 2026-09-03T14:00:48Z, finished
+2026-09-03T15:28:41Z. `--decisive`, 2 repetitions per deciding cell,
+seed 20260824, image `docker.io/cloudflare/sandbox@sha256:822501de5f0c…`.
+Money is not in this report; the driver prints time and bytes only.
+
+## What the run says outright
+
+**The run was REFUSED by its own admission contract, and the refusal is
+the finding.** One arm of five completed its lifecycle proof
+(`snapshot-chain`, the incumbent); the other four failed for named,
+reproducible reasons the driver recorded per arm. No cross-cell
+averaging is possible or attempted: with one lifecycle-proven arm, no
+incumbent-versus-challenger ratio exists, and the recommendation is
+REFUSED rather than fabricated over blank-disk rows.
+
+## The five-column matrix
+
+Conformance cells are the design § 6 battery
+(`packages/devbox/tests/strategy-conformance.test.ts`) on this same
+tree. `pass` = the cell ran and the arm passed it; `red-structural` =
+the arm refuses the cell in its own declaration — a property of the
+design, not a bug, reported as such; `red-bug` = the failure has a row
+in `packages/devbox/tests/support/conformance-bug-list.ts` with its
+recorded reason. Deployed-run column is the decisive run's own verdict.
+
+| cell | snapshot-chain | r2fs | overlay-cas | bounded-layers | merkle-pack |
+| --- | --- | --- | --- | --- | --- |
+| 6.1 attach/write/commit/replace | existing | existing | existing | existing | existing |
+| 6.2 quiesce publishes once | existing | existing | existing | existing | existing |
+| 6.3 three generations wake whole | existing | existing | existing | existing | existing |
+| 6.4 death at commit seams | existing | existing | existing | existing | existing |
+| 6.5 fault at every await point | red-structural | red-structural | red-structural | pass | pass |
+| 6.6 control metadata off payload prefix | existing | existing | existing | existing | existing |
+| 6.7 corrupted payload refused | existing | existing | existing | existing | existing |
+| 6.8 interrupted commit converges | existing | existing | existing | existing | existing |
+| 6.9 DO reset mid-restore | pass | pass | pass | pass | pass |
+| 6.10 racing containers | pass | red-structural | red-structural | pass | pass |
+| 6.11 byte-for-byte fidelity | pass | pass | red-structural | pass | pass |
+| 6.12 counted bounds k vs n vs 10n | red-bug | pass | red-bug | red-bug | pass |
+| 6.13 1e5 files, RestoreWork flat | pass | pass | pass | red-bug | red-bug |
+| 6.14 1 GiB sparse + 64 MiB dense | red-bug | red-structural | red-structural | red-bug | red-bug |
+| 6.15 sqlite rewrite, dirty pages | red-bug | red-bug | red-bug | red-bug | pass |
+| 6.16 teardown after stop | existing | existing | existing | existing | existing |
+| 6.17 two containers, one head | pass | red-structural | red-structural | pass | pass |
+| 6.18 disk full mid-journal | red-bug | red-bug | red-bug | red-bug | pass |
+| 6.19 stop then wake, same instance | harness | harness | harness | harness | harness |
+| 6.20 GC keeps reachable objects | pass | pass | pass | pass | pass |
+| **deployed run** | **complete** | **refused at cold attach** | **failed mid-measurement** | **failed mid-measurement** | **failed mid-measurement** |
+
+Structural refusals, in the arms' own words (from the matrix legend):
+
+- `6.5` (snapshot-chain, r2fs, overlay-cas): the strategy predates the
+  durability contract; its commit seams are its fault map.
+- `6.10`/`6.17` (r2fs): ONE WRITER — two containers mounted on one
+  prefix lose each other's writes; a devbox owns its prefix.
+- `6.10`/`6.17` (overlay-cas): no control head CAS; concurrent
+  containers share and may merge one prefix.
+- `6.11` (overlay-cas): tree objects carry mode and mtime only; no
+  uid/gid, xattrs, hardlink inode sharing or holes.
+- `6.14` (r2fs): s3fs has no sparse-hole wire format; a 1 GiB hole
+  would become 1 GiB. `6.14` (overlay-cas): scans files as dense
+  512 KiB chunks; no sparse-hole scan protocol.
+
+Bug-list reds, recorded 2026-09-02 against origin/main `6d19d50e7` and
+reproducing on this tree, all with reasons in
+`conformance-bug-list.ts`: 6.12 (snapshot-chain, overlay-cas,
+bounded-layers — publish bytes scale with the tree, not the change),
+6.13 (bounded-layers, merkle-pack — restore reads one object per file
+/ one pack per ledger pack, the lane-4 lazy-restore property),
+6.14 (snapshot-chain, bounded-layers, merkle-pack — wake remote ops
+above the O(1) bar), 6.15 (all but merkle-pack — sqlite rewrite moves
+whole files rather than dirty pages), 6.18 (all but merkle-pack — no
+clean bytes evicted under disk pressure).
+
+The matrix ran clean on this tree: 138 tests pass, 0 fail, and the
+rendered matrix's red set equals the bug list exactly (a red with no
+row, or a row whose cell passes, fails the suite — so the red set can
+only change on purpose).
+
+## The deployed run, per arm
+
+| arm | lifecycle proof | cold attach | ladder | decisive ticks | ops tally |
+| --- | --- | --- | --- | --- | --- |
+| `snapshot-chain` | PASSED (9/9) | 2301 ms, `empty` | 6/6 rows | 40 | 3082 (A 2836 / B 245) |
+| `r2fs` | FAILED | none | 0/6 | 0 | none |
+| `overlay-cas` | FAILED (2 checks) | 5322 ms, `empty` | 6/6 | 0 | none |
+| `bounded-layers` | FAILED (2 checks) | 4023 ms, `empty` | 6/6 | 0 | none |
+| `merkle-pack` | FAILED (2 checks) | 38390 ms, `empty` | 6/6 | 0 | none |
+
+What each failed arm's own record says, in the driver's words:
+
+- **r2fs** — `create failed: cold attach refused: /workspace could not
+  be emptied for a mount: Failed to change directory to
+  '/var/tmp/devbox'`. The arm never attached; it measured nothing. The
+  same refusal appeared in the aborted first launch of the day (run
+  `20260903131640`), so it is reproducible across runs on this tree.
+- **bounded-layers and merkle-pack** — the first candidate checkpoint
+  failed: `journal manifest version 2 is a delta; read it with
+  readJournalDelta`, thrown from `captureFromJournalFence` inside the
+  candidate-runner the image just built. The write path therefore moved
+  no bytes (`moved=n/a held=0B`), and the arm then failed at
+  `wake restored empty, expected attached`. Both arms share the
+  candidate runner, and both failed identically.
+- **overlay-cas** — passed its cold attach and ran the full ladder, but
+  its first decisive `npm` checkpoint did not settle within the
+  1,500,000 ms operation deadline, and after that its restoration never
+  completed: the box answered `a restoration has been running in the
+  request for N ms; a startup is armed, so ask again` for every later
+  segment until the runner itself died with `GET cursor.json: HTTP 530`
+  (the store read path failing behind the platform). Its tree-lower
+  mount check failed (`/var/tmp/devbox/cas-lower -> no`).
+
+## What one lifecycle-proven arm measured (`snapshot-chain`)
+
+The incumbent is the only arm whose numbers describe the strategy
+rather than a blank disk, so it is the only arm whose numbers are
+printed here.
+
+Decisive workloads (per repetition: 5 segments each, checkpoint between
+every segment; `bytesPut` is the R2 bytes each tick moved):
+
+| workload | rep | Σ tick ms | bytes per tick |
+| --- | --- | --- | --- |
+| npm | 1 | 34,165 | 48.8 MB |
+| npm | 2 | 124,420 | 244.8 MB |
+| npm-excluded | 1 | 33,333 | 48.8 MB |
+| npm-excluded | 2 | 121,577 | 244.8 MB |
+| git | 1 | 52,459 | 56.6 MB → 100.1 MB (grows with the repo) |
+| git | 2 | 110,222 | 201.3 MB → 244.8 MB |
+| sqlite | 1 | 119,147 | 235.1 → 244.8 MB |
+| sqlite | 2 | 125,047 | 235.1 → 244.8 MB |
+
+The checkpoint ladder (quiesce = full publication, tick = incremental):
+
+| change | quiesce | tick |
+| --- | --- | --- |
+| 64 KiB | 2199 ms, 86,016 B committed | 80 ms, skipped (unchanged) |
+| 4 MiB | 1339 ms, 4,366,336 B | 196 ms, skipped |
+| 64 MiB | 9170 ms, 71,389,184 B | 200 ms, skipped |
+
+The deciding metric `small-stat-1k` (metadata latency over 1000 small
+files), measured twice as the run asked: p50 **0.028 ms** and
+**0.027 ms** (repetitions 1 and 2). The full 8-phase probe set
+(posix, seq1, seq10, rand, archive, small1k ×2, npmlike) completed
+once per repetition; phase wall times are in the artifact.
+
+The two preregistered red witnesses the incumbent must produce were
+both observed: `mutable-delta` and `delta-layer-collapse`.
+
+## Admission
+
+The run exits 1 and refuses to rank, per its own gates (G0 identity is
+green; G1 mount truth, G2 witnesses, G3 publication-safety cuts, G4
+security cells, G5 counted restores, G6 complete cells, G7 accounting,
+G8 cleanup, G9 repetitions all red — reasons above and in the
+artifact). Notably G5 is a standing refusal for THIS driver: it
+observes wakes but runs no restore-complexity instrumentation, so no
+run it produces can be admitted outright; the conformance matrix's
+6.13 is where restore complexity is actually measured, and the deployed
+run's role is the time-and-bytes comparison the owner asked for twice.
+
+Cleanup is verified, not assumed: all C1–C7 evidence booleans read back
+true (`workerAbsent`, `runtimeAbsent`, `bucketAndMultipartEmpty`,
+`boxDurableStateEmpty`, `localSecretsProcessesAbsent`,
+`countersReconciled`, `replayIdempotent`; multipart residue 0), and an
+independent `wrangler r2 bucket list` after the run shows zero
+remaining buckets for this run id. The four G8 "live teardown" errors
+are OperationInterrupted notices against boxes whose containers had
+already stopped — the manifest itself records every resource deleted.
+
+## What would make the next run comparable
+
+Named, not speculated — each is the driver's own recorded refusal: the
+r2fs mount refusal at cold attach, the candidate runner's
+`journal manifest version 2 is a delta` (bounded-layers and
+merkle-pack both), and overlay-cas's restoration not settling within
+its own operation deadline. The conformance matrix above is the
+apples-to-apples comparison that IS complete on this tree; the deployed
+run needs those three named defects closed before its cells can join
+it.

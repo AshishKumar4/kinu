@@ -1,0 +1,110 @@
+{
+  "schema": "devbox-arm-artifact/1",
+  "arm": "bounded-layers",
+  "runId": "20260903140046",
+  "settledAt": "2026-09-03T14:03:54.547Z",
+  "logTail": [
+    "deployed https://kinu-devbox-bench-20260903140046-bounded-layers.ashishkmr472.workers.dev at version 83ac4ba2-7d1e-4fc5-9b78-a153501697c7",
+    "create (cold attach)",
+    "cold attach: no restoration has run for this container yet; driving readiness through one no-op exec (drive 1)",
+    "install harness",
+    "ops reset and ladder",
+    "stop then wake",
+    "arm failed mid-measurement: wake restored empty, expected attached"
+  ],
+  "row": {
+    "strategy": "bounded-layers",
+    "box": "ab-bounded-layers-20260903140046",
+    "verifyPassed": false,
+    "verifyChecks": [
+      {
+        "name": "default cwd is the durable work directory",
+        "pass": true,
+        "detail": "exit 0, cwd default /workspace"
+      },
+      {
+        "name": "the first checkpoint MOVED bytes into the store",
+        "pass": false,
+        "detail": "failed moved=n/a held=0B candidate checkpoint failed: Error: journal manifest version 2 is a delta; read it with readJournalDelta\n    at captureFromJournalFence (/opt/kinu/candidate-runner.bundle.mjs:4770:20)\n    at async checkpointCandidate (/opt/kinu/candidate-runner.bundle.mjs:5225:48)\n    at async runCandidate (/opt/kinu/candidate-runner.bundle.mjs:5254:37)\n    at processTicksAndRejections (native:7:39)"
+      },
+      {
+        "name": "the arm completed every measured step",
+        "pass": false,
+        "detail": "arm failed mid-measurement: wake restored empty, expected attached"
+      }
+    ],
+    "attachColdMs": 4023,
+    "attachColdKind": "empty",
+    "attachColdBootId": "aa834ac0-7ae1-4ad9-8cf1-0ba96870b2c1",
+    "attachWarmMs": null,
+    "attachWarmKind": "",
+    "wakeBootId": null,
+    "attachWarmBootId": null,
+    "checkpoints": [
+      {
+        "changeKiB": 64,
+        "kind": "quiesce",
+        "ms": 1254,
+        "bytes": -1,
+        "outcome": "failed (candidate checkpoint failed: Error: journal manifest version 2 is a delta; read it with readJournalDelta\n    at captureFromJournalFence (/opt/kinu/candidate-runner.bundle.mjs:4770:20)\n    at async checkpointCandidate (/opt/kinu/candidate-runner.bundle.mjs:5225:48)\n    at async runCandidate (/opt/kinu/candidate-runner.bundle.mjs:5254:37)\n    at processTicksAndRejections (native:7:39)\n)"
+      },
+      {
+        "changeKiB": 64,
+        "kind": "tick",
+        "ms": 330,
+        "bytes": -1,
+        "outcome": "failed (candidate checkpoint failed: Error: journal manifest version 2 is a delta; read it with readJournalDelta\n    at captureFromJournalFence (/opt/kinu/candidate-runner.bundle.mjs:4770:20)\n    at async checkpointCandidate (/opt/kinu/candidate-runner.bundle.mjs:5225:48)\n    at async runCandidate (/opt/kinu/candidate-runner.bundle.mjs:5254:37)\n    at processTicksAndRejections (native:7:39)\n)"
+      },
+      {
+        "changeKiB": 4096,
+        "kind": "quiesce",
+        "ms": 464,
+        "bytes": -1,
+        "outcome": "failed (candidate checkpoint failed: Error: journal manifest version 2 is a delta; read it with readJournalDelta\n    at captureFromJournalFence (/opt/kinu/candidate-runner.bundle.mjs:4770:20)\n    at async checkpointCandidate (/opt/kinu/candidate-runner.bundle.mjs:5225:48)\n    at async runCandidate (/opt/kinu/candidate-runner.bundle.mjs:5254:37)\n    at processTicksAndRejections (native:7:39)\n)"
+      },
+      {
+        "changeKiB": 4096,
+        "kind": "tick",
+        "ms": 304,
+        "bytes": -1,
+        "outcome": "failed (candidate checkpoint failed: Error: journal manifest version 2 is a delta; read it with readJournalDelta\n    at captureFromJournalFence (/opt/kinu/candidate-runner.bundle.mjs:4770:20)\n    at async checkpointCandidate (/opt/kinu/candidate-runner.bundle.mjs:5225:48)\n    at async runCandidate (/opt/kinu/candidate-runner.bundle.mjs:5254:37)\n    at processTicksAndRejections (native:7:39)\n)"
+      },
+      {
+        "changeKiB": 65536,
+        "kind": "quiesce",
+        "ms": 3073,
+        "bytes": -1,
+        "outcome": "failed (candidate checkpoint failed: Error: journal manifest version 2 is a delta; read it with readJournalDelta\n    at captureFromJournalFence (/opt/kinu/candidate-runner.bundle.mjs:4770:20)\n    at async checkpointCandidate (/opt/kinu/candidate-runner.bundle.mjs:5225:48)\n    at async runCandidate (/opt/kinu/candidate-runner.bundle.mjs:5254:37)\n    at processTicksAndRejections (native:7:39)\n)"
+      },
+      {
+        "changeKiB": 65536,
+        "kind": "tick",
+        "ms": 297,
+        "bytes": -1,
+        "outcome": "failed (candidate checkpoint failed: Error: journal manifest version 2 is a delta; read it with readJournalDelta\n    at captureFromJournalFence (/opt/kinu/candidate-runner.bundle.mjs:4770:20)\n    at async checkpointCandidate (/opt/kinu/candidate-runner.bundle.mjs:5225:48)\n    at async runCandidate (/opt/kinu/candidate-runner.bundle.mjs:5254:37)\n    at processTicksAndRejections (native:7:39)\n)"
+      }
+    ],
+    "stopMs": 356,
+    "wakeMs": null,
+    "wakeKind": "",
+    "phases": [],
+    "decisiveTicks": [],
+    "quiescesBeforeDecisive": 3,
+    "decisiveQuiesces": 0,
+    "generationBeforeLadder": {
+      "baseId": null,
+      "hasDelta": false,
+      "rev": null
+    },
+    "generationAfterLadder": null,
+    "treeBytes": {},
+    "ops": null,
+    "teardown": null,
+    "witnessChecks": [],
+    "notes": [
+      "cold attach: the driver drove readiness 1x through a no-op exec because /state reported the container stopped with no restoration started",
+      "the failed arm's box was not released: candidate checkpoint failed: Error: journal manifest version 2 is a delta; read it with readJournalDelta\n    at captureFromJournalFence (/opt/kinu/candidate-runner.bundle.mjs:4770:20)\n    at async checkpointCandidate (/opt/kinu/candidate-runner.bundle.mjs:5225:48)\n    at async runCandidate (/opt/kinu/candidate-runner.bundle.mjs:5254:37)\n    at processTicksAndRejections (native:7:39)\n",
+      "arm failed mid-measurement: wake restored empty, expected attached"
+    ]
+  }
+}
