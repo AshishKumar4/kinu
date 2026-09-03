@@ -26,7 +26,7 @@ import { MemoryControlStore } from './candidate-control';
 import { LiveTree, cloneMetadata, holesOf, runBytes, sortedByPath } from './tree-model';
 import type { NodeEntry } from '../../src/capture/model';
 import { SidecarCore } from '../../bench/sidecar/core';
-import type { SidecarDaemon, SidecarFence, SidecarPayloadStore } from '../../bench/sidecar/core';
+import type { SidecarDaemon, SidecarPayloadStore } from '../../bench/sidecar/core';
 import { DEFAULT_CHUNK_PARAMS } from '../../src/candidates/merkle-pack/chunk';
 import type { ChunkParams, StagedRange } from '../../src/candidates/merkle-pack/chunk';
 import { chunkWindows } from '../../src/candidates/merkle-pack/delta';
@@ -34,15 +34,15 @@ import type {
   BoundaryHandback,
   DeltaDirtyFile,
   DeltaManifestV2,
-  DeltaMetadataOp,
+  DeltaStage,
   DeltaStagedRange,
 } from '../../src/candidates/merkle-pack/delta';
 import { DEFAULT_MAX_PACK_BYTES_V2 } from '../../src/candidates/merkle-pack/build-v2';
-import type { DeltaStage } from '../../src/candidates/merkle-pack/build-v2';
-import { envelopeV2Bytes, parseEnvelopeV2Bytes } from '../../src/candidates/publication';
+import { envelopeV2Bytes, envelopeV2IdOf } from '../../src/candidates/publication';
+import * as v from 'valibot';
+import { RootEnvelopeV2Schema, CandidateRunControlV2Schema } from '../../src/durability/contracts';
 import type { MerkleV2View, PackRun } from '../../src/candidates/merkle-pack/view-v2';
-import { candidateRunControlV2 } from '../../src/candidates/control';
-import type { CandidateEnvelopeStoreV2 } from '../../src/candidates/control';
+import type { CandidateEnvelopeStoreV2, CandidateControlStore } from '../../src/candidates/control';
 import type {
   CandidateRunControlV2,
   ObjectReceipt,
@@ -52,6 +52,48 @@ import type {
   SealWork,
   UploadIntent,
 } from '../../src/durability/contracts';
+import type { JournalDelta, JournalFence } from '../../src/capture/journal/client';
+type DeltaMetadataOp = DeltaManifestV2['metadataOps'][number];
+
+/**
+ * THE TEST-SIDE MIRRORS. `candidateRunControlV2` and `parseEnvelopeV2Bytes`
+ * were test-only exports — production reaches neither — so both are gone from
+ * the module surface, and these two restate the literals they served. Drift
+ * fails these tests on purpose: if the control record's shape or the envelope
+ * canonicality rule changes, the mirror must be updated in the same commit or
+ * the sidecar harness is measuring the wrong record.
+ */
+export function parseEnvelopeV2Bytes(bytes: Uint8Array, rootEnvelopeId: string): RootEnvelopeV2 {
+  const envelope = v.parse(RootEnvelopeV2Schema, JSON.parse(new TextDecoder().decode(bytes)));
+  if (envelopeV2IdOf(envelope) !== rootEnvelopeId) {
+    throw new Error(`candidate v2 envelope does not match pointer ${rootEnvelopeId}`);
+  }
+  if (!bytesEqual(envelopeV2Bytes(envelope), bytes)) {
+    throw new Error(`candidate v2 envelope body at ${rootEnvelopeId} is not canonical`);
+  }
+  return envelope;
+}
+
+export async function candidateRunControlV2(
+  store: CandidateControlStore,
+  envelopes: CandidateEnvelopeStoreV2,
+): Promise<CandidateRunControlV2> {
+  const control = await store.read();
+  const pointer = control.head;
+  return v.parse(CandidateRunControlV2Schema, {
+    version: 2,
+    head: pointer === null ? null : { pointer, envelope: await envelopes.read(pointer.rootEnvelopeId) },
+    operation: control.operation,
+  });
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let at = 0; at < a.byteLength; at += 1) {
+    if (a[at] !== b[at]) return false;
+  }
+  return true;
+}
 
 /** One remote operation against the store, as the work rows count them. */
 export interface StoreOp {
@@ -293,7 +335,7 @@ export class ModeledDaemon implements SidecarDaemon {
 
   // ── the fence ────────────────────────────────────────────────────────────
 
-  async fence(): Promise<SidecarFence> {
+  async fence(): Promise<JournalFence> {
     this.#cut += 1;
     this.#generation += 1;
     // THE TOUCHED PATHS PLUS THEIR ANCESTORS, which is what makes a delta a
@@ -366,7 +408,7 @@ export class ModeledDaemon implements SidecarDaemon {
       generation: this.#generation,
       stageRoot: `/stage/${this.#generation}`,
       base: this.#base,
-      dirtyFiles,
+      entries: dirtyFiles,
       metadataOps: this.#ops,
       sealWork,
     };
@@ -412,12 +454,18 @@ export class ModeledDaemon implements SidecarDaemon {
     return staged.sort((a, b) => a.offset - b.offset);
   }
 
-  async manifest(path: string): Promise<DeltaManifestV2> {
+  /** The delta the sidecar reads after a fence: the manifest just written,
+   *  bound to the stage that reads the live tree at the same offsets. */
+  async delta(fence: JournalFence): Promise<JournalDelta> {
     const held = this.#manifest;
-    if (held === null || `${held.stageRoot}/manifest.json` !== path) {
-      throw new Error(`no fenced manifest at ${path}`);
+    if (held === null || held.cut !== fence.cut || held.generation !== fence.generation) {
+      throw new Error(`no delta for the fence at cut ${fence.cut}`);
     }
-    return held;
+    return {
+      manifest: held,
+      stage: this.stage,
+      close: () => {},
+    };
   }
 
   async boundaries(handback: BoundaryHandback): Promise<number> {
@@ -567,7 +615,6 @@ export function openSidecar(options: FixtureOptions = {}): SidecarFixture {
     snapshot,
     head: { control, envelopes },
     payload,
-    stage: daemon.stage,
     daemon,
     now: options.now ?? (() => 1_000),
     chunkParams: options.chunkParams,

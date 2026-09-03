@@ -65,7 +65,6 @@ export interface MerkleV2Reader extends MerklePackReader {
 }
 
 export type FileNodeV2 = Extract<NodeV2, { readonly kind: 'file' }>;
-export type DirNodeV2 = Extract<NodeV2, { readonly kind: 'dir' }>;
 
 /** One resolved record: where its bytes are, and what they decode to. */
 export interface RecordV2 {

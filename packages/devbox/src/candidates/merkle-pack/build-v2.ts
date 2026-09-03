@@ -34,7 +34,7 @@ import type { PublishedParent } from '../publication';
 import { DEFAULT_CHUNK_PARAMS, chunkStagedRegion, validateChunkParams } from './chunk';
 import type { ChunkParams, EmittedChunk, StagedRange } from './chunk';
 import { chunkWindows, fileBoundaries } from './delta';
-import type { BoundaryRow, DeltaDirtyFile, DeltaManifestV2, DeltaStagedRange } from './delta';
+import type { BoundaryRow, DeltaDirtyFile, DeltaManifestV2, DeltaStage, DeltaStagedRange } from './delta';
 import { MerklePackError } from './errors';
 import { PackWriter } from './pack-layout';
 import type { BuiltPack, ResolvePack, Slot } from './pack-layout';
@@ -57,11 +57,6 @@ import type {
  * `bench/measure-first/MEASUREMENTS.md` § (d)).
  */
 export const DEFAULT_MAX_PACK_BYTES_V2 = 32 * 1024 * 1024;
-
-/** The fence's copy of the dirty windows, read by path. */
-export interface DeltaStage {
-  read(path: string, offset: number, length: number): Promise<Uint8Array>;
-}
 
 /** The previous generation, authenticated against the published head. */
 export interface PublishedMerkleParentV2 {
@@ -647,7 +642,7 @@ export async function buildMerkleDelta(
       `delta base ${delta.base?.root ?? 'none'} is not the published parent ${parent.headRootId}`,
     );
   }
-  for (const file of delta.dirtyFiles) {
+  for (const file of delta.entries) {
     if (!isCanonicalJournalPath(file.path)) {
       throw new MerklePackError('hostile-path', `refusing non-canonical path ${JSON.stringify(file.path)}`);
     }
@@ -759,7 +754,7 @@ export async function buildMerkleDelta(
   const chunked: ChunkedFile[] = [];
   const boundaries: BoundaryRow[] = [];
   const sharedByIno = new Map<string, PlannedChild>();
-  for (const file of [...delta.dirtyFiles].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) {
+  for (const file of [...delta.entries].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) {
     const stat = statOf(file);
     if (file.kind === 'dir') {
       (await materializeDir(file.path)).stat = stat;

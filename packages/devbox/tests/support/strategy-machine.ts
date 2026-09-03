@@ -96,41 +96,21 @@ import {
   finalizeCandidateOperation,
   redriveCandidateOperation,
   settleCandidateNoChange,
-  candidateRunControlV2,
   type CandidateControlStore,
   type CandidateEnvelopeStore,
   type CandidateEnvelopeStoreV2,
 } from '../../src/candidates/control';
-import {
-  buildMerklePack,
-  openMerklePack,
-  parentFromPublishedParent,
-} from '../../src/candidates/merkle-pack';
-import {
-  MemoryCandidateObjectSink,
-  stageCandidatePayload,
-  envelopeBytes,
-  parseEnvelopeBytes,
-  recoverPublishedParent,
-  envelopeV2Bytes,
-  parseEnvelopeV2Bytes,
-} from '../../src/candidates/publication';
+import { candidateRunControlV2 } from './sidecar-fixture';
+import { MemoryCandidateObjectSink, stageCandidatePayload } from '../../src/candidates/publication';
+import { envelopeBytes, parseEnvelopeBytes, recoverPublishedParent, envelopeV2Bytes } from '../../src/candidates/publication';
+import { buildMerklePack, openMerklePack, parentFromPublishedParent } from '../../src/candidates/merkle-pack';
+import { parseEnvelopeV2Bytes } from './sidecar-fixture';
 import { parsePackLedger } from '../../src/candidates/merkle-pack/ledger';
-import {
-  contentSize,
-  issueVerifiedJournalCapture,
-  manifestSha256,
-  type AuditedCapture,
-  type Capture,
-  type FileContent,
-  type NodeEntry,
-  type PosixMetadata,
-} from '../../src/capture/model';
+import { contentSize, issueVerifiedJournalCapture, manifestSha256 } from '../../src/capture/model';
+import type { AuditedCapture, Capture, FileContent, NodeEntry, PosixMetadata } from '../../src/capture/model';
 import { SidecarCore, md5Of } from '../../bench/sidecar/core';
 import type { CandidatePayloadStore } from '../../src/candidates/publication';
-import {
-  ModeledDaemon,
-} from './sidecar-fixture';
+import { ModeledDaemon } from './sidecar-fixture';
 import { paintedSegments } from '../../src/candidates/merkle-pack/chunk';
 import type {
   CandidateControlStateV1,
@@ -3473,13 +3453,12 @@ function merklePackV2Arm(): ConformanceArm {
             durable.delete(`${paths.payloadPrefix}/${key}`);
           },
         },
-        stage: this.daemon.stage,
         daemon: {
           fence: async () => {
             this.#alive('fence');
             return await this.daemon.fence();
           },
-          manifest: async (path) => await this.daemon.manifest(path),
+          delta: async (fence) => await this.daemon.delta(fence),
           boundaries: async (handback) => await this.daemon.boundaries(handback),
         },
         now: () => clock,

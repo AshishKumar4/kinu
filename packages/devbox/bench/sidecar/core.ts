@@ -37,10 +37,10 @@ import {
   buildMerkleDelta,
   parentFromPublishedV2,
 } from '../../src/candidates/merkle-pack/build-v2';
-import type { DeltaStage, MerkleDeltaBuild } from '../../src/candidates/merkle-pack/build-v2';
+import type { MerkleDeltaBuild } from '../../src/candidates/merkle-pack/build-v2';
 import { compactMerklePacks } from '../../src/candidates/merkle-pack/compaction';
 import { mergeSealWork } from '../../src/candidates/merkle-pack/delta';
-import type { BoundaryHandback, BoundaryRow, DeltaManifestV2 } from '../../src/candidates/merkle-pack/delta';
+import type { BoundaryHandback, BoundaryRow } from '../../src/candidates/merkle-pack/delta';
 import {
   compactionCandidates,
   deletableRetiredPacks,
@@ -78,22 +78,20 @@ import type {
   SealWork,
   SidecarStatusV1,
 } from '../../src/durability/contracts';
+import type { JournalDelta, JournalFence } from '../../src/capture/journal/client';
 import type { NodeEntry } from '../../src/capture/model';
 
-/** The daemon's half of the seal, over its control socket. */
-export interface SidecarFence {
-  readonly cut: number;
-  readonly generation: number;
-  readonly manifestPath: string;
-  readonly base: { readonly cut: string; readonly generation: string; readonly root: string } | null;
-  readonly sealWork: SealWork;
-}
-
+/**
+ * The daemon half of the seal, over its control socket. `delta` is
+ * `readJournalDelta` behind the port: a modeled daemon in a test implements
+ * the same contract from its own tree, and the deployed adapter is the
+ * function itself.
+ */
 export interface SidecarDaemon {
   /** Close admission, drain, stage the dirty windows, answer the cut. */
-  fence(): Promise<SidecarFence>;
-  /** The delta manifest that fence wrote. */
-  manifest(path: string): Promise<DeltaManifestV2>;
+  fence(): Promise<JournalFence>;
+  /** The manifest that fence wrote, bound to its verified stage. */
+  delta(fence: JournalFence): Promise<JournalDelta>;
   /** Merge the boundaries of the files a published generation rewrote. */
   boundaries(handback: BoundaryHandback): Promise<number>;
 }
@@ -125,15 +123,10 @@ export interface SidecarPorts {
   readonly snapshot: () => Promise<CandidateRunControlV2>;
   readonly head?: SidecarHeadAuthority;
   readonly payload: SidecarPayloadStore;
-  readonly stage: DeltaStage;
   readonly daemon: SidecarDaemon;
   readonly now: () => number;
   readonly maxPackBytes?: number;
   readonly chunkParams?: ChunkParams;
-  /**
-   * How long a retired pack waits before deletion. Twice the attach budget, so
-   * a container that was told an object exists has finished attaching.
-   */
   readonly graceMs?: number;
   readonly log?: (event: string, detail: string) => void;
 }
@@ -163,10 +156,7 @@ export interface StagedSeal {
 
 const DEFAULT_GRACE_MS = 600_000;
 
-
-
 const ZERO_RESTORE: RestoreWork = {
-
   serialRemoteOps: 0,
   totalRemoteOps: 0,
   metadataBytes: 0,
@@ -357,12 +347,26 @@ export class SidecarCore {
       throw new Error('a staged seal needs a transferring operation');
     }
     const fence = await this.#ports.daemon.fence();
-    const manifest = await this.#ports.daemon.manifest(fence.manifestPath);
-    if (manifest.cut !== fence.cut || manifest.generation !== fence.generation) {
-      throw new Error('the delta manifest is not the fenced manifest');
+    // `delta` is the production client's `readJournalDelta` behind the port:
+    // the manifest arrives proven the fence's own, and every staged read is
+    // held to the digest the fence recorded.
+    const delta = await this.#ports.daemon.delta(fence);
+    try {
+      return await this.#stageSeal(begun, fence, delta, operation);
+    } finally {
+      delta.close();
     }
+  }
+
+  async #stageSeal(
+    begun: CandidateRunControlV2,
+    fence: JournalFence,
+    delta: JournalDelta,
+    operation: Extract<NonNullable<CandidateRunControlV2['operation']>, { phase: 'transferring' }>,
+  ): Promise<StagedSeal | { readonly kind: 'no-change' }> {
+    const manifest = delta.manifest;
     const head = begun.head;
-    if (manifest.dirtyFiles.length === 0 && manifest.metadataOps.length === 0 && head !== null) {
+    if (manifest.entries.length === 0 && manifest.metadataOps.length === 0 && begun.head !== null) {
       this.#unsealedBytes = 0;
       this.#unsealedSince = null;
       return { kind: 'no-change' };
@@ -404,7 +408,7 @@ export class SidecarCore {
       parentLedger = this.#ledger ?? await this.#readLedger(head.envelope.ledger, 'seal');
     }
     const build = await buildMerkleDelta(manifest, {
-      stage: this.#ports.stage,
+      stage: delta.stage,
       parent,
       chunkParams: this.#ports.chunkParams,
       maxPackBytes: this.#ports.maxPackBytes,

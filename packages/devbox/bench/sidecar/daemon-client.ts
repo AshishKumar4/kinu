@@ -1,188 +1,54 @@
 /**
- * The sidecar's half of the daemon control socket, and the stage it reads.
+ * The sidecar's daemon port, over the one control-socket client.
  *
- * TWO OPS, BOTH AGREED WITH THE DAEMON LANE (2026-09-02): `fence` closes
- * admission, stages the dirty windows and answers the cut with the five
- * counters the fence itself measured; `boundaries` hands the chunk boundaries
- * of the files a generation rewrote BACK to the daemon after that generation's
- * head CAS, so the next fence can stage windows instead of whole files.
- *
- * WHY `boundaries` MERGES. A full boundary map is O(total extents) — one
- * 64 MiB file is about 16,000 offsets — so re-sending it per publish would put
- * an O(n) term back into the path this design just made O(k). The request
- * therefore carries only the files this generation changed plus the paths it
- * dropped; the daemon merges by ino and path and replaces only the base.
- *
- * WHY THIS IS NOT `capture/journal/client.ts`. That client is the capture
- * plane's: it fences on behalf of a Durable Object operation and hands back an
- * AuditedCapture of a whole tree. The sidecar speaks the v2 ops instead and
- * consumes a delta manifest, and the daemon lane owns the other file. One wire,
- * two consumers, and the framing below is deliberately the same shape.
+ * TWO LANES WROTE A CLIENT EACH for the same daemon wire; the production
+ * client (`src/capture/journal/client.ts`) is the survivor, and this file is
+ * what the sidecar keeps of its own: the adaptation of `JournalDaemonClient`
+ * and `readJournalDelta` to the `SidecarDaemon` port, and the WAL tail the
+ * seal cadence reads. The duplicated reply schemas, framing and stage reader
+ * are gone — every safety property (the manifest proven the fence's own, a
+ * staged read held to the digest the fence recorded) lives in the one client
+ * now, and the modeled daemon in the tests implements the same port.
  */
 
-import { connect } from 'node:net';
-import { open, readFile, stat } from 'node:fs/promises';
-import { resolve } from 'node:path';
-import * as v from 'valibot';
+import { open, stat } from 'node:fs/promises';
 
-import { BeneathRoot } from '../../src/native-openat2';
-import { SealWorkSchema } from '../../src/durability/contracts';
-import { parseDeltaManifest } from '../../src/candidates/merkle-pack/delta';
-import type { BoundaryHandback, DeltaManifestV2 } from '../../src/candidates/merkle-pack/delta';
-import type { DeltaStage } from '../../src/candidates/merkle-pack/build-v2';
+import { JournalDaemonClient } from '../../src/capture/journal/client';
+import type { JournalDelta, JournalFence } from '../../src/capture/journal/client';
+import type { BoundaryHandback } from '../../src/candidates/merkle-pack/delta';
 
-import type { SidecarDaemon, SidecarFence } from './core';
-
-const NonEmpty = v.pipe(v.string(), v.minLength(1));
-const Count = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
-const Decimal = v.pipe(v.string(), v.regex(/^(?:0|[1-9]\d*)$/));
-const Hex64 = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/));
-
-const FenceReplySchema = v.strictObject({
-  id: NonEmpty,
-  ok: v.literal(true),
-  cut: Count,
-  generation: Count,
-  manifestPath: NonEmpty,
-  baseCut: v.optional(Decimal),
-  baseGeneration: v.optional(Decimal),
-  baseRoot: v.optional(Hex64),
-  sealWork: SealWorkSchema,
-});
-const BoundariesReplySchema = v.strictObject({
-  id: NonEmpty,
-  ok: v.literal(true),
-  boundaryFiles: Count,
-});
-const RefusalSchema = v.strictObject({ id: NonEmpty, ok: v.literal(false), error: NonEmpty });
-
-/** One NDJSON request per connection, with the id echoed back. The reply is
- *  parsed at this boundary; each reply schema below states the record it
- *  accepts, so nothing leaves here unparsed. */
-
-/** The request wire record: an id, an op, and the op's own fields. */
-const ControlRequestSchema = v.looseObject({ id: NonEmpty });
-type ControlRequest = v.InferOutput<typeof ControlRequestSchema>;
-
-async function request(socketPath: string, body: ControlRequest): Promise<ControlRequest> {
-  return await new Promise<ControlRequest>((settle, refuse) => {
-    const socket = connect(socketPath);
-    let received = '';
-    let done = false;
-    const fail = (error: Error): void => {
-      if (done) return;
-      done = true;
-      refuse(error);
-    };
-    socket.setEncoding('utf8');
-    socket.once('error', (error: Error) => fail(error));
-    socket.on('data', (chunk: string) => {
-      received += chunk;
-      const newline = received.indexOf('\n');
-      if (newline < 0) return;
-      socket.end();
-      if (done) return;
-      done = true;
-      try {
-        const parsed = v.parse(v.looseObject({ id: NonEmpty }), JSON.parse(received.slice(0, newline)));
-        settle(parsed);
-      } catch (error) {
-        fail(new Error('journal control response is not a valid JSON record', { cause: error }));
-      }
-    });
-    socket.once('connect', () => socket.write(`${JSON.stringify(body)}\n`));
-    socket.once('close', () => fail(new Error('journal control closed before a complete response')));
-  });
-}
-
-function reply<T extends { readonly id: string }>(
-  schema: v.GenericSchema<unknown, T>,
-  id: string,
-  raw: ControlRequest,
-  op: string,
-): T {
-  const refusal = v.safeParse(RefusalSchema, raw);
-  if (refusal.success) {
-    if (refusal.output.id !== id) throw new Error(`journal ${op} answered another request`);
-    throw new Error(`journal ${op} failed: ${refusal.output.error}`);
-  }
-  const parsed = v.parse(schema, raw);
-  if (parsed.id !== id) throw new Error(`journal ${op} answered another request`);
-  return parsed;
-}
+import type { SidecarDaemon } from './core';
 
 export class SidecarDaemonClient implements SidecarDaemon {
-  constructor(private readonly socketPath: string) {}
+  readonly #client: JournalDaemonClient;
 
-  async fence(): Promise<SidecarFence> {
-    const id = crypto.randomUUID();
-    const answer = reply(FenceReplySchema, id, await request(this.socketPath, { id, op: 'fence' }), 'fence');
-    const seeded = [answer.baseCut, answer.baseGeneration, answer.baseRoot];
-    if (seeded.some((value) => value === undefined) && seeded.some((value) => value !== undefined)) {
-      throw new Error('journal fence has an incomplete base identity');
-    }
-    return {
-      cut: answer.cut,
-      generation: answer.generation,
-      manifestPath: answer.manifestPath,
-      base: answer.baseCut === undefined
-        ? null
-        : { cut: answer.baseCut, generation: answer.baseGeneration!, root: answer.baseRoot! },
-      sealWork: answer.sealWork,
-    };
+  constructor(socketPath: string) {
+    this.#client = new JournalDaemonClient(socketPath);
   }
 
-  async manifest(path: string): Promise<DeltaManifestV2> {
-    return parseDeltaManifest(await readFile(path));
+  fence(): Promise<JournalFence> {
+    return this.#client.fence();
+  }
+
+  delta(fence: JournalFence): Promise<JournalDelta> {
+    return readBoundDelta(fence);
   }
 
   async boundaries(handback: BoundaryHandback): Promise<number> {
-    const id = crypto.randomUUID();
-    const answer = reply(
-      BoundariesReplySchema,
-      id,
-      await request(this.socketPath, {
-        id,
-        op: 'boundaries',
-        cut: handback.cut,
-        generation: handback.generation,
-        root: handback.root,
-        maxChunkBytes: handback.maxChunkBytes,
-        files: handback.files.map((file) => ({
-          ino: file.ino,
-          path: file.path,
-          size: file.size,
-          boundaries: [...file.boundaries],
-        })),
-        removed: [...handback.removed],
-      }),
-      'boundaries',
-    );
-    return answer.boundaryFiles;
+    return await this.#client.boundaries(handback);
   }
 }
 
-/**
- * The staged windows, read beneath the stage root. A staged file is sparse:
- * only the windows the fence copied are present, which is exactly the set the
- * manifest's ranges name, so a read outside them is a defect rather than a
- * hole to tolerate.
- */
-export class SidecarStage implements DeltaStage {
-  readonly #root: BeneathRoot;
-
-  constructor(stageRoot: string) {
-    this.#root = new BeneathRoot(resolve(stageRoot));
-  }
-
-  async read(path: string, offset: number, length: number): Promise<Uint8Array> {
-    return this.#root.readRange(path, offset, length);
-  }
-
-  close(): void {
-    this.#root.close();
-  }
+/** The staged bytes the delta names, read beneath the manifest's stage root.
+ *  A staged file is sparse: only the windows the fence copied are present,
+ *  which is exactly the set the manifest's ranges name, so a read outside
+ *  them is a defect rather than a hole to tolerate. The digest check and the
+ *  boundary check are `readJournalDelta`'s; this names the seam. */
+function readBoundDelta(fence: JournalFence): Promise<JournalDelta> {
+  return readJournalDeltaBound(fence);
 }
+
+import { readJournalDelta as readJournalDeltaBound } from '../../src/capture/journal/client';
 
 /**
  * The WAL tail, as the seal cadence reads it: how many bytes of writes the

@@ -584,17 +584,6 @@ async function runControlV2(
 }
 
 /**
- * The v2 attach path: the durable pointer plus the exact envelope it names,
- * and nothing else. Two remote reads whatever the tree holds.
- */
-export async function candidateRunControlV2(
-  store: CandidateControlStore,
-  envelopes: CandidateEnvelopeStoreV2,
-): Promise<CandidateRunControlV2> {
-  return await runControlV2(await store.read(), envelopes);
-}
-
-/**
  * Finish a v2 operation a reset interrupted after its payload sealed. The
  * sealed envelope is immutable and digest-addressed, so recovery resumes the
  * original expected-parent CAS; nothing is re-staged and nothing is verified

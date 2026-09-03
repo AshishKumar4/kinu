@@ -911,17 +911,6 @@ export function envelopeV2IdOf(envelope: RootEnvelopeV2): Sha256Hex {
   return sha256Hex(envelopeV2Bytes(envelope));
 }
 
-/** Read immutable v2 envelope bytes at the digest a head pointer names. */
-export function parseEnvelopeV2Bytes(bytes: Uint8Array, rootEnvelopeId: string): RootEnvelopeV2 {
-  const envelope = v.parse(RootEnvelopeV2Schema, JSON.parse(new TextDecoder().decode(bytes)));
-  const id = envelopeV2IdOf(envelope);
-  if (id !== rootEnvelopeId) throw new Error(`candidate v2 envelope does not match pointer ${rootEnvelopeId}`);
-  if (!sameBytes(envelopeV2Bytes(envelope), bytes)) {
-    throw new Error(`candidate v2 envelope body at ${rootEnvelopeId} is not canonical`);
-  }
-  return envelope;
-}
-
 export interface PublishedParentV2Info {
   readonly head: HeadPointerV1;
   readonly envelopeId: Sha256Hex;

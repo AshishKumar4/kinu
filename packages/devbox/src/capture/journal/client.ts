@@ -1,3 +1,27 @@
+/**
+ * The one client of the journal daemon's control socket, and the stage it
+ * reads. Two lanes built the two halves of one wire in parallel and each
+ * wrote a client; this is the survivor.
+ *
+ * THREE OPS. `fence` closes admission, stages the dirty windows, and answers
+ * the cut; `boundaries` hands the chunk boundaries of the files a published
+ * generation rewrote BACK to the daemon after that generation's head CAS, so
+ * the next fence can stage windows instead of whole files; `seed` names the
+ * published head a WAL starts from. Everything here goes through
+ * `request()`'s one framing: one NDJSON line per connection, `id` echoed
+ * back, reply parsed at this boundary.
+ *
+ * WHY `boundaries` MERGES. A full boundary map is O(total extents) — one
+ * 64 MiB file is about 16,000 offsets — so re-sending it per publish would put
+ * an O(n) term back into the path this design just made O(k). The request
+ * therefore carries only the files this generation changed plus the paths it
+ * dropped; the daemon merges by ino and path and replaces only the base.
+ *
+ * THE DELTA MANIFEST ITSELF LIVES IN ONE PLACE, `merkle-pack/delta.ts`, with
+ * the builder that consumes it — this client PARSES it, and the wire shape is
+ * the daemon's, which is declared beside its only reader.
+ */
+
 import { readFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { resolve } from 'node:path';
@@ -5,9 +29,12 @@ import { resolve } from 'node:path';
 import * as v from 'valibot';
 import { BeneathRoot } from '../../native-openat2';
 
-import { journalDaemonArgv, type JournalDaemonPaths } from './command';
 import { issueVerifiedJournalCapture, manifestSha256 } from '../model';
 import { sha256Hex } from '../../cas/hash';
+import { parseDeltaManifest } from '../../candidates/merkle-pack/delta';
+import type { BoundaryHandback, DeltaDirtyFile, DeltaManifestV2, DeltaStagedRange } from '../../candidates/merkle-pack/delta';
+import { SealWorkSchema } from '../../durability/contracts';
+import type { SealWork } from '../../durability/contracts';
 import type { AuditedCapture, CapturedCutIdentity, NodeEntry, NodeKind, SealedContentReader } from '../model';
 
 const NonEmptyString = v.pipe(v.string(), v.minLength(1));
@@ -36,66 +63,6 @@ const EntrySchema = v.strictObject({
 });
 const ManifestSchema = v.strictObject({ cut: SafeNumber, generation: SafeNumber, stageRoot: NonEmptyString, entries: v.array(EntrySchema) });
 
-/**
- * The delta manifest a v2 fence writes: the files and directories the journal
- * shows changed since the previous fence, the ordered metadata operations that
- * changed them, and the staged bytes of the dirty clusters.
- *
- * It is NOT a whole tree, which is the entire point: a seal costs O(k) rather
- * than O(n). Reconstructing a tree from one is the incremental builder's job,
- * against the head this manifest names in `base`.
- */
-const InoDecimal = v.pipe(v.string(), v.regex(/^[1-9]\d*$/));
-const DeltaRangeSchema = v.strictObject({
-  offset: SafeNumber,
-  length: v.pipe(SafeNumber, v.minValue(1)),
-  sha256: Digest,
-});
-const DeltaEntrySchema = v.strictObject({
-  path: NonEmptyString,
-  kind: v.picklist(['file', 'dir', 'symlink'] as const),
-  ino: InoDecimal,
-  mode: SafeNumber,
-  uid: SafeNumber,
-  gid: SafeNumber,
-  atimeNs: Nanoseconds,
-  mtimeNs: Nanoseconds,
-  ctimeNs: Nanoseconds,
-  xattrs: v.record(v.string(), XattrValue),
-  target: v.optional(NonEmptyString),
-  size: v.optional(SafeNumber),
-  whole: v.optional(v.boolean()),
-  /** The byte ranges writes touched since the previous fence: where a re-chunk
-   *  has to begin. Not the same as `ranges`, which is what the stage holds. */
-  dirty: v.optional(v.array(v.strictObject({ offset: SafeNumber, length: v.pipe(SafeNumber, v.minValue(1)) }))),
-  ranges: v.optional(v.array(DeltaRangeSchema)),
-});
-const MetadataOpSchema = v.strictObject({
-  sequence: v.pipe(SafeNumber, v.minValue(1)),
-  op: NonEmptyString,
-  path: v.string(),
-  argument: v.string(),
-  result: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-});
-const SealWorkSchema = v.strictObject({
-  bytesStaged: SafeNumber,
-  bytesChunked: SafeNumber,
-  chunksHashed: SafeNumber,
-  nodesRewritten: SafeNumber,
-  wholeFiles: SafeNumber,
-});
-const BaseIdentitySchema = v.strictObject({ cut: Nanoseconds, generation: Nanoseconds, root: Digest });
-const DeltaManifestSchema = v.strictObject({
-  version: v.literal(2),
-  cut: SafeNumber,
-  generation: SafeNumber,
-  stageRoot: NonEmptyString,
-  base: v.nullable(BaseIdentitySchema),
-  entries: v.array(DeltaEntrySchema),
-  metadataOps: v.array(MetadataOpSchema),
-  sealWork: SealWorkSchema,
-});
-
 const ControlResponseSchema = v.strictObject({
   id: NonEmptyString,
   ok: v.boolean(),
@@ -112,46 +79,11 @@ const ControlResponseSchema = v.strictObject({
 
 type ControlResponse = v.InferOutput<typeof ControlResponseSchema>;
 
-/** What one seal cost, in the field names the durability contract declares. */
-export type JournalSealWork = v.InferOutput<typeof SealWorkSchema>;
-/** One staged run of a dirty file, with the digest of the bytes in the stage. */
-export type JournalDeltaRange = v.InferOutput<typeof DeltaRangeSchema>;
-/** One path the delta describes, as it stands at the cut. */
-export type JournalDeltaEntry = v.InferOutput<typeof DeltaEntrySchema>;
-/** One metadata operation to replay, in journal order. */
-export type JournalMetadataOp = v.InferOutput<typeof MetadataOpSchema>;
-/** A parsed delta manifest. */
-export type JournalDeltaManifest = v.InferOutput<typeof DeltaManifestSchema>;
-
 /** The immutable published head a journal WAL starts from. */
 export interface JournalBase {
   readonly cut: string;
   readonly generation: string;
   readonly root: string;
-}
-
-/**
- * One file's published chunk boundaries, as the publish that created them saw
- * them: offsets in ascending order, including the file's start and end.
- */
-export interface PublishedFileBoundaries {
-  readonly ino: string;
-  readonly path: string;
-  readonly size: number;
-  readonly boundaries: readonly number[];
-}
-
-/**
- * What the sidecar hands back after a successful head CAS. Only the files whose
- * boundaries CHANGED are sent, plus the paths the generation stopped needing;
- * a full map per publish would be O(total extents) and would put the O(n) the
- * fence just shed back on the publish path.
- */
-export interface PublishedBoundaries {
-  readonly base: JournalBase;
-  readonly maxChunkBytes: number;
-  readonly files: readonly PublishedFileBoundaries[];
-  readonly removed: readonly string[];
 }
 
 /** One line on the daemon's AF_UNIX control socket; `id` must echo back. */
@@ -162,7 +94,7 @@ interface ControlRequest {
   readonly generation?: string;
   readonly root?: string;
   readonly maxChunkBytes?: number;
-  readonly files?: readonly PublishedFileBoundaries[];
+  readonly files?: readonly { readonly ino: string; readonly path: string; readonly size: number; readonly boundaries: readonly number[] }[];
   readonly removed?: readonly string[];
 }
 
@@ -171,16 +103,7 @@ export interface JournalFence {
   readonly generation: number;
   readonly manifestPath: string;
   readonly base: JournalBase | null;
-  readonly sealWork: JournalSealWork;
-}
-
-export interface JournalDaemonStartOptions extends JournalDaemonPaths {
-  readonly signal?: AbortSignal;
-}
-
-export interface StartedJournalDaemon {
-  readonly process: Bun.Subprocess<'ignore', 'pipe', 'pipe'>;
-  readonly client: JournalDaemonClient;
+  readonly sealWork: SealWork;
 }
 
 function decodeEntry(entry: v.InferOutput<typeof EntrySchema>): NodeEntry {
@@ -261,24 +184,24 @@ export class JournalDaemonClient {
    * Answers how many files the daemon merged, which is `files.length` for a
    * request it accepted.
    */
-  async publishBoundaries(published: PublishedBoundaries, signal?: AbortSignal): Promise<number> {
+  async boundaries(handback: BoundaryHandback, signal?: AbortSignal): Promise<number> {
     const id = crypto.randomUUID();
     const response = await request(this.socket, {
       id,
       op: 'boundaries',
-      cut: published.base.cut,
-      generation: published.base.generation,
-      root: published.base.root,
-      maxChunkBytes: published.maxChunkBytes,
-      files: published.files,
-      removed: published.removed,
+      cut: handback.cut,
+      generation: handback.generation,
+      root: handback.root,
+      maxChunkBytes: handback.maxChunkBytes,
+      files: handback.files,
+      removed: handback.removed,
     }, signal);
     if (response.id !== id) throw new Error('journal control response id mismatch');
     if (!response.ok || response.boundaryFiles === undefined) {
       throw new Error(`journal boundary publication failed: ${response.error ?? 'malformed response'}`);
     }
-    if (response.boundaryFiles !== published.files.length) {
-      throw new Error(`journal merged ${response.boundaryFiles} boundary files, sent ${published.files.length}`);
+    if (response.boundaryFiles !== handback.files.length) {
+      throw new Error(`journal merged ${response.boundaryFiles} boundary files, sent ${handback.files.length}`);
     }
     return response.boundaryFiles;
   }
@@ -315,21 +238,16 @@ export class JournalDaemonClient {
   }
 }
 
-export function startJournalDaemon(options: JournalDaemonStartOptions): StartedJournalDaemon {
-  const argv = [...journalDaemonArgv(options)];
-  const process = Bun.spawn(argv, { stdout: 'pipe', stderr: 'pipe', signal: options.signal });
-  return { process, client: new JournalDaemonClient(resolve(options.socket)) };
-}
-
-/** Every staged byte the delta names, addressed the way it was staged. */
-export interface JournalDeltaStage {
-  /** Reads one staged range and refuses bytes that do not match its digest. */
-  read(entry: JournalDeltaEntry, range: JournalDeltaRange): Promise<Uint8Array>;
-}
-
-export interface JournalDeltaCapture {
-  readonly manifest: JournalDeltaManifest;
-  readonly stage: JournalDeltaStage;
+/** The delta a fence wrote: its manifest, and the staged bytes it names. */
+export interface JournalDelta {
+  readonly manifest: DeltaManifestV2;
+  /** Reads staged bytes beneath the manifest's own stage root, holding every
+   *  read to the digest the fence recorded for exactly those bytes. */
+  readonly stage: {
+    read(path: string, offset: number, length: number): Promise<Uint8Array>;
+  };
+  /** Releases the stage root's directory handle. */
+  close(): void;
 }
 
 /**
@@ -341,28 +259,37 @@ export interface JournalDeltaCapture {
  * resolved beneath the stage root, so a swapped symlink cannot reach outside
  * it.
  */
-export async function readJournalDelta(fence: JournalFence): Promise<JournalDeltaCapture> {
-  const bytes = await readFile(fence.manifestPath);
-  const manifest = v.parse(DeltaManifestSchema, JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
+export async function readJournalDelta(fence: JournalFence): Promise<JournalDelta> {
+  const manifest = parseDeltaManifest(await readFile(fence.manifestPath));
   if (manifest.cut !== fence.cut || manifest.generation !== fence.generation) {
     throw new Error('journal delta manifest is not the fenced manifest');
   }
   const root = new BeneathRoot(resolve(manifest.stageRoot));
+  const byPath = new Map(manifest.entries.map((entry) => [entry.path, entry]));
   return {
     manifest,
     stage: {
-      async read(entry, range) {
-        if (entry.kind !== 'file') throw new Error(`journal delta entry ${entry.path} stages no bytes`);
-        const staged = await root.readRange(entry.path, range.offset, range.length);
-        if (staged.byteLength !== range.length) {
-          throw new Error(`journal delta stage is short for ${entry.path} at ${range.offset}`);
+      read: async (path, offset, length) => {
+        const entry: DeltaDirtyFile | undefined = byPath.get(path);
+        if (entry === undefined) throw new Error(`journal delta names no entry ${path}`);
+        if (entry.kind !== 'file') throw new Error(`journal delta entry ${path} stages no bytes`);
+        const covering = entry.ranges.find(
+          (range: DeltaStagedRange) => range.offset <= offset && offset + length <= range.offset + range.length,
+        );
+        if (covering === undefined) {
+          throw new Error(`journal delta stages no range covering ${path} at ${offset}+${length}`);
         }
-        if (sha256Hex(staged) !== range.sha256) {
-          throw new Error(`journal delta stage failed integrity verification for ${entry.path} at ${range.offset}`);
+        const staged = await root.readRange(path, offset, length);
+        if (staged.byteLength !== length) {
+          throw new Error(`journal delta stage is short for ${path} at ${offset}`);
+        }
+        if (sha256Hex(staged) !== covering.sha256) {
+          throw new Error(`journal delta stage failed integrity verification for ${path} at ${offset}`);
         }
         return staged;
       },
     },
+    close: () => root.close(),
   };
 }
 

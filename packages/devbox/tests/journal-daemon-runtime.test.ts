@@ -130,7 +130,7 @@ async function auditExportedFence(fence: ExportedFence): Promise<string> {
   if (entry === undefined) throw new Error('the exported delta has no after-cut.txt');
   const range = (entry.ranges ?? [])[0];
   if (range === undefined) throw new Error('the exported delta stages no bytes for after-cut.txt');
-  const bytes = await delta.stage.read(entry, range);
+  const bytes = await delta.stage.read(entry.path, range.offset, range.length);
   return new TextDecoder().decode(bytes);
 }
 

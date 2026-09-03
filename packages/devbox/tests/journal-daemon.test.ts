@@ -239,7 +239,7 @@ describe('the v2 delta manifest', () => {
     expect(entry.dirty).toEqual([{ offset: 0, length: bytes.byteLength }]);
     expect(delta.manifest.metadataOps[0]?.op).toBe('create');
     expect(delta.manifest.sealWork.bytesStaged).toBe(bytes.byteLength);
-    expect(new TextDecoder().decode(await delta.stage.read(entry, entry.ranges![0]!))).toBe('one delta of dirty bytes');
+    expect(new TextDecoder().decode(await delta.stage.read(entry.path, entry.ranges[0]!.offset, entry.ranges[0]!.length))).toBe('one delta of dirty bytes');
   });
 
   test('refuses staged bytes changed after the fence wrote them', async () => {
@@ -247,7 +247,7 @@ describe('the v2 delta manifest', () => {
     const delta = await readJournalDelta(fence);
     const entry = delta.manifest.entries[1]!;
     await writeFile(join(stage, 'src', 'a.txt'), 'a different delta bytes!');
-    await expect(delta.stage.read(entry, entry.ranges![0]!)).rejects.toThrow('integrity verification');
+    await expect(delta.stage.read(entry.path, entry.ranges[0]!.offset, entry.ranges[0]!.length)).rejects.toThrow('integrity verification');
   });
 
   test('refuses a manifest that is not the fence that asked for it', async () => {
@@ -268,8 +268,8 @@ describe('the boundary hand-back', () => {
     const { socket } = await fixture();
     const server = await recording(socket, (request) => ({ id: request.id, ok: true, boundaryFiles: 1 }));
     try {
-      const merged = await new JournalDaemonClient(socket).publishBoundaries({
-        base: { cut: '11', generation: '2', root: 'b'.repeat(64) },
+      const merged = await new JournalDaemonClient(socket).boundaries({
+        cut: '11', generation: '2', root: 'b'.repeat(64),
         maxChunkBytes: 65536,
         files: [{ ino: '11', path: 'src/a.txt', size: 24, boundaries: [0, 24] }],
         removed: ['src/gone.txt'],
@@ -292,8 +292,8 @@ describe('the boundary hand-back', () => {
     const { socket } = await fixture();
     const server = await recording(socket, (request) => ({ id: request.id, ok: true, boundaryFiles: 0 }));
     try {
-      await expect(new JournalDaemonClient(socket).publishBoundaries({
-        base: { cut: '11', generation: '2', root: 'b'.repeat(64) },
+      await expect(new JournalDaemonClient(socket).boundaries({
+        cut: '11', generation: '2', root: 'b'.repeat(64),
         maxChunkBytes: 65536,
         files: [{ ino: '11', path: 'src/a.txt', size: 24, boundaries: [0, 24] }],
         removed: [],
@@ -307,8 +307,8 @@ describe('the boundary hand-back', () => {
     const { socket } = await fixture();
     const server = await recording(socket, (request) => ({ id: request.id, ok: false, error: 'Numerical result out of range' }));
     try {
-      await expect(new JournalDaemonClient(socket).publishBoundaries({
-        base: { cut: '3', generation: '1', root: 'c'.repeat(64) },
+      await expect(new JournalDaemonClient(socket).boundaries({
+        cut: '3', generation: '1', root: 'c'.repeat(64),
         maxChunkBytes: 65536,
         files: [],
         removed: [],

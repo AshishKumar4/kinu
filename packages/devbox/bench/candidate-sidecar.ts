@@ -36,7 +36,7 @@ import type { PackRun } from '../src/candidates/merkle-pack/view-v2';
 
 import { SidecarCore } from './sidecar/core';
 import type { SidecarPayloadStore } from './sidecar/core';
-import { SidecarDaemonClient, SidecarStage, readWalProgress } from './sidecar/daemon-client';
+import { SidecarDaemonClient, readWalProgress } from './sidecar/daemon-client';
 import { SealLoop } from './sidecar/seal-loop';
 
 /**
@@ -126,7 +126,6 @@ export interface SidecarCliOptions {
   readonly boxId: string;
   readonly bootId: string;
   readonly socket: string;
-  readonly stageRoot: string;
   readonly walPath: string;
   readonly endpoint: string;
   readonly controlPath: string;
@@ -149,7 +148,6 @@ export function parseSidecarArgv(argv: readonly string[]): SidecarCliOptions {
     boxId: value('--box'),
     bootId: value('--boot'),
     socket: value('--journal-socket'),
-    stageRoot: value('--stage'),
     walPath: value('--wal'),
     endpoint: value('--store-endpoint'),
     controlPath: value('--control'),
@@ -167,7 +165,6 @@ export function parseSidecarArgv(argv: readonly string[]): SidecarCliOptions {
  */
 export async function runSidecar(options: SidecarCliOptions, until?: AbortSignal): Promise<void> {
   const daemon = new SidecarDaemonClient(options.socket);
-  const stage = new SidecarStage(options.stageRoot);
   const payload = new DirectR2Store(options.endpoint);
   /** The snapshot the Durable Object writes for this container to read. */
   const snapshot = async (): Promise<CandidateRunControlV2> =>
@@ -179,7 +176,6 @@ export async function runSidecar(options: SidecarCliOptions, until?: AbortSignal
     // Durable Object advances the head from the draft this writes.
     snapshot,
     payload,
-    stage,
     daemon,
     now: () => Date.now(),
   });
@@ -217,7 +213,6 @@ export async function runSidecar(options: SidecarCliOptions, until?: AbortSignal
     setTimeout(() => sleep.resolve(), options.pollMs);
     await sleep.promise;
   }
-  stage.close();
 }
 
 if (import.meta.main) {

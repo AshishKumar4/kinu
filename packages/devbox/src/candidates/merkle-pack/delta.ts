@@ -41,6 +41,10 @@ const DecimalString = v.pipe(
   v.string(),
   v.regex(/^(?:0|[1-9]\d*)$/, 'Expected a canonical non-negative decimal string'),
 );
+const PositiveDecimalString = v.pipe(
+  v.string(),
+  v.regex(/^[1-9]\d*$/, 'Expected a canonical positive decimal string'),
+);
 const Hex64 = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/, 'Expected a lowercase SHA-256 digest'));
 const Base64Value = v.pipe(
   v.string(),
@@ -52,7 +56,10 @@ const Base64Value = v.pipe(
  * spelling. A write is a `W` record and arrives as a dirty range, so it is not
  * in this list; `argument` carries the op-specific auxiliary the WAL holds
  * (the rename destination, the hardlink source, the symlink target, the xattr
- * name) and is empty for the ops that have none.
+ * name) and is empty for the ops that have none. `open-truncate` is the
+ * O_TRUNC open the daemon journals as its own op (`journal-daemon.c`,
+ * `pass_open`), and a reader that never heard of it would refuse a legal
+ * manifest.
  */
 export const DELTA_METADATA_OPS = [
   'create',
@@ -64,6 +71,7 @@ export const DELTA_METADATA_OPS = [
   'unlink',
   'rmdir',
   'truncate',
+  'open-truncate',
   'fallocate',
   'chmod',
   'chown',
@@ -71,7 +79,6 @@ export const DELTA_METADATA_OPS = [
   'setxattr',
   'removexattr',
 ] as const;
-export type DeltaMetadataOpName = (typeof DELTA_METADATA_OPS)[number];
 
 export const DeltaRangeSchema = v.strictObject({ offset: Count, length: PositiveCount });
 
@@ -113,12 +120,20 @@ export const DeltaStagedRangeSchema = v.strictObject({
 });
 export type DeltaStagedRange = v.InferOutput<typeof DeltaStagedRangeSchema>;
 
+/**
+ * THE FIELDS THE DAEMON OMITS CARRY DEFAULTS RATHER THAN OPTIONALITY. A file
+ * row always arrives with `size`, `whole`, `dirty` and `ranges`; a directory or
+ * symlink row arrives with none of them, because it carries no bytes
+ * (`journal-delta.c`, `write_entry`). Defaulting them here keeps one shape for
+ * the builder to read — a row it has to test for absence is a row every reader
+ * tests differently.
+ */
 export const DeltaDirtyFileSchema = v.pipe(
   v.strictObject({
-    ino: DecimalString,
+    ino: PositiveDecimalString,
     path: NonEmptyString,
     kind: v.picklist(['file', 'dir', 'symlink']),
-    size: Count,
+    size: v.optional(Count, 0),
     mode: Count,
     uid: Count,
     gid: Count,
@@ -126,10 +141,10 @@ export const DeltaDirtyFileSchema = v.pipe(
     mtimeNs: DecimalString,
     ctimeNs: DecimalString,
     xattrs: v.record(v.string(), Base64Value),
-    target: v.optional(v.string()),
-    whole: v.boolean(),
-    dirty: v.array(DeltaRangeSchema),
-    ranges: v.array(DeltaStagedRangeSchema),
+    target: v.optional(NonEmptyString),
+    whole: v.optional(v.boolean(), false),
+    dirty: v.optional(v.array(DeltaRangeSchema), () => []),
+    ranges: v.optional(v.array(DeltaStagedRangeSchema), () => []),
   }),
   v.check((file) => ascendingDisjoint(file.dirty, file.size), 'Expected dirty ranges ascending and inside the file'),
   v.check((file) => ascendingDisjoint(file.ranges, file.size), 'Expected staged ranges ascending and inside the file'),
@@ -144,6 +159,11 @@ export const DeltaDirtyFileSchema = v.pipe(
 );
 export type DeltaDirtyFile = v.InferOutput<typeof DeltaDirtyFileSchema>;
 
+/** The fence's copy of the dirty windows, read by path beneath the stage root. */
+export interface DeltaStage {
+  read(path: string, offset: number, length: number): Promise<Uint8Array>;
+}
+
 export const DeltaMetadataOpSchema = v.strictObject({
   sequence: Count,
   op: v.picklist(DELTA_METADATA_OPS),
@@ -151,7 +171,6 @@ export const DeltaMetadataOpSchema = v.strictObject({
   argument: v.string(),
   result: v.pipe(v.number(), v.safeInteger()),
 });
-export type DeltaMetadataOp = v.InferOutput<typeof DeltaMetadataOpSchema>;
 
 /** The published head a WAL started from: the base a fence authenticates. */
 export const DeltaBaseSchema = v.strictObject({
@@ -159,7 +178,6 @@ export const DeltaBaseSchema = v.strictObject({
   generation: DecimalString,
   root: Hex64,
 });
-export type DeltaBase = v.InferOutput<typeof DeltaBaseSchema>;
 
 export const DeltaManifestV2Schema = v.pipe(
   v.strictObject({
@@ -168,12 +186,15 @@ export const DeltaManifestV2Schema = v.pipe(
     generation: Count,
     stageRoot: NonEmptyString,
     base: v.nullable(DeltaBaseSchema),
-    dirtyFiles: v.array(DeltaDirtyFileSchema),
+    /** `entries`, because that is the field the daemon writes. Every touched
+     *  path is here, directories and symlinks included, so the delta is a
+     *  consistent partial tree rather than a list of files. */
+    entries: v.array(DeltaDirtyFileSchema),
     metadataOps: v.array(DeltaMetadataOpSchema),
     sealWork: SealWorkSchema,
   }),
   v.check(
-    (manifest) => new Set(manifest.dirtyFiles.map((file) => file.path)).size === manifest.dirtyFiles.length,
+    (manifest) => new Set(manifest.entries.map((file) => file.path)).size === manifest.entries.length,
     'A delta manifest cannot name one path twice',
   ),
   v.check(
@@ -305,21 +326,6 @@ export function chunkWindows(input: WindowInput): readonly StagedRange[] {
     merged.push({ offset: from, length: to - from });
   }
   return merged;
-}
-
-/** The bytes the fence copied for one file: what a `bytesStaged` bound is
- *  stated over, and what the sidecar may read without asking for more. */
-export function stagedBytes(windows: readonly StagedRange[], ranges: readonly StagedRange[]): number {
-  let total = 0;
-  for (const window of windows) {
-    const end = window.offset + window.length;
-    for (const range of ranges) {
-      const from = Math.max(window.offset, range.offset);
-      const to = Math.min(end, range.offset + range.length);
-      if (to > from) total += to - from;
-    }
-  }
-  return total;
 }
 
 /**
