@@ -40,12 +40,12 @@ const TERMINAL_WS_TAG_PREFIX = 'terminal:';
  * on the owner's machine with no window on it, and it is closed rather than
  * left.
  */
-export const TERMINAL_ATTACH_WINDOW_MS = 30_000;
+const TERMINAL_ATTACH_WINDOW_MS = 30_000;
 
 /** Why the pane could not attach, in words a person can act on. Each is the
  *  whole message: a device error crosses an RPC boundary as its text. */
-export const TERMINAL_SESSION_UNKNOWN = 'that terminal is no longer open; open a new one';
-export const TERMINAL_ALREADY_ATTACHED = 'that terminal is already open in another tab';
+const TERMINAL_SESSION_UNKNOWN = 'that terminal is no longer open; open a new one';
+const TERMINAL_ALREADY_ATTACHED = 'that terminal is already open in another tab';
 
 /** What a browser socket carries so a woken object knows what it is holding.
  *  An attachment is JSON we wrote, and it outlives the code that wrote it, so
@@ -64,7 +64,7 @@ const PaneControlSchema = v.object({
   rows: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(DEVICE_PTY_MAX_AXIS)),
 });
 
-export function terminalTag(session: string): string {
+function terminalTag(session: string): string {
   return `${TERMINAL_WS_TAG_PREFIX}${session}`;
 }
 

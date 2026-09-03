@@ -220,7 +220,6 @@ export const DEVICE_PTY_EXIT = 'PTY_EXIT';
 /** The frames a device sends about a live terminal. The hub reads these before
  *  the RPC correlator sees them: they have no id to correlate, and a
  *  correlator handed one would drop it without a word. */
-export const DEVICE_PTY_FRAMES: readonly string[] = [DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT];
 
 /** A window a terminal can actually have. The kernel carries each axis as an
  *  `unsigned short`, and a thousand cells on a side is past any real display,

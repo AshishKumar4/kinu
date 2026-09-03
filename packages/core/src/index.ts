@@ -980,7 +980,7 @@ export {
   DEVICE_DUPLICATE_REQUEST, DeviceCancelResultSchema, nextDeviceRequestId,
   DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
   DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE, DEVICE_PTY_CLOSE,
-  DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_FRAMES, DEVICE_PTY_MAX_AXIS,
+  DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
   type DeviceCancelResult,
   createNimbusExecutor, createNimbusWorkspaceExecutor, nimbusSessionShell,
   type NimbusExecutorOpts, type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
