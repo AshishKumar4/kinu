@@ -47,7 +47,7 @@ import {
   DEVICE_PTY_OUTPUT,
   DEVICE_PTY_EXIT,
   DEVICE_PTY_MAX_AXIS,
-  NO_DEVICE_CONNECTED,
+  NO_DEVICE_CONNECTED, SEVERAL_DEVICES_CONNECTED,
   isDeviceUnknownMethodError,
   ORCHESTRATOR_AGENT_SLUG,
   nanoid,
@@ -2298,6 +2298,15 @@ export class UserDO extends Agent<Env> {
     return { ok: true, deviceId: row.device_id, tokenWasCurrent: row.token_was_current === 1 };
   }
 
+  /** The user-chosen names of every live machine, for an answer that has to
+   *  name them. Names only: an id is routing, and the ask is for a person. */
+  private connectedDeviceNames(): string[] {
+    const live = this._devices.connectedDeviceIds();
+    return this.sqlx<{ id: string; label: string }>(
+      `SELECT id, label FROM user_devices WHERE revoked_at IS NULL`,
+    ).filter((row) => live.includes(row.id)).map((row) => row.label);
+  }
+
   private deviceLabel(deviceId: string): string {
     return this.sqlx<{ label: string }>(`SELECT label FROM user_devices WHERE id = ?`, deviceId)[0]?.label ?? 'your device';
   }
@@ -2339,6 +2348,12 @@ export class UserDO extends Agent<Env> {
       : opts?.agentName);
     const deviceId = this._devices.connectedDeviceId(opts?.deviceId);
     if (!deviceId) {
+      // Several machines are live and this call named none. That is a question
+      // for the caller, not a coin for the hub: nothing crosses to any machine,
+      // and the answer names the ones that could have been meant.
+      if (opts?.deviceId === undefined && this._devices.connectedDeviceIds().length > 1) {
+        throw new Error(`${SEVERAL_DEVICES_CONNECTED}: ${this.connectedDeviceNames().join(', ')}`);
+      }
       // A workspace operation that needs a machine raises one provisioning
       // request. Owner-facing checkpoint reads stay consent-free and simply
       // report that no machine is connected.
@@ -2398,9 +2413,10 @@ export class UserDO extends Agent<Env> {
     if (!stopping && !this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
     const tunnel = this._devices.tunnel(deviceId);
     if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
-    const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = {};
+    const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = { extra: { deviceId } };
     if (opts?.checkpoint) {
       rpcOptions.extra = {
+        ...rpcOptions.extra,
         checkpoint: {
           agent: opts.checkpoint.agent,
           turnId: opts.checkpoint.turnId,
@@ -2865,9 +2881,14 @@ export class UserDO extends Agent<Env> {
    * path scope stays on. One switch decides both enforcers, which is what
    * keeps "what bash sees" and "what readFile sees" from drifting apart.
    */
-  async getDeviceFileView(caller: UserCaller, agentName: string): Promise<{ unconfined: boolean }> {
+  async getDeviceFileView(
+    caller: UserCaller, agentName: string, device?: string,
+  ): Promise<{ unconfined: boolean }> {
     const resolved = await this.requireTier(caller, 'device.consent.read_self');
-    const deviceId = this._devices.connectedDeviceId();
+    // Per machine: the switch is on the device row, and two machines have two
+    // rows. Unnamed resolves the only live machine; several with none named
+    // is "confined", the closed answer.
+    const deviceId = this._devices.connectedDeviceId(device);
     if (!deviceId) return { unconfined: false };
     // Named so a facet cannot read a sibling workspace's answer by asking for
     // it: a workspace caller's identity is its token, never its argument.
@@ -2949,41 +2970,63 @@ export class UserDO extends Agent<Env> {
   async deviceRuntimeStatus(caller: UserCaller): Promise<DeviceStatus> {
     const resolved = await this.requireTier(caller, 'device.rpc');
     const workspace = resolved.kind === 'workspace' ? resolved.workspace : null;
-    const deviceId = this._devices.connectedDeviceId();
     // Names and liveness are visible BEFORE any grant: an agent that cannot
     // see the machine cannot ask for it by name, and seeing it grants nothing —
     // every call still goes through the consent chokepoint above.
-    const devices = this.deviceFleet();
-    if (deviceId) {
-      const granted = workspace
-        ? this.getDeviceBinding(workspace, deviceId) === 'allow'
-        : undefined;
+    //
+    // The fleet is answered PER MACHINE. Every live machine carries its own
+    // toolchain, its own sandbox for this workspace and this workspace's own
+    // grant on it, because two machines answer each of those independently
+    // and a single "the connected device" was what let them take turns.
+    const now = Date.now();
+    const devices = await Promise.all(this.deviceFleet().map(async (device): Promise<DeviceFleetEntry> => {
+      if (!device.connected) return device;
       const scope = this.sqlx<{ consented_root: string | null; device_home: string | null }>(
-        `SELECT consented_root, device_home FROM user_devices WHERE id = ?`, deviceId,
+        `SELECT consented_root, device_home FROM user_devices WHERE id = ?`, device.id,
       )[0];
-      const status: DeviceStatus = {
-        connected: true,
-        registered: true,
-        toolchain: await this._devices.probeToolchain(deviceId, Date.now()),
-        devices,
+      const reach: DeviceFleetEntry = {
+        ...device,
+        toolchain: await this._devices.probeToolchain(device.id, now),
+        sandbox: this.deviceSandboxFor(device.id, workspace),
         consentedRoot: scope?.consented_root ?? null,
         deviceHome: scope?.device_home ?? null,
-        // Per caller, not per device: the home and the roots this workspace
-        // gets are what the model needs to know before it writes anything.
-        sandbox: this.deviceSandboxFor(deviceId, workspace),
       };
-      if (granted !== undefined) status.workspaceGranted = granted;
-      return status;
+      return workspace === null
+        ? reach
+        : { ...reach, granted: this.getDeviceBinding(workspace, device.id) === 'allow' };
+    }));
+    const live = devices.filter((device) => device.connected);
+    if (live.length === 0) {
+      return { connected: false, registered: devices.length > 0, toolchain: null, devices };
     }
-    return { connected: false, registered: devices.length > 0, toolchain: null, devices };
+    // The single-machine fields describe THE live machine and nothing else.
+    // With several live there is no such machine, so they are absent — the
+    // per-device entries above carry each machine's own answer.
+    if (live.length > 1) return { connected: true, registered: true, toolchain: null, devices };
+    const only = live[0]!;
+    const status: DeviceStatus = {
+      connected: true,
+      registered: true,
+      toolchain: only.toolchain ?? null,
+      devices,
+      consentedRoot: only.consentedRoot ?? null,
+      deviceHome: only.deviceHome ?? null,
+      // Per caller, not per device: the home and the roots this workspace
+      // gets are what the model needs to know before it writes anything.
+      sandbox: only.sandbox,
+    };
+    if (only.granted !== undefined) status.workspaceGranted = only.granted;
+    return status;
   }
 
   /** Every registered device with its user-chosen name, platform and live
-   *  state — the pre-grant view both the agent's executor row and the UI read. */
+   *  state — the pre-grant view both the agent's executor row and the UI read.
+   *  Fleet order is registration order, newest first, and it is stable across
+   *  reads: two renders of the same fleet must be the same bytes. */
   private deviceFleet(): DeviceFleetEntry[] {
     return this.sqlx<{ id: string; label: string; os: string | null; hostname: string | null }>(
       `SELECT id, label, os, hostname FROM user_devices
-        WHERE revoked_at IS NULL ORDER BY created_at DESC`,
+        WHERE revoked_at IS NULL ORDER BY created_at DESC, id ASC`,
     ).map((r) => ({
       id: r.id,
       name: r.label,

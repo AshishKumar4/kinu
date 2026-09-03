@@ -220,14 +220,33 @@ export class DeviceSocketHub {
     return this.liveSocket(deviceId) != null;
   }
 
-  /** The id of a connected device — the requested one, or the first live one. */
-  connectedDeviceId(deviceId?: string): string | null {
-    if (deviceId) return this.isConnected(deviceId) ? deviceId : null;
+  /** Every device with a live socket right now, in socket order. The order is
+   *  the platform's, not a ranking: nothing here may read it as one. */
+  connectedDeviceIds(): string[] {
+    const ids: string[] = [];
     for (const ws of this.ctx.getWebSockets()) {
       const id = deviceIdFromSocket(ws);
-      if (id && ws.readyState === WS_OPEN) return id;
+      if (id && ws.readyState === WS_OPEN && !ids.includes(id)) ids.push(id);
     }
-    return null;
+    return ids;
+  }
+
+  /**
+   * The id of THE connected device: the requested one when it is live, or —
+   * with no request — the only live one. Null when several are live and none
+   * was named.
+   *
+   * This used to answer the unnamed case with the FIRST live socket in
+   * `ctx.getWebSockets()` iteration order. With two machines connected that
+   * order is the platform's, and a redial or a wake can change it between two
+   * calls in one turn, so the "connected device" — its name, its toolchain,
+   * its sandbox, the machine a command ran on — took turns being either one.
+   * A fleet of several has no "the"; a caller that needs one names it.
+   */
+  connectedDeviceId(deviceId?: string): string | null {
+    if (deviceId) return this.isConnected(deviceId) ? deviceId : null;
+    const live = this.connectedDeviceIds();
+    return live.length === 1 ? live[0]! : null;
   }
 
   /** The DeviceTunnel for a connected device — rebuilt from the hibernatable

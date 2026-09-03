@@ -11,11 +11,11 @@
  * re-seeds the snapshot.
  */
 import {
-  NO_DEVICE_CONNECTED, isDeviceNotConnectedError, nextDeviceRequestId,
+  NO_DEVICE_CONNECTED, isDeviceAmbiguityError, isDeviceNotConnectedError, nextDeviceRequestId,
   JsonValueSchema,
   type DeviceCheckpointHint, type DeviceStatus, type DeviceTransport, type JsonValue,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError, type LogEventName } from '@kinu.run/core/obs';
+import { KinuError, diagnostics, renderThrownChain, toKinuError, type LogEventName } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { shellQuote } from './cli/install-command';
 import type { UserCaller } from './user/workspace-capability';
@@ -67,6 +67,9 @@ export interface DeviceRpcOptions {
    *  request is recorded as that job's rather than handed over afterwards.
    *  Cloud-side only: it never rides the frame to the device. */
   backgroundJobId?: string;
+  /** The machine this call is FOR. The hub routes on it; absent, the hub
+   *  answers a one-machine account and refuses a fleet of several. */
+  deviceId?: string;
 }
 
 export interface HubDeviceTransportOpts {
@@ -177,6 +180,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         } : undefined;
         const requestId = method === 'exec' ? rpcOpts?.requestId ?? nextDeviceRequestId() : undefined;
         const deviceOptions: DeviceRpcOptions = { agentName: opts.agentName, checkpoint };
+        if (rpcOpts?.deviceId !== undefined) deviceOptions.deviceId = rpcOpts.deviceId;
         if (rpcOpts?.timeoutMs !== undefined) deviceOptions.timeoutMs = rpcOpts.timeoutMs;
         if (requestId !== undefined) deviceOptions.requestId = requestId;
         if (rpcOpts?.backgroundJobId !== undefined) {
@@ -204,6 +208,12 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         if (isDeviceNotConnectedError(err)) {
           snapshot = { ...snapshot, connected: false };
           checkedAt = now();
+        }
+        // Several machines are live and the call named none. The hub's
+        // message already names them; the class is the caller's, not the
+        // transport's, so it is fixed here before the executor's `io` wrap.
+        if (isDeviceAmbiguityError(err)) {
+          throw new KinuError('bad_input', renderThrownChain({ cause: err }), { cause: err });
         }
         throw err;
       }

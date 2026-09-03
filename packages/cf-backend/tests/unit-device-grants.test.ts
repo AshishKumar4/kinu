@@ -870,9 +870,12 @@ describe('a device is visible before it is usable', () => {
 
     expect(status.connected).toBe(true);
     expect(status.workspaceGranted).toBe(false);
-    expect(status.devices).toEqual([
+    expect(status.devices).toMatchObject([
       { id: harness.deviceId, name: 'ashish@studio', os: 'linux', hostname: 'studio', connected: true },
     ]);
+    // The fleet entry says the same thing PER MACHINE: visible, and not yet
+    // this workspace's to use.
+    expect(status.devices?.[0]?.granted).toBe(false);
     expect(harness.consentPrompts).toEqual([]);
     await harness.closeDeviceHarness();
   });

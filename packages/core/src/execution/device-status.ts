@@ -100,6 +100,13 @@ export interface DeviceFleetEntry {
    *  could not answer — an old daemon with no probe method is not a machine
    *  without python. Populated for connected devices. */
   readonly toolchain?: DeviceToolchain | null;
+  /** The directory the owner named at `kinu connect` on THIS machine — the
+   *  whole of the base tier's reach on it. Populated for connected devices;
+   *  null when the daemon predates the field. */
+  readonly consentedRoot?: string | null;
+  /** THIS machine's own home, as it reported on HELLO. Populated for
+   *  connected devices. */
+  readonly deviceHome?: string | null;
 }
 
 /** The fleet as one flat list — every registered machine with its liveness. */

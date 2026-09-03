@@ -166,7 +166,7 @@ export interface ActorRuntimeIdentity {
 }
 
 interface RuntimeUserDOClient extends UserCredentialClient, DeviceHubClient {
-  getDeviceFileView(caller: UserCaller, agentName: string): Promise<{ unconfined: boolean }>;
+  getDeviceFileView(caller: UserCaller, agentName: string, device?: string): Promise<{ unconfined: boolean }>;
 }
 
 interface RuntimeUserDONamespace {
@@ -678,13 +678,21 @@ export function createCFRuntime(
   // fails closed either way, and only the rethrow tells the model the truth —
   // the device DID name a directory, and the hub could not be asked. A null
   // scope would have it advise the owner to reconnect a machine that is fine.
+  //
+  // Per MACHINE: the fleet snapshot carries each live machine's own paths, and
+  // a question that names one is answered from that machine's entry. An
+  // unnamed question keeps the one-machine answer the snapshot's top level
+  // carries, which is absent — null — once several machines are live.
   const deviceScope = async (
     field: 'consentedRoot' | 'deviceHome',
+    deviceId: string | undefined,
   ): Promise<string | null> => {
     const hub = userDOStubFor(env, actor);
     if (!hub) return null;
     try {
-      return (await hub.deviceRuntimeStatus(await userCallerFor(actor)))[field] ?? null;
+      const status = await hub.deviceRuntimeStatus(await userCallerFor(actor));
+      if (deviceId === undefined) return status[field] ?? null;
+      return status.devices?.find((device) => device.id === deviceId)?.[field] ?? null;
     } catch (cause) {
       throw toKinuError({
         doing: "reading the device's consented directory",
@@ -694,13 +702,13 @@ export function createCFRuntime(
     }
   };
   executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
-    consentedRoot: async () => cliCwdForDevice() ?? await deviceScope('consentedRoot'),
-    deviceHome: async () => cliCwdForDevice() ?? await deviceScope('deviceHome'),
-    unconfined: async () => {
+    consentedRoot: async (deviceId) => cliCwdForDevice() ?? await deviceScope('consentedRoot', deviceId),
+    deviceHome: async (deviceId) => cliCwdForDevice() ?? await deviceScope('deviceHome', deviceId),
+    unconfined: async (deviceId) => {
       const hub = userDOStubFor(env, actor);
       if (!hub) return false;
       try {
-        return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName)).unconfined;
+        return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId)).unconfined;
       } catch (cause) {
         throw toKinuError({
           doing: "reading the device's file-view scope",

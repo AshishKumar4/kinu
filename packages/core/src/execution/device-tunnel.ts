@@ -104,6 +104,17 @@ export const TUNNEL_DISCONNECTED = 'device tunnel not connected';
 export const NO_DEVICE_CONNECTED = 'no device connected';
 
 /**
+ * Thrown by the hub when a call named no device and SEVERAL are live. The
+ * throw site appends the live machines' names after a colon, so the message
+ * a caller reads is the whole answer: which machines could have been meant.
+ * Not a "no device" condition and never reported as one — machines ARE
+ * connected; the call did not say which. Matched by
+ * {@link isDeviceAmbiguityError}, so the executor surface can classify it as
+ * the caller's `bad_input` rather than the transport's `io`.
+ */
+export const SEVERAL_DEVICES_CONNECTED = 'several devices are connected and the call named none';
+
+/**
  * The frame the hub sends immediately after accepting a daemon socket, carrying
  * that device's NEXT long-lived token: `{ type: 'ROTATE', token }`.
  *
@@ -132,6 +143,11 @@ export const DEVICE_TOKEN_ROTATION_ACK = 'ROTATE_ACK';
 export function isDeviceNotConnectedError<T>(err: T): boolean {
   const message = renderThrownChain({ cause: err });
   return message.includes(NO_DEVICE_CONNECTED) || message.includes(TUNNEL_DISCONNECTED);
+}
+
+/** The hub refused because several machines are live and the call named none. */
+export function isDeviceAmbiguityError<T>(err: T): boolean {
+  return renderThrownChain({ cause: err }).includes(SEVERAL_DEVICES_CONNECTED);
 }
 
 /**

@@ -103,8 +103,20 @@ export interface TestUserDO {
   /** Deliver a HELLO the way a daemon does — through the real socket handler,
    *  so what the hub records is what a machine could actually make it record.
    *  The frame is passed as sent, unvalidated here, because a daemon that sends
-   *  a field this build does not know is exactly the case worth testing. */
-  sendDeviceHello(hello: JsonValue): Promise<void>;
+   *  a field this build does not know is exactly the case worth testing.
+   *  `deviceId` targets one of `attachDaemon`'s sockets; absent, the harness's
+   *  own single socket. */
+  sendDeviceHello(hello: JsonValue, deviceId?: string): Promise<void>;
+  /**
+   * A second, third… fake daemon, each bound to ONE machine — the fleet. Each
+   * has its own live socket the hub tags by that device id, its own frame log,
+   * and a far-end `close()` that goes through the real `webSocketClose`
+   * handler, exactly as a machine leaving does. `deviceFrames` records every
+   * daemon's frames too, tagged with the device they reached. The harness's
+   * own `attachDevice` socket is untouched: a one-machine suite never sees
+   * these.
+   */
+  attachDaemon(deviceId: string): FakeDaemon;
   /** Sockets the UserDO accepted through its own upgrade path, with what it
    *  wrote to each — how a test reads the rotation frame the hub pushes.
    *  `drop` closes one from the far end, which is what makes a redial
@@ -166,11 +178,29 @@ export interface TestUserDOOptions {
   capabilityPushMissed?: () => number;
 }
 
+/** One machine of a fleet, faked: the socket the hub holds for it, the frames
+ *  that reached it, and the two things a machine can do to the hub — speak
+ *  and leave. */
+export interface FakeDaemon {
+  readonly deviceId: string;
+  /** Frames the hub sent to THIS machine, in order. */
+  readonly frames: DeviceFrame[];
+  /** Leave, from the far end: the socket reads closed and the hub's close
+   *  handler runs, as it does when a daemon's process ends. */
+  close(): Promise<void>;
+}
+
 /** One JSON-RPC frame as the hub's tunnel writes it onto the device socket. */
 export interface DeviceFrame {
   id: string;
   method: string;
   params: JsonValue[];
+  /** The machine this frame reached, when the harness holds several (a
+   *  socket from `attachDaemon`). Absent on the harness's own single socket. */
+  device?: string;
+  /** The id the hub stamped ON the frame — the wire's own statement of which
+   *  machine it is for, read back so a test can hold the hub to it. */
+  deviceId?: string;
   /** The sandbox frame the hub computed for this command, which the daemon
    *  enforces. It rides beside `id`/`method`/`params` because `DeviceTunnel`
    *  SPREADS its `extra` into the frame. Recorded because a decision the hub
@@ -184,6 +214,7 @@ const DeviceFrameSchema = v.object({
   method: v.string(),
   params: v.optional(v.array(JsonValueSchema)),
   sandbox: v.optional(JsonValueSchema),
+  deviceId: v.optional(v.string()),
 });
 
 interface TestUserEnvironment {
@@ -279,6 +310,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       if (!frame.success) return;
       const call: DeviceFrame = { id: frame.output.id, method: frame.output.method, params: frame.output.params ?? [] };
       if (frame.output.sandbox !== undefined) call.sandbox = frame.output.sandbox;
+      if (frame.output.deviceId !== undefined) call.deviceId = frame.output.deviceId;
       deviceFrames.push(call);
       const responder = options.deviceResponder;
       const owner = hub.current;
@@ -348,7 +380,18 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   // The socket pair is installed once per process (see ACCEPTED_SOCKETS below);
   // this harness reads only the sockets accepted after its own construction.
   const acceptedFrom = ACCEPTED_SOCKETS.length;
-  const live: Array<typeof socket> = [];
+  const live: Array<{ ws: typeof socket; tags: string[] }> = [];
+  /** The fleet's fake daemons, by device id, each with its own socket. */
+  const daemons: Array<{ deviceId: string; ws: WebSocket; frames: DeviceFrame[] }> = [];
+  /** The tags a socket answers to, as the platform would report them: the
+   *  ones it was accepted with, or — for the attachment-bound fakes — the
+   *  device tag its attachment implies. */
+  const tagsOf = (ws: WebSocket): string[] => {
+    const accepted = live.find((entry) => entry.ws === ws);
+    if (accepted) return accepted.tags;
+    const attachment = v.safeParse(v.object({ device: v.nullable(v.string()) }), ws.deserializeAttachment());
+    return attachment.success && attachment.output.device !== null ? [`device:${attachment.output.device}`] : [];
+  };
 
   const ctx = {
     // Sealed values are bound to the Durable Object's id, so the harness has
@@ -361,8 +404,15 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     // server name by reading and writing inside one `transactionSync`, and a
     // fake turns that atomic claim into a torn one that still reports success.
     storage: { sql, transactionSync: <T,>(closure: () => T): T => db.transaction(closure)() },
-    getWebSockets: () => [...(attached === null ? [] : [socket]), ...live],
-    acceptWebSocket: (ws: typeof socket) => { live.push(ws); },
+    // Tag-filtered, as the platform's is: a hub asking for `device:<id>` gets
+    // THAT machine's socket and no other. A tag-blind answer here would hand
+    // one machine's tunnel another machine's socket — a flap the real hub
+    // does not have, so the harness must not have it either.
+    getWebSockets: (tag?: string) => {
+      const all = [...(attached === null ? [] : [socket]), ...live.map((entry) => entry.ws), ...daemons.map((d) => d.ws)];
+      return tag === undefined ? all : all.filter((ws) => tagsOf(ws).includes(tag));
+    },
+    acceptWebSocket: (ws: typeof socket, tags: string[] = []) => { live.push({ ws, tags }); },
   };
   const env: TestUserEnvironment = {
     // The credential store refuses to operate without its key, so a harness
@@ -431,8 +481,66 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         for (const waiting of registry.list()) registry.resolve(waiting.consentId, answer);
       }
     },
-    sendDeviceHello: (hello) => userDO.webSocketMessage(socket, JSON.stringify(hello)),
+    sendDeviceHello: (hello, deviceId) => {
+      const target = deviceId === undefined ? socket : daemons.find((d) => d.deviceId === deviceId)?.ws;
+      if (!target) throw new Error(`no fake daemon is attached for ${deviceId}`);
+      return userDO.webSocketMessage(target, JSON.stringify(hello));
+    },
     attachDevice: (deviceId) => { attached = deviceId; },
+    attachDaemon: (deviceId) => {
+      const frames: DeviceFrame[] = [];
+      // The same shape as the harness's own socket, bound to ONE machine: the
+      // attachment is fixed, so the hub tags and routes it as that device
+      // and nothing else, and the responder answers on this very socket.
+      // A real attachment, because the hub keeps the machine's toolchain
+      // probe THERE: a no-op store would make every status read ask the
+      // machine again, and two reads of one unchanged fleet would differ.
+      let attachment: JsonValue = { device: deviceId };
+      const body = {
+        readyState: 1,
+        deserializeAttachment: () => attachment,
+        serializeAttachment: (value: JsonValue) => { attachment = value; },
+        send: (data: string) => {
+          const frame = v.safeParse(DeviceFrameSchema, JSON.parse(data));
+          if (!frame.success) return;
+          const call: DeviceFrame = {
+            id: frame.output.id, method: frame.output.method, params: frame.output.params ?? [], device: deviceId,
+          };
+          if (frame.output.sandbox !== undefined) call.sandbox = frame.output.sandbox;
+          if (frame.output.deviceId !== undefined) call.deviceId = frame.output.deviceId;
+          frames.push(call);
+          deviceFrames.push(call);
+          const responder = options.deviceResponder;
+          const owner = hub.current;
+          if (!responder || !owner) return;
+          return owner.runFiber('test:device-responder', async () => {
+            try {
+              const result = await responder(call);
+              await owner.webSocketMessage(ws, JSON.stringify({ id: call.id, result }));
+            } catch (cause) {
+              await owner.webSocketMessage(ws, JSON.stringify({
+                id: call.id, error: cause instanceof Error ? cause.message : String(cause),
+              }));
+            }
+          });
+        },
+        close: () => { body.readyState = 3; },
+      };
+      // Same construction as the harness socket above: the hub reads only the
+      // members the body declares, which is the boundary under test.
+      const ws: WebSocket = Object.create(body);
+      daemons.push({ deviceId, ws, frames });
+      return {
+        deviceId,
+        frames,
+        close: async () => {
+          body.readyState = 3;
+          const at = daemons.findIndex((d) => d.ws === ws);
+          if (at !== -1) daemons.splice(at, 1);
+          await userDO.webSocketClose(ws, 1000, 'daemon left', true);
+        },
+      };
+    },
     get acceptedSockets() { return ACCEPTED_SOCKETS.slice(acceptedFrom); },
     joinFibers: joinHarnessFibers,
     close: () => { if (!options.storage) db.close(); },

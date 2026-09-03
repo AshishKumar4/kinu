@@ -666,16 +666,17 @@ function filesForCall(
  * different machines, which is the drift the one view exists to prevent.
  */
 export interface DeviceFileConsent {
-  /** The directory the owner consented, or null when this device reported
-   *  none. Async because the answer lives on the device row, not in the
-   *  isolate. */
-  consentedRoot(): Promise<string | null>;
-  /** The machine's own home, as it reported on HELLO, or null. Where the file
-   *  view opens when no directory was consented — never a scope. */
-  deviceHome(): Promise<string | null>;
-  /** Whether the owner turned this device's Sandbox switch off, which lifts
+  /** The directory the owner consented on the machine asked about, or null
+   *  when that device reported none. Async because the answer lives on the
+   *  device row, not in the isolate. `deviceId` names the machine; a
+   *  one-machine implementation may ignore it. */
+  consentedRoot(deviceId?: string): Promise<string | null>;
+  /** That machine's own home, as it reported on HELLO, or null. Where the
+   *  file view opens when no directory was consented — never a scope. */
+  deviceHome(deviceId?: string): Promise<string | null>;
+  /** Whether the owner turned THAT device's Sandbox switch off, which lifts
    *  the path scope for the same reason it lifts the shell's. */
-  unconfined(): Promise<boolean>;
+  unconfined(deviceId?: string): Promise<boolean>;
 }
 
 const ALWAYS_CONSENTED: DeviceFileConsent = {
@@ -710,7 +711,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   const target: DeviceExecOptions | undefined = deviceId === undefined ? undefined : { deviceId };
   const trimmed = (path: string): string => (path.length > 1 ? path.replace(/\/+$/, '') : path);
   const effectiveRoot = async (): Promise<string> => {
-    const explicit = await consent.consentedRoot();
+    const explicit = await consent.consentedRoot(deviceId);
     if (explicit) return trimmed(explicit);
     throw makeVfsError(
       'EACCES',
@@ -722,15 +723,15 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   /** Where the view OPENS, which is not the same question as what it may
    *  reach: the full tier has no root and still needs somewhere to start. */
   const openingDir = async (): Promise<string> => {
-    const root = await consent.consentedRoot();
+    const root = await consent.consentedRoot(deviceId);
     if (root) return trimmed(root);
-    const home = await consent.deviceHome();
+    const home = await consent.deviceHome(deviceId);
     if (home) return trimmed(home);
     throw makeVfsError('EACCES', 'this device reported neither a consented directory nor a home', '/');
   };
 
   const guard = async (path: string, op: string): Promise<string | null> => {
-    if (await consent.unconfined()) return null;
+    if (await consent.unconfined(deviceId)) return null;
     const root = await effectiveRoot();
     // No fallback: a device that named no directory throws above rather than
     // widening to `/`. The daemon enforces the same view a second time, so
