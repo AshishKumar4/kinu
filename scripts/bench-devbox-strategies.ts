@@ -432,7 +432,7 @@ export function boxName(runId: string, arm: Strategy): string {
  * binary from the one its tests prove. Only the runtime libraries the compiled
  * daemon links against travel to the final stage; the toolchain does not.
  */
-function candidateImageDockerfile(): string {
+export function candidateImageDockerfile(): string {
   const recipe = readFileSync(JOURNAL_DAEMON_DOCKERFILE, 'utf8');
   // The checked-in daemon recipe deliberately stays readable as the versioned
   // tag humans recognize. The GENERATED benchmark image does not: a tag is a
@@ -453,6 +453,121 @@ function candidateImageDockerfile(): string {
     + 'RUN ldconfig\n'
     + 'COPY candidate-runner.bundle.mjs /opt/kinu/candidate-runner.bundle.mjs\n'
     + 'COPY overlay-cas-runner.bundle.mjs /opt/kinu/overlay-cas-runner.bundle.mjs\n';
+}
+
+/**
+ * Every path a Dockerfile expects to find in its build CONTEXT, read out of
+ * the Dockerfile itself.
+ *
+ * WHY THE STAGED SET IS DERIVED RATHER THAN LISTED. The candidate image re-uses
+ * the journal daemon's own recipe verbatim as its builder stage, so the files
+ * that recipe COPYs are inputs this benchmark must stage — and the recipe is
+ * free to change them. It did: the daemon became `journal-daemon.c` plus
+ * `journal-delta.c` and its header, the daemon Dockerfile gained the two COPY
+ * lines, and the hardcoded copy in staging did not follow. Every arm whose class
+ * raises this image then failed its deploy with `Docker build exited with code:
+ * 1` over `"/journal-delta.h": not found` — three of five arms in run
+ * 20260903131640. A second list beside the recipe is the defect, so there is no
+ * second list.
+ *
+ * `COPY --from=<stage>` is EXCLUDED: it copies out of an earlier build stage
+ * rather than the context, so demanding those as context files would refuse
+ * every complete build. The JSON array form is REFUSED by name rather than
+ * mis-read, because a parser that silently misses a source is how this defect
+ * reached a deploy in the first place.
+ */
+export function contextCopySources(dockerfile: string): readonly string[] {
+  const sources: string[] = [];
+  // Continuations first: a COPY split over two lines names its sources on the
+  // first and its destination on the second.
+  for (const line of dockerfile.replace(/\\\n/g, ' ').split('\n')) {
+    const copy = /^\s*COPY\s+(\S.*)$/i.exec(line);
+    if (copy === null) continue;
+    const tokens = copy[1].trim().split(/\s+/);
+    if (tokens.some((token) => token.startsWith('--from='))) continue;
+    if (tokens.some((token) => token.startsWith('['))) {
+      throw new Error(`the JSON array form of COPY is not read here: ${line.trim()}`);
+    }
+    // The last token is the destination inside the image; a `--flag=value`
+    // names no file.
+    for (const token of tokens.slice(0, -1)) {
+      if (!token.startsWith('--')) sources.push(token);
+    }
+  }
+  return sources;
+}
+
+/** What staging a build context answers: the daemon sources it copied, and the
+ * digest standing for all of them in the artifact's version row. */
+export interface StagedImageContext {
+  /** The recipe-named daemon sources staged, in the order the recipe names
+   * them. The digest is over the sorted set, so this order is for the reader. */
+  readonly daemonSources: readonly string[];
+  readonly journalDaemonSha256: string;
+}
+
+/**
+ * Complete the candidate image's build context, and refuse while the run still
+ * owns nothing if it cannot be.
+ *
+ * WHAT IS ALREADY THERE: the runner bundles, written by the caller before this
+ * runs. WHAT THIS ADDS: every remaining file the Dockerfile COPYs, from the
+ * daemon's own directory — the recipe is the authority on which those are.
+ * WHAT IT PROVES: the context holds every COPY source before a single bucket,
+ * Worker or container application exists. `docker build` answers a missing
+ * context file with a cache-key error and an exit code, and wrangler forwards
+ * only `Docker build exited with code: 1`, so an incomplete context is learned
+ * once per arm, after the sibling resources are already deployed. That is run
+ * 20260903131640: two arms measured, three refused their deploy, and nothing
+ * said which file was missing.
+ *
+ * The caller owns cleanup on refusal: staging may have written files already,
+ * and the build directory is the caller's to remove.
+ */
+export function stageImageContext(input: {
+  readonly dir: string;
+  readonly dockerfile: string;
+  /** Basenames of the bundle files the caller has already written into `dir`. */
+  readonly written: readonly string[];
+  /** Where recipe-named daemon sources are staged from. */
+  readonly sourceDir: string;
+}): StagedImageContext {
+  const contextSources = contextCopySources(input.dockerfile);
+  const daemonSources = contextSources.filter((source) => !input.written.includes(source));
+  // EVERY RECIPE INPUT CHECKED BEFORE ANY IS COPIED, so a refusal stages
+  // nothing rather than half a context. A missing input is a property of the
+  // recipe, not an order of files within it.
+  const unstaged = daemonSources.filter((source) => !existsSync(join(input.sourceDir, source)));
+  if (unstaged.length > 0) {
+    throw new Error(
+      `the candidate image recipe COPYs ${unstaged.map((source) => `\`${source}\``).join(' and ')} `
+      + `and ${unstaged.map((source) => join(input.sourceDir, source)).join(' and ')} does not exist, `
+      + 'so no context can be staged',
+    );
+  }
+  for (const source of daemonSources) {
+    copyFileSync(join(input.sourceDir, source), join(input.dir, source));
+  }
+  // AND THE CONTEXT IS COMPLETE: every COPY source the recipe names is present
+  // in the directory the build will run from, bundles included.
+  const absent = contextSources.filter((source) => !existsSync(join(input.dir, source)));
+  if (absent.length > 0) {
+    throw new Error(`the candidate image build context is missing ${absent.join(', ')}`);
+  }
+  // DIGESTED FROM THE BYTES THAT WERE STAGED, and over every daemon source the
+  // image compiles rather than the first of them: this stood for
+  // `journal-daemon.c` alone after the daemon was split, so two runs whose
+  // delta code differed recorded identical provenance. Name, byte length and
+  // bytes per input in sorted order: a rename, a byte change and a boundary
+  // shift between two inputs each move the digest.
+  const canonical = [...daemonSources].sort().map((source) => {
+    const bytes = readFileSync(join(input.dir, source), 'utf8');
+    return `${source}\0${String(bytes.length)}\0${bytes}`;
+  }).join('');
+  return {
+    daemonSources,
+    journalDaemonSha256: `sha256:${createHash('sha256').update(canonical).digest('hex')}`,
+  };
 }
 
 /** One Worker, only the selected Durable Object classes, their container-app
@@ -574,9 +689,20 @@ export async function createFixtureResources(
     Bun.write(bundlePath, candidateBundle),
     Bun.write(overlayBundlePath, overlayBundle),
   ]);
-  copyFileSync(JOURNAL_DAEMON_SOURCE, join(dir, 'journal-daemon.c'));
   const dockerfile = candidateImageDockerfile();
   writeFileSync(dockerfilePath, dockerfile);
+  let staged: StagedImageContext;
+  try {
+    staged = stageImageContext({
+      dir,
+      dockerfile,
+      written: [basename(bundlePath), basename(overlayBundlePath)],
+      sourceDir: JOURNAL_DAEMON_DIR,
+    });
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
   const template = readFileSync(join(BENCH_DIR, 'wrangler.jsonc'), 'utf8');
   // ONE CONFIG PER ARM, all in the one build directory: each names its own
   // Worker, binds its own bucket and deploys only its own class, and all of
@@ -602,7 +728,7 @@ export async function createFixtureResources(
       dockerfileSha256: digest(dockerfile),
       candidateRunnerSha256: digest(new Uint8Array(await Bun.file(bundlePath).arrayBuffer())),
       overlayRunnerSha256: digest(new Uint8Array(await Bun.file(overlayBundlePath).arrayBuffer())),
-      journalDaemonSha256: digest(readFileSync(JOURNAL_DAEMON_SOURCE, 'utf8')),
+      journalDaemonSha256: staged.journalDaemonSha256,
     },
     disposeConfig: () => { rmSync(dir, { recursive: true, force: true }); },
   };
@@ -612,7 +738,6 @@ const CANDIDATE_RUNNER_SOURCE = join(REPO_ROOT, 'packages/devbox/bench/candidate
 const OVERLAY_RUNNER_SOURCE = join(REPO_ROOT, 'packages/devbox/src/cas/overlay-runner.ts');
 const PROBE_FILES = ['stats.ts', 'probe.ts', 'decisive.ts'] as const;
 const JOURNAL_DAEMON_DIR = join(REPO_ROOT, 'packages/devbox/bench/journal-daemon');
-const JOURNAL_DAEMON_SOURCE = join(JOURNAL_DAEMON_DIR, 'journal-daemon.c');
 const JOURNAL_DAEMON_DOCKERFILE = join(JOURNAL_DAEMON_DIR, 'Dockerfile');
 /** The mutable version tag written in the checked-in daemon recipe. */
 const SANDBOX_IMAGE_TAG = 'docker.io/cloudflare/sandbox:0.12.8';

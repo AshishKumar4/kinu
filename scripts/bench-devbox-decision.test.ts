@@ -39,6 +39,7 @@ import {
   controlWitnessChecks,
   cleanupObservationProbes,
   checkpointOperation,
+  contextCopySources,
   comparablePairs,
   createFixtureResources,
   describeStartupState,
@@ -49,8 +50,10 @@ import {
   INCUMBENT,
   fixtureConfigForArms,
   frozenControlStatus,
+  candidateImageDockerfile,
   isRearmableStartupRefusal,
   isTransientContainerCreateError,
+  stageImageContext,
   parseFrozenControlArtifact,
   parseOptions,
   pollForAttach,
@@ -3161,6 +3164,122 @@ describe('the run records what it will own before it owns anything', () => {
     } finally {
       rmSync(buildDir, { recursive: true, force: true });
       rmSync(manifestFile, { force: true });
+    }
+  });
+});
+
+describe('the candidate image build context', () => {
+  const repoRoot = dirname(dirname(new URL(import.meta.url).pathname));
+  const daemonDir = join(repoRoot, 'packages/devbox/bench/journal-daemon');
+  /** One build directory to stage into, pre-seeded with the two bundle files
+   * the driver writes before staging runs. */
+  const stagedContext = () => {
+    const dir = scratchDir('devbox-candidate-context');
+    writeFileSync(join(dir, 'candidate-runner.bundle.mjs'), '/* bundle */');
+    writeFileSync(join(dir, 'overlay-cas-runner.bundle.mjs'), '/* bundle */');
+    return { dir, dockerfile: candidateImageDockerfile() };
+  };
+
+  test('carries every file the generated Dockerfile COPYs out of it', () => {
+    // MEASURED DEFECT THIS FORBIDS. Run 20260903131640 deployed `snapshot-chain`
+    // and `r2fs` and refused `overlay-cas`, `bounded-layers` and `merkle-pack` —
+    // exactly the three arms whose class raises the candidate image — with
+    // `Docker build exited with code: 1`. The build stopped at
+    // `COPY journal-delta.h`: `failed to compute cache key: "/journal-delta.h":
+    // not found`. The daemon recipe is re-used verbatim as the builder stage and
+    // COPYs three sources; staging wrote one, because the daemon was split into
+    // `journal-daemon.c` plus `journal-delta.c`/`.h` and a hardcoded copy list
+    // did not follow the recipe that names them.
+    const { dir, dockerfile } = stagedContext();
+    try {
+      stageImageContext({
+        dir,
+        dockerfile,
+        written: ['candidate-runner.bundle.mjs', 'overlay-cas-runner.bundle.mjs'],
+        sourceDir: daemonDir,
+      });
+
+      // The split daemon's three translation units are inputs of this image, so
+      // the recipe names them and the context holds them.
+      expect(contextCopySources(dockerfile)).toEqual(expect.arrayContaining([
+        'journal-daemon.c', 'journal-delta.c', 'journal-delta.h',
+      ]));
+      for (const source of contextCopySources(dockerfile)) {
+        expect(existsSync(join(dir, source))).toBe(true);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a stage copy is not demanded from the context', () => {
+    // `COPY --from=<stage>` reads an earlier build stage. Reading those as
+    // context inputs would refuse every complete build, so the parser that
+    // decides what to stage skips them — and still reads the flagless copies on
+    // either side of one.
+    expect(contextCopySources([
+      'FROM base AS builder',
+      'COPY daemon.c /src/daemon.c',
+      'FROM base',
+      'COPY --from=builder /usr/local/bin/daemon /usr/local/bin/daemon',
+      'COPY runner.mjs /opt/runner.mjs',
+    ].join('\n'))).toEqual(['daemon.c', 'runner.mjs']);
+  });
+
+  test('a recipe input the daemon directory does not hold refuses before any deploy', () => {
+    // The other direction: a recipe naming a file nobody can stage refuses while
+    // the run still owns nothing, rather than deploying a context `docker build`
+    // rejects one arm at a time.
+    const { dir } = stagedContext();
+    const dockerfile = [
+      'FROM base AS journal-daemon',
+      'COPY journal-daemon.c /usr/local/src/kinu-journal-daemon.c',
+      'COPY journal-nothing.c /usr/local/src/journal-nothing.c',
+    ].join('\n');
+    try {
+      expect(() => stageImageContext({
+        dir,
+        dockerfile,
+        written: [],
+        sourceDir: daemonDir,
+      })).toThrow(/journal-nothing\.c/);
+      // And nothing was staged into the context behind the refusal.
+      expect(existsSync(join(dir, 'journal-daemon.c'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the recorded daemon digest covers every source the image is built from', () => {
+    // PROVENANCE. `journal-daemon-source` is one digest in the artifact's version
+    // row, and it stood for `journal-daemon.c` alone while the image also
+    // compiled `journal-delta.c` and its header — so two runs whose delta code
+    // differed recorded the same provenance and could not be told apart.
+    const { dir, dockerfile } = stagedContext();
+    try {
+      const staged = stageImageContext({
+        dir,
+        dockerfile,
+        written: ['candidate-runner.bundle.mjs', 'overlay-cas-runner.bundle.mjs'],
+        sourceDir: daemonDir,
+      });
+      // The canonicalization the driver commits to: name, byte length and bytes
+      // per input in sorted order, so neither a rename nor a byte change nor a
+      // boundary shift between two inputs can collide.
+      const canonical = staged.daemonSources.slice().sort().map((name) => {
+        const bytes = readFileSync(join(daemonDir, name), 'utf8');
+        return `${name}\0${String(bytes.length)}\0${bytes}`;
+      }).join('');
+
+      expect(staged.journalDaemonSha256)
+        .toBe(`sha256:${createHash('sha256').update(canonical).digest('hex')}`);
+      // And it is NOT the single-source digest it used to be.
+      expect(staged.journalDaemonSha256).not.toBe(
+        `sha256:${createHash('sha256')
+          .update(readFileSync(join(daemonDir, 'journal-daemon.c'), 'utf8')).digest('hex')}`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
