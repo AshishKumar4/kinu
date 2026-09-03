@@ -412,15 +412,23 @@ function verifyDirtyIsStaged(entry: DeltaEntry): void {
       throw new Error(`entry '${entry.path}' has an invalid dirty range at ${dirty.offset}`);
     }
     end = dirty.offset + dirty.length;
-    const covered = staged.some((range) => range.offset <= dirty.offset
-      && range.offset + range.length >= dirty.offset + dirty.length);
-    /* A hole a write never filled is legitimately absent from the stage: the
-     * daemon skips holes, so a dirty range with no bytes on the disk has none
-     * to stage.  Anything else must be covered. */
-    if (!covered && dirty.length > 0) {
-      const holed = staged.every((range) => range.offset + range.length <= dirty.offset
-        || range.offset >= dirty.offset + dirty.length);
-      if (!holed) throw new Error(`entry '${entry.path}' stages part of its dirty range at ${dirty.offset}`);
+    /* Coverage is a property of the union: a run longer than one extent is
+     * staged as several, and they are ascending and non-overlapping, so
+     * walking them forward says exactly how far the stage reaches. */
+    let reached = dirty.offset;
+    for (const range of staged) {
+      if (range.offset > reached) break;
+      if (range.offset + range.length > reached) reached = range.offset + range.length;
+    }
+    if (reached >= dirty.offset + dirty.length) continue;
+    /* What is left uncovered may only be a hole the write never filled: the
+     * daemon stages data runs, so a dirty range over a hole has no bytes to
+     * stage.  A partially staged run of real bytes is a lost write. */
+    const touchesStage = staged.some((range) => range.offset < dirty.offset + dirty.length
+      && range.offset + range.length > dirty.offset);
+    if (touchesStage) {
+      throw new Error(`entry '${entry.path}' stages ${reached - dirty.offset} of its ${dirty.length}`
+        + ` dirty bytes at ${dirty.offset}`);
     }
   }
 }
@@ -484,13 +492,18 @@ async function verifyManifest(sealed: Fence): Promise<SealedFence> {
       || twin.mtimeNs !== entry.mtimeNs || twin.atimeNs !== entry.atimeNs)) {
       throw new Error(`hardlinked '${entry.path}' and '${twin.path}' disagree about their inode`);
     }
+    /* Counted per INODE, not per row: a hardlink is described under each of its
+     * names and staged once, so summing rows would count its bytes twice.  This
+     * is what the disagreement below is measured against. */
+    const firstRow = twin === undefined;
     inodes.set(entry.ino, entry);
     kinds.set(entry.path, entry.kind);
     if (entry.kind !== 'file') continue;
     files++;
-    if (entry.whole === true) wholeFiles++;
     verifyDirtyIsStaged(entry);
     extents += await verifyStagedRanges(manifest, entry);
+    if (!firstRow) continue;
+    if (entry.whole === true) wholeFiles++;
     for (const range of entry.ranges ?? []) bytes += range.length;
   }
   for (const path of kinds.keys()) {
@@ -741,16 +754,19 @@ async function posixAndFence(): Promise<void> {
       assert(checks, 'no-post-cut-entry', !sealed.manifest.entries.some((entry) => entry.path === 'after-cut.txt'),
         'after-cut.txt is absent from the sealed manifest');
 
-      /* Every path the journal shows changed is described, and every path
-       * described was changed: a delta that misses a write loses it, and one
-       * that names an untouched file is no longer O(k). */
+      /* Every write the journal shows is either described by an entry or is a
+       * path that no longer exists at the cut, whose removal the operation list
+       * carries.  A write to a file that IS still there and is not described is
+       * a lost write, which is the whole failure this cell exists to catch. */
       const written = new Set(parseJournal(await readFile(space.journal))
         .filter((record) => record.kind === 'W' && record.sequence <= first.cut)
         .map((record) => record.path.replace(/^\//, '')));
       const describedFiles = new Set(sealed.manifest.entries.filter((entry) => entry.kind === 'file').map((entry) => entry.path));
-      const missed = [...written].filter((path) => !describedFiles.has(path));
-      assert(checks, 'every-journaled-write-is-described', missed.length === 0,
-        `written=${written.size} described=${describedFiles.size} missed=${missed.slice(0, 5).join(',')}`);
+      const missed = [...written].filter((path) => !describedFiles.has(path) && existsSync(join(space.root, path)));
+      const retired = [...written].filter((path) => !describedFiles.has(path) && !existsSync(join(space.root, path)));
+      assert(checks, 'every-surviving-journaled-write-is-described', missed.length === 0,
+        `written=${written.size} described=${describedFiles.size} goneAtTheCut=${retired.length} ` +
+        `missed=${missed.slice(0, 5).join(',')}`);
 
       adopt(checks, await runProbe(['stage', sealed.manifest.stageRoot]), 'stage');
 
@@ -828,9 +844,6 @@ async function posixAndFence(): Promise<void> {
       assert(checks, 'group-commit-shares-one-append-pass',
         snapshot.records > snapshot.batches && snapshot.walFsyncs === 0,
         `records=${snapshot.records} batches=${snapshot.batches} walFsyncs=${snapshot.walFsyncs}`);
-      assert(checks, 'the-kernel-answered-the-read-path',
-        snapshot.passthrough || snapshot.records > 0,
-        `passthrough=${snapshot.passthrough}`);
 
       const closed = await stopDaemon(daemon);
       facts.stop = closed;
@@ -847,32 +860,49 @@ async function killRecovery(): Promise<void> {
     const space = await workspace('recovery');
     let torn: number[] = [];
     let results = 0;
+    let mix = { intents: 0, writes: 0, results: 0, ops: '', last: '' };
     let before = Buffer.alloc(0);
     let attempts = 0;
     while (torn.length === 0 && attempts < 5) {
       attempts++;
       const victim = await startDaemon(space);
-      const load = startProbe(['load', join(space.mount, `load-${attempts}`), '8', '5']);
-      /* Metadata churn beside the writes: a W record has no result to tear, so
-       * the torn-intent property lives on the operations that keep a pair. */
+      /* The load for this cell is the traffic that CAN tear.  A W record has no
+       * result to pair, so a write-heavy load only moves the kill away from the
+       * window: 3.4 million writes against 48,000 pairs put every kill inside a
+       * write.  So: metadata churn, which keeps a pair, and an fdatasync of 32
+       * freshly written megabytes, whose effect is tens of milliseconds long. */
       const churn = startProbe(['churn', join(space.mount, `churn-${attempts}`), '6', '400']);
+      const slow = startProbe(['slowsync', join(space.mount, `slowsync-${attempts}.bin`), '32', '40']);
+      const alsoSlow = startProbe(['slowsync', join(space.mount, `slowsync-b-${attempts}.bin`), '32', '40']);
       await Bun.sleep(500 + attempts * 400);
       victim.process.kill(9);
       await victim.process.exited;
-      load.process.kill(9);
-      await load.finished;
       churn.process.kill(9);
       await churn.finished;
+      slow.process.kill(9);
+      await slow.finished;
+      alsoSlow.process.kill(9);
+      await alsoSlow.finished;
       await releaseMount(space);
       before = await readFile(space.journal);
       const records = parseJournal(before);
       torn = unmatchedIntents(records);
       results = records.filter((record) => record.kind === 'RESULT').length;
+      mix = {
+        intents: records.filter((record) => record.kind === 'INTENT').length,
+        writes: records.filter((record) => record.kind === 'W').length,
+        results,
+        ops: [...new Set(records.filter((record) => record.kind === 'INTENT').map((record) => record.op))].join(','),
+        last: records.slice(-3).map((record) => `${record.sequence}:${record.kind}:${record.op}`).join(' '),
+      };
     }
     facts.attempts = attempts;
     facts.tornIntents = torn.length;
     facts.durableResults = results;
-    assert(checks, 'kill-after-intent-observed', torn.length > 0, `torn=${torn.length} attempts=${attempts}`);
+    facts.recordMix = mix;
+    assert(checks, 'kill-after-intent-observed', torn.length > 0,
+      `torn=${torn.length} attempts=${attempts} intents=${mix.intents} writes=${mix.writes} ` +
+      `results=${mix.results} ops=${mix.ops} last=${mix.last}`);
     assert(checks, 'kill-after-result-observed', results > 0, `results=${results}`);
 
     const daemon = await startDaemon(space);
@@ -895,7 +925,9 @@ async function killRecovery(): Promise<void> {
       assert(checks, 'writes-resume-after-recovery', (await readFile(resumed, 'utf8')) === 'admitted after recovery',
         'the file reads back through the mount');
 
-      const highest = Math.max(...parseJournal(before).map((record) => record.sequence));
+      /* A fold, not a spread: this journal now carries tens of thousands of
+       * records and `Math.max(...records)` overflows the stack on them. */
+      const highest = parseJournal(before).reduce((top, record) => Math.max(top, record.sequence), 0);
       const resumedRecords = parseJournal(await readFile(space.journal)).filter((record) => record.path === '/resumed.txt');
       assert(checks, 'resumed-work-continues-the-sequence',
         resumedRecords.length >= 2 && resumedRecords.every((record) => record.sequence > highest),
@@ -1638,93 +1670,54 @@ async function enospcBeforeEffect(): Promise<void> {
 }
 
 /**
- * Reads leave the daemon out of the path, and the daemon says which way.
+ * Reads leave the daemon out of the path, and the mixtures stay legal.
  *
- * With kernel passthrough the backing fd is registered and the kernel serves
- * the read; where registration is refused — a backing file on a stacked
- * filesystem is the case that happens in the field — the daemon says so on its
- * own error stream and keeps the page cache instead.  Either way the bytes are
- * the bytes, which is what this cell refuses to let slide.
+ * The daemon answers the first read of a range and the page cache answers the
+ * re-reads, which its own read counter shows directly: the second pass over the
+ * same bytes must not reach it at all.  The rest of the cell is the reason it
+ * does that with the page cache rather than with kernel passthrough — under
+ * passthrough a read-only handle makes the next `open(O_RDWR)` of the file fail
+ * with EIO, and a read-only open of a mapped file fails the same way, both
+ * measured in this container.  Those mixtures are ordinary, so they are pinned
+ * here, together with the coherency the page cache has to keep: a reader must
+ * see a write another handle made.
  */
-async function readPassthrough(): Promise<void> {
-  await scenario('read-passthrough', async (facts, checks) => {
-    const space = await workspace('passthrough');
+async function readPath(): Promise<void> {
+  await scenario('read-path', async (facts, checks) => {
+    const space = await workspace('read-path');
     const daemon = await startDaemon(space);
     const payload = Buffer.alloc(256 * 1024, 0x39);
     try {
       const target = join(space.mount, 'read.bin');
       await writeFile(target, payload);
-      const snapshot = await stats(space);
+      const before = await stats(space);
       const first = await readFile(target);
+      const filled = await stats(space);
       const second = await readFile(target);
-      facts.reads = { passthrough: snapshot.passthrough, bytes: first.byteLength };
-      assert(checks, 'the-session-declares-its-read-path',
-        snapshot.passthrough === true,
-        `passthrough=${snapshot.passthrough} (the deployed kernel offers FUSE_CAP_PASSTHROUGH)`);
-      assert(checks, 'passthrough-reads-return-the-written-bytes',
+      const cached = await stats(space);
+      const servedFirst = filled.reads - before.reads;
+      const servedAgain = cached.reads - filled.reads;
+      facts.readPath = { bytes: first.byteLength, firstPassReads: servedFirst, secondPassReads: servedAgain };
+      assert(checks, 'reads-return-the-written-bytes',
         Buffer.compare(first, payload) === 0 && Buffer.compare(second, payload) === 0,
         `first=${first.byteLength} second=${second.byteLength} of ${payload.byteLength}`);
-      /* A read served by the kernel or by the page cache still reaches no W
-       * record: reads are not mutations, and the journal proves it. */
+      /* The whole of the read path, as a number: the daemon serves the first
+       * pass over these bytes and NONE of the second.  A handle that went back
+       * to direct reads would serve both and fail here. */
+      assert(checks, 'a-re-read-does-not-reach-the-daemon', servedFirst > 0 && servedAgain === 0,
+        `firstPass=${servedFirst} secondPass=${servedAgain}`);
+      /* A read is not a mutation, whoever served it, and the journal says so. */
       const records = parseJournal(await readFile(space.journal));
       assert(checks, 'a-read-journals-nothing',
         !records.some((record) => record.op === 'read'),
         `records=${records.length}`);
+      /* The mixtures passthrough refuses, and the coherency the cache keeps. */
+      adopt(checks, await runProbe(['readpath', join(space.mount, 'mixed')]), 'mixed');
       const closed = await stopDaemon(daemon);
+      facts.stop = closed;
       assert(checks, 'stops-cleanly', closed.code === 0 && closed.unmounted, `code=${closed.code}`);
     } finally {
       if (daemon.process.exitCode === null) await killDaemon(daemon);
-    }
-
-    /* The fallback, on a backing root the kernel refuses to register: an
-     * overlay mount is stacked, and a stacked backing file is exactly what
-     * FUSE_DEV_IOC_BACKING_OPEN turns down. */
-    const stacked = await workspace('passthrough-stacked');
-    const layers = join(stacked.dir, 'layers');
-    await mkdir(layers, { recursive: true });
-    /* overlayfs refuses an upperdir on overlayfs, which the container root is,
-     * so the layers live on a tmpfs this cell owns. */
-    const carrier = await Bun.spawn({
-      cmd: ['mount', '-t', 'tmpfs', '-o', 'size=64m', 'tmpfs', layers],
-      stdout: 'ignore',
-      stderr: 'ignore',
-    }).exited;
-    const lower = join(layers, 'lower');
-    const upper = join(layers, 'upper');
-    const work = join(layers, 'work');
-    for (const path of [lower, upper, work]) await mkdir(path, { recursive: true });
-    const mounted = carrier !== 0 ? carrier : await Bun.spawn({
-      cmd: ['mount', '-t', 'overlay', 'overlay', '-o', `lowerdir=${lower},upperdir=${upper},workdir=${work}`, stacked.root],
-      stdout: 'ignore',
-      stderr: 'ignore',
-    }).exited;
-    assert(checks, 'a-stacked-backing-root-can-be-built', mounted === 0,
-      `tmpfs=${carrier} overlay=${mounted}`);
-    const fallback = await startDaemon(stacked);
-    try {
-      const target = join(stacked.mount, 'read.bin');
-      await writeFile(target, payload);
-      const served = await readFile(target);
-      const snapshot = await stats(stacked);
-      /* The daemon says on its error stream which read path it took, and a
-       * stream that cannot be drained is a fact about this cell rather than an
-       * absence: it is recorded and printed with the verdict. */
-      let stderrText = '';
-      let streamFailure = '';
-      try {
-        stderrText = await new Response(fallback.process.stderr).text();
-      } catch (cause) {
-        streamFailure = cause instanceof Error ? cause.message : String(cause);
-      }
-      const refused = stderrText.includes('BACKING_OPEN');
-      assert(checks, 'a-refused-registration-falls-back-and-still-serves-the-bytes',
-        Buffer.compare(served, payload) === 0,
-        `bytes=${served.byteLength} refusedRegistration=${refused} capable=${snapshot.passthrough} ` +
-        `daemonStderr=${streamFailure === '' ? 'read' : streamFailure}`);
-    } finally {
-      if (fallback.process.exitCode === null) await killDaemon(fallback);
-      await Bun.spawn({ cmd: ['umount', '-l', stacked.root], stdout: 'ignore', stderr: 'ignore' }).exited;
-      await Bun.spawn({ cmd: ['umount', '-l', layers], stdout: 'ignore', stderr: 'ignore' }).exited;
     }
   });
 }
@@ -1746,7 +1739,7 @@ async function main(): Promise<void> {
     ['metadata-ordering', metadataOrdering],
     ['fence-is-o-k', fenceIsOfK],
     ['enospc-before-effect', enospcBeforeEffect],
-    ['read-passthrough', readPassthrough],
+    ['read-path', readPath],
   ];
   if (selected !== undefined && !scenarios.some(([name]) => name === selected)) {
     throw new Error(`unknown KINU_RUNTIME_SCENARIO ${selected}`);

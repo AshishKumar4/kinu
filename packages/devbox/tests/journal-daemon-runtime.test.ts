@@ -123,12 +123,15 @@ async function auditExportedFence(fence: ExportedFence): Promise<string> {
   expect(delta.manifest.cut).toBe(fence.cut);
   expect(delta.manifest.version).toBe(2);
   expect(delta.manifest.sealWork.bytesStaged).toBe(fence.sealWork.bytesStaged);
-  const entry = delta.manifest.entries.find((candidate) => candidate.path === 'posix/create.txt');
-  if (entry === undefined) throw new Error('the exported delta has no posix/create.txt');
+  /* The exported fence is the SECOND one, and a delta describes what changed
+   * since the first: `after-cut.txt` is the file the scenario wrote in that
+   * window, so it is the row whose staged bytes are read back here. */
+  const entry = delta.manifest.entries.find((candidate) => candidate.path === 'after-cut.txt');
+  if (entry === undefined) throw new Error('the exported delta has no after-cut.txt');
   const range = (entry.ranges ?? [])[0];
-  if (range === undefined) throw new Error('the exported delta stages no bytes for posix/create.txt');
+  if (range === undefined) throw new Error('the exported delta stages no bytes for after-cut.txt');
   const bytes = await delta.stage.read(entry, range);
-  return new TextDecoder().decode(bytes.subarray(6, 12));
+  return new TextDecoder().decode(bytes);
 }
 
 /** The matrix's scenarios, in the order it runs them. */
@@ -136,7 +139,7 @@ const SCENARIOS = [
   'posix-fence-continuity', 'kill-intent-recovery', 'kill-after-fence', 'journal-compaction',
   'seeded-base', 'unstageable-node', 'bounded-shutdown', 'shutdown-races',
   'write-path-costs', 'dirty-set-recovery', 'metadata-ordering', 'fence-is-o-k',
-  'enospc-before-effect', 'read-passthrough',
+  'enospc-before-effect', 'read-path',
 ] as const;
 type ScenarioName = (typeof SCENARIOS)[number];
 
@@ -165,7 +168,7 @@ const SCENARIO_FACTS = {
      * manifest is proven acceptable to the capture surface that consumes it. */
     const fence = fenced.facts.exportedFence;
     if (fence === undefined) throw new Error('the fence scenario exported no fence');
-    expect(await auditExportedFence(fence)).toBe('sealed');
+    expect(await auditExportedFence(fence)).toBe('after the cut');
   },
   'kill-intent-recovery': async (report) => {
     const recovery = scenarioNamed(report, 'kill-intent-recovery');
@@ -227,10 +230,13 @@ const SCENARIO_FACTS = {
     expect(full.facts.enospc?.errno ?? '').toContain('ENOSPC');
     expect(full.facts.enospc?.effectsWithoutRecord).toBe(0);
   },
-  'read-passthrough': async (report) => {
-    const reads = scenarioNamed(report, 'read-passthrough');
-    expect(reads.facts.reads?.passthrough).toBe(true);
-    expect(reads.facts.reads?.bytes).toBe(256 * 1024);
+  'read-path': async (report) => {
+    /* The daemon served the first pass over the file and none of the second:
+     * that gap IS the read path, and a daemon back on the read path closes it. */
+    const reads = scenarioNamed(report, 'read-path');
+    expect(reads.facts.readPath?.bytes).toBe(256 * 1024);
+    expect(reads.facts.readPath?.firstPassReads).toBeGreaterThan(0);
+    expect(reads.facts.readPath?.secondPassReads).toBe(0);
   },
 } satisfies Readonly<Record<ScenarioName, (report: MatrixReport) => Promise<void>>>;
 

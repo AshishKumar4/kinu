@@ -77,8 +77,9 @@ export interface StatsReply {
   readonly batches: number;
   readonly journalBytes: number;
   readonly directIoAllowMmap: boolean;
-  /** Whether the kernel accepted read passthrough for this session. */
-  readonly passthrough: boolean;
+  /** Reads the daemon itself served; a re-read the page cache answers is not
+   *  one of them, which is how the read path is observed rather than declared. */
+  readonly reads: number;
   /** Writes served, journal bytes appended, and the two sync counts that
    *  separate what the WAL costs from what a caller's fsync costs. */
   readonly writes: number;
@@ -239,12 +240,21 @@ export interface MatrixFacts {
   writePath?: { readonly writes: number; readonly walFsyncs: number; readonly backingFsyncs: number };
   fsyncPath?: { readonly fsyncs: number; readonly backingFsyncs: number; readonly walFsyncs: number };
   restartDirty?: { readonly written: number; readonly recovered: number; readonly ranges: number };
+  /** The record mix a kill left behind, so a torn count of zero says why. */
+  recordMix?: {
+    readonly intents: number;
+    readonly writes: number;
+    readonly results: number;
+    readonly ops: string;
+    readonly last: string;
+  };
   rangeUnion?: readonly DirtyRange[];
   metadataOrder?: readonly string[];
   smallTree?: DeltaCostFacts;
   largeTree?: DeltaCostFacts;
   enospc?: { readonly errno: string; readonly recordsWithoutEffect: number; readonly effectsWithoutRecord: number };
-  reads?: { readonly passthrough: boolean; readonly bytes: number };
+  /** Reads the daemon served on a first pass over a file and on a second. */
+  readPath?: { readonly bytes: number; readonly firstPassReads: number; readonly secondPassReads: number };
   sigterm?: ExitFacts;
   stop?: ExitFacts;
   /** One exit per shutdown entry replayed against the race-detecting build. */

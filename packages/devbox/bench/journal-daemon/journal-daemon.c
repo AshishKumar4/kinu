@@ -46,13 +46,13 @@
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
-#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -77,8 +77,6 @@ _Static_assert(FUSE_DIRECT_IO_ALLOW_MMAP == (1ULL << 36), "unexpected FUSE ABI")
  * so it is bounded by the seal and not by the tree.  The ceiling only stops a
  * runaway peer from growing this process without limit. */
 #define CONTROL_REQUEST_CAP (64u * 1024u * 1024u)
-/* Backing files the kernel may read directly, indexed by their backing fd. */
-#define BACKING_CAP 65536
 #define CONTROL_TIMEOUT_SECONDS 5
 #define WAL_NAME "wal.log"
 #define WAL_COMPACT_NAME "wal.compact"
@@ -126,6 +124,11 @@ struct journal {
   counter wal_fsyncs;
   counter backing_fsyncs;
   counter writes;
+  /* Reads the daemon itself served.  Counted without a lock because it is the
+   * one counter on a path the daemon is trying to stay off: a re-read that the
+   * page cache answers never arrives here, and that gap is the read path's
+   * whole point.  Relaxed is enough — nothing orders against it. */
+  _Atomic counter reads;
   unsigned active;
   bool admitted;
   bool stopping;
@@ -134,7 +137,6 @@ struct journal {
   bool mmap_negotiated;
   bool has_base;
   bool has_fence;
-  bool passthrough;
   /* The CDC parameter the published boundaries were cut with, and the map
    * itself.  Both are the sidecar's to set and are read under `lock`. */
   uint64_t max_chunk;
@@ -420,22 +422,20 @@ static void *pass_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
   /* Truncation then arrives inside the open that asked for it, in one round trip
    * and on the one path the journal records. */
   if ((conn->capable & FUSE_CAP_ATOMIC_O_TRUNC) != 0) conn->want |= FUSE_CAP_ATOMIC_O_TRUNC;
-  /* Read passthrough where the kernel offers it: after open the kernel reads
-   * the backing fd itself, measured at 518,891 4 KiB random reads/s against
-   * 556,067 native.  Where it does not, read-only opens keep the page cache
-   * instead, measured at 601,647/s on the same box.  Writes take neither path:
-   * every byte has to reach a W record. */
-  bool passthrough = (conn->capable & FUSE_CAP_PASSTHROUGH) != 0;
-  if (passthrough) {
-    conn->want |= FUSE_CAP_PASSTHROUGH;
-    conn->max_backing_stack_depth = FUSE_BACKING_STACKED_OVER;
-  } else {
-    fprintf(stderr, "journal-daemon: kernel offers no FUSE_CAP_PASSTHROUGH; read-only opens keep the page cache\n");
-  }
-  /* This runs on a worker thread and the control socket reports it. */
+  /* FUSE_CAP_PASSTHROUGH is deliberately NOT asked for, even where the kernel
+   * offers it.  Passthrough is a property of the INODE and it is exclusive: the
+   * kernel expects every open of an inode to be passthrough or none to be, so a
+   * read-only passthrough handle makes the next open(O_RDWR) of the same file
+   * fail with EIO, and a read-only open of a file another handle has mapped
+   * fails the same way.  Writes have to stay intercepted to reach a W record,
+   * so both handles exist on the same file and the mixture is unavoidable.
+   * Read-only opens therefore keep the PAGE CACHE, which is legal in every one
+   * of those mixtures, stays coherent with an intercepted write (the kernel
+   * drops the cached range), and is the faster of the two anyway: 601,647 4 KiB
+   * random reads/s against passthrough's 518,891 and 556,067 native
+   * (bench/measure-first/MEASUREMENTS.md, 2026-09-02). */
   pthread_mutex_lock(&state.lock);
   state.mmap_negotiated = negotiated;
-  state.passthrough = passthrough;
   pthread_mutex_unlock(&state.lock);
   if (!negotiated) {
     fprintf(stderr, "journal-daemon: kernel refuses FUSE_CAP_DIRECT_IO_ALLOW_MMAP\n");
@@ -555,43 +555,6 @@ static int pass_fsyncdir(const char *path, int datasync, struct fuse_file_info *
   return finish_mutation(&m, op, path, "", result);
 }
 
-/* Backing files the kernel reads directly, indexed by the fd they were opened
- * on.  An fd is unique while it is open and its entry is cleared on release,
- * so two handles can never share a slot. */
-static int32_t backing_ids[BACKING_CAP];
-
-/* A read-only handle leaves the daemon out of the read path: with kernel
- * passthrough the kernel reads the backing fd, and without it the page cache
- * answers a re-read.  Neither weakens write interception. */
-static void open_for_reading(int fd, struct fuse_file_info *fi) {
-  pthread_mutex_lock(&state.lock);
-  bool passthrough = state.passthrough;
-  pthread_mutex_unlock(&state.lock);
-  if (passthrough && fd >= 0 && fd < BACKING_CAP) {
-    struct fuse_backing_map map = {.fd = fd, .flags = 0, .padding = 0};
-    int backing_id = ioctl(fuse_session_fd(fuse_get_session(state.fuse)), FUSE_DEV_IOC_BACKING_OPEN, &map);
-    if (backing_id > 0) {
-      backing_ids[fd] = backing_id;
-      fi->backing_id = backing_id;
-      fi->direct_io = 0;
-      fi->keep_cache = 0;
-      return;
-    }
-    fprintf(stderr, "journal-daemon: FUSE_DEV_IOC_BACKING_OPEN failed: %s\n", strerror(errno));
-  }
-  fi->direct_io = 0;
-  fi->keep_cache = 1;
-}
-
-static void close_for_reading(int fd) {
-  if (fd < 0 || fd >= BACKING_CAP || backing_ids[fd] <= 0) return;
-  uint32_t backing_id = (uint32_t)backing_ids[fd];
-  backing_ids[fd] = 0;
-  if (ioctl(fuse_session_fd(fuse_get_session(state.fuse)), FUSE_DEV_IOC_BACKING_CLOSE, &backing_id) < 0) {
-    fprintf(stderr, "journal-daemon: FUSE_DEV_IOC_BACKING_CLOSE failed: %s\n", strerror(errno));
-  }
-}
-
 /* O_DIRECT alignment on the backing file is the daemon's concern, never the
  * caller's, so it is dropped while every other open flag is honoured. */
 static int open_handle(const char *path, int flags, struct fuse_file_info *fi) {
@@ -601,8 +564,14 @@ static int open_handle(const char *path, int flags, struct fuse_file_info *fi) {
   int fd = open_beneath(rel, flags & ~O_DIRECT, 0);
   if (fd < 0) return fd;
   fi->fh = (uint64_t)fd;
-  fi->direct_io = 1;
-  if ((flags & O_ACCMODE) == O_RDONLY) open_for_reading(fd, fi);
+  /* A writable handle is direct: every byte it writes has to arrive here and
+   * reach a W record before it reaches the file.  A read-only handle keeps the
+   * page cache, so the daemon answers the first read of a range and none of the
+   * re-reads; an intercepted write drops the cached range, so the two handles
+   * stay coherent. */
+  bool writable = (flags & O_ACCMODE) != O_RDONLY;
+  fi->direct_io = writable ? 1 : 0;
+  fi->keep_cache = writable ? 0 : 1;
   return 0;
 }
 
@@ -638,7 +607,6 @@ static int pass_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
 static int pass_release(const char *path, struct fuse_file_info *fi) {
   (void)path;
-  close_for_reading((int)fi->fh);
   return close((int)fi->fh) == 0 ? 0 : neg_errno();
 }
 
@@ -652,6 +620,7 @@ static int pass_flush(const char *path, struct fuse_file_info *fi) {
 
 static int pass_read(const char *path, char *buffer, size_t size, off_t offset, struct fuse_file_info *fi) {
   (void)path;
+  atomic_fetch_add_explicit(&state.reads, 1, memory_order_relaxed);
   ssize_t n = pread((int)fi->fh, buffer, size, offset);
   return n < 0 ? neg_errno() : (int)n;
 }
@@ -1437,7 +1406,6 @@ static bool handle_control(int fd) {
     unsigned active = state.active;
     bool admitted = state.admitted;
     bool mmap_negotiated = state.mmap_negotiated;
-    bool passthrough = state.passthrough;
     size_t boundary_files = state.boundaries.count;
     pthread_mutex_unlock(&state.lock);
     pthread_mutex_lock(&state.queue_lock);
@@ -1448,17 +1416,18 @@ static bool handle_control(int fd) {
     counter backing_fsyncs = state.backing_fsyncs;
     counter writes = state.writes;
     pthread_mutex_unlock(&state.queue_lock);
+    counter reads = atomic_load_explicit(&state.reads, memory_order_relaxed);
     struct stat st;
     long long journal_bytes = fstat(state.wal_fd, &st) == 0 ? (long long)st.st_size : -1;
     fputs("{\"id\":", out);
     journal_json_string(out, id);
     fprintf(out,
             ",\"ok\":true,\"sequence\":%llu,\"generation\":%llu,\"active\":%u,\"admitted\":%s,\"records\":%llu,"
-            "\"batches\":%llu,\"journalBytes\":%lld,\"directIoAllowMmap\":%s,\"passthrough\":%s,"
+            "\"batches\":%llu,\"journalBytes\":%lld,\"directIoAllowMmap\":%s,\"reads\":%llu,"
             "\"writes\":%llu,\"walBytes\":%llu,\"walFsyncs\":%llu,\"backingFsyncs\":%llu,"
             "\"boundaryFiles\":%zu}\n",
             (counter)sequence, (counter)generation, active, admitted ? "true" : "false", records, batches,
-            journal_bytes, mmap_negotiated ? "true" : "false", passthrough ? "true" : "false", writes, wal_bytes,
+            journal_bytes, mmap_negotiated ? "true" : "false", reads, writes, wal_bytes,
             wal_fsyncs, backing_fsyncs, boundary_files);
   } else if (strcmp(op, "stop") == 0) {
     pthread_mutex_lock(&state.lock);

@@ -641,6 +641,117 @@ static int mode_setxattr(const char *path, const char *name, const char *value) 
   return summary("setxattr");
 }
 
+/* --------------------------------------------------------- readpath ------ */
+
+/*
+ * The read path's mixtures, and its coherency.
+ *
+ * A file is opened read-only and read-write at once all the time, and a mapped
+ * file is opened read-only behind its own mapping.  Kernel read passthrough
+ * refuses both of those with EIO because it is exclusive per inode, which is
+ * why this daemon does not ask for it; the page cache it uses instead has to
+ * allow all of them AND has to show a reader the write another handle made.
+ */
+static int mode_readpath(const char *dir) {
+  char path[PATH_MAX];
+  char buf[16];
+  if (mkdir(dir, 0755) != 0 && errno != EEXIST) {
+    check("readpath-dir", false, "mkdir errno=%d", errno);
+    return summary("readpath");
+  }
+
+  /* Coherency: a cached reader must see a write made through another handle. */
+  if (join_path(path, sizeof(path), dir, "coherent.bin") != 0) return summary("readpath");
+  write_file(path, "AAAAAAAA", 8, 0644);
+  int reader = open(path, O_RDONLY);
+  bool read_first = reader >= 0 && pread(reader, buf, 8, 0) == 8 && memcmp(buf, "AAAAAAAA", 8) == 0;
+  int writer = open(path, O_RDWR);
+  bool wrote = writer >= 0 && pwrite(writer, "BBBBBBBB", 8, 0) == 8;
+  if (writer >= 0) close(writer);
+  memset(buf, 0, sizeof(buf));
+  bool saw_write = reader >= 0 && pread(reader, buf, 8, 0) == 8 && memcmp(buf, "BBBBBBBB", 8) == 0;
+  if (reader >= 0) close(reader);
+  int fresh = open(path, O_RDONLY);
+  memset(buf, 0, sizeof(buf));
+  bool fresh_saw = fresh >= 0 && pread(fresh, buf, 8, 0) == 8 && memcmp(buf, "BBBBBBBB", 8) == 0;
+  if (fresh >= 0) close(fresh);
+  check("write-open-while-read-handle-open", writer >= 0 && wrote, "open=%d wrote=%d", writer >= 0 ? 1 : 0,
+        wrote ? 1 : 0);
+  check("a-cached-reader-sees-an-intercepted-write", read_first && saw_write, "first=%d second=%d saw=%.8s",
+        read_first ? 1 : 0, saw_write ? 1 : 0, buf);
+  check("a-fresh-open-sees-it-too", fresh_saw, "saw=%.8s", buf);
+
+  /* A read-only open of a file another handle has mapped. */
+  if (join_path(path, sizeof(path), dir, "mapped.bin") != 0) return summary("readpath");
+  int mapped = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+  bool sized = mapped >= 0 && ftruncate(mapped, PAGE) == 0;
+  unsigned char *view = sized ? mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, mapped, 0) : MAP_FAILED;
+  if (view != MAP_FAILED) memset(view, 0x43, PAGE);
+  int beside = open(path, O_RDONLY);
+  bool read_mapped = beside >= 0 && pread(beside, buf, 8, 0) == 8;
+  if (beside >= 0) close(beside);
+  if (view != MAP_FAILED) munmap(view, PAGE);
+  if (mapped >= 0) close(mapped);
+  check("read-only-open-while-mapped", sized && view != MAP_FAILED && beside >= 0 && read_mapped,
+        "mapped=%d open=%d read=%d errno=%d", view != MAP_FAILED ? 1 : 0, beside >= 0 ? 1 : 0, read_mapped ? 1 : 0,
+        errno);
+
+  /* And a mapping taken while a read handle is already open. */
+  if (join_path(path, sizeof(path), dir, "late-map.bin") != 0) return summary("readpath");
+  write_file(path, "late", 4, 0644);
+  int held = open(path, O_RDONLY);
+  int late = open(path, O_RDWR);
+  unsigned char *view2 = late >= 0 ? mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, late, 0) : MAP_FAILED;
+  check("mmap-while-a-read-handle-is-open", held >= 0 && late >= 0 && view2 != MAP_FAILED,
+        "held=%d write=%d mapped=%d errno=%d", held >= 0 ? 1 : 0, late >= 0 ? 1 : 0, view2 != MAP_FAILED ? 1 : 0,
+        errno);
+  if (view2 != MAP_FAILED) munmap(view2, PAGE);
+  if (late >= 0) close(late);
+  if (held >= 0) close(held);
+  return summary("readpath");
+}
+
+/* --------------------------------------------------------- bigalloc ------ */
+
+/*
+ * A mutation whose EFFECT takes real time.
+ *
+ * The recovery cell needs the daemon to die between a durable INTENT and its
+ * durable RESULT.  A v2 record is one `write(2)`, so the journal round trip now
+ * costs more than the effect of a create or a rename and that window is only a
+ * few percent wide.  An fdatasync of freshly dirtied megabytes is journaled
+ * exactly like any other mutation and spends tens of milliseconds in its
+ * effect, which is a window a kill can land in.
+ */
+static int mode_slowsync(const char *path, long megabytes, long rounds) {
+  long refused = 0;
+  unsigned char *block = malloc(1024 * 1024);
+  if (block == NULL) {
+    check("slowsync-ran", false, "no memory for a megabyte");
+    return summary("slowsync");
+  }
+  fill_pattern(block, 1024 * 1024, 91);
+  for (long round = 0; round < rounds; round++) {
+    int fd = open(path, O_WRONLY | O_CREAT, 0644);
+    if (fd < 0) {
+      refused++;
+      continue;
+    }
+    for (long megabyte = 0; megabyte < megabytes; megabyte++) {
+      if (pwrite(fd, block, 1024 * 1024, megabyte * 1024 * 1024) != 1024 * 1024) refused++;
+    }
+    /* The journaled mutation this cell needs: one record, a long effect, one
+     * record.  Its duration is real disk work, not a sleep. */
+    if (fdatasync(fd) != 0) refused++;
+    close(fd);
+  }
+  free(block);
+  /* A kill lands in the middle of this by design, so a refusal is not a probe
+   * failure: what it reports is that it ran. */
+  check("slowsync-ran", rounds > 0, "rounds=%ld refused=%ld", rounds, refused);
+  return summary("slowsync");
+}
+
 /* ----------------------------------------------------------- churn ------- */
 
 /* Metadata churn: create, rename, chmod and unlink in a loop.  A write is one
@@ -985,6 +1096,12 @@ int main(int argc, char **argv) {
   }
   if (strcmp(mode, "threads") == 0 && argc == 5) {
     return mode_threads(argv[2], strtol(argv[3], NULL, 10), strtol(argv[4], NULL, 10));
+  }
+  if (strcmp(mode, "readpath") == 0 && argc == 3) {
+    return mode_readpath(argv[2]);
+  }
+  if (strcmp(mode, "slowsync") == 0 && argc == 5) {
+    return mode_slowsync(argv[2], strtol(argv[3], NULL, 10), strtol(argv[4], NULL, 10));
   }
   if (strcmp(mode, "churn") == 0 && argc == 5) {
     return mode_churn(argv[2], strtol(argv[3], NULL, 10), strtol(argv[4], NULL, 10));

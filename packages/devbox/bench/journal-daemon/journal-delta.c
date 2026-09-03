@@ -819,6 +819,7 @@ static void bind_dirty_paths(struct delta *delta) {
  * first name, and the second name repeats what the first one recorded. */
 struct staged_inode {
   uint64_t ino;
+  char *path; /* the name the bytes were staged under, owned */
   char *dirty;
   char *ranges;
   bool whole;
@@ -844,6 +845,7 @@ static struct staged_inode *find_staged(struct stage_ctx *ctx, uint64_t ino) {
 static void release_staged(struct stage_ctx *ctx) {
   for (struct staged_inode *at = ctx->staged; at != NULL;) {
     struct staged_inode *next = at->next;
+    free(at->path);
     free(at->dirty);
     free(at->ranges);
     free(at);
@@ -1027,19 +1029,19 @@ static void write_dirty(FILE *out, const struct journal_dirty_file *file, uint64
 
 /* Copies the planned windows of one file into the stage and writes its
  * `ranges` array into `out`. */
-static int copy_planned(struct stage_ctx *ctx, FILE *out, int root_fd, const struct journal_dirty_file *file,
+static int copy_planned(struct stage_ctx *ctx, FILE *out, int root_fd, const char *source, const char *name,
                         const struct journal_stage_windows *windows, uint64_t size) {
   if (windows->count == 0) return 0;
-  int rc = stage_parents(ctx->stage_fd, file->path);
+  int rc = stage_parents(ctx->stage_fd, name);
   int from = -1;
   int to = -1;
   bool first = true;
   if (rc == 0) {
-    from = openat(root_fd, file->path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    from = openat(root_fd, source, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (from < 0) rc = neg_errno();
   }
   if (rc == 0) {
-    to = openat(ctx->stage_fd, file->path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    to = openat(ctx->stage_fd, name, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (to < 0) rc = neg_errno();
   }
   if (rc == 0 && ftruncate(to, (off_t)size) != 0) rc = neg_errno();
@@ -1064,10 +1066,21 @@ static int copy_planned(struct stage_ctx *ctx, FILE *out, int root_fd, const str
  * bytes.  An inode reached under a second name (a hardlink) repeats the rows
  * the first name recorded rather than staging its bytes twice.
  */
-static int stage_ranges(struct stage_ctx *ctx, int root_fd, const struct journal_dirty_file *file,
+static int stage_ranges(struct stage_ctx *ctx, int root_fd, const char *name,
+                        const struct journal_dirty_file *file,
                         const struct journal_boundaries_file *boundaries, uint64_t max_chunk, uint64_t size) {
   struct staged_inode *known = find_staged(ctx, file->ino);
   if (known != NULL) {
+    /* One inode, two names: the rows agree because they describe the same
+     * bytes, and the stage carries those bytes under both names, so a reader
+     * that follows a row's own path finds them there.  A link, not a copy. */
+    if (strcmp(known->path, name) != 0) {
+      int rc = stage_parents(ctx->stage_fd, name);
+      if (rc != 0) return rc;
+      if (linkat(ctx->stage_fd, known->path, ctx->stage_fd, name, 0) != 0 && errno != EEXIST) {
+        return neg_errno();
+      }
+    }
     fprintf(ctx->out, ",\"whole\":%s,\"dirty\":[%s],\"ranges\":[%s]", known->whole ? "true" : "false",
             known->dirty, known->ranges);
     return 0;
@@ -1094,7 +1107,9 @@ static int stage_ranges(struct stage_ctx *ctx, int root_fd, const struct journal
     return -ENOMEM;
   }
   write_dirty(dirty_out, file, size);
-  rc = copy_planned(ctx, ranges_out, root_fd, file, &windows, size);
+  /* Read through the name the journal bound to this inode — that name is known
+   * to resolve to it at the cut — and stage under the name this row carries. */
+  rc = copy_planned(ctx, ranges_out, root_fd, file->path, name, &windows, size);
   if (rc == 0 && (ferror(dirty_out) != 0 || ferror(ranges_out) != 0)) rc = -EIO;
   fclose(dirty_out);
   fclose(ranges_out);
@@ -1107,6 +1122,13 @@ static int stage_ranges(struct stage_ctx *ctx, int root_fd, const struct journal
     free(ranges_text);
     free(record);
     return rc;
+  }
+  record->path = copy_string(name);
+  if (record->path == NULL) {
+    free(dirty_text);
+    free(ranges_text);
+    free(record);
+    return -ENOMEM;
   }
   if (whole) ctx->work.whole_files++;
   record->ino = file->ino;
@@ -1160,7 +1182,7 @@ static int write_entry(struct stage_ctx *ctx, const struct journal_delta_request
         request->boundaries == NULL
           ? NULL
           : journal_boundaries_find((struct journal_boundaries *)request->boundaries, entry->ino);
-      rc = stage_ranges(ctx, request->root_fd, dirty, boundaries, request->max_chunk, size);
+      rc = stage_ranges(ctx, request->root_fd, entry->path, dirty, boundaries, request->max_chunk, size);
       if (rc != 0) return rc;
     } else {
       fputs(",\"whole\":false,\"dirty\":[],\"ranges\":[]", ctx->out);
