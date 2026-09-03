@@ -1,5 +1,5 @@
 {
-  "measured": "1060ac98b: 840 test files, 777 runnable suites, 11400 tests, 34 runners, 62 non-public product members",
+  "measured": "682812de5: 846 test files, 780 runnable suites, 11448 tests, 34 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -1499,10 +1499,6 @@
     },
     {
       "key": "tautology_suspect :: packages/test-utils/tests/eval-identity.test.ts :: two calls do not collide, so a suite can run twice :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: scripts/bench-devbox-decision.test.ts :: prices class A and class B at the published rates :: expected side computed by the code under test",
       "count": 1
     },
     {
