@@ -125,13 +125,16 @@ describe('the composer over wrapped drafts', () => {
 
   test('a newline keystroke wraps its own line and Enter still submits', async () => {
     const agent = fakeClient({ name: 'seams' });
-    const screen = await mountChat(agent.client, { width: 60 });
+    // The chord must reach OUR newline binding, so the test terminal speaks
+    // the kitty protocol: legacy bytes cannot express it. Ctrl+J arrives
+    // there byte-identical with Enter-as-LF (0x0A), and both submit; the
+    // chords that survive the legacy set are kitty-only.
+    const screen = await mountChat(agent.client, { width: 60, kittyKeyboard: true });
 
     await screen.mockInput.typeText('first '.repeat(12).trim());
     // The contract this scene ships: Enter sends, and the newline binding
-    // opens a line. Ctrl+J is the one a terminal without the kitty protocol
-    // can actually encode — Shift+Enter reaches such a terminal as Enter.
-    screen.mockInput.pressKey('\n');
+    // opens a line.
+    screen.mockInput.pressKey('j', { ctrl: true });
     await screen.mockInput.typeText('second');
     await screen.waitFor('both lines to be on screen', () => {
       const rows = composerDraftRows(screen.frame()).join(' ');

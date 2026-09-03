@@ -125,7 +125,12 @@ const COMMON_BINDINGS = {
   'home.page-previous': ['pageup'],
   'home.page-next': ['pagedown'],
   'onboarding.skip': ['s'],
-  'editor.submit': ['return'],
+  // Enter reaches the editor under two names. A terminal delivers it as
+  // CR (name "return") or, when the tty translates CR to NL, as LF (name
+  // "linefeed"); opentui's own default table maps that second name to the
+  // newline action. Both names submit here, so Enter sends the draft no
+  // matter which byte the terminal chose.
+  'editor.submit': ['return', 'linefeed'],
   'editor.newline': ['shift+return', 'ctrl+j'],
   'conversation.cancel': ['escape'],
   'queue.edit-last': ['backspace'],

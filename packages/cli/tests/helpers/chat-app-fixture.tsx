@@ -35,7 +35,7 @@ export function cleanupChats(): void {
 
 /** One workspace with one agent and the built-in role, held in memory. What a
  *  surface that never opens its hub still needs the hub reader to answer. */
-function soloHub(client: AgentClient): TuiHubData {
+export function soloHub(client: AgentClient): TuiHubData {
   return {
     agents: [{
       id: client.agentName, label: client.agentName, kind: 'main', status: 'idle',
@@ -66,6 +66,7 @@ interface FakeClientOptions {
    * readonly AgentClient surface after construction. */
   localControls?: LocalSessionControls;
   listModels?: () => Promise<AgentModelMenu>;
+  send?: AgentClient['send'];
   setModel?: AgentClient['setModel'];
   connect?: AgentClient['connect'];
   history?: AgentClient['history'];
@@ -101,7 +102,7 @@ export function fakeClient(options: FakeClientOptions) {
       listeners.add(listener);
       return () => { listeners.delete(listener); };
     },
-    send: async () => TURN,
+    send: options.send ?? (async () => TURN),
     steer: () => false,
     branch: () => false,
     fork: async () => ({ client, label: options.name }),
@@ -178,6 +179,10 @@ export async function mountChat(
     width?: number;
     /** What "mounted" means for this test; defaults to the ready composer. */
     settled?: (frame: string) => boolean;
+    /** Drive keys as a kitty-protocol terminal encodes them. A test that
+     *  needs a chord the legacy byte set cannot express — Shift+Enter, or a
+     *  Ctrl+J that is not byte-identical with Enter — asks for this. */
+    kittyKeyboard?: boolean;
   } = {},
 ) {
   const testRenderer = await createTestRenderer({
@@ -185,6 +190,7 @@ export async function mountChat(
     height: 30,
     useThread: false,
     maxFps: Number.POSITIVE_INFINITY,
+    kittyKeyboard: options.kittyKeyboard === true,
   });
   const root = createRoot(testRenderer.renderer);
   const workspaceSource: TuiAgentSource | undefined = options.listWorkspaces
