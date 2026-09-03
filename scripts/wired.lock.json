@@ -25,6 +25,7 @@
   "packages/cf-backend/src/components/Composer.tsx#pastedFiles (unreached-export)",
   "packages/cf-backend/src/components/WorkspaceBar.tsx#ALTITUDES (unreached-export)",
   "packages/cf-backend/src/components/landing/BugFixPlanPanel.tsx#BugFixPlanPanel (unreached-export)",
+  "packages/cf-backend/src/components/surfaces/EnvironmentSurface.tsx#statusOf (unreached-export)",
   "packages/cf-backend/src/components/surfaces/ExplorationSurface.tsx#useForkRunDetail (unreached-export)",
   "packages/cf-backend/src/components/surfaces/OutputSurface.tsx#previewPortId (unreached-export)",
   "packages/cf-backend/src/components/surfaces/OutputSurface.tsx#selectPreviewPort (unreached-export)",
