@@ -250,6 +250,18 @@ export function createDeviceTunnelExecutor(
     // carries what the machine will actually do with a command: the owner's
     // switch, what the machine proved, and this workspace's own home on it.
     if (s.sandbox !== undefined) identity.sandbox = s.sandbox;
+    // Reach, not liveness. A connected machine this workspace holds no grant
+    // on is not callable by the model: the first call raises the owner's card
+    // instead of running. `workspaceGranted` is absent for callers that have
+    // no workspace side to their identity, and those keep the row as it was —
+    // they were never routing on this field.
+    if (s.connected && s.workspaceGranted === false) {
+      return {
+        configured: true, available: false, active: false, status: 'idle',
+        reason: 'Connected, but this workspace has no access yet: the first command raises a consent card for the owner.',
+        ...identity,
+      };
+    }
     if (s.connected) return { configured: true, available: true, active: true, status: 'active', ...identity };
     if (s.registered) {
       return {

@@ -233,7 +233,9 @@ export interface DeviceStatus {
   /** Whether THIS caller's workspace holds an action grant on the connected
    *  device — what the executor row renders so the model knows whether its
    *  first call raises the consent card or just runs. Absent = unknown /
-   *  no device / non-workspace caller. */
+   *  no device / non-workspace caller, and a caller with no workspace side to
+   *  its identity keeps the liveness reading: routing on reach is a workspace
+   *  question, and those callers were never routing on this field. */
   workspaceGranted?: boolean;
   /** The directory the owner named at `kinu connect`, which is the whole of
    *  the base tier's reach. Null when the connected daemon predates the field:

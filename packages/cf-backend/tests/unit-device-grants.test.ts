@@ -1024,6 +1024,117 @@ describe('asking for a machine when there is none', () => {
 });
 
 /**
+ * The owner's own sequence, reproduced as one flow: a machine connects and
+ * shows online, the workspace holds no grant, and the agent asks for the
+ * device. What he saw was the PROVISIONING card — "needs a computer of yours
+ * and none is connected" — on a machine that was connected. The routing that
+ * raises it keys on hub liveness only, so if this ever passes while the
+ * machine is live and ungranted, the defect has moved somewhere this suite
+ * has not reached: keep looking, do not declare the Env half fixed.
+ */
+describe('the owner\'s sequence: a live machine, an ungranted workspace, one ask', () => {
+  test('a connected device raises the GRANT card, never the provisioning card', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'deny';
+
+    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], {
+      agentName: WORKSPACE,
+    })).rejects.toThrow(DEVICE_CONSENT_DENIED);
+
+    // The one card names the machine and THIS workspace — the grant question.
+    expect(harness.consentPrompts).toEqual([{
+      workspace: WORKSPACE,
+      method: 'exec',
+      command: 'ls',
+      workspaceName: WORKSPACE,
+    }]);
+    // And no provisioning card was raised beside it: the machine was live, so
+    // "none is connected" is the wrong question to have asked.
+    expect(harness.consentPrompts.some((p) => p.method === DEVICE_PROVISION_METHOD)).toBe(false);
+    await harness.closeDeviceHarness();
+  });
+});
+
+/**
+ * One ask, four worlds — what the owner sees on the card and what the Env
+ * view says about the machine. The card half lives in the hub chokepoint; the
+ * Env half rides `deviceRuntimeStatus`, the read the executor row and the
+ * surfaces both consume. A machine the workspace cannot use is OFFLINE in the
+ * Env grid until the owner answers for it, because that is what a row that
+ * says otherwise told him.
+ */
+describe('the machine the agent asked for, as the owner reads it', () => {
+  test('no device: the provisioning card, and no laptop row to render', async () => {
+    const harness = createTestUserDO();
+    const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
+
+    await expect(harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make'], {
+      agentName: WORKSPACE,
+    })).rejects.toThrow(NO_DEVICE_CONNECTED);
+    expect(harness.consentPrompts.map((p) => p.method)).toEqual([DEVICE_PROVISION_METHOD]);
+
+    const status = await harness.userDO.deviceRuntimeStatus({ workspaceToken: workspace });
+    expect(status.connected).toBe(false);
+    expect(status.workspaceGranted).toBeUndefined();
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('device offline: the provisioning card, and an offline row', async () => {
+    const harness = await deviceHarness();
+    // The daemon's socket closes — the machine is registered but gone.
+    harness.attachDevice(null);
+
+    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
+      agentName: WORKSPACE,
+    })).rejects.toThrow(NO_DEVICE_CONNECTED);
+    expect(harness.consentPrompts.map((p) => p.method)).toEqual([DEVICE_PROVISION_METHOD]);
+
+    const status = await harness.userDO.deviceRuntimeStatus(harness.workspace);
+    expect(status.connected).toBe(false);
+    expect(status.registered).toBe(true);
+    expect(status.workspaceGranted).toBeUndefined();
+    await harness.closeDeviceHarness();
+  });
+
+  test('device online and ungranted: the GRANT card, and a row that is not usable', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'deny';
+
+    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
+      agentName: WORKSPACE,
+    })).rejects.toThrow(DEVICE_CONSENT_DENIED);
+    // The grant card, by name, for this workspace — not the provisioning one.
+    expect(harness.consentPrompts).toEqual([{
+      workspace: WORKSPACE,
+      method: 'exec',
+      command: 'make',
+      workspaceName: WORKSPACE,
+    }]);
+    // And the row the Env view renders reads as connected but not granted.
+    const status = await harness.userDO.deviceRuntimeStatus(harness.workspace);
+    expect(status.connected).toBe(true);
+    expect(status.workspaceGranted).toBe(false);
+    await harness.closeDeviceHarness();
+  });
+
+  test('device online and granted: no card, and a row the agent can act on', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'always';
+
+    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
+      agentName: WORKSPACE,
+    });
+    expect(harness.consentPrompts).toHaveLength(1);
+
+    const status = await harness.userDO.deviceRuntimeStatus(harness.workspace);
+    expect(status.connected).toBe(true);
+    expect(status.workspaceGranted).toBe(true);
+    await harness.closeDeviceHarness();
+  });
+});
+
+/**
  * A stolen `device.json` used to be an indefinite credential: the token never
  * changed and its window slid forward on every use, so a copy stayed valid for
  * as long as the thief kept connecting. Rotation made it a race — and then the

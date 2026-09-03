@@ -253,6 +253,38 @@ describe('createDeviceTunnelExecutor', () => {
     expect(none.getStatus?.()).toMatchObject({ available: false, configured: false, status: 'not_configured' });
   });
 
+  test('a connected machine this workspace cannot use reads as reach, not liveness', () => {
+    const rpc: DeviceTransport['rpc'] = async () => 'unused';
+    const ungranted = staticTransport({
+      connected: true, registered: true, toolchain: null, workspaceGranted: false,
+    }, rpc);
+    const granted = staticTransport({
+      connected: true, registered: true, toolchain: null, workspaceGranted: true,
+    }, rpc);
+
+    // The ungranted row is the one the model reads before it decides where to
+    // put work: it says the machine is there and that the first call raises a
+    // card, so the model asks instead of concluding no machine exists.
+    expect(createDeviceTunnelExecutor(ungranted).getStatus?.()).toMatchObject({
+      available: false, active: false, granted: false, status: 'idle',
+    });
+    expect(createDeviceTunnelExecutor(granted).getStatus?.()).toMatchObject({
+      available: true, active: true, granted: true, status: 'active',
+    });
+  });
+
+  test('a caller with no workspace identity keeps the liveness reading', () => {
+    const rpc: DeviceTransport['rpc'] = async () => 'unused';
+    // `workspaceGranted` absent — a non-workspace caller, or one whose snapshot
+    // predates the field. The row stays as it always was.
+    const status = createDeviceTunnelExecutor(staticTransport({
+      connected: true, registered: true, toolchain: null,
+    }, rpc)).getStatus?.();
+
+    expect(status).toMatchObject({ available: true, active: true, status: 'active' });
+    expect(status?.granted).toBeUndefined();
+  });
+
   test('hub/tunnel disconnect errors surface the connect guidance', async () => {
     const hubRejects = staticTransport({ connected: false, registered: true, toolchain: null }, async () => {
       throw new Error('no device connected');

@@ -18,6 +18,9 @@ export interface ExecutorInfo {
   /** The user's own display name for the environment, where one exists —
    *  a registered device's chosen name on the laptop row. */
   label?: string;
+  /** Whether the reading workspace holds this environment's access grant.
+   *  Only the device row answers; absent means the question does not arise. */
+  granted?: boolean;
   available: boolean;
   configured?: boolean;
   active?: boolean;

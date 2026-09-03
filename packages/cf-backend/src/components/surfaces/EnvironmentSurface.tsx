@@ -75,7 +75,14 @@ function filesRootFor(name: string): string | null {
 
 type StatusReading = { word: string; dotClass: string };
 
-function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReading {
+export function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReading {
+  // Reach before liveness, but only for a row that is live: `granted` is
+  // answered only while the machine is connected, so a pairing with a
+  // not-live mount is a stale row and the honest word stays offline.
+  // Scoped to the device, because `granted` is its field.
+  if (mount.live && mount.name === "laptop" && exec?.granted === false) {
+    return { word: "needs approval", dotClass: "p-info" };
+  }
   if (!mount.live) return { word: "offline", dotClass: "p-text-3" };
   if (exec?.status === "error") return { word: "error", dotClass: "p-danger" };
   if (exec && isExecutorActive(exec)) return { word: "active", dotClass: "p-success" };
@@ -151,6 +158,10 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
       {/* Selected environment's terminal. */}
       {selectedMount === null ? (
         <div className="flex-1 min-h-0" />
+      ) : selectedExec?.granted === false ? (
+        <div className="flex-1 min-h-0">
+          <NeedsApprovalMount exec={selectedExec} />
+        </div>
       ) : !selectedMount.live ? (
         <div className="flex-1 min-h-0">
           <UnavailableMount mount={selectedMount} exec={selectedExec} onConnectDevice={onConnectDevice} />
@@ -273,6 +284,28 @@ function UnavailableMount({ mount, exec, onConnectDevice }: {
         <p className="text-xs p-text-2 leading-relaxed">
           {docs.text}{" "}
           <a href={docs.href} target="_blank" rel="noreferrer" className="p-accent hover:underline">Learn more</a>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ── Connected, but not to this workspace yet ────────────────────── */
+
+/** A machine the owner can see is online but this workspace has not been given
+ *  access to. The honest pane: the machine is there, the agent has asked, and
+ *  the one thing standing between them is an approval only the owner can give —
+ *  from the card the agent's next command raises. */
+function NeedsApprovalMount({ exec }: { exec: ExecutorInfo }) {
+  const name = exec.label ?? executorLabel(exec.name);
+  return (
+    <div className="h-full flex items-center justify-center p-6" data-env-needs-approval>
+      <div className="max-w-md text-center space-y-3">
+        <LockSimpleIcon size={26} className="p-text-3 mx-auto" />
+        <div className="text-sm font-medium p-text">{name} needs approval</div>
+        <p className="text-xs p-text-2 leading-relaxed">
+          {name} is connected. When this workspace runs its first command on it,
+          you choose whether to grant access.
         </p>
       </div>
     </div>
