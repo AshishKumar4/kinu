@@ -3,7 +3,7 @@
 // Bun loads the install scanner before it installs anything, so the scanner
 // cannot import a dependency; this bundle carries its decoder inlined.
 
-// ../Proteus/node_modules/valibot/dist/index.mjs
+// node_modules/valibot/dist/index.mjs
 var store$4;
 var DEFAULT_CONFIG = {
   lang: undefined,

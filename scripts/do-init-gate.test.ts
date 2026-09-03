@@ -786,8 +786,8 @@ export class A extends Agent {
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
     const slept = real!.replace(
-      '    await this.#sweepUnknownSchedules();',
-      '    await this.#sweepUnknownSchedules();\n    await scheduler.wait(100);',
+      '    await this.kickStartup();',
+      '    await this.kickStartup();\n    await scheduler.wait(100);',
     );
     expect(slept).not.toBe(real);
     const { violations } = auditFile(file, slept);

@@ -289,6 +289,6 @@ describe('against the real tree', () => {
     });
     const mb = platformFact('worker.isolate.memory').limit?.value ?? 0;
     expect(mb).toBeGreaterThan(0);
-    expect(rendered).toContain(`~${String(mb / (1000 * 1000))} MB of memory is what bounds any one command`);
+    expect(rendered).toContain(`~${String(mb / (1000 * 1000))} MB shared by everything in it`);
   });
 });
