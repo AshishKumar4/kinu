@@ -23,6 +23,26 @@
 # (scripts/ladder.test.ts asserts it by claimed files), so bypassing it cannot
 # let anything through — it only moves the same failure to CI.
 
+# WHY THE TRANSCRIPT GOES TO A FILE.
+#
+# Gates run with stdout inherited, so this tier used to write its whole
+# transcript into the pipe git gives a pre-push hook: 16,650 lines, measured
+# 2026-09-03. Git stops reading before the end, the next write takes SIGPIPE,
+# and the hook dies with status 141 — which git reports as a refusal with no
+# failing gate named. It refused three pushes in one evening whose 42 gates had
+# all passed, and the same tier run standalone exited 0, which is what
+# localised it.
+#
+# So the transcript lands in a file and git sees the verdict. A failure prints
+# the finding and names the log, which is also the only readable form of a
+# 16,000-line tier.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
-exec bun scripts/ladder.ts --tier=push
+log="$(git rev-parse --git-dir)/push-tier.log"
+if bun scripts/ladder.ts --tier=push > "$log" 2>&1; then
+  tail -n 1 "$log"
+  exit 0
+fi
+tail -n 40 "$log"
+printf '\nfull transcript: %s\n' "$log"
+exit 1
