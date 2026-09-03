@@ -33,6 +33,8 @@ import {
   finalizeCandidateOperationV2,
 } from '../../src/candidates/control';
 import type { CandidateControlStore, CandidateEnvelopeStoreV2 } from '../../src/candidates/control';
+import { LazyRestore } from '../../src/candidates/lazy-restore';
+import type { LazyRestorePorts } from '../../src/candidates/lazy-restore';
 import {
   buildMerkleDelta,
   parentFromPublishedV2,
@@ -66,6 +68,7 @@ import type {
   CandidatePublicationDraftV2,
 } from '../../src/candidates/publication';
 import type { ChunkParams } from '../../src/candidates/merkle-pack/chunk';
+import type { EvictionRequest, FileGeometry, Hydration } from '../../src/candidates/residency';
 import type {
   CandidateRunControlV2,
   CompactionWork,
@@ -189,6 +192,11 @@ export class SidecarCore {
       cause instanceof Error ? cause.message : String(cause),
     );
   #view: MerkleV2View | null = null;
+  /** The lazy restore this box is serving the head through, once a container
+   *  has asked for one. Reopened by every attach, because it reads through
+   *  the view that attach opened. */
+  #lazy: LazyRestore | null = null;
+  #lazyPorts: LazyRestorePorts | null = null;
   #head: CandidateRunControlV2['head'] = null;
   #ledger: PackLedger | null = null;
   #retired: RetiredPack[] = [];
@@ -235,6 +243,7 @@ export class SidecarCore {
     this.#head = control.head;
     if (control.head === null) {
       this.#view = null;
+      this.#lazy = null;
       this.#restore = { ...ZERO_RESTORE, totalRemoteOps: 1, serialRemoteOps: 1 };
       this.#attach = { kind: 'empty' };
       return this.#attach;
@@ -264,6 +273,15 @@ export class SidecarCore {
       files: [],
       removed: [],
     });
+    // A LAZY RESTORE READS THROUGH THE VIEW THIS ATTACH JUST OPENED, so the
+    // one the previous attach handed out is stale the moment the head moves.
+    // Reopening here rather than dropping it keeps a container that asked for
+    // lazy service lazy across the re-attach a publish performs; what it does
+    // NOT do is claim residency for the new head, which is the container's to
+    // declare because the container is what holds the bytes.
+    this.#lazy = this.#lazyPorts === null
+      ? null
+      : new LazyRestore(this.#view, this.#lazyPorts);
     this.#attach = {
       kind: 'attached',
       rootEnvelopeId: control.head.pointer.rootEnvelopeId,
@@ -272,15 +290,79 @@ export class SidecarCore {
     return this.#attach;
   }
 
+  /**
+   * Serve the head lazily: the container gets its root and the mount, and
+   * pays for a node the first time it touches one.
+   *
+   * THE ATTACH PATH. A box that is woken to run a command needs a workspace
+   * it can enter now, not a tree that has finished arriving — and the tree
+   * finishing is the term cell 6.13 measured at one remote operation per file.
+   * The container drives what it gets back: `list` on a directory fault,
+   * `hydrate` on a read, `forget` on a write, `evict` under disk pressure.
+   *
+   * The ports are remembered, so the re-attach a publish performs hands the
+   * same container a restore over the NEW head without it asking again.
+   */
+  restoreLazily(ports: LazyRestorePorts): LazyRestore {
+    const view = this.#view;
+    if (view === null) throw new Error('a lazy restore needs an attached head; attach first');
+    this.#lazyPorts = ports;
+    const restore = new LazyRestore(view, ports);
+    this.#lazy = restore;
+    return restore;
+  }
 
+  /** The lazy restore this box is serving through, if a container asked for
+   *  one. Answers the CURRENT head's: every attach reopens it. */
+  lazyRestore(): LazyRestore | null {
+    return this.#lazy;
+  }
+
+  /** One file of the tree is whole and clean again — what a publish leaves
+   *  behind, when every byte the container holds has become a cache of the
+   *  head it just wrote. Registering it is what makes it evictable. */
+  noteResident(path: string, geometry: FileGeometry): void {
+    this.#lazy?.registerResident(path, geometry);
+  }
 
   /**
-   * Write the published head into the container's filesystem: the eager
+   * Drop clean pages nothing has touched inside the window, and report what
+   * the sweep did.
+   *
+   * WHAT MAKES THIS SAFE is not the sweep, it is the read: every page it can
+   * reach came out of an immutable object and is held to the digest the head
+   * declares, so bringing one back is idempotent. A box under disk pressure
+   * therefore trades a re-read for the room to keep working, which is the
+   * alternative to refusing the write.
+   */
+  evictClean(request: EvictionRequest = {}): GcWork {
+    const restore = this.#lazy;
+    if (restore === null) return ZERO_GC;
+    const swept = restore.evict(request);
+    this.#gc = {
+      deletes: this.#gc.deletes + swept.deletes,
+      markPages: this.#gc.markPages + swept.markPages,
+      markBytes: this.#gc.markBytes + swept.markBytes,
+    };
+    return swept;
+  }
+
+  /** How much of the head this box holds locally. */
+  hydration(): Hydration {
+    return this.#lazy?.hydration() ?? { residentBytes: 0, treeBytes: 0, placeholders: 0 };
+  }
+
+  /**
+   * Write the whole published head into the container's filesystem: the eager
    * restore. The ledger names every pack with its length and digest, so the
    * walk reads each pack ONCE, whole, and slices every record and chunk out of
-   * that one fetch — one remote operation per pack, whatever the tree holds,
-   * which is what a materialize owes. Files land as the capture-model entries
-   * they are; a placeholder-lazy restore is the separate later lane.
+   * that one fetch — one remote operation per pack, whatever the tree holds.
+   *
+   * NOT THE ATTACH PATH, and the difference is measured rather than stylistic:
+   * this is O(#packs) operations and O(tree) bytes, against
+   * {@link restoreLazily}'s O(1) operations and the bytes the workload
+   * actually reads. A caller that genuinely wants every byte now — a fidelity
+   * comparison, a full-tree export — is what this is for.
    */
   async materialize(sink: (entries: readonly NodeEntry[]) => Promise<void> | void): Promise<HydrateWork> {
     const view = this.#view;
@@ -610,16 +692,20 @@ export class SidecarCore {
    * Delete the retired packs whose grace window has elapsed. Deletion is by
    * ledger and by grace, never by listing a prefix, and never before the
    * generation that retired a pack is published.
+   *
+   * Answers what THIS cycle did. The accumulation across every sweep — this
+   * one and {@link evictClean}'s, which is the same decision at a different
+   * distance — is the row `status` reports.
    */
   async collectGarbage(): Promise<GcWork> {
     const grace = this.#ports.graceMs ?? DEFAULT_GRACE_MS;
     const due = deletableRetiredPacks(this.#retired, this.#ports.now(), grace);
-    if (due.length === 0) return this.#gc;
+    if (due.length === 0) return ZERO_GC;
     const remaining = this.#retired.filter((pack) => !due.includes(pack.key));
     for (const key of due) await this.#ports.payload.deleteObject?.(key);
     this.#retired = remaining;
-    this.#gc = { ...this.#gc, deletes: due.length };
-    return this.#gc;
+    this.#gc = { ...this.#gc, deletes: this.#gc.deletes + due.length };
+    return { deletes: due.length, markPages: 0, markBytes: 0 };
   }
 
   /** Every row the Durable Object reads on a drive, from what really ran. */
@@ -638,15 +724,15 @@ export class SidecarCore {
         unpublishedGenerations: this.#unpublishedGenerations,
         unpublishedMs: this.#unpublishedSince === null ? 0 : Math.max(0, now - this.#unpublishedSince),
       },
-      // Placeholder residency is the lazy-restore lane's row; this sidecar
-      // reads the head through the view instead of paging it into the backing
-      // root, so it reports no resident bytes rather than a guess.
-      hydration: { residentBytes: 0, treeBytes: 0, placeholders: 0 },
+      // What a lazy restore holds of the head, or zeros for a box whose
+      // container never asked for one: a materialize owns its own bytes, and
+      // this sidecar will not guess at residency it does not manage.
+      hydration: this.hydration(),
       work: {
         restore: this.#restore,
         seal: this.#seal,
         publish: this.#publish,
-        hydrate: this.#view?.work() ?? ZERO_HYDRATE,
+        hydrate: this.#lazy?.work() ?? this.#view?.work() ?? ZERO_HYDRATE,
         compaction: this.#compaction,
         gc: this.#gc,
       },

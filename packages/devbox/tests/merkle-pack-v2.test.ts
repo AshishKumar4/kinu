@@ -19,6 +19,7 @@ import { describe, expect, test } from 'bun:test';
 
 import { openSidecar, readTree } from './support/sidecar-fixture';
 import type { SidecarFixture } from './support/sidecar-fixture';
+import { LazyContainer } from './support/lazy-container';
 import {
   Seeded,
   LiveTree,
@@ -393,6 +394,71 @@ describe('a publish is single PUTs, an ETag-proven body, and one CAS', () => {
     }
     const uploads = fixture.payload.ops.filter((op) => op.op === 'put');
     expect(uploads.every((op) => op.bytes <= PACK_CAP)).toBe(true);
+  });
+});
+
+describe('a wake serves the head lazily', () => {
+  test('attach plus enter is O(root), one file reads exact, evict then re-read is identical', async () => {
+    const wakeOf = async (files: number) => {
+      const fixture = openSidecar();
+      const expected = generatedTree({ seed: 5, files, bytesPerFile: 16 });
+      fixture.daemon.plant(expected);
+      await publish(fixture, `the ${files}-file base`);
+      const wake = openSidecar({
+        bootId: `boot-wake-${files}`,
+        share: {
+          daemon: fixture.daemon,
+          payload: fixture.payload,
+          envelopes: fixture.envelopes,
+          control: fixture.control,
+        },
+      });
+      const before = wake.payload.ops.length;
+      const attached = await wake.core.attach();
+      if (attached.kind !== 'attached') throw new Error(`wake answered ${attached.kind}`);
+      const afterAttach = wake.payload.ops.length;
+      const tree = new LiveTree();
+      const container = new LazyContainer(tree, () => 1_000);
+      container.adopt(wake.core.restoreLazily(container.ports()));
+      await container.enter();
+      return {
+        wake,
+        container,
+        tree,
+        expected,
+        attachGets: afterAttach - before,
+        enterGets: wake.payload.ops.length - afterAttach,
+      };
+    };
+    const small = await wakeOf(10);
+    const large = await wakeOf(100);
+    // THE WAKE PROPERTY. Ten times the files, the same remote operations:
+    // the root record, the ledger, and the root's one child. A wake that
+    // walked the tree would cost one operation per file here.
+    expect(small.attachGets).toBe(large.attachGets);
+    expect(small.enterGets).toBe(large.enterGets);
+    expect(large.attachGets + large.enterGets).toBeLessThanOrEqual(4);
+    // Nothing below the root arrived: the files are placeholders, not bytes.
+    expect(large.tree.has('d000/d000/f000000.bin')).toBe(false);
+    expect(large.tree.has('d000')).toBe(true);
+
+    // One file reads exact, paying for itself and nothing else.
+    const wanted = large.expected.find((entry) => entry.path === 'd000/d000/f000000.bin');
+    if (wanted?.kind !== 'file' || wanted.content?.kind !== 'dense') throw new Error('the fixture lost f000000.bin');
+    const read = await large.container.read('d000/d000/f000000.bin');
+    expect(read).toEqual(wanted.content.bytes);
+    const status = large.wake.core.status();
+    expect(status.work.hydrate.rangeGets).toBeGreaterThan(0);
+    expect(status.hydration.residentBytes).toBe(16);
+    expect(status.hydration.treeBytes).toBe(64 * 16);
+    expect(status.hydration.placeholders).toBe(64 - 1);
+    // THE EVICTION DIRECTION. Drop every clean page, read the file again,
+    // and the bytes are the bytes: a drop risks a re-read and nothing else.
+    const swept = large.wake.core.evictClean({ idleMs: 0 });
+    expect(swept.deletes).toBeGreaterThanOrEqual(1);
+    expect(large.wake.core.hydration().residentBytes).toBe(0);
+    const reread = await large.container.read('d000/d000/f000000.bin');
+    expect(reread).toEqual(wanted.content.bytes);
   });
 });
 

@@ -30,6 +30,7 @@ import {
   type FileContent,
   type NodeEntry,
   type PosixMetadata,
+  type SparseRun,
 } from '../../src/capture/model';
 
 /** A seeded generator: the same seed gives the same tree on every run. */
@@ -286,6 +287,42 @@ export function runBytes(content: FileContent): number {
   return content.runs.reduce((sum, run) => sum + run.bytes.byteLength, 0);
 }
 
+function runBytesOfRuns(runs: readonly SparseRun[]): number {
+  let total = 0;
+  for (const run of runs) total += run.bytes.byteLength;
+  return total;
+}
+
+/**
+ * One run list with overlaps and adjacencies resolved, later runs winning.
+ *
+ * A page-in that re-reads a range it already holds must not leave the file
+ * holding it twice: the disk charge is the sum of the run lengths, so a
+ * duplicate run would charge a byte the file does not have.
+ */
+function mergeRuns(runs: readonly SparseRun[]): SparseRun[] {
+  const painted: { offset: number; bytes: Uint8Array }[] = [];
+  for (const run of [...runs].sort((a, b) => a.offset - b.offset)) {
+    if (run.bytes.byteLength === 0) continue;
+    const last = painted[painted.length - 1];
+    const end = run.offset + run.bytes.byteLength;
+    if (last === undefined || run.offset > last.offset + last.bytes.byteLength) {
+      painted.push({ offset: run.offset, bytes: run.bytes.slice() });
+      continue;
+    }
+    const lastEnd = last.offset + last.bytes.byteLength;
+    if (end <= lastEnd) {
+      last.bytes.set(run.bytes, run.offset - last.offset);
+      continue;
+    }
+    const grown = new Uint8Array(end - last.offset);
+    grown.set(last.bytes);
+    grown.set(run.bytes, run.offset - last.offset);
+    painted[painted.length - 1] = { offset: last.offset, bytes: grown };
+  }
+  return painted;
+}
+
 // ── the live tree ───────────────────────────────────────────────────────────
 
 /** One inode, shared by every hardlinked path. Mutable: a write lands here. */
@@ -433,6 +470,72 @@ export class LiveTree {
       };
     }
     inode.metadata = touched(inode.metadata);
+  }
+
+  /**
+   * Page bytes into a file without touching anything a reader can observe
+   * except the bytes: the fault-in half of a lazy restore.
+   *
+   * NOT A WRITE, and the difference is the whole point. A write advances
+   * mtime, because the kernel does; a page-in restores bytes the head already
+   * declared for this file at times it already recorded, so a metadata
+   * comparison after a lazy wake must see exactly what a publish wrote.
+   */
+  hydrate(path: string, offset: number, bytes: Uint8Array): void {
+    const inode = this.#paths.get(path);
+    if (inode === undefined || inode.kind !== 'file' || inode.content === undefined) {
+      throw new Error(`hydrate: no file at ${path}`);
+    }
+    const content = inode.content;
+    if (content.kind === 'sealed') throw new Error('hydrate: sealed content is not live');
+    if (content.kind === 'dense') {
+      if (offset + bytes.byteLength > content.bytes.byteLength) {
+        throw new Error(`hydrate: ${path} is ${content.bytes.byteLength} bytes, page ends at ${offset + bytes.byteLength}`);
+      }
+      content.bytes.set(bytes, offset);
+      return;
+    }
+    const merged = mergeRuns([...content.runs, { offset, bytes: bytes.slice() }]);
+    this.charge(runBytesOfRuns(merged) - runBytes(content));
+    inode.content = { kind: 'sparse', size: content.size, runs: merged };
+  }
+
+  /**
+   * Release a resident range. The file keeps its length and reads as zeros
+   * there until it is paged back in, which is what an evicted page is.
+   */
+  dehydrate(path: string, offset: number, length: number): void {
+    const inode = this.#paths.get(path);
+    if (inode === undefined || inode.kind !== 'file' || inode.content === undefined) {
+      throw new Error(`dehydrate: no file at ${path}`);
+    }
+    const content = inode.content;
+    if (content.kind === 'sealed') throw new Error('dehydrate: sealed content is not live');
+    const size = contentSize(content);
+    const runs = content.kind === 'dense'
+      ? [{ offset: 0, bytes: content.bytes }]
+      : [...content.runs];
+    const kept: SparseRun[] = [];
+    const end = offset + length;
+    for (const run of runs) {
+      const runEnd = run.offset + run.bytes.byteLength;
+      if (runEnd <= offset || run.offset >= end) {
+        kept.push(run);
+        continue;
+      }
+      if (run.offset < offset) kept.push({ offset: run.offset, bytes: run.bytes.subarray(0, offset - run.offset) });
+      if (runEnd > end) kept.push({ offset: end, bytes: run.bytes.subarray(end - run.offset) });
+    }
+    this.charge(runBytesOfRuns(kept) - runBytes(content));
+    inode.content = { kind: 'sparse', size, runs: kept };
+  }
+
+  /** `link(2)`: a second name for one inode. What a restore does when the
+   *  head gives two paths the same inode id and it meets them separately. */
+  link(existing: string, path: string): void {
+    const inode = this.#paths.get(existing);
+    if (inode === undefined) throw new Error(`link: no node at ${existing}`);
+    this.#place(path, inode);
   }
 
   remove(path: string): void {
