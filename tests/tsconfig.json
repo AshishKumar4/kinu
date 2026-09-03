@@ -3,6 +3,16 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
+    // The first-run wiring suite reads the gate ladder and the file enumeration
+    // from `scripts/`, which spell their own imports with a `.ts` extension —
+    // the scripts project's setting, mirrored here so one module is not two
+    // compilers' disagreement. The TUI the pty fixture launches is a `.tsx`.
+    "allowImportingTsExtensions": true,
+    // The pty fixture launches the shipped TUI, whose JSX is opentui's — the
+    // CLI package's own two settings, mirrored so this project compiles the
+    // same file the same way rather than as DOM elements it is not.
+    "jsx": "react-jsx",
+    "jsxImportSource": "@opentui/react",
     "types": ["bun", "node"]
   },
   "include": ["**/*.ts"]

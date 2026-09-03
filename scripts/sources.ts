@@ -251,6 +251,25 @@ export const isVitestEvalSuite = (file: string): boolean =>
  *  rather than against the discovery roots someone remembered to name. */
 export const isPythonSuite = (file: string): boolean => PYTHON_SUITE.test(file);
 
+/**
+ * A first-run suite: the post-deploy tier that drives the DEPLOYED product.
+ *
+ * Its own suffix and its own directory, because three runners must not be able
+ * to reach each other's files. `bun test` selects only `.test.`/`.spec.`, and
+ * `vitest.evals.config.ts` includes `tests/evals/**` alone, so these files are
+ * disjoint from both BY CONSTRUCTION rather than by an ignore list somebody
+ * keeps in step — which is what stops the eval tier being CREDITED with suites
+ * it cannot run, the defect that once put four live eval files behind a bun
+ * gate unable to select any of them.
+ *
+ * Narrowed nowhere else: `tests/first-run/wiring.test.ts` holds this predicate
+ * equal to the tier's own config include AND to the case list the tier
+ * declares, which is the set-equality rule applied to the tier that exists
+ * because a gate broke it.
+ */
+export const isFirstRunSuite = (file: string): boolean =>
+  /^tests\/first-run\/[^/]+\.first-run\.ts$/.test(file);
+
 /** Where the anti-slop plugin lives, and where its per-rule suites live. */
 export const ANTI_SLOP_ROOT = 'tools/oxlint/anti-slop/';
 export const ANTI_SLOP_RULES = `${ANTI_SLOP_ROOT}rules/`;

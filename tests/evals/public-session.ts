@@ -602,6 +602,51 @@ const ExecutorCommandSchema = v.object({
 /** One command's answer on an executor, as the Env pane receives it. */
 export type PublicExecutorResult = v.InferOutput<typeof ExecutorCommandSchema>;
 
+/** The parked-command rows `listDeferredApprovals` serves — the needs-you
+ *  queue's own shape (`core/src/safety/deferred-approval.ts`), narrowed to what
+ *  a caller can decide on: which command, where it would run, and whether it is
+ *  still parked. `list()` returns queued rows only, so a decided row LEAVING
+ *  this array is the decision landing. */
+const DeferredApprovalSchema = v.object({
+  id: v.string(),
+  command: v.string(),
+  executor: v.string(),
+  status: v.string(),
+});
+const DeferredApprovalsSchema = v.array(DeferredApprovalSchema);
+const DecideApprovalsSchema = v.object({ decided: v.array(v.string()) });
+
+/** One parked command, as the queue hands it to the surface that decides it. */
+export type PublicDeferredApproval = v.InferOutput<typeof DeferredApprovalSchema>;
+
+/** The crafted half of `getToolDescriptions` — the tools this workspace holds
+ *  that the MODEL wrote. `usageCount` is the store's own counter, which is what
+ *  makes "the tool exists" and "the tool ran" separable facts. The built-in
+ *  half is not modelled: no caller here asks about it. */
+const CraftedToolSchema = v.object({
+  name: v.string(),
+  description: v.string(),
+  usageCount: v.optional(v.number()),
+});
+const ToolDescriptionsSchema = v.object({ crafted: v.array(CraftedToolSchema) });
+
+/** One tool the model built for itself, as the Tools pane lists it. */
+export type PublicCraftedTool = v.InferOutput<typeof CraftedToolSchema>;
+
+/** What `readExecutorFile` answers, exactly as `ExecutorTextFile` declares it
+ *  (core/src/read-models/files.ts): the preview's text, or the reason there is
+ *  none. Both optional, because the read model answers one or the other. */
+const ViewedFileSchema = v.object({
+  content: v.optional(v.string()),
+  truncated: v.optional(v.boolean()),
+  revision: v.optional(v.number()),
+  readOnlyReason: v.optional(v.string()),
+  error: v.optional(v.string()),
+});
+
+/** One file as the Files tab shows it. */
+export type PublicViewedFile = v.InferOutput<typeof ViewedFileSchema>;
+
 /** The SDK's message rows as `get-messages` serves them. Narrowed to what a
  *  trajectory asserts on — who spoke, and the text they said — because the parts
  *  array also carries tool and reasoning parts this projection does not read. */
@@ -824,6 +869,53 @@ export class KinuPublicSession {
     return v.parse(ExecutorCommandSchema, result);
   }
 
+  /**
+   * The needs-you queue, as the Work tab reads it.
+   *
+   * `listDeferredApprovals` answers the STILL-PARKED rows and nothing else, so
+   * a row's absence here after a decision is the decision landing rather than a
+   * projection this harness maintains. That is what makes the queue's own
+   * clearing checkable over the wire instead of only in the component.
+   */
+  async parkedCommands(): Promise<readonly PublicDeferredApproval[]> {
+    const rows = await infraBoundary(
+      `listDeferredApprovals on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('listDeferredApprovals', []),
+    );
+    return v.parse(DeferredApprovalsSchema, rows);
+  }
+
+  /**
+   * Decide parked commands — the RPC the Approve button is bound to
+   * (components/surfaces/WorkTab.tsx:306), with the same argument shape: the
+   * ids the owner had selected, and one answer for all of them.
+   *
+   * Deliberately the same call the click makes rather than a REST equivalent:
+   * the two halves of the approve case have to be a statement about ONE
+   * mechanism, or the UI half could pass over a queue the API half never
+   * cleared.
+   */
+  async decideParkedCommands(
+    ids: readonly string[], decision: 'approved' | 'denied' | 'always',
+  ): Promise<readonly string[]> {
+    const answer = await infraBoundary(
+      `decideDeferredApprovals on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('decideDeferredApprovals', [[...ids], decision]),
+    );
+    return v.parse(DecideApprovalsSchema, answer).decided;
+  }
+
+  /** The tools this workspace holds that the MODEL wrote, as the Tools pane
+   *  lists them. The built-in half of `getToolDescriptions` is dropped at the
+   *  boundary: a crafted-tool case asks about the crafted set. */
+  async craftedTools(): Promise<readonly PublicCraftedTool[]> {
+    const answer = await infraBoundary(
+      `getToolDescriptions on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('getToolDescriptions', []),
+    );
+    return v.parse(ToolDescriptionsSchema, answer).crafted;
+  }
+
   /** The durable transcript the web pane is seeded from. */
   async history(): Promise<readonly PublicMessage[]> {
     const rows = await infraBoundary(
@@ -877,6 +969,28 @@ export class KinuPublicSession {
       || a.runId.localeCompare(b.runId)
       || a.eventIndex - b.eventIndex);
     return events;
+  }
+
+  /**
+   * One file as the FILES TAB reads it — `readExecutorFile`, the RPC
+   * `FileViewer.tsx:67` is bound to, which is a bounded PREVIEW off the plane's
+   * ranged read rather than the whole-file download `readFile` above streams.
+   *
+   * The two are different surfaces and only this one carries the origin
+   * session's range reader, which is where a hosted read once answered EIO with
+   * the Workers runtime's own sentence about code generation. A case that read
+   * the download route instead would be green over that defect, so the pane's
+   * own call is the one that has to be made.
+   *
+   * The answer is returned WHOLE — `{content}` or `{error}` — because which one
+   * it is, and what the error says, is the finding.
+   */
+  async viewFile(executor: string, path: string): Promise<PublicViewedFile> {
+    const answer = await infraBoundary(
+      `readExecutorFile(${executor}) on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('readExecutorFile', [executor, path]),
+    );
+    return v.parse(ViewedFileSchema, answer);
   }
 
   /** What this workspace spent, from the deployment's own read model — the same

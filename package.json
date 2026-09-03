@@ -53,6 +53,7 @@
     "gate:mutation-fences": "bun scripts/mutation-fences.ts",
     "gate:twin-differential": "bun test packages/cf-backend/tests/unit-backend-twins.test.ts",
     "test:eval": "bash scripts/eval-tier.sh",
+    "gate:first-run": "bash scripts/first-run-tier.sh",
     "ladder": "bun scripts/ladder.ts",
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",
     "verify:lean": "bash scripts/verify-lean.sh",
