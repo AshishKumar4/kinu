@@ -363,7 +363,13 @@ export function listLegacyAgentNames(): string[] {
  *  outlives the rename, so adoption keys on it too. */
 export function readWorkspaceIdentityId(dbPath: string): string | null {
   if (!existsSync(dbPath)) return null;
-  const db = new Database(dbPath, { readonly: true });
+  // Opened READ-WRITE although nothing here writes. A workspace runs in WAL
+  // mode, a WAL database is unreadable without the `-shm` file SQLite builds
+  // beside it, and a readonly connection may not build one — so a workspace
+  // whose sidecars are not on disk failed every readonly read with "unable to
+  // open database file". That reached the owner's own log, reading back the
+  // title of a workspace nothing had open.
+  const db = new Database(dbPath);
   try {
     for (const table of ['workspace_identity', 'agent_identity']) {
       const present = db.query<{ n: number }, [string]>(
@@ -384,7 +390,10 @@ export function readWorkspaceIdentityId(dbPath: string): string | null {
  *  copy of it, so a rename or auto-title cannot drift from the roster. */
 export function readWorkspaceDisplayName(dbPath: string): string | null {
   if (!existsSync(dbPath)) return null;
-  const db = new Database(dbPath, { readonly: true });
+  // Read-write for the reason `readWorkspaceIdentityId` above states: a
+  // published WAL database has no `-shm`, and only a writable connection may
+  // build one.
+  const db = new Database(dbPath);
   try {
     const present = db.query<{ n: number }, []>(
       `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'agent_config'`,
