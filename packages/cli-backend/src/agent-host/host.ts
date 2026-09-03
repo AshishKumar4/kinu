@@ -493,6 +493,12 @@ export class LocalAgentHost {
       onEvent: (event) => this.onSessionEvent(input.key, event),
       instructionApprovals: input.instructionApprovals,
     };
+    // A subagent's prompt names the workspace it works in, and its own config
+    // holds only its own title. Read at prompt time rather than captured now:
+    // the ROOT is where a rename and an auto-title both land.
+    if (input.parentKey !== null) {
+      sessionOpts.workspaceTitle = () => this.rootEntry(input.key).config.getDisplayName();
+    }
     if (input.ws.modelResolver) sessionOpts.modelResolver = input.ws.modelResolver;
     if (input.ws.staticModel) sessionOpts.model = input.ws.staticModel;
     if (input.ws.profileAuthority) sessionOpts.profileAuthority = input.ws.profileAuthority;
@@ -1087,6 +1093,15 @@ export class LocalAgentHost {
     return entry;
   }
 
+  /** The workspace entry at the top of this agent's tree — itself, for a
+   *  workspace's own chat. A subordinate hires subordinates, so the immediate
+   *  parent is not the workspace past depth 1. */
+  private rootEntry(key: string): HostEntry {
+    let entry = this.requireEntry(key);
+    while (entry.parentKey !== null) entry = this.requireEntry(entry.parentKey);
+    return entry;
+  }
+
   /** Birth + seed the child before its LocalAgentSession becomes reachable.
    *  The role is one tagged selection, so catalog and legacy roles never
    *  become independent parent-side mirrors. */
@@ -1135,9 +1150,11 @@ export class LocalAgentHost {
     db.exec('PRAGMA journal_mode = WAL');
     try {
       await createWorkspace(db, {
-        // The slug when nothing has titled it yet: SOUL should not open with a
-        // blank name, and the slug is what this agent is genuinely called.
-        name: input.displayName || input.name,
+        // Address and title, separately. `input.name` is the slug the tree
+        // addresses this subagent by; the title is what a person calls it, and
+        // a one-click hire has none until its first message names it.
+        name: input.name,
+        title: input.displayName,
         purpose: input.mission,
         llm,
       });
@@ -1167,7 +1184,7 @@ export class LocalAgentHost {
         rt.agentStateVfs ?? rt.storage.vfs,
         rt.storage.sql,
         [
-          renderSoulMarkdown({ name: descriptor.displayName || input.name, mission: input.mission }),
+          renderSoulMarkdown({ name: descriptor.displayName, mission: input.mission }),
           '',
           '## Role',
           '',

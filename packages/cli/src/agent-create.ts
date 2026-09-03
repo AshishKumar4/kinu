@@ -232,10 +232,12 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   const db = new Database(partial, { create: true });
   try {
     db.exec('PRAGMA journal_mode = WAL');
-    // A blank display name is the provisional state of an agent added without
-    // one; the slug is what it is genuinely called until a title lands, so it
-    // is what the workspace identity and SOUL open with.
-    const rt = await createWorkspace(db, { name: displayName || name, purpose, llm: llmConfig });
+    // Address and title are two fields, because they are two things. The slug
+    // stays `workspace_identity.name` — every path that ADDRESSES this
+    // workspace reads it — while the title heads SOUL.md and MEMORY.md. A
+    // workspace added without a name has no title yet and gets one from its
+    // first prompt.
+    const rt = await createWorkspace(db, { name, title: displayName, purpose, llm: llmConfig });
     // Every table a workspace has, on any backend — one list, in core.
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const agentConfig = createAgentConfigStore(rt.storage.sql);

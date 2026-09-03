@@ -103,9 +103,15 @@ export function groupAgentWorkspaces<T extends ListedAgent>(
   return { projectRoot, workspaces: ordered, unplaced, remote };
 }
 
+/** What an untitled workspace is called on every CLI surface. Not the
+ *  directory name: that is the address `kinu chat <name>` takes, and showing it
+ *  as a title is what put `handwrought-walnut-4166c321` in front of the owner.
+ *  Not "New" either — a workspace nobody named is still untitled a month on. */
+const UNTITLED_WORKSPACE_LABEL = 'Untitled workspace';
+
 function localDisplay(dirName: string): Pick<ListedAgent, 'label' | 'readError'> {
   try {
-    return { label: readWorkspaceDisplayName(agentDbPath(dirName)) ?? dirName };
+    return { label: readWorkspaceDisplayName(agentDbPath(dirName))?.trim() || UNTITLED_WORKSPACE_LABEL };
   } catch (error) {
     const reason = renderThrownChain({ cause: error });
     diagnostics.failure(
@@ -120,7 +126,7 @@ function localDisplay(dirName: string): Pick<ListedAgent, 'label' | 'readError'>
 /** A local agent's row. `dirName` is the `~/.kinu/<name>` directory; the row
  *  opens under the ref's config name when a ref exists, so aliases and cloud
  *  links stay attached. The label is the workspace database's own title — the
- *  one place a rename or auto-title lands — falling back to the directory name
+ *  one place a rename or auto-title lands — and {@link UNTITLED_WORKSPACE_LABEL}
  *  until something names it. */
 function localRow(configured: KinuAgentConfig | undefined, dirName: string): ListedAgent {
   return {
@@ -156,7 +162,7 @@ export function listSidebarAgents(cwd = process.cwd()): ListedAgent[] {
       .filter((agent) => agent.mode === 'cloud')
       .map((agent) => ({
         name: agent.name,
-        label: agent.displayName ?? agent.name,
+        label: agent.displayName?.trim() || UNTITLED_WORKSPACE_LABEL,
         mode: 'cloud' as const,
         localName: agent.localName,
         cloudName: agent.cloudName,
@@ -178,7 +184,7 @@ export function reconcileAgentRefs(
     seenCloudNames.add(agent.name);
     return [{
       name: agent.name,
-      label: agent.displayName,
+      label: agent.displayName.trim() || UNTITLED_WORKSPACE_LABEL,
       mode: 'cloud' as const,
       cloudName: agent.name,
     }];
@@ -195,15 +201,22 @@ export function listKnownAgents(): ListedAgent[] {
     ...[...localAgents].map((name) => localRow(byDirName.get(name), name)),
     ...refs
       .filter((agent) => agent.mode === 'cloud' || !localAgents.has(agent.localName ?? agent.name))
-      .map((agent) => ({
-        name: agent.name,
-        label: agent.displayName ?? agent.name,
-        mode: agent.mode,
-        localName: agent.localName,
-        cloudName: agent.cloudName,
-        cwd: agent.cwd,
-        workspaceId: agent.workspaceId,
-      })),
+      // A LOCAL ref goes through `localRow` like any other, so its label comes
+      // from its workspace database — the one place a rename or an auto-title
+      // lands. Reading `config.json` here showed `kinu chat`'s picker a stale
+      // mirror for every workspace placed in another project, and its own
+      // directory name when that mirror was empty.
+      .map((agent) => (agent.mode === 'local'
+        ? localRow(agent, agent.localName ?? agent.name)
+        : {
+          name: agent.name,
+          label: agent.displayName?.trim() || UNTITLED_WORKSPACE_LABEL,
+          mode: agent.mode,
+          localName: agent.localName,
+          cloudName: agent.cloudName,
+          cwd: agent.cwd,
+          workspaceId: agent.workspaceId,
+        })),
   ];
 }
 

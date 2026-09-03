@@ -110,11 +110,31 @@ describe('workspace birth and open', () => {
   test('the seeds are real files the agent can read back', async () => {
     const db = new Database(':memory:');
     const rt = await createWorkspace(makeAgentDatabase(db), {
-      name: 'atlas', purpose: 'Help with testing.', llm: TEST_LLM,
+      name: 'quiet-harbor-1a4e20', title: 'Atlas', purpose: 'Help with testing.', llm: TEST_LLM,
     });
 
     expect(await rt.storage.vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })).toContain('async');
-    expect(await rt.storage.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toContain('atlas');
+    expect(await rt.storage.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toContain('Atlas');
+  });
+
+  /** `name` is the ADDRESS and `title` is the name. Heading a document with the
+   *  address is what showed a workspace's own model `# handwrought-walnut-…`,
+   *  and the untitled case is the one that produced it: a workspace is titled
+   *  by its first prompt, so it is born without one. */
+  test('the documents a model reads are headed by the title, never by the slug', async () => {
+    const titled = await createWorkspace(makeAgentDatabase(new Database(':memory:')), {
+      name: 'quiet-harbor-1a4e20', title: 'Callback Audit', purpose: 'Audit it.', llm: TEST_LLM,
+    });
+    expect(await readSoul(titled.storage.vfs)).toStartWith('# Callback Audit');
+
+    const untitled = await createWorkspace(makeAgentDatabase(new Database(':memory:')), {
+      name: 'quiet-harbor-1a4e20', purpose: 'Audit it.', llm: TEST_LLM,
+    });
+    const soul = await readSoul(untitled.storage.vfs) ?? '';
+    expect(soul).toStartWith('# Kinu');
+    expect(soul).not.toContain('quiet-harbor-1a4e20');
+    expect(await untitled.storage.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' }))
+      .not.toContain('quiet-harbor-1a4e20');
   });
 });
 

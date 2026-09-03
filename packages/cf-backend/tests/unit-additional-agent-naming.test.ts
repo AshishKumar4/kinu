@@ -140,9 +140,12 @@ describe('an agent the owner added without naming it', () => {
     const soul = await child.agent.observeIdentitySoul();
     expect(soul).toContain(WORKSPACE_MISSION);
     expect(soul).toContain('Role: general');
-    // With no title, it calls itself by the name it is genuinely addressed by
-    // rather than opening its own identity with a blank.
-    expect(soul).toContain('quiet-harbor-1a4e20');
+    // With no title it opens under the PRODUCT, never under the slug it is
+    // addressed by. That slug is a Durable Object name, and heading an identity
+    // document with one is what told a workspace's own model it was called
+    // `handwrought-walnut-4166c321`.
+    expect(soul).toStartWith('# Kinu');
+    expect(soul).not.toContain('quiet-harbor-1a4e20');
   });
 
   test('is named by the first thing its owner says to it, once, on both sides', async () => {

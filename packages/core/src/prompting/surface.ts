@@ -119,6 +119,34 @@ export interface PromptExternalToolInfo {
   description?: string;
 }
 
+/**
+ * What a person calls this agent and the workspace it works in.
+ *
+ * Titles, never slugs. A workspace slug is its address — its URL, its Durable
+ * Object name, its directory — and `identity/naming.ts` mints it from an id
+ * precisely so that no mission text reaches those places. Handing one to a
+ * model as a name is the same mistake in the other direction.
+ *
+ * Either field may be absent: a workspace is titled by its first prompt, so it
+ * spends its first moments with no name at all, and an actor that is a
+ * workspace's own chat has no subagent name to give.
+ */
+export interface PromptIdentity {
+  /** The workspace's shown title. */
+  readonly workspace?: string | null;
+  /** This agent's own shown title, when it is a subagent of that workspace
+   *  rather than the workspace's own chat. */
+  readonly agent?: string | null;
+}
+
+/** {@link PromptIdentity} with blanks resolved to null, so the renderer asks
+ *  one question per name instead of three. Required rather than optional: a
+ *  compiled surface has already decided, and `undefined` would be a third
+ *  state meaning the same thing as one of the two. */
+type ResolvedPromptIdentity = {
+  readonly [Name in keyof PromptIdentity]-?: string | null;
+};
+
 export interface PromptSurfaceOptions {
   registeredExecutors?: string[];
   executors?: readonly PromptExecutorInfo[];
@@ -147,6 +175,9 @@ export interface PromptSurfaceOptions {
    * delegated turn reports to its parent; an owner chat can own an independent
    * review even when the actor is an additional agent. */
   planSubmissionAvailable?: boolean;
+  /** The names this agent and its workspace answer to. Absent, and blank
+   *  either way, render nothing. */
+  identity?: PromptIdentity;
   model?: PromptModelContext;
 }
 
@@ -163,6 +194,7 @@ export interface PromptSurface {
   provenance: TurnProvenance;
   planSubmissionAvailable: boolean;
   roleSection: { id: string; label: string; instructions: string } | null;
+  identity: ResolvedPromptIdentity;
 }
 
 const EXECUTOR_PROMPT_ORDER = ['laptop', 'sandbox', 'workspace'];
@@ -270,5 +302,11 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
     workMode: opts.workMode ?? 'build',
     provenance: opts.provenance ?? 'chat',
     planSubmissionAvailable: opts.planSubmissionAvailable ?? false,
+    // `|| null`, not `??`: the empty string is what a fresh workspace's title
+    // is until its first prompt names it, and whitespace is not a name either.
+    identity: {
+      workspace: opts.identity?.workspace?.trim() || null,
+      agent: opts.identity?.agent?.trim() || null,
+    },
   };
 }

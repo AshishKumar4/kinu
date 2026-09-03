@@ -22,6 +22,30 @@ import { definePromptSection, type PromptSection } from './template';
 import { CRAFTED_TOOL_NAMESPACE } from '../tools/sandbox-contract';
 
 /**
+ * Who the model is, by name.
+ *
+ * The slug a workspace is addressed by (`identity/naming.ts` workspaceSlug) is
+ * an ID, and before this line it was the only name a prompt carried: the CLI
+ * create path seeded SOUL.md's heading with it, and that heading is the first
+ * thing `buildSystemPromptSync` emits. So a fresh workspace introduced itself
+ * to its own model as `handwrought-walnut-4166c321`.
+ *
+ * Rendered from the LIVE title rather than from any document. A title lands
+ * after birth — `planWorkspaceTitle` names the workspace from its first prompt
+ * — and a heading seeded before that cannot follow it.
+ *
+ * Not in `PROMPT_SECTIONS`: this states two facts the runtime holds, so there
+ * is no wording for an optimiser to improve and nothing it could rewrite that
+ * would still be true.
+ */
+export const AGENT_NAMES_LINE = definePromptSection(
+  'identity/names',
+  'You {{#if isSubagent}}are "{{agent}}", a subagent in '
+  + '{{#if hasWorkspace}}the workspace "{{workspace}}"{{else}}this workspace{{/if}}'
+  + '{{else}}work in the workspace "{{workspace}}"{{/if}}.',
+);
+
+/**
  * One built-in tool's index entry: its name and one real call.
  *
  * The builder maps this over the turn's tool list, so the iteration is typed

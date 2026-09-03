@@ -437,6 +437,9 @@ const ORCHESTRATOR_METHODS = [
   // signature, and re-checks the capability handle inside the object.
   'routeWorkspacePreview',
   'workspaceBoxOp',
+  // A subagent asks its workspace what it is called: its prompt names the
+  // workspace it works in, and it holds only the slug.
+  'workspaceTitle',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];
 
 export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [

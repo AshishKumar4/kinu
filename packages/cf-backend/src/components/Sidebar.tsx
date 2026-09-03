@@ -30,7 +30,7 @@ import { useWorkspaceRpc } from "../hooks/use-kinu";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
-import { agentTitle } from "./SubordinateTabs";
+import { agentTitle, workspaceTitle } from "./SubordinateTabs";
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
@@ -119,7 +119,7 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Escape" && !saving) onCancel(); }}
           className="min-w-0 flex-1 rounded-sm px-1.5 py-1 text-xs p-elevated p-text border p-border focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
-          aria-label={`Rename ${workspace.displayName}`}
+          aria-label={`Rename ${workspaceTitle(workspace.displayName)}`}
         />
         <button
           type="submit"
@@ -262,7 +262,7 @@ export default function Sidebar() {
           <button
             onClick={refreshWorkspaces}
             className="w-full text-left px-5 py-2 text-xs p-warning rounded-md p-card-hover transition-colors"
-          >Could not load workspaces. Tap to retry.</button>
+          >Couldn't load workspaces. Tap to retry.</button>
         )}
         <ul>
           {workspaces.map((a) => {
@@ -270,6 +270,9 @@ export default function Sidebar() {
             const live = activity[a.name];
             const editing = editingWorkspace === a.name;
             const isActive = a.name === agentId;
+            // A workspace is titled by its first prompt, so a row can be blank.
+            // The slug is not the fallback: it is the address this row links to.
+            const shown = workspaceTitle(a.displayName);
             return (
               <li key={a.name}>
                 <div className="group relative mx-2">
@@ -304,26 +307,26 @@ export default function Sidebar() {
                                 ? <span className="block size-1.5 rounded-full p-dot-accent" />
                                 : null}
                         </span>
-                        <span className={`min-w-0 flex-1 truncate text-[13px] ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'}`}>{a.displayName}</span>
+                        <span className={`min-w-0 flex-1 truncate text-[13px] ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'} ${a.displayName.trim() ? '' : 'italic p-text-3'}`}>{shown}</span>
                         {age && <span className="shrink-0 text-[10.5px] tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0">{age}</span>}
                       </NavLink>
                       <Link
                         to={`/settings/${a.name}`}
                         className="absolute right-11 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-all p-text-3 hover:p-gold focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-60"
                         title="Workspace settings"
-                        aria-label={`Workspace settings for ${a.displayName}`}
+                        aria-label={`Workspace settings for ${shown}`}
                       ><GearIcon size={11} /></Link>
                       <button
                         onClick={() => setEditingWorkspace(a.name)}
                         className="absolute right-6 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-all p-text-3 hover:p-text focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-60"
                         title="Rename"
-                        aria-label={`Rename workspace ${a.displayName}`}
+                        aria-label={`Rename workspace ${shown}`}
                       ><PencilSimpleIcon size={11} /></button>
                       <button
                         onClick={() => { setDeleteError(null); setDeleteTarget(a); }}
                         className="absolute right-1 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-all p-text-3 hover:p-danger focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-60"
                         title="Remove"
-                        aria-label={`Remove workspace ${a.displayName}`}
+                        aria-label={`Remove workspace ${shown}`}
                       ><TrashIcon size={11} /></button>
                     </>
                   )}
@@ -424,8 +427,8 @@ export default function Sidebar() {
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">
-            Remove <span className="font-medium p-text">{deleteTarget.displayName}</span> and everything
-            in it? This cannot be undone.
+            Remove <span className="font-medium p-text">{workspaceTitle(deleteTarget.displayName)}</span> and clear its
+            server-side state? This cannot be undone.
           </p>
           {deleteError && (
             <div className="p-notice-danger text-xs rounded-md px-3 py-2">Could not remove: {deleteError}</div>

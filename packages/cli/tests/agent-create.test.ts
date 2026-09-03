@@ -246,7 +246,10 @@ describe('local workspace creation publishes or leaves nothing', () => {
     const { first: contents, state } = reported(
       result.stdout, v.object({ identity: v.string(), model: v.boolean() }),
     );
-    expect(contents).toEqual({ identity: 'Published', model: true });
+    // `workspace_identity.name` is the ADDRESS, so it is the slug and not the
+    // title beside it. It used to be whichever of the two was non-empty, which
+    // made `agentName()` answer with a title on every named workspace.
+    expect(contents).toEqual({ identity: 'published-ws', model: true });
     expect(state).toEqual({ db: true, partial: false, wal: false, shm: false, ref: true });
   });
 });

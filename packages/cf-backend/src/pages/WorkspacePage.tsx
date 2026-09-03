@@ -37,7 +37,7 @@ import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface
 import { ConversationStartBoundary, HistoryBoundary } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { SupervisePage } from "./SupervisePage";
-import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
+import { SubordinateTabs, agentTitle, workspaceTitle } from "@/components/SubordinateTabs";
 import { WorkspaceBar, InlineRenameTitle, type Altitude } from "@/components/WorkspaceBar";
 import { Composer } from "@/components/Composer";
 import type { PendingConsent, Rpc, SubordinateActivityEvent } from "@/lib/protocol";
@@ -1057,7 +1057,10 @@ export default function WorkspacePage() {
 
   const as = state.agentStatus;
   const rosterTitle = workspaceEntries.find((entry) => entry.name === agentId)?.displayName;
-  const workspaceTitle = as?.displayName || rosterTitle || agentId;
+  // NOT `|| agentId`. `agentId` is the slug in the address bar, and falling
+  // back to it is what titled a new workspace `handwrought-walnut-4166c321`.
+  // The URL still carries the id for anyone who needs one.
+  const shownTitle = workspaceTitle(as?.displayName || rosterTitle);
   return (
     <div className="h-full flex flex-col">
       {/* Non-destructive disconnect banner. The chat panel below stays
@@ -1092,7 +1095,7 @@ export default function WorkspacePage() {
           with it — including the altitude switch: RUN (this run,
           mission-control) ⇄ SUPERVISE (the agent over time). */}
       <WorkspaceBar
-        title={workspaceTitle}
+        title={shownTitle}
         onRename={state.setDisplayName}
         connectionStatus={state.connectionStatus}
         working={state.isStreaming}
@@ -1366,7 +1369,7 @@ export default function WorkspacePage() {
 
       {forkFor && (
         <ForkModal
-          sourceName={workspaceTitle}
+          sourceName={shownTitle}
           messagesUpToHere={state.messages.findIndex(m => m.id === forkFor) + 1}
           craftedToolsCount={as?.craftedToolCount ?? 0}
           onCancel={() => setForkFor(null)}

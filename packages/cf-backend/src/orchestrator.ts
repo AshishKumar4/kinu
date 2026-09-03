@@ -128,6 +128,9 @@ import {
   // Which titling SOURCE this root offers the shared policy, and the wake-time
   // heal's own trigger. The policy itself lives on ActorAgent.
   isPlaceholderMission, isPlaceholderWorkspaceTitle,
+  // The names its own prompt introduces this workspace by, and what it is
+  // called before anything names it.
+  type PromptIdentity, UNTITLED_WORKSPACE_NAME,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
   // The one definition of "this executor output is a failure", shared with the
@@ -738,12 +741,17 @@ export class OrchestratorAgent extends ActorAgent {
     return this._replyChannels;
   }
 
-  /** Display name for outbound email From headers — never throws pre-schema. */
+  /** The From name on this workspace's outbound mail — never throws pre-schema.
+   *
+   *  An untitled workspace sends as the product, not as its slug. A person
+   *  reading their inbox is the last place a Durable Object name belongs, and
+   *  `handwrought-walnut-4166c321` in a From header is the same defect as it in
+   *  the workspace bar. */
   private safeDisplayName(): string {
-    try { return this.titleState().displayName || this.name; }
+    try { return this.titleState().displayName || UNTITLED_WORKSPACE_NAME; }
     catch (error) {
       diagnostics.event('orchestrator.display_name_unreadable', { error: renderThrownChain({ cause: error }) });
-      return this.name;
+      return UNTITLED_WORKSPACE_NAME;
     }
   }
 
@@ -1859,6 +1867,26 @@ export class OrchestratorAgent extends ActorAgent {
   protected override titleInputs() {
     const state = this.titleState();
     return { displayName: state.displayName === this.name ? null : state.displayName, nameOrigin: state.nameOrigin };
+  }
+
+  /**
+   * What a person calls this workspace, or null while nobody has named it.
+   *
+   * Public because this workspace's own subagents read it: their prompts name
+   * the workspace they work in, and a subagent holds only the slug.
+   *
+   * Hydrated only from a COLD cache. Every write to the registry row goes
+   * through `propagateDisplayName`, which refreshes the cache in the same call,
+   * so a warm activation already holds the current title and a per-turn read
+   * would buy nothing for its Durable Object hop.
+   */
+  async workspaceTitle(): Promise<string | null> {
+    if (this._titleCache === null) await this.hydrateTitle();
+    return this.titleInputs().displayName;
+  }
+
+  protected override async promptIdentity(): Promise<PromptIdentity> {
+    return { workspace: await this.workspaceTitle() };
   }
 
   /** Commit one display name to the ROOT registry, then refresh the activation

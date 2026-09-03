@@ -137,6 +137,15 @@ const KNOWN_TWINS: readonly string[] = [
   // POLICY is already core's (evolution/refinement-lane.ts). This entry is not
   // expected to shrink.
   'refinementDeps',
+  // WHERE a name is read, which is not one question on the two backends. The cf
+  // workspace root's title lives in the owner's UserDO registry and its
+  // subagent reaches the workspace over a Durable Object hop; a local session
+  // reads its own config row, and a local child is handed its workspace's
+  // reader by the host that holds both. What the answer MEANS — which name
+  // renders, and what an untitled workspace says — is core's
+  // (`PromptIdentity`, prompt.ts renderAgentNames), so neither body decides
+  // anything. Not expected to shrink.
+  'promptIdentity',
 ];
 
 /**

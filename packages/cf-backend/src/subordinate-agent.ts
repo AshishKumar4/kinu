@@ -26,6 +26,7 @@ import {
   type RoleSelection, type InlineSteer,
   type TierId,
   type InstructionApproval,
+  type PromptIdentity,
   TIER_IDS,
 } from '@kinu.run/core';
 import {
@@ -245,15 +246,51 @@ export class SubordinateAgent extends ActorAgent {
     return this.identity.read()?.mission ?? '';
   }
 
+  /** A subagent's soul opens with the name a person calls it, and with the
+   *  product name while it has none. NOT `|| identity.name`: that is the slug
+   *  the tree addresses this facet by, and a slug is an address rather than a
+   *  name — the reading that put `handwrought-walnut-4166c321` at the head of a
+   *  workspace's own prompt. */
   protected async loadSoulText(): Promise<string> {
     const identity = this.identity.read();
     const descriptor = subordinateDescriptorSource(this.config).read();
     return identity && descriptor
       ? renderSoulMarkdown({
-        name: descriptor.displayName || identity.name,
+        name: descriptor.displayName,
         mission: `${this.identityRoleBlock(descriptor.role)}\n\n${identity.mission}`,
       })
       : '';
+  }
+
+  protected override async promptIdentity(): Promise<PromptIdentity> {
+    return { agent: this.titleInputs().displayName, workspace: await this.workspaceTitle() };
+  }
+
+  /** The workspace's own title, one Durable Object hop away, held for this
+   *  activation. `undefined` is "not asked yet"; `null` is "asked, and nobody
+   *  has named the workspace".
+   *
+   *  A rename that lands mid-activation is not picked up, and a subagent
+   *  outlives few of them. An unreachable workspace costs this facet its
+   *  workspace's name for the activation and nothing else, so it is recorded
+   *  and the turn goes on. */
+  private _workspaceTitle: string | null | undefined;
+  private async workspaceTitle(): Promise<string | null> {
+    if (this._workspaceTitle !== undefined) return this._workspaceTitle;
+    try {
+      const workspace = await getAgentByName<Env, OrchestratorAgent>(
+        this.env[WORKSPACE_ACTOR_CLASS], this.workspaceName(),
+      );
+      this._workspaceTitle = await workspace.workspaceTitle();
+    } catch (cause) {
+      diagnostics.failure('subordinate.workspace_title_unreadable', toKinuError({
+        doing: "reading the workspace title for a subagent's prompt",
+        cause,
+        otherwise: 'unavailable',
+      }), { workspace: this.name });
+      this._workspaceTitle = null;
+    }
+    return this._workspaceTitle;
   }
 
   /**

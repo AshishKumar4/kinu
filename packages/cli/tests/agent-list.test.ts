@@ -42,9 +42,11 @@ describe('CLI cloud agent registry sync', () => {
     );
 
     // A local row's label comes from its workspace database; this fixture
-    // seeds none, so the directory name stands in until something names it.
+    // seeds none, so the row says it is untitled. NOT the directory name: that
+    // is the address `kinu chat <name>` takes, and showing it as a title is
+    // what put `handwrought-walnut-4166c321` in front of the owner.
     expect(reconciled.map(({ name, label, mode }) => ({ name, label, mode }))).toEqual([
-      { name: 'localbot', label: 'localbot', mode: 'local' },
+      { name: 'localbot', label: 'Untitled workspace', mode: 'local' },
       { name: 'web-agent', label: 'Web Agent', mode: 'cloud' },
     ]);
     expect(reconciled.some((agent) => agent.name === 'stale')).toBeFalse();
@@ -66,7 +68,7 @@ describe('CLI cloud agent registry sync', () => {
     );
     expect(reconciled).toEqual([{
       name: 'placed',
-      label: 'placed',
+      label: 'Untitled workspace',
       mode: 'local',
       localName: 'placed',
       cloudName: undefined,

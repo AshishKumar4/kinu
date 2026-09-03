@@ -85,8 +85,14 @@ export function workspaceGenesisSignal(mission: string | null | undefined): Agen
   };
 }
 
+/** What a workspace is called before anything names it: its own documents'
+ *  headings, and the From name on any mail it sends. The product, which is
+ *  true of every workspace, rather than the slug it is addressed by — a slug
+ *  is an ID and reads to a person and a model alike as a name. */
+export const UNTITLED_WORKSPACE_NAME = 'Kinu';
+
 function normalizeName(name: string): string {
-  return name.trim().replace(/\s+/g, ' ') || 'Kinu';
+  return name.trim().replace(/\s+/g, ' ') || UNTITLED_WORKSPACE_NAME;
 }
 
 function normalizeMission(mission?: string): string {

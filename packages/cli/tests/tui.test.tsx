@@ -814,7 +814,9 @@ describe('CLI TUI layout', () => {
     const run = runHomeScreen({
       workspaces: WORKSPACE_NAMES,
       driver: `
-        const WORKSPACES = ${JSON.stringify(WORKSPACE_NAMES)};
+        // The TITLES, because that is what the navigator renders. A row shows
+        // what a workspace is called; its directory is the address behind it.
+        const WORKSPACES = ${JSON.stringify(WORKSPACE_NAMES.map(workspaceTitle))};
         const selected = () => WORKSPACES.find((name) => {
           const row = frame().split('\\n').find((line) => line.includes(name));
           return row?.includes('▶') || row?.includes('›');
@@ -1094,7 +1096,15 @@ function topVisibleTranscriptLine(frame: string): number {
   return Math.min(...numbers);
 }
 
+/** The DIRECTORIES three seeded workspaces live in — their addresses. */
 const WORKSPACE_NAMES = ['alpha', 'beta', 'gamma'] as const;
+
+/** What the navigator shows for one of them. The label a workspace renders is
+ *  its title, never its directory, so a driver that waits for a row has to wait
+ *  for this. */
+function workspaceTitle(name: string): string {
+  return `${name[0]?.toUpperCase() ?? ''}${name.slice(1)} workspace`;
+}
 
 /** Keys and tokens that would otherwise decide, from the developer's own shell,
  *  whether the home screen comes up in cloud or local mode. */
@@ -1283,7 +1293,17 @@ function runHomeScreen(options: {
   }));
   for (const name of options.workspaces ?? []) {
     mkdirSync(resolve(home, name));
-    writeFileSync(resolve(home, name, 'agent.db'), '');
+    // A REAL database carrying a title, because the navigator reads its label
+    // from there. A zero-byte file is a workspace nobody has named, and the
+    // navigator says so ("Untitled workspace") rather than printing the
+    // directory name — that name is the address `kinu chat <name>` takes.
+    const db = new Database(resolve(home, name, 'agent.db'), { create: true });
+    try {
+      db.exec('CREATE TABLE agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+      db.query('INSERT INTO agent_config (key, value) VALUES (?, ?)').run('display_name', workspaceTitle(name));
+    } finally {
+      db.close();
+    }
   }
   const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: home, KINU_SKIP_DAEMON: '1' };
   for (const name of INHERITED_CREDENTIALS) delete env[name];

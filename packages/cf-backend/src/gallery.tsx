@@ -181,8 +181,13 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
       { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
       { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
+      // THE FIRST-RUN ROW. A workspace is titled by its first prompt, so the
+      // one every new account starts with has no title and only its slug. The
+      // sidebar used to render that slug as the workspace's name; this row is
+      // what a capture of that state looks like.
+      { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3, archivedAt: null },
     ],
-    total: 4,
+    total: 5,
   },
   // The endpoint returns a ModelMenu, not a bare array. Stubbing the array
   // made `menu.models.length` throw and HomePage rendered as a blank canvas,

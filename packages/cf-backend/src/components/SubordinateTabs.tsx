@@ -7,14 +7,31 @@ import type { SubordinateRosterEntry } from "../lib/protocol";
 import { Modal } from "./ui/Modal";
 import { diagnostics, toKinuError, renderThrownChain } from "@kinu.run/core/obs";
 
-/** What an agent with no name yet is called everywhere one renders. */
-const NEW_AGENT_TITLE = "New agent";
+/** What an agent with no name yet is called everywhere one renders. "Untitled"
+ *  rather than "New": an agent nobody has named is still untitled a month
+ *  later. */
+const UNTITLED_AGENT_TITLE = "Untitled agent";
+
+/** The same state on a workspace. Separate string because the surfaces that
+ *  show it say "workspace" in every neighbouring control. */
+const UNTITLED_WORKSPACE_TITLE = "Untitled workspace";
+
+/** The plus button's label. An ACTION, not the untitled state above it — the
+ *  two read alike and used to share one constant. */
+const ADD_AGENT_LABEL = "New agent";
 
 /** A roster entry's shown name. Blank means created-but-untitled: the
  *  first-message titler (or the owner's rename) fills it in, and until then
  *  every surface says the same thing instead of an empty string. */
 export function agentTitle(displayName: string): string {
-  return displayName.trim() === "" ? NEW_AGENT_TITLE : displayName;
+  return displayName.trim() === "" ? UNTITLED_AGENT_TITLE : displayName;
+}
+
+/** {@link agentTitle} for a workspace. The slug is NOT the fallback: it is the
+ *  address in the URL bar, and showing it as a title is what put
+ *  `handwrought-walnut-4166c321` in the workspace bar. */
+export function workspaceTitle(displayName: string | null | undefined): string {
+  return displayName?.trim() || UNTITLED_WORKSPACE_TITLE;
 }
 
 
@@ -117,8 +134,8 @@ export function SubordinateTabs({
             }}
             disabled={creating}
             className="p-btn-ghost my-1 ml-1 flex size-7 shrink-0 self-center items-center justify-center disabled:opacity-50"
-            title={NEW_AGENT_TITLE}
-            aria-label={NEW_AGENT_TITLE}
+            title={ADD_AGENT_LABEL}
+            aria-label={ADD_AGENT_LABEL}
           >
             <PlusIcon size={14} className={creating ? "animate-pulse" : undefined} />
           </button>

@@ -32,6 +32,7 @@ import {
   WORKSPACE_INSTRUCTIONS_DELIMITER, WORKSPACE_INSTRUCTIONS_TAG, sealDelimiters,
 } from './prompting/sections';
 import {
+  AGENT_NAMES_LINE,
   BACKGROUND_WORK_SECTION,
   BUILTIN_TOOL_LINE,
   CODE_EXECUTION_SECTION,
@@ -61,6 +62,7 @@ export type {
   PromptBackend,
   PromptExecutorInfo,
   PromptExternalToolInfo,
+  PromptIdentity,
   TurnProvenance,
   WorkMode,
 } from './prompting/surface';
@@ -133,6 +135,22 @@ function renderOperatingGuidance(surface: PromptSurface, render: RenderSection):
     backgroundResume: surface.provenance === 'background_resume',
     planMode: surface.workMode === 'plan',
     planSubmission: surface.planSubmissionAvailable,
+  });
+}
+
+/** The names this agent and its workspace answer to.
+ *
+ *  Empty when neither has one. A workspace is titled by its first prompt, so
+ *  the gap is real and the slug is not the answer to it: naming the workspace
+ *  `handwrought-walnut-4166c321` is what this line exists to stop. */
+function renderAgentNames(surface: PromptSurface, render: RenderSection): string {
+  const { workspace, agent } = surface.identity;
+  if (workspace === null && agent === null) return '';
+  return render(AGENT_NAMES_LINE, {
+    isSubagent: agent !== null,
+    hasWorkspace: workspace !== null,
+    agent: agent ?? '',
+    workspace: workspace ?? '',
   });
 }
 
@@ -378,6 +396,10 @@ export function buildSystemPromptSync(
     // Identity, then the hard rules, then the doctrine that bounds every tool
     // call — in that order, at the front, where the model reads them first.
     readSoulForPrompt(opts.soulOverride),
+    // Names directly after the soul, which is the document those names belong
+    // to: the soul says what this workspace is for, and this says what it and
+    // this agent are called.
+    renderAgentNames(surface, render),
     renderRoleSection(surface, render),
     renderOperatingGuidance(surface, render),
     // Execution doctrine BEFORE the tool index: it is the constraint on every

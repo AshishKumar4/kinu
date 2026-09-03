@@ -13,7 +13,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { LLMProviderConfig } from '../llm';
 import { initAllTables } from './schema';
-import { seedSoul } from './soul';
+import { seedSoul, UNTITLED_WORKSPACE_NAME } from './soul';
 import {
   createInlineCraftStore, createInlineExecutor, createInlineMemory,
   createInlineSchedule, createInlineWorkspace, wrapDatabase, type AgentDatabase,
@@ -28,7 +28,15 @@ import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from '../read-mode
 export { wrapDatabase, type AgentDatabase } from './inline-primitives';
 
 export interface WorkspaceBirthConfig {
+  /** The ADDRESS: the slug this workspace is reached by (`workspaceSlug`), and
+   *  what `workspace_identity.name` holds for the life of the workspace. */
   name: string;
+  /** The name a PERSON uses, when the birth already knows one. It heads the two
+   *  documents a model reads, and it is deliberately not `name`: a slug is an
+   *  address, and heading SOUL.md with one told every workspace's model that it
+   *  was called `handwrought-walnut-4166c321`. Absent until a first prompt
+   *  titles the workspace (`planWorkspaceTitle`). */
+  title?: string;
   purpose: string;
   llm: LLMProviderConfig;
   /** Custom initial scaffold (defaults to INITIAL_SCAFFOLD_SOURCE) */
@@ -107,9 +115,14 @@ export async function createWorkspace(
   const workspaceId = nanoid();
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${config.name}, ${nowMs()})`;
 
+  // The two documents a model reads open under the name a PERSON uses, and
+  // under the product's name while the workspace has none. `config.name` heads
+  // neither: it is the address.
+  const heading = config.title?.trim() || UNTITLED_WORKSPACE_NAME;
+
   // SOUL.md — the workspace's canonical identity document, embodied by its
   // default agent. seedSoul also seeds the mission a listing reads.
-  await seedSoul(workspace.vfs, sql, { name: config.name, mission: config.purpose });
+  await seedSoul(workspace.vfs, sql, { name: heading, mission: config.purpose });
 
   await workspace.vfs.mkdir('scaffold', { recursive: true });
   // Canonical source lands before the live view: the archive is authoritative
@@ -120,7 +133,7 @@ export async function createWorkspace(
   await workspace.vfs.writeFile('scaffold/agent.js', scaffoldSource);
 
   await workspace.vfs.mkdir('memory', { recursive: true });
-  await workspace.vfs.writeFile('memory/MEMORY.md', `# ${config.name}\n\nCreated: ${new Date().toISOString()}\n`);
+  await workspace.vfs.writeFile('memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
 
   const runtime = buildComponents(db, sql, execRaw, workspace, {
     llm: config.llm, agentId: workspaceId, agentName: config.name,

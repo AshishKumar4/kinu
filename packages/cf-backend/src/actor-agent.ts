@@ -85,6 +85,7 @@ import {
   withClampedToolResults,
   type WebSearchProvider,
   buildSystemPromptSync,
+  type PromptIdentity,
   activePromptSectionOverrides,
   currentDateForPrompt,
   turnProvenanceForMetadata,
@@ -5023,6 +5024,17 @@ export abstract class ActorAgent extends Think<Env> {
     return { displayName: this.config.getDisplayName(), nameOrigin: this.config.getNameOrigin() };
   }
 
+  /**
+   * The names this actor's prompt introduces it by: the workspace it works in,
+   * and its own name when it is a subagent of that workspace.
+   *
+   * Abstract because the two actors answer from different places and neither
+   * answer is a sensible default for the other. A workspace root's title lives
+   * in the owner's registry; a subagent's lives in its own config, and the
+   * workspace's is a hop away.
+   */
+  protected abstract promptIdentity(): Promise<PromptIdentity>;
+
 
   /**
    * The shared naming round-trip: the same prompt and parser the create path
@@ -5861,6 +5873,10 @@ export abstract class ActorAgent extends Think<Env> {
       // builder: the builder is the byte-stable cacheable prefix and does no
       // I/O, exactly as with the soul.
       sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql),
+      // Names, on the AUTHORITATIVE prompt only. The cached base above cannot
+      // carry them: a title is read from the owner's registry, which is an
+      // await, and `getSystemPrompt` is synchronous by contract.
+      identity: await this.promptIdentity(),
     };
     if (availableSkills.lines.length > 0) promptOptions.availableSkills = availableSkills;
     if (activeSetForPrompt) promptOptions.activeSkills = activeSetForPrompt;

@@ -154,6 +154,7 @@ import {
   buildModelCallEvent,
   applyWorkspaceTitle, planWorkspaceTitle, suggestWorkspaceTitle,
   isPlaceholderMission, readMission, type WorkspaceTitleState,
+  type PromptIdentity,
   roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
   readSoul,
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
@@ -489,6 +490,12 @@ export interface LocalAgentSessionOpts {
   /** Root workspace authority shared with local child sessions that share this
    * VFS. A child never gets an independent migration marker or approval table. */
   instructionApprovals?: InstructionApprovalStore;
+  /** The title of the workspace this session works in, read live, when this
+   *  session is a SUBAGENT of that workspace rather than the workspace's own
+   *  chat. Present makes the prompt name both; absent makes it name the
+   *  workspace only, from this session's own config. The host supplies it
+   *  because a child's config holds its own title and not its workspace's. */
+  workspaceTitle?: () => string | null;
   /** How long a tool call may run before it is moved to the background, and how
    *  long teardown waits on work that has not settled. Fixed by the surface that
    *  opened the session (BACKGROUND_POLICY). Default: the interactive policy. */
@@ -744,6 +751,10 @@ export class LocalAgentSession implements BackendHost {
    *  committed inside, and what core's terminal claim commits its roster
    *  inside. */
   private readonly db: LocalSessionDb;
+  /** Reads the title of the workspace this session works in, on a SUBAGENT
+   *  session. Null on a workspace's own chat, where this session's own config
+   *  already holds that title. */
+  private readonly workspaceTitleSource: (() => string | null) | null;
 
   constructor(opts: LocalAgentSessionOpts) {
     this.db = opts.db;
@@ -752,6 +763,7 @@ export class LocalAgentSession implements BackendHost {
     this.oneShot = opts.oneShot === true;
     this.autoEvolve = opts.noAutoEvolve !== true;
     this.cwd = opts.cwd ?? this.rt.cwd ?? process.cwd();
+    this.workspaceTitleSource = opts.workspaceTitle ?? null;
     this.fallbackModel = opts.model ?? null;
     this.modelResolver = opts.modelResolver ?? null;
     this.rt.setModelForRoute?.((resolution) => this.localRouteLlm(resolution));
@@ -2671,6 +2683,7 @@ export class LocalAgentSession implements BackendHost {
       // builder: the builder is the byte-stable cacheable prefix and does no
       // I/O, exactly as with the soul.
       sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql),
+      identity: this.promptIdentity(),
     };
     systemPromptOptions.agentsMd = agentsMd;
     if (availableSkills.lines.length > 0) systemPromptOptions.availableSkills = availableSkills;
@@ -3831,6 +3844,25 @@ export class LocalAgentSession implements BackendHost {
         }
       }
     });
+  }
+
+  /**
+   * The names this session's prompt introduces it by.
+   *
+   * A workspace's own chat names the workspace, from the one title store the
+   * rename and the auto-title both write. A subagent names itself and the
+   * workspace it works in, and the host supplies the second: a child's config
+   * holds its own title.
+   *
+   * The slug reaches neither. It is what this agent is ADDRESSED by — its
+   * directory, its `kinu chat` argument — and telling a model that a workspace
+   * is called `handwrought-walnut-4166c321` is what this replaces.
+   */
+  private promptIdentity(): PromptIdentity {
+    const own = this.config.getDisplayName();
+    return this.workspaceTitleSource
+      ? { agent: own, workspace: this.workspaceTitleSource() }
+      : { workspace: own };
   }
 
   /**
