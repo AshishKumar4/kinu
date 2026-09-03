@@ -750,7 +750,7 @@ function CloudflareGatewaySection({ status, onChanged }: {
     return (
       <CloudflareAIConnectNotice
         returnTo="/user/settings"
-        message={`Your AI Gateways couldn't be listed: ${status.error}`}
+        message={`Could not list your AI Gateways: ${status.error}`}
       />
     );
   }

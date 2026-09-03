@@ -1103,7 +1103,7 @@ export default function WorkspacePage() {
       />
       {createAgentError && (
         <div role="alert" className="flex items-center justify-center gap-3 border-b p-border px-3 py-1.5 text-xs p-notice-danger">
-          <span>Couldn't create an agent: {createAgentError}</span>
+          <span>Could not create an agent: {createAgentError}</span>
           <button type="button" className="font-medium underline" onClick={() => setCreateAgentError(null)}>
             Dismiss
           </button>
@@ -1298,7 +1298,7 @@ export default function WorkspacePage() {
                     const message = sideErrors[source];
                     return message
                       ? [{ id: `side-${source}`, tone: "warning" as const,
-                          text: `Couldn't ${label}: ${message}`,
+                          text: `Could not ${label}: ${message}`,
                           onDismiss: () => reportSide(source, null) }]
                       : [];
                   }),

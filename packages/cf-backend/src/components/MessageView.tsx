@@ -913,7 +913,7 @@ function MessageFeedback({
         }`}
         title="Mark this response poor. Feeds evolution scoring."
       >👎</button>
-      {failed && <span className="text-[10px] p-danger">couldn't save, try again</span>}
+      {failed && <span className="text-[10px] p-danger">Could not save. Try again.</span>}
     </div>
   );
 }

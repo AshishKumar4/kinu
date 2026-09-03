@@ -191,7 +191,7 @@ function DiffView({ executors, lastActiveExecutor, rpc }: {
     setBusy(true);
     setActionErr(null);
     try { await rpc("resetWorkspaceBaseline", []); clearExpanded(); reload(); }
-    catch (e) { setActionErr(`Couldn't mark reviewed: ${describeError(e)}`); }
+    catch (e) { setActionErr(`Could not mark reviewed: ${describeError(e)}`); }
     finally { setBusy(false); }
   }, [rpc, reload, clearExpanded]);
 

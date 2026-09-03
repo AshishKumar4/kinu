@@ -193,7 +193,7 @@ export function WorkspaceDrilldown(
                   onClick={() => confirm({
                     action: { action: 'workspace.remove', userId, workspace, confirm: '' },
                     title: 'Remove this workspace',
-                    body: "This removes the workspace's Durable Object, including its conversation, model, scaffold, triggers, and sandbox. It belongs to another account and cannot be undone.",
+                    body: 'This removes the workspace and everything in it: its conversation, model, scaffold, triggers, and sandbox. It belongs to another account and cannot be undone.',
                     danger: true,
                   })}
                   className="text-xs p-danger hover:underline flex items-center gap-1 px-2 py-1"

@@ -111,7 +111,7 @@ export default function HomePage() {
           <section aria-label="Recent workspaces" className="order-2 min-w-0 lg:order-none">
             <div className="mb-2.5 flex items-center justify-between gap-3 px-1">
               <span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Recent</span>
-              {listFailed && <span className="text-[11px] p-warning">couldn't load</span>}
+              {listFailed && <span className="text-[11px] p-warning">could not load</span>}
             </div>
             <div className="overflow-hidden rounded-[14px] border p-border p-surface">
               {workspaces.slice(0, 5).map((agent, index) => (

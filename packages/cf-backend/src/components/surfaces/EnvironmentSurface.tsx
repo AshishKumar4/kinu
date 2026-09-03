@@ -264,12 +264,12 @@ function UnavailableMount({ mount, exec, onConnectDevice }: {
   if (mount.name === "laptop") return <PcConnectCta onConnectDevice={onConnectDevice} />;
   const docs = mount.name === "sandbox"
       ? { text: "This deployment has no Linux sandbox. Use the Workspace shell instead.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
-      : { text: mount.reason ?? exec?.reason ?? "This environment isn't enabled on this deployment.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
+      : { text: mount.reason ?? exec?.reason ?? "This environment is not enabled here.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
   return (
     <div className="h-full flex items-center justify-center p-6">
       <div className="max-w-md text-center space-y-3">
         <PlugIcon size={28} className="p-text-3 mx-auto" />
-        <div className="text-sm font-medium p-text">{executorLabel(mount.name)} isn't available here</div>
+        <div className="text-sm font-medium p-text">{executorLabel(mount.name)} is not available here</div>
         <p className="text-xs p-text-2 leading-relaxed">
           {docs.text}{" "}
           <a href={docs.href} target="_blank" rel="noreferrer" className="p-accent hover:underline">Learn more</a>

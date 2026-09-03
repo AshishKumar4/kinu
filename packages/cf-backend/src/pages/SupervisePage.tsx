@@ -157,7 +157,7 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
     setBusy(true);
     setActionErr(null);
     try { await rpc("proposeCurriculumTasks", [5]); reload(); }
-    catch (e) { setActionErr(`Couldn't propose tasks: ${describeError(e)}`); }
+    catch (e) { setActionErr(`Could not propose tasks: ${describeError(e)}`); }
     finally { setBusy(false); }
   }, [rpc, reload]);
 
@@ -172,7 +172,7 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
       reload();
       return true;
     } catch (e) {
-      setActionErr(`Couldn't mark the task ${status}: ${describeError(e)}`);
+      setActionErr(`Could not mark the task ${status}: ${describeError(e)}`);
       return false;
     }
   }, [rpc, reload]);
