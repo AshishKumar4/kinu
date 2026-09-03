@@ -525,6 +525,43 @@ describe('bounded layers', () => {
     expect(await view.readRange('big', size + 10, 100)).toHaveLength(0);
   });
 
+  test('a placeholder is planned from the chunk list, and a read reports what it amplified', async () => {
+    // WHAT A LAZY RESTORE READS AT ATTACH: geometry, from documents `open()`
+    // already fetched. The extent list of a sparse file says where its bytes
+    // are without touching one of them, which is what lets a wake register a
+    // 100 MiB placeholder for free.
+    const store = new MemStore();
+    const size = 100 * MIB;
+    const runA: SparseRun = { offset: 1024, bytes: enc.encode('A'.repeat(4096)) };
+    const built = await build(audited(snap(sparseE('big', size, [runA])), 0));
+    await store.commit(built.plan);
+    const view = await store.openHead();
+
+    const extents = view.extents('big');
+    expect(extents.filter((extent) => extent.kind === 'data')).toHaveLength(1);
+    const data = extents.find((extent) => extent.kind === 'data')!;
+    expect(data.offset).toBeLessThanOrEqual(1024);
+    expect(data.offset + data.length).toBeGreaterThanOrEqual(1024 + 4096);
+    expect(extents.reduce((sum, extent) => sum + extent.length, 0)).toBe(size);
+    expect(view.work()).toEqual({ rangeGets: 0, bytesFetched: 0, bytesRequested: 0 });
+
+    // AND WHAT A PAGE-IN COSTS: one chunk fetched for a 4 KiB ask. The
+    // difference between the two figures is the amplification a hydrate bound
+    // is stated in, which is why the row carries both.
+    store.resetCounters();
+    await view.readRange('big', 1024, 4096);
+    const work = view.work();
+    expect(work.rangeGets).toBe(store.gets);
+    expect(work.bytesRequested).toBe(4096);
+    expect(work.bytesFetched).toBeGreaterThanOrEqual(4096);
+    expect(work.bytesFetched).toBeLessThanOrEqual(CHUNK_SIZE);
+
+    // A hole costs nothing, and says so in the row it reports.
+    await view.readRange('big', 50 * MIB, MIB);
+    expect(view.work().rangeGets).toBe(work.rangeGets);
+    expect(view.work().bytesRequested).toBe(4096 + MIB);
+  });
+
   test('a 1 TiB hole uses one exact extent, not one chunk document per hole', async () => {
     const size = 1024 ** 4;
     const built = await build(audited(snap(sparseE('terabyte-hole', size, [])), 0));

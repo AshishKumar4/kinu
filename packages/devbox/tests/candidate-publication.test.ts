@@ -825,22 +825,49 @@ describe('candidate durable control', () => {
     await expect(harness.begin()).rejects.toThrow('candidate envelope is absent');
   });
 
-  test('restore accepts only a fully existent closure', async () => {
-    for (const deleted of ['root', 'dependency', 'closure'] as const) {
+  test('restore verifies the envelope\'s own objects, and the closure not at all', async () => {
+    // WHAT A WAKE MAY PAY FOR. The root the resolution starts from and the
+    // closure record itself are the two objects no later read would name and
+    // no attach can proceed without, so their absence refuses here.
+    for (const deleted of ['root', 'closure'] as const) {
       const harness = new ControlHarness();
       const root = await harness.publish();
       const envelope = v.parse(RootEnvelopeV1Schema, JSON.parse(dec.decode(harness.envelopes.objects.get(root)!)));
-      const key = deleted === 'root'
-        ? envelope.rootObject.key
-        : deleted === 'dependency'
-          ? envelope.closure.find((ref) => ref.key !== envelope.rootObject.key)!.key
-          : envelope.closureObject.key;
-      harness.payloads.payloads.delete(key);
+      harness.payloads.payloads.delete(
+        deleted === 'root' ? envelope.rootObject.key : envelope.closureObject.key,
+      );
 
       await expect(candidateRunControl(
         harness.store, harness.envelopes, harness.payloads.verifyObject.bind(harness.payloads),
       )).rejects.toThrow('missing candidate object');
     }
+  });
+
+  test('an attach costs two verifications, whatever the closure names', async () => {
+    // THE LANE-4 PROPERTY, MEASURED AT THE PORT. A closure walk is one remote
+    // HEAD per chunk, which is one per file — half of the 200,006-operation
+    // wake cell 6.13 measured on 2026-09-02. A dependency's absence is
+    // therefore NOT an attach-time refusal: the read that needs those bytes
+    // refuses instead, holding them to the digest the record declares
+    // (`bounded-layers.test.ts` asserts exactly that at read time).
+    const harness = new ControlHarness();
+    const root = await harness.publish();
+    const envelope = v.parse(RootEnvelopeV1Schema, JSON.parse(dec.decode(harness.envelopes.objects.get(root)!)));
+    const dependency = envelope.closure.find((ref) => ref.key !== envelope.rootObject.key);
+    if (dependency === undefined) throw new Error('expected a closure with a dependency in it');
+    harness.payloads.payloads.delete(dependency.key);
+
+    const verified: string[] = [];
+    const control = await candidateRunControl(harness.store, harness.envelopes, async (ref) => {
+      verified.push(ref.key);
+      await harness.payloads.verifyObject(ref);
+    });
+    expect(control.head?.pointer.rootEnvelopeId).toBe(root);
+    expect(verified).toEqual([envelope.rootObject.key, envelope.closureObject.key]);
+    // The absent dependency is IN the closure and was never asked about: that
+    // difference is the whole of what a lazy wake stops paying for.
+    expect(envelope.closure.map((ref) => ref.key)).toContain(dependency.key);
+    expect(verified).not.toContain(dependency.key);
   });
 });
 

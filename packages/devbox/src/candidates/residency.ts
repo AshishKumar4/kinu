@@ -67,10 +67,10 @@ export interface ResidencyPorts {
   /** Monotonic milliseconds. The idle window is measured against it. */
   now(): number;
   /** Bytes one page holds. Defaults to {@link HYDRATE_PAGE_BYTES}. */
-  readonly pageBytes?: number;
+  readonly pageBytes?: number | undefined;
   /** How long a clean page may sit untouched. Defaults to
    *  {@link CLEAN_PAGE_IDLE_MS}. */
-  readonly idleMs?: number;
+  readonly idleMs?: number | undefined;
 }
 
 /** How much of the head is local, in the sidecar status's own words. */

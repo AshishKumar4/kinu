@@ -52,7 +52,8 @@ import type {
   UpperPath,
 } from '../capture/model';
 import { ImmutableObjectRefSchema, RangeReadIntentSchema } from '../durability/contracts';
-import type { ImmutableObjectRef, RangeReadIntent } from '../durability/contracts';
+import type { HydrateWork, ImmutableObjectRef, RangeReadIntent } from '../durability/contracts';
+import type { FileExtent, HeadFilesystem } from './lazy-restore';
 import { paintedSegments } from './merkle-pack/chunk';
 import type { LogicalLayout } from './merkle-pack/chunk';
 import {
@@ -625,6 +626,46 @@ export class BoundedLayers {
     private readonly publishedParent: PublishedParent | null,
   ) {}
 
+  /**
+   * What page-in has cost this serving instance, in the contract's own row.
+   *
+   * Counted here rather than at the transport because only this class knows
+   * which bytes the caller ASKED for: a 4 KiB read of a chunked file fetches
+   * the chunk, and the difference between the two is the amplification a
+   * hydrate bound is stated in. A view rebound to a published parent starts
+   * at zero — it exists to build against, not to serve reads from.
+   */
+  #hydrate = { rangeGets: 0, bytesFetched: 0, bytesRequested: 0 };
+
+  work(): HydrateWork {
+    return { ...this.#hydrate };
+  }
+
+  /**
+   * The data and hole geometry of one file, as its chunk list states it: what
+   * a lazy restore registers a placeholder by, with no read of any chunk.
+   */
+  extents(path: UpperPath): readonly FileExtent[] {
+    const doc = this.resolved.get(path);
+    if (doc === undefined) throw new Error(`no such file: ${path}`);
+    if (doc.kind !== 'file') throw new Error(`not a file: ${path} is a ${doc.kind}`);
+    const extents: FileExtent[] = [];
+    let offset = 0;
+    for (const part of doc.chunks) {
+      if (part.size > 0) {
+        const kind = isHoleExtent(part) ? 'hole' as const : 'data' as const;
+        const last = extents[extents.length - 1];
+        if (last !== undefined && last.kind === kind) {
+          extents[extents.length - 1] = { kind, offset: last.offset, length: last.length + part.size };
+        } else {
+          extents.push({ kind, offset, length: part.size });
+        }
+      }
+      offset += part.size;
+    }
+    return extents;
+  }
+
   /** Stored content hashes only. Hole extents have no object to reuse. */
   get chunkHashes(): ReadonlySet<string> {
     return this.chunks;
@@ -762,6 +803,7 @@ export class BoundedLayers {
     const end = start + Math.min(length, doc.size - start);
     const out = new Uint8Array(end - start);
     if (out.byteLength === 0) return out;
+    this.#hydrate.bytesRequested += out.byteLength;
 
     let partStart = 0;
     for (const part of doc.chunks) {
@@ -772,6 +814,8 @@ export class BoundedLayers {
         const ref: ImmutableObjectRef = {
           key: objectKey(part.hash), byteLength: String(part.size), sha256: part.hash,
         };
+        this.#hydrate.rangeGets += 1;
+        this.#hydrate.bytesFetched += part.size;
         const bytes = await fetchObject(this.reader, this.identity, ref, `content chunk of ${path}`);
         out.set(bytes.subarray(from - partStart, to - partStart), from - start);
       }
@@ -780,6 +824,27 @@ export class BoundedLayers {
     }
     return out;
   }
+}
+
+/**
+ * A bounded-layer root as the metadata surface a lazy restore reads.
+ *
+ * The resolution is already in hand — `open()` read the root and its layers,
+ * and nothing below them — so `stat`, `readdir` and `extents` answer from
+ * memory at no remote cost, which is exactly the property that makes an
+ * attach O(#layers) instead of O(#files). Only `readRange` reaches the store.
+ */
+export function headFilesystemOf(view: BoundedLayers): HeadFilesystem {
+  return {
+    stat: async (path) => {
+      const stat = view.stat(path);
+      if (stat === null) return null;
+      return { ...stat, size: stat.size ?? 0 };
+    },
+    readdir: async (path) => view.readdir(path),
+    extents: async (path) => view.extents(path),
+    readRange: async (path, offset, length) => await view.readRange(path, offset, length),
+  };
 }
 
 // ── open ─────────────────────────────────────────────────────────────────────
