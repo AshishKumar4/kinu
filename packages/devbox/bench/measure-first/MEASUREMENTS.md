@@ -80,7 +80,25 @@ Today's fence, 400 MiB tree on the instance disk, dirty bytes written through th
 | 4 MiB | 1,404.1 | 1,998.9 |
 | 64 MiB | 1,169.6 | 1,484.5 |
 
-Flat-to-decreasing in dirty bytes, because the cost is the whole-tree stage copy (`syncfs` + copy + manifest over 400 MiB) and the dirtier fences benefit from warmer page cache. This is the O(tree) fence the design removes; it sets today's baseline. **Not measurable here: the v2 O(k) fence, because lane 2 has not landed; the design's `fence-is-o-k` matrix cell is the proof that will number it.**
+Flat-to-decreasing in dirty bytes, because the cost is the whole-tree stage copy (`syncfs` + copy + manifest over 400 MiB) and the dirtier fences benefit from warmer page cache. This is the O(tree) fence the design removes; it sets the baseline the row below is measured against.
+
+### The O(k) fence, measured 2026-09-02
+
+Lane 2 landed, so this is no longer an open cell. The same 64 KiB of dirty
+bytes, sealed on two trees a hundredfold apart:
+
+| tree | files | bytesStaged | manifest entries | staged files | fence |
+| --- | --- | --- | --- | --- | --- |
+| 4,194,304 B | 16 | 196,608 | 2 | 1 | 7 ms |
+| 419,430,400 B | 1,600 | 196,608 | 2 | 1 | 7 ms |
+
+Byte-identical seal work and the same wall clock at 100x the tree, with
+196,608 inside the 393,216-byte cluster bound (the dirty run plus its boundary
+context). The whole-tree fence spent 2,175.8 ms on that same 64 KiB against a
+400 MiB tree, so the change is a 311x reduction in wall clock at 400 MiB and
+unbounded in the tree size, which is the point: the old cost grew with n and
+this one does not. Source: the daemon's own runtime matrix
+(`fence-is-o-k`), 14/14 scenarios green.
 
 ## (c) R2 range GET from the container
 
