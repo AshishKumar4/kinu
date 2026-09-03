@@ -2,11 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { memberBody, toolExecute } from '@kinu.run/test-utils';
-import {
-  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, effectiveRoleCatalog, profileCatalogDigest,
-  WORKSPACE_RUN_ID,
-  type CompletedTurn, type ProfileCatalog, type ProfileCatalogEnvelope,
-} from '@kinu.run/core';
+import { WORKSPACE_RUN_ID, type CompletedTurn } from '@kinu.run/core';
 import {
   orchestratorHarness, reactivateOrchestratorHarness,
   type ActorHarness, type HarnessOrchestratorAgent,
@@ -89,33 +85,6 @@ function effortDerivationSites(): string[] {
   walk(join(import.meta.dir, '..', 'src'));
   return sites.sort();
 }
-
-/** A second catalog, so a test can prove the roles are read off the ACTIVE
- *  envelope rather than baked in at construction. Two custom roles over the
- *  required default tier; the digest is the envelope's own content hash. */
-const CUSTOM_CATALOG: ProfileCatalog = {
-  roles: {
-    scout: {
-      description: 'Gathers evidence and reports findings.',
-      instructions: 'Look it up before you say it.',
-      tier: 'fast',
-      preset: 'research',
-    },
-    fixer: {
-      description: 'Applies a decided fix.',
-      instructions: 'Make the change and verify it.',
-      tier: 'default',
-      preset: 'optimise',
-    },
-  },
-  tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
-};
-const CUSTOM_ENVELOPE: ProfileCatalogEnvelope = {
-  authority: { kind: 'local' },
-  version: 1,
-  digest: profileCatalogDigest(CUSTOM_CATALOG),
-  catalog: CUSTOM_CATALOG,
-};
 
 describe('turn-pipeline correctness wiring', () => {
   test('the actor prompt contains its loaded SOUL on both prompt-build paths', () => {
@@ -847,8 +816,7 @@ describe('turn-pipeline correctness wiring', () => {
       body: {},
     });
     for (const prompt of [config?.system ?? '', agent.getSystemPrompt()]) {
-      expect(prompt).toContain('agents.ask({ role, message, context_ref');
-      expect(prompt).toContain('One question (action=ask with `role`)');
+      expect(prompt).toContain('`ask` with `role` runs one temporary agent for one question');
     }
   });
 
@@ -871,16 +839,11 @@ describe('turn-pipeline correctness wiring', () => {
     expect(config?.system).toContain('## Role: Auditor (auditor)');
   });
 
-  test('a delegation opportunity carries the roles the catalog offered AT DELIVERY', async () => {
-    // The wiring this pins: the DO hands its orchestrator a roleCatalog
-    // callback, and the steering object reads it at the moment a hint is
-    // delivered — so each row stamps the ids that were on offer then. That is
-    // the difference between an ignored hint under an empty catalog (a wiring
-    // gap) and one under a full catalog (behaviour).
-    //
-    // A CALLBACK rather than a constructor argument because the catalog changes
-    // between turns; captured at delivery rather than read at turn end because
-    // a catalog that moved afterwards would rewrite what the agent was offered.
+  test('a fresh multi-part ask gets NO delegation nudge at step 0', async () => {
+    // The turn-start hint used to splice a `[Runtime steering …]` message on
+    // every fresh ask telling the model to run the parts as one search. That
+    // pressure is what sent a simple diagnosis into a three-node swarm on
+    // 2026-09-03, and it is gone: the model decides from the tool description.
     const harness = orchestratorHarness();
     const agent = harness.agent;
     const orch = agent.observeOrch();
@@ -895,32 +858,12 @@ describe('turn-pipeline correctness wiring', () => {
       continuation: false,
       body: {},
     });
-    await prepare.call(orch.turnExtension, {
-      stepNumber: 0,
-      messages: [{ role: 'user' as const, content: 'add caching to the api and update the docs' }],
-    });
-    const [row] = orch.steering.delegationSnapshot();
-    expect(row?.roles).toEqual(Object.keys(effectiveRoleCatalog(BUILTIN_PROFILE_CATALOG)));
-
-    // Swap the active envelope for a different catalog AFTER the hint was
-    // delivered. The already-recorded row keeps what was on offer when it was
-    // delivered — the row is evidence about a moment, not a live view.
-    Reflect.set(agent, '_turnProfileInputs', {
-      envelope: CUSTOM_ENVELOPE,
-      provider: { revision: 'turn-pipeline-test', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
-    });
-    const swapped = orch.steering.delegationSnapshot();
-    expect(swapped[0]!.roles).toEqual(Object.keys(effectiveRoleCatalog(BUILTIN_PROFILE_CATALOG)));
-
-    // And the NEXT delivery reads the swapped catalog, which is what keeps the
-    // callback load-bearing rather than a constructor argument in disguise.
-    orch.beginTurn(Date.now());
-    await prepare.call(orch.turnExtension, {
-      stepNumber: 0,
-      messages: [{ role: 'user' as const, content: 'now do a different fresh thing entirely' }],
-    });
-    expect(orch.steering.delegationSnapshot()[0]!.roles)
-      .toEqual(Object.keys(effectiveRoleCatalog(CUSTOM_CATALOG)));
+    const messages = [{ role: 'user' as const, content: 'add caching to the api and update the docs' }];
+    const stepped = await prepare.call(orch.turnExtension, { stepNumber: 0, messages });
+    const rendered = JSON.stringify(stepped ?? messages);
+    expect(rendered).not.toContain('Runtime steering');
+    expect(rendered).not.toContain('action=swarm');
+    expect(orch.steering.snapshot()).toEqual([]);
   });
 
 

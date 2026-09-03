@@ -56,7 +56,6 @@ export type RunEventType =
   | 'context_budget'
   | 'file_edit'
   | 'turn_steering'
-  | 'delegation_opportunity'
   | 'profile_resolution'
   | 'completion_gate'
   | 'craft_cycle'
@@ -252,64 +251,24 @@ export type RunEvent =
    *  success a gradable signal. */
   | (RunEventBase & { type: 'file_edit' } & FileEditSnapshot)
   /** The harness mechanically steered the turn, and whether the model then did
-   *  what the steer asked. At most two per turn — the turn-start hint and the
-   *  one reactive steer — written by the settle spine like `context_budget`;
+   *  what the steer asked. At most one per turn — the one reactive steer —
+   *  written by the settle spine like `context_budget`;
    *  `turn_end` is the denominator, `converted` the conversion numerator, and
-   *  `trigger` is what separates the turn-start arm from the step-25 one.
+   *  `trigger` is what separates the loop arms from the stall arm.
    *  Declared here rather than imported from the producer
    *  (orchestrator/turn-steering.ts): this union is reachable from most of the
    *  turn pipeline, and the producer holds mid-turn injection machinery no
    *  other layer may reach. */
   | (RunEventBase & { type: 'turn_steering';
       /** Which mechanical trigger fired. */
-      trigger: 'repeated_call' | 'repeated_failure' | 'no_progress'
-        | 'long_turn_no_delegation' | 'turn_start_no_delegation';
+      trigger: 'repeated_call' | 'repeated_failure' | 'no_progress';
       /** Step boundary the steer was spliced into. */
       step: number;
-      /** The tool that kept repeating or failing (not the long-turn trigger). */
+      /** The tool that kept repeating or failing (not the stall trigger). */
       tool?: string;
-      /** The model did what the steer asked: reached for `agents` after a
-       *  delegation steer, or called something other than the repeating call
-       *  after a repeat steer. */
-      converted: boolean })
-  /** A delegation opportunity, and what the model did with it.
-   *
-   *  SEPARATE FROM `turn_steering` ON PURPOSE, and the reason is denominators.
-   *  A `turn_steering` row exists only where a mechanical trigger fired, so its
-   *  count IS the instructed denominator and every scorer built on it reads that
-   *  way. Autonomous delegation fires no trigger, so folding it in would inflate
-   *  the instructed denominator with turns nothing instructed — the exact
-   *  laundering of zero conversion into apparent success that measuring the two
-   *  arms separately exists to prevent.
-   *
-   *  `surface` is which arm: `hint` rows are the INSTRUCTED denominator and
-   *  `converted` is its numerator; `unprompted` rows are the autonomous
-   *  numerator, against `turn_end` as the denominator every per-turn row in this
-   *  union already uses.
-   *
-   *  `hintId` is a digest of the exact text delivered, so a reworded hint is a
-   *  different id and a conversion rate is never averaged across two different
-   *  things. `roles` is the role catalog the agent could actually have delegated
-   *  to at that moment — a zero conversion under an empty catalog is a wiring
-   *  fact, not a behavioural one, and without the list the two are
-   *  indistinguishable. */
-  | (RunEventBase & { type: 'delegation_opportunity';
-      /** Stable id for this occasion — joins the hint to what followed it. */
-      opportunityId: string;
-      /** Where the opportunity came from: a delivered hint, or the model's own
-       *  reach on a turn no hint was delivered to. */
-      surface: 'hint' | 'unprompted';
-      /** Digest of the hint text delivered (`hint` rows only). */
-      hintId?: string;
-      /** Which delegation hint fired (`hint` rows only). */
-      trigger?: 'long_turn_no_delegation' | 'turn_start_no_delegation';
-      /** Step boundary the opportunity was observed at. */
-      step: number;
-      /** Role ids the catalog offered at that moment. Empty means the agent had
-       *  no role catalog to delegate into — see the note above. */
-      roles: string[];
-      /** An `agents` call followed. Always true on an `unprompted` row, which is
-       *  what that row records; on a `hint` row it is the conversion. */
+      /** The model did what the steer asked: called something other than the
+       *  named call after a repeat or failure steer, or reached ground the
+       *  turn had not covered after a stall steer. */
       converted: boolean })
   /** Profile authority and provider availability resolved before model work. */
   | (RunEventBase & { type: 'profile_resolution';
@@ -411,15 +370,6 @@ export type TurnSteeringRecord =
   Omit<Extract<RunEvent, { type: 'turn_steering' }>, keyof RunEventBase | 'type'>;
 
 export type TurnSteeringTrigger = TurnSteeringRecord['trigger'];
-
-/** One delegation opportunity — what the steering object reports and what the
- *  settle spine writes, derived from the durable schema for the same reason the
- *  steering record is: one declaration, no drift. */
-export type DelegationOpportunityRecord =
-  Omit<Extract<RunEvent, { type: 'delegation_opportunity' }>, keyof RunEventBase | 'type'>;
-
-/** Which arm of the delegation measurement a row belongs to. */
-export type DelegationSurface = DelegationOpportunityRecord['surface'];
 
 /** One run's completion gate — derived from the durable schema for the same
  *  reason as the steering record: one declaration, no drift. */

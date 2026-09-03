@@ -165,7 +165,7 @@ These tools are exposed by connected external providers for this turn. Use them 
  */
 export const WORKSPACE_EXECUTOR_LINE = definePromptSection(
   'executors/workspace',
-  '- **workspace.*** / `runtime: "workspace"`: {{#if cliLocal}}your own durable workspace filesystem and a real shell over it. The machine the CLI is running on is `laptop.*`, in the machine\'s own paths.{{else}}the agent\'s own durable Nimbus workspace — one filesystem and real POSIX shell with node, npm, git, resident background processes, logs, and exposable ports. Additional interpreter/toolchain support is listed in its live capabilities. Its shell runs inside a Worker isolate, so ~{{memoryMb}} MB of memory is what bounds any one command: it fits editing, scripts, package installs, running services, and repositories that clone within that.{{/if}}',
+  '- **workspace.*** / `runtime: "workspace"`: {{#if cliLocal}}your own durable workspace filesystem and a real shell over it. The machine the CLI is running on is `laptop.*`, in the machine\'s own paths.{{else}}the agent\'s own durable Nimbus workspace — one filesystem and real POSIX shell with node and local git history, resident background processes, logs, and exposable ports. Additional interpreter/toolchain support is listed in its live capabilities. Its shell runs inside a Worker isolate with ~{{memoryMb}} MB shared by everything in it, so it is for editing, small scripts and local git history only: repository clones and fetches, package installs and builds run in `sandbox.*`, which refuses nothing of that size.{{/if}}',
 );
 
 export const SANDBOX_EXECUTOR_LINE = definePromptSection(
@@ -291,85 +291,21 @@ export const CODE_EXECUTION_SECTION = definePromptSection(
   'state/code-execution',
   `## Code execution and learned capabilities
 - Before building from scratch, check \`workspace.listTools()\` and \`memory\` search for existing tools and prior lessons.
-- When you have built a reusable routine, save it with \`workspace.createTool\` — saved tools become callable as \`${CRAFTED_TOOL_NAMESPACE}.<name>(args)\` on your next execute_tools call.{{#if hasTemporaryAsk}}
-- Oversize material does not have to enter your window to be answered about: \`agents.ask({ role, message, context_ref: ['<path>'] })\` inside execute_tools runs a temporary agent that reads those paths itself and resolves with its finished answer. Fan several out with \`Promise.all\` over slices or over separate questions, then aggregate in code. A path this workspace cannot resolve is refused by name, never truncated.{{/if}}
+- When you have built a reusable routine, save it with \`workspace.createTool\` — saved tools become callable as \`${CRAFTED_TOOL_NAMESPACE}.<name>(args)\` on your next execute_tools call.
 - Your own lifecycle is the \`agent.*\` namespace inside execute_tools: curriculum, scaffold proposals and their archive, scheduled autonomous wakes and their cumulative budgets, settled background-job results, and on-demand compaction. Every call is declared with its full contract in the namespace listing on the execute_tools description — read the signature there rather than guessing one. Schedule a wake only when the task genuinely calls for recurrence or a reminder.`,
 );
 
 /**
- * ONE ladder, keyed on lifetime, behind ONE tool — the only axis the model has
- * to decide on. The rungs are INDEXED here and specified in the `agents` schema:
- * each rung's triggers are selection doctrine, which the schema owns (registry.ts
- * renderToolSchemaDescription) and every family reads. What stays is the
- * prompt-only operational doctrine no tool schema carries — the frame, the turn
- * output budget, the node artifact trail, the coordination loop, the codemode
- * namespace.
- *
- * The middle rung is one agent for one question. Weight-ordered it sits between
- * doing it yourself and searching, and it renders only where the temporary port
- * is actually wired.
- *
- * The turn-cumulative clamp explained itself here, thousands of tokens before any
- * result could trip it. It says so in its own marker now (tools/clamp.ts), at the
- * trip, where the fact is actionable — and costs nothing on the turns that never
- * reach the floor.
- *
- * The ladder's DEFAULT is where the zeroth rung used to be listed first. A bullet
- * reading "- Do it yourself" made rung 0 the visually first choice and turned the
- * section into a classification: the model had to positively recognise 2+ angles
- * before it acted, so every ambiguous turn failed closed to doing it alone —
- * measured 0% conversion on doctrine against 24% for the mechanical splice. The
- * exemptions are the same three facts, stated last and stated as things to DO, so
- * an unrecognised shape now falls the other way.
- *
- * The swarm rung said what a search IS and never what work calls for one. The
- * schema's Breadth/Doubt triggers are selection doctrine and stay there; what
- * belongs here is the SHAPE test, because deciding the work has parts is upstream
- * of picking a tool. Compressed to a clause rather than restated: turn-steering
- * already says this mechanically, but only at 25 steps, which is after the shape
- * was already chosen wrong.
- *
- * The hire rung carries the CONTEXT half of the index, which is the half that
- * decides which rung a task wants: a node may inherit the caller's window, a hire
- * never does, one takes a one-line brief and the other takes a written one. The
- * rung itself (DELEGATION_RUNGS.hire) carries the mechanism; this is the index.
- *
- * The sibling-visibility half of the artifact line went to the field that is read
- * when the task is being WRITTEN: DELEGATION_INHERITANCE.swarm.brief names what a
- * node can lean on, on `task` itself. Repeating it thousands of tokens earlier
- * bought nothing the field does not already say at the moment it matters. What
- * stays is the artifact trail, which no schema carries.
- *
- * The rungs are also a codemode namespace, so a multi-step plan is code rather
- * than a tool-call-at-a-time grind. What `workspace.createTool` produces is the
- * Code-execution section's own bullet; what belongs here is only that a delegated
- * plan is one of the scripts worth saving.
- *
- * The coordination loop is the prompt-only half: an ORDER of operations no schema
- * field can hold. The roster/re-engage/dismiss half that followed it was
- * DELEGATION_RUNGS.hire said a second time, so it went where the rungs went.
- *
- * Peer addressing is DELEGATION_CONVERSE, which the `agents` docstring already
- * composes from the same deps that decide these actions exist
- * (renderAgentsToolDescription) — every clause of the line that stood here was a
- * paraphrase of it.
- *
- * The `report` line is the frame only. When to report and what turn-end relays
- * are the `report` schema's whenToUse/whenNotToUse, verbatim.
+ * The `agents` index: which helper lifetimes exist, and nothing about when to
+ * pick one. The section names the actions and their one-line shape; which rung
+ * a task wants is selection doctrine and lives in the `agents` tool
+ * description (registry.ts), which every family reads.
  */
 export const DELEGATION_SECTION = definePromptSection(
   'state/delegation',
   `## Delegation{{#if hasActions}}
-Delegation is one tool — \`agents\` — and one question: how long does the helper need to live?
-Delegate once the shape of the work is settled: naming the parts is yours, running them is theirs. Work alone on a single coherent change in one file, on a direct answer that needs no change, and on a command the user asked you to run; work with two or more independent parts goes to the ladder.{{/if}}{{#if hasSwarm}}
-- Ephemeral search (action=swarm) — nodes of you, each running its own tool loop in parallel, whose candidates are measured and settled back this turn. Reach for it when the work already has 2+ independent angles, or when one step is uncertain enough to be worth two attempts at once.{{/if}}{{#if hasTemporaryAsk}}
-- One question (action=ask with \`role\`) — a full agent created for that question, spending ITS window on the reading and handing you back one answer. Name bulk material by \`context_ref\` rather than pasting it. It is released when it answers, so ask everything you need at once.{{/if}}{{#if hasHire}}
-- Persistent subordinate (action=hire) — a helper that outlives this turn and stays in your roster. It starts with a blank context, so its mission is the whole brief; hire when the work needs its own memory across turns rather than one answer now.{{/if}}{{#if hasSwarm}}
-A search writes its own competing candidates from \`task\` and scores each one with the verifier you named in \`objective\` — you supply what counts, not the angles.
-Nodes recurse up to search depth 3 and leave durable findings under \`shared/findings/\` — read them after the settle for detail beyond the summary.{{/if}}{{#if rungsInCode}}
-The same rungs are callable inside execute_tools as \`agents.<action>\`, so a multi-step plan can be one script — loop, branch, Promise.all — and \`workspace.createTool\` saves that script as a reusable workflow. A search started there rides that call, which does not resume after an eviction.{{/if}}{{#if hasHire}}
-Run the coordination loop: hire the needed roles → ask each an independent workstream → integrate their reports as they arrive as events that wake you.
-Subordinates share this workspace's files and sandbox.{{/if}}{{#if hasReport}}
+Helper agents are one tool — \`agents\`. Its schema says what each action does: {{#if hasSwarm}}\`swarm\` runs parallel nodes over this workspace and settles their results back this turn; {{/if}}{{#if hasTemporaryAsk}}\`ask\` with \`role\` runs one temporary agent for one question; {{/if}}{{#if hasHire}}\`hire\` creates a persistent subordinate in this workspace. Subordinates share this workspace's files and sandbox.{{/if}}{{/if}}{{#if rungsInCode}}
+The same actions are callable inside execute_tools as \`agents.<action>\`.{{/if}}{{#if hasReport}}
 You are a subordinate agent of this workspace: the workspace is your world, whoever hired you assigns your work, and \`report\` carries progress back to them.{{/if}}`,
 );
 

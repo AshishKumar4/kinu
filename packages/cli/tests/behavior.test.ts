@@ -40,19 +40,9 @@ const RunEventEnvelopeSchema = v.object({
   type: v.literal("run_event"),
   event: v.object({ type: v.string(), runId: v.string() }),
 });
-// The turn-start delegation nudge carries no `tool` — nothing repeated or
-// failed, so `SteeringEnvelopeSchema` below (which requires one) matches only
-// the reactive steers. Kept separate rather than loosening that one: a schema
-// that accepts both stops proving which arm fired.
-const StartNudgeEnvelopeSchema = v.object({
-  type: v.literal("run_event"),
-  event: v.object({
-    type: v.literal("turn_steering"),
-    trigger: v.literal("turn_start_no_delegation"),
-    step: v.number(),
-    converted: v.boolean(),
-  }),
-});
+// A steer that NAMES a call: `repeated_call` and `repeated_failure` carry the
+// tool they fired over, and requiring `tool` here is what proves which arm
+// fired rather than also accepting `no_progress`, which names nothing.
 const SteeringEnvelopeSchema = v.object({
   type: v.literal("run_event"),
   event: v.object({
@@ -61,19 +51,6 @@ const SteeringEnvelopeSchema = v.object({
     step: v.number(),
     trigger: v.string(),
     tool: v.string(),
-    converted: v.boolean(),
-  }),
-});
-/** The turn-start hint carries no `tool` — it names no failing call, because it
- *  fires before there is one. Its own envelope, so the reactive-steer schema
- *  above stays exact rather than loosening `tool` to optional. */
-const StartHintEnvelopeSchema = v.object({
-  type: v.literal("run_event"),
-  event: v.object({
-    type: v.literal("turn_steering"),
-    runId: v.string(),
-    step: v.number(),
-    trigger: v.literal("turn_start_no_delegation"),
     converted: v.boolean(),
   }),
 });
@@ -393,22 +370,14 @@ describe("kinu exec (headless)", () => {
         const parsed = v.safeParse(RunEventEnvelopeSchema, event);
         return parsed.success ? [parsed.output.event] : [];
       });
-      // Profile resolution lands before the step. `closeTurnRun` then writes
-      // both conditional rows between `step_finish` and `turn_end`. The mock
-      // answers in one step and never delegates, so the start nudge fires and
-      // its opportunity row records the non-conversion. Pin all three names so
-      // the evidence cannot disappear while the turn still looks complete.
+      // Profile resolution lands before the step. The mock answers in one step
+      // and nothing repeats, fails or stalls, so no `turn_steering` row is
+      // written at all. Pin the whole sequence so a row that appears or
+      // vanishes here cannot pass while the turn still looks complete.
       expect(ledger.map((e) => e.type)).toEqual([
-        "run_start", "turn_start", "profile_resolution", "step_finish", "turn_steering",
-        "delegation_opportunity", "turn_end", "run_end",
+        "run_start", "turn_start", "profile_resolution", "step_finish",
+        "turn_end", "run_end",
       ]);
-      const nudges = events.flatMap((e) => {
-        const parsed = v.safeParse(StartNudgeEnvelopeSchema, e);
-        return parsed.success ? [parsed.output.event] : [];
-      });
-      expect(nudges).toEqual([{
-        type: "turn_steering", trigger: "turn_start_no_delegation", step: 0, converted: false,
-      }]);
       expect(ledger.every((e) => e.runId.length > 0)).toBe(true);
       expect(new Set(ledger.map((e) => e.runId)).size).toBe(1);
 
@@ -539,12 +508,12 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
   }, 120_000);
 });
 
-// The mechanical delegation nudge is the strongest causally-measured result in
-// the program, and it was measurable only from the run_events table inside the
-// agent's database — which a benchmark container deletes with the container.
-// Zero nudges were observable across a whole ten-task run as a result.
-describe("kinu exec --json — the delegation nudge is observable from outside", () => {
-  test("a turn reports both steering rows it wrote — the step-0 hint and the reactive nudge — with trigger and conversion", async () => {
+// The mechanical loop-detection steers were measurable only from the
+// run_events table inside the agent's database — which a benchmark container
+// deletes with the container. Zero steers were observable across a whole
+// ten-task run as a result.
+describe("kinu exec --json — a mechanical steer is observable from outside", () => {
+  test("a turn reports the steering row it wrote, with trigger, tool and conversion", async () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-nudge-"));
     tempDirs.push(home);
     // Three failures from the same tool is the `repeated_failure` trigger; an
@@ -581,18 +550,6 @@ describe("kinu exec --json — the delegation nudge is observable from outside",
         converted: false,
       });
       expect(steers[0]?.step).toBeNumber();
-
-      // Both arms of the delegation A/B leave the process, on the same turn:
-      // the step-0 hint (fired before any tool ran — "Fix it" is a fresh ask
-      // with no work behind it) and the reactive steer above. The bench reader
-      // is the only copy of either, so a row that never reaches stdout is a row
-      // the measurement cannot see.
-      const hints = events.flatMap((event) => {
-        const parsed = v.safeParse(StartHintEnvelopeSchema, event);
-        return parsed.success ? [parsed.output.event] : [];
-      });
-      expect(hints).toHaveLength(1);
-      expect(hints[0]).toMatchObject({ trigger: "turn_start_no_delegation", step: 0, converted: false });
     } finally {
       await server.stop();
     }

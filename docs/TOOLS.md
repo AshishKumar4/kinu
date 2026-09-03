@@ -112,10 +112,11 @@ parts is yours, running them is theirs."* Exemptions are a one-file change, a
 direct answer, or a command the user asked you to run.
 
 Until 2026-08-17, leading with serial work made uncertainty classify as serial:
-the doctrine converted 0% of eligible turns where
-`orchestrator/turn-steering.ts` converted 24%. The prompt asks at
-`turn_start_no_delegation`; its steer fires 25 steps in at
-`LONG_TURN_STEPS_BEFORE_STEER`.
+the doctrine converted 0% of eligible turns where a mechanical nudge in
+`orchestrator/turn-steering.ts` converted 24%. That nudge is gone — the harness
+no longer steers a turn toward delegating, and the doctrine above is the whole
+of the ask. `turn-steering.ts` keeps the three loop-detection steers only:
+`repeated_call`, `repeated_failure`, `no_progress`.
 
 1. One bounded question uses `agents({action:'ask', role, message})` — a full
    agent created for it, released when it answers. Oversize material goes by
@@ -242,25 +243,21 @@ unconditional; `report.*` is subordinate-only.
 
 ### Crafted tools
 
-`sandbox-contract.ts` sets one cross-backend rule:
-`CRAFTED_TOOL_NAMESPACE` is `tools`, so calls use `tools.<name>(args)`.
-`CRAFTED_TOOL_ALIAS_NAMESPACE` is declared `codemode` and refuses calls:
+`sandbox-contract.ts` sets one cross-backend rule: `CRAFTED_TOOL_NAMESPACE` is
+`tools`, and that is the ONE namespace every tool is callable in — native
+builtins and crafted tools alike, on every backend. There is no second spelling
+and no alias: a name that is not in `tools` is not a tool.
 
-```
-Crafted tools are callable as tools.summarize(args) in this sandbox, not codemode.summarize(args).
-```
+| Backend | How `tools.<name>` becomes callable |
+|---|---|
+| Cloudflare | one `CodemodeProvider` named `tools` (`packages/cf-backend/src/execute-tools.ts`): native tools are host-dispatched functions, crafted tools are defined by its `prelude`, and `renderToolsDeclaration(native, crafted)` is the declaration the model reads |
+| CLI | the crafted bindings are passed as the `tools` parameter of the evaluated function (`packages/cli-backend/src/execute-tools-factory.ts`), beside `workspace` and `console` |
 
-The alias throws. `{error}` would look successful and allow a fitness record
-for a call that never ran. Correction text derives from the namespace constants.
-
-| Backend | Callable `tools.<name>` | Declared `codemode.<name>` |
-|---|---|---|
-| Cloudflare | `PreambleCraftedExecutor` wraps the model's program in an arrow that declares `const tools = {…}` (`packages/cf-backend/src/crafted-tool-registry.ts`) | a named provider whose entries are `craftedDispatcherEntry` (`packages/cf-backend/src/execute-tools.ts`) |
-| CLI | the crafted bindings are passed as the `tools` parameter of the evaluated function (`packages/cli-backend/src/execute-tools-factory.ts`) | a sibling parameter of stubs raising the same `craftedNamespaceCorrection` |
-
-Cloudflare seeds a named alias provider so `createCodeTool` writes names into
-its type block. The CLI injects crafted bindings as arguments and builds types
-from declared providers. See [CRAFT-ARCHITECTURE.md](./CRAFT-ARCHITECTURE.md).
+Both re-read the crafted set per call, so a tool saved a program ago is callable
+now. A native tool referenced as a bare identifier is explained rather than
+left as a `ReferenceError`: `explainNativeToolReferenceError` names
+`tools.<name>(input)` as the form. See
+[CRAFT-ARCHITECTURE.md](./CRAFT-ARCHITECTURE.md).
 
 `buildCraftedToolSetFromExecute` reads `craftStore.list()`, filters below 0.2,
 then dispatches through `deps.craftedToolExecute`: LOADER on Cloudflare, Node
@@ -303,11 +300,14 @@ with incompatible `codemode.searchWeb({...})`; the CLI omitted live
 `memory.*`, `tasks.*`, `agents.*`, `web.*`, and `llm.*`. `web` once declared
 object-argument `search` beside positional prose, producing `"[object Object]"`.
 
-`PreambleCraftedExecutor` replaces a regex splice that missed statement bodies
-and left `tools.<name>` undefined. `injectPreamble` normalizes and wraps all
-forms as `async () => { const tools = {…}; return await (<normalized>)(); }`.
-`normalizeCode` is idempotent; `unit-crafted-injection.test.ts` runs statement,
-expression, concise-arrow, and block-arrow forms.
+Crafted tools are defined by the `tools` provider's prelude
+(`renderToolsPrelude`, `cf-backend/src/codemode-sandbox.ts`), one guarded
+definition per tool, before the model's program runs. A program is written as a
+Node-style script: statements at the top level, `await` anywhere, `return` for
+the result. `tests/workerd/codemode-sandbox.test.ts` runs the whole thing under
+workerd: `require('fs/promises')` over the workspace, `state.*`, a crafted tool
+calling another, a broken crafted row poisoning only its own name, and `fetch`
+through the egress entrypoint.
 
 ## file: action reference
 

@@ -17,8 +17,8 @@ import {
 } from '@kinu.run/core';
 import { createTestSql, type TestSql } from '../src/sql';
 import {
-  BEHAVIOUR_SCORERS, completionHonesty, craftReuse, delegationConversion, editLanding,
-  recoveryDurability, scoreDelegation, scoreExploration, scoreSettleVisibility,
+  BEHAVIOUR_SCORERS, completionHonesty, craftReuse, editLanding,
+  recoveryDurability, scoreExploration, scoreSettleVisibility,
   spillRetrieval, steeringConversion, toolOutcomes,
 } from '../src/agent-evals';
 
@@ -271,157 +271,6 @@ function emit(sql: SqlExecutor, runId: string, type: string, payload: JsonObject
     VALUES (${runId}, ${eventIndex}, ${type}, ${JSON.stringify(event)}, ${event.timestamp})`;
 }
 
-describe('scoreDelegation — conversion over eligible turns', () => {
-  test('each arm reports its own denominator and rate, never pooled', () => {
-    const store = eventStore();
-    // Turn-start arm: 4 eligible, 1 converted.
-    for (let i = 0; i < 4; i++) {
-      emit(store.sql, `run-${String(i)}`, 'turn_steering', {
-        trigger: 'turn_start_no_delegation', step: 0, converted: i === 0,
-      });
-      emit(store.sql, `run-${String(i)}`, 'turn_end', {});
-    }
-    // Step-25 arm: 2 eligible, 2 converted. Only reachable on turns the first
-    // arm did not convert, which is why these are reported separately.
-    for (let i = 1; i < 3; i++) {
-      emit(store.sql, `run-${String(i)}`, 'turn_steering', {
-        trigger: 'long_turn_no_delegation', step: 25, converted: true,
-      });
-    }
-
-    const score = scoreDelegation(store.sql);
-
-    const start = score.arms.find((a) => a.trigger === 'turn_start_no_delegation');
-    const long = score.arms.find((a) => a.trigger === 'long_turn_no_delegation');
-    expect(start).toEqual({ trigger: 'turn_start_no_delegation', eligible: 4, converted: 1, rate: 0.25 });
-    expect(long).toEqual({ trigger: 'long_turn_no_delegation', eligible: 2, converted: 2, rate: 1 });
-    expect(score.eligible).toBe(6);
-    expect(score.converted).toBe(3);
-    expect(score.completedTurns).toBe(4);
-    store.close();
-  });
-
-  test('a non-delegation steer is not counted as an eligible delegation turn', () => {
-    const store = eventStore();
-    emit(store.sql, 'run-a', 'turn_steering', {
-      trigger: 'repeated_call', step: 3, tool: 'run', converted: false,
-    });
-    const score = scoreDelegation(store.sql);
-    expect(score.eligible).toBe(0);
-    for (const arm of score.arms) expect(arm.rate).toBeNull();
-    store.close();
-  });
-
-  test('`converted` counts any agents call; `forkedRuns` counts only turns that opened heads', () => {
-    // The steer's own conversion test accepts the whole `agents` tool, so a turn
-    // that merely listed the roster converts it without delegating anything.
-    // `head_split` is what an actual fork writes, so that is the strict signal.
-    const store = eventStore();
-    emit(store.sql, 'run-listed', 'turn_steering', {
-      trigger: 'turn_start_no_delegation', step: 0, converted: true,
-    });
-    emit(store.sql, 'run-forked', 'turn_steering', {
-      trigger: 'turn_start_no_delegation', step: 0, converted: true,
-    });
-    emit(store.sql, 'run-forked', 'head_split', {
-      rootId: 'root-1', headIds: ['h0', 'h1', 'h2'], rationale: 'compare designs',
-    });
-
-    const score = scoreDelegation(store.sql);
-
-    expect(score.eligible).toBe(2);
-    expect(score.converted).toBe(2);
-    expect(score.forkedRuns).toBe(1);
-    expect(score.headsOpened).toBe(3);
-    store.close();
-  });
-
-  test('REGRESSION: the delegation signal is not `tool_call_start`, which nothing emits', () => {
-    // This scorer was first written against `tool_call_start` rows naming the
-    // `agents` tool. No production code emits that type on either backend — the
-    // sinks emit `tool_call_end` and `step_finish` — so it would have reported
-    // "never delegated" forever, on every run, and been believed. A store
-    // holding ONLY the row shape production writes must still score non-zero.
-    const store = eventStore();
-    emit(store.sql, 'run-a', 'tool_call_end', {
-      name: 'agents', toolCallId: 't1', durationMs: 5,
-    });
-    emit(store.sql, 'run-a', 'head_split', {
-      rootId: 'root-1', headIds: ['h0', 'h1'], rationale: 'why',
-    });
-
-    const score = scoreDelegation(store.sql);
-
-    expect(score.forkedRuns).toBe(1);
-    expect(score.headsOpened).toBe(2);
-    store.close();
-  });
-
-  test('a run that forked with no steer still counts as a forked run', () => {
-    const store = eventStore();
-    emit(store.sql, 'run-unprompted', 'head_split', {
-      rootId: 'root-2', headIds: ['h0', 'h1'], rationale: 'unprompted',
-    });
-    const score = scoreDelegation(store.sql);
-    expect(score.forkedRuns).toBe(1);
-    expect(score.eligible).toBe(0);
-    store.close();
-  });
-
-  test('an empty store reports a ZERO denominator and null rates, not a pass', () => {
-    const store = eventStore();
-    const score = scoreDelegation(store.sql);
-    expect(score.eligible).toBe(0);
-    expect(score.forkedRuns).toBe(0);
-    expect(score.headsOpened).toBe(0);
-    expect(score.completedTurns).toBe(0);
-    expect(score.toolCalls).toBe(0);
-    expect(score.arms.map((a) => a.rate)).toEqual([null, null]);
-    store.close();
-  });
-
-  test('PRECONDITION: an inert turn yields rate 0 with ZERO tool calls, so the rate is undecidable', () => {
-    // The corpus a real bench run produced: evolution fired 14 times over 14
-    // turns and every outcome read "ungraded | 0 tool calls | 1 step". Over
-    // turns like these the arithmetic rate is a clean-looking 0%, and it would
-    // be read as "the agent chose not to delegate" when nothing happened at
-    // all. `toolCalls` is what lets a caller tell those apart, so it must be
-    // reported as zero here while `rate` is still numerically 0.
-    const store = eventStore();
-    for (let i = 0; i < 3; i++) {
-      emit(store.sql, `inert-${String(i)}`, 'turn_steering', {
-        trigger: 'turn_start_no_delegation', step: 0, converted: false,
-      });
-      emit(store.sql, `inert-${String(i)}`, 'turn_end', {});
-    }
-
-    const score = scoreDelegation(store.sql);
-
-    expect(score.eligible).toBe(3);
-    expect(score.completedTurns).toBe(3);
-    expect(score.arms.find((a) => a.trigger === 'turn_start_no_delegation')?.rate).toBe(0);
-    // The precondition that makes that 0 meaningless.
-    expect(score.toolCalls).toBe(0);
-    store.close();
-  });
-
-  test('a turn that used tools reports a non-zero precondition', () => {
-    const store = eventStore();
-    emit(store.sql, 'busy', 'turn_steering', {
-      trigger: 'turn_start_no_delegation', step: 0, converted: false,
-    });
-    emit(store.sql, 'busy', 'tool_call_end', { name: 'run', toolCallId: 't1', durationMs: 3 });
-    emit(store.sql, 'busy', 'turn_end', {});
-
-    const score = scoreDelegation(store.sql);
-
-    expect(score.eligible).toBe(1);
-    expect(score.toolCalls).toBe(1);
-    expect(score.forkedRuns).toBe(0);
-    store.close();
-  });
-});
-
 /**
  * The uniform panel's own tests.
  *
@@ -461,15 +310,13 @@ describe('BEHAVIOUR_SCORERS — the panel contract', () => {
   });
 });
 
-describe('steeringConversion — every trigger, not just the delegation pair', () => {
-  test('a repeat-breaker steer that converted is counted, which scoreDelegation excludes', () => {
+describe('steeringConversion — every mechanical trigger', () => {
+  test('a repeat-breaker steer that converted is counted', () => {
     const store = eventStore();
     emit(store.sql, 'run-a', 'turn_steering', { trigger: 'repeated_call', step: 3, tool: 'run', converted: true });
     emit(store.sql, 'run-a', 'turn_steering', { trigger: 'no_progress', step: 9, converted: true });
 
     expect(steeringConversion.score(store.sql).rate).toBe(1);
-    // The delegation scorer must still see nothing: these are not its arms.
-    expect(scoreDelegation(store.sql).eligible).toBe(0);
     store.close();
   });
 
@@ -833,27 +680,6 @@ describe('toolOutcomes — the coarse instrument that always has a denominator',
       result: 'log line 12: Error (exit 1) was seen\n',
     });
     expect(toolOutcomes.score(store.sql).passed).toBe(1);
-    store.close();
-  });
-});
-
-describe('delegationConversion — the adapter does not drift from scoreDelegation', () => {
-  test('the uniform shape reports the same numbers as the function it wraps', () => {
-    const store = eventStore();
-    for (let i = 0; i < 4; i++) {
-      emit(store.sql, `run-${String(i)}`, 'turn_steering', {
-        trigger: 'turn_start_no_delegation', step: 0, converted: i < 2,
-      });
-    }
-    emit(store.sql, 'run-0', 'head_split', { rootId: 'r', headIds: ['a', 'b'], rationale: 'why' });
-
-    const rich = scoreDelegation(store.sql);
-    const uniform = delegationConversion.score(store.sql);
-
-    expect(uniform.eligible).toBe(rich.eligible);
-    expect(uniform.passed).toBe(rich.converted);
-    expect(uniform.rate).toBe(0.5);
-    expect(uniform.detail).toContain('1 runs opened 2 heads');
     store.close();
   });
 });

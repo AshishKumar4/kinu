@@ -32,10 +32,6 @@
     "reason": "needs live eval credentials: this is the completeness assertion over declared paid behaviour cases. Without a credential no case can run; resume and five-state classification are covered credential-free in tests/evals/harness-wiring.test.ts."
   },
   {
-    "key": "tests/evals/delegation.eval.test.ts › Delegation evals — conversion over eligible turns › the delegation rate is measured over a non-zero count of eligible turns",
-    "reason": "needs a live model: drives three fresh workspaces through the full LocalAgentSession turn spine to get three eligible turns, and measures how many converted. A mock model cannot answer 'does the agent delegate' — that IS the measurement. The scorer's own logic, including the false-zero regression where the signal was a run-event type nothing emits, is covered credential-free at packages/test-utils/tests/agent-evals.test.ts."
-  },
-  {
     "key": "tests/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 4. chat turn 2: code execution",
     "reason": "needs a live model: proves the agent reaches execute_tools rather than answering from memory. Runs in the eval tier."
   },

@@ -438,7 +438,6 @@ function ledgerJudge(name: string) {
 const TAG_MECHANISM = new Map<string, string>([
   ['edit', 'edit_landing'],
   ['failure', 'recovery_durability'],
-  ['multipart', 'delegation_conversion'],
 ]);
 
 const tagExpectation = createJudge<EvalInput, BehaviourOutput>(
@@ -463,7 +462,7 @@ const tagExpectation = createJudge<EvalInput, BehaviourOutput>(
 );
 
 const JUDGES = [
-  'delegation_conversion', 'steering_conversion', 'craft_reuse', 'edit_landing',
+  'steering_conversion', 'craft_reuse', 'edit_landing',
   'recovery_durability', 'completion_honesty', 'spill_retrieval', 'tool_outcomes',
 ].map(ledgerJudge).concat([tagExpectation]);
 
@@ -754,8 +753,9 @@ describeEval('Agent behaviour over the run-event ledger', {
     // the flaky red this file's next paragraph warns about. It is measured by
     // `tag_expectation` below and reported as a rate instead.
 
-    // Scores RECORDED, never gated on a floor. A recorded baseline converted 0%
-    // of eligible delegation turns where a mechanical nudge reached 24%; at this
+    // Scores RECORDED, never gated on a floor. The mechanism this panel once
+    // headlined converted 0% of eligible turns on a recorded baseline where a
+    // mechanical nudge reached 24% — that steer is since removed; at this
     // sample size a floor would be a coin flip dressed as a gate, and a flaky
     // gate teaches everyone to ignore red. `threshold: null` records without
     // failing, which is what makes these measurements rather than assertions —
@@ -781,7 +781,7 @@ describeEval('Agent behaviour over the run-event ledger', {
  * These deliberately do NOT assert mechanism coverage. An earlier version of this
  * ticket asserted that every scorer must have a non-zero eligibility count, and
  * that was wrong: it makes mechanism coverage a target, and adding tasks to move
- * a mechanism meter is how a delegation rate that converted 4/4 wherever the work
+ * a mechanism meter is how a rate that converted 4/4 wherever the work
  * was divisible came to be reported as an 85% failure. Mechanism telemetry is
  * recorded in full and explains a moved outcome after the fact. It is not a bar.
  */

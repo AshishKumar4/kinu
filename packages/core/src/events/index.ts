@@ -8,8 +8,6 @@ export type {
   RunEventInput,
   RunEventType,
   CompletionGateRecord,
-  DelegationOpportunityRecord,
-  DelegationSurface,
   TurnSteeringRecord,
   TurnSteeringTrigger,
   CraftCycleRecord,

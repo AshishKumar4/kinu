@@ -247,7 +247,7 @@ class RunEvents(unittest.TestCase):
             "type": "run_event",
             "event": {
                 "type": "turn_steering", "runId": "r1", "eventIndex": 4,
-                "trigger": "long_turn_no_delegation", "step": 25, "converted": True,
+                "trigger": "repeated_failure", "step": 3, "converted": True,
             },
         },
         {"type": "run_event", "event": {"type": "run_end", "runId": "r1", "reason": "completed"}},
@@ -260,10 +260,10 @@ class RunEvents(unittest.TestCase):
         )
 
     def test_filters_by_row_kind(self) -> None:
-        nudges = run_events(self.LEDGER, "turn_steering")
-        self.assertEqual(len(nudges), 1)
-        self.assertIs(nudges[0]["converted"], True)
-        self.assertEqual(nudges[0]["trigger"], "long_turn_no_delegation")
+        steers = run_events(self.LEDGER, "turn_steering")
+        self.assertEqual(len(steers), 1)
+        self.assertIs(steers[0]["converted"], True)
+        self.assertEqual(steers[0]["trigger"], "repeated_failure")
 
     def test_a_stream_without_a_ledger_reads_as_empty_not_an_error(self) -> None:
         self.assertEqual(run_events(parse_events(REAL_TURN)), [])

@@ -268,7 +268,7 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
   const parts: string[] = [render(PERSISTENCE_SECTION, {})];
 
   if (hasTool(tools, 'execute_tools')) {
-    parts.push(render(CODE_EXECUTION_SECTION, { hasTemporaryAsk: surface.temporaryAsk }));
+    parts.push(render(CODE_EXECUTION_SECTION, {}));
   }
 
   if (hasTool(tools, 'agents') || hasTool(tools, 'report')) {

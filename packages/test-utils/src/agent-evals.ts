@@ -217,128 +217,7 @@ export function scoreSettleVisibility(
   };
 }
 
-// ── (c) Delegation rate over eligible turns ──────────────────────
-
-/** The two delegation steers, which are the two arms of the A/B. */
-export const DELEGATION_TRIGGERS = ['turn_start_no_delegation', 'long_turn_no_delegation'] as const;
-export type DelegationTrigger = typeof DELEGATION_TRIGGERS[number];
-
-/**
- * Why this scorer does NOT count `agents` tool calls.
- *
- * The obvious independent signal would be a call naming the `agents` tool,
- * narrowed to the actions that actually spawn (`fork`, `hire`) — because the
- * steer's own conversion test accepts ANY `agents` call, so
- * `agents({action:'list'})` converts it without delegating anything.
- *
- * That signal was written against `tool_call_start`, a type declared in the
- * event union that no producer ever wrote. A scorer built on it would have
- * returned 0 forever, on every backend, and reported that as "the agent never
- * delegated" — the precise false-zero this harness exists to eliminate,
- * shipped inside the harness. The type is now deleted and `tool_call_end`
- * carries the args, so the narrowing IS expressible; it stays unused here
- * because `head_split` is the independent one.
- *
- * `head_split` is what a fork actually writes (`{ rootId, headIds, rationale }`),
- * and its producer exists because local runs "left no trace of a fork". So
- * that is the signal — a durable consequence of delegating, not a request to.
- */
-export const DELEGATION_EVENT_TYPE = 'head_split';
-
-export interface DelegationArmScore {
-  readonly trigger: DelegationTrigger;
-  /** Steering rows written for this trigger. A row exists only when the
-   *  eligibility predicate fired, so this IS the count of eligible turns. */
-  readonly eligible: number;
-  /** Of those, rows the harness marked converted. */
-  readonly converted: number;
-  /** converted / eligible, or null when nothing was eligible. Never 0 for an
-   *  empty arm: a rate over no turns is absent, not zero. */
-  readonly rate: number | null;
-}
-
-export interface DelegationScore {
-  /** Reported per arm and never pooled: the step-25 arm only fires on turns the
-   *  turn-start arm did not convert, so the two are sequentially dependent. */
-  readonly arms: readonly DelegationArmScore[];
-  /** Eligible turns across both arms — the denominator. */
-  readonly eligible: number;
-  readonly converted: number;
-  /**
-   * Runs that actually forked, counted from `head_split` — independent of the
-   * steers, and the honest answer to "did it delegate at all".
-   *
-   * Not the same as `converted`: the steer's conversion test accepts any
-   * `agents` call, so a turn can convert by listing the roster. This counts
-   * only turns that opened heads.
-   */
-  readonly forkedRuns: number;
-  /** Heads opened across all forks. A fork that opened one head delegated
-   *  nothing to compare. */
-  readonly headsOpened: number;
-  /** Completed turns in the store. Delegation rows are written when a turn
-   *  settles, so a turn killed by a timeout contributes to neither. */
-  readonly completedTurns: number;
-  /**
-   * Tool calls the eligible turns actually made — the PRECONDITION, not a
-   * result.
-   *
-   * A turn can settle, be eligible, and have done nothing: a recorded bench run
-   * fired evolution 14 times over 14 turns and every one read "ungraded, 0 tool
-   * calls, 1 step". Over turns like those this scorer would report a delegation
-   * rate of 0%, and that number would be read as "the agent chose not to
-   * delegate" when the truth is that nothing happened at all. Those are
-   * completely different findings and only one of them is about delegation.
-   *
-   * So a caller must assert this is non-zero BEFORE reading `rate`. Zero here
-   * makes the rate UNDECIDABLE rather than 0.
-   */
-  readonly toolCalls: number;
-}
-
-export function scoreDelegation(sql: SqlExecutor): DelegationScore {
-  const rows = sql<{ trigger: string; converted: number }>`
-    SELECT json_extract(payload, '$.trigger') AS trigger,
-           json_extract(payload, '$.converted') AS converted
-    FROM run_events WHERE type = 'turn_steering'`;
-
-  const arms = DELEGATION_TRIGGERS.map<DelegationArmScore>((trigger) => {
-    const forArm = rows.filter((row) => row.trigger === trigger);
-    const converted = forArm.filter((row) => row.converted === 1).length;
-    return {
-      trigger,
-      eligible: forArm.length,
-      converted,
-      rate: forArm.length === 0 ? null : converted / forArm.length,
-    };
-  });
-
-  const splits = sql<{ run_id: string; heads: number }>`
-    SELECT run_id,
-           json_array_length(json_extract(payload, '$.headIds')) AS heads
-    FROM run_events WHERE type = ${DELEGATION_EVENT_TYPE}`;
-  const forkedRuns = new Set(splits.map((row) => row.run_id));
-
-  const completedTurns = sql<{ n: number }>`
-    SELECT COUNT(*) AS n FROM run_events WHERE type = 'turn_end'`[0]?.n ?? 0;
-
-  // `tool_call_end` is the row production writes. `tool_call_start` was declared
-  // and never emitted, and is deleted; see DELEGATION_EVENT_TYPE above.
-  const toolCalls = sql<{ n: number }>`
-    SELECT COUNT(*) AS n FROM run_events WHERE type = 'tool_call_end'`[0]?.n ?? 0;
-
-  return {
-    arms,
-    eligible: arms.reduce((total, arm) => total + arm.eligible, 0),
-    converted: arms.reduce((total, arm) => total + arm.converted, 0),
-    forkedRuns: forkedRuns.size,
-    headsOpened: splits.reduce((total, row) => total + (row.heads ?? 0), 0),
-    completedTurns,
-    toolCalls,
-  };
-}
-
-// ── (d) The uniform behavioural verdict ──────────────────────────
+// ── (c) The uniform behavioural verdict ──────────────────────────
 
 /**
  * One scorer's reading of one trajectory, in the shape every consumer needs.
@@ -419,17 +298,13 @@ function eventsOfType<K extends RunEvent['type']>(
     .filter((event): event is Extract<RunEvent, { type: K }> => event.type === type);
 }
 
-// ── (e) Steering: every trigger, not just the delegation pair ─────
+// ── (d) Steering: every mechanical trigger ───────────────────────
 
-/** The five mechanical triggers, mirroring the producer's picklist
- *  (events/types.ts:152-153). Used only to order the per-trigger breakdown;
- *  membership is enforced upstream by the canonical parse, not here.
- *  `scoreDelegation` reports the two delegation arms in detail, while this
- *  reports conversion across the whole steering mechanism — which is what "did
- *  a steer convert" means when the steer was a repeat-breaker. */
+/** The three mechanical triggers, mirroring the producer's picklist
+ *  (events/types.ts:264). Used only to order the per-trigger breakdown;
+ *  membership is enforced upstream by the canonical parse, not here. */
 export const STEERING_TRIGGERS = [
   'repeated_call', 'repeated_failure', 'no_progress',
-  'long_turn_no_delegation', 'turn_start_no_delegation',
 ] as const;
 
 /**
@@ -463,7 +338,7 @@ export const steeringConversion: BehaviourScorer = {
   },
 };
 
-// ── (f) The in-episode craft loop actually closing ───────────────
+// ── (e) The in-episode craft loop actually closing ───────────────
 
 /**
  * Did the agent build itself a tool and then reach for it again?
@@ -491,7 +366,7 @@ export const craftReuse: BehaviourScorer = {
   },
 };
 
-// ── (g) Edits landing, and the exact-match failures they hit ─────
+// ── (f) Edits landing, and the exact-match failures they hit ─────
 
 /**
  * Did the agent's edits actually land?
@@ -529,7 +404,7 @@ export const editLanding: BehaviourScorer = {
   },
 };
 
-// ── (h) Recovery that TOOK, which is the only kind that counts ────
+// ── (g) Recovery that TOOK, which is the only kind that counts ────
 
 /**
  * Did the agent break a failure streak and STAY out of it?
@@ -571,7 +446,7 @@ export const recoveryDurability: BehaviourScorer = {
   },
 };
 
-// ── (i) Completion honesty, measured against the gate ────────────
+// ── (h) Completion honesty, measured against the gate ────────────
 
 /**
  * Did the run finish without the completion gate having to force a re-look?
@@ -599,7 +474,7 @@ export const completionHonesty: BehaviourScorer = {
   },
 };
 
-// ── (j) Spilled context read back, not silently lost ─────────────
+// ── (i) Spilled context read back, not silently lost ─────────────
 
 /**
  * When the turn spilled bulk output somewhere readable, did the agent read it?
@@ -629,7 +504,7 @@ export const spillRetrieval: BehaviourScorer = {
   },
 };
 
-// ── (k) Tool calls that worked ───────────────────────────────────
+// ── (j) Tool calls that worked ───────────────────────────────────
 
 /**
  * The label the failure mix is written behind, and read back from.
@@ -720,27 +595,6 @@ export const toolOutcomes: BehaviourScorer = {
   },
 };
 
-// ── (l) Delegation, in the uniform shape ─────────────────────────
-
-/**
- * `scoreDelegation`'s headline as a `BehaviourScorer`, so the ledger's oldest
- * instrument is comparable across runs like the rest.
- *
- * A thin adapter and not a reimplementation: it calls the same function, so the
- * per-arm detail keeps its one home and this cannot drift from it.
- */
-export const delegationConversion: BehaviourScorer = {
-  name: 'delegation_conversion',
-  asserts: 'a delegation steer converted on a turn that was eligible to delegate',
-  score(sql) {
-    const score = scoreDelegation(sql);
-    return verdict(score.eligible, score.converted,
-      `${String(score.converted)}/${String(score.eligible)} eligible turns delegated; ` +
-      `${String(score.forkedRuns)} runs opened ${String(score.headsOpened)} heads ` +
-      `over ${String(score.completedTurns)} completed turns`);
-  },
-};
-
 /**
  * The behavioural panel, in reporting order.
  *
@@ -750,6 +604,6 @@ export const delegationConversion: BehaviourScorer = {
  * suite and in cross-run comparison at once, with no second registration.
  */
 export const BEHAVIOUR_SCORERS: readonly BehaviourScorer[] = [
-  delegationConversion, steeringConversion, craftReuse, editLanding,
+  steeringConversion, craftReuse, editLanding,
   recoveryDurability, completionHonesty, spillRetrieval, toolOutcomes,
 ];

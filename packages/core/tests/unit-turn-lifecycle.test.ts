@@ -107,7 +107,7 @@ describe('openTurnRun / closeTurnRun', () => {
       steering.onToolResult({ toolName: 'run', args: { command: boom }, result: `Error (exit 2): ${boom}`, success: true });
     }
     steering.steerFor({ stepNumber: 4, messages: [] });
-    steering.onToolCall({ toolName: 'agents', args: { action: 'fork' } });
+    steering.onToolCall({ toolName: 'run', args: { command: 'cat config.log' } });
 
     closeTurnRun(rec, 'run-n', {
       turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',
@@ -120,7 +120,7 @@ describe('openTurnRun / closeTurnRun', () => {
     expect(row.trigger).toBe('repeated_failure');
     expect(row.tool).toBe('run');
     expect(row.step).toBe(4);
-    // The conversion numerator: the model reached for the ladder afterwards.
+    // The conversion numerator: the model tried a different call afterwards.
     expect(row.converted).toBe(true);
 
     closeTurnRun(rec, 'run-quiet', {
@@ -128,36 +128,6 @@ describe('openTurnRun / closeTurnRun', () => {
       steering: new TurnSteering().snapshot(),
     });
     expect(rec.read('run-quiet').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
-  });
-
-  test('delegation opportunities ride the settle spine after the steering rows', () => {
-    const rec = recorder();
-    closeTurnRun(rec, 'run-dop', {
-      turnIndex: 0, reason: 'completed',
-      steering: [{ trigger: 'turn_start_no_delegation', step: 0, converted: false }],
-      delegation: [
-        {
-          opportunityId: 'dop-a', surface: 'hint',
-          hintId: 'turn_start_no_delegation:abcd1234', trigger: 'turn_start_no_delegation',
-          step: 0, roles: ['general'], converted: true,
-        },
-        { opportunityId: 'dop-b', surface: 'unprompted', step: 3, roles: [], converted: true },
-      ],
-    });
-    const events = rec.read('run-dop');
-    // Delivery order in the raw log: the steer first, then the opportunity it
-    // produced — one delivery, two rows, readable in sequence.
-    expect(events.map((e) => e.type)).toEqual([
-      'turn_steering', 'delegation_opportunity', 'delegation_opportunity', 'turn_end', 'run_end',
-    ]);
-    const row = events[1];
-    if (row?.type !== 'delegation_opportunity') throw new Error('Expected delegation_opportunity');
-    expect(row.opportunityId).toBe('dop-a');
-    expect(row.roles).toEqual(['general']);
-
-    // A turn with neither arm writes no rows — each denominator stays its own.
-    closeTurnRun(rec, 'run-plain', { turnIndex: 1, reason: 'completed' });
-    expect(rec.read('run-plain').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
   });
 
   test('an in-episode craft loop writes its craft_cycle row; an idle turn writes none', () => {
