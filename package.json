@@ -106,6 +106,17 @@
           "src/index.ts!",
           "src/branch-worker.ts!"
         ]
+      },
+      "packages/devbox": {
+        "entry": [
+          "src/index.ts!",
+          "bench/worker.ts!",
+          "bench/candidate-sidecar.ts!",
+          "bench/candidate-runner.ts!",
+          "bench/strategy-dispatch.ts!",
+          "bench/measure-first/probe.ts!",
+          "tests/**/*.test.ts"
+        ]
       }
     }
   },
