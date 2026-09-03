@@ -304,7 +304,7 @@ Memory indexing and fork snapshots address the base tree alone.
 |-----------|------------|---------------------------|-----------------------------|
 | Workspace | workspace  | Nimbus over the owning DO's own SQLite | canonical files, POSIX shell, ~95 coreutils, `node`, `npm`, `npx`, `git`; on-demand `bash`, `python3`, `pip` LOCALLY ONLY; processes, ports, previews |
 | Container | sandbox    | Sandbox DO + Container    | Linux container: git, npm, node, bun, sh/bash, jq, curl; long processes, inbound ports, previews. Probed ABSENT: docker, python3, make, gcc, clang, tsc |
-| Device    | laptop     | WebSocket tunnel from user| the user's own machine, behind consent |
+| Device    | laptop     | WebSocket tunnel from user| the user's own machines, one grant per (workspace, machine); a call names its machine when several are live |
 | Parent    | parent     | (forks only)              | the forked-from workspace's real shell over DO RPC |
 
 Which of those a given session may claim is not a matter of taste: the

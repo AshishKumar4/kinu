@@ -132,7 +132,7 @@ import {
   // called before anything names it.
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
-  isDeviceNotConnectedError,
+  isDeviceNotConnectedError, isDeviceAmbiguityError,
   // The one definition of "this executor output is a failure", shared with the
   // renderer that produces both shapes it recognises.
   isFailingResultText,
@@ -3171,6 +3171,12 @@ export class OrchestratorAgent extends ActorAgent {
     } catch (err) {
       if (isDeviceNotConnectedError(err)) {
         return { available: false, reason: 'no device connected — connect one with `kinu connect`' };
+      }
+      // Several machines are live and the checkpoint plane does not yet name
+      // one: an availability answer, in the hub's own words (it names the
+      // machines), never a silent pick of whichever came first.
+      if (isDeviceAmbiguityError(err)) {
+        return { available: false, reason: renderThrownChain({ cause: err }) };
       }
       throw err;
     }

@@ -12,6 +12,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   DEVICE_CONSENT_DENIED, SEVERAL_DEVICES_CONNECTED, NO_DEVICE_CONNECTED,
   DynamicContextLedger, connectedDevices, deviceFleetAsk, renderDynamicContextBlock,
+  isDeviceAmbiguityError, isDeviceNotConnectedError,
   type DeviceFleetEntry, type DeviceStatus, type DynamicContext, type JsonValue,
 } from '@kinu.run/core';
 import {
@@ -145,6 +146,16 @@ describe('two daemons connected at once', () => {
     expect(fleet.mac.frames.filter((f) => f.method === 'exec')).toHaveLength(0);
     expect(fleet.rig.frames.filter((f) => f.method === 'exec')).toHaveLength(0);
     // No consent card was raised for a call that never chose a machine.
+    expect(fleet.consentPrompts).toEqual([]);
+
+    // The checkpoint plane's device-less read gets the same answer, and the
+    // matcher the orchestrator's availability arm branches on recognises it.
+    let statusRefused: unknown;
+    try {
+      await fleet.userDO.deviceRpc(fleet.workspace, 'checkpointStatus', []);
+    } catch (caught) { statusRefused = caught; }
+    expect(isDeviceAmbiguityError(statusRefused)).toBe(true);
+    expect(isDeviceNotConnectedError(statusRefused)).toBe(false);
     expect(fleet.consentPrompts).toEqual([]);
     await fleet.end();
   });

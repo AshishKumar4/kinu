@@ -182,7 +182,7 @@ export const SANDBOX_EXECUTOR_LINE = definePromptSection(
  */
 export const LAPTOP_EXECUTOR_LINE = definePromptSection(
   'executors/laptop',
-  '- **laptop.*** / `runtime: "laptop"`: {{#if cliLocal}}the local machine the Kinu CLI is running on — direct access, no tunnel or consent prompt.{{else}}your user\'s own machines, over the Kinu device tunnel; commands run under `bash -c`. Use it for their local files, commands or desktop. The execution-status block names each machine and what it can do. With more than one connected, name the machine on every call with `device: "<name>"`; a call that names none is refused. Grants are per machine: a first call on an ungranted machine asks them once — expected, not an error.{{/if}}',
+  '- **laptop.*** / `runtime: "laptop"`: {{#if cliLocal}}the local machine the Kinu CLI is running on — direct access, no tunnel or consent prompt.{{else}}your user\'s own machines, over the Kinu device tunnel; commands run under `bash -c`. Use it for their local files, commands or desktop. The live system state lists their machines by name and what each can do. With more than one connected, name the machine on every call with `device: "<name>"`; a call that names none is refused. Grants are per machine: a first call on an ungranted machine asks them once — expected, not an error.{{/if}}',
 );
 
 /** A registered-but-offline device is still listed (the user can bring it
@@ -243,7 +243,7 @@ Choose the runtime that matches the task; keep reads/writes in the same runtime 
 {{executorLines}}
 
 Your own workspace is a durable POSIX filesystem at {{workspaceRoot}}, and the \`workspace\` runtime is a real shell over it — the same bytes the \`file\` tool and \`workspace.*\` file ops read, by the same paths. Relative paths resolve there; \`cd\` persists between commands.{{#if hasDevices}}
-The environments above are separate machines: run each machine's commands through its own namespace ({{deviceNamespaces}}), in paths native to each machine. A live machine's files also appear in your own file plane under a mount point — the user's device at \`/pc\`, a bound container at \`/sandbox\` — where the \`file\` tool and \`workspace.*\` reach them directly, and a native path appears whole there: \`/pc/home/user/file\` is the device's own \`/home/user/file\`. To move a file between two machines, read it from one and write it to the other. Your workspace shell sees only your own tree; it cannot see mount points.{{/if}}{{#if hasPreview}}
+The environments above are separate machines: run each machine's commands through its own namespace ({{deviceNamespaces}}), in paths native to each machine. A live machine's files also appear in your own file plane under a mount point — the user's device at \`/pc\` (each of several at \`/pc/<name>\`), a bound container at \`/sandbox\` — where the \`file\` tool and \`workspace.*\` reach them directly, and a native path appears whole there: \`/pc/home/user/file\` is the device's own \`/home/user/file\`. To move a file between two machines, read it from one and write it to the other. Your workspace shell sees only your own tree; it cannot see mount points.{{/if}}{{#if hasPreview}}
 
 ### Showing a running app
 For a user-visible web app, keep its files and server in one preview-capable environment, start the server bound to 0.0.0.0 in the background, wait for it to bind, then call {{exposeCalls}} for the environment you chose. If exposePort fails, inspect that environment's server log and retry after the server is actually listening.{{/if}}

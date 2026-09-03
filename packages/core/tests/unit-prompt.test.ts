@@ -1259,15 +1259,17 @@ describe('buildSystemPromptSync', () => {
       //     +73 (device identity) the laptop rows now name the machine the user
       //       named it and say whether this workspace already holds its access
       //       grant. 2928 → 3001.
-      // 2026-09-03: RAISED 3050 → 3150 for the fleet, measured 3118.
-      //   +117 NET. The laptop line stopped naming ONE machine and one grant
+      // 2026-09-03: RAISED 3050 → 3200 for the fleet, measured 3159.
+      //   +158 NET. The laptop line stopped naming ONE machine and one grant
       //     (−73: both left for the dynamic-context roster, where every machine
       //     renders by name each step — with two connected, the prefix's one
       //     name was whichever the hub happened to pick) and now states the
-      //     fleet rule instead (+190): a call names its machine with
+      //     fleet rule instead (+197): a call names its machine with
       //     `device: "<name>"` when more than one is connected, a call that
-      //     names none is refused, and grants are per machine.
-      'Execution environments': 3150,
+      //     names none is refused, and grants are per machine. The mount
+      //     doctrine gained the fleet's mount point (+34): each of several
+      //     machines at `/pc/<name>`.
+      'Execution environments': 3200,
       'Persistence': 700,
       // 2026-08: −1 line. `execute_tools runs JavaScript against the active
       // executor/codemode namespaces` was the tool's own summary, restated.

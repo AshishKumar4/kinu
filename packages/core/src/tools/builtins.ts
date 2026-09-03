@@ -479,7 +479,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         device: {
           type: 'string',
           description:
-            'For runtime "laptop": the machine this command runs on, by the name the execution-status block lists. Required when more than one of the user\'s machines is connected; a command that names none is refused. With one machine connected it may be omitted.',
+            'For runtime "laptop": the machine this command runs on, by the name the live system state lists. Required when more than one of the user\'s machines is connected; a command that names none is refused. With one machine connected it may be omitted.',
         },
         why: {
           type: 'string',
