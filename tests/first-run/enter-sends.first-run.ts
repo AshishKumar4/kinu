@@ -31,6 +31,7 @@ import { afterAll, describe, test } from 'vitest';
 import { resolve } from 'node:path';
 
 import { workerSession, type EvalObservation } from '@kinu.run/test-utils';
+import { TUI_COMPOSER_PLACEHOLDER } from '../../packages/core/src/index';
 import { runTuiInPty } from '../../packages/cli/tests/helpers/pty-screen';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
@@ -103,7 +104,20 @@ describe(SUITE, () => {
               // be confused again. The READY wait is on text the connected TUI
               // reliably paints even before any turn exists; the fixture prints
               // its own marker first thing.
-              { wait: 'READY-FR', timeout: READY_SECONDS },
+              // THE FIRST THING A FIRST RUN MEETS is the connect offer: the TUI
+              // raises "link this computer?" over the composer and every
+              // keystroke goes to the card until it is answered. Measured on
+              // staging 2026-09-03 twice — first the draft and both Enter
+              // spellings landed in the card and no turn ran, then a blind `n`
+              // sent before the renderer existed was lost and the card was
+              // still up when the composer wait expired. So the card is WAITED
+              // FOR by its own words, answered with its own key
+              // (`device.not-now`, tui/actions.tsx:109), and only then is the
+              // composer typed into — which is exactly the order a person does
+              // it in.
+              { wait: 'not now', timeout: READY_SECONDS },
+              { send: 'n' },
+              { wait: TUI_COMPOSER_PLACEHOLDER, timeout: READY_SECONDS },
               { send: `${spelling.marker} reply with only OK` },
               { sleep: 2 },
               { send: spelling.bytes },
