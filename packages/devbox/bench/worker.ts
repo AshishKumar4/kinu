@@ -1208,7 +1208,18 @@ export default {
             candidateBoxPrefix(env, strategy, name),
           );
           const container = await box.candidateContainerFacts();
-          return json({ ok: true, strategy, box: name, store, container, ms: Date.now() - started });
+          // The raw control fact travels verbatim so a dump taken at publish
+          // and one taken at wake compare byte for byte.
+          const control = await box.candidateControlState();
+          return json({ ok: true, strategy, box: name, store, container, control, ms: Date.now() - started });
+        }
+
+        case 'GET /incidents': {
+          // Every filed failure, oldest first. Totals say how many; only the
+          // reasons say what. Called after the ladder and after the wake but
+          // before teardown, with full arrays archived.
+          const incidents = await box.devboxIncidentReasons();
+          return json({ ok: true, strategy, box: name, incidents, ms: Date.now() - started });
         }
 
         case 'GET /ops': {
