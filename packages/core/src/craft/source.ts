@@ -27,6 +27,7 @@
  */
 
 import * as acorn from 'acorn';
+import { renderThrownChain } from '../obs/index';
 
 const ECMA: acorn.Options = { ecmaVersion: 'latest', sourceType: 'module', allowAwaitOutsideFunction: true };
 
@@ -44,7 +45,7 @@ export function parsesAsExpression(source: string): string | null {
     }
     return null;
   } catch (cause) {
-    return cause instanceof Error ? cause.message : String(cause);
+    return renderThrownChain({ cause });
   }
 }
 
@@ -138,8 +139,7 @@ export function admitCraftedSource(source: string, preferredName: string): Craft
   try {
     program = acorn.parse(trimmed, ECMA);
   } catch (cause) {
-    const reason = cause instanceof Error ? cause.message : String(cause);
-    return { ok: false, error: `the tool source does not parse as JavaScript: ${reason}` };
+    return { ok: false, error: `the tool source does not parse as JavaScript: ${renderThrownChain({ cause })}` };
   }
   const exported = exportedExpression(program, trimmed);
   const { functions, variables } = topLevelDeclarations(program);

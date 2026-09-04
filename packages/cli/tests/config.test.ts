@@ -7,7 +7,10 @@ import {
   ProfileCatalogEnvelopeSchema, parseJsonValue,
   type JsonObject, type JsonValue,
 } from "@kinu.run/core";
-import { validateAliasName, validateAgentName } from "../src/config";
+import { Database } from "bun:sqlite";
+import {
+  readWorkspaceDisplayName, readWorkspaceIdentityId, validateAliasName, validateAgentName,
+} from "../src/config";
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];
@@ -86,6 +89,31 @@ describe("CLI config safety", () => {
     // A config file with one invalid field is reported, not silently replaced by
     // defaults: defaulting would discard the whole file and read as a first run.
     expect(out.invalidRejection).toContain('is not a valid Kinu config');
+  });
+
+  test("a published workspace is readable once its WAL sidecars are gone", () => {
+    // The exact shape `kinu create` leaves behind: a WAL-mode database,
+    // checkpointed and closed, whose `-wal` and `-shm` were removed with the
+    // partial name they were written under. SQLite has to CREATE the `-shm`
+    // for such a file, so both readers below failed with "unable to open
+    // database file" while opening readonly — and `kinu create` exited 1 after
+    // publishing the workspace, having already renamed it into place.
+    const dir = mkdtempSync(join(tmpdir(), "kinu-cli-wal-read-"));
+    tempDirs.push(dir);
+    const dbPath = join(dir, "agent.db");
+    const db = new Database(dbPath, { create: true });
+    db.exec("PRAGMA journal_mode = WAL");
+    db.exec("CREATE TABLE workspace_identity (id TEXT)");
+    db.exec("INSERT INTO workspace_identity (id) VALUES ('ws-durable-1')");
+    db.exec("CREATE TABLE agent_config (key TEXT, value TEXT)");
+    db.exec("INSERT INTO agent_config (key, value) VALUES ('display_name', 'Smokey')");
+    db.query("PRAGMA wal_checkpoint(TRUNCATE)").get();
+    db.close();
+    rmSync(`${dbPath}-wal`, { force: true });
+    rmSync(`${dbPath}-shm`, { force: true });
+
+    expect(readWorkspaceIdentityId(dbPath)).toBe("ws-durable-1");
+    expect(readWorkspaceDisplayName(dbPath)).toBe("Smokey");
   });
 });
 

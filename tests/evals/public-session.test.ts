@@ -23,14 +23,14 @@
  *                 make the run happen. A skip that says nothing is the false
  *                 green the tier was rebuilt to remove.
  *   ledger        events fetched over the public route score through the SAME
- *                 eight instruments a local episode scores through, with the
+ *                 seven instruments a local episode scores through, with the
  *                 same denominators. A second scoring path would make a cloud
  *                 number incomparable with a local one, silently.
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 
-import { ledgerTotalsFromEvents, TASK_OUTCOME } from '@kinu.run/test-utils';
+import { BEHAVIOUR_SCORERS, ledgerTotalsFromEvents, TASK_OUTCOME } from '@kinu.run/test-utils';
 import {
   PUBLIC_IDENTITY_ENV, decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity, scorePublicLedger,
@@ -312,9 +312,9 @@ describe('route-shaped run events score through the production instruments', () 
   test('every instrument scores, and the failing tool call is counted as one', () => {
     const rows = scorePublicLedger(LEDGER_EVENTS);
     const byName = new Map(rows.map((row) => [row.name, row]));
-    // The eight scorers, all of them, over one store: this is the assertion that
-    // the bridge did not quietly narrow the panel.
-    expect(rows.length).toBeGreaterThanOrEqual(8);
+    // Every declared scorer, over one store: this is the assertion that the
+    // bridge did not quietly narrow the panel.
+    expect(rows.map((row) => row.name).sort()).toEqual(BEHAVIOUR_SCORERS.map((scorer) => scorer.name).sort());
     // `tool_outcomes` is the coarse instrument with a denominator on any task,
     // and the row it must not get wrong is the command that RAN and exited 1 —
     // an ordinary successful tool result whose text begins `Error (exit 1)`.

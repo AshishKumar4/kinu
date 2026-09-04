@@ -190,10 +190,9 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     expect(Object.keys(surface.tools)).toContain('agents');
     // And the prompt names it: a tool the model is never told about is not
     // offered in any sense that matters (PRD §9.5 — production prompt AND tool
-    // projection).
+    // projection). The tool index is the one prompt text about delegation.
     const system = surface.systemPrompt();
-    expect(system).toContain('## Delegation');
-    expect(system).toContain('action=swarm');
+    expect(system).toContain('- **agents** —');
   });
 
   liveTest('DRIVEN (instructed): a direct mcts search branches and ranks, durably', async () => {
@@ -354,12 +353,12 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     const evidence = recorder.evidence();
     console.log(`    request evidence: ${String(evidence.calls)} call(s), tools offered `
       + `${evidence.toolsOffered.join(', ')}, agents=${String(evidence.agentsOffered)}, `
-      + `delegation ladder shown=${String(evidence.delegationSectionShown)}, `
+      + `agents indexed=${String(evidence.agentsIndexed)}, `
       + `system ${String(evidence.systemChars)} chars`);
     expect(evidence.calls).toBeGreaterThan(0);
     expect(evidence.toolsOffered).toEqual(Object.keys(surface.tools).sort());
     expect(evidence.agentsOffered).toBe(true);
-    expect(evidence.delegationSectionShown).toBe(true);
+    expect(evidence.agentsIndexed).toBe(true);
 
     // The denominator is one eligible turn, stated. This is a SAMPLE of a rate,
     // not the rate: a single turn cannot measure a conversion percentage, and

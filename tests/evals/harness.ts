@@ -7,7 +7,7 @@
  * the file ledger, execution recovery — writes its `run_events` row when a TURN
  * CLOSES, from `closeTurnRun` (core/src/orchestrator/turn-lifecycle.ts:64-116).
  * A bare `generateText` call never closes a turn, so a harness built on one
- * would report a zero denominator for all eight scorers and read as a pass. This
+ * would report a zero denominator for all seven scorers and read as a pass. This
  * is the same spine `kinu exec` uses, with no subprocess and no stdout
  * parsing.
  *
@@ -235,11 +235,12 @@ export interface RequestSurfaceEvidence {
   readonly toolsOffered: readonly string[];
   /** Whether `agents` was among them — the delegation surface, in the request. */
   readonly agentsOffered: boolean;
-  /** Whether the system prompt the provider received rendered the delegation
-   *  ladder. Both halves are needed: a tool with no prompt section is a
-   *  capability the model was not taught, and a section with no tool is one it
-   *  cannot reach. */
-  readonly delegationSectionShown: boolean;
+  /** Whether the system prompt the provider received names `agents` in its
+   *  tool index. Both halves are needed: a tool the prompt never names is a
+   *  capability the model was not taught, and an index entry with no tool is
+   *  one it cannot reach. The index line is the only prompt text about
+   *  delegation; the Delegation section that once ranked the rungs is gone. */
+  readonly agentsIndexed: boolean;
   /** System-prompt size, so a truncated or empty projection is visible without
    *  publishing the prompt itself. */
   readonly systemChars: number;
@@ -248,7 +249,7 @@ export interface RequestSurfaceEvidence {
 /** The swarm rung's marker in the RENDERED section (section-templates.ts:296):
  *  `action=swarm` appears only when the ladder was rendered WITH the swarm
  *  rung, which is the fact §9.5 wants — not merely that a heading exists. */
-const DELEGATION_MARKER = 'action=swarm';
+const AGENTS_INDEX_MARKER = '- **agents** —';
 
 /**
  * The two fields of a provider call this reads, in the shape BOTH model
@@ -323,7 +324,7 @@ export function recordRequestSurface(model: LanguageModel): RecordedRequestSurfa
   const offered = new Set<string>();
   let calls = 0;
   let systemChars = 0;
-  let delegationSectionShown = false;
+  let agentsIndexed = false;
 
   const observe = (options: ObservedRequest): void => {
     calls += 1;
@@ -334,7 +335,7 @@ export function recordRequestSurface(model: LanguageModel): RecordedRequestSurfa
       .map((parsed) => parsed.output.content)
       .join('\n');
     systemChars = Math.max(systemChars, system.length);
-    if (system.includes(DELEGATION_MARKER)) delegationSectionShown = true;
+    if (system.includes(AGENTS_INDEX_MARKER)) agentsIndexed = true;
   };
 
   const recording: LanguageModel = model.specificationVersion === 'v2'
@@ -355,7 +356,7 @@ export function recordRequestSurface(model: LanguageModel): RecordedRequestSurfa
       calls,
       toolsOffered: [...offered].sort(),
       agentsOffered: offered.has('agents'),
-      delegationSectionShown,
+      agentsIndexed,
       systemChars,
     }),
   };

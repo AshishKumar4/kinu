@@ -67,6 +67,13 @@ export async function openWorkspaceCLI(
   config: CLIOpenConfig,
 ): Promise<{ rt: CLIRuntime; info: WorkspaceInfo }> {
   const sql = makeSql(db);
+  // A RUNNING workspace is WAL: the scheduler daemon and the CLI read the same
+  // file at the same time, which is what WAL is for. It is set here rather than
+  // at creation because `kinu create` publishes the file with no sidecars
+  // beside it — a WAL database is unreadable without the `-shm` SQLite builds
+  // next to it — and opening is the one moment a workspace gains what it is
+  // missing, exactly as the schema below does.
+  db.exec('PRAGMA journal_mode = WAL');
 
   // Every table a workspace has, on any backend — one list, in core. Opening
   // is the only moment a workspace made by an older build (or by another

@@ -541,7 +541,7 @@ export function recordPublicTurn(): PublicTurnRecorder {
  * table in the recorder's own row shape — `run_id`, `event_index`, `type`, the
  * whole stamped event as `payload`, `ts` (events/recorder.ts:330-333) — and
  * `scoreTrajectory` reads them back through `parseStoredRunEvent`, the canonical
- * parse. Nothing about the eight instruments is re-expressed here, which is what
+ * parse. Nothing about the seven instruments is re-expressed here, which is what
  * makes a cloud number comparable with a local one.
  *
  * The events are written VERBATIM. `RunEventRecorder.emit` would re-stamp

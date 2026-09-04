@@ -35,7 +35,7 @@
 // once and throws otherwise, because a mutation whose edit silently missed is a test that
 // proves a guard is load-bearing by never removing it.
 import { describe, expect, test } from 'bun:test';
-import { readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { readFileSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
@@ -69,7 +69,10 @@ type SwarmBudgetModule = typeof pristineSwarmBudget;
 type ObjectiveModule = typeof pristineObjective;
 
 const TEST_DIR = new URL('.', import.meta.url).pathname;
-const MUTANTS = scratchDir('mutation-exploration-policy');
+// Canonical, because the loader resolves a copy's relative imports from its REAL
+// path: on macOS `tmpdir()` is `/var/folders/...`, a symlink to `/private/var/...`
+// one level deeper, so a specifier counted from the symlink lands one `../` short.
+const MUTANTS = realpathSync(scratchDir('mutation-exploration-policy'));
 const SRC = new URL('../src/', import.meta.url).pathname;
 symlinkSync(resolve(TEST_DIR, '../../../node_modules'), resolve(MUTANTS, 'node_modules'), 'dir');
 

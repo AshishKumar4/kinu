@@ -259,11 +259,24 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
       }
     }
     // Everything this database holds has to be IN it before the rename that
-    // publishes it. A WAL-mode database keeps its writes in the `-wal` sidecar
-    // until a checkpoint, and `close()` cannot run one while the runtime built
-    // above still holds prepared statements — so without this the published
-    // file contains only its header page, and its first read fails SQLITE_IOERR_SHORT_READ.
+    // publishes it, and it has to be readable with nothing beside it. A
+    // WAL-mode database keeps its writes in the `-wal` sidecar until a
+    // checkpoint, and `close()` cannot run one while the runtime built above
+    // still holds prepared statements — so without the checkpoint the
+    // published file contains only its header page and its first read fails
+    // SQLITE_IOERR_SHORT_READ.
+    //
+    // The journal mode then LEAVES WAL, because publication removes the
+    // sidecars along with the partial name they were written under. A WAL
+    // database with no `-shm` cannot be read at all — SQLite has to build that
+    // file, a readonly connection may not, and a second connection made while
+    // this process still holds the outstanding statements above gets
+    // SQLITE_IOERR_VNODE instead. So the file is published needing nothing
+    // beside it, and `openWorkspaceCLI` puts a workspace it opens back into
+    // WAL, which is where a RUNNING workspace belongs and where the daemon and
+    // the CLI read it concurrently from.
     db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    db.exec('PRAGMA journal_mode = DELETE');
   } catch (error) {
     db.close();
     // Compensation is not allowed to swallow the failure it is compensating
@@ -296,9 +309,9 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     alias: input.alias || undefined,
     cwd,
     workspaceId,
-    // The database's own durable id, read back through the one helper that
-    // knows both the current table and the pre-rename one — so a ref records
-    // the same identity whether creation wrote it or adoption found it.
+    // The database's own durable id, through the one helper that knows both the
+    // current table and the pre-rename one — so a ref records the same identity
+    // whether creation wrote it or adoption found it.
     identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
   });
   const aliasPath = input.alias ? writeAliasShim(name, input.alias) : undefined;
