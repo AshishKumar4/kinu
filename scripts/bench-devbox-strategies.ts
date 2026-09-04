@@ -3270,6 +3270,58 @@ function absentCell(name: string): WitnessCheck {
   };
 }
 
+/**
+ * WHICH ATTACH OUTCOMES EACH STARTUP STEP ADMITS, and the reason for every
+ * exclusion.
+ *
+ * ADMITTING AN OUTCOME IS NOT ACCEPTING IT AS PROOF. This list decides only
+ * whether the run CONTINUES; the lifecycle verify checks and
+ * `armCompletedTheCell` are what judge whether a step was satisfied. The
+ * difference is expensive: an arm ended by an expectation loses every cell
+ * after it, and in run `kinu-devbox-bench-20260904142724` `r2fs` completed its
+ * cold attach, its whole checkpoint ladder, its stop and its wake, and was then
+ * ended at the warm attach by a step that admitted only `attached` when the box
+ * legitimately answered `already-attached` — attaching an already-attached box
+ * being exactly what a warm attach does.
+ *
+ * THE PRODUCT'S OWN LIST is `ATTACH_OUTCOME_KINDS` in
+ * `packages/devbox/src/storage.ts`: `empty`, `attached`, `already-attached`.
+ * It is restated here for the same reason the container paths below are — this
+ * driver reads a deployed box over HTTP and imports nothing from it — and
+ * `bench-devbox-decision.test.ts` compares the restatement against that
+ * source, so it cannot drift unnoticed.
+ *
+ * EVERY EXCLUSION CARRIES ITS REASON, so a step cannot be narrowed silently.
+ * Three instrument defects of this family reached deployed runs in one day: a
+ * verify check asking for a layer path the strategy had moved, a fence reader
+ * demanding a manifest version the daemon no longer writes, and this.
+ */
+const PRODUCT_ATTACH_KINDS = ['empty', 'attached', 'already-attached'] as const;
+
+/** The three startup steps an arm takes, named so a step cannot be misspelled
+ *  into an empty exclusion set. */
+type StartupStep = 'cold attach' | 'wake' | 'warm attach';
+
+const ATTACH_KINDS_EXCLUDED = {
+  'cold attach': {},
+  wake: {
+    empty: 'a wake that finds no head has nothing to measure, and continuing would '
+      + 'spend a full decisive workload producing numbers that describe the container\'s '
+      + 'own blank disk — which G1 refuses anyway',
+  },
+  'warm attach': {
+    empty: 'an attached box whose head has vanished is a control-plane fault, not a '
+      + 'slower attach, and every later cell would measure a blank disk',
+  },
+} satisfies Record<StartupStep, Readonly<Record<string, string>>>;
+
+/** The kinds one startup step admits: the product's own list, less this step's
+ *  declared exclusions. */
+function admittedAttachKinds(step: StartupStep): readonly string[] {
+  const excluded: Readonly<Record<string, string>> = ATTACH_KINDS_EXCLUDED[step];
+  return PRODUCT_ATTACH_KINDS.filter((kind) => excluded[kind] === undefined);
+}
+
 /** Paths the cells read INSIDE the container. Each is the constant its own
  *  strategy publishes (`DEVBOX_WORKDIR` and `DEVBOX_RUNTIME_DIR` in
  *  `packages/devbox/src/storage.ts`; `upperDir` and `lowerDeltaRoot` in
@@ -3848,7 +3900,7 @@ async function measureArm(
   log('create (cold attach)');
   let cold: StartupCompletion;
   try {
-    cold = await startup('/create', 'cold attach', ['empty', 'attached']);
+    cold = await startup('/create', 'cold attach', admittedAttachKinds('cold attach'));
   } catch (error) {
     // Logged as well as noted. A create failure ends this arm and the run
     // continues to the next one, so an operator watching the log otherwise sees
@@ -3931,7 +3983,7 @@ async function measureArm(
   log('stop then wake');
   const stopped = await stopOperation(fixture, box, 'stop');
   result.stopMs = stopped.ms ?? null;
-  const woke = await startup('/wake', 'wake', ['attached']);
+  const woke = await startup('/wake', 'wake', admittedAttachKinds('wake'));
   result.wakeMs = woke.ms;
   result.wakeKind = woke.attach.kind;
   result.wakeBootId = woke.state.state?.bootId ?? null;
@@ -4204,7 +4256,7 @@ async function measureArm(
 
 
   // Warm attach: a second kick observes the already attached generation.
-  const warm = await startup('/create', 'warm attach', ['attached']);
+  const warm = await startup('/create', 'warm attach', admittedAttachKinds('warm attach'));
   result.attachWarmMs = warm.ms;
   result.attachWarmKind = warm.attach.kind;
   result.attachWarmBootId = warm.state.state?.bootId ?? null;
@@ -5417,7 +5469,12 @@ function armCompletedTheCell(arm: ArmResult): boolean {
   return arm.verifyPassed
     && arm.attachColdMs !== null && arm.attachColdMs <= COLD_ATTACH_CEILING_MS
     && arm.wakeKind === 'attached'
-    && arm.attachWarmKind === 'attached'
+    // THE SECOND ATTACH OBSERVED THE UNCHANGED GENERATION, which is what this
+    // clause is about — and `already-attached` IS that observation: the box
+    // answered without redoing the work, and the boot-id equality below is what
+    // proves the generation is the same one. Requiring `attached` here demanded
+    // that a warm attach re-attach, which is not what a warm attach is.
+    && (arm.attachWarmKind === 'attached' || arm.attachWarmKind === 'already-attached')
     && arm.wakeBootId !== null
     && arm.wakeBootId === arm.attachWarmBootId
     && arm.checkpoints.length === EXPECTED_LADDER_ROWS

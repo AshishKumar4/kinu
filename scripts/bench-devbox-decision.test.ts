@@ -3381,3 +3381,83 @@ describe('the lifecycle proof names the paths the strategies export', () => {
     expect(source).not.toContain("'/var/tmp/devbox/cas-lower'");
   });
 });
+
+// ── every admission check admits what the product can answer ────────────────
+//
+// THE FAMILY THIS PINS. Three instrument defects reached deployed runs in one
+// day, all the same shape — a check narrower than the thing it measures:
+//   1. the lifecycle proof asking for a layer path the strategy had moved,
+//   2. a fence reader demanding a manifest version the daemon no longer writes,
+//   3. a startup step admitting only `attached` where the box legitimately
+//      answered `already-attached`, which ended `r2fs` after it had completed
+//      its cold attach, its ladder, its stop and its wake.
+//
+// The third cost a full arm of a decisive run, so the rule is asserted rather
+// than remembered: a step may narrow what it admits ONLY with a stated reason,
+// and the set it narrows from is the product's own.
+
+describe('the driver admits every outcome the product can produce', () => {
+  test('the restated attach kinds are the product\'s own list', () => {
+    // The driver imports nothing from the box it measures, so it restates this
+    // list — and this is what keeps the restatement true.
+    const driver = readFileSync(join(import.meta.dir, 'bench-devbox-strategies.ts'), 'utf8');
+    const storage = readFileSync(
+      join(import.meta.dir, '..', 'packages', 'devbox', 'src', 'storage.ts'),
+      'utf8',
+    );
+    const product = /ATTACH_OUTCOME_KINDS = \[([^\]]+)\]/.exec(storage)?.[1];
+    const restated = /PRODUCT_ATTACH_KINDS = \[([^\]]+)\]/.exec(driver)?.[1];
+    expect(product).toBeDefined();
+    expect(restated).toBeDefined();
+    const kinds = (list: string): string[] =>
+      [...list.matchAll(/'([^']+)'/g)].map((match) => match[1]!).sort();
+    expect(kinds(restated ?? '')).toEqual(kinds(product ?? ''));
+  });
+
+  test('every startup step admits `already-attached`, and every exclusion states a reason', () => {
+    const driver = readFileSync(join(import.meta.dir, 'bench-devbox-strategies.ts'), 'utf8');
+    const block = /ATTACH_KINDS_EXCLUDED[\s\S]*?\n\}(?: satisfies[^;]*)?;/.exec(driver)?.[0] ?? '';
+    expect(block).toContain("'cold attach': {}");
+    // `already-attached` is a legitimate answer at EVERY step — a re-kicked
+    // create, a wake on an instance that never lost its mount, and a warm
+    // attach, which is by definition attaching an attached box. No step may
+    // exclude it.
+    expect(block).not.toMatch(/'already-attached':/);
+    // Every kind any step does exclude carries prose saying why. An exclusion
+    // with an empty reason is the silent narrowing this whole test exists for.
+    for (const [, kind, reason] of block.matchAll(/\n    (\w[\w-]*): '([^']*)'/g)) {
+      expect(kind.length).toBeGreaterThan(0);
+      expect(reason.length).toBeGreaterThan(40);
+    }
+  });
+
+  test('the state reply decodes every restoration phase the product can report', () => {
+    // CHECKED AND SOUND TODAY, pinned because the failure would be quiet: the
+    // phase list is a valibot picklist inside StateReplySchema, so a phase the
+    // product added and this driver did not know would fail the parse of EVERY
+    // `/state` reply — and a poll that cannot decode a reply waits out its
+    // deadline reporting nothing rather than naming the phase it did not know.
+    const driver = readFileSync(join(import.meta.dir, 'bench-devbox-strategies.ts'), 'utf8');
+    const devbox = readFileSync(
+      join(import.meta.dir, '..', 'packages', 'devbox', 'src', 'devbox.ts'),
+      'utf8',
+    );
+    const restated = /restoration: v\.optional\(\s*v\.picklist\(\[([^\]]+)\]/.exec(driver)?.[1];
+    expect(restated).toBeDefined();
+    const admitted = [...(restated ?? '').matchAll(/'([^']+)'/g)].map((match) => match[1]!).sort();
+    // The product's phases are the `phase:` literals of its Restoration union.
+    const produced = [...devbox.matchAll(/\{ readonly phase: '([^']+)'/g)].map((match) => match[1]!);
+    expect(produced.length).toBeGreaterThan(0);
+    for (const phase of new Set(produced)) expect(admitted).toContain(phase);
+  });
+
+  test('the completed cell accepts an unchanged-generation warm attach', () => {
+    // The clause is about a second attach OBSERVING the unchanged generation,
+    // and `already-attached` is that observation; the boot-id equality beside
+    // it is what proves the generation is the same one.
+    const driver = readFileSync(join(import.meta.dir, 'bench-devbox-strategies.ts'), 'utf8');
+    const cell = /function armCompletedTheCell[\s\S]*?\n\}/.exec(driver)?.[0] ?? '';
+    expect(cell).toContain("arm.attachWarmKind === 'already-attached'");
+    expect(cell).toContain('arm.wakeBootId === arm.attachWarmBootId');
+  });
+});
