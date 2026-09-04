@@ -35,6 +35,8 @@
   "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#SURFACES (unreached-export)",
   "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#agentViewSlug (unreached-export)",
   "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#agentViewSurface (unreached-export)",
+  "packages/cf-backend/src/components/surfaces/WorkTab.tsx#ParkedCommands (unreached-export)",
+  "packages/cf-backend/src/components/surfaces/WorkTab.tsx#ParkedDecisionFlow (unreached-export)",
   "packages/cf-backend/src/components/surfaces/WorkTab.tsx#buildJournal (unreached-export)",
   "packages/cf-backend/src/components/surfaces/changelog-entries.tsx#CHANGELOG_REVALIDATE_MS (unreached-export)",
   "packages/cf-backend/src/components/surfaces/fork-runs.ts#FORK_IDLE_REVALIDATE_MS (unreached-export)",
