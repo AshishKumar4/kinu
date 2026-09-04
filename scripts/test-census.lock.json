@@ -1,5 +1,5 @@
 {
-  "measured": "864f2f8c4: 865 test files, 794 runnable suites, 11601 tests, 34 runners, 62 non-public product members",
+  "measured": "e912a5161: 866 test files, 795 runnable suites, 11585 tests, 34 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -83,6 +83,10 @@
     },
     {
       "key": "mirror :: packages/cli/tests/composer-wrap.test.tsx :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cli/tests/device-connect.test.ts :: (file scope) :: declared mirror",
       "count": 1
     },
     {
