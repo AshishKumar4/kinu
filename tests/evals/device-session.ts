@@ -280,20 +280,32 @@ export async function grantDeviceAccess(
   // call until somebody answers or the registry's five-minute window closes, so
   // awaiting it here would deadlock the very card this function is trying to
   // read. The raise — with its warm-up retries — therefore runs DETACHED, the
-  // card is polled for below, and settling it is what unblocks the raise. The
-  // raise's own settle is awaited at the END, so its failure still surfaces.
-  const raising = (async (): Promise<void> => {
-    let raised = await raiseOnce();
-    for (let attempt = 0; attempt < 12 && !raised.ok; attempt += 1) {
-      if (!/not available|no device connected/i.test(raised.detail)) break;
-      const tick = Promise.withResolvers<void>();
-      setTimeout(tick.resolve, 1_000);
-      await tick.promise;
-      raised = await raiseOnce();
-    }
-    if (!raised.ok && !/queued|approval|denied/i.test(raised.detail)) {
-      throw new Error(`the laptop executor never became reachable for ${agentName}: `
-        + `${raised.detail}`);
+  // card is polled for below, and settling it is what unblocks the raise.
+  //
+  // IT RETURNS ITS FAILURE RATHER THAN REJECTING. A detached promise that
+  // rejects while the poller is still ahead of the join is an UNOBSERVED
+  // rejection, and the runtime reports that as a failure of whatever test
+  // happens to be running — which is how a deployment answering 400 to
+  // everything read as an uncaught error instead of as the refusal it was. The
+  // failure is a value, joined below, so it surfaces exactly once and in the
+  // caller's own frame.
+  const raising = (async (): Promise<Error | null> => {
+    try {
+      let raised = await raiseOnce();
+      for (let attempt = 0; attempt < 12 && !raised.ok; attempt += 1) {
+        if (!/not available|no device connected/i.test(raised.detail)) break;
+        const tick = Promise.withResolvers<void>();
+        setTimeout(tick.resolve, 1_000);
+        await tick.promise;
+        raised = await raiseOnce();
+      }
+      if (!raised.ok && !/queued|approval|denied/i.test(raised.detail)) {
+        return new Error(`the laptop executor never became reachable for ${agentName}: `
+          + `${raised.detail}`);
+      }
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err : new Error(String(err));
     }
   })();
 
@@ -311,16 +323,21 @@ export async function grantDeviceAccess(
         },
         body: JSON.stringify({ method: 'listPendingConsents', args: [] }),
       });
+      // The body is read BEFORE the verdict, because a refusal's words are the
+      // whole value of the refusal: this read answered `400 Bad Request` and
+      // dropped what the deployment actually said, so a scope the route would
+      // not accept was indistinguishable from a route that had moved.
+      const text = await response.text();
       if (!response.ok) {
         throw new Error(`could not list the pending consents on ${agentName}: `
-          + `${String(response.status)} ${response.statusText}`);
+          + `${String(response.status)} ${response.statusText} — ${text.slice(0, BODY_EXCERPT)}`);
       }
       // The generic RPC route wraps every answer as { result: … } — the same
       // envelope `callHttp` unwraps in the shipped client. Parsed HERE rather
       // than trusted, so a route that changes its envelope is a parse failure
       // rather than a card that reads as absent.
       const envelope = v.parse(v.object({ result: v.array(v.object({ consentId: v.string() })) }),
-        await response.json());
+        JSON.parse(text));
       return envelope.result;
     });
     const card = found.find((entry) => entry.consentId.length > 0) ?? null;
@@ -342,9 +359,10 @@ export async function grantDeviceAccess(
           args: [card.consentId, 'always'],
         }),
       });
+      const text = await response.text();
       if (!response.ok) {
         throw new Error(`answering the device consent card ${card.consentId} failed: `
-          + `${String(response.status)} ${response.statusText}`);
+          + `${String(response.status)} ${response.statusText} — ${text.slice(0, BODY_EXCERPT)}`);
       }
       // The answer's own words, kept whole: `resolve` answers false for an id it
       // no longer holds — already settled, or raced with the window closing —
@@ -355,7 +373,7 @@ export async function grantDeviceAccess(
       const answer = v.parse(v.union([
         v.object({ result: v.object({ ok: v.boolean() }) }),
         v.object({ ok: v.boolean() }),
-      ]), await response.json());
+      ]), JSON.parse(text));
       const decidedOk = 'result' in answer ? answer.result.ok : answer.ok;
       if (!decidedOk) {
         throw new Error(`the workspace did not record the decision on ${card.consentId} `
@@ -365,14 +383,22 @@ export async function grantDeviceAccess(
     // Settling the card is what unblocks the detached raise; its own verdict
     // (the `true` that finally ran, or the words it answered) is awaited here so
     // a raise that failed for a real reason still fails this grant.
-    await raising;
+    const raiseFailure = await raising;
+    if (raiseFailure) throw raiseFailure;
     return;
   }
   // No card within the budget. The raise may still be parked on a card this
   // poller could not see, so it is raced against a short grace rather than
   // abandoned — but its failure is not this function's finding either way: the
   // finding is that no card was ever raised.
-  await Promise.race([raising, new Promise<void>((resolve) => { setTimeout(resolve, 5_000); })]);
+  const lateFailure = await Promise.race([
+    raising,
+    new Promise<Error | null>((resolve) => { setTimeout(() => { resolve(null); }, 5_000); }),
+  ]);
+  // The raise's own words when it has any: a deployment that refused the very
+  // first call said WHY, and reporting "no card was raised" over that would
+  // hide the refusal behind a symptom of it.
+  if (lateFailure) throw lateFailure;
   throw new Error(`no device consent card was ever raised on ${agentName} for ${deviceId}`);
 }
 

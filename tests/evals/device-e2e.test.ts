@@ -334,22 +334,48 @@ describe('the client speaks the routes the product\'s own surfaces speak', () =>
     );
   });
 
-  test('consent is granted with the browser identity, at the full-machine tier', async () => {
+  test('the grant drives the card flow, and never the route the product deleted', async () => {
+    // This test used to assert a single `PUT /api/user/devices/:id/consent`
+    // carrying the browser identity. That route does not exist: `b2ceb2e7c`
+    // deleted it, and `user/routes.ts` now serves only `GET /devices/consents`
+    // and `DELETE /devices/:id/consent`. The old assertions passed anyway,
+    // because this fake answers 200 to anything — green over a route the
+    // product had dropped. So the pin is now the flow an owner really performs:
+    // one harmless `laptop` call raises the card, the workspace's own pending
+    // list is read, and the card is answered `always` through the RPC its
+    // button calls. All three go through `/api/cli` under the bearer, because
+    // consent is keyed on the PROVEN workspace when the workspace asks.
+    //
+    // The answers are ordered rather than dispatched on the body, because the
+    // fake's handler is synchronous and a request body is not: the ORDER is
+    // itself part of the contract this test pins, and a fourth call — a retry
+    // this flow should not need — answers 500 so it fails rather than repeats.
+    const scripted = [
+      Response.json({ result: { stdout: 'ok' } }),
+      Response.json({ result: [{ consentId: 'consent-1' }] }),
+      Response.json({ result: { ok: true } }),
+    ];
+    let served = 0;
     const seen = await withServer(
-      () => Response.json({ ok: true }),
+      () => scripted[served++] ?? new Response('the flow asked for a fourth call', { status: 500 }),
       (account) => grantDeviceConsent(account, 'dev-abc123', 'eval-device-ws'),
     );
-    expect(seen[0]?.method).toBe('PUT');
-    expect(seen[0]?.path).toBe('/api/user/devices/dev-abc123/consent');
-    // The browser plane's header, never the bearer: `handleCliRequest` answers
-    // nothing outside `/api/cli`.
-    expect(seen[0]?.identity).toBe('probe-identity');
-    expect(seen[0]?.authorization).toBeNull();
-    // `full_filesystem`, because `exec` requires it — the base tier would leave
-    // the command waiting on a consent card nobody answers.
-    expect(JSON.parse(seen[0]?.body ?? '{}')).toEqual({
-      agentName: 'eval-device-ws', scope: 'full_filesystem',
-    });
+    expect(seen).toHaveLength(3);
+    expect(seen.map((entry) => entry.body ?? '')).toEqual([
+      expect.stringContaining('executeInExecutor'),
+      expect.stringContaining('listPendingConsents'),
+      expect.stringContaining('resolveDeviceConsent'),
+    ]);
+    // Every call is the workspace's own plane under its bearer, and the deleted
+    // account route must not come back — a request to it would be the regression.
+    for (const entry of seen) {
+      expect(entry.method).toBe('POST');
+      expect(entry.path).toBe('/api/cli/workspaces/eval-device-ws/rpc');
+      expect(entry.authorization).not.toBeNull();
+      expect(entry.path.endsWith('/consent')).toBe(false);
+    }
+    // Only `always` is remembered, so only `always` grants the machine.
+    expect(seen[2]?.body ?? '').toContain('"always"');
   });
 
   test('a refused consent grant carries the deployment\'s own words', async () => {
