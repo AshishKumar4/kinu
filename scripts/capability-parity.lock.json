@@ -26,6 +26,7 @@
   "asymmetry RuntimeComponents.setShellApprovalChannel#absent-in-cf",
   "asymmetry RuntimeComponents.setTurnFileLedgerProvider#absent-in-cf",
   "asymmetry RuntimeComponents.shell#absent-in-cf",
+  "asymmetry SerializableToolDescriptor.inputSchema#absent-in-cli",
   "asymmetry ShellApprovalPolicy.deferrals#absent-in-cli",
   "asymmetry ShellApprovalPolicy.requestApproval#absent-in-cf",
   "asymmetry TurnSinks.logActivity#absent-in-cli",

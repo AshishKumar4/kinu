@@ -73,9 +73,9 @@ export function outputReserveTokens(limits: ModelWindow): number {
  * Exported because tool DEFINITIONS are the part of a step's request this
  * module cannot see: they are not messages, they ride every step of the turn,
  * and for MCP a third party writes them. The admission that bounds a remote
- * catalog (cf-backend/src/user/mcp.ts) subtracts the actor's own tool surface
- * from THIS number rather than taking a second share of the window, so one
- * allocation exists and moving it moves both.
+ * catalog (`tools/mcp-surface.ts`, applied by both backends) subtracts the
+ * actor's own tool surface from THIS number rather than taking a second share
+ * of the window, so one allocation exists and moving it moves both.
  */
 export function stepContextLimit(limits: ModelWindow): number {
   return Math.max(0, Math.floor(limits.contextWindow)) - outputReserveTokens(limits);

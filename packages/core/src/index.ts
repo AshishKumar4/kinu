@@ -519,6 +519,12 @@ export { STATE_NAMESPACE, STATE_TYPES, initCodemodeStateTable, createStateCodemo
 export { admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } from './craft/source';
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export {
+  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens,
+  SerializableToolDescriptorSchema, McpToolSurfaceSchema,
+  type SerializableToolDescriptor, type RemoteMcpTool,
+  type McpSurfaceBudget, type McpDescriptorAdmission,
+} from './tools/mcp-surface';
+export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
   parseAgentsToolInput, agentsProfileContext,
   AGENTS_ACTION_FIELDS, AGENTS_ACTION_REQUIRED_FIELDS, AGENTS_FIELD_TS_TYPES,

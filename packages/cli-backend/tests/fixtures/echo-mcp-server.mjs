@@ -21,6 +21,20 @@ server.registerTool(
   },
 );
 
+// Deliberately larger than any session's step allocation — proves the
+// descriptor admission bounds what the model is handed. BOTH the prose and
+// the schema exceed it on their own: the schema is atomic (never truncated),
+// so a tool shaped like this defers whole instead of arriving clamped.
+const OVERSIZED = 'x'.repeat(300_000);
+server.registerTool(
+  'huge',
+  {
+    description: `A tool with an enormous description. ${OVERSIZED}`,
+    inputSchema: { payload: z.string().describe(`An enormous parameter. ${OVERSIZED}`) },
+  },
+  async ({ payload }) => ({ content: [{ type: 'text', text: `got ${payload.length} chars` }] }),
+);
+
 await server.connect(new StdioServerTransport());
 process.stdin.resume();
 

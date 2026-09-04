@@ -142,13 +142,13 @@ import {
   type DeviceConsentDecision, type DeviceStatus,
   type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
   type DeviceSandboxCapability, type DeviceSandboxReason,
+  describeMcpTool, type SerializableToolDescriptor,
 } from '@kinu.run/core';
 import {
   validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
-  parseMcpHeaders, mcpCredentialTransport, describeMcpTool, isMcpTransportUnauthorized,
+  parseMcpHeaders, mcpCredentialTransport, isMcpTransportUnauthorized,
   storedMcpOptionsCarryCredential,
   type McpServerSummary, type McpTransport,
-  type SerializableToolDescriptor,
 } from './mcp';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
@@ -4755,7 +4755,23 @@ export class UserDO extends Agent<Env> {
 
     const out: SerializableToolDescriptor[] = [];
     const connections = this._userMcp?.mcpConnections ?? {};
+    // Connection is a property of the SDK connection, NOT of emitted
+    // descriptors. A ready server can expose zero tools or have every tool
+    // filtered by `allowed_tools`; neither fact means it is still connecting.
+    const connected = new Set(
+      Object.entries(connections)
+        .filter(([, conn]) => mapConnectionStatus(conn.connectionState) === 'ready')
+        .map(([id]) => id),
+    );
     for (const [id, conn] of Object.entries(connections)) {
+      // The two channels are disjoint by construction: a connection that is
+      // not ready contributes no descriptors, and the `unavailable` list below
+      // names exactly the configured servers outside this set. A converged
+      // connection (a 401 moved it to authenticating, the SDK kept its cached
+      // tools) is therefore disclaimed once and offered nowhere — handing the
+      // model tools that now fail on every call, next to the notice that they
+      // are gone, is the contradiction this gate deletes.
+      if (!connected.has(id)) continue;
       const allowed = allowedById.get(id);
       if (allowed === undefined) continue; // deleted
       const meta = rows.find((r) => r.id === id);
@@ -4765,14 +4781,6 @@ export class UserDO extends Agent<Env> {
         out.push(describeMcpTool({ id, name: meta.name }, tool));
       }
     }
-    // Connection is a property of the SDK connection, NOT of emitted
-    // descriptors. A ready server can expose zero tools or have every tool
-    // filtered by `allowed_tools`; neither fact means it is still connecting.
-    const connected = new Set(
-      Object.entries(connections)
-        .filter(([, conn]) => mapConnectionStatus(conn.connectionState) === 'ready')
-        .map(([id]) => id),
-    );
     const unavailable = rows
       .filter((r) => !connected.has(r.id))
       .map((r) => ({

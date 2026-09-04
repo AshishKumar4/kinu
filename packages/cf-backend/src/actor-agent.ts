@@ -56,7 +56,7 @@ import { Think, Session } from "@cloudflare/think";
 import { streamText, generateText, tool, jsonSchema, convertToModelMessages } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import {
-  McpToolSurfaceCache, toolSurfaceTokens,
+  McpToolSurfaceCache,
 } from "./user/mcp";
 
 import type {
@@ -226,7 +226,7 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile,
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   resolveModelRoute, roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
-  beginModelOperation,
+  beginModelOperation, toolSurfaceTokens,
   // Plan mode's one completion surface and the deps-gated report tool. Both sat
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,

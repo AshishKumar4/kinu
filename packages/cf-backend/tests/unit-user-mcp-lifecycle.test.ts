@@ -18,13 +18,13 @@ import {
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  dropLiveMcpFetch, failNextMcpRemove, failNextMcpToolCall, hangMcpEstablish, inheritedMcpManager,
+  dropLiveMcpFetch, failNextMcpRemove, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, inheritedMcpManager,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers,
-  resetRecordedMcp, seedMcpTools, seedSdkMcpServer, type RecordedMcpTransport,
+  resetRecordedMcp, seedMcpTools, seedMcpAuthContinuation, seedSdkMcpServer,
+  type RecordedMcpTransport,
 } from './helpers/agents-sdk';
-import {
-  McpToolSurfaceSchema, storedMcpOptionsCarryCredential, validateMcpServerInput,
-} from '../src/user/mcp';
+import { storedMcpOptionsCarryCredential, validateMcpServerInput } from '../src/user/mcp';
+import { McpToolSurfaceSchema } from '@kinu.run/core';
 import type { McpToolSurface } from '../src/user/user-do';
 import type { UserCaller } from '../src/user/workspace-capability';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
@@ -681,18 +681,32 @@ describe('an authorization failure converges to the reconnect state', () => {
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    // The continuation a completed authorization left on the live transport —
+    // the `authUrl` the SDK reads back while AUTHENTICATING
+    // (`client-zqKcsyFa.js:1704-1706`).
+    seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
     // What the pinned SDK actually throws when a POST comes back 401 and the
     // transport cannot resolve it (`streamableHttp.js:364`). The status is a
     // NUMBER on the error, which is what the convergence reads.
     failNextMcpToolCall(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
+    // The probe is the SDK's OWN request inside `discoverIfConnected`, and a
+    // revoked grant refuses it too — queued separately because in production
+    // these are two different requests failing, not one error seen twice.
+    failNextMcpDiscovery(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
 
     await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
       .rejects.toThrow(/Streamable HTTP error/);
 
     // `discoverIfConnected` is the SDK's own reauthorization path: an
     // unauthorized probe moves the connection to AUTHENTICATING and persists the
-    // authorize URL, which is what the UI renders as "Open authorize".
+    // authorize URL, which is what the UI renders as "Open authorize". The
+    // assertions below observe THAT state — the previous version of this test
+    // asserted only that the re-probe was attempted, and passed whether or
+    // not the convergence it names actually happened.
     expect(recordedMcpLifecycle().discovered).toContain('srv1');
+    const [listed] = await h.userDO.userMcp_list(await testOwner());
+    expect(listed?.status).toBe('authenticating');
+    expect(listed?.authUrl).toBe('https://auth.example/authorize?srv1');
     h.close();
   });
 
@@ -700,12 +714,19 @@ describe('an authorization failure converges to the reconnect state', () => {
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
+    // The dispatch failure is the auth layer's own error shape; the probe's
+    // refusal is the transport's, as in production.
     failNextMcpToolCall(new UnauthorizedError());
+    failNextMcpDiscovery(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
 
     await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
       .rejects.toThrow();
 
     expect(recordedMcpLifecycle().discovered).toContain('srv1');
+    const [listed] = await h.userDO.userMcp_list(await testOwner());
+    expect(listed?.status).toBe('authenticating');
+    expect(listed?.authUrl).toBe('https://auth.example/authorize?srv1');
     h.close();
   });
 
@@ -713,14 +734,43 @@ describe('an authorization failure converges to the reconnect state', () => {
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
     failNextMcpToolCall(new Error('MCP request failed', {
       cause: new StreamableHTTPError(401, 'Server returned 401 after successful authentication'),
     }));
+    failNextMcpDiscovery(new StreamableHTTPError(401, 'Server returned 401 after successful authentication'));
 
     await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
       .rejects.toThrow();
 
     expect(recordedMcpLifecycle().discovered).toContain('srv1');
+    const [listed] = await h.userDO.userMcp_list(await testOwner());
+    expect(listed?.status).toBe('authenticating');
+    expect(listed?.authUrl).toBe('https://auth.example/authorize?srv1');
+    h.close();
+  });
+
+  test('a converged connection leaves the descriptor surface: offered nowhere, disclaimed once', async () => {
+    // The model-facing half of the convergence. The failed probe does NOT
+    // clear the connection's cached tools (the SDK reassigns them only on the
+    // success paths), so after convergence the same server must appear in
+    // exactly one channel: absent from the descriptors the model plans with,
+    // named once in the `unavailable` the model reads as absence. Before the
+    // fix it appeared in both — tools that now 401 on every call, offered
+    // alongside the notice that they are gone.
+    const h = harness();
+    await seedServer(h, 'srv1');
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    failNextMcpToolCall(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
+    failNextMcpDiscovery(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
+
+    await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
+      .rejects.toThrow(/Streamable HTTP error/);
+
+    const surface = await readSurface(h, await testOwner());
+    expect(surface.descriptors).toEqual([]);
+    expect(surface.unavailable).toHaveLength(1);
+    expect(surface.unavailable[0]?.server).toBe('srv1');
     h.close();
   });
 

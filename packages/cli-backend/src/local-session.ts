@@ -15,7 +15,7 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
-  generateText, stepCountIs,
+  generateText, stepCountIs, tool, jsonSchema,
   type LanguageModel, type ModelMessage, type ToolSet,
 } from 'ai';
 import type { Database } from 'bun:sqlite';
@@ -171,7 +171,7 @@ import {
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  stepContextLimit,
+  stepContextLimit, admitMcpDescriptors, toolSurfaceTokens,
 } from '@kinu.run/core';
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
@@ -1738,23 +1738,56 @@ export class LocalAgentSession implements BackendHost {
    *  Call once at startup (no-op for empty config). Idempotent-safe to skip. */
   async connectMcp(servers: Record<string, McpServerConfig>): Promise<void> {
     if (!servers || Object.keys(servers).length === 0) return;
-    const conn = await connectMcpServers(servers, (msg) => this.emit({ type: 'background', event: 'mcp', message: msg }));
+    const log = (message: string): void => {
+      this.emit({ type: 'background', event: 'mcp', message });
+    };
+    const conn = await connectMcpServers(servers, log);
+    // ONE admission, through the same policy the cloud backend's turn applies:
+    // the session's resolved figures, less the native surface this session
+    // already carries. The install is session-scoped — merged once, ridden by
+    // every turn — so the native figure is the session's full surface rather
+    // than one turn's filtered subset. A turn that narrows its tools keeps
+    // MORE room, never less.
+    const admission = admitMcpDescriptors(conn.descriptors, {
+      contextWindow: this.sessionContextWindow(),
+      modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+      nativeToolTokens: toolSurfaceTokens(this.tools),
+    });
+    const tools: ToolSet = {};
+    for (const d of admission.admitted) {
+      tools[d.toolKey] = tool({
+        description: d.description ?? `${d.serverName}/${d.name}`,
+        inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
+        execute: async (args) => conn.call(d.serverName, d.name, args),
+      });
+    }
     // MCP servers are bulk producers like any other tool — same clamp, same
     // spill path, same turn budget as the builtins.
-    this.extraTools = withClampedToolResults(conn.tools, {
+    this.extraTools = withClampedToolResults(tools, {
       vfs: this.rt.storage.vfs, budget: this.orch.acc.context, producer: 'external_tool',
     });
     this.mcpClose = conn.close;
     // A server that never came up is stated in the turn's live context, not
     // only in a diagnostic the model never sees. Its tools are simply ABSENT
     // otherwise, so the model plans as if a capability the user configured
-    // does not exist and cannot explain why.
-    this.mcpUnavailable = conn.diagnostics
-      .filter((d) => d.status === 'failed')
-      .map((d) => ({
+    // does not exist and cannot explain why. A deferred server joins that
+    // list: the admission's reason carries the budget arithmetic, so the
+    // absence names what did not fit and out of what.
+    this.mcpUnavailable = [
+      ...conn.diagnostics
+        .filter((d) => d.status === 'failed')
+        .map((d) => ({
+          source: `MCP server "${d.server}"`,
+          reason: d.reason ?? 'failed to start — its tools are absent from this turn',
+        })),
+      ...admission.deferred.map((d) => ({
         source: `MCP server "${d.server}"`,
-        reason: d.reason ?? 'failed to start — its tools are absent from this turn',
-      }));
+        reason: d.reason,
+      })),
+    ];
+    for (const d of admission.deferred) {
+      log(`mcp: ${d.server} deferred: ${d.reason}`);
+    }
   }
 
   /** Configured MCP servers whose tools are not on this session's surface. */

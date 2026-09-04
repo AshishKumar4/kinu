@@ -913,6 +913,14 @@ const mcpDiscovered: string[] = [];
  *  SDK's transports raise and what the classification under test reads. */
 let mcpCallToolFailure: Error | null = null;
 
+/** The failure the next discovery PROBE runs into. The SDK's reauthorization
+ *  path sends its own request when `discoverIfConnected` re-probes a live
+ *  connection, and a revoked grant refuses that probe too — the refusal the
+ *  real connection's catch reads (`client-zqKcsyFa.js:762-764`). Queued
+ *  separately from the dispatch failure because in production they are two
+ *  different requests failing, not one error seen twice. */
+let mcpDiscoveryFailure: Error | null = null;
+
 /** The failure the next `removeServer` throws, exercising the credential-seam
  * teardown boundary rather than letting a test model it as a successful remove. */
 let mcpRemoveFailure: Error | null = null;
@@ -995,6 +1003,13 @@ export function hangMcpEstablish(): McpEstablishGate {
 export function failNextMcpToolCall(error: Error): void {
   mcpCallToolFailure = error;
 }
+/** Make the next discovery probe fail the way a revoked grant does. The probe
+ *  is the SDK's own request inside `discoverIfConnected`, not the dispatch
+ *  `failNextMcpToolCall` breaks — a test queues both because a mid-session
+ *  revocation refuses both. */
+export function failNextMcpDiscovery(error: Error): void {
+  mcpDiscoveryFailure = error;
+}
 
 /** Make the next SDK-server teardown fail. */
 export function failNextMcpRemove(error: Error): void {
@@ -1024,6 +1039,22 @@ export function dropLiveMcpFetch(id: string): void {
  *  different question from what the row persisted. */
 export function liveMcpTransport(id: string): RecordedMcpTransport | undefined {
   return liveMcpManager?.mcpConnections[id]?.options.transport;
+}
+/** Give a live connection the OAuth continuation a completed authorization
+ *  leaves on its transport — the `authUrl` the SDK reads back while
+ *  AUTHENTICATING (`client-zqKcsyFa.js:1704-1706`) and the same field
+ *  `userMcp_list` renders as the reconnect link. A stand-in for the
+ *  authorization redirect the harness cannot perform; without it a converged
+ *  connection renders the state with no link, exactly as a server the user
+ *  never authorized does. */
+export function seedMcpAuthContinuation(id: string, authUrl: string): void {
+  const manager = liveMcpManager;
+  if (!manager) throw new Error('No MCP manager has been constructed yet.');
+  const connection = manager.mcpConnections[id];
+  if (!connection) throw new Error(`No live MCP connection for ${id}.`);
+  connection.options.transport.authProvider = {
+    authUrl, clientId: 'test-client', serverId: id,
+  };
 }
 
 /**
@@ -1062,6 +1093,7 @@ export function resetRecordedMcp(): void {
   mcpEstablished.length = 0;
   mcpDiscovered.length = 0;
   mcpCallToolFailure = null;
+  mcpDiscoveryFailure = null;
 
   mcpRemoveFailure = null;
   liveMcpManager = null;
@@ -1070,9 +1102,8 @@ export function resetRecordedMcp(): void {
   mcpEstablishGate = null;
   mcpEstablishArrived = null;
 }
-
 /**
- * The MCP client manager, faithful in the four respects the per-user plane's
+ * The MCP client manager, faithful in the five respects the per-user plane's
  * contracts are about:
  *
  *  - `registerServer` records what it was handed and does NOT connect, leaving
@@ -1082,7 +1113,54 @@ export function resetRecordedMcp(): void {
  *    that connection's transport untouched (`:1719-1720`).
  *  - `restoreConnectionsFromStorage` connects only rows with no connection yet.
  *  - `removeServer` drops the row AND the connection (`:2299-2305`).
+ *  - `discoverIfConnected` re-probes the live connection the way the real one
+ *    does: a queued probe failure moves the state the way the connection's own
+ *    catch would (`:762-764`) — AUTHENTICATING for an unauthorized probe,
+ *    CONNECTED otherwise — and never clears the cached tools, which the real
+ *    one reassigns only on the success paths.
  */
+
+/** The numeric status the pinned SDK reads off a probe failure
+ *  (`client-zqKcsyFa.js:204-210`): a numeric `code`, else a numeric `status`,
+ *  else a numeric `data.status`. Shapes read with the schema validator, not
+ *  casts — a probe failure is an `Error` until proven otherwise, and every
+ *  failure this seam queues is one, because the SDK's transports raise
+ *  `Error` subclasses. */
+function mcpProbeStatus(error: Error): number | undefined {
+  const code = v.safeParse(v.object({ code: v.number() }), error);
+  if (code.success) return code.output.code;
+  const status = v.safeParse(v.object({ status: v.number() }), error);
+  if (status.success) return status.output.status;
+  const nested = v.safeParse(v.object({ data: v.object({ status: v.number() }) }), error);
+  if (nested.success) return nested.output.data.status;
+  return undefined;
+}
+
+/** The next link of the pinned SDK's cause walk
+ *  (`client-zqKcsyFa.js:211-214`): `cause`, else `data.cause`, followed while
+ *  it is an `Error` for the same reason as above. */
+function mcpProbeCause(error: Error): Error | undefined {
+  const direct = v.safeParse(v.object({ cause: v.unknown() }), error);
+  if (direct.success && direct.output.cause instanceof Error) return direct.output.cause;
+  const nested = v.safeParse(v.object({ data: v.object({ cause: v.unknown() }) }), error);
+  if (nested.success && nested.output.data.cause instanceof Error) return nested.output.data.cause;
+  return undefined;
+}
+
+/** Whether the pinned SDK would read a probe failure as unauthorized
+ *  (`client-zqKcsyFa.js:215-222`) — the model for what the fake's probe does
+ *  to the connection state. This is the DEPENDENCY's predicate, deliberately
+ *  not the production `isMcpTransportUnauthorized`: the fake answers what the
+ *  SDK does with the probe, and the tests assert what production does with
+ *  the dispatch failure. Sharing one predicate would make the tests agree
+ *  with production by construction instead of by observation. */
+function isMcpDiscoveryUnauthorized(error: Error): boolean {
+  if (mcpProbeStatus(error) === 401) return true;
+  const cause = mcpProbeCause(error);
+  if (cause !== undefined && cause !== error && isMcpDiscoveryUnauthorized(cause)) return true;
+  return error.message.includes('Unauthorized') || error.message.includes('401');
+}
+
 class FakeMCPClientManager {
   mcpConnections: Record<string, RecordedMcpConnection> = {};
   /** The vendor's restore-once flag, private to its class and written by a host
@@ -1164,8 +1242,23 @@ class FakeMCPClientManager {
     mcpWaited += 1;
   }
 
+  /** Re-probe the live connection, the way the SDK's own reauthorization path
+   *  does: the probe runs only against a connection that exists (the real one
+   *  returns early otherwise, `client-zqKcsyFa.js:1991-2001`), and a queued
+   *  probe failure lands the way the connection's own catch lands it
+   *  (`:762-764`) — the tools are NOT cleared, so a converged connection keeps
+   *  presenting the catalog the grant no longer authorizes. */
   async discoverIfConnected(id: string): Promise<void> {
     mcpDiscovered.push(id);
+    const connection = this.mcpConnections[id];
+    if (!connection) return;
+    const probe = mcpDiscoveryFailure;
+    mcpDiscoveryFailure = null;
+    if (probe === null) {
+      connection.connectionState = 'ready';
+      return;
+    }
+    connection.connectionState = isMcpDiscoveryUnauthorized(probe) ? 'authenticating' : 'connected';
   }
 
   /** The SDK's `CallToolResult`, as much of it as this mock produces: an empty

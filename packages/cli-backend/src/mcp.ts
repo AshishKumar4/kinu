@@ -1,10 +1,11 @@
-// Local MCP — connect the CLI agent to configured stdio MCP servers, discover
-// their tools, and expose them as ai-SDK tools merged into the agent's surface.
-// The cf backend reaches MCP via the per-user UserDO; locally we are the MCP
-// CLIENT directly over child processes.
+// Local MCP — connect the CLI agent to configured stdio MCP servers and
+// discover their tools as descriptors the session admits. The cf backend
+// reaches MCP via the per-user UserDO; locally we are the MCP CLIENT directly
+// over child processes. Discovery and dispatch live here; the admission policy
+// lives in core (`admitMcpDescriptors`) and the session applies it, because
+// only the session knows the resolved model figures the budget divides.
 
-import { tool, jsonSchema, type ToolSet } from 'ai';
-import { JsonObjectSchema, mcpToolKey } from '@kinu.run/core';
+import { describeMcpTool, JsonObjectSchema, type JsonObject, type SerializableToolDescriptor } from '@kinu.run/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import * as v from 'valibot';
@@ -55,8 +56,17 @@ export interface McpServerConfig {
 }
 
 export interface McpConnection {
-  /** Discovered tools, keyed by core's `mcpToolKey` — `mcp_<server>_<tool>`. */
-  readonly tools: ToolSet;
+  /** Every discovered tool as a descriptor, in discovery order — UNADMITTED.
+   *  The session admits these through core's `admitMcpDescriptors` and builds
+   *  the ToolSet from what survives, so a third party's catalog is bounded by
+   *  the same policy on both backends. The descriptor's `serverId` is the
+   *  config key: server names are unique per agent by construction on the CLI
+   *  (the config is a `mcpServers` object), so it routes `call` directly. */
+  readonly descriptors: SerializableToolDescriptor[];
+  /** Dispatch one call on the server the tool was discovered from, with that
+   *  server's call budget. A failure is rendered, not thrown: a broken tool
+   *  reports its breakage to the model instead of failing the turn. */
+  call(serverName: string, toolName: string, args: JsonObject): Promise<string>;
   /** Per-server connection status for UI/CLI diagnostics. */
   readonly diagnostics: McpConnectionDiagnostic[];
   /** Disconnect every server (kills the child processes). */
@@ -72,16 +82,17 @@ export interface McpConnectionDiagnostic {
 }
 
 /**
- * Connect to each configured stdio MCP server, list its tools, and wrap them as
- * ai-SDK tools that proxy back over MCP. A server that fails to start is logged
+ * Connect to each configured stdio MCP server, list its tools, and describe
+ * them for the session's admission. A server that fails to start is logged
  * and skipped — the rest still load. Empty config ⇒ a no-op connection.
  */
 export async function connectMcpServers(
   servers: Record<string, McpServerConfig>,
   onLog?: (msg: string) => void,
 ): Promise<McpConnection> {
-  const clients: Client[] = [];
-  const tools: ToolSet = {};
+  const clients = new Map<string, Client>();
+  const callTimeoutByServer = new Map<string, number>();
+  const descriptors: SerializableToolDescriptor[] = [];
   const diagnostics: McpConnectionDiagnostic[] = [];
 
   for (const [serverName, cfg] of Object.entries(servers)) {
@@ -99,26 +110,26 @@ export async function connectMcpServers(
       });
       await client.connect(transport, { timeout: MCP_STARTUP_TIMEOUT_MS });
       const { tools: mcpTools } = await client.listTools(undefined, { timeout: MCP_STARTUP_TIMEOUT_MS });
-      const callTimeout = cfg.timeoutMs ?? MCP_CALL_TIMEOUT_MS;
+      callTimeoutByServer.set(serverName, cfg.timeoutMs ?? MCP_CALL_TIMEOUT_MS);
       for (const t of mcpTools) {
-        tools[mcpToolKey(serverName, t.name)] = tool({
-          description: t.description ?? `${serverName}/${t.name}`,
-          inputSchema: jsonSchema(t.inputSchema ?? { type: 'object' }),
-          execute: async (args) => {
-            try {
-              const res = await client.callTool(
-                { name: t.name, arguments: v.parse(JsonObjectSchema, args ?? {}) },
-                undefined,
-                { timeout: callTimeout },
-              );
-              return formatMcpResult(res);
-            } catch (err) {
-              return `mcp error: ${renderThrownChain({ cause: err })}`;
-            }
-          },
-        });
+        // One bad tool must not take down its server's good ones: describe the
+        // rest and state the loss on the background channel, the way a server
+        // that fails to start is skipped while the rest still load.
+        try {
+          descriptors.push(describeMcpTool(
+            { id: serverName, name: serverName },
+            {
+              name: t.name,
+              description: t.description,
+              annotations: t.annotations,
+              inputSchema: t.inputSchema ?? { type: 'object' },
+            },
+          ));
+        } catch (err) {
+          onLog?.(`mcp: ${serverName} tool '${t.name}' skipped: ${renderThrownChain({ cause: err })}`);
+        }
       }
-      clients.push(client);
+      clients.set(serverName, client);
       diagnostics.push({ server: serverName, status: 'connected', toolCount: mcpTools.length });
       onLog?.(`mcp: ${serverName} → ${mcpTools.length} tool(s)`);
     } catch (err) {
@@ -146,14 +157,29 @@ export async function connectMcpServers(
   }
 
   return {
-    tools,
+    descriptors,
     diagnostics,
+    async call(serverName, toolName, args) {
+      const client = clients.get(serverName);
+      if (!client) throw new Error(`Unknown MCP server: ${serverName}`);
+      const timeout = callTimeoutByServer.get(serverName) ?? MCP_CALL_TIMEOUT_MS;
+      try {
+        const res = await client.callTool(
+          { name: toolName, arguments: v.parse(JsonObjectSchema, args ?? {}) },
+          undefined,
+          { timeout },
+        );
+        return formatMcpResult(res);
+      } catch (err) {
+        return `mcp error: ${renderThrownChain({ cause: err })}`;
+      }
+    },
     async close() {
       // Every client is closed before anything is thrown — one server that will
       // not shut down must not leave the other children running — but a close
       // that failed is a surviving child process, not a completed teardown.
       const failures: unknown[] = [];
-      for (const c of clients) {
+      for (const c of clients.values()) {
         try {
           await c.close();
         } catch (error) {
@@ -163,7 +189,7 @@ export async function connectMcpServers(
       if (failures.length > 0) {
         throw new AggregateError(
           failures,
-          `${failures.length} of ${clients.length} MCP server(s) failed to disconnect`,
+          `${failures.length} of ${clients.size} MCP server(s) failed to disconnect`,
         );
       }
     },

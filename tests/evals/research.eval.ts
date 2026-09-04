@@ -250,13 +250,12 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
     try {
       const failed = conn.diagnostics.filter((d) => d.status === 'failed');
       expect(failed, `MCP server(s) failed to start: ${JSON.stringify(failed)}`).toEqual([]);
-      expect(Object.keys(conn.tools).sort()).toEqual([READ_TOOL, SEARCH_TOOL].sort());
+      expect(conn.descriptors.map((d) => d.toolKey).sort()).toEqual([READ_TOOL, SEARCH_TOOL].sort());
 
-      const call = async (name: string, args: Record<string, string>): Promise<string> => {
-        const entry = conn.tools[name];
-        if (!entry?.execute) throw new Error(`${name} was discovered but carries no execute`);
-        const result: unknown = await entry.execute(args, { toolCallId: 'research-eval', messages: [] });
-        return String(result);
+      const call = async (key: string, args: Record<string, string>): Promise<string> => {
+        const descriptor = conn.descriptors.find((d) => d.toolKey === key);
+        if (!descriptor) throw new Error(`${key} was not discovered`);
+        return String(await conn.call(descriptor.serverName, descriptor.name, args));
       };
       // The search names the provenance entry, the read serves the canary: the
       // exact two hops the live episode is scored on.

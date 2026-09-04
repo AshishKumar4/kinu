@@ -9,7 +9,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { McpToolSurfaceCache, McpToolSurfaceSchema } from '../src/user/mcp';
+import { McpToolSurfaceCache } from '../src/user/mcp';
+import { McpToolSurfaceSchema } from '@kinu.run/core';
 
 function surface(descriptors: Array<{ toolKey: string; name: string }>, unavailable: string[] = []): string {
   return JSON.stringify(v.parse(McpToolSurfaceSchema, {

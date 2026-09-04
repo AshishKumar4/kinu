@@ -4,11 +4,11 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import { mcpToolKey, type LLMProviderConfig } from '@kinu.run/core';
+import { isMcpToolKey, mcpToolKey, type LLMProviderConfig } from '@kinu.run/core';
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { connectMcpServers } from '../src/mcp';
-import { scratchPath, toolExecute } from '@kinu.run/test-utils';
+import { scratchPath } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -74,11 +74,12 @@ describe('connectMcpServers', () => {
     // A prompt or skill that names an MCP tool has to resolve to the same tool
     // on both backends. cf used to key on its random registration id
     // (`tool_<nanoid>_<name>`) while the CLI keyed on the server name — so no
-    // reference to an MCP tool was portable. Both now go through mcpToolKey.
+    // reference to an MCP tool was portable. Both now go through mcpToolKey,
+    // via core's `describeMcpTool`.
     const conn = await connectMcpServers(mcpServers());
     try {
-      expect(Object.keys(conn.tools)).toEqual(
-        [mcpToolKey('echo', 'echo'), mcpToolKey('echo', 'slow')],
+      expect(conn.descriptors.map((d) => d.toolKey)).toEqual(
+        [mcpToolKey('echo', 'echo'), mcpToolKey('echo', 'slow'), mcpToolKey('echo', 'huge')],
       );
     } finally {
       await conn.close();
@@ -96,8 +97,7 @@ describe('connectMcpServers', () => {
       echo: { command: 'node', args: [fixtureServer] },
     });
     try {
-      const slow = toolExecute<unknown, string>(conn.tools[mcpToolKey('echo', 'slow')]);
-      await expect(slow({ ms: 6_000 })).resolves.toBe('slept 6000ms');
+      await expect(conn.call('echo', 'slow', { ms: 6_000 })).resolves.toBe('slept 6000ms');
     } finally {
       await conn.close();
     }
@@ -107,11 +107,11 @@ describe('connectMcpServers', () => {
     const logs: string[] = [];
     const conn = await connectMcpServers(mcpServers(), (msg) => logs.push(msg));
     try {
-      expect(Object.keys(conn.tools)).toEqual(['mcp_echo_echo', 'mcp_echo_slow']);
-      expect(conn.diagnostics).toEqual([{ server: 'echo', status: 'connected', toolCount: 2 }]);
+      expect(conn.descriptors.map((d) => d.toolKey))
+        .toEqual(['mcp_echo_echo', 'mcp_echo_slow', 'mcp_echo_huge']);
+      expect(conn.diagnostics).toEqual([{ server: 'echo', status: 'connected', toolCount: 3 }]);
       expect(logs.some((m) => m.includes('mcp: echo'))).toBe(true);
-      const echo = toolExecute<unknown, string>(conn.tools.mcp_echo_echo);
-      await expect(echo({ text: 'hello' })).resolves.toBe('echo: hello');
+      await expect(conn.call('echo', 'echo', { text: 'hello' })).resolves.toBe('echo: hello');
     } finally {
       await conn.close();
     }
@@ -133,4 +133,59 @@ describe('LocalAgentSession MCP surface', () => {
       await session.end();
     }
   });
+});
+describe('LocalAgentSession MCP admission', () => {
+  test('a tool larger than the session step allocation is deferred with its arithmetic', async () => {
+    // The fixture's `huge` tool carries ~300KB of description and ~300KB of
+    // schema against a ~53k-token step remainder: its schema alone cannot fit,
+    // and schemas are never truncated, so it defers whole. Red before the
+    // admission: the turn carried all 600KB and nothing reported a bound.
+    let captured: string[] = [];
+    const { session, events } = sessionWithModel(capturingModel((tools) => { captured = tools; }));
+    try {
+      await session.connectMcp(mcpServers());
+      expect(session.toolNames()).toContain('mcp_echo_echo');
+      expect(session.toolNames()).not.toContain('mcp_echo_huge');
+
+      await session.send('which tools can you see?');
+      expect(captured).toContain('mcp_echo_echo');
+      expect(captured).not.toContain('mcp_echo_huge');
+
+      const deferrals: string[] = [];
+      for (const e of events) {
+        if (e.type === 'background' && e.event === 'mcp' && e.message.includes('deferred')) {
+          deferrals.push(e.message);
+        }
+      }
+      expect(deferrals).toHaveLength(1);
+      expect(deferrals[0]).toContain('mcp: echo deferred:');
+      // The arithmetic the admission reports: what did not fit, out of what.
+      expect(deferrals[0]).toContain('did not fit this turn');
+      expect(deferrals[0]).toContain('remaining tool budget of');
+    } finally {
+      await session.end();
+    }
+  }, 30_000);
+
+  test('tools admit in (server, tool) order regardless of config map order', async () => {
+    // The admitted set must be the same on two sessions that configure the
+    // same servers: admission sorts by (server, tool) name, not by the config
+    // object's key order. `zulu` is configured first here and must still lose.
+    const { session } = sessionWithModel(capturingModel(() => {}));
+    try {
+      await session.connectMcp({
+        zulu: { command: 'node', args: [fixtureServer] },
+        alpha: { command: 'node', args: [fixtureServer] },
+      });
+      expect(session.toolNames().filter((name) => isMcpToolKey(name))).toEqual([
+        // `huge` defers on both servers (its schema alone exceeds the
+        // remainder), so the admitted set is the four small tools — still in
+        // (server, tool) order despite `zulu` being configured first.
+        'mcp_alpha_echo', 'mcp_alpha_slow',
+        'mcp_zulu_echo', 'mcp_zulu_slow',
+      ]);
+    } finally {
+      await session.end();
+    }
+  }, 30_000);
 });

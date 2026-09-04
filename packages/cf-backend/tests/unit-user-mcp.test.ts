@@ -18,11 +18,11 @@ import {
   validateMcpServerInput, canonicalMcpUrl,
   parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, mcpCredentialTransport,
-  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens,
-  type SerializableToolDescriptor,
 } from '../src/user/mcp';
 import {
   isMcpToolKey, mcpToolKey, stepContextLimit, type JsonObject, type JsonValue,
+  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens,
+  type SerializableToolDescriptor,
 } from '@kinu.run/core';
 import { tool, jsonSchema, type ToolSet } from 'ai';
 import type { RecordedMcpTransport } from './helpers/agents-sdk';
