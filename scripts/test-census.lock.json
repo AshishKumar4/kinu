@@ -1,5 +1,5 @@
 {
-  "measured": "4573b0198: 877 test files, 798 runnable suites, 11652 tests, 34 runners, 62 non-public product members",
+  "measured": "17042c177: 880 test files, 801 runnable suites, 11686 tests, 34 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -966,6 +966,10 @@
       "count": 1
     },
     {
+      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: every startup step admits `already-attached`, and every exclusion states a reason :: reads a source file",
+      "count": 1
+    },
+    {
       "key": "source_text :: scripts/bench-devbox-decision.test.ts :: no minute-scale route is posted as a blocking request any more :: expect(<source text>).not.toContain",
       "count": 2
     },
@@ -994,6 +998,10 @@
       "count": 1
     },
     {
+      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the completed cell accepts an unchanged-generation warm attach :: reads a source file",
+      "count": 1
+    },
+    {
       "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the driver has no monolithic verification request :: expect(<source text>).not.toContain",
       "count": 1
     },
@@ -1011,6 +1019,14 @@
     },
     {
       "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the proof asks whether the STORE is mounted, never the lower itself :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the restated attach kinds are the product's own list :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the state reply decodes every restoration phase the product can report :: reads a source file",
       "count": 1
     },
     {
