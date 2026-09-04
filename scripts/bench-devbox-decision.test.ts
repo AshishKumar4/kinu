@@ -86,6 +86,27 @@ import {
   type ControlWitnessFacts,
   type CandidateFactsReply,
   type Strategy,
+  candidateRootId,
+  chainServedWord,
+  compareGenerations,
+  countedRestoreWork,
+  diffOpTallies,
+  foldedCursor,
+  judgeCandidateCut,
+  judgeChainCut,
+  judgeOverlayCut,
+  judgeReadOnlyRefusal,
+  parseCursorSeq,
+  parseOverlaySweep,
+  replayedEntries,
+  restoreWorkFromCounts,
+  selectWakeMountLines,
+  summarizePublication,
+  verifyRestoreBound,
+  type CandidateCutFacts,
+  type ChainCutFacts,
+  type FaultCutObservation,
+  type OverlayCutFacts,
 } from './bench-devbox-strategies';
 const tick = (
   arm: string, workload: string, wallMs: number,
@@ -653,10 +674,22 @@ describe('the async checkpoint and stop protocol', () => {
 
   test('no minute-scale route is posted as a blocking request any more', () => {
     const source = readFileSync(new URL('./bench-devbox-strategies.ts', import.meta.url), 'utf8');
-    // The two routes now travel through `awaitArmedOperation`; a `call` that
-    // posts either of them is a request holding a publication open again.
-    expect(source).not.toContain("'POST', `/checkpoint?box=");
-    expect(source).not.toContain("'POST', `/stop?box=");
+    // The two routes travel through the async arm-and-poll protocol; a `call`
+    // that posts either of them and then waits out the outcome is a request
+    // holding a publication open again. `armCheckpointOperation` is the one
+    // named exception: it posts the arm, returns the token, and never waits —
+    // the fault-cut cell kills the container while the token is pending, so
+    // waiting there would defeat the cut it exists to make.
+    const lines = source.split('\n');
+    let enclosing = '';
+    for (const line of lines) {
+      const fn = /^(?:export )?async function ([A-Za-z0-9_]+)/.exec(line)?.[1]
+        ?? /^(?:export )?function ([A-Za-z0-9_]+)/.exec(line)?.[1];
+      if (fn !== undefined) enclosing = fn;
+      if (line.includes("'POST', `/checkpoint?box=") || line.includes("'POST', `/stop?box=")) {
+        expect(['awaitArmedOperation', 'armCheckpointOperation']).toContain(enclosing);
+      }
+    }
     expect(source).toContain('awaitArmedOperation');
   });
 });
@@ -3459,5 +3492,491 @@ describe('the driver admits every outcome the product can produce', () => {
     const cell = /function armCompletedTheCell[\s\S]*?\n\}/.exec(driver)?.[0] ?? '';
     expect(cell).toContain("arm.attachWarmKind === 'already-attached'");
     expect(cell).toContain('arm.wakeBootId === arm.attachWarmBootId');
+  });
+});
+
+describe('the counted restore (G5)', () => {
+  const casMountLines = [
+    's3fs /var/tmp/devbox/cas-store fuse.s3fs rw 0 0',
+    'overlay /workspace overlay rw,lowerdir=/var/tmp/devbox/cas-store/tree 0 0',
+  ];
+
+  test('an unchanged overlay-cas wake counts exactly, and only bytes and cpu stay null', () => {
+    const counted = countedRestoreWork({
+      strategy: 'overlay-cas',
+      wakeKind: 'attached',
+      wakeDetail: 'overlay-cas folded 14 0P',
+      wakeOps: { calls: { get: 1, list: 1 }, total: 2 },
+      wakeMountLines: casMountLines,
+    });
+    expect(counted.counts).toEqual({ serialRemoteOps: 2, totalRemoteOps: 2, mounts: 2, replayUnits: 0 });
+    expect(counted.work).toBeNull();
+    expect(counted.missing.map((reason) => reason.split(':')[0]).sort()).toEqual([
+      'cpuSteps',
+      'metadataBytes/payloadBytes',
+    ]);
+  });
+
+  test('a busy overlay-cas wake counts the replay but refuses the critical path', () => {
+    const counted = countedRestoreWork({
+      strategy: 'overlay-cas',
+      wakeKind: 'attached',
+      wakeDetail: 'overlay-cas folded 14 3P',
+      wakeOps: { calls: { get: 4, list: 1 }, total: 5 },
+      wakeMountLines: casMountLines,
+    });
+    expect(counted.counts).toEqual({ serialRemoteOps: null, totalRemoteOps: 5, mounts: 2, replayUnits: 3 });
+    expect(counted.work).toBeNull();
+    expect(counted.missing.join(' ')).toContain('store pool');
+  });
+
+  test('an unreadable detail and a missing bracket refuse every field', () => {
+    const counted = countedRestoreWork({
+      strategy: 'overlay-cas',
+      wakeKind: 'attached',
+      wakeDetail: 'overlay-cas overlay already mounted',
+      wakeOps: null,
+      wakeMountLines: [],
+    });
+    expect(counted.work).toBeNull();
+    expect(counted.missing.length).toBeGreaterThanOrEqual(5);
+    expect(counted.missing.join(' ')).toContain('went uncounted rather than zero');
+  });
+
+  test('a wake that never attached counts nothing', () => {
+    const counted = countedRestoreWork({
+      strategy: 'snapshot-chain', wakeKind: 'empty', wakeDetail: '', wakeOps: null, wakeMountLines: [],
+    });
+    expect(counted.work).toBeNull();
+    expect(counted.missing).toHaveLength(1);
+    expect(counted.missing[0]).toContain('the restore never ran');
+  });
+
+  test('a reset racing the window refuses the bill instead of pricing it', () => {
+    expect(diffOpTallies({ calls: { get: 4 } }, { calls: { get: 2 } })).toBeNull();
+    expect(diffOpTallies(null, { calls: {} })).toBeNull();
+    expect(diffOpTallies({ calls: { get: 1 } }, { calls: { get: 1, list: 1 } }))
+      .toEqual({ calls: { list: 1 }, total: 1 });
+  });
+
+  test('promotion needs all seven fields, never six', () => {
+    const full = {
+      serialRemoteOps: 2, totalRemoteOps: 2, metadataBytes: 128, payloadBytes: 0,
+      cpuSteps: 0, mounts: 2, replayUnits: 0,
+    };
+    expect(restoreWorkFromCounts(full)).toEqual(full);
+    expect(restoreWorkFromCounts({ ...full, cpuSteps: null })).toBeNull();
+    expect(restoreWorkFromCounts({
+      serialRemoteOps: null, totalRemoteOps: null, metadataBytes: null, payloadBytes: null,
+      cpuSteps: null, mounts: null, replayUnits: null,
+    })).toBeNull();
+  });
+
+  test('the chain two-deep serve verifies, and a third layer is caught', () => {
+    const row = (mounts: number) => ({
+      serialRemoteOps: 3, totalRemoteOps: 3, metadataBytes: 64, payloadBytes: 0,
+      cpuSteps: 0, mounts, replayUnits: 0,
+    });
+    const lines = [
+      's3fs /backups fuse.s3fs rw 0 0',
+      'overlay /workspace overlay rw 0 0',
+      'squashfuse /var/tmp/devbox/lower-base fuse.squashfuse ro 0 0',
+      'squashfuse /var/tmp/devbox/lower-delta/abc123 fuse.squashfuse ro 0 0',
+    ];
+    expect(verifyRestoreBound('snapshot-chain', row(4), lines).verified).toBe(true);
+    const tooMany = verifyRestoreBound(
+      'snapshot-chain', row(5), [...lines, 'squashfuse /var/tmp/devbox/lower-delta/def456 fuse.squashfuse ro 0 0'],
+    );
+    expect(tooMany.verified).toBe(false);
+    expect(tooMany.reason).toContain('past the at-most-two-deep serve');
+  });
+
+  test('every other claim refuses with the cell that would verify it named', () => {
+    const row = {
+      serialRemoteOps: 1, totalRemoteOps: 1, metadataBytes: 1, payloadBytes: 0,
+      cpuSteps: 0, mounts: 1, replayUnits: 0,
+    };
+    for (const strategy of ['r2fs', 'overlay-cas', 'bounded-layers', 'merkle-pack'] as const) {
+      expect(verifyRestoreBound(strategy, row, []).verified).toBe(false);
+    }
+    expect(verifyRestoreBound('r2fs', row, []).reason).toContain('two-size');
+    expect(verifyRestoreBound('overlay-cas', row, []).reason).toContain('red witness');
+    expect(verifyRestoreBound('bounded-layers', row, []).reason).toContain('MAX_LAYER_DEPTH');
+    expect(verifyRestoreBound('merkle-pack', row, []).reason).toContain('log-p');
+    expect(verifyRestoreBound('snapshot-chain', null, []).verified).toBe(false);
+  });
+
+  test('mount lines match by point, delta layers by prefix', () => {
+    const text = [
+      's3fs /backups fuse.s3fs rw 0 0',
+      'squashfuse /var/tmp/devbox/lower-delta/abc fuse.squashfuse ro 0 0',
+      'overlay /workspace overlay rw 0 0',
+      's3fs /var/tmp/devbox/cas-store fuse.s3fs rw 0 0',
+      'proc /proc proc rw 0 0',
+    ].join('\n');
+    expect(selectWakeMountLines('snapshot-chain', text)).toHaveLength(3);
+    expect(selectWakeMountLines('r2fs', text)).toHaveLength(1);
+    expect(selectWakeMountLines('overlay-cas', text)).toHaveLength(2);
+    expect(selectWakeMountLines('merkle-pack', text)).toHaveLength(0);
+    expect(selectWakeMountLines('merkle-pack', text, ['/workspace'])).toHaveLength(1);
+  });
+
+  test('detail parsers read the product shapes and refuse the rest', () => {
+    expect(replayedEntries('overlay-cas folded 14 3P')).toBe(3);
+    expect(replayedEntries('overlay-cas overlay already mounted')).toBeNull();
+    expect(foldedCursor('overlay-cas folded 14 3P')).toBe(14);
+    expect(candidateRootId('restored candidate root 9f86d081')).toBe('9f86d081');
+    expect(candidateRootId('repaired candidate root 9f86d081')).toBe('9f86d081');
+    expect(candidateRootId('candidate control has no published head')).toBeNull();
+    expect(parseCursorSeq('{"version":1,"foldedSeq":14}')).toBe(14);
+    expect(parseCursorSeq('{"foldedSeq":"soon"}')).toBeNull();
+    expect(parseCursorSeq('not json')).toBeNull();
+    expect(chainServedWord('chain abc 123B base+delta layered')).toBe('base+delta layered');
+    expect(chainServedWord('recovered chain abc 123B base')).toBeNull();
+  });
+
+  test('the sweep parser counts absent objects and ignores diagnostics', () => {
+    expect(parseOverlaySweep('swept 3 batches\nmissing blobs/ab/cd\nsweep-note: slow\nmissing cursor.json\n'))
+      .toEqual({ batches: 3, missing: 2 });
+    expect(parseOverlaySweep('')).toEqual({ batches: null, missing: 0 });
+  });
+});
+
+describe('the fault-cut judges (G3)', () => {
+  const chainFacts = (overrides: Partial<ChainCutFacts> = {}): ChainCutFacts => ({
+    recordPresent: true,
+    preBaseId: 'base1', preHasDelta: true, preRev: 7, preDeltaEtag: 'etag-a',
+    postBaseId: 'base1', postHasDelta: true, postRev: 7, postDeltaEtag: 'etag-a',
+    servedWord: 'base+delta layered', cutMarkerPresent: false, baseExists: true, deltaExists: true,
+    ...overrides,
+  });
+
+  test('a chain cut reads all-old, all-new, and the torn middle', () => {
+    const old = judgeChainCut(chainFacts());
+    expect(old.verdict).toBe('all-old');
+    expect(old.rollback).toBe(false);
+    expect(old.phantom).toBe(false);
+    const fresh = judgeChainCut(chainFacts({
+      postRev: 8, postDeltaEtag: 'etag-b', cutMarkerPresent: true,
+    }));
+    expect(fresh.verdict).toBe('all-new');
+    // THE MIXED READ the cell must catch: bytes served that no commit names.
+    const torn = judgeChainCut(chainFacts({ cutMarkerPresent: true }));
+    expect(torn.verdict).toBe('mixed');
+  });
+
+  test('a chain rollback and a vanished record are caught', () => {
+    expect(judgeChainCut(chainFacts({ postRev: 6 })).rollback).toBe(true);
+    const vanished = judgeChainCut(chainFacts({ recordPresent: false }));
+    expect(vanished.phantom).toBe(true);
+    expect(vanished.verdict).toBe('mixed');
+    expect(judgeChainCut(chainFacts({ servedWord: null })).verdict).toBe('unjudged');
+  });
+
+  const overlayFacts = (overrides: Partial<OverlayCutFacts> = {}): OverlayCutFacts => ({
+    seqMoved: false, seqComparable: true, seqDecreased: false, replayedEntries: 0,
+    cutMarkerPresent: false, cursorExists: true, journalEmpty: true,
+    ...overrides,
+  });
+
+  test('an overlay-cas cut reads all-old, all-new, and the torn middle', () => {
+    expect(judgeOverlayCut(overlayFacts()).verdict).toBe('all-old');
+    expect(judgeOverlayCut(overlayFacts({ seqMoved: true, cutMarkerPresent: true })).verdict).toBe('all-new');
+    // Folded without the bytes: the record moved but the marker never landed.
+    expect(judgeOverlayCut(overlayFacts({ seqMoved: true })).verdict).toBe('mixed');
+    expect(judgeOverlayCut(overlayFacts({ seqMoved: null })).verdict).toBe('unjudged');
+  });
+
+  test('an overlay-cas rollback and an unreaped remainder are caught', () => {
+    const back = judgeOverlayCut(overlayFacts({ seqMoved: true, seqDecreased: true }));
+    expect(back.rollback).toBe(true);
+    expect(back.verdict).toBe('mixed');
+    expect(judgeOverlayCut(overlayFacts({ journalEmpty: false })).phantom).toBe(true);
+    expect(judgeOverlayCut(overlayFacts({ journalEmpty: null })).phantom).toBeNull();
+    expect(judgeOverlayCut({ ...overlayFacts(), cursorExists: false }).verdict).toBe('mixed');
+  });
+
+  const candidateFacts = (overrides: Partial<CandidateCutFacts> = {}): CandidateCutFacts => ({
+    postKind: 'attached',
+    preGeneration: '5', preRootId: 'aaaa',
+    postGeneration: '5', postRootId: 'aaaa', detailRootId: 'aaaa',
+    forkedHeads: [], closureAbsent: 0, closureChecked: true,
+    cutMarkerPresent: false, barrierGeneration: '5', barrierMarkerPresent: true,
+    healForkedHeads: [], healStrayEnvelopes: 0, healUnreadable: 0,
+    ...overrides,
+  });
+
+  test('a candidate cut reads all-old and all-new', () => {
+    const old = judgeCandidateCut(candidateFacts());
+    expect(old.verdict).toBe('all-old');
+    expect(old.rollback).toBe(false);
+    expect(old.phantom).toBe(false);
+    expect(old.barrierAckLoss).toBe(0);
+    const fresh = judgeCandidateCut(candidateFacts({
+      postGeneration: '6', postRootId: 'bbbb', detailRootId: 'bbbb', cutMarkerPresent: true,
+    }));
+    expect(fresh.verdict).toBe('all-new');
+    expect(fresh.barrierAckLoss).toBe(0);
+  });
+
+  test('a candidate mixed read, absent reference and detail mismatch are caught', () => {
+    // Advanced without the bytes.
+    expect(judgeCandidateCut(candidateFacts({
+      postGeneration: '6', postRootId: 'bbbb', detailRootId: 'bbbb',
+    })).verdict).toBe('mixed');
+    // The attach claims a root the store does not head.
+    expect(judgeCandidateCut(candidateFacts({
+      postGeneration: '6', postRootId: 'bbbb', detailRootId: 'cccc', cutMarkerPresent: true,
+    })).verdict).toBe('mixed');
+    // A sealed envelope member with no bytes behind it.
+    const absent = judgeCandidateCut(candidateFacts({
+      postGeneration: '6', postRootId: 'bbbb', detailRootId: 'bbbb',
+      cutMarkerPresent: true, closureAbsent: 1,
+    }));
+    expect(absent.verdict).toBe('mixed');
+  });
+
+  test('a candidate rollback, phantom, lost barrier and vanished head are caught', () => {
+    expect(judgeCandidateCut(candidateFacts({ postGeneration: '4' })).rollback).toBe(true);
+    expect(judgeCandidateCut(candidateFacts({ postKind: 'empty' })).rollback).toBe(true);
+    expect(judgeCandidateCut(candidateFacts({ healForkedHeads: ['k1', 'k2'] })).phantom).toBe(true);
+    expect(judgeCandidateCut(candidateFacts({ healStrayEnvelopes: 1 })).phantom).toBe(true);
+    expect(judgeCandidateCut(candidateFacts({ healUnreadable: 1 })).phantom).toBe(true);
+    expect(judgeCandidateCut(candidateFacts({
+      postGeneration: '4', barrierGeneration: '5',
+    })).barrierAckLoss).toBe(1);
+    expect(judgeCandidateCut(candidateFacts({ barrierGeneration: null })).barrierAckLoss).toBeNull();
+  });
+
+  test('a read-only probe refuses writes and only writes', () => {
+    expect(judgeReadOnlyRefusal(1, 'touch: /backups/x: Read-only file system')).toBe(true);
+    expect(judgeReadOnlyRefusal(0, '')).toBe(false);
+    expect(judgeReadOnlyRefusal(1, 'touch: /backups/x: Permission denied')).toBe(false);
+  });
+
+  test('generations order decimally or refuse', () => {
+    expect(compareGenerations('5', '6')).toBe(-1);
+    expect(compareGenerations('6', '6')).toBe(0);
+    expect(compareGenerations('10', '9')).toBe(1);
+    expect(compareGenerations('007', '7')).toBeNull();
+    expect(compareGenerations(null, '7')).toBeNull();
+  });
+
+  const passCut = (overrides: Partial<FaultCutObservation> = {}): FaultCutObservation => ({
+    completed: true, verdict: 'all-new', absentReferences: 0, rollbackOrPhantomRoot: false,
+    barrierAckLoss: null, readOnlySurface: null, readOnlyRefusedWrites: null,
+    detail: 'cut',
+    ...overrides,
+  });
+
+  test('a complete cut folds into a passing publication block', () => {
+    const publication = summarizePublication([
+      { strategy: 'snapshot-chain', cut: passCut({ readOnlySurface: '/backups', readOnlyRefusedWrites: true }) },
+      { strategy: 'overlay-cas', cut: passCut() },
+      { strategy: 'bounded-layers', cut: passCut({ barrierAckLoss: 0 }) },
+      { strategy: 'merkle-pack', cut: passCut({ barrierAckLoss: 0 }) },
+      { strategy: 'r2fs', cut: null },
+    ]);
+    expect(publication).toEqual({
+      readOnlyDeclared: true,
+      readOnlyRefusedWrites: true,
+      faultCutCompleted: true,
+      allOldOrAllNew: true,
+      barrierAckLoss: 0,
+      absentReferences: 0,
+      rollbackOrPhantomRoot: false,
+    });
+  });
+
+  test('a mixed read, a caught true, and a missing cell refuse the block', () => {
+    const rows = (cut: FaultCutObservation | null) => ([
+      { strategy: 'snapshot-chain' as const, cut },
+      { strategy: 'r2fs' as const, cut: null },
+    ]);
+    expect(summarizePublication(rows(passCut({ verdict: 'mixed' }))).allOldOrAllNew).toBe(false);
+    expect(summarizePublication(rows(passCut({ absentReferences: 2 }))).absentReferences).toBe(2);
+    expect(summarizePublication(rows(passCut({ rollbackOrPhantomRoot: true }))).rollbackOrPhantomRoot).toBe(true);
+    expect(summarizePublication(rows(passCut({ barrierAckLoss: 1 }))).barrierAckLoss).toBe(1);
+    const incomplete = summarizePublication(rows(null));
+    expect(incomplete.faultCutCompleted).toBe(false);
+    expect(incomplete.allOldOrAllNew).toBeNull();
+    expect(incomplete.absentReferences).toBeNull();
+    expect(incomplete.rollbackOrPhantomRoot).toBeNull();
+    expect(incomplete.barrierAckLoss).toBeNull();
+  });
+});
+
+describe('the cut and counted cells reach the verdict', () => {
+  const meta = {
+    date: '2026-09-04', run: 'kinu-devbox-bench-test', worker: 'w', bucket: 'b',
+    image: SANDBOX_IMAGE, seed: '20260824', 'loop budget ms': '8000', 'deciding repetitions': '2',
+  };
+  const identity = {
+    commit: '6823779aa', dirtyDigest: 'clean', workerVersion: 'v',
+    startedAt: '2026-09-04T00:00:00.000Z', finishedAt: '2026-09-04T01:00:00.000Z',
+    image: SANDBOX_IMAGE, imageSha256: SANDBOX_IMAGE_DIGEST,
+    dockerfileSha256: `sha256:${'a'.repeat(64)}`, candidateRunnerSha256: `sha256:${'b'.repeat(64)}`,
+    overlayRunnerSha256: `sha256:${'c'.repeat(64)}`, journalDaemonSha256: `sha256:${'d'.repeat(64)}`,
+  };
+  const cleanup = {
+    attempted: true, kept: false, workerAbsent: true, runtimeAbsent: true,
+    bucketAndMultipartEmpty: true, boxDurableStateEmpty: true,
+    localSecretsProcessesAbsent: true, countersReconciled: true,
+    replayIdempotent: true, multipartResidue: 0, errors: [],
+  };
+  const admissionArm = (strategy: Strategy, overrides: Partial<ArmResult> = {}): ArmResult => ({
+    strategy, box: `box-${strategy}`, verifyPassed: true, verifyChecks: [],
+    attachColdMs: 1000, attachColdKind: 'empty', attachColdBootId: 'cold',
+    attachWarmMs: 50, attachWarmKind: 'attached', wakeBootId: 'wake', attachWarmBootId: 'wake',
+    checkpoints: [], stopMs: 100, wakeMs: 2000, wakeKind: 'attached',
+    phases: [], decisiveTicks: [], quiescesBeforeDecisive: 0, decisiveQuiesces: 0,
+    generationBeforeLadder: null, generationAfterLadder: null, treeBytes: {},
+    ops: { total: 10 }, teardown: null, witnessChecks: [], notes: [],
+    ...overrides,
+  });
+  const reasons = (verdict: { gates: readonly { gate: string; reasons: readonly string[] }[] }, gate: string): string =>
+    verdict.gates.find((row) => row.gate === gate)?.reasons.join(' | ') ?? '';
+
+  test('an uncounted overlay-cas arm refuses G5 on its bill and its unbounded claim', () => {
+    const verdict = devboxAdmission({
+      arms: [admissionArm('overlay-cas', {
+        wakeDetail: 'overlay-cas folded 14 3P', wakeOps: null, wakeMountLines: [],
+      })],
+      requested: ['overlay-cas'], repetitions: 2, meta, identity, token: 't', cleanup,
+    });
+    const g5 = verdict.gates.find((row) => row.gate === 'G5');
+    expect(g5?.ok).toBe(false);
+    expect(reasons(verdict, 'G5')).toContain('totalRemoteOps');
+    expect(reasons(verdict, 'G5')).toContain('unbounded restore class');
+  });
+
+  test('a fully cut candidate arm holds G3, a missing cut refuses it', () => {
+    const cut: FaultCutObservation = {
+      completed: true, verdict: 'all-new', absentReferences: 0, rollbackOrPhantomRoot: false,
+      barrierAckLoss: 0, readOnlySurface: null, readOnlyRefusedWrites: null,
+      detail: 'cut',
+    };
+    const held = devboxAdmission({
+      arms: [admissionArm('bounded-layers', { cut })],
+      requested: ['bounded-layers'], repetitions: 2, meta, identity, token: 't', cleanup,
+    });
+    expect(held.gates.find((row) => row.gate === 'G3')?.ok).toBe(true);
+    const refused = devboxAdmission({
+      arms: [admissionArm('bounded-layers', { cut: null })],
+      requested: ['bounded-layers'], repetitions: 2, meta, identity, token: 't', cleanup,
+    });
+    expect(refused.gates.find((row) => row.gate === 'G3')?.ok).toBe(false);
+    expect(reasons(refused, 'G3')).toContain('fault-cut');
+  });
+});
+
+describe('the instruments restate nothing unchecked', () => {
+  const driver = readFileSync(join(import.meta.dir, 'bench-devbox-strategies.ts'), 'utf8');
+  const repo = (...parts: string[]): string => readFileSync(join(import.meta.dir, '..', ...parts), 'utf8');
+
+  test('the folded parser instantiates the product template', () => {
+    const overlay = repo('packages', 'devbox', 'src', 'overlay-cas.ts');
+    const template = /detail: `(overlay-cas folded )\$\{[^}]+\} \$\{[^}]+\}(P)`/.exec(overlay);
+    expect(template?.[1]).toBe('overlay-cas folded ');
+    expect(template?.[2]).toBe('P');
+    const sample = `${template?.[1]}14 3${template?.[2]}`;
+    expect(replayedEntries(sample)).toBe(3);
+    expect(foldedCursor(sample)).toBe(14);
+  });
+
+  test('the candidate root parser instantiates servedOutcome', () => {
+    const container = repo('packages', 'devbox', 'src', 'candidates', 'container.ts');
+    expect(container).toContain('detail: `${how} candidate root ${rootId}`');
+    const words = new Set(
+      [...container.matchAll(/servedOutcome\([^,]+, '(restored|repaired)'\)/g)].map((match) => match[1]),
+    );
+    expect([...words].sort()).toEqual(['repaired', 'restored']);
+    for (const word of words) {
+      expect(candidateRootId(`${word} candidate root ${'9f'.repeat(32)}`)).toBe('9f'.repeat(32));
+    }
+    expect(candidateRootId('candidate control has no published head')).toBeNull();
+  });
+
+  test('the chain served words are the product ternary’s', () => {
+    const chain = repo('packages', 'devbox', 'src', 'snapshot-chain.ts');
+    const product = /\? '([^']+)'\s*:\s*held \? '([^']+)' : '([^']+)'/.exec(chain);
+    expect(product?.slice(1)).toEqual(['base', 'base+delta already in this upper', 'base+delta layered']);
+    const restated = /CHAIN_SERVED_WORDS = \[([^\]]+)\]/.exec(driver)?.[1] ?? '';
+    const words = [...restated.matchAll(/'([^']+)'/g)].map((match) => match[1]).sort();
+    expect(words).toEqual([...(product?.slice(1) ?? [])].sort());
+  });
+
+  test('legacy checkpoints have no third kind to hide a barrier in', () => {
+    const storage = repo('packages', 'devbox', 'src', 'storage.ts');
+    const kinds = /type CheckpointKind = ((?:'[^']+'(?: \| )?)+)/.exec(storage)?.[1] ?? '';
+    expect([...kinds.matchAll(/'([^']+)'/g)].map((match) => match[1]).sort()).toEqual(['quiesce', 'tick']);
+  });
+
+  test('the sweep spells every key the product declares', () => {
+    const types = repo('packages', 'devbox', 'src', 'cas', 'types.ts');
+    const values = [
+      /KEY_CURSOR = '([^']+)'/.exec(types)?.[1],
+      /PREFIX_JOURNAL = '([^']+)'/.exec(types)?.[1],
+      /PREFIX_BLOBS = '([^']+)'/.exec(types)?.[1],
+    ];
+    expect(values.every((value) => value !== undefined && value.length > 0)).toBe(true);
+    const script = /OVERLAY_SWEEP_SCRIPT = \[([\s\S]*?)\]\.join/.exec(driver)?.[1] ?? '';
+    for (const value of values) expect(script).toContain(value ?? '(absent)');
+    expect(script).toContain('.json');
+    expect(types).toContain('.json');
+  });
+
+  test('the chain store mount is the product’s', () => {
+    const chain = repo('packages', 'devbox', 'src', 'snapshot-chain.ts');
+    const product = /CHAIN_STORE_MOUNT = '([^']+)'/.exec(chain)?.[1];
+    const restated = /CHAIN_STORE_MOUNT_DIR = '([^']+)'/.exec(driver)?.[1];
+    expect(product).toBeDefined();
+    expect(restated).toBe(product);
+  });
+
+  test('every strategy has mount points, and candidates hold none statically', () => {
+    const block = /WAKE_MOUNT_POINTS = \{([\s\S]*?)\} satisfies/.exec(driver)?.[1] ?? '';
+    expect(block.length).toBeGreaterThan(0);
+    for (const strategy of STRATEGIES) {
+      expect(block).toContain(strategy);
+    }
+    expect(block).toContain("'bounded-layers': [],");
+    expect(block).toContain("'merkle-pack': [],");
+  });
+  test('r2fs is the only exclusion, and its reason says why', () => {
+    const block = /FAULT_CUT_EXCLUDED = \{([\s\S]*?)\} satisfies/.exec(driver)?.[1] ?? '';
+    expect(block).toContain('r2fs:');
+    for (const strategy of STRATEGIES) {
+      if (strategy === 'r2fs') continue;
+      expect(block).not.toContain(`'${strategy}'`);
+      expect(block).not.toContain(`${strategy}:`);
+    }
+    const reason = /r2fs: '([^']*(?:'[^']*)*)'/.exec(block)?.[0] ?? '';
+    expect(reason.length).toBeGreaterThan(40);
+    // The reader goes through `faultCutExclusion`, not the table: its cases
+    // must stay exactly the table's keys, or an exclusion would read one way
+    // and judge another.
+    //
+    // DIGITS IN THE CLASS, and a `case` that may wrap onto its own line. Both
+    // patterns began as `[a-z-]+` against one line, so every strategy name
+    // carrying a digit matched neither — and `r2fs` is the only exclusion
+    // there is. Keys came back empty, cases came back empty, and comparing
+    // them would have agreed about nothing; only the literal `['r2fs']`
+    // expectation beside them made the miss visible instead of vacuous.
+    const keys = [...block.matchAll(/^  ([a-z0-9-]+):/gm)].map((match) => match[1]).sort();
+    const cases = [...driver.matchAll(
+      /case '([a-z0-9-]+)':\s*(?:\n\s*)?return FAULT_CUT_EXCLUDED\./g,
+    )]
+      .map((match) => match[1])
+      .sort();
+    expect(keys).toEqual(['r2fs']);
+    expect(cases).toEqual(keys);
+  });
+
+  test('the cut cell dispatches every cuttable arm', () => {
+    const cell = /async function runFaultCutCell[\s\S]*?\n\}\n/.exec(driver)?.[0] ?? '';
+    for (const strategy of ['snapshot-chain', 'overlay-cas', 'bounded-layers', 'merkle-pack']) {
+      expect(cell).toContain(`'${strategy}'`);
+    }
   });
 });

@@ -654,10 +654,12 @@ describe('the devbox run\'s own admission requirements', () => {
   test('G5 refuses every requested arm for an uncounted restore instead of passing an empty array', () => {
     const verdict = devboxVerdict(completeArms());
     expect(gateHeld(verdict, 'G5')).toBe(false);
+    // The refusal names the missing source per field, not the old blanket
+    // sentence: an arm whose bracket never landed says which bill is missing.
     for (const strategy of CANDIDATE_ARMS) {
-      expect(gateReasons(verdict, 'G5')).toContain(`arm \`${strategy}\` has no counted restore`);
+      expect(gateReasons(verdict, 'G5')).toContain(`arm \`${strategy}\` totalRemoteOps: the wake-window /ops bracket never landed`);
     }
-    expect(gateReasons(verdict, 'G5')).toContain('restore-complexity instrumentation');
+    expect(gateReasons(verdict, 'G5')).toContain('no live byte counter');
   });
 
   test('G6 refuses a cold attach past the admission ceiling, whatever the fixture budget allows', () => {
