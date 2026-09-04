@@ -241,13 +241,16 @@ describe('a wake on the same instance rewrites the attach row the driver reads',
     // door's and the repair's own); three health probes of three execs each
     // (before the repair, after the store remount, after the seed); the store
     // remount's mkdir and its before/after mount reads; the daemon replacement's
-    // mount read, its mkdir and its one readiness ask; and the boot-marker
-    // re-check after the repair.
+    // mount read, its mkdir and its one readiness ask; the boot-marker
+    // re-check after the repair; and ONE `mkdir -p` of the runtime directory
+    // itself, issued once per container by the exec seam before any command
+    // stands in that directory (the chdir the deployed r2fs arm died on —
+    // `#rawExec`'s own note carries the measurement).
     expect(runner.invocations.slice(answered).map((call) => call.action)).toEqual(['seed']);
     expect(
       container.starts.slice(started).filter((start) => start.command.includes(CANDIDATE_JOURNAL_BINARY)),
     ).toHaveLength(1);
-    expect(wakeAsks).toBeLessThanOrEqual(18);
+    expect(wakeAsks).toBeLessThanOrEqual(19);
     // And the daemon answers after the wake, so the next tick reaches the
     // runner and its fence answers — the deployed release died instead of
     // `no mutation journal answers`.

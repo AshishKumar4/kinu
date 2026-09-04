@@ -1618,6 +1618,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     this.#generation += 1;
     this.#startup = undefined;
     this.#restoration = { phase: 'unstarted' };
+    // A REPLACEMENT IS A FRESH DISK. Every generation turnover has evidence
+    // that the container this box was talking to is gone or going, so the
+    // runtime directory this instance established is gone with it and the
+    // next command that stands in it must create it again.
+    this.#runtimeDirReady = false;
   }
 
   /**
@@ -3812,9 +3817,39 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     command: string,
     cwd = DEVBOX_WORKDIR,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    // THE CWD MUST EXIST BEFORE A COMMAND CAN STAND IN IT, and only the work
+    // directory is the image's. `DEVBOX_RUNTIME_DIR` is the devbox's own path:
+    // the session shell chdirs before it runs anything, so a command issued
+    // from a runtime directory nothing has created yet never runs at all — and
+    // every `mkdir -p` that would have created it is issued FROM that same
+    // directory, so a box in that state can never dig itself out.
+    //
+    // MEASURED. The deployed r2fs arm died of exactly this on both launches of
+    // 2026-09-03: `create failed: cold attach refused: /workspace could not be
+    // emptied for a mount: Failed to change directory to '/var/tmp/devbox'`.
+    // Every arm gets its own worker and container, so no sibling strategy's
+    // mountStore had ever created the directory there. The candidate arms
+    // carry the same latent defect — their `mountStore` reads `/proc/mounts`
+    // from the runtime directory too — which is why the repair belongs to this
+    // seam rather than to one strategy's ports.
+    //
+    // One command per container per runtime-directory cwd, and idempotent:
+    // `mkdir -p` from the work directory, which always exists.
+    if (cwd === DEVBOX_RUNTIME_DIR && !this.#runtimeDirReady) {
+      const made = await super.exec(`mkdir -p '${DEVBOX_RUNTIME_DIR}'`, { cwd: DEVBOX_WORKDIR });
+      if (made.exitCode !== 0) {
+        return { stdout: made.stdout, stderr: made.stderr, exitCode: made.exitCode };
+      }
+      this.#runtimeDirReady = true;
+    }
     const result = await super.exec(command, { cwd });
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
   }
+
+  /** Whether THIS instance has established the runtime directory on the
+   *  container it is talking to. Reset with the generation, because a
+   *  replacement is a fresh container whose disk holds none of ours. */
+  #runtimeDirReady = false;
 
   // ── the one seam every container mount is released through ────────────────
   //

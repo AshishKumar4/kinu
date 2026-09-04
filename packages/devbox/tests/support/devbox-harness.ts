@@ -380,6 +380,14 @@ export class FakeSandbox {
    * mount was not represented at all.
    */
   sessionCwd = '/workspace';
+  /**
+   * The directories this container holds. A FRESH container holds what the
+   * image ships — `/workspace` and `/tmp` — and nothing under `/var/tmp/devbox`:
+   * that path is the devbox's own, created by whatever runs first. Commands
+   * earn directories by `mkdir -p`; a cwd absent from this set refuses the
+   * chdir, as the container does.
+   */
+  readonly directories = new Set<string>(['/', '/workspace', '/tmp', '/var/tmp']);
   readonly fileOperationFailures = {
     rename: Array<Error>(),
     move: Array<Error>(),
@@ -501,13 +509,35 @@ export class FakeSandbox {
       this.sequence.push(`sessionKilled:${command.split(' ')[0]}`);
       throw refused;
     }
+    // A CWD THE CONTAINER DOES NOT HOLD IS A REFUSAL, NOT A MOVE. The session
+    // shell chdirs before it runs anything, so a command whose cwd does not
+    // exist never runs at all — and the deployed r2fs arm died of exactly
+    // that, twice on 2026-09-03: `Failed to change directory to
+    // '/var/tmp/devbox'`, on a fresh container where nothing had created the
+    // runtime directory the r2fs ports name as their cwd. The mkdir that would
+    // have created it travelled through the very exec the chdir killed. A fake
+    // that accepted the chdir could not hold that class of defect.
+    const cwd = options?.cwd;
+    if (cwd !== undefined && !this.directories.has(cwd)) {
+      this.sequence.push(`chdirRefused:${cwd}`);
+      return {
+        stdout: '',
+        stderr: `Failed to change directory to '${cwd}'`,
+        exitCode: 1,
+      };
+    }
     // AN EXEC'S CWD MOVES THE SHARED SESSION, AND IT STAYS MOVED. The container
     // server runs every command in one persistent session shell, so a cwd
     // option is a `cd` that outlives the command — which is exactly why the
     // SDK's own `unmountBucket`, which passes no cwd at all, inherits wherever
     // the last caller left the shell. A fake that dropped this argument (this
     // one did) cannot express the reference that refuses an unmount.
-    if (options?.cwd !== undefined) this.sessionCwd = options.cwd;
+    if (cwd !== undefined) this.sessionCwd = cwd;
+    // `mkdir -p` creates what it names, which is how a container earns the
+    // directories later commands stand in.
+    for (const made of command.matchAll(/mkdir -p ((?:'[^']+'\s*)+)/g)) {
+      for (const quoted of made[1]!.matchAll(/'([^']+)'/g)) this.directories.add(quoted[1]!);
+    }
     this.execs.push(command);
     // The scan gets a NAME rather than its first word, because the ordering
     // assertions read this row and a template whose first word changes must not

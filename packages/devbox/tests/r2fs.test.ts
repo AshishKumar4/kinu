@@ -61,6 +61,12 @@ interface Harness {
   readonly mountpoint: () => readonly string[];
   /** What was moved aside, so a test can prove nothing was destroyed. */
   readonly quarantined: () => readonly string[];
+  /** The directories this container holds. An absent runtime directory is the
+   *  fresh-container state the deployed r2fs arm died on. */
+  readonly directories: () => ReadonlySet<string>;
+  /** Create a directory in this container, as a command that runs from a cwd
+   *  the container holds would. */
+  readonly makeDirectory: (path: string) => void;
 }
 
 /**
@@ -121,11 +127,22 @@ function harness(overrides: {
    *  release failure reaches a caller, so it is the only one that can prove what
    *  that caller is told. */
   lazyUnmountRefuses?: boolean;
+  /** A fresh container: the runtime directory does not exist until something
+   *  creates it. The deployed r2fs arm died here — its port wiring runs every
+   *  command FROM the runtime dir, and the session's chdir killed it before
+   *  the mkdir that would have created the dir could run. */
+  runtimeDirExists?: boolean;
 } = {}): Harness {
   const calls: string[] = [];
   let mounted = overrides.mountedAtStart ?? false;
   let mountpoint = [...overrides.mountpointEntries ?? []];
   const quarantined: string[] = [];
+  // The container's directory set. A fresh per-arm container holds the
+  // image's own paths and nothing under /var/tmp/devbox — the runtime dir is
+  // ours to create, and nothing creates it before the r2fs attach runs.
+  const directories = new Set<string>(
+    overrides.runtimeDirExists === false ? ['/workspace'] : ['/workspace', DEVBOX_RUNTIME_DIR],
+  );
   // WHERE THE SHARED SESSION SHELL IS STANDING. The SDK creates its default
   // session with `cwd: "/workspace"` — the mount point — so that is the state
   // this starts in, and every port that runs a command moves it the way an
@@ -143,12 +160,29 @@ function harness(overrides: {
         calls.push(`sessionKilled:${command.split(' ')[0]}`);
         return Promise.reject(refused);
       }
+      // THE SDK SESSION CHDIRS BEFORE IT RUNS ANY COMMAND. A cwd the container
+      // does not hold kills the session with the deployed words — the exact
+      // refusal the r2fs arm recorded twice on 2026-09-03 — so the fake models
+      // it: every exec declares its cwd, and a missing one never runs.
+      if (overrides.runtimeDirExists === false && !directories.has(DEVBOX_RUNTIME_DIR)
+        && commandRunFromRuntimeDir(command)) {
+        calls.push(`execFailed:${command.split(' ')[0]}`);
+        return Promise.resolve({
+          stdout: '',
+          stderr: `Failed to change directory to '${DEVBOX_RUNTIME_DIR}'`,
+          exitCode: 1,
+        });
+      }
       calls.push(`exec:${command.split(' ')[0]}`);
       if (command.startsWith('sync')) {
         const code = overrides.syncExit ?? 0;
         return Promise.resolve({
           stdout: String(code), stderr: code === 0 ? '' : 'device busy', exitCode: 0,
         });
+      }
+      // mkdir -p creates what it names, once its cwd exists.
+      for (const made of command.matchAll(/'(\/[^']+)'/g)) {
+        directories.add(made[1]!);
       }
       return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
     },
@@ -241,7 +275,25 @@ function harness(overrides: {
     mounted: () => mounted,
     mountpoint: () => [...mountpoint],
     quarantined: () => [...quarantined],
+    directories: () => directories,
+    makeDirectory: (path) => directories.add(path),
   };
+}
+
+/**
+ * Whether the r2fs port wiring runs this command from the runtime directory —
+ * the wiring every `readMounts`/`exec`/`quarantineMountpoint` port declares in
+ * `devbox.ts` (`#rawExec(command, DEVBOX_RUNTIME_DIR)`), which is what the
+ * deployed chdir refusal named.
+ */
+function commandRunFromRuntimeDir(command: string): boolean {
+  // The harness cannot see the cwd the ports declared; the commands the r2fs
+  // ports compose from the runtime dir are these four shapes. Modelled by
+  // shape rather than by a new port argument so the port signature — the
+  // product's own seam — stays exactly as the strategy consumes it.
+  return command.startsWith('d=') || command.startsWith('cat /proc/mounts')
+    || command.startsWith('mkdir') || command.startsWith('find')
+    || command.startsWith('sync') || command.startsWith('test -');
 }
 
 async function checkpointOf(record: Harness, kind: CheckpointKind): Promise<CheckpointOutcome> {
@@ -824,5 +876,39 @@ describe('the stop order: holders are released before the mount is detached', ()
       stillMounted: container.s3fsMounts.has(DEVBOX_WORKDIR),
       stopped: container.stops,
     }).toEqual({ stillMounted: false, stopped: 1 });
+  });
+});
+
+// ── the runtime directory a cold attach stands in ───────────────────────────
+//
+// THE DEPLOYED DEFECT, in the arm's own recorded words: `create failed: cold
+// attach refused: /workspace could not be emptied for a mount: Failed to
+// change directory to '/var/tmp/devbox'` — run 20260903140046, and the same
+// refusal in the aborted launch before it, so it reproduced across both
+// launches of the day. The r2fs port wiring names the runtime directory as the
+// cwd of every command it issues; the session shell chdirs before it runs
+// anything; and a fresh per-arm container holds no `/var/tmp/devbox` at all
+// (every arm gets its own worker and its own container, so no sibling
+// strategy's mountStore has ever created it there). The session died on the
+// chdir — and the `mkdir -p` that would have created the directory travels
+// through that very exec, so the box could never dig itself out.
+//
+// Driven through the REAL class against the container stand-in, because the
+// defect lives in the port wiring rather than in the strategy: a fake standing
+// in for the ports cannot see the cwd they declare.
+
+describe('a cold attach on a fresh container establishes its runtime directory', () => {
+  test('the attach mounts where the deployed arm died on the chdir', async () => {
+    const { box, container } = devboxHarness(R2fsQuiesceBox);
+    // The fresh container: the image's own paths, and nothing of ours.
+    expect(container.directories.has(DEVBOX_RUNTIME_DIR)).toBe(false);
+
+    await box.devboxStartup();
+
+    // No command was refused its cwd, the runtime directory exists, and the
+    // work directory carries the mount this strategy claims.
+    expect(container.sequence.filter((row) => row.startsWith('chdirRefused:'))).toEqual([]);
+    expect(container.directories.has(DEVBOX_RUNTIME_DIR)).toBe(true);
+    expect(container.s3fsMounts.has(DEVBOX_WORKDIR)).toBe(true);
   });
 });
