@@ -1,5 +1,5 @@
 {
-  "measured": "042fddd98: 859 test files, 789 runnable suites, 11531 tests, 34 runners, 62 non-public product members",
+  "measured": "864f2f8c4: 865 test files, 794 runnable suites, 11601 tests, 34 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -947,6 +947,10 @@
     },
     {
       "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws when the member never closes :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: carries every file the generated Dockerfile COPYs out of it :: expect(<source text>).toBe",
       "count": 1
     },
     {
