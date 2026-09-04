@@ -7,10 +7,23 @@ import type { CandidateContainerFormat } from '../src/candidates/container';
 const RUN = 'ab-bounded-layers-20260904';
 
 describe('box identity derives from strategy and name', () => {
-  test('same inputs give the same identity, any difference gives another', () => {
-    expect(deriveBoxId('bounded-layers', RUN)).toBe(deriveBoxId('bounded-layers', RUN));
-    expect(deriveBoxId('bounded-layers', RUN)).not.toBe(deriveBoxId('merkle-pack', RUN));
-    expect(deriveBoxId('bounded-layers', RUN)).not.toBe(deriveBoxId('bounded-layers', `${RUN}-other`));
+  test('the identity is a stated function of its inputs, stable across processes', () => {
+    // Was `deriveBoxId(a, b)` compared with `deriveBoxId(a, b)` — the expected
+    // side computed by the code under test, so it could not fail. Determinism
+    // WITHIN one process is not the property that matters either: the id
+    // addresses durable storage, so a derivation that changes between deploys
+    // strands every existing box. Only a stated value can assert that, which
+    // is why these literals are here and why drift in one is a finding rather
+    // than a chore. Each is `sha256Hex('<strategy>:<name>')`, the fixture's
+    // model of `binding.idFromName`.
+    expect(deriveBoxId('bounded-layers', RUN))
+      .toBe('47353dc73641b25ec31b484d638525cb549209617d437243029ce4385a3b750d');
+    expect(deriveBoxId('merkle-pack', RUN))
+      .toBe('2c20456c8985722141a11115274afb71b3dc0b002495742b8e6bdab0a550a61a');
+    expect(deriveBoxId('bounded-layers', `${RUN}-other`))
+      .toBe('6225a1e8af4ab22b5c3248ce8c63a2eee2647fdfc5bc87d3dee6217fede58b90');
+    // And each differs from the legacy fixed id, which is what makes two boxes
+    // in one test genuinely separate storage rather than one shared row map.
     expect(deriveBoxId('bounded-layers', RUN)).not.toBe(TEST_BOX_ID);
   });
 
