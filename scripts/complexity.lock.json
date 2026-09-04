@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-03",
-  "files": 1978,
-  "functions": 51350,
+  "measuredAt": "2026-09-04",
+  "files": 1984,
+  "functions": 51640,
   "ceiling": 125,
   "line": 39,
   "inventory": [
@@ -126,10 +126,6 @@
       "complexity": 48
     },
     {
-      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
-      "complexity": 47
-    },
-    {
       "key": "lean/check-traceability.mjs#tsScan",
       "complexity": 46
     },
@@ -148,6 +144,10 @@
     {
       "key": "scripts/bench-r2-workspace.ts#main",
       "complexity": 46
+    },
+    {
+      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
+      "complexity": 45
     },
     {
       "key": "packages/devbox/tests/journal-daemon-runtime-matrix.ts#verifyManifest",

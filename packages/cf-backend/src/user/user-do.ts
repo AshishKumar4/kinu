@@ -2064,16 +2064,9 @@ export class UserDO extends Agent<Env> {
     // machine is connected on the way out.
     await this.requireTier(caller, 'device.rpc');
     const session = `pty-${nanoid(16)}`;
-    const target = this._devices.connectedDeviceId(deviceId);
-    // A caller that named no machine gets one answer when several are live,
-    // not the one that says none are. `deviceRpc` says the same below, with
-    // the machines' names; this says it before a session is minted.
-    if (!target) {
-      if (deviceId === undefined && this._devices.connectedDeviceIds().length > 1) {
-        throw new Error(`${SEVERAL_DEVICES_CONNECTED}: ${this.connectedDeviceNames().join(', ')}`);
-      }
-      throw new Error(NO_DEVICE_CONNECTED);
-    }
+    // Resolved before a session is minted, by the same rule every device call
+    // follows: several live and none named is a question, not a coin.
+    const target = await this.resolveDeviceForCall(deviceId, undefined);
     try {
       await this.deviceRpc(
         caller,
@@ -2335,6 +2328,30 @@ export class UserDO extends Agent<Env> {
    *  the owner consented. The daemon enforces that frame and never decides the
    *  tier itself, so one machine serving five workspaces gives each of them a
    *  different home from the same daemon. */
+  /**
+   * Which machine a call lands on, or which refusal it gets.
+   *
+   * A named machine resolves or is refused as not connected. An unnamed call
+   * resolves to the ONLY live machine; with several live it is a question for
+   * the caller, not a coin for the hub — nothing crosses to any machine, and
+   * the answer names the ones that could have been meant. With none live, a
+   * workspace operation raises one provisioning request when `consentAgent`
+   * names the workspace; owner-facing reads and terminal opens pass
+   * `undefined` and simply report that no machine is connected.
+   */
+  private async resolveDeviceForCall(
+    requested: string | undefined,
+    consentAgent: string | undefined,
+  ): Promise<string> {
+    const deviceId = this._devices.connectedDeviceId(requested);
+    if (deviceId) return deviceId;
+    if (requested === undefined && this._devices.connectedDeviceIds().length > 1) {
+      throw new Error(`${SEVERAL_DEVICES_CONNECTED}: ${this.connectedDeviceNames().join(', ')}`);
+    }
+    if (consentAgent !== undefined) await this.raiseProvisioningRequest(consentAgent);
+    throw new Error(NO_DEVICE_CONNECTED);
+  }
+
   async deviceRpc(
     caller: UserCaller,
     method: string,
@@ -2354,22 +2371,7 @@ export class UserDO extends Agent<Env> {
     const consentAgent = stopping ? undefined : (resolved.kind === 'workspace'
       ? (ownerRead ? undefined : resolved.workspace)
       : opts?.agentName);
-    const deviceId = this._devices.connectedDeviceId(opts?.deviceId);
-    if (!deviceId) {
-      // Several machines are live and this call named none. That is a question
-      // for the caller, not a coin for the hub: nothing crosses to any machine,
-      // and the answer names the ones that could have been meant.
-      if (opts?.deviceId === undefined && this._devices.connectedDeviceIds().length > 1) {
-        throw new Error(`${SEVERAL_DEVICES_CONNECTED}: ${this.connectedDeviceNames().join(', ')}`);
-      }
-      // A workspace operation that needs a machine raises one provisioning
-      // request. Owner-facing checkpoint reads stay consent-free and simply
-      // report that no machine is connected.
-      if (consentAgent !== undefined) {
-        await this.raiseProvisioningRequest(consentAgent);
-      }
-      throw new Error(NO_DEVICE_CONNECTED);
-    }
+    const deviceId = await this.resolveDeviceForCall(opts?.deviceId, consentAgent);
     if (!stopping && !this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
     if (consentAgent !== undefined) {
       // Consent is keyed on the PROVEN workspace, never the claimed name — an
