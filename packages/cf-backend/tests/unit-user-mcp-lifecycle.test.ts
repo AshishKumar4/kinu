@@ -20,9 +20,11 @@ import {
 import {
   dropLiveMcpFetch, failNextMcpRemove, failNextMcpToolCall, hangMcpEstablish, inheritedMcpManager,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers,
-  resetRecordedMcp, seedMcpTools, seedSdkMcpServer,
+  resetRecordedMcp, seedMcpTools, seedSdkMcpServer, type RecordedMcpTransport,
 } from './helpers/agents-sdk';
-import { McpToolSurfaceSchema, validateMcpServerInput } from '../src/user/mcp';
+import {
+  McpToolSurfaceSchema, storedMcpOptionsCarryCredential, validateMcpServerInput,
+} from '../src/user/mcp';
 import type { McpToolSurface } from '../src/user/user-do';
 import type { UserCaller } from '../src/user/workspace-capability';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
@@ -42,27 +44,22 @@ async function readSurface(h: TestUserDO, owner: UserCaller): Promise<McpToolSur
   return v.parse(McpToolSurfaceSchema, JSON.parse(await h.userDO.userMcp_toolDescriptors(owner)));
 }
 
-/** The SDK's persistence whitelist — `persistTransportOptions`,
- *  agents/dist/client-zqKcsyFa.js:1022-1035. What a registered server's
- *  transport options become in `cf_agents_mcp_servers.server_options`. */
-const SDK_PERSISTED_TRANSPORT_KEYS = [
-  'type', 'headers', 'requestInit', 'reconnectionOptions',
-  'skipIssuerMetadataValidation', 'onInsufficientScope', 'maxStepUpRetries',
-  'sessionId', 'protocolVersion',
-] as const;
-
+/**
+ * What the SDK's own `cf_agents_mcp_servers.server_options` column HOLDS for a
+ * server — the bytes, not a reconstruction of them.
+ *
+ * This is the state a credential-custody question has to be asked of:
+ * `restoreConnectionsFromStorage` rebuilds a live transport out of exactly
+ * these bytes (`agents/dist/client-zqKcsyFa.js:1557-1571`), so a credential
+ * that is absent from our own column and present here is still spent on every
+ * reconnect. The stand-in persists them the way `encodeMcpServerOptions` does,
+ * whitelist and all.
+ */
 function persistedServerOptions(id: string): string {
   const row = recordedMcpServers().find((server) => server.id === id);
   if (!row) throw new Error(`No SDK row for ${id}`);
-  // Built by picking, not by filling a dictionary: the whitelist's order is the
-  // order the SDK serialises in, and `Object.fromEntries` keeps it.
-  return JSON.stringify({
-    transport: Object.fromEntries(
-      SDK_PERSISTED_TRANSPORT_KEYS
-        .filter((key) => row.transport[key] !== undefined)
-        .map((key) => [key, row.transport[key]]),
-    ),
-  });
+  if (row.server_options === null) throw new Error(`SDK row ${id} persisted no options`);
+  return row.server_options;
 }
 
 function harness(options?: TestUserDOOptions): TestUserDO {
@@ -436,6 +433,128 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     first.close();
   });
 
+  test('a row whose credential column is NULL is scrubbed too, not replayed', async () => {
+    // The custody hole this closes: the scrub used to be a side effect of
+    // registering a CREDENTIALED row, so it was keyed on a column that can be
+    // null. Clear the credential — or let the old build's best-effort
+    // re-register fail — and the column goes NULL while the SDK's own row keeps
+    // the plaintext, which every reconnect then spends. Once NULL, nothing
+    // reached the row again.
+    const first = harness();
+    await seedServer(first, 'srv1');
+    // Exactly the shape a plaintext-era build left: `buildMcpHeaderTransportOpts`
+    // returned `requestInit: { headers }` beside an `eventSourceInit` wrapper
+    // (`7ba56550e^:src/user/mcp.ts:270-287`), and the closure half of that
+    // wrapper does not survive JSON.
+    seedSdkMcpServer('srv1', {
+      type: 'auto',
+      eventSourceInit: {},
+      requestInit: { headers: { Authorization: 'Bearer stale' } },
+    });
+    expect(persistedServerOptions('srv1')).toContain('stale');
+
+    const woken = createTestUserDO({ storage: first.db });
+    const listed = await woken.userDO.userMcp_list(await testOwner());
+
+    // The plaintext is gone from the SDK's OWN state, which is the only place
+    // it ever was — asserting it is absent from our column would prove nothing.
+    expect(persistedServerOptions('srv1')).toBe(JSON.stringify({ transport: { type: 'auto' } }));
+    expect(liveMcpTransport('srv1')?.requestInit).toBeUndefined();
+    expect(liveMcpTransport('srv1')?.eventSourceInit).toBeUndefined();
+    // A row with no credential gets no seam: there is nothing to open per
+    // request, so the transport is bare rather than a closure over a NULL read.
+    expect(liveMcpFetch('srv1')).toBeNull();
+    // And the server still works: the rewrite re-establishes what it tore down,
+    // because `restoreConnectionsFromStorage` skips a connection this pass
+    // registered (`client-zqKcsyFa.js:1541-1549`).
+    expect(recordedMcpLifecycle().established).toContain('srv1');
+    expect(listed[0]?.status).toBe('ready');
+    woken.close();
+    first.close();
+  });
+
+  test('a scrubbed row that DOES hold a credential still serves from the sealed copy', async () => {
+    // The neighbour case, and the one that says the scrub is not a deletion of
+    // the capability: the config row holds a credential, the SDK's row holds a
+    // plaintext copy of it, and after the rewrite the request must still be
+    // authorized — from the sealed column, opened per request.
+    const first = harness();
+    await seedServer(first, 'srv1', { headers: { Authorization: 'Bearer sealed' } });
+    seedSdkMcpServer('srv1', {
+      type: 'auto',
+      requestInit: { headers: { Authorization: 'Bearer stale' } },
+    });
+
+    const woken = createTestUserDO({ storage: first.db });
+    await woken.userDO.userMcp_list(await testOwner());
+
+    expect(persistedServerOptions('srv1')).toBe(JSON.stringify({ transport: { type: 'auto' } }));
+    expect(liveMcpTransport('srv1')?.requestInit).toBeUndefined();
+
+    const seen: string[] = [];
+    const real = globalThis.fetch;
+    const record = async (
+      _url: Request | URL | RequestInfo,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      seen.push(new Headers(init?.headers).get('authorization') ?? 'none');
+      return new Response('{}');
+    };
+    globalThis.fetch = Object.assign(record, { preconnect: real.preconnect });
+    try {
+      const send = liveMcpFetch('srv1');
+      expect(send).not.toBeNull();
+      await send?.('https://srv1.example/sse');
+    } finally { globalThis.fetch = real; }
+    expect(seen).toEqual(['Bearer sealed']);
+    woken.close();
+    first.close();
+  });
+
+  test('a headers-clearing patch as an activation’s FIRST MCP call leaves no plaintext', async () => {
+    // Hydration runs after the NULL write, so a scrub that depended on the
+    // column could not see the row it was meant to clean. Nothing has hydrated
+    // yet on this activation either, so the scrub cannot ride along on
+    // somebody else's registration.
+    const first = harness();
+    const owner = await testOwner();
+    await seedServer(first, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
+    seedSdkMcpServer('srv1', {
+      type: 'auto',
+      requestInit: { headers: { Authorization: 'Bearer mcp-secret' } },
+    });
+
+    const woken = createTestUserDO({ storage: first.db });
+    await woken.userDO.userMcp_update(owner, 'srv1', { headers: null });
+
+    expect(persistedServerOptions('srv1')).toBe(JSON.stringify({ transport: { type: 'auto' } }));
+    expect(liveMcpTransport('srv1')?.requestInit).toBeUndefined();
+    expect(liveMcpFetch('srv1')).toBeNull();
+    // The credential really was removed on our side, so nothing can re-derive
+    // it: this is the state the owner asked for.
+    expect(sqlExec(first.db).exec(
+      'SELECT headers FROM user_mcp_servers WHERE id = ?', 'srv1',
+    ).toArray()[0]?.headers).toBeNull();
+    woken.close();
+    first.close();
+  });
+
+  test('a row that never held a credential keeps the SDK session state it had', async () => {
+    // The scrub is keyed on the fields a credential can arrive in, NOT on "the
+    // SDK persisted something". Rewriting for `sessionId` would drop a
+    // resumable session on every activation and re-register forever.
+    const h = harness();
+    await seedServer(h, 'plain');
+    seedSdkMcpServer('plain', { type: 'auto', sessionId: 'sess-1', protocolVersion: '2026-07-28' });
+    const untouched = persistedServerOptions('plain');
+
+    await h.userDO.userMcp_warmConnections(await testOwner());
+
+    expect(persistedServerOptions('plain')).toBe(untouched);
+    expect(recordedMcpLifecycle().established).toEqual([]);
+    h.close();
+  });
+
   test('a rotation is spent by the next request, with no reconnect', async () => {
     const h = harness();
     await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer first' } });
@@ -520,6 +639,40 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     // Nothing to install a seam for, so nothing was registered by us.
     expect(recordedMcpLifecycle().established).toEqual([]);
     h.close();
+  });
+});
+
+describe('what counts as a credential in the SDK’s stored options', () => {
+  test('the three data fields count, and the SDK’s own connection state does not', () => {
+    // The same vocabulary the seeds use, so a field named here is a field the
+    // SDK's column can really hold.
+    const stored = (transport: RecordedMcpTransport): string => JSON.stringify({ transport });
+
+    // The two a plaintext-era build produced, plus the third the persistence
+    // whitelist keeps.
+    expect(storedMcpOptionsCarryCredential(
+      stored({ type: 'auto', requestInit: { headers: { Authorization: 'Bearer x' } } }),
+    )).toBe(true);
+    expect(storedMcpOptionsCarryCredential(
+      stored({ type: 'auto', eventSourceInit: {} }),
+    )).toBe(true);
+    expect(storedMcpOptionsCarryCredential(
+      stored({ type: 'auto', headers: { Authorization: 'Bearer x' } }),
+    )).toBe(true);
+
+    // Session resumption and retry policy are the SDK's own state. Reading them
+    // as a reason to rewrite would drop a resumable session on every activation
+    // and re-register forever.
+    expect(storedMcpOptionsCarryCredential(
+      stored({ type: 'auto', sessionId: 'sess-1', protocolVersion: '2026-07-28' }),
+    )).toBe(false);
+    expect(storedMcpOptionsCarryCredential(stored({ type: 'auto' }))).toBe(false);
+
+    // Nothing a credential could be restored from.
+    expect(storedMcpOptionsCarryCredential('{"client":{}}')).toBe(false);
+    expect(storedMcpOptionsCarryCredential('{"transport":null}')).toBe(false);
+    expect(storedMcpOptionsCarryCredential('not json at all')).toBe(false);
+    expect(storedMcpOptionsCarryCredential(null)).toBe(false);
   });
 });
 

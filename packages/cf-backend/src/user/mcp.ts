@@ -547,6 +547,59 @@ export interface McpCredentialTransport {
   fetch: (url: string | URL, init?: RequestInit) => Promise<Response>;
 }
 
+/** The stored SDK options, read for ONE question: does the transport the SDK
+ *  would restore carry request data of ours? Only the three credential-shaped
+ *  fields are declared, so nothing else in the payload can be read here — the
+ *  session state beside them is the SDK's business and is left alone. */
+const StoredMcpServerOptionsSchema = v.object({
+  transport: v.optional(v.object({
+    headers: v.optional(v.unknown()),
+    requestInit: v.optional(v.unknown()),
+    eventSourceInit: v.optional(v.unknown()),
+  })),
+});
+
+/**
+ * Whether an SDK-stored `server_options` payload still holds a credential the
+ * SDK would spend.
+ *
+ * `cf_agents_mcp_servers.server_options` is the SDK's OWN snapshot of a
+ * registered server, and `restoreConnectionsFromStorage` rebuilds the live
+ * transport out of it — `{ ...parsedOptions.transport, type, authProvider }`
+ * (`agents/dist/client-zqKcsyFa.js:1557-1571`). So a credential that reached
+ * that column is replayed to the third party on every reconnect, from outside
+ * this user's encryption envelope, no matter what our own column says. Asking
+ * this question of the SDK's bytes is what makes the scrub reach a row whose
+ * credential column is NULL — the row a cleared credential leaves behind.
+ *
+ * THE THREE FIELDS. `requestInit` and `eventSourceInit` are what the plaintext
+ * transport builder produced (`requestInit: { headers }` beside an
+ * `eventSourceInit` wrapper, `7ba56550e^:src/user/mcp.ts:270-287`), and
+ * `headers` is the third one the persistence whitelist keeps
+ * (`persistTransportOptions`, `:1022-1035`). Nothing else on that whitelist can
+ * hold a credential: `type`, `sessionId`, `protocolVersion`,
+ * `reconnectionOptions`, `skipIssuerMetadataValidation`, `onInsufficientScope`
+ * and `maxStepUpRetries` are the SDK's own connection state. Reading them as a
+ * reason to rewrite would drop a resumable session on every activation and
+ * re-register forever, which is why the question is about these three and not
+ * about "the SDK persisted something".
+ *
+ * A payload that will not parse reads as holding nothing, because the SDK
+ * cannot restore a credential out of bytes it cannot decode either.
+ */
+export function storedMcpOptionsCarryCredential(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  const parsed = v.safeParse(
+    StoredMcpServerOptionsSchema,
+    tolerate(() => JSON.parse(raw), 'malformed-input'),
+  );
+  if (!parsed.success) return false;
+  const transport = parsed.output.transport;
+  if (!transport) return false;
+  return [transport.headers, transport.requestInit, transport.eventSourceInit]
+    .some((carried) => carried !== undefined && carried !== null);
+}
+
 /**
  * Whether a failed MCP dispatch failed because the TRANSPORT was not
  * authorized. The one condition that justifies re-probing a live connection,

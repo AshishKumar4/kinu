@@ -146,6 +146,7 @@ import {
 import {
   validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, mcpCredentialTransport, describeMcpTool, isMcpTransportUnauthorized,
+  storedMcpOptionsCarryCredential,
   type McpServerSummary, type McpTransport,
   type SerializableToolDescriptor,
 } from './mcp';
@@ -4278,23 +4279,35 @@ export class UserDO extends Agent<Env> {
    *     during a delete both leave an SDK row behind — and that row keeps
    *     reconnecting, keeps spending the user's credential and keeps appearing in
    *     `listServers()` with nothing able to delete it. Two writable truths.
-   *  2. Every row holding a sealed credential is registered by US, carrying the
-   *     credential as a `fetch` closure rather than as data (see
-   *     `mcpCredentialTransport`). `registerServer` builds the connection
-   *     WITHOUT connecting and leaves it in CONNECTING, and
+   *  2. Every row whose transport THIS PLANE must own is re-registered by us:
+   *     one that holds a sealed credential, so the credential travels as a
+   *     `fetch` closure rather than as data (see `mcpCredentialTransport`), and
+   *     one whose SDK row still carries a credential as data, whatever our own
+   *     column now says. `registerServer` builds the connection WITHOUT
+   *     connecting and leaves it in CONNECTING, and
    *     `restoreConnectionsFromStorage` skips a connection already in that
    *     state (`agents/dist/client-zqKcsyFa.js:1541-1549`), so the SDK never
-   *     gets to connect a credentialed server from its own persisted options.
-   *     That is what closes the cold-start window: no unauthenticated first
-   *     request, and no reason for a credential to be persisted at all. The
-   *     same call rewrites `server_options`, which is how a row written by the
-   *     old plaintext path is scrubbed.
+   *     gets to connect one of these from its own persisted options. That is
+   *     what closes the cold-start window: no unauthenticated first request,
+   *     and no reason for a credential to be persisted at all. The same call
+   *     rewrites `server_options`, which is how a plaintext credential leaves
+   *     the SDK's storage.
+   *
+   *     SCRUBBING IS A PROPERTY OF HYDRATION, not a side effect of registering
+   *     a credentialed row. Keyed on the credential column it could not reach
+   *     the row that needs it most: clearing a credential writes NULL, and a
+   *     row with NULL beside a pre-change plaintext `requestInit` was then
+   *     skipped forever and restored FROM that plaintext — the removed
+   *     credential spent on every reconnect. `storedMcpOptionsCarryCredential`
+   *     asks the SDK's own bytes instead, so the reach does not depend on a
+   *     column that can be null.
    *  3. The SDK restores everything else — OAuth continuations, retry policy,
    *     resumed sessions — and then the connections registered in step 2 are
-   *     established.
+   *     established. They must be: the restore skipped them.
    *
-   * Idempotent. A connection that already carries the closure is left alone, so
-   * a warm activation pays one `listServers()` scan.
+   * Idempotent. A credentialed connection already carrying the closure whose
+   * SDK row holds no credential data is left alone, so a warm activation pays
+   * one `listServers()` scan.
    */
   private async hydrateUserMcp(): Promise<void> {
     if (this._hydratingUserMcp) return this._hydratingUserMcp;
@@ -4315,7 +4328,11 @@ export class UserDO extends Agent<Env> {
       `SELECT id, name, server_url, transport, headers FROM user_mcp_servers`,
     );
     const configured = new Set(rows.map((row) => row.id));
-    for (const stored of mgr.listServers()) {
+    // Read ONCE, and kept: these rows answer both questions this pass asks of
+    // the SDK's storage — which of them no config row owns, and which of them
+    // still hold a credential as data.
+    const sdkRows = mgr.listServers();
+    for (const stored of sdkRows) {
       if (configured.has(stored.id)) continue;
       try { await mgr.removeServer(stored.id); }
       catch (err) {
@@ -4330,10 +4347,16 @@ export class UserDO extends Agent<Env> {
 
     const registered: string[] = [];
     for (const row of rows) {
-      if (row.headers === null) continue;
       const live = mgr.mcpConnections[row.id]?.options.transport;
-      if (live && 'fetch' in live && live.fetch) continue;
-      await this.registerCredentialedMcpServer(row);
+      const seamLive = live !== undefined && 'fetch' in live && live.fetch !== undefined;
+      // A sealed credential must run on the seam, and a credential the SDK
+      // stored as data must go — whether or not our column still holds one.
+      const needsSeam = row.headers !== null && !seamLive;
+      const holdsPlaintext = storedMcpOptionsCarryCredential(
+        sdkRows.find((server) => server.id === row.id)?.server_options,
+      );
+      if (!needsSeam && !holdsPlaintext) continue;
+      await this.registerOwnedMcpTransport(row);
       registered.push(row.id);
     }
 
@@ -4341,37 +4364,49 @@ export class UserDO extends Agent<Env> {
     for (const id of registered) await mgr.establishConnection(id);
   }
 
-  /** Register one credentialed server with the credential as a closure.
+  /** Register one configured server on a transport THIS plane owns, replacing
+   *  whatever the SDK's row held.
    *
    *  A live connection is torn down FIRST. `createConnection` returns an
    *  existing connection object untouched (`client-zqKcsyFa.js:1719-1720`), so
    *  registering over one would rewrite the storage row and leave the wire
-   *  running on the old transport — the credential seam would silently not be
-   *  installed. Only the credential-acquiring transition reaches that branch; a
-   *  cold activation has no connection to close.
+   *  running on the old transport — the new transport would silently not be
+   *  installed. Only a transition that must change the transport reaches that
+   *  branch; a cold activation has no connection to close.
    *
    *  Any pending OAuth continuation on the SDK's row (callback URL, client id,
    *  the authorize URL a user has not visited yet) is read before the teardown
-   *  and carried across, because this registration REPLACES that row. */
-  private async registerCredentialedMcpServer(row: McpHydrationRow): Promise<void> {
+   *  and carried across, because this registration REPLACES that row.
+   *
+   *  The transport is the credential CLOSURE when the row holds a sealed
+   *  credential and a BARE `{type}` when it does not — the same two shapes
+   *  `userMcp_add` registers. A row whose credential was cleared therefore
+   *  leaves the SDK holding nothing, rather than a pass-through closure that
+   *  would read SQL on every request of a server with no secret to spend. Since
+   *  the closure reads the column per request, a credential added later is
+   *  spent by the seam the next hydration installs. */
+  private async registerOwnedMcpTransport(row: McpHydrationRow): Promise<void> {
     const mgr = this.userMcp();
     const stored = mgr.listServers().find((server) => server.id === row.id);
     const callbackUrl = stored?.callback_url ?? '';
     if (mgr.mcpConnections[row.id]) {
       try { await mgr.removeServer(row.id); }
       catch (err) {
-        diagnostics.failure('mcp.credential_seam_teardown_failed', toKinuError({
-          doing: 'closing an MCP connection before installing its credential seam',
+        diagnostics.failure('mcp.transport_rewrite_teardown_failed', toKinuError({
+          doing: 'closing an MCP connection before rewriting the transport it runs on',
           cause: err,
           otherwise: 'unavailable',
         }), { serverId: row.id });
         throw err;
       }
     }
-    const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> = {
-      ...mcpCredentialTransport(row.server_url, () => this.openMcpHeaderMap(row.id)),
-      type: row.transport,
-    };
+    const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> =
+      row.headers === null
+        ? { type: row.transport }
+        : {
+            ...mcpCredentialTransport(row.server_url, () => this.openMcpHeaderMap(row.id)),
+            type: row.transport,
+          };
     if (callbackUrl) {
       const authProvider = new DurableObjectOAuthClientProvider(
         this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,

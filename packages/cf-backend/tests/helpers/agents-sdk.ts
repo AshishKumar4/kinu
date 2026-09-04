@@ -829,6 +829,12 @@ export interface RecordedMcpTransport {
   type?: string;
   headers?: Record<string, string>;
   requestInit?: RequestInit;
+  /** Not on the current whitelist, and here because a row a PLAINTEXT-era build
+   *  wrote can carry it: `buildMcpHeaderTransportOpts`
+   *  (`7ba56550e^:src/user/mcp.ts:270-287`) returned this beside
+   *  `requestInit: { headers }`, and the credential-shaped half of it survives
+   *  whatever that day's whitelist kept. */
+  eventSourceInit?: { fetch?: McpCredentialTransport['fetch'] };
   authProvider?: { authUrl?: string | null; clientId?: string | null; serverId?: string };
   reconnectionOptions?: { maxRetries?: number };
   skipIssuerMetadataValidation?: boolean;
@@ -847,9 +853,40 @@ export interface RecordedMcpServer {
   readonly callbackUrl: string;
   readonly clientId: string | null;
   readonly authUrl: string | null;
-  /** Exactly what was handed to `registerServer`. A test that asks what the real
-   *  SDK would PERSIST applies its whitelist to this. */
+  /** Exactly what was handed to `registerServer`, closure included — which is
+   *  how a test asks whether the credential travelled as one. */
   readonly transport: RecordedMcpTransport;
+  /** The bytes the SDK's own column holds — `encodeMcpServerOptions` applied to
+   *  the transport above (`:1036-1046`). This is what
+   *  `restoreConnectionsFromStorage` rebuilds a live transport FROM, so it is
+   *  the state a credential-custody question has to be asked of; the object a
+   *  register call was handed answers a different question. */
+  readonly server_options: string | null;
+}
+
+/** The SDK's persistence whitelist — `persistTransportOptions`,
+ *  agents/dist/client-zqKcsyFa.js:1022-1035 — plus `eventSourceInit`, which a
+ *  plaintext-era row can carry. `fetch` is deliberately absent: it is the one
+ *  option the whitelist DROPS, which is the whole reason a credential travels
+ *  as a closure. */
+const SDK_PERSISTED_TRANSPORT_KEYS = [
+  'type', 'headers', 'requestInit', 'eventSourceInit', 'reconnectionOptions',
+  'skipIssuerMetadataValidation', 'onInsufficientScope', 'maxStepUpRetries',
+  'sessionId', 'protocolVersion',
+] as const;
+
+/** `encodeMcpServerOptions` (`:1036-1046`), as much of it as this plane's
+ *  contracts observe: the whitelist projection of the transport, as JSON text,
+ *  in whitelist order. Built by PICKING, so a key the SDK would not keep — a
+ *  credential closure above all — cannot reach the row. */
+function encodeSdkServerOptions(transport: RecordedMcpTransport): string {
+  return JSON.stringify({
+    transport: Object.fromEntries(
+      SDK_PERSISTED_TRANSPORT_KEYS
+        .filter((key) => transport[key] !== undefined)
+        .map((key) => [key, transport[key]]),
+    ),
+  });
 }
 
 export interface RecordedMcpConnection {
@@ -972,6 +1009,7 @@ export function seedSdkMcpServer(id: string, transport: RecordedMcpTransport = {
   mcpServers.set(id, {
     id, name: id, url: `https://${id}.example/sse`,
     callbackUrl: '', clientId: null, authUrl: null, transport,
+    server_options: encodeSdkServerOptions(transport),
   });
 }
 
@@ -1072,6 +1110,9 @@ class FakeMCPClientManager {
       clientId: options.clientId ?? null,
       authUrl: options.authUrl ?? null,
       transport,
+      // The register call is what re-persists the column, which is what makes a
+      // rewrite the way a credential leaves the SDK's own storage.
+      server_options: encodeSdkServerOptions(transport),
     });
     this.mcpConnections[id] ??= {
       connectionState: 'connecting', connectionError: null, tools: [], options: { transport },
