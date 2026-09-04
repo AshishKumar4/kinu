@@ -263,3 +263,79 @@ describe('a wake on the same instance rewrites the attach row the driver reads',
     expect(runner.invocations.at(-1)?.action).toBe('checkpoint');
   });
 });
+
+// ── the stop tolerates a daemon row it cannot kill ─────────────────────────
+//
+// THE DEFECT, and it is the ORDER that produces it. `#releaseWorkdirHolders`
+// kills every LIVE supervised process seconds earlier on the same stop — the
+// journal daemon included — under its own written rule that a stop must not be
+// held hostage by one id the container cannot kill. `stopJournal` then re-kills
+// the daemon row it still finds listed, and the SDK's kill contract ERRORS on
+// an id the container no longer holds. So the sibling's own tolerant kill is
+// what makes the row stale for the fatal one, and either way — a table one
+// beat behind, or a process that died between the list and the kill — the
+// caller is at fault, not the table.
+//
+// Tolerated BY CODE, never by prose: `PROCESS_NOT_FOUND` is the SDK's own
+// classification and `ProcessAbsentSchema` already reads it elsewhere in this
+// class. Any other failure still travels.
+
+describe('a stop that finds a daemon row it cannot kill', () => {
+  const staged = async (): Promise<ReturnType<typeof candidateBox>> => {
+    const harnessed = candidateBox('merkle-pack');
+    expect((await harnessed.box.attachNow()).kind).toBe('empty');
+    await harnessed.box.writeFile('/workspace/ladder/c64.bin', 'sixty-four KiB of ladder bytes');
+    expect((await harnessed.box.checkpointNow('quiesce')).kind).toBe('committed');
+    return harnessed;
+  };
+
+  const daemonRow = (id: string, status: string) => ({
+    id, pid: 4242, status, command: `${CANDIDATE_JOURNAL_BINARY} --mount /workspace`,
+  });
+
+  test('a daemon that died between the list and the kill does not fail the stop', async () => {
+    // THE RACY DEATH, and the path the release pass creates: it kills this row
+    // tolerantly moments earlier, so the re-kill here answers absence.
+    const { box, container } = await staged();
+    container.processes.set('journal-racy', daemonRow('journal-racy', 'running'));
+    container.killFaultsById.set(
+      'journal-racy',
+      Object.assign(new Error('no such process'), { code: 'PROCESS_NOT_FOUND' }),
+    );
+
+    const stopped = await box.quiesce();
+
+    expect(['committed', 'skipped']).toContain(stopped.kind);
+    expect(container.running.running).toBe(false);
+    // The release pass tolerated it too, so BOTH kills were attempted and
+    // neither ended the stop.
+    expect(container.kills.filter((id) => id === 'journal-racy').length).toBeGreaterThanOrEqual(2);
+  });
+
+  test('a row the table still lists but the container has finished is not killed at all', async () => {
+    // THE STALE TABLE. A row that is not live needs no kill, which is the
+    // sibling's own filter; attempting one is how a stop turns a table one
+    // beat behind into a refusal.
+    const { box, container } = await staged();
+    container.processes.set('journal-stale', daemonRow('journal-stale', 'exited'));
+
+    const stopped = await box.quiesce();
+
+    expect(['committed', 'skipped']).toContain(stopped.kind);
+    expect(container.kills).not.toContain('journal-stale');
+  });
+
+  test('a live daemon the container cannot kill still refuses the stop', async () => {
+    // The tolerance is for ABSENCE alone. A live daemon that will not die owns
+    // the mount below, and a stop that swallowed that would hand the next wake
+    // a second daemon over a mount the first still holds.
+    const { box, container } = await staged();
+    container.processes.set('journal-stuck', daemonRow('journal-stuck', 'running'));
+    container.killFaultsById.set(
+      'journal-stuck',
+      Object.assign(new Error('container is wedged'), { code: 'CONTAINER_ERROR' }),
+    );
+
+    await expect(box.quiesce()).rejects.toThrow(/wedged/);
+  });
+});

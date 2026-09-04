@@ -3741,7 +3741,41 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // must be, and said aloud if it still refuses.
       stopJournal: async () => {
         for (const row of await this.listProcesses()) {
-          if (row.command.includes(CANDIDATE_JOURNAL_BINARY)) await this.killProcess(row.id);
+          if (!row.command.includes(CANDIDATE_JOURNAL_BINARY)) continue;
+          // ABSENCE IS TOLERATED HERE, FOR THE REASON THE SIBLING STATES.
+          //
+          // MEASURED DEFECT THIS REPAIRS, and the ORDER is what produces it.
+          // `#releaseWorkdirHolders` kills every LIVE supervised process
+          // seconds earlier on this same stop — the journal daemon included —
+          // under its own rule that a stop must not be held hostage by one id
+          // the container cannot kill. This then re-kills the daemon row it
+          // still finds listed, and the SDK's kill contract ERRORS on an id
+          // the container no longer holds. So the tolerant kill is what makes
+          // the row stale for this one, and whether the table is a beat behind
+          // or the process died between the list and the kill, the caller is
+          // at fault rather than the table.
+          //
+          // The liveness filter is the sibling's, and only ABSENCE is
+          // tolerated past it: `PROCESS_NOT_FOUND` is the SDK's own
+          // classification, read as a CODE the way `#stopSupervised` reads it,
+          // never as prose. Every other failure travels — a live daemon this
+          // container cannot kill still owns the mount below, and a stop that
+          // swallowed that would hand the next wake a second daemon over a
+          // mount the first still holds, which is the one hazard this
+          // daemon's own comments say must never happen.
+          if (!isProcessLive(row.status)) continue;
+          let thrown: { readonly cause: unknown } | undefined;
+          try {
+            await this.killProcess(row.id);
+          } catch (error) {
+            thrown = { cause: error };
+          }
+          if (thrown === undefined) continue;
+          if (!v.is(ProcessAbsentSchema, thrown.cause)) throw thrown.cause;
+          console.error(
+            `[devbox] the journal daemon ${row.id} was already gone when the stop re-killed it: `
+            + describe(thrown),
+          );
         }
         // Only when there is something to release: this runs on paths where no
         // daemon ever mounted, and a refusal reported for an absent mount would

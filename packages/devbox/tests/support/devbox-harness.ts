@@ -445,6 +445,10 @@ export class FakeSandbox {
   providerStatus: 'running' | 'healthy' | 'stopped' | 'stopping' = 'healthy';
   readonly getFaults: Error[] = [];
   readonly killFaults: Error[] = [];
+  /** A kill failure for ONE id, consulted before the order-based queue. A test
+   *  about a single row's kill cannot use the queue: whichever kill runs first
+   *  consumes it, and a stop kills several. */
+  readonly killFaultsById = new Map<string, Error>();
   readonly stampFaults: (Error | undefined)[] = [];
   startGate: Gate | undefined;
   /** Parks the container's own admission probe — `start()`, which every attempt
@@ -889,6 +893,8 @@ export class FakeSandbox {
 
   killProcess(id: string): Promise<void> {
     this.kills.push(id);
+    const targeted = this.killFaultsById.get(id);
+    if (targeted !== undefined) return Promise.reject(targeted);
     const fault = this.killFaults.shift();
     if (fault !== undefined) return Promise.reject(fault);
     this.processes.delete(id);
