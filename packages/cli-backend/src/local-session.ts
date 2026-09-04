@@ -100,7 +100,8 @@ import {
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY, describeLandedSteers,
   type UserSteer, type SteerStatusDetail, type SteerStatusEvent,
   createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
-  createAgentsCodemodeProvider, createReleaseCodemodeProvider, type CodemodeProvider,
+  createAgentsCodemodeProvider, createReleaseCodemodeProvider, createStateCodemodeProvider,
+  type CodemodeProvider,
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   createReportCodemodeProvider, REPORT_TOOL, type ReportToolDeps,
   MissionGovernor,
@@ -4896,6 +4897,10 @@ export class LocalAgentSession implements BackendHost {
       // `agents.*` — the delegation tool projected into the sandbox, over
       // the same deps the top-level tool holds. Locally that is fork only.
       createAgentsCodemodeProvider(() => this.agentsToolDeps(mode)),
+      // `state.*` — the provider the shared execute_tools description promises.
+      // Absent, a CLI program calling `state.set` answered a bare ReferenceError;
+      // the hosted backend already binds this same provider over the same SQL.
+      createStateCodemodeProvider(this.rt.storage.sql),
       createWebCodemodeProvider(this.getWebSearchProvider()),
       // `memory.*` / `tasks.*` — unconditional codemode projections of
       // the same-named native tools (tools/memory-tool.ts, tools/tasks-

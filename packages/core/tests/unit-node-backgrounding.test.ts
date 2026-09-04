@@ -39,7 +39,7 @@
  * resumes it — is the one the shipped `interactive` policy runs.
  */
 import { describe, expect, test } from 'bun:test';
-import { tool, jsonSchema } from 'ai';
+import { tool, jsonSchema, type ToolSet } from 'ai';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
@@ -375,5 +375,66 @@ describe("a node's tool surface is partitioned exactly, with a reason on every w
     const given: readonly string[] = NODE_BUILTIN_TOOLS;
     for (const name of surface) expect(given).toContain(name);
     for (const name of Object.keys(NODE_WITHHELD_TOOLS)) expect(surface).not.toContain(name);
+  });
+});
+
+describe('a node resolves a function-form executeTool through the finished surface', () => {
+  test('function-form dep becomes a working execute_tools, not the NOT CONFIGURED stub', async () => {
+    // The production defect: the search hands `deps.executeTool` as a FUNCTION
+    // `(finished) => factory.toolFor(finished)` (exploration builds it over the
+    // actor's factory), and the node handed it raw into `preBuiltExecuteTool` —
+    // which only accepts a finished Tool. The function failed the entry check,
+    // no factory branch existed on this path, and every hosted node got the
+    // NOT CONFIGURED stub. The sibling builder (`buildHeadToolSet`) already
+    // resolved the function form against the finished surface; the node did not.
+    const factoryForm = (_finished: ToolSet) => tool({
+      description: 'Run code in the sandbox.',
+      inputSchema: jsonSchema<{ code: string }>({
+        type: 'object', required: ['code'], properties: { code: { type: 'string' } },
+      }),
+      execute: async ({ code }) => `factory-ran:${code}`,
+    });
+    const model = scriptedTurnModel({
+      modelId: 'fake-exec',
+      doGenerate: ({ prompt }) => {
+        const text = JSON.stringify(prompt);
+        const launched = prompt.some((message) => message.role === 'tool');
+        const reported = text.includes('"received":true');
+        const content: LanguageModelV3Content[] = reported
+          ? [{ type: 'text', text: 'Done.' }]
+          : launched
+            ? [{
+              type: 'tool-call',
+              toolCallId: 'report-1',
+              toolName: 'report',
+              input: JSON.stringify({
+                status: 'completed',
+                content: text.includes('factory-ran') ? 'saw factory-ran' : 'saw none',
+              }),
+            }]
+            : [{
+              type: 'tool-call',
+              toolCallId: 'exec-1',
+              toolName: 'execute_tools',
+              input: JSON.stringify({ code: 'const x = 1' }),
+            }];
+        return {
+          content,
+          finishReason: {
+            unified: reported ? 'stop' as const : 'tool-calls' as const,
+            raw: undefined,
+          },
+          usage: {
+            inputTokens: { total: 11, noCache: 11, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 4, text: 4, reasoning: undefined },
+          },
+          warnings: [],
+        };
+      },
+    });
+    const { input, deps } = fixture({ model, executeTool: factoryForm });
+    const run: NodeRun = await runNodeAgent(input, deps);
+    expect(run.report.status).toBe('completed');
+    expect(run.candidate).toContain('factory-ran');
   });
 });

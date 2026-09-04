@@ -44,7 +44,7 @@ import {
   pageDeployedBuildSha,
   type SessionRecovery,
 } from "./session-recovery";
-import { abandonTurn, admitTurn, newSendLatch } from "./send-admission";
+import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "./send-admission";
 import type { AsyncResource } from "./use-async-resource";
 
 export type { ExecutorInfo };
@@ -1186,13 +1186,17 @@ export function useKinu(target?: string | KinuActorAddress) {
    * next Send is admitted at once.
    */
   const abortChat = useCallback(async (): Promise<void> => {
+    // Snapshot BEFORE the awaits: a new Send admitted while the two RPCs below
+    // are in flight owns the latch now, and releasing it would open the door for
+    // a concurrent turn — the exact failure the latch prevents.
+    const aborting = sendLatch.current.owner;
     try {
       await Promise.all([
         stop(),
         rpc("cancelCurrentWork", []),
       ]);
     } finally {
-      abandonTurn(sendLatch.current);
+      abandonTurnIfOwner(sendLatch.current, aborting);
       if (!isSubordinate) {
         try {
           await refreshBackgroundJobs();

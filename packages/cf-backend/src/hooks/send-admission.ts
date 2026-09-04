@@ -63,3 +63,14 @@ export function admitTurn(latch: SendLatch, begin: () => Promise<void>): boolean
 export function abandonTurn(latch: SendLatch): void {
   latch.owner = null;
 }
+
+/**
+ * Abandon the latch only while its owner is still `expected`: the abort path
+ * awaits two RPCs before releasing, and a new Send admitted in that window owns
+ * the latch now — clearing it would release a turn that only just started and
+ * admit a second one beside it. A null owner is nobody's turn to release.
+ */
+export function abandonTurnIfOwner(latch: SendLatch, expected: number | null): void {
+  if (expected === null) return;
+  if (latch.owner === expected) latch.owner = null;
+}

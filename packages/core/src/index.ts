@@ -954,7 +954,7 @@ export {
 export { emaUpdate, effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema';
 export { craftFailureMarker, CRAFT_NEUTRAL_PRIOR } from './craft/in-episode';
 export {
-  attributeCraftedFailure, wrapCraftedBodyWithAttribution,
+  attributeCraftedFailure,
 } from './craft/attribution';
 export { maybeStoreCraftedTool } from './craft/discovery';
 export { periodicCraftConsolidation } from './craft/consolidation';

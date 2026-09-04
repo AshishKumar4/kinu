@@ -22,7 +22,7 @@ import {
   DEFAULT_ROLE_ID, REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
   craftedToolDescription, toCraftedToolSource, type CraftedTool,
   CRAFTED_TOOL_NAMESPACE, renderToolsDeclaration, nativeToolInput, jsonSchemaToTs,
-  attributeCraftedFailure, wrapCraftedBodyWithAttribution, craftFailureMarker,
+  attributeCraftedFailure, craftFailureMarker,
   initCompletedTurnTable, createCompletedTurnStore,
   initEventsHubTables, EventLog,
   type ModelPricing, type CompletedTurn, type SqlExec,
@@ -603,15 +603,6 @@ async function rejectionOf(work: Promise<unknown>): Promise<Error> {
   throw new Error('expected a rejection, got a resolved value');
 }
 
-/** Evaluate a spliced crafted body and call it. Both halves are PARSED rather
- *  than asserted: `v.function_()` refuses a non-callable emission and
- *  `v.number()` refuses a body that returned something else, so a malformed
- *  splice fails here by name instead of being cast into looking sound. */
-async function runCraftedBody(source: string): Promise<number> {
-  const compiled = v.parse(v.function_(), new Function(`return (${source})`)());
-  return v.parse(v.number(), await compiled());
-}
-
 describe('craft failure attribution — the same marker in both substrates', () => {
   test('a compiled tool failure is stamped with the tool that raised', async () => {
     const wrapped = attributeCraftedFailure('summarize', async () => { throw new Error('boom'); });
@@ -627,26 +618,6 @@ describe('craft failure attribution — the same marker in both substrates', () 
   test('a success passes straight through', async () => {
     const wrapped = attributeCraftedFailure('double', async (n: number) => n * 2);
     expect(await wrapped(21)).toBe(42);
-  });
-
-  // The source-text substrate cannot wrap a callable — V8 isolates forbid
-  // runtime string compilation, so the CF path splices text the loader compiles.
-  test('the spliced source carries the same marker', () => {
-    const source = wrapCraftedBodyWithAttribution('summarize', 'async (x) => x');
-    expect(source).toContain(JSON.stringify(`${craftFailureMarker('summarize')} `));
-  });
-
-  // A model-authored body routinely ends in a `//` comment. On one line that
-  // would swallow the rest of the wrapper and make the whole preamble — spliced
-  // into EVERY execute — a syntax error no crafted tool could survive.
-  test('a body ending in a line comment stays on its own line', () => {
-    const source = wrapCraftedBodyWithAttribution('f', 'async (x) => x // doubles');
-    expect(source).toContain('// doubles\n)');
-  });
-
-  test('the wrapped source is a callable that attributes at runtime', async () => {
-    const source = wrapCraftedBodyWithAttribution('boom', 'async () => { throw new Error("inner"); }');
-    await expect(runCraftedBody(source)).rejects.toThrow(craftFailureMarker('boom'));
   });
 
   // THE HAZARD A SECOND WRAPPER CREATES. buildCraftedTools is the ONE runtime
@@ -670,14 +641,6 @@ describe('craft failure attribution — the same marker in both substrates', () 
       params: null, scope: 'local', createdAt: 0, updatedAt: 0,
     };
     expect(toCraftedToolSource(stored)?.description).toBe('');
-  });
-
-  // A tool name reaches the splicer off a durable row. A quote in it would close
-  // the marker literal and rewrite the wrapper around it — so the proof is that
-  // the emitted body still RUNS, not merely that it is a function.
-  test('a name carrying a quote cannot break out of the spliced literal', async () => {
-    const source = wrapCraftedBodyWithAttribution('od"d', 'async () => 1');
-    expect(await runCraftedBody(source)).toBe(1);
   });
 });
 

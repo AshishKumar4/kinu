@@ -117,7 +117,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
     expect(prelude).toContain(`await import("./${KINU_NODE_MODULE_NAME}")`);
     expect(prelude).toContain("const require = __kinu.createRequire(");
     expect(prelude).toContain('workspace: "hardy-stone-a905df14"');
-    expect(prelude).toContain('"double": __kinu.defineCrafted("double", () => (\nasync (n) => n * 2\n))');
+    expect(prelude).toContain('"double": __kinu.defineCrafted("double", async () => (\nasync (n) => n * 2\n))');
     expect(prelude).toContain("Object.assign(tools, {");
   });
 
@@ -133,8 +133,23 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
       { workspace: "w" },
     );
     expect(prelude).toContain('"broken": __kinu.defineCrafted("broken", () => { throw new Error("stored source does not parse:');
-    expect(prelude).toContain('"fine": __kinu.defineCrafted("fine", () => (\nasync () => 2\n))');
+    expect(prelude).toContain('"fine": __kinu.defineCrafted("fine", async () => (\nasync () => 2\n))');
     // The definitions block parses as JavaScript on its own.
+    const block = prelude.slice(prelude.indexOf("Object.assign(tools, {"));
+    expect(() => new Function("tools", "__kinu", block)).not.toThrow();
+  });
+
+  test("a top-level await body compiles in the factory instead of poisoning the prelude", () => {
+    // The production defect, same class as the const-body one above: `await foo()`
+    // passes the host-side parse gate (acorn runs with allowAwaitOutsideFunction),
+    // and the old `() => (await foo())` factory was a SyntaxError in the
+    // vendor-compiled prelude module — denying EVERY tool in the workspace. The
+    // async wrapper keeps the failure, if any, at the tool's own call time.
+    const prelude = renderToolsPrelude(
+      [{ name: "waiter", code: "await foo()", description: "" }],
+      { workspace: "w" },
+    );
+    expect(prelude).toContain('"waiter": __kinu.defineCrafted("waiter", async () => (\nawait foo()\n))');
     const block = prelude.slice(prelude.indexOf("Object.assign(tools, {"));
     expect(() => new Function("tools", "__kinu", block)).not.toThrow();
   });

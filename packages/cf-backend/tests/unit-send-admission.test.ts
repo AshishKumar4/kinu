@@ -3,7 +3,7 @@
 // reactive guard both presses read before either had committed, so a test that
 // awaits between presses cannot see it.
 import { describe, test, expect } from 'bun:test';
-import { abandonTurn, admitTurn, newSendLatch } from '../src/hooks/send-admission';
+import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from '../src/hooks/send-admission';
 
 /** A turn whose terminal settle this test controls. */
 interface DeferredTurn {
@@ -179,6 +179,29 @@ describe('send admission', () => {
     expect(admitTurn(latch, deferredTurn().begin)).toBe(false);
   });
 
+  test('an abort releases only the turn it aborted, never a newer owner', () => {
+    // The production defect: `abortChat` awaited two RPCs and then abandoned
+    // unconditionally, so a Send admitted in that window lost its ownership and
+    // the next Send started a CONCURRENT turn — the exact failure the latch
+    // exists to prevent. The abort snapshots its turn's token first and the
+    // release is conditional on still holding it.
+    const latch = newSendLatch();
+    const turn = deferredTurn();
+    expect(admitTurn(latch, turn.begin)).toBe(true);
+    const aborting = latch.owner;
+    // A new Send admitted while the abort's RPCs are in flight.
+    abandonTurn(latch);
+    const next = deferredTurn();
+    expect(admitTurn(latch, next.begin)).toBe(true);
+    // The abort settles late. Its release must be a no-op now.
+    abandonTurnIfOwner(latch, aborting);
+    expect(latch.owner).not.toBeNull();
+    expect(admitTurn(latch, deferredTurn().begin)).toBe(false);
+    // And a null snapshot — an abort that never owned anything — releases nothing.
+    const free = newSendLatch();
+    abandonTurnIfOwner(free, null);
+    expect(admitTurn(free, deferredTurn().begin)).toBe(true);
+  });
   test('tokens never repeat, so no two sends can ever be the same owner', () => {
     const latch = newSendLatch();
     const tokens: number[] = [];

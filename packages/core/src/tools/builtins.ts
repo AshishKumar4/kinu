@@ -441,7 +441,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         error:
           'execute_tools is not configured on this runtime. The backend must supply ' +
           'deps.preBuiltExecuteTool or deps.createExecuteTool to buildBuiltinTools ' +
-          '(CF: cf-backend/createExecuteToolsTool; CLI: ' +
+          '(CF: cf-backend/createExecuteToolsFactory; CLI: ' +
           '@kinu.run/cli-backend/createNodeExecuteToolFactory).',
       }),
     });

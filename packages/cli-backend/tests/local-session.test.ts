@@ -1895,6 +1895,22 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(JSON.stringify(result?.result)).toContain('computed inline');
   });
 
+  test('the CLI sandbox binds state.* as the shared docstring promises', async () => {
+    // The production defect: the shared `execute_tools` description promises
+    // `state.set`/`state.get`, and the hosted backend binds the provider — but
+    // the CLI factory list never included it, so a CLI program calling
+    // `state.set` answered a bare ReferenceError with no correction. A program
+    // round-trips one key through the provider backed by this session's SQL.
+    const { session, events } = setup(
+      'unused',
+      executeToolsModel('await state.set("probe", "found")\nawait state.get("probe")'),
+      { backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true } },
+    );
+    await session.send('remember this');
+    const result = events.find((event) => event.type === 'tool-result');
+    expect(JSON.stringify(result?.result)).toContain('found');
+  });
+
   test('the same call detaches once it crosses the policy threshold', async () => {
     const { db, session, events } = setup(
       'unused',

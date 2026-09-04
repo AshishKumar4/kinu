@@ -81,7 +81,13 @@ export function renderToolsPrelude(crafted: readonly InjectableCraftedTool[], id
   const definitions = crafted.map((entry) => {
     const parseError = parsesAsExpression(entry.code);
     const factory = parseError === null
-      ? `() => (\n${entry.code}\n)`
+      // ASYNC, because a stored body may await at its top level: `parsesAsExpression`
+      // runs acorn with `allowAwaitOutsideFunction`, so `await foo()` passes the gate
+      // while `() => (await foo())` is a SyntaxError — and one bad factory broke the
+      // vendor-compiled prelude module, denying EVERY tool. An async wrapper still
+      // satisfies `defineCrafted`'s typeof-function check, and a body that throws
+      // still fails by name at call time rather than at module load.
+      ? `async () => (\n${entry.code}\n)`
       : `() => { throw new Error(${JSON.stringify(`stored source does not parse: ${parseError}`)}); }`;
     return `      ${JSON.stringify(entry.name)}: __kinu.defineCrafted(${JSON.stringify(entry.name)}, ${factory}),`;
   });

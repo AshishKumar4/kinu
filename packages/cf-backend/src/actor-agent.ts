@@ -6298,7 +6298,7 @@ export abstract class ActorAgent extends Think<Env> {
    * A codemode script issues device execs for as long as it runs — including
    * after its call has detached into a background job — and the channel is what
    * carries the owning job into each of those execs. It cannot be a construction
-   * argument: `createExecuteToolsTool` builds its provider namespaces once per DO
+   * argument: `createExecuteToolsFactory` builds its provider namespaces once per DO
    * lifetime, while the channel belongs to one invocation.
    *
    * Applied INSIDE the background wrap, because the wrap is what arms the bag:
