@@ -5,10 +5,17 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   boundEventQuery, buildDrainBatch, initEventsHubTables, EventLog,
-  EVENT_QUERY_LIMIT_DEFAULT, EVENT_QUERY_LIMIT_MAX, PENDING_EVENT_LIMIT_DEFAULT,
   type IngressDescriptor,
 } from '../src/events/hub/index';
 import type { SqlExec } from '../src/index';
+
+/** The page policy ASKED OF THE PUBLIC SEAM rather than restated here:
+ *  `boundEventQuery` is what an untrusted caller crosses, so its answers
+ *  ARE the default page and the ceiling. A restated literal would be a
+ *  second copy of the policy that drifts silently. */
+const DEFAULT_PAGE = boundEventQuery().limit;
+const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).limit;
+
 import type { JsonValue } from '../src/utils/json';
 import { makeSqlExec } from './helpers';
 
@@ -263,7 +270,7 @@ describe('EventLog.query admits only a finite positive integer limit', () => {
   }
 
   test('a negative limit reads one row, never the whole table', () => {
-    const log = seededLog(EVENT_QUERY_LIMIT_DEFAULT + 40);
+    const log = seededLog(DEFAULT_PAGE + 40);
     expect(log.query({ limit: -1 })).toHaveLength(1);
     expect(log.query({ limit: -999999 })).toHaveLength(1);
   });
@@ -278,17 +285,17 @@ describe('EventLog.query admits only a finite positive integer limit', () => {
     // The route parses `?limit=abc` with `parseInt`, which answers NaN, and
     // SQLite refuses NaN as a datatype mismatch — a 500 on a read that should
     // simply have been clamped.
-    const log = seededLog(EVENT_QUERY_LIMIT_DEFAULT + 40);
-    expect(log.query({ limit: Number.NaN })).toHaveLength(EVENT_QUERY_LIMIT_DEFAULT);
+    const log = seededLog(DEFAULT_PAGE + 40);
+    expect(log.query({ limit: Number.NaN })).toHaveLength(DEFAULT_PAGE);
     expect(log.query({ limit: Number.POSITIVE_INFINITY }))
-      .toHaveLength(EVENT_QUERY_LIMIT_DEFAULT);
+      .toHaveLength(DEFAULT_PAGE);
     expect(log.query({ limit: Number.NEGATIVE_INFINITY }))
-      .toHaveLength(EVENT_QUERY_LIMIT_DEFAULT);
+      .toHaveLength(DEFAULT_PAGE);
   });
 
   test('an absent limit takes the default page', () => {
-    expect(seededLog(EVENT_QUERY_LIMIT_DEFAULT + 40).query({}))
-      .toHaveLength(EVENT_QUERY_LIMIT_DEFAULT);
+    expect(seededLog(DEFAULT_PAGE + 40).query({}))
+      .toHaveLength(DEFAULT_PAGE);
   });
 
   test('a fractional limit truncates instead of failing the query', () => {
@@ -301,9 +308,9 @@ describe('EventLog.query admits only a finite positive integer limit', () => {
     // No ceiling lives here. `query` is also the in-object read, and a fold that
     // states its own window must get it; narrowing it to a stranger's allowance
     // would answer a different question than the one asked.
-    const log = seededLog(EVENT_QUERY_LIMIT_MAX + 60);
-    expect(log.query({ limit: EVENT_QUERY_LIMIT_MAX + 60 }))
-      .toHaveLength(EVENT_QUERY_LIMIT_MAX + 60);
+    const log = seededLog(UNTRUSTED_CEILING + 60);
+    expect(log.query({ limit: UNTRUSTED_CEILING + 60 }))
+      .toHaveLength(UNTRUSTED_CEILING + 60);
   });
 
   test('a legitimate limit is still honoured exactly', () => {
@@ -328,22 +335,30 @@ describe('EventLog.pending admits only a finite positive integer limit', () => {
   }
 
   test('a negative limit reads one row, never the whole table', () => {
-    const log = seededPending(PENDING_EVENT_LIMIT_DEFAULT + 40);
+    const log = seededPending(DEFAULT_PAGE + 40);
     expect(log.pending({ limit: -1 })).toHaveLength(1);
     expect(log.pending({ limit: -999999 })).toHaveLength(1);
   });
 
   test('zero, non-finite and absent limits behave like the query read', () => {
-    const log = seededPending(PENDING_EVENT_LIMIT_DEFAULT + 40);
+    // The pending default has no public accessor, so these assert the PROPERTY
+    // rather than the number: an unstated limit reads a page and not the table,
+    // and a non-finite limit is indistinguishable from an absent one. Stating
+    // the number here would put a second copy of the policy in the suite.
+    const seeded = DEFAULT_PAGE + 40;
+    const log = seededPending(seeded);
     expect(log.pending({ limit: 0 })).toHaveLength(1);
-    expect(log.pending({ limit: Number.NaN })).toHaveLength(PENDING_EVENT_LIMIT_DEFAULT);
-    expect(log.pending()).toHaveLength(PENDING_EVENT_LIMIT_DEFAULT);
+    const unstated = log.pending().length;
+    expect(unstated).toBeGreaterThan(1);
+    expect(unstated).toBeLessThan(seeded);
+    expect(log.pending({ limit: Number.NaN })).toHaveLength(unstated);
+    expect(log.pending({ limit: Number.POSITIVE_INFINITY })).toHaveLength(unstated);
   });
 
   test('an in-object window wider than the untrusted ceiling is honoured', () => {
-    const log = seededPending(EVENT_QUERY_LIMIT_MAX + 60);
-    expect(log.pending({ limit: EVENT_QUERY_LIMIT_MAX + 60 }))
-      .toHaveLength(EVENT_QUERY_LIMIT_MAX + 60);
+    const log = seededPending(UNTRUSTED_CEILING + 60);
+    expect(log.pending({ limit: UNTRUSTED_CEILING + 60 }))
+      .toHaveLength(UNTRUSTED_CEILING + 60);
   });
 });
 
@@ -354,17 +369,17 @@ describe('boundEventQuery is the one policy the boundary applies', () => {
   });
 
   test('an empty query states nothing and takes both defaults', () => {
-    expect(boundEventQuery()).toEqual({ since: 0, limit: EVENT_QUERY_LIMIT_DEFAULT });
+    expect(boundEventQuery()).toEqual({ since: 0, limit: DEFAULT_PAGE });
   });
 
   test('it caps what the log alone would honour', () => {
     // The direction that makes this the BOUNDARY rather than a second copy of
     // the log's invariant: a window the in-object read is trusted with is
     // refused to a stranger.
-    expect(boundEventQuery({ limit: 1e9 }).limit).toBe(EVENT_QUERY_LIMIT_MAX);
-    expect(boundEventQuery({ limit: EVENT_QUERY_LIMIT_MAX + 60 }).limit)
-      .toBe(EVENT_QUERY_LIMIT_MAX);
-    expect(boundEventQuery({ limit: Number.NaN }).limit).toBe(EVENT_QUERY_LIMIT_DEFAULT);
+    expect(boundEventQuery({ limit: 1e9 }).limit).toBe(UNTRUSTED_CEILING);
+    expect(boundEventQuery({ limit: UNTRUSTED_CEILING + 60 }).limit)
+      .toBe(UNTRUSTED_CEILING);
+    expect(boundEventQuery({ limit: Number.NaN }).limit).toBe(DEFAULT_PAGE);
     expect(boundEventQuery({ limit: 2.7 }).limit).toBe(2);
   });
 });

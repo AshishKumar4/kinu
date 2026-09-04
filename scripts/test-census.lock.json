@@ -1,5 +1,5 @@
 {
-  "measured": "e912a5161: 866 test files, 795 runnable suites, 11585 tests, 34 runners, 62 non-public product members",
+  "measured": "4573b0198: 877 test files, 798 runnable suites, 11652 tests, 34 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -958,6 +958,14 @@
       "count": 1
     },
     {
+      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: every layer path the proof restates is the constant its strategy declares :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: every layer path the proof restates is the constant its strategy declares :: reads a source file",
+      "count": 1
+    },
+    {
       "key": "source_text :: scripts/bench-devbox-decision.test.ts :: no minute-scale route is posted as a blocking request any more :: expect(<source text>).not.toContain",
       "count": 2
     },
@@ -991,6 +999,18 @@
     },
     {
       "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the driver has no monolithic verification request :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the proof asks whether the STORE is mounted, never the lower itself :: expect(<source text>).not.toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the proof asks whether the STORE is mounted, never the lower itself :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the proof asks whether the STORE is mounted, never the lower itself :: reads a source file",
       "count": 1
     },
     {
@@ -1483,10 +1503,6 @@
     },
     {
       "key": "tautology_suspect :: packages/devbox/tests/journal-daemon-native-openat2.test.ts :: creates all ancestry fd-relatively and never follows a swapped symlink :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/devbox/tests/journal-daemon.test.ts :: refuses a journal manifest that omits POSIX metadata :: weak-only test",
       "count": 1
     },
     {

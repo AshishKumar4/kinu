@@ -87,7 +87,7 @@ export interface QueryFilter {
 
 /** Rows one {@link EventLog.query} read returns when the caller states no
  *  usable limit. */
-export const EVENT_QUERY_LIMIT_DEFAULT = 100;
+const EVENT_QUERY_LIMIT_DEFAULT = 100;
 
 /**
  * Rows one {@link EventLog.pending} read returns when the caller states no
@@ -98,7 +98,7 @@ export const EVENT_QUERY_LIMIT_DEFAULT = 100;
  * to Analytics Engine's query timeout, while this one sizes how much unbound
  * work one drain picks up. Moving either has no reason to move the other.
  */
-export const PENDING_EVENT_LIMIT_DEFAULT = 50;
+const PENDING_EVENT_LIMIT_DEFAULT = 50;
 
 /**
  * The ceiling on a read an UNTRUSTED caller asked for.
@@ -108,7 +108,7 @@ export const PENDING_EVENT_LIMIT_DEFAULT = 50;
  * answer is correct over and must get it. How much a stranger may ask for is a
  * different question, and the boundary answers it.
  */
-export const EVENT_QUERY_LIMIT_MAX = 500;
+const EVENT_QUERY_LIMIT_MAX = 500;
 
 /** An event query whose numeric bounds are closed — the only shape an
  *  untrusted caller's query may take once it crosses the object boundary. */

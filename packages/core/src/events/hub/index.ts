@@ -25,7 +25,6 @@ export { initEventsHubTables } from './schema';
 export {
   EventLog,
   boundEventQuery,
-  EVENT_QUERY_LIMIT_DEFAULT, EVENT_QUERY_LIMIT_MAX, PENDING_EVENT_LIMIT_DEFAULT,
   type PublishResult, type PendingFilter, type QueryFilter, type BoundedQueryFilter,
 } from './log';
 export {

@@ -15,9 +15,14 @@
 // row — because the defect was in what SQL did with the forwarded value. A
 // counting stub would have agreed with the old code.
 import { describe, test, expect } from 'bun:test';
-import {
-  EVENT_QUERY_LIMIT_DEFAULT, EVENT_QUERY_LIMIT_MAX, type IngressDescriptor,
-} from '@kinu.run/core';
+import { boundEventQuery, type IngressDescriptor } from '@kinu.run/core';
+
+/** The page policy ASKED OF THE PUBLIC SEAM rather than restated here: the
+ *  route crosses `boundEventQuery`, so its answers ARE the default page and
+ *  the untrusted ceiling this suite asserts the route holds to. */
+const DEFAULT_PAGE = boundEventQuery().limit;
+const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).limit;
+
 import { orchestratorHarness } from './helpers/actor-harness';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
@@ -96,19 +101,19 @@ describe('the events route closes `limit` before it can reach SQL', () => {
     // from SQLite's datatype mismatch.
     const { env } = seededWorkspace();
     expect(await eventsVia(env, '?limit=abc'))
-      .toEqual({ status: 200, count: EVENT_QUERY_LIMIT_DEFAULT });
+      .toEqual({ status: 200, count: DEFAULT_PAGE });
     expect(await eventsVia(env, '?limit=NaN'))
-      .toEqual({ status: 200, count: EVENT_QUERY_LIMIT_DEFAULT });
+      .toEqual({ status: 200, count: DEFAULT_PAGE });
     expect(await eventsVia(env, '?limit=Infinity'))
-      .toEqual({ status: 200, count: EVENT_QUERY_LIMIT_DEFAULT });
+      .toEqual({ status: 200, count: DEFAULT_PAGE });
   });
 
   test('an absurdly large limit clamps to the untrusted ceiling', async () => {
     const { env } = seededWorkspace();
     expect(await eventsVia(env, '?limit=1000000000'))
-      .toEqual({ status: 200, count: EVENT_QUERY_LIMIT_MAX });
+      .toEqual({ status: 200, count: UNTRUSTED_CEILING });
     expect(await eventsVia(env, `?limit=${Number.MAX_SAFE_INTEGER}`))
-      .toEqual({ status: 200, count: EVENT_QUERY_LIMIT_MAX });
+      .toEqual({ status: 200, count: UNTRUSTED_CEILING });
   });
 
   test('a fractional limit truncates instead of failing the query', async () => {
@@ -120,7 +125,7 @@ describe('the events route closes `limit` before it can reach SQL', () => {
     const { env } = seededWorkspace();
     expect(await eventsVia(env, '?limit=37')).toEqual({ status: 200, count: 37 });
     expect(await eventsVia(env, ''))
-      .toEqual({ status: 200, count: EVENT_QUERY_LIMIT_DEFAULT });
+      .toEqual({ status: 200, count: DEFAULT_PAGE });
   });
 
   test('an unparseable or negative since reads from the start of the log', async () => {
@@ -143,11 +148,11 @@ describe('a direct RPC cannot ask for more than the route may', () => {
     expect(await countOf({ limit: -1 })).toBe(1);
     expect(await countOf({ limit: -999999 })).toBe(1);
     expect(await countOf({ limit: 0 })).toBe(1);
-    expect(await countOf({ limit: Number.NaN })).toBe(EVENT_QUERY_LIMIT_DEFAULT);
-    expect(await countOf({ limit: Number.POSITIVE_INFINITY })).toBe(EVENT_QUERY_LIMIT_DEFAULT);
-    expect(await countOf({})).toBe(EVENT_QUERY_LIMIT_DEFAULT);
+    expect(await countOf({ limit: Number.NaN })).toBe(DEFAULT_PAGE);
+    expect(await countOf({ limit: Number.POSITIVE_INFINITY })).toBe(DEFAULT_PAGE);
+    expect(await countOf({})).toBe(DEFAULT_PAGE);
     expect(await countOf({ limit: 2.7 })).toBe(2);
-    expect(await countOf({ limit: 1e9 })).toBe(EVENT_QUERY_LIMIT_MAX);
+    expect(await countOf({ limit: 1e9 })).toBe(UNTRUSTED_CEILING);
     expect(await countOf({ limit: -1, variant: 'chat' })).toBe(1);
     expect(await countOf({ since: Number.NaN, limit: 3 })).toBe(3);
   });
@@ -159,6 +164,6 @@ describe('a direct RPC cannot ask for more than the route may', () => {
       return Array.isArray(parsed) ? parsed.length : -1;
     };
     expect(await countOf({ limit: -1 })).toBe(1);
-    expect(await countOf({ limit: 1e9 })).toBe(EVENT_QUERY_LIMIT_MAX);
+    expect(await countOf({ limit: 1e9 })).toBe(UNTRUSTED_CEILING);
   });
 });

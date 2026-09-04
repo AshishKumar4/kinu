@@ -1002,7 +1002,7 @@ export function issueVerifiedJournalCapture(proof: VerifiedJournalCut): AuditedC
  *  duplicates, real identity on every entry, and every NAMED path's ancestors
  *  present as directories. Paths the capture does not name are the parent's
  *  business, not this capture's. */
-export function requirePartialCaptureTree(entries: readonly NodeEntry[]): void {
+function requirePartialCaptureTree(entries: readonly NodeEntry[]): void {
   const byPath = new Map<UpperPath, NodeEntry>();
   for (const entry of entries) {
     const path = entry.path;
