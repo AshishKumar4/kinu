@@ -121,6 +121,23 @@ describe('turn-pipeline correctness wiring', () => {
     expect(constructor).toContain('success: false');
   });
 
+  test('the admission count and the submitted model resolve ONE spec, not two', () => {
+    // The counter picks a provider by parsing the profile tier's spec; the model
+    // actually submitted comes from `resolveModel`, which NORMALISES first. So
+    // parsing the raw spec keyed the count on a different answer for exactly the
+    // forms normalisation exists to accept — a bare model id has no slash and
+    // `parseModelSpec` throws on it inside turn assembly, and a bare `@cf/…`
+    // parses to provider `@cf`, which no registry knows.
+    //
+    // A source pin because the rule is an AGREEMENT BETWEEN TWO CALL SITES: no
+    // behavioural test can state it without a turn harness that captures which
+    // provider was asked for a count, and the harness has no such seam. The
+    // property each site upholds alone is checked in unit-agent-registry.
+    const beforeTurn = memberBody(actor, 'async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void>');
+    expect(beforeTurn).toContain('parseModelSpec(providers.normalizeSpecSync(profile.tier.model))');
+    expect(beforeTurn).not.toContain('parseModelSpec(profile.tier.model)');
+  });
+
   test('facet-spawned heads inherit the registered parent workspace identity', () => {
     // The root's own split seeds the child with the REGISTERED workspace, never
     // this actor's own DO name — the file plane is keyed by it, so a self-named
@@ -223,7 +240,12 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
     );
     expect(beforeTurn).toContain('profile.tier.reasoningEffort');
-    expect(beforeTurn).toContain('parseModelSpec(profile.tier.model).provider');
+    // Was `parseModelSpec(profile.tier.model).provider` — a RAW parse, and the
+    // second of two in this method. Reasoning options for a provider spelled
+    // `@cf` reach a provider no registry knows, and a bare model id threw here.
+    // Both sites now read the one normalised parse.
+    expect(beforeTurn).toContain('tierModel.provider');
+    expect(beforeTurn).not.toContain('parseModelSpec(profile.tier.model)');
     expect(beforeTurn).toContain('reasoningEffortOptions');
     expect(beforeTurn).toContain('mergeProviderOptions(cacheOptions, reasoningOptions)');
     expect(beforeTurn).toContain('cfg.providerOptions = providerOptions');

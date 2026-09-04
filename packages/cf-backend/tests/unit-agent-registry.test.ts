@@ -58,6 +58,29 @@ describe('AgentProviderRegistry composition', () => {
     expect(reg.normalizeSpecSync('anthropic/claude-opus-4-7')).toBe('anthropic/claude-opus-4-7');
   });
 
+  test('an admission count is keyed on the spec the request will use, for every BC form', () => {
+    // The turn's admission counter parses the profile tier's spec to pick the
+    // provider it asks for a count. It used to parse the RAW spec while the
+    // submitted model came from `resolveModel`, which normalises first — so the
+    // two disagreed on exactly the forms normalisation exists to accept. A bare
+    // model id has no slash and `parseModelSpec` THROWS on it, inside turn
+    // assembly; a bare `@cf/…` parses to provider `@cf`, which no registry
+    // knows, so the count was asked of a provider that does not exist.
+    const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
+    for (const raw of ['@cf/moonshotai/kimi-k2.6', 'gpt-5.5', 'codex/gpt-5.5', '']) {
+      const keyed = parseModelSpec(reg.normalizeSpecSync(raw));
+      // The provider the counter names is one the registry can actually serve.
+      expect(reg.registry.get(keyed.provider)).toBeDefined();
+      // And it is the same spec the model resolution would take.
+      expect(`${keyed.provider}/${keyed.modelId}`).toBe(reg.normalizeSpecSync(raw));
+    }
+    // The two directions that used to break, stated as themselves: raw parsing
+    // throws on the bare id and mis-keys the bare `@cf/…`.
+    expect(() => parseModelSpec('gpt-5.5')).toThrow();
+    expect(parseModelSpec('@cf/moonshotai/kimi-k2.6').provider).toBe('@cf');
+    expect(reg.registry.get('@cf')).toBeUndefined();
+  });
+
   test('normalizeSpecSync — null returns workers-ai default without owner-billed env.AI', () => {
     const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
     expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);

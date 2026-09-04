@@ -5939,11 +5939,22 @@ export abstract class ActorAgent extends Think<Env> {
       assembly.providerReportedTokens = measured.providerReportedTokens;
     }
     const submittedTools = { ...ctx.tools, ...effectiveTools };
-    const admissionModel = parseModelSpec(profile.tier.model);
     const providers = this.providerRegistry();
+    // NORMALISED, and by the same registry that will serve the request. The
+    // model actually submitted comes from `resolveModel`, which normalises
+    // first, so parsing the RAW tier spec answered differently for exactly the
+    // forms normalisation exists to accept: a bare model id has no slash and
+    // `parseModelSpec` THROWS on it inside turn assembly, and a bare `@cf/…`
+    // parses to provider `@cf`, which no registry knows.
+    //
+    // ONE parse, read by both the admission counter and the reasoning-effort
+    // options below. Those were two separate raw parses of the same field, and
+    // `owned-model-services.ts` already did the normalised thing for its own
+    // copy — three answers to one question.
+    const tierModel = parseModelSpec(providers.normalizeSpecSync(profile.tier.model));
     assembly.admission = {
       count: (request) => countRequestInputTokens(
-        providers.registry.get(admissionModel.provider), admissionModel.modelId, providers.deps, request,
+        providers.registry.get(tierModel.provider), tierModel.modelId, providers.deps, request,
       ),
       // Think filters the merged surface by activeTools before submission.
       // Count that exact subset: including inactive workspace tools inflates
@@ -5982,7 +5993,7 @@ export abstract class ActorAgent extends Think<Env> {
     const cacheOptions = cachePlan.providerOptions;
     const reasoningOptions = reasoningEffortOptions(
       profile.tier.reasoningEffort,
-      parseModelSpec(profile.tier.model).provider,
+      tierModel.provider,
     );
     const providerOptions = mergeProviderOptions(cacheOptions, reasoningOptions);
     if (providerOptions) cfg.providerOptions = providerOptions;
