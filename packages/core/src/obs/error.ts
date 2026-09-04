@@ -109,6 +109,47 @@ export const CODE_IS_REFUSAL = {
 } satisfies Readonly<Record<ErrorCode, boolean>>;
 
 /**
+ * Whether a class of failure establishes that the work NEVER STARTED — that
+ * nothing was done, anywhere, under this call.
+ *
+ * A different question from {@link CODE_IS_REFUSAL}, which asks whether the
+ * failure was a decision. This one asks whether an EFFECT happened, and the two
+ * answers come apart: `denied` is a decision and no effect, `oom` is no
+ * decision and a large effect.
+ *
+ * It has a caller that must not guess. A one-shot grant the owner gave for one
+ * command is spent before the command runs, so a crash between the two costs an
+ * approval rather than granting one twice (safety/deferred-approval.ts). The
+ * grant is worth giving back only where the code PROVES no execution happened;
+ * everywhere else the safe reading is that it did.
+ *
+ * So the `false` half is the load-bearing half, and each `false` is a specific
+ * ignorance rather than a shrug. Total over `ErrorCode`, `satisfies` rather than
+ * annotated, for the reasons above.
+ */
+export const CODE_WORK_DID_NOT_START = {
+  /** The arguments were rejected. Nothing was dispatched to validate them. */
+  bad_input: true,
+  /** Something declined to do it. A decision not to act is not an act. */
+  denied: true,
+  /** The operation does not exist at that boundary; there was nothing to run. */
+  unsupported: true,
+  /** Nothing was there to receive the work — no device attached, no binding. */
+  unavailable: true,
+  /** A named thing was absent, and work can discover that after it starts. */
+  missing: false,
+  /** A deadline passed. The work may still be running. */
+  timeout: false,
+  /** The caller stopped waiting, which says nothing about what already ran. */
+  cancelled: false,
+  /** The environment killed it for memory, so it ran until it did. */
+  oom: false,
+  /** The transport broke and cannot say whether the frame arrived. This is the
+   *  unclassified failure's answer, and it must stay `false`. */
+  io: false,
+} satisfies Readonly<Record<ErrorCode, boolean>>;
+
+/**
  * A classified failure. An ordinary `Error` subclass, so it throws, prints and
  * chains through native `cause` exactly like everything else — the class is an
  * addition to the language's error, never a replacement for it.

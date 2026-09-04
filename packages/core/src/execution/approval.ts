@@ -27,6 +27,7 @@
  */
 
 import { gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { parseRefusal } from './exec-result';
 import * as v from 'valibot';
 import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
 import type { Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
@@ -35,6 +36,10 @@ const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.
   stdin: v.optional(v.string()),
   signal: v.optional(v.instance(AbortSignal)),
 }));
+
+/** An executor tool's result on its STRING channel — the only shape a
+ *  classified refusal can arrive on (`execution/exec-result.ts`). */
+const ResultTextSchema = v.string();
 
 function parseShellExecOptions(input: { value: unknown }): string | ShellExecOptions | undefined {
   const text = v.safeParse(v.string(), input.value);
@@ -50,6 +55,15 @@ function parseShellExecOptions(input: { value: unknown }): string | ShellExecOpt
  * (`exitCode: 1`, the message on stderr) rather than thrown, so it renders
  * through the same `formatExecResult` every caller already applies and reads
  * as a normal (failing) tool result to the model.
+ *
+ * No `refusalCode` reader is passed, and that is a statement about the shape
+ * rather than an omission: `ShellExecResult` is three fields of a process that
+ * ran, with no channel for a classification, and no `Shell` in this tree writes
+ * a refusal payload onto one. A reader here would have to read PROSE off
+ * stderr, which is a command's own output and not a classification. So a
+ * deferred grant spent on the workspace shell is consumed whatever happens —
+ * which is also the case the refund was never for: the workspace is the agent's
+ * own box, always attached, and "the executor was not there" cannot arise.
  */
 export function withApprovalGatedShell(
   shell: Shell,
@@ -114,6 +128,17 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
       (message) => message,
       provider.name,
       policy,
+      // The classification an executor tool already answers with. Every kind of
+      // provider — laptop, sandbox, Nimbus, a hosted workspace's startProcess —
+      // renders a classified failure through the ONE refusal payload
+      // `execution/exec-result.ts` defines, so reading it here covers all of
+      // them at once and no executor has to remember to opt in. A result that
+      // is not that payload carries no classification, which is the honest
+      // answer for a command's own output.
+      (result) => {
+        const text = v.safeParse(ResultTextSchema, result);
+        return text.success ? parseRefusal(text.output)?.reason ?? null : null;
+      },
     );
     GATED_EXECUTES.add(gated);
     tools[name] = { ...entry, execute: gated };

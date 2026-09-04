@@ -44,7 +44,7 @@
  * the same intuition + add Cloudflare-Workers-specific deny rules.
  */
 
-import { diagnostics, KinuError } from '../obs/index';
+import { CODE_WORK_DID_NOT_START, diagnostics, KinuError, type ErrorCode } from '../obs/index';
 
 export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 
@@ -591,22 +591,65 @@ export interface ShellApprovalPolicy {
 export const STRICT_NO_CHANNEL_POLICY: ShellApprovalPolicy = { mode: () => 'strict' };
 
 /**
+ * One SPEND of one grant — which row the owner approved, and which spend of
+ * that row this is.
+ *
+ * The spend counter is what keeps a refund from becoming a second way to
+ * grant. A settle names its own spend, so a late or replayed settle of an
+ * earlier spend cannot touch a grant that a later attempt already holds, and
+ * settling the same spend twice is a no-op. An opaque pair here rather than a
+ * bare id for exactly that reason.
+ */
+export interface ApprovalSpend {
+  readonly approvalId: string;
+  readonly spend: number;
+}
+
+/**
+ * What the gate learned about a spent grant once the wrapped execute returned.
+ *
+ * Two answers, not three, and the asymmetry is the point: `did-not-run` must be
+ * PROVEN, and everything else — it ran, it failed on the machine, nobody can
+ * say — is one answer, because they carry one consequence. A gate that never
+ * settles at all (a throw, a crash, a process that dies) leaves the grant
+ * spent, which is the same safe reading arrived at by silence.
+ */
+export type ApprovalSpendOutcome =
+  /** The boundary's own classification establishes that the command never
+   *  reached its machine. The grant goes back to the state the owner approved
+   *  it in, and stays theirs to spend. */
+  | 'did-not-run'
+  /** Anything else. The approval is consumed for good. */
+  | 'spent';
+
+/**
  * What the gate does with a 'gate' decision nobody is around to answer:
  * park it on the owner instead of refusing on their behalf.
  *
  * The whole vocabulary of parking — ids, durable rows, the words the model
  * reads, the wake when the owner decides — belongs to
- * safety/deferred-approval.ts. What crosses into THIS file is one verb with
- * two answers, because this file is a layergate subject source and stays
- * import-free (see {@link ShellApprovalMode}); a `DeferredApproval` type here
- * would drag the queue's whole import closure into the safety-gate layer.
+ * safety/deferred-approval.ts. What crosses into THIS file is two verbs,
+ * because this file is a layergate subject source and stays import-free (see
+ * {@link ShellApprovalMode}); a `DeferredApproval` type here would drag the
+ * queue's whole import closure into the safety-gate layer.
  *
  * `run: true` is the only answer that lets the command through, and by the
- * time it is returned the owner's grant is already spent — so one approval
- * can never authorise two executions.
+ * time it is returned the owner's grant is already spent — so a crash between
+ * the decision and the command costs an approval rather than granting one
+ * twice. That is deliberate and it stays. What it cost before `settle` existed
+ * was an approval per ATTEMPT: a command the gate let through, that then
+ * reached an executor which was not there, spent the grant on nothing and sent
+ * the owner the same question again. `settle` is how the gate reports which of
+ * those two things happened.
  */
 export interface DeferredApprovalChannel {
-  park(req: ShellApprovalRequest): { readonly run: true } | { readonly run: false; readonly message: string };
+  park(req: ShellApprovalRequest):
+    | { readonly run: true; readonly spent: ApprovalSpend }
+    | { readonly run: false; readonly message: string };
+  /** Close out a spend `park` reported. Called exactly once per spend on every
+   *  path the wrapped execute RETURNS on; never called when its outcome is
+   *  unknown. Idempotent, and safe to call late. */
+  settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): void;
 }
 
 /** The review with the owner's standing grants taken out of it: a rule they
@@ -638,12 +681,32 @@ function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, execut
  * `denyResult` shapes a gate/deny message into the wrapped function's own
  * return type — a bare string for a codemode tool, `{stdout,stderr,exitCode}`
  * for a raw `Shell`.
+ *
+ * `refusalCode` is its mirror: it reads a CLASSIFICATION back out of that same
+ * return type. Together they are the whole adapter between this gate and a
+ * boundary's result shape — one writes a message in, the other reads a code
+ * out — and the policy built on the code stays here, in one place, rather than
+ * once per executor. A boundary whose results carry no classification omits
+ * it; that costs it the refund below and nothing else, and it is the honest
+ * answer for a shape with no code in it. NEVER match on prose: a refusal is a
+ * code, and text that merely reads like one is a command's own output.
+ *
+ * THE REFUND. A deferred grant is spent BEFORE the command runs, so a crash
+ * between the two costs an approval rather than granting one twice. That gives
+ * "one approval, one attempt", where the product wants "one approval, one
+ * EXECUTION" — an attempt that never reached its machine spent the owner's
+ * grant on nothing and sent them the same question again. So the gate reports
+ * every spend back to the channel with what it now knows: a code that PROVES
+ * no execution happened gives the grant back, and anything else — it ran, it
+ * failed on the machine, nobody can say — consumes it. A throw settles
+ * nothing, because a throw establishes nothing.
  */
 export function gateExec<R>(
   execute: (command: string, ...rest: unknown[]) => Promise<R>,
   denyResult: (message: string) => R,
   executor: string,
   policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
+  refusalCode?: (result: R) => ErrorCode | null,
 ): (...args: unknown[]) => Promise<R> {
   // A rest-args signature — not `(command: string, ...)` — so the wrapped
   // function stays assignable to `ExecutorProvider['tools'][name].execute`
@@ -656,7 +719,15 @@ export function gateExec<R>(
       { command: cmd, executor }, reviewCommand(cmd, executor), policy,
     );
     if (!decision.run) return denyResult(decision.message);
-    return execute(cmd, ...rest);
+    const result = await execute(cmd, ...rest);
+    if (decision.spent) {
+      const code = refusalCode?.(result) ?? null;
+      policy.deferrals?.settle(
+        decision.spent,
+        code !== null && CODE_WORK_DID_NOT_START[code] ? 'did-not-run' : 'spent',
+      );
+    }
+    return result;
   };
 }
 
@@ -675,18 +746,31 @@ export function gateExec<R>(
  * whatever names the action. Standing grants are applied here, not by the
  * caller: a rule the owner already blessed on this executor must stop the
  * asking no matter which boundary asked.
+ *
+ * A `run: true` reached by replaying a parked grant carries the SPEND it made.
+ * The caller owns what happens next, so the caller is the only one who can say
+ * whether the action happened — it must hand that spend back to
+ * {@link DeferredApprovalChannel.settle} once it knows, and leave it unsettled
+ * when it never finds out. {@link gateExec} does this for every gated command
+ * boundary; a caller running its own ladder (an egress binding) owns its own.
  */
 export async function decideApproval(
   subject: { readonly command: string; readonly executor: string },
   rawReview: ApprovalResult,
   policy: ShellApprovalPolicy,
-): Promise<{ readonly run: true } | { readonly run: false; readonly message: string }> {
+): Promise<
+  | { readonly run: true; readonly spent?: ApprovalSpend }
+  | { readonly run: false; readonly message: string }
+> {
   const { command: cmd, executor } = subject;
   // Before anything is read: a facet's answers live in its root's storage.
   await policy.resolve?.();
   const mode = policy.mode();
   const review = afterGrants(rawReview, policy, executor);
   const deny = (message: string) => ({ run: false, message }) as const;
+  /** The grant a park replayed, if one was. Held across the ladder because the
+   *  spend happens mid-decision and is reported at the end. */
+  let spent: ApprovalSpend | undefined;
   if (review.decision === 'deny') {
     return deny(`${APPROVAL_DENIED} — ${formatApproval(review)}`);
   }
@@ -726,7 +810,9 @@ export async function decideApproval(
             : `NOT RUN — needs owner approval, nobody to ask — ${formatApproval(review)}`);
         }
         // parked.run — the owner approved this command while the agent was
-        // away and the grant has just been spent; fall through to execute.
+        // away and the grant has just been spent; fall through to execute,
+        // carrying the spend out so the caller can close it.
+        spent = parked.spent;
       } else if (!approvalGrants(outcome)) {
         return deny(`${APPROVAL_DENIED} by the owner — ${formatApproval(review)}`);
       } else if (outcome === 'allow_always') {
@@ -745,7 +831,7 @@ export async function decideApproval(
       { executor, rules: review.hits.map((h) => h.rule).join(',') },
     );
   }
-  return { run: true };
+  return spent === undefined ? { run: true } : { run: true, spent };
 }
 
 /** The grants an 'always' answer to this review buys: every rule that was

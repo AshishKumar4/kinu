@@ -34,19 +34,29 @@ describe('the local SQL adapter returns the rows a write produces', () => {
     const db = new Database(':memory:');
     const store = approvedGrant(db);
 
-    // `spend` is `DELETE … RETURNING`: the returned row IS the claim. Reading
-    // `[]` here destroyed the grant and told the caller it got nothing — the
-    // approved command could then never run, and the owner's answer was gone.
+    // `spend` is `UPDATE … RETURNING`: the returned row IS the claim. Reading
+    // `[]` here took the grant out of reach and told the caller it got nothing
+    // — the approved command could then never run, and the owner's answer was
+    // gone.
     const claimed = store.spend('act-1');
-    expect(claimed).toMatchObject({
+    expect(claimed?.action).toMatchObject({
       id: 'act-1',
       command: 'rm -rf ./build',
       executor: 'laptop',
-      status: 'approved',
+      status: 'spent',
     });
+    expect(claimed?.spend).toEqual({ approvalId: 'act-1', spend: 1 });
 
-    // And exactly once: the row is spent, so a second claim has nothing to take.
+    // And exactly once: the grant is out, so a second claim has nothing to take.
     expect(store.spend('act-1')).toBeNull();
+    expect(store.standing('rm -rf ./build', 'laptop')).toBeNull();
+    if (!claimed) throw new Error('the approved grant must be claimable');
+
+    // `settle` is the other keyword this adapter used to swallow:
+    // `DELETE … RETURNING`, whose row is how the caller knows THIS call is
+    // what closed the spend rather than a replay of one already closed.
+    expect(store.settle(claimed.spend, 'spent')).toBe(true);
+    expect(store.settle(claimed.spend, 'spent')).toBe(false);
     expect(store.get('act-1')).toBeNull();
     db.close();
   });

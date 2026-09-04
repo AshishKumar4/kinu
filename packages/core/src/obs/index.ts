@@ -44,6 +44,7 @@ export {
 export {
   classifyErrorCode,
   CODE_IS_REFUSAL,
+  CODE_WORK_DID_NOT_START,
   ERROR_CODES,
   KinuError,
   refusalOf,

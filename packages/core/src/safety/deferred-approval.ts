@@ -53,7 +53,8 @@ import * as v from 'valibot';
 import { reconcileColumns } from '../identity/columns';
 import {
   formatApproval, gatedGrants, reviewCommand,
-  type ApprovalGrant, type DeferredApprovalChannel, type ShellApprovalRequest,
+  type ApprovalGrant, type ApprovalSpend, type ApprovalSpendOutcome,
+  type DeferredApprovalChannel, type ShellApprovalRequest,
 } from './approval-gate';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, toKinuError } from '../obs/index';
@@ -79,9 +80,15 @@ export type DeferredApprovalStatus =
   /** The owner said yes. The command has not run; the grant is unspent. */
   | 'approved'
   /** The owner said no. */
-  | 'denied';
-  // A spent grant is NOT a status: spending DELETES the row, and the
-  // `approval_consumed` run event is the durable audit that it was used.
+  | 'denied'
+  /** The grant has been handed to a command that is running RIGHT NOW, and no
+   *  longer answers `standing()`. Not a resting state: the gate closes every
+   *  spend it makes, either by deleting the row (the command reached its
+   *  machine) or by putting it back to 'approved' (it provably did not). A row
+   *  left here is a process that died mid-command, and the grant it held is
+   *  lost — which is the safe direction and the reason the spend comes first.
+   *  The `approval_consumed` run event is the durable audit either way. */
+  | 'spent';
 
 /** What the owner can pick. `queued` is a state the queue reaches on its own.
  *  `always` is `approved` plus a standing grant for the rules this command
@@ -111,10 +118,12 @@ export interface DeferredApproval {
  *
  * `run` is the ONLY verdict that lets execution proceed, and reaching it has
  * already spent the grant — so a second attempt at the same command parks
- * again rather than riding one approval twice.
+ * again rather than riding one approval twice. It names the spend it made,
+ * because the gate has to close that spend once it knows whether the command
+ * reached its machine.
  */
 export type DeferredApprovalVerdict =
-  | { readonly outcome: 'run'; readonly action: DeferredApproval }
+  | { readonly outcome: 'run'; readonly action: DeferredApproval; readonly spend: ApprovalSpend }
   | { readonly outcome: 'denied'; readonly action: DeferredApproval }
   | { readonly outcome: 'queued'; readonly action: DeferredApproval };
 
@@ -123,8 +132,11 @@ interface Row {
   requested_at: number; decided_at: number | null;
 }
 
+/** A row plus which spend of it is being reported. */
+interface SpendRow extends Row { spend_seq: number }
+
 function toAction(r: Row): DeferredApproval {
-  const status = v.safeParse(v.picklist(['queued', 'approved', 'denied']), r.status);
+  const status = v.safeParse(v.picklist(['queued', 'approved', 'denied', 'spent']), r.status);
   return {
     id: r.id,
     command: r.command,
@@ -138,6 +150,10 @@ function toAction(r: Row): DeferredApproval {
 
 const DEFERRED_APPROVAL_ADDED_COLUMNS = {
   executor: "TEXT NOT NULL DEFAULT ''",
+  // How many times this grant has been handed to a command. A settle names the
+  // spend it is closing, so a replayed or late settle cannot reopen a grant a
+  // later attempt already holds.
+  spend_seq: 'INTEGER NOT NULL DEFAULT 0',
 } as const;
 
 export function initDeferredApprovalsTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
@@ -164,10 +180,11 @@ export class DeferredApprovalStore {
   /** The live row for this exact command ON THIS EXECUTOR, if there is one.
    *  'queued' (waiting) and 'approved' (grant unspent) are the two live
    *  states; 'denied' is the owner's standing answer and is also read back
-   *  here, so a refusal is reported rather than re-asked. A spent grant is
-   *  not here at all: spending deleted its row. The executor is part of the
-   *  key because an approval for the agent's own workspace is not an approval
-   *  for the owner's laptop.
+   *  here, so a refusal is reported rather than re-asked. A grant that is out
+   *  with a running command is 'spent' and is deliberately NOT here: while it
+   *  is out it answers for nobody. The executor is part of the key because an
+   *  approval for the agent's own workspace is not an approval for the owner's
+   *  laptop.
    */
   standing(command: string, executor: string): DeferredApproval | null {
     const rows = this.sql<Row>`
@@ -206,17 +223,56 @@ export class DeferredApprovalStore {
     return this.get(id);
   }
 
-  /** Spend an approved grant by DELETING its row, returning the action this
-   *  call consumed — or null when another call got there first. Deletion is
-   *  what makes one approval unrepeatable: there is nothing left to spend,
-   *  and the `approval_consumed` run event (the queue's audit sink) is the
-   *  record that it happened. */
-  spend(id: string): DeferredApproval | null {
-    const rows = this.sql<Row>`
-      DELETE FROM deferred_approvals
+  /**
+   * Hand an approved grant to a command that is about to run.
+   *
+   * The grant leaves `standing()` HERE, before the command runs, so a crash
+   * between the two costs an approval rather than granting one twice. It is a
+   * transition on the row and not a deletion, because the row's identity is
+   * what a refund needs: {@link settle} either finishes the spend by deleting
+   * the row or puts THAT SAME row back to the state the owner approved. There
+   * is no path in this store that creates an approved row, so a grant can
+   * never be minted by giving one back.
+   *
+   * Returns the action and which spend of it this is, or null when another
+   * call got there first.
+   */
+  spend(id: string): { readonly action: DeferredApproval; readonly spend: ApprovalSpend } | null {
+    const rows = this.sql<SpendRow>`
+      UPDATE deferred_approvals SET status='spent', spend_seq = spend_seq + 1
       WHERE id = ${id} AND status = 'approved'
-      RETURNING id, command, executor, reason, status, requested_at, decided_at`;
-    return rows[0] ? toAction(rows[0]) : null;
+      RETURNING id, command, executor, reason, status, requested_at, decided_at, spend_seq`;
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      action: toAction(row),
+      spend: { approvalId: row.id, spend: row.spend_seq },
+    };
+  }
+
+  /**
+   * Close out a spend: consume the grant for good, or give it back.
+   *
+   * Guarded on the spend counter as well as the id, which is what makes this
+   * idempotent and replay-safe. A settle of a spend that is already closed
+   * matches no row and does nothing — so settling twice changes nothing, and a
+   * stale settle arriving after a LATER attempt took the grant cannot reach it.
+   *
+   * Reports whether this call is what moved the row, for the same reason
+   * {@link decide} does: a caller that announces an outcome must announce it
+   * once.
+   */
+  settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): boolean {
+    const rows = outcome === 'did-not-run'
+      ? this.sql<{ id: string }>`
+          UPDATE deferred_approvals SET status='approved'
+          WHERE id = ${spent.approvalId} AND status='spent' AND spend_seq = ${spent.spend}
+          RETURNING id`
+      : this.sql<{ id: string }>`
+          DELETE FROM deferred_approvals
+          WHERE id = ${spent.approvalId} AND status='spent' AND spend_seq = ${spent.spend}
+          RETURNING id`;
+    return rows.length > 0;
   }
 
   get(id: string): DeferredApproval | null {
@@ -345,13 +401,14 @@ export class DeferredApprovalQueue {
   }
 
   /** The gate's view of this queue: run, or the words to hand the model
-   *  instead. The gate learns nothing else — see approval-gate.ts's
+   *  instead, plus the way back for a spend that bought nothing. The gate
+   *  learns nothing else — see approval-gate.ts's
    *  {@link DeferredApprovalChannel}. */
   get channel(): DeferredApprovalChannel {
     return {
       park: (req) => {
         const verdict = this.park(req);
-        if (verdict.outcome === 'run') return { run: true };
+        if (verdict.outcome === 'run') return { run: true, spent: verdict.spend };
         return {
           run: false,
           message: verdict.outcome === 'denied'
@@ -359,6 +416,7 @@ export class DeferredApprovalQueue {
             : queuedActionMessage(verdict.action),
         };
       },
+      settle: (spent, outcome) => { this.settle(spent, outcome); },
     };
   }
 
@@ -374,16 +432,11 @@ export class DeferredApprovalQueue {
     const standing = this.deps.store.standing(req.command, req.executor);
     if (standing?.status === 'denied') return { outcome: 'denied', action: standing };
     if (standing?.status === 'approved') {
-      // The grant is spent HERE, before the command runs, so a crash between
-      // the two costs an approval rather than granting one twice. Spending
-      // DELETES the row; the audit event is what remains of it.
+      // The grant leaves `standing()` HERE, before the command runs, so a crash
+      // between the two costs an approval rather than granting one twice. The
+      // row survives the spend so {@link settle} can close it either way.
       const spent = this.deps.store.spend(standing.id);
-      if (spent) {
-        this.deps.audit?.({
-          approvalId: spent.id, command: spent.command, executor: spent.executor,
-        });
-        return { outcome: 'run', action: spent };
-      }
+      if (spent) return { outcome: 'run', action: spent.action, spend: spent.spend };
       // Lost the race to a concurrent re-issue: fall through and park again.
     }
     if (standing?.status === 'queued') return { outcome: 'queued', action: standing };
@@ -397,6 +450,35 @@ export class DeferredApprovalQueue {
     });
     this.notify({ kind: 'queued', action });
     return { outcome: 'queued', action };
+  }
+
+  /**
+   * Close a spend {@link park} made, once the gate knows what became of the
+   * command.
+   *
+   * 'spent' consumes the grant for good and writes the `approval_consumed`
+   * audit. 'did-not-run' puts the SAME row back to the state the owner
+   * approved it in and writes nothing, because nothing was consumed — an audit
+   * for a grant that is still sitting there unspent would be a false entry in a
+   * permanent log.
+   *
+   * The audit is written HERE rather than at the spend for that reason. A
+   * process that dies between the spend and this call leaves no event and a row
+   * stuck at 'spent' — the grant is lost, which is the safe direction, and the
+   * stranded row is the evidence that it was taken.
+   *
+   * Reports whether this call is what closed the spend, so a replay is visibly
+   * a no-op rather than a silent one.
+   */
+  settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): boolean {
+    const action = this.deps.store.get(spent.approvalId);
+    if (!this.deps.store.settle(spent, outcome)) return false;
+    if (outcome === 'spent' && action) {
+      this.deps.audit?.({
+        approvalId: action.id, command: action.command, executor: action.executor,
+      });
+    }
+    return true;
   }
 
   /**

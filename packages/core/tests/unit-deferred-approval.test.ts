@@ -18,6 +18,10 @@ import {
   type AgentRuntime, type AgentSignal, type Shell,
 } from '../src/index';
 import { buildPendingActions } from '../src/read-models/pending-actions';
+import { gateProviderExec } from '../src/execution/approval';
+import { formatExecResult, parseRefusal, refusalText } from '../src/execution/exec-result';
+import { KinuError } from '../src/obs/index';
+import type { ExecutorProvider } from '../src/execution/types';
 import { createTestRuntime } from './helpers';
 import { makeSql, makeExecRaw } from './helpers';
 
@@ -382,7 +386,7 @@ describe('what an approval actually buys', () => {
   });
 });
 
-describe('the spent grant leaves an audit, not a row', () => {
+describe('the spent grant leaves an audit, and no row the gate did not close', () => {
   test('consuming a grant records the approval once and deletes its row', async () => {
     const { run, queue, store, audited } = setup();
     await run.execute({ command: GATED });
@@ -409,7 +413,10 @@ describe('the spent grant leaves an audit, not a row', () => {
     expect(audited).toHaveLength(1);
   });
 
-  test('store.spend returns the consumed action, then null on any later call', () => {
+  test('store.spend hands the grant out once, and a settle finishes it', () => {
+    // The row outlives the spend only so the gate can close it. While it is
+    // out it answers for nobody: `standing()` cannot see it and a second
+    // spend gets nothing.
     const db = new Database(':memory:');
     initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
     const store = new DeferredApprovalStore(makeSql(db));
@@ -417,9 +424,16 @@ describe('the spent grant leaves an audit, not a row', () => {
     expect(store.decide('defer-s', 'approved', 2)?.status).toBe('approved');
 
     const spent = store.spend('defer-s');
-    expect(spent?.id).toBe('defer-s');
+    expect(spent?.action.id).toBe('defer-s');
     expect(store.spend('defer-s')).toBeNull();
+    expect(store.standing(GATED, 'workspace')).toBeNull();
+    if (!spent) throw new Error('an approved grant must be spendable');
+
+    expect(store.settle(spent.spend, 'spent')).toBe(true);
     expect(store.get('defer-s')).toBeNull();
+    // Closed once. A replay finds nothing and cannot bring the grant back.
+    expect(store.settle(spent.spend, 'did-not-run')).toBe(false);
+    expect(store.standing(GATED, 'workspace')).toBeNull();
   });
 
   test('re-opening the workspace keeps parked and approved rows intact', () => {
@@ -509,5 +523,190 @@ describe('durability — the wait is a night, not a prompt window', () => {
 
     await expect(queue.decide(['defer-7'], 'approved')).rejects.toThrow('no host');
     expect(store.get('defer-7')?.status).toBe('approved');
+  });
+});
+
+/**
+ * The defect the live first-run tier found on staging 2026-09-03: the owner
+ * approves a command, and is asked for it a second time.
+ *
+ * One approval has two consumers. `decide()` writes 'approved' AND wakes the
+ * agent so it re-issues the command; `park()` spends the grant by taking the
+ * row out of `standing()`'s reach BEFORE the command runs. On a first run the
+ * woken re-issue reaches a device transport that is not ready yet, so the
+ * grant is spent on an attempt that ran nothing, and the next attempt finds no
+ * standing grant and parks a NEW row — the owner's complaint verbatim.
+ *
+ * The gate keeps spend-before-run: a crash between the spend and the run must
+ * cost an approval rather than grant one twice. What it adds is a CLASSIFIED
+ * refund — when the wrapped execute answers a code that establishes the
+ * command never reached its machine, the same grant becomes spendable again.
+ */
+describe('an approval outlives an attempt that never reached the machine', () => {
+  /** The laptop seam as a router wires it: an ExecutorProvider whose `exec`
+   *  answers whatever this run of the test needs, gated by `gateProviderExec`
+   *  with the real deferral queue behind it. */
+  function deviceSetup() {
+    const db = new Database(':memory:');
+    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
+    const store = new DeferredApprovalStore(makeSql(db));
+    let seq = 0;
+    const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
+    const queue = new DeferredApprovalQueue({
+      store,
+      signals: { deliver: async () => 'queued' },
+      remember: () => { throw new Error('not an always answer'); },
+      newId: () => `defer-${++seq}`,
+      now: () => 1_000 + seq,
+      audit: (record) => { audited.push(record); },
+    });
+
+    const executed: string[] = [];
+    /** What the machine answers. Swapped per phase: not connected, then
+     *  connected. */
+    let answer: () => string = () => 'ran';
+    const provider: ExecutorProvider = {
+      name: 'laptop',
+      kind: 'laptop',
+      capabilities: new Set(['shell']),
+      homeDir: async () => '/home/owner',
+      isAvailable: () => true,
+      connect: async () => {},
+      disconnect: async () => {},
+      tools: {
+        exec: {
+          description: 'Run a shell command on the owner\'s machine',
+          execute: async (...args: unknown[]) => {
+            executed.push(String(args[0]));
+            return answer();
+          },
+        },
+      },
+    };
+    const gated = gateProviderExec(provider, {
+      mode: () => 'strict',
+      deferrals: queue.channel,
+    });
+    const exec = async (command: string): Promise<string> =>
+      String(await gated.tools.exec!.execute(command));
+    return {
+      queue, store, exec, executed, audited,
+      answerWith: (next: () => string) => { answer = next; },
+    };
+  }
+
+  /** The device transport's own refusal, classified: `unavailable` is the code
+   *  the laptop path already produces when no machine is attached
+   *  (execution/device-tunnel-executor.ts NOT_CONNECTED_REFUSAL). The test
+   *  reads the CODE, never the prose. */
+  const notConnected = () => refusalText(new KinuError('unavailable', 'No device connected.'));
+
+  test('a definitive did-not-run leaves the grant spendable and asks nobody again', async () => {
+    const { queue, store, exec, executed, answerWith } = deviceSetup();
+    answerWith(notConnected);
+
+    expect(await exec(GATED)).toContain('NOT RUN — queued for owner approval (defer-1)');
+    await queue.decide(['defer-1'], 'approved');
+
+    // The woken re-issue. The command reaches an executor that is not there,
+    // so nothing ran on any machine.
+    expect(parseRefusal(await exec(GATED))?.reason).toBe('unavailable');
+    expect(executed).toEqual([GATED]);
+
+    // The owner approved a RUN, and no run happened: the grant they gave is
+    // still theirs to spend, and they are not asked a second time.
+    expect(store.standing(GATED, 'laptop')?.status).toBe('approved');
+    expect(store.standing(GATED, 'laptop')?.id).toBe('defer-1');
+    expect(queue.list()).toEqual([]);
+  });
+
+  test('the next attempt that DOES reach the machine spends it for good', async () => {
+    const { queue, store, exec, executed, audited, answerWith } = deviceSetup();
+    answerWith(notConnected);
+    await exec(GATED);
+    await queue.decide(['defer-1'], 'approved');
+    await exec(GATED);
+
+    answerWith(() => 'ran');
+    expect(await exec(GATED)).toBe('ran');
+
+    expect(executed).toEqual([GATED, GATED]);
+    expect(store.standing(GATED, 'laptop')).toBeNull();
+    expect(store.get('defer-1')).toBeNull();
+    // One approval, one execution — and one audit for the spend that stuck.
+    expect(audited).toEqual([{ approvalId: 'defer-1', command: GATED, executor: 'laptop' }]);
+    // A fourth attempt has no grant left and parks a fresh row.
+    expect(await exec(GATED)).toContain('NOT RUN — queued for owner approval (defer-2)');
+  });
+
+  test('a command that reached the machine and FAILED there does not refund', async () => {
+    // The negative control that keeps the refund narrow: a non-zero exit is a
+    // command that ran. The approval is spent, exactly as it always was.
+    const { queue, store, exec, answerWith } = deviceSetup();
+    answerWith(notConnected);
+    await exec(GATED);
+    await queue.decide(['defer-1'], 'approved');
+
+    answerWith(() => formatExecResult({ stdout: '', stderr: 'rejected', exitCode: 1 }));
+    expect(await exec(GATED)).toContain('Error (exit 1)');
+
+    expect(store.standing(GATED, 'laptop')).toBeNull();
+    expect(store.get('defer-1')).toBeNull();
+  });
+
+  test('an UNCLASSIFIABLE failure does not refund', async () => {
+    // `io` is what this seam answers for a cause its classifier does not
+    // recognise, and an unknown outcome must keep the safe behaviour: the
+    // frame may have reached the machine and run.
+    const { queue, store, exec, answerWith } = deviceSetup();
+    answerWith(notConnected);
+    await exec(GATED);
+    await queue.decide(['defer-1'], 'approved');
+
+    answerWith(() => refusalText(new KinuError('io', 'the tunnel closed mid-call')));
+    expect(parseRefusal(await exec(GATED))?.reason).toBe('io');
+
+    expect(store.standing(GATED, 'laptop')).toBeNull();
+  });
+
+  test('a throw out of the executor does not refund', async () => {
+    // Nothing classified anything, so nothing is known. Same rule.
+    const { queue, store, exec, answerWith } = deviceSetup();
+    answerWith(notConnected);
+    await exec(GATED);
+    await queue.decide(['defer-1'], 'approved');
+
+    answerWith(() => { throw new Error('socket died'); });
+    await expect(exec(GATED)).rejects.toThrow('socket died');
+
+    expect(store.standing(GATED, 'laptop')).toBeNull();
+  });
+
+  test('two refunds of one spend change nothing', async () => {
+    // The refund must be a state transition on the SAME row, not a second way
+    // to grant: replaying it must not resurrect a grant a later attempt spent.
+    const { queue, store, exec, answerWith } = deviceSetup();
+    answerWith(notConnected);
+    await exec(GATED);
+    await queue.decide(['defer-1'], 'approved');
+
+    const spend = store.spend('defer-1');
+    expect(spend).not.toBeNull();
+    if (!spend) throw new Error('the approved grant must be spendable');
+
+    queue.channel.settle(spend.spend, 'did-not-run');
+    expect(store.standing(GATED, 'laptop')?.id).toBe('defer-1');
+
+    queue.channel.settle(spend.spend, 'did-not-run');
+    expect(store.standing(GATED, 'laptop')?.id).toBe('defer-1');
+
+    // …and a replay that arrives after a LATER spend cannot undo it.
+    const second = store.spend('defer-1');
+    expect(second).not.toBeNull();
+    if (!second) throw new Error('the refunded grant must be spendable again');
+    queue.channel.settle(second.spend, 'spent');
+    queue.channel.settle(spend.spend, 'did-not-run');
+    expect(store.standing(GATED, 'laptop')).toBeNull();
+    expect(store.get('defer-1')).toBeNull();
   });
 });
