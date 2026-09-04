@@ -34,6 +34,7 @@
 
 import type { Process } from "@cloudflare/sandbox";
 import { decodeJsonValue, WORKSPACE_BACKUP_DIR, type SandboxHandle } from "@kinu.run/core";
+import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import type { KinuSandbox } from "./kinu-sandbox";
 import { sandboxPreviewLabelOf } from "./lib/preview-origin";
 import type { SandboxPreviewExposures } from "./lib/preview-exposures";
@@ -285,13 +286,29 @@ export function adaptCloudflareSandbox(
     // ageing out of the record, and what carries an exposure minted before this
     // record existed into it. Refresh writes only when the record is missing or
     // halfway through its life, so a polling panel writes nothing.
+    //
+    // A failed refresh is REPORTED AND THE LISTING STANDS, which is the one
+    // place this asymmetry is deliberate: publication is load-bearing (an
+    // unpublished URL is a dead link, so `exposePort` fails), while a refresh
+    // is maintenance on a record that is already correct. Failing the listing
+    // would turn a store hiccup into an empty Ports panel for a workspace
+    // whose ports are all live.
     getExposedPorts: async (hostname) => {
       const rows = await onContainer(() => handle.getExposedPorts(hostname));
       if (previews !== null) {
+        const index = previews;
         await Promise.all(rows.map(async (row) => {
           const label = sandboxPreviewLabelOf(new URL(row.url), { PREVIEW_HOST_SUFFIX: hostname });
           if (label === null || label.port !== row.port) return;
-          await previews.refresh(row.port, label.token);
+          try {
+            await index.refresh(row.port, label.token);
+          } catch (cause) {
+            diagnostics.failure('preview.refresh_failed', toKinuError({
+              doing: 'refreshing a published sandbox preview',
+              cause,
+              otherwise: 'unavailable',
+            }), { port: row.port });
+          }
         }));
       }
       return rows;

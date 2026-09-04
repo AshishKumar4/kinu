@@ -26,6 +26,10 @@ import {
   sandboxPreviewExposures,
 } from '../src/lib/preview-exposures';
 import { makeKv, type FakeKv } from './helpers/kv';
+import type { KvStore } from '../src/lib/kv';
+import {
+  createRecordingLogger, setDiagnosticsSink, type RecordedLog,
+} from '@kinu.run/core/obs';
 import type { KinuSandbox } from '../src/kinu-sandbox';
 
 const SUFFIX = 'previews.example';
@@ -34,6 +38,15 @@ const PORT = 8080;
 const TOKEN = 'p8080_ab12cd34';
 
 afterAll(() => { setSystemTime(); });
+
+/** What a body reported while it ran. A failure that is reported rather than
+ *  propagated still has to be visible, and this is where that is checked. */
+async function recordDiagnostics(body: () => Promise<void>): Promise<readonly RecordedLog[]> {
+  const logger = createRecordingLogger();
+  const restore = setDiagnosticsSink(logger);
+  try { await body(); } finally { restore(); }
+  return logger.emitted;
+}
 
 interface PortBox {
   /** Ports the container object was asked to expose. */
@@ -216,5 +229,26 @@ describe('listing ports re-observes what the container still reports', () => {
     await lane(kv, box).getExposedPorts(SUFFIX);
 
     expect(await kv.get(key)).toBe(published);
+  });
+
+  test('a store that refuses the refresh does not empty the Ports panel', async () => {
+    const kv = makeKv();
+    const { box } = portBox();
+    // The record is already correct; only the maintenance write fails. A
+    // workspace whose ports are all live must not see an empty panel because
+    // the store hiccupped — and the failure is reported, never dropped.
+    const refusing: KvStore = {
+      get: (key) => kv.get(key),
+      put: async () => { throw new Error('KV PUT failed: 429'); },
+      delete: (key) => kv.delete(key),
+    };
+    const emitted = await recordDiagnostics(async () => {
+      const rows = await adaptCloudflareSandbox(
+        box, async () => {}, sandboxPreviewExposures(refusing, SANDBOX_ID),
+      ).getExposedPorts(SUFFIX);
+      expect(rows.map((row) => row.port)).toEqual([PORT]);
+    });
+
+    expect(emitted.map((line) => line.event)).toContain('preview.refresh_failed');
   });
 });
