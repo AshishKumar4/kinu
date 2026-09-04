@@ -185,7 +185,7 @@ const runtime = () => new Miniflare({
       exports: { [CLASS_NAME]: { type: 'durable-object', storage: 'sqlite' } },
       env: {
         [binding.name]: {
-          type: 'durable-object', workerName: 'control-plane', exportName: CLASS_NAME,
+          type: 'durable-object', worker: 'control-plane', exportName: CLASS_NAME,
         },
         CREDENTIAL_ENCRYPTION_KEY: { type: 'text', value: SECRET },
         // Production binds the operations dataset, and the object's constructor

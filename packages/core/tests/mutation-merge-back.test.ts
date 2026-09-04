@@ -16,7 +16,7 @@
 //
 // Specified by docs/EXPLORATION.md — "Merge-back", including *Dependency order*.
 import { describe, expect, test } from 'bun:test';
-import { symlinkSync, writeFileSync } from 'node:fs';
+import { symlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 import { MAX_TX_BLOB_BYTES } from '@nimbus-sh/core/constants.js';
@@ -30,7 +30,10 @@ type MergeBackModule = typeof pristine;
 
 const SOURCE = new URL('../src/strategy/merge-back.ts', import.meta.url).pathname;
 const SOURCE_DIR = dirname(SOURCE);
-const MUTANTS = scratchDir('mutation-merge-back');
+// Canonical, because the loader resolves a copy's relative imports from its REAL
+// path: on macOS `tmpdir()` is `/var/folders/...`, a symlink to `/private/var/...`
+// one level deeper, so a specifier counted from the symlink lands one `../` short.
+const MUTANTS = realpathSync(scratchDir('mutation-merge-back'));
 
 symlinkSync(resolve(SOURCE_DIR, '../../../../node_modules'), join(MUTANTS, 'node_modules'), 'dir');
 /**

@@ -90,8 +90,8 @@ const miniflare = new Miniflare({
   log: new NoOpLog(),
   handleStructuredLogs: runtimeDiagnostics.handle,
   workers: [
-    worker('edge', edgeScript, { NIMBUS: { type: 'worker', workerName: 'session' } }),
-    worker('session', sessionScript, { GUEST: { type: 'worker', workerName: 'guest' } }),
+    worker('edge', edgeScript, { NIMBUS: { type: 'worker', worker: 'session' } }),
+    worker('session', sessionScript, { GUEST: { type: 'worker', worker: 'guest' } }),
     worker('guest', guestScript),
   ],
 });
