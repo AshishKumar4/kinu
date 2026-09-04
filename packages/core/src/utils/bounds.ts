@@ -30,3 +30,34 @@ export function boundedInt(
   const n = value !== undefined && Number.isFinite(value) ? Math.trunc(value) : fallback;
   return Math.min(max, Math.max(min, n));
 }
+
+/** The two numbers one surface states about a caller-supplied page: the rows a
+ *  read returns when the caller states nothing usable, and the most an
+ *  UNTRUSTED caller may ask for. */
+export interface PageBounds {
+  readonly fallback: number;
+  readonly max: number;
+}
+
+/**
+ * Close an untrusted caller's page before it crosses an object boundary:
+ * `limit` becomes a finite integer in [1, `page.max`] and `since` a finite
+ * non-negative integer, whatever the caller passed.
+ *
+ * Absent and non-finite both mean UNSTATED and take `page.fallback`.
+ *
+ * Two logs cross a boundary this way — `run_events` and `agent_log` — and each
+ * states its own two numbers. The SHAPE lives here once because the same
+ * negative limit read both tables end to end, and the second one stayed open
+ * for as long as the first one's bound was a body rather than a function.
+ */
+export function boundPageQuery<T extends { since?: number; limit?: number }>(
+  query: T,
+  page: PageBounds,
+): T & { since: number; limit: number } {
+  return {
+    ...query,
+    since: boundedInt(query.since, 0, 0, Number.MAX_SAFE_INTEGER),
+    limit: boundedInt(query.limit, page.fallback, 1, page.max),
+  };
+}

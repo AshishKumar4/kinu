@@ -48,6 +48,7 @@ import {
   parseJsonObject,
   parseJsonValue,
 } from '../../utils/json';
+import { boundedInt, boundPageQuery } from '../../utils/bounds';
 
 const EVENT_SCHEMA_VERSION = 1;
 
@@ -59,7 +60,9 @@ export interface PublishResult {
 }
 
 export interface PendingFilter {
-  /** Max number of events to return. Default 50. */
+  /** Max number of events to return. Closed by {@link EventLog.pending} to a
+   *  finite positive integer, defaulting to
+   *  {@link PENDING_EVENT_LIMIT_DEFAULT}. */
   limit?: number;
   /** Minimum priority. Defaults to 'background'. */
   min_priority?: Priority;
@@ -73,8 +76,65 @@ export interface QueryFilter {
   trace_id?: TraceId;
   turn_id?: TurnId;
   variant?: EventVariant;
+  /** Inclusive lower bound on `received_at`. */
   since?: number;
+  /** Max number of events to return. Closed by {@link EventLog.query} to a
+   *  finite positive integer, defaulting to
+   *  {@link EVENT_QUERY_LIMIT_DEFAULT}, and by {@link boundEventQuery} to
+   *  {@link EVENT_QUERY_LIMIT_MAX} for an untrusted caller. */
   limit?: number;
+}
+
+/** Rows one {@link EventLog.query} read returns when the caller states no
+ *  usable limit. */
+export const EVENT_QUERY_LIMIT_DEFAULT = 100;
+
+/**
+ * Rows one {@link EventLog.pending} read returns when the caller states no
+ * usable limit.
+ *
+ * `analytics/query.ts` `PANEL_ROW_LIMIT` is also 50 and is deliberately
+ * separate: that one sizes what a metrics panel shows an operator and is held
+ * to Analytics Engine's query timeout, while this one sizes how much unbound
+ * work one drain picks up. Moving either has no reason to move the other.
+ */
+export const PENDING_EVENT_LIMIT_DEFAULT = 50;
+
+/**
+ * The ceiling on a read an UNTRUSTED caller asked for.
+ *
+ * It is NOT the log's ceiling. `query` and `pending` enforce only that a finite
+ * positive integer reaches SQL, because an in-object read states the window its
+ * answer is correct over and must get it. How much a stranger may ask for is a
+ * different question, and the boundary answers it.
+ */
+export const EVENT_QUERY_LIMIT_MAX = 500;
+
+/** An event query whose numeric bounds are closed — the only shape an
+ *  untrusted caller's query may take once it crosses the object boundary. */
+export interface BoundedQueryFilter extends QueryFilter {
+  since: number;
+  limit: number;
+}
+
+/**
+ * Close an untrusted caller's event bounds before they cross the object
+ * boundary: `limit` becomes a finite integer in
+ * [1, {@link EVENT_QUERY_LIMIT_MAX}] and `since` a finite non-negative
+ * timestamp, whatever the caller passed.
+ *
+ * Absent and non-finite both mean UNSTATED and take the default. A route that
+ * forwards `parseInt('abc', 10)` cannot be told apart from one that asked for
+ * nothing, and guessing at the difference is not the boundary's job.
+ *
+ * `boundRunEventQuery` is this same policy over `run_events`. Both are one line
+ * over {@link boundPageQuery}, so the two logs state different numbers without
+ * carrying two answers to what a bound MEANS.
+ */
+export function boundEventQuery(filter: QueryFilter = {}): BoundedQueryFilter {
+  return boundPageQuery(filter, {
+    fallback: EVENT_QUERY_LIMIT_DEFAULT, max: EVENT_QUERY_LIMIT_MAX,
+  });
 }
 
 const PRIORITY_ORDER = {
@@ -324,7 +384,12 @@ export class EventLog {
   /** Events not yet bound to a turn. Ordered by priority desc, received_at asc.
    *  Honors deferred-revisit conditions if `resolve_deferred` is passed. */
   pending(filter: PendingFilter = {}): KinuEvent[] {
-    const limit = filter.limit ?? 50;
+    // Same invariant as `query`, same reason: `LIMIT -1` reads the whole table
+    // and `LIMIT NaN` is a datatype mismatch. The ceiling is the boundary's
+    // question, not this read's.
+    const limit = boundedInt(
+      filter.limit, PENDING_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER,
+    );
     const minPrio = filter.min_priority ?? 'background';
     const minPrioRank = PRIORITY_ORDER[minPrio];
 
@@ -589,9 +654,25 @@ export class EventLog {
 
   // ── query ───────────────────────────────────────────────────────
 
-  /** Generic event read. Used by the operator UI and the LLM-facing
-   *  `recent_events` / `list_pending_events` tools. */
+  /**
+   * Generic event read. Used by the operator UI and the LLM-facing
+   * `recent_events` / `list_pending_events` tools.
+   *
+   * The log's own invariant, applied to EVERY caller including the in-object
+   * reads that never cross a boundary: only a finite positive integer may reach
+   * SQL. SQLite reads `LIMIT -1` as no limit at all, so one negative value
+   * turns a page into a read, valibot-parse and serialize of the whole
+   * `agent_log` table, and it refuses `NaN` as a datatype mismatch — a 500 on a
+   * read that should simply have been clamped.
+   *
+   * No ceiling here, deliberately. How much an UNTRUSTED caller may ask for is
+   * a different question, and {@link boundEventQuery} answers it at the
+   * boundary.
+   */
   query(filter: QueryFilter): KinuEvent[] {
+    const limit = boundedInt(
+      filter.limit, EVENT_QUERY_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER,
+    );
     let sql = `
       SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
              payload_visibility, payload, received_at, schema_version,
@@ -605,7 +686,7 @@ export class EventLog {
     if (filter.variant)  { sql += ' AND variant = ?';  bindings.push(filter.variant); }
     if (filter.since)    { sql += ' AND received_at >= ?'; bindings.push(filter.since); }
     sql += ' ORDER BY received_at DESC';
-    sql += ' LIMIT ?'; bindings.push(filter.limit ?? 100);
+    sql += ' LIMIT ?'; bindings.push(limit);
     const rows = this.sql.exec(sql, ...bindings).toArray()
       .map((row) => v.parse(EventRowSchema, row));
     return rows.map(rowToEvent);

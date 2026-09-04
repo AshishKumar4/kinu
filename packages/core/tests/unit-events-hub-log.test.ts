@@ -4,7 +4,9 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  buildDrainBatch, initEventsHubTables, EventLog, type IngressDescriptor,
+  boundEventQuery, buildDrainBatch, initEventsHubTables, EventLog,
+  EVENT_QUERY_LIMIT_DEFAULT, EVENT_QUERY_LIMIT_MAX, PENDING_EVENT_LIMIT_DEFAULT,
+  type IngressDescriptor,
 } from '../src/events/hub/index';
 import type { SqlExec } from '../src/index';
 import type { JsonValue } from '../src/utils/json';
@@ -230,5 +232,139 @@ describe('EventLog.traceEventCount', () => {
     const r1 = log.publish({ descriptor: webhookDescriptor('d1', { x: 1 }), now: 1 });
     log.publish({ descriptor: webhookDescriptor('d2', { x: 2 }), now: 2, caused_by: r1.id });
     expect(log.traceEventCount(r1.id)).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// The KINU-N019 mechanism in the sibling log. `query` bound `limit` with
+// `?? 100`, which catches null and undefined and nothing else, so a caller's
+// `-1` reached SQLite as `LIMIT -1` — no limit at all.
+//
+// Measured against this file's own storage before the fix, 700 rows seeded and
+// a default page of 100: `query({ limit: -1 })` returned 700, `pending({ limit:
+// -1 })` returned 700, raw `LIMIT -1` returned 700, `LIMIT 0` returned 0, and
+// `LIMIT NaN` threw 'datatype mismatch'.
+//
+// Two layers, two questions, the same shape the run-event log uses. `query` and
+// `pending` own the log's invariant — only a finite positive integer may reach
+// SQL — and apply it to every caller, including the in-object reads that never
+// cross a boundary. `boundEventQuery` owns the ceiling on what an UNTRUSTED
+// caller may ask for.
+describe('EventLog.query admits only a finite positive integer limit', () => {
+  /** A log holding `count` chat events, which do not dedupe, so every one
+   *  lands. */
+  function seededLog(count: number): EventLog {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+    for (let i = 0; i < count; i++) {
+      log.publish({ descriptor: chatDescriptor(`event ${i}`), now: 1000 + i });
+    }
+    return log;
+  }
+
+  test('a negative limit reads one row, never the whole table', () => {
+    const log = seededLog(EVENT_QUERY_LIMIT_DEFAULT + 40);
+    expect(log.query({ limit: -1 })).toHaveLength(1);
+    expect(log.query({ limit: -999999 })).toHaveLength(1);
+  });
+
+  test('zero raises to one row rather than reading an empty page', () => {
+    // `LIMIT 0` returns nothing, and nothing is how a reader learns the log is
+    // empty. A caller's typo would report a busy workspace as having no events.
+    expect(seededLog(40).query({ limit: 0 })).toHaveLength(1);
+  });
+
+  test('a non-finite limit means unstated and takes the default', () => {
+    // The route parses `?limit=abc` with `parseInt`, which answers NaN, and
+    // SQLite refuses NaN as a datatype mismatch — a 500 on a read that should
+    // simply have been clamped.
+    const log = seededLog(EVENT_QUERY_LIMIT_DEFAULT + 40);
+    expect(log.query({ limit: Number.NaN })).toHaveLength(EVENT_QUERY_LIMIT_DEFAULT);
+    expect(log.query({ limit: Number.POSITIVE_INFINITY }))
+      .toHaveLength(EVENT_QUERY_LIMIT_DEFAULT);
+    expect(log.query({ limit: Number.NEGATIVE_INFINITY }))
+      .toHaveLength(EVENT_QUERY_LIMIT_DEFAULT);
+  });
+
+  test('an absent limit takes the default page', () => {
+    expect(seededLog(EVENT_QUERY_LIMIT_DEFAULT + 40).query({}))
+      .toHaveLength(EVENT_QUERY_LIMIT_DEFAULT);
+  });
+
+  test('a fractional limit truncates instead of failing the query', () => {
+    const log = seededLog(40);
+    expect(log.query({ limit: 2.7 })).toHaveLength(2);
+    expect(log.query({ limit: 0.5 })).toHaveLength(1);
+  });
+
+  test('an in-object window wider than the untrusted ceiling is honoured', () => {
+    // No ceiling lives here. `query` is also the in-object read, and a fold that
+    // states its own window must get it; narrowing it to a stranger's allowance
+    // would answer a different question than the one asked.
+    const log = seededLog(EVENT_QUERY_LIMIT_MAX + 60);
+    expect(log.query({ limit: EVENT_QUERY_LIMIT_MAX + 60 }))
+      .toHaveLength(EVENT_QUERY_LIMIT_MAX + 60);
+  });
+
+  test('a legitimate limit is still honoured exactly', () => {
+    expect(seededLog(120).query({ limit: 37 })).toHaveLength(37);
+  });
+
+  test('a variant filter does not reopen the bound', () => {
+    const log = seededLog(40);
+    expect(log.query({ variant: 'chat', limit: -1 })).toHaveLength(1);
+  });
+});
+
+describe('EventLog.pending admits only a finite positive integer limit', () => {
+  function seededPending(count: number): EventLog {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+    for (let i = 0; i < count; i++) {
+      log.publish({ descriptor: chatDescriptor(`event ${i}`), now: 1000 + i });
+    }
+    return log;
+  }
+
+  test('a negative limit reads one row, never the whole table', () => {
+    const log = seededPending(PENDING_EVENT_LIMIT_DEFAULT + 40);
+    expect(log.pending({ limit: -1 })).toHaveLength(1);
+    expect(log.pending({ limit: -999999 })).toHaveLength(1);
+  });
+
+  test('zero, non-finite and absent limits behave like the query read', () => {
+    const log = seededPending(PENDING_EVENT_LIMIT_DEFAULT + 40);
+    expect(log.pending({ limit: 0 })).toHaveLength(1);
+    expect(log.pending({ limit: Number.NaN })).toHaveLength(PENDING_EVENT_LIMIT_DEFAULT);
+    expect(log.pending()).toHaveLength(PENDING_EVENT_LIMIT_DEFAULT);
+  });
+
+  test('an in-object window wider than the untrusted ceiling is honoured', () => {
+    const log = seededPending(EVENT_QUERY_LIMIT_MAX + 60);
+    expect(log.pending({ limit: EVENT_QUERY_LIMIT_MAX + 60 }))
+      .toHaveLength(EVENT_QUERY_LIMIT_MAX + 60);
+  });
+});
+
+describe('boundEventQuery is the one policy the boundary applies', () => {
+  test('it closes the bounds and leaves the rest of the query alone', () => {
+    expect(boundEventQuery({ limit: -1, since: -5, variant: 'chat' }))
+      .toEqual({ limit: 1, since: 0, variant: 'chat' });
+  });
+
+  test('an empty query states nothing and takes both defaults', () => {
+    expect(boundEventQuery()).toEqual({ since: 0, limit: EVENT_QUERY_LIMIT_DEFAULT });
+  });
+
+  test('it caps what the log alone would honour', () => {
+    // The direction that makes this the BOUNDARY rather than a second copy of
+    // the log's invariant: a window the in-object read is trusted with is
+    // refused to a stranger.
+    expect(boundEventQuery({ limit: 1e9 }).limit).toBe(EVENT_QUERY_LIMIT_MAX);
+    expect(boundEventQuery({ limit: EVENT_QUERY_LIMIT_MAX + 60 }).limit)
+      .toBe(EVENT_QUERY_LIMIT_MAX);
+    expect(boundEventQuery({ limit: Number.NaN }).limit).toBe(EVENT_QUERY_LIMIT_DEFAULT);
+    expect(boundEventQuery({ limit: 2.7 }).limit).toBe(2);
   });
 });

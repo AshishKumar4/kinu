@@ -16,7 +16,7 @@ import { modelMessageSchema, type ModelMessage } from 'ai';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { RunEvent, RunEventInput, RunEventType } from './types';
 import { JsonValueSchema } from '../utils/json';
-import { boundedInt } from '../utils/bounds';
+import { boundedInt, boundPageQuery } from '../utils/bounds';
 import { USAGE_FIELDS, UsageSchema, type Usage } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
 import {
@@ -210,13 +210,13 @@ export const RUN_EVENT_LIMIT_MAX = 500;
  * request that came through the route. {@link RunEventRecorder.read} enforces
  * its own separate invariant on top, for the in-object callers that never reach
  * this function.
+ *
+ * `boundEventQuery` is this same policy over `agent_log`. Both are one line
+ * over {@link boundPageQuery}, so the two logs cannot drift on what a bound
+ * MEANS while stating different numbers for how large it is.
  */
 export function boundRunEventQuery(opts: RunEventQuery = {}): BoundedRunEventQuery {
-  return {
-    ...opts,
-    since: boundedInt(opts.since, 0, 0, Number.MAX_SAFE_INTEGER),
-    limit: boundedInt(opts.limit, RUN_EVENT_LIMIT_DEFAULT, 1, RUN_EVENT_LIMIT_MAX),
-  };
+  return boundPageQuery(opts, { fallback: RUN_EVENT_LIMIT_DEFAULT, max: RUN_EVENT_LIMIT_MAX });
 }
 
 /** One run as the log lists it: which run, when it was last written to, and how

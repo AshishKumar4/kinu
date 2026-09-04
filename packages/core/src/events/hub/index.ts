@@ -24,7 +24,9 @@ export { initEventsHubTables } from './schema';
 // Storage
 export {
   EventLog,
-  type PublishResult, type PendingFilter, type QueryFilter,
+  boundEventQuery,
+  EVENT_QUERY_LIMIT_DEFAULT, EVENT_QUERY_LIMIT_MAX, PENDING_EVENT_LIMIT_DEFAULT,
+  type PublishResult, type PendingFilter, type QueryFilter, type BoundedQueryFilter,
 } from './log';
 export {
   ReplyChannelStore,
