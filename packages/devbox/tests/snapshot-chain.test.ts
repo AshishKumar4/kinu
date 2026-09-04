@@ -7,6 +7,7 @@
 // says so.
 //
 // TWO TESTS HERE COME FROM A LIVE FAILURE, and they are the reason the rest is
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
@@ -3787,4 +3788,27 @@ describe('an archive replaced at the same length is refused', () => {
       expect(record.digests.get(deltaObjectKey(STORE_ROOT, CHAIN_ID)))
         .toBe(record.state?.delta?.digest);
     });
+});
+
+describe('the patched sandbox SDK: the container is the authority for a mount', () => {
+  test('unmount releases a registry entry the container no longer backs', () => {
+    // This repo owns patches/@cloudflare%2Fsandbox@0.12.8.patch. Measured live
+    // (kinu.run, hardy-stone, 2026-09-03): a store mount stood in the SDK's
+    // registry while the container held no mount at /backups; `fusermount -u`
+    // failed "not mounted", the SDK rethrew WITHOUT clearing its entry, and the
+    // next `mountBucket` refused with "already in use by bucket BACKUP_BUCKET"
+    // on every attach. The patch guards the unmount with `mountpoint -q` — the
+    // SDK's own idiom on its mount-failure path — so a path the container holds
+    // no mount at releases its entry the way a successful unmount does. Pinned
+    // against the INSTALLED dist so a repin that drops the guard fails by name.
+    const dist = readFileSync(
+      join(import.meta.dir, '../../../node_modules/@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js'),
+      'utf8',
+    );
+    const unmount = dist.slice(dist.indexOf('async unmountBucketUnlocked('));
+    const guard = unmount.indexOf('mountpoint -q ${shellEscape(mountPath)}`');
+    const fusermount = unmount.indexOf('fusermount -u ${shellEscape(mountPath)}`');
+    expect(guard).toBeGreaterThan(-1);
+    expect(fusermount).toBeGreaterThan(guard);
+  });
 });

@@ -1,8 +1,26 @@
 diff --git a/dist/sandbox-CPj2jsbz.js b/dist/sandbox-CPj2jsbz.js
-index cdb0475de10c97155df743e0c727f866d5c5c884..729854c23a7c9caf8282c9e5d0a1621957b33407 100644
+index cdb0475de10c97155df743e0c727f866d5c5c884..060fff6ae598ed3c15b5963fcb0cbf5eddb818a1 100644
 --- a/dist/sandbox-CPj2jsbz.js
 +++ b/dist/sandbox-CPj2jsbz.js
-@@ -11495,7 +11495,7 @@ var Sandbox = class Sandbox extends Container {
+@@ -8291,10 +8291,13 @@ var Sandbox = class Sandbox extends Container {
+ 			} else {
+ 				let unmounted = false;
+ 				try {
+-					const result = await this.execInternal(`fusermount -u ${shellEscape(mountPath)}`);
+-					if (result.exitCode !== 0) {
+-						const stderr = result.stderr || "unknown error";
+-						throw new BucketUnmountError(`fusermount -u failed (exit ${result.exitCode}): ${stderr}`);
++					const standing = await this.execInternal(`mountpoint -q ${shellEscape(mountPath)}`);
++					if (standing.exitCode === 0) {
++						const result = await this.execInternal(`fusermount -u ${shellEscape(mountPath)}`);
++						if (result.exitCode !== 0) {
++							const stderr = result.stderr || "unknown error";
++							throw new BucketUnmountError(`fusermount -u failed (exit ${result.exitCode}): ${stderr}`);
++						}
+ 					}
+ 					unmounted = true;
+ 					mountInfo.mounted = false;
+@@ -11495,7 +11498,7 @@ var Sandbox = class Sandbox extends Container {
  		const ctx = this.ctx;
  		if (!ctx.container?.interceptOutboundHttp) throw new InvalidMountConfigError("R2 binding mounts require container outbound interception support");
  		if (!ctx.exports?.ContainerProxy) throw new InvalidMountConfigError("R2 binding mounts require exporting ContainerProxy from the Worker entrypoint");
@@ -11,7 +29,7 @@ index cdb0475de10c97155df743e0c727f866d5c5c884..729854c23a7c9caf8282c9e5d0a16219
  		if (Object.keys(params.buckets).length > 0) await this.setOutboundByHost("r2.internal", "r2EgressMount", params);
  		else await this.removeOutboundByHost("r2.internal");
  		this.logger.debug("r2 egress: registering host interception", {
-@@ -11520,7 +11520,7 @@ var Sandbox = class Sandbox extends Container {
+@@ -11520,7 +11523,7 @@ var Sandbox = class Sandbox extends Container {
  		if (!ctx.container?.interceptOutboundHttp) throw new InvalidMountConfigError("Credential proxy bucket mounts require container outbound interception support");
  		if (!ctx.exports?.ContainerProxy) throw new InvalidMountConfigError("Credential proxy bucket mounts require exporting ContainerProxy from the Worker entrypoint");
  		const hosts = [S3_CREDENTIAL_PROXY_HOST, S3_CREDENTIAL_PROXY_DIAGNOSTIC_HOST];

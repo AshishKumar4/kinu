@@ -3724,10 +3724,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         try {
           await this.unmountBucket(at);
         } catch (error) {
-          // Not mounted is the ordinary case on a bare path, and the SDK says so
-          // by throwing. Anything else is worth knowing about but must not fail
-          // the mount that follows; `SnapshotChainPorts.unmountStore` states why
-          // no publication relies on this release to flush.
+          // A path the SDK's registry never held is the ordinary case on a bare
+          // path, and the SDK says so by throwing. A path it DID hold while the
+          // container holds no mount there is released by the patched SDK
+          // (patches/@cloudflare%2Fsandbox@0.12.8.patch): it used to rethrow
+          // with the entry standing, and every attach after a container swap
+          // refused with "already in use". Anything else is worth knowing about
+          // but must not fail the mount that follows; `SnapshotChainPorts.unmountStore`
+          // states why no publication relies on this release to flush.
           console.log(`[devbox] store mount at ${at} was not released: ${describe({ cause: error })}`);
         }
       },

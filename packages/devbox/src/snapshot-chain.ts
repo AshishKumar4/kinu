@@ -970,9 +970,13 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    * `sandbox-CPj2jsbz.js:8369`; measured live as `Mount path "/backups" is
    * already in use by bucket "BACKUP_BUCKET"`, run e2e20260902060426), it
    * cannot be read, and it resets with the isolate, while `/proc/mounts` is
-   * true across Durable Object resets. Only a bare path releases the entry a
-   * replaced container's mount may have left, then mounts. Answers the
-   * `/proc/mounts` it found the store standing in, or undefined after a new
+   * true across Durable Object resets. A bare-path unmount releases the entry a
+   * replaced container's mount may have left — by the patched SDK
+   * (patches/@cloudflare%2Fsandbox@0.12.8.patch), which checks `mountpoint -q`
+   * before `fusermount -u`; unpatched, a failed fusermount rethrew with the
+   * entry standing, and every attach after a container swap refused with
+   * "already in use" (kinu.run, hardy-stone, 2026-09-03). Then mounts. Answers
+   * the `/proc/mounts` it found the store standing in, or undefined after a new
    * mount.
    */
   const mountStoreOnce = async (): Promise<string | undefined> => {
