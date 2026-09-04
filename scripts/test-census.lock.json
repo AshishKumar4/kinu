@@ -1,5 +1,5 @@
 {
-  "measured": "17042c177: 880 test files, 801 runnable suites, 11686 tests, 34 runners, 62 non-public product members",
+  "measured": "eccd807a0: 881 test files, 802 runnable suites, 11703 tests, 34 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -774,6 +774,22 @@
       "count": 3
     },
     {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: attachment sanitization runs on the whole history BEFORE the extension transform :: expect(<source text>).not.toContain",
+      "count": 3
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: beforeTurn merges profile reasoning effort with cache provider options :: expect(<source text>).not.toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: beforeTurn merges profile reasoning effort with cache provider options :: expect(<source text>).toContain",
+      "count": 6
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: cloud admission counts precisely the active tool surface Think submits :: expect(<source text>).toContain",
+      "count": 4
+    },
+    {
       "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: facet-spawned heads inherit the registered parent workspace identity :: expect(<source text>).not.toContain",
       "count": 1
     },
@@ -783,6 +799,18 @@
     },
     {
       "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: facet-spawned heads inherit the registered parent workspace identity :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the admission count and the submitted model resolve ONE spec, not two :: expect(<source text>).not.toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the admission count and the submitted model resolve ONE spec, not two :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the admission count and the submitted model resolve ONE spec, not two :: memberBody() over source text",
       "count": 1
     },
     {
@@ -804,6 +832,10 @@
     {
       "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the head runtime constructor receives this actor's operation sink :: memberBody() over source text",
       "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the per-turn system prompt carries permission, provenance, and role :: expect(<source text>).toContain",
+      "count": 3
     },
     {
       "key": "source_text :: packages/cf-backend/tests/unit-workers-ai-auth.test.ts :: UserDO refreshes expiring Cloudflare credentials and persists the rotation :: expect(<source text>).toContain",
