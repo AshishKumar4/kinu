@@ -178,6 +178,15 @@ import {
 } from './storage';
 
 const CANDIDATE_CONTROL_PREFIX = 'devbox:candidate-control:';
+/**
+ * The one spelling of the candidate control key. The publish path and the
+ * wake path both derive it here, so a key the write uses and a key the read
+ * uses cannot drift apart unnoticed.
+ */
+function candidateControlKey(strategy: CandidateContainerFormat): string {
+  return `${CANDIDATE_CONTROL_PREFIX}${strategy}`;
+}
+
 /** Runner status is polled instead of opening Sandbox's long-lived log SSE.
  *  Separate from cli-backend's LOCK_POLL_MS: same round number, unrelated
  *  decisions — this paces a container process poll, that one a config lock. */
@@ -206,7 +215,20 @@ function readCandidateControl(stored: StoredValue | undefined): CandidateControl
     ? { version: 1, head: null, operation: null }
     : v.parse(CandidateControlStateV1Schema, stored);
 }
-
+/**
+ * The raw candidate control fact, for diagnosis, never for serving. `found`
+ * tells an absent row apart from a row that holds a null head. `key` and
+ * `boxId` travel so a dump taken at publish and a dump taken at wake compare
+ * byte for byte. Read-only: reporting it changes no stored row.
+ */
+export interface CandidateControlDump {
+  readonly strategy: DevboxStrategyName;
+  readonly boxId: string;
+  readonly key: string | null;
+  readonly found: boolean;
+  readonly head: string | null;
+  readonly operation: string | null;
+}
 
 /** Durable keys. One namespace, so a host's own keys cannot collide with these
  *  and a reader can tell at a glance which rows belong to the box machinery. */
@@ -2430,6 +2452,34 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // them rather than outliving them as a claim about nothing.
     await this.ctx.storage.delete(LAST_ATTACH_KEY);
   }
+  /**
+   * The raw candidate control fact this box holds, for diagnosis. A wake that
+   * finds no head can come from three places: the row is absent, the row
+   * holds a null head, or the read looked where the write never wrote. This
+   * answers which one by reporting the key it read, the identity it ran
+   * against, and whether the row was there. Read-only.
+   */
+  async candidateControlState(): Promise<CandidateControlDump> {
+    const strategy = this.strategy;
+    const boxId = this.ctx.id.toString();
+    if (strategy !== 'bounded-layers' && strategy !== 'merkle-pack') {
+      return { strategy, boxId, key: null, found: false, head: null, operation: null };
+    }
+    const key = candidateControlKey(strategy);
+    const stored = await this.ctx.storage.get<StoredValue>(key);
+    if (stored === undefined) {
+      return { strategy, boxId, key, found: false, head: null, operation: null };
+    }
+    const parsed = readCandidateControl(stored);
+    return {
+      strategy,
+      boxId,
+      key,
+      found: true,
+      head: parsed.head?.rootEnvelopeId ?? null,
+      operation: parsed.operation?.phase ?? null,
+    };
+  }
 
   /**
    * Start a background process AND record a durable spec for it.
@@ -3463,7 +3513,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       throw new Error(`candidate ${strategy} requires a bundled container runner`);
     }
     const paths = candidateStorePaths(this.#boxPrefix(), strategy);
-    const controlKey = `${CANDIDATE_CONTROL_PREFIX}${strategy}`;
+    const controlKey = candidateControlKey(strategy);
     const envelopeKey = (rootEnvelopeId: string): string => `${paths.envelopePrefix}/${rootEnvelopeId}.json`;
     const control: CandidateControlStore = {
       read: async () => readCandidateControl(await this.ctx.storage.get<StoredValue>(controlKey)),
