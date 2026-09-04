@@ -104,6 +104,25 @@ export const TUNNEL_DISCONNECTED = 'device tunnel not connected';
 export const NO_DEVICE_CONNECTED = 'no device connected';
 
 /**
+ * Thrown when the WORKSPACE has no owner account behind it, so there is no hub
+ * to ask at all.
+ *
+ * Distinct from {@link NO_DEVICE_CONNECTED} because the two have opposite
+ * remedies and only one of them is the owner's to perform. An unclaimed
+ * workspace resolves no UserDO stub, so the transport refused before reaching
+ * any hub — and reporting that as "no device connected — connect one with
+ * `kinu connect`" told an owner to link a machine they may already have
+ * linked, which is what the first-run tier caught on a deployed build. The
+ * code was honest; the sentence was not.
+ *
+ * Still a not-connected condition for classification ({@link
+ * isDeviceNotConnectedError} matches it), because every caller's HANDLING is
+ * the same — the device plane is unavailable — and only the words differ.
+ */
+export const WORKSPACE_HAS_NO_OWNER =
+  'this workspace has no owner account yet, so it can reach no machine';
+
+/**
  * Thrown by the hub when a call named no device and SEVERAL are live. The
  * throw site appends the live machines' names after a colon, so the message
  * a caller reads is the whole answer: which machines could have been meant.
@@ -138,11 +157,21 @@ export const DEVICE_TOKEN_ROTATION = 'ROTATE';
  */
 export const DEVICE_TOKEN_ROTATION_ACK = 'ROTATE_ACK';
 
-/** Both the hub's "no socket" rejection and the tunnel's "socket dropped"
- *  rejection mean the same thing to callers: the device is not connected. */
+/** The hub's "no socket" rejection, the tunnel's "socket dropped" rejection and
+ *  an unattached workspace all mean the same thing to a CALLER: the device
+ *  plane is unavailable. They do not mean the same thing to a READER, which is
+ *  what {@link isWorkspaceUnattachedError} is for. */
 export function isDeviceNotConnectedError<T>(err: T): boolean {
   const message = renderThrownChain({ cause: err });
-  return message.includes(NO_DEVICE_CONNECTED) || message.includes(TUNNEL_DISCONNECTED);
+  return message.includes(NO_DEVICE_CONNECTED)
+    || message.includes(TUNNEL_DISCONNECTED)
+    || message.includes(WORKSPACE_HAS_NO_OWNER);
+}
+
+/** The workspace itself has no owner account, so no hub was ever asked. The
+ *  narrower question, for the surfaces that tell a person what to do next. */
+export function isWorkspaceUnattachedError<T>(err: T): boolean {
+  return renderThrownChain({ cause: err }).includes(WORKSPACE_HAS_NO_OWNER);
 }
 
 /** The hub refused because several machines are live and the call named none. */

@@ -2,7 +2,10 @@
 // over the user-level device hub. This is what beforeTurn refreshes so the
 // turn's context reflects a device that connected mid-session.
 import { describe, expect, test } from 'bun:test';
-import { nextDeviceRequestId, type DeviceStatus, type JsonValue } from '@kinu.run/core';
+import {
+  nextDeviceRequestId, isDeviceNotConnectedError, isWorkspaceUnattachedError,
+  WORKSPACE_HAS_NO_OWNER, type DeviceStatus, type JsonValue,
+} from '@kinu.run/core';
 import {
   createHubDeviceTransport,
   type DeviceHubClient,
@@ -85,13 +88,36 @@ describe('createHubDeviceTransport', () => {
     expect(listCalls).toBe(2);
   });
 
-  test('no owner hub → none state, and rpc rejects with the connect guidance', async () => {
+  test('no owner hub → the workspace is unattached, which is not an unlinked machine', async () => {
+    // This pin said "rpc rejects with the connect guidance", and the guidance
+    // was wrong: a null hub means the stub resolved off no owner id, so no hub
+    // was asked and no device question was reached. Telling that owner to run
+    // `kinu connect` sends them to re-link a machine they may already have
+    // linked — which is what the first-run tier observed on a deployed build.
     const transport = createHubDeviceTransport({
       hub: () => null, agentName: 'agent-1', cliCwd: () => null,
       caller,
     });
     expect(await transport.refreshStatus()).toEqual({ connected: false, registered: false, toolchain: null });
-    await expect(transport.rpc('exec', ['ls'])).rejects.toThrow(/no device connected/i);
+    const refusal = transport.rpc('exec', ['ls']);
+    await expect(refusal).rejects.toThrow(WORKSPACE_HAS_NO_OWNER);
+    await expect(refusal).rejects.not.toThrow(/kinu connect/);
+    // Handled identically by every caller — the plane is unavailable — and told
+    // apart only where a person is being told what to do next.
+    let unattached: Error | null = null;
+    try { await transport.rpc('exec', ['ls']); }
+    catch (caught) { unattached = caught instanceof Error ? caught : new Error(String(caught)); }
+    expect(isDeviceNotConnectedError(unattached)).toBe(true);
+    expect(isWorkspaceUnattachedError(unattached)).toBe(true);
+    // The denominator: a hub that answers, with no device on it, is the OTHER
+    // condition and must not read as unattached.
+    const unlinked = createHubDeviceTransport({
+      hub: () => fakeHub(() => NO_DEVICE), agentName: 'agent-1', cliCwd: () => null, caller,
+    });
+    let hubRefusal: Error | null = null;
+    try { await unlinked.rpc('exec', ['ls']); }
+    catch (caught) { hubRefusal = caught instanceof Error ? caught : new Error(String(caught)); }
+    expect(isWorkspaceUnattachedError(hubRefusal)).toBe(false);
   });
 
   test('rpc outcomes re-seed the snapshot: success → connected, hub rejection → offline', async () => {

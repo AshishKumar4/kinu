@@ -11,7 +11,8 @@
  * re-seeds the snapshot.
  */
 import {
-  NO_DEVICE_CONNECTED, isDeviceAmbiguityError, isDeviceNotConnectedError, nextDeviceRequestId,
+  WORKSPACE_HAS_NO_OWNER,
+  isDeviceAmbiguityError, isDeviceNotConnectedError, nextDeviceRequestId,
   JsonValueSchema,
   type DeviceCheckpointHint, type DeviceStatus, type DeviceTransport, type JsonValue,
 } from '@kinu.run/core';
@@ -160,9 +161,14 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
     rpc: async (method, params, rpcOpts) => {
       const hub = opts.hub();
       if (!hub) {
+        // A null hub is an UNATTACHED WORKSPACE, never an unlinked machine: the
+        // stub resolves off the owner id, so there was no hub to ask and no
+        // device question was reached. Reporting it as "no device connected"
+        // told an owner to run `kinu connect` for a machine they may already
+        // have linked.
         snapshot = DISCONNECTED;
         checkedAt = now();
-        throw new Error(NO_DEVICE_CONNECTED);
+        throw new Error(WORKSPACE_HAS_NO_OWNER);
       }
       try {
         const cwd = opts.cliCwd();

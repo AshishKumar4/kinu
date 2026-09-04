@@ -132,7 +132,8 @@ import {
   // called before anything names it.
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
-  isDeviceNotConnectedError, isDeviceAmbiguityError,
+  isDeviceNotConnectedError,
+  isWorkspaceUnattachedError, WORKSPACE_HAS_NO_OWNER, isDeviceAmbiguityError,
   // The one definition of "this executor output is a failure", shared with the
   // renderer that produces both shapes it recognises.
   isFailingResultText,
@@ -3166,6 +3167,13 @@ export class OrchestratorAgent extends ActorAgent {
       const result = await stub.deviceRpc(caller, 'checkpointStatus', []);
       return v.parse(CheckpointAvailabilitySchema, result === undefined ? undefined : JSON.parse(result));
     } catch (err) {
+      // The unattached case FIRST, because its remedy is not the owner's: a
+      // workspace with no owner account reached no hub, and advising `kinu
+      // connect` there sends a person to re-link a machine that was never the
+      // problem.
+      if (isWorkspaceUnattachedError(err)) {
+        return { available: false, reason: WORKSPACE_HAS_NO_OWNER };
+      }
       if (isDeviceNotConnectedError(err)) {
         return { available: false, reason: 'no device connected — connect one with `kinu connect`' };
       }
