@@ -998,6 +998,39 @@ export function issueVerifiedJournalCapture(proof: VerifiedJournalCut): AuditedC
   );
 }
 
+/**
+ * WHAT A GENERATION REMOVES, relative to the parent it is published against.
+ *
+ * THE ONE RULE, IN ONE PLACE: absence means removal only for a WHOLE-TREE
+ * capture. Such a capture states the entire filesystem, so a parent path it
+ * does not name is a path that is gone. A PARTIAL capture — the v2 delta fence
+ * — states only what it touched, so absence there means "the parent still owns
+ * this" and removals are named explicitly by the WAL's own unlink, rmdir and
+ * rename records.
+ *
+ * Getting this backwards deletes an untouched tree, and both directions were
+ * observed before this had a name: v1 buildMerklePack dropped every path a
+ * partial capture did not name, and bounded-layers tombstoned them. Both
+ * codecs now ask this function instead of reasoning about it locally.
+ *
+ * `parentPaths` is lazy because the answer needs it only for a whole-tree
+ * capture: a partial capture's removals are its own, and a codec whose parent
+ * cannot enumerate paths cheaply (a Merkle view walks lazily) must not be made
+ * to try.
+ */
+export function removalsAgainstParent(
+  capture: AuditedCapture,
+  parentPaths: () => Iterable<UpperPath>,
+): ReadonlySet<UpperPath> {
+  if (capture.partial) return new Set(capture.removed);
+  const present = new Set(capture.entries.map((entry) => entry.path));
+  const removed = new Set<UpperPath>();
+  for (const path of parentPaths()) {
+    if (!present.has(path)) removed.add(path);
+  }
+  return removed;
+}
+
 /** The relaxed tree rule a v2 delta capture must satisfy: canonical paths, no
  *  duplicates, real identity on every entry, and every NAMED path's ancestors
  *  present as directories. Paths the capture does not name are the parent's

@@ -16,6 +16,7 @@ export {
   prefixState,
   stateEquals,
   requireCompleteCaptureTree,
+  removalsAgainstParent,
   toCapturedCut,
   requireAuditedCapture,
   issueVerifiedJournalCapture,

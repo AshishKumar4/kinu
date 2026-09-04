@@ -15,7 +15,7 @@ import * as v from 'valibot';
 
 import { sha256Hex } from '../../cas/hash';
 import { isCanonicalJournalPath } from '../../cas/types';
-import { contentEquals, contentSize, requireAuditedCapture } from '../../capture/model';
+import { contentEquals, contentSize, removalsAgainstParent, requireAuditedCapture } from '../../capture/model';
 import type { AuditedCapture, NodeEntry, PosixMetadata } from '../../capture/model';
 import type { ImmutableObjectRef } from '../../durability/contracts';
 import { planCandidatePublication, publishedParentInfo } from '../publication';
@@ -212,6 +212,113 @@ function canonicalMetadata(metadata: PosixMetadata | undefined): PosixMetadataJs
     ctimeNs: metadata.ctimeNs,
     xattrs: Object.fromEntries(Object.entries(metadata.xattrs).sort(([a], [b]) => a.localeCompare(b))),
   };
+}
+
+/** The kind a directory entry states for one child. A CARRIED child states the
+ *  kind of the parent node it carries, never `parent-ref`, which is this
+ *  builder's word for how the child got there and not a node kind the wire
+ *  knows. */
+function dirEntryKind(child: TreeNode): 'file' | 'dir' | 'symlink' {
+  return child.kind === 'parent-ref' ? child.nodeKind : child.kind;
+}
+
+/**
+ * WHAT THIS CAPTURE INHERITS FROM ITS PARENT — the whole question, once.
+ *
+ * A v2 delta fence hands over only the touched paths, so the tree a partial
+ * capture builds is an OVERLAY: every path the parent still holds that the
+ * capture does not name is carried into the child by identity, and the objects
+ * those carried subtrees reach are declared from the parent's own index. Both
+ * halves are one concern — inheritance — and answering them here is what keeps
+ * `buildMerklePack` about building a pack.
+ *
+ * A WHOLE-TREE capture inherits nothing: it states the entire filesystem, so
+ * the tree is already complete and the parent is consulted only for
+ * digest-level reuse, exactly as it always was. A PARTIAL capture without a
+ * parent is refused rather than published, because it would publish a tree
+ * silently missing everything the fence did not name.
+ */
+async function inheritParentSubtrees(input: {
+  readonly capture: AuditedCapture;
+  readonly parent: PublishedMerkleParent | null;
+  readonly root: TreeDir;
+  readonly snapshot: ReadonlyMap<string, NodeEntry>;
+}): Promise<ReadonlyMap<string, PackLocation>> {
+  if (!input.capture.partial) return new Map();
+  const parent = input.parent;
+  if (parent === null) {
+    throw new MerklePackError(
+      'invalid-parameter',
+      'a partial capture needs the published parent it is a delta against',
+    );
+  }
+  // Removals come from the ONE owner of the absence-is-removal rule. A Merkle
+  // parent walks lazily, so it never enumerates its paths for this: a partial
+  // capture's removals are its own.
+  await mergeParentTree(
+    parent.view, input.root, input.snapshot, removalsAgainstParent(input.capture, () => []),
+  );
+  return carriedObjectLocations(input.root, parent);
+}
+
+/** Add inherited locations this build has not already located, and answer how
+ *  many distinct chunks that reused. */
+function absorbInherited(
+  located: Map<string, PackLocation>,
+  inherited: ReadonlyMap<string, PackLocation>,
+): number {
+  let reused = 0;
+  for (const [digest, location] of inherited) {
+    if (located.has(digest)) continue;
+    located.set(digest, location);
+    reused += 1;
+  }
+  return reused;
+}
+
+/**
+ * WHERE A CARRIED SUBTREE'S BYTES ALREADY LIVE.
+ *
+ * A carried file names its chunks in the extent list of its own serialized
+ * node, and this generation never read those bytes — so the child's index must
+ * still declare them, or the child cannot be restored: a reader resolving a
+ * carried file asks the index for each chunk. The parent's index is the
+ * authority for their locations, and a chunk missing from BOTH the child's
+ * fresh set and the parent's index is a corrupt parent, refused here rather
+ * than published as an index gap.
+ */
+function carriedObjectLocations(
+  root: TreeDir,
+  parent: PublishedMerkleParent | null,
+): ReadonlyMap<string, PackLocation> {
+  const wanted = new Map<string, number>();
+  const collect = (node: TreeNode): void => {
+    if (node.kind === 'parent-ref') {
+      for (const [digest, length] of node.chunkRefs ?? []) wanted.set(digest, length);
+      return;
+    }
+    if (node.kind !== 'dir') return;
+    for (const child of node.children.values()) collect(child);
+  };
+  collect(root);
+  const located = new Map<string, PackLocation>();
+  for (const [digest, length] of wanted) {
+    const location = parent?.view.locate(digest);
+    if (location === undefined) {
+      throw new MerklePackError(
+        'invalid-parameter',
+        `the parent index names no location for carried chunk ${digest}`,
+      );
+    }
+    if (location.length !== length) {
+      throw new MerklePackError(
+        'invalid-parameter',
+        `carried chunk ${digest} is ${length} bytes; the parent locates ${location.length}`,
+      );
+    }
+    located.set(digest, location);
+  }
+  return located;
 }
 
 /**
@@ -457,16 +564,9 @@ export async function buildMerklePack(auditedInput: AuditedCapture, options: Bui
   //
   // A partial capture WITHOUT a parent is refused: it would publish a tree
   // silently missing everything the fence did not name.
-  if (audited.partial === true) {
-    if (options.parent === undefined || options.parent === null) {
-      throw new MerklePackError(
-        'invalid-parameter',
-        'a partial capture needs the published parent it is a delta against',
-      );
-    }
-    const removedSet = new Set(audited.removed);
-    await mergeParentTree(options.parent.view, root, snapshot, removedSet);
-  }
+  const inherited = await inheritParentSubtrees({
+    capture: audited, parent: options.parent ?? null, root, snapshot,
+  });
 
   const holeExtents = (content: NodeEntry['content']): HoleExtentJson[] => {
     if (content === undefined || content.kind === 'dense') return [];
@@ -544,11 +644,7 @@ export async function buildMerklePack(auditedInput: AuditedCapture, options: Bui
     } else {
       const entries: DirEntryJson[] = [...node.children.keys()].sort().map((n) => {
         const child = node.children.get(n)!;
-        return {
-          n,
-          k: child.kind === 'parent-ref' ? child.nodeKind : child.kind,
-          r: sealTree(child),
-        };
+        return { n, k: dirEntryKind(child), r: sealTree(child) };
       });
       json = { t: 'd', m: node.mode, i: node.ino, e: entries, metadata: canonicalMetadata(node.metadata) };
     }
@@ -591,40 +687,7 @@ export async function buildMerklePack(auditedInput: AuditedCapture, options: Bui
   const fresh: Array<{ order: string; digest: string; plainSha: string; bytes: Uint8Array }> = [];
   let distinctChunksReused = 0;
   let nodesReused = 0;
-  // CHUNKS A CARRIED FILE NAMES are part of the child's index even though no
-  // build step read them: the extent list in the carried node's own serialized
-  // form is the authority, and the parent's index answers each location. A
-  // chunk missing from BOTH is a corrupt parent, refused here rather than
-  // published as an index gap.
-  const carriedChunkRefs = new Map<string, number>();
-  const collectCarried = (node: TreeNode): void => {
-    if (node.kind === 'parent-ref') {
-      for (const [digest, length] of node.chunkRefs ?? []) carriedChunkRefs.set(digest, length);
-      return;
-    }
-    if (node.kind !== 'dir') return;
-    for (const child of node.children.values()) collectCarried(child);
-  };
-  collectCarried(root);
-
-  for (const [digest, length] of carriedChunkRefs) {
-    if (located.has(digest)) continue;
-    const parentLoc = options.parent?.view.locate(digest);
-    if (parentLoc === undefined) {
-      throw new MerklePackError(
-        'invalid-parameter',
-        `the parent index names no location for carried chunk ${digest}`,
-      );
-    }
-    if (parentLoc.length !== length) {
-      throw new MerklePackError(
-        'invalid-parameter',
-        `carried chunk ${digest} is ${length} bytes; the parent locates ${parentLoc.length}`,
-      );
-    }
-    located.set(digest, parentLoc);
-    distinctChunksReused++;
-  }
+  distinctChunksReused += absorbInherited(located, inherited);
 
   for (const [digest, record] of needed) {
     const plainSha = sha256Hex(record.bytes);

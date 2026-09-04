@@ -40,6 +40,7 @@ import { CHUNK_SIZE, sha256Hex } from '../cas/hash';
 import { decodeJson, isCanonicalJournalPath } from '../cas/types';
 import {
   readCaptureRange,
+  removalsAgainstParent,
   requireAuditedCapture,
 } from '../capture/model';
 import type {
@@ -403,12 +404,6 @@ export interface BuiltLayers {
  * Pure: nothing is uploaded. The caller hands `plan` to `publishCandidate`,
  * which is why a crash-before-publish is expressible as "stopped looping".
  */
-/** The removals a v2 delta capture names — already canonical and sorted, the
- *  capture model's own getter. Absence in a partial capture is NOT removal. */
-function removedPaths(capture: AuditedCapture): readonly string[] {
-  return capture.removed;
-}
-
 export async function build(
   capture: AuditedCapture,
   parent?: BoundedLayers,
@@ -449,20 +444,13 @@ export async function build(
     const doc = entryFromNode(path, node, chunking, metadata);
     if (!sameEntry(parent?.entryAt(path), doc)) changed.set(path, doc);
   }
-  // THE TOMBSTONE SWEEP IS A WHOLE-TREE CLAIM. A partial capture (the v2 delta
-  // fence) names only the touched paths: the paths it does NOT name are the
-  // parent's business, carried forward by `resolved` below, so sweeping them
-  // here would DELETE every untouched file in the tree. Removals on the partial
-  // path are explicit — the capture's `removed` list — never implied by
-  // absence: the removed paths become THIS generation's tombstones, so the
-  // delta layer carries them and every reader's oldest-to-newest merge
-  // deletes exactly what the WAL deleted.
-  if (parent !== undefined && audited.partial !== true) {
-    for (const path of parent.entryPaths()) {
-      if (!snapshot.has(path)) tombstones.add(path);
-    }
-  } else if (audited.partial === true) {
-    for (const path of removedPaths(audited)) tombstones.add(path);
+  // WHAT THIS GENERATION REMOVES is `removalsAgainstParent`'s question, not
+  // this builder's: absence is removal for a whole-tree capture and NOT for a
+  // partial one, and that rule now has one owner. Whatever it answers becomes
+  // this generation's tombstones, so the delta layer carries them and every
+  // reader's oldest-to-newest merge deletes exactly what was removed.
+  for (const path of removalsAgainstParent(audited, () => parent?.entryPaths() ?? [])) {
+    tombstones.add(path);
   }
 
   const resolved = parent === undefined ? new Map<UpperPath, EntryDoc>() : parent.merged();

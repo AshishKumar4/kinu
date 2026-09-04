@@ -55,7 +55,7 @@
     },
     {
       "key": "packages/devbox/src/candidates/merkle-pack/build.ts#buildMerklePack",
-      "complexity": 62
+      "complexity": 63
     },
     {
       "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.runTurn",

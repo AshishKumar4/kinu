@@ -500,6 +500,41 @@ export class FakeSandbox {
    * stop came back as `Session 'sandbox-default' shell exited (exit code: 2)`.
    * A fake that answers what a shell refuses cannot hold that class of defect.
    */
+  /**
+   * Stand the session in `cwd`, or REFUSE — a cwd the container does not hold
+   * is a refusal, not a move.
+   *
+   * The session shell chdirs before it runs anything, so a command whose cwd
+   * does not exist never runs at all. The deployed r2fs arm died of exactly
+   * that, twice on 2026-09-03: `Failed to change directory to
+   * '/var/tmp/devbox'`, on a fresh container where nothing had created the
+   * runtime directory its ports name as their cwd — and the mkdir that would
+   * have created it travelled through the very exec the chdir killed. A fake
+   * that accepted the chdir could not hold that class of defect.
+   *
+   * AND A CWD THAT IS ACCEPTED STAYS MOVED. One persistent session shell serves
+   * every command, so a cwd option is a `cd` that outlives its command — which
+   * is why the SDK's own `unmountBucket`, passing no cwd at all, inherits
+   * wherever the last caller left the shell.
+   */
+  #chdir(cwd: string | undefined): { stdout: string; stderr: string; exitCode: number } | null {
+    if (cwd === undefined) return null;
+    if (!this.directories.has(cwd)) {
+      this.sequence.push(`chdirRefused:${cwd}`);
+      return { stdout: '', stderr: `Failed to change directory to '${cwd}'`, exitCode: 1 };
+    }
+    this.sessionCwd = cwd;
+    return null;
+  }
+
+  /** `mkdir -p` creates what it names: how a container earns the directories
+   *  later commands are allowed to stand in. */
+  #recordDirectories(command: string): void {
+    for (const made of command.matchAll(/mkdir -p ((?:'[^']+'\s*)+)/g)) {
+      for (const quoted of made[1]!.matchAll(/'([^']+)'/g)) this.directories.add(quoted[1]!);
+    }
+  }
+
   async exec(
     command: string,
     options?: { readonly cwd?: string },
@@ -509,35 +544,14 @@ export class FakeSandbox {
       this.sequence.push(`sessionKilled:${command.split(' ')[0]}`);
       throw refused;
     }
-    // A CWD THE CONTAINER DOES NOT HOLD IS A REFUSAL, NOT A MOVE. The session
-    // shell chdirs before it runs anything, so a command whose cwd does not
-    // exist never runs at all — and the deployed r2fs arm died of exactly
-    // that, twice on 2026-09-03: `Failed to change directory to
-    // '/var/tmp/devbox'`, on a fresh container where nothing had created the
-    // runtime directory the r2fs ports name as their cwd. The mkdir that would
-    // have created it travelled through the very exec the chdir killed. A fake
-    // that accepted the chdir could not hold that class of defect.
-    const cwd = options?.cwd;
-    if (cwd !== undefined && !this.directories.has(cwd)) {
-      this.sequence.push(`chdirRefused:${cwd}`);
-      return {
-        stdout: '',
-        stderr: `Failed to change directory to '${cwd}'`,
-        exitCode: 1,
-      };
-    }
-    // AN EXEC'S CWD MOVES THE SHARED SESSION, AND IT STAYS MOVED. The container
-    // server runs every command in one persistent session shell, so a cwd
-    // option is a `cd` that outlives the command — which is exactly why the
-    // SDK's own `unmountBucket`, which passes no cwd at all, inherits wherever
-    // the last caller left the shell. A fake that dropped this argument (this
-    // one did) cannot express the reference that refuses an unmount.
-    if (cwd !== undefined) this.sessionCwd = cwd;
-    // `mkdir -p` creates what it names, which is how a container earns the
-    // directories later commands stand in.
-    for (const made of command.matchAll(/mkdir -p ((?:'[^']+'\s*)+)/g)) {
-      for (const quoted of made[1]!.matchAll(/'([^']+)'/g)) this.directories.add(quoted[1]!);
-    }
+    // TWO PRECONDITIONS BEFORE THE DISPATCH, each named: what the chdir does
+    // to a cwd the container does not hold, and what a command does to the set
+    // of directories it holds. The answers below are a dispatch a reader can
+    // follow; these are a different kind of thing and do not belong mixed into
+    // it.
+    const refusedChdir = this.#chdir(options?.cwd);
+    if (refusedChdir !== null) return refusedChdir;
+    this.#recordDirectories(command);
     this.execs.push(command);
     // The scan gets a NAME rather than its first word, because the ordering
     // assertions read this row and a template whose first word changes must not
