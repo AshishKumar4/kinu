@@ -13,6 +13,7 @@ import {
   reconcileSqlExecColumns,
   type SqlExec,
 } from '@kinu.run/core';
+import { diagnostics } from '@kinu.run/core/obs';
 import { initAccessTokenTable } from '../cli/access-token-store';
 import { initDeviceInflightTable } from './device-inflight';
 import { initEgressVaultTables } from './egress-vault';
@@ -310,10 +311,32 @@ export function initUserTables(sql: SqlExec): void {
   // inside a Durable Object: sealing the row's headers was an await between the
   // two, and two concurrent adds both passed the SELECT before either INSERTed.
   // The index is the floor under that boundary, not a substitute for it.
-  sql.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_user_mcp_servers_name_unique
-      ON user_mcp_servers (lower(name))
-  `);
+  //
+  // ASKED, NOT ASSUMED. `CREATE UNIQUE INDEX` over rows that already collide
+  // RAISES — measured on sqlite 2026-09-04: `UNIQUE constraint failed: index
+  // 'ix' (19)` for two rows named `GitHub` and `github`. This DDL runs inside
+  // `ensureInit`, which sets `_initialized` only after it and is the first
+  // statement of every `sqlx` read, so one such pair would fail every profile,
+  // workspace, credential, session and device call for that user, on every
+  // activation, with no path that could delete the duplicate first. The pair is
+  // reachable rather than hypothetical: the pre-fix write path read with a
+  // SELECT, awaited a header seal, then INSERTed, so two concurrent adds could
+  // both land. So the collision is READ first. With none, the index is built and
+  // refuses the next one. With one, the build is skipped and recorded, and
+  // `claimMcpServerName`'s transaction stays the guard it always was — the index
+  // is the floor under that boundary, never a substitute for it.
+  const collidingNames = sql.exec(`
+    SELECT lower(name) AS name FROM user_mcp_servers
+      GROUP BY lower(name) HAVING COUNT(*) > 1
+  `).toArray().length;
+  if (collidingNames === 0) {
+    sql.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_user_mcp_servers_name_unique
+        ON user_mcp_servers (lower(name))
+    `);
+  } else {
+    diagnostics.event('user.mcp_name_index_skipped', { collidingNames });
+  }
 
   // User-level connected devices (laptops/PCs). One row per device the user has
   // linked via `kinu connect`. The reverse-WS tunnel + the live socket live

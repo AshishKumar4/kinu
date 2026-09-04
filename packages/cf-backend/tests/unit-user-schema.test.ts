@@ -211,10 +211,7 @@ describe('UserDO schema bootstrap', () => {
     db.close();
   });
 
-  test('the MCP server-name constraint is unconditional', () => {
-    // It used to be built only when the table held no duplicates, with a plain
-    // non-unique index as the fallback. A fresh database has no duplicates to
-    // find, so the constraint is simply always there.
+  test('the MCP server-name constraint is built on a database that can hold it', () => {
     const db = new Database(':memory:');
     initUserTables(sqlExec(db));
 
@@ -222,6 +219,39 @@ describe('UserDO schema bootstrap', () => {
       .map((row) => row.name);
     expect(indexes).toContain('idx_user_mcp_servers_name_unique');
     expect(indexes).not.toContain('idx_user_mcp_servers_name');
+    db.close();
+  });
+
+  test('a legacy database holding two case-colliding names still opens', () => {
+    // The whole per-user plane rode on this. `initUserTables` runs inside
+    // `ensureInit` before `_initialized`, ahead of every `sqlx` read, and
+    // `CREATE UNIQUE INDEX` over rows that already collide RAISES — so an
+    // unconditional build failed profile, workspaces, credentials, sessions and
+    // devices for that user on every activation, unrecoverably. The pair is
+    // reachable: the pre-fix write path SELECTed, awaited a header seal, then
+    // INSERTed, so two concurrent adds could both land.
+    const db = new Database(':memory:');
+    initUserTables(sqlExec(db));
+    db.run(`DROP INDEX idx_user_mcp_servers_name_unique`);
+    for (const [id, name] of [['a', 'GitHub'], ['b', 'github']]) {
+      db.run(
+        `INSERT INTO user_mcp_servers (id, name, server_url, transport) VALUES (?, ?, ?, ?)`,
+        [id, name, 'https://example.invalid/mcp', 'http'],
+      );
+    }
+
+    expect(() => { initUserTables(sqlExec(db)); }).not.toThrow();
+
+    // Skipped rather than built, and the rows are untouched: repairing a user's
+    // server names is not something a schema pass decides.
+    const indexes = db.prepare<{ name: string }, []>(`PRAGMA index_list(user_mcp_servers)`).all()
+      .map((row) => row.name);
+    expect(indexes).not.toContain('idx_user_mcp_servers_name_unique');
+    expect(db.prepare<{ n: number }, []>(`SELECT COUNT(*) AS n FROM user_mcp_servers`).get()?.n).toBe(2);
+
+    // And a THIRD activation over the same rows behaves the same way, so the
+    // condition is read every time rather than remembered.
+    expect(() => { initUserTables(sqlExec(db)); }).not.toThrow();
     db.close();
   });
 });

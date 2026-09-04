@@ -4647,10 +4647,12 @@ export class UserDO extends Agent<Env> {
    * could not promise here, because sealing a row's headers is an await and both
    * callers passed the SELECT while the other was sealing.
    *
-   * It holds WITHOUT the UNIQUE index, which is why a database carrying
-   * historical duplicates keeps working: the constraint could not be built over
-   * those rows (schema.ts), and nothing about a new write depends on it. The
-   * index, where it exists, refuses the same thing with the same sentence.
+   * It holds WITHOUT the UNIQUE index, which is what lets a database carrying
+   * historical duplicates keep working: the constraint cannot be BUILT over
+   * those rows — it raises — so `schema.ts` reads for a collision first and
+   * skips the build when it finds one, recording that it did. Nothing about a
+   * new write depends on the index; where it exists it refuses the same thing
+   * with the same sentence.
    *
    * `write` MUST NOT await. The type says so — a synchronous body is what
    * `transactionSync` commits atomically; an async one would commit at its first
