@@ -1806,6 +1806,11 @@ interface CandidateContainerFact {
   mounts?: string;
   journalRootPresent?: boolean;
   journalSocketPresent?: boolean;
+  /** Whether the journal control socket answered a correlated, read-only
+   *  `stats` request — stronger than the socket merely existing. */
+  journalReady?: boolean;
+  /** Raw daemon reply when ready, or the socket/exec failure when not. */
+  journalReadyDetail?: string;
   journalDaemonCommand?: string;
 }
 
@@ -1904,6 +1909,8 @@ const CandidateFactsReplySchema: v.GenericSchema<CandidateFactsReply> = v.looseO
     mounts: v.optional(v.string()),
     journalRootPresent: v.optional(v.boolean()),
     journalSocketPresent: v.optional(v.boolean()),
+    journalReady: v.optional(v.boolean()),
+    journalReadyDetail: v.optional(v.string()),
     journalDaemonCommand: v.optional(v.string()),
   })),
   control: v.optional(CandidateControlDumpSchema),
@@ -1920,6 +1927,88 @@ function mountAt(mounts: string, mountpoint: string): { line: string; fstype: st
     if (fields[1] === mountpoint && fstype !== undefined) return { line, fstype };
   }
   return null;
+}
+
+/**
+ * The probe's one precondition: the candidate mutation journal answered a
+ * correlated, read-only `stats` request before the ladder spent anything.
+ * Socket presence, process argv and a mounted FUSE path are deliberately not
+ * substitutes — the failed deployed probe held all three while checkpoint
+ * answered CandidateCaptureUnavailable.
+ */
+export function candidateProbePrecondition(reply: CandidateFactsReply): VerifyCheck {
+  const container = reply.container;
+  const pass = reply.ok === true && container?.journalReady === true;
+  const detail = container?.journalReadyDetail ?? reply.error
+    ?? (container === undefined ? 'candidate facts carried no container evidence'
+      : `journalReady=${String(container.journalReady ?? 'unreported')}`);
+  return {
+    name: 'the mutation journal answers before the ladder',
+    pass,
+    detail,
+  };
+}
+
+/** A verify-only execution that stops without becoming a scored arm. */
+class ProbeAbort extends Error {
+  constructor(
+    readonly status: 'precondition-failed' | 'partial',
+    detail: string,
+  ) {
+    super(detail);
+    this.name = 'ProbeAbort';
+  }
+}
+
+/**
+ * Observe the candidate journal before the ladder. One read, no semantic
+ * retry: an absent or malformed fact means this probe did not run, rather
+ * than a failed arm whose numbers the report might still score.
+ */
+async function runProbePrecondition(
+  fixture: Fixture,
+  box: string,
+  strategy: Strategy,
+  enabled: boolean,
+): Promise<ProbeExecution | undefined> {
+  if (!enabled || (strategy !== 'bounded-layers' && strategy !== 'merkle-pack')) return undefined;
+  let reply: CandidateFactsReply;
+  try {
+    reply = await call(fixture, 'GET', `/candidate?box=${box}`, CandidateFactsReplySchema);
+  } catch (error) {
+    throw new ProbeAbort('precondition-failed',
+      `the mutation journal precondition could not be observed: ${describeThrown({ cause: error })}`);
+  }
+  const check = candidateProbePrecondition(reply);
+  if (!check.pass) throw new ProbeAbort('precondition-failed', check.detail);
+  return { status: 'partial', detail: `precondition held: ${check.detail}` };
+}
+
+/**
+ * A probe may archive a failed ladder row, but it may not keep walking into
+ * stop/wake and call the later live state recycle evidence. `skipped` is a
+ * settled product outcome rather than a failure; failed, missing or malformed
+ * outcomes abort with the row already retained.
+ */
+function requireProbeCheckpoint(
+  probe: ProbeExecution | undefined,
+  checkpoint: CheckpointReply,
+  label: string,
+): void {
+  if (probe === undefined) return;
+  const kind = checkpoint.outcome?.kind;
+  if (checkpoint.ok === true && (kind === 'committed' || kind === 'skipped')) return;
+  throw new ProbeAbort(
+    'partial',
+    `${label} failed: ${checkpoint.error ?? checkpoint.outcome?.reason ?? kind ?? 'no outcome'}`,
+  );
+}
+
+/** Mark the evidence window complete without growing the arm walk. */
+function completeProbe(probe: ProbeExecution | undefined): ProbeExecution | undefined {
+  return probe?.status === 'partial'
+    ? { status: 'complete', detail: `${probe.detail}; ladder, stop and wake completed` }
+    : probe;
 }
 
 /**
@@ -2872,6 +2961,16 @@ interface CheckpointRow {
   outcome: string;
 }
 
+/**
+ * The verify-only probe's execution state, separate from an arm verdict.
+ * A missing precondition means the probe did not run; a later failure means
+ * its archived evidence is partial. Neither state is a measurement to score.
+ */
+export interface ProbeExecution {
+  readonly status: 'precondition-failed' | 'partial' | 'complete';
+  readonly detail: string;
+}
+
 export interface ArmResult {
   strategy: Strategy;
   box: string;
@@ -2929,6 +3028,8 @@ export interface ArmResult {
   generationBeforeLadder: ChainGeneration | null;
   generationAfterLadder: ChainGeneration | null;
   treeBytes: Record<string, number>;
+  /** Execution state for `--verify-only`; absent on ordinary measurements. */
+  probe?: ProbeExecution;
   ops: OpTally | null;
   teardown: TeardownReply | null;
   /**
@@ -5000,6 +5101,11 @@ async function measureArm(
   result.attachColdKind = cold.attach.kind;
   result.attachColdBootId = cold.state.state?.bootId ?? null;
   settle('the cold attach');
+  // Candidate probes must prove the mutation journal answers before harness
+  // installation, marker creation, ops reset or any ladder write spends work.
+  // A failed observation throws ProbeAbort, which `runArm` reports as a
+  // precondition rather than an arm.
+  result.probe = await runProbePrecondition(fixture, box, strategy, options.verifyOnly);
   log('install harness');
   await installHarness(fixture, box);
 
@@ -5046,6 +5152,7 @@ async function measureArm(
           `${cp.outcome?.kind ?? 'unknown'} moved=${cp.outcome?.movedBytes ?? 'n/a'} held=${cp.outcome?.bytes ?? 0}B ${cp.error ?? cp.outcome?.reason ?? ''}`.trim(),
         );
       }
+      requireProbeCheckpoint(result.probe, cp, `ladder ${kib}KiB ${kind}`);
     }
   }
   // THE PUBLISH-TIME PROBE READS. The ladder just published, so the control
@@ -5303,6 +5410,7 @@ async function measureArm(
   // would file incident rows the dump comparison cannot place, so the walk
   // returns here with what the window settled.
   if (options.verifyOnly) {
+    result.probe = completeProbe(result.probe);
     notes.push(
       'probe scope: verify-only keeps the ladder, stop, wake and teardown; '
       + 'the decisive workloads, warm attach, tally and cells did not run',
@@ -5595,9 +5703,26 @@ export async function runArm(
   try {
     return await measureArm(fixture, strategy, options, noteLiveBox, (row) => { partial = row; });
   } catch (error) {
+    const measured = partial ?? unmeasuredArm(strategy, `ab-${strategy}-${options.runId}`, []);
+    if (error instanceof ProbeAbort) {
+      const label = error.status === 'precondition-failed' ? 'PROBE PRECONDITION FAILED' : 'PROBE PARTIAL';
+      const reason = `${label}: ${error.message}`;
+      measured.probe = { status: error.status, detail: error.message };
+      measured.notes.push(reason);
+      log(reason);
+      // This is a probe execution state, not an arm verdict. Teardown and
+      // release still run normally; the row returns without `refuseFailedArm`
+      // adding the scored-arm wording this path exists to avoid.
+      await releaseArm(fixture, measured.box, measured, measured.notes);
+      try {
+        writeArmArtifact(REPO_ROOT, options.runId, strategy, measured);
+      } catch (writeError) {
+        log(`the durable arm artifact could not be written after ${label}: ${describeThrown({ cause: writeError })}`);
+      }
+      return measured;
+    }
     const reason = `arm failed mid-measurement: ${describeThrown({ cause: error })}`;
     log(reason);
-    const measured = partial ?? unmeasuredArm(strategy, `ab-${strategy}-${options.runId}`, []);
     try {
       const released = await stopOperation(fixture, measured.box, 'release after failure', {
         deadlineMs: FAILED_ARM_RELEASE_DEADLINE_MS,
@@ -5874,6 +5999,28 @@ export function renderFrozenControls(controls: readonly FrozenControl[]): string
   return out.join('\n');
 }
 
+/**
+ * One report row, with verify-only execution states kept separate from arm
+ * verdicts. In particular a missing precondition says PROBE NOT RUN, never
+ * FAILED: there is no measurement in that row to score or diagnose as an arm.
+ */
+export function renderArmLifecycleRow(arm: ArmResult): string {
+  const probe = arm.probe;
+  if (probe !== undefined) {
+    const detail = probe.detail.replaceAll('|', '\\|');
+    if (probe.status === 'precondition-failed') {
+      return `| \`${arm.strategy}\` | **PROBE NOT RUN — PRECONDITION FAILED** | ${detail} |`;
+    }
+    if (probe.status === 'partial') {
+      return `| \`${arm.strategy}\` | **PROBE PARTIAL — NOT SCORED** | ${detail} |`;
+    }
+    return `| \`${arm.strategy}\` | PROBE COMPLETE — NOT SCORED | ${detail} |`;
+  }
+  const failing = arm.verifyChecks.filter((check) => !check.pass)
+    .map((check) => `\`${check.name}\``).join(', ');
+  return `| \`${arm.strategy}\` | ${arm.verifyPassed ? 'PASSED' : '**FAILED**'} | ${failing === '' ? '—' : failing} |`;
+}
+
 export function render(
   arms: readonly ArmResult[],
   meta: RunMeta,
@@ -5896,14 +6043,12 @@ export function render(
   out.push('');
   out.push('| arm | lifecycle proof | failing checks |');
   out.push('| --- | --- | --- |');
-  for (const arm of arms) {
-    const failing = arm.verifyChecks.filter((c) => !c.pass).map((c) => `\`${c.name}\``).join(', ');
-    out.push(`| \`${arm.strategy}\` | ${arm.verifyPassed ? 'PASSED' : '**FAILED**'} | ${failing === '' ? '—' : failing} |`);
-  }
+  for (const arm of arms) out.push(renderArmLifecycleRow(arm));
   out.push('');
   out.push(
-    'An arm whose lifecycle proof fails measured the container\'s own blank disk. Its rows below are '
-    + 'recorded for diagnosis and are NOT ranked.',
+    'An ordinary arm whose lifecycle proof fails measured the container\'s own blank disk. Its rows '
+    + 'are recorded for diagnosis and are NOT ranked. Probe rows are different: PRECONDITION FAILED '
+    + 'means no probe ran; PARTIAL means some evidence was archived before the finding. Neither is an arm verdict.',
   );
   out.push('');
 

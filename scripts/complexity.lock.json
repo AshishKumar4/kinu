@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-04",
   "files": 2016,
-  "functions": 52322,
+  "functions": 52345,
   "ceiling": 125,
   "line": 39,
   "inventory": [
@@ -82,10 +82,6 @@
       "complexity": 55
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#render",
-      "complexity": 53
-    },
-    {
       "key": "scripts/fixtures/r2-bench/report.ts#renderMarkdown",
       "complexity": 52
     },
@@ -95,6 +91,10 @@
     },
     {
       "key": "packages/devbox/bench/worker.ts#fetch",
+      "complexity": 51
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#render",
       "complexity": 51
     },
     {

@@ -36,6 +36,7 @@ import {
   benchmarkExitCode,
   boxName,
   CANDIDATE_CONTAINER_CLASSES,
+  candidateProbePrecondition,
   candidateLifecycleChecks,
   chainArchiveExpectations,
   controlWitnessChecks,
@@ -70,6 +71,7 @@ import {
   runArm,
   runArmsInFlight,
   runDecisive,
+  renderArmLifecycleRow,
   runWorkloadPhases,
   render,
   renderFrozenControls,
@@ -833,9 +835,7 @@ describe('an arm that fails mid-measurement', () => {
       arm = await runArm(
         BENCH_FIXTURE,
         'bounded-layers',
-        {
-          ...parseOptions([]), arms: ['bounded-layers'], runId: 'stop-refused-probe', verifyOnly: true,
-        },
+        { ...parseOptions([]), arms: ['bounded-layers'], runId: 'stop-refused-probe', verifyOnly: false },
         () => {},
       );
     } finally {
@@ -863,13 +863,18 @@ describe('an arm that fails mid-measurement', () => {
  * fake got. The publish and wake answers differ on purpose: two reads that
  * archived the same bytes would prove nothing about when each was taken.
  */
-function probeScopeFixture() {
+function probeScopeFixture(options: {
+  readonly journalReady?: boolean;
+  readonly failLadderTick?: boolean;
+} = {}) {
   const asked: { route: string; body: string }[] = [];
   const real = globalThis.fetch;
   let woken = false;
   let marker = '';
   let candidateCalls = 0;
   let incidentCalls = 0;
+  let checkpointArms = 0;
+  const journalReady = options.journalReady ?? true;
   const mounts =
     'journald /workspace fuse.journald rw 0 0\ns3fs /var/tmp/devbox/store fuse.s3fs rw 0 0\n';
   const answer = async (
@@ -898,12 +903,19 @@ function probeScopeFixture() {
         },
       }));
     }
+    if (route === 'POST /checkpoint') checkpointArms += 1;
     if (route === 'POST /checkpoint' || route === 'POST /stop') {
       return new Response(JSON.stringify({ ok: true, token: `token-${String(asked.length)}`, state: 'pending' }), {
         status: 202,
       });
     }
     if (route === 'GET /operation') {
+      if (options.failLadderTick === true && checkpointArms === 2) {
+        return new Response(JSON.stringify({
+          ok: false, state: 'failed', ms: 91, outcome: { kind: 'failed' },
+          error: 'CandidateCaptureUnavailable: journal disappeared during the ladder tick',
+        }));
+      }
       return new Response(JSON.stringify({
         ok: true,
         state: 'done',
@@ -926,7 +938,7 @@ function probeScopeFixture() {
     }
     if (route === 'GET /candidate') {
       candidateCalls += 1;
-      const head = candidateCalls === 1 ? 'pub-head' : 'wake-head';
+      const head = candidateCalls === 1 ? 'precondition-head' : candidateCalls === 2 ? 'pub-head' : 'wake-head';
       return new Response(JSON.stringify({
         ok: true,
         store: {
@@ -962,6 +974,8 @@ function probeScopeFixture() {
           journalRootPresent: true,
           journalSocketPresent: true,
           journalDaemonCommand: 'journal-daemon --root /var/tmp/journal --mount /workspace --socket /var/tmp/journal.sock',
+          journalReady,
+          journalReadyDetail: journalReady ? '{"ok":true,"sequence":7}' : 'connect ECONNREFUSED',
         },
         control: {
           strategy: 'bounded-layers',
@@ -1010,6 +1024,8 @@ describe('a verify-only probe arm', () => {
     expect(arm.wakeKind).toBe('attached');
     expect(arm.wakeBootId).toBe('boot-after-the-wake');
     expect(arm.verifyPassed).toBe(true);
+    expect(arm.probe?.status).toBe('complete');
+    expect(renderArmLifecycleRow(arm)).toContain('PROBE COMPLETE — NOT SCORED');
 
     // THE FOUR ARCHIVED READS, each from its own window.
     expect(arm.publishControl?.found).toBe(true);
@@ -1040,6 +1056,62 @@ describe('a verify-only probe arm', () => {
     }
     expect(fixture.asked.some((ask) => ask.route === 'POST /teardown')).toBe(true);
     expect(fixture.asked.filter((ask) => ask.route === 'POST /stop')).toHaveLength(2);
+  }, 20_000);
+
+  test('a missing journal aborts as a probe precondition before the ladder', async () => {
+    // A socket file and daemon argv are not an answer. The fixture reports
+    // the probe of the read-only `stats` request refusing; before this guard
+    // the driver spent the whole ladder and went on to stop/wake anyway.
+    const fixture = probeScopeFixture({ journalReady: false });
+    let arm: ArmResult;
+    try {
+      arm = await runArm(
+        BENCH_FIXTURE,
+        'bounded-layers',
+        { ...parseOptions([]), arms: ['bounded-layers'], runId: 'journal-precondition', verifyOnly: true },
+        () => {},
+      );
+    } finally {
+      fixture.restore();
+    }
+
+    expect(fixture.asked).not.toContainEqual(expect.objectContaining({ route: 'POST /checkpoint' }));
+    expect(fixture.asked).not.toContainEqual(expect.objectContaining({ route: 'POST /write' }));
+    expect(fixture.asked).not.toContainEqual(expect.objectContaining({ route: 'POST /ops/reset' }));
+    expect(arm.checkpoints).toEqual([]);
+    expect(arm.probe).toEqual({ status: 'precondition-failed', detail: 'connect ECONNREFUSED' });
+    expect(arm.verifyChecks).toEqual([]);
+    expect(arm.notes.join(' ')).toContain('PROBE PRECONDITION FAILED');
+    expect(arm.notes.join(' ')).toContain('connect ECONNREFUSED');
+    expect(arm.notes.join(' ')).not.toContain('arm failed mid-measurement');
+    expect(renderArmLifecycleRow(arm)).toContain('PROBE NOT RUN — PRECONDITION FAILED');
+    expect(renderArmLifecycleRow(arm)).not.toContain('| **FAILED** |');
+    expect(fixture.asked.some((ask) => ask.route === 'POST /teardown')).toBe(true);
+  }, 20_000);
+
+  test('a later journal tick failure aborts the probe before stop or wake', async () => {
+    const fixture = probeScopeFixture({ failLadderTick: true });
+    let arm: ArmResult;
+    try {
+      arm = await runArm(
+        BENCH_FIXTURE,
+        'bounded-layers',
+        { ...parseOptions([]), arms: ['bounded-layers'], runId: 'journal-tick-partial', verifyOnly: true },
+        () => {},
+      );
+    } finally {
+      fixture.restore();
+    }
+
+    expect(fixture.asked.filter((ask) => ask.route === 'POST /checkpoint')).toHaveLength(2);
+    expect(fixture.asked.some((ask) => ask.route === 'POST /wake')).toBe(false);
+    expect(arm.checkpoints).toHaveLength(2);
+    expect(arm.checkpoints[1]?.outcome).toContain('CandidateCaptureUnavailable');
+    expect(arm.notes.join(' ')).toContain('PROBE PARTIAL');
+    expect(arm.probe?.status).toBe('partial');
+    expect(renderArmLifecycleRow(arm)).toContain('PROBE PARTIAL — NOT SCORED');
+    expect(arm.notes.join(' ')).toContain('journal disappeared during the ladder tick');
+    expect(fixture.asked.some((ask) => ask.route === 'POST /teardown')).toBe(true);
   }, 20_000);
 
   test('verify-only wins over decisive at parse time', () => {
@@ -2967,6 +3039,8 @@ function candidateFacts(overrides: {
       mounts: ATTACHED_MOUNTS,
       journalRootPresent: true,
       journalSocketPresent: true,
+      journalReady: true,
+      journalReadyDetail: '{"ok":true,"sequence":7}',
       journalDaemonCommand: DAEMON_ARGV,
       ...overrides.container,
     },
@@ -2984,6 +3058,28 @@ describe('the candidate lifecycle contract', () => {
 
     expect(failingChecks(candidateFacts())).toEqual([]);
     expect(checks.length).toBeGreaterThanOrEqual(9);
+  });
+
+  test('the probe precondition requires an answering journal, not its artifacts', () => {
+    const ready = candidateProbePrecondition(candidateFacts());
+    expect(ready.pass).toBe(true);
+    expect(ready.name).toBe('the mutation journal answers before the ladder');
+
+    // Every old proxy for readiness remains healthy: mounted FUSE, socket
+    // path, process argv. Only the read-only stats request did not answer.
+    const absent = candidateProbePrecondition(candidateFacts({ container: {
+      journalReady: false,
+      journalReadyDetail: 'connect ECONNREFUSED',
+    } }));
+    expect(absent.pass).toBe(false);
+    expect(absent.detail).toBe('connect ECONNREFUSED');
+
+    const unobserved = candidateProbePrecondition(candidateFacts({ container: {
+      journalReady: undefined,
+      journalReadyDetail: undefined,
+    } }));
+    expect(unobserved.pass).toBe(false);
+    expect(unobserved.detail).toBe('journalReady=unreported');
   });
 
   test('the extraction shape a candidate used to pass on fails on every clause', () => {
@@ -4422,6 +4518,28 @@ describe('the instruments restate nothing unchecked', () => {
     expect(reads).toContain('publishes no candidate control envelope');
     const worker = repo('packages', 'devbox', 'bench', 'worker.ts');
     expect(worker).toContain('publishes no candidate control envelope');
+  });
+
+  test('the journal readiness fact is identical across fixture and driver', () => {
+    const worker = repo('packages', 'devbox', 'bench', 'worker.ts');
+    const served = /export interface CandidateContainerFacts \{([\s\S]*?)\}/.exec(worker)?.[1] ?? '';
+    const servedKeys = [...served.matchAll(/readonly (\w+)/g)].map((match) => match[1]).sort();
+    expect(servedKeys).toEqual([
+      'expectedJournalBinary', 'expectedJournalRoot', 'expectedJournalSocket', 'expectedStoreMount',
+      'expectedWorkdirMount', 'journalDaemonCommand', 'journalReady', 'journalReadyDetail',
+      'journalRootPresent', 'journalSocketPresent', 'mounts',
+    ]);
+    const decoded = /interface CandidateContainerFact \{([\s\S]*?)\}/.exec(driver)?.[1] ?? '';
+    const decodedKeys = [...decoded.matchAll(/(\w+)\?:/g)].map((match) => match[1]).sort();
+    expect(decodedKeys).toEqual(servedKeys);
+  });
+
+  test('the readiness probe asks the daemon’s read-only stats operation', () => {
+    const worker = repo('packages', 'devbox', 'bench', 'worker.ts');
+    const probe = /const JOURNAL_READY_PROBE = \[([\s\S]*?)\]\.join/.exec(worker)?.[1] ?? '';
+    expect(probe).toContain("op: 'stats'");
+    const daemon = repo('packages', 'devbox', 'bench', 'journal-daemon', 'journal-daemon.c');
+    expect(daemon).toContain('strcmp(op, "stats") == 0');
   });
 
   test('the probe scope gates the post-wake tail on verify-only', () => {
