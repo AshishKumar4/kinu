@@ -338,10 +338,11 @@ describe("deploy gate", () => {
     // same either way, because a gate that leaves the middle wave has to appear
     // in `SERIAL_GATES` to satisfy the assertion above it.
     // FIVE waves: preflight, one concurrent source block, the hammer,
-    // infrastructure, and — after the upload and the smoke test — the first-run
-    // tier. The last one is the only wave that runs against the DEPLOYED build,
-    // and it is alone for the reason SERIAL_GATES states: it links real
-    // machines to the account a sibling gate authenticates against.
+    // infrastructure, and — after the upload and the smoke test, on staging
+    // only — the first-run tier. The last one is the only wave that runs
+    // against the DEPLOYED build, and it is alone for the reason SERIAL_GATES
+    // states: it links real machines to the account a sibling gate
+    // authenticates against.
     expect(waves.length).toBe(5);
     expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
     expect(waves[1]?.length).toBe(REQUIRED_GATES.length - Object.keys(SERIAL_GATES).length + 1);
@@ -518,10 +519,24 @@ describe("deploy gate", () => {
   // purpose and the pipeline never reaches step 4. What is checkable here is
   // the wiring, and it is checked at the same three sites the census demands —
   // deploy.sh runs it, `scripts/ladder.ts` declares it, and this list names it.
-  test("the first-run tier runs after the smoke test, alone, and nothing runs after it", () => {
+  test("the first-run tier runs after the smoke test, alone, on staging only", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
     for (const gate of POST_DEPLOY_GATES) {
       expect(deployGates(source)).toContain(gate);
+      // STAGING ONLY. The tier acts as the eval identity, which is a staging
+      // construct by design: the DEV_IDENTITY_SECRET that lets a test act as a
+      // signed-in user without signing in is the whole authority for that
+      // identity, and production deliberately carries neither it nor
+      // DEV_USER_EMAIL (wrangler.jsonc:441-445). A first-run against production
+      // would need a service identity production is built to refuse, and the
+      // same bits reach production minutes after staging passed them.
+      // The three lines together, and the enqueue at COLUMN 0 inside the
+      // guard: `deployGates` parses `^run_required_gate`, so an indented line
+      // would run on staging while the ladder, this contract and the
+      // CI-coverage assertion all reported a tier that does not exist.
+      expect(source).toContain(`if [ "$KINU_ENV" = "staging" ]; then
+run_required_gate "First-run tier" ${gate}
+fi`);
       // AFTER the smoke test: a tier that judged the product before the smoke
       // gate had said the deploy landed would report five product failures for
       // one deployment failure.
@@ -549,6 +564,12 @@ describe("deploy gate", () => {
     const parsed = deployGates(source);
     expect(parsed).toHaveLength(REQUIRED_GATES.length + POST_DEPLOY_GATES.length);
     expect(parsed.slice(-POST_DEPLOY_GATES.length)).toEqual([...POST_DEPLOY_GATES]);
+    // AND NOT ON PRODUCTION. The `if` guard is the enforcement, and this is its
+    // other direction: the same command, run as `deploy.sh production`, must
+    // hold the gate behind the staging branch — which the staging-only test
+    // above proves by holding the exact three lines together. A production run
+    // that reached this tier without the secret would fail on a credential
+    // nobody can mint there, which is the design refusing it, not a gap.
   });
 
   test("a dirty checkout is rejected before verification or mutation", () => {

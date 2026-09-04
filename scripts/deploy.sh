@@ -776,6 +776,15 @@ fi
 
 # ── Step 4b: The first-run tier ──────────────────────────────────
 #
+# STAGING ONLY, and that is not a cost decision. The tier acts as the eval
+# identity, which is a STAGING construct by design: the same DEV_IDENTITY_SECRET
+# that lets a test act as a signed-in user without signing in is the whole
+# authority for that identity, and production deliberately carries neither it nor
+# DEV_USER_EMAIL (wrangler.jsonc:441-445, scripts/infra-manifest.ts:586-601) —
+# a first-run against production would need a service identity production is
+# built to refuse. The same bits reach production minutes after staging passed
+# them, so the product a production user meets IS the one this tier judged.
+#
 # WHAT A NEW USER MEETS, on the build that just landed. Every gate above this
 # line ran BEFORE the upload, on this tree, over inputs their authors wrote. The
 # owner found four product defects by hand in two days that 33 such gates and an
@@ -797,7 +806,16 @@ fi
 # reason: it attaches real machines to the account and drives a real browser
 # session as the same identity `gate:infra` authenticates with. Two gates on one
 # account is how a fleet case measures a sibling's daemons.
+#
+# THE ENQUEUE LINE STAYS AT COLUMN 0, inside the guard. `scripts/ladder.ts`
+# parses these lines with `^run_required_gate`, so an indented one is invisible
+# to `deployGates`/`deployWaves` — the gate would run on staging while the
+# ladder, the CI-coverage assertion and the deploy contract all reported a tier
+# that does not exist. Measured: indenting it dropped the gate from the parse
+# and left `deploy.test.ts` green over a wave it could no longer see.
+if [ "$KINU_ENV" = "staging" ]; then
 run_required_gate "First-run tier" bun run gate:first-run
+fi
 
 # BARRIER.
 flush_gates

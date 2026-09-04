@@ -144,7 +144,10 @@ export function runTuiInPty(entry: string, options: {
   };
   const proc = Bun.spawnSync({
     cmd: [python, driver, JSON.stringify(spec)],
-    cwd: resolve(import.meta.dir, '..'),
+    // `import.meta.dirname` — not Bun's `import.meta.dir`, which is undefined
+    // under any other runner and turns this resolve into the crash the
+    // first-run tier's vitest process hit.
+    cwd: resolve(import.meta.dirname),
     stdout: 'pipe',
     stderr: 'pipe',
   });

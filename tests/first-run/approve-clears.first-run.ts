@@ -43,7 +43,7 @@ import { webHeaders, type PublicSessionPlan } from '../evals/public-session';
 import type { DeviceAccount } from '../evals/device-session';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
 import {
-  FIRST_RUN_DEFECTS, firstRunPlan, publishFirstRunRecord, runFirstRunCase,
+  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
   type FirstRunSubgoal,
 } from './first-run';
 
@@ -60,7 +60,7 @@ const MACHINE = 'kinu-first-run-approve';
  *  once it has shown anything. */
 const PAINT_MS = 30_000;
 
-const PLAN = firstRunPlan(SUITE);
+const PLAN = firstRunCasePlan(SUITE, CASE);
 const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 

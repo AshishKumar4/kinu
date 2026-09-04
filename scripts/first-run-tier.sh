@@ -19,16 +19,16 @@
 #   KINU_EVAL_TOKEN           the CLI bearer, resolved by
 #                             `scripts/eval-credentials.ts` exactly as the eval
 #                             tier resolves it. It registers devices and drives
-#                             the pty client.
+#                             the pty client. The persisted eval-session identity
+#                             on this machine is the staging one.
 #   KINU_EVAL_WEB_IDENTITY    the deployment's DEV_IDENTITY_SECRET. The browser
 #                             plane's authority: the REST create, the run-event
 #                             and file routes, the consent and revoke routes,
 #                             and the Chrome page all act as it.
-#   KINU_EVAL_ORIGIN          which deployment. Defaults to staging.
-#   KINU_EVAL_ALLOW_PROD=1    required to point any of this at production, which
-#                             is what a post-deploy production run is. Named on
-#                             the command line so the choice is recorded in what
-#                             somebody ran.
+#   KINU_EVAL_ORIGIN          which deployment. Defaults to staging, and the
+#                             allowlist admits staging and loopback dev servers
+#                             only — the eval identity is a staging construct and
+#                             production is built to refuse it.
 #
 # WITH A CREDENTIAL MISSING IT FAILS. That is the opposite of the eval tier's
 # rule and it is deliberate: the eval tier must be reproducible on a machine
@@ -38,9 +38,7 @@
 # with silence while exiting 0. A deploy gate that can pass having measured
 # nothing is the defect this whole tier was built to name.
 #
-#   bash scripts/first-run-tier.sh                    # against KINU_EVAL_ORIGIN
-#   KINU_EVAL_ALLOW_PROD=1 KINU_EVAL_ORIGIN=https://kinu.run \
-#     bash scripts/first-run-tier.sh                  # against production
+#   bash scripts/first-run-tier.sh                    # against staging
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -75,7 +73,7 @@ if [[ -z "${KINU_TOKEN:-}" || -z "${KINU_ORIGIN:-}" ]]; then
   echo "first-run: no deployment credential resolved, so this tier would measure nothing." >&2
   echo "  It drives the DEPLOYED product; a skip here is a deploy gate passing over a product" >&2
   echo "  nobody looked at. Export KINU_EVAL_TOKEN (the CLI bearer) and KINU_EVAL_WEB_IDENTITY" >&2
-  echo "  (the deployment's DEV_IDENTITY_SECRET), and KINU_EVAL_ALLOW_PROD=1 for production." >&2
+  echo "  (the deployment's DEV_IDENTITY_SECRET). Both exist for staging on this machine." >&2
   exit 1
 fi
 if [[ -z "${KINU_EVAL_WEB_IDENTITY:-}" ]]; then

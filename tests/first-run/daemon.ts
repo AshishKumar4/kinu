@@ -26,21 +26,14 @@
  * ran it" a fact somebody can read afterwards rather than an inference from a
  * reply.
  */
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
-
-import * as v from 'valibot';
 
 import { infraBoundary } from '@kinu.run/test-utils';
 import { listCloudDevices, registerCloudDevice } from '../../packages/cli/src/cloud-api';
 import { DEVICE_CONNECT_DEADLINE_MS } from '../../packages/cli/src/device-connect';
 import { grantDeviceConsent, revokeDeviceOverUserRoute, type DeviceAccount } from '../evals/device-session';
-
-/** A spawned child's stream, as this harness always creates it: `stdout` and
- *  `stderr` are both `'pipe'` at the spawn, so a value that is not a readable
- *  stream is this module's own bug rather than a case to branch on. */
-const PipedStreamSchema = v.instance(ReadableStream<Uint8Array>);
 
 /** The daemon this release ships, and the policy it requires beside itself. */
 const DAEMON_ENTRY = resolve(import.meta.dirname, '../../packages/pc-agent/src/index.js');
@@ -133,6 +126,17 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
   );
   chmodSync(join(binDir, 'hostname'), 0o700);
 
+  // The daemon's output goes to a LOG FILE, the way `installDaemonFiles` runs
+  // it — never to a pipe nobody drains. Measured on staging 2026-09-03: a
+  // piped daemon that no process reads blocks on its own console.log once the
+  // pipe buffer fills, misses the hub's liveness window, and is dropped from
+  // the fleet while its row still says it registered — the machine the case
+  // had attached "vanishing" mid-run with no failure anywhere.
+  const logPath = join(home, 'pc-agent.log');
+  // A numeric fd, not a FileSink: Bun.spawn's stdout/stderr accept a file
+  // descriptor, and the fd needs no reader on this side to stay unblocked —
+  // the kernel writes the daemon's log straight to disk.
+  const logFd = openSync(logPath, 'a');
   const daemon = Bun.spawn({
     cmd: [process.execPath, DAEMON_ENTRY],
     cwd: home,
@@ -146,8 +150,8 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
       KINU_INFLIGHT_ROOT: join(home, 'inflight'),
       PATH: `${binDir}:${process.env.PATH ?? ''}`,
     },
-    stdout: 'pipe',
-    stderr: 'pipe',
+    stdout: logFd,
+    stderr: logFd,
   });
 
   const machine: AttachedMachine = {
@@ -162,8 +166,8 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
   if (!arrived) {
     machine.stop();
     throw new Error(`the machine ${name} (${registration.deviceId}) never reported connected `
-      + `within ${String(DEVICE_CONNECT_DEADLINE_MS)}ms — the daemon's own output: `
-      + `${await drain(daemon)}`);
+      + `within ${String(DEVICE_CONNECT_DEADLINE_MS)}ms — the daemon's own log: `
+      + `${readDaemonLogTail(logPath)}`);
   }
   return machine;
 }
@@ -246,15 +250,21 @@ function stopDaemon(daemon: Subprocess): void {
   }
 }
 
-/** Whatever the daemon has said so far, for a failure that has to explain
- *  itself. Bounded: a daemon that logged a megabyte before failing is not more
+
+/** The daemon's own last words, for a failure that has to explain itself. The
+ *  CLI's identical helper tails the same log `installDaemonFiles` runs it into;
+ *  bounded, because a daemon that logged a megabyte before failing is not more
  *  informative than its last lines. */
-async function drain(daemon: Subprocess): Promise<string> {
-  // Both streams are PIPED at the spawn above, so both are readable streams —
-  // `Subprocess` types them as `number` for the inherited case, and the schema
-  // parse is what turns that representation question into a domain one at this
-  // boundary rather than a `typeof` branch inside the read.
-  const streams = v.parse(v.array(PipedStreamSchema), [daemon.stdout, daemon.stderr]);
-  const parts = await Promise.all(streams.map((stream) => Bun.readableStreamToText(stream)));
-  return parts.join('\n').trim().split('\n').slice(-8).join('\n') || '(the daemon said nothing)';
+function readDaemonLogTail(path: string): string {
+  try {
+    const text = readFileSync(path, 'utf8');
+    return text.trim().split('\n').slice(-8).join('\n') || '(the daemon said nothing)';
+  } catch (cause) {
+    // ABSENCE ONLY. A daemon that never started writing has no log at all;
+    // an unreadable one is a harness fault worth the words.
+    if (cause instanceof Error && 'code' in cause && cause.code === 'ENOENT') {
+      return '(no daemon log was written)';
+    }
+    return `the daemon log at ${path} could not be read: ${String(cause)}`;
+  }
 }

@@ -218,6 +218,44 @@ export function firstRunPlan(suite: string): PublicSessionPlan | null {
   return resolution.plan;
 }
 
+
+/**
+ * The plan every first-run case opens, with the workspace name kept short
+ * enough to delete.
+ *
+ * The deployment tears a workspace down through its sandbox, whose ids are
+ * capped at 63 characters by the substrate itself — a longer workspace name
+ * CREATES fine and then cannot be torn down, which is exactly what a tier that
+ * promises "teardown in a finally" must not discover late. The resolver composes
+ * `first-run-<case>-<subject>-<random>`; this wrapper trims the subject to the
+ * case id alone, which keeps every case's name under the cap with room.
+ */
+export function firstRunCasePlan(suite: string, caseId: FirstRunCase): PublicSessionPlan | null {
+  const plan = firstRunPlan(suite);
+  if (plan === null) return null;
+  return {
+    ...plan,
+    open: (request) => plan.open({ ...request, subject: SHORT_SUBJECT[caseId] }),
+  };
+}
+
+/**
+ * The subject each case opens its workspace under, kept to one short word.
+ *
+ * The resolver composes `eval-<suite-slug>-<subject>-<random>`, and the suite
+ * slug alone (`first-run-files-outside-tree`) is already 26 characters — with
+ * the case id repeated as the subject, every name lands at 59-63 and the longest
+ * tip over the substrate's 63-character sandbox-id cap, which CREATES fine and
+ * then cannot be torn down. One short word keeps the attribution (the suite
+ * slug says which tier, the record says which case) and every name short.
+ */
+const SHORT_SUBJECT = {
+  'codemode-craft': 'craft',
+  'approve-clears': 'approve',
+  'two-machines': 'fleet',
+  'enter-sends': 'enter',
+  'files-outside-tree': 'files',
+} satisfies Record<FirstRunCase, string>;
 /** What a case's body is handed, and what it hands back. */
 export interface FirstRunRun {
   readonly session: KinuPublicSession;

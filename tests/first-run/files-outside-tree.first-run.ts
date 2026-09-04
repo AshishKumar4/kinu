@@ -30,7 +30,7 @@ import { afterAll, describe, test } from 'vitest';
 
 import type { EvalObservation } from '@kinu.run/test-utils';
 import {
-  FIRST_RUN_DEFECTS, firstRunPlan, publishFirstRunRecord, runFirstRunCase,
+  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
   type FirstRunSubgoal,
 } from './first-run';
 
@@ -64,7 +64,7 @@ const BYTES = [
 /** The refusal this row is named after, in the runtime's own words. */
 const CODEGEN_REFUSAL = 'Code generation from strings';
 
-const PLAN = firstRunPlan(SUITE);
+const PLAN = firstRunCasePlan(SUITE, CASE);
 const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 

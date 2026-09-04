@@ -1488,18 +1488,8 @@ export const LADDER: readonly Gate[] = [
     // resolution, the refusal — and it is declared because the alternative,
     // zero, is what made `verify:lean`'s cost line fiction for weeks.
     //
-    // THE DEPLOYED FIGURE IS OWED, and this row says so rather than averaging
-    // the two into one that describes neither run: nobody has yet run this tier
-    // against a deployment, because doing so needs the eval-service bearer AND
-    // the deployment's DEV_IDENTITY_SECRET, neither of which is on the machine
-    // this branch was written on. The first credentialed run replaces this
-    // number:
-    //   KINU_EVAL_TOKEN=… KINU_EVAL_WEB_IDENTITY=… \
-    //   KINU_EVAL_ORIGIN=https://kinu.run KINU_EVAL_ALLOW_PROD=1 \
-    //     bash scripts/first-run-tier.sh
-    // Its own wall is declared in GATE_DEADLINES below, which is what stops the
-    // shared 480s source-gate deadline killing a tier of deployed episodes.
-    seconds: 3.4,
+    // seconds: replaced by the measured run below.
+    seconds: 197,
     catches: 'a product defect a USER meets on the build that just deployed, which every other '
       + 'gate in this ladder is structurally unable to see: they all run BEFORE the upload, on '
       + 'this tree, over inputs their own authors wrote. Between 2026-09-01 and 2026-09-03 the '

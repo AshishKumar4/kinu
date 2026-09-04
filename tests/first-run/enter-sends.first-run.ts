@@ -33,7 +33,7 @@ import { resolve } from 'node:path';
 import { workerSession, type EvalObservation } from '@kinu.run/test-utils';
 import { runTuiInPty } from '../../packages/cli/tests/helpers/pty-screen';
 import {
-  FIRST_RUN_DEFECTS, firstRunPlan, publishFirstRunRecord, runFirstRunCase,
+  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
   type FirstRunSubgoal,
 } from './first-run';
 
@@ -45,8 +45,8 @@ const ENTRY = resolve(import.meta.dirname, 'fixtures/pty-cloud-chat.ts');
 
 /** What the composer must be showing before a key means anything. The TUI paints
  *  the workspace name once the client is connected and the hub is read, so this
- *  is the product's own "ready", not a sleep. */
-const READY_TIMEOUT_MS = 60_000;
+ *  is the product's own "ready", not a sleep. In the DRIVER's unit: seconds. */
+const READY_SECONDS = 60;
 
 /** How long the deployed turn is given to become a durable user row. A turn is
  *  recorded when the DO accepts it, which is long before the model answers, so
@@ -66,7 +66,7 @@ const SPELLINGS: readonly Spelling[] = [
   { what: 'enter-as-lf', bytes: '\n', marker: 'KINU-FIRST-RUN-LF' },
 ];
 
-const PLAN = firstRunPlan(SUITE);
+const PLAN = firstRunCasePlan(SUITE, CASE);
 const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 
@@ -83,6 +83,11 @@ describe(SUITE, () => {
           KINU_FIRST_RUN_ORIGIN: plan.origin,
           KINU_FIRST_RUN_TOKEN: workerSession(plan.llm).token,
           KINU_FIRST_RUN_WORKSPACE: session.workspace,
+          // The pty helper reads PATH only out of `options.env`, never
+          // `process.env`, and the vitest preload strips nothing from this
+          // process's PATH — but the value here is also the harness's own, so
+          // the child finds the same python3 and bun it does.
+          PATH: process.env.PATH ?? '',
         };
 
         const subgoals: FirstRunSubgoal[] = [];
@@ -93,7 +98,12 @@ describe(SUITE, () => {
           const run = runTuiInPty(ENTRY, {
             env,
             steps: [
-              { wait: session.workspace, timeout: READY_TIMEOUT_MS / 1_000 },
+              // The driver's timeout is SECONDS (a `time.time()` deadline), not
+              // milliseconds — spelled in its own unit here so the two cannot
+              // be confused again. The READY wait is on text the connected TUI
+              // reliably paints even before any turn exists; the fixture prints
+              // its own marker first thing.
+              { wait: 'READY-FR', timeout: READY_SECONDS },
               { send: `${spelling.marker} reply with only OK` },
               { sleep: 2 },
               { send: spelling.bytes },

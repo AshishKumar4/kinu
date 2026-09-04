@@ -219,19 +219,161 @@ export async function listDevicesOverCliRoute(account: DeviceAccount): Promise<D
 export async function grantDeviceConsent(
   account: DeviceAccount, deviceId: string, agentName: string,
 ): Promise<void> {
-  const url = `${account.origin}/api/user/devices/${encodeURIComponent(deviceId)}/consent`;
-  await infraBoundary(`PUT ${url}`, async () => {
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: { ...webHeaders(account.identity), 'content-type': 'application/json' },
-      body: JSON.stringify({ agentName, scope: 'full_filesystem' }),
-    });
-    if (!response.ok) {
-      throw new Error(`could not grant ${agentName} the full-filesystem tier on ${deviceId}: `
-        + `${String(response.status)} ${response.statusText} `
-        + `— ${(await response.text()).slice(0, BODY_EXCERPT)}`);
+  // This helper is now the FIRST-CALL route a case can use to reach a machine it
+  // owns: make one `laptop` call with a harmless `true`, let the deployment raise
+  // the real consent card for that workspace, and answer it `always` through the
+  // RPC the card's own button calls. See `grantDeviceAccess` for the work.
+  await grantDeviceAccess(account, deviceId, agentName);
+}
+
+/**
+ * Bind a workspace to a machine, by driving the consent flow the product runs.
+ *
+ * There is deliberately no PUT /devices/:id/consent any more (b2ceb2e7c): a
+ * binding is created by the FIRST device call a workspace makes, which raises
+ * the card on the workspace, and only `always` is remembered — so the way an
+ * owner grants a machine is the same whether it is a person clicking or this
+ * harness resolving. The harness makes one harmless call to raise the card,
+ * reads it off the workspace's own pending list, and resolves it.
+ *
+ * The card answers `always` by binding (workspace, device) with `allow` on the
+ * hub, which is exactly the row an owner's click writes. The call that raised
+ * the card then settles itself.
+ */
+export async function grantDeviceAccess(
+  account: DeviceAccount, deviceId: string, agentName: string,
+): Promise<void> {
+  // ONE call that raises the card, retried past the transport's warm-up.
+  //
+  // The workspace's device transport serves a TTL-cached snapshot and its
+  // authoritative refresh runs at TURN start (actor-agent.ts) — so a freshly
+  // created workspace answers the very first `executeInExecutor('laptop', …)`
+  // with "not available" while the kick its own status() read started is still
+  // in flight. A person sees this once and their next click works; this harness
+  // waits it out rather than concluding the machine is unreachable.
+  const rpcUrl = `${account.origin}/api/cli/workspaces/${encodeURIComponent(agentName)}/rpc`;
+  const raiseOnce = (): Promise<{ ok: boolean; detail: string }> => infraBoundary(
+    `POST ${rpcUrl} (device consent raise)`,
+    async () => {
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${account.cliToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ method: 'executeInExecutor', args: ['laptop', 'true'] }),
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(`raising the device consent card on ${agentName} failed: `
+          + `${String(response.status)} ${response.statusText} — ${text.slice(0, BODY_EXCERPT)}`);
+      }
+      const answer = v.parse(v.object({ result: v.object({
+        error: v.optional(v.string()),
+        stdout: v.optional(v.string()),
+      }) }), JSON.parse(text)).result;
+      const detail = answer.error ?? answer.stdout ?? '';
+      return { ok: answer.error === undefined, detail };
+    },
+  );
+  // The raise BLOCKS on the card: `awaitDeviceConsent` parks the workspace's
+  // call until somebody answers or the registry's five-minute window closes, so
+  // awaiting it here would deadlock the very card this function is trying to
+  // read. The raise — with its warm-up retries — therefore runs DETACHED, the
+  // card is polled for below, and settling it is what unblocks the raise. The
+  // raise's own settle is awaited at the END, so its failure still surfaces.
+  const raising = (async (): Promise<void> => {
+    let raised = await raiseOnce();
+    for (let attempt = 0; attempt < 12 && !raised.ok; attempt += 1) {
+      if (!/not available|no device connected/i.test(raised.detail)) break;
+      const tick = Promise.withResolvers<void>();
+      setTimeout(tick.resolve, 1_000);
+      await tick.promise;
+      raised = await raiseOnce();
     }
-  });
+    if (!raised.ok && !/queued|approval|denied/i.test(raised.detail)) {
+      throw new Error(`the laptop executor never became reachable for ${agentName}: `
+        + `${raised.detail}`);
+    }
+  })();
+
+  // The card, off the workspace's pending list, and answered. The raise is
+  // racing in the background and has a warm-up of its own, so absence is
+  // retried rather than read as "never raised".
+  const listUrl = rpcUrl;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const found = await infraBoundary(`POST ${rpcUrl} (listPendingConsents)`, async () => {
+      const response = await fetch(listUrl, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${account.cliToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ method: 'listPendingConsents', args: [] }),
+      });
+      if (!response.ok) {
+        throw new Error(`could not list the pending consents on ${agentName}: `
+          + `${String(response.status)} ${response.statusText}`);
+      }
+      // The generic RPC route wraps every answer as { result: … } — the same
+      // envelope `callHttp` unwraps in the shipped client. Parsed HERE rather
+      // than trusted, so a route that changes its envelope is a parse failure
+      // rather than a card that reads as absent.
+      const envelope = v.parse(v.object({ result: v.array(v.object({ consentId: v.string() })) }),
+        await response.json());
+      return envelope.result;
+    });
+    const card = found.find((entry) => entry.consentId.length > 0) ?? null;
+    if (card === null) {
+      const tick = Promise.withResolvers<void>();
+      setTimeout(tick.resolve, 500);
+      await tick.promise;
+      continue;
+    }
+    await infraBoundary(`POST ${rpcUrl} (resolveDeviceConsent)`, async () => {
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${account.cliToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          method: 'resolveDeviceConsent',
+          args: [card.consentId, 'always'],
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`answering the device consent card ${card.consentId} failed: `
+          + `${String(response.status)} ${response.statusText}`);
+      }
+      // The answer's own words, kept whole: `resolve` answers false for an id it
+      // no longer holds — already settled, or raced with the window closing —
+      // and that is a fact the caller needs, not a parse error. Both the
+      // envelope the route wraps in and a bare {ok} are accepted, so a shape
+      // change on either side reads as a finding about the deployment rather
+      // than as a ValiError three frames from the fact.
+      const answer = v.parse(v.union([
+        v.object({ result: v.object({ ok: v.boolean() }) }),
+        v.object({ ok: v.boolean() }),
+      ]), await response.json());
+      const decidedOk = 'result' in answer ? answer.result.ok : answer.ok;
+      if (!decidedOk) {
+        throw new Error(`the workspace did not record the decision on ${card.consentId} `
+          + '— the card was already settled');
+      }
+    });
+    // Settling the card is what unblocks the detached raise; its own verdict
+    // (the `true` that finally ran, or the words it answered) is awaited here so
+    // a raise that failed for a real reason still fails this grant.
+    await raising;
+    return;
+  }
+  // No card within the budget. The raise may still be parked on a card this
+  // poller could not see, so it is raced against a short grace rather than
+  // abandoned — but its failure is not this function's finding either way: the
+  // finding is that no card was ever raised.
+  await Promise.race([raising, new Promise<void>((resolve) => { setTimeout(resolve, 5_000); })]);
+  throw new Error(`no device consent card was ever raised on ${agentName} for ${deviceId}`);
 }
 
 /** Revoke a device, through the route Account settings → Devices uses

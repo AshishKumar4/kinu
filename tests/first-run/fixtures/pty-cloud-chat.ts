@@ -22,6 +22,10 @@ if (!origin || !token || !workspace) {
     + 'KINU_FIRST_RUN_WORKSPACE; it drives a deployed workspace and will not invent one');
 }
 
+// Printed before the client opens, so a harness can wait on a cheap marker
+// rather than guessing at first-paint text.
+console.log('READY-FR');
+
 await runTuiChat({
   client: new CloudAgentClient({
     origin, token, agentName: workspace, cloudName: workspace,

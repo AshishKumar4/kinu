@@ -51,7 +51,7 @@ import { afterAll, describe, test } from 'vitest';
 import type { EvalObservation } from '@kinu.run/test-utils';
 import type { RunEvent } from '../../packages/core/src/index';
 import {
-  FIRST_RUN_DEFECTS, firstRunPlan, publishFirstRunRecord, runFirstRunCase,
+  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
   type FirstRunSubgoal,
 } from './first-run';
 
@@ -85,7 +85,7 @@ const ASK = 'Build yourself a small reusable tool that adds up the digits of a n
   + `use that tool on ${INPUT} and reply with the resulting number on its own line. `
   + 'Do the arithmetic with the tool rather than in your head.';
 
-const PLAN = firstRunPlan(SUITE);
+const PLAN = firstRunCasePlan(SUITE, CASE);
 const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 

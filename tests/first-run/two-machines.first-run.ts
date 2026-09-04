@@ -37,7 +37,7 @@ import { scratchDir, workerSession, type EvalObservation } from '@kinu.run/test-
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
 import type { DeviceAccount } from '../evals/device-session';
 import {
-  FIRST_RUN_DEFECTS, firstRunPlan, publishFirstRunRecord, runFirstRunCase,
+  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
   type FirstRunSubgoal,
 } from './first-run';
 
@@ -54,7 +54,7 @@ const CASE = 'two-machines' as const;
 const ALPHA = 'kinu-first-run-alpha';
 const BETA = 'kinu-first-run-beta';
 
-const PLAN = firstRunPlan(SUITE);
+const PLAN = firstRunCasePlan(SUITE, CASE);
 const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 

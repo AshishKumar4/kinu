@@ -150,9 +150,11 @@ describe('a case gets a fresh workspace, and gives it back', () => {
     expect(script).toContain('KINU_EVAL_BACKEND=cloud');
     expect(script).toContain('KINU_EVAL_WEB_IDENTITY');
     expect(script).toContain('--expect-live');
-    // And it names the override a production run requires, so the command that
-    // measures production is discoverable from the script that runs it.
-    expect(script).toContain('KINU_EVAL_ALLOW_PROD=1');
+    // And it names NEITHER production nor the flag that would reach it: the
+    // eval identity is a staging construct and production is built to refuse
+    // it, so a runner that documents a way around the allowlist would be
+    // documenting the exact exception the rule forbids.
+    expect(script).not.toContain('KINU_EVAL_ALLOW_PROD');
   });
 
   test('the arm records what it did not control', () => {
@@ -208,6 +210,16 @@ describe('the tier is declared at all three sites', () => {
     const waves = deployWaves(source);
     const wave = waves.findIndex((entries) => entries.includes(GATE));
     expect(waves[wave]).toEqual([GATE]);
+    // STAGING ONLY, and the boundary is stated where it is enforced: the gate
+    // line sits inside `if [ "$KINU_ENV" = "staging" ]`. Production carries no
+    // DEV_IDENTITY_SECRET by design, so a first-run against it would need a
+    // service identity production is built to refuse — and the same bits reach
+    // production minutes after staging passed them.
+    expect(source).toContain('if [ "$KINU_ENV" = "staging" ]; then');
+    const gateLine = `run_required_gate "First-run tier" ${GATE}`;
+    const stagedIf = source.indexOf('if [ "$KINU_ENV" = "staging" ]; then');
+    expect(stagedIf).toBeGreaterThan(0);
+    expect(source.indexOf(gateLine, stagedIf)).toBeGreaterThan(stagedIf);
     // Its own wave means it must declare itself serial, or `deploy.test.ts`'s
     // "the serial gates run alone" assertion is satisfied by an undeclared one.
     expect(Object.keys(SERIAL_GATES)).toContain(GATE);
