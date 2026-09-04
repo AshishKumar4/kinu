@@ -29,7 +29,7 @@ import { CandidateRunControlV1Schema, CandidateControlStateV1Schema } from '../.
 import type { CandidateRunControlV1, OperationRecord } from '../../src/durability/contracts';
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../../src/lifecycle';
 import { DEVBOX_WORKDIR, type DevboxStore, type DevboxStrategyName, type StoredValue } from '../../src/storage';
-import { Devbox, TEST_BOX_ID, harness, runnerOption } from './devbox-harness';
+import { Devbox, TEST_BOX_ID, deriveBoxId, harness, runnerOption } from './devbox-harness';
 import type { Harness, RunnerInvocation, TestEnv } from './devbox-harness';
 import * as v from 'valibot';
 
@@ -234,9 +234,10 @@ export interface CandidateBoxHarness extends Harness<InstanceType<typeof Devbox<
  * A candidate box on a fresh container, fresh durable rows, an empty bucket and
  * a runner that answers. The policy's port probe is shortened the way every
  * candidate test shortens it: the admission probe is a real wait, and nothing
- * here is about its length.
+ * here is about its length. `name` gives the box a derived identity the way
+ * production derives it; omitted, the box keeps the legacy fixed identity.
  */
-export function candidateBox(format: CandidateContainerFormat): CandidateBoxHarness {
+export function candidateBox(format: CandidateContainerFormat, name?: string): CandidateBoxHarness {
   const bucket = memoryBucket();
   class CandidateBox extends Devbox<TestEnv> {
     protected override get strategy(): DevboxStrategyName {
@@ -259,8 +260,9 @@ export function candidateBox(format: CandidateContainerFormat): CandidateBoxHarn
       return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
     }
   }
-  const stand = harness(CandidateBox);
-  const paths = candidateStorePaths(`boxes/${TEST_BOX_ID}`, format);
+  const id = name === undefined ? TEST_BOX_ID : deriveBoxId(format, name);
+  const stand = harness(CandidateBox, id);
+  const paths = candidateStorePaths(`boxes/${id}`, format);
   const runner = new PublishingRunner(
     bucket,
     paths,
@@ -274,4 +276,39 @@ export function candidateBox(format: CandidateContainerFormat): CandidateBoxHarn
     await runner.write(path.slice(DEVBOX_WORKDIR.length + 1), content);
   };
   return { ...stand, bucket, runner, paths };
+}
+
+/**
+ * A new isolate over the same durable state. The Durable Object is evicted
+ * between the stop and the wake, so every in-memory field starts fresh while
+ * the storage rows, the bucket bytes and the stopped container disk survive.
+ * The container disk is transplanted so the wake takes the same-instance
+ * repair, with the boot marker intact. `name` must be the first box's name so
+ * both isolates derive one identity; omitted, both keep the legacy one.
+ */
+export function reactivateCandidateBox(
+  format: CandidateContainerFormat,
+  first: CandidateBoxHarness,
+  name?: string,
+): CandidateBoxHarness {
+  const second = candidateBox(format, name);
+  second.rows.clear();
+  for (const [key, value] of first.rows) second.rows.set(key, value);
+  second.bucket.objects.clear();
+  for (const [key, value] of first.bucket.objects) second.bucket.objects.set(key, value);
+  const from = first.container;
+  const to = second.container;
+  to.running.running = from.running.running;
+  to.bootId = from.bootId;
+  to.files.clear();
+  for (const [key, value] of from.files) to.files.set(key, value);
+  to.s3fsMounts.clear();
+  for (const mount of from.s3fsMounts) to.s3fsMounts.add(mount);
+  to.directories.clear();
+  for (const directory of from.directories) to.directories.add(directory);
+  to.processes.clear();
+  for (const [key, value] of from.processes) to.processes.set(key, value);
+  to.sessionCwd = from.sessionCwd;
+  to.journalMounts = from.journalMounts;
+  return second;
 }

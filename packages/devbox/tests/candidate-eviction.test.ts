@@ -1,41 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { candidateBox, candidateHead } from './support/candidate-box';
-import type { CandidateBoxHarness } from './support/candidate-box';
+import { candidateBox, candidateHead, reactivateCandidateBox } from './support/candidate-box';
 import { TEST_BOX_ID } from './support/devbox-harness';
 import type { CandidateContainerFormat } from '../src/candidates/container';
-
-/**
- * A new isolate over the same durable state. The Durable Object is evicted
- * between the stop and the wake, so every in-memory field starts fresh while
- * the storage rows, the bucket bytes and the stopped container disk survive.
- * The container disk is transplanted so the wake takes the same-instance
- * repair the deployed red took, with the boot marker intact.
- */
-function reactivate(
-  format: CandidateContainerFormat,
-  first: CandidateBoxHarness,
-): CandidateBoxHarness {
-  const second = candidateBox(format);
-  second.rows.clear();
-  for (const [key, value] of first.rows) second.rows.set(key, value);
-  second.bucket.objects.clear();
-  for (const [key, value] of first.bucket.objects) second.bucket.objects.set(key, value);
-  const from = first.container;
-  const to = second.container;
-  to.running.running = from.running.running;
-  to.bootId = from.bootId;
-  to.files.clear();
-  for (const [key, value] of from.files) to.files.set(key, value);
-  to.s3fsMounts.clear();
-  for (const mount of from.s3fsMounts) to.s3fsMounts.add(mount);
-  to.directories.clear();
-  for (const directory of from.directories) to.directories.add(directory);
-  to.processes.clear();
-  for (const [key, value] of from.processes) to.processes.set(key, value);
-  to.sessionCwd = from.sessionCwd;
-  to.journalMounts = from.journalMounts;
-  return second;
-}
 
 async function publishStopEvictWake(format: CandidateContainerFormat): Promise<void> {
   const first = candidateBox(format);
@@ -58,7 +24,7 @@ async function publishStopEvictWake(format: CandidateContainerFormat): Promise<v
   expect(stopped.kind).toBe('skipped');
   expect(first.container.running.running).toBe(false);
 
-  const second = reactivate(format, first);
+  const second = reactivateCandidateBox(format, first);
   await second.box.kickStartup();
   await second.box.devboxStartup();
   const woken = await second.box.candidateControlState();

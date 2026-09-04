@@ -24,6 +24,7 @@
 // imported by every file that needs the class.
 import { mock } from 'bun:test';
 
+import { sha256Hex } from '../../src/cas/hash';
 import { describeThrown } from '../../src/lifecycle';
 import type { StoredValue } from '../../src/storage';
 import { sessionShellRefusal } from './session-shell';
@@ -210,6 +211,11 @@ export function fakeStorage(): FakeStorage {
   const schedules: { callback: string; time: number }[] = [];
   const gates: Record<string, Gate | undefined> = {};
   const faults: Record<string, Error | undefined> = {};
+  /** Write counter per key. A transaction records the counter of every key it
+   *  touches and refuses to commit one another writer moved meanwhile: the
+   *  runtime isolates concurrent transactions, so the second committer fails
+   *  instead of silently overwriting the first. Sequential flows never trip it. */
+  const keyVersions = new Map<string, number>();
   // SAFETY: `DurableObjectStorage` declares the platform's whole storage API,
   // of which the methods under test reach exactly these five; the rest is
   // alarms and SQL beyond the one statement modelled below, which no line of
@@ -232,9 +238,14 @@ export function fakeStorage(): FakeStorage {
         return Promise.reject(fault);
       }
       rows.set(key, value);
+      keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
       return Promise.resolve();
     },
-    delete: (key: string): Promise<boolean> => Promise.resolve(rows.delete(key)),
+    delete: (key: string): Promise<boolean> => {
+      const existed = rows.delete(key);
+      if (existed) keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
+      return Promise.resolve(existed);
+    },
     // THE CANDIDATE CONTROL ROW'S READ-MODIFY-WRITE. The runtime runs the
     // closure against a transaction whose writes land together when it
     // settles and not at all when it throws; a closure that refused (the head
@@ -246,22 +257,46 @@ export function fakeStorage(): FakeStorage {
     ): Promise<T> => {
       const staged = new Map<string, StoredValue>();
       const removed = new Set<string>();
+      const seen = new Map<string, number>();
+      const observe = (key: string): void => {
+        if (!seen.has(key)) seen.set(key, keyVersions.get(key) ?? -1);
+      };
       const transaction: DurableObjectTransaction = Object.create({
-        get: async (key: string): Promise<StoredValue> =>
-          removed.has(key) ? undefined : staged.get(key) ?? rows.get(key),
+        get: async (key: string): Promise<StoredValue> => {
+          observe(key);
+          return removed.has(key) ? undefined : staged.get(key) ?? rows.get(key);
+        },
         put: async (key: string, value: StoredValue): Promise<void> => {
+          observe(key);
           removed.delete(key);
           staged.set(key, value);
         },
         delete: async (key: string): Promise<boolean> => {
+          observe(key);
           staged.delete(key);
           removed.add(key);
           return rows.has(key);
         },
       });
       const result = await closure(transaction);
-      for (const key of removed) rows.delete(key);
-      for (const [key, value] of staged) rows.set(key, value);
+      for (const key of staged.keys()) {
+        if ((keyVersions.get(key) ?? -1) !== (seen.get(key) ?? -1)) {
+          throw new Error(`transaction conflict: ${key} changed during the transaction`);
+        }
+      }
+      for (const key of removed) {
+        if ((keyVersions.get(key) ?? -1) !== (seen.get(key) ?? -1)) {
+          throw new Error(`transaction conflict: ${key} changed during the transaction`);
+        }
+      }
+      for (const key of removed) {
+        rows.delete(key);
+        keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
+      }
+      for (const [key, value] of staged) {
+        rows.set(key, value);
+        keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
+      }
       return result;
     },
     // The DO's own SQLite, as the ONE statement the class issues sees it. A fake
@@ -1050,6 +1085,17 @@ export type TestEnv = Record<string, never>;
  *  its strategy scopes the store to (`boxes/<id>`). */
 export const TEST_BOX_ID = 'devbox-under-test';
 
+/**
+ * Deterministic box identity from the same input production hashes:
+ * `binding.idFromName(`${strategy}:${name}`)` (the bench fixture's `boxOf`).
+ * Same input gives the same id and the same isolated storage; any difference
+ * gives another box. Tests that need two boxes pass different names; tests
+ * that need one keep the default below.
+ */
+export function deriveBoxId(strategy: string, name: string): string {
+  return sha256Hex(new TextEncoder().encode(`${strategy}:${name}`));
+}
+
 /** One box, its container and its durable rows. */
 export interface Harness<Box> {
   readonly box: Box;
@@ -1061,6 +1107,9 @@ export interface Harness<Box> {
 /**
  * One box on a fresh container and fresh durable rows.
  *
+ * `id` is the Durable Object identity, defaulting to the legacy fixed one so
+ * every existing test keeps its box. Pass `deriveBoxId` output to model
+ * production, where the identity derives from the strategy and the box name.
  * `container.running` starts true, so the readiness gate drives the restoration
  * rather than starting a container: an ephemeral box — no store — attaches
  * nothing, which is a real state and the one that keeps these tests about the
@@ -1068,6 +1117,7 @@ export interface Harness<Box> {
  */
 export function harness<Box>(
   Box: new (state: BoxState, env: TestEnv) => Box,
+  id: string = TEST_BOX_ID,
 ): Harness<Box> {
   const storage = fakeStorage();
   // SAFETY: `DurableObjectState` declares the platform handle a Durable Object
@@ -1077,7 +1127,7 @@ export function harness<Box>(
   // reaches — and all three are provided here.
   const state = {
     storage: storage.handle,
-    id: { toString: () => TEST_BOX_ID },
+    id: { toString: () => id },
     // The platform's critical section, as a stand-in that deliberately does NOT
     // provide the exclusion the real one does: the closure simply runs. That is
     // what lets a test park inside the section and prove the conditional write
