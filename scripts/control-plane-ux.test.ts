@@ -161,7 +161,8 @@ const TAB_HEADINGS = {
   Users: 'Accounts',
   Workspaces: 'Across every account',
   Incidents: 'Open incidents',
-  Feedback: 'In-product reports',
+  // 33056d3d8 cut the heading to "Feedback"; the readiness signal follows the product's words.
+  Feedback: 'Feedback',
   Metrics: 'Fleet metrics',
   Audit: 'Admin audit',
 } satisfies Record<string, string>;

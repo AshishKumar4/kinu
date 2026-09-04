@@ -734,7 +734,8 @@ describe('the Environment tab, as a user reads it', () => {
   test('one card per environment: status, durability, and the device wears its own name', () => {
     const byName = Object.fromEntries(observed.envCards.map((card) => [card.name, card]));
     expect(byName["Ashish's MacBook"]?.status).toBe('active');
-    expect(byName["Ashish's MacBook"]?.durability).toContain('Your machine');
+    // 33056d3d8 cut the live-shared hint to "Files stay on your machine."
+    expect(byName["Ashish's MacBook"]?.durability).toContain('Files stay on your machine');
     expect(byName['Workspace']?.durability).toContain('Durable');
     expect(byName['Sandbox']?.durability).toContain('Ephemeral');
   });
@@ -1119,7 +1120,8 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.click('[aria-label="New agent"]');
       await page.waitForSelector('[role="alert"]', { timeout: 15_000 });
       const banner = await page.$eval('[role="alert"]', (node) => node.textContent ?? '');
-      expect(banner).toContain("Couldn't create an agent");
+      // 9593645b0: one spelling, "Could not create an agent".
+      expect(banner).toContain('Could not create an agent');
       expect(banner).toContain(CREATE_REFUSAL_CHAIN);
       // The + button is not stuck in `creating`.
       expect(await page.$eval('[aria-label="New agent"]', (node) => node.hasAttribute('disabled'))).toBe(false);
@@ -1133,7 +1135,8 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.waitForFunction(() => (
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('New agent')
       ), { timeout: 15_000 });
-      expect(await page.evaluate(() => document.body.innerText)).not.toContain("Couldn't create an agent");
+      // 9593645b0: the banner's spelling, if it wrongly returned.
+      expect(await page.evaluate(() => document.body.innerText)).not.toContain('Could not create an agent');
       await page.close();
     });
   }, 240_000);
@@ -1485,7 +1488,9 @@ describe('a revoked device whose command may still run', () => {
       await dialogAccepted;
 
       const immediate = await page.$eval('[data-device-incident="dev-1"]', (row) => row.textContent ?? '');
-      expect(immediate).toContain('A command could not be confirmed stopped when you revoked this device.');
+      // 33056d3d8: the warning reads "Kinu could not confirm that every
+      // command stopped after revocation."
+      expect(immediate).toContain('Kinu could not confirm that every command stopped after revocation.');
       expect(immediate).toContain('2 commands have no confirmed termination and may still run.');
       expect(await page.$('[data-device-incident="dev-1"] [title="Rename this device"]')).toBeNull();
       expect(await page.$('[data-device-incident="dev-1"] [title="Revoke device"]')).toBeNull();
@@ -1493,7 +1498,8 @@ describe('a revoked device whose command may still run', () => {
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-device-incident="dev-1"]', { timeout: 10_000 });
       const persisted = await page.$eval('[data-device-incident="dev-1"]', (row) => row.textContent ?? '');
-      expect(persisted).toContain('A command could not be confirmed stopped when you revoked this device.');
+      // 33056d3d8: same rewrite as the immediate arm.
+      expect(persisted).toContain('Kinu could not confirm that every command stopped after revocation.');
       expect(persisted).toContain('Commands may still run.');
 
       await page.click('[data-device-incident="dev-1"] button');
@@ -1537,7 +1543,9 @@ describe('linking a machine happens on the surface that asked for it', () => {
       expect(new URL(page.url()).pathname).toBe('/gallery.html');
       // The disclosure is on screen BEFORE anything is installed.
       expect(await page.$eval('[role="dialog"]', (d) => d.textContent ?? ''))
-        .toContain('The daemon dials out over one WebSocket; it opens no inbound ports.');
+        // 162182954 cut the line to "The daemon dials out and opens no
+        // inbound ports."
+        .toContain('The daemon dials out and opens no inbound ports.');
 
       await page.click('[role="dialog"] [data-connect-start]');
       await page.waitForSelector('[data-connect-command]');
