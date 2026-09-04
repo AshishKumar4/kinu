@@ -938,9 +938,11 @@ describe('an additional agent, as an ordinary conversation', () => {
 
       // One click. No dialog, no role field, no mission field — the click
       // lands directly in the new agent's conversation, titled provisionally.
+      // 108c6c414: the untitled tab reads "Untitled agent" now; "New agent"
+      // is the create button's label, not the conversation's title.
       await page.click('[aria-label="New agent"]');
       await page.waitForFunction(() => (
-        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('New agent')
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
       ), { timeout: 10_000 });
       const afterCreate = await rig.bodyText();
       expect(afterCreate).not.toContain('Add a subordinate');
@@ -1049,7 +1051,8 @@ describe('an additional agent, as an ordinary conversation', () => {
       const { page } = rig;
       await page.click('[aria-label="New agent"]');
       await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/agent-1"]');
-      expect(await rig.activeTab()).toContain('New agent');
+      // 108c6c414: the untitled conversation is "Untitled agent" on the strip.
+      expect(await rig.activeTab()).toContain('Untitled agent');
       expect(await rig.bodyText()).not.toContain('Add a subordinate');
       expect(await rig.bodyText()).not.toContain(MISSION);
 
@@ -1057,7 +1060,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       await rig.clickTab('Main');
       await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');
       expect(await rig.draft()).toBe('');
-      await rig.clickTab('New agent');
+      await rig.clickTab('Untitled agent');
       await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/agent-1"]');
       expect(await rig.draft()).toBe('thumb-typed draft');
 
@@ -1096,7 +1099,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       // The affordance is intact: the next click creates and opens the agent.
       await page.click('[aria-label="New agent"]');
       await page.waitForFunction(() => (
-        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('New agent')
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
       ), { timeout: 10_000 });
       // Exactly one record for exactly one failure — the create that landed
       // added nothing, and nothing was ever unhandled.
@@ -1133,7 +1136,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       // Retry lands: the banner clears and the new conversation opens.
       await page.click('[aria-label="New agent"]');
       await page.waitForFunction(() => (
-        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('New agent')
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
       ), { timeout: 15_000 });
       // 9593645b0: the banner's spelling, if it wrongly returned.
       expect(await page.evaluate(() => document.body.innerText)).not.toContain('Could not create an agent');
@@ -1152,8 +1155,9 @@ describe('an additional agent, as an ordinary conversation', () => {
       // One click on the page's own strip: the hook's zero-argument RPC, the
       // navigate, the facet column — all the page's real wiring.
       await page.click('[aria-label="New agent"]');
+      // 108c6c414: the untitled conversation is "Untitled agent".
       await page.waitForFunction(() => (
-        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('New agent')
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
       ), { timeout: 15_000 });
       const body = await page.evaluate(() => document.body.innerText);
       expect(body).not.toContain('Add a subordinate');
