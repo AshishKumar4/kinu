@@ -709,4 +709,31 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     expect(store.standing(GATED, 'laptop')).toBeNull();
     expect(store.get('defer-1')).toBeNull();
   });
+
+  test('a refund beside a second re-issue answers the grant, not the fresh ask', async () => {
+    // The two-consumer shape the whole defect comes from: `decide()` wakes the
+    // agent AND leaves the grant for anyone, so a second re-issue can park a
+    // NEW row in the window between the first one's spend and its refund. Once
+    // the refund lands, one key holds both. Answering the newer QUEUED row
+    // there would ask the owner for the very thing they already approved.
+    const { queue, store, exec, executed, answerWith } = deviceSetup();
+    answerWith(notConnected);
+    await exec(GATED);
+    await queue.decide(['defer-1'], 'approved');
+
+    // Consumer A takes the grant and has not come back yet.
+    const spend = store.spend('defer-1');
+    if (!spend) throw new Error('the approved grant must be spendable');
+    // Consumer B finds nothing standing and parks its own row.
+    expect(await exec(GATED)).toContain('NOT RUN — queued for owner approval (defer-2)');
+    // A never reached the machine, so the grant comes back beside defer-2.
+    queue.channel.settle(spend.spend, 'did-not-run');
+
+    answerWith(() => 'ran');
+    expect(await exec(GATED)).toBe('ran');
+    expect(executed).toEqual([GATED]);
+    // defer-2 is still the owner's to answer; the grant is gone for good.
+    expect(store.get('defer-1')).toBeNull();
+    expect(queue.list().map((a) => a.id)).toEqual(['defer-2']);
+  });
 });

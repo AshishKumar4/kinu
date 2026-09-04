@@ -185,6 +185,14 @@ export class DeferredApprovalStore {
    *  is out it answers for nobody. The executor is part of the key because an
    *  approval for the agent's own workspace is not an approval for the owner's
    *  laptop.
+   *
+   *  A DECISION outranks a pending ask, and only then does the newest win. One
+   *  key can hold both once a refund puts a grant back while a second re-issue
+   *  has already parked a fresh row beside it — two consumers of one approval
+   *  is the shape this whole mechanism exists for. Answering the newer QUEUED
+   *  row there would ask the owner for something they have already answered,
+   *  which is the complaint, not the fix. Between two decisions the newest
+   *  still wins, so the owner's latest word governs.
    */
   standing(command: string, executor: string): DeferredApproval | null {
     const rows = this.sql<Row>`
@@ -192,7 +200,8 @@ export class DeferredApprovalStore {
       FROM deferred_approvals
       WHERE command = ${command} AND executor = ${executor}
         AND status IN ('queued','approved','denied')
-      ORDER BY requested_at DESC LIMIT 1`;
+      ORDER BY CASE WHEN status = 'queued' THEN 1 ELSE 0 END, requested_at DESC
+      LIMIT 1`;
     return rows[0] ? toAction(rows[0]) : null;
   }
 
