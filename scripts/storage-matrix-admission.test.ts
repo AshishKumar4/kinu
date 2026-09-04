@@ -532,7 +532,6 @@ function measuredArm(strategy: Strategy, overrides: Partial<ArmResult> = {}): Ar
     phases: [probeRun(1.10), probeRun(1.15)],
     decisiveTicks: [],
     quiescesBeforeDecisive: 3,
-    decisiveQuiesces: 0,
     generationBeforeLadder: null,
     generationAfterLadder: null,
     treeBytes: {},

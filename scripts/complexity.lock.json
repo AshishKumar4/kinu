@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-04",
-  "files": 1984,
-  "functions": 51640,
+  "files": 2016,
+  "functions": 52322,
   "ceiling": 125,
   "line": 39,
   "inventory": [
@@ -19,7 +19,7 @@
     },
     {
       "key": "scripts/bench-devbox-strategies.ts#measureArm",
-      "complexity": 100
+      "complexity": 95
     },
     {
       "key": "packages/core/src/tools/agents-tool.ts#dispatchAgentsAction",
@@ -82,10 +82,6 @@
       "complexity": 55
     },
     {
-      "key": "packages/devbox/bench/worker.ts#fetch",
-      "complexity": 53
-    },
-    {
       "key": "scripts/bench-devbox-strategies.ts#render",
       "complexity": 53
     },
@@ -95,6 +91,10 @@
     },
     {
       "key": "packages/core/src/strategy/swarm-setup.ts#seedResumedSearch",
+      "complexity": 51
+    },
+    {
+      "key": "packages/devbox/bench/worker.ts#fetch",
       "complexity": 51
     },
     {
@@ -211,6 +211,14 @@
     },
     {
       "key": "scripts/axis-ergonomics/report.ts#score",
+      "complexity": 39
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#readCandidateCutCell",
+      "complexity": 39
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#readChainCutCell",
       "complexity": 39
     }
   ]

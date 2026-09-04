@@ -1024,6 +1024,55 @@ async function body(request: Request): Promise<DriverBody> {
 
 
 
+/**
+ * The deployed probe's two diagnostic reads: the candidate control dump and
+ * the incident ledger. Both are read-only facts about one box — the control
+ * row the publish path wrote, every failure the box filed — and the probe
+ * archives both after the ladder and after the wake, so they ride ahead of
+ * the operation router rather than inside it. The switch below stays the
+ * router for the operations that arm, write, or tear down. Null answers any
+ * other route.
+ */
+async function serveProbeDiagnostics(
+  route: string,
+  env: BenchEnv,
+  strategy: DevboxStrategyName,
+  box: BenchStub,
+  name: string,
+  started: number,
+): Promise<Response | null> {
+  if (route === 'GET /incidents') {
+    // Every filed failure, oldest first. Totals say how many; only the
+    // reasons say what. Called after the ladder and after the wake but
+    // before teardown, with full arrays archived.
+    const incidents = await box.devboxIncidentReasons();
+    return json({ ok: true, strategy, box: name, incidents, ms: Date.now() - started });
+  }
+  if (route !== 'GET /candidate') return null;
+  // FACTS ONLY, and only for an arm that has candidate control state.
+  // A chain or overlay arm is refused here rather than served the
+  // nearest-looking rows, because a driver that accepted those would be
+  // proving a candidate lifecycle against another strategy's evidence.
+  if (strategy !== 'bounded-layers' && strategy !== 'merkle-pack') {
+    return json({
+      ok: false,
+      strategy,
+      box: name,
+      error: `${strategy} publishes no candidate control envelope`,
+    }, 400);
+  }
+  const store = await candidateStoreFacts(
+    env.BACKUP_BUCKET,
+    strategy,
+    candidateBoxPrefix(env, strategy, name),
+  );
+  const container = await box.candidateContainerFacts();
+  // The raw control fact travels verbatim so a dump taken at publish
+  // and one taken at wake compare byte for byte.
+  const control = await box.candidateControlState();
+  return json({ ok: true, strategy, box: name, store, container, control, ms: Date.now() - started });
+}
+
 export default {
   async fetch(request: Request, env: BenchEnv): Promise<Response> {
     if (!authorized(request, env.BENCH_TOKEN)) return json({ ok: false, error: 'unauthorized' }, 401);
@@ -1061,7 +1110,10 @@ export default {
     const started = Date.now();
 
     try {
-      switch (`${request.method} ${url.pathname}`) {
+      const route = `${request.method} ${url.pathname}`;
+      const probe = await serveProbeDiagnostics(route, env, strategy, box, name, started);
+      if (probe !== null) return probe;
+      switch (route) {
         case 'POST /create': {
           await box.kickStartup();
           return json({ ok: true, strategy, box: name, ms: Date.now() - started });
@@ -1187,39 +1239,6 @@ export default {
             state,
             ms: Date.now() - started,
           });
-        }
-
-        case 'GET /candidate': {
-          // FACTS ONLY, and only for an arm that has candidate control state.
-          // A chain or overlay arm is refused here rather than served the
-          // nearest-looking rows, because a driver that accepted those would be
-          // proving a candidate lifecycle against another strategy's evidence.
-          if (strategy !== 'bounded-layers' && strategy !== 'merkle-pack') {
-            return json({
-              ok: false,
-              strategy,
-              box: name,
-              error: `${strategy} publishes no candidate control envelope`,
-            }, 400);
-          }
-          const store = await candidateStoreFacts(
-            env.BACKUP_BUCKET,
-            strategy,
-            candidateBoxPrefix(env, strategy, name),
-          );
-          const container = await box.candidateContainerFacts();
-          // The raw control fact travels verbatim so a dump taken at publish
-          // and one taken at wake compare byte for byte.
-          const control = await box.candidateControlState();
-          return json({ ok: true, strategy, box: name, store, container, control, ms: Date.now() - started });
-        }
-
-        case 'GET /incidents': {
-          // Every filed failure, oldest first. Totals say how many; only the
-          // reasons say what. Called after the ladder and after the wake but
-          // before teardown, with full arrays archived.
-          const incidents = await box.devboxIncidentReasons();
-          return json({ ok: true, strategy, box: name, incidents, ms: Date.now() - started });
         }
 
         case 'GET /ops': {

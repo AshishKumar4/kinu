@@ -29,6 +29,7 @@ import { WRANGLER_FAILED } from './fixtures/r2-bench/deploy-substrate';
 import { scratchDir } from '@kinu.run/test-utils';
 import {
   DECIDING_METRIC,
+  admittedAttachKinds,
   addressArmRequest,
   armLogTail,
   underArmLog,
@@ -62,11 +63,14 @@ import {
   r2CleanupKeyRefusal,
   R2_CLEANUP_KEY_FILE,
   rankableTicks,
+  retainWakeMountLines,
   readArmArtifact,
   refuseFailedArm,
   resetArmLogs,
   runArm,
   runArmsInFlight,
+  runDecisive,
+  runWorkloadPhases,
   render,
   renderFrozenControls,
   orphanTeardownExecutor,
@@ -806,6 +810,231 @@ describe('an arm that fails mid-measurement', () => {
   }, 20_000);
 });
 
+/**
+ * A verify-only probe arm: one arm's ladder, stop and wake with the evidence
+ * reads, then teardown — and nothing else. The fake answers the whole probe
+ * path the way `wakeRefusingFixture` answers the failure path, so what the
+ * arm does NOT ask for is decided by the driver rather than by how far the
+ * fake got. The publish and wake answers differ on purpose: two reads that
+ * archived the same bytes would prove nothing about when each was taken.
+ */
+function probeScopeFixture() {
+  const asked: { route: string; body: string }[] = [];
+  const real = globalThis.fetch;
+  let woken = false;
+  let marker = '';
+  let candidateCalls = 0;
+  let incidentCalls = 0;
+  const mounts =
+    'journald /workspace fuse.journald rw 0 0\ns3fs /var/tmp/devbox/store fuse.s3fs rw 0 0\n';
+  const answer = async (
+    input: Parameters<typeof globalThis.fetch>[0],
+    init?: Parameters<typeof globalThis.fetch>[1],
+  ): Promise<Response> => {
+    const url = new URL(String(input));
+    const method = init?.method ?? 'GET';
+    const route = `${method} ${url.pathname}`;
+    const body = String(init?.body ?? '');
+    asked.push({ route, body });
+    if (route === 'POST /wake') {
+      woken = true;
+      return new Response(JSON.stringify({ ok: true, ms: 12 }));
+    }
+    if (route === 'GET /state') {
+      return new Response(JSON.stringify({
+        ok: true,
+        storePrefix: 'boxes/probe/',
+        state: {
+          running: true,
+          restoration: 'attached',
+          lastAttach: { kind: 'attached', detail: 'restored candidate root aabbcc' },
+          bootId: woken ? 'boot-after-the-wake' : 'boot-before-the-stop',
+          chain: { base: { id: 'chain-1' }, delta: { bytes: 4096 }, mode: 'chain', rev: 3 },
+        },
+      }));
+    }
+    if (route === 'POST /checkpoint' || route === 'POST /stop') {
+      return new Response(JSON.stringify({ ok: true, token: `token-${String(asked.length)}`, state: 'pending' }), {
+        status: 202,
+      });
+    }
+    if (route === 'GET /operation') {
+      return new Response(JSON.stringify({
+        ok: true,
+        state: 'done',
+        ms: 1_234,
+        outcome: { kind: 'committed', bytes: 65_536, movedBytes: 32_768 },
+      }));
+    }
+    if (route === 'POST /exec') {
+      const posted = v.safeParse(PostedBodySchema, JSON.parse(String(init?.body ?? '{}')));
+      const command = posted.success ? posted.output.command ?? '' : '';
+      const written = /printf %s (devbox-verify-[0-9a-f-]+)/.exec(command)?.[1] ?? '';
+      if (written !== '') marker = written;
+      const stdout = command.includes('cat /proc/mounts')
+        ? mounts
+        : command.includes('.devbox-verify-marker.txt') ? (written !== '' ? written : marker) : '';
+      return new Response(JSON.stringify({ ok: true, exitCode: 0, stdout, stderr: '', ms: 3 }));
+    }
+    if (route === 'GET /ops') {
+      return new Response(JSON.stringify({ calls: { put: 4 }, classA: 4, classB: 1, classFree: 0, total: 5 }));
+    }
+    if (route === 'GET /candidate') {
+      candidateCalls += 1;
+      const head = candidateCalls === 1 ? 'pub-head' : 'wake-head';
+      return new Response(JSON.stringify({
+        ok: true,
+        store: {
+          payloadPrefix: 'boxes/probe/candidate/bounded-layers/payload/',
+          envelopePrefix: 'boxes/probe/candidate/bounded-layers/envelopes/',
+          expectedBoxId: 'probe-box',
+          expectedFormat: 'probe-format',
+          envelopes: [],
+          head: {
+            key: 'boxes/probe/candidate/bounded-layers/envelopes/aabb.json',
+            rootEnvelopeId: 'aabb',
+            sha256: 'aabb',
+            format: 'probe-format',
+            boxId: 'probe-box',
+            generation: '3',
+            cut: 'all',
+          },
+          forkedHeads: [],
+          closure: [{
+            key: 'boxes/probe/candidate/bounded-layers/payload/obj-1',
+            declaredBytes: '8',
+            storedBytes: 8,
+          }],
+          unreadable: [],
+        },
+        container: {
+          expectedWorkdirMount: '/workspace',
+          expectedStoreMount: '/var/tmp/devbox/store',
+          expectedJournalRoot: '/var/tmp/journal',
+          expectedJournalSocket: '/var/tmp/journal.sock',
+          expectedJournalBinary: 'journal-daemon',
+          mounts,
+          journalRootPresent: true,
+          journalSocketPresent: true,
+          journalDaemonCommand: 'journal-daemon --root /var/tmp/journal --mount /workspace --socket /var/tmp/journal.sock',
+        },
+        control: {
+          strategy: 'bounded-layers',
+          boxId: 'probe-box',
+          key: 'candidate/bounded-layers/control',
+          found: true,
+          head,
+          operation: 'quiesce',
+        },
+      }));
+    }
+    if (route === 'GET /incidents') {
+      incidentCalls += 1;
+      const ladder = [{ stage: 'checkpoint', reason: 'ladder-window failure', at: 1000, attempts: 1, delivered: true }];
+      return new Response(JSON.stringify({
+        ok: true,
+        incidents: incidentCalls === 1
+          ? ladder
+          : [...ladder, { stage: 'restore', reason: 'restore-window failure', at: 2000, attempts: 3, delivered: false }],
+      }));
+    }
+    return new Response(JSON.stringify({ ok: true, ms: 1 }));
+  };
+  globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+  return { asked, restore: () => { globalThis.fetch = real; } };
+}
+
+describe('a verify-only probe arm', () => {
+  test('runs one ladder, stop, wake and teardown with its evidence reads — and nothing else', async () => {
+    const fixture = probeScopeFixture();
+    let arm: ArmResult;
+    try {
+      arm = await runArm(
+        BENCH_FIXTURE,
+        'bounded-layers',
+        { ...parseOptions([]), arms: ['bounded-layers'], runId: 'probe-scope-verify', verifyOnly: true },
+        () => {},
+      );
+    } finally {
+      fixture.restore();
+    }
+
+    // THE LADDER, STOP AND WAKE RAN: the evidence window's own steps.
+    expect(arm.checkpoints).toHaveLength(EXPECTED_LADDER_ROWS);
+    expect(arm.stopMs).toBe(1_234);
+    expect(arm.wakeKind).toBe('attached');
+    expect(arm.wakeBootId).toBe('boot-after-the-wake');
+    expect(arm.verifyPassed).toBe(true);
+
+    // THE FOUR ARCHIVED READS, each from its own window.
+    expect(arm.publishControl?.found).toBe(true);
+    expect(arm.publishControl?.head).toBe('pub-head');
+    expect(arm.wakeControl?.head).toBe('wake-head');
+    expect(arm.publishIncidents?.map((row) => row.reason)).toEqual(['ladder-window failure']);
+    expect(arm.wakeIncidents?.map((row) => row.reason)).toEqual(['ladder-window failure', 'restore-window failure']);
+
+    // AND NOTHING ELSE: no workload phases, no decisive ticks, no warm
+    // attach, no tally, no cells — with the skips noted, not silent.
+    expect(arm.phases).toEqual([]);
+    expect(arm.decisiveTicks).toEqual([]);
+    expect(arm.attachWarmMs).toBeNull();
+    expect(arm.ops).toBeNull();
+    expect(arm.witnessChecks).toEqual([]);
+    expect(arm.cut).toBeNull();
+    expect(arm.notes.join(' ')).toContain('workload phases skipped');
+    expect(arm.notes.join(' ')).toContain('probe scope');
+
+    // A PROBE THAT SILENTLY RAN A WORKLOAD IS THE FAILURE MODE: no exec
+    // carried a phase or a decisive workload, and the box was still torn
+    // down and handed back.
+    const execs = fixture.asked.filter((ask) => ask.route === 'POST /exec');
+    expect(execs.length).toBeGreaterThan(0);
+    for (const ask of execs) {
+      expect(ask.body).not.toContain('probe.ts');
+      expect(ask.body).not.toContain('decisive.ts');
+    }
+    expect(fixture.asked.some((ask) => ask.route === 'POST /teardown')).toBe(true);
+    expect(fixture.asked.filter((ask) => ask.route === 'POST /stop')).toHaveLength(2);
+  }, 20_000);
+
+  test('verify-only wins over decisive at parse time', () => {
+    const options = parseOptions(['--arms', 'bounded-layers', '--decisive', '--verify-only']);
+    expect(options.verifyOnly).toBe(true);
+    expect(options.decisive).toBe(false);
+  });
+
+  test('the workload phases skip without touching the fixture', async () => {
+    const arm = measuredArm('bounded-layers');
+    const notes: string[] = [];
+    await runWorkloadPhases(
+      BENCH_FIXTURE,
+      'ab-bounded-layers-probe',
+      'bounded-layers',
+      { seed: 1, budgetMs: 1, repetitions: 2, verifyOnly: true },
+      arm,
+      notes,
+    );
+    expect(arm.phases).toEqual([]);
+    expect(notes.join(' ')).toContain('workload phases skipped');
+  });
+
+  test('mount retention reads the reply’s own points for candidates, declared points elsewhere', () => {
+    const mounts = 'journald /workspace fuse.journald rw 0 0\ns3fs /var/tmp/devbox/store fuse.s3fs rw 0 0\n';
+    expect(retainWakeMountLines('bounded-layers', mounts, {
+      expectedWorkdirMount: '/workspace',
+      expectedStoreMount: '/var/tmp/devbox/store',
+    })).toEqual([
+      'journald /workspace fuse.journald rw 0 0',
+      's3fs /var/tmp/devbox/store fuse.s3fs rw 0 0',
+    ]);
+    expect(retainWakeMountLines('r2fs', mounts)).toEqual(['journald /workspace fuse.journald rw 0 0']);
+    expect(retainWakeMountLines('r2fs', mounts, {
+      expectedWorkdirMount: '/nowhere',
+      expectedStoreMount: '/nowhere-else',
+    })).toEqual(['journald /workspace fuse.journald rw 0 0']);
+  });
+});
+
 /** When a stub lane started or finished: the ORDER it happened in, which is
  *  what an overlap claim rests on, and the wall clock it happened at, which is
  *  what a reader of a failure wants to see. */
@@ -889,7 +1118,6 @@ function measuredArm(strategy: Strategy): ArmResult {
     phases: [],
     decisiveTicks: [],
     quiescesBeforeDecisive: 0,
-    decisiveQuiesces: 0,
     generationBeforeLadder: null,
     generationAfterLadder: null,
     treeBytes: {},
@@ -1529,7 +1757,7 @@ describe('the lifecycle-proof gate at the rule', () => {
       checkpoints: [], stopMs: null, wakeMs: null, wakeKind: '', phases: [], decisiveTicks: [
         tick('bounded-layers', 'git', 10),
       ],
-      quiescesBeforeDecisive: 0, decisiveQuiesces: 0,
+      quiescesBeforeDecisive: 0,
       generationBeforeLadder: null, generationAfterLadder: null, treeBytes: {},
       ops: null, teardown: null, witnessChecks: [], notes: [],
     };
@@ -1625,7 +1853,7 @@ describe('the recommendation ranks every measured arm', () => {
     checkpoints: [], stopMs: null, wakeMs: null, wakeKind: 'attached',
     phases: [],
     decisiveTicks: [tick(strategy, 'git', ms.git), tick(strategy, 'npm', ms.npm)],
-    quiescesBeforeDecisive: 0, decisiveQuiesces: 0,
+    quiescesBeforeDecisive: 0,
     generationBeforeLadder: null, generationAfterLadder: null, treeBytes: {},
     ops: null, teardown: null,
     witnessChecks: witnesses.map((name) => ({ name, observed: true, detail: 'observed' })),
@@ -1740,7 +1968,7 @@ describe('the rendered report carries no money', () => {
       tick(strategy, 'npm', 400, { classA: 112, classB: 22, bytesPut: 244_143_360 }),
       tick(strategy, 'sqlite', 900, { classA: 494, classB: 28, bytesPut: 1_199_570_944 }),
     ],
-    quiescesBeforeDecisive: 3, decisiveQuiesces: 0,
+    quiescesBeforeDecisive: 3,
     generationBeforeLadder: null, generationAfterLadder: null,
     treeBytes: { sqlite: 162_308_680 },
     ops: { calls: { put: 27 }, classA: 912, classB: 145, classFree: 1, total: 1_058 },
@@ -1886,6 +2114,83 @@ describe('operation totals', () => {
     expect(totals.ticks).toBe(1);
     expect(totals.sumWallMs).toBe(100);
   });
+
+  test('a decisive run prices only committed ticks, and says which segments it did not', async () => {
+    // RED-FIRST for a decision skew: runDecisive pushed a TickRecord per
+    // segment even on checkpoint error with wallMs -1, and the aggregates
+    // summed it — a chain arm erroring every tick summed a negative numerator.
+    // The first two of five segments fail here, the third commits without a
+    // measured duration, and the last two commit whole.
+    let checkpointArms = 0;
+    const real = globalThis.fetch;
+    const answer = async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init?: Parameters<typeof globalThis.fetch>[1],
+    ): Promise<Response> => {
+      const url = new URL(String(input));
+      const route = `${init?.method ?? 'GET'} ${url.pathname}`;
+      if (route === 'POST /exec') {
+        return new Response(JSON.stringify({
+          ok: true,
+          exitCode: 0,
+          stdout: JSON.stringify({
+            workload: 'npm',
+            segments: [{ name: 's0', bytesWritten: 8, pathsTouched: 1, wallMs: 5 }],
+            treeBytes: 100,
+          }),
+          stderr: '',
+          ms: 3,
+        }));
+      }
+      if (route === 'POST /checkpoint') {
+        checkpointArms += 1;
+        return new Response(
+          JSON.stringify({ ok: true, token: `token-${String(checkpointArms)}`, state: 'pending' }),
+          { status: 202 },
+        );
+      }
+      if (route === 'GET /operation') {
+        if (checkpointArms <= 2) {
+          return new Response(JSON.stringify({ ok: true, state: 'done', ms: 50, outcome: { kind: 'failed' } }));
+        }
+        if (checkpointArms === 3) {
+          return new Response(JSON.stringify({
+            ok: true, state: 'done', outcome: { kind: 'committed', bytes: 100, movedBytes: 80 },
+          }));
+        }
+        return new Response(JSON.stringify({
+          ok: true, state: 'done', ms: 50, outcome: { kind: 'committed', bytes: 100, movedBytes: 80 },
+        }));
+      }
+      if (route === 'GET /ops') {
+        return new Response(JSON.stringify({ calls: {}, classA: 0, classB: 0, classFree: 0, total: 0 }));
+      }
+      return new Response(JSON.stringify({ ok: true, ms: 1 }));
+    };
+    globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+    let run: { ticks: TickRecord[]; treeBytes: number; notes: string[] };
+    try {
+      // Five segments at the three-second checkpoint interval: ~15 s of honest
+      // waiting, which is why this test owns its timeout.
+      run = await runDecisive(
+        BENCH_FIXTURE,
+        'ab-snapshot-chain-probe',
+        'snapshot-chain',
+        { id: 'npm', workload: 'npm', excludes: false, args: '--target-mib 400 --segments 4' },
+        1,
+        1,
+      );
+    } finally {
+      globalThis.fetch = real;
+    }
+    expect(run.ticks).toHaveLength(2);
+    expect(run.ticks.every((tick) => tick.wallMs === 50)).toBe(true);
+    expect(run.notes.filter((note) => note.includes('did not commit'))).toHaveLength(2);
+    expect(run.notes.filter((note) => note.includes('without a measured duration'))).toHaveLength(1);
+    expect(totalsFor(run.ticks, 'npm').sumWallMs).toBe(100);
+    expect(run.treeBytes).toBe(100);
+  }, 25_000);
+
 });
 
 describe('moved bytes are three-valued, and the third value is not zero', () => {
@@ -3493,6 +3798,66 @@ describe('the driver admits every outcome the product can produce', () => {
     expect(cell).toContain("arm.attachWarmKind === 'already-attached'");
     expect(cell).toContain('arm.wakeBootId === arm.attachWarmBootId');
   });
+
+  test('devboxRequirements admits every kind each startup step admits', () => {
+    // G6 DERIVES its kind clauses from the steps' own admission lists, so the
+    // poll and the gate cannot narrow apart: a healthy arm refused for the
+    // kind it legitimately answered is the defect that ended `r2fs` after a
+    // completed cold attach, ladder, stop and wake. The boot-id equality stays
+    // the generation proof — these arms all carry it.
+    const meta = {
+      date: '2026-09-04', run: 'kinu-devbox-bench-test', worker: 'w', bucket: 'b',
+      image: SANDBOX_IMAGE, seed: '20260824', 'loop budget ms': '8000',
+      'deciding repetitions': '2',
+    };
+    const identity = {
+      commit: '6823779aa', dirtyDigest: 'clean', workerVersion: 'v',
+      startedAt: '2026-09-04T00:00:00.000Z', finishedAt: '2026-09-04T01:00:00.000Z',
+      image: SANDBOX_IMAGE, imageSha256: SANDBOX_IMAGE_DIGEST,
+      dockerfileSha256: `sha256:${'a'.repeat(64)}`, candidateRunnerSha256: `sha256:${'b'.repeat(64)}`,
+      overlayRunnerSha256: `sha256:${'c'.repeat(64)}`, journalDaemonSha256: `sha256:${'d'.repeat(64)}`,
+    };
+    const cleanup = {
+      attempted: true, kept: false, workerAbsent: true, runtimeAbsent: true,
+      bucketAndMultipartEmpty: true, boxDurableStateEmpty: true,
+      localSecretsProcessesAbsent: true, countersReconciled: true,
+      replayIdempotent: true, multipartResidue: 0, errors: [],
+    };
+    const checkpoints = Array.from({ length: EXPECTED_LADDER_ROWS }, (_, index) => ({
+      changeKiB: 64, kind: index % 2 === 0 ? 'quiesce' as const : 'tick' as const,
+      ms: 10, bytes: 100, outcome: 'committed',
+    }));
+    const healthyArm = (overrides: Partial<ArmResult> = {}): ArmResult => ({
+      strategy: 'snapshot-chain', box: 'box-snapshot-chain', verifyPassed: true, verifyChecks: [],
+      attachColdMs: 1000, attachColdKind: 'attached', attachColdBootId: 'cold',
+      attachWarmMs: 50, attachWarmKind: 'attached', wakeBootId: 'wake', attachWarmBootId: 'wake',
+      checkpoints, stopMs: 100, wakeMs: 2000, wakeKind: 'attached',
+      phases: [], decisiveTicks: [], quiescesBeforeDecisive: 0,
+      generationBeforeLadder: null, generationAfterLadder: null, treeBytes: {},
+      ops: { total: 10 }, teardown: null, witnessChecks: [], notes: [],
+      ...overrides,
+    });
+    const g6 = (arm: ArmResult): string => {
+      const verdict = devboxAdmission({
+        arms: [arm], requested: [arm.strategy], repetitions: 2, meta, identity, token: 't', cleanup,
+      });
+      return verdict.gates.find((row) => row.gate === 'G6')?.reasons.join(' | ') ?? '';
+    };
+    expect(g6(healthyArm())).toBe('');
+    for (const kind of admittedAttachKinds('cold attach')) {
+      expect(g6(healthyArm({ attachColdKind: kind }))).toBe('');
+    }
+    for (const kind of admittedAttachKinds('wake')) {
+      expect(g6(healthyArm({ wakeKind: kind }))).toBe('');
+    }
+    for (const kind of admittedAttachKinds('warm attach')) {
+      expect(g6(healthyArm({ attachWarmKind: kind }))).toBe('');
+    }
+    // AND THE TEETH STAY: what a step excludes still refuses.
+    expect(g6(healthyArm({ wakeKind: 'empty' }))).toContain('did not attach');
+    expect(g6(healthyArm({ attachWarmKind: 'empty' }))).toContain('unchanged generation');
+  });
+
 });
 
 describe('the counted restore (G5)', () => {
@@ -3829,7 +4194,7 @@ describe('the cut and counted cells reach the verdict', () => {
     attachColdMs: 1000, attachColdKind: 'empty', attachColdBootId: 'cold',
     attachWarmMs: 50, attachWarmKind: 'attached', wakeBootId: 'wake', attachWarmBootId: 'wake',
     checkpoints: [], stopMs: 100, wakeMs: 2000, wakeKind: 'attached',
-    phases: [], decisiveTicks: [], quiescesBeforeDecisive: 0, decisiveQuiesces: 0,
+    phases: [], decisiveTicks: [], quiescesBeforeDecisive: 0,
     generationBeforeLadder: null, generationAfterLadder: null, treeBytes: {},
     ops: { total: 10 }, teardown: null, witnessChecks: [], notes: [],
     ...overrides,
@@ -3979,4 +4344,46 @@ describe('the instruments restate nothing unchecked', () => {
       expect(cell).toContain(`'${strategy}'`);
     }
   });
+
+  test('the control dump restates the product row, key for key', () => {
+    // Both sides literal: an empty comparison agreeing about nothing is the
+    // failure this device exists to catch — a character class that matches no
+    // name carrying a digit taught us that.
+    const devbox = repo('packages', 'devbox', 'src', 'devbox.ts');
+    const product = /export interface CandidateControlDump \{([\s\S]*?)\}/.exec(devbox)?.[1] ?? '';
+    const productKeys = [...product.matchAll(/readonly (\w+)/g)].map((match) => match[1]).sort();
+    expect(productKeys).toEqual(['boxId', 'found', 'head', 'key', 'operation', 'strategy']);
+    const restated = /export interface CandidateControlDump \{([\s\S]*?)\}/.exec(driver)?.[1] ?? '';
+    const restatedKeys = [...restated.matchAll(/(\w+)\?:/g)].map((match) => match[1]).sort();
+    expect(restatedKeys).toEqual(productKeys);
+  });
+
+  test('the incident rows restate the ledger row, key for key', () => {
+    const devbox = repo('packages', 'devbox', 'src', 'devbox.ts');
+    const product = /export interface IncidentReasonRow \{([\s\S]*?)\}/.exec(devbox)?.[1] ?? '';
+    const productKeys = [...product.matchAll(/readonly (\w+)/g)].map((match) => match[1]).sort();
+    expect(productKeys).toEqual(['at', 'attempts', 'delivered', 'reason', 'stage']);
+    const restated = /export interface IncidentReasonRow \{([\s\S]*?)\}/.exec(driver)?.[1] ?? '';
+    const restatedKeys = [...restated.matchAll(/(\w+)\?:/g)].map((match) => match[1]).sort();
+    expect(restatedKeys).toEqual(productKeys);
+  });
+
+  test('the control-dump exclusion names the route’s own refusal', () => {
+    // Non-candidate arms publish no control row, so the read skips them
+    // without a gap note — but the reason lives here in prose, pinned to the
+    // refusal the route answers, so a rewording on either side fails loudly.
+    const reads = /async function readControlDump[\s\S]*?\n\}/.exec(driver)?.[0] ?? '';
+    expect(reads).toContain(`strategy !== 'bounded-layers' && strategy !== 'merkle-pack'`);
+    expect(reads).toContain('publishes no candidate control envelope');
+    const worker = repo('packages', 'devbox', 'bench', 'worker.ts');
+    expect(worker).toContain('publishes no candidate control envelope');
+  });
+
+  test('the probe scope gates the post-wake tail on verify-only', () => {
+    const arm = /async function measureArm[\s\S]*?\n\}\n/.exec(driver)?.[0] ?? '';
+    expect(arm).toContain('await runWorkloadPhases(fixture, box, strategy, options, result, notes);');
+    expect(arm).toContain('if (options.verifyOnly) {');
+    expect(arm).toContain('await releaseArm(fixture, box, result, notes);');
+  });
+
 });
