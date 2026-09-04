@@ -4535,8 +4535,8 @@ describe('the instruments restate nothing unchecked', () => {
   });
 
   test('the readiness probe asks the daemon’s read-only stats operation', () => {
-    const worker = repo('packages', 'devbox', 'bench', 'worker.ts');
-    const probe = /const JOURNAL_READY_PROBE = \[([\s\S]*?)\]\.join/.exec(worker)?.[1] ?? '';
+    const probeModule = repo('packages', 'devbox', 'bench', 'journal-ready-probe.ts');
+    const probe = /const JOURNAL_READY_PROBE = \[([\s\S]*?)\]\.join/.exec(probeModule)?.[1] ?? '';
     expect(probe).toContain("op: 'stats'");
     const daemon = repo('packages', 'devbox', 'bench', 'journal-daemon', 'journal-daemon.c');
     expect(daemon).toContain('strcmp(op, "stats") == 0');

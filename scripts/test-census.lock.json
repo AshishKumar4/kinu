@@ -1,5 +1,5 @@
 {
-  "measured": "b8eefa1a3: 887 test files, 808 runnable suites, 11753 tests, 34 runners, 62 non-public product members",
+  "measured": "5855df99b: 888 test files, 809 runnable suites, 11774 tests, 34 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -875,6 +875,18 @@
     },
     {
       "key": "source_text :: packages/devbox/tests/decisions.test.ts :: the deployed worker routes through the fail-closed parser :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/devbox/tests/journal-ready-probe.test.ts :: the worker stages probe bytes instead of shell-quoting them :: expect(<source text>).not.toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/devbox/tests/journal-ready-probe.test.ts :: the worker stages probe bytes instead of shell-quoting them :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/devbox/tests/journal-ready-probe.test.ts :: the worker stages probe bytes instead of shell-quoting them :: reads a source file",
       "count": 1
     },
     {

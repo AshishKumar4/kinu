@@ -71,6 +71,7 @@ import {
   candidateStorePaths,
 } from '../src/candidates/container';
 import { sha256Hex } from '../src/cas/hash';
+import { JOURNAL_READY_PROBE, JOURNAL_READY_PROBE_PATH, journalReadyRunCommand } from './journal-ready-probe';
 import {
   R2_CLASS_A_OPERATIONS as CLASS_A,
   R2_CLASS_B_OPERATIONS as CLASS_B,
@@ -127,53 +128,6 @@ export interface CandidateContainerFacts {
    *  is alive in the container. */
   readonly journalDaemonCommand: string;
 }
-
-/**
- * Ask the candidate journal its read-only `stats` operation over the same
- * Unix socket checkpoint uses. Socket presence and daemon argv are weaker
- * facts: the probe that motivated this reached both, then checkpoint found
- * that no mutation journal answered. This script exits zero only after one
- * complete, correlated `{ ok: true }` reply; the fixture carries that raw
- * reply or the failure beside its boolean.
- *
- * The protocol word is checked against the daemon source by the decision
- * suite. No elapsed deadline lives here: the driver transport owns its one
- * request bound, as it does for every other container fact.
- */
-const JOURNAL_READY_PROBE = [
-  "const socketPath = process.argv[1];",
-  "const id = crypto.randomUUID();",
-  "const decoder = new TextDecoder();",
-  "let received = '';",
-  "let settled = false;",
-  "await new Promise((resolve, reject) => {",
-  "  const settle = (finish) => { if (settled) return; settled = true; finish(); };",
-  "  void Bun.connect({",
-  "    unix: socketPath,",
-  "    socket: {",
-  "      open(socket) { socket.write(JSON.stringify({ id, op: 'stats' }) + '\\n'); },",
-  "      data(socket, data) {",
-  "        received += decoder.decode(data, { stream: true });",
-  "        const newline = received.indexOf('\\n');",
-  "        if (newline === -1) return;",
-  "        let response;",
-  "        try { response = JSON.parse(received.slice(0, newline)); }",
-  "        catch (error) { settle(() => reject(error)); socket.end(); return; }",
-  "        if (response.id !== id || response.ok !== true) {",
-  "          settle(() => reject(new Error(response.error ?? 'journal rejected stats')));",
-  "          socket.end();",
-  "          return;",
-  "        }",
-  "        console.log(JSON.stringify(response));",
-  "        settle(resolve);",
-  "        socket.end();",
-  "      },",
-  "      error(_socket, error) { settle(() => reject(error)); },",
-  "      close() { settle(() => reject(new Error('journal closed before answering stats'))); },",
-  "    },",
-  "  }).catch((error) => settle(() => reject(error)));",
-  "});",
-].join('\n');
 
 // ── object-store op counting ────────────────────────────────────────────────
 //
@@ -486,9 +440,11 @@ class BenchBox extends Devbox<BenchEnv> {
     const mounts = await this.exec('cat /proc/mounts');
     const journalRoot = await this.exec(`test -d ${CANDIDATE_JOURNAL_ROOT} && echo yes || echo no`);
     const journalSocket = await this.exec(`test -S ${CANDIDATE_JOURNAL_SOCKET} && echo yes || echo no`);
-    const journalProbe = await this.exec(
-      `bun -e ${JSON.stringify(JOURNAL_READY_PROBE)} ${JSON.stringify(CANDIDATE_JOURNAL_SOCKET)}`,
-    );
+    // Staged to a file first: interpolating the bytes into `bun -e` inside
+    // shell double-quotes mangles real newlines into literal backslash-n
+    // sequences that Bun's parser rejects.
+    await this.writeFile(JOURNAL_READY_PROBE_PATH, JOURNAL_READY_PROBE);
+    const journalProbe = await this.exec(journalReadyRunCommand(CANDIDATE_JOURNAL_SOCKET));
     // The daemon's own argv, found by scanning /proc rather than by asking a
     // process table tool the sandbox image may not carry. `grep -a` because a
     // cmdline is NUL-separated and grep would otherwise call it binary.
