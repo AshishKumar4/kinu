@@ -403,6 +403,12 @@ export interface BuiltLayers {
  * Pure: nothing is uploaded. The caller hands `plan` to `publishCandidate`,
  * which is why a crash-before-publish is expressible as "stopped looping".
  */
+/** The removals a v2 delta capture names — already canonical and sorted, the
+ *  capture model's own getter. Absence in a partial capture is NOT removal. */
+function removedPaths(capture: AuditedCapture): readonly string[] {
+  return capture.removed;
+}
+
 export async function build(
   capture: AuditedCapture,
   parent?: BoundedLayers,
@@ -443,13 +449,24 @@ export async function build(
     const doc = entryFromNode(path, node, chunking, metadata);
     if (!sameEntry(parent?.entryAt(path), doc)) changed.set(path, doc);
   }
-  if (parent !== undefined) {
+  // THE TOMBSTONE SWEEP IS A WHOLE-TREE CLAIM. A partial capture (the v2 delta
+  // fence) names only the touched paths: the paths it does NOT name are the
+  // parent's business, carried forward by `resolved` below, so sweeping them
+  // here would DELETE every untouched file in the tree. Removals on the partial
+  // path are explicit — the capture's `removed` list — never implied by
+  // absence: the removed paths become THIS generation's tombstones, so the
+  // delta layer carries them and every reader's oldest-to-newest merge
+  // deletes exactly what the WAL deleted.
+  if (parent !== undefined && audited.partial !== true) {
     for (const path of parent.entryPaths()) {
       if (!snapshot.has(path)) tombstones.add(path);
     }
+  } else if (audited.partial === true) {
+    for (const path of removedPaths(audited)) tombstones.add(path);
   }
 
   const resolved = parent === undefined ? new Map<UpperPath, EntryDoc>() : parent.merged();
+  for (const path of tombstones) resolved.delete(path);
   for (const doc of changed.values()) resolved.set(doc.path, doc);
   for (const path of tombstones) resolved.delete(path);
 

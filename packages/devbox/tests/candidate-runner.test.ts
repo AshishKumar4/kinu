@@ -178,6 +178,45 @@ const FENCE_SEAL_WORK = {
   bytesStaged: 0, bytesChunked: 0, chunksHashed: 0, nodesRewritten: 0, wholeFiles: 0,
 } as const;
 
+/** One delta manifest row for a staged file: its ranges name the staged bytes
+ *  with the fence's own digests — the exact shape journal-delta.c writes. */
+/** Distinct inodes per row: the capture model reads a shared `ino` as one
+ *  hardlinked inode, which two unrelated files are not. */
+let deltaIno = 2;
+function deltaFile(path: string, bytes: Uint8Array) {
+  return {
+    ino: String(deltaIno++),
+    path,
+    kind: 'file',
+    size: bytes.byteLength,
+    mode: 0o644,
+    uid: process.getuid?.() ?? 0,
+    gid: process.getgid?.() ?? 0,
+    atimeNs: '1',
+    mtimeNs: '2',
+    ctimeNs: '3',
+    xattrs: {},
+    whole: false,
+    dirty: [{ offset: 0, length: bytes.byteLength }],
+    ranges: [{ offset: 0, length: bytes.byteLength, sha256: sha256Hex(bytes) }],
+  };
+}
+
+function deltaDir(path: string) {
+  return {
+    ino: '1',
+    path,
+    kind: 'dir',
+    mode: 0o755,
+    uid: process.getuid?.() ?? 0,
+    gid: process.getgid?.() ?? 0,
+    atimeNs: '1',
+    mtimeNs: '2',
+    ctimeNs: '3',
+    xattrs: {},
+  };
+}
+
 async function journalControl(socket: string, reply: FenceReply): Promise<() => Promise<void>> {
   const server = createServer((connection) => {
     let text = '';
@@ -738,35 +777,38 @@ describe('candidate container runner', () => {
     const place = paths('journal');
     try {
       await mkdir(place.journal, { recursive: true });
+      // THE DAEMON SPEAKS v2: the manifest is a delta whose rows are the whole
+      // tree (no boundary map yet, no base), and the stage holds the bytes
+      // under the paths the rows name — the fence's own layout.
       const stage = join(place.journal, 'stage');
       await mkdir(stage, { recursive: true });
       const bytes = enc.encode('journaled bytes');
-      await writeFile(join(stage, 'notes.extent'), bytes);
+      await writeFile(join(stage, 'notes.txt'), bytes);
       const manifestPath = join(place.journal, 'fence-7.json');
       await writeFile(manifestPath, JSON.stringify({
+        version: 2,
         cut: 7,
         generation: 3,
         stageRoot: stage,
+        base: null,
         entries: [{
+          ino: '2',
           path: 'notes.txt',
           kind: 'file',
+          size: bytes.byteLength,
           mode: 0o644,
-          ino: 2,
-          metadata: {
-            uid: process.getuid?.() ?? 0,
-            gid: process.getgid?.() ?? 0,
-            atimeNs: '0',
-            mtimeNs: '0',
-            ctimeNs: '0',
-            xattrs: {},
-          },
-          content: {
-            kind: 'sealed',
-            size: bytes.byteLength,
-            sourceId: 'notes.extent',
-            extents: [{ offset: 0, length: bytes.byteLength, sha256: sha256Hex(bytes) }],
-          },
+          uid: process.getuid?.() ?? 0,
+          gid: process.getgid?.() ?? 0,
+          atimeNs: '0',
+          mtimeNs: '0',
+          ctimeNs: '0',
+          xattrs: {},
+          whole: true,
+          dirty: [{ offset: 0, length: bytes.byteLength }],
+          ranges: [{ offset: 0, length: bytes.byteLength, sha256: sha256Hex(bytes) }],
         }],
+        metadataOps: [],
+        sealWork: FENCE_SEAL_WORK,
       }));
       let close = await journalControl(join(place.journal, 'control.sock'), {
         cut: 7, generation: 3, manifestPath,
@@ -790,10 +832,14 @@ describe('candidate container runner', () => {
         await mkdir(divergentStage, { recursive: true });
         const divergentManifestPath = join(place.journal, 'fence-7-divergent.json');
         await writeFile(divergentManifestPath, JSON.stringify({
+          version: 2,
           cut: 7,
           generation: 3,
           stageRoot: divergentStage,
+          base: { cut: '7', generation: '3', root: publishedRoot },
           entries: [],
+          metadataOps: [],
+          sealWork: FENCE_SEAL_WORK,
         }));
         close = await journalControl(join(place.journal, 'control.sock'), {
           cut: 7,
@@ -817,10 +863,9 @@ describe('candidate container runner', () => {
 
         await close();
         const lowerManifestPath = join(place.journal, 'fence-6.json');
-        await writeFile(
-          lowerManifestPath,
-          (await readFile(manifestPath, 'utf8')).replace('"cut":7', '"cut":6'),
-        );
+        const lowerManifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+        lowerManifest.cut = 6;
+        await writeFile(lowerManifestPath, JSON.stringify(lowerManifest));
         close = await journalControl(join(place.journal, 'control.sock'), {
           cut: 6,
           generation: 3,
@@ -831,6 +876,132 @@ describe('candidate container runner', () => {
           .rejects.toBeInstanceOf(CandidateFenceRefused);
       } finally {
         await close();
+      }
+    } finally {
+      await rm(join(place.workspace, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('fences a v2 delta manifest and publishes it incrementally against the head', async () => {
+    const place = paths('journal-delta');
+    try {
+      await mkdir(place.journal, { recursive: true });
+      // The first fence's stage: the daemon seeds nothing, so its delta has no
+      // base and its rows ARE the whole tree (whole-file staging for a file
+      // with no boundary map — journal_stage_plan, journal-delta.c).
+      const firstStage = join(place.journal, 'stage-g1-c1');
+      await mkdir(firstStage, { recursive: true });
+      await mkdir(join(firstStage, 'pkg'), { recursive: true });
+      const keptBytes = enc.encode('the untouched generation one bytes');
+      await writeFile(join(firstStage, 'pkg/kept.bin'), keptBytes);
+      const changedBytes = enc.encode('generation one');
+      await writeFile(join(firstStage, 'pkg/changed.bin'), changedBytes);
+      const firstManifest = join(place.journal, 'fence-c1-g1.json');
+      await writeFile(firstManifest, JSON.stringify({
+        version: 2,
+        cut: 1,
+        generation: 1,
+        stageRoot: firstStage,
+        base: null,
+        entries: [
+          deltaDir('pkg'),
+          deltaFile('pkg/kept.bin', keptBytes),
+          deltaFile('pkg/changed.bin', changedBytes),
+        ],
+        metadataOps: [],
+        sealWork: FENCE_SEAL_WORK,
+      }));
+      let close = await journalControl(join(place.journal, 'control.sock'), {
+        cut: 1, generation: 1, manifestPath: firstManifest,
+      });
+      let closed = false;
+      const stopJournal = async (): Promise<void> => {
+        if (closed) return;
+        closed = true;
+        await close();
+      };
+      const host = new Host('box-bounded-layers', place.store);
+
+      try {
+        // FIRST CHECKPOINT: no published head, so the delta publishes as a
+        // whole-tree capture and the head lands.
+        const begun = await host.begin();
+        const first = staged(await runCandidate(runOptions('bounded-layers', place, begun)));
+        expect(first.draft.capturedCut.cut).toBe('1');
+        expect(first.movedBytes).toBeGreaterThan(0);
+        const finalized = await host.finalize(first.draft);
+        expect(finalized.operation?.phase).toBe('published');
+        const head = finalized.head;
+        if (head === null || head === undefined) throw new Error('the first checkpoint published no head');
+
+        // SECOND FENCE: a real v2 delta — base names the published head, only
+        // the touched path appears, and the digest of every staged byte is the
+        // fence's own record.
+        await stopJournal();
+        const secondStage = join(place.journal, 'stage-g2-c2');
+        await mkdir(secondStage, { recursive: true });
+        const nextBytes = enc.encode('generation two');
+        await mkdir(join(secondStage, 'pkg'), { recursive: true });
+        await writeFile(join(secondStage, 'pkg/changed.bin'), nextBytes);
+        await writeFile(join(secondStage, 'pkg/doomed.bin'), enc.encode('to be removed'));
+        const secondManifest = join(place.journal, 'fence-c2-g2.json');
+        await writeFile(secondManifest, JSON.stringify({
+          version: 2,
+          cut: 2,
+          generation: 2,
+          stageRoot: secondStage,
+          base: { cut: '1', generation: '1', root: head.rootEnvelopeId },
+          entries: [
+            deltaDir('pkg'),
+            deltaFile('pkg/changed.bin', nextBytes),
+            deltaFile('pkg/doomed.bin', enc.encode('to be removed')),
+          ],
+          metadataOps: [
+            { sequence: 1, op: 'unlink', path: 'pkg/doomed.bin', argument: '', result: 0 },
+          ],
+          sealWork: FENCE_SEAL_WORK,
+        }));
+        close = await journalControl(join(place.journal, 'control.sock'), {
+          cut: 2, generation: 2, manifestPath: secondManifest,
+          base: { cut: '1', generation: '1', root: head.rootEnvelopeId },
+        });
+
+        // THE INCREMENTAL CHECKPOINT: the delta names one changed file and one
+        // removal, so the second publish moves the CHANGED bytes only and holds
+        // everything else from the parent. The proof is the object SET: the
+        // second publish stages a fresh chunk for the changed bytes and a layer
+        // document — and NOT a fresh chunk for the kept bytes, which a
+        // whole-tree capture of this state would have had to stage again.
+        const second = staged(await runCandidate(runOptions('bounded-layers', place, await host.begin())));
+        expect(second.draft.capturedCut.cut).toBe('2');
+        expect(second.movedBytes).toBeGreaterThan(0);
+        // THE INCREMENTAL PROOF, on the bytes themselves: the second publish
+        // staged the changed bytes and the layer document — and did NOT stage
+        // the kept file's bytes again, which is what a whole-tree capture of
+        // this state would have had to do.
+        const stagedBytes = new Set(
+          await Promise.all(second.draft.dependencyReceipts.map(async (receipt) =>
+            new TextDecoder().decode(await readFile(join(place.store, receipt.key)))),
+        ),
+        );
+        expect(stagedBytes.has('generation two')).toBe(true);
+        expect(stagedBytes.has('the untouched generation one bytes')).toBe(false);
+        const settled = await host.finalize(second.draft);
+        expect(settled.operation?.phase).toBe('published');
+
+        // THE MERGE, through the real restore: kept.bin survives the partial
+        // capture, changed.bin is the new bytes, doomed.bin is gone.
+        await stopJournal();
+        const restore = await runCandidate({
+          ...runOptions('bounded-layers', place, await host.restoreControl()),
+          action: 'restore',
+        });
+        expect(restored(restore).rootId).toBe(settled.head?.rootEnvelopeId ?? null);
+        expect(await readFile(join(place.workspace, 'pkg/kept.bin'), 'utf8')).toBe('the untouched generation one bytes');
+        expect(await readFile(join(place.workspace, 'pkg/changed.bin'), 'utf8')).toBe('generation two');
+        await expect(readFile(join(place.workspace, 'pkg/doomed.bin'))).rejects.toThrow();
+      } finally {
+        await stopJournal();
       }
     } finally {
       await rm(join(place.workspace, '..'), { recursive: true, force: true });

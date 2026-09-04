@@ -11,8 +11,10 @@ import type { AuditedCapture } from '../src/capture/model';
 import { build as buildBounded, isHoleExtent, open as openBounded } from '../src/candidates/bounded-layers';
 import { buildMerklePack, openMerklePack, parentFromPublishedParent } from '../src/candidates/merkle-pack';
 import type { MerklePackView } from '../src/candidates/merkle-pack';
-import { JournalDaemonClient, captureFromJournalFence } from '../src/capture/journal/client';
-import type { JournalBase, JournalFence } from '../src/capture/journal/client';
+import { JournalDaemonClient, readJournalDelta } from '../src/capture/journal/client';
+import type { JournalBase, JournalDelta, JournalFence } from '../src/capture/journal/client';
+import { issueVerifiedJournalCapture, manifestSha256 } from '../src/capture/model';
+import type { Capture, NodeEntry } from '../src/capture/model';
 import type { PosixMetadata } from '../src/capture/model';
 import { FileCandidateObjectSink, envelopeBytes, recoverPublishedParent, requireEnvelopeAt, stageCandidatePayload } from '../src/candidates/publication';
 import { BeneathRoot } from '../src/native-openat2';
@@ -652,13 +654,105 @@ async function checkpointCandidate(options: CandidateRunOptions): Promise<Candid
     );
   }
   if (fencePublishedHead(control, fence)) return { ok: true, noChange: true };
-  const capture = await captureFromJournalFence(fence, {
-    captureId: grant.operationId,
-    epoch: grant.epoch,
-    baseRevision: grant.baseRevision,
-    stableStageHandle: `journal-${fence.generation}-${fence.cut}`,
+  // THE DAEMON SPEAKS v2 NOW: every fence manifest is a DELTA (the O(k) fence
+  // landed 2026-09-02), so the capture is read through `readJournalDelta` —
+  // the manifest proven the fence's own and every staged read held to the
+  // digest the fence recorded — and converted into the partial sealed capture
+  // both codecs merge against the published head it names. A v1 whole-tree
+  // capture is no longer produced by this daemon, and `captureFromJournalFence`
+  // refuses a delta by name, correctly: a delta is the input to an incremental
+  // build against the head it names, never a capture of a whole filesystem.
+  const delta = await readJournalDelta(fence);
+  try {
+    const capture = await captureFromDelta(delta, {
+      captureId: grant.operationId,
+      epoch: grant.epoch,
+      baseRevision: grant.baseRevision,
+      stableStageHandle: `journal-${fence.generation}-${fence.cut}`,
+    });
+    return await publishCapturedCandidate(options, capture);
+  } finally {
+    delta.close();
+  }
+}
+
+/**
+ * One v2 delta manifest as the PARTIAL sealed capture both codecs merge.
+ *
+ * The entries are the delta's own rows — every touched path plus its
+ * ancestors, which is exactly the consistent partial tree the capture model's
+ * partial rule demands — with file content read from the delta's stage, where
+ * every read is held to the digest the fence recorded for exactly those bytes.
+ * The removals are the WAL's own structural deletions (unlink/rmdir, and the
+ * old name of a rename), which is what the daemon's `removed` semantics state.
+ *
+ * A delta with no base is a FIRST fence (no published head to build against):
+ * its rows are the whole tree as the daemon sees it, so it publishes as a
+ * whole-tree capture — `partial: false`, which also carries no `removed`,
+ * because there is no parent state to remove from.
+ */
+async function captureFromDelta(
+  delta: JournalDelta,
+  identity: { captureId: string; epoch: string; baseRevision: string; stableStageHandle: string },
+) {
+  const manifest = delta.manifest;
+  const partial = manifest.base !== null;
+  const entries: NodeEntry[] = [];
+  for (const row of manifest.entries) {
+    const metadata: PosixMetadata = {
+      uid: row.uid,
+      gid: row.gid,
+      atimeNs: row.atimeNs,
+      mtimeNs: row.mtimeNs,
+      ctimeNs: row.ctimeNs,
+      xattrs: { ...row.xattrs },
+    };
+    if (row.kind === 'symlink') {
+      if (row.target === undefined) throw new Error(`delta row ${row.path} is a symlink with no target`);
+      entries.push({ path: row.path, kind: 'symlink', mode: row.mode, ino: Number(row.ino), metadata, target: row.target });
+      continue;
+    }
+    if (row.kind === 'dir') {
+      entries.push({ path: row.path, kind: 'dir', mode: row.mode, ino: Number(row.ino), metadata });
+      continue;
+    }
+    const sealed = {
+      kind: 'sealed' as const,
+      size: row.size,
+      sourceId: row.path,
+      extents: row.ranges.map((range) => ({ offset: range.offset, length: range.length, sha256: range.sha256 })),
+    };
+    entries.push({ path: row.path, kind: 'file', mode: row.mode, ino: Number(row.ino), metadata, content: sealed });
+  }
+  // THE REMOVALS the WAL recorded: unlink, rmdir, and a rename's old name. A
+  // failed op (`result < 0`) removed nothing, and non-structural ops touch
+  // only what their own rows state.
+  const removed: string[] = [];
+  if (partial) {
+    for (const op of manifest.metadataOps) {
+      if (op.result < 0) continue;
+      if (op.op === 'unlink' || op.op === 'rmdir') removed.push(op.path);
+      if (op.op === 'rename') removed.push(op.path);
+    }
+  }
+  const capture: Capture = {
+    mechanism: 'mutation-journal',
+    cut: manifest.cut,
+    generation: manifest.generation,
+    entries,
+  };
+  return issueVerifiedJournalCapture({
+    cut: manifest.cut,
+    generation: manifest.generation,
+    entries,
+    identity,
+    manifestSha256: manifestSha256(capture),
+    sealedReader: {
+      read: async (sourceId, offset, length) => await delta.stage.read(sourceId, offset, length),
+    },
+    partial,
+    removed: partial ? removed : [],
   });
-  return await publishCapturedCandidate(options, capture);
 }
 
 async function seedCandidateJournal(options: CandidateRunOptions): Promise<CandidateSeedResult> {

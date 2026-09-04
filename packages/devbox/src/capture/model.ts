@@ -37,6 +37,7 @@ import { createHash } from 'node:crypto';
 
 
 import { sha256Hex } from '../cas/hash';
+import { isCanonicalJournalPath } from '../cas/types';
 import { CapturedCutSchema } from '../durability/contracts';
 import type { CapturedCut } from '../durability/contracts';
 
@@ -784,6 +785,10 @@ export class AuditedCapture {
   readonly #generation: number;
   readonly #entries: readonly NodeEntry[];
   readonly #sealedReader: SealedContentReader | undefined;
+  /** A v2 delta fence: merge against the parent rather than replace. */
+  readonly #partial: boolean;
+  /** The paths a v2 delta capture says the WAL deleted since the parent's cut. */
+  readonly #removed: readonly string[];
 
   private constructor(
     cut: number,
@@ -791,14 +796,30 @@ export class AuditedCapture {
     generation: number,
     entries: readonly NodeEntry[],
     sealedReader: SealedContentReader | undefined,
+    partial: boolean,
+    removed: readonly string[],
   ) {
     this.#cut = cut;
     this.#capturedCut = capturedCut;
     this.#generation = generation;
     this.#entries = entries;
     this.#sealedReader = sealedReader;
+    this.#partial = partial;
+    this.#removed = [...removed].sort();
     auditedCaptures.add(this);
     Object.freeze(this);
+  }
+
+  /** True when this capture carries only the touched paths and must be merged
+   *  against its published parent by a builder that supports the merge. */
+  get partial(): boolean {
+    return this.#partial;
+  }
+
+  /** The removals this capture names, canonical and sorted. Empty for a
+   *  whole-tree capture, where absence IS removal. */
+  get removed(): readonly string[] {
+    return [...this.#removed];
   }
 
   get cut(): number {
@@ -824,9 +845,11 @@ export class AuditedCapture {
     generation: number,
     entries: readonly NodeEntry[],
     sealedReader?: SealedContentReader,
+    partial = false,
+    removed: readonly string[] = [],
   ): AuditedCapture {
     if (!captureFactoryAuthorities.has(authority)) throw new Error('AuditedCapture issuance is factory-only');
-    return new AuditedCapture(cut, capturedCut, generation, entries, sealedReader);
+    return new AuditedCapture(cut, capturedCut, generation, entries, sealedReader, partial, removed);
   }
 
   readSealed(sourceId: string, offset: number, length: number): Promise<Uint8Array> {
@@ -914,6 +937,15 @@ export interface VerifiedJournalCut {
   readonly identity: CapturedCutIdentity;
   readonly manifestSha256: string;
   readonly sealedReader?: SealedContentReader;
+  /**
+   * A v2 delta fence: only the touched paths (plus their ancestors) appear in
+   * `entries`, and `removed` names the paths the WAL deleted since the parent's
+   * cut. The capture is an OVERLAY a builder merges against its published
+   * parent — never a whole-tree replacement, so a builder that cannot merge
+   * must refuse it rather than silently drop the unnamed majority of the tree.
+   */
+  readonly partial?: boolean;
+  readonly removed?: readonly string[];
 }
 
 /** Issues a sealed capture only after a local journal has verified its fence. */
@@ -923,7 +955,15 @@ export function issueVerifiedJournalCapture(proof: VerifiedJournalCut): AuditedC
     throw new Error('journal fence has an invalid generation');
   }
   for (const entry of proof.entries) requirePosixMetadata(entry.metadata, entry.path);
-  requireCompleteCaptureTree(proof.entries);
+  // A WHOLE-TREE capture must BE a tree; a PARTIAL one (the v2 delta fence)
+  // must still be internally canonical — every named path's ancestors present
+  // as directories — but is not the whole tree, and the manifest digest that
+  // binds the cut covers exactly the named subset.
+  if (proof.partial === true) {
+    requirePartialCaptureTree(proof.entries);
+  } else {
+    requireCompleteCaptureTree(proof.entries);
+  }
   if (proof.entries.some((entry) => entry.content?.kind === 'sealed') && !proof.sealedReader) {
     throw new Error('sealed journal capture has no range reader');
   }
@@ -945,7 +985,63 @@ export function issueVerifiedJournalCapture(proof: VerifiedJournalCut): AuditedC
       manifestSha256: manifest,
     }),
   );
-  return AuditedCapture.issue(captureFactoryAuthority, proof.cut, capturedCut, proof.generation, snapshot, proof.sealedReader);
+  if (proof.partial === true) {
+    for (const path of proof.removed ?? []) {
+      if (!isCanonicalJournalPath(path)) {
+        throw new Error(`journal fence names a non-canonical removed path '${path}'`);
+      }
+    }
+  }
+  return AuditedCapture.issue(
+    captureFactoryAuthority, proof.cut, capturedCut, proof.generation, snapshot, proof.sealedReader,
+    proof.partial === true, proof.partial === true ? proof.removed ?? [] : [],
+  );
+}
+
+/** The relaxed tree rule a v2 delta capture must satisfy: canonical paths, no
+ *  duplicates, real identity on every entry, and every NAMED path's ancestors
+ *  present as directories. Paths the capture does not name are the parent's
+ *  business, not this capture's. */
+export function requirePartialCaptureTree(entries: readonly NodeEntry[]): void {
+  const byPath = new Map<UpperPath, NodeEntry>();
+  for (const entry of entries) {
+    const path = entry.path;
+    if (path === '' || path.startsWith('/') || path.endsWith('/')) {
+      throw new Error(`non-canonical capture path '${path}'`);
+    }
+    for (const segment of path.split('/')) {
+      if (segment === '' || segment === '.' || segment === '..') {
+        throw new Error(`non-canonical capture path '${path}'`);
+      }
+    }
+    if (byPath.has(path)) throw new Error(`duplicate capture path '${path}'`);
+    if (!Number.isSafeInteger(entry.mode) || entry.mode < 0) {
+      throw new Error(`entry '${path}' carries no real mode`);
+    }
+    if (!Number.isSafeInteger(entry.ino) || entry.ino <= 0) {
+      throw new Error(`entry '${path}' carries no real inode identity`);
+    }
+    if (entry.kind === 'file' && !entry.content) {
+      throw new Error(`file entry '${path}' carries no content`);
+    }
+    if (entry.kind === 'symlink' && entry.target === undefined) {
+      throw new Error(`symlink entry '${path}' carries no target`);
+    }
+    byPath.set(path, entry);
+  }
+  for (const [path] of byPath) {
+    let ancestor = parentOf(path);
+    while (ancestor !== '') {
+      const parent = byPath.get(ancestor);
+      if (parent === undefined) {
+        throw new Error(`incomplete partial capture: ancestor '${ancestor}' of '${path}' is absent`);
+      }
+      if (parent.kind !== 'dir') {
+        throw new Error(`ancestor '${ancestor}' of '${path}' is a ${parent.kind}, not a directory`);
+      }
+      ancestor = parentOf(ancestor);
+    }
+  }
 }
 
 

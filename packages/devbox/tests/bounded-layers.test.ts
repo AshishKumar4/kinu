@@ -224,7 +224,11 @@ function withJournalMetadata(entries: readonly NodeEntry[]): readonly NodeEntry[
   return entries.map((entry) => entry.metadata === undefined ? { ...entry, metadata: { ...defaultJournalMetadata, xattrs: {} } } : entry);
 }
 
-function verifiedJournalCapture(entries: readonly NodeEntry[], cut: number): AuditedCapture {
+function verifiedJournalCapture(
+  entries: readonly NodeEntry[],
+  cut: number,
+  partial: { partial?: boolean; removed?: readonly string[] } = {},
+): AuditedCapture {
   const journalEntries = withJournalMetadata(entries);
   const capture = { mechanism: 'mutation-journal' as const, cut, generation: 0, entries: journalEntries };
   return issueVerifiedJournalCapture({
@@ -236,6 +240,8 @@ function verifiedJournalCapture(entries: readonly NodeEntry[], cut: number): Aud
       stableStageHandle: `journal-stage-${cut}`,
     },
     manifestSha256: manifestSha256(capture),
+    partial: partial.partial === true,
+    removed: partial.removed,
   });
 }
 
@@ -1379,3 +1385,50 @@ class HarnessPublicationStore implements CandidatePayloadStore, CandidatePublica
   }
   async markComplete(): Promise<void> {}
 }
+
+// ── the partial capture the v2 delta fence presents ─────────────────────────
+//
+// The journal daemon now fences v2 DELTA manifests: only the touched paths (and
+// their ancestors) appear, and removals are named explicitly rather than implied
+// by absence. The tombstone sweep in `build()` is a WHOLE-TREE claim — on a
+// partial capture it would DELETE every untouched path in the tree. This test
+// pins the merge: unnamed paths carry forward from the parent, and only the
+// capture's explicit `removed` list deletes.
+
+describe('bounded layers — partial captures against a parent', () => {
+  test('a partial capture carries unnamed paths forward and removes only what it names', async () => {
+    const store = new MemStore();
+    const publisher = new HarnessPublicationStore();
+    const parent = await publishAndOpen(
+      await build(verifiedJournalCapture([
+        dirE('pkg'),
+        fileE('pkg/kept.bin', 'the untouched bytes'),
+        fileE('pkg/changed.bin', 'generation one'),
+        fileE('pkg/doomed.bin', 'about to be removed'),
+      ], 0)),
+      store,
+      publisher,
+    );
+
+    // THE PARTIAL CAPTURE: the touched file and its ancestor, plus an explicit
+    // removal — the exact shape a v2 delta manifest presents for that write.
+    const built = await build(verifiedJournalCapture([
+      dirE('pkg'),
+      fileE('pkg/changed.bin', 'generation two'),
+    ], 10, { partial: true, removed: ['pkg/doomed.bin'] }), parent);
+
+    // The built view resolves entry metadata only; bytes are the opened
+    // child's to serve. Publish the merge and read it back through the real
+    // serving path.
+    const child = await publishAndOpen(built, store, publisher);
+    const read = async (path: string): Promise<string> => {
+      const doc = child.entryAt(path);
+      if (doc === undefined || doc.kind !== 'file') throw new Error(`no file at ${path}`);
+      return new TextDecoder().decode(await child.readRange(path, 0, Number(doc.chunks.reduce((n, c) => n + c.size, 0))));
+    };
+    expect(child.entryAt('pkg/kept.bin')).toBeDefined();
+    expect(await read('pkg/kept.bin')).toBe('the untouched bytes');
+    expect(await read('pkg/changed.bin')).toBe('generation two');
+    expect(child.entryAt('pkg/doomed.bin')).toBeUndefined();
+  });
+});

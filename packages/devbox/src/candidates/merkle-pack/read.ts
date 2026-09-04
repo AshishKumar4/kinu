@@ -73,6 +73,17 @@ export interface MerklePackView extends PackIndex {
   readdir(path: string): Promise<readonly string[]>;
   extents(path: string): Promise<readonly MerkleFileExtent[]>;
   readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
+  /**
+   * The sealed digest of the node at `path` — the identity a partial-capture
+   * merge references an untouched subtree by — or null when no node is there.
+   */
+  nodeDigest(path: string): Promise<string | null>;
+  /**
+   * The sealed node bytes at their digest, from the parent's own packs — the
+   * merge's whole read of an untouched subtree — or null when the index names
+   * no location for it.
+   */
+  nodeBytes(digest: string): Promise<Uint8Array | null>;
 }
 const KIND_OF = { f: 'file', d: 'dir', l: 'symlink' } as const;
 
@@ -409,6 +420,27 @@ export async function openMerklePack(
         throw new MerklePackError('malformed-node', `extent geometry for ${path} does not cover its size`);
       }
       return Object.freeze(extents);
+    },
+    async nodeDigest(path: string): Promise<string | null> {
+      if (path === '') return manifest.root;
+      if (!isCanonicalJournalPath(path)) {
+        throw new MerklePackError('hostile-path', `refusing non-canonical path ${JSON.stringify(path)}`);
+      }
+      let node = await fetchNode(manifest.root);
+      let digest: string | null = null;
+      for (const name of path.split('/')) {
+        if (node.t !== 'd') return null;
+        const entry = node.e.find((e) => e.n === name);
+        if (entry === undefined) return null;
+        digest = entry.r;
+        node = await fetchNode(entry.r);
+      }
+      return digest;
+    },
+    async nodeBytes(digest: string): Promise<Uint8Array | null> {
+      const loc = locations.get(digest);
+      if (loc === undefined) return null;
+      return await fetch(loc);
     },
     async readRange(path: string, offset: number, length: number): Promise<Uint8Array> {
       if (

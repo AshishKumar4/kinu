@@ -11,6 +11,8 @@
  * byte-identical output.
  */
 
+import * as v from 'valibot';
+
 import { sha256Hex } from '../../cas/hash';
 import { isCanonicalJournalPath } from '../../cas/types';
 import { contentEquals, contentSize, requireAuditedCapture } from '../../capture/model';
@@ -24,6 +26,7 @@ import type { ChunkParams, EmittedChunk } from './chunk';
 import { DEFAULT_CHUNK_PARAMS, chunkCaptureContent, paintedSegments, validateChunkParams } from './chunk';
 import { MerklePackError } from './errors';
 import type { DirEntryJson, FileExtentJson, HoleExtentJson, MerklePackRoot, NodeJson, PosixMetadataJson } from './wire';
+import { NodeSchema } from './wire';
 import {
   MERKLE_PACK_FORMAT,
   hashNodeBytes,
@@ -161,7 +164,28 @@ type TreeFile = {
 };
 type TreeSymlink = { kind: 'symlink'; mode: number; ino: number; metadata?: PosixMetadata; target: string };
 type TreeDir = { kind: 'dir'; mode: number; ino: number; metadata?: PosixMetadata; children: Map<string, TreeNode> };
-type TreeNode = TreeFile | TreeSymlink | TreeDir;
+
+/**
+ * A subtree carried from the parent UNCHANGED by a partial capture: the parent
+ * node's own digest and bytes, so the child references it by the same name it
+ * already had. Untouched content is merged by IDENTITY — the whole point of
+ * the O(k) fence — rather than re-read, re-chunked, or re-uploaded.
+ */
+type TreeParentRef = {
+  kind: 'parent-ref';
+  /** The carried node's own kind, as the directory entry must state it. */
+  nodeKind: 'file' | 'dir' | 'symlink';
+  digest: string;
+  bytes: Uint8Array;
+  /**
+   * For a carried FILE: every chunk its extent list names, so the child's
+   * index declares locations for bytes it never re-read. The parent's own
+   * index answers each location; the digests come from the parent node's
+   * serialized form, which the merge already holds.
+   */
+  chunkRefs?: ReadonlyArray<readonly [digest: string, length: number]>;
+};
+type TreeNode = TreeFile | TreeSymlink | TreeDir | TreeParentRef;
 
 function metadataMatches(a: PosixMetadata | undefined, b: PosixMetadata | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
@@ -188,6 +212,111 @@ function canonicalMetadata(metadata: PosixMetadata | undefined): PosixMetadataJs
     ctimeNs: metadata.ctimeNs,
     xattrs: Object.fromEntries(Object.entries(metadata.xattrs).sort(([a], [b]) => a.localeCompare(b))),
   };
+}
+
+/**
+ * Plant the parent's untouched paths into the capture's tree as parent-refs.
+ *
+ * The parent view's own sealed nodes ARE the merge unit: `locate(digest)`
+ * answers where each node's bytes already live, so a parent-ref costs one
+ * in-memory lookup and nothing else. Directories the capture rewrote keep
+ * their captured children and GAIN the parent's children the capture did not
+ * touch — the overlay semantics the delta manifest states.
+ */
+/** The chunk digests a carried file node's extent list names, with each
+ *  extent's length. The node is already in hand (its bytes are the merge's
+ *  own read); the wire's own NodeSchema parses it, so a carried node that
+ *  does not parse is refused here rather than partially trusted. */
+function fileChunkRefs(bytes: Uint8Array): ReadonlyArray<readonly [string, number]> {
+  let node: NodeJson;
+  try {
+    node = v.parse(NodeSchema, JSON.parse(new TextDecoder().decode(bytes)));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new MerklePackError('malformed-node', `a carried file node did not decode: ${detail}`, { cause: error });
+  }
+  if (node.t !== 'f') {
+    throw new MerklePackError('malformed-node', `a carried node at a file path is a ${node.t}`);
+  }
+  const refs: Array<readonly [string, number]> = [];
+  for (const extent of node.c) refs.push([extent.d, extent.l * extent.n]);
+  return refs;
+}
+
+async function mergeParentTree(
+  view: MerklePackView,
+  root: TreeDir,
+  snapshot: ReadonlyMap<string, NodeEntry>,
+  removed: ReadonlySet<string>,
+): Promise<void> {
+  // One recursive walk of the parent's tree. `into` is the CHILD's directory
+  // node being filled — the captured root for depth 0, a captured directory for
+  // a path the capture rewrote, or a merged-directory overlay for a subtree
+  // the capture did not touch at all.
+  const merge = async (at: string, into: TreeDir): Promise<void> => {
+    for (const name of await view.readdir(at)) {
+      const path = at === '' ? name : `${at}/${name}`;
+      const captured = snapshot.get(path);
+      if (captured !== undefined) {
+        // The capture named this path. A captured DIRECTORY absorbs the
+        // parent's untouched children beneath it; anything else the capture
+        // states outright, and it wins.
+        const child = into.children.get(name);
+        if (child !== undefined && child.kind === 'dir') await merge(path, child);
+        continue;
+      }
+      if (removed.has(path)) continue;
+      const stat = await view.stat(path);
+      if (stat === null) continue;
+      if (stat.kind === 'dir') {
+        // An untouched directory from the parent. A directory node's content
+        // is its child LIST, so it can only carry by identity when nothing
+        // beneath it changed either — the walk below decides that, by leaving
+        // the overlay empty (then the parent's node is referenced whole) or
+        // filling it (then the directory is re-sealed with its merged set).
+        const digest = await nodeDigestOf(view, path);
+        const overlay: TreeDir = {
+          kind: 'dir', mode: stat.mode, ino: stat.ino ?? 0,
+          metadata: stat.metadata, children: new Map(),
+        };
+        into.children.set(name, overlay);
+        await merge(path, overlay);
+        if (overlay.children.size === 0) {
+          const ref: TreeParentRef = { kind: 'parent-ref', nodeKind: 'dir', digest, bytes: await nodeBytesOf(view, digest) };
+          into.children.set(name, ref);
+        }
+        continue;
+      }
+      // An untouched file or symlink: carried by identity, whole. A file also
+      // names its chunks — the digest list the child's index must declare —
+      // which the merge reads out of the parent node's own serialized form.
+      const digest = await nodeDigestOf(view, path);
+      const bytes = await nodeBytesOf(view, digest);
+      const child: TreeParentRef = {
+        kind: 'parent-ref', nodeKind: stat.kind === 'file' ? 'file' : 'symlink',
+        digest, bytes,
+        chunkRefs: stat.kind === 'file' ? fileChunkRefs(bytes) : undefined,
+      };
+      into.children.set(name, child);
+    }
+  };
+  await merge('', root);
+}
+
+/** The sealed digest of the parent's node at `path`. */
+async function nodeDigestOf(view: MerklePackView, path: string): Promise<string> {
+  const digest = await view.nodeDigest(path);
+  if (digest === null) throw new MerklePackError('no-entry', `the parent holds no node at ${JSON.stringify(path)}`);
+  return digest;
+}
+
+/** The parent node's serialized bytes at their sealed digest. */
+async function nodeBytesOf(view: MerklePackView, digest: string): Promise<Uint8Array> {
+  const bytes = await view.nodeBytes(digest);
+  if (bytes === null) {
+    throw new MerklePackError('missing-digest', `the parent index names no location for node ${digest}`);
+  }
+  return bytes;
 }
 
 /**
@@ -316,6 +445,29 @@ export async function buildMerklePack(auditedInput: AuditedCapture, options: Bui
       });
     }
   }
+  // ── THE PARTIAL-CAPTURE MERGE ───────────────────────────────────────────
+  //
+  // A v2 delta fence hands over only the touched paths, so the tree above is
+  // an OVERLAY, not a replacement. Every path the parent still holds that the
+  // capture does not name is carried into the child by identity: the parent's
+  // sealed node digest, referenced unchanged. The merge is O(parent paths) in
+  // METADATA ONLY — one index lookup per parent node already open in `view`,
+  // no content read, no re-chunk, no re-upload — and the parent's own view is
+  // the source, so nothing is re-derived.
+  //
+  // A partial capture WITHOUT a parent is refused: it would publish a tree
+  // silently missing everything the fence did not name.
+  if (audited.partial === true) {
+    if (options.parent === undefined || options.parent === null) {
+      throw new MerklePackError(
+        'invalid-parameter',
+        'a partial capture needs the published parent it is a delta against',
+      );
+    }
+    const removedSet = new Set(audited.removed);
+    await mergeParentTree(options.parent.view, root, snapshot, removedSet);
+  }
+
   const holeExtents = (content: NodeEntry['content']): HoleExtentJson[] => {
     if (content === undefined || content.kind === 'dense') return [];
     if (content.kind === 'sealed') {
@@ -367,6 +519,15 @@ export async function buildMerklePack(auditedInput: AuditedCapture, options: Bui
   const sealTree = (node: TreeNode): string => {
     const memo = nodeId.get(node);
     if (memo !== undefined) return memo;
+    // AN UNTOUCHED SUBTREE FROM THE PARENT: its node is already sealed in the
+    // parent's packs under this digest, so the child references it by the same
+    // identity and the bytes reach `needed` from the parent-ref itself — never
+    // re-serialized, never re-chunked, never re-uploaded.
+    if (node.kind === 'parent-ref') {
+      nodeRecords.set(node.digest, node.bytes);
+      nodeId.set(node, node.digest);
+      return node.digest;
+    }
     let json: NodeJson;
     if (node.kind === 'file') {
       json = {
@@ -381,11 +542,14 @@ export async function buildMerklePack(auditedInput: AuditedCapture, options: Bui
     } else if (node.kind === 'symlink') {
       json = { t: 'l', m: node.mode, i: node.ino, g: node.target, metadata: canonicalMetadata(node.metadata) };
     } else {
-      const entries: DirEntryJson[] = [...node.children.keys()].sort().map((n) => ({
-        n,
-        k: node.children.get(n)!.kind,
-        r: sealTree(node.children.get(n)!),
-      }));
+      const entries: DirEntryJson[] = [...node.children.keys()].sort().map((n) => {
+        const child = node.children.get(n)!;
+        return {
+          n,
+          k: child.kind === 'parent-ref' ? child.nodeKind : child.kind,
+          r: sealTree(child),
+        };
+      });
       json = { t: 'd', m: node.mode, i: node.ino, e: entries, metadata: canonicalMetadata(node.metadata) };
     }
     const serialized = serializeNode(json);
@@ -427,6 +591,41 @@ export async function buildMerklePack(auditedInput: AuditedCapture, options: Bui
   const fresh: Array<{ order: string; digest: string; plainSha: string; bytes: Uint8Array }> = [];
   let distinctChunksReused = 0;
   let nodesReused = 0;
+  // CHUNKS A CARRIED FILE NAMES are part of the child's index even though no
+  // build step read them: the extent list in the carried node's own serialized
+  // form is the authority, and the parent's index answers each location. A
+  // chunk missing from BOTH is a corrupt parent, refused here rather than
+  // published as an index gap.
+  const carriedChunkRefs = new Map<string, number>();
+  const collectCarried = (node: TreeNode): void => {
+    if (node.kind === 'parent-ref') {
+      for (const [digest, length] of node.chunkRefs ?? []) carriedChunkRefs.set(digest, length);
+      return;
+    }
+    if (node.kind !== 'dir') return;
+    for (const child of node.children.values()) collectCarried(child);
+  };
+  collectCarried(root);
+
+  for (const [digest, length] of carriedChunkRefs) {
+    if (located.has(digest)) continue;
+    const parentLoc = options.parent?.view.locate(digest);
+    if (parentLoc === undefined) {
+      throw new MerklePackError(
+        'invalid-parameter',
+        `the parent index names no location for carried chunk ${digest}`,
+      );
+    }
+    if (parentLoc.length !== length) {
+      throw new MerklePackError(
+        'invalid-parameter',
+        `carried chunk ${digest} is ${length} bytes; the parent locates ${parentLoc.length}`,
+      );
+    }
+    located.set(digest, parentLoc);
+    distinctChunksReused++;
+  }
+
   for (const [digest, record] of needed) {
     const plainSha = sha256Hex(record.bytes);
     const parentLoc = options.parent?.view.locate(digest);
