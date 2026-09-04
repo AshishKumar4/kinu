@@ -302,6 +302,16 @@ function JobRows(
               {job.status}
             </span>
             <span className="text-[11px] p-text-3">{when(job.createdAt)}</span>
+            {(job.resumeAttempts ?? 0) > 0 && (
+              // An operator looking at a job that has been running a long time
+              // needs the one fact the row could never show: whether it is stuck
+              // or whether the platform keeps interrupting it.
+              <span className="text-[11px] p-warning">
+                interrupted {job.resumeAttempts}x
+                {job.resumeAfter != null && job.resumeAfter > Date.now()
+                  ? `, next attempt ${when(job.resumeAfter)}` : ''}
+              </span>
+            )}
           </div>
           {job.label !== null && <div className="text-xs p-text-2">{job.label}</div>}
           {job.error !== null && <div className="text-[11px] p-danger">{job.error}</div>}

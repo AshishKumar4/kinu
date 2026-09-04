@@ -181,6 +181,13 @@ export interface BackgroundJob {
 	createdAt: number;
 	settledAt: number | null;
 	retriedBy?: string | null;
+	/** How many times a platform interruption re-drove this job. Zero for work
+	 *  that has run once, which is most of it. */
+	resumeAttempts?: number;
+	/** When the next attempt may start, for a job that is waiting for one.
+	 *  Null while nothing is owed — including while an attempt is running, once
+	 *  its claim has cleared the wait it served. */
+	resumeAfter?: number | null;
 }
 
 export type ReleaseStatus =

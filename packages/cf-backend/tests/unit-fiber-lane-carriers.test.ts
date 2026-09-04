@@ -18,8 +18,11 @@ import {
   TERMINAL_LANE_FIBER, classifyRecoveredFiber, type FiberLaneTransports,
 } from '../src/fiber-recovery';
 
-/** Mirrors the module-private lane name and backoff curve; drift fails these
- *  tests, which is the point. */
+/** Mirrors the module-private lane name and the shared backoff curve; drift
+ *  fails these tests, which is the point. The curve moved to core on
+ *  2026-09-04 (`@kinu.run/core` → `utils/recovery-backoff`) when the job
+ *  runner became its third caller; it stays a MIRROR here rather than an
+ *  import, so a change to it has to be made twice on purpose. */
 const FORK_NOTICE_LANE_FIBER = 'fork:notice';
 const noticeBackoffMs = (attempts: number): number =>
   Math.min(1000 * 2 ** Math.min(attempts, 6), 60_000); // mirrors recoveryBackoffMs

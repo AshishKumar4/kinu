@@ -952,6 +952,29 @@ export class BackgroundJobRunner {
   }
 
   /**
+   * The wake's entry point: re-enter recovery when a deferred attempt has come
+   * due, and cost one read when none has.
+   *
+   * Separate from {@link recoverOrphans} because the two are run by different
+   * things. The sweep is what a COLD START runs, where every running row is an
+   * orphan by definition. This is what a TIMER runs inside a live process, where
+   * almost every tick has nothing to do — so it asks one indexed MIN whether any
+   * job is waiting at all before walking the registry.
+   *
+   * It lives here rather than in each backend's wake handler because it was the
+   * same six lines in both, which is the twin this repository's own gate refuses:
+   * the decision "is an attempt owed" belongs to the thing that owes it.
+   *
+   * Nothing re-arms here. A sweep that finds a job still waiting arms its own
+   * next wake through {@link BackgroundJobRunnerDeps.scheduleResume}.
+   */
+  async recoverDueResumes(): Promise<void> {
+    const next = this.deps.store.nextResumeAt();
+    if (next === null || next > Date.now()) return;
+    await this.recoverOrphans();
+  }
+
+  /**
    * Settle, re-drive, or pace one orphaned job.
    *
    * A job whose outcome was already persisted (settled/failed) before its

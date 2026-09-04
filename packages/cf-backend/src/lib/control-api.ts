@@ -149,6 +149,12 @@ export const BackgroundJobRowSchema = v.object({
   error: v.nullable(v.string()),
   createdAt: v.number(),
   settledAt: v.nullable(v.number()),
+  // OPTIONAL, both of them, and that is a contract rather than laziness: this
+  // page parses answers from an orchestrator it does not deploy with, so a
+  // required field here would make every older workspace's job panel render
+  // "the control plane answered in a shape this page cannot read".
+  resumeAttempts: v.optional(v.number()),
+  resumeAfter: v.optional(v.nullable(v.number())),
 });
 export type BackgroundJobRow = v.InferOutput<typeof BackgroundJobRowSchema>;
 

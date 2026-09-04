@@ -28,6 +28,34 @@ function statusMeta(status: BackgroundJob["status"]) {
   }
 }
 
+/**
+ * What a running job's card says about having been interrupted.
+ *
+ * A job that was evicted and re-driven used to say nothing at all: the count was
+ * durable the whole time and appeared nowhere a reader could see it, so the only
+ * thing that ever mentioned an interruption was the give-up that ended the work.
+ * The give-up is gone; this is what replaces it.
+ *
+ * Null when there is nothing to say, so an ordinary job's card is unchanged.
+ */
+function interruptionNote(job: BackgroundJob, now: number): string | null {
+  const attempts = job.resumeAttempts ?? 0;
+  if (attempts === 0) return null;
+  const times = attempts === 1 ? "once" : `${attempts} times`;
+  const waiting = job.resumeAfter != null && job.resumeAfter > now
+    ? ` Next attempt ${timeUntil(job.resumeAfter - now)}.`
+    : "";
+  return `Interrupted and re-driven ${times}. The work was not lost.${waiting}`;
+}
+
+/** How long until an armed instant, in the same coarse words the cards use
+ *  elsewhere. Rounded up, so a wait that exists never reads as "in 0s". */
+function timeUntil(ms: number): string {
+  const seconds = Math.ceil(ms / 1000);
+  if (seconds < 60) return `in ${seconds}s`;
+  return `in ${Math.ceil(seconds / 60)}m`;
+}
+
 export interface JobCardProps {
   job: BackgroundJob;
   /** Render inside the journal's shared grouped-row container. */
@@ -67,6 +95,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
   const m = statusMeta(job.status);
   const Icon = m.icon;
   const detail = job.status === "completed" ? job.result : job.error;
+  const interrupted = interruptionNote(job, Date.now());
 
   return (
     <div className={grouped ? "p-3" : "p-group p-3"}>
@@ -81,6 +110,9 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
           <div className="text-[10.5px] leading-[15px] p-text-3">
             {m.label} · started {timeAgo(job.createdAt)}{job.settledAt ? ` · settled ${timeAgo(job.settledAt)}` : ""}
           </div>
+          {interrupted && (
+            <div className="text-[10.5px] leading-[15px] p-warning">{interrupted}</div>
+          )}
           {job.retriedBy && (
             <div className="mt-1 font-mono text-[10px] p-gold">
               Retried as {job.retriedBy.replace(/^bgjob-/, "").slice(0, 8)}

@@ -240,7 +240,6 @@ import {
 } from "./runtime";
 import { cleanupNimbusNodeHome, createNimbusNodeHomeProvisioner } from "./node-home";
 import {
-  recoveryBackoffMs,
   // The durable lanes' recovery roster — synchronous classification, six arms,
   // terminal-result discipline — and this backend's three cf-minted lane names.
   classifyRecoveredFiber, EVOLUTION_LANE_FIBER, ADVISOR_LANE_FIBER, MCP_WARM_LANE_FIBER,
@@ -254,6 +253,9 @@ import {
   type FiberLaneTransports,
 } from "./fiber-recovery";
 import {
+  // The pace every durable recovery lane retries at, from core: the notice
+  // carrier, this tick's own re-arm and the job runner's deferral share it.
+  recoveryBackoffMs,
   // Core's once-only lifecycle for one settled response, and the per-effect
   // ledger it wraps. Both backends drive this same state machine.
   TerminalTransitions, initTerminalEffectTable,
@@ -2212,6 +2214,14 @@ export abstract class ActorAgent extends Think<Env> {
     const sweepsUnfinished = this.maintenanceSweeps();
     const recoveryUnfinished = await this.maintenanceWork();
     await this.owedDeliveryWork();
+    // The deferred-attempt wake. It is re-entered HERE rather than left to
+    // `maintenanceWork` because that pass is ACTIVATION-SCOPED — the orchestrator
+    // clears its own pending flag after the first one — so the second and later
+    // ticks inside one warm isolate never reach the job sweep. An interrupted
+    // job's wake is armed up to sixty seconds out, which a warm actor serves from
+    // that same isolate, and without this line it would fire into a frame that
+    // had already decided it had nothing to recover.
+    await this.jobRunner.recoverDueResumes();
     if (sweepsUnfinished || recoveryUnfinished) {
       this.#maintenanceLaps = this.#maintenanceLaps + 1;
       await this.scheduleTerminalRetry(Date.now() + recoveryBackoffMs(this.#maintenanceLaps));
@@ -3840,6 +3850,13 @@ export abstract class ActorAgent extends Think<Env> {
         harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
           { sql: this.boundSql, ledger: this.mctsSearchStore }, kind, input,
         )),
+        // The wake for an attempt this activation deliberately did not start.
+        // It arms the actor's ONE terminal-retry row (soonest-wins), so a job
+        // waiting out its backoff costs no timer, no second callback, and no
+        // schedule row of its own — and the tick that row fires re-enters the
+        // job sweep itself, because the fork reconcile behind it runs at most
+        // once per activation and a deferred job outlives that.
+        scheduleResume: (atMs) => this.scheduleTerminalRetry(atMs),
       });
     }
     return this._jobRunner;

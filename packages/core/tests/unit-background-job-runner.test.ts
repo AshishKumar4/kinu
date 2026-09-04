@@ -781,6 +781,30 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     })(['root-live']);
     expect(retired).toEqual([]);
   });
+
+  // What both backends' wakes actually call. The tick that fires it runs on a
+  // live process where almost every pass has nothing to do, so "nothing is owed"
+  // and "something came due" have to be different observable outcomes.
+  test('the wake re-drives only when an attempt has come due, and is a no-op otherwise', async () => {
+    const resume: JobResumer = () => new Promise<never>(() => {});
+    const first = setup({ resume });
+    first.store.create({ id: 'jd', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+
+    // Nothing deferred at all: the wake must not sweep, so an untouched job is
+    // not re-driven by a tick that had no business waking for it.
+    await setup({ resume, db: first.db }).runner.recoverDueResumes();
+    expect(first.store.get('jd')?.resumeAttempts).toBe(0);
+
+    // Deferred into the future: still not due.
+    first.store.deferResume('jd', Date.now() + 60_000);
+    await setup({ resume, db: first.db }).runner.recoverDueResumes();
+    expect(first.store.get('jd')?.resumeAttempts).toBe(0);
+
+    // Due: re-driven, and the wait it just served is cleared by the claim.
+    first.store.deferResume('jd', Date.now() - 1);
+    await setup({ resume, db: first.db }).runner.recoverDueResumes();
+    expect(first.store.get('jd')?.resumeAttempts).toBe(1);
+  });
 });
 
 describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring', () => {

@@ -999,6 +999,12 @@ export class LocalAgentSession implements BackendHost {
       harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
         { sql: this.rt.storage.sql, ledger: this.mctsSearchStore }, kind, input,
       )),
+      // The wake for an attempt this process deliberately did not start. It arms
+      // the session's ONE terminal-retry timer (soonest-wins, unref'd), whose
+      // body sweeps due jobs before it replays owed effects — so a job waiting
+      // out its backoff needs no timer of its own, and a process that exits
+      // before the instant leaves the next start to carry it.
+      scheduleResume: (atMs) => this.scheduleTerminalRetry(atMs),
     });
     // Scaffold cold-start heal (the DO's onStart parity): a workspace created
     // before scaffold bootstrap landed has no scaffold/agent.js, and
@@ -3745,6 +3751,20 @@ export class LocalAgentSession implements BackendHost {
     this.terminalRetryAt = atMs;
     const timer = setTimeout(async () => {
       this.clearTerminalRetry();
+      // The job sweep FIRST, and in its own try: this timer is also the wake a
+      // deferred background job arms, and `recoverTerminalTransitions` does not
+      // reach `recoverOrphans` — the only path that does is
+      // `recoverBackgroundJobs`, which runs once at startup. Without this a job
+      // waiting out its backoff inside a live session would sleep until the next
+      // process start. Its own catch, because "the job sweep failed" and "an
+      // owed effect failed" are different facts and one must not hide the other.
+      try {
+        await this.jobRunner.recoverDueResumes();
+      } catch (cause) {
+        diagnostics.failure('jobs.due_resume_failed', toKinuError({
+          doing: 'resuming a background job whose next attempt came due', cause, otherwise: 'unavailable',
+        }));
+      }
       try {
         await this.recoverTerminalTransitions();
       } catch (cause) {

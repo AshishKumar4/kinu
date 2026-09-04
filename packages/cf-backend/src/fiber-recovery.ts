@@ -47,7 +47,7 @@ import * as v from 'valibot';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 
 import {
-  BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME, BackgroundJobRunner,
+  BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME, BackgroundJobRunner, recoveryBackoffMs,
   AdvisorRecoverySnapshotSchema, nanoid, projectJsonValue,
   type AdvisorDisposition, type AdvisorRecoverySnapshot, type JsonValue,
   type SqlExecutor,
@@ -597,14 +597,6 @@ const RecoveredSignalSchema = v.object({
  *  every dispatch site. */
 export type RecoveredNotice = v.InferOutput<typeof RecoveredSignalSchema>;
 
-/** Capped backoff for recovery work that must never give up: unbounded
- *  ATTEMPTS — a cap would lose the work the carrier exists to keep — with a
- *  bounded PACE, per the retry doctrine every provider path here follows.
- *  Shared by the notice lane and the maintenance tick's own re-arm, so a
- *  persistently failing sweep settles at the ceiling instead of a 1 Hz loop. */
-export function recoveryBackoffMs(attempts: number): number {
-  return Math.min(1000 * 2 ** Math.min(attempts, 6), 60_000);
-}
 
 /**
  * The MCP warmup lane, which has NOTHING to re-enter.
