@@ -27,8 +27,21 @@ import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';
 import DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
+import PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
 
 const repoRoot = resolve(__dirname, '../../..');
+/** Every module the daemon requires beside itself, keyed by the name it
+ *  requires, with the bytes this CLI ships for it. Derived from the daemon's
+ *  own require lines: a sibling the daemon requires and this table lacks is
+ *  the defect this suite exists to catch — the pty module shipped nowhere
+ *  for one release while the daemon required it, and every clean install
+ *  died on its first require. */
+const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE } as const;
+/** Mirrors the installer's private reader of the daemon's `require('./x')`
+ *  lines; drift between the two fails these tests, which is the point. */
+const REQUIRED_SIBLINGS = [...DAEMON_SOURCE.matchAll(/require\('\.\/([^']+)'\)/g)]
+  .map((m) => m[1] ?? '').filter((n) => n !== '');
+
 const tempDirs: string[] = [];
 
 /** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
@@ -522,10 +535,15 @@ describe('device-connect install hardening', () => {
     // bytes on disk are this CLI's own, and the poison never ran.
     expect(stub.hits.daemonScript).toBe(0);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
-    // The daemon requires its sandbox policy as a SIBLING, so a release that
-    // shipped one without the other is a daemon that dies on its first
-    // require. Both bytes are this CLI's own.
-    expect(readFileSync(join(home, 'sandbox.js'), 'utf-8')).toBe(SANDBOX_SOURCE);
+    // The daemon requires its siblings by relative path, so a release that
+    // ships the daemon without one of them is a daemon that dies on its first
+    // require. The shipped set IS the daemon's require lines, and every byte
+    // is this CLI's own.
+    expect(REQUIRED_SIBLINGS.length).toBeGreaterThan(1);
+    expect(Object.keys(DAEMON_SIBLINGS).sort()).toEqual([...REQUIRED_SIBLINGS].sort());
+    for (const [name, source] of Object.entries(DAEMON_SIBLINGS)) {
+      expect(readFileSync(join(home, name), 'utf-8')).toBe(source);
+    }
     expect(existsSync(join(home, POISON_MARKER))).toBe(false);
   }, 20_000);
 
@@ -767,10 +785,12 @@ describe('device daemon single-instance lock', () => {
   function installedMachine(origin: string): string {
     const home = makeHome({ origin, accessToken: 'ptc_test' });
     writeFileSync(join(home, 'pc-agent.js'), DAEMON_SOURCE, { mode: 0o700 });
-    // Both files, because the daemon requires its sandbox policy as a sibling:
-    // an installed machine with only one of them is a daemon that dies before
-    // it logs anything, which is what this fixture found.
-    writeFileSync(join(home, 'sandbox.js'), SANDBOX_SOURCE, { mode: 0o700 });
+    // Every sibling, because the daemon requires them by relative path: an
+    // installed machine missing one is a daemon that dies before it logs
+    // anything, which is what this fixture found — twice.
+    for (const [name, source] of Object.entries(DAEMON_SIBLINGS)) {
+      writeFileSync(join(home, name), source, { mode: 0o700 });
+    }
     writeFileSync(
       join(home, 'device.json'),
       `${JSON.stringify({ user: 'user_1', token: 'device-token', origin })}\n`,

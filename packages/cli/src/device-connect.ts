@@ -25,11 +25,30 @@ import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolve
 import { listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
 import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
+import PC_AGENT_PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
 const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
-/** The daemon's sandbox policy, required by pc-agent.js as a sibling. */
-const SANDBOX_PATH = join(AGENT_HOME, 'sandbox.js');
+/**
+ * Every module the daemon `require`s beside itself, by the name it requires.
+ *
+ * The daemon is one file that requires siblings by relative path, so the
+ * shipped set is the daemon's own require lines and nothing else — a sibling
+ * missing here is a daemon that dies on its first require after a clean
+ * install, which is how the pty module shipped nowhere for one release.
+ * `daemonSiblingNames` reads those lines from the source this CLI ships, and
+ * the install refuses to stage a daemon whose requires this table does not
+ * cover.
+ */
+const DAEMON_SIBLINGS: readonly { readonly name: string; readonly source: string }[] = [
+  { name: 'sandbox.js', source: PC_AGENT_SANDBOX_SOURCE },
+  { name: 'pty.js', source: PC_AGENT_PTY_SOURCE },
+];
+
+/** The sibling names the daemon source requires — `require('./x.js')`. */
+function daemonSiblingNames(daemonSource: string): readonly string[] {
+  return [...daemonSource.matchAll(/require\('\.\/([^']+)'\)/g)].map((m) => m[1] ?? '').filter((n) => n !== '');
+}
 export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
 export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
 /** Where this machine keeps agent homes. The daemon reports this ROOT to the
@@ -335,21 +354,31 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     0o700,
     (temporary) => verifyStagedDaemon(temporary),
   );
-  // The daemon requires this beside itself, so it is not optional and it is
-  // not fetched: the sandbox policy ships in the same release as the code that
-  // reads it, or a released daemon dies on its first require.
-  const sandboxTemporary = stageInstallFile(
-    SANDBOX_PATH,
-    PC_AGENT_SANDBOX_SOURCE,
-    0o700,
-    (temporary) => {
-      if (readFileSync(temporary, 'utf-8') !== PC_AGENT_SANDBOX_SOURCE) {
-        throw new KinuError('io', 'the staged device sandbox policy does not match this release');
-      }
-    },
-  );
+  // The daemon requires these beside itself, so they are not optional and
+  // they are not fetched: each ships in the same release as the code that
+  // reads it, or a released daemon dies on its first require. The table is
+  // checked against the daemon's own require lines before anything lands.
+  const required = daemonSiblingNames(PC_AGENT_DAEMON_SOURCE);
+  const shipped = new Set(DAEMON_SIBLINGS.map((sibling) => sibling.name));
+  const unshipped = required.filter((name) => !shipped.has(name));
+  if (unshipped.length > 0) {
+    throw new KinuError('io', `this CLI ships no ${unshipped.join(', ')} beside the device daemon that requires it`);
+  }
+  const siblingTemporaries = DAEMON_SIBLINGS.map((sibling) => ({
+    target: join(AGENT_HOME, sibling.name),
+    temporary: stageInstallFile(
+      join(AGENT_HOME, sibling.name),
+      sibling.source,
+      0o700,
+      (temporary) => {
+        if (readFileSync(temporary, 'utf-8') !== sibling.source) {
+          throw new KinuError('io', `the staged device daemon module ${sibling.name} does not match this release`);
+        }
+      },
+    ),
+  }));
   let scriptPending: string | null = scriptTemporary;
-  let sandboxPending: string | null = sandboxTemporary;
+  const siblingsPending = new Set(siblingTemporaries.map((entry) => entry.temporary));
   let configPending: string | null = null;
   try {
     const configTemporary = stageInstallFile(
@@ -367,12 +396,14 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     // The config activates the replacement on the next daemon start, so it
     // lands last. A crash can leave a newer script beside the old credentials,
     // never new credentials beside an unverified script.
-    // The policy lands BEFORE the daemon that requires it, for the same
+    // Every sibling lands BEFORE the daemon that requires it, for the same
     // reason the config lands after: no ordering leaves a daemon on disk whose
     // sibling is missing or older than it.
-    renameSync(sandboxTemporary, SANDBOX_PATH);
-    sandboxPending = null;
-    enforceOwnerOnly(SANDBOX_PATH, 0o700);
+    for (const entry of siblingTemporaries) {
+      renameSync(entry.temporary, entry.target);
+      siblingsPending.delete(entry.temporary);
+      enforceOwnerOnly(entry.target, 0o700);
+    }
     renameSync(scriptTemporary, SCRIPT_PATH);
     scriptPending = null;
     enforceOwnerOnly(SCRIPT_PATH, 0o700);
@@ -382,7 +413,7 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     syncAgentDirectory();
   } catch (cause) {
     try {
-      for (const temporary of [scriptPending, sandboxPending, configPending]) {
+      for (const temporary of [scriptPending, ...siblingsPending, configPending]) {
         if (temporary !== null) rmSync(temporary, { force: true });
       }
     } catch (cleanup) {
