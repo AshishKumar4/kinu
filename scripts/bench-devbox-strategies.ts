@@ -2758,6 +2758,17 @@ export async function stopOperation(
   };
 }
 
+/**
+ * A wake can prove a recycle only after stop confirms. The stop's final
+ * quiesce may fail before detach, invalidate and stop; callers use this one
+ * guard so none can ask wake against the still-running box and call its live
+ * attach a restoration.
+ */
+function requireConfirmedStop(stopped: StopReply, failure: string): void {
+  if (stopped.ok === true) return;
+  throw new Error(`${failure}: ${stopped.error ?? 'stop did not confirm'}`);
+}
+
 /** What `/teardown` discarded and purged. The report prints this row whole and
  *  the artifact keeps it, so nothing here is read by name. */
 interface TeardownReply {
@@ -3842,9 +3853,7 @@ async function runControlWitnessCells(
         );
       }
       const stopped = await stopOperation(fixture, box, 'delta-layer-collapse stop');
-      if (stopped.ok !== true) {
-        throw new Error(`the box did not stop: ${stopped.error ?? 'the stop did not confirm'}`);
-      }
+      requireConfirmedStop(stopped, 'the box did not stop');
       const woke = await startupOperation(
         fixture, box, '/wake', 'delta-layer-collapse wake', ['attached'],
       );
@@ -5064,6 +5073,12 @@ async function measureArm(
   log('stop then wake');
   const stopped = await stopOperation(fixture, box, 'stop');
   result.stopMs = stopped.ms ?? null;
+  // NO STOP, NO WAKE. A failed final quiesce can return before detach,
+  // invalidate and stop; asking /wake then observes the still-running box and
+  // manufactures attached evidence for a recycle that never happened. The
+  // stop duration is already on the mutable row; `runArm` catches this named
+  // failure and settles both duration and reason before returning the arm.
+  requireConfirmedStop(stopped, 'stop failed before wake');
   // A FLUSHED WINDOW AROUND THE WAKE ALONE, on the decisive-tick precedent:
   // the tally batches in the proxy isolate, so an unflushed boundary would
   // price the stop's tail against the restore. GET /ops flushes both isolates

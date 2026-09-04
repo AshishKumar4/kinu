@@ -706,9 +706,10 @@ describe('the async checkpoint and stop protocol', () => {
  * an arm touches before that point answers here, so what the artifact keeps is
  * decided by the driver rather than by how far the fake got.
  */
-function wakeRefusingFixture(refusal: string) {
+function wakeRefusingFixture(refusal: string, stopRefusal?: string) {
   const asked: string[] = [];
   let woken = false;
+  let stopping = false;
   const real = globalThis.fetch;
   const answer = async (
     input: Parameters<typeof globalThis.fetch>[0],
@@ -737,12 +738,23 @@ function wakeRefusingFixture(refusal: string) {
             },
           }));
     }
+    if (route === 'POST /stop' && stopRefusal !== undefined) {
+      stopping = true;
+      return new Response(JSON.stringify({ ok: true, token: `token-${String(asked.length)}`, state: 'pending' }), {
+        status: 202,
+      });
+    }
     if (route === 'POST /checkpoint' || route === 'POST /stop') {
       return new Response(JSON.stringify({ ok: true, token: `token-${String(asked.length)}`, state: 'pending' }), {
         status: 202,
       });
     }
     if (route === 'GET /operation') {
+      if (stopping && stopRefusal !== undefined) {
+        return new Response(JSON.stringify({
+          ok: false, state: 'failed', ms: 1_234, outcome: { kind: 'failed' }, error: stopRefusal,
+        }));
+      }
       return new Response(JSON.stringify({
         ok: true,
         state: 'done',
@@ -806,6 +818,39 @@ describe('an arm that fails mid-measurement', () => {
 
     // AND ITS INSTANCE WAS HANDED BACK, which is what stops one arm's death
     // from refusing the next arm's create with `Maximum number of instances`.
+    expect(fixture.asked.filter((route) => route === 'POST /stop')).toHaveLength(2);
+  }, 20_000);
+
+  test('a failed stop never asks wake against the still-running box', async () => {
+    // THE PROBE'S FAILURE SHAPE. The final quiesce answered
+    // CandidateCaptureUnavailable before detach/invalidate/stop, so the box was
+    // still running. Asking /wake next observed that live box as attached and
+    // manufactured stop-to-wake evidence from a lifecycle that never recycled.
+    const refusal = 'CandidateCaptureUnavailable: journal capture did not seal';
+    const fixture = wakeRefusingFixture('the still-running box answered its live state', refusal);
+    let arm: ArmResult;
+    try {
+      arm = await runArm(
+        BENCH_FIXTURE,
+        'bounded-layers',
+        {
+          ...parseOptions([]), arms: ['bounded-layers'], runId: 'stop-refused-probe', verifyOnly: true,
+        },
+        () => {},
+      );
+    } finally {
+      fixture.restore();
+    }
+
+    expect(fixture.asked).not.toContain('POST /wake');
+    expect(arm.stopMs).toBe(1_234);
+    expect(arm.wakeKind).toBe('');
+    expect(arm.wakeMs).toBeNull();
+    expect(arm.verifyPassed).toBe(false);
+    expect(arm.notes.join(' ')).toContain(refusal);
+    expect(arm.notes.join(' ')).toContain('arm failed mid-measurement');
+    // The failed arm still asks stop once more through the bounded release
+    // path, but neither failed stop can be followed by a wake.
     expect(fixture.asked.filter((route) => route === 'POST /stop')).toHaveLength(2);
   }, 20_000);
 });
