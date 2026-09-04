@@ -201,10 +201,13 @@ export async function handleContainerEgress(
 }
 
 /** Refusal shape for a refused destination: the classified payload on the
- *  wire, the classification in diagnostics, host only in fields. */
+ *  wire, the classification in diagnostics, host only in fields. The seam is
+ *  named because ONE classifier refuses at three of them — this container hop,
+ *  the agent's `web.fetch`, and the codemode loopback — and one event name with
+ *  one shape is what makes them comparable. */
 function destinationRefusal(host: string, payload: Refusal): Response {
   const error = new KinuError('denied', payload.error);
-  diagnostics.failure('egress.private_destination', error, { host });
+  diagnostics.failure('egress.private_destination', error, { host, seam: 'container' });
   return Response.json(payload, { status: 403 });
 }
 

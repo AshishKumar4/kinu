@@ -157,6 +157,23 @@ describe('the execute_tools sandbox under workerd', () => {
     expect(String(result.result)).not.toContain('not permitted to access the internet');
   });
 
+  test('a program cannot reach cloud metadata, and is told why', async () => {
+    // The seam's whole point, inside the real runtime: the same address the
+    // approval gate denies as a shell command and `web.fetch` refuses as a URL
+    // is refused here too, by the one shared classifier — before any DNS
+    // lookup or socket, so nothing leaves the isolate.
+    const egress = codemodeEgress();
+    expect(egress).not.toBeNull();
+    const online = new KinuSandboxExecutor({ loader: env.LOADER, egress });
+    const program = "// probe the metadata service\ntry { await fetch('http://169.254.169.254/latest/meta-data/'); return 'reached'; } catch (e) { return 'threw: ' + e.message; }";
+
+    const result = await online.execute(program, [toolsProvider([]), stateProvider, workspace]);
+
+    expect(String(result.result)).toContain('threw: fetch failed: ');
+    expect(String(result.result)).toContain('blocked private/internal address');
+    expect(String(result.result)).not.toContain('reached');
+  });
+
   test('a bare native tool name is corrected toward tools.<name>', async () => {
     const result = await executor.execute("// misuse\nreturn await run({ command: 'ls' })", [toolsProvider([]), stateProvider, workspace]);
     expect(result.error).toContain('"run" is a native Kinu tool');

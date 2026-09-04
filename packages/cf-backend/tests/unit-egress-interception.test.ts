@@ -665,8 +665,10 @@ describe('private destinations are refused at the one place requests leave', () 
     });
     expect(emitted[0]!.event).toBe('egress.private_destination');
     expect(emitted[0]!.code).toBe('denied');
-    // Host only — no path, no query in the diagnostic.
-    expect(emitted[0]!.fields).toEqual({ host: '169.254.169.254' });
+    // Host only — no path, no query in the diagnostic — and the seam named, so
+    // one event name carries one shape across the three enforcement points of
+    // the shared classifier (see unit-codemode-egress.test.ts).
+    expect(emitted[0]!.fields).toEqual({ host: '169.254.169.254', seam: 'container' });
   });
 
   test('the public control still succeeds end to end', async () => {
