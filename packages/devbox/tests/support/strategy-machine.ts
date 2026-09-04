@@ -78,8 +78,8 @@ import { sha256Hex } from '../../src/cas/hash';
 import { byApplyOrder } from '../../src/cas/pending-state';
 import {
   build as buildBoundedLayers,
-  headFilesystemOf,
   open as openBoundedLayers,
+  type BoundedLayers,
 } from '../../src/candidates/bounded-layers';
 import {
   candidateStorePaths,
@@ -108,7 +108,7 @@ import { parseEnvelopeV2Bytes } from './sidecar-fixture';
 import { parsePackLedger } from '../../src/candidates/merkle-pack/ledger';
 import { contentSize, issueVerifiedJournalCapture, manifestSha256 } from '../../src/capture/model';
 import type { AuditedCapture, Capture, FileContent, NodeEntry, PosixMetadata } from '../../src/capture/model';
-import { LazyRestore } from '../../src/candidates/lazy-restore';
+import { LazyRestore, type HeadFilesystem } from '../../src/candidates/lazy-restore';
 import { LazyContainer } from './lazy-container';
 import { SidecarCore, md5Of } from '../../bench/sidecar/core';
 import type { CandidatePayloadStore } from '../../src/candidates/publication';
@@ -2589,6 +2589,24 @@ function receipt(
  * its mount — the exact placement the envelope defect got wrong for control
  * metadata.
  */
+/** A bounded-layer root as the metadata surface a lazy restore reads.
+ *  Local to this harness: its one caller. The resolution is already in
+ *  hand — `open()` read the root and its layers — so `stat`, `readdir`
+ *  and `extents` answer from memory at no remote cost, which is exactly
+ *  the property that makes an attach O(#layers) instead of O(#files).
+ *  Only `readRange` reaches the store. */
+function headFilesystemForRestore(view: BoundedLayers): HeadFilesystem {
+  return {
+    stat: async (path) => {
+      const stat = view.stat(path);
+      if (stat === null) return null;
+      return { ...stat, size: stat.size ?? 0 };
+    },
+    readdir: async (path) => view.readdir(path),
+    extents: async (path) => view.extents(path),
+    readRange: async (path, offset, length) => await view.readRange(path, offset, length),
+  };
+}
 class MountedPayloadStore implements CandidatePayloadStore {
   constructor(
     private readonly durable: DurableStore,
@@ -3013,7 +3031,8 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
      * so `evictCleanBytes` has something to evict even when the box that
      * just published never replaced its container.
      */
-    async #ensureLazy(head: NonNullable<CandidateRunControlV1['head']>): Promise<LazyContainer> {
+  
+  async #ensureLazy(head: NonNullable<CandidateRunControlV1['head']>): Promise<LazyContainer> {
       const identity = {
         operationId: `restore-${head.pointer.lastOperationId}`,
         attemptId: '1',
@@ -3022,7 +3041,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
         expiresAt: '99999999999999',
       };
       const view = await openBoundedLayers(head.envelope.rootObject, this.#payload(), identity);
-      const restore = new LazyRestore(headFilesystemOf(view), {
+      const restore = new LazyRestore(headFilesystemForRestore(view), {
         place: (path, offset, bytes) => this.tree.hydrate(path, offset, bytes),
         drop: (path, offset, length) => this.tree.dehydrate(path, offset, length),
         now: () => clock,

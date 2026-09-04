@@ -53,7 +53,7 @@ import type {
 } from '../capture/model';
 import { ImmutableObjectRefSchema, RangeReadIntentSchema } from '../durability/contracts';
 import type { HydrateWork, ImmutableObjectRef, RangeReadIntent } from '../durability/contracts';
-import type { FileExtent, HeadFilesystem } from './lazy-restore';
+import type { FileExtent } from './lazy-restore';
 import { paintedSegments } from './merkle-pack/chunk';
 import type { LogicalLayout } from './merkle-pack/chunk';
 import {
@@ -824,27 +824,6 @@ export class BoundedLayers {
     }
     return out;
   }
-}
-
-/**
- * A bounded-layer root as the metadata surface a lazy restore reads.
- *
- * The resolution is already in hand — `open()` read the root and its layers,
- * and nothing below them — so `stat`, `readdir` and `extents` answer from
- * memory at no remote cost, which is exactly the property that makes an
- * attach O(#layers) instead of O(#files). Only `readRange` reaches the store.
- */
-export function headFilesystemOf(view: BoundedLayers): HeadFilesystem {
-  return {
-    stat: async (path) => {
-      const stat = view.stat(path);
-      if (stat === null) return null;
-      return { ...stat, size: stat.size ?? 0 };
-    },
-    readdir: async (path) => view.readdir(path),
-    extents: async (path) => view.extents(path),
-    readRange: async (path, offset, length) => await view.readRange(path, offset, length),
-  };
 }
 
 // ── open ─────────────────────────────────────────────────────────────────────

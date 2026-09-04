@@ -621,7 +621,6 @@
   "packages/devbox/src/candidates/bounded-layers.ts#LayerDocSchema (unreached-export)",
   "packages/devbox/src/candidates/bounded-layers.ts#MAX_LAYER_DEPTH (unreached-export)",
   "packages/devbox/src/candidates/bounded-layers.ts#encodeCanonical (unreached-export)",
-  "packages/devbox/src/candidates/bounded-layers.ts#headFilesystemOf (unreached-export)",
   "packages/devbox/src/candidates/bounded-layers.ts#objectKey (unreached-export)",
   "packages/devbox/src/candidates/control.ts#CandidateOperationRefused (unreached-export)",
   "packages/devbox/src/candidates/merkle-pack/build-v2.ts#DEFAULT_MAX_PACK_BYTES_V2 (unreached-export)",
