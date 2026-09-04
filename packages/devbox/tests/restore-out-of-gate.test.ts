@@ -319,6 +319,43 @@ describe('T4/T5: a request joins the one attempt, and is never held hostage to i
     expect(container.starts).toHaveLength(1);
   });
 
+  test('T4b: a CHECKPOINT arriving mid-attempt is bounded by the same law', async () => {
+    // THE DEPLOYED DEFECT. `#checkpoint` awaited the in-flight startup attempt
+    // with no bound at all — `await pending.run` — inside both the checkpoint
+    // lane and the storage-mutation FIFO. So a restoration that ran long held
+    // every later checkpoint behind it, and the armed operation row stayed
+    // `pending` while the box answered every other segment with `a restoration
+    // has been running in the request for N ms`. That is run 20260903140046's
+    // overlay-cas arm exactly: its first decisive `npm` checkpoint never
+    // settled inside the 1,500,000 ms operation deadline, and every segment
+    // after it was refused with that sentence until the runner died.
+    //
+    // A checkpoint is a REQUEST, and the law T4 states for `exec` is the law
+    // for it too: join the attempt, wait only the request's own budget, then
+    // answer from the restoration's state. Nothing is abandoned — the attempt
+    // keeps running under the single-flight entry — and the caller gets a
+    // re-askable refusal instead of an unbounded hold.
+    const harnessed: Harness<ImpatientBox> = harness(ImpatientBox);
+    proc(harnessed.rows, 'p1');
+    port(harnessed.rows, 3000, 'tok3000');
+    harnessed.container.listening.add(3000);
+    const { box, container } = harnessed;
+    const parked = gate();
+    container.stampGate = parked;
+
+    const driven = box.devboxStartup();
+    await parked.reached;
+
+    // The checkpoint must not wait out the parked attempt.
+    const settled = await box.checkpointNow('tick');
+    expect(settled.kind).toBe('failed');
+    expect(settled.reason).toContain('ask again');
+
+    parked.release();
+    await driven;
+    expect((await box.devboxState()).ready).toBe(true);
+  });
+
   test('the alarm door drives the attempt to completion, budget or no budget', async () => {
     // The other half of the ruling: the schedule frame holds no caller, so it
     // waits for the whole restoration. A box nobody is asking about has no other

@@ -21,6 +21,7 @@ export {
   replayPending,
   stageBlobs,
   sweepOrphanBlobs,
+  throughStorePool,
   type FoldResult,
   type StageBlobsOptions,
   type StageBlobsResult,

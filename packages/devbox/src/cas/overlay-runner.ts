@@ -13,6 +13,7 @@ import {
   CAS_FORMAT_VERSION,
   CHUNK_SIZE,
   appendJournalBatch,
+  blobKey,
   counterDelta,
   emptyCounters,
   encodeJson,
@@ -21,6 +22,7 @@ import {
   stageBlobs,
   stampEntries,
   sweepOrphanBlobs,
+  throughStorePool,
   type CasPutMeta,
   type CasStore,
   type FileDigest,
@@ -516,6 +518,32 @@ async function materializePending(
 ): Promise<{ readonly entries: number; readonly foldedSeq: number }> {
   const pending = await replayPending(store);
   const entries = [...pending.pending].sort(byApplyOrder);
+  // THE BLOBS OF ONE REPLAY ARE FETCHED TOGETHER, AND THE TREE STILL APPLIES
+  // IN ORDER.
+  //
+  // MEASURED. After the deployed 25-minute checkpoint missed its deadline in
+  // run 20260903140046, every later segment was answered `a restoration has
+  // been running in the request for N ms` until the runner died on
+  // `GET cursor.json: HTTP 530`. The 530 is the platform's store read path,
+  // which is not this file's to fix — but the replay that spun until it
+  // happened is: this fetched one blob per await, so a wake after a large tick
+  // cost latency times blob count. The reads are independent
+  // (content-addressed keys, verified by digest on arrival), so they overlap;
+  // the APPLICATION below stays in `byApplyOrder`, because parents before
+  // children and deletes last is what makes a replayed tree correct.
+  const wanted = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.kind !== 'file') continue;
+    for (const part of entry.parts) {
+      if (part.kind === 'data') wanted.set(part.hash, blobKey(part.hash));
+    }
+  }
+  const fetched = new Map<string, Uint8Array>();
+  await throughStorePool([...wanted], async ([hash, key]) => {
+    const bytes = await store.get(key);
+    if (bytes === null) throw new Error(`blob missing: ${hash}`);
+    fetched.set(hash, bytes);
+  });
   for (const entry of entries) {
     const parent = parentDirectory(entry.path);
     if (parent !== null) root.mkdir(parent);
@@ -531,8 +559,8 @@ async function materializePending(
         let offset = 0;
         for (const part of entry.parts) {
           if (part.kind === 'data') {
-            const bytes = await store.get(`blobs/${part.hash.slice(0, 2)}/${part.hash}`);
-            if (bytes === null) throw new Error(`blob missing for ${entry.path}: ${part.hash}`);
+            const bytes = fetched.get(part.hash);
+            if (bytes === undefined) throw new Error(`blob missing for ${entry.path}: ${part.hash}`);
             root.writeRange(entry.path, offset, bytes);
           }
           offset += part.size;

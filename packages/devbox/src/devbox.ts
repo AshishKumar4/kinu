@@ -2248,7 +2248,50 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return this.#lane.run(kind, async () => await this.#withStorageMutation(async () => {
       const pending = this.#startup;
       if (pending !== undefined && pending.generation === this.#generation) {
-        await pending.run;
+        // A CHECKPOINT IS A REQUEST, AND IT WAITS THE REQUEST'S OWN BUDGET.
+        //
+        // MEASURED DEFECT THIS REPAIRS. This was `await pending.run` — no
+        // bound at all — inside both the checkpoint lane and the
+        // storage-mutation FIFO, so one long restoration held every later
+        // checkpoint behind it. Run 20260903140046's overlay-cas arm is the
+        // shape: its first decisive `npm` checkpoint never settled inside the
+        // driver's 1,500,000 ms operation deadline, and every segment after it
+        // was answered `a restoration has been running in the request for N
+        // ms; a startup is armed, so ask again` — the armed operation row
+        // still `pending`, the lane still held, until the runner died.
+        //
+        // The same law `#awaitAttempt` holds a request door to: join the one
+        // attempt, wait `requestJoinMs`, then answer from the restoration's
+        // state. NOTHING IS ABANDONED — the attempt keeps running under the
+        // single-flight entry and the next ask joins or reads it — and a
+        // caller gets the re-askable refusal its own retry already knows how
+        // to read instead of a hold with no end.
+        const joined = await runRestoreStep(
+          this.policy.requestJoinMs,
+          async () => await pending.run,
+          (failure) => {
+            console.error(
+              '[devbox] the restoration this checkpoint joined settled after the checkpoint had '
+              + `answered: ${describe({ cause: failure.cause })}`,
+            );
+          },
+        );
+        if (joined.kind === 'failed') throw joined.cause;
+        // STILL RESTORING: this checkpoint has no attached work directory to
+        // commit. It answers with the readiness gate's OWN sentence — the one
+        // the driver's `isRearmableStartupRefusal` already reads as "ask
+        // again" — as a checkpoint OUTCOME rather than a throw, because a
+        // caller of `checkpointNow` acts on the outcome and a scheduled
+        // operation records it.
+        if (joined.kind === 'late') {
+          return {
+            kind: 'failed',
+            reason: `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}. `
+              + 'Nothing has been classified as a failure; a startup is armed, so ask again.',
+            bytes: undefined,
+            movedBytes: undefined,
+          };
+        }
       }
       return await this.#requireStorage().checkpoint(kind);
     }));

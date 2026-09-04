@@ -832,3 +832,49 @@ describe('the receipt’s byte figure is the bytes that were written', () => {
     }
   });
 });
+
+// ── the replay that spun until the platform's store failed ──────────────────
+//
+// MEASURED. After the overlay-cas arm's 25-minute checkpoint missed its
+// deadline in run 20260903140046, every later segment answered `a restoration
+// has been running in the request for N ms; a startup is armed, so ask again`,
+// and the runner finally died on `GET cursor.json: HTTP 530`. The 530 is the
+// platform's store read path and is not ours — but the replay that spun until
+// it happened is: `materializePending` fetched the pending set ONE BLOB AT A
+// TIME, so a wake after a large tick paid latency times blob count against a
+// store that was already degrading. The same one-at-a-time shape the fold and
+// the staging had.
+//
+// The fetches overlap; the filesystem application stays in `byApplyOrder` —
+// parents before children, deletes last — because that order is what makes a
+// replayed tree correct.
+
+describe('a replay fetches its pending blobs together', () => {
+  test('the blob reads of one replay overlap, and the tree still applies in order', async () => {
+    const paths = await fixture('replay-overlap');
+    try {
+      await mkdir(join(paths.upper, 'pkg'), { recursive: true });
+      for (let index = 0; index < 24; index += 1) {
+        await writeFile(join(paths.upper, 'pkg', `f${String(index).padStart(3, '0')}.txt`), `body ${String(index)}`);
+      }
+      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: paths.store });
+      await rm(join(paths.upper, 'pkg'), { recursive: true, force: true });
+
+      paths.store.resetPutWave();
+      paths.store.holdGets(8);
+      const receipt = await runOverlayRunner({ operation: 'restore', upper: paths.upper, store: paths.store });
+
+      expect(receipt).toMatchObject({ operation: 'restore', entries: 25 });
+      // THE OVERLAP: the pending blobs were in flight together.
+      expect(paths.store.widestGetWave).toBeGreaterThanOrEqual(8);
+      // AND THE TREE IS RIGHT: every file is back, under a parent that had to
+      // exist before it.
+      for (let index = 0; index < 24; index += 1) {
+        expect(await readFile(join(paths.upper, 'pkg', `f${String(index).padStart(3, '0')}.txt`), 'utf8'))
+          .toBe(`body ${String(index)}`);
+      }
+    } finally {
+      await rm(paths.root, { recursive: true, force: true });
+    }
+  });
+});

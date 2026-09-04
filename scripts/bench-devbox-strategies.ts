@@ -3279,6 +3279,28 @@ function absentCell(name: string): WitnessCheck {
  *  measures. */
 const DEVBOX_WORK_DIR = '/workspace';
 const CHAIN_UPPER_DIR = '/var/tmp/devbox/upper';
+/**
+ * The layer paths the LIFECYCLE PROOF reads, restated for the same reason and
+ * kept true by `bench-devbox-decision.test.ts`, which compares every one of
+ * them against the constant its strategy exports.
+ *
+ * MEASURED DEFECT THIS REPAIRS. The overlay-cas lower was checked at
+ * `/var/tmp/devbox/cas-lower` — its path until the arm moved the lower INSIDE
+ * the store mount so that a fold and the lower are one object — and the check
+ * also demanded a mount line of its own, which that layout deliberately does
+ * not have. Run 20260903140046 therefore failed the arm's lifecycle proof on
+ * `cas-lower -> no` while the same proof's other rows showed the folded tree
+ * holding the committed marker and the cursor advanced: a healthy arm refused
+ * by a stale question. A restated path with nothing re-checking it is the
+ * defect class; the test is what makes restating safe.
+ */
+const CHAIN_LOWER_BASE_DIR = '/var/tmp/devbox/lower-base';
+const R2FS_CACHE_DIR = '/var/tmp/devbox/r2fs-cache';
+const CAS_UPPER_DIR = '/var/tmp/devbox/cas-upper';
+const CAS_STORE_MOUNT_DIR = '/var/tmp/devbox/cas-store';
+/** The overlay's read-only lower: a path INSIDE the one store mount, which is
+ *  why the proof checks the directory and the STORE's mount line. */
+const CAS_TREE_LOWER_DIR = `${CAS_STORE_MOUNT_DIR}/tree`;
 /** One directory per served generation, named after it: `deltaLayerMountPoint`
  *  is `${lowerDeltaRoot}/<generation>`, and its presence in `/proc/mounts` is
  *  the same fact `deltaLayerServed` reads to decide the collapse. */
@@ -3982,11 +4004,26 @@ async function measureArm(
     );
     verify('the writable layer exists', (exists.stdout ?? '').trim() === 'yes', `${path} -> ${(exists.stdout ?? '').trim()}`);
   };
-  const lowerLayer = async (name: string, path: string): Promise<void> => {
+  /**
+   * A read-only lower layer: the directory is there, and the mount that serves
+   * it is up. `mountedAt` is the path whose `/proc/mounts` line carries it —
+   * the layer itself for a chain layer mounted on its own, or the store mount
+   * for a lower that lives INSIDE one (overlay-cas, since the fold and the
+   * lower became one object).
+   */
+  const lowerLayer = async (name: string, path: string, mountedAt = path): Promise<void> => {
     const lower = await retryTransient(`${name} read`, async () =>
-      await execInBox(fixture, box, `test -d ${path} && grep -qs " ${path} " /proc/mounts && echo yes || echo no`),
+      await execInBox(
+        fixture,
+        box,
+        `test -d ${path} && grep -qs " ${mountedAt} " /proc/mounts && echo yes || echo no`,
+      ),
     );
-    verify(name, (lower.stdout ?? '').trim() === 'yes', `${path} -> ${(lower.stdout ?? '').trim()}`);
+    verify(
+      name,
+      (lower.stdout ?? '').trim() === 'yes',
+      `${path} under ${mountedAt} -> ${(lower.stdout ?? '').trim()}`,
+    );
   };
 
   if (strategy === 'bounded-layers' || strategy === 'merkle-pack') {
@@ -4002,7 +4039,7 @@ async function measureArm(
       workdirMount?.fstype.includes('s3fs') === true,
       mountLine.length > 0 ? mountLine : '(no mount line)',
     );
-    await writableLayer('/var/tmp/devbox/r2fs-cache');
+    await writableLayer(R2FS_CACHE_DIR);
     await head('the store holds the committed marker', afterWake.storePrefix === undefined
       ? undefined
       : `${afterWake.storePrefix}${markerFile}`);
@@ -4012,8 +4049,16 @@ async function measureArm(
       workdirMount?.fstype.includes('overlay') === true,
       mountLine.length > 0 ? mountLine : '(no mount line)',
     );
-    await writableLayer('/var/tmp/devbox/cas-upper');
-    await lowerLayer('the tree lower is present and mounted at its lower path', '/var/tmp/devbox/cas-lower');
+    await writableLayer(CAS_UPPER_DIR);
+    // THE LOWER IS A PATH INSIDE THE ONE STORE MOUNT, so the question is
+    // whether the tree directory is there and whether the STORE is mounted —
+    // never whether the lower is a mount of its own, which this layout does
+    // not create and never will.
+    await lowerLayer(
+      'the tree lower is present under its mounted store',
+      CAS_TREE_LOWER_DIR,
+      CAS_STORE_MOUNT_DIR,
+    );
     await head('the folded tree holds the committed marker', afterWake.storePrefix === undefined
       ? undefined
       : `${afterWake.storePrefix}tree/${markerFile}`);
@@ -4026,8 +4071,8 @@ async function measureArm(
       workdirMount?.fstype.includes('overlay') === true,
       mountLine.length > 0 ? mountLine : '(no mount line)',
     );
-    await writableLayer('/var/tmp/devbox/upper');
-    await lowerLayer('the base layer is present and mounted at its lower path', '/var/tmp/devbox/lower-base');
+    await writableLayer(CHAIN_UPPER_DIR);
+    await lowerLayer('the base layer is present and mounted at its lower path', CHAIN_LOWER_BASE_DIR);
     // WHAT THE RECORD NAMES, IN BOTH DIRECTIONS. This asked for `delta.sqsh`
     // unconditionally, and a chain that has just collapsed onto a fresh base
     // names no delta and has no such object — so the arm failed its own verify

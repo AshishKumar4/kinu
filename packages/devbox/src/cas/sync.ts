@@ -38,6 +38,76 @@ import {
   counterDelta,
 } from './types';
 
+/**
+ * How many store calls one step keeps in flight.
+ *
+ * MEASURED, and this is the term that spent a deployed deadline. Run
+ * 20260903140046's overlay-cas arm never settled its first decisive `npm`
+ * checkpoint inside 1,500,000 ms. The ladder in that same run prices why: its
+ * committing checkpoints moved 0.05-1.98 MB/s, and the 64 MiB quiesce spent
+ * 67,723 ms across roughly 132 store calls — about 513 ms each. The endpoint is
+ * not the bound: `bench/measure-first/MEASUREMENTS.md` measures this exact
+ * direct path at 95-146 MiB/s with 16-64 requests in flight. Every call here
+ * was awaited inside a `for`, so the arm ran at ONE request and was bound by
+ * latency times call count — and a fold issues one tree write per changed path
+ * plus a read per blob it streams, which passes 25 minutes at about 2,000
+ * changed files. An npm tree is far larger than that.
+ *
+ * SIXTEEN, the low end of the measured range: the flat part of that curve
+ * starts there, and a bound this side picks is a bound the platform has been
+ * measured at rather than a number chosen for ambition.
+ *
+ * CONCURRENCY LIVES INSIDE ONE STEP AND NEVER ACROSS TWO. Every ordering the
+ * layout's crash safety rests on — blobs before their batch, the batch before
+ * the fold, the tree before the manifest, the manifest before the cursor, the
+ * cursor before the reap — is a boundary between steps, and each of those is
+ * still a single await. What overlaps is only the calls WITHIN a step, which
+ * are independent by construction: distinct content-addressed keys, no
+ * ordering among themselves, and idempotent under a repeat.
+ */
+const STORE_CALL_WIDTH = 16;
+
+/**
+ * Run `work` over `items` with at most {@link STORE_CALL_WIDTH} in flight, in
+ * order of issue. The first failure is what the caller sees, and no further
+ * item is issued after it — a step that half-failed must not keep writing.
+ */
+export async function throughStorePool<Item>(
+  items: readonly Item[],
+  work: (item: Item) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  let failure: unknown;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      if (failure !== undefined) return;
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      try {
+        await work(items[index]!);
+      } catch (error) {
+        failure ??= error;
+        return;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(STORE_CALL_WIDTH, items.length) }, () => worker()),
+  );
+  if (failure !== undefined) throw failure;
+}
+
+/** A file whose bytes no longer digest to what the journal recorded. It stops
+ *  the staging, exactly as the sequential form's `return null` did; the class
+ *  exists so the bounded pool's first-failure rule carries the reason. */
+class StaleUpperBytes extends Error {
+  constructor(readonly path: string) {
+    super(`upper bytes for ${path} no longer match the digest the journal recorded`);
+    this.name = 'StaleUpperBytes';
+  }
+}
+
 /** `S_IFREG`. s3fs decodes `x-amz-meta-mode` as decimal st_mode. */
 const S_IFREG = 32_768;
 /** `S_IFLNK`. The object body is the raw target. */
@@ -99,20 +169,33 @@ export async function stageBlobs(options: StageBlobsOptions): Promise<StageBlobs
 
   outer: for (let offset = 0; offset < entries.length; offset += batchSize) {
     const batch = entries.slice(offset, offset + batchSize);
-    const committed: JournalEntry[] = [];
-    for (const entry of batch) {
-      if (entry.kind === 'file') {
+    // THE BLOBS OF ONE BATCH GO OUT TOGETHER. Every entry's chunks are
+    // independent content-addressed keys with no ordering among themselves, so
+    // this is the step whose calls may overlap — and the batch's own journal
+    // object still follows ALL of them, which is the invariant that makes a
+    // crash leave an orphan blob rather than a journal entry whose bytes are
+    // absent. Sequentially this loop was the deployed cost: about 513 ms per
+    // call, thousands of calls, one at a time (see STORE_CALL_WIDTH).
+    const files = batch.filter((entry): entry is Extract<JournalEntry, { kind: 'file' }> =>
+      entry.kind === 'file');
+    let stale: string | undefined;
+    try {
+      await throughStorePool(files, async (entry) => {
         const result = await uploadChunks(store, known, entry, readChunk);
-        if (result === null) {
-          stalePaths.push(entry.path);
-          break outer;
-        }
+        if (result === null) throw new StaleUpperBytes(entry.path);
         uploaded += result.uploaded;
         skipped += result.skipped;
         if (result.uploaded === 0 && entry.parts.some(part => part.kind === 'data')) dedupHits += 1;
-      }
-      committed.push(entry);
+      });
+    } catch (error) {
+      if (!(error instanceof StaleUpperBytes)) throw error;
+      stale = error.path;
     }
+    if (stale !== undefined) {
+      stalePaths.push(stale);
+      break outer;
+    }
+    const committed: JournalEntry[] = [...batch];
     if (committed.length === 0) break;
     if (options.commitBatch !== undefined) await options.commitBatch(committed);
     staged.push(...committed);
@@ -132,18 +215,32 @@ async function uploadChunks(
   let skipped = 0;
   const chunks = entry.parts.filter((part): part is { kind: 'data'; hash: string; size: number } =>
     part.kind === 'data');
-  for (let index = 0; index < chunks.length; index += 1) {
-    const chunk = chunks[index]!;
-    if (known.has(chunk.hash)) {
-      known.add(chunk.hash);
+  // The chunks of one file are independent, content-addressed and idempotent,
+  // so they go out together rather than one round trip at a time. A chunk
+  // whose bytes no longer digest to what the journal recorded is STALE and
+  // stops the whole staging — the same refusal as before, reported by the
+  // first failure the pool sees.
+  const pending = chunks
+    .map((chunk, index) => ({ chunk, index }))
+    .filter(({ chunk }) => {
+      if (!known.has(chunk.hash)) return true;
       skipped += 1;
-      continue;
-    }
-    const bytes = await readChunk(entry, index, chunk.size);
-    if (bytes === null || sha256Hex(bytes) !== chunk.hash) return null;
-    await store.put(blobKey(chunk.hash), bytes);
-    known.add(chunk.hash);
-    uploaded += 1;
+      return false;
+    });
+  try {
+    await throughStorePool(pending, async ({ chunk, index }) => {
+      const bytes = await readChunk(entry, index, chunk.size);
+      if (bytes === null || sha256Hex(bytes) !== chunk.hash) throw new StaleUpperBytes(entry.path);
+      await store.put(blobKey(chunk.hash), bytes);
+      known.add(chunk.hash);
+      uploaded += 1;
+    });
+  } catch (error) {
+    // STALE IS AN ANSWER, NOT A FAILURE: the sequential form returned null for
+    // it and staging stops there. Every other throw is a real store failure
+    // and travels.
+    if (error instanceof StaleUpperBytes) return null;
+    throw error;
   }
   return { uploaded, skipped };
 }
@@ -213,25 +310,45 @@ export async function foldJournalIntoTree(store: CasStore): Promise<FoldResult> 
   let treeWrites = 0;
   let treeDeletes = 0;
 
-  for (const entry of coalesce(entries)) {
+  // THE INDEPENDENT TREE WRITES OF ONE FOLD GO OUT TOGETHER.
+  //
+  // This is the term that spent the deployed deadline: one tree object per
+  // changed path, each one awaited, at about 513 ms a call (see
+  // STORE_CALL_WIDTH). Only files and symlinks are independent — a `hardlink`
+  // reads the manifest row its target's own write puts there, and `dir` and
+  // `delete` sweep the manifest by prefix — so exactly those two kinds are
+  // pooled here and every other kind keeps its place in the sequential pass
+  // below, which runs after this one completes. Both passes finish before the
+  // manifest, the cursor and the reap, so the crash ordering is untouched.
+  const folded = coalesce(entries);
+  const independent = folded.filter((entry) => entry.kind === 'file' || entry.kind === 'symlink');
+  await throughStorePool(independent, async (entry) => {
+    if (entry.kind === 'file') {
+      await store.putStream(treeKey(entry.path), fileChunkStream(store, entry), entry.size, {
+        mode: S_IFREG | (entry.mode & 0o7777),
+        mtimeMs: entry.mtimeMs,
+      });
+    } else if (entry.kind === 'symlink') {
+      await store.put(
+        treeKey(entry.path),
+        new TextEncoder().encode(entry.target),
+        { mode: S_IFLNK | 0o777, symlink: true, mtimeMs: entry.mtimeMs },
+      );
+    }
+  });
+  // The manifest rows for what just landed, in the fold's own order, so the
+  // map a `hardlink` reads and a `delete` sweeps is identical to what the
+  // sequential pass produced.
+  for (const entry of independent) {
+    manifest.set(entry.path, entry);
+    treeWrites += 1;
+  }
+
+  for (const entry of folded) {
     switch (entry.kind) {
-      case 'file': {
-        await store.putStream(treeKey(entry.path), fileChunkStream(store, entry), entry.size, {
-          mode: S_IFREG | (entry.mode & 0o7777),
-          mtimeMs: entry.mtimeMs,
-        });
-        manifest.set(entry.path, entry);
-        treeWrites += 1;
-        break;
-      }
+      case 'file':
       case 'symlink': {
-        await store.put(
-          treeKey(entry.path),
-          new TextEncoder().encode(entry.target),
-          { mode: S_IFLNK | 0o777, symlink: true, mtimeMs: entry.mtimeMs },
-        );
-        manifest.set(entry.path, entry);
-        treeWrites += 1;
+        // Written and recorded by the pooled pass above.
         break;
       }
       case 'hardlink': {

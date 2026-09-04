@@ -1474,3 +1474,83 @@ describe('the off-hot-path orphan blob sweep', () => {
   });
 
 });
+
+// ── the term that spent the deployed deadline ───────────────────────────────
+//
+// MEASURED, from run 20260903140046's own rows. The overlay-cas arm's first
+// decisive `npm` checkpoint did not settle within the 1,500,000 ms operation
+// deadline. The ladder in the same run prices the reason: its committing
+// checkpoints ran at 0.05-1.98 MB/s, and the 64 MiB quiesce spent 67,723 ms on
+// roughly 132 store calls — about 513 ms EACH. The endpoint itself is not the
+// bound: `bench/measure-first/MEASUREMENTS.md` records the same direct path at
+// 95-146 MiB/s with 16-64 requests in flight. The runner issued them ONE AT A
+// TIME — every store call awaited inside a `for` — so the arm was latency-bound
+// at one request, and a fold, which writes one tree object per changed path
+// plus a read per blob it streams, needs thousands: over 25 minutes at ~2,000
+// changed files, and an npm tree is larger than that.
+//
+// So the fix is concurrency WITHIN a step, and these tests pin both halves:
+// the requests overlap, and the write order the layout's crash safety rests on
+// is untouched — blob before batch, tree before manifest before cursor before
+// reap, still exactly in that order.
+
+describe('the store calls of one step overlap', () => {
+  test('staging many blobs issues them concurrently, in one batch', async () => {
+    const store = new MemoryCasStore();
+    const contents = new Map<string, Uint8Array>();
+    const entries = [];
+    for (let index = 0; index < 24; index += 1) {
+      const path = `pkg/f${String(index).padStart(3, '0')}.txt`;
+      const text = `body ${String(index)}`;
+      contents.set(path, fileBytes(text));
+      entries.push(fileEntry(index + 1, path, text));
+    }
+    store.holdPuts(8);
+
+    await stageBlobs({ store, entries, readChunk: readerFor(contents) });
+
+    // Every blob landed, and the widest wave proves they were in flight
+    // together rather than one after another.
+    expect(store.counters.putCalls).toBeGreaterThanOrEqual(24);
+    expect(store.widestPutWave).toBeGreaterThanOrEqual(8);
+  });
+
+  test('a fold overlaps its tree writes and still advances the cursor last', async () => {
+    const store = new MemoryCasStore();
+    const contents = new Map<string, Uint8Array>();
+    const entries = [];
+    for (let index = 0; index < 24; index += 1) {
+      const path = `pkg/g${String(index).padStart(3, '0')}.txt`;
+      const text = `folded ${String(index)}`;
+      contents.set(path, fileBytes(text));
+      entries.push(fileEntry(index + 1, path, text));
+    }
+    await stageBlobs({ store, entries, readChunk: readerFor(contents) });
+    await appendJournalBatch(store, entries);
+    store.writes.length = 0;
+    // THE FOLD IS MEASURED ALONE. The staging above already overlapped its own
+    // writes, so a wave counter carried over from it would pass this test
+    // without the fold overlapping anything.
+    store.resetPutWave();
+    store.holdPuts(8);
+
+    const folded = await foldJournalIntoTree(store);
+
+    expect(folded.foldedEntries).toBe(24);
+    expect(folded.treeWrites).toBe(24);
+    // THE OVERLAP: the tree objects of one fold are in flight together.
+    expect(store.widestPutWave).toBeGreaterThanOrEqual(8);
+    // AND THE ORDER THAT MAKES A CRASH SAFE IS UNCHANGED. Concurrency lives
+    // inside the tree-write step; the manifest, the cursor and the reap still
+    // follow it strictly, so a crash can still only ever lose an orphan.
+    const lastTree = Math.max(...entries.map((entry) => store.writes.indexOf(`put:tree/${entry.path}`)));
+    const manifest = store.writes.indexOf('put:meta/manifest.jsonl');
+    const cursor = store.writes.indexOf('put:cursor.json');
+    const reap = store.writes.findIndex((row) => row.startsWith('delete:journal/'));
+    expect(lastTree).toBeGreaterThanOrEqual(0);
+    expect(lastTree).toBeLessThan(manifest);
+    expect(manifest).toBeLessThan(cursor);
+    expect(cursor).toBeLessThan(reap);
+    expect(await readFoldedSeq(store)).toBe(24);
+  });
+});

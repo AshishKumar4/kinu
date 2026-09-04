@@ -40,13 +40,107 @@ export class MemoryCasStore implements CasStore {
    *  back a lazy stream, never read blobs eagerly. */
   requireBlobGetsInsideStream = false;
   private insidePutStream = false;
+  /**
+   * The widest set of writes this store held in flight AT ONCE — the measure a
+   * concurrency claim rests on. A step that awaits every call in a loop never
+   * exceeds one, however many calls it makes.
+   */
+  widestPutWave = 0;
+  #putsInFlight = 0;
+  #putGate: { readonly width: number; waiting: (() => void)[] } | undefined;
+
+  /**
+   * Hold every write until `width` of them are in flight, then release the
+   * wave. A caller that issues them one at a time never assembles a wave and
+   * deadlocks against its own bound — so the hold releases whatever it has
+   * once the caller stops issuing, and `widestPutWave` reports what it saw.
+   */
+  holdPuts(width: number): void {
+    this.#putGate = { width, waiting: [] };
+  }
+
+  /** Forget the widest wave seen so far, so one step can be measured alone. */
+  resetPutWave(): void {
+    this.widestPutWave = 0;
+    this.widestGetWave = 0;
+  }
+
+  /** The widest set of READS this store held in flight at once. A replay that
+   *  fetches one blob at a time never exceeds one, whatever it fetches. */
+  widestGetWave = 0;
+  #getsInFlight = 0;
+  #getGate: { readonly width: number; waiting: (() => void)[] } | undefined;
+
+  /** Hold every read until `width` are in flight, then release the wave. */
+  holdGets(width: number): void {
+    this.#getGate = { width, waiting: [] };
+  }
+
+  async #enterGet(): Promise<void> {
+    this.#getsInFlight += 1;
+    this.widestGetWave = Math.max(this.widestGetWave, this.#getsInFlight);
+    const gate = this.#getGate;
+    if (gate === undefined) return;
+    if (this.#getsInFlight >= gate.width) {
+      const waiting = gate.waiting;
+      gate.waiting = [];
+      for (const release of waiting) release();
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      gate.waiting.push(resolve);
+      setTimeout(() => {
+        const at = gate.waiting.indexOf(resolve);
+        if (at >= 0) {
+          gate.waiting.splice(at, 1);
+          resolve();
+        }
+      }, 5);
+    });
+  }
+
+  async #enterPut(): Promise<void> {
+    this.#putsInFlight += 1;
+    this.widestPutWave = Math.max(this.widestPutWave, this.#putsInFlight);
+    const gate = this.#putGate;
+    if (gate === undefined) return;
+    if (this.#putsInFlight >= gate.width) {
+      // The wave is assembled: release everyone, this caller included.
+      const waiting = gate.waiting;
+      gate.waiting = [];
+      for (const release of waiting) release();
+      return;
+    }
+    // Not yet a full wave. Wait, but never forever: a sequential caller has
+    // nothing else in flight, so a microtask-scheduled sweep releases it and
+    // the recorded wave stays honest about what really overlapped.
+    await new Promise<void>((resolve) => {
+      gate.waiting.push(resolve);
+      setTimeout(() => {
+        const at = gate.waiting.indexOf(resolve);
+        if (at >= 0) {
+          gate.waiting.splice(at, 1);
+          resolve();
+        }
+      }, 5);
+    });
+  }
+
+  #leavePut(): void {
+    this.#putsInFlight -= 1;
+  }
 
   async put(key: string, bytes: Uint8Array, meta?: CasPutMeta): Promise<void> {
-    this.counters.putCalls += 1;
-    this.counters.bytesPut += bytes.byteLength;
-    this.writes.push(`put:${key}`);
-    this.objects.set(key, bytes);
-    if (meta !== undefined) this.meta.set(key, meta);
+    await this.#enterPut();
+    try {
+      this.counters.putCalls += 1;
+      this.counters.bytesPut += bytes.byteLength;
+      this.writes.push(`put:${key}`);
+      this.objects.set(key, bytes);
+      if (meta !== undefined) this.meta.set(key, meta);
+    } finally {
+      this.#leavePut();
+    }
   }
 
   async putStream(
@@ -55,6 +149,7 @@ export class MemoryCasStore implements CasStore {
     size: number,
     meta?: CasPutMeta,
   ): Promise<void> {
+    await this.#enterPut();
     const reader = stream.getReader();
     const parts: Uint8Array[] = [];
     let total = 0;
@@ -77,6 +172,9 @@ export class MemoryCasStore implements CasStore {
       bytes.set(part, offset);
       offset += part.byteLength;
     }
+    // Leave the wave before delegating: `put` enters it on its own, and one
+    // logical write must count once.
+    this.#leavePut();
     await this.put(key, bytes, meta);
   }
 
@@ -84,11 +182,16 @@ export class MemoryCasStore implements CasStore {
     if (this.requireBlobGetsInsideStream && key.startsWith(PREFIX_BLOBS) && !this.insidePutStream) {
       throw new Error(`eager blob read outside putStream: ${key}`);
     }
-    const value = this.objects.get(key);
-    this.counters.getCalls += 1;
-    if (value === undefined) return null;
-    this.counters.bytesGot += value.byteLength;
-    return value;
+    await this.#enterGet();
+    try {
+      const value = this.objects.get(key);
+      this.counters.getCalls += 1;
+      if (value === undefined) return null;
+      this.counters.bytesGot += value.byteLength;
+      return value;
+    } finally {
+      this.#getsInFlight -= 1;
+    }
   }
 
   async delete(key: string): Promise<void> {

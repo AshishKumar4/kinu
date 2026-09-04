@@ -22,6 +22,7 @@ import {
   sqliteFinding, totalsFor, type TickRecord,
 } from './fixtures/r2-bench/decision';
 import { refusalText } from './fixtures/storage-matrix/admission';
+
 import { loadManifest, manifestPath } from './fixtures/storage-matrix/cleanup';
 import * as v from 'valibot';
 import { WRANGLER_FAILED } from './fixtures/r2-bench/deploy-substrate';
@@ -3321,5 +3322,62 @@ describe('an abandoned run is deleted from its names alone', () => {
 
     expect(outcome).toEqual({ ok: true });
     expect(existsSync(directory)).toBe(false);
+  });
+});
+
+// ── the paths the lifecycle proof checks ────────────────────────────────────
+//
+// THE DEPLOYED DEFECT this pins. The overlay-cas arm of run 20260903140046
+// failed its lifecycle proof on `the tree lower is present and mounted at its
+// lower path: /var/tmp/devbox/cas-lower -> no` — while the same proof's other
+// rows showed the folded tree holding the committed marker and the cursor
+// advanced. The mount graph was healthy; the CHECK was three commits stale.
+// `cas-lower` was the lower's path until the arm moved it inside the store
+// mount (one mount, so a fold and the lower are one object), and the driver
+// kept asking about a path the strategy no longer creates — and demanding it
+// be its own mount line, which the new layout deliberately does not have.
+//
+// A hardcoded container path in the driver is the defect class: the strategy
+// owns those paths and exports them. This asserts the driver reads them from
+// the strategy rather than restating them.
+
+describe('the lifecycle proof names the paths the strategies export', () => {
+  test('every layer path the proof restates is the constant its strategy declares', () => {
+    // THE DRIVER RESTATES THESE ON PURPOSE — it reads a deployed container over
+    // HTTP and imports nothing from the box it measures, and neither does this
+    // test: the scripts project is not compiled with the Workers types those
+    // sources need. So both sides are read as TEXT, which is exactly the
+    // comparison that was missing while `cas-lower` drifted for three commits
+    // and a healthy arm failed its proof for it.
+    const driver = readFileSync(join(import.meta.dir, 'bench-devbox-strategies.ts'), 'utf8');
+    const overlay = readFileSync(
+      join(import.meta.dir, '..', 'packages', 'devbox', 'src', 'overlay-cas.ts'),
+      'utf8',
+    );
+    const r2fs = readFileSync(join(import.meta.dir, '..', 'packages', 'devbox', 'src', 'r2fs.ts'), 'utf8');
+    const RUNTIME = '/var/tmp/devbox';
+    /** A `${DEVBOX_RUNTIME_DIR}/<leaf>` constant, as the strategy writes it. */
+    const strategyLeaf = (source: string, name: string): string | undefined =>
+      new RegExp(`${name} = \`\\$\\{DEVBOX_RUNTIME_DIR\\}([^\`]+)\``).exec(source)?.[1];
+    const declared = (name: string): string | undefined =>
+      new RegExp(`const ${name} = '([^']+)'`).exec(driver)?.[1];
+
+    expect(declared('R2FS_CACHE_DIR')).toBe(`${RUNTIME}${strategyLeaf(r2fs, 'R2FS_CACHE_DIR') ?? '?'}`);
+    expect(declared('CAS_UPPER_DIR')).toBe(`${RUNTIME}${strategyLeaf(overlay, 'CAS_UPPER_DIR') ?? '?'}`);
+    expect(declared('CAS_STORE_MOUNT_DIR'))
+      .toBe(`${RUNTIME}${strategyLeaf(overlay, 'CAS_STORE_MOUNT') ?? '?'}`);
+    // THE PROPERTY THAT BROKE: the overlay's lower is INSIDE the store mount,
+    // and both sides derive it from that mount rather than naming it apart.
+    expect(overlay).toContain('CAS_TREE_MOUNT = `${CAS_STORE_MOUNT}/tree`');
+    expect(driver).toContain('CAS_TREE_LOWER_DIR = `${CAS_STORE_MOUNT_DIR}/tree`');
+  });
+
+  test('the proof asks whether the STORE is mounted, never the lower itself', () => {
+    // The overlay-cas layout has ONE mount; a lower inside it never appears in
+    // /proc/mounts under its own path, so a check that demanded one could only
+    // ever answer `no` — which is exactly what run 20260903140046 recorded.
+    const source = readFileSync(join(import.meta.dir, 'bench-devbox-strategies.ts'), 'utf8');
+    expect(source).toContain('CAS_TREE_LOWER_DIR,\n      CAS_STORE_MOUNT_DIR,');
+    expect(source).not.toContain("'/var/tmp/devbox/cas-lower'");
   });
 });
