@@ -19,6 +19,7 @@ import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
 import type { ActiveRoster } from '../prompting/volatile-context';
 import { nanoid } from '../utils/nanoid';
+import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import type { WorkMode } from '../prompting/surface';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
@@ -92,12 +93,6 @@ export type JobResumer = (
   signal: AbortSignal,
 ) => Promise<JsonValue | undefined>;
 
-/** Give up re-driving a job after this many evict-recovery attempts, so a job
- *  that evicts on every activation can't loop forever. MCTS makes monotonic
- *  progress (budget strictly decreases per resume) so it converges well within
- *  this; the cap only bounds pathological non-progressing kinds. */
-const MAX_RESUME_ATTEMPTS = 5;
-
 /**
  * What a job has already produced, for a job that will not be driven again.
  *
@@ -114,6 +109,21 @@ export type JobHarvester = (
   kind: string,
   input: JsonValue,
 ) => Promise<JsonValue | null>;
+
+/**
+ * What one pass of recovery did with one job.
+ *
+ * Three states and not two, because `deferred` and `none` are opposite answers
+ * to the question a resume gate asks. A deferred job is work that WILL be
+ * continued, so the fork run behind it must survive; a refused one is work
+ * nothing will pick up, so that run must be retired. Collapsing them — which a
+ * bare `BackgroundJob | null` does — retires the searches of exactly the jobs
+ * that are recovering normally.
+ */
+type JobRecoveryOutcome =
+  | { readonly state: 'redriven'; readonly job: BackgroundJob }
+  | { readonly state: 'deferred'; readonly job: BackgroundJob }
+  | { readonly state: 'none' };
 
 /**
  * Ceiling on jobs detached at once. Every detached job is a live process tree
@@ -177,8 +187,8 @@ export interface BackgroundJobRunnerDeps {
    *  the job under a fresh lease epoch and re-drives it in a new durable fiber. */
   resume?: JobResumer;
   /** What a job that will not be driven again has already produced, for the two
-   *  terminals that reach settle-with-what-you-have: the resume cap and the
-   *  no-resumer case.
+   *  terminals that reach settle-with-what-you-have: a kind that cannot be
+   *  re-driven, and the no-resumer case.
    *
    * Absent means "settle with nothing", which is what every one of those paths used
    * to do unconditionally. Present, the job settles `completed` carrying the partial
@@ -187,6 +197,21 @@ export interface BackgroundJobRunnerDeps {
    * way it would have without one.
    */
   harvest?: JobHarvester;
+  /**
+   * The durable wake that re-enters recovery when a deferred attempt becomes
+   * eligible; absent means this agent has no later activation to wake.
+   *
+   * An interrupted job waits before its next attempt (see {@link recoverJob}),
+   * and a wait nothing comes back for is a job that stops. The backends arm
+   * their existing single wake row rather than a timer of their own, so this is
+   * "tell me at this instant", never "run this callback".
+   *
+   * Absent is a real wiring and not a gap, exactly as `eventLog`/`scheduleDrain`
+   * are: a swarm node is abandoned with the run that spawned it, so there is no
+   * later activation to wake. It passes no `resume` either, so its recovery
+   * never reaches the branch that would arm one.
+   */
+  scheduleResume?: (atMs: number) => Promise<void> | void;
 }
 
 /** The classified reason a detach cannot be admitted. The live call stays
@@ -365,7 +390,7 @@ export class BackgroundJobRunner {
     kind: string, input: T, mode: WorkMode, controller: AbortController, promise: Promise<T>,
     ownership?: DeviceRequestOwnership,
   ): Promise<DetachOutcome> {
-    const running = this.deps.store.countRunning();
+    const running = this.liveDetachedCount();
     if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
       this.deps.logActivity?.('bg_job_refused', `${kind} — ${running} jobs already running`);
       return { detached: false, reason: refusalMessage(kind, this.deps.store.listRunning(MAX_CONCURRENT_DETACHED_JOBS)) };
@@ -374,6 +399,33 @@ export class BackgroundJobRunner {
     this.deps.logActivity?.('bg_job_started', `${kind} → ${jobId}`);
     await this.beginDetachedWork(jobId, kind, promise, ownership);
     return { detached: true, jobId };
+  }
+
+  /**
+   * How much LIVE work the machine is carrying — what the detach ceiling counts.
+   *
+   * The ceiling exists because "every detached job is a live process tree", so
+   * that clause decides what a slot is. A job waiting for its next attempt has
+   * no process tree: its executor died, and nothing will start another until its
+   * armed instant passes. Counting it would let eight interrupted jobs refuse
+   * every new detach for as long as they kept being interrupted — the give-up
+   * this recovery path removed, coming back through the admission door.
+   *
+   * A row cannot say this by itself, because an armed instant is written FORWARD
+   * and a job being driven right now carries one too. So the two facts are
+   * paired: the store names the rows whose next attempt is not yet due, and this
+   * runner discounts exactly those it is not itself driving. That pairing is
+   * exact rather than approximate, because one workspace has one driver — a DO
+   * is single-threaded and the CLI holds a driver lease — so a claim that is not
+   * in this process's hands is a claim no process still holds. The swarm-node
+   * runners that share this table never defer at all (no resumer, so no
+   * deferral), and their rows are therefore always counted.
+   */
+  private liveDetachedCount(): number {
+    const owed = this.deps.store.resumeOwedIds(Date.now());
+    let idle = 0;
+    for (const jobId of owed) if (!this.controllers.has(jobId)) idle++;
+    return this.deps.store.countRunning() - idle;
   }
 
   /**
@@ -488,28 +540,40 @@ export class BackgroundJobRunner {
    *  or the wake's durable retry breadcrumb fails; runToSettlement owns that. */
   private async settleAndWake<T>(jobId: string, exec: () => Promise<T>): Promise<void> {
     const epoch = this.deps.store.epochOf(jobId) ?? 0;
-    let outcome: { ok: true; result: T } | { ok: false; error: string };
-    try { outcome = { ok: true, result: await exec() }; }
+    // Three outcomes, because a kind that cannot be re-driven is neither a
+    // success nor a crash: it is the LAST word on a job whose work already
+    // happened, so it settles with what that work produced rather than with a
+    // failure string over it. A `run` has nothing partial and fails saying so; a
+    // search that had measured two candidates hands them back.
+    type Recorded =
+      | { readonly kind: 'settled'; readonly result: T }
+      | { readonly kind: 'failed'; readonly error: string }
+      | { readonly kind: 'bounded'; readonly why: string };
+    let outcome: Recorded;
+    try { outcome = { kind: 'settled', result: await exec() }; }
     catch (err) {
-      // A kind the resumer can't re-drive is a clean interruption, not a crash:
-      // record the same eviction message a non-resumable job always has.
-      const error = err instanceof JobNotResumable ? EVICTION_INTERRUPT_ERROR
-        : renderThrownChain({ cause: err });
-      outcome = { ok: false, error };
+      outcome = err instanceof JobNotResumable
+        ? { kind: 'bounded', why: 'this kind cannot be re-driven from a durable checkpoint' }
+        : { kind: 'failed', error: renderThrownChain({ cause: err }) };
     }
     this.controllers.delete(jobId);
     // A cancelled job was already marked; its promise rejects with the abort,
     // which we must NOT relabel as a generic failure.
     if (this.deps.store.get(jobId)?.status === 'cancelled') return;
     const record = async (): Promise<void> => {
-      if (outcome.ok) this.deps.store.settle(jobId, epoch, serializeJobResult(outcome.result), Date.now());
+      // settleBounded is a whole settle path — it decides between the partial and
+      // the empty failure, then notifies and wakes — so it is called instead of
+      // the writes below, never beside them.
+      if (outcome.kind === 'bounded') { await this.settleBounded(jobId, epoch, outcome.why); return; }
+      if (outcome.kind === 'settled') this.deps.store.settle(jobId, epoch, serializeJobResult(outcome.result), Date.now());
       else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
       // The lifecycle's OTHER end: start/refuse/cancel/resume already reach
       // logActivity (console.log + the queryable activity_log table), but the
       // terminal settle/fail never did — the one event that actually answers
       // "is this job still running", silently missing from both `wrangler tail`
       // and the activity log an operator would otherwise check.
-      this.deps.logActivity?.('bg_job_settled', outcome.ok ? `${jobId} completed` : `${jobId} failed — ${outcome.error}`);
+      this.deps.logActivity?.('bg_job_settled',
+        outcome.kind === 'settled' ? `${jobId} completed` : `${jobId} failed — ${outcome.error}`);
       this.notifySettled(jobId);
       await this.wake(jobId);
     };
@@ -824,11 +888,12 @@ export class BackgroundJobRunner {
    *
    *  Returns the job if this call RE-DROVE it, so a caller can tell what durable
    *  work is now in flight. Null covers every other outcome: already driven here,
-   *  already settled, cancelled, or refused. */
+   *  already settled, cancelled, refused, or waiting for its next attempt. */
   async recover<T>(snapshot: T): Promise<BackgroundJob | null> {
     const parsed = v.safeParse(v.object({ jobId: v.string(), phase: v.literal('running') }), snapshot);
     if (!parsed.success) return null;
-    return await this.recoverJob(parsed.output.jobId);
+    const outcome = await this.recoverJob(parsed.output.jobId);
+    return outcome.state === 'redriven' ? outcome.job : null;
   }
 
   /**
@@ -845,15 +910,19 @@ export class BackgroundJobRunner {
    * again. It would then never resume, never fail, and never stop consuming one
    * of the MAX_CONCURRENT_DETACHED_JOBS slots.
    *
-   * Every recovery here goes through the same reclaim, so MAX_RESUME_ATTEMPTS
-   * bounds it: at most that many re-drives, then a terminal `failed`.
+   * NOTHING HERE GIVES UP. A resume that fails is already terminal — the thrown
+   * error fails the job, and a kind that cannot be re-driven settles through
+   * {@link settleBounded} — so the only path that reaches another attempt is one
+   * where nothing was observed at all: the isolate died. That is a fact about
+   * the platform, not about the work, and the bound on it is PACE, not count
+   * (see {@link recoverJob}).
    *
-   * Returns every job that is IN FLIGHT when it returns — the ones it re-drove
-   * plus the ones this runner was already driving. That is what makes the sweep
-   * usable as a resume gate by a caller reconciling other durable state: it can
-   * tell which of that state is being continued and which nothing will ever pick
-   * up again, and a refused job is absent, so refusal is a fact rather than a
-   * timeout.
+   * Returns every job that is IN FLIGHT when it returns — the ones it re-drove,
+   * the ones this runner was already driving, and the ones waiting for their
+   * next attempt. That is what makes the sweep usable as a resume gate by a
+   * caller reconciling other durable state: it can tell which of that state is
+   * being continued and which nothing will ever pick up again, and a refused job
+   * is absent, so refusal is a fact rather than a timeout.
    *
    * ALREADY-DRIVING COUNTS AS IN FLIGHT, and the distinction is load-bearing.
    * `recoverJob` declines a job this runner already holds, because re-driving one
@@ -862,16 +931,28 @@ export class BackgroundJobRunner {
    * "nothing will ever run this" are opposite answers. Both entry points can name
    * the same job in one activation, so reading the decline as a refusal would
    * retire a fork whose job had just been re-driven by the fiber callback.
+   *
+   * A DEFERRED JOB COUNTS AS IN FLIGHT for the same reason, and this is the half
+   * that removing the give-up depends on. `jobRedriveResumeGate` retires the fork
+   * run of any job absent from this set, so a job that is merely WAITING — the
+   * ordinary state of interrupted work now — would have its search retired while
+   * the job itself goes on to be re-driven into a tree nobody is listening for.
+   * Waiting is continuing.
    */
   async recoverOrphans(): Promise<readonly BackgroundJob[]> {
-    for (const jobId of this.deps.store.runningIds()) await this.recoverJob(jobId);
-    return [...this.controllers.keys()]
+    const inFlight = new Set<string>();
+    for (const jobId of this.deps.store.runningIds()) {
+      const outcome = await this.recoverJob(jobId);
+      if (outcome.state === 'deferred') inFlight.add(jobId);
+    }
+    for (const jobId of this.controllers.keys()) inFlight.add(jobId);
+    return [...inFlight]
       .map((jobId) => this.deps.store.get(jobId))
       .filter((job): job is BackgroundJob => job !== null && job !== undefined);
   }
 
   /**
-   * Settle or re-drive one orphaned job.
+   * Settle, re-drive, or pace one orphaned job.
    *
    * A job whose outcome was already persisted (settled/failed) before its
    * executor died just gets its wake re-delivered. A job still `running` was
@@ -880,59 +961,91 @@ export class BackgroundJobRunner {
    * dead executor) and re-driven in a new durable fiber from its durable
    * checkpoint (MCTS continues its remaining search budget; heads re-run).
    *
-   * PAST A BOUND IT SETTLES WITH WHAT IT HAS. The one bound that reaches here is
-   * the resume-attempt cap, and it settles through {@link settleBounded} rather
-   * than writing an eviction string over work that had really been done — the
-   * incident's job was one reclaim short of the cap with two completed candidates
-   * in its journal, and the next eviction would have discarded them.
+   * THE INTERRUPTION IS NOT THE WORK'S FAILURE, so it is not counted against it.
+   * A Durable Object eviction is the ordinary life of a Durable Object; five of
+   * them say nothing about whether the work can finish. What they do say is that
+   * re-driving at the speed of activation would be a hot loop, so the bound is
+   * PACE: each claim arms the next attempt one capped-backoff step out
+   * ({@link recoveryBackoffMs}, 1s doubling to a 60s ceiling), and an attempt
+   * whose instant has not arrived is left alone and its wake re-armed. Unbounded
+   * attempts, bounded pace — the same rule the provider paths follow.
    *
-   * THERE IS NO WALL CLOCK HERE. Time since `createdAt` is the wrong quantity:
-   * a Durable Object evicted overnight was not working overnight. No attempt
-   * clock exists either; elapsed silence is not a failure. Work remains pending
-   * until it completes, is cancelled, or fails definitively. Across
-   * generations, the cap is the bound.
+   * THE PAUSE IS ARMED FORWARD because an eviction is unobservable by the process
+   * it kills: nothing runs after it to write a wait, so the claim writes the one
+   * for the attempt AFTER it. A successful attempt settles and the value is never
+   * read; an eviction leaves the next activation a durable instant to respect.
+   *
+   * THERE IS NO WALL CLOCK HERE. Time since `createdAt` is the wrong quantity: a
+   * Durable Object evicted overnight was not working overnight, and bounding a
+   * job on it would make a workspace resumed after an idle night discard a search
+   * instead of continuing it. The only instant this reads is the one a previous
+   * claim armed, which measures a WAIT rather than work.
    *
    * A job THIS runner is already driving is left alone. Both entry points can
    * name the same job in one activation — a resume leaves its own fiber row, so
    * a cold start can recover two fibers for one job, and the registry sweep
    * names every running row besides — and re-driving one twice would reclaim it
    * out from under the executor that is making progress on it.
-   *
-   * Every refusal returns null, so a caller using this as a resume gate reads one
-   * fact with one spelling rather than inferring it from a timeout.
    */
-  private async recoverJob(jobId: string): Promise<BackgroundJob | null> {
-    if (this.controllers.has(jobId)) return null;
+  private async recoverJob(jobId: string): Promise<JobRecoveryOutcome> {
+    if (this.controllers.has(jobId)) return { state: 'none' };
     const job = this.deps.store.get(jobId);
-    if (!job || job.status === 'cancelled') return null;
+    if (!job || job.status === 'cancelled') return { state: 'none' };
     // Outcome already persisted before the settle checkpoint landed → just deliver
     // the wake that the dead fiber never reached.
-    if (job.status !== 'running') { await this.wake(jobId); return null; }
+    if (job.status !== 'running') { await this.wake(jobId); return { state: 'none' }; }
 
     if (this.deps.resume) {
-      if (job.resumeAttempts >= MAX_RESUME_ATTEMPTS) {
-        await this.settleBounded(jobId, job.epoch,
-          `it was re-driven ${String(MAX_RESUME_ATTEMPTS)} times without finishing, so it gave up`);
-        return null;
+      const now = Date.now();
+      if (job.resumeAfter !== null && job.resumeAfter > now) {
+        return await this.deferRecovery(job, job.resumeAfter);
       }
-      const claim = this.deps.store.reclaim(jobId);
-      if (!claim) return null; // lost the race — another activation already reclaimed it
-      // NO WALL-CLOCK CHECK HERE, and that is a decision rather than an omission.
-      // Time since `createdAt` is the wrong quantity: a Durable Object evicted
-      // overnight was not WORKING overnight, and bounding a job on it would make a
-      // workspace resumed after an idle night discard a search instead of continuing
-      // it. The time bound belongs where the time is real — {@link raceAttemptBound},
-      // on the attempt this process is actually driving, measured from a clock the
-      // reclaim above just wrote. Across generations, the cap is the bound.
+      const claim = this.deps.store.reclaim(jobId, now);
+      if (!claim) return { state: 'none' }; // lost the race — another activation reclaimed it
+      // Armed BEFORE the drive, for the attempt after this one: the eviction that
+      // would need this value is the one that stops this line from ever running
+      // again. `claim.attempts - 1` is how many attempts preceded the wait, so the
+      // first interruption waits the curve's first term rather than its second.
+      this.deps.store.deferResume(jobId, now + recoveryBackoffMs(claim.attempts - 1));
       this.deps.logActivity?.('bg_job_resume', `${job.kind} → ${jobId} (attempt ${claim.attempts}, epoch ${claim.epoch})`);
       this.driveResume(job);
-      return job;
+      return { state: 'redriven', job };
     }
 
     // No resumer: this job's work is gone and nothing will re-run it. It still
     // settles with whatever it produced rather than with the eviction string alone.
     await this.settleBounded(jobId, job.epoch, 'its executor was lost and this kind cannot be re-driven');
-    return null;
+    return { state: 'none' };
+  }
+
+  /**
+   * Leave a job that is waiting for its next attempt, and make sure something
+   * comes back for it.
+   *
+   * The wake is re-armed on every sweep rather than only when the instant is
+   * written, because the schedule row is the half that can be lost: an isolate
+   * evicted between the claim and its wake leaves a durable instant with no
+   * durable wake, and the next activation to look at this row is the only thing
+   * that can notice. Arming is soonest-wins on both backends, so repeating it is
+   * free.
+   *
+   * The deferral is ANNOUNCED, because the give-up this replaced was the only
+   * thing that ever told anyone the job had been interrupted. Silence is what
+   * made the incident unreadable: the owner watched a job sit `running` with
+   * nothing able to say why.
+   */
+  private async deferRecovery(job: BackgroundJob, at: number): Promise<JobRecoveryOutcome> {
+    const delayMs = at - Date.now();
+    diagnostics.event('jobs.resume_deferred', {
+      jobId: job.id, kind: job.kind, attempts: job.resumeAttempts, delayMs, resumeAfter: at,
+    });
+    this.deps.logActivity?.(
+      'bg_job_resume_deferred',
+      `${job.kind} → ${job.id} was interrupted ${String(job.resumeAttempts)} time(s); `
+      + `next attempt in ${String(Math.ceil(delayMs / 1000))}s`,
+    );
+    await this.deps.scheduleResume?.(at);
+    return { state: 'deferred', job };
   }
 
   /** Re-drive a reclaimed job from its durable checkpoint in a fresh durable

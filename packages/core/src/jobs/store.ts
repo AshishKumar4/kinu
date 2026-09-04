@@ -48,6 +48,22 @@ export interface BackgroundJob {
    * completed candidates its caller could not see.
    */
   attemptStartedAt: number;
+  /**
+   * The instant before which this job's NEXT attempt must not start, or null
+   * when nothing is owed.
+   *
+   * Written FORWARD, at claim time, for the attempt after the one being
+   * claimed — because the event it paces is unobservable by the process it
+   * kills. An isolate evicted mid-attempt writes nothing, so a pause recorded
+   * after a failure would never be recorded at all; the claim is the last
+   * moment anything can still speak for the attempt it is starting.
+   *
+   * So a live attempt carries one too, and that is not a contradiction: it says
+   * "if I am still `running` after this instant, whoever finds me may drive me
+   * again". A settle clears the question by ending the job, and the next
+   * {@link BackgroundJobStore.reclaim} clears the column.
+   */
+  resumeAfter: number | null;
 }
 
 /** The result of claiming a job for an evict-recovery re-drive. */
@@ -63,6 +79,7 @@ interface Row {
   work_mode: string;
   result: string | null; error: string | null; created_at: number; settled_at: number | null;
   epoch: number; resume_attempts: number; attempt_started_at: number | null; retried_by: string | null;
+  resume_after: number | null;
 }
 
 function toJob(r: Row): BackgroundJob {
@@ -78,6 +95,9 @@ function toJob(r: Row): BackgroundJob {
     // Null for a row written before this column existed. `created_at` is the honest
     // reading there: its first attempt is the only one anything recorded.
     attemptStartedAt: r.attempt_started_at ?? r.created_at,
+    // Null for every row written before this column existed, and for every job
+    // that has never been interrupted: nothing is owed, so nothing is waited on.
+    resumeAfter: r.resume_after ?? null,
   };
 }
 
@@ -111,6 +131,7 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec, sql: SqlExecutor): 
     epoch       INTEGER NOT NULL DEFAULT 0,
     resume_attempts INTEGER NOT NULL DEFAULT 0,
     attempt_started_at INTEGER,
+    resume_after INTEGER,
     retried_by TEXT,
     retry_of TEXT UNIQUE,
     created_at  INTEGER NOT NULL,
@@ -122,6 +143,7 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec, sql: SqlExecutor): 
     epoch: 'INTEGER NOT NULL DEFAULT 0',
     resume_attempts: 'INTEGER NOT NULL DEFAULT 0',
     attempt_started_at: 'INTEGER',
+    resume_after: 'INTEGER',
     retried_by: 'TEXT',
     retry_of: 'TEXT',
   });
@@ -194,16 +216,54 @@ export class BackgroundJobStore {
    *
    *  `attempt_started_at` moves with the epoch because they name the same event: a
    *  new lease IS a new generation, and a generation with no start time is one
-   *  nothing can bound. */
+   *  nothing can bound.
+   *
+   *  `resume_after` is CLEARED for the same reason it exists: it paced the attempt
+   *  this claim just started, and a wait that has been served is not still owed.
+   *  The claimer arms the next one through {@link deferResume}. */
   reclaim(id: string, now = Date.now()): JobClaim | null {
     void this.sql`UPDATE background_jobs
-      SET epoch = epoch + 1, resume_attempts = resume_attempts + 1, attempt_started_at = ${now}
+      SET epoch = epoch + 1, resume_attempts = resume_attempts + 1, attempt_started_at = ${now},
+          resume_after = NULL
       WHERE id=${id} AND status='running'`;
     const rows = this.sql<{ epoch: number; resume_attempts: number; status: string }>`
       SELECT epoch, resume_attempts, status FROM background_jobs WHERE id=${id} LIMIT 1`;
     const row = rows[0];
     if (!row || row.status !== 'running') return null;
     return { epoch: row.epoch, attempts: row.resume_attempts };
+  }
+
+  /**
+   * Arm the instant before which this job's next attempt must not start.
+   *
+   * Only over a `running` row: a settled job is owed nothing, and a wait written
+   * onto one would be read by the next sweep as work still to come.
+   *
+   * The value is absolute rather than a duration, so it survives the process that
+   * wrote it. That is the whole point of the column — the isolate that would have
+   * counted a duration down is the one the eviction kills.
+   */
+  deferResume(id: string, at: number): void {
+    void this.sql`UPDATE background_jobs SET resume_after=${at}
+      WHERE id=${id} AND status='running'`;
+  }
+
+  /** The soonest armed instant across every running job that has one, or null
+   *  when no job is waiting. One indexed MIN, for a caller deciding whether a
+   *  wake is owed at all before it sweeps the registry. */
+  nextResumeAt(): number | null {
+    const rows = this.sql<{ at: number | null }>`SELECT MIN(resume_after) AS at
+      FROM background_jobs WHERE status='running' AND resume_after IS NOT NULL`;
+    return rows[0]?.at ?? null;
+  }
+
+  /** Every running job whose next attempt is not yet due at `now` — the rows a
+   *  reader must not assume are being worked on. Ids only: the caller pairs them
+   *  with what it knows is live in memory, which no row can say. */
+  resumeOwedIds(now: number): string[] {
+    return this.sql<{ id: string }>`SELECT id FROM background_jobs
+      WHERE status='running' AND resume_after IS NOT NULL AND resume_after > ${now}`
+      .map((r) => r.id);
   }
 
   /** The current lease epoch of a job — captured by an executor at detach so its
@@ -241,7 +301,7 @@ export class BackgroundJobStore {
   get(id: string): BackgroundJob | null {
     const rows = this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
-      job.epoch, job.resume_attempts, job.attempt_started_at,
+      job.epoch, job.resume_attempts, job.attempt_started_at, job.resume_after,
       COALESCE(job.retried_by, replacement.id) AS retried_by
       FROM background_jobs job
       LEFT JOIN background_jobs replacement ON replacement.retry_of=job.id
@@ -252,7 +312,7 @@ export class BackgroundJobStore {
   list(limit = 20): BackgroundJob[] {
     return this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
-      job.epoch, job.resume_attempts, job.attempt_started_at,
+      job.epoch, job.resume_attempts, job.attempt_started_at, job.resume_after,
       COALESCE(job.retried_by, replacement.id) AS retried_by
       FROM background_jobs job
       LEFT JOIN background_jobs replacement ON replacement.retry_of=job.id
@@ -280,7 +340,7 @@ export class BackgroundJobStore {
    *  `limit` bounds the returned page; `total` is the TRUE running count, so a
    *  renderer can state its elision honestly even when the page was cut. */
   listRunning(limit = 20): ActiveRoster<BackgroundJob> {
-    const items = this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at
+    const items = this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at, resume_after
       FROM background_jobs WHERE status='running' ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
     return { items, total: this.countRunning() };
   }

@@ -1629,6 +1629,11 @@ export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/
 // SQL. Exported because the CLI's local read models bind their own `LIMIT` and
 // need the same policy as their cloud peers.
 export { boundedInt } from './utils/bounds';
+// The pace every durable recovery lane retries at — the notice carrier, the
+// maintenance tick's re-arm and the job runner's deferral. Exported because two
+// of those three live in the backends, and a second copy of the curve is the
+// drift this export exists to prevent.
+export { recoveryBackoffMs } from './utils/recovery-backoff';
 export { getRunEvents, getRunSummaries, listRuns } from './read-models/runs';
 export type { RunListEntry, RunSummary } from './read-models/runs';
 export { workspaceSpend } from './read-models/workspace-spend';

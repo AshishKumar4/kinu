@@ -107,6 +107,48 @@ describe('BackgroundJobStore', () => {
     expect(s.reclaim('missing')).toBeNull();
   });
 
+  test('the armed next attempt is a column: written, read back, and cleared by the claim that serves it', () => {
+    const s = newStore();
+    s.create({ id: 'w', kind: 'agents', workMode: 'build', now: 1 });
+    expect(s.get('w')?.resumeAfter).toBeNull();
+    expect(s.nextResumeAt()).toBeNull();
+
+    s.deferResume('w', 5_000);
+    expect(s.get('w')?.resumeAfter).toBe(5_000);
+    expect(s.nextResumeAt()).toBe(5_000);
+    expect(s.listRunning().items[0]?.resumeAfter).toBe(5_000);
+    expect(s.list()[0]?.resumeAfter).toBe(5_000);
+
+    // The claim SERVES the wait, so it clears it — and arms nothing by itself.
+    expect(s.reclaim('w', 6_000)).toEqual({ epoch: 1, attempts: 1 });
+    expect(s.get('w')?.resumeAfter).toBeNull();
+    expect(s.nextResumeAt()).toBeNull();
+  });
+
+  test('a wait is only ever owed by a RUNNING job', () => {
+    const s = newStore();
+    s.create({ id: 'settled', kind: 'agents', workMode: 'build', now: 1 });
+    s.settle('settled', 0, '"done"', 2);
+    // A settled row must not become work the next sweep thinks is still coming.
+    s.deferResume('settled', 9_000);
+    expect(s.get('settled')?.resumeAfter).toBeNull();
+    expect(s.nextResumeAt()).toBeNull();
+  });
+
+  test('resumeOwedIds names only the jobs whose next attempt is still in the future', () => {
+    const s = newStore();
+    for (const id of ['due', 'waiting', 'never']) {
+      s.create({ id, kind: 'agents', workMode: 'build', now: 1 });
+    }
+    s.deferResume('due', 1_000);
+    s.deferResume('waiting', 10_000);
+
+    expect(s.resumeOwedIds(5_000)).toEqual(['waiting']);
+    expect(s.resumeOwedIds(50_000)).toEqual([]);
+    // The soonest instant is what a caller arms its one wake for.
+    expect(s.nextResumeAt()).toBe(1_000);
+  });
+
   test('create stores input_json; getInput round-trips it for retry', () => {
     const s = newStore();
     s.create({ id: 'd', kind: 'execute_tools', workMode: 'build', input: '{"code":"1+1"}', now: 1 });

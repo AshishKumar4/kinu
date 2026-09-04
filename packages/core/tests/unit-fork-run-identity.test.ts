@@ -8,7 +8,9 @@
  * five heads.
  *
  * Mechanism: a detached fork's background job is re-driven by evict/exit
- * recovery (jobs/runner.ts, MAX_RESUME_ATTEMPTS = 5), and `resumeBackgroundJob`
+ * recovery (jobs/runner.ts — five re-drives and then a give-up when this was
+ * written; unbounded attempts at a capped pace since 2026-09-04, which makes
+ * this defect's blast radius larger, not smaller), and `resumeBackgroundJob`
  * re-executes the raw `agents` call with the stored input. MCTS survives that
  * because re-entry reclaims the same search by task, keeping ONE `root_id`.
  * `HeadController.run` had no such reclaim: `opts.rootId ?? opts.parentHeadId ??

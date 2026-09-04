@@ -1281,13 +1281,19 @@ describe('the start-of-life sweep reaches registry-only jobs', () => {
 });
 
 /**
- * THE STALE-RUNNING DEFECT, AS A TEST: a swarm whose job settled `failed` — the
- * resume cap exhausted, five evictions, "gave up" — left its `mcts_search_runs`
- * row claiming a live executor forever. Measured on the owner's workspace:
- * root `2rye1eyny1efm9583sqye` read `running · 2 reported · 18 stopped · last
- * step 11h ago`, because the only writers of that row sit inside the executor
- * the platform had already destroyed, and the start-of-life sweep closed the
- * journal rows but never the ledger row beside them.
+ * THE STALE-RUNNING DEFECT, AS A TEST: a swarm whose job settled `failed` left
+ * its `mcts_search_runs` row claiming a live executor forever. Measured on the
+ * owner's workspace: root `2rye1eyny1efm9583sqye` read `running · 2 reported ·
+ * 18 stopped · last step 11h ago`, because the only writers of that row sit
+ * inside the executor the platform had already destroyed, and the start-of-life
+ * sweep closed the journal rows but never the ledger row beside them.
+ *
+ * The incident's job reached `failed` through the resume cap — five evictions,
+ * "gave up" — which is deleted as of 2026-09-04. The defect this pins does not
+ * depend on it: what strands the ledger row is a job REFUSED by the resume gate,
+ * and refusal has outlived the cap. It is now the honest terminals only (a
+ * definitive failure, a kind nothing can re-drive), which is why the test drives
+ * a refusal rather than a count.
  */
 describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
   test('a refused run\'s ledger row is failed, and the surface stops calling it running', async () => {

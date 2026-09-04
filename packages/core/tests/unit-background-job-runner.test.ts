@@ -13,6 +13,7 @@ import {
   BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY, DeviceRequestOwnership,
   type BackgroundPolicy, type BackgroundJob, type InvocationSurface,
 } from '../src/jobs/index';
+import { jobRedriveResumeGate } from '../src/heads/reconcile';
 import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hub/index';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives';
@@ -61,6 +62,7 @@ function setup(opts: {
   resume?: JobResumer; policy?: BackgroundPolicy; db?: Database; harvest?: JobHarvester;
   onDetached?: (jobId: string, requestIds: readonly string[]) => Promise<void> | void;
   onCancelled?: (jobId: string) => Promise<void> | void;
+  scheduleResume?: (atMs: number) => Promise<void> | void;
 } = {}) {
   const db = opts.db ?? new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
@@ -93,6 +95,7 @@ function setup(opts: {
     resume: opts.resume,
     policy: opts.policy ? () => opts.policy! : undefined,
     harvest: opts.harvest,
+    scheduleResume: opts.scheduleResume,
   };
   const runner = new BackgroundJobRunner(runnerDeps);
   return {
@@ -560,25 +563,89 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     expect(enqueued[0].metadata?.status).toBe('failed');
   });
 
-  test('a job that evicts on every activation is failed after the resume-attempt cap', async () => {
+  // REPLACES 'a job that evicts on every activation is failed after the
+  // resume-attempt cap' (MAX_RESUME_ATTEMPTS = 5, deleted 2026-09-04). That test
+  // pinned the give-up itself: five platform interruptions turned into a terminal
+  // failure of work that had never failed, over a count `reclaim` bumps whatever
+  // the cause. What replaces it is the same scenario driven twice as far, and the
+  // opposite assertion — the bound is now PACE, and pace is proven separately
+  // below. The owner's own words are the acceptance: "it was re-driven 5 times
+  // without finishing, so it gave up" must not be sayable of anything.
+  test('twelve interrupted activations leave the job running — an eviction is not a failure', async () => {
     const resume: JobResumer = () => new Promise<never>(() => {}); // never settles ⇒ evicted again
     const first = setup({ resume });
     first.store.create({ id: 'jc', kind: 'think', workMode: 'build', input: '{}', now: Date.now() });
 
     // One activation per recovery — a re-drive lives in the activation that
-    // started it, and the next eviction brings up a new one.
+    // started it, and the next eviction brings up a new one. Each activation
+    // first finds the wait its predecessor armed already elapsed, which is the
+    // one thing a test cannot do by waiting: the instants reach 60s.
     let last = first;
-    for (let activation = 0; activation < 6; activation++) {
+    for (let activation = 0; activation < 12; activation++) {
+      first.store.deferResume('jc', Date.now() - 1);
       last = setup({ resume, db: first.db });
       await last.runner.recover({ jobId: 'jc', phase: 'running' });
     }
 
     const job = first.store.get('jc');
-    expect(job?.status).toBe('failed');
-    expect(job?.error).toContain('gave up');
-    expect(job?.resumeAttempts).toBe(5);
-    expect(last.enqueued.at(-1)?.metadata?.status).toBe('failed');
-    expect(last.enqueued.at(-1)?.text ?? '').toContain('generation 6');
+    expect(job?.status).toBe('running');
+    expect(job?.resumeAttempts).toBe(12);
+    expect(job?.error).toBeNull();
+    expect(first.store.runningIds()).toEqual(['jc']);
+    // Nothing announced a terminal outcome, and nothing said the words.
+    expect(last.enqueued).toHaveLength(0);
+    expect(last.logs.map((l) => `${l.e} ${l.d ?? ''}`).join('\n')).not.toContain('gave up');
+  });
+
+  test('the wait between attempts is capped, durable, and respected by a runner that never wrote it', async () => {
+    const resume: JobResumer = () => new Promise<never>(() => {});
+    const first = setup({ resume });
+    first.store.create({ id: 'jp', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+
+    // Each activation reads the wait off the ROW, so the delay it arms is
+    // measurable against the attempt clock the same claim wrote.
+    const waits: number[] = [];
+    for (let activation = 0; activation < 9; activation++) {
+      first.store.deferResume('jp', Date.now() - 1);
+      await setup({ resume, db: first.db }).runner.recover({ jobId: 'jp', phase: 'running' });
+      const job = first.store.get('jp');
+      if (job?.resumeAfter === null || job === null) throw new Error('a claim armed no next attempt');
+      waits.push(job.resumeAfter - job.attemptStartedAt);
+    }
+
+    // One second, doubling, to a sixty-second ceiling that STAYS the ceiling.
+    expect(waits).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000]);
+
+    // The durability half: a brand-new runner over the same database — a new
+    // isolate, which wrote none of this — respects a wait it never made.
+    const armed = Date.now() + 60_000;
+    first.store.deferResume('jp', armed);
+    const fresh = setup({ resume, db: first.db });
+    await fresh.runner.recover({ jobId: 'jp', phase: 'running' });
+
+    expect(first.store.get('jp')?.resumeAttempts).toBe(9); // not re-driven early
+    expect(first.store.get('jp')?.resumeAfter).toBe(armed); // and the instant stands
+  });
+
+  test('a deferred attempt arms the durable wake, and the runner without one is not broken by it', async () => {
+    const resume: JobResumer = () => new Promise<never>(() => {});
+    const first = setup({ resume });
+    first.store.create({ id: 'jw', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+    await setup({ resume, db: first.db }).runner.recover({ jobId: 'jw', phase: 'running' });
+
+    const armedFor: number[] = [];
+    const waker = setup({ resume, db: first.db, scheduleResume: (atMs) => { armedFor.push(atMs); } });
+    await waker.runner.recover({ jobId: 'jw', phase: 'running' });
+
+    expect(armedFor).toEqual([first.store.get('jw')?.resumeAfter ?? -1]);
+    expect(waker.logs.some((l) => l.e === 'bg_job_resume_deferred')).toBe(true);
+
+    // A swarm node passes no `scheduleResume` (and no `resume`): the branch is
+    // unreachable there, and a runner that DOES resume without a wake must still
+    // leave the job alone rather than throw or re-drive early.
+    const nowake = setup({ resume, db: first.db });
+    await nowake.runner.recover({ jobId: 'jw', phase: 'running' });
+    expect(first.store.get('jw')?.resumeAttempts).toBe(1);
   });
 
   test('a job this runner is already driving is never re-driven out from under itself', async () => {
@@ -632,20 +699,36 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     expect(enqueued).toHaveLength(0); // the stranded process woke nobody
   });
 
-  test('resuming is bounded: repeated restarts end in a terminal status, not another re-drive', async () => {
+  // REPLACES 'resuming is bounded: repeated restarts end in a terminal status,
+  // not another re-drive' (2026-09-04). "Bounded" there meant the resume-attempt
+  // cap, and the cap is gone: repeated restarts are repeated PLATFORM events, and
+  // ending the user's work on a count of them is the defect. What the sweep must
+  // still guarantee is the part that made the cap look safe — that the job never
+  // becomes invisible — so this asserts the successor contract: every restart
+  // leaves the job in the sweep's IN-FLIGHT set, whether it re-drove the job or
+  // left it waiting.
+  test('repeated restarts keep the job alive, and the sweep keeps naming it in flight', async () => {
     const resume: JobResumer = () => new Promise<never>(() => {}); // never settles ⇒ orphaned again
     const first = setup({ resume });
     first.store.create({ id: 'jz', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
-    // Each restart finds the row, reclaims it, and re-drives — until the cap.
+    // Six restarts, each finding the previous wait elapsed: six re-drives.
     for (let start = 0; start < 6; start++) {
-      await setup({ resume, db: first.db }).runner.recoverOrphans();
+      first.store.deferResume('jz', Date.now() - 1);
+      const inFlight = await setup({ resume, db: first.db }).runner.recoverOrphans();
+      expect(inFlight.map((j) => j.id)).toEqual(['jz']);
     }
+    expect(first.store.get('jz')?.resumeAttempts).toBe(6);
 
-    const job = first.store.get('jz');
-    expect(job?.status).toBe('failed');
-    expect(job?.error).toContain('gave up');
-    expect(first.store.runningIds()).toEqual([]);
+    // And a seventh that arrives DURING the wait. It re-drives nothing, and the
+    // job is still in flight — the half `jobRedriveResumeGate` reads to decide
+    // whether a fork run is still alive.
+    first.store.deferResume('jz', Date.now() + 60_000);
+    const waiting = await setup({ resume, db: first.db }).runner.recoverOrphans();
+    expect(waiting.map((j) => j.id)).toEqual(['jz']);
+    expect(first.store.get('jz')?.resumeAttempts).toBe(6);
+    expect(first.store.get('jz')?.status).toBe('running');
+    expect(first.store.runningIds()).toEqual(['jz']);
   });
 
   test('a job whose executor is alive in THIS process is not reclaimed as an orphan', async () => {
@@ -661,6 +744,42 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     finish();
     await settled();
     expect(store.get(id)?.result).toBe('"real result"');
+  });
+
+  // The coupling the give-up's removal depends on, driven through the REAL gate
+  // rather than asserted about the set: `jobRedriveResumeGate` retires the fork
+  // run of every job absent from this sweep's result, and waiting for a next
+  // attempt is now the ordinary state of interrupted work.
+  test('a job waiting for its next attempt keeps its fork run — and an absent one loses it', async () => {
+    const resume: JobResumer = () => new Promise<never>(() => {});
+    const task = 'measure the three candidates';
+    const first = setup({ resume });
+    first.store.create({
+      id: 'jf', kind: 'agents', workMode: 'build', input: JSON.stringify({ task }), now: Date.now(),
+    });
+    // One interruption, so the next activation finds it WAITING rather than due.
+    await setup({ resume, db: first.db }).runner.recoverOrphans();
+    expect(first.store.get('jf')?.resumeAfter).toBeGreaterThan(Date.now());
+
+    const next = setup({ resume, db: first.db });
+    const claimed = await jobRedriveResumeGate({
+      recoverOrphans: () => next.runner.recoverOrphans(),
+      inputOf: (jobId) => next.store.getInput(jobId),
+      rootsForTask: (t) => (t === task ? ['root-live'] : []),
+    })(['root-live']);
+    // Claimed, so `reconcileInterruptedForks` continues the run instead of
+    // retiring it — over a job that this activation deliberately did not re-drive.
+    expect(claimed).toEqual(['root-live']);
+
+    // The red direction, stated as the mechanism: a sweep that does NOT name the
+    // job retires the very same root. That is what a deferred job absent from the
+    // in-flight set would do to a live search.
+    const retired = await jobRedriveResumeGate({
+      recoverOrphans: async () => [],
+      inputOf: (jobId) => next.store.getInput(jobId),
+      rootsForTask: (t) => (t === task ? ['root-live'] : []),
+    })(['root-live']);
+    expect(retired).toEqual([]);
   });
 });
 
@@ -747,6 +866,46 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
     expect(outcome.detached).toBe(true);
+  });
+
+  test('eight jobs merely WAITING for their next attempt do not refuse a new detach', async () => {
+    // The ceiling's own reason decides this: "every detached job is a live
+    // process tree". A job whose isolate died and whose next attempt is not yet
+    // due has no process tree at all, so counting it would let eight interrupted
+    // jobs block every new detach for as long as the platform kept interrupting
+    // them — the give-up, coming back through the admission door.
+    const resume: JobResumer = () => new Promise<never>(() => {});
+    const { runner, store } = setup({ resume });
+    for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
+      store.create({ id: `owed-${i}`, kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+      store.reclaim(`owed-${i}`);
+      store.deferResume(`owed-${i}`, Date.now() + 60_000);
+    }
+    expect(store.countRunning()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
+
+    const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
+      .onThreshold('run', new Promise(() => { /* still running */ }));
+    expect(outcome.detached).toBe(true);
+  });
+
+  test('eight jobs actually DRIVING still refuse it — the ceiling did not move', async () => {
+    // The other arm, and the one that would silently disappear if "owed" were
+    // read off the row alone: a job being re-driven right now also carries an
+    // armed instant, because the pause is written FORWARD at claim time.
+    const resume: JobResumer = () => new Promise<never>(() => {});
+    const { runner, store } = setup({ resume });
+    for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
+      store.create({ id: `live-${i}`, kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+    }
+    // This runner re-drives all eight, so all eight are live here AND all eight
+    // have a future `resume_after`.
+    await runner.recoverOrphans();
+    expect(runner.inFlight).toBe(MAX_CONCURRENT_DETACHED_JOBS);
+    expect(store.resumeOwedIds(Date.now())).toHaveLength(MAX_CONCURRENT_DETACHED_JOBS);
+
+    const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
+      .onThreshold('run', new Promise(() => { /* still running */ }));
+    expect(outcome.detached).toBe(false);
   });
 
   test('the detach transfers what the call had issued, and OWNS what it issues next', async () => {
@@ -870,33 +1029,76 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     // anyone grows a compensating timer back into this seam.
     const { runner, store } = setup();
     // Production mints the row through `create` before any detach can name it;
-    // a fixed id here follows the bgjob-capped test below.
+    // a fixed id here follows the bgjob-unresumable test below.
     store.create({ id: 'bgjob-immortal', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
     runner.detach('bgjob-immortal', 'agents', new Promise(() => { /* never */ }));
     await new Promise((r) => setTimeout(r, 50));
     expect(store.get('bgjob-immortal')?.status).toBe('running');
   });
 
-  test('past the resume cap it also settles with the partial, instead of an eviction string', async () => {
+  // REPLACES 'past the resume cap it also settles with the partial, instead of an
+  // eviction string' (2026-09-04). The CAP is gone, but the intent it carried —
+  // a job that will never be driven again settles with the work it really did,
+  // not with an empty failure over it — is untouched and now belongs to the path
+  // that actually reaches it: a kind the resumer refuses. The incident's job held
+  // two completed candidates while its row reported nothing, and that must stay
+  // impossible whichever terminal it arrives at.
+  test('a kind that cannot be re-driven settles with the partial, instead of an eviction string', async () => {
     const { runner, store, settled } = setup({
-      resume: async () => 'never reached',
+      resume: async (kind) => { throw new JobNotResumable(kind); },
       harvest: async () => ({ rootId: 'root-2', candidates: [{ nodeId: 'n1', score: 0.4 }] }),
     });
-    store.create({ id: 'bgjob-capped', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
-    // Driven past the cap. The incident's job was at exactly attempts=4, so the
-    // reclaim after it is the one that used to discard its two completed
-    // candidates. Reclaimed well past any cap rather than exactly to it: the
-    // count is the runner's to own, and asserting it here only compared this
-    // file's copy of the number with the runner's.
-    for (let i = 0; i < 50; i++) store.reclaim('bgjob-capped');
+    store.create({ id: 'bgjob-unresumable', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+    // Interrupted repeatedly first: the generation count rides the partial, and
+    // reaching this terminal on attempt 51 must read no differently from
+    // reaching it on attempt 1 — there is no count that decides anything now.
+    for (let i = 0; i < 50; i++) store.reclaim('bgjob-unresumable');
 
     await runner.recoverOrphans();
     await settled();
 
-    const job = store.get('bgjob-capped');
+    const job = store.get('bgjob-unresumable');
     expect(job?.status).toBe('completed');
     expect(job?.error).toBeNull();
     expect(String(job?.result)).toContain('root-2');
+    expect(String(job?.result)).toContain('PARTIAL');
+  });
+
+  test('a kind that cannot be re-driven with NOTHING to hand back fails, naming that', async () => {
+    // The other arm of the same terminal, and the one the owner was handed: no
+    // partial exists, so the job fails — but it says which, rather than implying
+    // the work produced nothing when nobody looked.
+    const { runner, store, settled } = setup({
+      resume: async (kind) => { throw new JobNotResumable(kind); },
+      harvest: async () => null,
+    });
+    store.create({ id: 'bgjob-unresumable-empty', kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
+
+    await runner.recoverOrphans();
+    await settled();
+
+    const job = store.get('bgjob-unresumable-empty');
+    expect(job?.status).toBe('failed');
+    expect(job?.error ?? '').toContain('no partial result');
+    expect(job?.error ?? '').toContain('cannot be re-driven');
+  });
+
+  test('a resumer that THROWS fails the job with its own error — a real failure is terminal', async () => {
+    // The boundary the unbounded-attempts rule rests on. Only an unobserved
+    // interruption earns another attempt; work that failed says so, once.
+    const { runner, store, settled } = setup({
+      resume: async () => { throw new Error('the branch budget was rejected'); },
+      harvest: async () => ({ rootId: 'root-3' }),
+    });
+    store.create({ id: 'bgjob-thrown', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+
+    await runner.recoverOrphans();
+    await settled();
+
+    const job = store.get('bgjob-thrown');
+    expect(job?.status).toBe('failed');
+    expect(job?.error ?? '').toContain('the branch budget was rejected');
+    expect(store.runningIds()).toEqual([]);
   });
 
   test('with nothing to hand over it fails — and says the bound, not just "evicted"', async () => {

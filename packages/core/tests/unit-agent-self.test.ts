@@ -154,7 +154,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
       id: "bgjob-1", kind: "run", label: null, workMode: "build", status: "completed",
       result: '"the output"', error: null, createdAt: 1, settledAt: 2, epoch: 0, resumeAttempts: 0,
       retriedBy: null,
-      attemptStartedAt: 1,
+      attemptStartedAt: 1, resumeAfter: null,
     };
     const host = fakeHost({ jobResult: async (id) => { host.calls.push(`jobResult:${id}`); return settled; } });
     const p = createAgentSelfProvider(host);
@@ -170,7 +170,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
       id: "bgjob-2", kind: "agents", label: null, workMode: "build", status: "running",
       result: null, error: null, createdAt: 1, settledAt: null, epoch: 0, resumeAttempts: 0,
       retriedBy: null,
-      attemptStartedAt: 1,
+      attemptStartedAt: 1, resumeAfter: null,
     };
     const host = fakeHost({ jobResult: async () => running });
     const p = createAgentSelfProvider(host);
