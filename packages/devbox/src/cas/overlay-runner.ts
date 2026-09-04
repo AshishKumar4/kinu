@@ -543,7 +543,7 @@ async function materializePending(
     const bytes = await store.get(key);
     if (bytes === null) throw new Error(`blob missing: ${hash}`);
     fetched.set(hash, bytes);
-  });
+  }, ([, key]) => key);
   for (const entry of entries) {
     const parent = parentDirectory(entry.path);
     if (parent !== null) root.mkdir(parent);

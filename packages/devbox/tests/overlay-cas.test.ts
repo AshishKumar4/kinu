@@ -1554,3 +1554,53 @@ describe('the store calls of one step overlap', () => {
     expect(await readFoldedSeq(store)).toBe(24);
   });
 });
+
+// ── what a pooled step does with the failures beside the one it throws ──────
+//
+// Sixteen store calls are in flight, so several workers can fail AT THE SAME
+// TIME. "The first failure is what the caller sees" is the right caller
+// contract — callers match on it by class, and `stageBlobs` turns a
+// StaleUpperBytes into its `stalePaths` answer — but "the others never
+// existed" is not: gate:silent-drop named the `??=` that discarded them, and
+// it was right. The first error is still thrown ITSELF, class intact, and the
+// ones that ran beside it are recorded with the item each belongs to.
+
+describe('a pooled step keeps the failures that ran beside the one it throws', () => {
+  test('the first failure is thrown by class and the concurrent ones are recorded', async () => {
+    const store = new MemoryCasStore();
+    const contents = new Map<string, Uint8Array>();
+    const entries = [];
+    for (let index = 0; index < 24; index += 1) {
+      const path = `pkg/h${String(index).padStart(3, '0')}.txt`;
+      const text = `body ${String(index)}`;
+      contents.set(path, fileBytes(text));
+      entries.push(fileEntry(index + 1, path, text));
+    }
+    // Three entries whose bytes no longer match what the journal recorded. All
+    // three are inside the first wave of sixteen, so they fail concurrently.
+    for (const index of [1, 2, 3]) {
+      contents.set(`pkg/h${String(index).padStart(3, '0')}.txt`, fileBytes('a different body entirely'));
+    }
+
+    const recorded: string[] = [];
+    const spoken = console.error;
+    // The pool reports with exactly one string per line, which is the shape
+    // this stub accepts; `spoken` is restored in the finally below.
+    console.error = (message: string): void => void recorded.push(message);
+    let staged;
+    try {
+      staged = await stageBlobs({ store, entries, readChunk: readerFor(contents) });
+    } finally {
+      console.error = spoken;
+    }
+
+    // The caller's contract is unchanged: ONE stale path answers for the step.
+    expect(staged.stalePaths).toHaveLength(1);
+    // And the two that failed beside it are on the record, by class, by count,
+    // and with an item named — not discarded.
+    const line = recorded.find((row) => row.includes('StaleUpperBytes'));
+    expect(line).toBeDefined();
+    expect(line).toContain('2 further');
+    expect(line).toMatch(/pkg\/h00[123]\.txt/);
+  });
+});

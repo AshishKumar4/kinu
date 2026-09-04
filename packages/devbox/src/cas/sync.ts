@@ -10,6 +10,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { describeThrown } from '../lifecycle';
 import { CHUNK_SIZE, sha256Hex } from './hash';
 import {
   DEFAULT_BATCH_SIZE,
@@ -75,27 +76,90 @@ const STORE_CALL_WIDTH = 16;
 export async function throughStorePool<Item>(
   items: readonly Item[],
   work: (item: Item) => Promise<void>,
+  name: (item: Item) => string,
 ): Promise<void> {
   let next = 0;
   let failure: unknown;
+  const beside: SuppressedFailure[] = [];
   const worker = async (): Promise<void> => {
     for (;;) {
       if (failure !== undefined) return;
       const index = next;
       next += 1;
       if (index >= items.length) return;
+      const item = items[index]!;
+      // THE HANDLER RECORDS; IT DECIDES NOTHING. A catch that early-returns
+      // reads as tolerating the failure it caught, and nothing here tolerates
+      // one: every failure this step produces is either thrown or put on the
+      // record below, in plain control flow where that is visible.
+      let thrown: { readonly error: unknown } | null = null;
       try {
-        await work(items[index]!);
+        await work(item);
       } catch (error) {
-        failure ??= error;
+        thrown = { error };
+      }
+      if (thrown === null) continue;
+      if (failure === undefined) {
+        // THE FIRST FAILURE IS THROWN ITSELF, at the end, with its class
+        // intact: callers match on it — `StaleUpperBytes` by identity — so
+        // wrapping it in an aggregate would break the matching the staging
+        // path depends on.
+        failure = thrown.error;
         return;
       }
+      // AND THE ONES THAT RAN BESIDE IT DO NOT VANISH. With STORE_CALL_WIDTH
+      // calls in flight, up to that many workers can fail at the same
+      // instant, and each is a fault that really happened. They are reduced to
+      // what a reader can act on — a count and the first of each distinct
+      // class, with the item it belongs to — rather than discarded, or dumped
+      // as a list nobody reads.
+      beside.push({
+        item: name(item),
+        kind: thrown.error instanceof Error ? thrown.error.name : 'a non-Error throw',
+        detail: describeThrown({ cause: thrown.error }),
+      });
+      return;
     }
   };
   await Promise.all(
     Array.from({ length: Math.min(STORE_CALL_WIDTH, items.length) }, () => worker()),
   );
-  if (failure !== undefined) throw failure;
+  if (failure === undefined) return;
+  reportFailuresBeside(beside);
+  throw failure;
+}
+
+/** One failure a pooled step produced beyond the one it threw, already reduced
+ *  to what a reader can act on: the item, the error's class, and its words. */
+interface SuppressedFailure {
+  readonly item: string;
+  readonly kind: string;
+  readonly detail: string;
+}
+
+/**
+ * Put the concurrent failures on the record: one line per distinct class, with
+ * how many there were and the first item that showed it.
+ *
+ * Where a reader finds them: this runs inside the container-side runner, whose
+ * stderr the host hands back with the invocation and reports verbatim when the
+ * runner exits non-zero — so these lines travel with the failure that was
+ * thrown rather than needing a log nobody collects.
+ */
+function reportFailuresBeside(beside: readonly SuppressedFailure[]): void {
+  if (beside.length === 0) return;
+  const byKind = new Map<string, { count: number; first: SuppressedFailure }>();
+  for (const row of beside) {
+    const held = byKind.get(row.kind);
+    if (held === undefined) byKind.set(row.kind, { count: 1, first: row });
+    else held.count += 1;
+  }
+  for (const [kind, { count, first }] of byKind) {
+    console.error(
+      `[cas] ${String(count)} further ${kind} failure(s) ran concurrently with the one this step `
+      + `threw; first at ${first.item}: ${first.detail}`,
+    );
+  }
 }
 
 /** A file whose bytes no longer digest to what the journal recorded. It stops
@@ -186,7 +250,7 @@ export async function stageBlobs(options: StageBlobsOptions): Promise<StageBlobs
         uploaded += result.uploaded;
         skipped += result.skipped;
         if (result.uploaded === 0 && entry.parts.some(part => part.kind === 'data')) dedupHits += 1;
-      });
+      }, (entry) => entry.path);
     } catch (error) {
       if (!(error instanceof StaleUpperBytes)) throw error;
       stale = error.path;
@@ -234,7 +298,7 @@ async function uploadChunks(
       await store.put(blobKey(chunk.hash), bytes);
       known.add(chunk.hash);
       uploaded += 1;
-    });
+    }, ({ index }) => `${entry.path} chunk ${String(index)}`);
   } catch (error) {
     // STALE IS AN ANSWER, NOT A FAILURE: the sequential form returned null for
     // it and staging stops there. Every other throw is a real store failure
@@ -335,7 +399,7 @@ export async function foldJournalIntoTree(store: CasStore): Promise<FoldResult> 
         { mode: S_IFLNK | 0o777, symlink: true, mtimeMs: entry.mtimeMs },
       );
     }
-  });
+  }, (entry) => entry.path);
   // The manifest rows for what just landed, in the fold's own order, so the
   // map a `hardlink` reads and a `delete` sweeps is identical to what the
   // sequential pass produced.
