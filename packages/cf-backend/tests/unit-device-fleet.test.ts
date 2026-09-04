@@ -326,10 +326,19 @@ describe('what the model is told', () => {
     const fleet = await twoDaemons();
     const status = await fleet.userDO.deviceRuntimeStatus(fleet.workspace);
     // The ask a refused call carries names exactly the machines the roster
-    // lists as connected, in the roster's order, with the same platforms.
-    expect(deviceFleetAsk(status.devices)).toBe(
-      'name the machine this command runs on — connected: mrwhite@rig (linux), ashish@mac (darwin). Pass it as device: "<name>".',
-    );
+    // lists as connected, in the roster's order, with the same platforms —
+    // fleet order (registration, newest first), the hub's own answer to
+    // "which machines". Written from the snapshot's entries so the test
+    // cannot hand-write the order wrong.
+    const expected = `name the machine this command runs on — connected: ${
+      connectedDevices(status.devices).map((d) => `${d.name} (${d.os})`).join(', ')
+    }. Pass it as device: "<name>".`;
+    expect(deviceFleetAsk(status.devices)).toBe(expected);
+    // Both machines are named; their relative order is registration order
+    // (created_at DESC, id ASC on ties), which is run-dependent and not the
+    // contract — the contract is that roster and refusal speak the same words.
+    expect(expected).toContain('mrwhite@rig (linux)');
+    expect(expected).toContain('ashish@mac (darwin)');
     await fleet.end();
   });
 });
