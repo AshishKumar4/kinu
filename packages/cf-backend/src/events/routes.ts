@@ -28,7 +28,9 @@
 
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
-import { DEFAULT_RATE_LIMIT_PER_MIN, normalizeWebhookRateLimitPerMin } from '@kinu.run/core';
+import {
+  boundEventQuery, DEFAULT_RATE_LIMIT_PER_MIN, normalizeWebhookRateLimitPerMin,
+} from '@kinu.run/core';
 import { err, json, readBounded, safeJson } from '../lib/http';
 import { ingressAdmitted, ingressDenied, peerIp } from '../lib/ingress-budget';
 import { isFreshAuthTime } from '../auth/session';
@@ -330,13 +332,22 @@ async function handleTriggersRoute(
 async function handleEventsList(request: Request, env: Env, agentName: string): Promise<Response> {
   const url = new URL(request.url);
   const variant = url.searchParams.get('variant') ?? undefined;
-  const sinceRaw = url.searchParams.get('since');
-  const limitRaw = url.searchParams.get('limit');
-  const since = sinceRaw ? parseInt(sinceRaw, 10) : undefined;
-  const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
+  // The same closed parser the object behind this RPC applies, so a request
+  // that skips the route gets the identical ceiling. `parseInt('abc', 10)` is
+  // NaN, which the parser reads as "unstated" — the route never has to decide
+  // what a garbage query string meant, and SQLite never sees the NaN it used to
+  // refuse as a datatype mismatch.
+  const bounds = boundEventQuery({
+    since: url.searchParams.has('since')
+      ? parseInt(url.searchParams.get('since') ?? '', 10) : undefined,
+    limit: url.searchParams.has('limit')
+      ? parseInt(url.searchParams.get('limit') ?? '', 10) : undefined,
+  });
 
   const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
-  return json(decodeJsonWire(await agent.listRecentEventsWire({ variant, since, limit })));
+  return json(decodeJsonWire(await agent.listRecentEventsWire({
+    variant, since: bounds.since, limit: bounds.limit,
+  })));
 }
 
 // ── helpers ──────────────────────────────────────────────────────

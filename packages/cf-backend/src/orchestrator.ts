@@ -190,6 +190,8 @@ import {
   // The one declaration of the event-variant set, and the one classifier that
   // names how a run ended. Both were hand-mirrored here.
   EVENT_VARIANTS, type RunEndReason,
+  // The one bound an untrusted caller's event-log page passes through.
+  boundEventQuery,
   type WorkMode,
   resolveModelRoute, type ResolvedTurnProfile,
   WORKSPACE_RUN_ID,
@@ -5243,18 +5245,25 @@ export class OrchestratorAgent extends ActorAgent {
    *  formats it through the one row formatter its four sibling list reads go
    *  through, so this answers a bare list of rows and never an envelope. The
    *  operator UI does not read it — the events it shows are the ones drained
-   *  into a turn, carried on that turn's message. */
+   *  into a turn, carried on that turn's message.
+   *
+   *  This is the boundary an UNTRUSTED caller crosses, so `boundEventQuery`
+   *  states the ceiling HERE and not only at the route: the method is on the
+   *  CLI RPC surface gated at `workspace.read`, which reaches the object with
+   *  no route in the path. The old `?? 100` caught null and undefined and
+   *  nothing else, so a caller's `-1` reached SQLite as `LIMIT -1` — no limit
+   *  at all. `EventLog.query` enforces its own invariant underneath. */
   async listRecentEvents(opts?: {
     variant?: string;
     since?: number;
     limit?: number;
   }): Promise<RecentEventRow[]> {
     const parsedVariant = v.safeParse(EventVariantSchema, opts?.variant);
-    const events = this.eventLog.query({
+    const events = this.eventLog.query(boundEventQuery({
       variant: parsedVariant.success ? parsedVariant.output : undefined,
       since: opts?.since,
-      limit: opts?.limit ?? 100,
-    });
+      limit: opts?.limit,
+    }));
     return events.map((e) => ({
       id: e.id,
       trace_id: e.trace_id,
