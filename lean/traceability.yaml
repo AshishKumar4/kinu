@@ -1093,7 +1093,7 @@ requirements:
       - Kinu.Storage.DurableRoot.manifest_fsync_precedes_fence_fsync
     tsRefs:
       - packages/devbox/src/capture/journal/client.ts#JournalDaemonClient.fence
-      - packages/devbox/src/capture/journal/client.ts#captureFromJournalFence
+      - packages/devbox/src/capture/journal/client.ts#readJournalDelta
       - packages/devbox/src/capture/freeze-drain.ts#FreezeSeam
       - packages/devbox/src/capture/freeze-drain.ts#captureFrozenCopy
       - packages/devbox/src/capture/capabilities.ts#decideCaptureMechanism

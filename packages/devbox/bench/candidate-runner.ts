@@ -654,14 +654,16 @@ async function checkpointCandidate(options: CandidateRunOptions): Promise<Candid
     );
   }
   if (fencePublishedHead(control, fence)) return { ok: true, noChange: true };
-  // THE DAEMON SPEAKS v2 NOW: every fence manifest is a DELTA (the O(k) fence
-  // landed 2026-09-02), so the capture is read through `readJournalDelta` —
-  // the manifest proven the fence's own and every staged read held to the
-  // digest the fence recorded — and converted into the partial sealed capture
-  // both codecs merge against the published head it names. A v1 whole-tree
-  // capture is no longer produced by this daemon, and `captureFromJournalFence`
-  // refuses a delta by name, correctly: a delta is the input to an incremental
-  // build against the head it names, never a capture of a whole filesystem.
+  // THE DAEMON SPEAKS v2, AND ONLY v2: `write_manifest_head` in
+  // `bench/journal-daemon/journal-delta.c` is its one manifest writer and it
+  // emits `{"version":2,...`, a baseless fence differing only in
+  // `"base":null`. So the capture is read through `readJournalDelta` — the
+  // manifest proven the fence's own, every staged read held to the digest the
+  // fence recorded and resolved beneath the stage root — and converted into
+  // the sealed capture both codecs consume: partial against the head the delta
+  // names, whole-tree when it names no base because there is no parent to
+  // merge against. A manifest that is not version 2 is refused by
+  // `parseDeltaManifest`, where manifests are parsed.
   const delta = await readJournalDelta(fence);
   try {
     const capture = await captureFromDelta(delta, {

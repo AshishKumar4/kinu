@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,16 +6,12 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 
-import { captureFromJournalFence, JournalDaemonClient, readJournalDelta } from '../src/capture/journal/client';
+import { JournalDaemonClient, readJournalDelta } from '../src/capture/journal/client';
 import type { JournalFence } from '../src/capture/journal/client';
 import { sha256Hex } from '../src/cas/hash';
-import { readCaptureRange, requireAuditedCapture } from '../src/capture/model';
 
 const dirs: string[] = [];
 
-const metadata = () => ({ uid: 1000, gid: 1000, atimeNs: '1', mtimeNs: '2', ctimeNs: '3', xattrs: {} });
-/** What a v2 fence answers with; the client refuses a reply without it. */
-const NO_WORK = { bytesStaged: 0, bytesChunked: 0, chunksHashed: 0, nodesRewritten: 0, wholeFiles: 0 };
 afterEach(async () => await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))));
 
 async function fixture(): Promise<{ dir: string; socket: string; manifest: string; stage: string }> {
@@ -88,102 +84,6 @@ async function recording(socket: string, reply: (request: SentBoundaries) => obj
 }
 
 describe('JournalDaemonClient', () => {
-  test('issues a sealed capture and streams only its requested range', async () => {
-    const { socket, manifest, stage } = await fixture();
-    const bytes = new TextEncoder().encode('hello sealed journal');
-    await mkdir(stage);
-    await writeFile(join(stage, 'a.extent'), bytes);
-    const digest = sha256Hex(bytes);
-    await writeFile(manifest, JSON.stringify({
-      cut: 7, generation: 3, stageRoot: stage,
-      entries: [
-        { path: 'dir', kind: 'dir', mode: 0o755, ino: 1, metadata: metadata() },
-        { path: 'dir/a', kind: 'file', mode: 0o644, ino: 2, metadata: metadata(), content: { kind: 'sealed', size: bytes.byteLength, sourceId: 'a.extent', extents: [{ offset: 0, length: bytes.byteLength, sha256: digest }] } },
-      ],
-    }));
-    const close = await control(socket, (request) => ({ id: request.id, ok: true, cut: 7, generation: 3, manifestPath: manifest, sealWork: NO_WORK }));
-    try {
-      const fence = await new JournalDaemonClient(socket).fence();
-      const capture = await captureFromJournalFence(fence, { captureId: 'capture-7', epoch: '3', baseRevision: '3', stableStageHandle: 'fence-7' });
-      const entry = capture.entries[1]!;
-      expect(requireAuditedCapture(capture).capturedCut.cut).toBe('7');
-      expect(new TextDecoder().decode(await readCaptureRange(capture, entry, 6, 6))).toBe('sealed');
-    } finally {
-      await close();
-    }
-  });
-
-  test('refuses a journal manifest that omits POSIX metadata', async () => {
-    const { socket, manifest, stage } = await fixture();
-    await mkdir(stage);
-    await writeFile(manifest, JSON.stringify({
-      cut: 8, generation: 3, stageRoot: stage,
-      entries: [{ path: 'a', kind: 'file', mode: 0o644, ino: 1, content: { kind: 'sealed', size: 0, sourceId: 'extent', extents: [] } }],
-    }));
-    const close = await control(socket, (request) => ({ id: request.id, ok: true, cut: 8, generation: 3, manifestPath: manifest, sealWork: NO_WORK }));
-    try {
-      await expect(captureFromJournalFence(await new JournalDaemonClient(socket).fence(), {
-        captureId: 'capture-8', epoch: '3', baseRevision: '3', stableStageHandle: 'fence-8',
-      })).rejects.toThrow();
-    } finally {
-      await close();
-    }
-  });
-
-  test('refuses a stage extent changed after its fence manifest', async () => {
-    const { socket, manifest, stage } = await fixture();
-    await mkdir(stage);
-    const original = new TextEncoder().encode('sealed');
-    await writeFile(join(stage, 'extent'), original);
-    await writeFile(manifest, JSON.stringify({
-      cut: 8, generation: 3, stageRoot: stage,
-      entries: [{ path: 'a', kind: 'file', mode: 0o644, ino: 1, metadata: metadata(), content: { kind: 'sealed', size: original.byteLength, sourceId: 'extent', extents: [{ offset: 0, length: original.byteLength, sha256: sha256Hex(original) }] } }],
-    }));
-    const close = await control(socket, (request) => ({ id: request.id, ok: true, cut: 8, generation: 3, manifestPath: manifest, sealWork: NO_WORK }));
-    try {
-      const capture = await captureFromJournalFence(await new JournalDaemonClient(socket).fence(), { captureId: 'capture-8', epoch: '3', baseRevision: '3', stableStageHandle: 'fence-8' });
-      await writeFile(join(stage, 'extent'), 'mutated');
-      await expect(readCaptureRange(capture, capture.entries[0]!, 0, original.byteLength)).rejects.toThrow('integrity verification');
-    } finally {
-      await close();
-    }
-  });
-
-  test('refuses a stage source swapped to a symlink', async () => {
-    const { socket, manifest, stage } = await fixture();
-    await mkdir(stage);
-    const original = new TextEncoder().encode('sealed');
-    await writeFile(join(stage, 'extent'), original);
-    await writeFile(manifest, JSON.stringify({
-      cut: 9, generation: 3, stageRoot: stage,
-      entries: [{ path: 'a', kind: 'file', mode: 0o644, ino: 1, metadata: metadata(), content: { kind: 'sealed', size: original.byteLength, sourceId: 'extent', extents: [{ offset: 0, length: original.byteLength, sha256: sha256Hex(original) }] } }],
-    }));
-    const close = await control(socket, (request) => ({ id: request.id, ok: true, cut: 9, generation: 3, manifestPath: manifest, sealWork: NO_WORK }));
-    try {
-      const capture = await captureFromJournalFence(await new JournalDaemonClient(socket).fence(), { captureId: 'capture-9', epoch: '3', baseRevision: '3', stableStageHandle: 'fence-9' });
-      await rm(join(stage, 'extent'));
-      await symlink('/etc/passwd', join(stage, 'extent'));
-      await expect(readCaptureRange(capture, capture.entries[0]!, 0, original.byteLength)).rejects.toThrow('openat2 refused');
-    } finally {
-      await close();
-    }
-  });
-
-  test('refuses a source path outside the sealed stage', async () => {
-    const { socket, manifest, stage } = await fixture();
-    await mkdir(stage);
-    await writeFile(manifest, JSON.stringify({
-      cut: 2, generation: 1, stageRoot: stage,
-      entries: [{ path: 'a', kind: 'file', mode: 0o644, ino: 1, metadata: metadata(), content: { kind: 'sealed', size: 1, sourceId: '../escape', extents: [{ offset: 0, length: 1, sha256: '0'.repeat(64) }] } }],
-    }));
-    const close = await control(socket, (request) => ({ id: request.id, ok: true, cut: 2, generation: 1, manifestPath: manifest, sealWork: NO_WORK }));
-    try {
-      const capture = await captureFromJournalFence(await new JournalDaemonClient(socket).fence(), { captureId: 'capture-2', epoch: '1', baseRevision: '1', stableStageHandle: 'fence-2' });
-      await expect(readCaptureRange(capture, capture.entries[0]!, 0, 1)).rejects.toThrow('non-relative path');
-    } finally {
-      await close();
-    }
-  });
 
   test('a fence reply without its seal counters is refused', async () => {
     const { socket, manifest } = await fixture();
@@ -255,11 +155,44 @@ describe('the v2 delta manifest', () => {
     await expect(readJournalDelta({ ...fence, cut: 12 })).rejects.toThrow('not the fenced manifest');
   });
 
-  test('is refused by name when read as a whole tree', async () => {
-    const { fence } = await deltaFixture();
-    await expect(captureFromJournalFence(fence, {
-      captureId: 'capture-11', epoch: '2', baseRevision: '2', stableStageHandle: 'fence-11',
-    })).rejects.toThrow('version 2 is a delta');
+  // ── the stage's own boundary, on the reader that ships ───────────────────
+  //
+  // These two cases moved here from the deleted whole-tree reader. They are the
+  // ONLY coverage of the beneath-root discipline `readJournalDelta` documents
+  // ("Paths are resolved beneath the stage root, so a swapped symlink cannot
+  // reach outside it"), and a protection that is documented and untested is the
+  // same shape as a gate that runs but cannot fail. Deleting them with their
+  // old subject would have dropped that coverage while the case count fell and
+  // looked like cleanup.
+
+  test('refuses a stage source swapped to a symlink', async () => {
+    const { fence, stage, bytes } = await deltaFixture();
+    const delta = await readJournalDelta(fence);
+    const entry = delta.manifest.entries[1]!;
+    // The stage is opened at fence time; the swap happens after, which is the
+    // window a hostile or broken container would use.
+    await rm(join(stage, 'src', 'a.txt'));
+    await symlink('/etc/passwd', join(stage, 'src', 'a.txt'));
+
+    await expect(delta.stage.read(entry.path, 0, bytes.byteLength)).rejects.toThrow('openat2 refused');
+  });
+
+  test('refuses a source path outside the sealed stage', async () => {
+    const { fence, stage } = await deltaFixture();
+    const escape = 'src/../../escape';
+    await writeFile(join(stage, '..', 'escape'), 'outside the stage');
+    // A manifest whose own row names a path climbing out of the stage: the
+    // delta names the entry, so the range lookup admits it and the READ is
+    // what must refuse.
+    const manifest = JSON.parse(await readFile(fence.manifestPath, 'utf8'));
+    manifest.entries[1].path = escape;
+    manifest.entries[1].size = 1;
+    manifest.entries[1].dirty = [{ offset: 0, length: 1 }];
+    manifest.entries[1].ranges = [{ offset: 0, length: 1, sha256: '0'.repeat(64) }];
+    await writeFile(fence.manifestPath, JSON.stringify(manifest));
+    const reopened = await readJournalDelta(fence);
+
+    await expect(reopened.stage.read(escape, 0, 1)).rejects.toThrow(/non-relative path|openat2 refused|escapes/);
   });
 });
 

@@ -29,40 +29,16 @@ import { resolve } from 'node:path';
 import * as v from 'valibot';
 import { BeneathRoot } from '../../native-openat2';
 
-import { issueVerifiedJournalCapture, manifestSha256 } from '../model';
 import { sha256Hex } from '../../cas/hash';
 import { parseDeltaManifest } from '../../candidates/merkle-pack/delta';
 import type { BoundaryHandback, DeltaDirtyFile, DeltaManifestV2, DeltaStagedRange } from '../../candidates/merkle-pack/delta';
 import { SealWorkSchema } from '../../durability/contracts';
 import type { SealWork } from '../../durability/contracts';
-import type { AuditedCapture, CapturedCutIdentity, NodeEntry, NodeKind, SealedContentReader } from '../model';
 
 const NonEmptyString = v.pipe(v.string(), v.minLength(1));
 const SafeNumber = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
 const Digest = v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/));
-const ExtentSchema = v.strictObject({ offset: SafeNumber, length: v.pipe(SafeNumber, v.minValue(1)), sha256: Digest });
-const ContentSchema = v.strictObject({ kind: v.literal('sealed'), size: SafeNumber, sourceId: NonEmptyString, extents: v.array(ExtentSchema) });
 const Nanoseconds = v.pipe(v.string(), v.regex(/^(?:0|[1-9]\d*)$/));
-const XattrValue = v.pipe(v.string(), v.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/));
-const PosixMetadataSchema = v.strictObject({
-  uid: SafeNumber,
-  gid: SafeNumber,
-  atimeNs: Nanoseconds,
-  mtimeNs: Nanoseconds,
-  ctimeNs: Nanoseconds,
-  xattrs: v.record(v.string(), XattrValue),
-});
-const EntrySchema = v.strictObject({
-  path: NonEmptyString,
-  kind: v.picklist(['file', 'dir', 'symlink'] as const),
-  mode: SafeNumber,
-  ino: v.pipe(SafeNumber, v.minValue(1)),
-  metadata: PosixMetadataSchema,
-  target: v.optional(NonEmptyString),
-  content: v.optional(ContentSchema),
-});
-const ManifestSchema = v.strictObject({ cut: SafeNumber, generation: SafeNumber, stageRoot: NonEmptyString, entries: v.array(EntrySchema) });
-
 const ControlResponseSchema = v.strictObject({
   id: NonEmptyString,
   ok: v.boolean(),
@@ -106,28 +82,7 @@ export interface JournalFence {
   readonly sealWork: SealWork;
 }
 
-function decodeEntry(entry: v.InferOutput<typeof EntrySchema>): NodeEntry {
-  const kind: NodeKind = entry.kind;
-  if (kind === 'file') {
-    if (!entry.content || entry.target !== undefined) throw new Error(`journal file ${entry.path} has invalid metadata`);
-    return { path: entry.path, kind, mode: entry.mode, ino: entry.ino, metadata: entry.metadata, content: entry.content };
-  }
-  if (kind === 'symlink') {
-    if (entry.content !== undefined || entry.target === undefined) throw new Error(`journal symlink ${entry.path} has invalid metadata`);
-    return { path: entry.path, kind, mode: entry.mode, ino: entry.ino, metadata: entry.metadata, target: entry.target };
-  }
-  if (entry.content !== undefined || entry.target !== undefined) throw new Error(`journal directory ${entry.path} has invalid metadata`);
-  return { path: entry.path, kind, mode: entry.mode, ino: entry.ino, metadata: entry.metadata };
-}
 
-function stagedReader(stageRoot: string): SealedContentReader {
-  const root = new BeneathRoot(resolve(stageRoot));
-  return {
-    async read(sourceId, offset, length) {
-      return root.readRange(sourceId, offset, length);
-    },
-  };
-}
 
 async function request(socketPath: string, body: ControlRequest, signal?: AbortSignal): Promise<ControlResponse> {
   if (signal?.aborted) throw signal.reason;
@@ -293,29 +248,3 @@ export async function readJournalDelta(fence: JournalFence): Promise<JournalDelt
   };
 }
 
-/**
- * Issues an audited capture from a WHOLE-TREE fence manifest.
- *
- * A v2 delta manifest is refused by name here rather than parsed into a
- * partial tree: a delta is the input to an incremental build against the head
- * it names, never a capture of a whole filesystem.
- */
-export async function captureFromJournalFence(fence: JournalFence, identity: CapturedCutIdentity): Promise<AuditedCapture> {
-  const bytes = await readFile(fence.manifestPath);
-  const decoded: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-  const versioned = v.safeParse(v.looseObject({ version: v.optional(v.number()) }), decoded);
-  if (versioned.success && versioned.output.version !== undefined) {
-    throw new Error(`journal manifest version ${versioned.output.version} is a delta; read it with readJournalDelta`);
-  }
-  const manifest = v.parse(ManifestSchema, decoded);
-  if (manifest.cut !== fence.cut || manifest.generation !== fence.generation) throw new Error('journal manifest is not the fenced manifest');
-  const entries = manifest.entries.map(decodeEntry);
-  return issueVerifiedJournalCapture({
-    cut: manifest.cut,
-    generation: manifest.generation,
-    entries,
-    identity,
-    sealedReader: stagedReader(manifest.stageRoot),
-    manifestSha256: manifestSha256({ mechanism: 'mutation-journal', cut: manifest.cut, generation: manifest.generation, entries }),
-  });
-}
