@@ -230,6 +230,18 @@ export interface CandidateControlDump {
   readonly operation: string | null;
 }
 
+/**
+ * One filed failure, as the ledger holds it. `delivered` tells a failure the
+ * host already saw apart from one it never did. Read-only reporting shape.
+ */
+export interface IncidentReasonRow {
+  readonly stage: IncidentStage;
+  readonly reason: string;
+  readonly at: number;
+  readonly attempts: number;
+  readonly delivered: boolean;
+}
+
 /** Durable keys. One namespace, so a host's own keys cannot collide with these
  *  and a reader can tell at a glance which rows belong to the box machinery. */
 const STORAGE_KEY = 'devbox:storage-state';
@@ -2479,6 +2491,23 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       head: parsed.head?.rootEnvelopeId ?? null,
       operation: parsed.operation?.phase ?? null,
     };
+  }
+  /**
+   * Every incident reason this box holds, oldest first, for diagnosis. Totals
+   * say how many failures were filed; only the reasons say what they were.
+   * Bounded by the ledger cap and read-only.
+   */
+  async devboxIncidentReasons(): Promise<readonly IncidentReasonRow[]> {
+    const rows = await this.ctx.storage.list<IncidentRow>({ prefix: INCIDENT_PREFIX });
+    return [...rows.values()]
+      .map((row) => ({
+        stage: row.stage,
+        reason: row.reason,
+        at: row.at,
+        attempts: row.attempts,
+        delivered: row.deliveredAt !== undefined || row.rejectedAt !== undefined,
+      } satisfies IncidentReasonRow))
+      .sort((a, b) => a.at - b.at);
   }
 
   /**
