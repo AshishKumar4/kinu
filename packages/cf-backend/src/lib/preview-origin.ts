@@ -174,19 +174,27 @@ export function isPreviewUrl(value: string, configuredSuffix: string | null = br
 }
 
 /**
- * The sandbox id a preview hostname routes to, or null when the hostname is not
- * a well-formed preview label on the configured suffix.
+ * The three parts a sandbox preview hostname carries, or null when the hostname
+ * is not a well-formed sandbox preview label on the configured suffix.
  *
- * THE SAME ID `proxyToSandbox` RESOLVED, which is the whole requirement: a
- * repair aimed at a different workspace's container would be worse than no
- * repair at all. The SDK segments the label as this regex does, checks the id
- * with `sanitizeSandboxId` — a pure validator that returns the id unchanged —
- * and then calls `getSandbox(ns, id, { normalizeId: true })`, which lowercases.
- * A caller that passes this id to `getSandbox` with the same option therefore
- * addresses the object that answered the request. Hostnames are already
- * lower-case, so the normalization is a no-op either way.
+ * THE SAME SEGMENTATION `proxyToSandbox` PERFORMED, which is the whole
+ * requirement for both readers: the edge gate has to judge the id, port and
+ * token the SDK would resolve, and a stale-preview repair aimed at a different
+ * workspace's container would be worse than no repair at all. The SDK splits
+ * the label as the regex above does, checks the id with `sanitizeSandboxId` —
+ * a pure validator that returns the id unchanged — and then calls
+ * `getSandbox(ns, id, { normalizeId: true })`, which lowercases. A caller that
+ * passes this id to `getSandbox` with the same option therefore addresses the
+ * object that answered the request. Hostnames are already lower-case, so the
+ * normalization is a no-op either way.
  */
-export function previewSandboxIdOf(url: URL, env: PreviewHostEnv): string | null {
+export interface SandboxPreviewLabel {
+  readonly port: number;
+  readonly sandboxId: string;
+  readonly token: string;
+}
+
+export function sandboxPreviewLabelOf(url: URL, env: PreviewHostEnv): SandboxPreviewLabel | null {
   const suffix = previewHostSuffix(env);
   if (!suffix) return null;
   const host = url.hostname.toLowerCase();
@@ -196,7 +204,9 @@ export function previewSandboxIdOf(url: URL, env: PreviewHostEnv): string | null
   if (label.includes('.')) return null;
   const parsed = PREVIEW_HOST_LABEL.exec(label);
   if (parsed === null || !validPort(parsed[1])) return null;
-  return parsed[2];
+  const [, port, sandboxId, token] = parsed;
+  if (port === undefined || sandboxId === undefined || token === undefined) return null;
+  return { port: Number(port), sandboxId, token };
 }
 
 /**

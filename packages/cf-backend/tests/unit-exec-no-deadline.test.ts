@@ -141,7 +141,9 @@ function fakeBox(input: {
     /** True once the process has an exit code, which is the only evidence a
      *  cancellation may be reported on. */
     hasExited: () => exited,
-    handle: adaptCloudflareSandbox(sdk, async () => {}),
+    // `null`: this box exposes no ports, and the lane refuses to mint a preview
+    // URL it cannot publish for the edge to verify.
+    handle: adaptCloudflareSandbox(sdk, async () => {}, null),
   };
 }
 

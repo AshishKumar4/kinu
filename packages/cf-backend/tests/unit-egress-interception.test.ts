@@ -261,9 +261,12 @@ describe('configuration is awaited before the container runs', () => {
     let configured = 0;
     let released: () => void = () => {};
     const gate = new Promise<void>((resolve) => { released = resolve; });
+    // `null`: an exec-only box publishes no previews, and the lane refuses to
+    // mint one it cannot publish — see `adaptCloudflareSandbox`'s exposePort.
     const handle = adaptCloudflareSandbox(
       execOnlyBox(),
       async () => { configured += 1; await gate; },
+      null,
     );
     const both = Promise.all([handle.exec('a'), handle.exec('b')]);
     released();
@@ -276,6 +279,7 @@ describe('configuration is awaited before the container runs', () => {
     const handle = adaptCloudflareSandbox(
       execOnlyBox(),
       async () => { attempts += 1; if (attempts === 1) throw new Error('root unreachable'); },
+      null,
     );
     await expect(handle.exec('a')).rejects.toThrow('root unreachable');
     expect((await handle.exec('a')).stdout).toBe('done');
@@ -297,7 +301,7 @@ describe('configuration is awaited before the container runs', () => {
         listFiles: async () => { order.push('listFiles'); return { files: [] }; },
         deleteFile: async () => { order.push('deleteFile'); return undefined; },
       });
-      const handle = adaptCloudflareSandbox(box, async () => { order.push('configureEgress'); });
+      const handle = adaptCloudflareSandbox(box, async () => { order.push('configureEgress'); }, null);
 
       await handle.readFile('/workspace/a');
       await handle.writeFile('/workspace/a', 'x');

@@ -10,12 +10,26 @@
  * (lib/preview-origin.ts), a failed forward gets a page a user can act on
  * instead of a bare `Proxy routing error`, and a preview whose exposure did not
  * survive a container recycle gets ONE repair.
+ *
+ * AND ONE THING THE SDK CANNOT DO FROM HERE: refuse a hostname nobody minted
+ * before an object exists. `proxyToSandbox` resolves the sandbox id into a
+ * Durable Object stub — the act that creates one — and only then hands the
+ * token to that object to validate. This host is step 1 of the route table,
+ * ahead of authentication, so an anonymous GET to a guessed hostname used to
+ * instantiate a container object and its SQLite, once per guess. So the label
+ * is proven against the exposures this deployment published
+ * (lib/preview-exposures.ts) BEFORE the SDK is handed the request. That record
+ * is a KV projection with no object behind a key: proving a forged label wrong
+ * allocates nothing. The container object still validates the port token and
+ * its runtime activation on every forward — this gate decides only whether the
+ * question is asked at all.
  */
 
 import { getSandbox, proxyToSandbox } from "@cloudflare/sandbox";
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { escapeHtml } from "./lib/http";
-import { containPreviewResponse, previewSandboxIdOf } from "./lib/preview-origin";
+import { containPreviewResponse, sandboxPreviewLabelOf } from "./lib/preview-origin";
+import { isKinuSandboxId, sandboxPreviewExposed } from "./lib/preview-exposures";
 import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 
@@ -48,21 +62,53 @@ export const SDK_STALE_PREVIEW = {
   }),
 } as const;
 
+/** One refusal shape for every hostname this host will not serve, so a forged
+ *  label for a real workspace and one for a workspace that never existed are
+ *  the same answer and neither is an existence oracle. */
+function refusePreview(code: string, error: string, status: number): Response {
+  return containPreviewResponse(new Response(
+    JSON.stringify({ error, code }),
+    { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } },
+  ));
+}
+
 /**
  * Serve a request that arrived on the preview host. Always answers: a hostname
- * that does not resolve to an exposed port gets a 404, never the app.
+ * this deployment did not publish as an exposed port gets a 404, never the app,
+ * and never a Durable Object.
  */
 export async function servePreviewRequest(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const label = sandboxPreviewLabelOf(url, env);
+  // The whole preview subtree is claimed by this host, so most of what arrives
+  // here is not a preview label at all: a bare guess, a scanner, a mistyped
+  // hostname. Refused on shape, before any lookup.
+  if (label === null || !isKinuSandboxId(label.sandboxId)) {
+    return refusePreview('NOT_A_PREVIEW', 'This host serves sandbox previews only.', 404);
+  }
+  // Fail closed. Without the projection there is nothing to prove the label
+  // against, and an unprovable label is exactly what must not reach the SDK.
+  if (!env.AUTH_KV) {
+    return refusePreview('PREVIEW_UNAVAILABLE', 'Preview routing is unavailable.', 503);
+  }
+  if (!(await sandboxPreviewExposed(env.AUTH_KV, label))) {
+    diagnostics.event('preview.unpublished_label', { sandboxId: label.sandboxId, port: label.port });
+    return refusePreview(
+      'PREVIEW_NOT_EXPOSED',
+      'This preview is not exposed. Re-expose the port to publish it again.',
+      404,
+    );
+  }
+
   const forward = (): Promise<Response | null> => proxyToSandbox(new Request(request, {
     headers: sanitizePreviewRequestHeaders(request.headers),
   }), env);
 
   let response = await forward();
+  // A published label the SDK will not route is a disagreement between the
+  // projection and the object's own state, not a guess: the same refusal.
   if (!response) {
-    return containPreviewResponse(new Response(
-      JSON.stringify({ error: 'This host serves sandbox previews only.', code: 'NOT_A_PREVIEW' }),
-      { status: 404, headers: { 'content-type': 'application/json' } },
-    ));
+    return refusePreview('NOT_A_PREVIEW', 'This host serves sandbox previews only.', 404);
   }
 
   // ONE repair, then ONE re-issue. The count is structural rather than a retry
@@ -73,14 +119,14 @@ export async function servePreviewRequest(request: Request, env: Env): Promise<R
   // (a server that no longer listens on the port is the usual reason), which is
   // the box's problem to report and not something more attempts reach.
   if (request.method === 'GET' && await isStalePreview(response)) {
-    await repairStalePreview(request, env);
+    await repairStalePreview(label.sandboxId, env);
     const reissued = await forward();
     if (reissued !== null) response = reissued;
   }
 
   if (response.status === SDK_FORWARD_FAILURE.status
     && (await response.clone().text()) === SDK_FORWARD_FAILURE.body) {
-    return renderNotReadyPage(new URL(request.url).hostname);
+    return renderNotReadyPage(url.hostname);
   }
 
   return containPreviewResponse(response);
@@ -107,9 +153,8 @@ async function isStalePreview(response: Response): Promise<boolean> {
  * answer this visitor gets is the stale 410 either way. Turning a stale preview
  * into a 500 would lose the classification the caller needs.
  */
-async function repairStalePreview(request: Request, env: Env): Promise<void> {
-  const sandboxId = previewSandboxIdOf(new URL(request.url), env);
-  if (sandboxId === null || !env.Sandbox) return;
+async function repairStalePreview(sandboxId: string, env: Env): Promise<void> {
+  if (!env.Sandbox) return;
   try {
     // {@link SANDBOX_TRANSPORT}, the one value every Kinu getSandbox call site
     // passes: the SDK persists the transport and drops in-flight requests when

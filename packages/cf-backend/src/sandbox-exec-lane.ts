@@ -35,6 +35,21 @@
 import type { Process } from "@cloudflare/sandbox";
 import { decodeJsonValue, WORKSPACE_BACKUP_DIR, type SandboxHandle } from "@kinu.run/core";
 import type { KinuSandbox } from "./kinu-sandbox";
+import { sandboxPreviewLabelOf } from "./lib/preview-origin";
+import type { SandboxPreviewExposures } from "./lib/preview-exposures";
+
+/**
+ * Why an exposure is refused when this deployment cannot publish it.
+ *
+ * `AUTH_KV` is where the published exposures live, and the edge proves every
+ * preview hostname against them before a container object is resolved. Without
+ * the binding a minted URL would be refused at the edge on arrival, so the
+ * honest answer is to refuse the exposure and say why, rather than hand the
+ * agent a link that cannot work.
+ */
+const PREVIEWS_UNPUBLISHABLE =
+  'Port exposure is unavailable: this deployment has no AUTH_KV binding, so a '
+  + 'preview URL could not be published for the edge to verify.';
 
 /**
  * The container control-plane transport EVERY `getSandbox` call site passes, and
@@ -202,6 +217,7 @@ async function execWithoutDeadline(
 export function adaptCloudflareSandbox(
   handle: KinuSandbox,
   configureEgress: () => Promise<void>,
+  previews: SandboxPreviewExposures | null,
 ): SandboxHandle {
   // Memoized on the PROMISE, not a boolean: two concurrent first operations must
   // both wait for the same configuration rather than one of them racing past a
@@ -238,9 +254,48 @@ export function adaptCloudflareSandbox(
       onContainer(() => jsonResultOrVoid(handle.writeFile(path, content, opts))),
     listFiles: (path, opts) => onContainer(() => handle.listFiles(path, opts)),
     deleteFile: (path) => onContainer(() => jsonResultOrVoid(handle.deleteFile(path))),
-    exposePort: (port, opts) => onContainer(() => handle.exposePort(port, opts)),
-    unexposePort: (port) => onContainer(() => jsonResultOrVoid(handle.unexposePort(port))),
-    getExposedPorts: (hostname) => onContainer(() => handle.getExposedPorts(hostname)),
+    // EVERY PREVIEW URL THIS LANE HANDS OUT IS PUBLISHED FIRST, because the
+    // edge proves a preview hostname against that record before it lets the
+    // SDK resolve a container object (`preview-proxy.ts`). The token is read
+    // back out of the URL the SDK just minted rather than out of the options,
+    // so what is recorded is what was actually handed to the caller, whoever
+    // minted it. A URL this lane cannot record is a URL the edge would refuse,
+    // so it is a failure here instead of a dead link the agent hands to its
+    // owner.
+    exposePort: async (port, opts) => {
+      if (previews === null) throw new Error(PREVIEWS_UNPUBLISHABLE);
+      const exposed = await onContainer(() => handle.exposePort(port, opts));
+      const label = sandboxPreviewLabelOf(new URL(exposed.url), { PREVIEW_HOST_SUFFIX: opts.hostname });
+      if (label === null || label.port !== port) {
+        throw new Error(`the SDK minted a preview URL this deployment cannot publish: ${exposed.url}`);
+      }
+      await previews.publish(port, label.token);
+      return exposed;
+    },
+    // Withdrawn BEFORE the container object is asked to revoke: the safe
+    // direction is a live port nothing can reach, never a revoked port the edge
+    // still admits, so a failure in the second half leaves the first standing.
+    unexposePort: async (port) => {
+      await previews?.withdraw(port);
+      return await onContainer(() => jsonResultOrVoid(handle.unexposePort(port)));
+    },
+    // The one authenticated path that OBSERVES exposures rather than making
+    // them: the Ports surface and the agent's own listing. Re-publishing what
+    // the container still reports is what keeps a long-lived preview from
+    // ageing out of the record, and what carries an exposure minted before this
+    // record existed into it. Refresh writes only when the record is missing or
+    // halfway through its life, so a polling panel writes nothing.
+    getExposedPorts: async (hostname) => {
+      const rows = await onContainer(() => handle.getExposedPorts(hostname));
+      if (previews !== null) {
+        await Promise.all(rows.map(async (row) => {
+          const label = sandboxPreviewLabelOf(new URL(row.url), { PREVIEW_HOST_SUFFIX: hostname });
+          if (label === null || label.port !== row.port) return;
+          await previews.refresh(row.port, label.token);
+        }));
+      }
+      return rows;
+    },
     startSupervisedProcess: (command, opts) =>
       onContainer(() => handle.startSupervised(command, opts?.cwd)),
     stopSupervisedProcess: (processId) => onContainer(() => handle.stopSupervised(processId)),
@@ -254,6 +309,11 @@ export function adaptCloudflareSandbox(
     // token has to be mintable BEFORE the exposure it names. The owner puts it on
     // the port's claim, which is where that ordering belongs.
     portToken: (port, name) => handle.portToken(port, name),
-    notePortRemoved: (port) => handle.notePortRemoved(port).then(() => undefined),
+    // The removal of a port's row is also the removal of its published
+    // exposure: the URL built on that token is not coming back.
+    notePortRemoved: async (port) => {
+      await previews?.withdraw(port);
+      await handle.notePortRemoved(port);
+    },
   };
 }

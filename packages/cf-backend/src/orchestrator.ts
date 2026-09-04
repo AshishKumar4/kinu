@@ -239,6 +239,7 @@ import {
   type SandboxLifecycleFailureResult,
 } from "./sandbox-lifecycle";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
+import { sandboxIdForWorkspace, sandboxPreviewExposures } from "./lib/preview-exposures";
 import {
   terminalEffect, keyedScope, declareTerminalRoster,
   type OwedEffect, type TerminalEffectTable, type TerminalTurnParts,
@@ -3660,11 +3661,23 @@ export class OrchestratorAgent extends ActorAgent {
     if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new Error('invalid expected owner user id');
     const ownerUserId = this.getOwnerUserId();
     if (ownerUserId !== expectedOwnerUserId) throw new Error('Agent owner mismatch; refusing to destroy.');
+    // FIRST, and before the container object's own token store is deleted with
+    // it: every preview URL this workspace published stops resolving at the
+    // edge. Without this, a URL somebody still holds — chat history, a
+    // screenshot, a bookmark — would prove an exposure whose object no longer
+    // exists, and answering it would CREATE a fresh empty container object.
+    // One write, no enumeration: the watermark outranks every record published
+    // before now (lib/preview-exposures.ts).
+    if (this.env.AUTH_KV) {
+      await sandboxPreviewExposures(
+        this.env.AUTH_KV, sandboxIdForWorkspace(this.name),
+      ).revokeAll();
+    }
     if (this.env.Sandbox) {
       // {@link SANDBOX_TRANSPORT} — the SDK drops in-flight requests if the
       // transport changes between calls on one sandbox, so the constant is the
       // agreement. The measured reasoning for `rpc` lives on the constant.
-      const sb = getSandbox(this.env.Sandbox, `kinu-${this.name}`, {
+      const sb = getSandbox(this.env.Sandbox, sandboxIdForWorkspace(this.name), {
         normalizeId: true, transport: SANDBOX_TRANSPORT,
       });
       // Before destroy(): the container object owns its /workspace snapshot, and

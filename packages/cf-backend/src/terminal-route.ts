@@ -37,6 +37,7 @@ import { err, json } from "./lib/http";
 import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
 import { terminalLane } from "./lib/terminal-lane";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
+import { sandboxIdForWorkspace } from "./lib/preview-exposures";
 
 /**
  * The PTY entry points the SDK's client proxy adds around the container stub.
@@ -267,7 +268,7 @@ export async function handleTerminalRequest(
   // through the same proxy's fall-through to the stub — which is how
   // `runtime.ts` already calls `configureEgress`. The narrowing is done here, at
   // the one acquisition point, so every call site below is type-checked.
-  const sandbox = getSandbox(env.Sandbox, `kinu-${agentName}`, {
+  const sandbox = getSandbox(env.Sandbox, sandboxIdForWorkspace(agentName), {
     normalizeId: true,
     transport: SANDBOX_TRANSPORT,
   }) as KinuSandbox & SandboxPty;

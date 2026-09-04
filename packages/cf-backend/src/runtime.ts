@@ -59,6 +59,7 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
 import { adaptCloudflareSandbox, SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 import { previewHostSuffix } from "./lib/preview-origin";
+import { sandboxIdForWorkspace, sandboxPreviewExposures } from "./lib/preview-exposures";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
 import { generateText, type LanguageModelUsage } from "ai";
@@ -531,7 +532,7 @@ export function createCFRuntime(
   // builds preview URLs on — `<port>-<sandbox>-<token>.<suffix>`, routed back
   // by preview-proxy.ts. `sandboxId` is the stable DO key those URLs carry.
   const previewSuffix = previewHostSuffix(env) ?? undefined;
-  const sandboxId = `kinu-${actor.workspaceName}`;
+  const sandboxId = sandboxIdForWorkspace(actor.workspaceName);
   let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox) {
     try {
@@ -590,7 +591,13 @@ export function createCFRuntime(
           vault: await listOwnerEgressVault(env, actor),
           grants: memoryConfig.getShellApprovalGrants(),
         }));
-      });
+      },
+      // Where this box's published previews live. `AUTH_KV` is the Worker's own
+      // store, so the edge can prove a preview hostname without asking any
+      // per-name Durable Object — asking the object would create the object the
+      // question is about. Absent binding, port exposure refuses rather than
+      // minting a URL the edge would turn away.
+      env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null);
       sandboxHandle = handle;
       // No restore wrapper here, deliberately. Restoring /workspace is the
       // container's own affair and happens in KinuSandbox.onStart, inside the

@@ -88,6 +88,7 @@
   "movable packages/cf-backend/src/lib/kv.ts",
   "movable packages/cf-backend/src/lib/nimbus-preview-host.ts",
   "movable packages/cf-backend/src/lib/orchestrator-wire.ts",
+  "movable packages/cf-backend/src/lib/preview-exposures.ts",
   "movable packages/cf-backend/src/lib/preview-origin.ts",
   "movable packages/cf-backend/src/lib/preview-ports.ts",
   "movable packages/cf-backend/src/lib/preview-request.ts",

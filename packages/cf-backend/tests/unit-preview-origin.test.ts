@@ -29,6 +29,9 @@ import {
   WORKSPACE_PREVIEW_PATH,
 } from '../src/nimbus-route';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { makeKv } from './helpers/kv';
+import { sandboxPreviewExposures } from '../src/lib/preview-exposures';
+import type { KvStore } from '../src/lib/kv';
 
 // The SDK's entry point pulls in `cloudflare:workers`, which only exists inside
 // workerd. proxyToSandbox is the seam the Worker delegates preview routing to,
@@ -92,10 +95,30 @@ const source = (path: string): string => readFileSync(join(root, path), 'utf8');
 
 const APP = 'https://kinu.example.com';
 const SUFFIX = 'previews.example';
-const PREVIEW_HOST = `8080-kinu-hello-p8080_ab12cd34.${SUFFIX}`;
+/** The three parts of one exposed port, named because both the hostname under
+ *  test and the published record are built from them. */
+const PREVIEW_SANDBOX_ID = 'kinu-hello';
+const PREVIEW_PORT = 8080;
+const PREVIEW_TOKEN = 'p8080_ab12cd34';
+const PREVIEW_HOST = `${String(PREVIEW_PORT)}-${PREVIEW_SANDBOX_ID}-${PREVIEW_TOKEN}.${SUFFIX}`;
 const PREVIEW_URL = `https://${PREVIEW_HOST}/`;
 const OWNER = '0123456789abcdef0123456789abcdef';
+
+/**
+ * The exposures this deployment has published.
+ *
+ * The rail proves every preview hostname against this record before the SDK may
+ * resolve a container object, so a suite that forwards has to publish the port
+ * it forwards for — through the real writer, exactly as the workspace's own
+ * executor lane does when it exposes one. The refusal directions (a label
+ * nobody minted, a guessed token, a withdrawn or revoked exposure) are proven
+ * end to end against the real SDK in `unit-preview-forgery.test.ts`.
+ */
+const PREVIEW_STORE = makeKv();
+await sandboxPreviewExposures(PREVIEW_STORE, PREVIEW_SANDBOX_ID).publish(PREVIEW_PORT, PREVIEW_TOKEN);
+
 const ENV = {
+  AUTH_KV: PREVIEW_STORE,
   CLI_PUBLIC_ORIGIN: APP,
   PREVIEW_HOST_SUFFIX: SUFFIX,
   CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
@@ -112,6 +135,9 @@ interface PreviewNimbusStub {
 }
 
 interface PreviewTestBindings {
+  /** Where the published exposures live. Absent in the one case that proves the
+   *  rail fails closed without it. */
+  AUTH_KV?: KvStore;
   CLI_PUBLIC_ORIGIN?: string;
   PREVIEW_HOST_SUFFIX?: string;
   CREDENTIAL_ENCRYPTION_KEY?: string;
@@ -355,13 +381,28 @@ describe('serving the preview host', () => {
     expect(await res.json()).toMatchObject({ code: 'NOT_A_PREVIEW' });
   });
 
-  test('the SDK owns token validation, so a bad token never reaches here', async () => {
-    // proxyToSandbox forwards to the Durable Object, which checks the port's
-    // token before touching the container and answers 404 INVALID_TOKEN.
+  test('an unpublished label never reaches the SDK at all', async () => {
+    // The label is well-formed and names a real container; what it does not
+    // name is an exposure this deployment published. `sdkForwards` is the whole
+    // assertion: `proxyToSandbox` is where a Durable Object gets resolved, so
+    // not calling it is what makes a guess cost nothing.
+    const res = await serve(`https://8080-${PREVIEW_SANDBOX_ID}-p8080_forged1.${SUFFIX}/`, null);
+    expect(sdkForwards).toBe(0);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: 'PREVIEW_NOT_EXPOSED' });
+  });
+
+  test('a published label still gets the object\'s own verdict, unchanged', async () => {
+    // The two gates are independent, and this is the case where they disagree:
+    // the exposure is published, and the container object nevertheless refuses
+    // the token (its own store is the authority — a port unexposed inside the
+    // object, or a record this deployment has not caught up with). The object's
+    // answer is passed through rather than reinterpreted.
     const res = await serve(PREVIEW_URL, new Response(
       JSON.stringify({ error: 'Access denied', code: 'INVALID_TOKEN' }),
       { status: 404, headers: { 'content-type': 'application/json' } },
     ));
+    expect(sdkForwards).toBe(1);
     expect(res.status).toBe(404);
     expect(await res.json()).toMatchObject({ code: 'INVALID_TOKEN' });
   });
