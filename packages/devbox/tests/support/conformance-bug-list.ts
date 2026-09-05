@@ -26,7 +26,11 @@ export interface KnownRed {
  * page-in and eviction work. On 2026-09-05 `snapshot-chain`/6.12 cleared and
  * `snapshot-chain`/6.14 and 6.15 moved to the arm's own structural refusal:
  * the format archives the whole changed inode, and the measurement is in the
- * arm's declaration.
+ * arm's declaration. Later on 2026-09-05 the bounded-layers arm began to
+ * fence through `captureFromJournalDelta` as the deployed runner does, and
+ * its 6.12, 6.14, 6.15 and 6.21 rows cleared; the modeled daemon began to
+ * key its dirty set and boundary map by inode as the C daemon does, and the
+ * `merkle-pack`/6.14 row below appeared.
  */
 export const KNOWN_RED: readonly KnownRed[] = [
   {
@@ -34,18 +38,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     cell: '6.12',
     since: '2026-09-02',
     reason: "bytesStaged 823296 > 2k + 4c for k=4 KiB; nodesRewritten 206 > p(d+2) = 3; objectsPut 5 > ceil(k/P)+2 = 3; seal.bytesStaged: n gives 823296, 10n gives 8196096; seal.bytesChunked: n gives 823296, 10n gives 8196096; seal.nodesRewritten: n gives 206, 10n gives 2034; publish.bytesPut: n gives 64302, 10n gives 565706",
-  },
-  {
-    arm: 'bounded-layers',
-    cell: '6.12',
-    since: '2026-09-02',
-    reason: "bytesStaged 823296 > 2k + 4c for k=4 KiB; nodesRewritten 206 > p(d+2) = 3; objectsPut 5 > ceil(k/P)+2 = 3; seal.bytesStaged: n gives 823296, 10n gives 8196096; seal.bytesChunked: n gives 823296, 10n gives 8196096; seal.nodesRewritten: n gives 206, 10n gives 2034; publish.bytesPut: n gives 77016, 10n gives 707021; restore.totalRemoteOps: n gives 410, 10n gives 4010",
-  },
-  {
-    arm: 'bounded-layers',
-    cell: '6.14',
-    since: '2026-09-03',
-    reason: "wake made 5 remote ops; O(1) is 3 (the lane-4 lazy restore brought this from 266 to 5: the v1 control plane's attach-time verifyObject on rootObject and closureObject, plus openBoundedLayers' own root-plus-one-base-layer read, floor at 4; the 64 KiB write chunked and put bytes both now pass. closureObject verification is GC bookkeeping integrity, not the read path lazy restore covers, so removing it is out of this lane's scope)",
   },
   {
     arm: 'r2fs',
@@ -58,12 +50,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     cell: '6.15',
     since: '2026-09-02',
     reason: "bytesPut 93874582 > 4 × 64 dirty pages × 16384 = 4194304",
-  },
-  {
-    arm: 'bounded-layers',
-    cell: '6.15',
-    since: '2026-09-02',
-    reason: "bytesPut 26798013 > 4 × 64 dirty pages × 16384 = 4194304",
   },
   {
     arm: 'r2fs',
@@ -84,10 +70,10 @@ export const KNOWN_RED: readonly KnownRed[] = [
     reason: "64 KiB backup bytesPut 2934023 at 10,000 files against 411000 at 1,000: the commit rewrites the tree manifest, so a fixed change puts bytes that grow with the tree",
   },
   {
-    arm: 'bounded-layers',
-    cell: '6.21',
+    arm: 'merkle-pack',
+    cell: '6.14',
     since: '2026-09-05',
-    reason: "64 KiB backup bytesPut 3339214 at 10,000 files against 393602 at 1,000 (6840475 against 744860 before the spine closure): the conformance arm still captures and chunks the whole tree at every checkpoint (wholeTreeSeal); restore ops hold at 4 and 4. The codec's dirty-window overlay and spine closure are in; the arm's fence-driven partial capture and boundary hand-back are not",
+    reason: "the 64 KiB in-place commit after the wake did not commit: 'A generation cannot retire a pack it adds'. The daemon's boundary map is empty after a container replacement and the v2 sidecar's attach hands it no file rows (bench/sidecar/core.ts, `files: []`), so the first write after a wake stages the 64 MiB file whole; the v2 build re-packs it into packs the parent already holds and the envelope names them as both added and retired. Until 2026-09-05 the modeled daemon kept a path-keyed map across the replacement and credited the windows",
   },
   {
     arm: 'merkle-pack',

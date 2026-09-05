@@ -35,7 +35,7 @@ import type { BoundaryHandback, DeltaDirtyFile, DeltaManifestV2, DeltaStagedRang
 import { SealWorkSchema } from '../../durability/contracts';
 import type { SealWork } from '../../durability/contracts';
 import { issueVerifiedJournalCapture, manifestSha256 } from '../model';
-import type { AuditedCapture, Capture, NodeEntry, PosixMetadata, SealedContent } from '../model';
+import type { AuditedCapture, Capture, NodeEntry, PosixMetadata, SealedContent, StructuralOp } from '../model';
 
 const NonEmptyString = v.pipe(v.string(), v.minLength(1));
 const SafeNumber = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
@@ -252,22 +252,70 @@ export async function readJournalDelta(fence: JournalFence): Promise<JournalDelt
 
 
 /**
+ * One file row's content. A row a partial fence staged as windows carries its
+ * `dirty` ranges, so a builder re-chunks only those and takes the rest from
+ * the parent; a row staged whole, and every row of a first fence, carries none
+ * and its extents are the file.
+ */
+function sealedRowContent(row: DeltaDirtyFile, partial: boolean): SealedContent {
+  const extents = row.ranges.map((range) => ({ offset: range.offset, length: range.length, sha256: range.sha256 }));
+  if (partial && !row.whole) {
+    return {
+      kind: 'sealed',
+      size: row.size,
+      sourceId: row.path,
+      extents,
+      dirty: row.dirty.map((range) => ({ offset: range.offset, length: range.length })),
+    };
+  }
+  return { kind: 'sealed', size: row.size, sourceId: row.path, extents };
+}
+
+/**
+ * The structural ops of one delta, in the capture model's four verbs. A failed
+ * op (`result < 0`) changed nothing; a write is a dirty range and not an op;
+ * truncates and attribute changes touch bytes and stat, never names. The
+ * daemon's `argument` carries the rename destination and the link SOURCE
+ * (`journal-daemon.c`, `pass_rename` and `pass_link`).
+ */
+function structuralOps(manifest: DeltaManifestV2): StructuralOp[] {
+  const ops: StructuralOp[] = [];
+  for (const op of manifest.metadataOps) {
+    if (op.result < 0) continue;
+    switch (op.op) {
+      case 'create': case 'mkdir': case 'mknod': case 'symlink':
+        ops.push({ op: 'create', path: op.path });
+        break;
+      case 'unlink': case 'rmdir':
+        ops.push({ op: 'remove', path: op.path });
+        break;
+      case 'rename':
+        ops.push({ op: 'rename', from: op.path, to: op.argument });
+        break;
+      case 'link':
+        ops.push({ op: 'link', from: op.argument, to: op.path });
+        break;
+      default:
+        break;
+    }
+  }
+  return ops;
+}
+
+/**
  * One v2 delta manifest as the PARTIAL sealed capture both v1 codecs merge.
  *
  * The entries are the delta's own rows — every touched path plus its
  * ancestors, which is exactly the consistent partial tree the capture model's
  * partial rule demands — with file content read from the delta's stage, where
  * every read is held to the digest the fence recorded for exactly those bytes.
- * A row the fence staged as windows (`whole` false) carries its `dirty`
- * ranges, so a builder re-chunks only those and takes the rest from the
- * parent; a row staged whole carries none and its extents are the file. The
- * removals are the WAL's own structural deletions (unlink/rmdir, and the old
- * name of a rename), which is what the daemon's `removed` semantics state.
+ * The structural ops are the WAL's own, in order, so the merge learns what
+ * was removed and where a renamed or linked inode came from.
  *
  * A delta with no base is a FIRST fence (no published head to build against):
  * its rows are the whole tree as the daemon sees it, so it publishes as a
- * whole-tree capture — `partial: false`, which also carries no `removed`,
- * because there is no parent state to remove from.
+ * whole-tree capture — `partial: false`, which also carries no ops, because
+ * there is no parent state to relate them to.
  */
 export function captureFromJournalDelta(
   delta: JournalDelta,
@@ -294,22 +342,9 @@ export function captureFromJournalDelta(
       entries.push({ path: row.path, kind: 'dir', mode: row.mode, ino: Number(row.ino), metadata });
       continue;
     }
-    const extents = row.ranges.map((range) => ({ offset: range.offset, length: range.length, sha256: range.sha256 }));
-    const sealed: SealedContent = partial && !row.whole
-      ? { kind: 'sealed', size: row.size, sourceId: row.path, extents, dirty: row.dirty.map((range) => ({ offset: range.offset, length: range.length })) }
-      : { kind: 'sealed', size: row.size, sourceId: row.path, extents };
-    entries.push({ path: row.path, kind: 'file', mode: row.mode, ino: Number(row.ino), metadata, content: sealed });
-  }
-  // THE REMOVALS the WAL recorded: unlink, rmdir, and a rename's old name. A
-  // failed op (`result < 0`) removed nothing, and non-structural ops touch
-  // only what their own rows state.
-  const removed: string[] = [];
-  if (partial) {
-    for (const op of manifest.metadataOps) {
-      if (op.result < 0) continue;
-      if (op.op === 'unlink' || op.op === 'rmdir') removed.push(op.path);
-      if (op.op === 'rename') removed.push(op.path);
-    }
+    entries.push({
+      path: row.path, kind: 'file', mode: row.mode, ino: Number(row.ino), metadata, content: sealedRowContent(row, partial),
+    });
   }
   const capture: Capture = {
     mechanism: 'mutation-journal',
@@ -327,6 +362,6 @@ export function captureFromJournalDelta(
       read: async (sourceId, offset, length) => await delta.stage.read(sourceId, offset, length),
     },
     partial,
-    removed: partial ? removed : [],
+    structural: partial ? structuralOps(manifest) : [],
   });
 }

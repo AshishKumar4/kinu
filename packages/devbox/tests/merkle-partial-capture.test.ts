@@ -78,7 +78,7 @@ function sealedAudited(
   entries: readonly NodeEntry[],
   sources: ReadonlyMap<string, Uint8Array>,
   cut = '4096',
-  partial: { partial?: boolean; removed?: readonly string[] } = {},
+  partial: { partial?: boolean } = {},
 ): ReturnType<typeof issueVerifiedJournalCapture> {
   const journalEntries = withJournalMetadata(entries);
   const cutNumber = Number(cut);
@@ -102,7 +102,6 @@ function sealedAudited(
       },
     },
     partial: partial.partial === true,
-    removed: partial.removed,
   });
 }
 

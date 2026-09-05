@@ -9,14 +9,20 @@ import * as v from 'valibot';
 
 import {
   beginCandidateOperation,
-  candidateRunControl,
   finalizeCandidateOperation,
   settleCandidateNoChange,
+  settleCandidateOperation,
 } from '../src/candidates/control';
 import { sha256Hex } from '../src/cas/hash';
 import { MutationLog, prefixState, toCapturedCut } from '../src/capture/model';
 import type { AuditedCapture, Capture } from '../src/capture/model';
-import type { CandidateRunControlV1, PayloadGrant, RangeReadIntent, UploadIntent } from '../src/durability/contracts';
+import type {
+  CandidateRunControlV1,
+  ImmutableObjectRef,
+  PayloadGrant,
+  RangeReadIntent,
+  UploadIntent,
+} from '../src/durability/contracts';
 import {
   CandidateCaptureUnavailable,
   CandidateFenceRefused,
@@ -88,10 +94,7 @@ class Host {
       bootId: 'boot-1',
       store: this.control,
       envelopes: this.envelopes,
-      verifyObject: async (ref) => {
-        const facts = await stat(join(this.store, ref.key));
-        if (String(facts.size) !== ref.byteLength) throw new Error(`candidate object metadata mismatches ${ref.key}`);
-      },
+      verifyObject: this.#verifyObject,
     });
   }
 
@@ -101,10 +104,7 @@ class Host {
       boxId: this.boxId,
       store: this.control,
       envelopes: this.envelopes,
-      verifyObject: async (ref) => {
-        const facts = await stat(join(this.store, ref.key));
-        if (String(facts.size) !== ref.byteLength) throw new Error(`candidate object metadata mismatches ${ref.key}`);
-      },
+      verifyObject: this.#verifyObject,
     });
   }
 
@@ -116,8 +116,17 @@ class Host {
   }
 
   async restoreControl(): Promise<CandidateRunControlV1> {
-    return await candidateRunControl(this.control, this.envelopes);
+    return await settleCandidateOperation({
+      store: this.control,
+      envelopes: this.envelopes,
+      verifyObject: this.#verifyObject,
+    });
   }
+
+  readonly #verifyObject = async (ref: ImmutableObjectRef): Promise<void> => {
+    const facts = await stat(join(this.store, ref.key));
+    if (String(facts.size) !== ref.byteLength) throw new Error(`candidate object metadata mismatches ${ref.key}`);
+  };
 }
 
 function transferringOperation(control: CandidateRunControlV1) {
@@ -909,6 +918,8 @@ describe('candidate container runner', () => {
       await writeFile(join(firstStage, 'pkg/kept.bin'), keptBytes);
       const changedBytes = enc.encode('generation one');
       await writeFile(join(firstStage, 'pkg/changed.bin'), changedBytes);
+      const doomedBytes = enc.encode('to be removed');
+      await writeFile(join(firstStage, 'pkg/doomed.bin'), doomedBytes);
       const firstManifest = join(place.journal, 'fence-c1-g1.json');
       await writeFile(firstManifest, JSON.stringify({
         version: 2,
@@ -920,6 +931,7 @@ describe('candidate container runner', () => {
           deltaDir('pkg'),
           deltaFile('pkg/kept.bin', keptBytes),
           deltaFile('pkg/changed.bin', changedBytes),
+          deltaFile('pkg/doomed.bin', doomedBytes),
         ],
         metadataOps: [],
         sealWork: FENCE_SEAL_WORK,
@@ -948,15 +960,16 @@ describe('candidate container runner', () => {
         if (head === null || head === undefined) throw new Error('the first checkpoint published no head');
 
         // SECOND FENCE: a real v2 delta — base names the published head, only
-        // the touched path appears, and the digest of every staged byte is the
-        // fence's own record.
+        // the touched paths appear, and the digest of every staged byte is the
+        // fence's own record. The unlinked file has no row: the daemon writes
+        // a row for a path present at the cut and nothing else
+        // (`journal-delta.c`, `stat_touched`), so its removal is the op alone.
         await stopJournal();
         const secondStage = join(place.journal, 'stage-g2-c2');
         await mkdir(secondStage, { recursive: true });
         const nextBytes = enc.encode('generation two');
         await mkdir(join(secondStage, 'pkg'), { recursive: true });
         await writeFile(join(secondStage, 'pkg/changed.bin'), nextBytes);
-        await writeFile(join(secondStage, 'pkg/doomed.bin'), enc.encode('to be removed'));
         const secondManifest = join(place.journal, 'fence-c2-g2.json');
         await writeFile(secondManifest, JSON.stringify({
           version: 2,
@@ -967,7 +980,6 @@ describe('candidate container runner', () => {
           entries: [
             deltaDir('pkg'),
             deltaFile('pkg/changed.bin', nextBytes),
-            deltaFile('pkg/doomed.bin', enc.encode('to be removed')),
           ],
           metadataOps: [
             { sequence: 1, op: 'unlink', path: 'pkg/doomed.bin', argument: '', result: 0 },

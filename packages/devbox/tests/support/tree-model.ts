@@ -538,6 +538,24 @@ export class LiveTree {
     this.#place(path, inode);
   }
 
+  /** `rename(2)`: `from` and everything beneath it takes the name `to`, the
+   *  inodes unchanged, so a write before the rename still names them. */
+  rename(from: string, to: string): void {
+    const moved = [...this.#paths.keys()].filter((path) => path === from || path.startsWith(`${from}/`));
+    if (moved.length === 0) throw new Error(`rename: no node at ${from}`);
+    const inodes = moved.map((path) => this.#paths.get(path)!);
+    for (const path of moved) this.#paths.delete(path);
+    moved.forEach((path, index) => this.#place(`${to}${path.slice(from.length)}`, inodes[index]!));
+  }
+
+  /** The inode number of the node at `path`, as the daemon indexes it: given
+   *  once per inode when first asked for, and never given twice. */
+  ino(path: string): number {
+    const inode = this.#paths.get(path);
+    if (inode === undefined) throw new Error(`ino: no node at ${path}`);
+    return this.#inoOf(inode);
+  }
+
   remove(path: string): void {
     const inode = this.#paths.get(path);
     if (inode === undefined) return;

@@ -385,7 +385,10 @@ async function runControl(
 }
 
 /**
- * A wake reads the durable pointer and the exact envelope it names.
+ * The control a wake serves: the durable pointer, the exact envelope it
+ * names, and any operation that sealed before the interruption driven to
+ * rest first.
+ *
  * The envelope read binds the bytes to the digest the head carries, so a
  * relabeled envelope refuses here. The root the wake opens next proves itself
  * when the open fetches it through its digest-bearing intent. Finalization
@@ -394,12 +397,29 @@ async function runControl(
  * closure the wake never reads proves itself where the head is made. A
  * wake-time re-check of either object would spend a remote operation without
  * proving anything the reads do not already prove.
+ *
+ * A sealed payload is immutable and its head CAS is the only way forward, so
+ * the restore that follows serves the head the CAS lands and the seed names
+ * that same head. Served without settling (2026-09-05, conformance 6.8 under
+ * the journal harness), the restore and the seed took the older head, the
+ * next begin published the sealed result, and every fence after it was
+ * refused against a base the daemon no longer held. A transferring operation
+ * waits for the next checkpoint's re-drive; nothing else is touched.
  */
-export async function candidateRunControl(
-  store: CandidateControlStore,
-  envelopes: CandidateEnvelopeStore,
-): Promise<CandidateRunControlV1> {
-  return await runControl(await store.read(), envelopes);
+export async function settleCandidateOperation(input: {
+  readonly store: CandidateControlStore;
+  readonly envelopes: CandidateEnvelopeStore;
+  readonly verifyObject: VerifyObject;
+}): Promise<CandidateRunControlV1> {
+  const control = await input.store.read();
+  const active = control.operation;
+  if (active?.phase !== 'sealed' && active?.phase !== 'completion-pending') {
+    return await runControl(control, input.envelopes);
+  }
+  return await runControl(
+    await recoverOperation(active, input.store, input.envelopes, input.verifyObject),
+    input.envelopes,
+  );
 }
 
 /**

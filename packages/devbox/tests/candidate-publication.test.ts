@@ -42,9 +42,9 @@ import type {
 } from '../src/candidates/publication';
 import {
   beginCandidateOperation,
-  candidateRunControl,
   finalizeCandidateOperation,
   settleCandidateNoChange,
+  settleCandidateOperation,
   type CandidateEnvelopeStore,
 } from '../src/candidates/control';
 import { candidateContainerStorage, candidateStorePaths, type CandidateStorePaths } from '../src/candidates/container';
@@ -536,6 +536,13 @@ class ControlHarness {
     });
   }
 
+  /** The control a wake serves: what a replacement's attach reads. */
+  async wake(): Promise<CandidateRunControlV1> {
+    return await settleCandidateOperation({
+      store: this.store, envelopes: this.envelopes, verifyObject: this.payloads.verifyObject.bind(this.payloads),
+    });
+  }
+
   /** Begin, stage and publish one operation, then answer the committed root. */
   async publish(): Promise<string> {
     const finalized = await this.finalize(await this.stage(await this.begin()));
@@ -613,10 +620,7 @@ describe('candidate durable control', () => {
 
     // A replacement has only the durable head, the direct control object, and
     // the mounted payload closure. It cannot recover any container-local state.
-    const attached = await candidateRunControl(
-      published.store,
-      envelopes,
-    );
+    const attached = await published.wake();
     expect(attached.head?.pointer.rootEnvelopeId).toBe(rootEnvelopeId);
   });
 
@@ -717,6 +721,30 @@ describe('candidate durable control', () => {
     expect(harness.store.writes.filter((phase) => phase === 'published')).toHaveLength(1);
   });
 
+  test('the control a wake serves names the head a sealed operation was about to publish', async () => {
+    // A replacement after the seal: the restore and the seed read this
+    // control, and the next begin publishes the sealed result. Served as the
+    // durable record stands, the daemon is seeded with the older head and
+    // every fence after that begin is refused against it.
+    const harness = new ControlHarness();
+    const first = await harness.publish();
+    const draft = await harness.stage(await harness.begin());
+    harness.store.resetAfterPhase = 'sealed';
+    await expect(harness.finalize(draft)).rejects.toBeInstanceOf(ControlReset);
+    const sealed = harness.durableOperation();
+    const sealedRoot = sealed.phase === 'sealed' ? sealed.resultRootId : '';
+    expect(harness.store.record.head?.rootEnvelopeId).toBe(first);
+
+    const served = await harness.wake();
+    expect(served.head?.pointer.rootEnvelopeId).toBe(sealedRoot);
+    expect(served.operation).toMatchObject({ phase: 'published', resultRootId: sealedRoot });
+    // The begin that follows finds nothing left to publish and starts fresh
+    // against the head the wake served.
+    const next = transferring(await harness.begin());
+    expect(next.expectedParent).toBe(sealedRoot);
+    expect(harness.store.writes.filter((phase) => phase === 'published')).toHaveLength(2);
+  });
+
   test('replays a published draft idempotently and refuses a draft from another operation', async () => {
     const harness = new ControlHarness();
     const draft = await harness.stage(await harness.begin());
@@ -801,14 +829,10 @@ describe('candidate durable control', () => {
     const envelope = v.parse(RootEnvelopeV1Schema, JSON.parse(dec.decode(canonical)));
 
     harness.envelopes.objects.set(root, enc.encode(`${JSON.stringify(envelope, null, 2)}\n`));
-    await expect(candidateRunControl(
-      harness.store, harness.envelopes,
-    )).rejects.toThrow('is not canonical');
+    await expect(harness.wake()).rejects.toThrow('is not canonical');
 
     harness.envelopes.objects.set(root, envelopeBytes({ ...envelope, generation: '999' }));
-    await expect(candidateRunControl(
-      harness.store, harness.envelopes,
-    )).rejects.toThrow('does not match pointer');
+    await expect(harness.wake()).rejects.toThrow('does not match pointer');
 
     harness.envelopes.objects.delete(root);
     await expect(harness.begin()).rejects.toThrow('candidate envelope is absent');
@@ -830,7 +854,7 @@ describe('candidate durable control', () => {
       if (member === undefined) throw new Error('the published closure names only its root');
       harness.payloads.payloads.delete(deleted === 'root' ? envelope.rootObject.key : member.key);
 
-      const control = await candidateRunControl(harness.store, harness.envelopes);
+      const control = await harness.wake();
       expect(control.head?.pointer.rootEnvelopeId).toBe(root);
     }
   });
@@ -856,7 +880,7 @@ describe('candidate durable control', () => {
       await inner(ref);
     };
 
-    const control = await candidateRunControl(harness.store, harness.envelopes);
+    const control = await harness.wake();
     expect(control.head?.pointer.rootEnvelopeId).toBe(root);
     expect(verified).toEqual([]);
     // The absent dependency is IN the closure and was never asked about: that

@@ -20,7 +20,7 @@
  * decides. Where a strategy's byte work happens container-side — the snapshot
  * chain's archiver, the overlay-cas runner, the candidate runner — this module
  * runs the SHIPPED code in-process (`stageBlobs`, `foldJournalIntoTree`,
- * `fileChunkStream`, `build`, `buildMerklePack`, `open`, `openMerklePack`,
+ * `fileChunkStream`, `build`, `captureFromJournalDelta`, `open`,
  * `stageCandidatePayload`, `finalizeCandidateOperation`) against in-memory
  * bytes, and only simulates what genuinely cannot run here: mksquashfs,
  * fuse-overlayfs and s3fs.
@@ -80,22 +80,22 @@ import {
   build as buildBoundedLayers,
   open as openBoundedLayers,
   type BoundedLayers,
+  type PublishedBoundaries,
 } from '../../src/candidates/bounded-layers';
 import {
   candidateStorePaths,
   candidateContainerStorage,
   CANDIDATE_JOURNAL_ROOT,
   CANDIDATE_STORE_MOUNT,
-  type CandidateContainerFormat,
   type CandidateContainerPorts,
   type CandidateRunnerProcess,
 } from '../../src/candidates/container';
 import {
   beginCandidateOperation,
-  candidateRunControl,
   finalizeCandidateOperation,
   redriveCandidateOperation,
   settleCandidateNoChange,
+  settleCandidateOperation,
   type CandidateControlStore,
   type CandidateEnvelopeStore,
   type CandidateEnvelopeStoreV2,
@@ -103,12 +103,15 @@ import {
 import { candidateRunControlV2 } from './sidecar-fixture';
 import { MemoryCandidateObjectSink, stageCandidatePayload } from '../../src/candidates/publication';
 import { envelopeBytes, parseEnvelopeBytes, recoverPublishedParent, envelopeV2Bytes } from '../../src/candidates/publication';
-import { buildMerklePack, openMerklePack, parentFromPublishedParent } from '../../src/candidates/merkle-pack';
 import type { PackRun } from '../../src/candidates/merkle-pack';
+import { mergeSealWork } from '../../src/candidates/merkle-pack/delta';
+import type { BoundaryRow } from '../../src/candidates/merkle-pack/delta';
 import { parseEnvelopeV2Bytes } from './sidecar-fixture';
 import { parsePackLedger } from '../../src/candidates/merkle-pack/ledger';
-import { contentSize, issueVerifiedJournalCapture, manifestSha256 } from '../../src/capture/model';
-import type { AuditedCapture, Capture, FileContent, NodeEntry, PosixMetadata } from '../../src/capture/model';
+import { contentSize } from '../../src/capture/model';
+import type { NodeEntry, PosixMetadata } from '../../src/capture/model';
+import { captureFromJournalDelta } from '../../src/capture/journal/client';
+import type { JournalBase } from '../../src/capture/journal/client';
 import { LazyRestore, type HeadFilesystem } from '../../src/candidates/lazy-restore';
 import { LazyContainer } from './lazy-container';
 import { SidecarCore, md5Of } from '../../bench/sidecar/core';
@@ -2732,11 +2735,30 @@ class MountedPayloadStore implements CandidatePayloadStore {
   }
 }
 
-function candidateArm(format: CandidateContainerFormat): ConformanceArm {
+/**
+ * The bounded-layers arm: the v1 candidate control plane, the shipped runner
+ * actions run in-process, and the mutation journal modeled over the
+ * container's own disk tree.
+ *
+ * THE FENCE IS THE CAPTURE. A checkpoint fences the daemon, reads the delta
+ * the fence wrote through `captureFromJournalDelta` — the same function the
+ * deployed runner calls — and builds against the published parent. The first
+ * fence of a box is the whole tree; every later one carries the touched paths
+ * only, a file with a boundary row staged as windows around its writes, so
+ * the codec's dirty-cell overlay runs here exactly as it runs in the container.
+ *
+ * THE HAND-BACK CROSSES PROCESSES THE WAY THE RUNNER'S DOES. A checkpoint
+ * leaves the rows of the files it rewrote, a restore the rows of every file it
+ * materialized, and the `seed` action the host runs after both hands them to
+ * the daemon with the head they belong to — only when that head's root is the
+ * root the rows describe. A daemon start empties the boundary map, as a
+ * restarted daemon's is empty, and keeps its base, as a recovered WAL does.
+ */
+function boundedLayersArm(): ConformanceArm {
   const durable = new DurableStore();
   const deaths = new DeathWatch();
   const boxId = 'box-conformance';
-  const paths = candidateStorePaths(`boxes/${boxId}`, format);
+  const paths = candidateStorePaths(`boxes/${boxId}`, 'bounded-layers');
   const control = new MemoryControlStore();
   let casAttempts = 0;
   let bootSequence = 0;
@@ -2817,18 +2839,32 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
     deaths.reset(awaitPointSeam('verify-upload'));
   };
 
-  const fallbackMetadata: PosixMetadata = {
-    uid: 0,
-    gid: 0,
-    atimeNs: '0',
-    mtimeNs: '0',
-    ctimeNs: '0',
-    xattrs: {},
-  };
+  /** The base a fence must authenticate: the published head, as the runner's
+   *  `publishedJournalBase` states it. */
+  const journalBaseOf = (head: NonNullable<CandidateRunControlV1['head']>): JournalBase => ({
+    cut: head.envelope.cut.cut,
+    generation: head.envelope.generation,
+    root: head.pointer.rootEnvelopeId,
+  });
+
+  /** The rows one runner action left for the seed that follows it, and the
+   *  root object they describe: the runner's `boundaries.json` on the
+   *  container's disk. A restore's rows name the stored inode numbers, which
+   *  died with the filesystem that captured them; the seed hands the daemon
+   *  the inodes the restored files have here, as the runner's `fstat` per
+   *  row does. A checkpoint's rows carry the fence's own live numbers. */
+  interface HeldHandback {
+    readonly rootSha256: string;
+    readonly rows: PublishedBoundaries;
+    readonly restored: boolean;
+  }
 
   class CandidateBoot implements ArmBoot {
     disk = new ContainerDisk();
     tree = this.disk.tree(CANDIDATE_JOURNAL_ROOT);
+    /** The container's journal daemon, over the container's own tree: a
+     *  replacement is a new daemon over a blank disk. */
+    daemon = new ModeledDaemon(this.tree);
     readonly workspace: Workspace;
     readonly failures: string[] = [];
     journal = false;
@@ -2843,10 +2879,6 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
      *  reset with it; an isolate reset leaves both, which is what 6.9 counts. */
     actionStarts = { restore: 0, checkpoint: 0, seed: 0 };
     daemonStarts = 0;
-    /** The journal daemon's own WAL model: one line per admitted write, plus
-     *  the lines a full disk made it cancel before their effect. */
-    readonly wal: string[] = [];
-    readonly cancelledWal: string[] = [];
     #storage: DevboxStorage;
     #rootUploadKey: string | null = null;
     #finalizeGate = new OneShotGate();
@@ -2856,13 +2888,14 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
      *  Null before the first commit (nothing to restore from) and right
      *  after a replacement, until the next attach opens one. */
     #lazy: LazyContainer | null = null;
+    #handback: HeldHandback | null = null;
 
     constructor() {
       this.workspace = {
         write: async (path, text) => {
           if (!this.journal) throw new Error('the candidate workspace has no journal daemon');
           await this.#lazy?.beforeWrite(path);
-          this.#journaled(`W ${path} ${encoder.encode(text).byteLength}`, () => this.tree.writeFile(path, encoder.encode(text)));
+          this.#journaled(`W ${path} ${encoder.encode(text).byteLength}`, () => this.daemon.write(path, encoder.encode(text)));
         },
         read: async (path) => {
           if (this.#lazy !== null) {
@@ -2875,20 +2908,20 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
         },
         remove: async (path) => {
           await this.#lazy?.beforeWrite(path);
-          this.tree.remove(path);
+          this.daemon.remove(path);
         },
         paths: async () => {
           await this.#lazy?.listAll();
           return this.tree.filePaths();
         },
-        plant: async (entries) => this.tree.plant(entries),
+        plant: async (entries) => this.daemon.plant(entries),
         snapshot: async () => {
           await this.#lazy?.readAll();
           return this.tree.snapshot();
         },
         pwrite: async (path, offset, bytes) => {
           await this.#lazy?.beforeWrite(path);
-          this.#journaled(`W ${path} ${offset}+${bytes.byteLength}`, () => this.tree.pwrite(path, offset, bytes));
+          this.#journaled(`W ${path} ${offset}+${bytes.byteLength}`, () => this.daemon.pwrite(path, offset, bytes));
         },
       };
       this.#storage = this.#build();
@@ -2897,19 +2930,19 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
      *  first; an effect the disk refuses moves its record to the cancelled
      *  list and rethrows, so there is never an effect without a record. */
     #journaled(line: string, effect: () => void): void {
-      this.wal.push(line);
+      this.daemon.wal.push(line);
       try {
         effect();
       } catch (error) {
-        this.wal.pop();
-        this.cancelledWal.push(line);
+        this.daemon.wal.pop();
+        this.daemon.cancelledWal.push(line);
         throw error;
       }
     }
 
     /** Journal and eviction facts, exposed to the ENOSPC and reset cells. */
     journalFacts(): JournalFacts {
-      return { records: this.wal, failedWrites: this.cancelledWal };
+      return { records: this.daemon.wal, failedWrites: this.daemon.cancelledWal };
     }
 
     evictCleanBytes(): number {
@@ -2941,6 +2974,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       this.disk.dead = true;
       this.disk = new ContainerDisk();
       this.tree = this.disk.tree(CANDIDATE_JOURNAL_ROOT);
+      this.daemon = new ModeledDaemon(this.tree);
       this.journal = false;
       this.storeMounted = false;
       this.bootId = `boot-${++bootSequence}`;
@@ -2951,6 +2985,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       this.daemonStarts = 0;
       this.#restoreWindow = null;
       this.#lazy = null;
+      this.#handback = null;
       this.#finalizeGate = new OneShotGate();
       this.#storage = this.#build();
     }
@@ -2969,43 +3004,6 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
 
     #payload(): MountedPayloadStore {
       return new MountedPayloadStore(durable, paths.payloadPrefix, deaths, () => this.#rootUploadKey);
-    }
-
-    /**
-     * The audited capture the fence builds from: the whole tree, exactly as
-     * `build()` has always read it.
-     *
-     * A LAZY TREE MUST BE WHOLE BEFORE THIS RUNS. `build()` hashes every
-     * file's CONTENT to diff it against the parent, and a placeholder's
-     * content is zeros — so a fence that read one unhydrated would see a
-     * file that changed to all-zero bytes and stage that lie. This is not a
-     * new cost this lane adds: `build()` has always read every file
-     * (`bytesStaged`/`bytesChunked` already scale with the tree, the
-     * `bounded-layers`/6.12 row on the bug list), so paying to page in what
-     * it is about to read anyway regresses nothing.
-     */
-    async #capture(input: { operationId: string; epoch: string; baseRevision: string }): Promise<AuditedCapture> {
-      await this.#lazy?.readAll();
-      const entries = this.tree.snapshot();
-      const cut = Number(input.baseRevision) + 1;
-      const captured: Capture = {
-        mechanism: 'mutation-journal',
-        cut,
-        generation: Number(input.epoch),
-        entries,
-      };
-      return issueVerifiedJournalCapture({
-        cut,
-        generation: Number(input.epoch),
-        entries,
-        identity: {
-          captureId: input.operationId,
-          epoch: input.epoch,
-          baseRevision: input.baseRevision,
-          stableStageHandle: `stage-${input.operationId}`,
-        },
-        manifestSha256: manifestSha256(captured),
-      });
     }
 
     #identityOf(run: CandidateRunControlV1) {
@@ -3052,58 +3050,86 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       });
     }
 
+    /**
+     * The runner's checkpoint: fence, read the delta as the capture, build
+     * against the published parent, stage. A fence whose base is not the
+     * published head is refused as the runner refuses it — publishing it
+     * would merge a delta onto a parent it was not cut from, or tombstone
+     * every path a whole-tree first fence did not name. A fence that touched
+     * nothing above the head is the no-change reply.
+     */
     async #runCheckpoint(run: CandidateRunControlV1): Promise<string> {
       const identity = this.#identityOf(run);
-      const store = this.#payload();
-      const sink = new MemoryCandidateObjectSink();
       const head = run.head;
-      const audited = await this.#capture(identity);
-      let plan;
-      if (format === 'bounded-layers') {
+      const fence = await this.daemon.fence();
+      if (head !== null) {
+        const base = journalBaseOf(head);
+        if (
+          fence.base === null
+          || fence.base.cut !== base.cut
+          || fence.base.generation !== base.generation
+          || fence.base.root !== base.root
+        ) {
+          throw new Error('candidate journal fence does not authenticate the published head base');
+        }
+      }
+      const delta = await this.daemon.delta(fence);
+      try {
+        if (head !== null && delta.manifest.entries.length === 0 && delta.manifest.metadataOps.length === 0) {
+          return JSON.stringify({ ok: true, noChange: true });
+        }
+        const audited = captureFromJournalDelta(delta, {
+          captureId: identity.operationId,
+          epoch: identity.epoch,
+          baseRevision: identity.baseRevision,
+          stableStageHandle: `journal-${fence.generation}-${fence.cut}`,
+        });
+        const store = this.#payload();
         const parent = head === null
           ? undefined
           : (await openBoundedLayers(head.envelope.rootObject, store, identity))
             .withPublishedParent(await this.#recoverParent(head, store, identity));
-        const built = await buildBoundedLayers(audited, parent, sink);
-        plan = built.plan;
-        this.#rows = { ...this.#rows, seal: wholeTreeSeal(audited.entries, 512 * 1024) };
-      } else {
-        let parent = null;
-        if (head !== null) {
-          const manifestBytes = await store.readRange({
-            ...identity,
-            exactKey: head.envelope.rootObject.key,
-            method: 'GET',
-            byteOffset: '0',
-            byteLength: head.envelope.rootObject.byteLength,
-            sha256: head.envelope.rootObject.sha256,
-          });
-          parent = parentFromPublishedParent(
-            await openMerklePack({ rootId: sha256Hex(manifestBytes), manifestBytes }, store, identity),
-            await this.#recoverParent(head, store, identity),
-          );
-        }
-        const built = await buildMerklePack(audited, { sink, parent });
-        plan = built.plan;
-        const staged = wholeTreeSeal(audited.entries, 4096);
-        this.#rows = {
-          ...this.#rows,
-          seal: {
-            ...staged,
-            chunksHashed: built.stats.distinctChunks,
-            nodesRewritten: built.stats.nodes,
-          },
-        };
+        const built = await buildBoundedLayers(audited, parent, new MemoryCandidateObjectSink());
+        this.#rows = { ...this.#rows, seal: mergeSealWork(fence.sealWork, built.stats) };
+        this.#rootUploadKey = built.plan.root.ref.key;
+        const draft = await stageCandidatePayload(built.plan, identity, store);
+        this.#handback = { rootSha256: built.plan.root.ref.sha256, rows: built.handback, restored: false };
+        return JSON.stringify({
+          ok: true,
+          movedBytes: [...draft.dependencyReceipts, draft.rootReceipt]
+            .reduce((bytes, receipt) => bytes + Number(receipt.byteLength), 0),
+          heldBytes: built.view.gcClosure().reduce((bytes, ref) => bytes + Number(ref.byteLength), 0),
+          draft,
+        });
+      } finally {
+        delta.close();
       }
-      this.#rootUploadKey = plan.root.ref.key;
-      const draft = await stageCandidatePayload(plan, identity, store);
-      return JSON.stringify({
-        ok: true,
-        movedBytes: [...draft.dependencyReceipts, draft.rootReceipt]
-          .reduce((bytes, receipt) => bytes + Number(receipt.byteLength), 0),
-        heldBytes: draft.closure.reduce((bytes, ref) => bytes + Number(ref.byteLength), 0),
-        draft,
-      });
+    }
+
+    /**
+     * The runner's seed: the published head to the daemon, with the boundary
+     * rows the last checkpoint or restore left when they describe that head's
+     * root, so the next fence stages windows. Any other rows are stale and
+     * the base travels alone.
+     */
+    async #runSeed(run: CandidateRunControlV1): Promise<string> {
+      const head = run.head;
+      if (head === null) return JSON.stringify({ ok: true });
+      const held = this.#handback;
+      if (held === null || held.rootSha256 !== head.envelope.rootObject.sha256) {
+        this.daemon.seed(journalBaseOf(head));
+        return JSON.stringify({ ok: true });
+      }
+      let rows = held.rows;
+      if (held.restored) {
+        const container = this.#lazy;
+        if (container === null) throw new Error('a restore left boundary rows but no lazy container');
+        const files: BoundaryRow[] = [];
+        for (const row of held.rows.files) files.push({ ...row, ino: String(await container.ino(row.path)) });
+        rows = { ...held.rows, files };
+      }
+      await this.daemon.boundaries({ ...journalBaseOf(head), ...rows });
+      return JSON.stringify({ ok: true });
     }
 
     /**
@@ -3113,8 +3139,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
      * so `evictCleanBytes` has something to evict even when the box that
      * just published never replaced its container.
      */
-  
-  async #ensureLazy(head: NonNullable<CandidateRunControlV1['head']>): Promise<LazyContainer> {
+    async #ensureLazy(head: NonNullable<CandidateRunControlV1['head']>): Promise<{ container: LazyContainer; view: BoundedLayers }> {
       const identity = {
         operationId: `restore-${head.pointer.lastOperationId}`,
         attemptId: '1',
@@ -3131,72 +3156,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       const container = this.#lazy ?? new LazyContainer(this.tree, () => clock);
       container.adopt(restore);
       this.#lazy = container;
-      return container;
-    }
-
-    async #merkleEntries(run: CandidateRunControlV1): Promise<NodeEntry[]> {
-      const head = run.head!;
-      const identity = {
-        operationId: `restore-${head.pointer.lastOperationId}`,
-        attemptId: '1',
-        boxId,
-        epoch: head.envelope.epoch,
-        expiresAt: '99999999999999',
-      };
-      const store = this.#payload();
-      const manifestBytes = await store.readRange({
-        ...identity,
-        exactKey: head.envelope.rootObject.key,
-        method: 'GET',
-        byteOffset: '0',
-        byteLength: head.envelope.rootObject.byteLength,
-        sha256: head.envelope.rootObject.sha256,
-      });
-      const view = await openMerklePack(
-        { rootId: sha256Hex(manifestBytes), manifestBytes },
-        store,
-        identity,
-      );
-      const entries: NodeEntry[] = [];
-      const contentByIno = new Map<number, FileContent>();
-      const walk = async (at: string): Promise<void> => {
-        for (const child of await view.readdir(at)) {
-          const path = at === '' ? child : `${at}/${child}`;
-          const stat = await view.stat(path);
-          if (stat === null) continue;
-          const ino = stat.ino ?? entries.length + 1;
-          const metadata = stat.metadata ?? fallbackMetadata;
-          if (stat.kind === 'dir') {
-            entries.push({ path, kind: 'dir', mode: stat.mode, ino, metadata });
-            await walk(path);
-            continue;
-          }
-          if (stat.kind === 'symlink') {
-            entries.push({ path, kind: 'symlink', mode: stat.mode, ino, metadata, target: stat.target });
-            continue;
-          }
-          let content = contentByIno.get(ino);
-          if (content === undefined) {
-            const extents = await view.extents(path);
-            const hasHole = extents.some((extent) => extent.kind === 'hole');
-            if (!hasHole) {
-              content = { kind: 'dense', bytes: await view.readRange(path, 0, stat.size) };
-            } else {
-              const runs: Array<{ offset: number; bytes: Uint8Array }> = [];
-              for (const extent of extents) {
-                if (extent.kind === 'data') {
-                  runs.push({ offset: extent.offset, bytes: await view.readRange(path, extent.offset, extent.length) });
-                }
-              }
-              content = { kind: 'sparse', size: stat.size, runs };
-            }
-            contentByIno.set(ino, content);
-          }
-          entries.push({ path, kind: 'file', mode: stat.mode, ino, metadata, content });
-        }
-      };
-      await walk('');
-      return entries;
+      return { container, view };
     }
 
     async #runRestore(run: CandidateRunControlV1): Promise<string> {
@@ -3205,19 +3165,16 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
         this.#lazy = null;
         return JSON.stringify({ ok: true, rootId: null });
       }
-      if (format === 'bounded-layers') {
-        this.tree.clear();
-        // ROOT AND LAYERS ONLY: no directory is listed here, so a wake's
-        // remote ops stay fixed at whatever `open()` reads regardless of how
-        // many files or directories the tree holds. The first `paths`,
-        // `snapshot` or `read` on the workspace lists on demand, and that
-        // cost lands in HydrateWork, never in this restore's window.
-        await this.#ensureLazy(head);
-      } else {
-        const entries = await this.#merkleEntries(run);
-        this.tree.clear();
-        this.tree.plant(entries);
-      }
+      this.tree.clear();
+      // ROOT AND LAYERS ONLY: no directory is listed here, so a wake's
+      // remote ops stay fixed at whatever `open()` reads regardless of how
+      // many files or directories the tree holds. The first `paths`,
+      // `snapshot` or `read` on the workspace lists on demand, and that
+      // cost lands in HydrateWork, never in this restore's window.
+      const { view } = await this.#ensureLazy(head);
+      // The rows of every restored file wait for the seed that follows the
+      // journal's restart, as the runner leaves them on the container's disk.
+      this.#handback = { rootSha256: head.envelope.rootObject.sha256, rows: view.boundaryRows(), restored: true };
       return JSON.stringify({ ok: true, rootId: head.pointer.rootEnvelopeId });
     }
 
@@ -3251,12 +3208,10 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
           // Every byte this boot just wrote is now a cache of the head it
           // published: mark it resident and evictable, the same fact a wake
           // establishes for a container that paged it in instead of writing
-          // it. Bounded-layers only: the v1 merkle-pack branch here is
-          // unreachable through the exported arms (`CONFORMANCE_ARMS` never
-          // opens `format: 'merkle-pack'`) and carries no lazy restore.
-          if (outcome.kind === 'committed' && format === 'bounded-layers') {
-            const run = await candidateRunControl(controlStore, envelopes);
-            if (run.head !== null) (await this.#ensureLazy(run.head)).notePublished();
+          // it.
+          if (outcome.kind === 'committed') {
+            const run = await settleCandidateOperation({ store: controlStore, envelopes, verifyObject });
+            if (run.head !== null) (await this.#ensureLazy(run.head)).container.notePublished();
           }
           return outcome;
         },
@@ -3266,7 +3221,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
 
     #build(): DevboxStorage {
       const ports: CandidateContainerPorts = {
-        format,
+        format: 'bounded-layers',
         runnerPath: '/opt/kinu/candidate-runner.bundle.mjs',
         mountStore: async () => {
           if (this.disk.dead) throw new ContainerDied('mountStore on a dead container');
@@ -3313,7 +3268,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
             verifyObject,
           });
         },
-        restoreState: async () => await candidateRunControl(controlStore, envelopes),
+        restoreState: async () => await settleCandidateOperation({ store: controlStore, envelopes, verifyObject }),
         settleNoChange: async (run) => {
           const active = run.operation;
           if (active?.phase !== 'transferring') {
@@ -3346,6 +3301,9 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
           if (this.disk.stopped) throw new ContainerStopped('startJournal');
           this.journal = true;
           this.daemonStarts += 1;
+          // A started daemon holds no boundaries: the map lives in the
+          // process and the seed that follows every start hands it back.
+          this.daemon.boundaryMap.clear();
         },
         stopJournal: async () => {
           if (this.disk.dead) throw new ContainerDied('stopJournal on a dead container');
@@ -3390,7 +3348,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
             ? await this.#runCheckpoint(run)
             : action === 'restore'
               ? await this.#runRestore(run)
-              : JSON.stringify({ ok: true });
+              : await this.#runSeed(run);
           this.files.set(resultPath, printed);
           return process;
         },
@@ -3408,7 +3366,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
 
   let current = new CandidateBoot();
   return {
-    name: format,
+    name: 'bounded-layers',
     storage: () => current.storage(),
     get workspace() { return current.workspace; },
     get failures() { return current.failures; },
@@ -3986,6 +3944,6 @@ export const CONFORMANCE_ARMS = {
   'snapshot-chain': snapshotChainArm,
   r2fs: r2fsArm,
   'overlay-cas': overlayCasArm,
-  'bounded-layers': () => candidateArm('bounded-layers'),
+  'bounded-layers': boundedLayersArm,
   'merkle-pack': merklePackV2Arm,
 } satisfies Record<DevboxStrategyName, () => ConformanceArm>;

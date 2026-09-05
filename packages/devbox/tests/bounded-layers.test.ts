@@ -29,6 +29,7 @@ import type {
   NodeEntry,
   SparseRun,
   StateSnapshot,
+  StructuralOp,
 } from '../src/capture/model';
 import type {
   HeadPointerV1,
@@ -222,7 +223,7 @@ function withJournalMetadata(entries: readonly NodeEntry[]): readonly NodeEntry[
 function verifiedJournalCapture(
   entries: readonly NodeEntry[],
   cut: number,
-  partial: { partial?: boolean; removed?: readonly string[] } = {},
+  partial: { partial?: boolean; structural?: readonly StructuralOp[] } = {},
 ): AuditedCapture {
   const journalEntries = withJournalMetadata(entries);
   const capture = { mechanism: 'mutation-journal' as const, cut, generation: 0, entries: journalEntries };
@@ -236,7 +237,7 @@ function verifiedJournalCapture(
     },
     manifestSha256: manifestSha256(capture),
     partial: partial.partial === true,
-    removed: partial.removed,
+    structural: partial.structural,
   });
 }
 
@@ -359,12 +360,14 @@ describe('bounded layers', () => {
     expect(v1.cut).toBe(capture1.cut);
     expect(new TextDecoder().decode(await v1.readRange('d/a.txt', 0, 64))).toBe('alphabet!');
 
-    // Rename: the old path is tombstoned; the inode survives under the new one.
+    // Rename: the old path is tombstoned; the inode survives under the new
+    // one. `stat` answers a view-local identity, the doc the stored number.
     const r2 = await build(audited(snap(dirE('d'), fileE('d/b.txt', 'alphabet!', { ino }), fileE('d/empty', ''), symE('link', 'd/a.txt')), 2),
     v1,)
     const v2 = await publishAndOpen(r2, store, publisher);
     expect(v2.stat('d/a.txt')).toBeNull();
-    expect(v2.stat('d/b.txt')).toMatchObject({ kind: 'file', ino, size: 9 });
+    expect(v2.stat('d/b.txt')).toMatchObject({ kind: 'file', size: 9 });
+    expect(v2.entryAt('d/b.txt')).toMatchObject({ kind: 'file', ino, size: 9 });
     expect(v2.readdir('d')).toEqual(['b.txt', 'empty']);
 
     // Delete, then recreate the SAME path two checkpoints later: the newest
@@ -760,7 +763,6 @@ describe('bounded layers', () => {
           },
         },
         partial: true,
-        removed: [],
       }),
     };
   }
@@ -805,9 +807,11 @@ describe('bounded layers', () => {
       { hash: third.hash, size: CHUNK_SIZE - 32 * 1024, offset: 32 * 1024, length: CHUNK_SIZE },
       cell.chunks[3],
     ]);
-    expect(built.handback.files).toEqual([
-      { ino: String(ino), path: 'db.bin', size: 4 * CHUNK_SIZE, boundaries: [0, CHUNK_SIZE, 2 * CHUNK_SIZE, 3 * CHUNK_SIZE] },
-    ]);
+    // The hand-back names the dirty-cell grid, so the daemon's next window
+    // starts at the cell before a write rather than the 512 KiB chunk before it.
+    const cells = Array.from({ length: (4 * CHUNK_SIZE) / (16 * 1024) }, (_, index) => index * 16 * 1024);
+    expect(built.handback.files).toEqual([{ ino: String(ino), path: 'db.bin', size: 4 * CHUNK_SIZE, boundaries: cells }]);
+    expect(built.handback.maxChunkBytes).toBe(16 * 1024);
 
     // The published root serves the edited bytes across every seam, and a
     // read inside a range part fetches its object once, not once per part.
@@ -851,7 +855,7 @@ describe('bounded layers', () => {
     ]);
   });
 
-  test('a renamed file staged as windows finds its parent entry by inode', async () => {
+  test('a renamed file staged as windows finds its parent entry through the rename', async () => {
     const store = new MemStore();
     const publisher = new HarnessPublicationStore();
     const ino = nextIno++;
@@ -872,7 +876,7 @@ describe('bounded layers', () => {
       manifestSha256: windowed.capture.capturedCut.manifestSha256,
       sealedReader: { read: async (_sourceId, offset, length) => edited.slice(offset, offset + length) },
       partial: true,
-      removed: ['old.bin'],
+      structural: [{ op: 'rename', from: 'old.bin', to: 'new.bin' }],
     });
     const built = await build(moved, parent);
     expect(built.plan.dependencies.map((object) => Number(object.ref.byteLength))).toEqual([16 * 1024]);
@@ -883,6 +887,99 @@ describe('bounded layers', () => {
     // Windows for a file no published entry holds cannot be merged with anything.
     const orphan = windowedCapture('orphan.bin', nextIno++, edited, [{ offset: 0, length: 4096 }], [{ offset: 0, length: 4096 }], 2);
     await expect(build(orphan.capture, view)).rejects.toThrow(/no published parent entry/);
+  });
+
+  test('a rename onto an existing name overlays the moved inode, never the name it replaced', async () => {
+    const store = new MemStore();
+    const publisher = new HarnessPublicationStore();
+    const ino = nextIno++;
+    const moving = new Uint8Array(2 * CHUNK_SIZE).fill(3);
+    const replaced = new Uint8Array(2 * CHUNK_SIZE).fill(5);
+    const parent = await publishAndOpen(
+      await build(verifiedJournalCapture([fileE('old.bin', moving, { ino }), fileE('target.bin', replaced)], 0)),
+      store,
+      publisher,
+    );
+    const edited = moving.slice();
+    edited.fill(9, 0, 4096);
+    const windowed = windowedCapture('target.bin', ino, edited, [{ offset: 0, length: 4096 + 64 * 1024 }], [{ offset: 0, length: 4096 }], 1);
+    const built = await build(issueVerifiedJournalCapture({
+      cut: 1,
+      generation: 0,
+      entries: windowed.capture.entries,
+      identity: { captureId: 'window-over', epoch: '7', baseRevision: '1', stableStageHandle: 'window-over-stage' },
+      manifestSha256: windowed.capture.capturedCut.manifestSha256,
+      sealedReader: { read: async (_sourceId, offset, length) => edited.slice(offset, offset + length) },
+      partial: true,
+      structural: [{ op: 'rename', from: 'old.bin', to: 'target.bin' }],
+    }), parent);
+    const view = await publishAndOpen(built, store, publisher);
+    expect(view.stat('old.bin')).toBeNull();
+    expect(await view.readRange('target.bin', 0, edited.byteLength)).toEqual(edited);
+  });
+
+  test('a renamed directory carries the entries beneath it that the fence did not name', async () => {
+    const store = new MemStore();
+    const publisher = new HarnessPublicationStore();
+    const parent = await publishAndOpen(
+      await build(verifiedJournalCapture([
+        dirE('src'), fileE('src/a.txt', 'alpha'), dirE('src/deep'), fileE('src/deep/b.txt', 'beta'), fileE('keep.txt', 'kept'),
+      ], 0)),
+      store,
+      publisher,
+    );
+    // The fence names the moved directory and nothing beneath it, as the
+    // daemon does: a rename touches its two names, not the subtree.
+    const built = await build(verifiedJournalCapture(
+      [dirE('lib')], 1, { partial: true, structural: [{ op: 'rename', from: 'src', to: 'lib' }] },
+    ), parent);
+    const view = await publishAndOpen(built, store, publisher);
+    expect(view.readdir('')).toEqual(['keep.txt', 'lib']);
+    expect(view.readdir('lib')).toEqual(['a.txt', 'deep']);
+    expect(new TextDecoder().decode(await view.readRange('lib/deep/b.txt', 0, 16))).toBe('beta');
+    expect(view.stat('src')).toBeNull();
+    expect(built.view.own.tombs).toEqual(['src', 'src/a.txt', 'src/deep', 'src/deep/b.txt']);
+  });
+
+  test('an inode number a wake reuses is not the restored file it collides with', async () => {
+    // Two lifetimes: the parent's `src.txt` was inode 2 on the filesystem
+    // that captured it; after a wake the container's filesystem numbers a
+    // new `notes.txt` 2 as well. They are two inodes, and a restore that
+    // hardlinked them would serve one file's bytes under the other's name.
+    const store = new MemStore();
+    const publisher = new HarnessPublicationStore();
+    const parent = await publishAndOpen(
+      await build(verifiedJournalCapture([fileE('src.txt', 'export const one = 1;', { ino: 2 })], 0)),
+      store,
+      publisher,
+    );
+    const built = await build(verifiedJournalCapture(
+      [fileE('notes.txt', 'generation two', { ino: 2 })], 1, { partial: true, structural: [{ op: 'create', path: 'notes.txt' }] },
+    ), parent);
+    const view = await publishAndOpen(built, store, publisher);
+    expect(view.stat('notes.txt')!.ino).not.toBe(view.stat('src.txt')!.ino);
+    expect(new TextDecoder().decode(await view.readRange('src.txt', 0, 64))).toBe('export const one = 1;');
+    expect(new TextDecoder().decode(await view.readRange('notes.txt', 0, 64))).toBe('generation two');
+  });
+
+  test('a rewrite through one name of a hardlinked inode reaches every name', async () => {
+    const store = new MemStore();
+    const publisher = new HarnessPublicationStore();
+    const ino = nextIno++;
+    const parent = await publishAndOpen(
+      await build(verifiedJournalCapture([fileE('a', 'shared bytes', { ino }), fileE('b', 'shared bytes', { ino })], 0)),
+      store,
+      publisher,
+    );
+    // The fence reports the name the write used; the inode is both names.
+    const built = await build(verifiedJournalCapture(
+      [fileE('a', 'SHARED bytes', { ino, mode: 0o600 })], 1, { partial: true },
+    ), parent);
+    const view = await publishAndOpen(built, store, publisher);
+    expect(view.stat('a')!.ino).toBe(view.stat('b')!.ino);
+    expect(view.stat('b')).toMatchObject({ mode: 0o600, size: 12 });
+    expect(new TextDecoder().decode(await view.readRange('b', 0, 32))).toBe('SHARED bytes');
+    expect(built.view.own.entries.map((entry) => entry.path)).toEqual(['a', 'b']);
   });
   test('emitted buffers are copies: mutating the capture afterwards changes nothing', async () => {
     const store = new MemStore();
@@ -1029,7 +1126,7 @@ describe('bounded layers', () => {
 
     // Declared size exceeds the chunks' span.
     const mismatched = plantCorrupt({
-      kind: 'file', path: 'bad-size', mode: 0o644, ino: 1, size: 99,
+      kind: 'file', path: 'bad-size', mode: 0o644, ino: 1, inoCut: 0, size: 99,
       chunks: [{ hash: sha256Hex(good), size: good.byteLength }],
     });
     await expect(open(mismatched, store.reader, IDENTITY)).rejects.toThrow(/declares size 99 but its 1 chunk\(s\) hold 8/);
@@ -1038,14 +1135,14 @@ describe('bounded layers', () => {
     // object of whatever size the layer declared.
     const oversized = new Uint8Array(CHUNK_SIZE + 1).fill(9);
     const badGeometry = plantCorrupt({
-      kind: 'file', path: 'bad-geom', mode: 0o644, ino: 2, size: CHUNK_SIZE + 1,
+      kind: 'file', path: 'bad-geom', mode: 0o644, ino: 2, inoCut: 0, size: CHUNK_SIZE + 1,
       chunks: [{ hash: sha256Hex(oversized), size: CHUNK_SIZE + 1 }],
     });
     await expect(open(badGeometry, store.reader, IDENTITY)).rejects.toThrow(/above the 524288-byte bound/);
 
     // A hole carries no digest; one that does is no shape the wire has.
     const badHole = plantCorrupt({
-      kind: 'file', path: 'bad-hole', mode: 0o644, ino: 3, size: CHUNK_SIZE,
+      kind: 'file', path: 'bad-hole', mode: 0o644, ino: 3, inoCut: 0, size: CHUNK_SIZE,
       chunks: [{ hash: sha256Hex(good), size: CHUNK_SIZE, hole: true }],
     });
     await expect(open(badHole, store.reader, IDENTITY)).rejects.toThrow(/does not match its schema/);
@@ -1583,7 +1680,7 @@ describe('bounded layers — partial captures against a parent', () => {
     const built = await build(verifiedJournalCapture([
       dirE('pkg'),
       fileE('pkg/changed.bin', 'generation two'),
-    ], 10, { partial: true, removed: ['pkg/doomed.bin'] }), parent);
+    ], 10, { partial: true, structural: [{ op: 'remove', path: 'pkg/doomed.bin' }] }), parent);
 
     // The built view resolves entry metadata only; bytes are the opened
     // child's to serve. Publish the merge and read it back through the real

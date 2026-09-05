@@ -123,6 +123,9 @@ export interface CandidateContainerPorts {
   readonly attachmentHealth: () => Promise<CandidateAttachmentHealth>;
   readonly begin: (kind: CheckpointKind) => Promise<CandidateRunControlV1>;
   readonly finalize: (draft: CandidatePublicationDraft) => Promise<CandidateControlStateV1>;
+  /** The control a wake serves and seeds from, with any operation that
+   *  sealed before the interruption published first: the restore and the
+   *  seed must name the head the next begin would otherwise move. */
   readonly restoreState: () => Promise<CandidateRunControlV1>;
   /** Settles a fenced manifest that is already the immutable published head. */
   readonly settleNoChange: (control: CandidateRunControlV1) => Promise<CandidateControlStateV1>;

@@ -64,7 +64,7 @@ import type { HydrateWork, ImmutableObjectRef, RangeReadIntent, SealWork } from 
 import type { FileExtent } from './lazy-restore';
 import { paintedSegments } from './merkle-pack/chunk';
 import type { LogicalLayout } from './merkle-pack/chunk';
-import type { BoundaryRow } from './merkle-pack/delta';
+import type { BoundaryHandback, BoundaryRow } from './merkle-pack/delta';
 import {
   MemoryCandidateObjectSink,
   planCandidatePublication,
@@ -86,9 +86,11 @@ export const MAX_LAYER_DEPTH = 8;
 /**
  * The grid a window-staged file is re-chunked on: one object per cell the
  * writes touched. A 4 KiB page write puts one 16 KiB object; the 512 KiB
- * cell around it keeps its parent's object by range.
+ * cell around it keeps its parent's object by range. The daemon receives it
+ * as `maxChunkBytes` with every boundary hand-back, so the window a fence
+ * stages ends four cells past the last dirty byte.
  */
-export const DIRTY_CELL_BYTES = 16 * 1024;
+const DIRTY_CELL_BYTES = 16 * 1024;
 
 /** Every object lives under one content-addressed prefix: `obj/<sha256>`. */
 export function objectKey(hash: string): string {
@@ -158,13 +160,22 @@ export type HoleExtentDoc = v.InferOutput<typeof HoleExtentDocSchema>;
 export type ChunkPartDoc = ChunkDoc | HoleExtentDoc;
 const ChunkPartDocSchema = v.union([ChunkDocSchema, HoleExtentDocSchema]);
 
-/** One changed entry, mirroring `NodeEntry` with content replaced by chunk refs. */
+/**
+ * One changed entry, mirroring `NodeEntry` with content replaced by chunk
+ * refs. `ino` is the number the filesystem gave the inode when the capture at
+ * `inoCut` observed it; the pair is the inode's identity here. Inode numbers
+ * die with the filesystem and a wake gives every restored file a new one, so
+ * a raw match across cuts means nothing, and a match inside one cut is a
+ * hardlink. A rewrite through one name moves every name of the inode to the
+ * rewriting cut, so the pair stays exact across generations.
+ */
 const EntryDocSchema = v.variant('kind', [
   v.strictObject({
     kind: v.literal('file'),
     path: PathSchema,
     mode: v.number(),
     ino: v.number(),
+    inoCut: SizeSchema,
     metadata: v.optional(PosixMetadataDocSchema),
     size: SizeSchema,
     chunks: v.array(ChunkPartDocSchema),
@@ -174,6 +185,7 @@ const EntryDocSchema = v.variant('kind', [
     path: PathSchema,
     mode: v.number(),
     ino: v.number(),
+    inoCut: SizeSchema,
     metadata: v.optional(PosixMetadataDocSchema),
   }),
   v.strictObject({
@@ -181,6 +193,7 @@ const EntryDocSchema = v.variant('kind', [
     path: PathSchema,
     mode: v.number(),
     ino: v.number(),
+    inoCut: SizeSchema,
     metadata: v.optional(PosixMetadataDocSchema),
     target: v.string(),
   }),
@@ -501,9 +514,12 @@ function sameMetadata(a: PosixMetadataDoc | undefined, b: PosixMetadataDoc | und
   return aNames.length === bNames.length && aNames.every((name) => a.xattrs[name] === b.xattrs[name]);
 }
 
+/** The doc one captured row becomes. The row's inode number is scoped to
+ *  this capture's cut: it is the number the filesystem held at the cut. */
 function entryFromNode(
   path: UpperPath,
   node: { kind: NodeKind; mode: number; ino: number; target?: string },
+  inoCut: number,
   chunking: Chunking | undefined,
   metadata: PosixMetadataDoc | undefined,
 ): EntryDoc {
@@ -511,16 +527,16 @@ function entryFromNode(
   if (node.kind === 'file') {
     if (chunking === undefined) throw new Error(`file ${path} produced no chunks`);
     return {
-      kind: 'file', path, mode: node.mode, ino: node.ino, ...metadataField,
+      kind: 'file', path, mode: node.mode, ino: node.ino, inoCut, ...metadataField,
       size: chunking.size,
       chunks: [...chunking.chunks],
     };
   }
   if (node.kind === 'symlink') {
     if (node.target === undefined) throw new Error(`symlink ${path} carries no target`);
-    return { kind: 'symlink', path, mode: node.mode, ino: node.ino, ...metadataField, target: node.target };
+    return { kind: 'symlink', path, mode: node.mode, ino: node.ino, inoCut, ...metadataField, target: node.target };
   }
-  return { kind: 'dir', path, mode: node.mode, ino: node.ino, ...metadataField };
+  return { kind: 'dir', path, mode: node.mode, ino: node.ino, inoCut, ...metadataField };
 }
 
 function sameChunks(a: readonly ChunkPartDoc[], b: readonly ChunkPartDoc[]): boolean {
@@ -534,6 +550,9 @@ function sameChunks(a: readonly ChunkPartDoc[], b: readonly ChunkPartDoc[]): boo
   });
 }
 
+/** Whether a captured doc restates the parent's entry: same name, same inode
+ *  number, same stat, same bytes. The cut the number was observed at is not
+ *  compared: a row that restates its parent keeps the parent's identity. */
 function sameEntry(a: EntryDoc | undefined, b: EntryDoc): boolean {
   if (a === undefined) return false;
   if (
@@ -554,6 +573,14 @@ function copyEntry(doc: EntryDoc): EntryDoc {
 
 // ── build ────────────────────────────────────────────────────────────────────
 
+/**
+ * What a root hands the daemon about the files it serves, in the shape of
+ * the post-CAS `boundaries` request minus the head identity the caller adds
+ * once the CAS has named it: the cell grid as `maxChunkBytes`, one row per
+ * file wider than a cell, and the paths that are gone.
+ */
+export type PublishedBoundaries = Pick<BoundaryHandback, 'maxChunkBytes' | 'files' | 'removed'>;
+
 /** What one checkpoint contributes to the shared publication boundary. */
 export interface BuiltLayers {
   /** The publication plan: staged objects, identified expected parent, the
@@ -566,19 +593,186 @@ export interface BuiltLayers {
    *  are the fence's, so the row leaves them at zero. */
   readonly stats: SealWork;
   /** The boundary rows a publish hands the daemon once its head has landed:
-   *  every file this generation rewrote on the chunk grid, and every path it
-   *  removed, so the next fence stages windows instead of whole files. */
-  readonly handback: {
-    readonly files: readonly BoundaryRow[];
-    readonly removed: readonly string[];
-  };
+   *  every file this generation rewrote, and every path it removed, so the
+   *  next fence stages windows instead of whole files. */
+  readonly handback: PublishedBoundaries;
 }
 
-/** The chunk grid, as the daemon takes it: every cell start below the size. */
-function gridBoundaries(size: number): number[] {
-  const boundaries: number[] = [];
-  for (let at = 0; at < size; at += CHUNK_SIZE) boundaries.push(at);
-  return boundaries;
+/**
+ * The boundary rows for `docs`: one per file wider than a dirty cell, with
+ * every cell start below its size. A file that fits in one cell is staged
+ * whole by a fence with or without a row, and its row would cost the daemon
+ * a merge per publish for nothing.
+ */
+function boundaryRowsOf(docs: Iterable<EntryDoc>): BoundaryRow[] {
+  const files: BoundaryRow[] = [];
+  for (const doc of docs) {
+    if (doc.kind !== 'file' || doc.size <= DIRTY_CELL_BYTES) continue;
+    const boundaries: number[] = [];
+    for (let at = 0; at < doc.size; at += DIRTY_CELL_BYTES) boundaries.push(at);
+    files.push({ ino: String(doc.ino), path: doc.path, size: doc.size, boundaries });
+  }
+  return files;
+}
+
+/** The inode identity of one doc: the number, scoped to the cut that saw it. */
+function inodeKey(doc: EntryDoc): string {
+  return `${doc.inoCut}:${doc.ino}`;
+}
+
+/**
+ * Chunk one captured file: whole when the fence staged it whole, an overlay
+ * on the parent's parts when the fence staged windows around its writes. A
+ * window-staged row with no published bytes behind it is one this generation
+ * created and never wrote (an empty create, a truncate, a fallocate), so the
+ * bytes the fence did not stage are zeros; dirty cells with no parent to
+ * overlay have no source for the rest of the file and refuse. A directory or
+ * symlink chunks nothing and may carry no content.
+ */
+async function chunkEntry(
+  audited: AuditedCapture,
+  node: NodeEntry,
+  parentDoc: EntryDoc | undefined,
+  staging: ObjectStaging,
+): Promise<Chunking | undefined> {
+  if (node.kind !== 'file') {
+    if (node.content !== undefined) throw new Error(`non-file ${node.path} carries file content`);
+    return undefined;
+  }
+  const content = node.content;
+  if (content === undefined) throw new Error(`file ${node.path} carries no content`);
+  if (content.kind !== 'sealed' || content.dirty === undefined) {
+    return await chunkContent(audited, node, content, staging);
+  }
+  if (parentDoc?.kind === 'file') {
+    return await overlayContent(audited, node, content, content.dirty, parentDoc.chunks, staging);
+  }
+  if (content.dirty.length === 0) return await overlayContent(audited, node, content, [], [], staging);
+  throw new Error(`file ${node.path} was staged as windows but no published parent entry holds its other bytes`);
+}
+
+/** What one build accumulates against the parent's resolved tree. */
+interface Merge {
+  /** The entries this generation's layer carries, by their path at the cut. */
+  readonly changed: Map<UpperPath, EntryDoc>;
+  /** The parent paths this generation's layer tombstones. */
+  readonly tombstones: Set<UpperPath>;
+  /** The doc a captured row replaced a parent entry with, by the inode
+   *  identity the parent held: every other name of that inode takes it. */
+  readonly groups: Map<string, EntryDoc>;
+}
+
+/**
+ * Carry the parent's unnamed entries through this generation's renames: an
+ * entry under a renamed directory moves with it, at its old identity, and its
+ * old name is tombstoned. A row of the capture at the destination wins over
+ * the carried entry, because the row is what the fence saw at the cut.
+ */
+function relocate(audited: AuditedCapture, parent: BoundedLayers, named: ReadonlySet<UpperPath>, merge: Merge): void {
+  if (!audited.structural.some((op) => op.op === 'rename')) return;
+  for (const path of parent.entryPaths()) {
+    if (named.has(path)) continue;
+    const destination = audited.destinationOf(path);
+    if (destination === path) continue;
+    merge.tombstones.add(path);
+    if (destination === null || named.has(destination)) continue;
+    const doc = parent.entryAt(path);
+    if (doc !== undefined) merge.changed.set(destination, { ...doc, path: destination });
+  }
+}
+
+/**
+ * Every captured row's doc, into the merge. A row is chunked against the
+ * parent entry its inode had when the parent was cut (the same name, or the
+ * name a rename or link took it from); a row that restates that entry is not
+ * a change. A file or symlink row that replaced a parent entry is remembered
+ * by the inode identity the parent held, for the other names of that inode.
+ */
+async function mergeRows(
+  audited: AuditedCapture,
+  parent: BoundedLayers | undefined,
+  staging: ObjectStaging,
+  merge: Merge,
+): Promise<void> {
+  for (const node of audited.entries) {
+    if (!isCanonicalJournalPath(node.path)) throw new Error(`refusing hostile path: ${JSON.stringify(node.path)}`);
+    const origin = audited.originOf(node.path);
+    const parentDoc = origin === null ? undefined : parent?.entryAt(origin);
+    const chunking = await chunkEntry(audited, node, parentDoc, staging);
+    const doc = entryFromNode(node.path, node, audited.cut, chunking, copyMetadata(node.metadata));
+    if (sameEntry(parentDoc, doc)) continue;
+    merge.changed.set(node.path, doc);
+    if (parentDoc !== undefined && parentDoc.kind !== 'dir' && parentDoc.kind === doc.kind) {
+      merge.groups.set(inodeKey(parentDoc), doc);
+    }
+  }
+}
+
+/**
+ * Give every other name of a rewritten inode the doc its row produced. A
+ * hardlink group is one inode: a write, a chmod or a rename through one name
+ * changed them all, and the fence reports the names it touched, not the
+ * group. The group is the parent's, by the identity the parent held; a name
+ * the capture named for itself has its own row.
+ */
+function propagate(merge: Merge, resolved: Map<UpperPath, EntryDoc>, named: ReadonlySet<UpperPath>): void {
+  if (merge.groups.size === 0) return;
+  for (const [path, doc] of resolved) {
+    if (named.has(path)) continue;
+    const rewritten = merge.groups.get(inodeKey(doc));
+    if (rewritten === undefined) continue;
+    const sibling = copyEntry({ ...rewritten, path });
+    resolved.set(path, sibling);
+    merge.changed.set(path, sibling);
+  }
+}
+
+const byPath = (a: EntryDoc, b: EntryDoc): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+
+/**
+ * This generation's own layer. The first root and the one that would exceed
+ * the depth bound stream the resolved tree into a base; a generation that
+ * changed or removed something is a delta over the parent's layers; one that
+ * changed nothing restates the parent's own layer under the new cut, so the
+ * chain does not grow for an empty generation. Above a base the restatement
+ * is an empty delta naming it.
+ */
+function ownLayer(
+  parent: BoundedLayers | undefined,
+  cut: number,
+  changed: ReadonlyMap<UpperPath, EntryDoc>,
+  tombstones: ReadonlySet<UpperPath>,
+  resolved: ReadonlyMap<UpperPath, EntryDoc>,
+): LayerDoc {
+  if (parent === undefined || parent.depth >= MAX_LAYER_DEPTH) {
+    return {
+      v: 1, fmt: BOUNDED_LAYERS_FORMAT, cut, t: 'base',
+      entries: [...resolved.values()].sort(byPath), tombs: [], layers: [],
+    };
+  }
+  if (changed.size > 0 || tombstones.size > 0) {
+    return {
+      v: 1, fmt: BOUNDED_LAYERS_FORMAT, cut, t: 'delta',
+      entries: [...changed.values()].sort(byPath),
+      tombs: [...tombstones].sort(),
+      layers: [parent.rootRef, ...parent.layers],
+    };
+  }
+  return parent.own.t === 'delta'
+    ? { ...parent.own, cut, entries: parent.own.entries.map(copyEntry), tombs: [...parent.own.tombs], layers: [...parent.layers] }
+    : { v: 1, fmt: BOUNDED_LAYERS_FORMAT, cut, t: 'delta', entries: [], tombs: [], layers: [parent.rootRef] };
+}
+
+/** Every stored (non-hole) chunk hash the resolved tree references. */
+function chunkHashesOf(resolved: ReadonlyMap<UpperPath, EntryDoc>): Set<string> {
+  const hashes = new Set<string>();
+  for (const doc of resolved.values()) {
+    if (doc.kind !== 'file') continue;
+    for (const part of doc.chunks) {
+      if (!isHoleExtent(part)) hashes.add(part.hash);
+    }
+  }
+  return hashes;
 }
 
 /**
@@ -590,8 +784,11 @@ function gridBoundaries(size: number): number[] {
  * a first root.
  *
  * A partial capture merges against the parent: a file the fence staged as
- * windows is overlaid on the parent's entry — found by path, or by inode
- * when a rename moved it — and only its dirty cells are chunked.
+ * windows is overlaid on the entry its inode had when the parent was cut —
+ * the same name, or the name a rename or link took it from — and only its
+ * dirty cells are chunked; the parent's other entries follow this
+ * generation's renames; every other name of a rewritten inode takes its
+ * new doc.
  *
  * Pure: nothing is uploaded. The caller hands `plan` to `publishCandidate`,
  * which is why a crash-before-publish is expressible as "stopped looping".
@@ -620,83 +817,31 @@ export async function build(
     known: new Set(parent?.chunkHashes ?? []),
     tally: { bytesChunked: 0, chunksHashed: 0, wholeFiles: 0 },
   };
-  const changed = new Map<UpperPath, EntryDoc>();
-  const tombstones = new Set<UpperPath>();
-  const snapshot = new Map(audited.entries.map((entry) => [entry.path, entry]));
-  type FileDoc = Extract<EntryDoc, { kind: 'file' }>;
-  let parentFilesByIno: Map<number, FileDoc> | null = null;
-  const parentFileFor = (path: UpperPath, ino: number): FileDoc | undefined => {
-    const byPath = parent?.entryAt(path);
-    if (byPath?.kind === 'file') return byPath;
-    if (parent === undefined) return undefined;
-    if (parentFilesByIno === null) {
-      parentFilesByIno = new Map();
-      for (const doc of parent.merged().values()) {
-        if (doc.kind === 'file') parentFilesByIno.set(doc.ino, doc);
-      }
-    }
-    return parentFilesByIno.get(ino);
-  };
-
-  for (const [path, node] of snapshot) {
-    if (!isCanonicalJournalPath(path)) throw new Error(`refusing hostile path: ${JSON.stringify(path)}`);
-    const metadata = copyMetadata(node.metadata);
-    let chunking: Chunking | undefined;
-    if (node.kind === 'file') {
-      if (node.content === undefined) throw new Error(`file ${path} carries no content`);
-      const dirty = node.content.kind === 'sealed' ? node.content.dirty : undefined;
-      if (dirty === undefined) {
-        chunking = await chunkContent(audited, node, node.content, staging);
-      } else {
-        const parentDoc = parentFileFor(path, node.ino);
-        if (parentDoc === undefined) {
-          throw new Error(`file ${path} was staged as windows but no published parent entry holds its other bytes`);
-        }
-        if (node.content.kind !== 'sealed') throw new Error(`file ${path} carries dirty ranges without sealed content`);
-        chunking = await overlayContent(audited, node, node.content, dirty, parentDoc.chunks, staging);
-      }
-    } else if (node.content !== undefined) {
-      throw new Error(`non-file ${path} carries file content`);
-    }
-    const doc = entryFromNode(path, node, chunking, metadata);
-    if (!sameEntry(parent?.entryAt(path), doc)) changed.set(path, doc);
-  }
+  const named = new Set(audited.entries.map((entry) => entry.path));
+  const merge: Merge = { changed: new Map(), tombstones: new Set(), groups: new Map() };
+  if (parent !== undefined) relocate(audited, parent, named, merge);
+  await mergeRows(audited, parent, staging, merge);
   // WHAT THIS GENERATION REMOVES is `removalsAgainstParent`'s question, not
   // this builder's: absence is removal for a whole-tree capture and NOT for a
   // partial one, and that rule now has one owner. Whatever it answers becomes
   // this generation's tombstones, so the delta layer carries them and every
-  // reader's oldest-to-newest merge deletes exactly what was removed.
+  // reader's oldest-to-newest merge deletes exactly what was removed. A path
+  // the capture names exists at the cut, so a removal that also names it (an
+  // unlink and a create of one name in one generation) is not a tombstone,
+  // and neither is a name a relocation lands on: a reader applies a layer's
+  // tombstones after its entries, so one path may not be both.
   for (const path of removalsAgainstParent(audited, () => parent?.entryPaths() ?? [])) {
-    tombstones.add(path);
+    if (!named.has(path)) merge.tombstones.add(path);
   }
+  for (const path of merge.changed.keys()) merge.tombstones.delete(path);
+  const { changed, tombstones } = merge;
 
   const resolved = parent === undefined ? new Map<UpperPath, EntryDoc>() : parent.merged();
   for (const path of tombstones) resolved.delete(path);
   for (const doc of changed.values()) resolved.set(doc.path, doc);
-  for (const path of tombstones) resolved.delete(path);
+  propagate(merge, resolved, named);
 
-  const byPath = (a: EntryDoc, b: EntryDoc) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-  let own: LayerDoc;
-  if (parent === undefined || parent.depth >= MAX_LAYER_DEPTH) {
-    own = {
-      v: 1, fmt: BOUNDED_LAYERS_FORMAT, cut, t: 'base',
-      entries: [...resolved.values()].sort(byPath), tombs: [], layers: [],
-    };
-  } else if (changed.size > 0 || tombstones.size > 0) {
-    own = {
-      v: 1, fmt: BOUNDED_LAYERS_FORMAT, cut, t: 'delta',
-      entries: [...changed.values()].sort(byPath),
-      tombs: [...tombstones].sort(),
-      layers: [parent.rootRef, ...parent.layers],
-    };
-  } else {
-    // NOTHING CHANGED: restate the parent's own layer under the new cut, so
-    // the chain does not grow for an empty generation. Above a base the
-    // restatement is an empty delta naming it.
-    own = parent.own.t === 'delta'
-      ? { ...parent.own, cut, entries: parent.own.entries.map(copyEntry), tombs: [...parent.own.tombs], layers: [...parent.layers] }
-      : { v: 1, fmt: BOUNDED_LAYERS_FORMAT, cut, t: 'delta', entries: [], tombs: [], layers: [parent.rootRef] };
-  }
+  const own = ownLayer(parent, cut, changed, tombstones, resolved);
   const rootBytes = encodeCanonical(layerCanon(own));
   // Root is staged only after every dependency has sealed in the sink.
   const root = await sink.stage(objectKey(sha256Hex(rootBytes)), rootBytes);
@@ -715,30 +860,17 @@ export async function build(
     root,
     reused: own.layers,
   });
-
-  const chunkHashes = new Set<string>();
-  for (const doc of resolved.values()) {
-    if (doc.kind !== 'file') continue;
-    for (const part of doc.chunks) {
-      if (!isHoleExtent(part)) chunkHashes.add(part.hash);
-    }
-  }
   const view = new BoundedLayers(
     root.ref.sha256,
     root.ref,
     cut,
     own,
     resolved,
-    chunkHashes,
+    chunkHashesOf(resolved),
     undefined,
     undefined,
     null,
   );
-  const files: BoundaryRow[] = [];
-  for (const doc of changed.values()) {
-    if (doc.kind !== 'file') continue;
-    files.push({ ino: String(doc.ino), path: doc.path, size: doc.size, boundaries: gridBoundaries(doc.size) });
-  }
   return {
     plan,
     view,
@@ -749,7 +881,11 @@ export async function build(
       nodesRewritten: own.entries.length,
       wholeFiles: staging.tally.wholeFiles,
     },
-    handback: { files, removed: [...tombstones].sort() },
+    handback: {
+      maxChunkBytes: DIRTY_CELL_BYTES,
+      files: boundaryRowsOf(changed.values()),
+      removed: [...tombstones].sort(),
+    },
   };
 }
 
@@ -807,6 +943,12 @@ async function fetchObject(
   }
 }
 
+/**
+ * One resolved entry as a restore reads it. `ino` is an id of this view:
+ * equal for every name of one inode, distinct otherwise, unrelated to the
+ * number a filesystem gave the file. A restore hardlinks the names that
+ * share it and never reads a stored inode number.
+ */
 export interface StatView {
   readonly kind: NodeKind;
   readonly mode: number;
@@ -884,6 +1026,19 @@ export class BoundedLayers {
 
   work(): HydrateWork {
     return { ...this.#hydrate };
+  }
+
+  /** The view-local inode ids, one per inode identity, in first-stat order. */
+  readonly #inodeIds = new Map<string, number>();
+
+  #inodeId(doc: EntryDoc): number {
+    const key = inodeKey(doc);
+    let id = this.#inodeIds.get(key);
+    if (id === undefined) {
+      id = this.#inodeIds.size + 1;
+      this.#inodeIds.set(key, id);
+    }
+    return id;
   }
 
   /**
@@ -989,6 +1144,16 @@ export class BoundedLayers {
     }
     return [...refs.values()];
   }
+
+  /**
+   * What a restored container's daemon is told about every file this root
+   * serves, so the first fence after a wake stages windows rather than whole
+   * files. Nothing is removed: a restore replaces the map, it does not
+   * subtract from one.
+   */
+  boundaryRows(): PublishedBoundaries {
+    return { maxChunkBytes: DIRTY_CELL_BYTES, files: boundaryRowsOf(this.resolved.values()), removed: [] };
+  }
   /** The resolved entry, or null when absent or tombstoned. Hostile paths
    *  refuse rather than reading as a quiet miss. */
   stat(path: UpperPath): StatView | null {
@@ -997,11 +1162,12 @@ export class BoundedLayers {
     if (doc === undefined) return null;
     const metadata = copyMetadata(doc.metadata);
     const metadataField = metadata === undefined ? {} : { metadata };
+    const ino = this.#inodeId(doc);
     return doc.kind === 'file'
-      ? { kind: 'file', mode: doc.mode, ino: doc.ino, ...metadataField, size: doc.size }
+      ? { kind: 'file', mode: doc.mode, ino, ...metadataField, size: doc.size }
       : doc.kind === 'symlink'
-        ? { kind: 'symlink', mode: doc.mode, ino: doc.ino, ...metadataField, target: doc.target }
-        : { kind: 'dir', mode: doc.mode, ino: doc.ino, ...metadataField };
+        ? { kind: 'symlink', mode: doc.mode, ino, ...metadataField, target: doc.target }
+        : { kind: 'dir', mode: doc.mode, ino, ...metadataField };
   }
 
   /** Immediate children of a directory, sorted. Refuses a missing or non-dir

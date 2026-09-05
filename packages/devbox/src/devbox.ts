@@ -137,10 +137,10 @@ import {
 } from './capture/journal/command';
 import {
   beginCandidateOperation,
-  candidateRunControl,
   finalizeCandidateOperation,
   redriveCandidateOperation,
   settleCandidateNoChange,
+  settleCandidateOperation,
   type CandidateControlStore,
   type CandidateEnvelopeStore,
 } from './candidates/control';
@@ -3699,7 +3699,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         }
         return await settleCandidateNoChange({ active, store: control });
       },
-      restoreState: async () => await candidateRunControl(control, envelopes),
+      restoreState: async () => await settleCandidateOperation({ store: control, envelopes, verifyObject }),
       bootId: async () => await this.ctx.storage.get<string>(BOOT_ID_KEY),
       redrive: async (run) => {
         const active = run.operation;

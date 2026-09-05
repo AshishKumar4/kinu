@@ -62,7 +62,9 @@ export class LazyContainer {
   }
 
   /** A new restore over a new head: what an attach hands back. The tree stays
-   *  where it is — a replacement clears it, an attach does not. */
+   *  where it is — a replacement clears it, an attach does not — and every
+   *  directory faults again, which is how the new restore learns what is
+   *  resident; a live file is never recreated by that listing. */
   adopt(restore: LazyRestore | null, tree?: LiveTree): void {
     this.#restore = restore;
     if (tree !== undefined) this.tree = tree;
@@ -118,6 +120,13 @@ export class LazyContainer {
   async readRange(path: string, offset: number, length: number): Promise<void> {
     await this.faultPath(path);
     await this.#restore?.hydrate(path, offset, length);
+  }
+
+  /** The inode the container gave `path`: what a restore's `fstat` answers,
+   *  the directory on the way to it faulted in as a stat would fault it. */
+  async ino(path: string): Promise<number> {
+    await this.faultPath(path);
+    return this.tree.ino(path);
   }
 
   /**
@@ -204,12 +213,14 @@ export class LazyContainer {
   }
 
   /** Plant one directory's children, hardlinks shared with the names already
-   *  planted for the same inode. */
+   *  planted for the same inode. A name the disk already holds is left as
+   *  it is: a listing never recreates a live file, so its inode survives. */
   async #list(dir: string): Promise<void> {
     const restore = this.#restore;
     if (restore === null || this.#listed.has(dir)) return;
     this.#listed.add(dir);
     for (const entry of await restore.list(dir)) {
+      if (this.tree.has(entry.path)) continue;
       const linked = entry.kind === 'file' ? restore.linkedPath(entry.ino) : undefined;
       if (linked !== undefined && linked !== entry.path && this.tree.has(linked)) {
         this.tree.link(linked, entry.path);

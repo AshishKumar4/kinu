@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
-import { closeSync, constants as FS, createWriteStream } from 'node:fs';
+import { closeSync, constants as FS, createWriteStream, fstatSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
@@ -10,6 +10,7 @@ import { sha256Hex } from '../src/cas/hash';
 import * as v from 'valibot';
 import type { AuditedCapture } from '../src/capture/model';
 import { build as buildBounded, isHoleExtent, open as openBounded } from '../src/candidates/bounded-layers';
+import type { PublishedBoundaries } from '../src/candidates/bounded-layers';
 import { buildMerklePack, openMerklePack, parentFromPublishedParent } from '../src/candidates/merkle-pack';
 import type { MerklePackView, PackRun } from '../src/candidates/merkle-pack';
 import { JournalDaemonClient, captureFromJournalDelta, readJournalDelta } from '../src/capture/journal/client';
@@ -109,6 +110,49 @@ async function atomicWrite(path: string, body: Uint8Array): Promise<void> {
     await rm(temp, { force: true });
     throw error;
   }
+}
+
+/**
+ * The boundary hand-back one runner process leaves for the next. A checkpoint
+ * builds the rows of the files it rewrote and a restore the rows of every file
+ * it materialized, but neither may speak to the daemon: the checkpoint runs
+ * before the head CAS and the restore runs beneath a stopped journal. The
+ * `seed` action the host runs after both reads this file and hands the rows to
+ * the daemon together with the head they belong to, and only when the head it
+ * was given is the root the rows describe. A stale or absent file seeds the
+ * base alone, so the daemon stages the next dirty file whole rather than
+ * against boundaries of a root it does not serve.
+ */
+const BoundaryHandbackFileSchema = v.strictObject({
+  rootSha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)),
+  maxChunkBytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+  files: v.array(v.strictObject({
+    ino: v.pipe(v.string(), v.minLength(1)),
+    path: v.pipe(v.string(), v.minLength(1)),
+    size: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+    boundaries: v.array(v.pipe(v.number(), v.safeInteger(), v.minValue(0))),
+  })),
+  removed: v.array(v.pipe(v.string(), v.minLength(1))),
+});
+type BoundaryHandbackFile = v.InferOutput<typeof BoundaryHandbackFileSchema>;
+
+async function writeHandback(stage: string, rootSha256: string, rows: PublishedBoundaries): Promise<void> {
+  // Parsed on the way out, so a file this writes is a file `readHandback` accepts.
+  const file = v.parse(BoundaryHandbackFileSchema, { rootSha256, ...rows });
+  await atomicWrite(objectPath(stage, 'boundaries.json'), new TextEncoder().encode(JSON.stringify(file)));
+}
+
+/** The hand-back on this container's disk, or null when no runner left one. */
+async function readHandback(stage: string): Promise<BoundaryHandbackFile | null> {
+  let text: string;
+  try {
+    text = await readFile(objectPath(stage, 'boundaries.json'), 'utf8');
+  } catch (error) {
+    const code = error instanceof Error && 'code' in error ? error.code : undefined;
+    if (code === 'ENOENT') return null;
+    throw error;
+  }
+  return v.parse(BoundaryHandbackFileSchema, JSON.parse(text));
 }
 
 /**
@@ -439,6 +483,23 @@ async function restoreBounded(
     for (const directory of directories.reverse()) {
       restoreMetadata(root, directory.path, directory.metadata);
     }
+    // The stored inodes died with the old filesystem, so the rows carry the
+    // live inodes the daemon indexes by. The daemon is stopped while this
+    // runs, so the rows wait on disk for the seed after its restart.
+    const rows = view.boundaryRows();
+    const files = rows.files.map((row) => {
+      const fd = root.openRead(row.path);
+      try {
+        return { ...row, ino: String(fstatSync(fd).ino) };
+      } finally {
+        closeSync(fd);
+      }
+    });
+    await writeHandback(options.stage, head.envelope.rootObject.sha256, {
+      maxChunkBytes: rows.maxChunkBytes,
+      files,
+      removed: rows.removed,
+    });
   } finally {
     root.close();
   }
@@ -777,6 +838,9 @@ export async function publishCapturedCandidate(
         );
       const built = await buildBounded(capture, parent, sink);
       const draft = await stageCandidatePayload(built.plan, input, payload);
+      // Left after the stage, so only a root that can still publish has rows
+      // waiting; the seed after the host's CAS matches them to the head.
+      await writeHandback(options.stage, built.plan.root.ref.sha256, built.handback);
       return checkpointResult(draft, built.view.gcClosure());
     }
     let parent = null;
@@ -886,9 +950,30 @@ async function checkpointCandidate(options: CandidateRunOptions): Promise<Candid
   }
 }
 
+/**
+ * Name the published head to the daemon. When the rows a checkpoint or a
+ * restore left on this disk describe that head's root, they travel with it as
+ * one `boundaries` request, which seeds the base in the same admission-closed
+ * window; otherwise the base travels alone and the next fence stages whole.
+ */
 async function seedCandidateJournal(options: CandidateRunOptions): Promise<CandidateSeedResult> {
-  const base = publishedJournalBase(controlState(options));
-  if (base !== null) await new JournalDaemonClient(options.journalSocket).seed(base);
+  const control = controlState(options);
+  const base = publishedJournalBase(control);
+  if (base === null || control.head === null) return { ok: true };
+  const client = new JournalDaemonClient(options.journalSocket);
+  const held = await readHandback(options.stage);
+  if (held === null || held.rootSha256 !== control.head.envelope.rootObject.sha256) {
+    await client.seed(base);
+    return { ok: true };
+  }
+  await client.boundaries({
+    cut: base.cut,
+    generation: base.generation,
+    root: base.root,
+    maxChunkBytes: held.maxChunkBytes,
+    files: held.files,
+    removed: held.removed,
+  });
   return { ok: true };
 }
 

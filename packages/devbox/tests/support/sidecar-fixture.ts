@@ -53,7 +53,7 @@ import type {
   SealWork,
   UploadIntent,
 } from '../../src/durability/contracts';
-import type { JournalDelta, JournalFence } from '../../src/capture/journal/client';
+import type { JournalBase, JournalDelta, JournalFence } from '../../src/capture/journal/client';
 type DeltaMetadataOp = DeltaManifestV2['metadataOps'][number];
 
 /**
@@ -196,24 +196,42 @@ export class MemoryPayloadStore implements SidecarPayloadStore {
   }
 }
 
-/** One file the modeled fence found dirty, before the manifest is written. */
+/** One inode the modeled fence found dirty, before the manifest is written:
+ *  the name its writes used, and the ranges they touched. */
 interface DirtyFile {
+  readonly path: string;
   whole: boolean;
   readonly ranges: StagedRange[];
+}
+
+/** One published file's boundaries, as the daemon's map holds them: by the
+ *  inode, with the name the hand-back gave it, which `removed` drops by. */
+interface BoundaryFile {
+  readonly path: string;
+  readonly size: number;
+  readonly boundaries: readonly number[];
 }
 
 /**
  * The daemon, modeled: it observes mutations, holds the boundary map the
  * sidecar hands it, and answers a fence with the same windows the deployed
  * fence would have staged.
+ *
+ * EVERYTHING IS BY INODE, as the daemon keys it (`journal-delta.c`:
+ * `journal_dirty_find`, `journal_boundaries_find`). A write is recorded
+ * against the inode the name resolved to; a fence binds each dirty inode to
+ * the name it has at the cut; a boundary row is found by the inode a restore
+ * or a checkpoint stated it under. A wake therefore credits windows only to
+ * the inodes the seed's hand-back names, which is what the deployed restore
+ * pays an `fstat` per row to make true.
  */
 export class ModeledDaemon implements SidecarDaemon {
-  readonly boundaryMap = new Map<string, { readonly size: number; readonly boundaries: readonly number[] }>();
+  readonly boundaryMap = new Map<number, BoundaryFile>();
   readonly fences: DeltaManifestV2[] = [];
   /** One line per admitted write, plus the lines a refusal cancelled. */
   readonly wal: string[] = [];
   readonly cancelledWal: string[] = [];
-  #dirty = new Map<string, DirtyFile>();
+  #dirty = new Map<number, DirtyFile>();
   #touched = new Set<string>();
   #ops: DeltaMetadataOp[] = [];
   #sequence = 1;
@@ -240,10 +258,16 @@ export class ModeledDaemon implements SidecarDaemon {
     return this.#tree;
   }
 
-  /** A replaced container hands its new disk tree over; the WAL history and
-   *  the boundary map stay, because both live with the daemon's state. */
+  /** A replaced container hands its new disk tree over. The WAL lines stay
+   *  for the cells that read them; the boundary map and the pending
+   *  mutations do not, because a replacement starts a daemon over a blank
+   *  disk and only the seed's hand-back refills its map. */
   adopt(tree: LiveTree): void {
     this.#tree = tree;
+    this.#dirty = new Map();
+    this.#touched = new Set();
+    this.#ops = [];
+    this.boundaryMap.clear();
   }
 
   /** Forget the box: what discard owes the next container. */
@@ -269,17 +293,22 @@ export class ModeledDaemon implements SidecarDaemon {
 
   // ── the workload's mutations ─────────────────────────────────────────────
 
+  /** The workload wrote these entries: a new name is journaled as its
+   *  create, mkdir, symlink or link, every name is touched, and every
+   *  file's inode is dirty in full. */
   plant(entries: readonly NodeEntry[]): void {
+    const existed = new Set(entries.filter((entry) => this.tree.has(entry.path)).map((entry) => entry.path));
     this.tree.plant(entries);
+    const firstName = new Map<number, string>();
     for (const entry of sortedByPath(entries)) {
-      if (entry.kind === 'dir') {
-        this.#touched.add(entry.path);
-        continue;
+      this.#touched.add(entry.path);
+      const linked = firstName.get(entry.ino);
+      if (!existed.has(entry.path)) {
+        if (linked !== undefined) this.#op('link', entry.path, linked);
+        else this.#op(entry.kind === 'dir' ? 'mkdir' : entry.kind === 'symlink' ? 'symlink' : 'create', entry.path, '');
       }
-      if (entry.kind === 'symlink') {
-        this.#touched.add(entry.path);
-        continue;
-      }
+      if (entry.kind !== 'file') continue;
+      if (linked === undefined) firstName.set(entry.ino, entry.path);
       this.#markWhole(entry.path);
       this.#walBytes += entry.content === undefined ? 0 : runBytes(entry.content);
     }
@@ -287,11 +316,13 @@ export class ModeledDaemon implements SidecarDaemon {
 
   write(path: string, bytes: Uint8Array): void {
     const existed = this.tree.has(path);
+    const created = ancestorsOfPath(path).filter((ancestor) => !this.tree.has(ancestor));
     this.tree.writeFile(path, bytes);
     if (!existed) {
-      for (const ancestor of ancestorsOfPath(path)) {
-        if (this.tree.has(ancestor)) this.#touched.add(ancestor);
-      }
+      for (const ancestor of created) this.#op('mkdir', ancestor, '');
+      this.#op('create', path, '');
+      for (const ancestor of ancestorsOfPath(path)) this.#touched.add(ancestor);
+      this.#touched.add(path);
     }
     this.#markWhole(path);
     this.#walBytes += bytes.byteLength;
@@ -303,32 +334,25 @@ export class ModeledDaemon implements SidecarDaemon {
     this.#walBytes += bytes.byteLength;
   }
 
-  /** A rename, as the WAL records it: the structure moves, bytes do not. */
+  /** A rename, as the WAL records it: the names move, the inodes and their
+   *  dirty ranges do not; the fence binds each dirty inode to its new name. */
   rename(from: string, to: string): void {
-    const node = this.tree.node(from);
-    if (node === undefined) throw new Error(`no node at ${from}`);
-    const snapshot = this.tree.snapshot().filter((entry) => entry.path === from || entry.path.startsWith(`${from}/`));
-    this.tree.remove(from);
-    this.tree.plant(snapshot.map((entry) => ({ ...entry, path: `${to}${entry.path.slice(from.length)}` })));
+    this.tree.rename(from, to);
     this.#op('rename', from, to);
-    const held = this.#dirty.get(from);
-    if (held !== undefined) {
-      this.#dirty.delete(from);
-      this.#dirty.set(to, held);
-    }
     for (const ancestor of ancestorsOfPath(to)) {
       if (this.tree.has(ancestor)) this.#touched.add(ancestor);
     }
     this.#touched.add(to);
   }
 
+  /** An unlink or rmdir. The dirty record and the boundary row outlive the
+   *  name: the fence finds the inode gone, and only a publish's `removed`
+   *  drops the row, as the daemon's map is merged. */
   remove(path: string): void {
     const node = this.tree.node(path);
     this.tree.remove(path);
     this.#op(node?.kind === 'dir' ? 'rmdir' : 'unlink', path, '');
-    this.#dirty.delete(path);
     this.#touched.delete(path);
-    this.boundaryMap.delete(path);
     for (const ancestor of ancestorsOfPath(path)) {
       if (this.tree.has(ancestor)) this.#touched.add(ancestor);
     }
@@ -341,16 +365,17 @@ export class ModeledDaemon implements SidecarDaemon {
     this.#generation += 1;
     // THE TOUCHED PATHS PLUS THEIR ANCESTORS, which is what makes a delta a
     // consistent partial tree: a rewritten directory needs its own stat, and
-    // the sidecar rewrites every ancestor of everything that changed.
+    // the sidecar rewrites every ancestor of everything that changed. A
+    // written name that is gone at the cut has no row; its inode's bytes are
+    // found under whatever name it has now, or nowhere.
     const paths = new Set<string>();
-    for (const path of [...this.#dirty.keys(), ...this.#touched]) {
+    for (const path of [...[...this.#dirty.values()].map((held) => held.path), ...this.#touched]) {
       if (!this.tree.has(path)) continue;
       paths.add(path);
       for (const ancestor of ancestorsOfPath(path)) {
         if (this.tree.has(ancestor)) paths.add(ancestor);
       }
     }
-    const inos = new Map(this.tree.snapshot().map((entry) => [entry.path, entry.ino]));
     const dirtyFiles: DeltaDirtyFile[] = [];
     let bytesStaged = 0;
     let wholeFiles = 0;
@@ -358,8 +383,7 @@ export class ModeledDaemon implements SidecarDaemon {
       const node = this.tree.node(path);
       if (node === undefined) continue;
       const metadata = cloneMetadata(node.metadata);
-      const ino = inos.get(path);
-      if (ino === undefined) throw new Error(`no inode for ${path}`);
+      const ino = this.tree.ino(path);
       const row = {
         ino: String(ino),
         path,
@@ -385,22 +409,24 @@ export class ModeledDaemon implements SidecarDaemon {
       }
       const content = node.content;
       const size = content === undefined ? 0 : (content.kind === 'dense' ? content.bytes.byteLength : content.size);
-      const entry = this.#dirty.get(path) ?? { whole: true, ranges: [] };
-      const known = this.boundaryMap.get(path);
-      const whole = entry.whole || known === undefined || known.size !== size;
-      const dataRuns = content === undefined ? [] : dataRunsOf(content, size);
-      const dirty = whole ? dataRuns : mergeRanges(entry.ranges);
-      const windows = chunkWindows({
-        size,
-        ranges: dirty,
-        boundaries: whole ? null : known.boundaries,
-        params: this.#params,
-        whole,
-      });
-      const ranges = await this.#stageWindows(path, windows, dataRuns);
+      const held = this.#dirty.get(ino);
+      if (held === undefined) {
+        // Present, touched, unwritten: a row with no bytes (`write_entry`).
+        dirtyFiles.push({ ...row, kind: 'file', size });
+        continue;
+      }
+      // THE WINDOW PLAN IS THE DAEMON'S (`journal_stage_plan`): whole when no
+      // boundaries are held for the inode, else one window per dirty cluster
+      // from the boundary before it to four chunks past it, and whole again
+      // when that one window is the file.
+      const written = clampRanges(held.whole ? [{ offset: 0, length: size }] : mergeRanges(held.ranges), size);
+      const known = this.boundaryMap.get(ino);
+      const windows = chunkWindows({ size, ranges: written, boundaries: known?.boundaries ?? null, params: this.#params, whole: false });
+      const whole = known === undefined || (windows.length === 1 && windows[0]!.offset === 0 && windows[0]!.length >= size);
+      const ranges = await this.#stageWindows(path, windows, content === undefined ? [] : dataRunsOf(content, size));
       bytesStaged += ranges.reduce((sum, range) => sum + range.length, 0);
       if (whole) wholeFiles += 1;
-      dirtyFiles.push({ ...row, kind: 'file', size, whole, dirty, ranges });
+      dirtyFiles.push({ ...row, kind: 'file', size, whole, dirty: written, ranges });
     }
     const sealWork: SealWork = { bytesStaged, bytesChunked: 0, chunksHashed: 0, nodesRewritten: 0, wholeFiles };
     const manifest: DeltaManifestV2 = {
@@ -471,13 +497,35 @@ export class ModeledDaemon implements SidecarDaemon {
 
   async boundaries(handback: BoundaryHandback): Promise<number> {
     // MERGE, never replace: a full map is O(total extents) and this is the
-    // request that would put an O(n) term back into every publish.
-    for (const file of handback.files) {
-      this.boundaryMap.set(file.path, { size: file.size, boundaries: [...file.boundaries] });
+    // request that would put an O(n) term back into every publish. A row
+    // replaces the inode's row; `removed` drops rows by the name they carry
+    // (`journal_boundaries_merge`).
+    for (const removed of handback.removed) {
+      for (const [ino, file] of this.boundaryMap) {
+        if (file.path === removed) this.boundaryMap.delete(ino);
+      }
     }
-    for (const path of handback.removed) this.boundaryMap.delete(path);
-    this.#base = { cut: handback.cut, generation: handback.generation, root: handback.root };
+    for (const file of handback.files) {
+      this.boundaryMap.set(Number(file.ino), { path: file.path, size: file.size, boundaries: [...file.boundaries] });
+    }
+    this.seed(handback);
     return handback.files.length;
+  }
+
+  /**
+   * The published head, as the `base` request names it: the next fence is
+   * partial against it, and a file it touches stages whole until a hand-back
+   * names its boundaries. A daemon that has fenced nothing continues the
+   * head's own counters, as the deployed daemon does when a seed reaches it
+   * fresh; one that has fenced is being told about its own fence and keeps
+   * counting from it.
+   */
+  seed(base: JournalBase): void {
+    if (this.#manifest === null) {
+      this.#cut = Math.max(this.#cut, Number(base.cut));
+      this.#generation = Math.max(this.#generation, Number(base.generation));
+    }
+    this.#base = { cut: base.cut, generation: base.generation, root: base.root };
   }
 
   /** The stage, as the sidecar reads it: the live bytes at identical offsets. */
@@ -509,17 +557,21 @@ export class ModeledDaemon implements SidecarDaemon {
     this.#ops.push({ sequence: this.#sequence++, op, path, argument, result: 0 });
   }
 
+  /** A write that rewrote the file: dirty from the first byte to the last it
+   *  has at the cut. Recorded against the inode, under the name it used. */
   #markWhole(path: string): void {
-    const held = this.#dirty.get(path);
-    if (held === undefined) this.#dirty.set(path, { whole: true, ranges: [] });
+    const ino = this.tree.ino(path);
+    const held = this.#dirty.get(ino);
+    if (held === undefined) this.#dirty.set(ino, { path, whole: true, ranges: [] });
     else held.whole = true;
   }
 
   #markRange(path: string, offset: number, length: number): void {
-    const held = this.#dirty.get(path) ?? { whole: false, ranges: [] };
+    const ino = this.tree.ino(path);
+    const held = this.#dirty.get(ino) ?? { path, whole: false, ranges: [] };
     held.ranges.push({ offset, length });
     held.ranges.sort((a, b) => a.offset - b.offset);
-    this.#dirty.set(path, held);
+    this.#dirty.set(ino, held);
   }
 }
 
@@ -579,6 +631,17 @@ function mergeRanges(ranges: readonly StagedRange[]): StagedRange[] {
     merged.push({ offset: range.offset, length: range.length });
   }
   return merged;
+}
+
+/** The ranges inside a file of `size` bytes: a write past a later truncate
+ *  has no bytes at the cut, and a manifest names only bytes the file has. */
+function clampRanges(ranges: readonly StagedRange[], size: number): StagedRange[] {
+  const inside: StagedRange[] = [];
+  for (const range of ranges) {
+    const length = Math.min(range.length, size - range.offset);
+    if (length > 0) inside.push({ offset: range.offset, length });
+  }
+  return inside;
 }
 
 export interface SidecarFixture {

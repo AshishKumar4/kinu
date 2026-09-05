@@ -808,6 +808,25 @@ export interface SealedContentReader {
   read(sourceId: string, offset: number, length: number): Promise<Uint8Array>;
 }
 
+/**
+ * One structural mutation the WAL recorded since the parent's cut: an op that
+ * changes which inode a name resolves to. A `rename` moves `from`, and
+ * everything under it, to `to`; a `link` gives the inode at `from` the second
+ * name `to`; a `create` (create, mkdir, mknod, symlink) puts a new inode at
+ * `path`; a `remove` (unlink, rmdir) takes a name away. Writes, truncates and
+ * attribute changes touch bytes and stat, never names, and are not here.
+ */
+export type StructuralOp =
+  | { readonly op: 'rename'; readonly from: UpperPath; readonly to: UpperPath }
+  | { readonly op: 'link'; readonly from: UpperPath; readonly to: UpperPath }
+  | { readonly op: 'create'; readonly path: UpperPath }
+  | { readonly op: 'remove'; readonly path: UpperPath };
+
+/** Whether `name` is `prefix` or lies beneath it. */
+function under(name: UpperPath, prefix: UpperPath): boolean {
+  return name === prefix || name.startsWith(`${prefix}/`);
+}
+
 /** The one value a capture mechanism may hand a publisher. */
 export class AuditedCapture {
   readonly #cut: number;
@@ -817,8 +836,12 @@ export class AuditedCapture {
   readonly #sealedReader: SealedContentReader | undefined;
   /** A v2 delta fence: merge against the parent rather than replace. */
   readonly #partial: boolean;
-  /** The paths a v2 delta capture says the WAL deleted since the parent's cut. */
-  readonly #removed: readonly string[];
+  /** The structural ops a v2 delta capture says the WAL recorded since the
+   *  parent's cut, in sequence order. */
+  readonly #structural: readonly StructuralOp[];
+  /** The inode each issued path carries, so a range read can tell an entry of
+   *  this capture from a lookalike without walking the entries. */
+  readonly #inoByPath: ReadonlyMap<UpperPath, number>;
 
   private constructor(
     cut: number,
@@ -827,7 +850,7 @@ export class AuditedCapture {
     entries: readonly NodeEntry[],
     sealedReader: SealedContentReader | undefined,
     partial: boolean,
-    removed: readonly string[],
+    structural: readonly StructuralOp[],
   ) {
     this.#cut = cut;
     this.#capturedCut = capturedCut;
@@ -835,9 +858,15 @@ export class AuditedCapture {
     this.#entries = entries;
     this.#sealedReader = sealedReader;
     this.#partial = partial;
-    this.#removed = [...removed].sort();
+    this.#structural = structural.map((op) => ({ ...op }));
+    this.#inoByPath = new Map(entries.map((entry) => [entry.path, entry.ino]));
     auditedCaptures.add(this);
     Object.freeze(this);
+  }
+
+  /** Whether `entry` is one this capture issued: its path, with its inode. */
+  issued(entry: NodeEntry): boolean {
+    return this.#inoByPath.get(entry.path) === entry.ino;
   }
 
   /** True when this capture carries only the touched paths and must be merged
@@ -846,10 +875,61 @@ export class AuditedCapture {
     return this.#partial;
   }
 
-  /** The removals this capture names, canonical and sorted. Empty for a
-   *  whole-tree capture, where absence IS removal. */
+  /** The structural ops this capture carries, in WAL order. Empty for a
+   *  whole-tree capture, which has no parent to relate names to. */
+  get structural(): readonly StructuralOp[] {
+    return this.#structural.map((op) => ({ ...op }));
+  }
+
+  /** The names this capture's ops took away: every unlinked or rmdir'd path
+   *  and every rename's old name, canonical and sorted. A name the ops took
+   *  away and gave back is still here; the builder's named rule keeps it. */
   get removed(): readonly string[] {
-    return [...this.#removed];
+    const removed = new Set<UpperPath>();
+    for (const op of this.#structural) {
+      if (op.op === 'remove') removed.add(op.path);
+      if (op.op === 'rename') removed.add(op.from);
+    }
+    return [...removed].sort();
+  }
+
+  /**
+   * Where the inode now at `path` was when the parent was cut, or null when
+   * this generation created it. The ops are walked newest first: a rename
+   * onto or over the name moves it back, a link takes it to its source, and
+   * a create or remove of the name means nothing older stands behind it.
+   */
+  originOf(path: UpperPath): UpperPath | null {
+    let name = path;
+    for (let at = this.#structural.length - 1; at >= 0; at -= 1) {
+      const op = this.#structural[at]!;
+      if (op.op === 'rename') {
+        if (under(name, op.to)) name = `${op.from}${name.slice(op.to.length)}`;
+      } else if (op.op === 'link') {
+        if (name === op.to) name = op.from;
+      } else if (under(name, op.path)) {
+        return null;
+      }
+    }
+    return name;
+  }
+
+  /**
+   * Where the inode the parent held at `path` is now, or null when the ops
+   * removed it or renamed another inode over it. The ops are walked oldest
+   * first, so a rename of an ancestor carries the name along.
+   */
+  destinationOf(path: UpperPath): UpperPath | null {
+    let name = path;
+    for (const op of this.#structural) {
+      if (op.op === 'rename') {
+        if (under(name, op.from)) name = `${op.to}${name.slice(op.from.length)}`;
+        else if (under(name, op.to)) return null;
+      } else if (op.op === 'remove' && under(name, op.path)) {
+        return null;
+      }
+    }
+    return name;
   }
 
   get cut(): number {
@@ -876,10 +956,10 @@ export class AuditedCapture {
     entries: readonly NodeEntry[],
     sealedReader?: SealedContentReader,
     partial = false,
-    removed: readonly string[] = [],
+    structural: readonly StructuralOp[] = [],
   ): AuditedCapture {
     if (!captureFactoryAuthorities.has(authority)) throw new Error('AuditedCapture issuance is factory-only');
-    return new AuditedCapture(cut, capturedCut, generation, entries, sealedReader, partial, removed);
+    return new AuditedCapture(cut, capturedCut, generation, entries, sealedReader, partial, structural);
   }
 
   readSealed(sourceId: string, offset: number, length: number): Promise<Uint8Array> {
@@ -904,18 +984,24 @@ export function requireAuditedCapture(value: AuditedCapture): AuditedCapture {
   return value;
 }
 
-/** Streams an immutable capture range without materializing the full file. */
+/**
+ * Streams an immutable capture range without materializing the full file.
+ *
+ * The capture is recognized by identity and the entry by the index the
+ * capture built at issue, never by re-walking or re-hashing the entries: a
+ * builder reads one range per chunk, so a per-read walk made a whole-tree
+ * seal of n sealed files cost n squared (2026-09-05: the bounded-layers
+ * battery's 100,000-file cell did not finish inside a 1600 s run).
+ */
 export async function readCaptureRange(
   capture: AuditedCapture,
   entry: NodeEntry,
   offset: number,
   length: number,
 ): Promise<Uint8Array> {
-  requireAuditedCapture(capture);
+  if (!auditedCaptures.has(capture)) throw new Error('candidate input is not an AuditedCapture issued by the capture factory');
   if (entry.kind !== 'file' || !entry.content) throw new Error('capture range requires a file entry');
-  if (!capture.entries.some((issued) => issued.path === entry.path && issued.ino === entry.ino)) {
-    throw new Error('capture range entry was not issued with this capture');
-  }
+  if (!capture.issued(entry)) throw new Error('capture range entry was not issued with this capture');
   if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || offset + length > contentSize(entry.content)) {
     throw new Error('capture range is outside file bounds');
   }
@@ -969,13 +1055,15 @@ export interface VerifiedJournalCut {
   readonly sealedReader?: SealedContentReader;
   /**
    * A v2 delta fence: only the touched paths (plus their ancestors) appear in
-   * `entries`, and `removed` names the paths the WAL deleted since the parent's
-   * cut. The capture is an OVERLAY a builder merges against its published
-   * parent — never a whole-tree replacement, so a builder that cannot merge
-   * must refuse it rather than silently drop the unnamed majority of the tree.
+   * `entries`, and `structural` holds the ops the WAL recorded since the
+   * parent's cut, in sequence order, so the merge knows what was removed and
+   * where a renamed inode came from. The capture is an OVERLAY a builder
+   * merges against its published parent — never a whole-tree replacement, so
+   * a builder that cannot merge must refuse it rather than silently drop the
+   * unnamed majority of the tree.
    */
   readonly partial?: boolean;
-  readonly removed?: readonly string[];
+  readonly structural?: readonly StructuralOp[];
 }
 
 /** Issues a sealed capture only after a local journal has verified its fence. */
@@ -1015,16 +1103,18 @@ export function issueVerifiedJournalCapture(proof: VerifiedJournalCut): AuditedC
       manifestSha256: manifest,
     }),
   );
-  if (proof.partial === true) {
-    for (const path of proof.removed ?? []) {
+  const structural = proof.partial === true ? proof.structural ?? [] : [];
+  for (const op of structural) {
+    const paths = op.op === 'rename' || op.op === 'link' ? [op.from, op.to] : [op.path];
+    for (const path of paths) {
       if (!isCanonicalJournalPath(path)) {
-        throw new Error(`journal fence names a non-canonical removed path '${path}'`);
+        throw new Error(`journal fence names a non-canonical ${op.op} path '${path}'`);
       }
     }
   }
   return AuditedCapture.issue(
     captureFactoryAuthority, proof.cut, capturedCut, proof.generation, snapshot, proof.sealedReader,
-    proof.partial === true, proof.partial === true ? proof.removed ?? [] : [],
+    proof.partial === true, structural,
   );
 }
 

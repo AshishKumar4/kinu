@@ -616,6 +616,30 @@ function pagesFor(
   return pages;
 }
 
+/**
+ * Replay one `link`: the second name shares the source's node. A source this
+ * generation created has no record yet; the daemon touches both names of a
+ * link, so the rows state the inode under each and one inode number plants
+ * them as one node. A source neither the parent nor the rows hold is a
+ * corrupt fence.
+ */
+async function replayLink(
+  op: { readonly path: string; readonly argument: string },
+  named: ReadonlySet<string>,
+  materializeDir: (path: string) => Promise<PlannedDir>,
+  setChild: (path: string, child: PlannedChild) => Promise<void>,
+): Promise<void> {
+  const source = await materializeDir(parentPathOf(op.argument));
+  const shared = source.children.get(nameOf(op.argument));
+  if (shared !== undefined) {
+    await setChild(op.path, shared);
+    return;
+  }
+  if (!named.has(op.argument)) {
+    throw new MerklePackError('no-entry', `hardlink source ${JSON.stringify(op.argument)} is absent`);
+  }
+}
+
 // ── the build ────────────────────────────────────────────────────────────────
 
 export async function buildMerkleDelta(
@@ -706,6 +730,7 @@ export async function buildMerkleDelta(
   };
 
   // ── structural replay, in WAL order ───────────────────────────────────────
+  const named = new Set(delta.entries.map((file) => file.path));
   for (const op of delta.metadataOps) {
     if (op.result < 0) continue;
     if (!isCanonicalJournalPath(op.path)) {
@@ -716,12 +741,7 @@ export async function buildMerkleDelta(
     // both xattr ops each end in a row that states the result, so replaying
     // them here would replay what the row already says.
     if (op.op === 'link') {
-      const source = await materializeDir(parentPathOf(op.argument));
-      const shared = source.children.get(nameOf(op.argument));
-      if (shared === undefined) {
-        throw new MerklePackError('no-entry', `hardlink source ${JSON.stringify(op.argument)} is absent`);
-      }
-      await setChild(op.path, shared);
+      await replayLink(op, named, materializeDir, setChild);
       continue;
     }
     if (op.op === 'rename') {
