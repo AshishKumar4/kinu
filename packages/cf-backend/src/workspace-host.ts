@@ -169,6 +169,7 @@ export interface HostedWorkspaceDeps {
    * the workspace itself has any business holding.
    */
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
+  onFilesChanged?(paths: readonly string[]): void;
 }
 
 export interface HostedWorkspace {
@@ -273,6 +274,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
     // halves `git clone` refuses before it spawns anything.
     fabric: HOST_FABRIC_COMPOSITION,
   });
+  if (deps.onFilesChanged) bundle.onFilesChanged(deps.onFilesChanged);
 
   // One registry per isolate, exactly as a session has one: a port is a live
   // listener in this isolate's memory, and its capability is persisted through

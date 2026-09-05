@@ -329,6 +329,8 @@ export interface WorkspaceBundle {
    * has already revoked.
    */
   session(): Promise<WorkspaceSession>;
+  /** Observe file changes after boot, including a successful retry. */
+  onFilesChanged(listener: (paths: readonly string[]) => void): () => void;
   /**
    * Drop this workspace's tables, leaving the host's own rows alone.
    *
@@ -389,6 +391,7 @@ export interface WorkspaceOptions {
  * filesystem arrives late.
  */
 export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
+  const fileListeners = new Set<(paths: readonly string[]) => void>();
   let booting: Promise<NimbusWorkspace> | undefined;
   const open = async (): Promise<NimbusWorkspace> => {
     if (!booting) {
@@ -425,6 +428,11 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           // this every facet provisioned before an eviction comes back with a
           // home and no private `/tmp`.
           restoreAgentTmpConfinements(opts.sql, workspace.vfs.as(CRED_KERNEL), workspace.vfs);
+          workspace.vfs.events.on((batch) => {
+            if (fileListeners.size === 0) return;
+            const paths = batch.map((event) => event.path);
+            for (const listener of fileListeners) listener(paths);
+          });
           return workspace;
         } catch (cause) {
           // Clear the cache BEFORE rethrowing: this bundle lives for the whole
@@ -461,6 +469,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   return {
     vfs: workspaceVfs(open),
     shell: workspaceShell(open),
+    onFilesChanged(listener) {
+      fileListeners.add(listener);
+      return () => { fileListeners.delete(listener); };
+    },
     async stats() { return (await open()).stats(); },
     async privileged() {
       const workspace = await open();

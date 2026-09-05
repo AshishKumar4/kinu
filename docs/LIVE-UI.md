@@ -195,6 +195,9 @@ decides with the pure rules in `core/src/gadgets/bindings.ts`.
 | `workspace` | `read(source)` for the closed list `GADGET_DATA_SOURCES` (`core/src/gadgets/sources.ts`) | the orchestrator's `@callable` read models, each classed `workspace.read` in `cli/rpc-gate.ts` (`tests/unit-gadget-sources.test.ts` holds the list to the gate); the needs-you and consent queues stay off the list |
 | `mcp` (`server`, `tools?`) | `tools()`, `call(tool, args)` on one owner-configured connection | the owner's UserDO (`userMcp_toolDescriptors`, `userMcp_callTool` behind the `mcp.tools` capability tier) reached through `userHub()`, with every call judged by `decideApproval` (`core/src/safety/approval-gate.ts`): a read-only tool (MCP `readOnlyHint`) runs; anything else is parked on the owner through the deferred-approval queue under executor `gadget:<slug>` and rule `gadget_mcp_action` |
 
+The MCP binding's `server` names the connection id. Discovery and dispatch
+use that id. Renaming the connection does not change the binding.
+
 Two deliberate differences from the reference. Kinu does not simulate an
 outcome while the owner decides: the gadget is told the call is queued and
 NOT run, the honesty rule `safety/deferred-approval.ts` already states for the
@@ -248,9 +251,15 @@ not render there or under `vite dev`; a preview hostname needs
 no-network is stronger than the rail's `connect-src`. The preview rail stays
 what it is: the carrier for agent-started servers on exposed ports.
 
-Hot reload. The workspace object broadcasts `{ type: 'gadgets_changed', slugs }`
-on the same event that restarts the facet; the UI re-lists gadgets and
-remounts the open frame, which fetches `getGadgetClient` again.
+The workspace snapshot includes gadget summaries, so tabs appear on the first
+load. A successful list read removes reload counters for unpublished gadgets.
+If the open gadget disappears, the reader returns to Work.
+
+The memoized workspace boot subscribes to file changes once. A retry after an
+activation failure installs the same subscription. The workspace object broadcasts
+`{ type: 'gadgets_changed', slugs }` on the event that restarts the facet.
+The UI re-lists gadgets and remounts the open frame, which fetches
+`getGadgetClient` again.
 
 ## 3. Trust boundary
 

@@ -56,13 +56,14 @@ import {
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier,
 } from '@kinu.run/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
+import { parse, walk } from '../../scripts/syntax';
 import { disposeFailedCase } from '../evals/episode-failure';
 import {
   resolvePublicSessionPlan, type KinuPublicSession, type PublicSessionPlan,
 } from '../evals/public-session';
 
 /** The family every case's record is published under, so one tier's evidence is
- *  one family rather than five. */
+ *  one family rather than six. */
 export const FIRST_RUN_FAMILY = 'first-run';
 
 /** Every case this tier declares, in the order the defects were found. The list
@@ -166,12 +167,32 @@ export const FIRST_RUN_DEFECTS = {
       + 'fixture manifest, a fixture server, a probe object — so files the MODEL wrote from '
       + 'words were never read back through the surfaces the tab uses.',
     provedRedAt: null,
-    redDirection: 'RED on any build without the gadget host: listGadgets names no hello tab '
-      + 'and gadgetCall answers missing. It could not be proved red against a deployed build '
-      + 'in this lane — no deploy runs from this lane — so provedRedAt stays null until the '
-      + 'tier runs it.',
+    redDirection: 'Not proved red against a deployed sha. The build before the gadget commit '
+      + 'has no listGadgets RPC. The first deployed tier run must measure this row.',
   },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
+
+export function isGadgetBridgeCall(client: string, method: string): boolean {
+  let found = false;
+  walk(parse('client.js', client).root, (node) => {
+    const call = node.raw;
+    if (call.type !== 'CallExpression') return;
+    const member = call.callee;
+    if (member.type !== 'MemberExpression') return;
+    if (member.object.type !== 'Identifier' || member.object.name !== 'gadget') return;
+    const property = member.property;
+    if (member.computed) {
+      if (property.type === 'Literal' && property.value === method) found = true;
+    } else if (property.type === 'Identifier' && property.name === method) {
+      found = true;
+    }
+  });
+  return found;
+}
+
+export function isGadgetReplyOnOwnLine(reply: string): boolean {
+  return /^pong$/m.test(reply);
+}
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
 export const FIRST_RUN_TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';

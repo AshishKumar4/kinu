@@ -38,7 +38,7 @@ import { ReleasesSurface } from "./ReleasesSurface";
 import { ActivitySurface } from "./ActivitySurface";
 import { GadgetFrame } from "@/components/gadgets/GadgetFrame";
 import { GadgetSurface } from "./GadgetSurface";
-import { resolveGatedSurface, surfaceHasContent } from "./presence";
+import { GADGET_PREFIX, resolveGatedSurface, surfaceHasContent } from "./presence";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
 const SURFACES = ["Output", "Work", "Files", "Releases", "Exploration", "Agent", "Environment"] as const;
@@ -50,12 +50,12 @@ export const ACTIVITY_SURFACE = "Activity";
 /** Tabs Kinu wrote. Namespaced rather than mixed into the tuple above so a
  *  gadget can never collide with a host surface by picking its name, and so
  *  every render path can tell the two apart without a lookup. */
-export type GadgetSurfaceKind = `gadget:${string}`;
+export type GadgetSurfaceKind = `${typeof GADGET_PREFIX}${string}`;
 export type SurfaceKind = (typeof SURFACES)[number] | typeof ACTIVITY_SURFACE | GadgetSurfaceKind;
 
-const gadgetSurface = (slug: string): GadgetSurfaceKind => `gadget:${slug}`;
+const gadgetSurface = (slug: string): GadgetSurfaceKind => `${GADGET_PREFIX}${slug}`;
 const gadgetSlug = (surface: SurfaceKind): string | null =>
-  surface.startsWith("gadget:") ? surface.slice("gadget:".length) : null;
+  surface.startsWith(GADGET_PREFIX) ? surface.slice(GADGET_PREFIX.length) : null;
 
 const SURFACE_LABEL = {
   Output: "Output",
@@ -112,7 +112,7 @@ export interface WorkSurfaceProps {
   onChangelogSeen?: () => void;
   /** Gadgets Kinu published for this workspace. Appended after the host
    *  surfaces, in their own marked group. */
-  gadgets?: GadgetSummary[];
+  gadgets?: readonly GadgetSummary[];
   /** Per-gadget remount counter, bumped by the `gadgets_changed` broadcast —
    *  what an open frame re-reads its client on. */
   gadgetReloads?: ReadonlyMap<string, number>;
@@ -124,13 +124,11 @@ export interface WorkSurfaceProps {
 export function WorkSurface(props: WorkSurfaceProps) {
   const { surface, onSurface } = props;
   const strip = useRef<HTMLDivElement>(null);
-  // Gated tabs render only while their ledger has a row, and a reader left on
-  // one whose content just emptied is moved back before the pane can show a
-  // tab that is no longer in the strip.
+  // An unpublished gadget or an empty gated surface loses its selected tab.
   useEffect(() => {
-    const resolved = resolveGatedSurface(surface, props.tabPresence, props.mctsTrees);
+    const resolved = resolveGatedSurface(surface, props.tabPresence, props.mctsTrees, props.gadgets);
     if (resolved !== surface) onSurface(resolved);
-  }, [surface, onSurface, props.tabPresence, props.mctsTrees]);
+  }, [surface, onSurface, props.tabPresence, props.mctsTrees, props.gadgets]);
   // A one-shot cross-surface intent: an Environment card's Files action lands
   // the Files tab at that environment's own root on the composite plane.
   const [filesJump, setFilesJump] = useState<{ path: string; nonce: number } | null>(null);
@@ -138,13 +136,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
     setFilesJump((prev) => ({ path, nonce: (prev?.nonce ?? 0) + 1 }));
     onSurface("Files");
   }, [onSurface]);
-  // The open gadget tab, if any: its summary for the header, and its remount
-  // counter for the frame. A slug with no summary is a gadget unpublished
-  // while open — the frame still mounts and shows the server's refusal.
+  // The frame uses the summary for its header and the counter for remounts.
   const openGadget = gadgetSlug(surface);
   const openGadgetSummary = openGadget === null
     ? undefined
-    : (props.gadgets ?? []).find((gadget) => gadget.slug === openGadget);
+    : props.gadgets?.find((gadget) => gadget.slug === openGadget);
   const openGadgetReloadKey = openGadget === null ? 0 : (props.gadgetReloads?.get(openGadget) ?? 0);
   // Linking a machine is asked for from three places in this column — an
   // offline Environment card, that card's call-to-action, and the drive's
@@ -173,7 +169,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             The longer route names stay internal; the visible words are
             Explore and Env, as in the owner's surface switcher. */}
         <div ref={strip} className="p-tabstrip [--scroll-ground:var(--c-sidebar)] flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px">
-          {SURFACES.filter((s) => surfaceHasContent(s, props.tabPresence, props.mctsTrees)).map((s) => {
+          {SURFACES.filter((s) => surfaceHasContent(s, props.tabPresence, props.mctsTrees, props.gadgets)).map((s) => {
             // Two signals, two homes, two encodings: live ports light Output
             // green, and decisions waiting on the owner light Work in accent.
             // Liveness gets no digit — something merely running needs nobody,
@@ -197,10 +193,10 @@ export function WorkSurface(props: WorkSurfaceProps) {
             is what stops it reading as one more thing we shipped. Titles are
             validated in core against RESERVED_GADGET_TITLES, so none of them can
             wear a host surface's name. */}
-        {(props.gadgets ?? []).length > 0 && (
+        {(props.gadgets?.length ?? 0) > 0 && (
           <span aria-hidden className="self-center h-4 w-px mx-1.5 shrink-0" style={{ background: "var(--c-border)" }} />
         )}
-        {(props.gadgets ?? []).map((gadget) => {
+        {props.gadgets?.map((gadget) => {
           const kind = gadgetSurface(gadget.slug);
           return (
             <button key={gadget.slug} onClick={() => onSurface(kind)}

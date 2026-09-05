@@ -176,14 +176,8 @@ describe('the workspace snapshot contract', () => {
   test('the gallery stub supplies each field a current snapshot reads', () => {
     const stubbed = stubbedKeys(GALLERY, 'AGENT_RPC_DATA', 'getWorkspaceSnapshot');
 
-    // Snapshot-only fields have no granular source and always replace state.
-    const snapshotOnly = ['status', 'pendingSteers', 'branchRuns'];
-    // These fields have freshness guards, not presence guards. A current
-    // initial load still reads them, so the gallery must supply them.
-    const seeded = ['tools', 'executors', 'executorOutputs'];
-    for (const field of [...snapshotOnly, ...seeded]) {
-      expect(stubbed).toContain(field);
-    }
+    const declared = interfaceFields(CLIENT, 'WorkspaceSnapshot');
+    expect(declared.filter((field) => !stubbed.includes(field))).toEqual([]);
   });
 
   test('every seeded source guards its own write in loadAllData', () => {

@@ -116,3 +116,25 @@ describe('the gadget sandbox', () => {
     expect(observed.console).toEqual(['error probe: console reaches the host']);
   });
 });
+
+describe('an open gadget tab whose gadget disappears', () => {
+  test('removal while open lands on Work', async () => {
+    await withGallery(async ({ browser, origin }) => {
+      const page = await browser.newPage();
+      page.setDefaultTimeout(60_000);
+      try {
+        await page.setViewport({ width: 720, height: 800 });
+        await page.goto(`${origin}/gallery.html?frame=workgadgetfallback`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('button[title="Fallback Probe, written by Kinu"][aria-current="true"]', { timeout: 30_000 });
+        await page.evaluate(() => {
+          window.dispatchEvent(new Event('gallery:gadget-unpublish'));
+        });
+        await page.waitForSelector('button[aria-label="Work"][aria-current="true"]', { timeout: 5_000 });
+        const gadgetTab = await page.$('button[title="Fallback Probe, written by Kinu"]');
+        expect(gadgetTab).toBeNull();
+      } finally {
+        await page.close();
+      }
+    });
+  }, 120_000);
+});

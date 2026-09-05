@@ -107,6 +107,7 @@ import { WorkspaceBar, InlineRenameTitle } from "@/components/WorkspaceBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/surfaces/WorkSurface";
+import { GadgetFallbackFrame } from "@/gallery-gadget-fallback";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { GadgetFrame } from "@/components/gadgets/GadgetFrame";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
@@ -567,6 +568,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     // keep showing them.
     tabPresence: { releases: true, explorations: true },
     activePlan: null,
+    gadgets: [],
   },
   getStoredModelSpec: "anthropic/claude-opus-4",
   getShellApprovalMode: "strict",
@@ -5300,6 +5302,7 @@ async function mount() {
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;
   else if (frame === "gadget") node = <GadgetSandboxFrame />;
+  else if (frame === "workgadgetfallback") node = <GadgetFallbackFrame rpc={workRpc} />;
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
   else if (frame === "work") node = <WorkFrame />;

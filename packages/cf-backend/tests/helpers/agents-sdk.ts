@@ -4,6 +4,7 @@ import * as v from 'valibot';
 import type { AgentContext, Connection, ConnectionContext, FiberRecoveryContext, WSMessage } from 'agents';
 import { parseJsonValue, type JsonObject, type JsonValue, type SqlValue } from '@kinu.run/core';
 import type { McpCredentialTransport } from '../../src/user/mcp';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 type ModuleMockFactory = Parameters<typeof mock.module>[1];
 
@@ -900,7 +901,7 @@ function encodeSdkServerOptions(transport: RecordedMcpTransport): string {
 export interface RecordedMcpConnection {
   connectionState: string;
   connectionError: string | null;
-  tools: { name: string; description?: string; title?: string; inputSchema: unknown }[];
+  tools: { name: string; description?: string; title?: string; inputSchema: unknown; annotations?: Tool['annotations'] }[];
   options: { transport: RecordedMcpTransport };
 }
 

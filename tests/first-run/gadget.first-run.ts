@@ -25,9 +25,14 @@
  *   answered   `gadgetCall` on the tab's method answers the known string. The
  *              same socket RPC the tab's bridge forwards over, so a green here
  *              is a statement about the surface a person uses.
- *   shown      the client's own file names the method. A server that answers
- *              with no client calling it is exactly the half-success this case
- *              exists to refuse.
+ *   shown      the client's own file calls the method over the gadget bridge
+ *              (`gadget.ping(...)`; the `gadget["ping"](...)` spelling counts).
+ *              A mention in a comment or a string is not a call, and a server
+ *              that answers with no client calling it is exactly the
+ *              half-success this case exists to refuse.
+ *   replied    the stored reply carries the answer on its own line. A gadget
+ *              that answers while the reply says nothing leaves the user with
+ *              nothing to read back.
  *
  * NOT PROVED RED AGAINST A DEPLOYED SHA. The build before the gadget commit
  * has no `listGadgets` RPC, so this row fails there on the missing surface
@@ -39,7 +44,8 @@ import { afterAll, describe, test } from 'vitest';
 
 import type { EvalObservation } from '@kinu.run/test-utils';
 import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
+  FIRST_RUN_DEFECTS, firstRunCasePlan, isGadgetBridgeCall, isGadgetReplyOnOwnLine,
+  publishFirstRunRecord, runFirstRunCase,
   type FirstRunSubgoal,
 } from './first-run';
 
@@ -86,16 +92,16 @@ describe(SUITE, () => {
         const call = row === null ? null : await session.gadgetCall(SLUG, METHOD, []);
         const answered = call !== null && call.ok && call.value === ANSWER;
 
-        // The client's own file, through the files route: it must name the
-        // method, or nothing calls the server that answers.
+        // The client's own file, through the files route: it must CALL the
+        // method over the bridge, not merely mention it.
         let shown = false;
         let clientDetail = 'client.js was not checked';
         try {
           const client = await session.readFile(`gadgets/${SLUG}/client.js`);
-          shown = client.includes(METHOD);
+          shown = isGadgetBridgeCall(client, METHOD);
           clientDetail = shown
-            ? `client.js names ${METHOD}`
-            : `client.js holds ${String(client.length)} chars and never names ${METHOD}`;
+            ? `client.js calls ${METHOD} as gadget.${METHOD}(...) or gadget["${METHOD}"](...)`
+            : `client.js holds ${String(client.length)} chars with no gadget.${METHOD}( call`;
         } catch (error) {
           clientDetail = 'client.js could not be read: '
             + (error instanceof Error ? error.message : String(error));
@@ -105,6 +111,7 @@ describe(SUITE, () => {
         // turn: what a user reads when they come back is the stored answer.
         const history = await session.history();
         const reply = history.filter((entry) => entry.role === 'assistant').at(-1)?.text ?? turn.text;
+        const replied = isGadgetReplyOnOwnLine(reply);
 
         const subgoals: FirstRunSubgoal[] = [
           {
@@ -124,7 +131,14 @@ describe(SUITE, () => {
           {
             what: 'shown',
             reached: shown,
-            detail: `${clientDetail}; the reply ${reply.includes(ANSWER) ? 'carries' : 'does NOT carry'} ${ANSWER}`,
+            detail: clientDetail,
+          },
+          {
+            what: 'replied',
+            reached: replied,
+            detail: replied
+              ? `reply carries ${ANSWER} on its own line`
+              : `reply never holds ${ANSWER} alone on a line: ${JSON.stringify(reply).slice(0, 200)}`,
           },
         ];
         return subgoals;

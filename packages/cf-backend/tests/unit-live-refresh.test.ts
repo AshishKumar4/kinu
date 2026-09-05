@@ -11,6 +11,7 @@ import {
   type MctsProgress,
 } from '../src/hooks/use-kinu';
 import { explorationForkTree } from '../src/lib/fork-tree-rows';
+import { pruneGadgetReloads } from '../src/components/surfaces/presence';
 import type { ForkNode } from '../src/lib/protocol';
 import {
   activateMctsProgressActor,
@@ -18,6 +19,18 @@ import {
   createMctsProgressState as createProgressState,
   type MctsProgressState,
 } from '@kinu.run/core';
+
+test('a fresh gadget list retains reload versions only for published slugs', () => {
+  const previous = new Map([['removed', 4], ['kept', 2]]);
+  const gadgets = [{
+    slug: 'kept', title: 'Kept', subtitle: null, hasClient: true, hasServer: true, bindings: [],
+  }];
+  const pruned = pruneGadgetReloads(previous, gadgets);
+  expect([...pruned]).toEqual([['kept', 2]]);
+  expect([...previous]).toEqual([['removed', 4], ['kept', 2]]);
+  expect(pruneGadgetReloads(pruned, gadgets)).toBe(pruned);
+  expect([...pruneGadgetReloads(pruned, [])]).toEqual([]);
+});
 
 const TEST_ACTOR = 'actor';
 const NEXT_ACTOR = 'next-actor';

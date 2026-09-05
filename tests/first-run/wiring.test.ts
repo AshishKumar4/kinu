@@ -23,8 +23,8 @@
  *               against or the reason there is none.
  *   fresh       a case gets its own workspace and deletes it, and the plan that
  *               opens one is refused outright off the cloud backend.
- *   admissible  a run that measured four of five cases is not evidence about the
- *               fifth, and a run whose scores carry no `task_outcome` measured
+ *   admissible  a run that measured five of six cases is not evidence about the
+ *               sixth, and a run whose scores carry no `task_outcome` measured
  *               activity rather than whether anything worked.
  *   gate        the tier is declared at all three sites the census requires.
  */
@@ -40,7 +40,8 @@ import {
 } from '../../scripts/ladder';
 import firstRunConfig, { FIRST_RUN_INCLUDE } from '../../vitest.first-run.config';
 import {
-  FIRST_RUN_ARM, FIRST_RUN_CASES, FIRST_RUN_DEFECTS, FIRST_RUN_FAMILY,
+  FIRST_RUN_ARM, FIRST_RUN_CASES, FIRST_RUN_DEFECTS, FIRST_RUN_FAMILY, isGadgetBridgeCall,
+  isGadgetReplyOnOwnLine,
 } from './first-run';
 import { resolvePublicSessionPlan } from '../evals/public-session';
 
@@ -167,7 +168,7 @@ describe('a case gets a fresh workspace, and gives it back', () => {
 });
 
 describe('a partial first-run tier is not evidence', () => {
-  test('four of five cases is inadmissible, and five carries the primary metric', () => {
+  test('five of six cases is inadmissible, and six carries the primary metric', () => {
     const scored = (id: string): EvalObservation => ({
       taskId: id, repetition: 0, outcome: 'scored',
       scores: [outcomeRow(subgoalOutcome(3, 3, 'every subgoal reached'))],
@@ -175,7 +176,7 @@ describe('a partial first-run tier is not evidence', () => {
     });
     const declared = [...FIRST_RUN_CASES];
 
-    const partial = assessAdmissibility(declared, declared.slice(0, 4).map(scored));
+    const partial = assessAdmissibility(declared, declared.slice(0, 5).map(scored));
     expect(partial.admissible).toBe(false);
     expect(partial.failures.join(' ')).toContain('never attempted');
 
@@ -246,5 +247,26 @@ describe('the tier is declared at all three sites', () => {
     // with no scripts table fails there instead of reading as an empty object
     // that satisfies nothing.
     expect(packageScripts()['gate:first-run']).toBe(`bash ${RUNNER}`);
+  });
+});
+
+describe('the gadget row proves a bridge call and a reply on its own line', () => {
+  test('a bridge call names gadget ping as code, not as a mention', () => {
+    expect(isGadgetBridgeCall('await gadget.ping()', 'ping')).toBe(true);
+    expect(isGadgetBridgeCall('await gadget["ping"]()', 'ping')).toBe(true);
+    expect(isGadgetBridgeCall("await gadget['ping']()", 'ping')).toBe(true);
+    expect(isGadgetBridgeCall('// gadget.ping()', 'ping')).toBe(false);
+    expect(isGadgetBridgeCall('"gadget.ping()"', 'ping')).toBe(false);
+    expect(isGadgetBridgeCall('// ping', 'ping')).toBe(false);
+    expect(isGadgetBridgeCall('gadget.ping', 'ping')).toBe(false);
+    expect(isGadgetBridgeCall('gadget.pong()', 'ping')).toBe(false);
+  });
+
+  test('a reply carries pong on its own line', () => {
+    expect(isGadgetReplyOnOwnLine('pong')).toBe(true);
+    expect(isGadgetReplyOnOwnLine('done\npong\nthanks')).toBe(true);
+    expect(isGadgetReplyOnOwnLine('the answer is pong')).toBe(false);
+    expect(isGadgetReplyOnOwnLine('pong!')).toBe(false);
+    expect(isGadgetReplyOnOwnLine('')).toBe(false);
   });
 });

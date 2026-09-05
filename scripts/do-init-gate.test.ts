@@ -737,8 +737,8 @@ export class A extends Agent {
     expect(real).toBeDefined();
 
     const widened = real!.replace(
-      '      const session = await this.hostedWorkspace().bundle.session();',
-      '      const session = await this.hostedWorkspace().bundle.session();\n      await this.runDueSessionEvolution();',
+      '      await this.hostedWorkspace().bundle.session();',
+      '      await this.hostedWorkspace().bundle.session();\n      await this.runDueSessionEvolution();',
     );
     expect(widened).not.toBe(real);
     const { violations } = auditFile(file, widened);

@@ -46,6 +46,7 @@ import {
 } from "./session-recovery";
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "./send-admission";
 import type { AsyncResource } from "./use-async-resource";
+import { pruneGadgetReloads } from "../components/surfaces/presence";
 
 export type { ExecutorInfo };
 
@@ -162,6 +163,7 @@ export interface WorkspaceSnapshot {
   status: AgentStatus;
   tools: ToolDescResult;
   memoryContent: string;
+  gadgets: GadgetSummary[];
 
   executors: ExecutorInfo[];
   executorOutputs: Array<{ name: string; outputs: ExecutorOutput[] }>;
@@ -449,6 +451,7 @@ const SNAPSHOT_SEEDED_SOURCES: readonly LiveRefreshSource[] = [
   "executors",
   "presence",
   "plan",
+  "gadgets",
 ];
 
 /** A failed read, plus the two failures that belong to an action the user
@@ -1188,14 +1191,16 @@ export function useKinu(target?: string | KinuActorAddress) {
     setTabPresence,
   ), [refreshCurrentLiveResource, rpc]);
 
-  // The gadget tabs ride the same live cycle as every other workspace read.
-  // `listGadgets` answers the summaries with their problems; the strip draws
-  // the summaries, so the problems stay server-side here.
+  const applyGadgets = useCallback((listing: GadgetSummary[]) => {
+    setGadgets(listing);
+    setGadgetReloads((previous) => pruneGadgetReloads(previous, listing));
+  }, []);
+
   const refreshGadgets = useCallback(() => refreshCurrentLiveResource(
     "gadgets",
     () => rpc<{ gadgets: GadgetSummary[] }>("listGadgets", []).then((listing) => listing.gadgets),
-    setGadgets,
-  ), [refreshCurrentLiveResource, rpc]);
+    applyGadgets,
+  ), [applyGadgets, refreshCurrentLiveResource, rpc]);
 
   // Stable identity: it is an effect dependency in the changelog hook, which
   // re-reads on a timer now — an inline arrow re-armed that effect on every
@@ -1554,6 +1559,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     }
     if (isSourceCurrent("plan")) setActivePlan(parsePlanReview(snap.activePlan));
     if (isSourceCurrent("presence")) setTabPresence(snap.tabPresence);
+    if (isSourceCurrent("gadgets")) applyGadgets(snap.gadgets);
     // REPLACE, never merge. The durable rows are the authority for what is
     // queued and what is running, so a tab that reconnects after a deploy or a
     // corpse redial both LEARNS transitions it missed and DROPS chips for work

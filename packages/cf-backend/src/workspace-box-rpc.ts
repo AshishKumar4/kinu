@@ -103,7 +103,7 @@ export interface WorkspaceBoxResults {
  *  recurse through every op variant, which TypeScript reports as "type
  *  instantiation is excessively deep". The narrowing lives on
  *  {@link WorkspaceBoxRpc}, whose only production instance is minted by the
- *  declared cast in {@link workspaceBoxOwner}. */
+ *  declared cast in {@link workspaceOwner}. */
 export type WorkspaceBoxResult = WorkspaceBoxResults[WorkspaceBoxOp['op']];
 
 /** The orchestrator method this module's two halves meet at, typed per op so a

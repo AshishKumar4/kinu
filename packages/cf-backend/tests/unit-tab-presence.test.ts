@@ -62,8 +62,8 @@ const renderStrip = (tabPresence: TabPresence | undefined): string =>
 
 describe('the gated tabs appear only with content', () => {
   test('a fresh workspace shows neither Releases nor Explore', () => {
-    expect(surfaceHasContent('Releases', FRESH, EMPTY_TREES)).toBe(false);
-    expect(surfaceHasContent('Exploration', FRESH, EMPTY_TREES)).toBe(false);
+    expect(surfaceHasContent('Releases', FRESH, EMPTY_TREES, [])).toBe(false);
+    expect(surfaceHasContent('Exploration', FRESH, EMPTY_TREES, [])).toBe(false);
   });
 
   test('every ungated surface stays visible on a fresh workspace', () => {
@@ -83,45 +83,45 @@ describe('the gated tabs appear only with content', () => {
 
 
   test('a release change makes Releases appear', () => {
-    expect(surfaceHasContent('Releases', { ...FRESH, releases: true }, EMPTY_TREES)).toBe(true);
+    expect(surfaceHasContent('Releases', { ...FRESH, releases: true }, EMPTY_TREES, [])).toBe(true);
   });
 
   test('an exploration run makes Explore appear', () => {
-    expect(surfaceHasContent('Exploration', { ...FRESH, explorations: true }, EMPTY_TREES)).toBe(true);
+    expect(surfaceHasContent('Exploration', { ...FRESH, explorations: true }, EMPTY_TREES, [])).toBe(true);
   });
 
 
   test('a search in flight appears through the live trees without waiting for the next refresh', () => {
-    expect(surfaceHasContent('Exploration', FRESH, oneTree())).toBe(true);
+    expect(surfaceHasContent('Exploration', FRESH, oneTree(), [])).toBe(true);
   });
 
   test('an absent presence keeps every tab visible — fixture frames claim nothing about ledgers', () => {
-    expect(surfaceHasContent('Releases', undefined, EMPTY_TREES)).toBe(true);
-    expect(surfaceHasContent('Exploration', undefined, EMPTY_TREES)).toBe(true);
+    expect(surfaceHasContent('Releases', undefined, EMPTY_TREES, [])).toBe(true);
+    expect(surfaceHasContent('Exploration', undefined, EMPTY_TREES, [])).toBe(true);
   });
 });
 
 describe('an active tab whose content vanishes falls back', () => {
   test('being on Releases when the lane empties lands on Work', () => {
-    expect(resolveGatedSurface('Releases', FRESH, EMPTY_TREES)).toBe('Work');
+    expect(resolveGatedSurface('Releases', FRESH, EMPTY_TREES, [])).toBe('Work');
   });
 
   test('being on Explore when the last run goes away lands on Work', () => {
-    expect(resolveGatedSurface('Exploration', FRESH, EMPTY_TREES)).toBe('Work');
+    expect(resolveGatedSurface('Exploration', FRESH, EMPTY_TREES, [])).toBe('Work');
   });
 
   test('a live tree keeps an active Explore tab exactly where it is', () => {
-    expect(resolveGatedSurface('Exploration', FRESH, oneTree())).toBe('Exploration');
+    expect(resolveGatedSurface('Exploration', FRESH, oneTree(), [])).toBe('Exploration');
   });
 
   test('ungated surfaces are never moved', () => {
     for (const surface of ['Output', 'Work', 'Files', 'Agent', 'Environment'] as const) {
-      expect(resolveGatedSurface(surface, FRESH, EMPTY_TREES)).toBe(surface);
+      expect(resolveGatedSurface(surface, FRESH, EMPTY_TREES, [])).toBe(surface);
     }
   });
 
   test('content present means no move, even on a gated tab', () => {
-    expect(resolveGatedSurface('Releases', FULL, EMPTY_TREES)).toBe('Releases');
-    expect(resolveGatedSurface('Exploration', FULL, EMPTY_TREES)).toBe('Exploration');
+    expect(resolveGatedSurface('Releases', FULL, EMPTY_TREES, [])).toBe('Releases');
+    expect(resolveGatedSurface('Exploration', FULL, EMPTY_TREES, [])).toBe('Exploration');
   });
 });

@@ -231,11 +231,9 @@ GATE_DEADLINE_SECONDS=480
 # The launcher reads this table under `set -u`, so it exists even when no gate
 # has earned a different wall. A future deployed probe may add one only with its
 # matching declaration in `scripts/ladder.ts` and the deploy-contract proof.
-# The first-run tier is five DEPLOYED episodes — a real model, real daemons, a
-# real browser — and the shared wall above is calibrated against the slowest
-# SOURCE gate. Killing this one at 480s would report a product failure for a
-# harness deadline. Held equal to GATE_DEADLINES in scripts/ladder.ts by
-# deploy.test.ts: the runner is bash and cannot import the declaration.
+# Six deployed episodes use a real model, daemons and browser. Their configured
+# deadline remains 1800s. The six-case deployed wall is unmeasured.
+# deploy.test.ts holds this value equal to GATE_DEADLINES in scripts/ladder.ts.
 declare -A GATE_DEADLINES=(
   ['bun run gate:first-run']=1800
 )
@@ -801,7 +799,7 @@ fi
 #
 # AFTER THE SMOKE GATE, because the smoke gate answers a cheaper question first:
 # did the deploy land at all. Running this against an origin that is not serving
-# would report five product failures for one deployment failure.
+# would report six product failures for one deployment failure.
 #
 # ALONE, in its own wave, and `SERIAL_GATES` in scripts/ladder.ts carries the
 # reason: it attaches real machines to the account and drives a real browser

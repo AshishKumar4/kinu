@@ -1568,15 +1568,13 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:first-run',
     tier: 'deploy',
-    // 3.4s MEASURED, and it is the floor rather than the cost: five suites
-    // collected and refused, credential-free, on the 24-thread box on
-    // 2026-09-03 (`bun --bun vitest run --config vitest.first-run.config.ts`,
-    // 5 skipped, 3.17s reported / 3.41s wall). What that number covers is every
-    // part of this tier that does not need a deployment — module import, plan
-    // resolution, the refusal — and it is declared because the alternative,
-    // zero, is what made `verify:lean`'s cost line fiction for weeks.
-    //
-    // seconds: replaced by the measured run below.
+    // On 2026-09-05, credential-free collection skipped six files and six tests.
+    // `bun --bun vitest run --config vitest.first-run.config.ts` reported
+    // 3.84s and took 4.07s wall time on the 24-thread box.
+    // `bun test tests/first-run/wiring.test.ts` passed 14 tests in 253ms
+    // and took 0.33s wall time. These runs measure collection and predicates.
+    // The deployed six-case wall is unmeasured. Its deadline remains 1800s.
+    // The declared deployed cost below remains unchanged.
     seconds: 197,
     catches: 'a product defect a USER meets on the build that just deployed, which every other '
       + 'gate in this ladder is structurally unable to see: they all run BEFORE the upload, on '
@@ -1591,17 +1589,17 @@ export const LADDER: readonly Gate[] = [
       + 'real pty bytes into the shipped TUI against a deployed workspace. Hard assertions '
       + 'only — a `tool_outcome` row that closed clean, a decided row GONE from the queue, the '
       + 'other machine\'s exec log EMPTY, a user turn durable in the deployment\'s own '
-      + 'transcript, a file\'s exact bytes off the Files tab\'s own read. Three of the five red '
+      + 'transcript, a file\'s exact bytes off the Files tab\'s own read. Three of the six red '
       + 'directions are proved against the deployed builds that had the bug (675444233, '
       + 'd894de564, 4e1122d2d).',
     blind: 'everything a first run does not reach, and the list is long on purpose: it drives '
-      + 'five paths, not the product. It cannot see a defect on any surface no case names, a '
+      + 'six paths, not the product. It cannot see a defect on any surface no case names, a '
       + 'defect that needs a second user or a second account, or one that needs a machine that '
       + 'is not this one — both daemons are this host wearing two names, so a real '
       + 'cross-platform fleet is unmeasured. It runs AFTER the upload, so its red is a '
       + 'deployed red: the bad build is already serving when this fails, and the tier reports '
       + 'rather than prevents. It is not a regression net either — a green here says these '
-      + 'five mechanisms work, never that the deploy is good. And its model cases depend on a '
+      + 'six mechanisms work, never that the deploy is good. And its model cases depend on a '
       + 'model choosing to use the capability it was asked for, so a refusal is red and reads '
       + 'identically to a broken one until somebody reads the transcript the record keeps.',
   },
@@ -1722,14 +1720,10 @@ export function deployWaves(
 export const GATE_DEADLINES = {
   'bun run gate:first-run': {
     seconds: 1_800,
-    why: 'is five DEPLOYED episodes, not a source gate: two of them wait on a real model over a '
-      + 'real socket, two attach real daemons and wait for the deployment to report each machine '
-      + 'connected (20s apiece by the product\'s own connect deadline), and one drives Chrome '
-      + 'against the deployed app. The shared 480s wall is calibrated against the slowest SOURCE '
-      + 'gate and would kill this tier mid-episode, which reads as a product failure and is a '
-      + 'harness one. The figure is a BOUND rather than a measurement — nobody has run this tier '
-      + 'against a deployment yet, and the run that does owes both this number and the row\'s '
-      + 'cost in LADDER.',
+    why: 'covers six deployed episodes. Three use a real model over a socket. '
+      + 'Two attach real daemons; one drives Chrome against the deployed app. '
+      + 'The six-case deployed wall is unmeasured. This configured bound stays unchanged '
+      + 'until a deployed run measures it and the cost in LADDER.',
   },
 } satisfies Readonly<Record<string, { readonly seconds: number; readonly why: string }>>;
 

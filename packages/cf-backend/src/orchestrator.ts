@@ -397,16 +397,7 @@ export class OrchestratorAgent extends ActorAgent {
     return 'orchestrator';
   }
 
-  /**
-   * THE WORKSPACE. Nimbus over this object's own SQLite — one Durable Object per
-   * workspace, and the filesystem tables sit beside the conversation, the
-   * ledgers, the memory index and the fork lineage they belong to.
-   *
-   * Lazy for two reasons that are the same reason: `nextWorkspaceGeneration`
-   * writes a row, and `onStart` runs inside `ctx.blockConcurrencyWhile` where
-   * every write stalls every request on this object. An activation that only
-   * answers a `@callable` read never composes one.
-   */
+  /** One workspace over this object's SQLite, shared across boot retries. */
   private _workspace: HostedWorkspace | undefined;
 
   private hostedWorkspace(): HostedWorkspace {
@@ -414,6 +405,7 @@ export class OrchestratorAgent extends ActorAgent {
       ctx: this.ctx,
       env: this.env,
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
+      onFilesChanged: (paths) => this.gadgets.filesChanged(paths),
     });
     return this._workspace;
   }
@@ -2379,29 +2371,10 @@ export class OrchestratorAgent extends ActorAgent {
     // reads cover owed deliveries, interrupted transitions, running heads AND
     // live job rows, so recovery is owed exactly when one of them answers.
 
-    // The workspace BOOTS AT ACTIVATION — detached, owned, off the gate. The
-    // boot is bounded local work (schema DDL, /etc/profile, session compose
-    // over this object's own SQLite; no network, no model), so it belongs to
-    // the start of the object's life: a request arriving mid-boot awaits the
-    // same memoized promise instead of paying the boot serially, and a failed
-    // boot clears the memo so the next touch retries instead of poisoning the
-    // isolate. Detached rather than awaited only because `onStart` runs inside
-    // `blockConcurrencyWhile`, where an await stalls every request on this
-    // object behind work none of them may need first.
-    // The workspace boots INSIDE the gate, awaited — the owner's ruling:
-    // provably bounded work owed once at the start of the object's life stays
-    // in onStart, because anything else adds machinery. The boot is this
-    // object's own SQLite (schema DDL, /etc/profile, session compose; no
-    // network, no model), every request queues behind it exactly once per
-    // activation, and a FAILED boot is classified and clears the memo — the
-    // activation completes and the next workspace touch retries, rather than
-    // wedging the object behind a thrown gate.
+    // Boot awaits only this object's SQLite and session composition. A failure
+    // clears the memo so the next workspace request can retry after activation.
     try {
-      const session = await this.hostedWorkspace().bundle.session();
-      // The file plane's own event bus: a write under `gadgets/` restarts the
-      // gadget's facet and tells the UI, whichever path wrote it — the `file`
-      // tool, the shell, a facet over `workspaceBoxOp`, the Files tab.
-      session.vfs.events.on((batch) => this.gadgets.filesChanged(batch.map((event) => event.path)));
+      await this.hostedWorkspace().bundle.session();
     } catch (err) {
       diagnostics.failure('workspace.activation_boot_failed', toKinuError({
         doing: 'booting the workspace at activation',
@@ -3940,11 +3913,8 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   // ── Gadgets ────────────────────────────────────────────────────
-  // Agent-written apps under `gadgets/<slug>/`, hosted by `GadgetHost`: the
-  // server in a dynamic-worker facet of this object, the client in the UI's
-  // sandboxed iframe. There is no publish RPC — the agent writes files and
-  // this object reacts to the write (`onStart` subscribes to the file plane's
-  // event bus). See docs/LIVE-UI.md.
+  // Agent-written apps under `gadgets/<slug>/`. The memoized workspace boot
+  // subscribes to file changes. See docs/LIVE-UI.md.
 
   private _gadgets: GadgetHost | undefined;
 
@@ -4003,7 +3973,7 @@ export class OrchestratorAgent extends ActorAgent {
     const { stub, caller } = await this.userHub();
     const surface = v.parse(McpToolSurfaceSchema, JSON.parse(await stub.userMcp_toolDescriptors(caller)));
     return surface.descriptors
-      .filter((descriptor) => descriptor.serverId === server || descriptor.serverName === server)
+      .filter((descriptor) => descriptor.serverId === server)
       .map((descriptor) => ({ name: descriptor.name, readOnly: descriptor.readOnly === true }));
   }
 
@@ -4292,13 +4262,14 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable()
   async getWorkspaceSnapshot() {
-    const [status, tools, memoryContent, executors, activePlan, tabPresence] = await Promise.all([
+    const [status, tools, memoryContent, executors, activePlan, tabPresence, { gadgets }] = await Promise.all([
       this.getAgentStatus(),
       this.getToolDescriptions(),
       this.getMemoryContent(),
       this.getExecutors(),
       this.getActivePlanReview(),
       this.getWorkspaceTabPresence(),
+      this.listGadgets(),
     ]);
     const executorOutputs = await Promise.all(
       executors.map(async (e) => ({
@@ -4314,7 +4285,7 @@ export class OrchestratorAgent extends ActorAgent {
       .map((run) => ({ type: 'branch_status' as const, status: 'running' as const, branchId: run.rootId, task: run.task }));
     return {
       status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan,
-      tabPresence, pendingSteers: this.pendingSteerRuns(), branchRuns,
+      tabPresence, gadgets, pendingSteers: this.pendingSteerRuns(), branchRuns,
     };
   }
 
