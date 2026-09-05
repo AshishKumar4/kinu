@@ -264,8 +264,10 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
         }
         const raw = args[0] === context ? undefined : args[0];
         const parsedRaw = raw === undefined ? undefined : v.safeParse(JsonValueSchema, raw);
+        // Reason first, as every refusal on this surface: a script branching on
+        // the class must not parse prose to learn its call was malformed.
         if (parsedRaw && (!parsedRaw.success || !isJsonObject(parsedRaw.output))) {
-          return { error: `agents.${action}: expects a single options object` };
+          return { reason: 'bad_input', error: `agents.${action}: expects a single options object` };
         }
         // `action` is written last: the member the script called decides it,
         // never a field in the object the script passed.
@@ -276,7 +278,7 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
         try {
           input = parseAgentsToolInput(candidate);
         } catch (error) {
-          return { error: `agents.${action}: ${renderThrownChain({ cause: error })}` };
+          return { reason: 'bad_input', error: `agents.${action}: ${renderThrownChain({ cause: error })}` };
         }
         const signal = readExecSignal({ context });
         return dispatchAgentsAction({ ...deps(), mode }, input, signal ? { abortSignal: signal } : undefined);

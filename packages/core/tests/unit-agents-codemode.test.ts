@@ -458,11 +458,17 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     expect(result.error).not.toContain('unknown field "signal"');
   });
 
-  test('a non-object argument is a sharp error, not a deps call', async () => {
+  test('a non-object argument is a classified refusal, not a deps call', async () => {
     const team = makeTeam();
     const ns = namespaceOf(() => ({ team: team.deps }));
-    expect(await member(ns, 'hire').execute('just a string')).toEqual({ error: 'agents.hire: expects a single options object' });
-    expect(await member(ns, 'dismiss').execute(['researcher'])).toEqual({ error: 'agents.dismiss: expects a single options object' });
+    // Reason first, like every other refusal on this surface: a script that
+    // branches on the class must not have to parse prose for these two.
+    expect(await member(ns, 'hire').execute('just a string'))
+      .toEqual({ reason: 'bad_input', error: 'agents.hire: expects a single options object' });
+    expect(await member(ns, 'dismiss').execute(['researcher']))
+      .toEqual({ reason: 'bad_input', error: 'agents.dismiss: expects a single options object' });
+    expect(await member(ns, 'hire').execute({ role: 'r', mission: 'm', budgetUsd: 5 }))
+      .toMatchObject({ reason: 'bad_input', error: expect.stringContaining('budgetUsd') });
     expect(team.calls).toEqual([]);
   });
 
