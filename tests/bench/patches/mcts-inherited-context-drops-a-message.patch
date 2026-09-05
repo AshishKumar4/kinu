@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/mcts/inherited-context.ts b/packages/core/src/mcts/inherited-context.ts
-index 6e44656..22a68fe 100644
+index 259beee75..9b2b3e58e 100644
 --- a/packages/core/src/mcts/inherited-context.ts
 +++ b/packages/core/src/mcts/inherited-context.ts
-@@ -32,7 +32,7 @@ export function formatInheritedContext(
-   lastN: number = DEFAULT_INHERITED_MESSAGES,
+@@ -48,7 +48,7 @@ export function formatInheritedContext(
+   maxChars: number = DEFAULT_INHERITED_CONTEXT_CHARS,
  ): string {
    if (history.length === 0) return '';
 -  const n = Math.max(1, lastN);
 +  const n = Math.max(1, lastN - 1);
-   return history
+   const block = history
      .slice(-n)
      .map((m) => `${m.role}: ${m.content}`)

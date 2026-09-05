@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/memory/facts.ts b/packages/core/src/memory/facts.ts
+index 103e9eac4..b32133370 100644
 --- a/packages/core/src/memory/facts.ts
 +++ b/packages/core/src/memory/facts.ts
-@@ -68,7 +68,7 @@
- export function createFactsStore(sql: SqlExecutor): FactsStore {
+@@ -80,7 +80,7 @@ export function createFactsStore(sql: SqlExecutor): FactsStore {
    return {
      upsert(key, value, opts = {}) {
--      const conf = opts.confidence ?? 1;
-+      const conf = opts.confidence ?? 0;
+       const canonical = normalizeFactKey(key);
+-      const raw = opts.confidence ?? 1;
++      const raw = opts.confidence ?? 0;
+       const conf = Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 1;
        const src = opts.source ?? null;
        const valueJson = JSON.stringify(value);
-       const existing = sql<{ value_json: string; last_observed_at: number }>`

@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/skills/parse.ts b/packages/core/src/skills/parse.ts
-index 1c8ff7d..43d7c85 100644
+index 978fb5657..9b4b3a5b2 100644
 --- a/packages/core/src/skills/parse.ts
 +++ b/packages/core/src/skills/parse.ts
-@@ -104,7 +104,7 @@ export function parseSkillFile(
+@@ -99,7 +99,7 @@ export function parseSkillFile(
    const user_invocable =
-     fm['user-invocable'] !== undefined ? Boolean(fm['user-invocable'])
-     : fm.user_invocable !== undefined  ? Boolean(fm.user_invocable)
+     fm['user-invocable'] !== undefined ? fm['user-invocable'] !== false
+     : fm.user_invocable !== undefined  ? fm.user_invocable !== false
 -    : true;
 +    : false;
    // auto_activate is the Kinu-only keyword-fire flag. We force it false

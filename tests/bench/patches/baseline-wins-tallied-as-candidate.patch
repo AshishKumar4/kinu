@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/eval/types.ts b/packages/core/src/eval/types.ts
-index 823e439..6eaf412 100644
+index 05cb88590..56467de5d 100644
 --- a/packages/core/src/eval/types.ts
 +++ b/packages/core/src/eval/types.ts
-@@ -77,7 +77,7 @@ export function summarizeEval(results: EvalResult[]): EvalSummary {
-     byTag: {},
+@@ -92,7 +92,7 @@ export function summarizeEval(results: EvalResult[]): EvalSummary {
+     avgScoreA: 0, avgScoreB: 0,
    };
    for (const r of results) {
 -    if (r.verdict.winner === 'a') summary.aWins++;
