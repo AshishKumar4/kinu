@@ -866,7 +866,7 @@ function webErrorResult(err: Error | string) {
   return { error: err instanceof Error ? err.message : err };
 }
 
-export function isExecutableToolEntry(
+function isExecutableToolEntry(
   input: { value: unknown },
 ): input is { value: ExecutableToolEntry } {
   return v.is(v.object({
