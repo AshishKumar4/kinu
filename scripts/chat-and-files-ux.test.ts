@@ -1478,6 +1478,10 @@ describe('a revoked device whose command may still run', () => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1000, height: 1200 });
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=devices`, { waitUntil: 'networkidle0' });
+      // The rail renders once the account reads settle, which lands after the
+      // network goes quiet — the reads resolve through the page fixture, not
+      // the wire — so the deep-link section is waited for, never read on arrival.
+      await page.waitForSelector('[data-settings-section="devices"]', { timeout: 10_000 });
       expect(await page.$eval(
         '[data-settings-section="devices"]',
         (entry) => entry.getAttribute('aria-current'),
