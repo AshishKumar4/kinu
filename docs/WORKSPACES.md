@@ -106,15 +106,16 @@ actors that work inside it.
     PARENT's file plane (`cf-backend/src/exploration.ts:418-444`). MCTS rollouts
     use the same facet class in a separate toolless mode and acquire no runtime.
 
-    Node isolation is one contract with two appliers.
-    `AgentsForkDeps.provisionNodeHome` hands over one
-    `NodeWorkspaceProvisioner` per swarm call, and `agentHomeLayout` is the one
-    table that says a node owns `/home/node-<id>` at `0o755` and
-    `/tmp/node-<id>` at `0o700` (`core/src/vfs/agent-home.ts`). A LOCAL runtime
-    whose plane is its in-SQLite tree applies that layout through the three
-    host-owned members from `WorkspaceBundle.privileged()`. The HOSTED backend
-    applies the same layout through the Nimbus session's own coreutils, run as
-    uid 0 (`cf-backend/src/node-home.ts`).
+    Facet isolation is one contract with two appliers. `agentHomeLayout` is
+    the one table that says a facet owns its home at `0o755` and its tmp at
+    `0o700` (`core/src/vfs/agent-home.ts`). The kind rides in the name:
+    `/home/node-<id>`, `/home/sub-<slug>`, `/home/head-<id>`. A LOCAL
+    runtime whose plane is its in-SQLite tree provisions any of them through
+    `facetHomeProvisioner` and the three host-owned members from
+    `WorkspaceBundle.privileged()`. The HOSTED backend applies the same
+    layout through the Nimbus session's own coreutils, run as uid 0
+    (`cf-backend/src/node-home.ts` `provisionNimbusAgentHome`). Nodes are
+    wired on both backends through `AgentsForkDeps.provisionNodeHome`.
 
     Both then credential BOTH planes, because a node reaches the tree with
     commands and with file tools. A file plane pinned to the session user
@@ -136,17 +137,30 @@ actors that work inside it.
     leaves the old bytes untouched. It costs one session call per chunk plus
     one to commit.
 
-    A hosted session cannot rewrite a bare `/tmp`: `confinePrincipal` is a
-    `SqliteVFS` method with no RPC. `TMPDIR` points at the node's own
-    directory, and a command hardcoding `/tmp/x` there writes the shared
-    `/tmp`. In this isolate the rewrite exists, so a bare `/tmp` write stays
-    private.
+    A hosted facet's bare `/tmp` resolves to its own tmp. The provisioner
+    runs on the object that owns the workspace, so it registers the rewrite
+    on that object's own principal registry — no RPC carries the call
+    because none needs to. `TMPDIR` points at the same directory. Shell
+    commands resolve per credential, and file reads, stats and listings do
+    too. One substrate limit remains, measured 2026-09-05: the credentialed
+    plane stages a write beside its target and renames it onto place, and
+    the substrate resolves a rename's source without the rewrite, so a
+    file-plane write to a confined `/tmp` fails closed with `ENOENT`.
 
-    A runtime bound to a physical directory builds no provisioner: a directory
-    has no principal registry. A node always reports the isolation it actually
-    got, `private-home` or `shared-origin-plane`. Nothing invents a boundary.
-    `docs/EXPLORATION.md` is the spec for the six axes, presets, report
-    contract and isolation states.
+    A runtime bound to a physical directory builds no uid provisioner: a
+    directory has no principal registry. Each facet still gets its own
+    mapped scratch — a home and a tmp under the workspace's own `.kinu`
+    state, for `HOME` and `TMPDIR` (`facetCwdScratch` in
+    `cli-backend/src/runtime.ts`). The tree stays honestly shared, and a
+    facet reports `shared-origin-plane` for it. `docs/EXPLORATION.md` is
+    the spec for the six axes, presets, report contract and isolation
+    states.
+
+    Only the workspace tree is one view. A path under the workspace root —
+    relative or under `/home/user` — names the same file on every surface,
+    measured 2026-09-05 in both directions. A path at the filesystem root
+    outside it does not: the shell and the file surface keep separate roots
+    there, and each hides the other's root writes.
 
   - Subordinates (`agents`, `action: 'hire'`) are durable: a
     `SubordinateAgent` facet with its own SQL history and full turn loop,

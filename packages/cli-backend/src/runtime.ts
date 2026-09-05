@@ -22,10 +22,10 @@ import type {
 import type { ExecutorProvider, ResourceLimits } from '@kinu.run/core';
 import type { RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
-import { promises as fs } from 'node:fs';
-import { resolve as resolvePath } from 'node:path';
+import { promises as fs, mkdirSync, rmSync } from 'node:fs';
+import { join, resolve as resolvePath } from 'node:path';
 import {
-  type LLMProviderConfig, buildRuntime,
+  type LLMProviderConfig, buildRuntime, agentHome,
   observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL,
   createParentExecutor, createParentWorkspaceVfs,
@@ -660,6 +660,42 @@ export function shareLocalWorkspacePlane(
     checkpoints: workspace.checkpoints,
     cwd: workspace.cwd ?? null,
   });
+}
+
+/**
+ * One facet's own scratch inside a directory-bound workspace.
+ *
+ * A bound directory has no principal registry — every command runs as the
+ * same Unix user — so uid/gid/mode cannot separate two facets there, and the
+ * tree stays honestly shared: siblings can read it, and the isolation a
+ * directory-bound facet reports stays `shared-origin-plane`. What each facet
+ * still gets is its own mapped ground: a home directory and a tmp directory
+ * under the workspace's own state, created for the facet and removed with
+ * it. `HOME` and `TMPDIR` point there; nothing copies the workspace into
+ * them, and they are ordinary directories rather than a second workspace —
+ * no plane, no shell, no scaffold of their own.
+ *
+ * The name is validated like a workspace home, because a scratch root is a
+ * directory under a fixed parent and a name holding `/` or `..` must not
+ * reach the join.
+ */
+export interface FacetCwdScratch {
+  readonly home: string;
+  readonly tmp: string;
+}
+
+export function facetCwdScratch(cwd: string, agentName: string): FacetCwdScratch {
+  agentHome(agentName);
+  const home = join(cwd, '.kinu', 'facets', agentName);
+  const tmp = join(home, 'tmp');
+  mkdirSync(tmp, { recursive: true });
+  return { home, tmp };
+}
+
+/** Remove one facet's scratch root, and only that root. */
+export function cleanupFacetCwdScratch(cwd: string, agentName: string): void {
+  agentHome(agentName);
+  rmSync(join(cwd, '.kinu', 'facets', agentName), { recursive: true, force: true });
 }
 
 /**
