@@ -5,10 +5,9 @@
  * chosen text as the correction follow-up).
  */
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw, createTestWorkspace } from './helpers';
+import { createTestWorkspace } from './helpers';
 import {
-  initAlternateTakesTable, recordBranchTakeSet, claimAlternateTakesForTurn,
+  recordBranchTakeSet, claimAlternateTakesForTurn,
   latestAlternateTakeSet, listAlternateTakeSets, recordTakePick, buildTakeContinuationPrompt,
 } from '../src/mcts/takes';
 import { HeadJournal } from '../src/heads/journal';
@@ -271,26 +270,6 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
   });
 });
 
-describe('alternate_takes schema migration', () => {
-  test('a pre-branch table gains the source column; old rows read as mcts', () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    db.exec(`CREATE TABLE alternate_takes (
-      id TEXT PRIMARY KEY, turn_id TEXT, session_id TEXT, task TEXT NOT NULL,
-      winner_node_id TEXT NOT NULL, chosen_node_id TEXT, candidates TEXT NOT NULL,
-      created_at INTEGER NOT NULL, picked_at INTEGER)`);
-    db.exec(`INSERT INTO alternate_takes (id, task, winner_node_id, candidates, created_at)
-             VALUES ('take-old', 'old task', 'n1', '[]', 1)`);
-
-    initAlternateTakesTable(makeExecRaw(db), makeSql(db));
-    expect(latestAlternateTakeSet(sql)!.source).toBe('mcts');
-
-    // And the migrated table accepts branch-sourced inserts.
-    expect(recordBranchTakeSet(sql, {
-      task: 't', turnId: 'turn-1', sessionId: 'default', liveText: 'a', branchText: 'b',
-    })).not.toBeNull();
-  });
-});
 
 // Every set id here is a fresh `take-${nanoid()}`, so the table has no natural
 // conflict to catch a settlement that ran twice: the second attempt would insert

@@ -768,7 +768,7 @@ export abstract class ActorAgent extends Think<Env> {
     // Here for the same reason as the row above it, and one more: the recovery
     // sweep reads it from `onStart`, which is not guaranteed to follow a root's
     // `ensureSchema`. Idempotent DDL, so a re-activation costs nothing.
-    initTerminalEffectTable(this.boundSql, (ddl: string) => this.ctx.storage.sql.exec(ddl));
+    initTerminalEffectTable((ddl: string) => this.ctx.storage.sql.exec(ddl));
   }
 
   /** Every table this root carries, created before any read. Declared here
@@ -1007,7 +1007,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   protected get subordinateRoster(): SubordinateRosterStore {
     if (!this._subordinateRoster) {
-      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql, this.boundSql);
+      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql);
       this._subordinateRoster.ensureSchema();
     }
     return this._subordinateRoster;
@@ -1023,7 +1023,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (entry === null) throw new Error(`Subordinate "${name}" is not in the roster`);
     try {
       const snapshot = await (await this.subAgent(this.subordinateFacet(), name)).getSubordinateSnapshot();
-      const role = snapshot.role.kind === 'catalog' ? snapshot.role.roleId : snapshot.role.text;
+      const role = snapshot.role;
       return { ...entry, displayName: snapshot.displayName, role };
     } catch (error) {
       diagnostics.failure('subordinate.descriptor_unavailable', toKinuError({
@@ -1251,16 +1251,9 @@ export abstract class ActorAgent extends Think<Env> {
     return { ok: true };
   }
 
-  /** This actor's role as ONE label: the catalog id of a catalog hire, or the
-   *  freeform line a pre-catalog hire carries — core's one `role_selection`
-   *  row, read through getRoleSelection(). Surfaces that key into the catalog
-   *  match only the catalog arm; a legacy line matches nothing, exactly as an
-   *  unknown id did. */
+  /** This actor's role as ONE label. It reads core's one `role_selection` row. */
   protected activeRoleLabel(): string {
-    const selection = this.config.getRoleSelection();
-    // A legacy line is prompt prose, not a catalog key. Its tool/tier policy
-    // is the general role until the owner assigns a catalog role.
-    return selection.kind === 'catalog' ? selection.roleId : 'general';
+    return this.config.getRoleSelection();
   }
   /**
    * Facet bootstrap authority. Worker-side DO RPC only. The child verifies its

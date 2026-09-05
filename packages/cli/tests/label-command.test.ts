@@ -62,7 +62,7 @@ function seedWorkspace(name: string, size = 600): World {
   mkdirSync(join(home, name), { recursive: true });
   const db = new Database(join(home, name, 'agent.db'));
   const sql = makeSql(db);
-  initTurnOutcomeTables((ddl: string) => { db.exec(ddl); }, sql);
+  initTurnOutcomeTables((ddl: string) => { db.exec(ddl); });
 
   const random = seededRandom(4242);
   const truthByTurn = new Map<string, 'accepted' | 'corrected'>();

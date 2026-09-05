@@ -69,7 +69,6 @@ import {
   type TimerTrigger,
   type MctsSearchRunSummary,
   type ReasoningEffort,
-  reconcileColumns,
   decodeJsonValue,
   parseJsonValue,
   type SqlExec,
@@ -236,9 +235,8 @@ export function getLocalProfileCoordinates(name: string): LocalProfileCoordinate
       return { roleId: 'general', assignedTier: null };
     }
     const config = createAgentConfigStore(makeSql(db));
-    const selection = config.getRoleSelection();
     return {
-      roleId: selection.kind === 'catalog' ? selection.roleId : 'general',
+      roleId: config.getRoleSelection(),
       assignedTier: config.getAssignedTier(),
     };
   });
@@ -502,18 +500,9 @@ export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
 
 /** Local peer of the cloud `getChatHistoryPage` RPC — the newest page, which
  *  is what `kinu debug messages --limit` is asking for. The read model
- *  itself (core status.ts) works over any SqlExecutor.
- *
- *  The read selects the provenance column by name, so a workspace created
- *  before it existed is reconciled here first — this is the one reader that
- *  opens the database without running `initWorkspaceSchema`, and "no such
- *  column" on a diagnostic read of an old workspace is a self-inflicted
- *  failure, not information. */
+ *  itself (core status.ts) works over any SqlExecutor. */
 export async function getLocalChatHistory(name: string, limit = 100): Promise<ChatHistoryEntry[]> {
-  return withLocalWritableDb(name, (db) => {
-    if (tableExists(db, 'messages')) {
-      reconcileColumns(makeSql(db), (ddl) => { db.exec(ddl); }, 'messages', { metadata: 'TEXT' });
-    }
+  return withLocalDb(name, (db) => {
     return [...getChatHistoryPage(makeSql(db), { limit }).items];
   });
 }
@@ -570,7 +559,7 @@ export async function recordLocalOutcomeLabels(
 ): Promise<LabelIngestResult> {
   return withLocalWritableDb(name, (db) => {
     const sql = makeSql(db);
-    initTurnOutcomeTables((ddl) => { db.exec(ddl); }, sql);
+    initTurnOutcomeTables((ddl) => { db.exec(ddl); });
     return ingestOutcomeLabels(sql, input);
   });
 }
@@ -608,7 +597,7 @@ export async function runLocalOutcomeEnsemble(
   const db = new Database(agentDbPath(name));
   try {
     const sql = makeSql(db);
-    initTurnOutcomeTables((ddl) => { db.exec(ddl); }, sql);
+    initTurnOutcomeTables((ddl) => { db.exec(ddl); });
     // Two stages, because they have different costs: choosing the judges is a
     // read over the provider catalog, while resolving one into an LLM reaches the
     // signed-in session and the stored keys. `runEnsemble` asks for the specs
@@ -850,15 +839,10 @@ function safeIdentifier(value: string): string {
 }
 
 function getLocalStatus(db: SqliteDb): LocalStatus {
-  // `agent_identity` is the pre-rename table. Read it here rather than adopting
-  // it: this path is READ-ONLY, and the adoption belongs to the write-capable
-  // open path (identity/schema.ts adoptLegacyAgentIdentity).
-  const identityTable = tableExists(db, 'workspace_identity') ? 'workspace_identity'
-    : tableExists(db, 'agent_identity') ? 'agent_identity'
-      : null;
-  const identity = identityTable
+  const hasIdentity = tableExists(db, 'workspace_identity');
+  const identity = hasIdentity
     ? get<{ name: string; created_at: number }>(
-      db, `SELECT name, created_at FROM ${safeIdentifier(identityTable)} LIMIT 1`)
+      db, `SELECT name, created_at FROM workspace_identity LIMIT 1`)
     : null;
   // The MISSION, off the identity row — not SOUL.md itself.
   //
@@ -867,15 +851,8 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
   // directories and advances the process-generation counter on every open). A
   // listing that mutated every workspace it walked past would be wrong twice
   // over, so `writeSoul` keeps this one line current instead (identity/soul.ts).
-  // `mission` was added to this table AFTER it shipped, so an older workspace
-  // does not have the column. `reconcileColumns` (identity/schema.ts:163) adds
-  // it — but only on the OPEN path, and this inspection is deliberately
-  // read-only per the note above, so it can never have run here. Ask, do not
-  // assume: three of the owner's real local workspaces reported
-  // `(error reading)` in `kinu list` because this line selected a column
-  // that only a write would have created, and the caller discarded the cause.
-  const mission = identityTable && columnSet(db, identityTable).has('mission')
-    ? get<{ mission: string | null }>(db, `SELECT mission FROM ${safeIdentifier(identityTable)} LIMIT 1`)?.mission?.trim() || null
+  const mission = hasIdentity
+    ? get<{ mission: string | null }>(db, `SELECT mission FROM workspace_identity LIMIT 1`)?.mission?.trim() || null
     : null;
   return {
     name: identity?.name ?? null,

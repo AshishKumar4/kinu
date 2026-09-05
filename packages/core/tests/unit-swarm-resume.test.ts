@@ -74,8 +74,8 @@ const TASK = 'find the largest of 12 opaque tokens in the fewest oracle calls';
 function ledgerOnly() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initSearchTables(makeExecRaw(db), sql);
-  initMctsSearchTable(makeExecRaw(db), sql);
+  initSearchTables(makeExecRaw(db));
+  initMctsSearchTable(makeExecRaw(db));
   return new MctsSearchStore(sql);
 }
 
@@ -174,8 +174,8 @@ describe('swarm progress reads the durable tree, not the row', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
-    initSearchTables(execRaw, sql);
-    initMctsSearchTable(execRaw, sql);
+    initSearchTables(execRaw);
+    initMctsSearchTable(execRaw);
     const ledger = new MctsSearchStore(sql);
     ledger.begin({
       rootId: 'mid-level', task: TASK, engine: 'swarm', rootMsgId: null,
@@ -251,8 +251,8 @@ describe('harvesting a capped swarm', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
-    initSearchTables(execRaw, sql);
-    initMctsSearchTable(execRaw, sql);
+    initSearchTables(execRaw);
+    initMctsSearchTable(execRaw);
     initSwarmNodeRecords(execRaw);
     const ledger = new MctsSearchStore(sql);
     beganSwarm(ledger, 'harvest-root', 1_000);
@@ -389,8 +389,8 @@ describe('the durable record envelope is versioned', () => {
     // start-of-life sweep; the search tables are re-initialised idempotently.
     const { rt } = createTestRuntime();
     const sql = rt.storage.sql;
-    initSearchTables(rt.storage.execRaw, sql);
-    initMctsSearchTable(rt.storage.execRaw, sql);
+    initSearchTables(rt.storage.execRaw);
+    initMctsSearchTable(rt.storage.execRaw);
     initSwarmNodeRecords(rt.storage.execRaw);
     const ledger = new MctsSearchStore(sql);
     const journal = new HeadJournal(sql);
@@ -776,7 +776,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     // The durable half survives (`db`, the workspace); nothing of the first run's memory
     // does, because every accumulator `runSwarm` owns is local to the call.
     const second = nodeModel();
-    initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+    initBackgroundJobsTable(makeExecRaw(db));
     const jobs = new BackgroundJobStore(makeSql(db));
     const agent = idleAgent();
     const { fiber, settled } = inlineFiber();
@@ -982,7 +982,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
 
     // ── ATTEMPT TWO, through the REAL runner path ──────────────────────────
     const second = nodeModel();
-    initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+    initBackgroundJobsTable(makeExecRaw(db));
     const jobs = new BackgroundJobStore(makeSql(db));
     const agent = idleAgent();
     const { fiber, settled } = inlineFiber();
@@ -1112,7 +1112,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
 
     // ── THE NEXT ACTIVATION ────────────────────────────────────────────────
     const second = nodeModel();
-    initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+    initBackgroundJobsTable(makeExecRaw(db));
     const jobs = new BackgroundJobStore(makeSql(db));
     const agent = idleAgent();
     const { fiber, settled } = inlineFiber();
@@ -1184,7 +1184,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     expect(frozen).toBeInstanceOf(Promise);
     await first.script.frozen;
     const rootId = firstRoot(sql)?.root_id ?? '';
-    initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+    initBackgroundJobsTable(makeExecRaw(db));
     const agent = idleAgent();
 
     const retired = await reconcileInterruptedForks({
@@ -1586,8 +1586,8 @@ describe('harvested witness verdict', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
-    initSearchTables(execRaw, sql);
-    initMctsSearchTable(execRaw, sql);
+    initSearchTables(execRaw);
+    initMctsSearchTable(execRaw);
     initSwarmNodeRecords(execRaw);
     const ledger = new MctsSearchStore(sql);
     beganSwarm(ledger, 'harvest-root', 1_000);

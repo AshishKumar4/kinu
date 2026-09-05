@@ -13,14 +13,14 @@ function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  initSearchTables(execRaw, sql);
+  initSearchTables(execRaw);
   return { db, sql };
 }
 
 describe('Backpropagation', () => {
   test('updates a single root node', () => {
     const { sql } = setup();
-    void sql`INSERT INTO search_nodes (id, task, value, visits) VALUES ('root', 'test', 0, 0)`;
+    void sql`INSERT INTO search_nodes (id, root_id, task, value, visits) VALUES ('root', 'root', 'test', 0, 0)`;
 
     backpropagate(sql, 'root', 0.8);
 
@@ -32,7 +32,7 @@ describe('Backpropagation', () => {
 
   test('running mean after two updates', () => {
     const { sql } = setup();
-    void sql`INSERT INTO search_nodes (id, task, value, visits) VALUES ('root', 'test', 0, 0)`;
+    void sql`INSERT INTO search_nodes (id, root_id, task, value, visits) VALUES ('root', 'root', 'test', 0, 0)`;
 
     backpropagate(sql, 'root', 0.8);
     backpropagate(sql, 'root', 0.4);
@@ -46,9 +46,9 @@ describe('Backpropagation', () => {
 
   test('full ancestor chain update via WITH RECURSIVE', () => {
     const { sql } = setup();
-    void sql`INSERT INTO search_nodes (id, parent_id, task, value, visits) VALUES ('root', NULL, 'test', 0, 0)`;
-    void sql`INSERT INTO search_nodes (id, parent_id, task, value, visits) VALUES ('child', 'root', 'test', 0, 0)`;
-    void sql`INSERT INTO search_nodes (id, parent_id, task, value, visits) VALUES ('leaf', 'child', 'test', 0, 0)`;
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, value, visits) VALUES ('root', NULL, 'root', 'test', 0, 0)`;
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, value, visits) VALUES ('child', 'root', 'root', 'test', 0, 0)`;
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, value, visits) VALUES ('leaf', 'child', 'root', 'test', 0, 0)`;
 
     backpropagate(sql, 'leaf', 0.9);
 
@@ -67,8 +67,8 @@ describe('Backpropagation', () => {
 
   test('preserves node IDs after backprop', () => {
     const { sql } = setup();
-    void sql`INSERT INTO search_nodes (id, parent_id, task, value, visits) VALUES ('a', NULL, 'test', 0, 0)`;
-    void sql`INSERT INTO search_nodes (id, parent_id, task, value, visits) VALUES ('b', 'a', 'test', 0, 0)`;
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, value, visits) VALUES ('a', NULL, 'a', 'test', 0, 0)`;
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, value, visits) VALUES ('b', 'a', 'a', 'test', 0, 0)`;
 
     backpropagate(sql, 'b', 0.5);
 
@@ -81,7 +81,7 @@ describe('Backpropagation', () => {
   // The prior is guarded behaviourally in unit-initial-value-prior.test.ts.
   test('running mean from a zero-valued node tracks the reward sequence', () => {
     const { sql } = setup();
-    void sql`INSERT INTO search_nodes (id, task, value, visits) VALUES ('n', 'test', 0, 0)`;
+    void sql`INSERT INTO search_nodes (id, root_id, task, value, visits) VALUES ('n', 'n', 'test', 0, 0)`;
 
     backpropagate(sql, 'n', 0.7);
     const after1 = sql<{ value: number }>`SELECT value FROM search_nodes WHERE id = 'n'`[0]!;

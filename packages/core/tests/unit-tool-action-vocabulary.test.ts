@@ -96,7 +96,7 @@ function surfaceUnder(rt: AgentRuntime, surface: DispatchSurface) {
 function runtime(): AgentRuntime {
   const { rt, testSql } = createTestRuntime();
   initAllTables(testSql.execRaw, rt.storage.sql);
-  initTaskListTable(testSql.execRaw, testSql.sql);
+  initTaskListTable(testSql.execRaw);
   return rt;
 }
 

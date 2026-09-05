@@ -128,13 +128,13 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
-  readSoul, readMission, summarizeSoul, writeSoul, workspaceGenesisSignal,
+  readMission, summarizeSoul, writeSoul, workspaceGenesisSignal,
   // The durable answer an interrupted terminal transition still owes a reply
   // for — read from the transcript, because a recovery has no live turn.
   answersForDrainTurns,
-  // Which titling SOURCE this root offers the shared policy, and the wake-time
-  // heal's own trigger. The policy itself lives on ActorAgent.
-  isPlaceholderMission, isPlaceholderWorkspaceTitle,
+  // Which titling SOURCE this root offers the shared policy. The policy itself
+  // lives on ActorAgent.
+  isPlaceholderMission,
   // The names its own prompt introduces this workspace by, and what it is
   // called before anything names it.
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
@@ -1989,50 +1989,6 @@ export class OrchestratorAgent extends ActorAgent {
     this._titleHydrated = true;
     this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
     return true;
-  }
-
-  /** Whether this activation has already offered a legacy workspace its title.
-   *  See {@link ensureLegacyTitle}: the answer this produces is durable, so one
-   *  check is everything any number of opens can learn. */
-  private _legacyTitleChecked = false;
-
-  /**
-   * Offer a legacy workspace its title, from the frame that OPENED it.
-   *
-   * Workspaces created before mission-derived titling still show their raw
-   * slug. Healing one costs a registry read, a SOUL.md read, and — when the
-   * placeholder is real — a model call.
-   *
-   * That chain used to be launched from `onStart`: a fire-and-forget task,
-   * spawned inside `blockConcurrencyWhile`, ending in `generateText`. Detaching
-   * work does not take it off the init path. The activation's gate is still
-   * open around whatever the hook spawns, the runtime cancels a floating
-   * promise on eviction with its rejection swallowed, and the model call was
-   * therefore both unbounded and unreliable — paid for on every cold start of
-   * every claimed workspace, whether or not anyone was looking.
-   *
-   * The open frame is where it belongs: an ordinary request, off the gate, at
-   * the one moment the raw slug is actually on somebody's screen. Detached from
-   * THAT frame rather than awaited by it, so the mount payload never waits on a
-   * model call — request-frame model work is ordinary agent work.
-   * `scripts/do-init-gate.ts` refuses the old shape by REACH now (its pinned
-   * model-sink list), not by whether the gate awaits it.
-   */
-  private ensureLegacyTitle(): void {
-    if (this._legacyTitleChecked || !this.getOwnerUserId()) return;
-    this._legacyTitleChecked = true;
-    this.detachOwned(async () => {
-      try {
-        await this.hydrateTitle();
-        if (!isPlaceholderWorkspaceTitle(this.getDisplayName(), this.name)) return;
-        const soul = await readSoul(this.rt.storage.vfs);
-        await this.maybeAutoTitle(summarizeSoul(soul ?? ''));
-      } catch (cause) {
-        diagnostics.failure('workspace.auto_title_soul_read_failed', toKinuError({
-          doing: 'reading SOUL.md to title a legacy workspace', cause, otherwise: 'io',
-        }), { workspace: this.name });
-      }
-    });
   }
 
   // ── Background jobs (#173) — auto-detach >30s tool calls, wake on completion ──
@@ -4020,9 +3976,7 @@ export class OrchestratorAgent extends ActorAgent {
     }));
     const craftedRaw = this.rt.craftStore.list();
     const crafted = craftedRaw.map(t => {
-      // Quality lives ON the crafted-tools row now (score/uses/last_used_at
-      // columns, backfilled by core's initCraftQualityColumns) — there is no
-      // separate craft_scores table to join.
+      // Quality lives on the crafted_tools row, so there is no craft_scores table to join.
       const scoreRow = this.sql<{ score: number; uses: number }>`
         SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
       return {
@@ -4249,11 +4203,6 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable()
   async getWorkspaceSnapshot() {
-    // The workspace is being OPENED: this is the mount round trip the web
-    // client makes (`hooks/use-kinu.ts`, `loadAllData`), and a request frame
-    // rather than the init gate. Launched BEFORE this frame's own reads, so an
-    // open whose payload fails still leaves the title lane running.
-    this.ensureLegacyTitle();
     const [status, tools, memoryContent, executors, activePlan, tabPresence] = await Promise.all([
       this.getAgentStatus(),
       this.getToolDescriptions(),

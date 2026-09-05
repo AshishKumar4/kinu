@@ -11,8 +11,7 @@
  *
  * "Latest" is the tree most recently written to (its newest node insert), so
  * a resumed search that is still growing outranks a newer one that died at
- * its root. Legacy pre-`root_id` rows are invisible to scoped queries by
- * design (mcts/schemas.ts).
+ * its root.
  */
 
 import type { SqlExecutor } from '../types/primitives';
@@ -24,7 +23,7 @@ export function readLatestSearchTree(sql: SqlExecutor): SearchNode[] {
            visits, value, depth, status, msg_id, branch_agent_key, created_at
     FROM search_nodes
     WHERE root_id = (
-      SELECT root_id FROM search_nodes WHERE root_id IS NOT NULL
+      SELECT root_id FROM search_nodes
       GROUP BY root_id ORDER BY MAX(created_at) DESC, root_id DESC LIMIT 1
     )
     ORDER BY depth, created_at`;
@@ -81,9 +80,8 @@ export interface SearchNodeDetail extends SearchNodeSummary {
   children: SearchNodeSummary[];
 }
 
-/** Exactly the columns the projection below reads. Deliberately NOT the whole
- *  `SearchNode`: a workspace written before `root_id`/`code_language` existed
- *  still answers this read, and neither column is projected. */
+/** Exactly the columns the detail view renders — a projection, not the whole
+ *  `SearchNode`. */
 interface DetailRow {
   id: string;
   parent_id: string | null;

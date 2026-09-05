@@ -20,7 +20,6 @@ import * as v from 'valibot';
 import type { SqlExec } from '../../types/primitives';
 
 const SqlDefinitionRowSchema = v.object({ sql: v.nullable(v.string()) });
-const TableColumnRowSchema = v.object({ name: v.string() });
 
 const AGENT_LOG_DDL = `
 CREATE TABLE IF NOT EXISTS agent_log (
@@ -195,11 +194,6 @@ function rebuildIfCheckMissing(sql: SqlExec, table: string, marker: string, ddl:
 /** Initialize all hub tables, indexes, and views. Idempotent. */
 export function initEventsHubTables(sql: SqlExec): void {
   sql.exec(AGENT_LOG_DDL);
-  const agentLogColumns = sql.exec(`PRAGMA table_info(agent_log)`).toArray()
-    .map((row) => v.parse(TableColumnRowSchema, row));
-  if (!agentLogColumns.some((column) => column.name === 'consumed_at')) {
-    sql.exec(`ALTER TABLE agent_log ADD COLUMN consumed_at INTEGER`);
-  }
   for (const ix of INDEXES) sql.exec(ix);
   for (const v of VIEWS) sql.exec(v);
   // CHECK-widening rebuilds for live DOs created before these enum members

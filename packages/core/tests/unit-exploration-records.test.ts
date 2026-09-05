@@ -40,7 +40,7 @@ import type { SqlExecutor } from '../src/types/primitives';
 function store(): SqlExecutor {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initExplorationRecordsTable(makeExecRaw(db), sql);
+  initExplorationRecordsTable(makeExecRaw(db));
   return sql;
 }
 
@@ -388,9 +388,9 @@ describe('a row reads back as what was written', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
-    initExplorationRecordsTable(execRaw, sql);
+    initExplorationRecordsTable(execRaw);
     recordExploration(sql, { publication: OPEN, write: write() });
-    initExplorationRecordsTable(execRaw, sql);
+    initExplorationRecordsTable(execRaw);
     expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
   });
 });

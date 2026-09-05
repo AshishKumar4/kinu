@@ -1113,7 +1113,7 @@ export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
     `INSERT OR REPLACE INTO agent_config (key, value) VALUES
       ('display_name', 'Harness Sub'),
       ('name_origin', 'user'),
-      ('role_selection', '{"kind":"legacy","text":"specialist"}')`,
+      ('role_selection', 'general')`,
   ).run();
   harness.agent.declareScaffoldPresent();
   return harness;
@@ -1153,15 +1153,13 @@ export async function hiredSubordinateHarness(
   Object.defineProperty(harness.agent, 'messages', { value: [], configurable: true });
   ensureActorSchema(harness.agent);
   harness.agent.declareScaffoldPresent();
-  const { roleId, role, ...seed } = identity;
+  const { roleId, ...seed } = identity;
   await harness.agent.setSubordinateIdentity({
     ...seed,
     // Durable unless a scenario says otherwise: the harness stands in for a
     // HIRE, and the temporary rung has its own tests.
     lifetime: 'durable',
-    role: roleId === undefined
-      ? { kind: 'legacy', text: role }
-      : { kind: 'catalog', roleId },
+    role: roleId ?? 'general',
   });
   // The parent addresses its children through `subAgent`, which needs a facet.
   // Resolve that ONE name to the real child instead, so both directions of the

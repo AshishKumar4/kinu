@@ -31,7 +31,7 @@ import { createTestRuntime, createMockSession, makeSql, makeExecRaw } from './he
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftQualityColumns } from '../src/craft/schemas';
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import {
   MissionGovernor, localMissionScope, type MissionScope,
 } from '../src/mission-budget';
@@ -88,9 +88,9 @@ function branchingRuntime() {
       return { text: 'it did not work', usage: PER_REFLECTION };
     },
   });
-  initSearchTables(rt.storage.execRaw, rt.storage.sql);
-  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-  initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
+  initSearchTables(rt.storage.execRaw);
+  initScaffoldTables(rt.storage.execRaw);
+  initCraftedToolsTables(rt.storage.sql);
   return { rt, rollouts: () => rollouts, reflections: () => reflections };
 }
 

@@ -212,11 +212,11 @@ interface Fixture {
 function fixture(): Fixture {
   const { rt } = createTestRuntime();
   initAllTables(rt.storage.execRaw, rt.storage.sql);
-  initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
+  initTurnOutcomeTables(rt.storage.execRaw);
   initGepaTables(rt.storage.execRaw);
   initPromptSectionTables(rt.storage.execRaw);
   initInstructionApprovalsTable(rt.storage.execRaw);
-  initRefinementTables(rt.storage.execRaw, rt.storage.sql);
+  initRefinementTables(rt.storage.execRaw);
   const facts = createFactsStore(rt.storage.sql);
   const approvals = new InstructionApprovalStore(
     rt.storage.sql, 'test-workspace', (body) => body(),
@@ -900,7 +900,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const tables = () => bare.sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`.map((row) => row.name);
     const before = new Set(tables());
-    initRefinementTables(bare.execRaw, bare.sql);
+    initRefinementTables(bare.execRaw);
     const added = tables().filter((name) => !before.has(name));
 
     expect(added).toEqual(['refinement_requests']);

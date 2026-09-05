@@ -5,8 +5,8 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { emaUpdate, effectiveScore, filterByEffectiveScore } from '../src/craft/ema';
-import { initCraftQualityColumns } from '../src/craft/schemas';
-import { makeSql, makeExecRaw } from './helpers';
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
+import { makeSql } from './helpers';
 
 describe('EMA scoring', () => {
   test('emaUpdate with alpha=0.3', () => {
@@ -59,7 +59,7 @@ describe('Time decay', () => {
 describe('filterByEffectiveScore — the one injection policy', () => {
   function setup() {
     const db = new Database(':memory:');
-    initCraftQualityColumns(makeExecRaw(db), makeSql(db));
+    initCraftedToolsTables(makeSql(db));
     return { db, sql: makeSql(db) };
   }
   const tools = [{ name: 'good' }, { name: 'stale' }, { name: 'unstored' }];

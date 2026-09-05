@@ -131,14 +131,8 @@ export function initReleaseTables(sql: SqlExec): void {
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_release_approvals_change ON release_approvals (change_id, created_at DESC)`);
-  // Live-table migration: bind the argument digest (SPEC §7.3) on stores that
-  // predate the column. Existing rows get '' — an empty digest never matches a
-  // recomputed one, so a stale approval fails closed and is re-requested.
-  const approvalColumns = sql.exec(`PRAGMA table_info(release_approvals)`).toArray()
-    .map((row) => v.parse(v.object({ name: v.string() }), row));
-  if (!approvalColumns.some((c) => c.name === 'argument_digest')) {
-    sql.exec(`ALTER TABLE release_approvals ADD COLUMN argument_digest TEXT NOT NULL DEFAULT ''`);
-  }
+  // An empty digest never matches a recomputed one, so a stale approval fails
+  // closed and is re-requested (SPEC §7.3).
 
   sql.exec(`
     CREATE TABLE IF NOT EXISTS release_deployments (

@@ -80,7 +80,7 @@ function watchedHost(opts: { refuse?: boolean } = {}) {
 
 function inertEngine(): AgentOrchestratorDeps['engine'] {
   const { sql, execRaw } = createTestSql();
-  initCompletedTurnTable(execRaw, sql);
+  initCompletedTurnTable(execRaw);
   const store = createCompletedTurnStore(sql);
   return {
     enabled: false,

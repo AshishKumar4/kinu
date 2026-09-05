@@ -9,13 +9,13 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers';
+import { makeSql } from './helpers';
 import {
   CRAFT_INVOCATION_QUALITY, CRAFT_NEUTRAL_PRIOR,
   craftCreatesTool, craftFailureBlame, craftFailureMarker, craftInvocationError, craftInvocationSites,
   createCraftLedger, stripNonCode,
 } from '../src/craft/in-episode';
-import { initCraftQualityColumns } from '../src/craft/schemas';
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { feedbackToQuality } from '../src/evolution/outcomes';
 
 describe('craftInvocationSites — what the runtime saw called', () => {
@@ -109,7 +109,7 @@ describe('craftFailureBlame — attribution by stamp only', () => {
 function ledgerFixture() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initCraftQualityColumns(makeExecRaw(db), sql);
+  initCraftedToolsTables(sql);
   const ledger = createCraftLedger({
     craftStore: { list: () => db.query<{ name: string }, []>('SELECT name FROM crafted_tools').all() },
     sql,

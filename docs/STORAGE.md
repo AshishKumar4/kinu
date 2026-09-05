@@ -368,19 +368,11 @@ opened any other way silently no-opped.
 
 The pass runs in this order:
 
-1. `repairLegacyTables`: a `memory_chunks` predating the 7-column FTS5 schema
-   is dropped with its shadow index and rebuilt empty. `search_nodes` gains its
-   post-release columns here, before the CREATE pass builds an index over
-   `root_id`.
-2. `renameReleaseTables`: the five `product_*` tables become `release_*`,
-   guarded both ways so the audit trail survives.
-3. `initAllTables` (`core/src/identity/schema.ts`): `workspace_identity`, then
+1. `initAllTables` (`core/src/identity/schema.ts`): `workspace_identity`, then
    `initActorTables` (the actor substrate plus `initSearchTables`,
    `initScaffoldTables` and `initViewTables`), then `fork_lineage`,
    `fork_transfer` and `fork_staged_files`.
-4. `migrateWorkspaceStorage` adopts a pre-rename `agent_identity` row and a
-   pre-rename `fork_lineage`.
-5. Each subsystem's own `init*` from the tables above.
+2. Each subsystem's own `init*` from the tables above.
 
 Then each root adds what only it carries. The orchestrator DO also runs
 `initWorkspaceBaselineTable`, `initWebhookRateLimitTables`,
@@ -388,13 +380,15 @@ Then each root adds what only it carries. The orchestrator DO also runs
 call is gated by an in-memory flag so it runs once per activation. No
 persistent schema version is tracked because a cold activation always re-runs.
 
-Each table now has exactly one owning module. The duplicate copies that
+Each table has exactly one owning module. The duplicate copies that
 `identity/schema.ts` used to carry are gone. A second definition of
 `search_nodes` is how `code_language` went missing on a live workspace. A
-second `scaffold_versions` is how `status` and `parent_version` did. Where a
-workspace predates a column, the owning module reconciles it by asking
-`pragma_table_info` (`reconcileColumns`). It never attempts an ALTER and swallows
-the failure. DO SQLite also cannot ALTER a `CHECK` constraint and
-forbids explicit transactions. Widening one, as `turn_outcomes` and the
-events-hub tables have both needed, is an in-place table rebuild with a resume
-branch for a crash mid-sequence.
+second `scaffold_versions` is how `status` and `parent_version` did.
+
+A table's `CREATE TABLE IF NOT EXISTS` is its genesis. No module carries a
+column reconcile, a `CHECK`-widening rebuild or a row backfill: this tree
+deploys as a reset (docs/DEPLOYMENT.md, the migrations paragraph), so every
+row it ever writes is under the DDL in the tree. `scripts/schema-drift.ts`
+holds that DDL to `scripts/schema-genesis.lock.json` in both directions. A
+shipped table whose shape must change has two fixes: a table of its own for
+the new columns, or another reset with a re-lock.

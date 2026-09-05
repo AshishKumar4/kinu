@@ -18,7 +18,6 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { MCTSConfig } from '../types/mcts';
 import type { WorkMode } from '../prompting/surface';
 import { validateSwarmProfileSnapshot, type SwarmProfileSnapshot } from '../profiles';
-import { reconcileColumns } from '../identity/columns';
 
 /** The serializable knobs of an MCTSConfig — everything a resumed loop needs,
  *  minus the live handles (AbortSignal, callbacks, the store itself, and the
@@ -167,12 +166,7 @@ export function persistableMCTSConfig(config: MCTSConfig): PersistedMCTSConfig {
   return rest;
 }
 
-const MCTS_SEARCH_RUNS_ADDED_COLUMNS = {
-  engine: "TEXT NOT NULL DEFAULT 'mcts'",
-  judge_samples_realised: 'INTEGER',
-} as const;
-
-export function initMctsSearchTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
+export function initMctsSearchTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS mcts_search_runs (
     root_id      TEXT PRIMARY KEY,
     task         TEXT NOT NULL,
@@ -187,7 +181,6 @@ export function initMctsSearchTable(execRaw: RawSqlExec, sql: SqlExecutor): void
     created_at   INTEGER NOT NULL,
     updated_at   INTEGER NOT NULL
   )`);
-  reconcileColumns(sql, execRaw, 'mcts_search_runs', MCTS_SEARCH_RUNS_ADDED_COLUMNS);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_mcts_search_status_task ON mcts_search_runs(status, task, updated_at)`);
 }
 

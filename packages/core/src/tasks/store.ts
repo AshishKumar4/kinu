@@ -63,8 +63,8 @@ function toTask(r: Row): AgentTask {
   };
 }
 
-export function initTaskListTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
-  const ddl = `(
+export function initTaskListTable(execRaw: RawSqlExec): void {
+  execRaw(`CREATE TABLE IF NOT EXISTS agent_tasks (
     id         TEXT PRIMARY KEY,
     seq        INTEGER NOT NULL,
     parent_id  TEXT,
@@ -72,30 +72,9 @@ export function initTaskListTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
     status     TEXT NOT NULL DEFAULT 'open' CHECK (status IN (${sqlCheckList(TASK_STATUSES)})),
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
-  )`;
-  // Widening the status CHECK: SQLite cannot ALTER one, so a table created
-  // before the vocabulary was constrained is renamed aside, recreated, and
-  // copied back (the experience/library.ts discipline). The probe is the
-  // status LIST itself, so widening the vocabulary is the only edit ever
-  // needed here, and `_legacy` is the resume point for a crash mid-sequence:
-  // rows stranded there are copied before a bare CREATE starts an empty one.
-  const storedDdl = (name: string): string | null => {
-    const rows = sql<{ sql: string | null }>`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${name}`;
-    return rows[0]?.sql ?? null;
-  };
-  const live = storedDdl('agent_tasks');
-  const narrow = live !== null && TASK_STATUSES.some((status) => !live.includes(`'${status}'`));
-  const stranded = storedDdl('agent_tasks_legacy') !== null;
-  if (narrow) {
-    execRaw(`ALTER TABLE agent_tasks RENAME TO agent_tasks_legacy`);
-  }
-  execRaw(`CREATE TABLE IF NOT EXISTS agent_tasks ${ddl}`);
+  )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent ON agent_tasks(parent_id)`);
-  if (narrow || stranded) {
-    execRaw(`INSERT OR IGNORE INTO agent_tasks SELECT * FROM agent_tasks_legacy`);
-    execRaw(`DROP TABLE agent_tasks_legacy`);
-  }
 }
 
 /** What `add` refused, and why — the model gets the reason, never a silent drop. */

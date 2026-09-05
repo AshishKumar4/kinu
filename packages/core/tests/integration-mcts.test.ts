@@ -13,7 +13,7 @@ import { createTestRuntime, createMockSession, captureConsole, makeSql } from '.
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftQualityColumns } from '../src/craft/schemas';
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
 import type { MCTSProgressEvent, SearchNode } from '../src/types/mcts';
 import type { Executor, LLM } from '../src/types/primitives';
@@ -55,9 +55,9 @@ function countingLLM(json: string): LLM & { judgeCalls: () => number } {
 }
 
 function initTables(rt: ReturnType<typeof createTestRuntime>['rt']) {
-  initSearchTables(rt.storage.execRaw, rt.storage.sql);
-  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-  initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
+  initSearchTables(rt.storage.execRaw);
+  initScaffoldTables(rt.storage.execRaw);
+  initCraftedToolsTables(rt.storage.sql);
 }
 
 describe('MCTS integration', () => {
@@ -843,7 +843,7 @@ describe('MCTS below-floor outcome classification', () => {
       llmResponses: { alpha: '{"score": 0.1}', beta: '{"score": 0.2}' },
     });
     initTables(bundle.rt);
-    initMctsSearchTable(bundle.rt.storage.execRaw, bundle.rt.storage.sql);
+    initMctsSearchTable(bundle.rt.storage.execRaw);
     return { ...bundle, store: new MctsSearchStore(makeSql(bundle.db)) };
   }
 

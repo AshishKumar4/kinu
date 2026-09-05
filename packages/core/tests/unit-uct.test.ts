@@ -13,7 +13,7 @@ function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  initSearchTables(execRaw, sql);
+  initSearchTables(execRaw);
   return { db, sql };
 }
 

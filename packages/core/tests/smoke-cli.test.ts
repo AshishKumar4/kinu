@@ -21,7 +21,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Identity } from '../src/types/primitives';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftQualityColumns } from '../src/craft/schemas';
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from '../src/scaffold/bootstrap';
 import { runMCTS } from '../src/mcts/engine';
 
@@ -112,7 +112,7 @@ describe('CLI smoke test', () => {
 
   test('bootstrap creates scaffold on cold start', async () => {
     const { rt } = createFullCLIRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
 
     // Ensure no scaffold exists (simulate cold start)
     if (await rt.storage.vfs.exists('scaffold/agent.js')) {
@@ -130,9 +130,9 @@ describe('CLI smoke test', () => {
 
   test('full MCTS cycle creates correct DB tables and rows', async () => {
     const { rt, db } = createFullCLIRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
+    initCraftedToolsTables(rt.storage.sql);
 
     const session = createMockSession();
     const result = await runMCTS(rt, session, 'Improve error handling', {

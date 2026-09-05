@@ -663,7 +663,7 @@ export async function runNodeLoop(
   // The table is reconciled here rather than assumed: this loop runs in the
   // search's isolate OR in a facet with storage of its own, and only one of those
   // has already opened a workspace.
-  initBackgroundJobsTable(deps.rt.storage.execRaw, deps.rt.storage.sql);
+  initBackgroundJobsTable(deps.rt.storage.execRaw);
   const runnerDeps: BackgroundJobRunnerDeps = {
     store: new BackgroundJobStore(deps.rt.storage.sql),
     fiber: deps.rt.schedule.fiber,

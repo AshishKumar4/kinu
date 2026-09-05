@@ -10,8 +10,8 @@
  * newer and winning every caller's dedup.
  *
  * These tests pin the fixed list: one row per root, both halves on it, one
- * chronological order, one status vocabulary, and the two things that must NOT
- * appear (Steer-as-Branch redirects, legacy unscoped search rows).
+ * chronological order, one status vocabulary, and the thing that must NOT
+ * appear (Steer-as-Branch redirects).
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -30,9 +30,9 @@ import type { ForkRunSummary } from '../src/read-models/fork-runs';
 function freshDb() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
-  initSearchTables(execRaw, makeSql(db));
-  initMctsSearchTable(execRaw, makeSql(db));
-  initHeadsTables(execRaw, makeSql(db));
+  initSearchTables(execRaw);
+  initMctsSearchTable(execRaw);
+  initHeadsTables(execRaw);
   return { db, sql: makeSql(db) };
 }
 
@@ -271,16 +271,6 @@ describe('listForkRuns', () => {
     }
 
     expect(listForkRuns(sql, null, 30).items.map((run) => run.id)).toEqual(['r-real']);
-  });
-
-  test('legacy unscoped search rows stay invisible', () => {
-    const { db, sql } = freshDb();
-    db.prepare(
-      `INSERT INTO search_nodes (id, parent_id, root_id, task, action, observation, depth, status, created_at)
-       VALUES ('legacy', NULL, NULL, 'pre-root_id', '', '', 0, 'open', 5000)`,
-    ).run();
-    seedSearchRun(db, { rootId: 'r1', task: 'scoped', at: 1000, branches: 1, ledger: 'converged' });
-    expect(listForkRuns(sql).items.map((r) => r.id)).toEqual(['r1']);
   });
 
   test('the limit bounds the run list, not each store', () => {

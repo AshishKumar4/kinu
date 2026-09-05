@@ -42,6 +42,55 @@ function rowToTool(row: CraftRow): CraftedTool {
 	};
 }
 
+/**
+ * The `crafted_tools` table, FTS5 index, and sync triggers.
+ *
+ * Standalone so a workspace's schema initializer can create them without
+ * constructing a store (core's `initActorTables` calls this). Every
+ * composition root that builds a CraftStore also gets them via
+ * {@link CraftStore.ensureSchema}, which delegates here — one DDL, one
+ * source of truth.
+ */
+export function initCraftedToolsTables(sql: SqlExecutor): void {
+	void sql`
+		CREATE TABLE IF NOT EXISTS crafted_tools (
+			name TEXT PRIMARY KEY,
+			description TEXT NOT NULL DEFAULT '',
+			params TEXT,
+			code TEXT NOT NULL DEFAULT '',
+			scope TEXT NOT NULL DEFAULT 'local',
+			created_at INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL DEFAULT 0,
+			score REAL NOT NULL DEFAULT 0.5,
+			uses INTEGER NOT NULL DEFAULT 0,
+			last_used_at INTEGER NOT NULL DEFAULT 0
+		)
+	`;
+	void sql`
+		CREATE VIRTUAL TABLE IF NOT EXISTS crafted_tools_fts USING fts5(
+			name, description,
+			content=crafted_tools, content_rowid=rowid
+		)
+	`;
+	// Triggers to keep FTS in sync
+	void sql`
+		CREATE TRIGGER IF NOT EXISTS crafted_tools_ai AFTER INSERT ON crafted_tools BEGIN
+			INSERT INTO crafted_tools_fts(rowid, name, description) VALUES (new.rowid, new.name, new.description);
+		END
+	`;
+	void sql`
+		CREATE TRIGGER IF NOT EXISTS crafted_tools_ad AFTER DELETE ON crafted_tools BEGIN
+			INSERT INTO crafted_tools_fts(crafted_tools_fts, rowid, name, description) VALUES ('delete', old.rowid, old.name, old.description);
+		END
+	`;
+	void sql`
+		CREATE TRIGGER IF NOT EXISTS crafted_tools_au AFTER UPDATE ON crafted_tools BEGIN
+			INSERT INTO crafted_tools_fts(crafted_tools_fts, rowid, name, description) VALUES ('delete', old.rowid, old.name, old.description);
+			INSERT INTO crafted_tools_fts(rowid, name, description) VALUES (new.rowid, new.name, new.description);
+		END
+	`;
+}
+
 // ---------------------------------------------------------------------------
 // CraftStore — SQLite + FTS5 storage for agent-crafted tools
 // ---------------------------------------------------------------------------
@@ -54,40 +103,7 @@ export class CraftStore implements CraftedToolProvider {
 	}
 
 	ensureSchema(): void {
-		void this.sql`
-			CREATE TABLE IF NOT EXISTS crafted_tools (
-				name TEXT PRIMARY KEY,
-				description TEXT NOT NULL,
-				params TEXT,
-				code TEXT NOT NULL,
-				scope TEXT NOT NULL DEFAULT 'local',
-				created_at INTEGER NOT NULL,
-				updated_at INTEGER NOT NULL
-			)
-		`;
-		void this.sql`
-			CREATE VIRTUAL TABLE IF NOT EXISTS crafted_tools_fts USING fts5(
-				name, description,
-				content=crafted_tools, content_rowid=rowid
-			)
-		`;
-		// Triggers to keep FTS in sync
-		void this.sql`
-			CREATE TRIGGER IF NOT EXISTS crafted_tools_ai AFTER INSERT ON crafted_tools BEGIN
-				INSERT INTO crafted_tools_fts(rowid, name, description) VALUES (new.rowid, new.name, new.description);
-			END
-		`;
-		void this.sql`
-			CREATE TRIGGER IF NOT EXISTS crafted_tools_ad AFTER DELETE ON crafted_tools BEGIN
-				INSERT INTO crafted_tools_fts(crafted_tools_fts, rowid, name, description) VALUES ('delete', old.rowid, old.name, old.description);
-			END
-		`;
-		void this.sql`
-			CREATE TRIGGER IF NOT EXISTS crafted_tools_au AFTER UPDATE ON crafted_tools BEGIN
-				INSERT INTO crafted_tools_fts(crafted_tools_fts, rowid, name, description) VALUES ('delete', old.rowid, old.name, old.description);
-				INSERT INTO crafted_tools_fts(rowid, name, description) VALUES (new.rowid, new.name, new.description);
-			END
-		`;
+		initCraftedToolsTables(this.sql);
 	}
 
 	create(input: { name: string; description: string; params?: Record<string, string> | null; code: string; scope?: CraftedTool["scope"] }): CraftedTool {

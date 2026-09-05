@@ -64,7 +64,6 @@
  */
 import * as v from 'valibot';
 import { argumentDigest, sha256Hex } from '../safety/argument-digest';
-import { reconcileColumns } from '../identity/columns';
 import {
   admitsPublication, isBetter,
   type ExplorationRecord, type Floor, type ObjectiveDirection, type ObjectiveIdentity,
@@ -94,31 +93,13 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
  * fields, not the four a leaderboard displays — and a re-hash test is impossible
  * without it.
  *
- * NULLABLE, and one text feeding both the CREATE and the reconcile, for
- * `heads/schema.ts`'s reason: SQLite cannot ADD COLUMN a NOT NULL column without a
- * default, a default here would be a FABRICATED identity, and a stricter CREATE would
- * leave a fresh workspace and a reconciled one under different constraints — so a test
- * on one would prove nothing about the other. A row predating these columns therefore
- * carries NULL, and `describeObjective` reports that as an absence rather than
- * guessing; see its doc for what the reads then do.
+ * The five columns are NULLABLE: a default here would fabricate an identity.
+ * `describeObjective` reports NULL as an absence rather than guessing.
  */
-const EXPLORATION_RECORDS_IDENTITY_COLUMNS = {
-  metric: 'TEXT',
-  unit: 'TEXT',
-  direction: 'TEXT',
-  scale: 'TEXT',
-  verifier_digest: 'TEXT',
-} as const satisfies Readonly<Record<string, string>>;
-
-const IDENTITY_COLUMN_DDL = Object.entries(EXPLORATION_RECORDS_IDENTITY_COLUMNS)
-  .map(([column, definition]) => `  ${column.padEnd(17)} ${definition}`)
-  .join(',\n');
-
 /**
  * Every column NULLable that {@link ExplorationRecord} declares nullable, and none
- * carrying a default — the discipline `heads/schema.ts` states: NULL means the run
- * reported nothing, which is not the claim that it reported zero. `DEFAULT 0` on
- * `cost_tokens` would record a run whose spend nobody measured as having spent none.
+ * carrying a default. NULL means the run reported nothing. `DEFAULT 0` on
+ * `cost_tokens` would record an unmeasured spend as none.
  *
  * `displacements` is the one counter with a default, and 0 is its correct initial
  * value rather than an absence: a freshly written row has genuinely seen its cell's
@@ -146,20 +127,20 @@ const EXPLORATION_RECORDS_DDL = `CREATE TABLE IF NOT EXISTS exploration_records 
   cost_tokens       INTEGER,
   first_recorded_at INTEGER NOT NULL,
   displacements     INTEGER NOT NULL DEFAULT 0,
-${IDENTITY_COLUMN_DDL}
+  metric            TEXT,
+  unit              TEXT,
+  direction         TEXT,
+  scale             TEXT,
+  verifier_digest   TEXT
 )`;
 
-export function initExplorationRecordsTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
+export function initExplorationRecordsTable(execRaw: RawSqlExec): void {
   execRaw(EXPLORATION_RECORDS_DDL);
   // The comparable set is the identity AND the floor, and every read below is scoped
   // by both, so the index is too — a floor-blind index would serve a query nothing
   // here asks.
   execRaw('CREATE INDEX IF NOT EXISTS idx_er_cell ON exploration_records'
     + '(objective_id, floor_digest, descriptor, value)');
-  // Asked rather than attempted-and-caught: a catch cannot tell a missing column from
-  // a locked database, and the table has just been created above so an absent one is a
-  // fault this must not report as reconciled.
-  reconcileColumns(sql, execRaw, 'exploration_records', EXPLORATION_RECORDS_IDENTITY_COLUMNS);
 }
 
 /**
@@ -519,8 +500,8 @@ export function recordsInCell(
  * The identity the STORE holds for a handle, and how many rows it holds under it.
  *
  * `MAX()` per column rather than one row's values: SQL aggregates skip NULLs, so a set
- * that has gained even one row since the identity columns existed reports the true
- * identity, and only an all-legacy set reports none. Every row of a set agrees by
+ * that holds even one described row reports the true identity, and only a set
+ * whose rows carry no identity reports none. Every row of a set agrees by
  * construction — `objective_id` is the digest of exactly these five fields — which is
  * why an aggregate is exact here rather than a summary.
  *
@@ -649,10 +630,9 @@ export function recordExploration(
     // `first_recorded_at` is untouched: it is when this artifact first entered the
     // store, not when it was last measured.
     //
-    // The identity columns ARE re-written, and that is not a no-op on a row created
-    // before they existed: this writer holds the identity that hashes to the row's own
-    // `record_key`, so filling them is the one backfill available and it is derived
-    // rather than guessed. On any other row it writes back what is already there,
+    // The identity columns ARE re-written: this writer holds the identity that
+    // hashes to the row's own `record_key`, so a row with blank columns gains
+    // them here. On any other row it writes back what is already there,
     // because a differing identity is a different `objective_id` and a different row.
     void sql`UPDATE exploration_records SET
         artifact = ${write.artifact}, value = ${write.value}, detail = ${write.detail},

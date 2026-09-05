@@ -59,7 +59,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   const db = new Database(':memory:');
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL,
+    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, {
     dbPath: scratchPath('scaffold-turn', 'agent.db'), llm: DUMMY_LLM,
@@ -69,7 +69,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   // session's cold-start heal is a deterministic no-op here. The
   // shadow-rollout ledger is deliberately NOT created — LocalAgentSession
   // must provision it, the way the DO does, or no trial can ever be recorded.
-  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+  initScaffoldTables(rt.storage.execRaw);
   initAgentConfigTable(rt.storage.execRaw);
   if (opts.provisionScaffold !== false) {
     await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);

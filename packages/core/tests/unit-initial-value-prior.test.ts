@@ -41,7 +41,7 @@ function record(session: SessionWriter, sql: SqlExecutor, nodeId: string): Promi
 describe('BUG-1: the initial value prior', () => {
   test('a node that has never been backpropagated has value 0 and visits 0', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
     await record(createMockSession(), rt.storage.sql, 'fresh');
 
     const node = rt.storage.sql<{ value: number; visits: number }>`
@@ -53,7 +53,7 @@ describe('BUG-1: the initial value prior', () => {
 
   test('a tree where nothing was ever evaluated does NOT converge', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
     await record(session, rt.storage.sql, 'a');
     await record(session, rt.storage.sql, 'b');
@@ -69,7 +69,7 @@ describe('BUG-1: the initial value prior', () => {
 
   test('an unevaluated branch cannot out-rank a genuinely low-scored one', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
     await record(session, rt.storage.sql, 'scored');
     await record(session, rt.storage.sql, 'never-evaluated');
@@ -97,7 +97,7 @@ describe('BUG-1: the initial value prior', () => {
       return Object.fromEntries(cols.map((c) => [c.name, c.dflt_value]));
     };
 
-    const mctsOnly = defaultsOf((db) => initSearchTables(makeExecRaw(db), makeSql(db)));
+    const mctsOnly = defaultsOf((db) => initSearchTables(makeExecRaw(db)));
     const unified = defaultsOf((db) => initActorTables(makeExecRaw(db), makeSql(db)));
 
     expect(mctsOnly).toEqual(unified);

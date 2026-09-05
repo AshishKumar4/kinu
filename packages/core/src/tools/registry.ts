@@ -361,10 +361,7 @@ export interface BuiltinToolSpec {
 //     of this surface already uses (role, mission, roster, dismiss), and pairs
 //     with `dismiss` — hire/dismiss is a matched pair on the enum, staff/dismiss
 //     was not.
-// The cutover is total: no alias, no accepted-legacy action. The one place the
-// old token survives is `evolution/delegation-features.ts`, which counts
-// STORED turns and must keep reading history written before this rename — the
-// same history tolerance it already carries for the pre-unification tool names.
+// The cutover is total: no alias, no accepted-legacy action.
 
 /** Every action the `agents` tool can expose. Which ones a given actor
  *  actually gets is decided by the deps its backend wires — see

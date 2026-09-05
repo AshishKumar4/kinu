@@ -57,7 +57,7 @@ import {
   type LocalPeerEndpoint,
   type PeerMessage,
   type ReceiveResult,
-  type RoleSelection,
+  type RoleId,
   subordinateAgentName,
   type SqlExec,
   type SubordinateHandoff,
@@ -467,7 +467,7 @@ export class LocalAgentHost {
   }): Promise<HostEntry> {
     const config = createAgentConfigStore(input.ws.rt.storage.sql);
     const hubSql = makeSqlExec(input.db);
-    const roster = new SubordinateRosterStore(hubSql, makeSql(input.db));
+    const roster = new SubordinateRosterStore(hubSql);
     roster.ensureSchema();
     const sessionId = canonicalConversationId(config);
     const sessionOpts: LocalAgentSessionOpts = {
@@ -1090,9 +1090,7 @@ export class LocalAgentHost {
     return entry;
   }
 
-  /** Birth + seed the child before its LocalAgentSession becomes reachable.
-   *  The role is one tagged selection, so catalog and legacy roles never
-   *  become independent parent-side mirrors. */
+  /** Birth + seed the child before its LocalAgentSession becomes reachable. */
   private async birthChild(
     parent: HostEntry,
     input: Parameters<LocalAgentHost['birthChildEntry']>[1],
@@ -1118,7 +1116,7 @@ export class LocalAgentHost {
       /** Empty when nothing the caller said can name this agent yet. */
       displayName: string;
       nameOrigin: 'user' | 'auto';
-      role: RoleSelection;
+      role: RoleId;
       tier?: TierId;
       mission: string;
       lifetime: SubordinateLifetime;
@@ -1176,13 +1174,7 @@ export class LocalAgentHost {
           '',
           '## Role',
           '',
-          descriptor.role.kind === 'catalog'
-            ? `Role: ${descriptor.role.roleId}${descriptor.tier ? ` (tier ${descriptor.tier})` : ''}`
-            : [
-              'Legacy role (assigned before this workspace had a role catalog):',
-              descriptor.role.text,
-              'You keep these instructions until you are explicitly assigned a catalog role.',
-            ].join('\n'),
+          `Role: ${descriptor.role}${descriptor.tier ? ` (tier ${descriptor.tier})` : ''}`,
         ].join('\n'),
       );
       const ws: LocalHostedAgent = { rt, openConfig };

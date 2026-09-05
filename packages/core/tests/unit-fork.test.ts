@@ -133,7 +133,7 @@ describe('forkWorkspaceStorage', () => {
       identity: { id: 'S', name: 's' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    void src.sql`INSERT INTO search_nodes (id, task, action, visits, value) VALUES (${'n1'}, ${'t'}, ${'a'}, ${3}, ${0.8})`;
+    void src.sql`INSERT INTO search_nodes (id, root_id, task, action, visits, value) VALUES (${'n1'}, ${'n1'}, ${'t'}, ${'a'}, ${3}, ${0.8})`;
     void src.sql`INSERT INTO evolution_events (type, message) VALUES (${'reflection'}, ${'done'})`;
 
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });

@@ -385,20 +385,6 @@ describe('estimation and transcripts', () => {
 });
 
 describe('conventions', () => {
-  test('skills read/invoke calls are skill items; other skills actions and tools are not', () => {
-    const turns = kinuCodec.encode([
-      assistant([
-        toolCall('s1', 'skills', { action: 'read', name: 'deploy' }),
-        toolCall('s2', 'skills', { action: 'list' }),
-        toolCall('r1', 'run', { command: 'ls' }),
-      ]),
-    ]);
-    const [read, list, run] = turns[0].items;
-    expect(kinuConventions.isSkillItem?.(read)).toBe(true);
-    expect(kinuConventions.isSkillItem?.(list)).toBe(false);
-    expect(kinuConventions.isSkillItem?.(run)).toBe(false);
-  });
-
   test('todo and itemNote conventions are intentionally absent', () => {
     expect(kinuConventions.todo).toBeUndefined();
     expect(kinuConventions.itemNote).toBeUndefined();
@@ -423,9 +409,8 @@ describe('conventions', () => {
     });
   });
 
-  test('ladder order enables skills, superseding, and error purging before old tools', () => {
+  test('ladder order enables superseding and error purging before old tools', () => {
     expect(kinuSpec.stages.map((stage) => stage.name)).toEqual([
-      'skills',
       'supersede-reads',
       'purge-error-inputs',
       'tools-old',

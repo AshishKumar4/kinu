@@ -23,7 +23,8 @@ import {
   type PlanReview,
   planReviewAwaitingDecision,
   subordinateDescriptorSource,
-  type RoleSelection, type InlineSteer,
+  type InlineSteer,
+  type RoleId,
   type TierId,
   type InstructionApproval,
   type PromptIdentity,
@@ -70,8 +71,8 @@ export interface SetSubordinateIdentityInput {
    *  `user` for one the owner typed. `user` is what makes auto-titling
    *  refuse for good (`planWorkspaceTitle`). */
   nameOrigin: 'user' | 'auto';
-  /** Current role selection. The child's agent_config row is authoritative. */
-  role: RoleSelection;
+  /** Current role id. The child's agent_config row is authoritative. */
+  role: RoleId;
   /** Optional tier override for this child. */
   tier?: TierId | null;
   mission: string;
@@ -130,7 +131,7 @@ export class SubordinateAgent extends ActorAgent {
   private settledRunThisTurn = false;
 
   private get identity(): SubordinateIdentityStore {
-    if (!this._identity) this._identity = new SubordinateIdentityStore(this.ctx.storage.sql, this.boundSql);
+    if (!this._identity) this._identity = new SubordinateIdentityStore(this.ctx.storage.sql);
     return this._identity;
   }
 
@@ -325,20 +326,9 @@ export class SubordinateAgent extends ActorAgent {
     return this._workspaceTitle;
   }
 
-  /**
-   * The leading block of the identity section — the SAME position the
-   * freeform line always occupied. A catalog hire shows its role id; a
-   * pre-catalog hire keeps its original text as a LABELLED legacy block, so
-   * no user prose silently changes shape or place, until an explicit catalog
-   * assignment replaces and clears it.
-   */
-  private identityRoleBlock(role: RoleSelection): string {
-    if (role.kind === 'catalog') return `Role: ${role.roleId}`;
-    return [
-      'Legacy role (assigned before this workspace had a role catalog):',
-      role.text,
-      'You keep these instructions until you are explicitly assigned a catalog role.',
-    ].join('\n');
+  /** The leading block of the identity section. It shows the role id. */
+  private identityRoleBlock(role: RoleId): string {
+    return `Role: ${role}`;
   }
 
   protected get engine(): EvolutionEngine {
@@ -650,7 +640,7 @@ export class SubordinateAgent extends ActorAgent {
   async getSubordinateSnapshot(): Promise<{
     name: string;
     displayName: string;
-    role: RoleSelection;
+    role: RoleId;
     tier: TierId | null;
     mission: string;
     model: string | null;

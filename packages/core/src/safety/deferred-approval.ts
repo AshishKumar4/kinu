@@ -50,7 +50,6 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { SignalDeliverer } from '../types/signals';
 import type { ApprovalConsumedRecord } from '../events/types';
 import * as v from 'valibot';
-import { reconcileColumns } from '../identity/columns';
 import {
   formatApproval, gatedGrants, reviewCommand,
   type ApprovalGrant, type ApprovalSpend, type ApprovalSpendOutcome,
@@ -164,15 +163,10 @@ function toAction(r: Row): DeferredApproval {
   };
 }
 
-const DEFERRED_APPROVAL_ADDED_COLUMNS = {
-  executor: "TEXT NOT NULL DEFAULT ''",
-  // How many times this grant has been handed to a command. A settle names the
-  // spend it is closing, so a replayed or late settle cannot reopen a grant a
-  // later attempt already holds.
-  spend_seq: 'INTEGER NOT NULL DEFAULT 0',
-} as const;
-
-export function initDeferredApprovalsTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
+/** How many times this grant has gone out with a command. A settle names the
+ *  spend it closes, so a replayed or late settle cannot reopen a grant a
+ *  later attempt already holds. */
+export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS deferred_approvals (
     id           TEXT PRIMARY KEY,
     command      TEXT NOT NULL,
@@ -180,12 +174,11 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec, sql: SqlExecutor
     reason       TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'queued',
     requested_at INTEGER NOT NULL,
-    decided_at   INTEGER
+    decided_at   INTEGER,
+    spend_seq    INTEGER NOT NULL DEFAULT 0
   )`);
-  reconcileColumns(sql, execRaw, 'deferred_approvals', DEFERRED_APPROVAL_ADDED_COLUMNS);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_status ON deferred_approvals(status)`);
 }
-
 /**
  * The durable rows. Pure storage — what the words say and who gets woken is
  * {@link DeferredApprovalQueue}'s.

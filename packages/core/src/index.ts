@@ -1,7 +1,7 @@
 // @kinu.run/core — barrel export
 
 // Identity system
-export { initActorTables, initAllTables, migrateWorkspaceStorage, tableExists } from './identity/schema';
+export { initActorTables, initAllTables, tableExists } from './identity/schema';
 // The once-only lifecycle of one settled response, and the per-effect ledger it
 // wraps. Backend-neutral: the Durable Object and the CLI drive the same state
 // machine over the same table and supply only effect bodies and a wake.
@@ -25,7 +25,6 @@ export {
   type TerminalEffectFault, type OwedEffect, type OwedTerminalEffect,
   type TerminalSequenceRun,
 } from './orchestrator/terminal-effects';
-export { reconcileColumns, reconcileSqlExecColumns } from './identity/columns';
 // The durable record that a keyed piece of work already happened, kept after the
 // row that did it has been retired.
 export {
@@ -234,7 +233,7 @@ export {
   canonicalConversationId,
   AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
   DEFAULT_GEPA_EVAL_BUDGET, clampGepaEvalBudget,
-  type AgentConfigStore, type MctsOverrides, type RoleSelection, type ShellApprovalMode,
+  type AgentConfigStore, type MctsOverrides, type ShellApprovalMode,
 } from './config/index';
 
 // Types
@@ -868,7 +867,6 @@ export {
   type MctsSearchRunSummary,
 } from './mcts/search-store';
 export { initScaffoldTables } from './scaffold/schemas';
-export { initCraftQualityColumns } from './craft/schemas';
 
 // Scaffold management
 export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap';

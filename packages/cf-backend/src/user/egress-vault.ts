@@ -111,10 +111,6 @@ export function initEgressVaultTables(sql: SqlExec): void {
   // placeholder would let one secret be spent where the other was approved.
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_egress_secrets_placeholder
             ON user_egress_secrets (placeholder)`);
-  // No `reconcileColumns` call: every column above is in the CREATE, so there is
-  // nothing to reconcile. The FIRST column this table gains after release needs
-  // one added here, listing that column and every later one forever — a DO
-  // created before it would otherwise break with `no such column`.
 }
 
 /** A fresh placeholder. Independent of the secret by construction — this

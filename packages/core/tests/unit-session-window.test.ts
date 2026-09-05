@@ -7,7 +7,7 @@ import type { SqlExecutor } from '../src/types/primitives';
 
 function newStore(): CompletedTurnStore {
   const { sql, execRaw } = createTestSql();
-  initCompletedTurnTable(execRaw, sql);
+  initCompletedTurnTable(execRaw);
   return createCompletedTurnStore(sql);
 }
 
@@ -143,7 +143,7 @@ describe('SessionWindow — the pending outcome review', () => {
 
   test('a settled turn is dropped — the table holds the window plus one pending review', () => {
     const { sql, execRaw } = createTestSql();
-    initCompletedTurnTable(execRaw, sql);
+    initCompletedTurnTable(execRaw);
     const win = createCompletedTurnStore(sql);
     for (let i = 0; i < 4; i++) {
       win.append(aTurn(i), { awaitsFollowup: true, now: i });
@@ -160,7 +160,7 @@ describe('SessionWindow — the pending outcome review', () => {
 describe('SessionWindow — durability past the row', () => {
   function open() {
     const { sql, execRaw } = createTestSql();
-    initCompletedTurnTable(execRaw, sql);
+    initCompletedTurnTable(execRaw);
     return { sql, win: createCompletedTurnStore(sql) };
   }
   const rowCount = (sql: SqlExecutor): number =>

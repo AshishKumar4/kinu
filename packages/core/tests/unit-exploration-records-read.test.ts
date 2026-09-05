@@ -76,7 +76,7 @@ const T0 = 1_700_000_000_000;
 function store(): SqlExecutor {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initExplorationRecordsTable(makeExecRaw(db), sql);
+  initExplorationRecordsTable(makeExecRaw(db));
   return sql;
 }
 
@@ -190,10 +190,9 @@ describe('a stored identity cannot disagree with the digest beside it', () => {
     expect(new Set(rows.map((row) => row.direction))).toEqual(new Set(['minimise', 'maximise']));
   });
 
-  test('a re-record of a row written before the identity columns existed fills them', () => {
-    // The only backfill available, and it is derived rather than guessed: the writer
-    // holds the identity that hashes to the row's own key. Simulated by blanking the
-    // columns, which is exactly the state `reconcileColumns` leaves an old row in.
+  test('a re-record fills blank identity columns from the writer-held identity', () => {
+    // The writer holds the identity that hashes to the row's own key, so the
+    // fill is derived rather than guessed. Simulated by blanking the columns.
     const sql = store();
     recordExploration(sql, { publication: OPEN, write: write({ value: 40 }) });
     void sql`UPDATE exploration_records SET metric = NULL, unit = NULL, direction = NULL,

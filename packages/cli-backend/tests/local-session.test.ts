@@ -177,7 +177,7 @@ function workspaceRuntime() {
   // create`); the runtime factory doesn't, so provision it for the test.
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL,
+    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, { dbPath: scratchPath('local-session', 'agent.db'), llm: DUMMY_LLM });
   return { db, rt };
@@ -968,7 +968,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     // `programmatic:` id prefix is one reader away from the owner's bubble.
     const { db, session } = setup('ack');
     const sql = makeSql(db);
-    initBackgroundJobsTable(makeExecRaw(db), sql);
+    initBackgroundJobsTable(makeExecRaw(db));
     const store = new BackgroundJobStore(sql);
     const now = Date.now();
     store.create({ id: JOB, kind: 'agents', workMode: 'build', now, label: 'fork: design the algorithm' });
@@ -1634,20 +1634,6 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job'));
   });
 
-  test('recoverBackgroundJobs re-drives an orphaned think job instead of failing it', async () => {
-    const { db, session } = setup('resumed answer');
-    const input = JSON.stringify({ strategy: 'single-shot', task: 'finish the interrupted exploration' });
-    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-t', 'think', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f2', 'bg:think', '{"phase":"running","jobId":"bgjob-t","kind":"think"}', 1)`);
-
-    await session.recoverBackgroundJobs();
-
-    await waitFor(() => jobStatus(db, 'bgjob-t') === 'completed');
-    // Reclaimed under a fresh lease epoch, fencing the executor that died.
-    expect(db.query(`SELECT epoch FROM background_jobs WHERE id='bgjob-t'`).get()).toEqual({ epoch: 1 });
-    expect(jobResult(db, 'bgjob-t')).toContain('resumed answer');
-  });
-
   test('recoverBackgroundJobs re-drives an orphaned agents fork job (the post-unification kind)', async () => {
     const { db, session } = setup('resumed fork answer');
     // A row written by a surface that no longer exists. It is HISTORY rather
@@ -1707,9 +1693,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     });
 
     const { db, session } = setup('unused', model);
-    const input = JSON.stringify({ strategy: 'single-shot', task: 'finish the interrupted exploration' });
-    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-s', 'think', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f3', 'bg:think', '{"phase":"running","jobId":"bgjob-s","kind":"think"}', 1)`);
+    const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'finish the interrupted exploration' });
+    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-s', 'agents', 'build', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f3', 'bg:agents', '{"phase":"running","jobId":"bgjob-s","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
     expect(jobStatus(db, 'bgjob-s')).toBe('running');
@@ -1752,9 +1738,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, session, events } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true },
     });
-    const input = JSON.stringify({ strategy: 'single-shot', task: 'start the server' });
-    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-hang', 'think', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fh', 'bg:think', '{"phase":"running","jobId":"bgjob-hang","kind":"think"}', 1)`);
+    const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
+    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-hang', 'agents', 'build', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fh', 'bg:agents', '{"phase":"running","jobId":"bgjob-hang","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
     expect(jobStatus(db, 'bgjob-hang')).toBe('running');
@@ -1784,10 +1770,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, session, events } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 50, wakesAfterTurn: true },
     });
-    const input = JSON.stringify({ strategy: 'single-shot', task: 'edit the target file' });
+    const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'edit the target file' });
     db.exec(`INSERT INTO background_jobs (id, kind, label, work_mode, status, input_json, created_at)
-      VALUES ('bgjob-quiet', 'think', 'mcts: edit the target file', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fq', 'bg:think', '{"phase":"running","jobId":"bgjob-quiet","kind":"think"}', 1)`);
+      VALUES ('bgjob-quiet', 'agents', 'mcts: edit the target file', 'build', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fq', 'bg:agents', '{"phase":"running","jobId":"bgjob-quiet","kind":"agents"}', 1)`);
     await session.recoverBackgroundJobs();
 
     const stderrLines: string[] = [];
@@ -1816,9 +1802,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, session } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true },
     });
-    const input = JSON.stringify({ strategy: 'single-shot', task: 'start the server' });
-    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-e', 'think', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fe', 'bg:think', '{"phase":"running","jobId":"bgjob-e","kind":"think"}', 1)`);
+    const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
+    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-e', 'agents', 'build', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fe', 'bg:agents', '{"phase":"running","jobId":"bgjob-e","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
     const started = performance.now();
@@ -1834,9 +1820,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, session } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 200, wakesAfterTurn: true },
     });
-    const input = JSON.stringify({ strategy: 'single-shot', task: 'start the server' });
-    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-2x', 'think', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f2x', 'bg:think', '{"phase":"running","jobId":"bgjob-2x","kind":"think"}', 1)`);
+    const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
+    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-2x', 'agents', 'build', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f2x', 'bg:agents', '{"phase":"running","jobId":"bgjob-2x","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
     const started = performance.now();
@@ -2055,7 +2041,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     const db = new Database(':memory:');
     db.exec(`CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-      role TEXT NOT NULL, content TEXT NOT NULL,
+      role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
     const rt = createCLIRuntime(db, { dbPath: scratchPath('local-session-review', 'agent.db'), llm: DUMMY_LLM });
     // The classifier + reflection ride rt.llm.complete — stub it so the review
@@ -3095,8 +3081,8 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
 
 describe('LocalAgentSession — Alternate Takes parity', () => {
   function seedTakes(rt: ReturnType<typeof createCLIRuntime>) {
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
                         VALUES ('win', 'win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)

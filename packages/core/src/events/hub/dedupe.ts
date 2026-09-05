@@ -72,14 +72,8 @@ function dedupeReadableEvent(
 
     case 'subordinate_report':
       // The sending child's terminal sequence. A report is replayable durable
-      // work on that side, so with no key a replay lands beside the delivery
-      // the parent already admitted and the report is published twice.
-      // A pre-upgrade row carries no sequence — it was admitted with no key at
-      // all, and inventing one now would make two unrelated legacy reports
-      // collide. Absent means unkeyed, exactly as it was.
-      return event.payload.sequence_id === undefined
-        ? null
-        : subordinateReportDedupeKey(event.payload.sequence_id);
+      // work on that side, so its sequence is the key that recognises a replay.
+      return subordinateReportDedupeKey(event.payload.sequence_id);
 
     case 'chat':
     case 'internal':

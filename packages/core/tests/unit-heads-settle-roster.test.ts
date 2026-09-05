@@ -56,9 +56,9 @@ function seeded() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
   const sql = makeSql(db);
-  initHeadsTables(execRaw, sql);
-  initSearchTables(execRaw, sql);
-  initMctsSearchTable(execRaw, sql);
+  initHeadsTables(execRaw);
+  initSearchTables(execRaw);
+  initMctsSearchTable(execRaw);
   const journal = new HeadJournal(sql);
   journal.recordSplit(RUN, 'Check every other call site that indexes rules by kind', 1_000);
   for (const id of ['h0', 'h1', 'h2', 'h3', 'h4']) journal.insertSpawn(spawn(id));

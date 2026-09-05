@@ -60,7 +60,7 @@ function report(id: string, stepCount: number): HeadReport {
 
 function freshStore() {
   const { db, sql } = createTestSql();
-  initHeadsTables((ddl) => db.exec(ddl), sql);
+  initHeadsTables((ddl) => db.exec(ddl));
   return { sql };
 }
 

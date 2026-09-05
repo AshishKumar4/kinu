@@ -191,9 +191,6 @@ export const DEFAULT_SHADOW_CONFIG: ShadowConfig = {
 };
 
 export function initShadowTables(execRaw: RawSqlExec): void {
-  // Add `status` column to scaffold_versions if missing.
-  // (initScaffoldTables creates scaffold_versions with (version, written_at,
-  //  rationale). We extend with status to drive shadow-mode rollout.)
   execRaw(`CREATE TABLE IF NOT EXISTS scaffold_evaluations (
     id TEXT PRIMARY KEY,
     current_version INTEGER NOT NULL,
@@ -220,8 +217,6 @@ export function initShadowTables(execRaw: RawSqlExec): void {
   // The queue row is deleted the moment its trial is scored, so the tombstone
   // that outlives it is part of this queue's contract.
   initEffectTombstoneTable(execRaw);
-  // scaffold_versions.status is now created natively by initScaffoldTables
-  // (in scaffold/schemas.ts); no ALTER fallback needed here.
 }
 
 // ── The trial queue: what a turn contributes, before anything runs ──────────

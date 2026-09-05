@@ -35,7 +35,7 @@ function spawn(id: string, rootId: string): HeadInput {
 /** A head whose trace is `n` steps, s0 oldest. */
 function seeded(n: number) {
   const sql = createTestSql();
-  initHeadsTables(sql.execRaw, sql.sql);
+  initHeadsTables(sql.execRaw);
   const journal = new HeadJournal(sql.sql);
   journal.recordSplit(RUN, 'a swarm', Date.now());
   journal.insertSpawn(spawn(NODE, RUN));

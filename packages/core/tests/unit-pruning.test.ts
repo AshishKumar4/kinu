@@ -17,7 +17,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 function setup() {
   const { rt: base, db } = createTestRuntime();
   const sql = base.storage.sql;
-  initSearchTables(base.storage.execRaw, base.storage.sql);
+  initSearchTables(base.storage.execRaw);
   const aborted: Array<{ key: string; reason?: string }> = [];
   const rt: AgentRuntime = {
     ...base,

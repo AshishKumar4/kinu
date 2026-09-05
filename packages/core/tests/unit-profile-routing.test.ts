@@ -11,7 +11,7 @@ import {
 } from '../src/profiles/catalog';
 import { resolveTurnProfile } from '../src/profiles/resolve';
 import { SPEND_SOURCES, resolveModelRoute } from '../src/profiles/model-route';
-import { AGENT_CONFIG_KEYS, parseRoleSelectionRow } from '../src/config/store';
+import { AGENT_CONFIG_KEYS } from '../src/config/store';
 import { changeActiveRole, roleChangeOutcomeText } from '../src/profiles/role-change';
 import type { RoleChangeOutcome, RoleStateStore } from '../src/profiles/role-change';
 import type { ProfileCatalogEnvelope } from '../src/profiles';
@@ -137,7 +137,7 @@ describe('durable role change', () => {
     const config = memoryConfig();
     const out = changeActiveRole({ envelope: envelope(), config, to: 'auditor', actor: 'user' });
     expect(out).toEqual({ kind: 'applied', from: 'general', to: 'auditor', catalogVersion: 3 });
-    expect(parseRoleSelectionRow(config.get(AGENT_CONFIG_KEYS.roleSelection))).toEqual({ kind: 'catalog', roleId: 'auditor' });
+    expect(config.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('auditor');
     expect(config.get('role_changed_by')).toBe('user');
     const nextTurn = resolveTurnProfile(baseInput({ roleId: 'auditor' }));
     expect(nextTurn.role.id).toBe('auditor');
@@ -176,7 +176,7 @@ describe('durable role change', () => {
     // unchanged, and no request row staged for an owner surface that reads one.
     const widened = changeActiveRole({ envelope: restricted, config, to: 'generalist', actor: 'agent' });
     expect(widened).toEqual({ kind: 'refused', reason: 'approval-required' });
-    expect(parseRoleSelectionRow(config.get(AGENT_CONFIG_KEYS.roleSelection))).toEqual({ kind: 'catalog', roleId: 'scout' });
+    expect(config.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('scout');
     expect(config.get('pending_role_id')).toBeNull();
     // The widening classification itself is proved by the two outcomes above:
     // the narrowing switch landed and the widening one did not.

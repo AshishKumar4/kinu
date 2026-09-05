@@ -21,7 +21,6 @@ import type { CompletedTurn, ToolCallRecord } from './types';
 import type { EvalInstance } from './gepa/types';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
-import { reconcileColumns } from '../identity/columns';
 import { sqlCheckList } from '../identity/schema';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive';
 import { nanoid } from '../utils/nanoid';
@@ -59,8 +58,7 @@ export const OUTCOME_LABELS = [...TURN_OUTCOMES, 'unclear'] as const;
 export type OutcomeLabel = (typeof OUTCOME_LABELS)[number];
 
 /** Where an outcome row came from, in the ledger's canonical order — the one
- *  list, from which the table's CHECK constraint and its widening migration
- *  both derive:
+ *  list the table's CHECK constraint derives from:
  *    explicit    — the user's thumbs.
  *    classifier  — the LLM verdict on a real conversational follow-up.
  *    session_end — the session-end (abandoned) rule.
@@ -320,10 +318,6 @@ export async function classifyTurnOutcome(
 
 // ── The durable outcome ledger ───────────────────────────────────
 
-/** `evidence` is LAST deliberately. On an existing table it arrives by
- *  ALTER TABLE ADD COLUMN, which appends — so keeping the declared order
- *  identical to the altered order is what lets the rebuilds below copy with
- *  `SELECT *`. */
 const TURN_OUTCOMES_DDL = `(
     id TEXT PRIMARY KEY,
     turn_id TEXT,
@@ -339,63 +333,12 @@ const TURN_OUTCOMES_DDL = `(
     evidence TEXT
   )`;
 
-/** Columns added after the ledger shipped. Both sides of a `SELECT *` rebuild
- *  must carry them, or the copy is a column-count mismatch. */
-const TURN_OUTCOMES_POST_RELEASE_COLUMNS = { evidence: 'TEXT' } as const;
-
-export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
-  // The probe decides whether either migration below runs at all, so it must
-  // not fail quietly. It used to `catch { return null }` for "exotic executors
-  // without sqlite_master" — every real one is SQLite, and the cost of the
-  // excuse was that a failing probe silently skipped BOTH the resume branch
-  // and the CHECK-widening rebuild: rows left stranded in turn_outcomes_legacy
-  // beside a freshly-minted empty turn_outcomes, the history no longer visible
-  // and nothing crashing.
-  const tableDdl = (name: string): string | null =>
-    sql<{ sql: string }>`
-      SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${name}`[0]?.sql ?? null;
-
-  // Resume an interrupted CHECK-widening rebuild: a crash mid-sequence leaves
-  // rows stranded in turn_outcomes_legacy while a bare CREATE IF NOT EXISTS
-  // would silently start an empty ledger. Finish the copy first. INSERT OR
-  // IGNORE (PK ids) makes the resume idempotent at every crash point.
-  if (tableDdl('turn_outcomes_legacy') !== null) {
-    execRaw(`CREATE TABLE IF NOT EXISTS turn_outcomes ${TURN_OUTCOMES_DDL}`);
-    // Both sides before the copy: a rebuild interrupted before `evidence`
-    // existed leaves a legacy table one column short of the one it feeds.
-    reconcileColumns(sql, execRaw, 'turn_outcomes', TURN_OUTCOMES_POST_RELEASE_COLUMNS);
-    reconcileColumns(sql, execRaw, 'turn_outcomes_legacy', TURN_OUTCOMES_POST_RELEASE_COLUMNS);
-    execRaw(`INSERT OR IGNORE INTO turn_outcomes SELECT * FROM turn_outcomes_legacy`);
-    execRaw(`DROP TABLE turn_outcomes_legacy`);
-  }
-
+export function initTurnOutcomeTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS turn_outcomes ${TURN_OUTCOMES_DDL}`);
-  reconcileColumns(sql, execRaw, 'turn_outcomes', TURN_OUTCOMES_POST_RELEASE_COLUMNS);
-  // A table created before a source was added carries a narrower CHECK that
-  // SQLite cannot ALTER — rebuild it in place (same columns, data kept). The
-  // probe is the source LIST, so adding a member is the only edit a future
-  // widening needs. No explicit BEGIN/COMMIT: DO SQLite forbids explicit
-  // transaction statements, so crash-safety comes from the resume branch
-  // above instead — every intermediate state of this sequence is recoverable
-  // from it.
-  const ddl = tableDdl('turn_outcomes');
-  if (ddl !== null && TURN_OUTCOME_SOURCES.some((source) => !ddl.includes(`'${source}'`))) {
-    execRaw(`ALTER TABLE turn_outcomes RENAME TO turn_outcomes_legacy`);
-    execRaw(`CREATE TABLE turn_outcomes ${TURN_OUTCOMES_DDL}`);
-    execRaw(`INSERT OR IGNORE INTO turn_outcomes SELECT * FROM turn_outcomes_legacy`);
-    execRaw(`DROP TABLE turn_outcomes_legacy`);
-  }
   // Lessons ledger — reflection prose with provenance. Self-scored lessons
   // (no real user signal behind them) stay 'provisional' and OUT of the
   // derived view until a real negative outcome on one of their turns
-  // corroborates them (the audit's net-negative-lessons fix). Same
-  // CHECK-widening discipline as turn_outcomes above: the probe is the source
-  // LIST, the resume branch finishes an interrupted rebuild.
-  if (tableDdl('lessons_legacy') !== null) {
-    execRaw(`CREATE TABLE IF NOT EXISTS lessons ${LESSONS_DDL}`);
-    execRaw(`INSERT OR IGNORE INTO lessons SELECT * FROM lessons_legacy`);
-    execRaw(`DROP TABLE lessons_legacy`);
-  }
+  // corroborates them (the audit's net-negative-lessons fix).
   // The generated pattern, held between the model call that produced it and the
   // crafted tool it becomes. Same shape and same reason as `sleep_time_updates`:
   // the answer is expensive and the application is not atomic with it, so a
@@ -407,13 +350,6 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): vo
     created_at INTEGER NOT NULL
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS lessons ${LESSONS_DDL}`);
-  const lessonsDdl = tableDdl('lessons');
-  if (lessonsDdl !== null && LESSON_SOURCES.some((source) => !lessonsDdl.includes(`'${source}'`))) {
-    execRaw(`ALTER TABLE lessons RENAME TO lessons_legacy`);
-    execRaw(`CREATE TABLE lessons ${LESSONS_DDL}`);
-    execRaw(`INSERT OR IGNORE INTO lessons SELECT * FROM lessons_legacy`);
-    execRaw(`DROP TABLE lessons_legacy`);
-  }
   // Gold labels — turns a HUMAN judged directly, the calibration set that
   // measures how far the classifier's verdicts are from the truth
   // (calibration.ts). Append-only: a re-label inserts a new row and the newest
@@ -545,8 +481,7 @@ export interface TurnOutcomeRow {
   scaffoldVersion: number | null;
   createdAt: number;
   /** WHY this verdict: the classifier's one-sentence reason, or the execution
-   *  verdict's observation. Null where the source is its own evidence (a thumb)
-   *  or the row predates the column. */
+   *  verdict's observation. Null where the source is its own evidence (a thumb). */
   evidence: string | null;
 }
 
@@ -898,7 +833,7 @@ export interface OutcomeEvalSplit {
 // ── Lessons ledger (provisional → corroborated) ──────────────────
 
 /** Where a lesson came from, in the ledger's canonical order — the one list
- *  the table's CHECK constraint and its widening migration both derive from:
+ *  the table's CHECK constraint derives from:
  *    turn_reflection     — the one-sentence reflection on a turn that went
  *                          wrong (engine.reviewTurn).
  *    session_reflection  — the window-close reflection over recent lessons.

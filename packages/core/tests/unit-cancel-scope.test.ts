@@ -51,7 +51,7 @@ function idleHost(): BackendHost {
 
 function scene() {
   const db = new Database(':memory:');
-  initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+  initBackgroundJobsTable(makeExecRaw(db));
   const hubSql = makeSqlExec(db);
   initEventsHubTables(hubSql);
   const { fiber, settled } = inlineFiber();

@@ -11,7 +11,7 @@ import { makeSql, makeExecRaw } from './helpers';
 
 function newStore() {
   const db = new Database(':memory:');
-  initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+  initBackgroundJobsTable(makeExecRaw(db));
   return new BackgroundJobStore(makeSql(db));
 }
 

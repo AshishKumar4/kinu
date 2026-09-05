@@ -33,9 +33,10 @@ import { dirname } from 'node:path';
 import {
   HeadController, HeadJournal, MissionGovernor,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile,
-  initSearchTables, initScaffoldTables, initCraftQualityColumns,
+  initSearchTables, initScaffoldTables,
   type LLMProviderConfig, type MergeResult, type WebSearchProvider,
 } from '../packages/core/src/index';
+import { initCraftedToolsTables } from '../packages/agent-utils/src/stores/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
 import { createCLIHeadRuntime } from '../packages/cli-backend/src/head-runtime';
 import { createCLIRuntime, makeSql } from '../packages/cli-backend/src/runtime';
@@ -107,14 +108,13 @@ async function main(): Promise<void> {
     await createWorkspace(backendDb, {
       name: input.workspaceName, purpose: input.purpose, llm: analyst,
     });
-    // `initSearchTables` and `initScaffoldTables` read `pragma_table_info` to decide which columns
-    // are missing rather than adding them speculatively and swallowing the duplicate-column error,
-    // so they need a reader as well as a writer.
+    // `initSearchTables` and `initScaffoldTables` seed the search and scaffold
+    // tables for the panel arms' starting point.
     const sql = makeSql(db);
     const execRaw = (ddl: string): void => { db.exec(ddl); };
-    initSearchTables(execRaw, sql);
-    initScaffoldTables(execRaw, sql);
-    initCraftQualityColumns(execRaw, sql);
+    initSearchTables(execRaw);
+    initScaffoldTables(execRaw);
+    initCraftedToolsTables(sql);
   }
 
   const rt = createCLIRuntime(backendDb, { dbPath: input.dbPath, llm: analyst });

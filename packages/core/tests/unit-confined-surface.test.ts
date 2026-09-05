@@ -115,7 +115,7 @@ describe('head function-form execute_tools resolves over the allowed surface', (
 describe('node proposal merges after the execute_tools finish', () => {
   test('the function never sees propose_branch, and propose still grants', async () => {
     const { rt } = createTestRuntime();
-    initHeadsTables(rt.storage.execRaw, rt.storage.sql);
+    initHeadsTables(rt.storage.execRaw);
     const journal = new HeadJournal(rt.storage.sql);
     let seen: readonly string[] | null = null;
     const executeTool = (finished: ToolSet) => {

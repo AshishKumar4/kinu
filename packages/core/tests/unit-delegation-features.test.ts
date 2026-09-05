@@ -12,18 +12,18 @@ const write = (path: string): ToolCallRecord =>
   call('execute_tools', { code: `await workspace.writeFile("${path}", body);` });
 
 describe('delegationFeatures', () => {
-  test('counts agents actions — and legacy tool AND action names — from a completed turn record', () => {
-    // Live turns call the unified `agents` tool; stored turns from before the
-    // unification carry think/team/peers, and turns stored before 2026-08-17
-    // carry `staff` where `hire` is now written. All of them count into the same
-    // buckets, because this reader runs over history it did not write.
+  test('counts agents actions from a completed turn record', () => {
+    // Live turns call the unified `agents` tool; the evidence separates the
+    // persistent, search and messaging rungs by ACTION.
     const toolCalls: ToolCallRecord[] = [
       call('execute_tools', { code: 'a()' }),
       call('agents', { action: 'hire', role: 'r' }),
-      call('agents', { action: 'staff', role: 'r' }),
-      call('agents', { action: 'fork', task: 't' }),
-      call('team', { action: 'status' }),
-      call('agents', { action: 'ask', agent: 'a' }),
+      call('agents', { action: 'list' }),
+      call('agents', { action: 'dismiss', agent: 'a' }),
+      call('agents', { action: 'swarm', task: 't' }),
+      call('agents', { action: 'ask', agent: 'b' }),
+      call('agents', { action: 'send', agent: 'b', text: 'hi' }),
+      call('agents', { action: 'reply', text: 'ok' }),
       call('run', { command: 'ls' }),
     ];
 
@@ -31,7 +31,7 @@ describe('delegationFeatures', () => {
       stepCount: 41,
       teamCalls: 3,
       thinkCalls: 1,
-      peerCalls: 1,
+      peerCalls: 3,
       executeToolsCalls: 1,
       wallClockMs: 372_000,
       loopedCalls: 0,
@@ -182,8 +182,8 @@ describe('executionPathSignals — backtracking', () => {
 
   test('paths are found in nested argument values, not just top-level strings', () => {
     const trace = [
-      call('team', { action: 'spawn', task: { brief: 'run: echo x > /work/plan.md' } }),
-      call('team', { action: 'spawn', task: { brief: 'run: rm /work/plan.md' } }),
+      call('run', { action: 'spawn', task: { brief: 'run: echo x > /work/plan.md' } }),
+      call('run', { action: 'spawn', task: { brief: 'run: rm /work/plan.md' } }),
     ];
     expect(executionPathSignals(trace).backtrackCalls).toBe(1);
   });

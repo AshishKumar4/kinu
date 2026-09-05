@@ -192,7 +192,7 @@ describe('a running head publishes what it is producing', () => {
     // screen forever.
     const database = new Database(':memory:');
     const sql = makeSql(database);
-    initHeadsTables(makeExecRaw(database), sql);
+    initHeadsTables(makeExecRaw(database));
     const announced: string[] = [];
     const journal = new LiveHeadJournal(sql, (headId) => { announced.push(headId); });
     const frames: Frame[] = [];

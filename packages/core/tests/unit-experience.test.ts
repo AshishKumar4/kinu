@@ -90,9 +90,9 @@ const ImportSchema = v.object({
 
 function workspace(name: string, library: ExperienceLibraryStore, llmResponses?: Record<string, string>): Workspace {
   const { rt, db } = createTestRuntime(llmResponses ? { llmResponses } : undefined);
-  initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
+  initTurnOutcomeTables(rt.storage.execRaw);
   initFactsTable(rt.storage.execRaw);
-  initImportedExperienceTable(rt.storage.execRaw, rt.storage.sql);
+  initImportedExperienceTable(rt.storage.execRaw);
   db.exec(`CREATE TABLE IF NOT EXISTS evolution_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, message TEXT NOT NULL,
     data TEXT, created_at INTEGER NOT NULL)`);
@@ -823,98 +823,6 @@ describe('library search', () => {
 
     expect(library.search().map((e) => e.key)).toEqual(['ok']);
     expect(library.get('exp-bad')).toBeNull();
-  });
-});
-
-// ── a store built before the fourth kind existed ────────────────────────────
-
-describe('adding a kind widens the CHECK an existing store already carries', () => {
-  /** The library exactly as it shipped with three kinds. */
-  function threeKindLibrary(db: Database): void {
-    db.exec(`CREATE TABLE experience_library (
-      id               TEXT PRIMARY KEY,
-      kind             TEXT NOT NULL CHECK (kind IN ('craft','lesson','fact')),
-      source_workspace TEXT NOT NULL,
-      key              TEXT NOT NULL,
-      title            TEXT NOT NULL,
-      payload_json     TEXT NOT NULL,
-      evidence         TEXT NOT NULL,
-      search_text      TEXT NOT NULL,
-      published_at     INTEGER NOT NULL,
-      UNIQUE (source_workspace, kind, key)
-    )`);
-    db.exec(`CREATE VIRTUAL TABLE experience_library_fts USING fts5(
-      title, key, evidence, search_text,
-      content=experience_library, content_rowid=rowid)`);
-    db.exec(`CREATE TRIGGER experience_library_ai AFTER INSERT ON experience_library BEGIN
-      INSERT INTO experience_library_fts(rowid, title, key, evidence, search_text)
-      VALUES (new.rowid, new.title, new.key, new.evidence, new.search_text);
-    END`);
-    db.exec(`INSERT INTO experience_library
-      (id, kind, source_workspace, key, title, payload_json, evidence, search_text, published_at)
-      VALUES ('exp-old', 'lesson', 'alpha', 'lsn-1', 'Read the error first',
-              '{"kind":"lesson","text":"Read the error before rerunning."}',
-              'corroborated 2026-08-01', 'Read the error first', 1)`);
-  }
-
-  test('the owner library keeps its rows, its index, and now takes a scaffold', () => {
-    const db = new Database(':memory:');
-    threeKindLibrary(db);
-
-    const exec = sqlExec(db);
-    initExperienceLibraryTables(exec);
-    const library = createExperienceLibrary(exec);
-
-    // The published entry survived the rebuild and is still reachable by FTS,
-    // which is the half a rename would have silently detached.
-    expect(library.search({ query: 'error' }).map((e) => e.key)).toEqual(['lsn-1']);
-    expect(library.get('exp-old')?.kind).toBe('lesson');
-    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM sqlite_master
-      WHERE name = 'experience_library_legacy'`).get()?.c).toBe(0);
-
-    const entry = library.publish({
-      kind: 'scaffold', key: '1', title: 'Scaffold v1', evidence: 'promoted here',
-      payload: { kind: 'scaffold', version: 1, rationale: SCAFFOLD_RATIONALE, code: scaffoldSrc('v1') },
-    }, 'alpha');
-    expect(library.get(entry.id)?.payload).toMatchObject({ kind: 'scaffold', version: 1 });
-    expect(library.search({ kind: 'scaffold' }).map((e) => e.key)).toEqual(['1']);
-  });
-
-  test('the workspace staging ledger keeps its rows and now takes a scaffold', () => {
-    const { rt } = createTestRuntime();
-    rt.storage.execRaw(`DROP TABLE imported_experience`);
-    rt.storage.execRaw(`CREATE TABLE imported_experience (
-      id               TEXT PRIMARY KEY,
-      library_id       TEXT NOT NULL UNIQUE,
-      kind             TEXT NOT NULL CHECK (kind IN ('craft','lesson','fact')),
-      key              TEXT NOT NULL,
-      title            TEXT NOT NULL,
-      payload_json     TEXT NOT NULL,
-      evidence         TEXT NOT NULL,
-      source_workspace TEXT NOT NULL,
-      status           TEXT NOT NULL CHECK (status IN ('provisional','corroborated')),
-      turn_ids         TEXT NOT NULL,
-      imported_at      INTEGER NOT NULL,
-      corroborated_at  INTEGER
-    )`);
-    void rt.storage.sql`INSERT INTO imported_experience
-      (id, library_id, kind, key, title, payload_json, evidence, source_workspace,
-       status, turn_ids, imported_at, corroborated_at)
-      VALUES ('imp-old', 'exp-old', 'fact', 'deploy.target', 'deploy.target',
-              '{"kind":"fact","key":"deploy.target","value":"kinu.workers.dev","confidence":1}',
-              'held at confidence 1.00', 'alpha', 'provisional', '[]', 1, NULL)`;
-
-    initImportedExperienceTable(rt.storage.execRaw, rt.storage.sql);
-
-    expect(listImportedExperience(rt.storage.sql).map((r) => [r.id, r.kind]))
-      .toEqual([['imp-old', 'fact']]);
-    void rt.storage.sql`INSERT INTO imported_experience
-      (id, library_id, kind, key, title, payload_json, evidence, source_workspace,
-       status, turn_ids, imported_at, corroborated_at)
-      VALUES ('imp-new', 'exp-new', 'scaffold', '1', 'Scaffold v1',
-              ${JSON.stringify({ kind: 'scaffold', version: 1, rationale: SCAFFOLD_RATIONALE, code: scaffoldSrc('v1') })},
-              'promoted here', 'alpha', 'provisional', '[]', 2, NULL)`;
-    expect(listImportedExperience(rt.storage.sql).map((r) => r.kind)).toEqual(['scaffold', 'fact']);
   });
 });
 

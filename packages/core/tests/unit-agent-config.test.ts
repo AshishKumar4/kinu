@@ -4,7 +4,6 @@ import {
   DEFAULT_AUTO_GEPA_EVERY_N_TURNS, DEFAULT_GEPA_EVAL_BUDGET,
   canonicalConversationId, setReasoningEffort,
 } from '../src/index';
-import { parseRoleSelectionRow } from '../src/config/store';
 import { createTestSql } from '@kinu.run/test-utils';
 
 function setup() {
@@ -377,7 +376,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setDisplayName('Ada'),
     (c) => c.setNameOrigin('user'),
     (c) => c.setRoleChangePolicy('approval'),
-    (c) => c.setRoleSelection({ kind: 'catalog', roleId: 'auditor' }),
+    (c) => c.setRoleSelection('auditor'),
     (c) => c.setAssignedTier('deep'),
     (c) => c.setShellApprovalMode('allow_all'),
     (c) => c.grantShellApproval([{ rule: 'rm-recursive', executor: 'laptop' }]),
@@ -447,9 +446,9 @@ describe('the canonical conversation id lives under its registered key', () => {
 describe('the hired assignment a child reads at its turn boundary', () => {
   test('role and tier round-trip through the typed accessors', () => {
     const c = setup();
-    c.setRoleSelection({ kind: 'catalog', roleId: 'auditor' });
+    c.setRoleSelection('auditor');
     c.setAssignedTier('deep');
-    expect(c.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'auditor' });
+    expect(c.getRoleSelection()).toBe('auditor');
     expect(c.getAssignedTier()).toBe('deep');
   });
 
@@ -458,7 +457,7 @@ describe('the hired assignment a child reads at its turn boundary', () => {
     // resolver takes the role's own — the documented promise that a role's
     // default tier is re-derived from its roleId at the next boundary.
     const c = setup();
-    c.setRoleSelection({ kind: 'catalog', roleId: 'auditor' });
+    c.setRoleSelection('auditor');
     expect(c.getAssignedTier()).toBeNull();
   });
 
@@ -489,43 +488,34 @@ describe('the hired assignment a child reads at its turn boundary', () => {
   });
 
   test('a malformed role_selection row reads as general and is left alone', () => {
-    // The row is schema-parsed on every read: garbage reads as the default, and
-    // the read does NOT overwrite it — a reader is not a repair pass.
+    // An invalid id reads as the default, and the read does NOT overwrite it.
     const c = setup();
     c.set(AGENT_CONFIG_KEYS.roleSelection, 'not json');
-    expect(c.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'general' });
+    expect(c.getRoleSelection()).toBe('general');
     expect(c.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('not json');
   });
 
-  test('a well-formed row with an unknown role id fails parse instead of passing as general', () => {
-    // The schema used to coerce an unknown role id to `general` and report
-    // success, blessing the row. Null keeps the read on its fallback path,
-    // while a shape-valid custom id still parses as itself.
-    expect(parseRoleSelectionRow(JSON.stringify({ kind: 'catalog', roleId: 'Not A Role!!' }))).toBeNull();
-    expect(parseRoleSelectionRow(JSON.stringify({ kind: 'catalog', roleId: 'field-researcher' })))
-      .toEqual({ kind: 'catalog', roleId: 'field-researcher' });
+  test('a valid custom id reads as itself', () => {
+    const c = setup();
+    c.set(AGENT_CONFIG_KEYS.roleSelection, 'field-researcher');
+    expect(c.getRoleSelection()).toBe('field-researcher');
   });
 
   test('an unknown role id still reads as general and the read leaves the row alone', () => {
     const c = setup();
-    const raw = JSON.stringify({ kind: 'catalog', roleId: 'Not A Role!!' });
-    c.set(AGENT_CONFIG_KEYS.roleSelection, raw);
-    expect(c.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'general' });
-    expect(c.get(AGENT_CONFIG_KEYS.roleSelection)).toBe(raw);
+    c.set(AGENT_CONFIG_KEYS.roleSelection, 'Not A Role!!');
+    expect(c.getRoleSelection()).toBe('general');
+    expect(c.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('Not A Role!!');
   });
 
   test('a read never mints a role row; only an explicit selection persists one', () => {
     const c = setup();
-    // Absent IS the catalog default, and reading it writes nothing: an agent
-    // nobody has assigned stays distinguishable from one put on `general`.
-    expect(c.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'general' });
+    // Absent reads as the default and writes nothing.
+    expect(c.getRoleSelection()).toBe('general');
     expect(c.all()).toEqual({});
 
-    c.setRoleSelection({ kind: 'legacy', text: 'market researcher' });
-    c.setRoleSelection({ kind: 'catalog', roleId: 'researcher' });
-    // One row for the whole authority — a catalog pick REPLACES the freeform line.
+    c.setRoleSelection('researcher');
     expect(Object.keys(c.all())).toEqual([AGENT_CONFIG_KEYS.roleSelection]);
-    expect(JSON.parse(c.get(AGENT_CONFIG_KEYS.roleSelection)!))
-      .toEqual({ kind: 'catalog', roleId: 'researcher' });
+    expect(c.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('researcher');
   });
 });

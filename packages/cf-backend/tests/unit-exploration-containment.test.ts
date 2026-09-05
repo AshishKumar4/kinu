@@ -361,7 +361,7 @@ describe('head containment is structural', () => {
 describe('recursive split budget', () => {
   test('the controller decrements maxDepth for spawned subheads', async () => {
     const { db, sql } = createTestSql();
-    initHeadsTables((ddl) => db.exec(ddl), sql);
+    initHeadsTables((ddl) => db.exec(ddl));
     const spawned: HeadInput[] = [];
     const runtime: HeadRuntime = {
       async spawnHead(input) {

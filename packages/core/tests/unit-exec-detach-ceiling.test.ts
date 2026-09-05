@@ -215,7 +215,7 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
     // SignalDelivery, the REAL durable store. Only the fiber and the platform
     // host are doubles, because a DO is the one thing a unit cannot have.
     const db = new Database(':memory:');
-    initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+    initBackgroundJobsTable(makeExecRaw(db));
     const hubSql = makeSqlExec(db);
     initEventsHubTables(hubSql);
     const store = new BackgroundJobStore(makeSql(db));

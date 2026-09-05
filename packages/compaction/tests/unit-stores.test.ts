@@ -237,23 +237,6 @@ describe('createCompactionStateStore', () => {
     expect(store.loadPromptTokens('s1', 30)).toBe(9_000);
   });
 
-  test('a pre-overflow-recovery table gains the flag column on init', () => {
-    const db = new Database(':memory:');
-    db.exec(`CREATE TABLE compaction_state (
-      session_key        TEXT PRIMARY KEY,
-      plan_json          TEXT,
-      last_prompt_tokens INTEGER,
-      measured_at_length INTEGER
-    )`);
-    db.prepare(`INSERT INTO compaction_state (session_key, last_prompt_tokens, measured_at_length)
-                VALUES ('legacy', 5000, 12)`).run();
-    initCompactionStateTable(db);
-    const store = createCompactionStateStore(sqliteSql(db));
-    expect(store.loadPromptTokens('legacy', 12)).toBe(5_000);
-    expect(store.takeForceCompaction('legacy')).toBe(false);
-    store.armForceCompaction('legacy');
-    expect(store.takeForceCompaction('legacy')).toBe(true);
-  });
 });
 
 describe('archive index', () => {

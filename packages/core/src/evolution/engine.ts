@@ -299,13 +299,13 @@ export class EvolutionEngine {
     // refinement ledgers, and the config table it paces the lifetime timescale
     // in — created here so both backends (and tests) get them without
     // per-backend schema wiring.
-    initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
-    initReplayTables(rt.storage.execRaw, rt.storage.sql);
+    initTurnOutcomeTables(rt.storage.execRaw);
+    initReplayTables(rt.storage.execRaw);
     initAgentConfigTable(rt.storage.execRaw);
     this.agentConfig = createAgentConfigStore(rt.storage.sql);
-    initCompletedTurnTable(rt.storage.execRaw, rt.storage.sql);
+    initCompletedTurnTable(rt.storage.execRaw);
     this.sessionWindow = createCompletedTurnStore(rt.storage.sql);
-    initRefinementTables(rt.storage.execRaw, rt.storage.sql);
+    initRefinementTables(rt.storage.execRaw);
     // A review some earlier host claimed and died inside is owed again, not
     // lost — the claim was never the work, only its lease. A refinement claim
     // is the same fact about a different ledger: the refiner is read-only, so

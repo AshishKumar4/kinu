@@ -181,7 +181,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
    *  has touched — passes through here first. */
   private ensureInit(): void {
     if (this.initialized) return;
-    initTerminalEffectTable(this.sql, this.execRaw);
+    initTerminalEffectTable(this.execRaw);
     initToolEffectClaimTable(this.execRaw);
     this.execRaw(`CREATE TABLE IF NOT EXISTS probe_effect_runs (
       effect_key TEXT NOT NULL,

@@ -63,15 +63,15 @@ function interruptedWorkspace() {
   const db = new Database(':memory:');
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL,
+    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, {
     dbPath: scratchPath('local-session-fork-resume', 'agent.db'),
     llm: DUMMY_LLM,
   });
   const execRaw = makeExecRaw(db);
-  initHeadsTables(execRaw, makeSql(db));
-  initBackgroundJobsTable(execRaw, makeSql(db));
+  initHeadsTables(execRaw);
+  initBackgroundJobsTable(execRaw);
   const journal = new HeadJournal(makeSql(db));
   const now = Date.now();
   journal.recordSplit(ROOT, RATIONALE, now);
@@ -133,7 +133,7 @@ describe('resuming a workspace whose fork was interrupted', () => {
     const db = new Database(':memory:');
     db.exec(`CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-      role TEXT NOT NULL, content TEXT NOT NULL,
+      role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
     const rt = createCLIRuntime(db, {
       dbPath: scratchPath('local-session-fork-clean', 'agent.db'),

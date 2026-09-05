@@ -44,7 +44,7 @@ function insertV0Row(rt: AgentRuntime): void {
 }
 
 export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
-  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+  initScaffoldTables(rt.storage.execRaw);
   const sql = rt.storage.sql;
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
   const path = rt.identity.scaffold.path;

@@ -434,7 +434,7 @@ describe('claude-cli provider — tool loop composition', () => {
     const db = new Database(':memory:');
     db.exec(`CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-      role TEXT NOT NULL, content TEXT NOT NULL,
+      role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
     const rt = createCLIRuntime(db, { dbPath: scratchPath('claude-cli-provider', 'agent.db'), llm: openaiLlm });
     const events: SessionEvent[] = [];

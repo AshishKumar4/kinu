@@ -16,7 +16,7 @@ import {
   type CompactionProfile,
 } from '../src/index';
 import {
-  assistant, history, memoryArchive, memoryPorts, toolCall, toolMessage, toolResult, user,
+  assistant, history, memoryArchive, memoryPorts, user,
   validSummary, type MemoryArchiveStore, type MemoryPorts,
 } from './helpers';
 
@@ -252,20 +252,6 @@ describe('plan build', () => {
     expect(flat).toContain('output-14 ');
   });
 
-  test('skills bodies are pruned even inside the recent tool budget', async () => {
-    const { transform } = rig();
-    const skillsBody = 'skill body '.repeat(30);
-    const messages: ModelMessage[] = [
-      ...history(14, 3_000),
-      user('load the deploy skill'),
-      assistant([toolCall('sk1', 'skills', { action: 'read', name: 'deploy' })]),
-      toolMessage([toolResult('sk1', 'skills', skillsBody)]),
-      ...history(2, 100).map((m) => m), // protected tail turns
-    ];
-    const result = await transform(messages);
-    if (!result) throw new Error('expected a rewrite');
-    expect(JSON.stringify(result)).not.toContain('skill body ');
-  });
 });
 
 describe('replay', () => {

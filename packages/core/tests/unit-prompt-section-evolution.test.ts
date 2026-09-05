@@ -59,13 +59,13 @@ function setup(): Harness {
   initAllTables(execRaw, rt.storage.sql);
   initRunEventTables(execRaw);
   initPromptSectionTables(execRaw);
-  initScaffoldTables(execRaw, rt.storage.sql);
+  initScaffoldTables(execRaw);
   initShadowTables(execRaw);
-  initTurnOutcomeTables(execRaw, rt.storage.sql);
-  initReplayTables(execRaw, rt.storage.sql);
+  initTurnOutcomeTables(execRaw);
+  initReplayTables(execRaw);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
-  initRefinementTables(execRaw, rt.storage.sql);
+  initRefinementTables(execRaw);
   return { rt, facts: createFactsStore(rt.storage.sql) };
 }
 

@@ -394,7 +394,7 @@ async function askRefiner(
   if (!refiner) return { ok: false, error: 'this host wires no refiner' };
   const contextRefs = await presentContextRefs(deps);
   const outcome = await refiner.run({
-    role: { kind: 'catalog', roleId: 'general' },
+    role: 'general',
     roleLabel: 'refiner',
     task: renderRefinerBrief(deps, request, contextRefs),
     contextRefs,

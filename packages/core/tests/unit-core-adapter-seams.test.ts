@@ -263,7 +263,7 @@ describe('the mid-work invariant is loud when it breaks', () => {
 function seamOrchestrator(opts?: { enabled?: boolean }) {
   const recorded: CompletedTurn[] = [];
   const { sql, execRaw } = createTestSql();
-  initCompletedTurnTable(execRaw, sql);
+  initCompletedTurnTable(execRaw);
   const store = createCompletedTurnStore(sql);
   const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,

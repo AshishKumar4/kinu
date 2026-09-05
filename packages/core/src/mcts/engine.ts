@@ -69,11 +69,11 @@ export async function runMCTS(
   task: string,
   config: MCTSConfig,
 ): Promise<ConvergenceResult> {
-  initSearchTables(rt.storage.execRaw, rt.storage.sql);
-  initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+  initSearchTables(rt.storage.execRaw);
+  initAlternateTakesTable(rt.storage.execRaw);
 
   const search = config.search;
-  if (search) initMctsSearchTable(rt.storage.execRaw, rt.storage.sql);
+  if (search) initMctsSearchTable(rt.storage.execRaw);
 
   // Resume an unfinished search for this task (one evicted mid-run): continue its
   // remaining budget against the persisted tree instead of starting over (B6).

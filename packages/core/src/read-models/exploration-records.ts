@@ -26,13 +26,12 @@
  * bare `value REAL` shows a number that cannot be read. The register's own `25.4%` read
  * as a reward LEVEL when it was a DELTA — 3.1 points from the level for the same leader
  * — and a column of unlabelled reals is the same hazard with a sort applied. The store
- * now records what it measured (`EXPLORATION_RECORDS_IDENTITY_COLUMNS`), and these reads
- * report it rather than leaving a surface to caption a scalar.
+ * now records what it measured, and these reads report it rather than leaving a
+ * surface to caption a scalar.
  *
- * A set whose rows all predate those columns cannot say what it measured, and is
- * therefore NOT listed — the precedent `fork-runs.ts` states for legacy NULL-scoped
- * `search_nodes` rows, applied for a stronger reason: presenting such a set would mean
- * choosing a direction to sort it by, and there is no honest choice. Asking about one
+ * A set whose rows carry no identity cannot say what it measured, and is
+ * therefore NOT listed: presenting such a set would mean choosing a direction
+ * to sort it by, and there is no honest choice. Asking about one
  * DIRECTLY raises instead of answering with an empty page, because rows that exist and
  * cannot be described are a fault, not an absence.
  *
@@ -131,9 +130,8 @@ const MAX_RECORD_PAGE = 200;
  * collide with and it totalises the ORDERING key. The scoping predicates stay `IS`,
  * because there the NULL is the thing being matched.
  *
- * `HAVING MAX(metric) IS NOT NULL` excludes sets written entirely before the store
- * recorded what it measured. See the header: there is no honest direction to sort such a
- * set by.
+ * `HAVING MAX(metric) IS NOT NULL` excludes sets whose rows carry no identity.
+ * See the header: there is no honest direction to sort such a set by.
  *
  * One `best` query per set IN THE PAGE, which is what keeps the cost the page rather
  * than the store: the alternative is a second best-expression written here, and a second

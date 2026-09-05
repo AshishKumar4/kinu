@@ -73,7 +73,7 @@ const AlignmentConvergenceSchema: v.GenericSchema<AlignmentConvergence> = v.obje
   note: v.string(),
 });
 const SearchNodeSchema: v.GenericSchema<SearchNode> = v.object({
-  id: v.string(), parent_id: v.nullable(v.string()), root_id: v.nullable(v.string()),
+  id: v.string(), parent_id: v.nullable(v.string()), root_id: v.string(),
   task: v.string(), action: v.string(), observation: v.string(),
   code_used: v.nullable(v.string()), code_language: v.nullable(v.string()),
   visits: v.number(), value: v.number(), depth: v.number(),

@@ -58,7 +58,7 @@ describe('buildScaffoldProposalPrompt — documents the real sandbox contract', 
 describe('a proposal written against the documented API', () => {
   test('passes the 4-gate pipeline and survives the executor smoke path', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     rt.executor = createEvalExecutor();
 
     // Gates 1-4: structural, parse, version checkpoint, versioned write.
@@ -103,7 +103,7 @@ test('a prose-wrapped typescript fence stores only the scaffold source', async (
       'Return ONLY the JavaScript code': `Here is the revision:\n\n\`\`\`typescript\n${CONTRACT_PROPOSAL}\n\`\`\`\n\nDone.`,
     },
   });
-  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+  initScaffoldTables(rt.storage.execRaw);
   rt.executor = createEvalExecutor();
   await rt.identity.scaffold.write(CONTRACT_PROPOSAL);
   const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 1000 });

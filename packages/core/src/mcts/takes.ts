@@ -14,7 +14,6 @@ import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { SearchNode } from '../types/mcts';
 import { recordTurnOutcome } from '../evolution/outcomes';
-import { reconcileColumns } from '../identity/columns';
 import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../identity/effect-tombstones';
@@ -94,7 +93,7 @@ export interface TakePickOutcome extends TakePickRecord {
   continuationQueued: boolean;
 }
 
-export function initAlternateTakesTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
+export function initAlternateTakesTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS alternate_takes (
     id TEXT PRIMARY KEY,
     turn_id TEXT,
@@ -108,12 +107,6 @@ export function initAlternateTakesTable(execRaw: RawSqlExec, sql: SqlExecutor): 
     created_at INTEGER NOT NULL,
     picked_at INTEGER
   )`);
-  // Tables created before Steer-as-Branch lack the source column; tables created
-  // before branch settlement was keyed lack the settlement key.
-  reconcileColumns(sql, execRaw, 'alternate_takes', {
-    source: `TEXT NOT NULL DEFAULT 'mcts'`,
-    settlement_key: 'TEXT',
-  });
   // UNIQUE so the invariant is the database's rather than the caller's: a
   // replayed settlement that got past the tombstone read would fail here instead
   // of adding a second set for one branch. SQLite treats NULLs as distinct, so

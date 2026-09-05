@@ -76,8 +76,8 @@ export interface ImportedExperienceRow {
   corroboratedAt: number | null;
 }
 
-export function initImportedExperienceTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
-  const ddl = `(
+export function initImportedExperienceTable(execRaw: RawSqlExec): void {
+  execRaw(`CREATE TABLE IF NOT EXISTS imported_experience (
     id               TEXT PRIMARY KEY,
     library_id       TEXT NOT NULL UNIQUE,
     kind             TEXT NOT NULL CHECK (kind IN (${sqlCheckList(EXPERIENCE_KINDS)})),
@@ -90,33 +90,7 @@ export function initImportedExperienceTable(execRaw: RawSqlExec, sql: SqlExecuto
     turn_ids         TEXT NOT NULL,
     imported_at      INTEGER NOT NULL,
     corroborated_at  INTEGER
-  )`;
-  const storedDdl = (name: string): string | null =>
-    sql<{ sql: string }>`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${name}`[0]?.sql
-      ?? null;
-
-  // Resume an interrupted rebuild first: a crash mid-sequence leaves the rows
-  // in `imported_experience_legacy` while a bare CREATE IF NOT EXISTS would
-  // silently start an empty ledger. Same discipline as turn_outcomes
-  // (evolution/outcomes.ts) — SQLite cannot ALTER a CHECK, so widening one is
-  // an in-place rebuild, and the resume branch makes it idempotent at every
-  // crash point.
-  if (storedDdl('imported_experience_legacy') !== null) {
-    execRaw(`CREATE TABLE IF NOT EXISTS imported_experience ${ddl}`);
-    execRaw(`INSERT OR IGNORE INTO imported_experience SELECT * FROM imported_experience_legacy`);
-    execRaw(`DROP TABLE imported_experience_legacy`);
-  }
-  execRaw(`CREATE TABLE IF NOT EXISTS imported_experience ${ddl}`);
-  // A table created before a kind was added carries a narrower CHECK that
-  // rejects the new kind's rows. The probe is the kind LIST itself, so adding a
-  // member is the only edit ever needed here.
-  const current = storedDdl('imported_experience');
-  if (current !== null && EXPERIENCE_KINDS.some((kind) => !current.includes(`'${kind}'`))) {
-    execRaw(`ALTER TABLE imported_experience RENAME TO imported_experience_legacy`);
-    execRaw(`CREATE TABLE imported_experience ${ddl}`);
-    execRaw(`INSERT OR IGNORE INTO imported_experience SELECT * FROM imported_experience_legacy`);
-    execRaw(`DROP TABLE imported_experience_legacy`);
-  }
+  )`);
 }
 
 interface RawImportRow {

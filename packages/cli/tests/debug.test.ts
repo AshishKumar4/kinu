@@ -64,10 +64,10 @@ function seedInvestigationWorkspace(dbPath: string): void {
   const db = new Database(dbPath, { create: true });
   const execRaw = (sql: string) => { db.exec(sql); };
   initRunEventTables(execRaw);
-  initHeadsTables(execRaw, makeSql(db));
-  initSearchTables(execRaw, makeSql(db));
-  initMctsSearchTable(execRaw, makeSql(db));
-  initBackgroundJobsTable(execRaw, makeSql(db));
+  initHeadsTables(execRaw);
+  initSearchTables(execRaw);
+  initMctsSearchTable(execRaw);
+  initBackgroundJobsTable(execRaw);
   const sql = makeSql(db);
 
   // ── Runs: an older plain run, then the latest — which backgrounds a call
@@ -156,7 +156,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
   // partition and one partitioned across three cells, five occupants in the
   // largest. Written through the real writer, because the identity columns the
   // bundle prints are only trustworthy as something that writer filled. ──
-  initExplorationRecordsTable(execRaw, sql);
+  initExplorationRecordsTable(execRaw);
   const CALLS: ObjectiveIdentity = {
     metric: 'oracle_calls', unit: 'oracle calls', direction: 'minimise',
     scale: 'log', verifierDigest: 'exec-ratio@abc123',

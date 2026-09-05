@@ -7,7 +7,6 @@
 // The store is a deep module (small interface, real behavior): typed getters
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
-import * as v from 'valibot';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
 import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../profiles/catalog';
 import {
@@ -20,45 +19,7 @@ import {
   DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity,
 } from '../advisor/review';
 
-/**
- * The ONE role authority for an agent: either a validated catalog id or the
- * freeform line a hire outside the catalog carries. Never both — {@link
- * AgentConfigStore.setRoleSelection} writes the single row, so no reader can
- * ever see two current roles.
- */
-export type RoleSelection =
-  | { readonly kind: 'catalog'; readonly roleId: RoleId }
-  | { readonly kind: 'legacy'; readonly text: string };
-
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
-
-/** Encode a selection for its single `role_selection` storage row. */
-export function encodeRoleSelection(selection: RoleSelection): string {
-  return JSON.stringify(selection);
-}
-
-const RoleSelectionSchema = v.union([
-  v.object({
-    kind: v.literal('catalog'),
-    roleId: v.pipe(v.string(), v.check(isValidRoleId, 'invalid role id')),
-  }),
-  v.object({ kind: v.literal('legacy'), text: v.string() }),
-]);
-/** Schema-parse a stored row. Null when absent or malformed — callers decide
- *  what an unreadable row means (the store reads it as `general`). */
-export function parseRoleSelectionRow(value: string | null): RoleSelection | null {
-  if (value === null || value === '') return null;
-  let raw: unknown;
-  try {
-    raw = JSON.parse(value);
-  } catch (error) {
-    // Unparseable text is absence for this purpose; anything else propagates.
-    if (!(error instanceof SyntaxError)) throw error;
-    return null;
-  }
-  const parsed = v.safeParse(RoleSelectionSchema, raw);
-  return parsed.success ? parsed.output : null;
-}
 /** Read a stored role-change policy. Unset or unknown reads as `allow`. */
 export function parseRoleChangePolicy(value: string | null): 'allow' | 'approval' | 'locked' {
   return value === 'approval' || value === 'locked' ? value : 'allow';
@@ -75,7 +36,7 @@ export const AGENT_CONFIG_KEYS = {
   displayName: 'display_name',
   /** 'user' once the operator sets a name explicitly — suppresses auto-titling. */
   nameOrigin: 'name_origin',
-  /** The ONE role authority row: a JSON-encoded {@link RoleSelection}. */
+  /** The ONE role authority row. It stores the bare catalog id. */
   roleSelection: 'role_selection',
   /** The owner's self-switch policy: 'allow' | 'approval' | 'locked'. */
   roleChangePolicy: 'role_change_policy',
@@ -188,15 +149,10 @@ export interface AgentConfigStore {
   setNameOrigin(origin: 'user' | 'auto'): void;
   /** Persist the visible title and its ownership in one SQLite statement. */
   setDisplayNameOrigin(name: string, origin: 'user' | 'auto'): void;
-  /** The agent's whole current role selection — the ONE role authority
-   *  (catalog id or freeform line). An absent or unreadable row reads as the
-   *  `general` catalog role and PERSISTS NOTHING: the row exists only once
-   *  {@link AgentConfigStore.setRoleSelection} has put one there. The NEXT
-   *  resolved turn reads it; a running step keeps its profile. */
-  getRoleSelection(): RoleSelection;
-  /** Replace the whole role selection: ONE row, schema-parsed on read.
-   *  A catalog selection REPLACES any freeform line and vice versa. */
-  setRoleSelection(selection: RoleSelection): void;
+  /** The agent's current role id. An absent or invalid row reads as `general`. The read writes nothing. */
+  getRoleSelection(): RoleId;
+  /** Store the role id in the ONE role row. */
+  setRoleSelection(roleId: RoleId): void;
   /** The tier a parent pinned at hire, or null when none was. Null derives
    *  from the role at the child's turn boundary. */
   getAssignedTier(): TierId | null;
@@ -338,18 +294,14 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
   };
   /**
-   * The role selection lives in ONE `role_selection` row encoding the tagged
-   * union (`{"kind":"catalog","roleId":…}` / `{"kind":"legacy","text":…}`),
-   * schema-parsed on every read.
-   *
-   * An absent or unreadable row IS the `general` catalog role and is not
-   * written back. A read that minted the row would make the default
-   * indistinguishable from a `general` an owner chose, and would put a write
-   * on the read path of every turn boundary for the answer it already has.
+   * The role id lives in ONE `role_selection` row as the bare id.
+   * An absent or invalid row reads as `general`.
+   * The read writes nothing, so an unread row stays distinguishable from a stored `general`.
    */
-  const readRoleSelection = (): RoleSelection =>
-    parseRoleSelectionRow(get(AGENT_CONFIG_KEYS.roleSelection))
-      ?? { kind: 'catalog', roleId: DEFAULT_ROLE_ID };
+  const readRoleSelection = (): RoleId => {
+    const stored = get(AGENT_CONFIG_KEYS.roleSelection);
+    return stored !== null && isValidRoleId(stored) ? stored : DEFAULT_ROLE_ID;
+  };
   /** One-statement bump of a monotone counter, returning the new value. Shared
    *  by the two lifetime counters here — closed turn windows, and isolate
    *  generations — because they differ only in their key and a byte-identical
@@ -422,9 +374,9 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       `;
     },
     getRoleSelection: readRoleSelection,
-    setRoleSelection(selection) {
+    setRoleSelection(roleId) {
       void sql`INSERT INTO agent_config (key, value)
-        VALUES (${AGENT_CONFIG_KEYS.roleSelection}, ${encodeRoleSelection(selection)})
+        VALUES (${AGENT_CONFIG_KEYS.roleSelection}, ${roleId})
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
     },
     getAssignedTier(): TierId | null {

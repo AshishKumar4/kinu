@@ -32,10 +32,8 @@ describe('programmatic turn provenance', () => {
 
   test('the operator\'s own words keep the user bubble', () => {
     // `mcp` is the operator driving an MCP client, and its producer stamps that
-    // (cf-backend/src/orchestrator.ts runTaskFromMcp). It is also read
-    // correctly off the pre-stamp rows, which carry only the event name.
+    // (cf-backend/src/orchestrator.ts runTaskFromMcp).
     expect(classifyProgrammaticTurn({ kinuEvent: 'mcp', kinuAuthor: 'operator' })).toBeNull();
-    expect(classifyProgrammaticTurn({ kinuEvent: 'mcp' })).toBeNull();
     // No markers at all, whatever the id: the operator typed it.
     expect(classifyProgrammaticTurn(undefined)).toBeNull();
     expect(classifyProgrammaticTurn({})).toBeNull();

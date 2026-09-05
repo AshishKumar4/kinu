@@ -357,9 +357,7 @@ export function listLegacyAgentNames(): string[] {
     .sort();
 }
 
-/** The durable id of a local workspace database, or null when it carries none.
- *  `agent_identity` is the pre-rename table: a local workspace is a file that
- *  outlives the rename, so adoption keys on it too. */
+/** The durable id of a local workspace database, or null when it carries none. */
 export function readWorkspaceIdentityId(dbPath: string): string | null {
   if (!existsSync(dbPath)) return null;
   // Opened READ-WRITE although nothing here writes. A workspace runs in WAL
@@ -370,14 +368,12 @@ export function readWorkspaceIdentityId(dbPath: string): string | null {
   // title of a workspace nothing had open.
   const db = new Database(dbPath);
   try {
-    for (const table of ['workspace_identity', 'agent_identity']) {
-      const present = db.query<{ n: number }, [string]>(
-        `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?`,
-      ).get(table);
-      if (!present || present.n === 0) continue;
-      const row = db.query<{ id: string }, []>(`SELECT id FROM ${table} LIMIT 1`).get();
-      if (row?.id) return row.id;
-    }
+    const present = db.query<{ n: number }, []>(
+      `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'workspace_identity'`,
+    ).get();
+    if (!present || present.n === 0) return null;
+    const row = db.query<{ id: string }, []>(`SELECT id FROM workspace_identity LIMIT 1`).get();
+    if (row?.id) return row.id;
     return null;
   } finally {
     db.close();

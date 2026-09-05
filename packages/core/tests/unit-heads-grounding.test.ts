@@ -29,7 +29,7 @@ import { makeSql, makeExecRaw, captureConsole } from './helpers';
 
 function newJournal() {
   const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db), makeSql(db));
+  initHeadsTables(makeExecRaw(db));
   const sql = makeSql(db);
   return { sql, journal: new HeadJournal(sql), db };
 }

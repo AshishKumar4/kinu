@@ -107,7 +107,7 @@ function activation(db: Database) {
  *  written for, and the state that produced the 58 rows. */
 function evictedWorkspace() {
   const ws = createTestWorkspace();
-  initBackgroundJobsTable(ws.execRaw, ws.sql);
+  initBackgroundJobsTable(ws.execRaw);
   initEventsHubTables(makeSqlExec(ws.db));
   const store = new BackgroundJobStore(ws.sql);
   const now = Date.now();

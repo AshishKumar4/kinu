@@ -13,7 +13,6 @@
 // platform with no fenced DO callback (Queues/alarms are at-least-once) this
 // epoch check IS the fence.
 
-import { reconcileColumns } from '../identity/columns';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { WorkMode } from '../prompting/surface';
 import { renderThrownChain } from '../obs/index';
@@ -92,11 +91,11 @@ function toJob(r: Row): BackgroundJob {
     epoch: r.epoch ?? 0,
     resumeAttempts: r.resume_attempts ?? 0,
     retriedBy: r.retried_by ?? null,
-    // Null for a row written before this column existed. `created_at` is the honest
-    // reading there: its first attempt is the only one anything recorded.
+    // `created_at` is the honest reading when no attempt start was recorded:
+    // its first attempt is the only one anything recorded.
     attemptStartedAt: r.attempt_started_at ?? r.created_at,
-    // Null for every row written before this column existed, and for every job
-    // that has never been interrupted: nothing is owed, so nothing is waited on.
+    // Null for every job that has never been interrupted: nothing is owed,
+    // so nothing is waited on.
     resumeAfter: r.resume_after ?? null,
   };
 }
@@ -118,12 +117,12 @@ export function serializeJobResult<Result>(result: Result): string {
   }
 }
 
-export function initBackgroundJobsTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
+export function initBackgroundJobsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS background_jobs (
     id          TEXT PRIMARY KEY,
     kind        TEXT NOT NULL,
     label       TEXT,
-    work_mode   TEXT NOT NULL,
+    work_mode   TEXT NOT NULL DEFAULT 'build',
     status      TEXT NOT NULL DEFAULT 'running',
     result      TEXT,
     error       TEXT,
@@ -137,16 +136,6 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec, sql: SqlExecutor): 
     created_at  INTEGER NOT NULL,
     settled_at  INTEGER
   )`);
-  reconcileColumns(sql, execRaw, 'background_jobs', {
-    work_mode: `TEXT NOT NULL DEFAULT 'build'`,
-    input_json: 'TEXT',
-    epoch: 'INTEGER NOT NULL DEFAULT 0',
-    resume_attempts: 'INTEGER NOT NULL DEFAULT 0',
-    attempt_started_at: 'INTEGER',
-    resume_after: 'INTEGER',
-    retried_by: 'TEXT',
-    retry_of: 'TEXT',
-  });
   execRaw(`CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status)`);
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_background_jobs_retry_of
     ON background_jobs(retry_of) WHERE retry_of IS NOT NULL`);

@@ -82,9 +82,8 @@ export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
  *
  * The rows are written in the production shape, through the production chunker
  * and the DDL's real owner, because this used to declare a THIRD schema:
- * `(id, path, content)`. Whichever of the two ran first won, so
- * `repairLegacyTables` classified this shape as pre-release and dropped it,
- * every insert afterwards failed on `no column named content`, and the catch
+ * `(id, path, content)`. Whichever of the two ran first won, every insert
+ * against the other shape failed on `no column named content`, and the catch
  * that wrapped it reported an indexed file. A fork copies `memory_chunks`, so
  * the same divergence also handed a fork an empty memory index.
  */

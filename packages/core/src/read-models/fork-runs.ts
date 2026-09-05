@@ -167,9 +167,6 @@ interface RunPosition {
  * contributes nothing: it is a header row written before the first node spawns,
  * so a run known only to it has neither a tree nor a transcript, and every run
  * that reaches a node writes its tree root either way.
- *
- * Legacy pre-`root_id` `search_nodes` rows are NULL-scoped and stay invisible, as
- * they are to every scoped query.
  */
 function queryPositions(
   sql: SqlExecutor,
@@ -184,7 +181,7 @@ function queryPositions(
     FROM (
       SELECT root_id AS root_id, MIN(created_at) AS started_at
       FROM search_nodes
-      WHERE root_id IS NOT NULL AND (${rootId} IS NULL OR root_id = ${rootId})
+      WHERE (${rootId} IS NULL OR root_id = ${rootId})
       GROUP BY root_id
       UNION ALL
       SELECT root_id AS root_id, MIN(spawned_at) AS started_at
@@ -321,8 +318,7 @@ function queryTreeHalves(
            MAX(CASE WHEN n.status = 'terminal' THEN n.value END)    AS best_terminal
     FROM search_nodes n
     LEFT JOIN mcts_search_runs r ON r.root_id = n.root_id
-    WHERE n.root_id IS NOT NULL
-      AND (${rootId} IS NULL OR n.root_id = ${rootId})
+    WHERE (${rootId} IS NULL OR n.root_id = ${rootId})
     GROUP BY n.root_id`;
   const halves = new Map<string, TreeHalf>();
   for (const row of rows) {

@@ -22,7 +22,7 @@ import {
   type RecoveryFinding,
 } from '../src/evolution/recovery';
 import {
-  corroborateLessonsForTurn, initTurnOutcomeTables, listLessons, recordLesson,
+  corroborateLessonsForTurn, initTurnOutcomeTables, listLessons,
 } from '../src/evolution/outcomes';
 import { composePrepareStep } from '../src/prompting/prepare-step';
 import {
@@ -48,7 +48,7 @@ function finding(overrides: Partial<RecoveryFinding> = {}): RecoveryFinding {
 function ledgerDb() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initTurnOutcomeTables(makeExecRaw(db), sql);
+  initTurnOutcomeTables(makeExecRaw(db));
   return { sql, db };
 }
 
@@ -102,45 +102,6 @@ describe('the ledger', () => {
   test('an empty ledger reads as empty, never as a throw', () => {
     const { sql } = ledgerDb();
     expect(listRecoveryFindings(sql)).toEqual([]);
-  });
-});
-
-describe('the CHECK widening', () => {
-  test('a lessons table from before the execution_recovery source is rebuilt in place, rows kept', () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    db.exec(`CREATE TABLE lessons (
-      id TEXT PRIMARY KEY,
-      turn_ids TEXT NOT NULL,
-      text TEXT NOT NULL,
-      source TEXT NOT NULL CHECK (source IN ('turn_reflection','session_reflection')),
-      status TEXT NOT NULL CHECK (status IN ('provisional','corroborated')),
-      created_at INTEGER NOT NULL,
-      corroborated_at INTEGER
-    )`);
-    recordLesson(sql, { turnIds: ['t1'], text: 'old lesson', source: 'turn_reflection', status: 'provisional' });
-    // On the narrow table the new source is refused by the CHECK itself.
-    expect(() => recordRecoveryFinding(sql, finding()))
-      .toThrow("CHECK constraint failed: source IN ('turn_reflection','session_reflection')");
-
-    initTurnOutcomeTables(makeExecRaw(db), sql);
-    expect(recordRecoveryFinding(sql, finding())).toBe(true);
-    const rows = listLessons(sql);
-    expect(rows.map((r) => r.text)).toContain('old lesson');
-    expect(rows.map((r) => r.source)).toContain('execution_recovery');
-  });
-
-  test('a crash mid-rebuild is finished by the next init — rows stranded in lessons_legacy come back', () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    initTurnOutcomeTables(makeExecRaw(db), sql);
-    recordLesson(sql, { turnIds: [], text: 'stranded', source: 'session_reflection', status: 'provisional' });
-    // The crash point: renamed away, replacement never created.
-    db.exec(`ALTER TABLE lessons RENAME TO lessons_legacy`);
-
-    initTurnOutcomeTables(makeExecRaw(db), sql);
-    expect(listLessons(sql).map((r) => r.text)).toContain('stranded');
-    expect(() => db.query('SELECT 1 FROM lessons_legacy').all()).toThrow('no such table: lessons_legacy');
   });
 });
 

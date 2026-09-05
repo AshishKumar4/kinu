@@ -35,7 +35,7 @@ export const LOCKED_BASELINE: Baseline = {
   'craft-fitness/turn-usage-is-the-call-site-scan': '10719c03ee4d4d3e',
   'delegation/no-delegation-is-zero-not-absent': '0cbc79a1a34127df',
   'delegation/render-duration-units': '4fa9da77d1ec5656',
-  'delegation/tool-call-counts': 'aa7539d73906ae51',
+  'delegation/tool-call-counts': '34549bbbdcb6214a',
   'event-drain/batch-text': '320b547813b7ba2b',
   'event-drain/event-render': 'd7de371c229d2e9b',
   'event-drain/peer-reply-route': 'da148e3a43e544d0',

@@ -251,9 +251,7 @@ const SubordinateReportPayloadSchema = v.object({
   from_subordinate: v.string(),
   status: v.picklist(SUBORDINATE_REPORT_STATUSES),
   content: v.string(),
-  // Optional on the STORED shape: see SubordinateReportPayload. Ingress
-  // requires it, so nothing new is written without one.
-  sequence_id: v.optional(v.string()),
+  sequence_id: v.string(),
   task: v.optional(v.string()),
   content_path: v.optional(v.string()),
   kinu_mode: WorkModeSchema,

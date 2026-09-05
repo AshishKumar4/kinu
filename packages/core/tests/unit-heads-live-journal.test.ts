@@ -47,7 +47,7 @@ function report(id: string): HeadReport {
 /** The journal over a real store, plus the ids it announced, in order. */
 function live() {
   const sql = createTestSql();
-  initHeadsTables(sql.execRaw, sql.sql);
+  initHeadsTables(sql.execRaw);
   const announced: string[] = [];
   return { sql, announced, journal: new LiveHeadJournal(sql.sql, (id) => { announced.push(id); }) };
 }
@@ -82,7 +82,7 @@ describe('LiveHeadJournal', () => {
 
   test('the announcement follows the durable write, never precedes it', () => {
     const sql = createTestSql();
-    initHeadsTables(sql.execRaw, sql.sql);
+    initHeadsTables(sql.execRaw);
     // Read the store from INSIDE the announcement. A row that is not there yet
     // would send a client to an empty ledger, and an announcement that
     // overtook its own write is indistinguishable from a dropped one.
@@ -97,7 +97,7 @@ describe('LiveHeadJournal', () => {
 
   test('a failed announcement does not fail the write it was announcing', () => {
     const sql = createTestSql();
-    initHeadsTables(sql.execRaw, sql.sql);
+    initHeadsTables(sql.execRaw);
     const journal = new LiveHeadJournal(sql.sql, () => {
       throw new Error('no listeners');
     });
@@ -112,7 +112,7 @@ describe('LiveHeadJournal', () => {
     // The pre-fix shape, so the tests above cannot pass over a journal that
     // announced by itself all along.
     const sql = createTestSql();
-    initHeadsTables(sql.execRaw, sql.sql);
+    initHeadsTables(sql.execRaw);
     const plain = new HeadJournal(sql.sql);
     let announcements = 0;
     const counting = new LiveHeadJournal(sql.sql, () => { announcements += 1; });

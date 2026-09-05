@@ -10,8 +10,9 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
 import type { CraftedTool, CraftStore, JsonValue } from "@kinu.run/core";
-import { craftFailureMarker, initCraftQualityColumns } from "@kinu.run/core";
+import { craftFailureMarker } from "@kinu.run/core";
 import { createTestSql, scratchDir } from "@kinu.run/test-utils";
+import { initCraftedToolsTables } from "@kinu.run/agent-utils/stores";
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from "../src/codemode-node-shim";
 // @cloudflare/codemode (the DWE import) needs the workerd-only module, which
 // the preload's boundary stub serves.
@@ -70,8 +71,8 @@ function vendorProxy(dispatch: (name: string, args: JsonValue[]) => Promise<Json
 
 describe("selectInjectableCraftedTools — one policy with core", () => {
   test("drops comment-only code and score-retired tools; keeps healthy + unscored", () => {
-    const { db, sql } = createTestSql();
-    initCraftQualityColumns((ddl: string) => db.exec(ddl), sql);
+    const { sql } = createTestSql();
+    initCraftedToolsTables(sql);
     const now = Date.now();
     void sql`INSERT INTO crafted_tools (name, score, uses, last_used_at) VALUES ('healthy', 0.9, 4, ${now})`;
     void sql`INSERT INTO crafted_tools (name, score, uses, last_used_at) VALUES ('retired', 0.01, 9, ${now})`;
@@ -89,8 +90,8 @@ describe("selectInjectableCraftedTools — one policy with core", () => {
   });
 
   test("a broken craft store surfaces its failure rather than an empty selection", () => {
-    const { db, sql } = createTestSql();
-    initCraftQualityColumns((ddl: string) => db.exec(ddl), sql);
+    const { sql } = createTestSql();
+    initCraftedToolsTables(sql);
     const store = makeCraftStore([]);
     store.list = () => { throw new Error("not initialized"); };
     expect(() => selectInjectableCraftedTools(store, sql)).toThrow("not initialized");

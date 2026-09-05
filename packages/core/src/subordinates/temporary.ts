@@ -37,7 +37,7 @@
  */
 
 import type { WorkMode } from '../prompting/surface';
-import type { RoleSelection } from '../config/store';
+import type { RoleId } from '../profiles/catalog';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import { classifyErrorCode, type ErrorCode } from '../obs/error';
 import { renderThrownChain } from '../obs/index';
@@ -113,7 +113,7 @@ export interface TemporaryRunRefusal {
 /** What a caller hands the port for one temporary run. */
 export interface TemporaryRunRequest {
   /** The child's role, already resolved by the caller's profile authority. */
-  readonly role: RoleSelection;
+  readonly role: RoleId;
   /** The role as one label — what the roster shows and the name derives from. */
   readonly roleLabel: string;
   readonly task: string;

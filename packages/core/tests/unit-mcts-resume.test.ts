@@ -11,8 +11,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { createTestRuntime, createMockSession, makeSql, makeExecRaw, captureConsole } from './helpers';
+import { createTestRuntime, createMockSession, makeSql, captureConsole } from './helpers';
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
@@ -21,45 +20,14 @@ import { recordNode } from '../src/mcts/record-node';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 
 function initTables(rt: AgentRuntime): void {
-  initSearchTables(rt.storage.execRaw, rt.storage.sql);
-  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-  initMctsSearchTable(rt.storage.execRaw, rt.storage.sql);
+  initSearchTables(rt.storage.execRaw);
+  initScaffoldTables(rt.storage.execRaw);
+  initMctsSearchTable(rt.storage.execRaw);
 }
 
 const TASK = 'pick the best database architecture';
 
 describe('MCTS evict-resume (B6)', () => {
-  test('repairs search ledgers created before engine and judge-observation columns', () => {
-    const db = new Database(':memory:');
-    const execRaw = makeExecRaw(db);
-    const sql = makeSql(db);
-    execRaw(`CREATE TABLE mcts_search_runs (
-      root_id TEXT PRIMARY KEY,
-      task TEXT NOT NULL,
-      root_msg_id TEXT NOT NULL,
-      config_json TEXT NOT NULL,
-      iteration INTEGER NOT NULL DEFAULT 0,
-      budget INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'running',
-      epoch INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )`);
-    execRaw(`INSERT INTO mcts_search_runs
-      (root_id, task, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at)
-      VALUES ('legacy', 'task', '', '{}', 0, 1, 'running', 0, 1, 1)`);
-
-    initMctsSearchTable(execRaw, sql);
-
-    const columns = db.query<{ name: string }, []>('PRAGMA table_info(mcts_search_runs)').all()
-      .map((row) => row.name);
-    expect(columns).toContain('engine');
-    expect(columns).toContain('judge_samples_realised');
-    expect(db.query<{ engine: string; judge_samples_realised: number | null }, []>(
-      `SELECT engine, judge_samples_realised FROM mcts_search_runs WHERE root_id = 'legacy'`,
-    ).get()).toEqual({ engine: 'mcts', judge_samples_realised: null });
-    db.close();
-  });
 
   test('an interrupted search resumes from checkpoint, continues remaining budget, converges', async () => {
     const { rt, db } = createTestRuntime();
@@ -171,8 +139,8 @@ describe('MCTS per-iteration checkpoint logging', () => {
 
   test('the fiber-snapshot-only path (no search store) stays silent', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
     const { stdout, stderr } = await captureConsole(() =>
       runMCTS(rt, createMockSession(), TASK, { budget: 2, branches: 1 }),
     );
@@ -342,7 +310,7 @@ describe('the ledger classifies a search that earned no acceptable answer', () =
 describe('the search ledger is created whole', () => {
   function fresh() {
     const { rt, db } = createTestRuntime();
-    initMctsSearchTable(rt.storage.execRaw, rt.storage.sql);
+    initMctsSearchTable(rt.storage.execRaw);
     return { db, sql: makeSql(db) };
   }
 

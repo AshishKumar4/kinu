@@ -64,11 +64,9 @@ export interface DebugOpts {
 }
 
 /** A single search's raw nodes, as `getMctsTree`/`listLocalMcts` return
- *  them — root_id may be null on legacy rows written before the column
- *  existed (see mcts/schemas.ts), which is why grouping keys on it verbatim
- *  rather than assuming every row belongs to a known search. */
+ *  them — grouped by run rather than assumed to belong to one known search. */
 interface RawMctsNode extends JsonObject {
-  id: string; parent_id: string | null; root_id: string | null; depth: number;
+  id: string; parent_id: string | null; root_id: string; depth: number;
   visits: number; value: number; status: string; action: string; created_at: number;
 }
 
@@ -211,7 +209,7 @@ const DebugMctsSearchRunSchema: v.GenericSchema<DebugMctsSearchRun> = v.objectWi
   rootId: v.string(), task: v.string(), status: v.string(), iteration: v.number(), budget: v.number(), updatedAt: v.number(),
 }, JsonValueSchema);
 const RawMctsNodeSchema: v.GenericSchema<RawMctsNode> = v.objectWithRest({
-  id: v.string(), parent_id: v.nullable(v.string()), root_id: v.nullable(v.string()), depth: v.number(),
+  id: v.string(), parent_id: v.nullable(v.string()), root_id: v.string(), depth: v.number(),
   visits: v.number(), value: v.number(), status: v.string(), action: v.string(), created_at: v.number(),
 }, JsonValueSchema);
 const DebugBackgroundJobSchema: v.GenericSchema<DebugBackgroundJob> = v.objectWithRest({
@@ -567,13 +565,11 @@ function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
 /** Group the flat, unscoped node list `getMctsTree` returns into one summary
  *  per root_id — the fix for the client bug in use-kinu.ts's `buildTree`,
  *  which picks whichever depth-0 node sorts first (oldest by created_at) and
- *  silently drops every node not reachable from it. Nodes with a null
- *  root_id (legacy rows) are grouped under the sentinel key so they are
- *  reported rather than dropped. */
+ *  silently drops every node not reachable from it. */
 function summarizeMctsSearches(nodes: RawMctsNode[], searches: DebugMctsSearchRun[]): MctsSearchSummary[] {
   const byRoot = new Map<string, RawMctsNode[]>();
   for (const n of nodes) {
-    const key = n.root_id ?? '(legacy: no root_id)';
+    const key = n.root_id;
     const list = byRoot.get(key);
     if (list) list.push(n); else byRoot.set(key, [n]);
   }

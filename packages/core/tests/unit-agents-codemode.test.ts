@@ -81,11 +81,7 @@ const ActionVariantSchemaContract = v.object({
   }),
 });
 const SpawnCallInputSchema = v.object({
-  role: v.object({
-    kind: v.picklist(['catalog', 'legacy']),
-    roleId: v.optional(v.string()),
-    text: v.optional(v.string()),
-  }),
+  role: v.string(),
   tier: v.optional(v.string()),
 });
 
@@ -334,7 +330,7 @@ describe('agents.* codemode namespace — dispatch', () => {
   test('hire / ask / send / reply / list / dismiss reach the same transports', async () => {
     const team = makeTeam();
     const peers = makePeers();
-    const deps = withBuildMode({ fork: forkDeps(), team: team.deps, peers: peers.deps });
+    const deps = withBuildMode({ fork: forkDeps(), team: team.deps, peers: peers.deps, profile: profileDeps().profile });
     const ns = namespaceOf(() => deps);
 
     expect(await member(ns, 'hire').execute({ role: 'researcher', mission: 'Map the landscape' }))
@@ -379,7 +375,7 @@ describe('agents.* codemode namespace — dispatch', () => {
   test('deps failures come back as inspectable values, never thrown into the script', async () => {
     const team = makeTeam();
     team.deps.spawn = async () => { throw new Error('kaboom'); };
-    const ns = namespaceOf(() => ({ team: team.deps }));
+    const ns = namespaceOf(() => ({ team: team.deps, profile: profileDeps().profile }));
     const result = v.parse(ErrorResultSchema, await member(ns, 'hire').execute({
       role: 'researcher', mission: 'map the landscape',
     }));
@@ -780,7 +776,7 @@ describe('agents delegation — role/tier/preset precedence', () => {
     const call = team.calls.find((c) => c.action === 'spawn');
     expect(call).toBeDefined();
     const input = v.parse(SpawnCallInputSchema, call!.input);
-    expect(input.role).toEqual({ kind: 'catalog', roleId: 'researcher' });
+    expect(input.role).toBe('researcher');
     // The ROLE-default tier is NOT stored — the child re-derives it from its
     // roleId at its own turn boundary. Only an explicit override rides along.
     expect(input.tier).toBeUndefined();
@@ -849,20 +845,17 @@ describe('agents delegation — role/tier/preset precedence', () => {
     expect(validateSwarmProfileSnapshot(config.profile).sources.presetSource).toBe('role_default');
   });
 
-  test('without a wired catalog, swarm demands an explicit preset and hire stays legacy', async () => {
+  test('without a wired catalog, swarm demands an explicit preset and hire refuses', async () => {
     const tools = namespaceOf(() => ({ fork: forkDeps(), team: makeTeam().deps }));
     const refused = await member(tools, 'swarm').execute?.({ task: 'angles only' });
     expect(refused).toMatchObject({ reason: 'bad_input' });
     expect(v.parse(ErrorResultSchema, refused).error).toContain('preset');
 
     const team = makeTeam();
-    const legacy = namespaceOf(() => ({ fork: forkDeps(), team: team.deps }));
-    await member(legacy, 'hire').execute?.({ role: 'competitive landscape scout', mission: 'scan' });
-    const input = v.parse(
-      SpawnCallInputSchema,
-      team.calls.find((call) => call.action === 'spawn')!.input,
-    );
-    expect(input.role.kind).toBe('legacy'); // freeform text rides the legacy path
+    const noCatalog = namespaceOf(() => ({ fork: forkDeps(), team: team.deps }));
+    const hireRefused = await member(noCatalog, 'hire').execute?.({ role: 'researcher', mission: 'scan' });
+    expect(hireRefused).toMatchObject({ reason: 'denied' });
+    expect(team.calls).toEqual([]);
   });
 
   test('role summaries project into the native schema from the same catalog', () => {

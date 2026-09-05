@@ -36,7 +36,8 @@
     "payload",
     "received_at",
     "schema_version",
-    "dedupe_key"
+    "dedupe_key",
+    "consumed_at"
   ],
   "agent_tasks@packages/core/src/tasks/store.ts": [
     "id",
@@ -64,6 +65,7 @@
     "winner_node_id",
     "chosen_node_id",
     "candidates",
+    "settlement_key",
     "created_at",
     "picked_at"
   ],
@@ -79,10 +81,17 @@
     "id",
     "kind",
     "label",
+    "work_mode",
     "status",
     "result",
     "error",
     "input_json",
+    "epoch",
+    "resume_attempts",
+    "attempt_started_at",
+    "resume_after",
+    "retried_by",
+    "retry_of",
     "created_at",
     "settled_at"
   ],
@@ -108,7 +117,9 @@
     "user_code",
     "poll_interval",
     "portal_url",
-    "started_at"
+    "started_at",
+    "generation",
+    "settled_at"
   ],
   "compaction_archive@packages/core/src/identity/workspace-schema.ts": [
     "session_key",
@@ -187,49 +198,33 @@
     "code",
     "scope",
     "created_at",
-    "updated_at"
-  ],
-  "crafted_tools@packages/core/src/craft/schemas.ts": [
-    "name",
-    "description",
-    "params",
-    "code",
-    "scope",
-    "created_at",
     "updated_at",
     "score",
     "uses",
     "last_used_at"
   ],
-  "crafted_tools@packages/core/src/identity/schema.ts": [
-    "name",
-    "description",
-    "params",
-    "code",
-    "scope",
-    "created_at",
-    "updated_at"
-  ],
   "deferred_approvals@packages/core/src/safety/deferred-approval.ts": [
     "id",
     "command",
+    "executor",
     "reason",
     "status",
     "requested_at",
-    "decided_at"
+    "decided_at",
+    "spend_seq"
   ],
   "device_connect_tickets@packages/cf-backend/src/user/schema.ts": [
     "ticket_hash",
     "device_id",
     "created_at",
     "expires_at",
-    "used_at"
+    "used_at",
+    "token_was_current"
   ],
   "device_consent@packages/cf-backend/src/user/schema.ts": [
     "agent_name",
     "device_id",
     "policy",
-    "scope",
     "last_method",
     "last_summary",
     "updated_at"
@@ -302,7 +297,12 @@
     "cost_usd",
     "cost_tokens",
     "first_recorded_at",
-    "displacements"
+    "displacements",
+    "metric",
+    "unit",
+    "direction",
+    "scale",
+    "verifier_digest"
   ],
   "facet_activation@packages/cf-backend/src/facet-activation.ts": [
     "id",
@@ -332,8 +332,8 @@
   ],
   "fork_lineage@packages/core/src/identity/schema.ts": [
     "id",
-    "source_agent_id",
-    "source_agent_name",
+    "source_workspace_id",
+    "source_workspace_name",
     "source_message_id",
     "source_message_created_at",
     "forked_at"
@@ -416,6 +416,11 @@
     "completed_at",
     "token_input",
     "token_output",
+    "token_cache_read",
+    "token_cache_write",
+    "token_cache_write_1h",
+    "token_reasoning",
+    "neurons",
     "wall_clock_ms",
     "summary",
     "error_message",
@@ -423,6 +428,7 @@
     "artifacts_json",
     "tool_calls_json",
     "child_head_ids_json",
+    "file_changes_json",
     "merge_strategy"
   ],
   "head_merge_results@packages/core/src/heads/schema.ts": [
@@ -436,7 +442,8 @@
     "cost_total_wall_ms",
     "cost_max_depth",
     "merged_at",
-    "merge_strategy"
+    "merge_strategy",
+    "blind_spots_json"
   ],
   "head_runs@packages/core/src/heads/schema.ts": [
     "root_id",
@@ -487,12 +494,14 @@
   "mcts_search_runs@packages/core/src/mcts/search-store.ts": [
     "root_id",
     "task",
+    "engine",
     "root_msg_id",
     "config_json",
     "iteration",
     "budget",
     "status",
     "epoch",
+    "judge_samples_realised",
     "created_at",
     "updated_at"
   ],
@@ -511,6 +520,7 @@
     "parent_id",
     "role",
     "content",
+    "metadata",
     "created_at"
   ],
   "mission_budget@packages/core/src/mission-budget.ts": [
@@ -683,7 +693,9 @@
     "mean_score",
     "loss",
     "scaffold_version",
-    "details"
+    "details",
+    "score_lo",
+    "score_hi"
   ],
   "reply_channels@packages/core/src/events/hub/schema.ts": [
     "id",
@@ -743,21 +755,27 @@
     "written_at",
     "rationale",
     "canary_score",
-    "baseline_score"
+    "baseline_score",
+    "status",
+    "parent_version",
+    "pathology"
   ],
   "search_nodes@packages/core/src/mcts/schemas.ts": [
     "id",
     "parent_id",
+    "root_id",
     "task",
     "action",
     "observation",
     "code_used",
+    "code_language",
     "visits",
     "value",
     "depth",
     "status",
     "msg_id",
     "branch_agent_key",
+    "evaluation_json",
     "created_at"
   ],
   "sleep_time_updates@packages/cf-backend/src/orchestrator.ts": [
@@ -772,7 +790,9 @@
     "parent_workspace",
     "owner_user_id",
     "depth",
-    "lifetime"
+    "lifetime",
+    "uid",
+    "gid"
   ],
   "swarm_node_records@packages/core/src/strategy/swarm-resume.ts": [
     "node_id",
@@ -819,16 +839,12 @@
   "traces@packages/cf-backend/src/exploration.ts": [
     "id",
     "step",
-    "text",
-    "code_used",
-    "created_at"
+    "text"
   ],
   "traces@packages/cli-backend/src/branch-worker.ts": [
     "id",
     "step",
-    "text",
-    "code_used",
-    "created_at"
+    "text"
   ],
   "triggers@packages/core/src/events/hub/schema.ts": [
     "id",
@@ -866,7 +882,8 @@
     "assistant_response",
     "followup",
     "scaffold_version",
-    "created_at"
+    "created_at",
+    "evidence"
   ],
   "user_access_tokens@packages/cf-backend/src/cli/access-token-store.ts": [
     "token_hash",
@@ -883,7 +900,12 @@
   ],
   "user_browser_sessions@packages/cf-backend/src/user/schema.ts": [
     "token_hash",
-    "expires_at"
+    "expires_at",
+    "email",
+    "display_name",
+    "provider",
+    "provider_sub",
+    "auth_time"
   ],
   "user_cli_tokens@packages/cf-backend/src/user/schema.ts": [
     "token_hash",
@@ -891,12 +913,14 @@
     "created_at",
     "expires_at",
     "last_used_at",
-    "revoked_at"
+    "revoked_at",
+    "authorization_hash"
   ],
   "user_config@packages/cf-backend/src/user/schema.ts": [
     "key",
     "value",
-    "updated_at"
+    "updated_at",
+    "version"
   ],
   "user_credential_revisions@packages/cf-backend/src/user/schema.ts": [
     "key",
@@ -918,13 +942,27 @@
   "user_devices@packages/cf-backend/src/user/schema.ts": [
     "id",
     "token_hash",
+    "prev_token_hash",
     "label",
     "os",
     "hostname",
     "created_at",
     "connected_at",
     "last_seen_at",
-    "revoked_at"
+    "expires_at",
+    "revoked_at",
+    "last_ip",
+    "last_agent",
+    "replaced_at",
+    "consented_root",
+    "device_home",
+    "sandbox_capability",
+    "sandbox_reason",
+    "sandbox_detail",
+    "sandbox_gpu",
+    "agent_root",
+    "tier",
+    "unstopped_at"
   ],
   "user_egress_secrets@packages/cf-backend/src/user/egress-vault.ts": [
     "id",
@@ -964,9 +1002,13 @@
   "user_workspaces@packages/cf-backend/src/user/schema.ts": [
     "name",
     "display_name",
+    "name_origin",
     "created_at",
     "last_visited",
-    "archived_at"
+    "archived_at",
+    "delete_pending",
+    "create_pending",
+    "fork_lease_expires_at"
   ],
   "vfs_baseline@packages/core/src/read-models/workspace-diff.ts": [
     "generation",
@@ -1013,6 +1055,7 @@
     "id",
     "name",
     "owner_user_id",
+    "mission",
     "created_at"
   ],
   "workspace_subordinates@packages/core/src/subordinates/roster.ts": [
@@ -1024,10 +1067,5 @@
     "dismissed_at",
     "lifetime",
     "task_event_id"
-  ],
-  "workspace_tiers@packages/cf-backend/src/user/workspace-capability.ts": [
-    "workspace_name",
-    "tier",
-    "updated_at"
   ]
 }

@@ -284,27 +284,6 @@ describe('mission budget — USD at catalog prices', () => {
     expect(governor.snapshot()[0]!.remaining.usd).toBe(0);
   });
 
-  test('a ledger written before pricing existed migrates as blended, not as unspent', () => {
-    const db = new Database(':memory:');
-    const storage = { sql: makeSql(db), execRaw: makeExecRaw(db) };
-    // The pre-pricing table, verbatim.
-    storage.execRaw(`CREATE TABLE mission_budget (
-      label TEXT PRIMARY KEY, parent_label TEXT, limit_usd REAL, limit_tokens INTEGER,
-      spent_tokens INTEGER NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0,
-      spawns INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, exhausted_at INTEGER)`);
-    storage.execRaw(`INSERT INTO mission_budget
-      (label, parent_label, limit_usd, limit_tokens, spent_tokens, calls, spawns, created_at, exhausted_at)
-      VALUES ('legacy', NULL, 1.0, NULL, 400000, 12, 0, 1, NULL)`);
-
-    const governor = new MissionGovernor({ storage, now: () => 1_000 });
-    const [row] = governor.snapshot('legacy');
-    expect(row!.spent.tokens).toBe(400_000);
-    expect(row!.spent.usd).toBeCloseTo(estimateUsdCost(400_000), 10);
-    expect(row!.pricing).toEqual({ blendedTokens: 400_000, source: 'blended' });
-    // $1.20 blended against a $1 cap — still exhausted, as it was before.
-    expect(row!.exhausted).toBe(true);
-  });
-
   test('a usage report the catalog cannot price blends the tokens AND says so', () => {
     const { governor } = makeGovernor({ pricing: () => SONNET });
     governor.declare('m', {});

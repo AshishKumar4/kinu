@@ -30,10 +30,10 @@ import {
  */
 function forkStore(): TestSql {
   const store = createTestSql();
-  initSearchTables(store.execRaw, store.sql);
-  initMctsSearchTable(store.execRaw, store.sql);
-  initAlternateTakesTable(store.execRaw, store.sql);
-  initHeadsTables(store.execRaw, store.sql);
+  initSearchTables(store.execRaw);
+  initMctsSearchTable(store.execRaw);
+  initAlternateTakesTable(store.execRaw);
+  initHeadsTables(store.execRaw);
   return store;
 }
 

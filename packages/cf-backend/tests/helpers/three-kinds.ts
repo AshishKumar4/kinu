@@ -453,7 +453,7 @@ export function nodeDeps(model: LanguageModel, opts?: NodeDepsOptions): NodeSeam
   // The PRODUCTION head DDL, not a hand-picked subset: `runNodeAgent` opens a row
   // before it dispatches and closes one whatever happens, so a fixture missing a
   // column measures a store no swarm ever has.
-  initHeadsTables(rt.storage.execRaw, rt.storage.sql);
+  initHeadsTables(rt.storage.execRaw);
   const journal = new HeadJournal(rt.storage.sql);
   const deps: NodeAgentDeps = {
     rt, model, journal,

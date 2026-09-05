@@ -116,7 +116,7 @@ function scriptedControl(rt: AgentRuntime, judgeScore: (candidate: string) => nu
 function evolvableRuntime(): AgentRuntime {
   const { rt } = createTestRuntime();
   initAllTables(rt.storage.execRaw, rt.storage.sql);
-  initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
+  initTurnOutcomeTables(rt.storage.execRaw);
   initGepaTables(rt.storage.execRaw);
   initPromptSectionTables(rt.storage.execRaw);
   return rt;

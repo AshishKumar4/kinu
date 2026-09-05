@@ -943,7 +943,6 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
       name: latest?.name ?? "agent-0",
       displayName: latest?.displayName ?? "",
       roleId: "general",
-      legacyRole: null,
       mission: "",
       model: null,
       activePlan: galleryAgentPlan,

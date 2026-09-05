@@ -22,9 +22,9 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { LLM } from '../src/types/primitives';
 
 function initTables(rt: AgentRuntime): void {
-  initSearchTables(rt.storage.execRaw, rt.storage.sql);
-  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-  initMctsSearchTable(rt.storage.execRaw, rt.storage.sql);
+  initSearchTables(rt.storage.execRaw);
+  initScaffoldTables(rt.storage.execRaw);
+  initMctsSearchTable(rt.storage.execRaw);
 }
 
 /** An LLM whose judge verdicts are controlled per-search, so one search can be

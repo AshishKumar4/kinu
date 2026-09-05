@@ -4,13 +4,12 @@
  * and the provisional-lesson corroboration mechanics.
  */
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw, createMockLLM, createTestWorkspace } from './helpers';
+import { makeSql, createMockLLM, createTestWorkspace } from './helpers';
 import {
   isTrivialTurn, classifyTurnOutcome, buildOutcomeClassifierPrompt,
   outcomeToFeedback, outcomeQuality, feedbackToQuality,
   executionVerdict, executionVerdictOutcome, isUserVerdictSource, isPureLookupCall,
-  initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome,
+  recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
   describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
@@ -24,8 +23,7 @@ import { jsonObjectOnlyInstruction } from '../src/prompts/structured';
 /** The PRODUCTION schema, not this module's own tables alone: the eval split
  *  reconstructs process evidence from the message and run-event ledgers, and a
  *  harness that omits them would force that reader to tolerate an absence no
- *  real workspace has. The migration tests below still build their own legacy
- *  databases by hand — that IS the shape under test there. */
+ *  real workspace has. */
 const setup = createTestWorkspace;
 
 describe('isTrivialTurn — the LLM-call pre-filter', () => {
@@ -144,27 +142,6 @@ describe('outcome mappings', () => {
   });
 });
 
-// The pre-take_pick production DDL (CHECK lacks the 'take_pick' source).
-const LEGACY_DDL = `(
-    id TEXT PRIMARY KEY,
-    turn_id TEXT,
-    session_id TEXT NOT NULL DEFAULT 'default',
-    outcome TEXT NOT NULL CHECK (outcome IN ('accepted','corrected','frustrated','abandoned')),
-    confidence REAL NOT NULL,
-    source TEXT NOT NULL CHECK (source IN ('explicit','classifier','session_end')),
-    user_message TEXT NOT NULL,
-    assistant_response TEXT NOT NULL,
-    followup TEXT,
-    scaffold_version INTEGER,
-    created_at INTEGER NOT NULL
-  )`;
-
-function legacyRow(db: Database, id: string) {
-  db.exec(`INSERT INTO ${id.startsWith('legacy:') ? 'turn_outcomes_legacy' : 'turn_outcomes'}
-    (id, turn_id, outcome, confidence, source, user_message, assistant_response, created_at)
-    VALUES ('${id}', 't-${id}', 'accepted', 0.8, 'classifier', 'u', 'a', 100)`);
-}
-
 describe('executionVerdict — the environment\'s verdict, read symmetrically', () => {
   const turn = (over: Partial<{ hadError: boolean; toolCalls: ToolCallRecord[] }> = {}) =>
     ({ hadError: false, toolCalls: [{ name: 'run', args: { command: 'make' }, result: 'ok' }], ...over });
@@ -272,62 +249,6 @@ describe('execution-sourced rows are priced and labelled as proxies', () => {
   });
 });
 
-describe('turn_outcomes CHECK-widening rebuild', () => {
-  test('rebuilds the legacy CHECK in place, keeping rows, and accepts take_pick after', () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    db.exec(`CREATE TABLE turn_outcomes ${LEGACY_DDL}`);
-    legacyRow(db, 'old-1');
-    expect(() => recordTurnOutcome(sql, {
-      turnId: 'x', outcome: 'accepted', confidence: 1, source: 'take_pick',
-      userMessage: 'u', assistantResponse: 'a',
-    })).toThrow();
-
-    initTurnOutcomeTables(makeExecRaw(db), sql);
-    expect(listTurnOutcomes(sql).map((r) => r.id)).toEqual(['old-1']);
-    recordTurnOutcome(sql, {
-      turnId: 'x', outcome: 'accepted', confidence: 1, source: 'take_pick',
-      userMessage: 'u', assistantResponse: 'a', now: 200,
-    });
-    expect(listTurnOutcomes(sql)).toHaveLength(2);
-    // Idempotent re-run.
-    initTurnOutcomeTables(makeExecRaw(db), sql);
-    expect(listTurnOutcomes(sql)).toHaveLength(2);
-  });
-
-  test('self-heals a crash after RENAME: stranded legacy rows are recovered, not orphaned', () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    // Crash point: RENAME succeeded, CREATE never ran — only the legacy
-    // table exists. A bare CREATE IF NOT EXISTS would start an empty ledger.
-    db.exec(`CREATE TABLE turn_outcomes_legacy ${LEGACY_DDL}`);
-    legacyRow(db, 'legacy:1');
-    legacyRow(db, 'legacy:2');
-
-    initTurnOutcomeTables(makeExecRaw(db), sql);
-    expect(listTurnOutcomes(sql).map((r) => r.id).sort()).toEqual(['legacy:1', 'legacy:2']);
-    expect(db.prepare(`SELECT name FROM sqlite_master WHERE name = 'turn_outcomes_legacy'`).all()).toHaveLength(0);
-  });
-
-  test('self-heals a crash after the copy but before DROP: no duplicates', () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    const execRaw = makeExecRaw(db);
-    db.exec(`CREATE TABLE turn_outcomes_legacy ${LEGACY_DDL}`);
-    legacyRow(db, 'legacy:1');
-    initTurnOutcomeTables(execRaw, sql); // creates the new table + copies
-    // Re-create the crash state: legacy still present alongside copied rows.
-    // Cloned from the live table rather than re-declared, because legacy IS the
-    // RENAMED original — it always carries the shape the table had at rename
-    // time, including columns reconciled onto it before the rename.
-    db.exec(`CREATE TABLE turn_outcomes_legacy AS SELECT * FROM turn_outcomes`);
-
-    initTurnOutcomeTables(execRaw, sql);
-    expect(listTurnOutcomes(sql)).toHaveLength(1);
-    expect(db.prepare(`SELECT name FROM sqlite_master WHERE name = 'turn_outcomes_legacy'`).all()).toHaveLength(0);
-  });
-});
-
 describe('the verdict reason is durable', () => {
   test('evidence round-trips, and a verdict that is its own evidence stores none', () => {
     const { sql } = setup();
@@ -346,26 +267,6 @@ describe('the verdict reason is durable', () => {
     const [newest, oldest] = listTurnOutcomes(sql);
     expect(newest.evidence).toBeNull();
     expect(oldest.evidence).toBe('the user restated the request with a correction');
-  });
-
-  test('a ledger written before the column reads null rather than failing', () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    db.exec(`CREATE TABLE turn_outcomes ${LEGACY_DDL}`);
-    legacyRow(db, 'old-1');
-
-    initTurnOutcomeTables(makeExecRaw(db), sql);
-
-    // The row predates the column, so it has no reason on record — which is a
-    // different thing from a reason that was recorded as empty.
-    expect(listTurnOutcomes(sql).map((r) => [r.id, r.evidence])).toEqual([['old-1', null]]);
-    // And the reconciled table takes one immediately afterwards.
-    recordTurnOutcome(sql, {
-      turnId: 'x', outcome: 'accepted', confidence: 1, source: 'execution',
-      userMessage: 'u', assistantResponse: 'a',
-      evidence: 'every tool call this turn ran completed', now: 300,
-    });
-    expect(listTurnOutcomes(sql)[0].evidence).toBe('every tool call this turn ran completed');
   });
 });
 
@@ -579,11 +480,11 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
       type: 'step_finish',
       stepIndex: 1,
       messages: [
-        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'tc-1', toolName: 'team', input: { role: 'reviewer' } }] },
-        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'tc-1', toolName: 'team', output: { type: 'text', value: 'spawned' } }] },
+        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'tc-1', toolName: 'agents', input: { action: 'hire', role: 'reviewer' } }] },
+        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'tc-1', toolName: 'agents', output: { type: 'text', value: 'spawned' } }] },
       ],
     });
-    recorder.emit('run-1', { type: 'tool_call_end', name: 'team', toolCallId: 'tc-1', result: 'spawned' });
+    recorder.emit('run-1', { type: 'tool_call_end', name: 'agents', toolCallId: 'tc-1', result: 'spawned' });
     recorder.emit('run-1', {
       type: 'step_finish',
       stepIndex: 2,

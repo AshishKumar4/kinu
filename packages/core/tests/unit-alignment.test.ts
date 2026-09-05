@@ -16,7 +16,7 @@ import type { SqlExecutor } from '../src/types/primitives';
 function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initTurnOutcomeTables(makeExecRaw(db), sql);
+  initTurnOutcomeTables(makeExecRaw(db));
   return { sql };
 }
 

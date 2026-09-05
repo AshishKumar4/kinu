@@ -12,7 +12,7 @@ import { isE2EConfigured, loadAIGatewayProviders } from './ai-gateway-llm';
 import { runMCTS } from '../../src/mcts/engine';
 import { initSearchTables } from '../../src/mcts/schemas';
 import { initScaffoldTables } from '../../src/scaffold/schemas';
-import { initCraftQualityColumns } from '../../src/craft/schemas';
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import type { SearchNode } from '../../src/types/mcts';
 import type { AgentRuntime, BranchHandle } from '../../src/types/agent-runtime';
 import type { LLM } from '../../src/types/primitives';
@@ -123,9 +123,9 @@ describe.skipIf(!isE2EConfigured())('E2E MCTS with real LLM', () => {
     const { primary, judge } = loadAIGatewayProviders();
     const { rt, db } = await createE2ERuntime(primary, judge);
 
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
+    initCraftedToolsTables(rt.storage.sql);
 
     const session = createE2ESession();
     const result = await runMCTS(rt, session, 'Write a function to validate email addresses', {

@@ -29,7 +29,7 @@ function seededRuns(count: number) {
   const { sql, execRaw } = createTestSql();
   initAllTables(execRaw, sql);
   initRunEventTables(execRaw);
-  initBackgroundJobsTable(execRaw, sql);
+  initBackgroundJobsTable(execRaw);
   const recorder = new RunEventRecorder(sql);
   for (let i = 0; i < count; i++) {
     recorder.emit(`run-${String(i).padStart(4, '0')}`, { type: 'run_start', agentId: 'a' });

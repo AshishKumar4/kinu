@@ -36,10 +36,10 @@ const RATIONALE = 'Session reflection: stream tool results incrementally for lon
 function setup() {
   const { rt } = createTestRuntime();
   const execRaw = rt.storage.execRaw;
-  initScaffoldTables(execRaw, rt.storage.sql);
+  initScaffoldTables(execRaw);
   initShadowTables(execRaw);
-  initTurnOutcomeTables(execRaw, rt.storage.sql);
-  initReplayTables(execRaw, rt.storage.sql);
+  initTurnOutcomeTables(execRaw);
+  initReplayTables(execRaw);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
   return { rt, facts: createFactsStore(rt.storage.sql) };

@@ -34,7 +34,7 @@ import { makeSql, makeExecRaw } from './helpers';
 
 function newJournal() {
   const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db), makeSql(db));
+  initHeadsTables(makeExecRaw(db));
   const sql = makeSql(db);
   return { sql, journal: new HeadJournal(sql), db };
 }
@@ -692,7 +692,7 @@ describe('HeadJournal.listLive — the live fork roster', () => {
   // previous `GROUP BY … HAVING running > 0` with "SCAN j USING INDEX …".
   test('the roster does not read the settled journal', () => {
     const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db), makeSql(db));
+    initHeadsTables(makeExecRaw(db));
     const inner = makeSql(db);
     const statements: string[] = [];
     const capturing: typeof inner = <T,>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {

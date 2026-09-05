@@ -26,8 +26,8 @@
  * column), then the `kinuEvent` name, then the row id —
  * `BackendHost.enqueueTurn` derives a programmatic turn's message id from
  * {@link programmaticMessageId}, which is durable on both backends and
- * survives the fork copy (which preserves primary keys). The id is what rows
- * written before stamps existed lean on; a new row leans on its stamp.
+ * survives the fork copy (which preserves primary keys but not metadata).
+ * A row leans on its stamp; the id decides only where the stamp did not cross.
  */
 
 import type { UIMessage } from 'ai';
@@ -88,13 +88,6 @@ const TurnAuthorSchema = v.looseObject({
 });
 
 /**
- * Event names that predate {@link TURN_AUTHOR_METADATA_KEY} and carry the
- * operator's own words. Rows written before the stamp existed are read through
- * this; nothing new belongs here, because a new producer stamps instead.
- */
-const LEGACY_OPERATOR_EVENTS = { mcp: true } satisfies Record<string, true>;
-
-/**
  * The metadata a programmatic turn's durable row carries. Call it at the seam
  * that writes the row, so the stamp cannot be forgotten by a producer.
  *
@@ -110,23 +103,19 @@ export function stampTurnAuthor(metadata?: JsonObject): JsonObject {
 /**
  * Who wrote a stored row, from written markers only — never from its prose.
  *
- * The stamp answers it outright. Rows written before the stamp existed are read
- * from the two markers they do carry: the `kinuEvent` metadata a queued
- * signal has always stamped, and the {@link PROGRAMMATIC_MESSAGE_ID_PREFIX}
- * both backends have always derived a programmatic row's id from. One legacy
- * shape stays genuinely ambiguous — a metadata-less row under the programmatic
- * id prefix, which is what a leftover steer re-run as its own turn used to
- * write — and it resolves to `harness`, the direction that cannot put the
- * harness's words in the owner's mouth. Every such turn written from now on
- * stamps `operator` and is exact.
+ * The stamp answers it outright. A row without one still carries the
+ * `kinuEvent` a queued signal stamps, and that names the harness: the one
+ * producer carrying the operator's own words says so in its stamp. A row with
+ * neither marker leans on its id, because the fork copy preserves primary keys
+ * but not metadata. The id resolves to `harness`, the direction that cannot
+ * put the harness's words in the owner's mouth.
  */
 export function turnAuthor<Metadata>(row: { id?: string; metadata?: Metadata }): TurnAuthor {
   const parsed = v.safeParse(TurnAuthorSchema, row.metadata ?? {});
   if (parsed.success) {
     const stamped = parsed.output[TURN_AUTHOR_METADATA_KEY];
     if (stamped) return stamped;
-    const event = parsed.output.kinuEvent;
-    if (event !== undefined) return Object.hasOwn(LEGACY_OPERATOR_EVENTS, event) ? 'operator' : 'harness';
+    if (parsed.output.kinuEvent !== undefined) return 'harness';
   }
   return row.id?.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX) ? 'harness' : 'operator';
 }

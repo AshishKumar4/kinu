@@ -16,7 +16,7 @@ import {
   type ProfileCatalogEnvelope, type RoleDefinition, type RoleId,
 } from './catalog';
 import {
-  AGENT_CONFIG_KEYS, encodeRoleSelection, parseRoleChangePolicy, parseRoleSelectionRow,
+  AGENT_CONFIG_KEYS, parseRoleChangePolicy,
 } from '../config/store';
 
 export type RoleChangeActor = 'user' | 'agent';
@@ -105,7 +105,7 @@ function applyRole(
   to: RoleId,
   actor: RoleChangeActor,
 ): void {
-  config.set(AGENT_CONFIG_KEYS.roleSelection, encodeRoleSelection({ kind: 'catalog', roleId: to }));
+  config.set(AGENT_CONFIG_KEYS.roleSelection, to);
   config.set('role_changed_from', from);
   config.set('role_changed_by', actor);
   config.set('role_changed_at', String(Date.now()));
@@ -122,10 +122,8 @@ export function changeActiveRole(input: {
   actor: RoleChangeActor;
 }): RoleChangeOutcome {
   const envelope = validateProfileCatalogEnvelope(input.envelope);
-  const current = parseRoleSelectionRow(input.config.get(AGENT_CONFIG_KEYS.roleSelection));
-  // A legacy selection has no catalog id to change FROM; the change targets
-  // the catalog arm, so the default is the honest `from`.
-  const from = current?.kind === 'catalog' ? current.roleId : DEFAULT_ROLE_ID;
+  const stored = input.config.get(AGENT_CONFIG_KEYS.roleSelection);
+  const from = stored !== null && isValidRoleId(stored) ? stored : DEFAULT_ROLE_ID;
   if (!isValidRoleId(input.to)) return { kind: 'refused', reason: 'invalid-role-id' };
   const target = roleOf(envelope, input.to);
   if (!target) return { kind: 'refused', reason: 'unknown-role' };

@@ -255,7 +255,7 @@ const DEFENDED: readonly Defended[] = [
 function store(records: RecordsModule): SqlExecutor {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  records.initExplorationRecordsTable(makeExecRaw(db), sql);
+  records.initExplorationRecordsTable(makeExecRaw(db));
   return sql;
 }
 

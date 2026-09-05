@@ -116,10 +116,8 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
     naming: opts,
     surface: opts.surface ?? 'interactive',
   });
-  client.startAutoTitle({ mission: info.purpose, trigger: 'legacy-heal' });
   return client;
 }
-
 /**
  * Run one GEPA optimisation pass over a local workspace's scaffold.
  *
@@ -142,24 +140,13 @@ export async function runLocalGepa(
 }
 
 /**
- * Automatic titling for a local agent — two triggers, one shared policy
+ * Automatic titling for a local agent from its first owner message
  * (`applyWorkspaceTitle`).
  *
- * `legacy-heal` runs on open: a workspace created before mission-derived
- * titling still shows its raw directory name, and its mission is the only
- * thing there is to name it from.
- *
- * `first-message` runs when the owner speaks to an agent that has no title at
- * all — one they added to a virtual workspace without naming it. Its mission
- * is the workspace's, shared with every peer, so naming it from that would
- * give the whole group one name; what distinguishes it is what the owner
- * brings to it.
- *
- * The two are told apart by what is STORED, and the difference is exact: a
- * legacy workspace has no `display_name` row at all, or one echoing its slug.
- * An agent added without a name has a row holding the EMPTY STRING, written
- * once by `createLocalPeerAgent` and by nothing else — a rename refuses an
- * empty title. So the heal skips exactly that value and nothing else.
+ * It runs when the owner speaks to an agent that has no title at all — one
+ * they added to a virtual workspace without naming it. Its mission is the
+ * workspace's, shared with every peer, so naming it from that would give the
+ * whole group one name; what distinguishes it is what the owner brings to it.
  *
  * The persistent client owns the operation and settles it before closing the
  * workspace database. A failure stays visible to that owner; this operation
@@ -168,12 +155,11 @@ export async function runLocalGepa(
 export async function autoTitleLocalWorkspace(
   name: string,
   rt: AgentRuntime,
-  source: { mission: string; trigger: 'legacy-heal' | 'first-message' },
+  source: { mission: string },
   opts: SuggestAgentIdentityOptions,
 ): Promise<void> {
   initAgentConfigTable(rt.storage.execRaw);
   const config = createAgentConfigStore(rt.storage.sql);
-  if (source.trigger === 'legacy-heal' && config.getDisplayName() === '') return;
   await applyWorkspaceTitle({
     slug: name,
     displayName: config.getDisplayName(),
@@ -336,7 +322,7 @@ export class LocalAgentClient implements AgentClient {
   }
 
   /** Start one title operation and retain its settlement on this client. */
-  startAutoTitle(source: { mission: string; trigger: 'legacy-heal' | 'first-message' }): void {
+  startAutoTitle(source: { mission: string }): void {
     if (this.closed || this.autoTitleTask !== null) return;
     const owner: AutoTitleOperation = {
       controller: new AbortController(),
@@ -425,7 +411,7 @@ export class LocalAgentClient implements AgentClient {
       // owner brings to it is the only thing that distinguishes it from the
       // peers it shares a mission with, so that is what names it — once, since
       // persisting marks `name_origin` and the shared policy stops matching.
-      this.startAutoTitle({ mission: text, trigger: 'first-message' });
+      this.startAutoTitle({ mission: text });
       return pending.result ?? unfinishedTurn();
     } finally {
       if (this.pending === pending) this.pending = null;

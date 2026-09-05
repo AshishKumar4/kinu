@@ -72,7 +72,7 @@ describe('v2 e2e: workspace executor via createInlineExecutor', () => {
 describe('v2 e2e: branching heads → merge', () => {
   test('split 3 heads, await all, merge with deterministic mock LLM', async () => {
     const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db), makeSql(db));
+    initHeadsTables(makeExecRaw(db));
     const sql = makeSql(db);
     const journal = new HeadJournal(sql);
 
@@ -175,7 +175,7 @@ describe('v2 e2e: branching heads → merge', () => {
 describe('v2 e2e: scaffold shadow rollout', () => {
   test('modifyScaffold writes new version with status=pending', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
     await rt.identity.scaffold.write('async function* run(rt, task) { yield task; }');
     void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
@@ -207,7 +207,7 @@ describe('v2 e2e: scaffold shadow rollout', () => {
 
   test('pending wins → promote; statuses flip correctly', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
     void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (0, ${Date.now()}, 'initial bootstrap', 'current')`;

@@ -26,8 +26,10 @@ import {
   classifyToolFailure, JsonObjectSchema,
   type AgentsToolInput,
   type AgentsForkDeps, type AgentsToolDeps, type PeersToolDeps,
+  type AgentsProfileContext,
   type SubordinateRosterEntry, type TeamToolDeps,
   type SubordinateDelivery, type SubordinateHandoff,
+  BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC,
 } from '../src/index';
 import { CODE_IS_REFUSAL, ERROR_CODES } from '../src/obs/index';
 
@@ -35,6 +37,28 @@ interface Call { action: string; input: object }
 type AgentsTestResult = object | string | number | boolean | null | undefined;
 
 type TestAgentsToolDeps = Omit<AgentsToolDeps, 'mode'> & { mode?: AgentsToolDeps['mode'] };
+
+function testProfile(): AgentsProfileContext {
+  const catalog = {
+    roles: BUILTIN_PROFILE_CATALOG.roles,
+    tiers: {
+      default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC },
+      fast: { model: DEFAULT_WORKERS_AI_MODEL_SPEC },
+      deep: { model: DEFAULT_WORKERS_AI_MODEL_SPEC },
+    },
+  };
+  return {
+    envelope: {
+      authority: { kind: 'local' } as const,
+      version: 0,
+      digest: profileCatalogDigest(catalog),
+      catalog,
+    },
+    provider: { revision: 'test-1', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
+    roleId: 'general',
+    availableTools: [],
+  };
+}
 
 function withBuildMode(deps: TestAgentsToolDeps): AgentsToolDeps {
   return { mode: 'build', ...deps };
@@ -415,20 +439,20 @@ describe('agents tool — delegation depth', () => {
     const team = makeTeam();
     return {
       team,
-      deps: withBuildMode({ team: { ...team.deps, delegation: delegationBudgetAtDepth(depth) }, ...extra }),
+      deps: withBuildMode({ team: { ...team.deps, delegation: delegationBudgetAtDepth(depth) }, profile: () => testProfile(), ...extra }),
     };
   };
 
   test('depth 4 is reachable and depth 5 is refused, at the boundary', async () => {
     // Room left below depth 3, so this hire PRODUCES the depth-4 subordinate.
     const below = depthDeps(3);
-    expect(await agentsTool(below.deps).execute({ action: 'hire', role: 'r', mission: 'm' }))
+    expect(await agentsTool(below.deps).execute({ action: 'hire', role: 'researcher', mission: 'm' }))
       .toEqual({ name: 'researcher', displayName: 'Researcher' });
     expect(below.team.calls).toMatchObject([{ action: 'spawn' }]);
 
     // Depth 4 is the deepest that exists; the hire it would make is depth 5.
     const atCap = depthDeps(4);
-    const refusal = await agentsTool(atCap.deps).execute({ action: 'hire', role: 'r', mission: 'm' });
+    const refusal = await agentsTool(atCap.deps).execute({ action: 'hire', role: 'researcher', mission: 'm' });
     expect(refusal).toEqual({ reason: 'denied', error: expect.stringContaining('depth 4') });
     expect(refusal).toMatchObject({ error: expect.stringContaining('depth 5') });
     // Refused BEFORE the substrate: nothing was spawned, so a refusal cannot
@@ -440,7 +464,7 @@ describe('agents tool — delegation depth', () => {
     const { deps } = depthDeps(4);
     const refusal = v.parse(
       v.object({ reason: v.picklist([...ERROR_CODES]), error: v.string() }),
-      await agentsTool(deps).execute({ action: 'hire', role: 'r', mission: 'm' }),
+      await agentsTool(deps).execute({ action: 'hire', role: 'researcher', mission: 'm' }),
     );
     expect(CODE_IS_REFUSAL[refusal.reason]).toBe(true);
   });
@@ -459,7 +483,7 @@ describe('agents tool — delegation depth', () => {
     expect(team.calls).toEqual([]);
     // …and the roster path stays open: the point is that it cannot leave its
     // subtree, not that it cannot delegate.
-    expect(await agentsTool(deps).execute({ action: 'hire', role: 'r', mission: 'm' }))
+    expect(await agentsTool(deps).execute({ action: 'hire', role: 'researcher', mission: 'm' }))
       .toEqual({ name: 'researcher', displayName: 'Researcher' });
   });
 
@@ -556,7 +580,7 @@ describe('agents tool — the swarm refusal seam', () => {
 describe('agents tool — subordinate actions', () => {
   test('the host-stamped Plan mode reaches hire, ask, and send without a model field', async () => {
     const team = makeTeam();
-    const tool = agentsTool({ mode: 'plan', team: team.deps });
+    const tool = agentsTool({ mode: 'plan', team: team.deps, profile: () => testProfile() });
 
     await tool.execute({ action: 'hire', role: 'researcher', mission: 'Map without editing' });
     await tool.execute({ action: 'ask', agent: 'researcher', message: 'Inspect the design' });
@@ -571,15 +595,25 @@ describe('agents tool — subordinate actions', () => {
 
   test('hire forwards role/mission (+ optional agent name/tier) to team.spawn', async () => {
     const { deps, calls } = makeTeam();
-    const t = agentsTool({ team: deps });
+    const t = agentsTool({ team: deps, profile: () => testProfile() });
     const result = await t.execute({
       action: 'hire', agent: 'scout', role: 'researcher', mission: 'Map the landscape',
     });
     expect(result).toEqual({ name: 'scout', displayName: 'Researcher' });
     expect(calls[0].input).toEqual({
-      name: 'scout', role: { kind: 'legacy', text: 'researcher' }, mission: 'Map the landscape', mode: 'build',
+      name: 'scout', role: 'researcher', mission: 'Map the landscape', mode: 'build',
     });
   });
+
+  test('hire and ask without a catalog refuse', async () => {
+    const { deps } = makeTeam();
+    const t = agentsTool({ team: deps });
+    expect(await t.execute({ action: 'hire', role: 'researcher', mission: 'Map the landscape' }))
+      .toMatchObject({ reason: 'denied' });
+    expect(await t.execute({ action: 'ask', role: 'researcher', message: 'Survey auth' }))
+      .toMatchObject({ reason: 'denied' });
+  });
+
 
   test('ask to a roster name assigns the work and says the report arrives as an event', async () => {
     const { deps, calls } = makeTeam();
@@ -981,32 +1015,5 @@ describe('agents tool — resuming a stored delegation row', () => {
     expect(resumableAgentsInput('agents', { action: 'ask', agent: 'a', message: 'm' })).toBeNull();
     expect(resumableAgentsInput('run', { command: 'ls' })).toBeNull();
   });
-
-  test('a pre-unification `think` row is translated onto the search action', () => {
-    // Rows stored before the agents unification carry kind 'think', `heads`
-    // instead of briefs, and a `strategy` naming the engine directly. Every one
-    // of those is dropped by the same rule, and the result must be a call the
-    // strict parse accepts.
-    const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('think', {
-      // The engine a pre-unification row named directly, as a stored STRING: the
-      // point of the arm is that `strategy` is dropped whatever it says.
-      strategy: 'heads', task: 'search', heads: twoForks, budget: 4, unknown_since: 'ever',
-    }));
-    expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
-    const dropped = lines.filter((line) => line.includes('agents.resume.fields_dropped'));
-    expect(dropped).toHaveLength(1);
-    expect(dropped[0]).toContain('heads');
-    expect(dropped[0]).toContain('unknown_since');
-    expect(dropped[0]).toContain('settlement');
-  });
-
-  test('a legacy `think` row whose strategy was a tree search replays the same way', () => {
-    // A row from either era that asked for several attempts gets the one action
-    // that runs them, and loses the same settlement — so the translation does not
-    // depend on which engine the row happened to name.
-    const { result: resumed } = captureEvents(() => resumableAgentsInput('think', {
-      strategy: 'mcts', task: 'search', heads: twoForks, budget: 4,
-    }));
-    expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
-  });
 });
+

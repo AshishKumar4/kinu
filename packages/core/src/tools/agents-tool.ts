@@ -74,7 +74,6 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
-import type { RoleSelection } from '../config/store';
 import { diagnostics, renderThrownChain } from '../obs/index';
 import {
   delegationDepthRefusal,
@@ -190,14 +189,13 @@ export interface TeamToolDeps {
    *  first-interaction title policy claim it (identity/naming.ts). The
    *  model's `hire` goes through {@link spawn} and stays strict.
    *
-   *  `role` is ONE typed selection — catalog id or legacy freeform line,
-   *  written to the child's own config store at seed time. */
+  *  `role` is the catalog id, written to the child's own config store at seed time. */
   create(input: {
     name?: string;
     /** A title the owner typed. Given, the name is THEIRS: origin `user`,
      *  never auto-retitled. */
     displayName?: string;
-    role?: RoleSelection;
+    role?: RoleId;
     tier?: TierId;
     mission?: string;
   }): Promise<{
@@ -222,7 +220,7 @@ export interface TeamToolDeps {
    *  vocabulary as {@link create}. */
   spawn(input: {
     name?: string;
-    role: RoleSelection;
+    role: RoleId;
     mission: string;
     tier?: TierId;
     mode: WorkMode;
@@ -458,8 +456,7 @@ export interface AgentsForkDeps {
  * against, its own active role, and the action surface role narrowing applies
  * to. Wired under {@link AgentsToolDeps.profile} by every backend that has an
  * authority — signed in (account catalog) or signed out (local catalog).
- * Absent is an actor whose backend has no catalog yet: hire falls back to its
- * legacy freeform behaviour, and swarm requires an explicit preset.
+ * Absent means hire and ask refuse and swarm needs an explicit preset.
  */
 export interface AgentsProfileContext extends ProfileAuthorityInputs {
   /** The actor's own active role — what a swarm or hire without an explicit
@@ -519,9 +516,8 @@ export interface AgentsToolDeps {
   budget?: MissionGovernor;
   /** The actor's profile authority — the one resolver input set role/tier/
    *  precedence reads. A thunk because a backend may sign in (or load its
-   *  local catalog) after the toolset was built, and an absent factory is an
-   *  actor with no catalog: hire keeps its legacy freeform behaviour and
-   *  swarm demands an explicit preset. */
+   *  local catalog) after the toolset was built. Absent means hire and ask
+   *  refuse and swarm needs an explicit preset. */
   profile?: () => AgentsProfileContext | null;
 }
 
@@ -1155,11 +1151,6 @@ export function parseAgentsToolInput<T>(input: T): AgentsToolInput {
 /** A durable job row, at the width the replay parse reads it. */
 type StoredAgentsRow = v.InferOutput<typeof StoredAgentsInputSchema>;
 
-/** The pre-unification tool's row, at the width the translation reads. Its other
- *  fields are deliberately not parsed: nothing on this surface can carry them, so
- *  they reach the drop line off the RAW row like every other uncarried field. */
-const LegacyThinkRowSchema = v.object({ task: v.string() });
-
 /** What a TRANSLATED row must not carry, because the translation decides it: the
  *  `preset` is fixed to `ideate` below, and an `objective` cannot ride a row that
  *  declared no metric, no unit, no direction and no verifier. */
@@ -1200,28 +1191,6 @@ function recordDroppedFields<T>(
 }
 
 /**
- * A stored row from a surface that no longer exists, re-driven as the one thing that
- * runs ephemeral nodes today.
- *
- * `preset:'ideate'` and not a measured preset, because the row has no `objective` and
- * none can be invented for it: `optimise` would need a metric, a unit, a direction and
- * a verifier the original call never supplied. `ideate` is the shape that needs none —
- * it writes its own competing approaches from `task` alone.
- *
- * The SETTLEMENT is the loss and it is a real one: the merge that reconciled a fork's
- * findings, and the judged ensemble that ordered a settle's, are both deliberately
- * unreachable from a swarm. So the re-drive hands back candidates nothing combined,
- * and the drop line says that rather than only counting fields — a resumed search that
- * quietly stopped settling is worse than one that refused.
- */
-function searchReplay<T>(kind: string, input: T, task: string | undefined, carry: Partial<AgentsToolInput>): AgentsToolInput | null {
-  if (task === undefined) return null;
-  const resumed: AgentsToolInput = { ...carry, action: 'swarm', preset: 'ideate', task };
-  recordDroppedFields(kind, input, resumed, ['settlement']);
-  return resumed;
-}
-
-/**
  * Background-job resume filter, shared by both backends: durable job rows store the
  * tool KIND + input, and only exploration work is safely re-runnable. Returns the
  * input to re-execute, or null when the job is not resumable.
@@ -1243,32 +1212,28 @@ function searchReplay<T>(kind: string, input: T, task: string | undefined, carry
  *   `action:'fork'` — the removed ephemeral rung. Its caller supplied the angles
  *   itself and a merge model synthesised what came back. A search is what spawns
  *   ephemeral tool-using nodes now, so the row re-drives as one; the briefs and the
- *   merge are the loss, and the drop line names them.
+ *   merge are the loss, and the drop line names them. `preset:'ideate'` runs without
+ *   an invented objective, and the settlement loss rides the drop line.
  *
  *   `settle` — an older row still, from when a judged tree was reachable from inside
  *   that rung. Same translation: the field is not an entry any more, so it arrives as
  *   an unknown key and is named in the same line.
- *
- *   `kind:'think'` — rows written by the pre-unification tool, whose `heads` are the
- *   same briefs and whose `strategy` named the engine directly.
  */
 export function resumableAgentsInput<T>(kind: string, input: T): AgentsToolInput | null {
-  if (kind === 'agents') {
-    const parsed = v.safeParse(StoredAgentsInputSchema, input);
-    if (!parsed.success) return null;
-    const row = parsed.output;
-    if (row.action === 'fork') {
-      return searchReplay(kind, input, row.task, swarmFieldsOf(row, TRANSLATION_DECIDES));
-    }
-    if (row.action !== 'swarm') return null;
-    const resumed: AgentsToolInput = { action: 'swarm', ...swarmFieldsOf(row, {}) };
-    recordDroppedFields(kind, input, resumed, []);
+  if (kind !== 'agents') return null;
+  const parsed = v.safeParse(StoredAgentsInputSchema, input);
+  if (!parsed.success) return null;
+  const row = parsed.output;
+  if (row.action === 'fork') {
+    if (row.task === undefined) return null;
+    const resumed: AgentsToolInput = { ...swarmFieldsOf(row, TRANSLATION_DECIDES), action: 'swarm', preset: 'ideate', task: row.task };
+    recordDroppedFields(kind, input, resumed, ['settlement']);
     return resumed;
   }
-  if (kind !== 'think') return null;
-  const parsed = v.safeParse(LegacyThinkRowSchema, input);
-  if (!parsed.success) return null;
-  return searchReplay(kind, input, parsed.output.task, {});
+  if (row.action !== 'swarm') return null;
+  const resumed: AgentsToolInput = { action: 'swarm', ...swarmFieldsOf(row, {}) };
+  recordDroppedFields(kind, input, resumed, []);
+  return resumed;
 }
 
 interface AgentsToolCallOptions {
@@ -1651,8 +1616,7 @@ type SwarmSchemaProperties = SchemaPropertiesFor<'swarm'>;
  * of "hire/swarm with a role": a model cannot pick a role it was never shown.
  * Rendered into the `role` field descriptions of both the native schema and
  * the codemode declaration, from the same context, so neither can list a role
- * the resolver would refuse. Absent (no catalog wired) is an empty string —
- * the legacy freeform wording covers that actor.
+ * the resolver would refuse. Absent (no catalog wired) is an empty string.
  */
 function roleSummaries(deps: AgentsToolDeps): string {
   const ctx = deps.profile?.();
@@ -1970,36 +1934,29 @@ export async function dispatchAgentsAction(
           return badInput('field "message" is not available for action "hire" on this actor');
         }
         if (!input.role || !input.mission) return badInput('hire requires role and mission');
-        // The role is a CATALOG id here — validated, spawn-checked and carried
+        // The role is a catalog id here. It is validated and spawn-checked, then carried
         // onto the subordinate's durable identity with its tier override.
-        // Without a catalog the freeform text still hires (the legacy path),
-        // so an actor that never wired a profile keeps working; one that has
-        // one refuses an unresolvable role rather than seeding an identity the
-        // child's next turn cannot resolve.
-        let request: Parameters<TeamToolDeps['spawn']>[0];
+        // Without a catalog the hire is refused rather than seeded onto an
+        // identity the child's next turn cannot resolve.
         const ctx = deps.profile?.();
-        if (ctx) {
-          const delegated = resolveDelegatedProfile(ctx, input.role, input.tier);
-          if ('error' in delegated) return badInput(delegated.error);
-          // Only an EXPLICIT override rides along: a role's own default tier
-          // is re-derived by the child at its next turn boundary from its
-          // roleId, so storing it twice would be a second source of truth.
-          const resolvedTier = input.tier !== undefined ? delegated.resolved.tier : undefined;
-          request = {
-            role: { kind: 'catalog', roleId: delegated.resolved.role.id },
-            mission: input.mission,
-            mode,
-          };
-          if (resolvedTier !== undefined) Object.assign(request, { tier: resolvedTier.id });
-        } else {
-          // No catalog wired: the freeform line hires as the labelled legacy
-          // block, exactly as it did before roles existed.
-          request = {
-            role: { kind: 'legacy', text: input.role },
-            mission: input.mission,
-            mode,
-          };
+        if (!ctx) {
+          return {
+            reason: 'denied',
+            error: 'This actor wires no role catalog. Hire cannot resolve a role without one.',
+          } satisfies DelegationDepthRefusal;
         }
+        const delegated = resolveDelegatedProfile(ctx, input.role, input.tier);
+        if ('error' in delegated) return badInput(delegated.error);
+        // Only an EXPLICIT override rides along: a role's own default tier
+        // is re-derived by the child at its next turn boundary from its
+        // roleId, so storing it twice would be a second source of truth.
+        const resolvedTier = input.tier !== undefined ? delegated.resolved.tier : undefined;
+        const request: Parameters<TeamToolDeps['spawn']>[0] = {
+          role: delegated.resolved.role.id,
+          mission: input.mission,
+          mode,
+        };
+        if (resolvedTier !== undefined) Object.assign(request, { tier: resolvedTier.id });
         if (input.agent) Object.assign(request, { name: input.agent });
         return await team.spawn(request);
       }
@@ -2034,19 +1991,19 @@ export async function dispatchAgentsAction(
             } satisfies DelegationDepthRefusal;
           }
           const ctx = deps.profile?.();
-          // Same resolver, same precedence, same refusal as a hire: a role this
-          // catalog cannot resolve is refused rather than seeded onto a child
-          // whose first turn could not read it.
-          let role: RoleSelection;
-          if (ctx) {
-            const delegated = resolveDelegatedProfile(ctx, input.role, undefined);
-            if ('error' in delegated) return badInput(delegated.error);
-            role = { kind: 'catalog', roleId: delegated.resolved.role.id };
-          } else {
-            role = { kind: 'legacy', text: input.role };
+          if (!ctx) {
+            return {
+              reason: 'denied',
+              error: 'This actor wires no role catalog. Ask cannot resolve a role without one.',
+            } satisfies DelegationDepthRefusal;
           }
+          // The ask arm uses the same resolver and the same precedence as a hire.
+          // A role this catalog cannot resolve is refused rather than seeded onto
+          // a child whose first turn could not read it.
+          const delegated = resolveDelegatedProfile(ctx, input.role, undefined);
+          if ('error' in delegated) return badInput(delegated.error);
           const request: TemporaryRunRequest = {
-            role,
+            role: delegated.resolved.role.id,
             roleLabel: input.role,
             task: input.message,
             mode,

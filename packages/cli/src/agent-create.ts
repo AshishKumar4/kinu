@@ -309,9 +309,8 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     alias: input.alias || undefined,
     cwd,
     workspaceId,
-    // The database's own durable id, through the one helper that knows both the
-    // current table and the pre-rename one — so a ref records the same identity
-    // whether creation wrote it or adoption found it.
+    // The database's own durable id from `workspace_identity`, so a ref
+    // records the same identity whether creation wrote it or adoption found it.
     identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
   });
   const aliasPath = input.alias ? writeAliasShim(name, input.alias) : undefined;

@@ -83,6 +83,6 @@ describe('runMCTS reports progress while the search runs', () => {
 });
 
 function initTables(rt: AgentRuntime) {
-  initSearchTables(rt.storage.execRaw, rt.storage.sql);
-  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+  initSearchTables(rt.storage.execRaw);
+  initScaffoldTables(rt.storage.execRaw);
 }

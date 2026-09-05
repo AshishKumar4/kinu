@@ -492,14 +492,14 @@ export function initRunLedgers(
   announce?: AnnounceHeadActivity,
 ): RunLedgers {
   const sql = rt.storage.sql;
-  initSearchTables(rt.storage.execRaw, sql);
+  initSearchTables(rt.storage.execRaw);
   // The transcript store *The journal read model* governs, and it is the SAME ledger a
   // fork's turns land in: the transcript is a read model over the node's journal, never
   // a second store. `search_nodes` stays the TREE — structure and one normalised value
   // per node — and the journal stays the turns. Initialised rather than assumed, for the
   // reason `initSearchTables` is: a workspace that has never run a fork has no
   // `head_journal`.
-  initHeadsTables(rt.storage.execRaw, sql);
+  initHeadsTables(rt.storage.execRaw);
   const journal = announce === undefined
     ? new HeadJournal(sql)
     : new LiveHeadJournal(sql, announce);
@@ -508,13 +508,13 @@ export function initRunLedgers(
   // ignored* gives: a swarm wrote a tree and no ledger row, so the surface could read
   // its structure and not one knob it ran under, and the judge clamp it computes and
   // discloses was persisted nowhere at all.
-  initMctsSearchTable(rt.storage.execRaw, sql);
+  initMctsSearchTable(rt.storage.execRaw);
   const searchLedger = new MctsSearchStore(sql);
   // The leaderboard *The records store* governs, initialised for the same reason the two
   // above are: a workspace that has never run a search has no `exploration_records`, and
   // the carry-in read immediately below would be a query against a table that does not
   // exist.
-  initExplorationRecordsTable(rt.storage.execRaw, sql);
+  initExplorationRecordsTable(rt.storage.execRaw);
   // The per-node content store a RE-ENTRY reads (*swarm-resume.ts*), initialised for
   // the same reason the three above are. `search_nodes` holds this tree's selection
   // state and cannot answer a resume — `value` is a mean over a subtree, and no column

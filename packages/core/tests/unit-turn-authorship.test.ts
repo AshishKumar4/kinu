@@ -145,15 +145,6 @@ describe('rows written before the stamp existed', () => {
     expect(turnAuthor({ id: 'steer-ozev3bmdd9tv', metadata: { kinuSteer: true } })).toBe('operator');
   });
 
-  test('a legacy mcp row keeps its bubble on the event name alone', () => {
-    // It has the programmatic id prefix like every other queued turn, so the
-    // event name has to be consulted BEFORE the prefix or the operator's own
-    // task would be filed as the harness's.
-    expect(turnAuthor({
-      id: `${PROGRAMMATIC_MESSAGE_ID_PREFIX}0f2c`, metadata: { kinuEvent: 'mcp' },
-    })).toBe('operator');
-  });
-
   test('an unparseable metadata row still answers from its id prefix', () => {
     // A corrupt metadata cell carries no stamp and no event name, so the id
     // prefix decides: the ambiguous shape resolves to the harness rather than

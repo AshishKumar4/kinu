@@ -61,7 +61,6 @@ import * as v from 'valibot';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 
 import { parseJsonValue, type JsonValue } from '../utils/json';
-import { reconcileColumns } from '../identity/columns';
 import {
   OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, RUN_END_REASONS,
 } from './turn-lifecycle';
@@ -186,17 +185,6 @@ export type TerminalEffectName = (typeof TERMINAL_EFFECT_NAMES)[number];
 
 const TerminalEffectNameSchema = v.picklist(TERMINAL_EFFECT_NAMES);
 
-/**
- * The effects that run OFF the turn queue, as every declaration assigns them.
- *
- * Stated once here because a row written before the `lane` column existed has to
- * be corrected from its name, and the correction must not be a second opinion
- * about which effects are detached. A reply makes an SMTP round trip, a branch
- * waits on a live head, and the between-turn lanes each spend a model call.
- */
-const DETACHED_EFFECT_NAMES: readonly TerminalEffectName[] = [
-  'event_reply', 'branches', 'parent_report', 'sleep_time', 'auto_title', 'auto_gepa',
-];
 
 /**
  * The disposition of one row. `completed` is the only terminal one.
@@ -370,19 +358,11 @@ export type TerminalEffectFault = (
 ) => void;
 
 /**
- * `sql` is the same storage as `execRaw`, as the tagged-template primitive:
- * `reconcileColumns` asks `pragma_table_info` which columns are present rather
- * than adding them and swallowing the duplicate-column error.
- *
- * `status` carries no CHECK. Its vocabulary changed in place while this table
- * was pre-release, SQLite bakes a CHECK into the stored table definition and
- * offers no ALTER for it, and core's in-place rebuild is private to the head
- * journal. The column has exactly one writer — this module — and its values come
- * from the closed {@link TerminalEffectStatus} union, so the constraint would
- * guard against a writer that does not exist while breaking every storage
- * created under the older word list.
+ * `status` carries no CHECK. The column has exactly one writer — this module —
+ * and its values come from the closed {@link TerminalEffectStatus} union, so
+ * the constraint would guard against a writer that does not exist.
  */
-export function initTerminalEffectTable(sql: SqlExecutor, execRaw: RawSqlExec): void {
+export function initTerminalEffectTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS terminal_effects (
     sequence_id     TEXT NOT NULL,
     effect_key      TEXT NOT NULL,
@@ -399,21 +379,6 @@ export function initTerminalEffectTable(sql: SqlExecutor, execRaw: RawSqlExec): 
     settled_at      INTEGER,
     PRIMARY KEY (sequence_id, effect_key)
   )`);
-  // `DEFAULT 0` is also the right value for a row written before the column
-  // existed: due immediately, which is what an owed row with no schedule means.
-  reconcileColumns(sql, execRaw, 'terminal_effects', {
-    next_attempt_at: 'INTEGER NOT NULL DEFAULT 0',
-    lane: "TEXT NOT NULL DEFAULT 'inline'",
-  });
-  // A row written before the column existed carries the DEFAULT, and defaulting
-  // every one of them to inline is not conservative — it is the ordering defect
-  // the column was added to remove. A stalled reply would once again be awaited
-  // ahead of the recording behind it. The lane is a property of the EFFECT, not
-  // of the row, so the pre-column rows are corrected from their own names.
-  for (const name of DETACHED_EFFECT_NAMES) {
-    void sql`UPDATE terminal_effects SET lane = 'detached'
-      WHERE effect_name = ${name} AND lane = 'inline' AND status != 'completed'`;
-  }
   // Covers every owed read there is: one sequence's suffix, the set of sequences
   // still owing anything, and the earliest instant any of them is next due. One
   // index because those three questions differ only in how much of the same

@@ -75,8 +75,8 @@ describe('workspace schema is the only path', () => {
     expect(owned).toEqual(
       expect.arrayContaining([
         'initAgentConfigTable', 'initAllTables', 'initAlternateTakesTable',
-        'initBackgroundJobsTable', 'initCraftQualityColumns',
-        'initCurriculumTable', 'initEventsHubTables', 'initFactsTable', 'initGepaTables',
+        'initBackgroundJobsTable', 'initCurriculumTable',
+        'initEventsHubTables', 'initFactsTable', 'initGepaTables',
         'initHeadsTables', 'initImportedExperienceTable', 'initMctsSearchTable', 'initRunEventTables',
         'initScaffoldTables', 'initSearchTables', 'initShadowTables', 'initTurnOutcomeTables',
       ]),
@@ -113,10 +113,6 @@ describe('workspace schema is the only path', () => {
   });
 });
 
-// The product_change -> release rename touched five tables holding approval and
-// deployment records. Without a migration, CREATE TABLE IF NOT EXISTS would mint
-// them empty beside the populated originals: nothing crashes, the audit trail
-// just stops being visible. This asserts the rows survive.
 /** The three dialects initWorkspaceSchema takes, over one bun:sqlite handle.
  *  Built here rather than imported from cli-backend, which core may not reach. */
 function schemaSql(db: InstanceType<typeof Database>) {
@@ -127,51 +123,3 @@ function schemaSql(db: InstanceType<typeof Database>) {
     exec: makeSqlExec(db),
   } satisfies Parameters<typeof initWorkspaceSchema>[0];
 }
-
-describe('release table migration', () => {
-  const LEGACY: ReadonlyArray<readonly [string, string]> = [
-    ['product_source_bindings', 'release_sources'],
-    ['product_change_requests', 'release_changes'],
-    ['product_change_checks', 'release_checks'],
-    ['product_change_approvals', 'release_approvals'],
-    ['product_deployments', 'release_deployments'],
-  ];
-
-  test('rows written under the old names are readable under the new ones', () => {
-    const db = new Database(':memory:');
-    for (const [from] of LEGACY) {
-      db.exec(`CREATE TABLE ${from} (id TEXT PRIMARY KEY, payload TEXT)`);
-      db.exec(`INSERT INTO ${from} (id, payload) VALUES ('keep-me', 'audit trail')`);
-    }
-    initWorkspaceSchema(schemaSql(db));
-    for (const [from, to] of LEGACY) {
-      const row = db.query<{ payload: string }, []>(
-        `SELECT payload FROM ${to} WHERE id = 'keep-me'`,
-      ).get();
-      expect(row?.payload).toBe('audit trail');
-      const orphan = db.query(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name = ?`,
-      ).get(from);
-      expect(orphan).toBeNull();
-    }
-    db.close();
-  });
-
-  test('a fresh workspace is untouched, and re-running is a no-op', () => {
-    // The release tables are created by the release lane, not by the workspace
-    // schema — so on a fresh database the rename has nothing to find and must
-    // simply do nothing, twice, without throwing.
-    const db = new Database(':memory:');
-    expect(() => {
-      initWorkspaceSchema(schemaSql(db));
-      initWorkspaceSchema(schemaSql(db));
-    }).not.toThrow();
-    for (const [from] of LEGACY) {
-      const revived = db.query(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name = ?`,
-      ).get(from);
-      expect(revived).toBeNull();
-    }
-    db.close();
-  });
-});

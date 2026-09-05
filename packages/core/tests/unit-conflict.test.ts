@@ -5,7 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { checkConflictsBeforeAdding, upsertCraftedTool } from '../src/craft/conflict';
-import { initCraftQualityColumns } from '../src/craft/schemas';
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { ExecuteResult, Executor } from '../src/types/primitives';
 
@@ -79,7 +79,7 @@ describe('upsertCraftedTool — the admission check', () => {
   // `//`" — nothing ever compiled the code the runtime would have to compile.
   function runtime(): AgentRuntime {
     const { rt } = createTestRuntime();
-    initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
+    initCraftedToolsTables(rt.storage.sql);
     return { ...rt, executor: evaluatingExecutor() };
   }
 

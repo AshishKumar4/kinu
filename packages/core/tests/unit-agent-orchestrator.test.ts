@@ -42,7 +42,7 @@ function fakeEngine(opts?: { enabled?: boolean }) {
   /** One entry per cadence pass that ran the promotion gate's queued trials. */
   const trials: number[] = [];
   const { sql, execRaw } = createTestSql();
-  initCompletedTurnTable(execRaw, sql);
+  initCompletedTurnTable(execRaw);
   const store = createCompletedTurnStore(sql);
   // The crafted-tool ledger the engine owns in production, over a real store,
   // so the in-episode clock is exercised through the same seam.

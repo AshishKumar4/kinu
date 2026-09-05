@@ -428,7 +428,7 @@ export function createCLIRuntime(
   // Same reason the agent-config DDL runs here: a runtime built without
   // `initWorkspaceSchema` (a branch worker, `kinu evolve`, a fixture) still
   // reads and writes scaffold tables on its first identity.scaffold touch.
-  initScaffoldTables(execRaw, sql);
+  initScaffoldTables(execRaw);
   const agentConfig = createAgentConfigStore(sql);
   let turnProfile: ResolvedTurnProfile | null = null;
   // The model plane a PROFILE resolves against: how a stored spec is spelled in
@@ -777,7 +777,7 @@ export function buildCLIHeadRuntime(
   // tables live in the same scratch database — without them, the first
   // `identity.scaffold` touch on a fresh head raised `no such table:
   // scaffold_versions`.
-  initScaffoldTables(execRaw, sql);
+  initScaffoldTables(execRaw);
 
   const workspaceSql = nimbusSql(db);
   const workspace = createWorkspaceFilesystem({

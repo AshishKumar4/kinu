@@ -569,7 +569,7 @@ describe('LocalAgentHost', () => {
 
     const created = await team.create({
       name: 'researcher',
-      role: { kind: 'catalog', roleId: 'researcher' },
+      role: 'researcher',
       mission: 'Investigate the incident.',
     });
     const childTeam = await host.team('root/researcher');
@@ -611,7 +611,7 @@ describe('LocalAgentHost', () => {
 
     await team.create({
       name: 'temporary',
-      role: { kind: 'catalog', roleId: 'auditor' },
+      role: 'auditor',
       mission: 'Inspect one isolated case.',
     });
     const temporaryPath = join(dirname(dbPath), 'subordinates', 'temporary', 'agent.db');
@@ -647,7 +647,7 @@ describe('LocalAgentHost', () => {
     expect(port).toBeDefined();
 
     const outcome = await port!.run({
-      role: { kind: 'catalog', roleId: 'researcher' },
+      role: 'researcher',
       roleLabel: 'researcher',
       task: 'Find the root cause and report it.',
       mode: 'build',
@@ -713,7 +713,7 @@ describe('LocalAgentHost', () => {
     });
     const team = await host.team('root');
     await team.spawn({
-      role: { kind: 'catalog', roleId: 'researcher' },
+      role: 'researcher',
       mission: 'Investigate the incident.',
       mode: 'build',
     });
@@ -758,7 +758,7 @@ describe('LocalAgentHost', () => {
       ]);
       const team = await host.team('root');
       const outcome = await team.temporary!.run({
-        role: { kind: 'catalog', roleId: 'researcher' },
+        role: 'researcher',
         roleLabel: 'researcher',
         task: 'Find the root cause.',
         mode: 'build',
@@ -809,7 +809,7 @@ describe('LocalAgentHost', () => {
       ]);
       const team = await host.team('root');
       const outcome = await team.temporary!.run({
-        role: { kind: 'catalog', roleId: 'researcher' },
+        role: 'researcher',
         roleLabel: 'researcher',
         task: 'Audit the ledger.',
         mode: 'build',
@@ -858,7 +858,7 @@ describe('LocalAgentHost', () => {
 
     await team.create({
       name: 'deep',
-      role: { kind: 'catalog', roleId: 'researcher' },
+      role: 'researcher',
       mission: 'Work at the cap.',
     });
     // Put the child AT the cap, the way its parent's seed would at depth 4.
@@ -903,7 +903,7 @@ describe('LocalAgentHost', () => {
     ]);
     const team = await host.team('root');
     const outcome = await team.temporary!.run({
-      role: { kind: 'catalog', roleId: 'researcher' },
+      role: 'researcher',
       roleLabel: 'researcher',
       task: 'Find the root cause.',
       mode: 'build',
@@ -946,7 +946,7 @@ describe('LocalAgentHost', () => {
     // durable verbs refuse a task row, so the row flips after the handoff.
     await team.spawn({
       name: 'ask-researcher-late',
-      role: { kind: 'catalog', roleId: 'researcher' },
+      role: 'researcher',
       mission: 'Find the root cause.',
       mode: 'build',
     });
@@ -1007,7 +1007,7 @@ describe('LocalAgentHost', () => {
 
     const team = await host.team('root');
     await team.create({
-      name: 'researcher', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Investigate the incident.',
+      name: 'researcher', role: 'researcher', mission: 'Investigate the incident.',
     });
     const assigned = await team.assign({
       name: 'researcher', task: 'Find the root cause and report it.', mode: 'build',
@@ -1141,10 +1141,10 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     const { host } = makeHost(state, streamingModel('ack'), refs);
     try {
       await (await host.team('alpha')).create({
-        name: 'scout', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Read the parser.',
+        name: 'scout', role: 'researcher', mission: 'Read the parser.',
       });
       await (await host.team('beta')).create({
-        name: 'auditor', role: { kind: 'catalog', roleId: 'auditor' }, mission: 'Check the parser.',
+        name: 'auditor', role: 'auditor', mission: 'Check the parser.',
       });
       expect(existsSync(join(dirname(alphaDb), 'subordinates', 'scout', 'agent.db'))).toBe(true);
       expect(existsSync(join(dirname(betaDb), 'subordinates', 'auditor', 'agent.db'))).toBe(true);
@@ -1244,7 +1244,7 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     }), refs);
     try {
       await (await host.team('alpha')).create({
-        name: 'scout', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Read the parser.',
+        name: 'scout', role: 'researcher', mission: 'Read the parser.',
       });
       // Both peers opened, so both runtimes exist to compare.
       await host.acquire('beta');

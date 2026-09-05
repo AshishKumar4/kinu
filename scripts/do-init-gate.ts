@@ -116,9 +116,8 @@
  * So the fourth rule is about REACH, and it is the only one that descends into
  * what the hook SPAWNS: no call named in `MODEL_SINKS` may appear anywhere
  * inside a governed `onStart` — its own scope, or a function expression it
- * launches there. Model-reaching work belongs on a request frame (for the
- * legacy title heal, the workspace-open `@callable`), where it is ordinary
- * agent work rather than init-path work.
+ * launches there. Model-reaching work belongs on a request frame (a `@callable`
+ * or a turn), where it is ordinary agent work rather than init-path work.
  *
  * Recovery hooks are deliberately NOT held to this rule: their sanctioned shape
  * is to hand each re-drive to a detached durable carrier, and a re-drive may
@@ -966,7 +965,7 @@ if (import.meta.main) {
     + '\nevery re-drive to a detached durable carrier (ActorAgent.redriveRecoveredLane).'
     + '\nEither onStart, whatever the gate waits on: a call named in `MODEL_SINKS` is refused'
     + '\noutright — detaching a model call does not move it off the init path. Run it from a'
-    + '\nrequest frame (for the legacy title heal, the workspace-open @callable).',
+    + '\nrequest frame (a @callable or a turn).',
   );
   process.exit(1);
 }

@@ -44,8 +44,7 @@
 
 import * as v from 'valibot';
 import type { LLM, RawSqlExec, SqlExecutor } from './types/primitives';
-import { BLENDED_USD_PER_1K_TOKENS, estimateTokens, estimateUsdCost } from './llm';
-import { reconcileColumns } from './identity/columns';
+import { estimateTokens, estimateUsdCost } from './llm';
 import type { ModelPricing } from './providers/types';
 import type { JsonValue } from './utils/json';
 import { usageReported, usageTotal, type Usage } from './usage';
@@ -178,25 +177,6 @@ export class MissionBudgetLedger {
     execRaw: RawSqlExec,
   ) {
     execRaw(DDL);
-    // Ledgers written before USD was priced carry tokens and no dollars, and
-    // everything they spent WAS blended — so the backfill states exactly that
-    // rather than reading as $0 spent and silently reopening a USD cap that was
-    // already met. Which columns are missing is ASKED, not inferred from a
-    // failing ALTER: a locked or read-only database throws the same way as a
-    // duplicate column, so the old boolean reported "already present" and
-    // skipped the backfill precisely when the ledger was least trustworthy.
-    const before = new Set(
-      sql<{ name: string }>`SELECT name FROM pragma_table_info('mission_budget')`.map((c) => c.name),
-    );
-    reconcileColumns(sql, execRaw, 'mission_budget', {
-      spent_usd: 'REAL NOT NULL DEFAULT 0',
-      blended_tokens: 'INTEGER NOT NULL DEFAULT 0',
-    });
-    if (!before.has('spent_usd') || !before.has('blended_tokens')) {
-      execRaw(`UPDATE mission_budget
-        SET spent_usd = spent_tokens * ${BLENDED_USD_PER_1K_TOKENS / 1000},
-            blended_tokens = spent_tokens`);
-    }
   }
 
   /**

@@ -34,12 +34,12 @@ export function openTerminalWorkspace(dbPath: string) {
   const db = new Database(dbPath);
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL,
+    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
-  initSearchTables(rt.storage.execRaw, rt.storage.sql);
-  initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
-  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+  initSearchTables(rt.storage.execRaw);
+  initAlternateTakesTable(rt.storage.execRaw);
+  initScaffoldTables(rt.storage.execRaw);
   initAgentConfigTable(rt.storage.execRaw);
   return { db, rt };
 }

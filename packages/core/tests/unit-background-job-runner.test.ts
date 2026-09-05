@@ -66,7 +66,7 @@ function setup(opts: {
   scheduleResume?: (atMs: number) => Promise<void> | void;
 } = {}) {
   const db = opts.db ?? new Database(':memory:');
-  initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+  initBackgroundJobsTable(makeExecRaw(db));
   // The registry behind a switchable fault, so a test can reproduce the one
   // failure the in-process settlement path cannot survive: teardown closing the
   // database out from under a fiber that is still running ("Cannot use a closed

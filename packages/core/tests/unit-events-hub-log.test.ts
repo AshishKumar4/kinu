@@ -2,7 +2,6 @@
 // In-memory SQLite via bun:sqlite as the storage backend.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import * as v from 'valibot';
 import {
   boundEventQuery, buildDrainBatch, initEventsHubTables, EventLog,
   type IngressDescriptor,
@@ -42,21 +41,6 @@ function webhookDescriptor(deliveryId: string, body: JsonValue): IngressDescript
 }
 
 describe('EventLog.publish + dedupe', () => {
-  test('schema initialization adds the recovery lease column to legacy agent_log tables', () => {
-    const sql = makeSql();
-    sql.exec(`CREATE TABLE agent_log (
-      id TEXT PRIMARY KEY, kind TEXT NOT NULL, turn_id TEXT, step_idx INTEGER,
-      parent_id TEXT, trace_id TEXT NOT NULL, ingress TEXT, variant TEXT,
-      trust TEXT, priority TEXT, payload_visibility TEXT, payload TEXT NOT NULL,
-      received_at INTEGER NOT NULL, schema_version INTEGER NOT NULL, dedupe_key TEXT
-    )`);
-    initEventsHubTables(sql);
-    const columns = v.parse(
-      v.array(v.object({ name: v.string() })),
-      sql.exec(`PRAGMA table_info(agent_log)`).toArray(),
-    );
-    expect(columns.some((column) => column.name === 'consumed_at')).toBe(true);
-  });
 
   test('first publish admits; second publish with same dedupe key is idempotent', () => {
     const sql = makeSql();

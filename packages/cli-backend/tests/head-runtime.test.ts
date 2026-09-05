@@ -67,7 +67,7 @@ function makeGovernor(): MissionGovernor {
  *  directly — the cf backend's has to cross a facet boundary to reach one. */
 function makeJournal(): HeadJournal {
   const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db), makeSql(db));
+  initHeadsTables(makeExecRaw(db));
   return new HeadJournal(makeSql(db));
 }
 
@@ -169,7 +169,7 @@ function fakeHeadsModel(capture?: (options: {
 
 function controllerWithCLIRuntime(model: LanguageModel, probe?: RouteProbe) {
   const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db), makeSql(db));
+  initHeadsTables(makeExecRaw(db));
   const journal = new HeadJournal(makeSql(db));
   const overrides: Partial<CLIHeadRuntimeDeps> = { journal: () => journal };
   return {
@@ -209,7 +209,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   test('the merge reports its own spend as judge, and the heads report none', async () => {
     const reports: ModelCallReport[] = [];
     const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db), makeSql(db));
+  initHeadsTables(makeExecRaw(db));
     const journal = new HeadJournal(makeSql(db));
     const controller = new HeadController(
       createCLIHeadRuntime(headDeps(fakeHeadsModel(), {

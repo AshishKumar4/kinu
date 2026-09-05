@@ -14,8 +14,7 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExec, SqlExecutor } from '../types/primitives';
-import { reconcileColumns } from '../identity/columns';
+import type { SqlExec } from '../types/primitives';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import type { SubordinateReportOrigin } from './support';
 import type { SubordinateRosterEntry, SubordinateStatus } from '../tools/agents-tool';
@@ -39,14 +38,7 @@ const ROSTER_PROJECTION =
  *  what correlates the eventual report with the thing that was asked. It is the
  *  same id the sender is handed as `SubordinateHandoff.eventId`, which is what
  *  makes the correlation the one already documented on this surface rather than
- *  a second scheme beside it.
- *
- *  Both carry constant defaults, so a workspace created before this rung reads
- *  as what it is: every existing row is `durable` with no open assignment id. */
-const ROSTER_ADDED_COLUMNS = {
-  lifetime: "TEXT NOT NULL DEFAULT 'durable'",
-  task_event_id: 'TEXT',
-} as const;
+ *  a second scheme beside it. */
 
 /** Lifecycle and task facts only — the title and role a subordinate presents
  *  live in ITS agent_config ({@link SubordinateDescriptorSource}), never here. */
@@ -70,11 +62,7 @@ function parseStoredRosterRow<T>(row: T): SubordinateRosterEntry {
 /** Parent-DO product roster. All status policy lives here so tools, report
  * ingress, snapshots, and the future UI cannot drift. */
 export class SubordinateRosterStore {
-  /** `tagged` is the same storage as `sql` in the tagged-template form
-   *  {@link reconcileColumns} needs, for the same reason
-   *  {@link SubordinateIdentityStore} takes it: this table has gained columns,
-   *  and IF NOT EXISTS is a no-op on a workspace that already had it. */
-  constructor(private readonly sql: SqlExec, private readonly tagged: SqlExecutor) {}
+  constructor(private readonly sql: SqlExec) {}
 
   ensureSchema(): void {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_subordinates (
@@ -87,10 +75,6 @@ export class SubordinateRosterStore {
       lifetime      TEXT NOT NULL DEFAULT 'durable' CHECK (lifetime IN ('durable','task')),
       task_event_id TEXT
     )`);
-    reconcileColumns(
-      this.tagged, (ddl) => { this.sql.exec(ddl); },
-      'workspace_subordinates', ROSTER_ADDED_COLUMNS,
-    );
   }
 
   create(entry: SubordinateRosterEntry): void {

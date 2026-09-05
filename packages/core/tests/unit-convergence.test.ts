@@ -12,7 +12,7 @@ import { initAlternateTakesTable, latestAlternateTakeSet, listAlternateTakeSets 
 describe('Convergence', () => {
   test('throws when no nodes exist', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
 
     await expect(converge(rt, session, 'r')).rejects.toThrow('No viable nodes');
@@ -20,7 +20,7 @@ describe('Convergence', () => {
 
   test('converges with high-scoring winner', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
 
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, observation)
@@ -38,7 +38,7 @@ describe('Convergence', () => {
 
   test('BUG-4: returns converged=false when all scores below threshold', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
 
     // All nodes have value < MIN_ACCEPTABLE_SCORE (0.3)
@@ -73,8 +73,8 @@ describe('Convergence', () => {
   // shared value cleared minAcceptableScore.
   test('two DISTINCT approaches scoring identically is not a convergence', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
 
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
@@ -102,8 +102,8 @@ describe('Convergence', () => {
   // alternate-takes ledger records rather than a reason to refuse.
   test('a near-tie that is not an exact tie still converges', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
 
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
@@ -120,7 +120,7 @@ describe('Convergence', () => {
 
   test('marks the winner terminal and other open nodes pruned after convergence', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
 
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
@@ -138,8 +138,8 @@ describe('Convergence', () => {
 
   test('captures near-tied rivals as Alternate Takes before pruning them', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
 
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
@@ -167,8 +167,8 @@ describe('Convergence', () => {
       // so the discriminating test actually runs.
       llmResponses: { 'verification harness': '```js\ncheck();\n```' },
     });
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
 
     // Marker executor: code containing FAIL_MARKER fails, everything else passes.
@@ -202,8 +202,8 @@ describe('Convergence', () => {
     const { rt } = createTestRuntime({
       llmResponses: { 'verification harness': '```js\ncheck();\n```' },
     });
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
     rt.executor = {
       languages: ['javascript'],
@@ -226,8 +226,8 @@ describe('Convergence', () => {
 
   test('a clear winner converges without leaving a take set', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
 
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
@@ -241,8 +241,8 @@ describe('Convergence', () => {
 
   test('records the task outcome into task_history when the table exists', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);   // creates task_history
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);   // creates task_history
     const session = createMockSession();
 
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
@@ -266,8 +266,8 @@ describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
     const { rt } = createTestRuntime({
       llmResponses: { 'verification harness': '```js\ncheck();\n```' },
     });
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
     rt.executor = {
       languages: ['javascript'],
@@ -302,8 +302,8 @@ describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
 
   test('a throwing judge records the fallback and keeps the argmax winner', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
     rt.judgeModel = {
       async complete(_prompt: string): Promise<string> {

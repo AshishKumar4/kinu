@@ -13,14 +13,12 @@
  *   2. The switch is the owner's. A workspace cannot turn it off.
  *   3. Every command carries the CALLING workspace's own home, not a shared
  *      one — one machine, many workspaces, one home each.
- *   4. A UserDO created before these columns existed gets them.
- *   5. The refusal carries what the daemon actually said. Every status the
+ *   4. The refusal carries what the daemon actually said. Every status the
  *      shipped daemon can report lands on the row as itself, with the
  *      daemon's own words beside it, and the sentence "the daemon reported
  *      no reason" survives only where the daemon really said nothing.
  */
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import * as v from 'valibot';
@@ -28,9 +26,8 @@ import {
   DEVICE_SANDBOX_REASONS, SANDBOX_UNAVAILABLE, parseSandboxReason, sandboxReasonFix,
   type JsonValue,
 } from '@kinu.run/core';
-import { sqlExec, testOwner, type DeviceFrame } from './helpers/user-do';
+import { testOwner, type DeviceFrame } from './helpers/user-do';
 import { WORKSPACE, OTHER_WORKSPACE, daemon, deviceHarness } from './helpers/device-harness';
-import { initUserTables } from '../src/user/schema';
 import { CapabilityDeniedError } from '../src/user/workspace-capability';
 
 /** The shipped daemon's own sandbox module: the statuses its probe can answer
@@ -421,41 +418,3 @@ describe('the refusal carries what the daemon actually said', () => {
   });
 });
 
-describe('the columns reach a UserDO that predates them', () => {
-  test('a pre-change user_devices gains the sandbox columns and keeps its row', () => {
-    // The devices 500 of 2026-09-01 was exactly this: a column added to the
-    // CREATE and not to the reconciliation object, so every older UserDO
-    // answered `no such column` on a page that used to work.
-    const db = new Database(':memory:');
-    const sql = sqlExec(db);
-    sql.exec(`
-      CREATE TABLE user_devices (
-        id              TEXT PRIMARY KEY,
-        token_hash      TEXT NOT NULL,
-        label           TEXT NOT NULL,
-        os              TEXT,
-        hostname        TEXT,
-        created_at      INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-        connected_at    INTEGER,
-        last_seen_at    INTEGER,
-        revoked_at      INTEGER
-      )
-    `);
-    sql.exec(`INSERT INTO user_devices (id, token_hash, label) VALUES ('dev-old', 'hash', 'studio')`);
-
-    initUserTables(sql);
-
-    const columns = sql.exec(`PRAGMA table_info(user_devices)`).toArray()
-      .map((row) => v.parse(v.object({ name: v.string() }), row).name);
-    for (const column of [
-      'tier', 'sandbox_capability', 'sandbox_reason', 'sandbox_detail', 'sandbox_gpu', 'agent_root', 'consented_root',
-    ]) {
-      expect(columns).toContain(column);
-    }
-    // The switch is ON for a row written before the switch existed.
-    const row = sql.exec(`SELECT label, tier FROM user_devices WHERE id = 'dev-old'`).toArray()[0];
-    expect(v.parse(v.object({ label: v.string(), tier: v.string() }), row))
-      .toEqual({ label: 'studio', tier: 'sandboxed' });
-    db.close();
-  });
-});

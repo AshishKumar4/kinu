@@ -27,6 +27,7 @@ import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
 import { createWorkspace, nextWorkspaceGeneration, type WorkspaceVFS } from '../src/vfs/nimbus-workspace';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff';
 
@@ -297,17 +298,7 @@ export function createEvalExecutor(): Executor {
 // ── In-memory CraftStore ─────────────────────────────────────────
 
 export function createMemoryCraftStore(db: Database): CraftStore {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS crafted_tools (
-      name TEXT PRIMARY KEY,
-      description TEXT NOT NULL DEFAULT '',
-      params TEXT,
-      code TEXT NOT NULL DEFAULT '',
-      scope TEXT NOT NULL DEFAULT 'local',
-      created_at INTEGER NOT NULL DEFAULT 0,
-      updated_at INTEGER NOT NULL DEFAULT 0
-    )
-  `);
+  initCraftedToolsTables(makeSql(db));
 
   // The row→tool mapping the production CraftStore performs. Handing raw rows
   // back instead would hide real drift: `params` is stored as JSON text and the

@@ -121,9 +121,7 @@ describe('subordinate wiring', () => {
     expect(actor).toContain('statRef: async (path) => (await this.rt.storage.vfs.stat(path)) !== null,');
     expect(actor).not.toContain('vfs.readFile(path, { encoding: \'utf8\' })');
 
-    // The roster store takes both sql forms, because the table has gained
-    // columns and IF NOT EXISTS is a no-op on a workspace that already had it.
-    expect(actor).toContain('new SubordinateRosterStore(this.ctx.storage.sql, this.boundSql)');
+    expect(actor).toContain('new SubordinateRosterStore(this.ctx.storage.sql)');
   });
 
   /** The standalone recursive-LM namespace is gone from this backend's sandbox

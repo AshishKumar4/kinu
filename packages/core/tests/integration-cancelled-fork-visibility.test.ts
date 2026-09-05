@@ -53,8 +53,8 @@ function workspace() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  initHeadsTables(execRaw, makeSql(db));
-  initBackgroundJobsTable(execRaw, makeSql(db));
+  initHeadsTables(execRaw);
+  initBackgroundJobsTable(execRaw);
   const journal = new HeadJournal(sql);
   const jobs = new BackgroundJobStore(sql);
 

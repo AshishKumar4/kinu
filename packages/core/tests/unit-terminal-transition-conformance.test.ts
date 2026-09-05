@@ -220,7 +220,7 @@ class Plane {
 
   constructor(private readonly kind: AdapterKind) {
     this.clock = CLOCK_BASE[kind];
-    initTerminalEffectTable(this.sql, this.execRaw);
+    initTerminalEffectTable(this.execRaw);
     initToolEffectClaimTable(this.execRaw);
     this.execRaw('CREATE TABLE IF NOT EXISTS conf_effect_runs (effect_key TEXT NOT NULL)');
     this.execRaw(`CREATE TABLE IF NOT EXISTS conf_effect_output (
@@ -269,30 +269,6 @@ class Plane {
       SELECT effect_key FROM conf_effect_runs ORDER BY rowid`.map((row) => row.effect_key);
   }
 
-  /** A row as the schema BEFORE the lane column produced it: present, and
-   *  carrying the column default rather than its real lane. */
-  seedPreColumnRow(name: TerminalEffectName, scope: string): void {
-    const now = this.clock;
-    void this.sql`INSERT INTO terminal_effects
-      (sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, outcome,
-       attempts, next_attempt_at, claimed_at, settled_at)
-      VALUES (${this.seq()}, ${terminalEffectKey(name, scope)}, ${name}, ${scope}, 0,
-              '{"answer":"a"}', 'inline', 'pending', ${null}, 0, ${now}, ${now}, ${null})`;
-  }
-
-  /** Re-run schema init, which is where the migration lives. */
-  migrate(): void {
-    initTerminalEffectTable(this.sql, this.execRaw);
-  }
-
-  laneOf(name: TerminalEffectName, scope: string): string {
-    return this.sql<{ lane: string }>`
-      SELECT lane FROM terminal_effects WHERE effect_key = ${terminalEffectKey(name, scope)}`[0]?.lane ?? '';
-  }
-
-  private seq(): string {
-    return `${TRANSITION.turnId}/${TRANSITION.messageId}`;
-  }
 
   advance(ms: number): void {
     this.clock += ms;
@@ -788,29 +764,4 @@ describe('terminal transition conformance across two adapters', () => {
     }
   });
 
-  /**
-   * A row written BEFORE the lane column existed is corrected from its name.
-   *
-   * The column arrives with `DEFAULT 'inline'`, and leaving every migrated row
-   * at that default is not the conservative reading — it is the ordering defect
-   * the column was added to remove, reinstated for exactly the rows that predate
-   * the fix. A stalled reply would once again be awaited ahead of the recording
-   * behind it.
-   */
-  test('a pre-column detached row is migrated to its real lane', () => {
-    const plane = new Plane('alarm');
-    try {
-      // What the old schema left: the row exists, the column does not know it is
-      // detached. Written directly, because no API can produce this state any
-      // more — that is what makes it a migration rather than a branch.
-      plane.seedPreColumnRow('event_reply', 'evt-1');
-      plane.seedPreColumnRow('turn_record', '');
-      plane.migrate();
-      expect(plane.laneOf('event_reply', 'evt-1')).toBe('detached');
-      // …and an inline effect is left exactly as it was.
-      expect(plane.laneOf('turn_record', '')).toBe('inline');
-    } finally {
-      plane.close();
-    }
-  });
 });

@@ -31,7 +31,7 @@ import { createTestRuntime } from './helpers';
 function setup() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
-  initScaffoldTables(execRaw, makeSql(db));
+  initScaffoldTables(execRaw);
   initShadowTables(execRaw);
   return { sql: makeSql(db), execRaw, db };
 }
@@ -249,7 +249,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     // scaffold/agent.js.v{N}; promote is a real file swap. This test exercises
     // the full proposal → promote round-trip.
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
 
     const v0Code = 'async function* run(rt, task) { yield "v0"; }';
@@ -280,7 +280,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
 
   test('rollback marks pending rolled_back and re-confirms previous version', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
 
     const v0Code = 'async function* run(rt, task) { yield "v0"; }';
@@ -310,7 +310,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
 
   test('modifyScaffold refuses a second pending while one is in flight', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
     await rt.identity.scaffold.write('async function* run(rt, task) { yield "v0"; }');
     void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
@@ -340,7 +340,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     // return to the PROMOTED version — not pending.version-1, which would be
     // the wrong (pre-promote) version under non-contiguous numbering.
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
     const v0 = 'async function* run(rt, task) { yield "v0"; }';
     await rt.identity.scaffold.write(v0);

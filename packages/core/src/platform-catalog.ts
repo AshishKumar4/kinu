@@ -1078,8 +1078,8 @@ export const PLATFORM_CATALOG = {
     observable: [],
     firstPartySignal: true,
     notes:
-      'Relevant because this repo reconciles columns additively at activation '
-      + '(reconcileColumns), which is a monotonically growing count with no ceiling check.',
+      'Relevant because a shipped table\'s DDL is its genesis here (scripts/schema-drift.ts): '
+      + 'a column joins a table only through a reset deployment, and nothing checks the count.',
   },
 
   'do.storage.bytes': {

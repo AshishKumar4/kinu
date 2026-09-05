@@ -109,7 +109,7 @@ function fixture(over: {
   readonly gradeReport?: NodeAgentDeps['gradeReport'];
 }) {
   const { rt } = createTestRuntime();
-  initHeadsTables(rt.storage.execRaw, rt.storage.sql);
+  initHeadsTables(rt.storage.execRaw);
   const journal = new HeadJournal(rt.storage.sql);
   const input: NodeAgentInput = {
     nodeId: 'n1', rootId: 'r1', parentId: null, depth: 1,

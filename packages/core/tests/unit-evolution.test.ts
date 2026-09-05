@@ -411,8 +411,8 @@ describe('EvolutionEngine — Session-level', () => {
 
   test('the lifetime cadence counts closed windows durably — a new engine resumes it', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
     const window = session([makeTurn(), makeTurn(), makeTurn()]);
 
     // Five windows, each closed by a DIFFERENT engine instance — one per
@@ -431,8 +431,8 @@ describe('EvolutionEngine — Session-level', () => {
 describe('EvolutionEngine — Lifetime-level', () => {
   test('runs CraftStore consolidation', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
 
     const engine = new EvolutionEngine(rt);
 

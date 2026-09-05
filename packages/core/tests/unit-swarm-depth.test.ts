@@ -260,7 +260,7 @@ interface Tree {
 function tree(): Tree {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initSearchTables(makeExecRaw(db), sql);
+  initSearchTables(makeExecRaw(db));
   const rootId = 'root';
   let minted = 0;
   insertSearchNode(sql, {

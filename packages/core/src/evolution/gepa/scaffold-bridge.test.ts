@@ -37,7 +37,7 @@ const VALID_IMPROVED = `async function* run(rt, task) {
 describe('runScaffoldGepa', () => {
   test('proposes the winner via modifyScaffold when GEPA finds improvement', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     await rt.identity.scaffold.write(VALID_SEED);
 
     const evalSet: EvalInstance<string>[] = [
@@ -93,7 +93,7 @@ describe('runScaffoldGepa', () => {
 
   test('does NOT propose when winner equals seed', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     await rt.identity.scaffold.write(VALID_SEED);
     const metric = async (): Promise<MetricOutcome> => ({ score: 0.5, feedback: '' });
     const reflectionLm = async () => VALID_SEED; // no-op
@@ -115,7 +115,7 @@ describe('runScaffoldGepa', () => {
     // when the LM proposes a strictly-different candidate with an identical
     // aggregate, the seed remains the winner and we hit `winner_equals_seed`.
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     await rt.identity.scaffold.write(VALID_SEED);
     const metric = async (): Promise<MetricOutcome> => ({ score: 0.5, feedback: '' });
     const reflectionLm = async () => VALID_IMPROVED; // different source, same score
@@ -133,7 +133,7 @@ describe('runScaffoldGepa', () => {
 
   test('rejects GEPA candidates that fail scaffold structural gates EARLY', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     await rt.identity.scaffold.write(VALID_SEED);
     // Reflection LM produces something that violates the required signature.
     const reflectionLm = async () => 'function notAGenerator(rt, task) { return null; }';
@@ -154,7 +154,7 @@ describe('runScaffoldGepa', () => {
 
   test('rejects candidates with forbidden imports / globalThis / eval', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     await rt.identity.scaffold.write(VALID_SEED);
     let calls = 0;
     const reflectionLm = async () => {

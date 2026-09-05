@@ -28,7 +28,6 @@ import {
   TURN_OUTCOMES,
   type TurnOutcomeRow,
 } from './outcomes';
-import { reconcileColumns } from '../identity/columns';
 import { renderThrownChain, tolerate } from '../obs/index';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
@@ -48,7 +47,7 @@ import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stat
  */
 export const DEFAULT_REPLAY_SAMPLE_SIZE = 20;
 
-export function initReplayTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
+export function initReplayTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS replay_evals (
     id TEXT PRIMARY KEY,
     ran_at INTEGER NOT NULL,
@@ -62,11 +61,6 @@ export function initReplayTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
     score_lo REAL,
     score_hi REAL
   )`);
-  // The record is the audit of what was reported, interval included, so the
-  // bounds are stored rather than recomputed. Rows written before they
-  // existed keep NULLs; listReplayEvals reconstructs those exactly from the
-  // stored mean and sample size.
-  reconcileColumns(sql, execRaw, 'replay_evals', { score_lo: 'REAL', score_hi: 'REAL' });
 }
 
 export interface ReplayInstanceResult {

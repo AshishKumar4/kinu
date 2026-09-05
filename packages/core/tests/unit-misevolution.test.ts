@@ -32,7 +32,7 @@ const CreateToolResultSchema = v.object({
 
 function setupScaffoldRt(): AgentRuntime {
   const { rt } = createTestRuntime();
-  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+  initScaffoldTables(rt.storage.execRaw);
   initShadowTables(rt.storage.execRaw);
   rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS evolution_events (
     id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),

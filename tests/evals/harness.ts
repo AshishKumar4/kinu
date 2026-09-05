@@ -818,7 +818,7 @@ export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): v
   rt.setProfileResolver(() => Promise.resolve(resolveAgentTurnProfile({
     envelope,
     provider,
-    activeRoleId: role.kind === 'catalog' ? role.roleId : 'general',
+    activeRoleId: role,
     workMode: 'build',
     availableTools: [],
     activeSkills: [],

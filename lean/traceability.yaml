@@ -206,7 +206,7 @@ requirements:
       - Kinu.MCTS.Backpropagation.sum_invariant
     tsRefs:
       - packages/core/src/mcts/backpropagation.ts#backpropagate
-      - packages/core/src/mcts/schemas.ts#SEARCH_NODES_POST_RELEASE_COLUMNS
+      - packages/core/src/mcts/schemas.ts#initSearchTables
     remainingEvidence:
       - TypeScript and SQLite compute IEEE-754 REAL values rather than exact scaled integers
       - WP-F4 differential fixtures against the recursive SQL update

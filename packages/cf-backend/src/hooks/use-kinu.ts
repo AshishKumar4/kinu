@@ -7,7 +7,7 @@ import { useAgent } from "agents/react";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
   branchHeadId, ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
-  type AgentViewSummary, type PendingAction, type PlanReview, type RoleSelection,
+  type AgentViewSummary, type PendingAction, type PlanReview, type RoleId,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
@@ -1533,7 +1533,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     const snapshot = await rpc<{
       name: string;
       displayName: string;
-      role: RoleSelection;
+      role: RoleId;
       mission: string;
       model: string | null;
       activePlan: unknown;
@@ -1547,7 +1547,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setAgentStatus({
       name: snapshot.name,
       displayName: snapshot.displayName,
-      purpose: snapshot.role.kind === 'catalog' ? snapshot.role.roleId : snapshot.role.text,
+      purpose: snapshot.role,
       soul: snapshot.mission,
       createdAt: 0,
       scaffoldVersion: 0,

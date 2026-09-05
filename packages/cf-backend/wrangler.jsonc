@@ -170,32 +170,31 @@
       }
     }
   ],
-  // Append-only from the first deploy onwards. `v1` registered the six classes
-  // this Worker shipped with and is never edited again — a later SQLite class
-  // gets its own tag, which is what `v2` and `v3` are. `ExplorationAgent` is in
-  // v1 without a binding above because it is reached as a facet of
-  // OrchestratorAgent rather than by name; `SubordinateAgent` likewise.
+  // ONE migration: the genesis of a RESET deployment. Every SQLite-backed
+  // Durable Object class this Worker has is declared new here. The earlier
+  // `v1`..`v3` history (which also registered and then retired `NimbusSession`)
+  // belonged to a Worker whose storage no longer exists.
   //
-  // `v3` RETIRES the workspace session class. Nimbus is now held as a library in
-  // the OrchestratorAgent that owns each workspace (src/workspace-host.ts), so
-  // there is no second object per workspace and nothing binds NIMBUS_SESSION.
-  // v1 keeps naming the class because a migration list is a history, not a
-  // description: editing it would tell the platform this Worker never had one.
+  // What an operator does before deploying this configuration: delete the old
+  // Worker (its Durable Object namespaces, and every object in them, go with
+  // it), or deploy under a fresh Worker name. Wrangler does not enforce that
+  // step. Read from node_modules/wrangler (`getMigrationsToUpload`, 2026-09-05):
+  // when the deployed Worker's last tag is missing from this list, wrangler
+  // warns and uploads every step here against that tag, and what the platform
+  // answers to a class declared new a second time is not measured here.
+  // Re-using the old last tag (`v3`) would be worse: wrangler would find it,
+  // send no migration at all, and the deploy would land on the old storage
+  // with a schema that carries no path from it.
+  //
+  // `ExplorationAgent` has no binding above because it is reached as a facet
+  // of OrchestratorAgent rather than by name.
   "migrations": [
     {
       "tag": "v1",
       "new_sqlite_classes": [
         "OrchestratorAgent", "ExplorationAgent", "KinuSandbox", "UserDO",
-        "NimbusSession", "MonitorDO"
+        "MonitorDO", "ControlPlaneDO"
       ]
-    },
-    {
-      "tag": "v2",
-      "new_sqlite_classes": ["ControlPlaneDO"]
-    },
-    {
-      "tag": "v3",
-      "deleted_classes": ["NimbusSession"]
     }
   ],
   // Synthetic monitoring. Every 15 minutes the worker probes its own public
@@ -514,23 +513,16 @@
           "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
         }
       ],
-      // Append-only here too, and for the same reason: `v1` is the shipped set
-      // and `v2` adds the control plane. The two environments stay one shape.
+      // The same genesis migration as production, for the same reset: staging's
+      // old Worker is deleted (or renamed away) before this deploys, and the
+      // two environments stay one shape.
       "migrations": [
         {
           "tag": "v1",
           "new_sqlite_classes": [
             "OrchestratorAgent", "ExplorationAgent", "KinuSandbox", "UserDO",
-            "NimbusSession", "MonitorDO"
+            "MonitorDO", "ControlPlaneDO"
           ]
-        },
-        {
-          "tag": "v2",
-          "new_sqlite_classes": ["ControlPlaneDO"]
-        },
-        {
-          "tag": "v3",
-          "deleted_classes": ["NimbusSession"]
         }
       ],
       // No cron trigger and no OPS_ALERT_EMAIL here: staging has no OAuth

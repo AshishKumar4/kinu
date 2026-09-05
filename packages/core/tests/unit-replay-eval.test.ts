@@ -16,8 +16,8 @@ function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  initTurnOutcomeTables(execRaw, sql);
-  initReplayTables(execRaw, sql);
+  initTurnOutcomeTables(execRaw);
+  initReplayTables(execRaw);
   return { sql, execRaw };
 }
 
@@ -146,8 +146,8 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
         "User's correction": '{"score": 0.8, "note": "ok"}',
       },
     });
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
     const engine = new EvolutionEngine(rt, {
       replayTaskRunner: async (task) => `current-config answer: ${task}`,
     });
@@ -168,8 +168,8 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
         "User's correction": '{"score": 0.8, "note": "ok"}',
       },
     });
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
 
     const engine = new EvolutionEngine(rt, {
       replayTaskRunner: async (task) => `current-config answer: ${task}`,

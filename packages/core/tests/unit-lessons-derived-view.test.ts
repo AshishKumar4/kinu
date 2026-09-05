@@ -88,7 +88,7 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
 describe('S8 — an explicit verdict overrules the classifier without erasing it', () => {
   function setup() {
     const rt = createTestRuntime().rt;
-    initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
+    initTurnOutcomeTables(rt.storage.execRaw);
     return rt;
   }
 

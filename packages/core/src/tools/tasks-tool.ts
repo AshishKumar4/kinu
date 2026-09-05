@@ -22,7 +22,6 @@ import {
 } from './registry';
 import {
   BUILTIN_ROLE_DEFINITIONS,
-  DEFAULT_ROLE_ID,
   isValidRoleId,
   type ProfileCatalogEnvelope,
 } from '../profiles/catalog';
@@ -163,8 +162,7 @@ export function createTasksDispatcher(
       case 'mode': {
         // No argument = read the current one.
         if (args.role === undefined) {
-          const selection = config.getRoleSelection();
-          return { role: selection.kind === 'catalog' ? selection.roleId : DEFAULT_ROLE_ID, roleSource: selection.kind };
+          return { role: config.getRoleSelection() };
         }
         const envelope = roleAuthority?.();
         if (!isValidRoleId(args.role)) {
@@ -175,9 +173,7 @@ export function createTasksDispatcher(
         }
         const outcome = changeActiveRole({ envelope, config, to: args.role, actor: 'agent' });
         if (outcome.kind === 'refused') {
-          const current = config.getRoleSelection();
-          const live = current.kind === 'catalog' ? current.roleId : DEFAULT_ROLE_ID;
-          const text = roleChangeOutcomeText(args.role, outcome, live);
+          const text = roleChangeOutcomeText(args.role, outcome, config.getRoleSelection());
           if (outcome.reason !== 'unknown-role') return { error: text };
           const known = Object.keys({ ...BUILTIN_ROLE_DEFINITIONS, ...envelope.catalog.roles }).sort();
           return { error: `${text} Known roles: ${known.join(', ')}.` };

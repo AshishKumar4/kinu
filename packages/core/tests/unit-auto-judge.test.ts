@@ -54,7 +54,7 @@ function makeJudge(
 
 async function setup(): Promise<ReturnType<typeof createTestRuntime>['rt']> {
   const { rt } = createTestRuntime();
-  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+  initScaffoldTables(rt.storage.execRaw);
   initShadowTables(rt.storage.execRaw);
   // Bootstrap a pending scaffold v1, current v0.
   void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
@@ -76,7 +76,7 @@ async function setup(): Promise<ReturnType<typeof createTestRuntime>['rt']> {
 describe('runAutoShadowEval', () => {
   test('skips when no pending scaffold', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
     const result = await runAutoShadowEval({
       rt, task: 'hello', currentOutput: LIVE_OUTPUT,
@@ -208,7 +208,7 @@ describe('runAutoShadowEval', () => {
 
   test('skips gracefully when pending file unreadable', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
     // Pending row exists but no scaffold/agent.js current file. version()
     // returns max(scaffold_versions.version)=1 which matches our pending=1,

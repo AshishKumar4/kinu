@@ -185,28 +185,19 @@ export function executionPathSignals(calls: ReadonlyArray<ToolCallRecord>): Exec
   };
 }
 
-/** The unified `agents` tool folds the old think/team/peers surfaces into one
- *  name; the delegation evidence still separates exploration / hiring / messaging
- *  by ACTION — and keeps counting the legacy tool names so stored turns from
- *  before the unification report the same signal. */
+/** The unified `agents` tool carries one name; the delegation evidence
+ *  separates exploration / hiring / messaging by ACTION. */
 function agentsAction(call: ToolCallRecord): string | null {
   if (call.name !== 'agents') return null;
   const input = v.safeParse(v.object({ action: v.optional(v.string()) }), call.args);
   return input.success ? input.output.action ?? null : null;
 }
 
-/** `staff` is the pre-2026-08-17 name of `hire` and is kept for the same reason
- *  the legacy TOOL names below are: this reader runs over STORED turns, and a
- *  row written before the rename must report the same signal it did when it was
- *  written. It is history tolerance in a read model, not an alias on the
- *  model-facing surface — nothing accepts `staff` as an action any more. */
-const STAFFING_ACTIONS = { hire: true, staff: true, list: true, dismiss: true } satisfies Record<string, true>;
+/** The persistent rung's actions. */
+const STAFFING_ACTIONS = { hire: true, list: true, dismiss: true } satisfies Record<string, true>;
 const MESSAGING_ACTIONS = { ask: true, send: true, reply: true } satisfies Record<string, true>;
-/** The ephemeral-search rung, and the two spellings it had before. `fork` is the
- *  action removed on 2026-08-18 and `think` the tool that preceded it; both are
- *  kept for the reason `staff` is, one paragraph up — a stored row must report the
- *  signal it reported when it was written. */
-const EXPLORATION_ACTIONS = { swarm: true, fork: true } satisfies Record<string, true>;
+/** The ephemeral-search rung's action. */
+const EXPLORATION_ACTIONS = { swarm: true } satisfies Record<string, true>;
 
 /** Whether an action read off a stored row is in one of the tables above. The
  *  action is `string | null` off the wire, so the lookup narrows rather than
@@ -221,9 +212,9 @@ export function delegationFeatures(turn: TurnProcessRecord): DelegationFeatures 
     turn.toolCalls.filter(predicate).length;
   return {
     stepCount: turn.steps,
-    teamCalls: count((call) => call.name === 'team' || hasKey(STAFFING_ACTIONS, agentsAction(call))),
-    thinkCalls: count((call) => call.name === 'think' || hasKey(EXPLORATION_ACTIONS, agentsAction(call))),
-    peerCalls: count((call) => call.name === 'peers' || hasKey(MESSAGING_ACTIONS, agentsAction(call))),
+    teamCalls: count((call) => hasKey(STAFFING_ACTIONS, agentsAction(call))),
+    thinkCalls: count((call) => hasKey(EXPLORATION_ACTIONS, agentsAction(call))),
+    peerCalls: count((call) => hasKey(MESSAGING_ACTIONS, agentsAction(call))),
     executeToolsCalls: count((call) => call.name === 'execute_tools'),
     wallClockMs: turn.durationMs,
     ...executionPathSignals(turn.toolCalls),

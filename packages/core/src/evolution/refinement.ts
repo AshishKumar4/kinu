@@ -354,7 +354,7 @@ export function refinementRequestView(request: RefinementRequest): RefinementReq
   };
 }
 
-export function initRefinementTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
+export function initRefinementTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS refinement_requests (
     id         TEXT PRIMARY KEY,
     trigger    TEXT NOT NULL CHECK (trigger IN (${sqlCheckList(REFINEMENT_TRIGGERS)})),
@@ -380,7 +380,6 @@ export function initRefinementTables(execRaw: RawSqlExec, sql: SqlExecutor): voi
            ON refinement_requests(debt_key) WHERE debt_key IS NOT NULL`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_refinement_stage
            ON refinement_requests(stage, created_at)`);
-  void sql`SELECT 1 FROM refinement_requests LIMIT 0`;
 }
 
 /** How a request is opened. */

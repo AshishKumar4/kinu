@@ -1,1 +1,1 @@
-export { CraftStore } from "./craft";
+export { CraftStore, initCraftedToolsTables } from "./craft";

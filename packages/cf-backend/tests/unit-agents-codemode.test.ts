@@ -28,13 +28,13 @@ import {
   BUILTIN_TOOL_DESCRIPTIONS,
   createAgentsCodemodeProvider,
   parseJsonValue,
-  initCraftQualityColumns,
   type AgentsToolDeps,
   type JsonValue,
   type SubordinateHandoff,
   type WebSearchProvider,
 } from '@kinu.run/core';
 import { ROOT_DELEGATION_BUDGET } from '@kinu.run/core';
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import * as v from 'valibot';
 
 /** The admission facts every handoff carries back to the sender. */
@@ -85,7 +85,7 @@ function webSearchProvider(): WebSearchProvider {
  *  declaration has a native member to assert on. */
 function executeToolsDescription(agents?: () => AgentsToolDeps): string {
   const { rt, testSql } = createTestRuntime();
-  initCraftQualityColumns(testSql.execRaw, testSql.sql);
+  initCraftedToolsTables(testSql.sql);
   const options = {
     loader: workerLoader(),
     egress: null,

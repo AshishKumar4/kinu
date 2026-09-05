@@ -532,6 +532,39 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   `agents.resume.fields_dropped` with `ranking` among the losses, because
   `ideate` returns its candidates unordered.
 
+### Removed
+
+- **Every schema compatibility path, because production is reset.** A table's
+  `CREATE TABLE IF NOT EXISTS` is now its genesis. Gone: the column reconcile
+  (`reconcileColumns`, `reconcileSqlExecColumns`) and its 30 call sites, the
+  `CHECK`-widening rebuilds with their `_legacy` resume branches (`turn_outcomes`,
+  `lessons`, `imported_experience`, `experience_library`, `agent_tasks`,
+  `head_journal`, `head_merge_results`), the guarded `ALTER TABLE … ADD COLUMN`
+  statements (`agent_log`, `release_approvals`), the `craft_scores` backfill, the
+  `session_window` and `turn_review_queue` drain, the `agent_identity` and
+  `fork_lineage` rename adoption, the `product_*` to `release_*` rename, and the
+  pre-FTS5 `memory_chunks` repair. `scripts/schema-drift.ts` holds every DDL to
+  `scripts/schema-genesis.lock.json` in both directions, and the lock is
+  re-locked at this tree. `crafted_tools` has one DDL owner,
+  `@kinu.run/agent-utils` (`initCraftedToolsTables`), the way `memory_chunks`
+  already had.
+- **The wrangler migration history.** Both environments declare one `v1` tag
+  listing every SQLite class. Deploying it needs the old Worker deleted or a
+  fresh Worker name; `docs/DEPLOYMENT.md` states the procedure and what wrangler
+  does when the step is skipped.
+- **The legacy role and the legacy title.** A subordinate's role is a catalog id
+  (`RoleId`). The freeform `{ kind: 'legacy', text }` selection, its "Legacy role
+  (assigned before this workspace had a role catalog)" prompt block, and the
+  `hire`/`ask` fallback that produced it are gone; `hire` and `ask` refuse on an
+  actor with no role catalog. The workspace-open heal that titled a pre-titling
+  workspace from its `SOUL.md` is gone on both backends; a workspace is titled at
+  creation and by its first message.
+- **Read-model tolerance for rows written under older shapes.** Delegation
+  evidence counts only the live `agents` actions (no `staff`, `think`, `team`,
+  `peers`), a subordinate report always carries `sequence_id`, the compaction
+  ladder no longer matches the retired `skills` tool, and `search_nodes.root_id`
+  is `NOT NULL`.
+
 ### Fixed
 
 - Shell approval patterns cover `rm -rf //`, `--no-preserve-root`, `| /bin/sh`, `| sudo sh`, `| dash`, plain `su`, chown flags, refspec-first `git push --force`, setgid modes, reversed `dd` on NVMe and virtio disks, and `mkfs -t`.

@@ -369,11 +369,11 @@ Classification is narrow: 429 and 529 always count. A 503 counts only when statu
 
 Two agent classes bind nowhere: `ExplorationAgent` (MCTS branches and heads) and `SubordinateAgent` exist only as facets of `OrchestratorAgent` via the agents SDK sub-agent mechanism. `ExplorationAgent` still appears in the DO migration list. Class registration and binding are separate things.
 
-`compatibility_date` `2025-12-01`, `nodejs_compat`. Migrations are two tags, identical across environments: `v1` registers `OrchestratorAgent`, `ExplorationAgent`, `KinuSandbox`, `UserDO`, `NimbusSession`, `MonitorDO`; `v2` adds `ControlPlaneDO`. Wrangler inherits no `env.*` config, so every binding repeats under `env.staging` even where the two agree.
+`compatibility_date` `2025-12-01`, `nodejs_compat`. Migrations are one tag, identical across environments: `v1` registers `OrchestratorAgent`, `ExplorationAgent`, `KinuSandbox`, `UserDO`, `MonitorDO` and `ControlPlaneDO` as new SQLite classes. That one tag is the genesis of a reset deployment. Before the first deploy of it, delete the old Worker (its Durable Object namespaces go with it) or deploy under a fresh Worker name; wrangler applies every step against whatever tag the old Worker last carried and does not refuse. Wrangler inherits no `env.*` config, so every binding repeats under `env.staging` even where the two agree.
 
 ## Deploy script
 
-`scripts/deploy.sh` deploys both environments (`bun run deploy`, `bun run deploy:staging`). One Worker: `kinu` in production, `kinu-staging` in staging. `NimbusSession` ships inside it, so there is no separate Nimbus deploy.
+`scripts/deploy.sh` deploys both environments (`bun run deploy`, `bun run deploy:staging`). One Worker: `kinu` in production, `kinu-staging` in staging. Nimbus is held as a library inside the `OrchestratorAgent` that owns each workspace, so there is no separate Nimbus deploy.
 
 ```bash
 bash scripts/deploy.sh <production|staging>

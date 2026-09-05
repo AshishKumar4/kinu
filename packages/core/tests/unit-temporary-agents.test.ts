@@ -32,6 +32,7 @@ import {
   renderAgentsToolDescription,
   TOOL_REACH,
   type AgentsToolDeps,
+  type AgentsProfileContext,
   type VFS,
   type SubordinateHandoff,
   type SubordinateRuntime,
@@ -40,10 +41,39 @@ import {
   type AgentsToolAction,
   type AgentsToolInput,
   type CodemodeResult,
+  BUILTIN_PROFILE_CATALOG,
+  profileCatalogDigest,
+  DEFAULT_WORKERS_AI_MODEL_SPEC,
 } from '../src/index';
 import { dispatchAgentsAction } from '../src/tools/agents-tool';
 import { createMemoryVfs } from '@kinu.run/test-utils';
-import { makeSql as makeTagged, makeSqlExec } from './helpers';
+import { makeSqlExec } from './helpers';
+
+const TEST_MODEL = DEFAULT_WORKERS_AI_MODEL_SPEC;
+
+function testProfile(): AgentsProfileContext {
+  const catalog = {
+    roles: BUILTIN_PROFILE_CATALOG.roles,
+    tiers: {
+      default: { model: TEST_MODEL },
+      tiny: { model: TEST_MODEL },
+      fast: { model: TEST_MODEL },
+      slow: { model: TEST_MODEL },
+      deep: { model: TEST_MODEL },
+    },
+  };
+  return {
+    envelope: {
+      authority: { kind: 'local' } as const,
+      version: 0,
+      digest: profileCatalogDigest(catalog),
+      catalog,
+    },
+    provider: { revision: 'test-1', availableModels: [TEST_MODEL] },
+    roleId: 'auditor',
+    availableTools: [],
+  };
+}
 
 const NOW = 1_700_000_000_000;
 
@@ -93,11 +123,9 @@ interface Scene {
   files: VFS;
 }
 
-/** The roster store needs BOTH sql forms — `reconcileColumns` binds the table
- *  name into `pragma_table_info` through the tagged one. */
 function makeRosterStore(): SubordinateRosterStore {
   const db = new Database(':memory:');
-  return new SubordinateRosterStore(makeSqlExec(db), makeTagged(db));
+  return new SubordinateRosterStore(makeSqlExec(db));
 }
 
 function makeScene(options: {
@@ -172,6 +200,7 @@ function makeScene(options: {
   const deps: AgentsToolDeps = {
     mode: 'build' satisfies WorkMode,
     team,
+    profile: () => testProfile(),
   };
   return {
     deps,
@@ -471,7 +500,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     // The name the scene's `createName` will generate, already taken by a
     // durable hire.
     await scene.deps.team!.spawn({
-      name: TEMP_NAME, role: { kind: 'legacy', text: 'auditor' },
+      name: TEMP_NAME, role: 'auditor',
       mission: 'Investigate.', mode: 'build',
     });
     const before = scene.roster.listAll();
@@ -630,7 +659,7 @@ describe('an answer that outlives its waiter', () => {
   test('a durable subordinate is left in the roster by the very report that releases a task one', async () => {
     const scene = makeScene();
     await scene.deps.team!.spawn({
-      name: 'researcher', role: { kind: 'legacy', text: 'researcher' },
+      name: 'researcher', role: 'researcher',
       mission: 'Investigate.', mode: 'build',
     });
     await scene.report({ from: 'researcher', content: 'Root cause found.' });
@@ -717,7 +746,7 @@ describe('the two ask targets are exclusive', () => {
   test('an existing-agent ask is unchanged: it reports back later, it does not resolve here', async () => {
     const scene = makeScene();
     await scene.deps.team!.spawn({
-      name: 'researcher', role: { kind: 'legacy', text: 'researcher' },
+      name: 'researcher', role: 'researcher',
       mission: 'Investigate.', mode: 'build',
     });
     scene.calls.length = 0;

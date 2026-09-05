@@ -8,11 +8,9 @@
 //     'queued' (a host owes the review), 'claimed' (a host is running it),
 //     'done' (it ran). The row is DELETED only when both lifetimes are over.
 //
-// Both used to live in two tables (`session_window` + `turn_review_queue`)
-// whose writers raced: taking a turn awaiting review destroyed the canonical
-// row before any deferred copy existed, and an interactive review whose
-// detached work died was lost outright. One row per turn makes those states
-// impossible to disagree with each other.
+// One row carries both lifetimes, so they cannot disagree: taking a turn
+// awaiting review never destroys the row before its deferred copy exists,
+// and a detached review that dies leaves its row behind instead of losing it.
 //
 // A window is CLAIMED for a session-evolution pass and settled only once that
 // pass has run (`claim()` → `settle()`), never closed up front. That is what
@@ -70,7 +68,7 @@ const APPEND_SCOPE = 'turn_append';
  *  lesson. Distinct from the row's `done` state, which is only the lease. */
 const REVIEW_SCOPE = 'turn_review';
 
-export function initCompletedTurnTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
+export function initCompletedTurnTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS completed_turns (
     id         TEXT PRIMARY KEY,
     turn       TEXT NOT NULL,
@@ -84,27 +82,6 @@ export function initCompletedTurnTable(execRaw: RawSqlExec, sql: SqlExecutor): v
   // this table's contract as its own columns, and the store must never be
   // constructed without them.
   initEffectTombstoneTable(execRaw);
-  // One-shot cutover for a workspace that predates the unified row: window
-  // rows keep their membership and their awaiting flag becomes the typed
-  // state; deferred-review rows become owed queued reviews with the follow-up
-  // they captured. Both legacy tables are dropped once drained.
-  const legacy = sql<{ name: string }>`
-    SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_window','turn_review_queue')`;
-  const names = new Set(legacy.map((r) => r.name));
-  if (names.has('session_window')) {
-    void sql`INSERT INTO completed_turns (id, turn, followup, in_window, review, created_at)
-        SELECT id, turn, NULL, in_window,
-               CASE awaiting_review WHEN 1 THEN 'awaiting_followup' ELSE 'none' END,
-               created_at
-        FROM session_window`;
-    execRaw(`DROP TABLE session_window`);
-  }
-  if (names.has('turn_review_queue')) {
-    void sql`INSERT INTO completed_turns (id, turn, followup, in_window, review, created_at)
-        SELECT id, turn, followup, 0, 'queued', queued_at
-        FROM turn_review_queue`;
-    execRaw(`DROP TABLE turn_review_queue`);
-  }
 }
 
 /**

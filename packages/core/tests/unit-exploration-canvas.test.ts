@@ -35,7 +35,6 @@ import { initSearchTables } from '../src/mcts/schemas';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initHeadsTables } from '../src/heads/schema';
 import { initSwarmNodeRecords, recordSwarmNode } from '../src/strategy/swarm-resume';
-import { readSearchTree } from '../src/read-models/search-tree';
 import { readForkRunParams } from '../src/read-models/fork-params';
 import {
   readExplorationCanvas, readExplorationRun, type ExplorationCanvasRun,
@@ -45,9 +44,9 @@ import type { Page, SeekCursor } from '../src/read-models/page';
 function freshDb() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
-  initSearchTables(execRaw, makeSql(db));
-  initMctsSearchTable(execRaw, makeSql(db));
-  initHeadsTables(execRaw, makeSql(db));
+  initSearchTables(execRaw);
+  initMctsSearchTable(execRaw);
+  initHeadsTables(execRaw);
   initSwarmNodeRecords(execRaw);
   return { db, sql: makeSql(db) };
 }
@@ -381,14 +380,6 @@ describe('readExplorationCanvas', () => {
     expect(page.items).toHaveLength(1);
     expect(page.items[0]!.params).toBeNull();
     expect(page.items[0]!.tree).toHaveLength(2);
-  });
-
-  test('legacy unscoped rows stay invisible, as they are to every scoped read', () => {
-    const { db, sql } = freshDb();
-    db.exec(`INSERT INTO search_nodes (id, task, action, depth, visits, value, status, created_at)
-      VALUES ('legacy', 'old', '', 0, 1, 0.5, 'open', 500)`);
-    expect(readExplorationCanvas(sql)).toEqual({ status: 'end', items: [] });
-    expect(readSearchTree(sql, 'legacy')).toEqual([]);
   });
 
   test('an empty workspace is an exhausted page, not an error and not "more"', () => {

@@ -124,18 +124,15 @@ export async function handleUserRequest(
   await retryTransientDO('ensureProfile',
     () => stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined));
 
-  // First hit for this user in this isolate: warm MCP, and repair workspaces that
-  // predate the capability boundary. Both are one-shot per user inside the UserDO
-  // — a workspace runs on an alarm, an inbound email or a peer's task without
-  // anyone opening it, so waiting for a human to visit each one would fail those
-  // turns.
+  // First hit for this user in this isolate warms MCP connections. The warm is
+  // one-shot per user per isolate.
   //
   // `ctx` here is the WORKER's ExecutionContext, so waitUntil is the right call:
-  // it is a no-op only inside a Durable Object (`do.wait_until.no_op`). What was
-  // wrong is what these two did with their failures. Both settlements were
-  // discarded by `.then(() => {}, () => {})`, so a capability repair that threw
-  // on every request left no trace anywhere — and the user was marked warmed
-  // regardless, which recorded a repair that had not happened.
+  // it is a no-op only inside a Durable Object (`do.wait_until.no_op`). A warm
+  // that throws must leave a trace and must not mark the user warmed: the
+  // settlement below deletes the user from the set and reports the failure, so
+  // the next request retries the warm instead of recording one that did not
+  // happen.
   if (ctx && !warmedMcpUsers.has(identity.userId)) {
     warmedMcpUsers.add(identity.userId);
     const caller = await ownerCaller(env);

@@ -86,7 +86,7 @@ function walkTranscript(sql: SqlExecutor, limit: number): string[] {
 function jobPlane() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+  initBackgroundJobsTable(makeExecRaw(db));
   const jobs = new BackgroundJobStore(sql);
   const detached: Array<{ jobId: string; kind: string }> = [];
   let created = 0;
@@ -203,8 +203,8 @@ describe('run timeline', () => {
     const base = Date.now() + 1000;
     void sql`INSERT INTO evolution_events (id, type, message, data, created_at)
       VALUES ('e1', 'scaffold_proposed', 'v2 proposed', '{"version":2}', ${base})`;
-    void sql`INSERT INTO search_nodes (id, parent_id, depth, visits, value, status, action, task, created_at)
-      VALUES ('n1', NULL, 0, 1, 0.5, 'terminal', 'explore A', 't', ${base + 1000})`;
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, depth, visits, value, status, action, task, created_at)
+      VALUES ('n1', NULL, 'n1', 0, 1, 0.5, 'terminal', 'explore A', 't', ${base + 1000})`;
     jobs.create({ id: 'j1', kind: 'run', workMode: 'build', now: base + 2000 });
 
     const spans = getRunTimeline({ sql, events, jobs, currentRunId: 'r1' });

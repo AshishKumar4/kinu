@@ -2,15 +2,12 @@
 // keyed by the stable Kinu userId the auth store derives from the email.
 // Idempotent — safe to call on every DO boot.
 //
-// EVERY COLUMN BELOW IS IN ITS CREATE. Columns added after release also stay in
-// the adjacent reconciliation object: CREATE TABLE IF NOT EXISTS is a no-op on
-// an older UserDO, while every reader immediately names the current columns.
-// This is shape repair, not a migration framework — no versions or data rewrites.
+// EVERY COLUMN BELOW IS IN ITS CREATE. The CREATE declares every column the
+// code reads or writes.
 
 import {
   initExperienceLibraryTables,
   initReleaseTables,
-  reconcileSqlExecColumns,
   type SqlExec,
 } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
@@ -21,96 +18,6 @@ import { initWorkspaceCapabilityTables } from './workspace-capability';
 
 /** The sole account profile-catalog row in user_config. */
 export const PROFILE_CATALOG_CONFIG_KEY = 'profile_catalog';
-
-const USER_WORKSPACE_ADDED_COLUMNS = {
-  name_origin: "TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'user'))",
-  delete_pending: 'INTEGER NOT NULL DEFAULT 0',
-  create_pending: 'INTEGER NOT NULL DEFAULT 0',
-  fork_lease_expires_at: 'INTEGER',
-} as const;
-
-const CODEX_DEVICE_FLOW_ADDED_COLUMNS = {
-  generation: 'INTEGER NOT NULL DEFAULT 1',
-  settled_at: 'INTEGER',
-} as const;
-
-const USER_CLI_TOKEN_ADDED_COLUMNS = {
-  authorization_hash: 'TEXT',
-} as const;
-
-// `user_devices` shipped 2026-06-12 with nine columns; every device security
-// hardening since has added one, and a UserDO first created before them keeps
-// its old shape because CREATE TABLE IF NOT EXISTS is a no-op on it. That
-// reached production as `no such column: unstopped_at` on GET /api/cli/devices,
-// which also failed `kinu connect` on a machine whose daemon had connected.
-const USER_DEVICES_ADDED_COLUMNS = {
-  // Superseded secret, held until the new one is first used, so a rotation
-  // message lost with the socket does not brick the machine.
-  prev_token_hash: 'TEXT',
-  // Rotation window, absolute from the last accept.
-  expires_at: 'INTEGER',
-  // Provenance of the newest accept and the record that a second socket took
-  // the slot — rendered in Account settings because a silent takeover is the
-  // shape these three columns exist to expose.
-  last_ip: 'TEXT',
-  last_agent: 'TEXT',
-  replaced_at: 'INTEGER',
-  // Revocation found a command it could not confirm stopped. Owner-visible
-  // fact; survives removal of the active in-flight row.
-  unstopped_at: 'INTEGER',
-  // The directory `kinu connect` ran in, and the machine's home, both carried
-  // on HELLO. A workspace's file view is scoped to `consented_root`, so it is
-  // one directory the owner NAMED rather than a default the hub computed; a
-  // row with none has no scoped file access at all. `device_home` is what
-  // the file view opens at, and it exists so the hub never has to run a
-  // command on the machine to learn a path.
-  consented_root: 'TEXT',
-  device_home: 'TEXT',
-  // What the daemon PROVED about sandboxing when it started, why it could
-  // not, and the words behind that verdict (the daemon's own line when it
-  // sent one, the hub's when the hub made the verdict). A row with none of
-  // them reads as `files_only`: a machine that has not proved it can sandbox
-  // has not proved it can sandbox, and the sandbox tier then runs nothing
-  // rather than quietly running everything unconfined.
-  sandbox_capability: 'TEXT',
-  sandbox_reason: 'TEXT',
-  sandbox_detail: 'TEXT',
-  // GPU device nodes the daemon found, as a JSON array.
-  sandbox_gpu: 'TEXT',
-  // Where this machine keeps agent homes (`<home>/.kinu/agents`), reported on
-  // HELLO. The hub composes `<agent_root>/<workspace>/home` per exec, so it
-  // never guesses a path on someone else's machine.
-  agent_root: 'TEXT',
-  // The owner's Sandbox switch for this device. Defaulted rather than
-  // nullable: the switch is ON, and a row written before the column existed
-  // must read as on.
-  tier: `TEXT NOT NULL DEFAULT 'sandboxed'`,
-} as const;
-
-// A ticket bought with the CURRENT device token is the one accept that may
-// leave a grace behind. Nullable because SQLite cannot ADD a NOT NULL column
-// without a default, and a default would claim something about tickets written
-// before this column: a null reads as "not proved current", which is the
-// fail-closed answer.
-const DEVICE_CONNECT_TICKET_ADDED_COLUMNS = {
-  token_was_current: 'INTEGER',
-} as const;
-
-const USER_CONFIG_ADDED_COLUMNS = {
-  version: 'INTEGER NOT NULL DEFAULT 0',
-} as const;
-
-// Nullable, and they have to be: SQLite cannot ADD a NOT NULL column without a
-// default, and a default here would be a fabricated identity where the truth is
-// an absent one. A row registered before these columns existed reports NULL and
-// its KV projection stays the only copy of what it stands for.
-const USER_BROWSER_SESSION_ADDED_COLUMNS = {
-  email: 'TEXT',
-  display_name: 'TEXT',
-  provider: 'TEXT',
-  provider_sub: 'TEXT',
-  auth_time: 'INTEGER',
-} as const;
 
 export function initUserTables(sql: SqlExec): void {
   sql.exec(`
@@ -163,7 +70,6 @@ export function initUserTables(sql: SqlExec): void {
       fork_lease_expires_at INTEGER
     )
   `);
-  reconcileSqlExecColumns(sql, 'user_workspaces', USER_WORKSPACE_ADDED_COLUMNS);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_workspaces_last_visited ON user_workspaces (last_visited DESC)`);
 
   // Per-workspace capability tokens + the taint registry — the caller boundary
@@ -257,7 +163,6 @@ export function initUserTables(sql: SqlExec): void {
       version    INTEGER NOT NULL DEFAULT 0
     )
   `);
-  reconcileSqlExecColumns(sql, 'user_config', USER_CONFIG_ADDED_COLUMNS);
 
   // In-flight Codex device-code state (deviceAuthId + userCode), one per
   // attempt. SETTLED, never deleted: `generation` has to keep rising across
@@ -279,7 +184,6 @@ export function initUserTables(sql: SqlExec): void {
       settled_at      INTEGER
     )
   `);
-  reconcileSqlExecColumns(sql, 'codex_device_flow', CODEX_DEVICE_FLOW_ADDED_COLUMNS);
 
   // User-level MCP server registry. Tokens + dynamic client registrations
   // live under separate keys written by DurableObjectOAuthClientProvider into
@@ -396,7 +300,6 @@ export function initUserTables(sql: SqlExec): void {
       unstopped_at    INTEGER
     )
   `);
-  reconcileSqlExecColumns(sql, 'user_devices', USER_DEVICES_ADDED_COLUMNS);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token_hash ON user_devices (token_hash)`);
 
   // Device commands whose request reached a daemon but has not reached a
@@ -433,7 +336,6 @@ export function initUserTables(sql: SqlExec): void {
       auth_time    INTEGER
     )
   `);
-  reconcileSqlExecColumns(sql, 'user_browser_sessions', USER_BROWSER_SESSION_ADDED_COLUMNS);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_browser_sessions_exp
             ON user_browser_sessions (expires_at)`);
 
@@ -446,10 +348,10 @@ export function initUserTables(sql: SqlExec): void {
   // reads from each colo's cache, so "mark it consumed, then mint" is not a
   // check: two polls could both read `approved` and both be handed a 180-day
   // token. The row below is the check, because this Durable Object is the thing
-  // that mints — the claim and the mint are one INSERT, and the unique index
-  // makes a second mint against the same approval unrepresentable rather than
-  // merely unlikely. NULL for tokens minted outside that flow, and SQLite
-  // treats NULLs in a unique index as distinct, so those never collide.
+  // that mints — the claim and the mint are one INSERT, and the UNIQUE on the
+  // column makes a second mint against the same approval unrepresentable rather
+  // than merely unlikely. NULL for tokens minted outside that flow, and SQLite
+  // treats NULLs in a UNIQUE column as distinct, so those never collide.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_cli_tokens (
       token_hash  TEXT PRIMARY KEY,
@@ -458,15 +360,9 @@ export function initUserTables(sql: SqlExec): void {
       expires_at  INTEGER NOT NULL,
       last_used_at INTEGER,
       revoked_at  INTEGER,
-      authorization_hash TEXT
+      authorization_hash TEXT UNIQUE
     )
   `);
-  reconcileSqlExecColumns(sql, 'user_cli_tokens', USER_CLI_TOKEN_ADDED_COLUMNS);
-  // A UNIQUE INDEX rather than a UNIQUE column: ALTER TABLE cannot add one, and
-  // this table predates the claim, so the constraint has to be reachable by a
-  // UserDO that already holds rows.
-  sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_cli_tokens_authorization
-            ON user_cli_tokens (authorization_hash)`);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_cli_tokens_active ON user_cli_tokens (expires_at, revoked_at)`);
 
   // Long-lived, scoped CI access tokens (`pta_…`) — table shape owned by the
@@ -514,7 +410,6 @@ export function initUserTables(sql: SqlExec): void {
       token_was_current INTEGER
     )
   `);
-  reconcileSqlExecColumns(sql, 'device_connect_tickets', DEVICE_CONNECT_TICKET_ADDED_COLUMNS);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_device_connect_tickets_exp ON device_connect_tickets (expires_at, used_at)`);
 
   // Short-lived, single-use WebSocket tickets for CLI clients connecting to

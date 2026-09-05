@@ -247,7 +247,7 @@ describe('a workspace is named by its first prompt, and that name is what a pers
       // the role, and the tree ADDRESSES it by a minted slug.
       const team = await host.team(SLUG);
       const created = await team.create({
-        role: { kind: 'catalog', roleId: 'researcher' },
+        role: 'researcher',
         mission: 'Read the callback handler and report what it trusts.',
       });
       expect(created.displayName).toBe('Researcher');

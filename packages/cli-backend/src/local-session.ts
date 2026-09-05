@@ -802,7 +802,7 @@ export class LocalAgentSession implements BackendHost {
     // intent row that carries a roster whose claim never landed. Idempotent
     // DDL, and here beside the rest of the schema for the same reason: a session
     // may be the first thing to touch this database.
-    initTerminalEffectTable(this.rt.storage.sql, this.rt.storage.execRaw);
+    initTerminalEffectTable(this.rt.storage.execRaw);
     initTerminalIntentTable(this.rt.storage.execRaw);
 
     // Instruction approvals are keyed by the directory on THIS disk, because on
@@ -1216,12 +1216,10 @@ export class LocalAgentSession implements BackendHost {
     return this.turnProfile?.tier.model ?? this.profiles().normalizeSpec(this.config.getModel());
   }
 
-  /** The catalog role id this agent resolves under. A legacy freeform
-   *  selection has no id; the honest structural answer is `general`. */
+  /** The catalog role id this agent resolves under. */
   getActiveRoleId(): string {
     if (this.turnProfile) return this.turnProfile.role.id;
-    const selection = this.config.getRoleSelection();
-    return selection.kind === 'catalog' ? selection.roleId : 'general';
+    return this.config.getRoleSelection();
   }
 
   getEffectiveTierId(): string {

@@ -15,18 +15,17 @@ import * as v from 'valibot';
 import type { EventLog, PublishResult } from '../events/hub/log';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import type { SerializedMessage } from '../heads/types';
-import type { SqlExec, SqlExecutor } from '../types/primitives';
+import type { SqlExec } from '../types/primitives';
 import {
   DELEGATION_MAX_DEPTH,
   delegationBudgetAtDepth,
   type DelegationBudget,
 } from './depth';
-import { reconcileColumns } from '../identity/columns';
 import type { AgentIdentity } from '../vfs/agent-home';
 import { SubordinateRosterStore } from './roster';
 import type { WorkMode } from '../prompting/surface';
-import type { AgentConfigStore, RoleSelection } from '../config/store';
-import type { TierId } from '../profiles/catalog';
+import type { AgentConfigStore } from '../config/store';
+import type { RoleId, TierId } from '../profiles/catalog';
 import type {
   SubordinateHandoff,
   SubordinateRosterEntry,
@@ -171,11 +170,7 @@ function identitiesEqual(stored: SubordinateIdentity, attempted: SubordinateIden
  * interruption, but no caller can retarget an initialized facet to another
  * workspace, owner or DEPTH. */
 export class SubordinateIdentityStore {
-  /** `tagged` is the same storage as `sql` in the tagged-template form
-   *  `reconcileColumns` needs — it binds the table name into
-   *  `pragma_table_info` rather than adding a column and swallowing the
-   *  duplicate-column error. */
-  constructor(private readonly sql: SqlExec, private readonly tagged: SqlExecutor) {}
+  constructor(private readonly sql: SqlExec) {}
 
   ensureSchema(): void {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS subordinate_identity (
@@ -185,22 +180,10 @@ export class SubordinateIdentityStore {
       parent_workspace TEXT NOT NULL,
       owner_user_id    TEXT NOT NULL,
       depth            INTEGER NOT NULL DEFAULT 1,
-      lifetime         TEXT NOT NULL DEFAULT 'durable'
+      lifetime         TEXT NOT NULL DEFAULT 'durable',
+      uid              INTEGER,
+      gid              INTEGER
     )`);
-    // Every subordinate that existed before nesting was possible was hired by
-    // the workspace orchestrator, so 1 is that row's TRUE depth rather than a
-    // compatibility guess.
-    // Every subordinate that existed before the temporary rung was DURABLE, so
-    // that default is the row's true lifetime rather than a compatibility guess
-    // — the same argument the depth default carries above.
-    // A subordinate that existed before homes did has no credential, which is
-    // the row's true state: nothing allocated one, and it runs as the origin.
-    reconcileColumns(this.tagged, (ddl) => { this.sql.exec(ddl); }, 'subordinate_identity', {
-      depth: 'INTEGER NOT NULL DEFAULT 1',
-      lifetime: "TEXT NOT NULL DEFAULT 'durable'",
-      uid: 'INTEGER',
-      gid: 'INTEGER',
-    });
   }
 
   seed(identity: SubordinateIdentity): void {
@@ -267,8 +250,8 @@ export class SubordinateIdentityStore {
 export interface SubordinateDescriptor {
   displayName: string;
   nameOrigin: 'user' | 'auto';
-  /** The catalog role, or the freeform line a pre-catalog hire carries. */
-  role: RoleSelection;
+  /** The catalog role id. */
+  role: RoleId;
   /** The tier a parent pinned at hire; null derives from the role. */
   tier: TierId | null;
 }
@@ -538,9 +521,8 @@ export interface SubordinateRuntime {
      *  nobody chose, so the first-interaction policy may replace it once.
      *  `user` is final. */
     nameOrigin: 'user' | 'auto';
-    /** The child's initial role selection — catalog id or legacy freeform
-     *  line, written to the CHILD's config store. */
-    role: RoleSelection;
+    /** The child's initial role id, written to the CHILD's config store. */
+    role: RoleId;
     tier?: TierId;
     mission: string;
     /**
@@ -711,9 +693,8 @@ export function createTeamToolDeps(deps: {
   const provision = async (input: {
     name?: string;
     displayName?: string;
-    /** The caller's resolved role selection; absent only for an owner who
-     *  said nothing, which reads as the general catalog role. */
-    role?: RoleSelection;
+    /** The caller's resolved role id. Absent only for an owner who said nothing. */
+    role?: RoleId;
     tier?: TierId;
     mission?: string;
   }, ownerCreated: boolean, mode: WorkMode | null): Promise<{
@@ -722,21 +703,18 @@ export function createTeamToolDeps(deps: {
     createdAt: number;
     subordinate: SubordinateRosterEntry;
   }> => {
-    let selection: RoleSelection;
+    let selection: RoleId;
     if (input.role !== undefined) {
-      if (input.role.kind === 'legacy' && optionalText(input.role.text) === undefined) {
-        throw new Error('role must be non-empty');
-      }
       selection = input.role;
     } else if (ownerCreated) {
       // The owner may say nothing at all. `spawn` has already refused an empty
       // mission by the time it reaches here, so this default is only ever the
       // owner's.
-      selection = { kind: 'catalog', roleId: DEFAULT_SUBORDINATE_ROLE_ID };
+      selection = DEFAULT_SUBORDINATE_ROLE_ID;
     } else {
       throw new Error('role must be non-empty');
     }
-    const roleLabel = selection.kind === 'catalog' ? selection.roleId : selection.text;
+    const roleLabel = selection;
     const mission = ownerCreated
       ? requiredText(optionalText(input.mission) ?? deps.ownMission(), 'mission')
       : requiredText(input.mission ?? '', 'mission');

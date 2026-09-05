@@ -53,7 +53,7 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
   test('LLM generates valid scaffold code that passes 4-gate', async () => {
     const { primary } = loadAIGatewayProviders();
     const { rt } = createScaffoldTestRuntime(primary);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     await bootstrapScaffold(rt);
 
     const generated = await primary.complete(
@@ -106,7 +106,7 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
   test('full scaffold lifecycle: bootstrap -> modify -> rollback', async () => {
     const { primary } = loadAIGatewayProviders();
     const { rt } = createScaffoldTestRuntime(primary);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw);
     await bootstrapScaffold(rt);
 
     const v0 = await rt.identity.scaffold.read();

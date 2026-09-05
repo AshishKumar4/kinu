@@ -16,21 +16,21 @@ import { readLatestSearchTree, readSearchNodeDetail } from '../src/read-models/s
 
 function freshDb() {
   const db = new Database(':memory:');
-  initSearchTables(makeExecRaw(db), makeSql(db));
+  initSearchTables(makeExecRaw(db));
   return { db, sql: makeSql(db) };
 }
 
 function insertNode(
   db: Database,
   node: {
-    id: string; parentId?: string | null; rootId?: string | null;
+    id: string; parentId?: string | null; rootId: string;
     depth?: number; status?: string; createdAt: number;
   },
 ): void {
   db.prepare(
     `INSERT INTO search_nodes (id, parent_id, root_id, task, action, observation, depth, status, created_at)
      VALUES (?, ?, ?, 'task', 'act', 'obs', ?, ?, ?)`,
-  ).run(node.id, node.parentId ?? null, node.rootId ?? null, node.depth ?? 0, node.status ?? 'open', node.createdAt);
+  ).run(node.id, node.parentId ?? null, node.rootId, node.depth ?? 0, node.status ?? 'open', node.createdAt);
 }
 
 /** A failed first search (root only) and a later, richer one. */
@@ -69,12 +69,8 @@ describe('readLatestSearchTree', () => {
     expect(rows.map((r) => r.depth)).toEqual([0, 1, 1, 2]);
   });
 
-  test('no searches yet is an empty projection, and legacy NULL-root rows stay invisible', () => {
-    const { db, sql } = freshDb();
-    expect(readLatestSearchTree(sql)).toEqual([]);
-    // Pre-root_id rows are excluded from every scoped query by design.
-    insertNode(db, { id: 'legacy-root', createdAt: 500 });
-    insertNode(db, { id: 'legacy-child', parentId: 'legacy-root', depth: 1, createdAt: 600 });
+  test('no searches yet is an empty projection', () => {
+    const { sql } = freshDb();
     expect(readLatestSearchTree(sql)).toEqual([]);
   });
 });

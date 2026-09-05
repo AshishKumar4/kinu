@@ -92,9 +92,9 @@ async function settleInterruptedRuns(
 function freshJournal() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
-  initHeadsTables(execRaw, makeSql(db));
-  initSearchTables(execRaw, makeSql(db));
-  initMctsSearchTable(execRaw, makeSql(db));
+  initHeadsTables(execRaw);
+  initSearchTables(execRaw);
+  initMctsSearchTable(execRaw);
   const sql = makeSql(db);
   return { db, sql, journal: new HeadJournal(sql) };
 }

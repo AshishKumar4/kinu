@@ -40,7 +40,7 @@ function panelOf(judges: ReadonlyArray<EnsembleJudge>): EnsemblePanel {
 function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initTurnOutcomeTables(makeExecRaw(db), sql);
+  initTurnOutcomeTables(makeExecRaw(db));
   return { db, sql };
 }
 

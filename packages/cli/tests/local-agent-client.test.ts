@@ -101,7 +101,7 @@ function setup(model: LanguageModel) {
   const db = new Database(':memory:');
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL,
+    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
   const info = {
@@ -135,7 +135,7 @@ function openPersistentClient(
   const db = new Database(dbPath);
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL,
+    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
   const info = {
@@ -416,8 +416,8 @@ describe('/takes — Alternate Takes over a real local client', () => {
 
     // Seed a near-tied convergence (what think-mcts captures mid-turn), then
     // run a turn so the session claims it.
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
         VALUES ('r', 'win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)

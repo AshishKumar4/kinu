@@ -61,7 +61,7 @@ function episode(blocks: readonly string[]) {
   const db = new Database(':memory:');
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL,
+    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, {
     dbPath: scratchPath('in-episode-craft', 'agent.db'), llm: DUMMY_LLM,
@@ -168,7 +168,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
       const dbOff = new Database(':memory:');
       dbOff.exec(`CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-        role TEXT NOT NULL, content TEXT NOT NULL,
+        role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
         created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
       const rt = createCLIRuntime(dbOff, {
         dbPath: scratchPath('in-episode-craft-off', 'agent.db'), llm: DUMMY_LLM,

@@ -209,8 +209,8 @@ export interface WorkspaceTitlePlan {
   mission: string;
 }
 
-/** A title nobody chose: absent, or an echo of the raw slug — which is what
- *  workspaces created before mission-derived titling still carry. */
+/** A title nobody chose: absent, or an echo of the raw slug — what a workspace
+ *  created with no purpose shows until its first message titles it. */
 export function isPlaceholderWorkspaceTitle(displayName: string | null | undefined, slug: string): boolean {
   const shown = displayName?.trim() ?? '';
   return shown.length === 0 || shown === slug.trim();
@@ -221,8 +221,7 @@ export function isPlaceholderWorkspaceTitle(displayName: string | null | undefin
  *  `null` means leave it alone: the operator named it (`nameOrigin: 'user'`),
  *  there is no mission to title from, or it already carries a title it was
  *  deliberately given. Otherwise the workspace either never had a title
- *  generated (`nameOrigin: null`) or is still showing its raw slug — the
- *  legacy shape this heals. */
+ *  generated (`nameOrigin: null`) or is still showing its raw slug. */
 export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePlan | null {
   if (state.nameOrigin === 'user') return null;
   if (isPlaceholderMission(state.mission)) return null;

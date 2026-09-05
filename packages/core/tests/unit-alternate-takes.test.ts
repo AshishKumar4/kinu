@@ -4,8 +4,7 @@
  * (turn_outcomes, source 'take_pick') and re-points the convergence record.
  */
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw, createTestWorkspace } from './helpers';
+import { makeSql, createTestWorkspace } from './helpers';
 import {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
   purgeUnclaimedAlternateTakes,
@@ -14,7 +13,7 @@ import {
 } from '../src/mcts/takes';
 import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
 import {
-  initTurnOutcomeTables, listTurnOutcomes, realOutcomeScaffoldRates,
+  listTurnOutcomes, realOutcomeScaffoldRates,
 } from '../src/evolution/outcomes';
 
 /** The PRODUCTION schema plus this module's own table: the eval split the pick
@@ -22,7 +21,7 @@ import {
  *  so a hand-picked subset here would test a workspace shape that never ships. */
 function setup() {
   const { db, sql, execRaw } = createTestWorkspace();
-  initAlternateTakesTable(execRaw, sql);
+  initAlternateTakesTable(execRaw);
   return { db, sql, execRaw };
 }
 
@@ -241,42 +240,5 @@ describe('the take_pick signal feeds R3’s routes for free', () => {
 
     const rates = realOutcomeScaffoldRates(sql);
     expect(rates.get(5)).toEqual({ accepted: 0, negative: 1 });
-  });
-});
-
-describe('turn_outcomes legacy CHECK migration', () => {
-  test('a pre-take_pick table is rebuilt in place with data preserved', () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    const execRaw = makeExecRaw(db);
-    execRaw(`CREATE TABLE turn_outcomes (
-      id TEXT PRIMARY KEY,
-      turn_id TEXT,
-      session_id TEXT NOT NULL DEFAULT 'default',
-      outcome TEXT NOT NULL CHECK (outcome IN ('accepted','corrected','frustrated','abandoned')),
-      confidence REAL NOT NULL,
-      source TEXT NOT NULL CHECK (source IN ('explicit','classifier','session_end')),
-      user_message TEXT NOT NULL,
-      assistant_response TEXT NOT NULL,
-      followup TEXT,
-      scaffold_version INTEGER,
-      created_at INTEGER NOT NULL
-    )`);
-    void sql`INSERT INTO turn_outcomes (id, turn_id, outcome, confidence, source, user_message, assistant_response, created_at)
-        VALUES ('old-1', 't-1', 'accepted', 0.9, 'classifier', 'q', 'a', 111)`;
-    // The legacy CHECK rejects the new source…
-    expect(() => sql`INSERT INTO turn_outcomes (id, outcome, confidence, source, user_message, assistant_response, created_at)
-        VALUES ('new-1', 'accepted', 1, 'take_pick', 'q', 'a', 222)`).toThrow();
-
-    initTurnOutcomeTables(execRaw, sql);
-
-    // …the rebuilt table accepts it and kept the old rows.
-    void sql`INSERT INTO turn_outcomes (id, outcome, confidence, source, user_message, assistant_response, created_at)
-        VALUES ('new-1', 'accepted', 1, 'take_pick', 'q', 'a', 222)`;
-    const rows = listTurnOutcomes(sql);
-    expect(rows.map((r) => r.id).sort()).toEqual(['new-1', 'old-1']);
-    // Idempotent: a second init leaves the rebuilt table alone.
-    initTurnOutcomeTables(execRaw, sql);
-    expect(listTurnOutcomes(sql)).toHaveLength(2);
   });
 });

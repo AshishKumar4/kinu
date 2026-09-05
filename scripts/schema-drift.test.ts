@@ -2,12 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import {
   driftViolations,
   genesisForNewTable,
-  inspectBackfillCalls,
   lockKey,
   lockUpdate,
-  moverViolations,
   parseTables,
-  readGenesisLock,
   survey,
   tablesIn,
   type GenesisLock,
@@ -19,8 +16,8 @@ const USER_DEVICES_GENESIS = [
   'revoked_at',
 ];
 
-/** The shape the production 500 shipped in: the six device-hardening columns in
- *  the DDL, none of them declared anywhere. */
+/** The shape the production 500 shipped in: six device-hardening columns in
+ *  the DDL that the storage created at genesis never had. */
 const DRIFTED_DEVICES: TableDdl = {
   table: 'user_devices',
   file: 'packages/cf-backend/src/user/schema.ts',
@@ -31,43 +28,6 @@ const DRIFTED_DEVICES: TableDdl = {
 const DEVICES_LOCK: GenesisLock = {
   [lockKey(DRIFTED_DEVICES.table, DRIFTED_DEVICES.file)]: USER_DEVICES_GENESIS,
 };
-
-describe('schema-drift TypeScript call discovery', () => {
-  test('reads multiline callbacks, trailing commas, named objects and object spreads by AST', () => {
-    const inspected = inspectBackfillCalls(new Map([['fixture.ts', `
-      const SHARED = { first: 'TEXT' } as const;
-      reconcileColumns(
-        sql,
-        (ddl) => { exec(ddl); },
-        'alpha',
-        { ...SHARED, second: 'INTEGER' },
-      );
-      reconcileSqlExecColumns(sql, 'beta', {
-        third: 'TEXT',
-      });
-      ensureColumn(sql, 'gamma', 'fourth');
-    `]]));
-
-    expect(inspected.reconcileCalls).toBe(2);
-    expect([...inspected.named].sort()).toEqual([
-      'alpha.first', 'alpha.second', 'beta.third', 'gamma.fourth',
-    ]);
-  });
-
-  test('fails closed when a column object is dynamically generated', () => {
-    expect(() => inspectBackfillCalls(new Map([['fixture.ts', `
-      const columns = Object.fromEntries([['added', 'TEXT']]);
-      reconcileColumns(sql, execRaw, 'alpha', columns);
-    `]]))).toThrow(/CallExpression, not an object or named object/u);
-  });
-
-  test('counts calls, never a same-named declaration or mention', () => {
-    expect(() => inspectBackfillCalls(new Map([['fixture.ts', `
-      function reconcileColumns() {}
-      const mention = 'reconcileColumns(';
-    `]]))).toThrow(/parsed no column reconciliation calls/u);
-  });
-});
 
 describe('schema-drift DDL census', () => {
   // Every shape below was measured in this tree, and the previous regex — which
@@ -133,8 +93,6 @@ describe('schema-drift DDL census', () => {
   });
 
   test('a table declared twice in one file carries the union of both statements', () => {
-    // outcomes.ts and imports.ts each create their table twice: once to finish an
-    // interrupted rebuild, once on the ordinary path.
     expect(parseTables('fixture.ts', `
       execRaw('CREATE TABLE IF NOT EXISTS both (id TEXT PRIMARY KEY, first INTEGER)');
       execRaw('CREATE TABLE IF NOT EXISTS both (id TEXT PRIMARY KEY, second INTEGER)');
@@ -143,36 +101,35 @@ describe('schema-drift DDL census', () => {
 });
 
 describe('schema-drift genesis comparison', () => {
-  test('RED: a column added after genesis with no backfill names the table and the column', () => {
-    const violations = driftViolations([DRIFTED_DEVICES], new Set(), DEVICES_LOCK);
+  test('RED: a column added after genesis names the table and every column', () => {
+    const violations = driftViolations([DRIFTED_DEVICES], DEVICES_LOCK);
 
     expect(violations).toHaveLength(1);
     expect(violations[0]?.key).toBe('user_devices@packages/cf-backend/src/user/schema.ts');
     expect(violations[0]?.detail).toContain('unstopped_at');
     expect(violations[0]?.detail).toContain('prev_token_hash');
+    expect(violations[0]?.detail).toContain('added after genesis');
   });
 
-  test('GREEN: the same tree once the columns are declared beside the DDL', () => {
-    const declared = new Set([
-      'user_devices.prev_token_hash', 'user_devices.expires_at', 'user_devices.last_ip',
-      'user_devices.last_agent', 'user_devices.replaced_at', 'user_devices.unstopped_at',
-    ]);
+  test('RED: a column removed after genesis is the other direction of the same drift', () => {
+    const narrowed: TableDdl = { ...DRIFTED_DEVICES, columns: ['id', 'token_hash'] };
+    const detail = driftViolations([narrowed], DEVICES_LOCK)[0]?.detail ?? '';
 
-    expect(driftViolations([DRIFTED_DEVICES], declared, DEVICES_LOCK)).toEqual([]);
+    expect(detail).toContain('removed after genesis');
+    expect(detail).toContain('revoked_at');
+    expect(detail).not.toContain('added after genesis');
   });
 
-  test('RED: a partial declaration still names the columns left out', () => {
-    // Production reported `unstopped_at`; staging reported `last_ip` from an
-    // older table. A reconcile naming one column moves the 500 to the next one.
-    const partial = new Set(['user_devices.unstopped_at']);
-    const detail = driftViolations([DRIFTED_DEVICES], partial, DEVICES_LOCK)[0]?.detail ?? '';
+  test('GREEN: a DDL that matches its genesis, in any column order', () => {
+    const reordered: TableDdl = {
+      ...DRIFTED_DEVICES, columns: [...USER_DEVICES_GENESIS].reverse(),
+    };
 
-    expect(detail).toContain('last_ip');
-    expect(detail).not.toContain('[unstopped_at');
+    expect(driftViolations([reordered], DEVICES_LOCK)).toEqual([]);
   });
 
   test('RED: a table with no genesis entry is a violation, never an empty comparison', () => {
-    const violations = driftViolations([DRIFTED_DEVICES], new Set(), {});
+    const violations = driftViolations([DRIFTED_DEVICES], {});
 
     expect(violations).toHaveLength(1);
     expect(violations[0]?.detail).toContain('no entry in scripts/schema-genesis.lock.json');
@@ -199,7 +156,7 @@ describe('schema-drift genesis lock', () => {
       .toEqual(USER_DEVICES_GENESIS);
   });
 
-  test('RED: refuses to NARROW an existing entry, which would demand a pointless backfill', () => {
+  test('RED: refuses to NARROW an existing entry, which would report columns the table shipped with', () => {
     const update = lockUpdate([DRIFTED_DEVICES], DEVICES_LOCK, () => ['id', 'token_hash']);
 
     expect(update.refused).toHaveLength(1);
@@ -207,17 +164,9 @@ describe('schema-drift genesis lock', () => {
       .toEqual(USER_DEVICES_GENESIS);
   });
 
-  test('the tree lock records the genesis this repository actually shipped', () => {
-    // 8dab4c8e6, 2026-06-12. Verified against `git show` rather than recalled:
-    // the six columns absent here are the six the production 500 named.
-    expect(readGenesisLock()['user_devices@packages/cf-backend/src/user/schema.ts'])
-      .toEqual(USER_DEVICES_GENESIS);
-  });
-
-  test('RED: a DDL moved to a path with no history inherits the narrowest locked genesis', () => {
-    // The hole a per-run `git log -S` had, in its remaining form: relocate the
-    // statement and the new key would lock at TODAY's shape, excusing the six
-    // columns the move carried with it.
+  test('RED: a DDL moved to another file inherits the narrowest locked genesis', () => {
+    // Relocate the statement and the new key would lock at TODAY's shape,
+    // excusing the six columns the move carried with it.
     const moved: TableDdl = {
       table: 'user_devices',
       file: 'packages/cf-backend/src/user/device-schema.ts',
@@ -227,7 +176,7 @@ describe('schema-drift genesis lock', () => {
     expect(genesisForNewTable(moved, DEVICES_LOCK)).toEqual(USER_DEVICES_GENESIS);
   });
 
-  test('a genuinely new table with no history and no namesake locks at its own shape', () => {
+  test('a genuinely new table with no namesake locks at its own shape', () => {
     const fresh: TableDdl = {
       table: 'schema_drift_probe',
       file: 'packages/cf-backend/src/user/absent.ts',
@@ -238,81 +187,16 @@ describe('schema-drift genesis lock', () => {
   });
 });
 
-describe('schema-drift runtime-mover excuse', () => {
-  const MOVER_SOURCES = new Map([
-    ['packages/core/src/identity/schema.ts', `
-      const FORK_LINEAGE_DDL = 'CREATE TABLE IF NOT EXISTS fork_lineage (id INTEGER PRIMARY KEY)';
-      export function initAllTables(execRaw, sql) { execRaw(FORK_LINEAGE_DDL); }
-      export function migrateWorkspaceStorage(sql, execRaw) { adoptLegacyForkLineage(sql, execRaw); }
-      function adoptLegacyForkLineage(sql, execRaw) {}
-    `],
-    ['packages/core/src/identity/open.ts', `
-      import { initAllTables, migrateWorkspaceStorage } from './schema';
-      export function openWorkspace(db) {
-        initAllTables(execRaw, sql);
-        migrateWorkspaceStorage(sql, execRaw);
-      }
-    `],
-  ]);
-
-  test('GREEN: the mover is called in the declaring module and runs after the init', () => {
-    expect(moverViolations(MOVER_SOURCES)).toEqual([]);
-  });
-
-  test('RED: the excuse dies with the mover call', () => {
-    const withoutMover = new Map(MOVER_SOURCES);
-    withoutMover.set('packages/core/src/identity/schema.ts', `
-      const FORK_LINEAGE_DDL = 'CREATE TABLE IF NOT EXISTS fork_lineage (id INTEGER PRIMARY KEY)';
-      export function initAllTables(execRaw, sql) { execRaw(FORK_LINEAGE_DDL); }
-      export function migrateWorkspaceStorage(sql, execRaw) {}
-      function adoptLegacyForkLineage(sql, execRaw) {}
-    `);
-    const violations = moverViolations(withoutMover);
-
-    expect(violations).toHaveLength(1);
-    expect(violations[0]?.key).toBe('fork_lineage.mover');
-    expect(violations[0]?.detail).toContain('no call to adoptLegacyForkLineage');
-  });
-
-  test('RED: the mover reading a table that does not exist yet is an ordering failure', () => {
-    const inverted = new Map(MOVER_SOURCES);
-    inverted.set('packages/core/src/identity/open.ts', `
-      import { initAllTables, migrateWorkspaceStorage } from './schema';
-      export function openWorkspace(db) {
-        migrateWorkspaceStorage(sql, execRaw);
-        initAllTables(execRaw, sql);
-      }
-    `);
-    const violations = moverViolations(inverted);
-
-    expect(violations).toHaveLength(1);
-    expect(violations[0]?.key).toBe('fork_lineage.order@packages/core/src/identity/open.ts');
-  });
-
-  test('a declaration or a mention is not a call', () => {
-    const mentionOnly = new Map(MOVER_SOURCES);
-    mentionOnly.set('packages/core/src/identity/schema.ts', `
-      const FORK_LINEAGE_DDL = 'CREATE TABLE IF NOT EXISTS fork_lineage (id INTEGER PRIMARY KEY)';
-      export function initAllTables(execRaw, sql) { execRaw(FORK_LINEAGE_DDL); }
-      export function migrateWorkspaceStorage(sql, execRaw) {}
-      /** adoptLegacyForkLineage moves the row. */
-      function adoptLegacyForkLineage(sql, execRaw) {}
-    `);
-
-    expect(moverViolations(mentionOnly)[0]?.key).toBe('fork_lineage.mover');
-  });
-});
-
 describe('schema-drift over this tree', () => {
-  test('every table is locked, censused and free of undeclared drift', () => {
+  test('every table is locked, censused and equal to its genesis', () => {
     const state = survey();
 
     expect(state.violations).toEqual([]);
     // The census is the governed set: a gate whose corpus quietly shrinks is the
-    // defect this file exists to make impossible.
-    expect(state.tables.length).toBeGreaterThanOrEqual(118);
-    expect(Object.keys(state.lock).length).toBeGreaterThanOrEqual(state.tables.length);
-    expect(state.backfill.reconcileCalls).toBeGreaterThanOrEqual(29);
+    // defect this file exists to make impossible. 116 is the count at the reset
+    // genesis, after `crafted_tools` lost its two duplicate declarations and
+    // kept one owner (`@kinu.run/agent-utils`).
+    expect(state.tables.length).toBeGreaterThanOrEqual(116);
   });
 
   test('the census reads every CREATE TABLE IF NOT EXISTS the corpus holds', () => {

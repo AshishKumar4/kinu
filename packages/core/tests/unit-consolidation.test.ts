@@ -7,19 +7,19 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { periodicCraftConsolidation } from '../src/craft/consolidation';
-import { initCraftQualityColumns } from '../src/craft/schemas';
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 
 describe('CraftStore consolidation', () => {
   test('does nothing with empty CraftStore', async () => {
     const { rt } = createTestRuntime();
-    initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
+    initCraftedToolsTables(rt.storage.sql);
     await periodicCraftConsolidation(rt);
     expect(rt.craftStore.list()).toHaveLength(0);
   });
 
   test('retires stale tools (low effective score, ≥2 uses)', async () => {
     const { rt } = createTestRuntime();
-    initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
+    initCraftedToolsTables(rt.storage.sql);
 
     // Add a tool with many uses but old timestamp (120 days ago → effective ≈ 0.0625)
     rt.craftStore.create({ name: 'stale_tool', description: 'old', params: null, code: 'fn()', scope: 'local' });
@@ -39,7 +39,7 @@ describe('CraftStore consolidation', () => {
 
   test('BUG-2: does NOT retire all tools when all are stale', async () => {
     const { rt } = createTestRuntime();
-    initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
+    initCraftedToolsTables(rt.storage.sql);
 
     const veryOld = Date.now() - 365 * 86_400_000;
     rt.craftStore.create({ name: 'stale1', description: 'old', params: null, code: 'fn()', scope: 'local' });
@@ -57,7 +57,7 @@ describe('CraftStore consolidation', () => {
 
   test('skips tools with fewer than 2 uses', async () => {
     const { rt } = createTestRuntime();
-    initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
+    initCraftedToolsTables(rt.storage.sql);
 
     const old = Date.now() - 120 * 86_400_000;
     rt.craftStore.create({ name: 'low_use', description: 'x', params: null, code: 'fn()', scope: 'local' });

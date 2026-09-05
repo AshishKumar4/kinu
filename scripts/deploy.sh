@@ -10,9 +10,9 @@
 # uploaded" and "the product works".
 #
 # Deploys the cf-backend Worker (name "kinu") with the @cloudflare/sandbox
-# Sandbox DO + Container binding, the NimbusSession DO, and the local-device
-# executor routes. Pipeline: strict repository gates → vite build → CLI source
-# archive → wrangler deploy → smoke test.
+# Sandbox DO + Container binding and the local-device executor routes.
+# Pipeline: strict repository gates → vite build → CLI source archive →
+# wrangler deploy → smoke test.
 #
 # Where the static assets come from (settled by reading wrangler 4.97 source +
 # `wrangler deploy --dry-run`, 2026-08-07):
