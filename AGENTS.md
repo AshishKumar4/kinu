@@ -32,7 +32,7 @@ errors, warnings fail the gate, and unused disable directives are errors.
 blind.** `gate-set-equality`'s import resolver returned nothing for an extensionless specifier,
 silently shrinking the governed set; `layergate` carried the same bug; `capability-parity` carried
 a dead `.jsx?` strip; and `sources.ts` applied `.gitignore` on top of `git ls-files`, so a file
-that was tracked AND ignored was invisible to every gate built on it — including the secret
+that was tracked AND ignored was invisible to every gate built on it. That included the secret
 scanner, which passed over two live credentials. None of those failed. They passed, over less than
 they claimed. So when adding or trusting a gate: state the set it MEASURES and the set it claims
 to GOVERN and check they are equal; read the corpus through `scripts/sources.ts`, never a
@@ -44,25 +44,25 @@ red output is invisible exactly when the tree is green.
 That means all of: no `--no-verify` and no `core.hooksPath=/dev/null`; no `oxlint-disable` on any
 rule, not only the four catch ones; no ignore-list or allowlist entry added so a check stops seeing
 something; no rule downgraded from error to warning; no assertion narrowed, no failing test deleted
-or skipped, and no timeout raised until a wait succeeds — a longer wait on a selector that will
+or skipped, and no timeout raised until a wait succeeds. A longer wait on a selector that will
 never appear takes twice as long to lie. When a gate goes red, exactly one of two things is true:
 the code is wrong, or the gate's own fixture is stale. Find out which and fix that one. If you
 conclude the RULE is wrong, that is a decision to surface with evidence, never to take while
 clearing your own path.
 
 **A defect the owner finds by hand gets a first-run row before its fix ships.** Every gate above
-runs BEFORE a deploy, on this tree, over inputs its own author wrote — so the whole ladder can be
+runs BEFORE a deploy, on this tree, over inputs its own author wrote. The whole ladder can be
 green while the product a person meets is red, which is the set-equality failure above at the
 largest scale it has. It happened four times in two days: a crafted tool whose body would not run,
 an Approve button that re-ticked every box it had just cleared, two machines flapping on one
 executor slot, and Enter not sending in the TUI. Each had a green test that exercised an
 `async (args) =>` body, a fixture queue, one fake daemon and a CR byte, while a user brings the
 model, the click, the second machine and the LF byte. So `tests/first-run/` holds one case per
-such defect, driven the way a user drives it — a fresh workspace over the public REST, the real
-model, a real click, real daemons, real pty bytes — with hard assertions only, and
+such defect, driven the way a user drives it (a fresh workspace over the public REST, the real
+model, a real click, real daemons, real pty bytes) with hard assertions only, and
 `bun run gate:first-run` runs the tier from `scripts/deploy.sh` after the smoke gate. The row is
 written and proved RED against the deployed build that still has the bug, and the fix is what
-turns it green; a row added after the fix proves only that the author could describe what they
+turns it green. A row added after the fix proves only that the author could describe what they
 already repaired. State which sha you proved red against, or state that you could not and why.
 
 **And a gate that runs but can no longer fail is worse than a red one, because it reads green.**
@@ -73,7 +73,7 @@ a bench defect was retired rather than re-pointed at the surviving code that sti
 it encoded. Each was recorded honestly and left, which is how a suite keeps its count while losing
 its teeth. So: when a fixture stops being able to fail, restoring its red direction is part of the
 same change, not a follow-up. Retiring a corpus entry is legitimate only after establishing that no
-live code still holds the property — say what you searched.
+live code still holds the property. Say what you searched.
 
 **A verification claim must match what was exercised.** Beyond the `node_modules` trap below: a
 suite run in a shared checkout proves nothing about your branch (green may be someone else's
@@ -100,7 +100,7 @@ bun run test:anti-slop
 ## Working In A Git Worktree
 
 A fresh worktree has no `node_modules`. **Run `bash scripts/setup-worktree.sh` in
-it — once — before anything else.**
+it, once, before anything else.**
 
 Do NOT symlink or copy the main checkout's `node_modules` wholesale. Everything
 inside it, the workspace scope included, then resolves through the main checkout, so
@@ -111,7 +111,7 @@ the harbor adapter, and a week of agent worktrees.
 
 The script links third-party dependencies per entry and gives the tree its own
 real `@kinu.run/` scope directory pointing at its own `packages/`. It refuses to
-run when the branch changed `bun.lock` — run `bun install` in the worktree then,
+run when the branch changed `bun.lock`. Run `bun install` in the worktree then,
 because borrowed modules would be the wrong ones.
 
 The invariant is enforced, not just documented: every package's suite carries
@@ -133,15 +133,15 @@ edit lands in the primary, no error anywhere. So:
 - After the first edit of any file, `git -C <your-worktree> status` must show
   it changed; if `git -C ~/Kinu status` shows your file instead, stop,
   extract your diff with `git diff -- <paths>`, apply it in your worktree,
-  and revert the primary path-scoped. Never a bare checkout or reset there —
-  other agents' work may be in flight beside yours.
+  and revert the primary path-scoped. Never a bare checkout or reset there.
+  Other agents' work may be in flight beside yours.
 
 Parallel writers use isolated worktrees and make focused commits. Main merges
 and verifies those commits before updating `origin/main`.
 
 A fresh worktree whose branch changed `bun.lock` needs its own `bun install`.
 Bun loads the install scanner BEFORE it installs anything, so the file bunfig
-names cannot import a dependency — and the source (`scripts/security-scanner.ts`)
+names cannot import a dependency. The source (`scripts/security-scanner.ts`)
 must keep its decoder, because the anti-slop rules forbid hand-rolled narrowing
 of boundary input. So bunfig names a committed BUILD of the source,
 `scripts/security-scanner.bundle.js`, and `gate:scanner-bundle` refuses a byte of
@@ -156,8 +156,8 @@ other ref reaches. No test or gate fires when a tag disappears.
 
 ## Deploy Discipline
 
-- `bun run deploy` (`scripts/deploy.sh`) is the only production deploy path. Never deploy production with a bare `wrangler deploy` — it skips the CLI-download asset check and the post-deploy smoke gate, and production has shipped assetless that way (every fresh install died on a checksum mismatch while the site looked fine).
-- One assets directory: `packages/cf-backend/dist/client`. `dist/kinu/assets/` is the Worker's code-split chunk output, not an assets dir — nothing written there is served. See docs/DEPLOYMENT.md § Static assets.
+- `bun run deploy` (`scripts/deploy.sh`) is the only production deploy path. Never deploy production with a bare `wrangler deploy`. It skips the CLI-download asset check and the post-deploy smoke gate, and production has shipped assetless that way (every fresh install died on a checksum mismatch while the site looked fine).
+- One assets directory: `packages/cf-backend/dist/client`. `dist/kinu/assets/` is the Worker's code-split chunk output, not an assets dir. Nothing written there is served. See docs/DEPLOYMENT.md § Static assets.
 - `GET /api/health` reports `{version, sha, builtAt}` for the deployed build, read back out of the asset bundle. Check it after any deploy or rollback; `ok: false` means the asset half did not land.
 - **The Worker's gzip bundle is the binding build budget, and it is measured, not assumed.** After a vite build, `bunx wrangler deploy --dry-run` in `packages/cf-backend` prints the authoritative `Total Upload / gzip` figure the deploy API enforces — Vite's per-chunk `gzip:` line covers one chunk and understates the total by more than 2x. Three readings, same method: **6,254.64 KiB on 2026-08-04** (spike branch, Nimbus 0.1.x), **6,983.03 KiB on 2026-08-18** (`17318b3f`, Nimbus `worker@0.2.3`), and **7,091.83 KiB on 2026-08-19** (Nimbus `core@0.5.0`/`worker@0.3.0`, every Nimbus patch dropped and `@nimbus-sh/fabric@0.1.0` newly in the graph). A fourth reading: **7,138.34 KiB on 2026-08-20** (`a38d2b73`, pins unchanged) — +46.5 KiB over its own-day baseline of 7,091.83, attributed by measuring both sides of one commit: the `@kinu.run` scope rename lengthens every specifier that survives into the bundle. One trap this section has already caught once: the dry-run only measures a FRESH build — `dist/` from an earlier build measures identically forever, and cf-backend has no `build` script, so the build step is `bunx vite build` (with `CLOUDFLARE_ENV` for staging), never `bun run build`. Against the paid **10 MB** gzip cap that is roughly **69% consumed, ~3 MB free**; raw upload 27,471 KiB against the 64 MB pre-compression cap is not close. The third reading is what makes the second interpretable: the 0.2.x→0.3.x major bump plus a whole new package cost **+109 KiB**, so the earlier **+728 KiB** was overwhelmingly main's own growth rather than the Nimbus pin, which is the split that reading could not perform. Most of the floor is structural: `server.ts:85-95` re-exports `NimbusSession` plus eight sibling Nimbus entrypoint classes, and an exported entrypoint cannot be tree-shaken, so the Worker pays for Nimbus's whole session machinery whether or not a request touches it. Re-measure on both sides of anything that adds a dependency, a DO class, or top-level work. A Worker over the cap fails validation at upload — the same shape of failure as the assetless deploy above, where the site looks fine
   A fifth fresh-build reading is **7,259.24 KiB on 2026-08-24** (`feat/profiles-tui`, after final review). The raw upload is **27,965.43 KiB**. The ControlPlaneDO, three Analytics Engine datasets, feedback flow, profile routing, and UI changes add **120.90 KiB gzip** over the 2026-08-20 reading. The bundle uses **70.9%** of the paid 10 MB cap.
@@ -167,13 +167,13 @@ other ref reaches. No test or gate fires when a tag disappears.
 
 ## Commit Messages
 
-`bun run gate:commit-message` and `.githooks/commit-msg` enforce this. Both run the same program, `scripts/commit-hygiene.ts`, which states the vocabulary in its own failure output — so this section is a convenience, and `scripts/commit-hygiene.test.ts` asserts the two agree rather than letting them drift.
+`bun run gate:commit-message` and `.githooks/commit-msg` enforce this. Both run the same program, `scripts/commit-hygiene.ts`, which states the vocabulary in its own failure output. This section is a convenience, and `scripts/commit-hygiene.test.ts` asserts the two agree rather than letting them drift.
 
 - **A subject is `type: text` or `type(scope): text`, at most 80 characters.** `type` is lowercase and one of: `fix` `feat` `docs` `bench` `test` `refactor` `chore` `cli` `core` `mcts` `cf` `gate` `heads` `eval` `evolution` `prompt`. Those sixteen are every token used 13 or more times across the 1,610 non-merge subjects of the pre-convention history; the other 171 were used fewer, and a component name belongs in the parens (`fix(layergate): …`) rather than in front of the colon. The ceiling is the largest round number at or below the measured p90 of 82. Git writes its own subjects for merges, reverts and autosquash, and those are exempt.
 - **Never name a subagent.** Every commit here is authored under one person's name, so `Main's ruling` or `FixtureZero's findings` reads as him crediting a colleague who does not exist. Nine such names reached the permanent record before the gate existed. State what changed and what proves it.
-- **Never credit the requester, and never treat a session as a unit of work.** `the owner asked for this`, `the owner was right`, `per the owner's instruction`, `the owner's floor-continuation question`, `shipped this session`, `before this session` — all facts about a work process rather than about the code, and all permanent. **The owner as a modelled ENTITY is fine and is not gated**, because it is one: `the owner's UserDO`, `spend the owner's inference credentials`, `emails the owner on failure`, `runs as the owner on the owner's machine`. Same for a live session object: `this session owns the local clock`, `this session's delegation deps`. The rule follows the act, not the word — `the owner` appears in 119 tracked source files and gating the bare phrase would fail correct sentences.
+- **Never credit the requester, and never treat a session as a unit of work.** `the owner asked for this`, `the owner was right`, `per the owner's instruction`, `the owner's floor-continuation question`, `shipped this session`, `before this session` — all facts about a work process rather than about the code, and all permanent. **The owner as a modelled ENTITY is fine and is not gated**, because it is one: `the owner's UserDO`, `spend the owner's inference credentials`, `emails the owner on failure`, `runs as the owner on the owner's machine`. Same for a live session object: `this session owns the local clock`, `this session's delegation deps`. The rule follows the act, not the word. `the owner` appears in 119 tracked source files and gating the bare phrase would fail correct sentences.
 - **No first person.** No `I`, no `my`, no argument with a previous position (`my earlier claim was wrong`, `as requested`). The Author field records who wrote it. If a previous commit's claim was wrong and has not shipped, amend it.
-- **Bodies are welcome and usually earn their place** — a measured number, a rejected alternative, a non-obvious why. The audit that produced this convention found the long bodies here justified far more often than not. Length is not the defect; the four rules above are.
+- **Bodies are welcome and usually earn their place**: a measured number, a rejected alternative, a non-obvious why. The audit that produced this convention found the long bodies here justified far more often than not. Length is not the defect; the four rules above are.
 - The four prose rules skip quoted spans, inline code, fenced blocks and indented lines, so a commit may quote a shipped product string verbatim even when that string itself contains a governed phrase.
 - Four things the gate deliberately does NOT judge, and prints on its green path so nobody reads green as "well written": colon-reveal subjects, binary contrasts, em-dash density, and sentence length. All four are real and all four have legitimate instances, so they stay review criteria.
 
@@ -230,7 +230,7 @@ first-person voice.
 `packages/cli/src/cli-reference.ts` (which writes `docs/CLI.md`) and `scripts/platform-catalog.ts`.
 Do not add the line back.
 
-Where Simplified Technical English and readable English pull apart, the reader wins — keep the STE
+Where Simplified Technical English and readable English pull apart, the reader wins. Keep the STE
 discipline that carries the weight (one idea, one word per meaning, active voice, short) and drop
 the letter of a rule that makes a sentence worse.
 
@@ -294,14 +294,14 @@ bench/clbench/  Kinu as a system for the external Continual Learning Bench
 
 Each environment is a codemode `ExecutorProvider` with namespace.* APIs.
 `workspace` is the one authoritative file and execution plane, and it is Nimbus
-held as a LIBRARY over the host's own SQLite — `ctx.storage.sql` in the
+held as a LIBRARY over the host's own SQLite. That is `ctx.storage.sql` in the
 OrchestratorAgent Durable Object that owns a hosted workspace, a `bun:sqlite`
 file on the CLI. ONE Durable Object per workspace: the filesystem tables sit
 beside the conversation, the ledgers and the memory index that reads those same
 files, so bytes and index commit together and a SQL-only snapshot of the object
 is the whole workspace. A facet (subordinate, exploration head, swarm node) has
 its own SQLite for its own ledgers and shares the workspace over one RPC into
-that object (`OrchestratorAgent.workspaceBoxOp`) — never a filesystem of its
+that object (`OrchestratorAgent.workspaceBoxOp`). It never keeps a filesystem of its
 own, which would be a second, empty workspace. Optional sandbox and laptop rows are genuinely different machines
 with their own native paths. The workspace plane carries a MOUNT TABLE
 (`core/src/vfs/mounts.ts`): a live device's files appear at `/pc`, a bound
@@ -312,7 +312,7 @@ is a FLEET: with several of the user's machines live, each mounts under
 machine keeps plain `/pc` and needs no name); see docs/EXECUTION-LAYER-SPEC.md. The mount table
 extends the one view; there is no second Nimbus executor or filesystem, and no
 copy of workspace bytes behind a mount point. The workspace shell does not see
-mount points — commands reach other machines only through their namespaces.
+mount points. Commands reach other machines only through their namespaces.
 Memory indexing and fork snapshots address the base tree alone.
 
 | Executor   | Namespace  | Binding Required          | Capabilities                |
@@ -348,12 +348,12 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 ## Code Style
 
 - TypeScript strict mode, ES2022 target, ESNext modules, bundler resolution, `verbatimModuleSyntax`
-- **Relative imports carry NO extension.** `import { x } from './thing'`, never `'./thing.js'` and never `'./thing.ts'`. Nothing here emits: every project is `noEmit`, there is no `outDir`, and all three runtimes read the TypeScript directly — Vite/wrangler bundle the Worker, Bun runs the CLI and the suites from source, the deploy ships a CLI source archive. So there is no `.js` file for a specifier to name, and `.ts` is redundant where the resolver already finds it. `tsconfig.base.json` omits `allowImportingTsExtensions` so a `.ts` specifier is a type error, and `anti-slop/require-runtime-import-extension` rejects both spellings
-  - **One exception, and it is enforced, not honoured.** `tools/oxlint/anti-slop/**` plus `scripts/sources.ts` run under raw `node --experimental-strip-types` (oxlint's `RuleTester` needs Node's raw transfer and throws under Bun), and Node's ESM resolver takes a complete path — no extensionless specifier, no directory index. Those files keep explicit `.ts`. `import-extension.gate.test.ts` recomputes that closure from the entrypoints and fails if it stops matching, so the exception cannot quietly widen
+- **Relative imports carry NO extension.** `import { x } from './thing'`, never `'./thing.js'` and never `'./thing.ts'`. Nothing here emits: every project is `noEmit`, there is no `outDir`, and all three runtimes read the TypeScript directly. Vite/wrangler bundle the Worker, Bun runs the CLI and the suites from source, the deploy ships a CLI source archive. So there is no `.js` file for a specifier to name, and `.ts` is redundant where the resolver already finds it. `tsconfig.base.json` omits `allowImportingTsExtensions` so a `.ts` specifier is a type error, and `anti-slop/require-runtime-import-extension` rejects both spellings
+  - **One exception, and it is enforced, not honoured.** `tools/oxlint/anti-slop/**` plus `scripts/sources.ts` run under raw `node --experimental-strip-types` (oxlint's `RuleTester` needs Node's raw transfer and throws under Bun), and Node's ESM resolver takes a complete path. No extensionless specifier, no directory index. Those files keep explicit `.ts`. `import-extension.gate.test.ts` recomputes that closure from the entrypoints and fails if it stops matching, so the exception cannot quietly widen
   - An extension is correct only when it names a file that is really there: `.json` data, the `.mjs`/`.cjs` test fixtures, and `packages/pc-agent/src/index.js`, which is a genuinely CommonJS package
 - Tagged-template SQL via `SqlExecutor` for parameterized queries
 - `RawSqlExec` (plain string) only for DDL (CREATE TABLE, CREATE INDEX)
-- All DDL uses `IF NOT EXISTS` — schema init is idempotent
+- All DDL uses `IF NOT EXISTS`. Schema init is idempotent
 - Vercel AI SDK v6: `tool()` + `jsonSchema()` for tool definitions
 - `ToolSet` type from `ai` package for tool collections
 - **The AI SDK is not a preference and replacing it is not an option** — asked and answered 2026-08-17, do not reopen without new evidence. `ai` is a REQUIRED peer of `@cloudflare/think` (only `@ai-sdk/react`, `@chat-adapter/telegram`, `react` and `vite` are optional there), `ActorAgent extends Think<Env>`, and every override point is SDK-typed: `getModel(): LanguageModel`, `getTools(): ToolSet`, `beforeTurn(TurnContext{ModelMessage[], ToolSet, LanguageModel})`, `TurnConfig.stopWhen: StopCondition<ToolSet>`. Think does not merely import it — `think.js:7` does `import * as aiSdk from "ai"`, `:301` feature-detects `"registerTelemetry" in aiSdk`, and `:2827` calls `wrapAISDK(aiSdk, …).streamText`, so it branches on which MAJOR of `ai` is installed at runtime. Nor is the CLI the cheap side to swap: `cli-backend/src/local-session.ts:63` drives `runChat` from `@kinu.run/core`, which IS `core/src/chat.ts`, and core holds 54 of the 86 SDK source files. Plus ~1,423 lines of `LanguageModelV2` implementations (`claude-cli-provider.ts`, `opencode-provider.ts`, `providers/codex.ts`) exist only because an SDK model is BEHAVIOUR; alternatives model it as data. Reasoning of record: maximum code reuse across backends, with most logic in core. Full audit: `docs/research/sdk-dependency.md` (gitignored)
@@ -367,18 +367,18 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 
 No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch { return [] }` are defects: a read that answers `null` for "absent" and `null` for "the query blew up" is how `workspace_capability` stayed invisible for months. Every catch does exactly one of three things:
 
-1. **Do not catch.** The default, and usually the fix — deleting the `try`/`catch` is a real change.
+1. **Do not catch.** The default, and usually the fix: deleting the `try`/`catch` is a real change.
 2. **Wrap and rethrow** — `throw new Error('what we were doing', { cause: caught })`. Native `cause` is the language's `%w`; the chain must never be broken.
 3. **Handle, and say so.** Only when the caught condition is a *value* in the domain. Record the caught error and return something the caller can tell apart from success.
 
 - A handler is only as honest as the statements it spans. `fork.ts` wrapped a `CREATE TABLE` *and* the twenty-statement `INSERT` loop under it in one catch commented "table may be absent", so a constraint violation on message #400 reported as a missing table and the fork returned success with the owner's whole conversation gone. One catch, one condition
-- Prefer asking over catching. `tableExists(sql, name)` and `PRAGMA table_info` turn "absent" into a value; a `catch` cannot tell a missing table from a locked one. DDL by swallowed exception is prohibited — `reconcileColumns` for a column, `initWorkspaceSchema` for a table
+- Prefer asking over catching. `tableExists(sql, name)` and `PRAGMA table_info` turn "absent" into a value; a `catch` cannot tell a missing table from a locked one. DDL by swallowed exception is prohibited: `reconcileColumns` for a column, `initWorkspaceSchema` for a table
 - A production `catch` may never accommodate a test-only condition. If a table would be missing in tests, the harness builds the production schema (`createTestWorkspace`), it does not earn a swallow in shipped code
 - Where an absence is genuinely expected, name it: `tolerate(op, 'enoent')` / `classify({ cause })` from `@kinu.run/core/obs`. Anything the matcher does not recognise rethrows
 - Never log a secret, and never log an object you have not looked inside: no `apiKey`, `authorization`, `body`, `content`, `credential`, `header(s)`, `password`, `prompt`, `secret`, `soul`, `systemPrompt`, `token`. `ReservedLogField` in `@kinu.run/core/obs` makes that a type: a log call carrying one fails to COMPILE, through a variable, an interface, a spread or an index signature alike. A cast still defeats it, and `require-safety-comment-for-type-assertion` makes the cast a written admission
-- Every log carries a stable dotted event name (`capability.read_failed`) — that is what makes a failure greppable across Workers Logs and the CLI journal
+- Every log carries a stable dotted event name (`capability.read_failed`). That is what makes a failure greppable across Workers Logs and the CLI journal
 - Enforced mechanically by the `no-empty-catch`, `no-sentinel-catch`, `require-cause-on-rethrow` and `no-ddl-in-catch` anti-slop rules. Never add an `oxlint-disable` to pass one
-- A refusal carries its classification, reason FIRST — `{ reason: ErrorCode, error }` via `refusalOf` — because every seam that shows a result to a human or hashes it for steering bounds it to a head slice, and the prose is the long part. Precedents, cited by name because these lines rot: `failure()` in `tools/file-tool.ts`, the `createTool` catch in `execution/inline.ts`, `unsupported()` in `strategy/swarm-run.ts`, and the refusal helper in `strategy/merge-back.ts`
+- A refusal carries its classification, reason FIRST (`{ reason: ErrorCode, error }` via `refusalOf`), because every seam that shows a result to a human or hashes it for steering bounds it to a head slice, and the prose is the long part. Precedents, cited by name because these lines rot: `failure()` in `tools/file-tool.ts`, the `createTool` catch in `execution/inline.ts`, `unsupported()` in `strategy/swarm-run.ts`, and the refusal helper in `strategy/merge-back.ts`
 - `classifyErrorCode` answers `null` when nothing pinned recognises a failure, and `toKinuError` therefore REQUIRES an `otherwise` from its caller. An unknowable cause is a value, never a guessed code: `Worker exceeded resource limits` is what the client sees for BOTH an isolate memory kill and a CPU-time kill, so it is not in the OOM matcher
 - The `Observability`/`Tracer` seam is WIRED at **six** production boundaries, measured 2026-08-24 by grepping `this.tracing.invocation`: `orchestrator.ts` `_kinuTimerTick` (`alarm`/`tick`), `recordHeadStep` (`rpc`/`head.record_step`), `actor-agent.ts` `nodeArbitrate` (`rpc`/`swarm.arbitrate`), `exploration.ts` `explore` (`rpc`/`mcts.branch`), `runAsHead` (`rpc`/`head.run`), `runAsNode` (`rpc`/`swarm.node`) — cited by name because the line numbers rotted twice in one week. Two of the four `InvocationKind` values are in use — `alarm` and `rpc` — while `fetch` and `websocket` are declared and unused. This bullet has now been wrong in BOTH directions within one day: it first claimed a test fixture was the only caller, then claimed exactly one production call site, and the second was stale the moment five more landed. Re-grep rather than trusting the sentence. The handle comes from the `tracing` getter on `ActorAgent`, which builds `createAgentTracing({tracer: createWorkersTracer(), isolateGen, selfPath})` once per construction; `createWorkersTracer` (`obs/cf-tracer.ts`) goes through `cloudflare:workers`' `tracing.enterSpan`, the only entry point available at our pin. `selfPath` rather than `ctx.id` because two facets with distinct ids both reported under the ROOT's `durableObjectId` on the deployed runtime, so an id-keyed trace collapses every head and node into one orchestrator. Spans are always scoped, and trace context does not survive a hibernation wake or a cold start. Across `alarm()` it is not merely absent but ENFORCED absent: `tracing.invocation` revokes the handle when the method's promise settles, so a span opened from anything that escaped the tick throws
 - The full contract, its status table and the unconverted boundary: [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)
@@ -394,12 +394,12 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
 - `getTools()` builds the 8-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`): `execute_tools`, `run`, `file`, `agents`, `memory`, `tasks`, `web`, `report`; results are cached per CraftStore version
 - **How the model reaches a capability is DECLARED, not derived**: `TOOL_REACH` in `core/src/tools/registry.ts` gives each capability `{ native, codemode }`, where `codemode` is the sandbox NAMESPACE (not a boolean — `run` and `file` reach the sandbox through the shared `workspace` primitives, so they own no namespace). `BuiltinToolName` is derived from it, every `*-codemode.ts` factory takes its provider `name` from it, `explainNativeToolReferenceError` reads it to tell the model where a capability actually is, and `getToolDescriptions` reports it instead of guessing from ToolSet keys. Reach is not permission: what an actor gets is reach ∩ its wired deps, and `getToolDescriptions` reports those two facts separately (`exposure` + `wired`). Adding a native row grows the 8-tool surface, which `core/tests/unit-tool-reach.test.ts` pins by both name set and count
 - `agents`, `web`, and `report` are dependency-gated native builtins. `report` appears only on a subordinate's assigned turn, while the `agents` action schema is derived from the actor's wired fork/team/peer capabilities. Release is codemode-only and mechanically omitted in Plan mode. See [docs/TOOLS.md](docs/TOOLS.md)
-- `execute_tools`' docstring is composed ONCE, in `registry.renderExecuteToolsDescription(typeBlock)`, and both backends use it: CF passes `@cloudflare/codemode`'s `{{types}}` placeholder and lets `createCodeTool` substitute; the CLI joins its providers' declared `types`. Do not let either backend describe this tool on its own — CF used to ship the vendor's generic `DEFAULT_DESCRIPTION` (none of the registry spec reached the model, and its worked example named a `codemode.<name>` call the dispatcher throws on) while the CLI shipped the spec and discarded every namespace declaration
-- `agents` is the ONE delegation surface (`swarm | hire | ask | send | reply | list | dismiss`), and it is projected into the codemode sandbox as the `agents.*` namespace over the same dispatch — so a script can delegate with ordinary control flow. Do not reintroduce `think` / `team` / `peers` as separate tools
+- `execute_tools`' docstring is composed ONCE, in `registry.renderExecuteToolsDescription(typeBlock)`, and both backends use it: CF passes `@cloudflare/codemode`'s `{{types}}` placeholder and lets `createCodeTool` substitute; the CLI joins its providers' declared `types`. Do not let either backend describe this tool on its own. CF used to ship the vendor's generic `DEFAULT_DESCRIPTION` (none of the registry spec reached the model, and its worked example named a `codemode.<name>` call the dispatcher throws on) while the CLI shipped the spec and discarded every namespace declaration
+- `agents` is the ONE delegation surface (`swarm | hire | ask | send | reply | list | dismiss`), and it is projected into the codemode sandbox as the `agents.*` namespace over the same dispatch, so a script can delegate with ordinary control flow. Do not reintroduce `think` / `team` / `peers` as separate tools
 - `swarm` is the measured rung. `AgentsForkDeps` supplies the model resolver and workspace used for measurement. `preset` fixes the search tuple ([docs/EXPLORATION.md](docs/EXPLORATION.md)); `objective` defines what counts. The caller's verifier scores candidates unless `score:'judge'` selects the marginalised ensemble. `verify` uses the closed registry in `strategy/verifier-registry.ts`; an unknown kind fails as `bad_input`. `swarmValidity` checks the resolved tuple before anything spends.
 - **Every field of `agents` belongs to an ACTION, and an unrecognised one is an ERROR that names the field meant** (`unknown field "budgetUsd" — did you mean "budget_usd"?`). The input schemas are `v.strictObject` over one shared entry set, `parseAgentsToolInput` runs on BOTH surfaces (the tool's own `execute` and every `agents.*` codemode member), and `AGENTS_ACTION_FIELDS` declares what each action's handler reads. It was a flat `v.object`, which EXCLUDES an unknown entry rather than rejecting it: measured 2026-08-18, `{action:'fork', task:'x', budgetUsd:5, wallClockMs:1000}` parsed to `{action:'fork', task:'x'}` — two spend caps asked for and neither applied, silently. `gate:agents-fields` holds the declaration to the CODE (per action, the `input.<field>` reads its `case` arm performs, followed through every whole-input hand-off) so an action cannot join the picklist while its fields join nothing. The resume filter deliberately DROPS instead of refusing — a durable job row is history, not a prompt — and logs `agents.resume.fields_dropped`. See [docs/TOOLS.md](docs/TOOLS.md)
 - `memory` is the one durable-state surface: `save | search | conversations` for prose and transcript recall, plus FactsStore-gated `remember | recall | forget` keyed facts. `web` is the one live-web surface: `search | fetch`. Do not reintroduce `fact`, `web_search`, or `web_fetch`.
-- `file` is the ONE file plane (`read | edit | write`) over the same workspace filesystem `run` and `execute_tools` address — do not split it into separate `read`/`write`/`edit` tools, and do not add a second filesystem path for it. Its load-bearing property is that an `edit` whose `old_text` is absent or repeated FAILS naming the problem, and that `edit`/overwriting `write` require the file to have been read first. Both are locked by the `file-plane` layergate layer; losing either is what the `file-plane/edits-land-blind` fault models
+- `file` is the ONE file plane (`read | edit | write`) over the same workspace filesystem `run` and `execute_tools` address. Do not split it into separate `read`/`write`/`edit` tools, and do not add a second filesystem path for it. Its load-bearing property is that an `edit` whose `old_text` is absent or repeated FAILS naming the problem, and that `edit`/overwriting `write` require the file to have been read first. Both are locked by the `file-plane` layergate layer; losing either is what the `file-plane/edits-land-blind` fault models
 - Delegation uses one ladder: direct work, `ask` with a `role` for ONE temporary full agent per question (`context_ref` names workspace paths it reads itself; it is a `lifetime:'task'` row in the one `workspace_subordinates` roster, correlated by `task_event_id`, archived when it answers), `swarm` for measured ephemeral nodes, and `hire` for persistent additional agents. `ask` takes `agent` XOR `role`; there is no standalone `rlm`/`llm` codemode namespace. A swarm's context axis is `fork | fresh`; it is not another rung. There is no model-facing `fork` action or settlement field. Tree search at every depth is `action:'swarm'`. `score:'judge'` reaches `evaluateWithMultiModelJudging` and requires at least `JUDGE_MARGINALISATION_MIN` samples on tree advance. The `strategy/mcts.ts` adapter remains available to programmatic and evaluation callers; production lifetime evolution calls `runMCTS` directly. Subordinate trees recurse to `DELEGATION_MAX_DEPTH = 4`, with depth stored in immutable identity. `DELEGATION_FRAME`, `DELEGATION_INHERITANCE`, and `DELEGATION_RUNGS` are the single source for tool doctrine. The prompt carries only the separate operational index.
 - `getSystemPrompt()` reads `SOUL.md` from VFS
 - `onChatResponse()` fires evolution async (never blocks TurnQueue)
