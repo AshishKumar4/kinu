@@ -651,6 +651,29 @@ export function moduleSpecifiers(tree: SyntaxNode): readonly string[] {
 }
 
 /**
+ * Suffixes a module specifier may omit. Relative imports here carry no
+ * extension, and the raw-Node closure carries `.ts`, so the literal path is
+ * tried first. One list for every resolver, so every gate resolves the same
+ * specifier to the same file.
+ */
+export const IMPORT_CANDIDATES: readonly string[] = ['', '.ts', '.tsx', '/index.ts', '/index.tsx'];
+
+/**
+ * Collapse `.` and `..` segments of a `/`-joined path. Every resolver builds
+ * its candidate base with this rather than with its own loop, so `a/../b`
+ * means one thing everywhere.
+ */
+export function collapsePath(path: string): string {
+  const stack: string[] = [];
+  for (const part of path.split('/')) {
+    if (part === '.' || part === '') continue;
+    if (part === '..') stack.pop();
+    else stack.push(part);
+  }
+  return stack.join('/');
+}
+
+/**
  * The number an expression evaluates to, when it evaluates to one without
  * running anything: a literal, a sign, or arithmetic over those. This is what
  * makes `5 * 60 * 1000` and `300_000` the same policy rather than two — a

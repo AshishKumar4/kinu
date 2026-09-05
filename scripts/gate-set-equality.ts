@@ -84,8 +84,8 @@ import { LADDER, deployGates, packageScripts } from './ladder';
 import { assertMeasured, finding } from './gate-ratchet';
 import { isParseable, trackedFiles } from './sources';
 import {
-  identifierCalleeName, identifierText, importedNames, memberCalleeName, moduleSpecifiers, parse,
-  regexPattern, type SyntaxNode, walk,
+  collapsePath, identifierCalleeName, identifierText, IMPORT_CANDIDATES, importedNames,
+  memberCalleeName, moduleSpecifiers, parse, regexPattern, type SyntaxNode, walk,
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -165,6 +165,11 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'it is written at runtime by a run that may no longer exist, so `git ls-files` has never '
     + 'listed one — the set is exactly what no repository enumerator can produce, and it is the '
     + 'set whose members are live Cloudflare Workers and buckets nobody else will ever delete.',
+  ],
+  [
+    'scripts/gallery-harness.ts',
+    'reads the OS temp directory for gallery builds left by processes that are gone. Not a '
+    + 'repository path, and the whole point is to see what git never will.',
   ],
 ]);
 
@@ -290,28 +295,21 @@ function globMatches(token: string, path: string): boolean {
   return pattern.test(path);
 }
 
-/** Repo-relative paths a file imports. There is one spelling per regime now — no
- *  extension under a bundler or Bun, an explicit `.ts` in the raw-Node closure
- *  (`tools/oxlint/anti-slop`, which is where the `.gate.test.ts` files live) — so
- *  resolution tries the literal path, then `.ts`, then the directory's barrel. It
- *  used to rewrite a trailing `.js`, and left an extensionless specifier pointing
- *  at a path with no file, which drops the edge and silently shrinks the governed
- *  set this gate exists to compare. */
+/** Repo-relative paths a file imports. One spelling per regime: no extension
+ *  under a bundler or Bun, an explicit `.ts` in the raw-Node closure
+ *  (`tools/oxlint/anti-slop`, which is where the `.gate.test.ts` files live).
+ *  Resolution tries the shared candidate list from `syntax.ts`, so an
+ *  extensionless specifier naming a `.tsx` file still resolves: a dropped edge
+ *  silently shrinks the governed set this gate exists to compare. */
 function localImports(file: string, tracked: ReadonlySet<string>): string[] {
   const text = readFileSync(root + file, 'utf8');
   const dir = file.slice(0, file.lastIndexOf('/') + 1);
   const resolved: string[] = [];
   for (const specifier of moduleSpecifiers(parse(file, text).root)) {
     if (!specifier.startsWith('.')) continue;
-    const parts = (dir + specifier).split('/');
-    const stack: string[] = [];
-    for (const part of parts) {
-      if (part === '.' || part === '') continue;
-      if (part === '..') stack.pop();
-      else stack.push(part);
-    }
-    const base = stack.join('/');
-    const target = [base, `${base}.ts`, `${base}/index.ts`].find((path) => tracked.has(path));
+    const base = collapsePath(dir + specifier);
+    const target = IMPORT_CANDIDATES.map((suffix) => base + suffix)
+      .find((path) => tracked.has(path));
     if (target !== undefined) resolved.push(target);
   }
   return resolved;
@@ -568,6 +566,21 @@ function unmeasuredPublications(
     }));
 }
 
+/**
+ * What this gate cannot see, printed on the GREEN path. A limitation visible
+ * only in red output is invisible exactly when the tree is clean, which is
+ * when somebody decides how far to trust the signal. Shell programs are
+ * already counted on every run; these are the classes no count covers.
+ */
+export const BLIND_SPOTS: readonly string[] = [
+  'SETS THAT ARE NOT REPOSITORY FILES — OUT OF SCOPE. Temp-directory prefixes, '
+  + 'sandbox copy exclusions, artifact retention paths, and statistical '
+  + 'denominators are the same defect in a domain no repository enumerator covers.',
+  'GROUNDING FAILURES — OUT OF SCOPE. A claim relayed instead of read, with the '
+  + 'file on disk the whole time, measures nothing too narrowly, so no '
+  + 'set-equality assertion reaches it.',
+];
+
 /* ── The verdict ──────────────────────────────────────────────────────── */
 
 if (import.meta.main) {
@@ -620,6 +633,9 @@ if (import.meta.main) {
     console.error(
       `\n${String(offending)} gate program(s) select repository files on their own authority.`,
     );
+  }
+  if (violations.length === 0) {
+    for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
   }
   process.exit(violations.length === 0 ? 0 : 1);
 }

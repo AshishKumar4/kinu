@@ -60,13 +60,13 @@ const root = new URL('..', import.meta.url).pathname;
 const LOCK = `${root}scripts/ast-duplication.lock.json`;
 
 /**
- * The smallest body worth calling a duplicate, in AST nodes. This was 30 while
- * the gate counted TypeScript's AST; ESTree has fewer wrapper nodes for the same
- * code — no `VariableDeclarationList`, no `Parameter` around each parameter — so
- * the same body now counts about 13% fewer (measured across the groups this gate
- * reports: 52→45, 61→55, 72→64, 105→96). 26 is the image of the old floor under
- * the new unit, picked by measurement rather than taste: it is the largest value
- * at which no group the previous implementation reported is lost.
+ * The smallest body worth calling a duplicate, in AST nodes. ESTree carries
+ * fewer wrapper nodes for the same code than the TypeScript AST (no
+ * `VariableDeclarationList`, no `Parameter` around each parameter), so bodies
+ * count about 13% fewer here (measured across the groups this gate reports:
+ * 52→45, 61→55, 72→64, 105→96). 26 is the largest floor at which every group
+ * the old floor of 30 found is still found: the measured image of that floor
+ * under the new unit, not a taste.
  */
 const MIN_NODES = 26;
 
@@ -240,6 +240,25 @@ export function describe(group: DuplicateGroup): string {
   return [head, ...group.members.map((m) => `    ${m.file}:${m.line} ${m.name}`)].join('\n');
 }
 
+/**
+ * What this gate cannot see, printed on the GREEN path. A limitation visible
+ * only in red output is invisible exactly when the tree is clean, which is
+ * when somebody decides how far to trust the signal.
+ */
+export const BLIND_SPOTS: readonly string[] = [
+  'A NEAR-COPY WHOSE LITERALS WERE ALSO EDITED — NOT DETECTED. Literal text is '
+  + 'part of the fingerprint, so the same algorithm over different unit strings '
+  + 'or messages is a different body. Live pair: `fmtSize` in '
+  + '`packages/cf-backend/src/components/surfaces/FilesSurface.tsx` and '
+  + '`formatBytes` in `packages/cli/src/display.ts`.',
+  'DUPLICATED POLICY IN DIFFERENT CODE SHAPES — NOT DETECTED. Two '
+  + 'implementations of one rule with different structure share no fingerprint. '
+  + 'Only identical structure is governed here.',
+  'BODIES BELOW 26 AST NODES — OUT OF SCOPE. Small shapes collide by '
+  + 'coincidence, so the floor keeps the gate from dying on boilerplate. A copy '
+  + 'smaller than the floor is invisible here.',
+];
+
 if (import.meta.main) {
   const sources = readSources();
   const units = [...sources].reduce((n, [file, text]) => n + unitsOf(file, text).length, 0);
@@ -253,12 +272,16 @@ if (import.meta.main) {
     console.log(`ast-duplication: locked ${count} group(s) over ${measured}`);
   } else {
     const detail = new Map(groups.map((g) => [g.key, describe(g)]));
-    process.exit(report(
+    const code = report(
       'ast-duplication',
       reconcile(groups.map((g) => g.key), LOCK),
       detail,
       'bun scripts/ast-duplication.ts --lock',
       measured,
-    ));
+    );
+    if (code === 0) {
+      for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
+    }
+    process.exit(code);
   }
 }

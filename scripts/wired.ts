@@ -101,9 +101,9 @@ import {
   trackedFiles,
 } from './sources';
 import {
-  classMembers, declarationOf, declaredName, identifierText, importBindings,
-  importedNames, isFunctionLike, isOptionalMember, isReExport, literalText, methodKind,
-  moduleSpecifiers,
+  classMembers, collapsePath, declarationOf, declaredName, identifierText, importBindings,
+  importedNames, IMPORT_CANDIDATES, isFunctionLike, isOptionalMember, isReExport, literalText,
+  methodKind, moduleSpecifiers,
   NAMESPACE, parse, type Parsed, reExportBindings, referencedNames, returnTypeOf, superClassName,
   type SyntaxNode, walk,
 } from './syntax';
@@ -205,25 +205,11 @@ function defaultExportName(tree: SyntaxNode): string | undefined {
   return undefined;
 }
 
-/** Extensions a specifier may omit. Relative imports here carry none, and the
- *  raw-Node closure carries `.ts`, so the literal path is tried first. */
-const CANDIDATES = ['', '.ts', '.tsx', '/index.ts', '/index.tsx'];
-
 /** This workspace's own packages. */
 const WORKSPACE_SCOPE = '@kinu.run/';
 
 /** A vite import query — `./x.js?raw` addresses the same file as `./x.js`. */
 const QUERY = '?';
-
-function collapse(path: string): string {
-  const stack: string[] = [];
-  for (const part of path.split('/')) {
-    if (part === '.' || part === '') continue;
-    if (part === '..') stack.pop();
-    else stack.push(part);
-  }
-  return stack.join('/');
-}
 
 /** A package's declared subpaths. Parsed rather than guessed: `@kinu.run/core`
  *  publishes `./workspace` as `src/vfs/nimbus-workspace.ts`, so the directory
@@ -295,7 +281,7 @@ export function createResolver(
     const rules = Object.entries(paths).flatMap(([pattern, targets]) => {
       const target = targets[0];
       if (target === undefined || !pattern.endsWith('*') || !target.endsWith('*')) return [];
-      return [[pattern.slice(0, -1), collapse(`${dir}/${target.slice(0, -1)}`)] as const];
+      return [[pattern.slice(0, -1), collapsePath(`${dir}/${target.slice(0, -1)}`)] as const];
     });
     aliasRules.set(dir, rules);
     return rules;
@@ -304,12 +290,12 @@ export function createResolver(
   return (from, raw) => {
     const specifier = raw.includes(QUERY) ? raw.slice(0, raw.indexOf(QUERY)) : raw;
     const found = (base: string): Resolution => ({
-      file: CANDIDATES.map((suffix) => base + suffix).find((path) => corpus.has(path)),
+      file: IMPORT_CANDIDATES.map((suffix) => base + suffix).find((path) => corpus.has(path)),
       local: true,
     });
 
     if (specifier.startsWith('.')) {
-      const base = collapse(`${from.slice(0, from.lastIndexOf('/'))}/${specifier}`);
+      const base = collapsePath(`${from.slice(0, from.lastIndexOf('/'))}/${specifier}`);
       // A relative path into node_modules is a DEPENDENCY reached through the
       // filesystem — @nimbus-sh/worker exports no subpath for its dist session
       // modules, and nimbus-programmatic.ts documents the one live instance.
@@ -321,13 +307,13 @@ export function createResolver(
       const [pkg, ...rest] = specifier.slice(WORKSPACE_SCOPE.length).split('/');
       if (pkg === undefined || pkg.length === 0) return EXTERNAL;
       const entry = subpaths(pkg)[rest.length === 0 ? '.' : `./${rest.join('/')}`];
-      const named = entry === undefined ? undefined : collapse(`packages/${pkg}/${entry}`);
+      const named = entry === undefined ? undefined : collapsePath(`packages/${pkg}/${entry}`);
       if (named !== undefined && corpus.has(named)) return { file: named, local: true };
-      return found(collapse(`packages/${pkg}/src/${rest.join('/')}`));
+      return found(collapsePath(`packages/${pkg}/src/${rest.join('/')}`));
     }
     for (const [prefix, target] of aliases(from)) {
       if (!specifier.startsWith(prefix)) continue;
-      return found(collapse(`${target}/${specifier.slice(prefix.length)}`));
+      return found(collapsePath(`${target}/${specifier.slice(prefix.length)}`));
     }
     return EXTERNAL;
   };
@@ -382,7 +368,7 @@ export function buildGraph(reachers: ReadonlyMap<string, string>): Graph {
       if (target !== undefined) edges.add(target);
     }
 
-    const exports = exportedDeclarations(file, text);
+    const exports = exportedDeclarations(file, text, tree);
     modules.set(file, {
       file,
       exports,

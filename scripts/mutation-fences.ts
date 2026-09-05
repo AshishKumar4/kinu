@@ -90,7 +90,7 @@ export interface Fence {
 }
 
 /**
- * THE DECLARED FENCES. Three today, one per subsystem the tier was built to
+ * THE DECLARED FENCES. Four today, across the three subsystems the tier was built to
  * hammer, each named with the defect its absence shipped.
  *
  * Adding a fence: name `file`, quote the guarded lines as `snippet`, write the

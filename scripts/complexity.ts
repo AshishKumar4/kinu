@@ -53,13 +53,12 @@
  * and growth is what fails, which is the only shape of budget worth having on a
  * tree this size.
  *
- * WHY THE LINE IS p99.9 AND NOT THE TWENTIETH-WORST FUNCTION. The first draft
- * pinned the worst twenty, whose floor is 53. A 40-branch dispatcher injected
- * into `packages/core/src/config.ts` scored 41 and the gate stayed green: a
- * budget that admits a fresh 41-branch function is a budget in name only. p99.9
- * is measured the same way and lands at 39, so that injection is red and the
- * list stays short enough to read. The worst twenty are still printed on every
- * run; they are the head of the same inventory.
+ * WHY THE LINE IS p99.9 AND NOT THE TWENTIETH-WORST FUNCTION. The worst twenty
+ * floor at 53. A 40-branch dispatcher injected into `packages/core/src/config.ts`
+ * scores 41 and stays green under that floor: a budget that admits a fresh
+ * 41-branch function is a budget in name only. p99.9 lands at 39, so that
+ * injection is red and the list stays short enough to read. The worst twenty
+ * are still printed on every run; they are the head of the same inventory.
  *
  * ## The set it MEASURES and the set it GOVERNS
  *

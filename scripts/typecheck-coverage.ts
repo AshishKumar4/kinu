@@ -149,6 +149,17 @@ export async function programFiles(
   return [...fileNames].sort();
 }
 
+/**
+ * What this gate cannot see, printed on the GREEN path. A limitation visible
+ * only in red output is invisible exactly when the tree is clean, which is
+ * when somebody decides how far to trust the signal.
+ */
+export const BLIND_SPOTS: readonly string[] = [
+  'WHETHER THE TESTS IN A COVERED DIRECTORY ASSERT ANYTHING — NOT MEASURED. '
+  + 'This gate proves each runnable suite reaches the compiler. A suite that '
+  + 'compiles and asserts nothing passes here.',
+];
+
 export interface TestCoverage {
   readonly governed: readonly string[];
   readonly missing: readonly string[];
@@ -235,6 +246,7 @@ async function main(): Promise<number> {
       `typecheck-coverage: ok — measured ${String(tests.length)} runnable test files = governed `
       + `${String(coverage.governed.length)} exact program-or-exception rows (${measured})`,
     );
+    for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
     return 0;
   }
 

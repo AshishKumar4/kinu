@@ -427,9 +427,12 @@ export function listHistoryRefs(repoRoot: string): readonly string[] {
  * a remediation must reach. */
 export function refClassOf(ref: string): HistoryRefClass {
   const parts = ref.split('/');
-  return parts[1] === 'remotes' && parts.length > 3
-    ? ['refs', 'remotes', parts[2]!].join('/')
-    : parts.slice(0, 2).join('/');
+  if (parts[1] === 'remotes' && parts.length > 3) {
+    const remote = parts[2];
+    if (remote === undefined) throw new Error(`sources: unreachable ref shape ${ref}`);
+    return ['refs', 'remotes', remote].join('/');
+  }
+  return parts.slice(0, 2).join('/');
 }
 
 interface HistoryRecord {
@@ -552,7 +555,8 @@ class BufferedHistoryBytes {
   async take(bytes: number): Promise<Buffer> {
     if (bytes === 0) return Buffer.alloc(0);
     await this.ensure(bytes);
-    const first = this.chunks[0]!;
+    const first = this.chunks[0];
+    if (first === undefined) throw new Error('sources: history byte buffer lost data it ensured');
     if (first.byteLength >= bytes) {
       const result = first.subarray(0, bytes);
       this.available -= bytes;
@@ -564,7 +568,8 @@ class BufferedHistoryBytes {
     let offset = 0;
     let remaining = bytes;
     while (remaining > 0) {
-      const chunk = this.chunks[0]!;
+      const chunk = this.chunks[0];
+      if (chunk === undefined) throw new Error('sources: history byte buffer lost data it ensured');
       const count = Math.min(chunk.byteLength, remaining);
       chunk.copy(result, offset, 0, count);
       offset += count;
@@ -579,7 +584,8 @@ class BufferedHistoryBytes {
   async discard(bytes: number): Promise<void> {
     while (bytes > 0) {
       await this.ensure(1);
-      const chunk = this.chunks[0]!;
+      const chunk = this.chunks[0];
+      if (chunk === undefined) throw new Error('sources: history byte buffer lost data it ensured');
       const count = Math.min(chunk.byteLength, bytes);
       this.available -= count;
       bytes -= count;
@@ -624,7 +630,8 @@ export async function readHistoryObjects(
       if (match === null || !Number.isSafeInteger(Number(match[3]))) {
         throw new Error('sources: git cat-file --batch returned an invalid object header');
       }
-      const type = match[2]!;
+      const type = match[2];
+      if (type === undefined) throw new Error('sources: git cat-file --batch returned an invalid object header');
       const size = Number(match[3]);
       if (type !== 'blob' || size > maxBlobBytes) {
         await bytes.discard(size);

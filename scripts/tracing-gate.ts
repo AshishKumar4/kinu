@@ -70,19 +70,21 @@ const REPO = new URL('..', import.meta.url).pathname;
  *  environment list is the thing that drifts when someone adds a third. */
 const WRANGLER_CONFIGS = ['packages/cf-backend/wrangler.jsonc'] as const;
 
-/** Files that may construct a tracer — the census the config assertion is
+/** Files that may construct a tracer. The census the config assertion is
  *  conditioned on. If none of them uses the factory, traces being off is not a
  *  defect and the gate says so rather than inventing one.
  *
- *  `actor-agent.ts` is the PRODUCTION call site, and until it was listed here this
- *  gate's config assertion was vacuous by its own design: the factory was used
- *  only by itself and by this gate's fixture, so `instrumentedCount` counted two
- *  files that ship no span and `observability.traces` could have been absent from
- *  every environment without a finding. That is the shape the whole gate warns
- *  about — correct, wired, dead — reproduced one level up, in the gate. */
+ *  `actor-agent.ts` and `exploration.ts` are the PRODUCTION call sites. Until
+ *  `actor-agent.ts` was listed here this gate's config assertion was vacuous by
+ *  its own design: the factory was used only by itself and by this gate's
+ *  fixture, so `instrumentedCount` counted two files that ship no span and
+ *  `observability.traces` could have been absent from every environment without
+ *  a finding. That is the shape the whole gate warns about. Correct, wired,
+ *  dead. Reproduced one level up, in the gate. */
 const TRACER_SOURCES = [
   'packages/cf-backend/src/obs/cf-tracer.ts',
   'packages/cf-backend/src/actor-agent.ts',
+  'packages/cf-backend/src/exploration.ts',
   'packages/cf-backend/tests/fixtures/tracing-gate-worker.ts',
 ] as const;
 
@@ -277,8 +279,7 @@ export function auditTracing(
           silently: 'each traced invocation emits a trace event that re-invokes the tail handler; '
             + 'measured at 51 self-invocations within 300 ms of ONE request, still climbing at 3 s, '
             + 'bounded only by a breaker inside the probe',
-          fix: 'point tail_consumers at a SEPARATE worker with no bindings, so re-entry is '
-            + 'structurally impossible instead of merely avoided',
+          fix: 'point tail_consumers at a SEPARATE worker with no bindings, so re-entry cannot happen',
         }));
       }
     }
@@ -332,6 +333,8 @@ async function main(): Promise<number> {
     return 1;
   }
   console.log(`${gate}: ok — ${measured}`);
+  console.log('  blind: the span tree shape. tailStream is not dispatched locally or on the deployed runtime, so shape is readable only from Cloudflare ingestion');
+  console.log('  blind: the file list is hand kept. A new production call site outside TRACER_SOURCES is uncounted until the list gains it');
   return 0;
 }
 

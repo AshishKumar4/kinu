@@ -702,6 +702,11 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  if (PATTERNS.length === 0) {
+    console.error('Secret scan FAILED — 0 patterns, the matcher is not matching.');
+    process.exitCode = 1;
+    return;
+  }
   let failed = false;
   if (args[0] !== '--history') failed = reportLive(scanLiveIndex());
   failed = reportHistory(await scanHistory()) || failed;

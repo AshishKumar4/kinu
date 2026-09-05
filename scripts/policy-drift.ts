@@ -333,9 +333,9 @@ export function findDrift(sources: ReadonlyMap<string, string>): Survey {
      in core, which are one policy written twice.
 
      So the rule is: some shared word must identify EXACTLY THIS PAIR at this
-     value. Two is not a threshold anyone chose — it is what a pair is. A crowd
-     at one (word, value) means the number is a common default for that role,
-     which is not a duplicated decision.
+     value. Two identifies one pair. A crowd at one (word, value) means the
+     number is a common default for that role, which is not a duplicated
+     decision.
 
      Measured: without this, 23 findings of which 3 were real. With it, the
      three seed-list positives survive and the crowd is silent.                */

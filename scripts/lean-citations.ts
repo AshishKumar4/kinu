@@ -84,7 +84,7 @@ const CITED_NAMES_TRAILING =
  *    name as prose; an author citing one marks it as an identifier.
  * 2. The name is SNAKE_CASE, enforced here rather than filtered afterwards. Without
  *    the path-first anchor a bare lowercase word is far likelier to be an English
- *    word, so the underscore does the work the anchor used to.
+ *    word, so the underscore does the anchor's work.
  * 3. The locator is ADJACENT: nothing but whitespace may sit between the name's
  *    closing backtick and the opening parenthesis. This is the condition that
  *    separates a citation from prose, because prose puts WORDS in that gap — see

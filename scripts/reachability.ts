@@ -175,6 +175,23 @@ export function describe(entry: Unreachable): string {
   return `  ${rpc.file}:${rpc.line} ${rpc.owner}.${rpc.method}() — ${reach}`;
 }
 
+/**
+ * What this gate cannot see, printed on the GREEN path. A limitation visible
+ * only in red output is invisible exactly when the tree is clean, which is
+ * when somebody decides how far to trust the signal.
+ */
+export const BLIND_SPOTS: readonly string[] = [
+  'A REACHABLE RPC WHOSE RESULT NOBODY READS — NOT DETECTED. This gate proves a '
+  + 'call path exists. It has no opinion on whether any caller reads the result.',
+  'AN INVOCATION THAT IS NEITHER A STRING ARGUMENT NOR A MEMBER CALL — NOT '
+  + 'DETECTED. Dispatch through a registry table, a route map, or a string built '
+  + 'at runtime names the method where no literal argument or member callee '
+  + 'carries it.',
+  'A CALLER IN A FILE THAT IS NEITHER PRODUCT SOURCE NOR A TEST — OUT OF SCOPE. '
+  + 'Docs, shell, and workflow files are never searched, so an RPC driven only '
+  + 'from prose or a script reads as unreachable, loudly rather than quietly.',
+];
+
 if (import.meta.main) {
   const sources = readSources();
   const tests = readTests();
@@ -197,12 +214,16 @@ if (import.meta.main) {
     console.log(`reachability: locked ${count} unreachable over ${measured}`);
   } else {
     const detail = new Map(unreachable.map((e) => [keyOf(e), describe(e)]));
-    process.exit(report(
+    const code = report(
       'reachability',
       reconcile(unreachable.map(keyOf), LOCK),
       detail,
       'bun scripts/reachability.ts --lock',
       measured,
-    ));
+    );
+    if (code === 0) {
+      for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
+    }
+    process.exit(code);
   }
 }

@@ -86,8 +86,8 @@ import {
   readRepositoryFile, readSources, trackedFiles, workspaceScope,
 } from './sources';
 import {
-  classMembers, declaredName, importBindings, isFunctionLike, literalText, moduleSpecifiers,
-  parse, stringArguments, type SyntaxNode, walk,
+  classMembers, collapsePath, declaredName, importBindings, IMPORT_CANDIDATES, isFunctionLike,
+  literalText, moduleSpecifiers, parse, stringArguments, type SyntaxNode, walk,
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -365,9 +365,9 @@ function productFileNamed(
 ): string | undefined {
   const parts = from.split('/');
   parts.pop();
-  const candidates = literal.startsWith('.') ? [] : [collapse(literal)];
+  const candidates = literal.startsWith('.') ? [] : [collapsePath(literal)];
   for (let depth = parts.length; depth >= 0; depth -= 1) {
-    candidates.push(collapse(`${parts.slice(0, depth).join('/')}/${literal}`));
+    candidates.push(collapsePath(`${parts.slice(0, depth).join('/')}/${literal}`));
   }
   return candidates.find((path) => tracked.has(path) && !isTestFile(path)
     && (isParseable(path) || isStylesheet(path)));
@@ -787,8 +787,7 @@ function mirrors(
 ): Finding[] {
   const found: Finding[] = [];
   const lines = parsed.text.split('\n');
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]!;
+  for (const [index, line] of lines.entries()) {
     if (!MIRROR_COMMENT.test(line)) continue;
     found.push({
       file: parsed.file, line: index + 1, test: titleAt(spans, index + 1),
@@ -1507,36 +1506,25 @@ export interface Census {
   readonly blindSpots: readonly string[];
 }
 
-const IMPORT_CANDIDATES = ['', '.ts', '.tsx', '/index.ts', '/index.tsx'];
-
-function collapse(path: string): string {
-  const stack: string[] = [];
-  for (const part of path.split('/')) {
-    if (part === '.' || part === '') continue;
-    if (part === '..') stack.pop();
-    else stack.push(part);
-  }
-  return stack.join('/');
-}
-
 /**
  * The tracked file a module specifier names, with the candidate-suffix rule
  * `wired.ts` uses — so "the module under test" means the same thing in both.
+ * The suffix list and the collapse live in `syntax.ts`: one spelling shared by
+ * every resolver, rather than one per gate.
  *
- * ONE RESOLVER, and it is the reason the golden-fixture reader no longer
- * carries a `packages/[^/]+/src/` pattern of its own: "this script imports
- * product source" is now RESOLVED to a path the enumeration holds and asked of
- * `isProductSource`, rather than matched against the shape a specifier usually
- * has. A specifier that resolves nowhere is not an import of anything.
+ * A specifier that resolves nowhere is not an import of anything, and "this
+ * script imports product source" is RESOLVED to a path the enumeration holds
+ * and asked of `isProductSource`, rather than matched against the shape a
+ * specifier usually has.
  */
 function resolveSpecifier(
   specifier: string, dir: string, tracked: ReadonlySet<string>, scope: string,
 ): string | undefined {
   let base: string | undefined;
-  if (specifier.startsWith('.')) base = collapse(`${dir}/${specifier}`);
+  if (specifier.startsWith('.')) base = collapsePath(`${dir}/${specifier}`);
   else if (specifier.startsWith(`${scope}/`)) {
     const rest = specifier.slice(scope.length + 1).split('/');
-    base = collapse(`packages/${rest[0] ?? ''}/src/${rest.slice(1).join('/')}`);
+    base = collapsePath(`packages/${rest[0] ?? ''}/src/${rest.slice(1).join('/')}`);
   }
   if (base === undefined) return undefined;
   const at = base;

@@ -58,6 +58,10 @@ const FRESH = process.env.KINU_HISTORY_PROOF_FRESH === "1";
 const CHROME_CANDIDATES = ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium"];
 const WALK_POLL_MS = 500;
 const PAGE_WAIT_MS = 30_000;
+/** Page size of `getChatHistoryPage`, mirroring `CHAT_PAGE_SIZE` in
+ *  `packages/cf-backend/src/hooks/use-chat-thread.ts`. Estimate logging only;
+ *  the walk itself stops on the boundary, never on a count. */
+const HISTORY_PAGE_SIZE = 40;
 const MAX_WALK_ITERATIONS = 120;
 
 const t0 = Date.now();
@@ -497,7 +501,7 @@ async function walk(): Promise<void> {
       + `(${(seededBytes / (1024 * 1024)).toFixed(2)} MiB seeded) — oldest ${cut} cut, premise proven`);
 
     await page.screenshot({ path: join(ARTIFACTS, "1-initial-window.png") });
-    log(`stage 4: screenshot 1-initial-window.png — walking ${Math.ceil(cut / 40)}+ pages to the oldest row`);
+    log(`stage 4: screenshot 1-initial-window.png — walking ${Math.ceil(cut / HISTORY_PAGE_SIZE)}+ pages to the oldest row`);
 
     let midWalkCaptured = false;
     let reachedBeginning = false;

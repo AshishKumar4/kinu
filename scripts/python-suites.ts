@@ -2,16 +2,16 @@
 /**
  * The Python suites, run and PROVEN RUN.
  *
- * `bench/` ships three unittest suites — 77 tests over the shared KINU_HOME
- * guard, the model-endpoint adapter, the harbor corpus identity and the clbench
- * event mapping — and until this file existed not one gate in the repository
- * executed any of them. They were invisible rather than exempted:
- * `scripts/ladder.test.ts` asserts every tracked test file is claimed by some
- * runner, and its denominator is `isRunnableSuite`, a JS/TS basename rule. So
- * "every test file is claimed" was a statement about TypeScript, and three
- * Python suites sat outside the sentence entirely. `scripts/sources.ts` now
- * exports `isPythonSuite`, which puts them in the denominator, and this is the
- * runner that answers for them.
+ * `bench/` ships three unittest suites over the shared KINU_HOME guard, the
+ * model-endpoint adapter, the harbor corpus identity and the clbench event
+ * mapping (84 tests executed on 2026-09-05; this gate prints the count on every
+ * run). Without a runner that executes them they are invisible rather than
+ * exempted: `scripts/ladder.test.ts` asserts every tracked test file is claimed
+ * by some runner, and its denominator is `isRunnableSuite`, a JS/TS basename
+ * rule. So "every test file is claimed" is a statement about TypeScript, and
+ * three Python suites sit outside that sentence. `scripts/sources.ts` exports
+ * `isPythonSuite`, which puts them in the denominator, and this is the runner
+ * that answers for them.
  *
  * WHY IT IS NOT ONE `unittest discover`. Measured: `python3 -m unittest discover
  * -t . -s bench -p 'test_*.py'` reports `Ran 0 tests` and exits 0 — a silent
@@ -105,6 +105,18 @@ export function reportedCount(output: string): number | null {
   return match?.[1] === undefined ? null : Number(match[1]);
 }
 
+/**
+ * What this gate cannot see, printed on the GREEN path. A limitation visible
+ * only in red output is invisible exactly when the tree is clean, which is
+ * when somebody decides how far to trust the signal.
+ */
+export const BLIND_SPOTS: readonly string[] = [
+  'TYPE ERRORS — NOT DETECTED. No Python typechecker runs in this repository, '
+  + 'so a suite that passes unittest with a wrong-typed call passes here.',
+  'PYTHON WITHOUT SUITES — OUT OF SCOPE. Only files the discovery pattern '
+  + 'selects are governed. A bench helper no suite imports is invisible here.',
+];
+
 function main(): number {
   const files = trackedFiles().filter(isPythonSuite);
   const roots = suiteRoots(files);
@@ -191,6 +203,7 @@ function main(): number {
     return 1;
   }
   console.log(`python-suites: ok — ${measured}, ${String(executed)} tests executed`);
+  for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
   return 0;
 }
 

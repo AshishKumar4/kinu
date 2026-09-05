@@ -1,9 +1,9 @@
 /**
  * Egress interception totality — no container has an un-intercepted way out.
  *
- * Kinu removes the owner's secrets from the agent's container and replaces
- * them with placeholders, substituting the real value outside the container on
- * the way out. That trade is only safe if the interception is TOTAL. A path
+ * Kinu removes the owner's secrets from the agent container. It substitutes
+ * the real value outside the container on the way out. That trade is only safe
+ * if the interception is TOTAL. A path
  * that leaves without passing a handler is worse than having no vault at all:
  * the secret is gone from the container, so the agent's own work breaks, while
  * the path that could have carried it is still open.

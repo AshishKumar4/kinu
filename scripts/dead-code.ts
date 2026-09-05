@@ -99,7 +99,7 @@ import {
 } from './sources';
 import {
   declarationOf, declaredBindings, declaredName, exportedLocalNames, importedNames,
-  isReExport, parse,
+  isReExport, parse, type SyntaxNode,
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -145,14 +145,15 @@ export interface KnipFindings {
  *  on the declaration or in a later `export { … }`. A specifier naming an
  *  imported symbol is a re-export and is not included — that rule is what took
  *  this gate from 64 raw findings to 13, because 51 were barrel re-export lines
- *  whose symbol is live somewhere else. */
-export function exportedDeclarations(file: string, text: string): Set<string> {
+ *  whose symbol is live somewhere else. Takes an already-parsed tree when the
+ *  caller holds one, so a whole-tree reader parses each file once. */
+export function exportedDeclarations(file: string, text: string, tree?: SyntaxNode): Set<string> {
   const declared = new Set<string>();
   const imported = new Set<string>();
   const exportedHere = new Set<string>();
   const specifiers = new Set<string>();
 
-  for (const statement of parse(file, text).root.children) {
+  for (const statement of (tree ?? parse(file, text).root).children) {
     for (const name of importedNames(statement)) imported.add(name);
     if (statement.type === 'ImportDeclaration') continue;
     // `export … from '…'` never declares anything here.
@@ -529,6 +530,19 @@ export function dependencyReason(key: string): string | undefined {
   return Object.entries(DEPENDENCY_REASONS).find(([recorded]) => recorded === key)?.[1];
 }
 
+/**
+ * What this gate cannot see, printed on the GREEN path. A limitation visible
+ * only in red output is invisible exactly when the tree is clean, which is
+ * when somebody decides how far to trust the signal.
+ */
+export const BLIND_SPOTS: readonly string[] = [
+  'PER-BACKEND REACH — NOT DETECTED. Reachability is one whole-tree union, so a '
+  + 'symbol still referenced by one backend reads as live after the other backend '
+  + 'drops the wire. Closing it needs one entrypoint set per backend and a diff.',
+  'UNUSED BARREL ENTRIES — OUT OF SCOPE. A re-export line whose symbol is live '
+  + 'elsewhere is surface bloat, not dead logic, and this gate does not report it.',
+];
+
 if (import.meta.main) {
   const production = knip(true);
   const everywhere = knip(false);
@@ -621,5 +635,9 @@ if (import.meta.main) {
   const verdict = report(
     'dead-code', ratchet, detail, 'bun scripts/dead-code.ts --lock', measured,
   );
-  process.exit(faults.length > 0 ? 1 : verdict);
+  const code = faults.length > 0 ? 1 : verdict;
+  if (code === 0) {
+    for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
+  }
+  process.exit(code);
 }

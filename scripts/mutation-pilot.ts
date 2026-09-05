@@ -9,9 +9,9 @@
  * proofs have not rotted. Its own green output states the hole: "a fence nobody
  * declared" — nothing enumerates the guards a module contains.
  *
- * `scripts/mutation-sweep.ts` is a hand-authored CATALOGUE of 25 mutations over
- * `packages/core/src/strategy/` and `tools/agents-tool.ts`, aimed where an audit
- * had already found four built-and-unwired features. Each entry is a decision
+ * `scripts/mutation-sweep.ts` is a hand-authored CATALOGUE of 20 mutations over
+ * `packages/core/src/strategy/` and `packages/core/src/tools/agents-tool.ts`, aimed where
+ * an audit had already found four built-and-unwired features. Each entry is a decision
  * someone chose to question, with a sentence saying what it decides.
  *
  * Both need a human to name the line first. This program does not: it GENERATES
@@ -41,7 +41,7 @@
  * moves the line, and `--all` takes the pool. A budget spent evenly across four
  * operators and as many files as possible is the sample that says most about the
  * scope; 24 consecutive mutants from one file would say a great deal about that
- * file and nothing about the other 40.
+ * file and nothing about the rest of the scope.
  *
  * ## What a survivor claims here
  *
@@ -196,7 +196,7 @@ function isGuard(node: SyntaxNode): boolean {
  * A condition is negated rather than replaced by a constant, because `if (true)`
  * is usually dead-code-eliminated by the reader as much as by the compiler:
  * negation keeps both arms reachable and asks the sharper question, which is
- * whether anything asserts on the arm that is now taken.
+ * whether anything asserts on the arm the mutant takes.
  */
 export function mutantsIn(file: string, text: string): Mutant[] {
   const parsed = parse(file, text);
@@ -269,7 +269,7 @@ export function pool(files: ReadonlyMap<string, string>): Mutant[] {
  * operator the code happens to offer most of — on this scope that is
  * `negate-condition` — so a prefix of the pool would spend the whole budget on
  * one operator in the first few files, and the run would say nothing about the
- * other three or about the other 38 files.
+ * other three operators or about the other files.
  */
 export function select(all: readonly Mutant[], budget: number): Mutant[] {
   const byOperator = new Map<Operator, Mutant[]>();

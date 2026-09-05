@@ -92,8 +92,8 @@ export const SKIP_RATCHET_TARGETS: readonly string[] = [
 /**
  * The vitest side of the eval tier, named as FILES rather than a directory.
  *
- * `./tests/` is satisfied by the bun arm alone, so before this existed the gate
- * could not tell a MISSING vitest report from a clean one — and the vitest arm
+ * `./tests/` is satisfied by the bun arm alone, so without file-named arms a
+ * MISSING vitest report reads as clean — and the vitest arm
  * reports 36 tests of which 35 skip, credential-free, exiting 0. That is the
  * exact false green this file exists for, one runner over. `bun test` cannot see
  * these files (it matches only `*.test.*` / `*_test.*` / `*.spec.*`), so they can
@@ -129,6 +129,21 @@ export const ALL_SKIP_RATCHET_TARGETS: readonly string[] = [
 ];
 
 export const SKIP_LOCK_PATH = resolve(root, 'scripts/skip-ratchet.lock.json');
+
+/**
+ * What this gate cannot see, printed on the GREEN path. A limitation visible
+ * only in red output is invisible exactly when the tree is clean, which is
+ * when somebody decides how far to trust the signal.
+ */
+export const BLIND_SPOTS: readonly string[] = [
+  'ARMS NEVER RUN — OUT OF SCOPE WHEN --target NAMES A SUBSET. The '
+  + 'non-emptiness proof covers only the targets the caller names. An arm '
+  + 'nobody ran and nobody named is invisible here.',
+  'AN ENVIRONMENT FAILURE OUTSIDE AN infraBoundary — REPORTED AS BEHAVIOURAL. '
+  + 'Only code that raises through `infraBoundary` counts as infrastructure. An '
+  + 'environment error thrown elsewhere lands in the behavioural list, which '
+  + 'under-claims infrastructure rather than over-claiming it.',
+];
 
 /** One skipped test, keyed by identity rather than by line so an edit above it
  *  does not read as a new skip. */
@@ -537,6 +552,7 @@ function main(argv: readonly string[]): number {
         ? `; ${String(verdict.stale.length)} locked skip(s) RAN against the resolved target`
         : ''),
     );
+    for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
     return 0;
   }
 

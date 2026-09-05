@@ -456,7 +456,15 @@ async function main(): Promise<number> {
   for (const record of merged) {
     const pkg = packageOf(record.file);
     const t = tally(record);
-    pkgTallies.set(pkg, pkgTallies.has(pkg) ? mergeTally(pkgTallies.get(pkg)!, t) : t);
+    const prior = pkgTallies.get(pkg);
+    pkgTallies.set(pkg, prior === undefined ? t : mergeTally(prior, t));
+  }
+  // A merged artifact over no file records is a coverage number made of
+  // nothing. Every group can pass while writing an empty lcov, so the merge
+  // itself is what has to refuse it — the same liveness rule
+  // `coverage:check` holds on the artifact from the other side.
+  if (merged.length === 0) {
+    failures.push('merged lcov holds no file records');
   }
 
   // THE MERGED ARTIFACTS. Written even when a runner failed, so a red run

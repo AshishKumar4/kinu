@@ -6,14 +6,14 @@
  * `SwarmRunDeps.mission`, `AgentsForkDeps.registry`, `FORK_STRATEGY_ID`, merge-back's
  * four policies, `spawnNodeFacet`, the `carry:'artifacts'` threshold, the `models`
  * field, the judge clamp. So the catalogue is `packages/core/src/strategy/` plus
- * `tools/agents-tool.ts` — the swarm engine, the delegation tool that drives it, and
- * the measurement seams they settle by. A wider sweep is affordable in wall clock and
- * would dilute the reading; this one aims where the defects already were.
+ * `packages/core/src/tools/agents-tool.ts` — the swarm engine, the delegation tool that
+ * drives it, and the measurement seams they settle by. A wider sweep is affordable in
+ * wall clock and would dilute the reading; this one aims where the defects already were.
  *
- * NINE ARE CONTROLS. A sweep reporting only survivors is indistinguishable from a
- * sweep that ran nothing, so nine entries are decisions a named suite already pins.
+ * SEVENTEEN ARE CONTROLS. A sweep reporting only survivors is indistinguishable from a
+ * sweep that ran nothing, so seventeen entries are decisions a named suite already pins.
  * They must come back KILLED. If one of them survives, the harness is broken and no
- * survivor in the same run means anything. The ninth is the defect this sweep found:
+ * survivor in the same run means anything. The eleventh is the defect this sweep found:
  * once fixed and defended, a question becomes a control.
  *
  * WHAT IS NOT HERE, AND WHY — recognising an equivalent mutant is part of the method,
@@ -33,7 +33,7 @@
  *   - `Date.now() > UNTIL` → `>=` on the exec-ratio deadline. Separates the readings
  *     only when the clock lands on the exact millisecond at a 1024-call boundary. No
  *     test can hold that deterministically, so it is inert in practice.
- *   - `void 0;` and its family. Declined twice already today by two agents
+ *   - `void 0;` and its family. Declined twice on 2026-08-19 by two agents
  *     independently, and both were right.
  */
 
@@ -109,27 +109,27 @@ export const CATALOGUE: readonly Mutation[] = [
   },
   {
     id: 'refusal-class-unavailable',
-    file: 'packages/core/src/strategy/swarm-run.ts',
-    find: "return refusalOf(new KinuError('unavailable', error));",
-    replace: "return refusalOf(new KinuError('unsupported', error));",
-    decision: "this file's refusals are transient `unavailable`, not permanent `unsupported`",
+    file: 'packages/core/src/strategy/swarm-setup.ts',
+    find: "  return refusalOf(new KinuError('unavailable', error));",
+    replace: "  return refusalOf(new KinuError('unsupported', error));",
+    decision: 'the `unavailable` refusal constructor builds a transient `unavailable`, not a permanent `unsupported`',
     symbol: 'runSwarm',
     control: 'unit-swarm-node-hang.test.ts',
   },
   {
     id: 'aggregate-depth-floor',
-    file: 'packages/core/src/strategy/swarm-run.ts',
-    find: 'if (depth.value < 2) {',
-    replace: 'if (depth.value <= 2) {',
+    file: 'packages/core/src/strategy/swarm-setup.ts',
+    find: '    if (depth.value < 2) {',
+    replace: '    if (depth.value <= 2) {',
     decision: "expand:'aggregate' needs depth >= 2, one level for the fan-in to consume",
     symbol: 'runSwarm',
     control: 'unit-swarm-depth.test.ts',
   },
   {
     id: 'arbitrate-tool-build-gate',
-    file: 'packages/core/src/strategy/swarm-run.ts',
-    find: 'arbitrate: isTreeAdvance(resolved.config.advance.kind) && atDepth + 1 <= maxDepth',
-    replace: 'arbitrate: isTreeAdvance(resolved.config.advance.kind) && atDepth + 1 < maxDepth',
+    file: 'packages/core/src/strategy/swarm-expansion.ts',
+    find: '    arbitrate: isTreeAdvance(resolved.config.advance.kind) && atDepth + 1 <= maxDepth',
+    replace: '    arbitrate: isTreeAdvance(resolved.config.advance.kind) && atDepth + 1 < maxDepth',
     decision: 'a node one level below the cap is still built with propose_branch',
     symbol: 'runSwarm',
     control: 'unit-swarm-agent-nodes.test.ts',
@@ -137,8 +137,8 @@ export const CATALOGUE: readonly Mutation[] = [
   {
     id: 'shared-plane-label-honesty',
     file: 'packages/core/src/strategy/node-workspace.ts',
-    find: "  return { home: '.', cred: undefined, isolation: 'shared-origin-plane' };",
-    replace: "  return { home: '.', cred: undefined, isolation: 'private-home' };",
+    find: "  return { home: '.', tmp: undefined, cred: undefined, isolation: 'shared-origin-plane' };",
+    replace: "  return { home: '.', tmp: undefined, cred: undefined, isolation: 'private-home' };",
     decision: 'a node with no provisioner is told it shares the origin plane',
     symbol: 'nodeWorkspace',
     control: 'unit-swarm-agent-nodes.test.ts',
@@ -182,7 +182,7 @@ export const CATALOGUE: readonly Mutation[] = [
   /* ── The swarm engine's undefended decisions ──────────────────────────────── */
   {
     id: 'mission-forwarded-to-nodes',
-    file: 'packages/core/src/strategy/swarm-run.ts',
+    file: 'packages/core/src/strategy/swarm-setup.ts',
     find: 'if (deps.mission !== undefined) nodeDeps.mission = deps.mission;',
     replace: 'if (deps.mission === undefined) nodeDeps.mission = deps.mission;',
     decision: "a caller's mission ledger reaches every node, so each debits its own steps",
@@ -190,7 +190,7 @@ export const CATALOGUE: readonly Mutation[] = [
   },
   {
     id: 'node-wallclock-zero-honoured',
-    file: 'packages/core/src/strategy/swarm-run.ts',
+    file: 'packages/core/src/strategy/swarm-setup.ts',
     find: 'if (deps.maxWallClockMs !== undefined) nodeDeps.maxWallClockMs = deps.maxWallClockMs;',
     replace: 'nodeDeps.maxWallClockMs = deps.maxWallClockMs;',
     decision: 'an undeclared clock stays an ABSENT key — no default wall clock over node work (ruling 2026-08-21)',
@@ -210,8 +210,8 @@ export const CATALOGUE: readonly Mutation[] = [
   // be reached, so both readings are observationally identical and a test there could not
   // fail. `VERIFIER_KINDS` has ONE member; `exec-ratio`'s `MeasurementSchema` requires
   // refOps, candOps, refMs and candMs and rejects a non-finite one, so every measurement
-  // it returns carries the same four finite quantities; `runSwarm`'s baseline check
-  // (swarm-run.ts:1606) refuses any `key` outside the BASELINE's map before a candidate
+  // it returns carries the same four finite quantities; the run-level baseline check
+  // refuses any `key` outside the BASELINE's map before a candidate
   // exists; and a candidate with no measurement is skipped earlier at the settle barrier.
   // So `archiveCellOf` at the barrier is always handed a key it can bin, and
   // `cause: 'unwitnessed'` is unreachable while one instrument measures both the baseline
@@ -219,12 +219,12 @@ export const CATALOGUE: readonly Mutation[] = [
   // `unit-exec-ratio-budget.test.ts` holds the premise — every quantity the instrument
   // reports is a key an archive can bin — so this becomes measurable again, rather than
   // silently reachable, if a second kind ever reports a quantity for only one of the two.
-  // FOUND BY THIS SWEEP AND FIXED, so the entry now runs the other way: it restores the
+  // FOUND BY THIS SWEEP AND FIXED, so the entry runs the other way: it restores the
   // `>=` the tree shipped with, and `unit-swarm-depth.test.ts` must reject it. It is a
-  // control rather than a question because the answer is now defended.
+  // control rather than a question because the answer is defended.
   {
     id: 'propose-invitation-cutoff',
-    file: 'packages/core/src/strategy/swarm-run.ts',
+    file: 'packages/core/src/strategy/swarm-expansion.ts',
     find: "if (!isTreeAdvance(input.advance.kind) || input.atDepth + 1 > input.maxDepth) return '';",
     replace: "if (!isTreeAdvance(input.advance.kind) || input.atDepth + 1 >= input.maxDepth) return '';",
     decision: 'the prompt invites a proposal on every level a grant is still legal from',
@@ -233,9 +233,9 @@ export const CATALOGUE: readonly Mutation[] = [
   },
   {
     id: 'aggregate-lands-at-cap',
-    file: 'packages/core/src/strategy/swarm-run.ts',
-    find: 'if (parents.length < 2 || atDepth + 1 > maxDepth) {',
-    replace: 'if (parents.length < 2 || atDepth + 1 >= maxDepth) {',
+    file: 'packages/core/src/strategy/fanin.ts',
+    find: '    if (parents.length < 2 || atDepth + 1 > deps.maxDepth) {',
+    replace: '    if (parents.length < 2 || atDepth + 1 >= deps.maxDepth) {',
     decision: 'a fan-in vertex may land exactly at the depth cap',
     symbol: 'runSwarm',
   },
@@ -302,8 +302,8 @@ export const CATALOGUE: readonly Mutation[] = [
   {
     id: 'provisioned-node-runs-as-itself',
     file: 'packages/core/src/strategy/node-workspace.ts',
-    find: "    return { home, cred: agentCred(identity), isolation: 'private-home' };",
-    replace: "    return { home, cred: undefined, isolation: 'private-home' };",
+    find: "    return { home, tmp, cred: agentCred(identity), isolation: 'private-home' };",
+    replace: "    return { home, tmp, cred: undefined, isolation: 'private-home' };",
     decision: "a provisioned node's commands run as its own confined uid",
     symbol: 'agentHomeNodeProvisioner',
   },

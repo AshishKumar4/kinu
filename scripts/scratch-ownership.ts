@@ -294,6 +294,8 @@ if (import.meta.main) {
       `scratch-ownership: ok — ${measured}, every suite that mints releases through `
       + `${SCRATCH_ROOT_PREFIX}* or its own hook`,
     );
+    console.log('  blind: a directory minted by a program this repo merely runs (`external/` clones mint `agent-core-*`)');
+    console.log('  blind: a leak inside a helper that takes the path as an argument. The mint site is what is checked, and the mint site is where the name is chosen');
     process.exit(0);
   }
   console.error(`scratch-ownership: ${String(audit.problems.length)} unowned scratch site(s)\n`);

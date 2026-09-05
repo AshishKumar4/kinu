@@ -249,7 +249,7 @@ export type Window = 'sentence' | 'section';
  * The COMMENT text a literature citation can live in. Prose a human wrote for
  * another human: Markdown, and in source a comment.
  *
- * It is half the corpus and it used to be all of it. `renderedProse`
+ * It is half the corpus. `renderedProse`
  * (literature-quotations.ts) is the
  * other half, and blind spot 9 named its absence for exactly as long as it took to
  * measure: `scripts/axis-ergonomics/{corpus,surface,validate}.ts` carried the
@@ -667,9 +667,9 @@ export function auditProse(
  * MODEL is handed in string expressions.
  *
  * The second is the surface that survived the whole audit, and its size is the
- * finding: 168,682 string expressions over 1,872 parseable files, 3.7MB of literal
- * text, of which 808KB across 1,230 files carries a digit and can therefore produce
- * a citation or a finding. Nothing before this read a byte of it.
+ * finding: 189,675 string expressions over 2,022 parseable files, 4.1MB of literal
+ * text, of which 920KB across 1,346 files carries a digit and can therefore produce
+ * a citation or a finding (measured 2026-09-05). Nothing before this read a byte of it.
  *
  * THE TWO CORPORA DO NOT MEET, and that is a property of this function rather than a
  * rule stated anywhere: each `auditProse` call gets its own `source` string, so a
