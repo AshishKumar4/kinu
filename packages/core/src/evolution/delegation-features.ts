@@ -91,12 +91,13 @@ function blockEquals(prints: ReadonlyArray<string>, a: number, b: number, length
 // ── Backtracking ─────────────────────────────────────────────────
 
 /**
- * Path effects readable from a call's arguments. Kinu has no file tool —
- * files are touched from code-mode (`workspace.readFile` / `workspace.writeFile`,
- * the documented VFS surface) and from `run` shell commands, so those two
- * vocabularies are what a trace can actually show. Deliberately narrow: a
- * missed effect costs one missed signal, an invented one would poison the
- * evidence line this module feeds.
+ * Path effects readable from a call's arguments. Files are touched three ways:
+ * the `file` tool (the native file plane, whose path is a typed field read by
+ * `fileToolPath` below), code-mode (`workspace.readFile` / `workspace.writeFile`,
+ * the documented VFS surface) and `run` shell commands. The two text
+ * vocabularies here cover the last two. Deliberately narrow: a missed effect
+ * costs one missed signal, an invented one would poison the evidence line this
+ * module feeds.
  */
 const WRITE_PATTERNS: ReadonlyArray<RegExp> = [
   /\bworkspace\.writeFile\s*\(\s*['"`]([^'"`]+)/g,
@@ -145,6 +146,19 @@ function pathsMatching(text: ReadonlyArray<string>, patterns: ReadonlyArray<RegE
   return found;
 }
 
+/** The path a `file` tool call touches, and how: `write` and `edit` leave the
+ *  file changed, `read` revisits it. Read from the typed input rather than
+ *  pattern-matched, because the tool carries its path as a field. */
+function fileToolPath(call: ToolCallRecord): { path: string; effect: 'write' | 'revisit' } | null {
+  if (call.name !== 'file') return null;
+  const action = call.args.action;
+  const path = call.args.path;
+  if (!v.is(v.string(), path)) return null;
+  if (action === 'write' || action === 'edit') return { path, effect: 'write' };
+  if (action === 'read') return { path, effect: 'revisit' };
+  return null;
+}
+
 /** Calls that read or removed a path written by an earlier call in the turn. */
 function countBacktracks(calls: ReadonlyArray<ToolCallRecord>): number {
   const written = new Set<string>();
@@ -152,8 +166,11 @@ function countBacktracks(calls: ReadonlyArray<ToolCallRecord>): number {
   for (const call of calls) {
     const text = stringLeaves(decodeJsonValue({ value: call.args }));
     const revisited = pathsMatching(text, REVISIT_PATTERNS);
+    const touched = fileToolPath(call);
+    if (touched?.effect === 'revisit') revisited.add(touched.path);
     if ([...revisited].some((path) => written.has(path))) backtracks += 1;
     for (const path of pathsMatching(text, WRITE_PATTERNS)) written.add(path);
+    if (touched?.effect === 'write') written.add(touched.path);
   }
   return backtracks;
 }

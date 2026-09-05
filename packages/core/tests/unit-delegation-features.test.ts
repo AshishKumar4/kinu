@@ -187,4 +187,34 @@ describe('executionPathSignals — backtracking', () => {
     ];
     expect(executionPathSignals(trace).backtrackCalls).toBe(1);
   });
+
+  // The `file` tool is the native file plane (read | edit | write). Its paths
+  // arrive as a typed field, so they are read from the action rather than
+  // pattern-matched out of free text.
+  test('the file tool: a read of a path the turn wrote or edited is a backtrack', () => {
+    expect(executionPathSignals([
+      call('file', { action: 'write', path: '/src/auth.ts', content: 'x' }),
+      call('file', { action: 'read', path: '/src/auth.ts' }),
+    ]).backtrackCalls).toBe(1);
+    expect(executionPathSignals([
+      call('file', { action: 'edit', path: '/src/auth.ts', edits: [{ old_text: 'a', new_text: 'b' }] }),
+      call('run', { command: 'cat /src/auth.ts' }),
+    ]).backtrackCalls).toBe(1);
+    // The shell vocabulary and the file plane are one path set.
+    expect(executionPathSignals([
+      call('run', { command: 'echo hi > /tmp/out.txt' }),
+      call('file', { action: 'read', path: '/tmp/out.txt' }),
+    ]).backtrackCalls).toBe(1);
+  });
+
+  test('the file tool: reading before writing, or reading another path, is ordinary work', () => {
+    expect(executionPathSignals([
+      call('file', { action: 'read', path: '/src/auth.ts' }),
+      call('file', { action: 'write', path: '/src/auth.ts', content: 'x' }),
+    ]).backtrackCalls).toBe(0);
+    expect(executionPathSignals([
+      call('file', { action: 'write', path: '/src/auth.ts', content: 'x' }),
+      call('file', { action: 'read', path: '/src/other.ts' }),
+    ]).backtrackCalls).toBe(0);
+  });
 });
