@@ -259,20 +259,27 @@ export function createFetch(failureHeader) {
 }
 
 export function defineCrafted(name, factory) {
-  let impl;
-  try {
-    impl = factory();
-  } catch (cause) {
-    return async () => {
+  // The factory is async so a stored body may await at its top level, which
+  // means it answers a promise: the source is evaluated once, on the first
+  // call, and the settled value is what every later call runs. A body that
+  // throws while evaluating, or evaluates to something that is not a
+  // function, poisons only its own name and says so on each call.
+  let loaded;
+  const load = async () => {
+    let impl;
+    try {
+      impl = await factory();
+    } catch (cause) {
       throw new Error('[crafted:' + name + '] failed to load: ' + (cause && cause.message ? cause.message : String(cause)), { cause });
-    };
-  }
-  if (typeof impl !== 'function') {
-    return async () => {
+    }
+    if (typeof impl !== 'function') {
       throw new Error('[crafted:' + name + '] is not a function: its stored source evaluates to ' + typeof impl);
-    };
-  }
+    }
+    return impl;
+  };
   return async (...args) => {
+    loaded ??= load();
+    const impl = await loaded;
     try {
       return await impl(...args);
     } catch (cause) {

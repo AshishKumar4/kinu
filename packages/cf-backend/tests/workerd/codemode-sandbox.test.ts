@@ -122,6 +122,29 @@ describe('the execute_tools sandbox under workerd', () => {
     });
   });
 
+  test('a stored body may await at its top level, and one that evaluates to a value fails by name', async () => {
+    // A body that awaits before it hands back its function is legal source:
+    // the host-side parse gate admits it, so the prelude's factory must be
+    // async and the definition must settle it before the first call. A body
+    // that evaluates to a value rather than a function poisons only itself.
+    const crafted = [
+      { name: 'waited', code: 'await Promise.resolve(async (n) => n * 3)', description: '' },
+      { name: 'value', code: '42', description: '' },
+    ];
+    const program = [
+      '// An awaited definition is callable; a value is a named failure',
+      'let failure = null;',
+      'try { await tools.value(); } catch (e) { failure = e.message; }',
+      'return { waited: await tools.waited(5), failure };',
+    ].join('\n');
+    const result = await executor.execute(program, [toolsProvider(crafted), stateProvider, workspace]);
+    expect(result.error).toBeUndefined();
+    expect(result.result).toMatchObject({
+      waited: 15,
+      failure: expect.stringContaining('[crafted:value] is not a function: its stored source evaluates to number'),
+    });
+  });
+
   test('state survives between two programs, and a host failure is attributed to its namespace member', async () => {
     const first = await executor.execute("// save\nawait state.set('n', 41); return 'saved'", [toolsProvider([]), stateProvider, workspace]);
     expect(first.result).toBe('saved');
