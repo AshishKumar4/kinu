@@ -2040,13 +2040,12 @@ export abstract class ActorAgent extends Think<Env> {
               ? { pendingVersion }
               : { pendingVersion, id: `trial-${trialScope}` },
           );
-          // A REFUSAL is not a deferral, and conflating them wedged the whole
-          // transition: a session with evolution off answers `not_sampled`
-          // forever, so an owed row for it holds the outer claim open across
-          // every later start. `not_sampled` and `no_pending` mean there is
-          // nothing to queue and never will be for this turn — the obligation is
-          // discharged. Only a full queue or a failed insert is worth coming back
-          // for, and both clear on their own.
+          // A refusal is not a deferral. A session with evolution off answers
+          // `not_sampled` forever, so an owed row for it would hold the outer
+          // claim open across every later start. `not_sampled` means there is
+          // nothing to queue for this turn and the obligation is discharged.
+          // Only a full queue or a failed insert is worth coming back for, and
+          // both clear on their own.
           if (queued === 'queue_full' || queued === 'failed') {
             return { status: 'owed', detail: `the shadow trial for this turn is ${queued}` };
           }
@@ -5492,16 +5491,19 @@ export abstract class ActorAgent extends Think<Env> {
       this.logActivity('mcp_tools_served', `${Object.keys(tools).length} tools`);
       return tools;
     } catch (err) {
-      // An unreadable catalog is not the same thing as an unconfigured one, and
-      // the only caller draws that line: `prepareTurn` catches this rethrow,
-      // records `mcp.tool_surface_failed` and proceeds on builtins alone. The
-      // failure travels WHOLE; the surface state here records what this turn
-      // will actually advertise — none of it, by name.
+      // An unreadable catalog is not an unconfigured one. The turn proceeds on
+      // builtins alone, the failure is recorded whole, and the surface state
+      // records what this turn will actually advertise: none of it, by name.
+      diagnostics.failure('mcp.tool_surface_failed', toKinuError({
+        doing: 'building the user MCP tool adapters for this turn',
+        cause: err,
+        otherwise: 'unavailable',
+      }));
       this._mcpUnavailable = [{
         source: 'MCP catalog',
         reason: 'The descriptor read failed. No MCP tool is available for this turn.',
       }];
-      throw err;
+      return {};
     }
   }
 
@@ -5593,7 +5595,26 @@ export abstract class ActorAgent extends Think<Env> {
     await this.ensureOwnedScaffold();
     if (this._cachedSoulText === null) await this.refreshSoulText();
     this._turnProfile = null;
-    const profileInputs = await this.profileInputs();
+    // Four reads of the owner's UserDO, each a Durable Object hop, started
+    // together: the profile catalog, the MCP descriptor surface, the device
+    // presence and the workspace title. None depends on another, so the turn
+    // pays one hop of latency instead of four. Each keeps its own failure arm.
+    const [profileInputs, mcpTools, deviceStatus, identity] = await Promise.all([
+      this.profileInputs(),
+      // `ctx.tools` is the actor's own surface, handed over because the remote
+      // catalog is admitted against what the step context limit has LEFT after
+      // it: the builtins are not negotiable, so they are priced first. A failed
+      // read answers no tools and records why; the turn runs on builtins.
+      this.buildUserMcpTools(ctx.tools),
+      // One authoritative hub check so the executor list reflects the CURRENT
+      // device state; the transport's TTL-cached snapshot can lag a mid-session
+      // `kinu connect` by a turn. `refreshStatus` records its own failure and
+      // answers the last snapshot.
+      this.rt.deviceTransport.refreshStatus(),
+      // Names, on the authoritative prompt only: a title is read from the
+      // owner's registry, which is an await.
+      this.promptIdentity(),
+    ]);
     this._turnProfileInputs = profileInputs;
     const activeRoleId = this.activeRoleLabel();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
@@ -5687,23 +5708,6 @@ export abstract class ActorAgent extends Think<Env> {
         activeSetForPrompt.active.map(s => s.name).join(',') || '(none)');
     }
 
-    // Per-user MCP tools — fetched from UserDO, dispatched back via RPC.
-    // Failure is non-fatal; the turn proceeds with builtins only and the UI
-    // surfaces the broken-server status via /api/user/mcp/servers polling.
-    //
-    // `ctx.tools` is the actor's own surface, and it is handed over because the
-    // remote catalog is admitted against what the step context limit has LEFT
-    // after it — the builtins are not negotiable, so they are priced first.
-    let mcpTools: ToolSet = {};
-    try { mcpTools = await this.buildUserMcpTools(ctx.tools); }
-    catch (err) {
-      diagnostics.failure('mcp.tool_surface_failed', toKinuError({
-        doing: 'building the user MCP tool adapters for this turn',
-        cause: err,
-        otherwise: 'unavailable',
-      }));
-    }
-
     const mcpToolNames = Object.keys(mcpTools);
     const extensionTools = Object.fromEntries(
       Object.entries(this.extensions.tools())
@@ -5758,19 +5762,14 @@ export abstract class ActorAgent extends Think<Env> {
         .filter(([name]) => toolAllowed(name)),
     );
 
-    // ── Per-turn device awareness ────────────────────────────────
-    // One authoritative hub check (a cheap DO-to-DO RPC) so the executor list
-    // below reflects the CURRENT device state — the transport's TTL-cached
-    // snapshot can lag a mid-session `kinu connect` by a turn. The persisted
-    // watermark is only a diff anchor for the one-turn change notice; the hub
-    // stays the single source of truth.
+    // The persisted watermark is only a diff anchor for the one-turn change
+    // notice; the hub stays the single source of truth.
     let deviceNotice: string | null = null;
     try {
-      const status = await this.rt.deviceTransport.refreshStatus();
-      deviceNotice = observeDevicePresence(this.config, status).notice;
+      deviceNotice = observeDevicePresence(this.config, deviceStatus).notice;
     } catch (err) {
       diagnostics.failure('device.status_refresh_failed', toKinuError({
-        doing: 'refreshing the device hub presence for this turn',
+        doing: 'recording the device hub presence for this turn',
         cause: err,
         otherwise: 'unavailable',
       }));
@@ -5823,10 +5822,7 @@ export abstract class ActorAgent extends Think<Env> {
       // builder: the builder is the byte-stable cacheable prefix and does no
       // I/O, exactly as with the soul.
       sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql),
-      // Names, on the AUTHORITATIVE prompt only. The cached base above cannot
-      // carry them: a title is read from the owner's registry, which is an
-      // await, and `getSystemPrompt` is synchronous by contract.
-      identity: await this.promptIdentity(),
+      identity,
     };
     if (availableSkills.lines.length > 0) promptOptions.availableSkills = availableSkills;
     if (activeSetForPrompt) promptOptions.activeSkills = activeSetForPrompt;
