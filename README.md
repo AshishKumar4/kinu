@@ -41,23 +41,23 @@
 
 ## What you get
 
-A workspace is a durable POSIX filesystem, a shell, execution environments, agent
-conversations, memory and an event log. Close the laptop; a cloud workspace keeps
+A workspace holds a durable POSIX filesystem, a shell, execution environments, agent
+conversations, memory, and an event log. Close the laptop and a cloud workspace keeps
 going. A schedule or a webhook starts the next turn with nobody at the
-keyboard, and an email does too once the mail domain is onboarded.
+keyboard. An email does too once the mail domain is onboarded.
 
-The agent writes tools for itself, keeps the ones that score well, and starts the
-next task from what the last one taught it.
+The agent writes tools for itself and keeps the ones that score well. Each
+task starts from what the last one taught it.
 
 For a hard task it runs a search whose nodes are whole agents. A verifier runs in
 the workspace and reports a number. The number picks the winner.
 
 ## Ways to use it
 
-**Hosted.** Sign in at [kinu.run](https://kinu.run) and create a workspace in the
-browser. Close the tab; the workspace keeps running.
+Hosted. Sign in at [kinu.run](https://kinu.run) and create a workspace in the
+browser. Close the tab and the workspace keeps running.
 
-**From your terminal.**
+From your terminal.
 
 ```bash
 curl -fsSL 'https://kinu.run/install.sh' | bash
@@ -69,9 +69,9 @@ kinu run triage "find the slowest query"
 `kinu chat` opens a full-screen terminal UI over the same workspace. `kinu exec`
 runs one task, never prompts, and exits 0 only when the turn completed cleanly.
 
-**Cloud or your own machine.** `--mode cloud` runs on Cloudflare Durable Objects;
+Cloud or your own machine. `--mode cloud` runs on Cloudflare Durable Objects.
 `--mode local` runs on your machine over `bun:sqlite`. The agent is the same either
-way. `kinu export` archives either one; `kinu import` restores it locally. Editors
+way. `kinu export` archives either one. `kinu import` restores it locally. Editors
 attach over `kinu acp`.
 
 [QUICKSTART.md](QUICKSTART.md) is the short path.
@@ -94,7 +94,7 @@ bun run gate:infra           # every declared resource exists and is bound
 Preflight runs first, source gates run concurrently, and `gate:hammer` then
 `gate:infra` each run alone at the end. You bring a Workers Paid account, a
 zone, and OAuth applications for sign-in.
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) lists each prerequisite;
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) lists each prerequisite.
 [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) walks an empty account end to end.
 
 ## Features
@@ -108,7 +108,7 @@ zone, and OAuth applications for sign-in.
 | Crafted tools | The agent writes tools, scores them with use, and finds them again over FTS5. |
 | A mutable scaffold | The agent loop is code the agent can rewrite. Four structural gates validate a mutation before it runs. |
 | Evolution | Four timescales: step, turn, session, lifetime. `kinu evolve` searches over the scaffold itself. |
-| Triggers | Schedules and webhooks reach a workspace with nobody at the keyboard. Email does the same, on a domain that has completed the one-time Email Routing setup — `kinu.run` has not, so the inbox is code-complete and inert. |
+| Triggers | Schedules and webhooks reach a workspace with nobody at the keyboard. Email reaches it too, on a domain that has completed the one-time Email Routing setup. `kinu.run` has not completed it, so the inbox is code-complete and inert. |
 | Web search | The `web` tool works with no keys. A Tavily key adds ranked search. |
 | Model choice | Your Cloudflare account through one sign-in, or your keys: OpenAI, Anthropic, OpenRouter, a Codex subscription, any OpenAI-compatible endpoint, a local Claude Code login. |
 | A control plane | Operators get `/control`: users, workspaces, incidents, feedback, fleet metrics, an audit log. |
@@ -144,7 +144,7 @@ adapters over it.
 ## Extending
 
 `packages/core` knows nothing about where it runs. Two interfaces carry the
-platform: `AgentRuntime` provides storage, memory, models and scheduling;
+platform. `AgentRuntime` provides storage, memory, models and scheduling.
 `BackendHost` provides what a turn loop needs from its host. I implement the pair
 twice: on Cloudflare Durable Objects built on
 [Think](https://github.com/cloudflare/agents), and on POSIX over `bun:sqlite` and
@@ -155,9 +155,9 @@ real processes.
   <img alt="Clients and autonomous ingress feed packages/core, which owns the turn pipeline, tools, delegation, evolution, context, the canonical workspace file plane, the execution router and the event log. Below it the AgentRuntime and BackendHost interfaces are implemented twice: by cf-backend on Cloudflare Durable Objects, and by cli-backend on your own machine." src="docs/diagrams/backend.svg" width="900">
 </picture>
 
-A third backend implements that pair and nothing else. Core owns the turn: it
-arrives from a person, a schedule or a finished background job, gets assembled once,
-and runs a step loop where the agent re-reads live workspace state between steps.
+A third backend implements that pair and nothing else. Core owns the turn. The turn
+arrives from a person, a schedule or a finished background job. Core assembles it once,
+then runs a step loop where the agent re-reads live workspace state between steps.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/turn-dark.svg">

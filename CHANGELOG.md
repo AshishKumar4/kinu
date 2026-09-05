@@ -35,7 +35,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 - **The overlay-cas runner can say where a run went: `--profile stderr`.** One
   `[profile]` line per phase carrying the wall time, the store's own counter
-  delta for that phase, and whatever else the phase counted — paths walked,
+  delta for that phase, and whatever else the phase counted: paths walked,
   files re-digested, tree writes. Milliseconds alone cannot tell a phase that
   spent a minute on two thousand FUSE round trips from one that spent a minute
   moving a gigabyte, and on a mount whose per-operation latency is a second that
@@ -93,7 +93,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   attach, the workload restart, every listener proof, every exposure and the boot
   stamp. The listener proof used to carry a window per port, so three silent
   ports added about ninety seconds while every caller waited in the readiness
-  gate. Every step now draws an allowance from the one clock — what is left
+  gate. Every step now draws an allowance from the one clock: what is left
   divided by the steps still to run.
 
   What exhaustion means depends on what is abandoned. The attach is mid-mount, so
@@ -101,7 +101,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   it mutates no mount, so exhaustion is reported instead: the box stays attached,
   its specs stay, no failed port is exposed, and `unready` names what did not come
   back. A slow dev server costs the box its readiness and nothing else, and an
-  explicit `attachNow()` retries it — the walk asks the container first, so a
+  explicit `attachNow()` retries it. The walk asks the container first, so a
   process it already holds is not started twice.
 
   Readiness is honest. A port is exposed only after its own listener answers, no
@@ -246,7 +246,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - The literature citation gate now reads STRING EXPRESSIONS, not just comments.
   Its blind spot was load-bearing: a paper is cited in prose, and the prose this
   repository hands a MODEL lives in tool descriptions and field docstrings that
-  nothing had ever read a byte of — 168,682 string expressions across 1,872
+  nothing had ever read a byte of: 168,682 string expressions across 1,872
   parseable files, 3.7MB of literal text. The unit is the whole expression rather
   than one quote, because a citation and the figures it attributes are routinely
   in different `+`-joined fragments; an interpolation is read as an unknown
@@ -255,13 +255,13 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   names. `Verbatim from `Name`` in the docblock above a string is a checkable
   claim: the target resolves to a declaration anywhere in the corpus, and every
   sentence of it inside the span the quote covers must survive in the quote. An
-  excerpt may stop early — a description rendered for a model legitimately drops
-  the paragraphs about a refusal — but a silent drop from the MIDDLE of what it
+  excerpt may stop early (a description rendered for a model legitimately drops
+  the paragraphs about a refusal). A silent drop from the MIDDLE of what it
   quotes is refused. It caught `MODELS_FIELD_DESCRIPTION` in the axis study
   presenting itself as verbatim while missing `Available on EVERY preset.` and
   the clause carrying Self-MoA's own `up to 3.2x` magnitude, both of which are
-  restored. A target this tree does not declare — another program's output, a
-  paper, a person, or a field that has since been removed — is counted and named
+  restored. A target this tree does not declare (another program's output, a
+  paper, a person, or a field that has since been removed) is counted and named
   on the green path rather than guessed at, and three such targets are named
   there now.
 
@@ -270,8 +270,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **One deploy path, an immutable container image, and no credential beside
   unreviewed code.** `packages/cf-backend` declared its own `deploy:staging`
   around a bare `wrangler deploy`, and `docs/DEPLOYMENT.md` documented it as the
-  way to deploy staging — a path with none of the required gates, neither asset
-  check and no smoke test. It is gone: `scripts/deploy.sh` is the only deploy, and
+  way to deploy staging: a path with none of the required gates, neither asset
+  check nor smoke test. It is gone: `scripts/deploy.sh` is the only deploy, and
   `scripts/deploy.test.ts` fails if a package script or a document names another
   one.
 
@@ -284,8 +284,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   TypeScript served from the public origin.
 
   Every workflow declares read-only token permissions and checks out with no
-  persisted git token. The eval benchmark job — startable by labelling a pull
-  request, and holding three secrets — now runs the reviewed base revision instead
+  persisted git token. The eval benchmark job (startable by labelling a pull
+  request, and holding three secrets) now runs the reviewed base revision instead
   of the branch, and both credential-bearing jobs ask for a GitHub environment.
   The elan installer is a checksum-verified release artifact in one shared action
   instead of `curl … | sh` of somebody's default branch in three workflows, which
@@ -569,8 +569,6 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 - Event redaction masks camelCase secret fields such as `authToken` and `clientSecret`.
 
-- Event redaction masks camelCase secret fields such as `authToken` and `clientSecret`.
-
 - An agent view refuses markdown links, images, autolinks and reference definitions, and refuses non-ASCII titles. A tab draws nothing clickable and cannot spoof a host tab name.
 
 - `web` fetch checks every redirect target before it follows the hop, so a page cannot bounce the agent onto a private or metadata address. The body reader stops at the byte cap instead of buffering the whole response.
@@ -600,8 +598,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   Workers AI binding was refused whole: the AI SDK spells an assistant turn
   that only called tools as `content: null` beside its `tool_calls`, which
   OpenAI accepts, and the binding's validator answered AiError 5006 "Type
-  mismatch of '/messages/1/content', 'string' not in 'null'" — on
-  `@cf/qwen/qwen3-30b-a3b-fp8` and `@cf/openai/gpt-oss-20b` alike. So a
+  mismatch of '/messages/1/content', 'string' not in 'null'". That hit
+  `@cf/qwen/qwen3-30b-a3b-fp8` and `@cf/openai/gpt-oss-20b` alike. A
   development or staging workspace that switched model, or resolved a
   different one for a role, lost every turn after its first tool call. The
   adapter now writes that turn's content as the empty string, the same
@@ -615,15 +613,15 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   than the scan measured, as a stand-in for "some cached row is now stale". That
   stand-in is PERMANENTLY true for any upper holding one deleted file or one
   opaque directory: `scanUpper` re-emits a whiteout's `delete` and an opaque
-  directory's entry on every single pass — neither can ever be satisfied by a
-  cached row — and `filterChanged` then drops both, because the pending journal
+  directory's entry on every single pass. Neither can ever be satisfied by a
+  cached row, and `filterChanged` then drops both, because the pending journal
   already holds them. So a box sitting still republished one row per path in its
   workspace, forever, to store bytes identical to the ones already there. The
   documented invariant said it wrote nothing at all; on a deployed 1 MB arm it
   wrote 25,072 B and spent 1,975 ms doing it, every tick.
 
   The write was not the whole damage. A receipt reporting `entries: 0` with
-  nonzero `movedBytes` is deliberately NOT a skip — the adapter reads that pair
+  nonzero `movedBytes` is deliberately NOT a skip. The adapter reads that pair
   as a real commit, because it is how a redrive whose journal batch already
   landed reports itself. So a box holding one deleted file and doing nothing
   else answered `committed` on every tick and advanced `lastCheckpointAt` each
@@ -638,7 +636,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   path.** `OrchestratorAgent.onStart` spawned a fire-and-forget task that read the
   owner's title registry, read SOUL.md and asked a model for a name, so every cold
   start of every claimed workspace launched an LLM call inside
-  `blockConcurrencyWhile` — whether or not anybody was looking at the title. The
+  `blockConcurrencyWhile`, whether or not anybody was looking at the title. The
   gate waited on none of it, which is exactly why it survived review: the hook was
   not `async`, awaited nothing in its own scope, and opened no nested gate.
   Detaching work takes it out of the WAIT, not off the init path. The promise runs
@@ -646,8 +644,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   its rejection swallowed by the runtime, so the title a legacy workspace was owed
   could also simply never arrive.
 
-  The check now runs from the frame that OPENED the workspace — the mount round
-  trip the web client makes (`getWorkspaceSnapshot`) — guarded once per activation,
+  The check now runs from the frame that OPENED the workspace: the mount round
+  trip the web client makes (`getWorkspaceSnapshot`), guarded once per activation,
   because the answer it produces is durable. That is the only moment the raw slug
   is on somebody's screen, and request-frame model work is ordinary agent work.
 
@@ -657,29 +655,28 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   a call named in the pinned `MODEL_SINKS` list may not appear anywhere inside a
   governed `onStart`. The bounded fork-journal reconcile spawned from the same
   method stays legal, which is the discrimination the rule rests on, and recovery
-  hooks are exempt outright — their sanctioned answer hands a re-drive that may
+  hooks are exempt outright. Their sanctioned answer hands a re-drive that may
   reach the model to a detached durable carrier. A pin no source mentions fails
   the gate, and both the exemption and the by-name limit print on the success path.
 
 - **An interrupted durable lane is classified inside the Durable Object's init
-  gate and re-driven outside it.** Every entry point — `fetch`, a websocket
-  frame, the persisted keepAlive alarm with nobody connected — awaits
+  gate and re-driven outside it.** Every entry point (`fetch`, a websocket
+  frame, the persisted keepAlive alarm with nobody connected) awaits
   partyserver's `blockConcurrencyWhile`, and inside it the agents SDK awaits
   `_checkRunFibers`, which awaits `onFiberRecovered` once per interrupted
   `cf_agents_runs` row with no timeout of its own. The hook re-drove the lane
   there: an advisor review is a model call, the evolution pass spends model calls
   and real tool loops, a settled background job's re-drive delivers a wake that
   resolves only when the turn it queues ENDS, and the terminal arm replayed every
-  owed effect — an SMTP round trip per reply, a wait on another agent's live head
-  per branch, a model call per between-turn lane. One interrupted lane therefore
+  owed effect: an SMTP round trip per reply, a wait on another agent's live head
   held every request on that workspace, pure `@callable` reads included; past the
   platform's cancellation window the runtime reset the object; and because the row
-  is deleted only when the hook RETURNS, the next wake re-ran the same call — a
+  is deleted only when the hook RETURNS. The next wake re-ran the same call: a
   reset loop able to hold a workspace unusable for the whole 24h recovery budget.
 
   The hook is now synchronous and classification-only. It names the lane, asks
-  that lane's own idempotency guard whether anything is still owed — the advisor
-  note row, the evolution window claim, the job lease — and hands the re-drive to
+  that lane's own idempotency guard whether anything is still owed (the advisor
+  note row, the evolution window claim, the job lease) and hands the re-drive to
   a fresh durable fiber under the same lane name holding the same checkpoint.
   `runFiber` writes that row in its synchronous prefix, so the obligation has a
   carrier before the SDK deletes the row it recovered, and an interruption of the
@@ -693,20 +690,20 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   `ok`. It now holds three populations, and the recovery rule states what the other
   two cannot: a method that is neither `async` nor contains an `await` can still
   hand the gate a promise that resolves when a model call finishes, so what a
-  recovery hook RETURNS must be a call to the pinned classification seam — whose
+  recovery hook RETURNS must be a call to the pinned classification seam. Its
   own declaration the gate requires to be synchronous, because a synchronous
   function cannot await. Its blind spots print on the success path.
 
 - **Withdrawn authority now takes effect across the await it was withdrawn
   during.** A Durable Object serializes nothing across an outbound call, so
-  between a call's read and its write another call runs to completion — and five
+  between a call's read and its write another call runs to completion. Five
   paths in the user plane were reading before that gap and writing after it.
 
   Deleting a workspace revoked its capability token AFTER tearing its Durable
   Object down, so for the whole length of that teardown the dying workspace
   still held an identity the owner's registry honoured: it could read
   credentials, list the owner's other workspaces and spend their devices. A
-  teardown that failed closed was worse — the marked row deliberately survives,
+  teardown that failed closed was worse. The marked row deliberately survives,
   and it survived holding a live token indefinitely. The mark and the revoke are
   now one synchronous act before the teardown begins, and the mint re-checks its
   admission in the same turn as its write, so a provisioning call already in
@@ -717,7 +714,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   paste a new credential and the reply overwrote it with a token derived from the
   one just retired; let the provider answer `invalid_grant` and the rejection
   deleted whichever credential was current by then. Each credential key now
-  carries a monotonic revision — its writes AND its deletions — and every write
+  carries a monotonic revision (its writes AND its deletions), and every write
   on a refresh path is a compare-and-swap against the revision read before the
   network call, so the store is the authority and a late reply is dropped.
 
@@ -730,8 +727,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   together under both fences or not at all.
 
   Creating a workspace whose name was already taken ran the whole birth sequence
-  on the live workspace — re-seeding `SOUL.md` from the new request's mission,
-  resetting the Output baseline, and opening a second genesis turn beside
+  on the live workspace. It re-seeded `SOUL.md` from the new request's mission,
+  reset the Output baseline, and opened a second genesis turn beside
   whatever it was already doing. Two creates racing on one name did it to each
   other and a retried request did it to itself. `registerWorkspace` now answers
   with a closed word (`created` / `active` / `reserved`) instead of a boolean:
@@ -751,7 +748,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
   One browser approval could mint more than one 180-day CLI token. The flow's
   record lives in KV, which has no compare-and-swap and answers reads from each
-  colo's cache, so "mark it consumed, then mint" is not a check — two polls of
+  colo's cache, so "mark it consumed, then mint" is not a check. Two polls of
   one approved request could both be handed a token. The approval's identity is
   now stored on the token row itself under a unique index, in the same Durable
   Object and the same statement as the mint, so a second redemption is
@@ -773,15 +770,15 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   the body, and before it addresses any workspace, so an unminted URL answers
   404 and reaches nothing. It is a routing capability and nothing more: the
   trigger's own HMAC, Bearer or mTLS check still decides whether the payload is
-  authentic. Nothing durable was added — the capability is derived from facts
+  authentic. Nothing durable was added. The capability is derived from facts
   that cannot change, so existing trigger rows need no migration, and the
   workspace name and trigger id are checked against the grammars that issued
   them both where a URL is minted and before any comparison.
 
   **Every webhook URL in use has to be replaced.** The old unsigned path is
   gone rather than deprecated, because it cannot be made safe. Owners read the
-  new URL from the triggers list — the Supervise Automations block, or
-  `kinu triggers <workspace> list` — and paste it into whatever posts to it.
+  new URL from the triggers list (the Supervise Automations block, or
+  `kinu triggers <workspace> list`) and paste it into whatever posts to it.
   Trigger rows, their secrets and their history are untouched. Without the
   secret, creating a webhook answers 503 and names the variable, and delivery
   answers 404 without waking a workspace; rotating it revokes every URL the
@@ -790,8 +787,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **Signing out ends the session at once, everywhere, and only that session.**
   Logout deleted the cookie's KV record and nothing else. A KV delete needs up
   to a minute to reach every colo, so a cookie copied off the browser kept
-  working at any colo the delete had not reached — proven with a two-colo KV
-  double, where the copy verified back to the full identity after logout had
+  working at any colo the delete had not reached. Proven with a two-colo KV
+  double: the copy verified back to the full identity after logout had
   returned. A session is now live while one row in the signing-in user's own
   Durable Object says so: sign-in publishes that row before the browser gets a
   cookie, every cookie check reads it, and logout deletes it before anything
@@ -880,10 +877,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   downward, so token cost differs, and what it holds fixed is the proposal
   count and topology, six proposals and one aggregator. That is what
   `MODELS_FIELD_DESCRIPTION` declares it quotes verbatim from the spec's own
-  `models` field docstring. The gate now reads that position — string
+  `models` field docstring. The gate now reads that position (string
   expressions are part of the corpus, and a declared quotation is compared
-  against the declaration it names — and it reports this one as UNCOMPARED,
-  because `SwarmInput` no longer declares `models` at all: the field was removed
+  against the declaration it names), and it reports this one as UNCOMPARED,
+  because `SwarmInput` no longer declares `models` at all. The field was removed
   from `packages/core` as accepted-and-ignored, so there is no live declaration
   left to compare the study's copy against.
 - A literature citation no longer reaches across the code between two comments.
@@ -892,15 +889,15 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   a comment opening on a bare digit six lines below an unrelated docblock was
   read as an uncited number belonging to that docblock's paper, and two members
   of one interface had their separate docblocks read as a single sentence. The
-  one-character fix — separate every comment — was measured and rejected: a run
+  one-character fix (separate every comment) was measured and rejected: a run
   of `//` lines is N separate comments, so it shatters all 10,344 multi-line
   line-comment blocks in the tree into one-line paragraphs and drops real
   coverage, including both `absolute-zero` citations in
   `packages/core/src/curriculum/proposer.ts`. So a unit now ends where its
   AUTHOR ended it: a block comment's closing delimiter says so, and only line
   comments with neither a blank line nor code between them are one block. The
-  governed set is byte-identical — every register entry keeps the same home
-  files — and the two claim sites it drops were sentences spliced from two
+  governed set is byte-identical. Every register entry keeps the same home
+  files, and the two claim sites it drops were sentences spliced from two
   different comments, which no author wrote.
 - A shell command or file write no longer fails because the shadow-git
   checkpoint before it met a directory the agent may not read. Staging a
@@ -965,7 +962,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   journals a branch run's single head under an id derived from the run id, and the
   durable settle both backends replay after an eviction looked that head up under
   the RUN's id instead. It found no row, reported "the journal holds no such branch
-  head", and pruned itself — so the comparison the user was owed was dropped
+  head", and pruned itself, so the comparison the user was owed was dropped
   silently every time the workspace restarted between the branch answering and the
   takes being written, which for a hosted branch is the ordinary case rather than
   the rare one. The replay now reads the head's own id, and reports the head's own
@@ -975,7 +972,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   The same misread status list retained facet storage. The exploration-facet sweep
   classified a facet as finished on `completed` or `aborted` alone, so a head that
   errored or blew its budget was treated as resumable and kept its SQLite storage
-  inside the root object — permanently, since a facet id is never reused. Every
+  inside the root object permanently, since a facet id is never reused. Every
   terminal report status is now reclaimable and only `running` and `interrupted`
   are held, which is exactly the pair under which work can still continue.
 

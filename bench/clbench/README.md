@@ -2,13 +2,13 @@
 
 [Continual Learning Bench](https://github.com/pgasawa/continual-learning-bench)
 (Berkeley/Snorkel, [arXiv:2606.05661](https://arxiv.org/abs/2606.05661)) measures
-one thing I care about more than any benchmark we wrote ourselves: **`mean_gain`,
-the stateful system's reward minus the reward of the same system run stateless**.
-That is Kinu's central claim, scored by someone else's harness on someone
+one thing I care about more than any benchmark we wrote ourselves: `mean_gain`.
+That is the stateful system's reward minus the reward of the same system run
+stateless. That is Kinu's central claim, scored by someone else's harness on someone
 else's tasks.
 
 This directory is the adapter. It stays here because it is our code about our
-agent; CL-Bench is cloned separately and left unmodified.
+agent. CL-Bench is cloned separately and left unmodified.
 
 ## Layout
 
@@ -30,8 +30,8 @@ uv sync --all-extras && source .venv/bin/activate
 ```
 
 Link the adapter in as a system. CL-Bench discovers systems from
-`src/systems/<name>/` and follows a symlink like a directory, so the code
-stays here and the checkout stays clean:
+`src/systems/<name>/` and follows a symlink like a directory. That keeps the code
+here and the checkout clean:
 
 ```bash
 ln -s /path/to/Kinu/bench/clbench/kinu src/systems/kinu
@@ -39,8 +39,8 @@ clbench inspect system kinu     # confirms registration + every parameter
 ```
 
 Point it at a checkout that will still exist. A symlink into a throwaway
-agent worktree under `.claude/worktrees/` dies when that worktree is removed;
-that is how the first install of this adapter was wired. Repoint with
+agent worktree under `.claude/worktrees/` dies when that worktree is removed.
+That is how the first install of this adapter was wired. Repoint with
 `ln -sfn` rather than re-cloning.
 
 Some tasks need a one-time dataset download:
@@ -61,32 +61,31 @@ kinu tokens create --name clbench --scopes ai.proxy
 export KINU_TOKEN=pta_…
 ```
 
-The credential is read at runtime and never accepted as a system parameter,
-so it cannot land in a committed config or on a command line. A direct
+The credential is read at runtime and never accepted as a system parameter.
+It cannot land in a committed config or on a command line. A direct
 Workers AI endpoint can be selected with `base_url` set to
-`https://api.cloudflare.com/client/v4/accounts/<account-id>/ai/v1`; that path
+`https://api.cloudflare.com/client/v4/accounts/<account-id>/ai/v1`. That path
 reads `$CLOUDFLARE_API_TOKEN`. Explicit BYO comparisons remain available by
-setting `model`, `base_url`, and `provider` together; known providers read
-their own key, and a custom endpoint must name its exact `api_key_env`.
+setting `model`, `base_url`, and `provider` together. Known providers read
+their own key. A custom endpoint must name its exact `api_key_env`.
 
-Every run gets a throwaway `KINU_HOME`, so your own workspaces are never
+Every run gets a throwaway `KINU_HOME`. Your own workspaces are never
 opened, mutated, or measured. `_env()` strips every `KINU_*` variable the
-operator's shell holds and re-adds exactly six: `HOME` and `KINU_HOME` (both,
-so the child cannot fall back to `~/.kinu` even if it ignored the latter),
-`KINU_BASE_URL`, `KINU_MODEL`, the resolved bearer `KINU_AUTH`, passed through
-the environment rather than argv because a command line is world-readable, and
-`CI=1`. Nothing else named `KINU_*` reaches a measured run.
+operator's shell holds. It re-adds exactly six. `HOME` and `KINU_HOME` both ship,
+so the child cannot fall back to `~/.kinu` even if it ignored the latter.
+`KINU_BASE_URL`, `KINU_MODEL`, and the resolved bearer `KINU_AUTH` pass
+through the environment rather than argv, because a command line is world-readable.
+`CI=1` completes the six. Nothing else named `KINU_*` reaches a measured run.
 
 Know that before blaming the environment for a result. A first run's one-step
-turns were blamed on a step ceiling, and no step ceiling exists:
+turns were blamed on a step ceiling, and no step ceiling exists.
 `UNBOUNDED_STEPS` is the stop condition a turn runs under when its caller
-names none (`packages/core/src/chat.ts:170`), and the one loop whose vendor
-demands a number gets `Number.MAX_SAFE_INTEGER`. So a one-step turn means the
-model chose to stop or a tool failed; neither is something the harness
-configured.
+names none (`packages/core/src/chat.ts:188`). The one loop whose vendor
+demands a number gets `Number.MAX_SAFE_INTEGER`. A one-step turn means the
+model chose to stop or a tool failed. The harness configured neither.
 
 The throwaway home goes through `bench/isolation.py`, the one rule both
-benchmark adapters share: it refuses an unset or relative home, your real
+benchmark adapters share. It refuses an unset or relative home, your real
 `~/.kinu`, and anything inside the Kinu checkout.
 
 ## Running
@@ -100,15 +99,15 @@ clbench run --config /path/to/Kinu/bench/clbench/configs/exploitable_poker_kinu_
   --runs 1 --max-workers 3
 ```
 
-`clbench run` runs the stateful rollout *and* the stateless baseline, then
+`clbench run` runs the stateful rollout and the stateless baseline, then
 reports `mean_gain`. Budget before you start a full schedule: the paper
-reports **$7.6–62.8 per full run**, and every default schedule is 12–120
+reports $7.6–62.8 per full run, and every default schedule is 12–120
 instances.
 
 ## The two axes
 
-"A stateful, self-evolving agent improves over a task sequence" is two claims,
-and the configs separate them.
+"A stateful, self-evolving agent improves over a task sequence" is two claims.
+The configs separate them.
 
 | Config | `persist_workspace` | `auto_evolve` | What it isolates |
 |---|---|---|---|
@@ -116,47 +115,47 @@ and the configs separate them.
 | `*_kinu_no_evolve.json` | on | off | memory without evolution |
 | `*_kinu_fresh_workspace.json` | off | on | evolution without carried state |
 
-**Workspace persistence.** One durable workspace carries memory, lessons, the
+One durable workspace carries memory, lessons, the
 CraftStore and the evolved scaffold across the sequence. CL-Bench already
-drives half of this itself: the stateless baseline builds a fresh system per
+drives half of this itself. The stateless baseline builds a fresh system per
 instance, each with its own throwaway home, so "stateless" really is a v0
-workspace. `persist_workspace=False` covers the *within-run* case, resetting
-the workspace at every instance boundary so a single rollout can be its own
+workspace. `persist_workspace=False` covers the *within-run* case. It resets
+the workspace at every instance boundary, so a single rollout can be its own
 control.
 
-**Self-evolution.** `auto_evolve=False` passes `kinu exec --no-auto-evolve`,
-which turns off turn- and session-level evolution and leaves durable state
+With `auto_evolve=False`, the run passes `kinu exec --no-auto-evolve`.
+That flag turns off turn- and session-level evolution. Durable state stays
 intact. Persistent state with evolution off is the control that says how much
 of any gain is evolution rather than plain memory.
 
 `single_conversation` (the direct analogue of the Codex adapter's flag, on by
 default) captures the CLI session id from the first turn and replays it with
-`--resume`, so Kinu sees its own prior turns rather than only the task's
+`--resume`. Kinu sees its own prior turns, not only the task's
 latest observation.
 
 ## How a turn works
 
 One benchmark turn is one `kinu exec --json`. Kinu runs its full agentic loop
 inside that turn, with its own tools, memory, and scaffold, in its own
-throwaway working directory, and returns one structured action.
+throwaway working directory. It returns one structured action.
 
-No CL-Bench task hands a system a live handle on its environment, and it is
+No CL-Bench task hands a system a live handle on its environment. It is
 easy to expect otherwise. `Query` carries a prompt, a Pydantic schema, and the
-previous observation; every task, including the containerized ones, is driven
-one structured action per turn, and the task owns the container. Kinu's tool
-calls happen in *its* workspace, and the benchmark environment is reached
+previous observation. Every task, including the containerized ones, is driven
+one structured action per turn. The task owns the container. Kinu's tool
+calls happen in its workspace. The benchmark environment is reached
 through the returned action. The built-in `codex` and `claude` systems work
 exactly the same way.
 
 ## Cost
 
-Token usage comes from the CLI's `turn_end` event and is reported to CL-Bench
+Token usage comes from the CLI's `turn_end` event. The adapter reports it to CL-Bench
 as a `UsageEvent` per turn, which prices it through litellm. When litellm has
 no rate for the model, CL-Bench records `pricing_error` and leaves `cost_usd`
-null; the token counts are still exact. The Cloudflare dashboard remains
+null. The token counts are still exact. The Cloudflare dashboard remains
 authoritative for the account's Workers AI entitlement and billing.
 
-The `turn_end` payload is sparse: a field appears only when the provider
-reported it, and the whole `usage` object is absent when the provider reported
-nothing. Such a turn records NO `UsageEvent` rather than a row of zeros, so
+The `turn_end` payload is sparse. A field appears only when the provider
+reported it. The whole `usage` object is absent when the provider reported
+nothing. Such a turn records no `UsageEvent` rather than a row of zeros.
 "nobody metered this turn" stays visible instead of being priced as free.
