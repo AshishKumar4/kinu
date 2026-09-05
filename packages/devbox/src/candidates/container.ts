@@ -26,9 +26,10 @@ export const CANDIDATE_STORE_MOUNT = `${DEVBOX_RUNTIME_DIR}/candidate-r2`;
  * Where a checkpoint stages its objects before they move to the store: the
  * container's own disk, never the mount. Through s3fs every write, rename and
  * read of the mount is a store request, and staging there cost four of them
- * per object (run 20260905075659, 516 s for one 64 MiB quiesce).
+ * per object (run 20260905075659, 516 s for one 64 MiB quiesce). The runner
+ * keeps the boundary hand-back for the seed action here too.
  */
-export const CANDIDATE_STAGE_DIR = `${DEVBOX_RUNTIME_DIR}/candidate-stage`;
+const CANDIDATE_STAGE_DIR = `${DEVBOX_RUNTIME_DIR}/candidate-stage`;
 
 /**
  * The control envelope is deliberately outside the payload mount. A container

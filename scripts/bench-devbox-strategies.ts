@@ -5166,6 +5166,91 @@ async function recordServedEntries(
   else notes.push(`the served entry count did not answer: ${(served.stderr ?? served.error ?? '').trim().slice(0, 120)}`);
 }
 
+/**
+ * One rung's tree-size complexity row: a fixed 64 KiB backup plus quiesce,
+ * then a stop and wake for every rung but the last. The post-ladder wake
+ * stands as the last rung's restore, so no container work is duplicated.
+ * A failed extra measurement writes a row and a note, never a gate.
+ */
+async function measureComplexityRung(
+  fixture: Fixture,
+  box: string,
+  kib: number,
+  rung: number,
+  ladderBytes: number,
+  complexityScope: boolean,
+  result: ArmResult,
+  notes: string[],
+  startup: (
+    path: '/create' | '/wake',
+    operation: string,
+    allowedKinds: readonly string[],
+  ) => Promise<StartupCompletion>,
+): Promise<number> {
+  if (!complexityScope) return ladderBytes;
+  const treeBytes = ladderBytes + kib * 1024;
+  try {
+    await retryTransient(`complexity 64KiB write at ${treeBytes}B`, async () =>
+      await execInBox(fixture, box, 'dd if=/dev/urandom of=/workspace/ladder/backup-64k.bin bs=1024 count=64 2>/dev/null && sync'),
+    );
+    result.quiescesBeforeDecisive++;
+    const backup = await checkpointOperation(fixture, box, 'quiesce', `complexity backup-64k at ${treeBytes}B`);
+    result.complexity?.push({
+      treeBytes,
+      kind: 'backup-64k',
+      ms: backup.ms ?? null,
+      outcome: backup.error !== undefined ? `error: ${backup.error}` : `${backup.outcome?.kind ?? 'unknown'}${backup.outcome?.reason !== undefined ? ` (${backup.outcome.reason})` : ''}`,
+    });
+  } catch (error) {
+    const words = describeThrown({ cause: error }).slice(0, 240);
+    notes.push(`complexity backup-64k at ${treeBytes}B did not answer: ${words}`);
+    result.complexity?.push({ treeBytes, kind: 'backup-64k', ms: null, outcome: `error: ${words}` });
+  }
+  if (rung < CHANGE_SIZES_KIB.length - 1) {
+    try {
+      await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
+      const opsBeforeRestore = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+      const restoreStop = await stopOperation(fixture, box, `complexity restore at ${treeBytes}B`);
+      requireConfirmedStop(restoreStop, `complexity restore at ${treeBytes}B: stop failed before wake`);
+      const rewoke = await startup('/wake', `complexity restore at ${treeBytes}B`, admittedAttachKinds('wake'));
+      const restoreOps = await closeWakeOpsWindow(fixture, box, opsBeforeRestore, notes);
+      result.complexity?.push({
+        treeBytes,
+        kind: 'restore',
+        ms: rewoke.ms,
+        outcome: rewoke.attach.kind,
+        attachKind: rewoke.attach.kind,
+        wakeOps: restoreOps,
+      });
+    } catch (error) {
+      const words = describeThrown({ cause: error }).slice(0, 240);
+      notes.push(`complexity restore at ${treeBytes}B did not answer: ${words}`);
+      result.complexity?.push({ treeBytes, kind: 'restore', ms: null, outcome: `error: ${words}` });
+    }
+  }
+  return treeBytes;
+}
+
+/**
+ * The last rung's restore is the post-ladder wake itself. Transcribe it from
+ * the wake the arm just took, so the third rung needs no extra stop and wake.
+ */
+function recordFinalComplexityRestore(
+  result: ArmResult,
+  ladderBytes: number,
+  complexityScope: boolean,
+): void {
+  if (!complexityScope) return;
+  result.complexity?.push({
+    treeBytes: ladderBytes,
+    kind: 'restore',
+    ms: result.wakeMs,
+    outcome: result.wakeKind,
+    attachKind: result.wakeKind,
+    wakeOps: result.wakeOps,
+  });
+}
+
 async function measureArm(
   fixture: Fixture,
   strategy: Strategy,
@@ -5307,54 +5392,7 @@ async function measureArm(
       }
       requireProbeCheckpoint(result.probe, cp, `ladder ${kib}KiB ${kind}`);
     }
-    // TREE-SIZE COMPLEXITY at this rung's cumulative size: one fixed 64 KiB
-    // write plus quiesce, then a stop and wake for every rung but the last —
-    // the post-ladder stop and wake below stands as the last rung's restore,
-    // so no container work is duplicated. A failed extra measurement is a
-    // recorded row and a note, never a gate. Measured 2026-09-05.
-    if (complexityScope) {
-      ladderBytes += kib * 1024;
-      const treeBytes = ladderBytes;
-      try {
-        await retryTransient(`complexity 64KiB write at ${treeBytes}B`, async () =>
-          await execInBox(fixture, box, 'dd if=/dev/urandom of=/workspace/ladder/backup-64k.bin bs=1024 count=64 2>/dev/null && sync'),
-        );
-        result.quiescesBeforeDecisive++;
-        const backup = await checkpointOperation(fixture, box, 'quiesce', `complexity backup-64k at ${treeBytes}B`);
-        result.complexity?.push({
-          treeBytes,
-          kind: 'backup-64k',
-          ms: backup.ms ?? null,
-          outcome: backup.error !== undefined ? `error: ${backup.error}` : `${backup.outcome?.kind ?? 'unknown'}${backup.outcome?.reason !== undefined ? ` (${backup.outcome.reason})` : ''}`,
-        });
-      } catch (error) {
-        const words = describeThrown({ cause: error }).slice(0, 240);
-        notes.push(`complexity backup-64k at ${treeBytes}B did not answer: ${words}`);
-        result.complexity?.push({ treeBytes, kind: 'backup-64k', ms: null, outcome: `error: ${words}` });
-      }
-      if (rung < CHANGE_SIZES_KIB.length - 1) {
-        try {
-          await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-          const opsBeforeRestore = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
-          const restoreStop = await stopOperation(fixture, box, `complexity restore at ${treeBytes}B`);
-          requireConfirmedStop(restoreStop, `complexity restore at ${treeBytes}B: stop failed before wake`);
-          const rewoke = await startup('/wake', `complexity restore at ${treeBytes}B`, admittedAttachKinds('wake'));
-          const restoreOps = await closeWakeOpsWindow(fixture, box, opsBeforeRestore, notes);
-          result.complexity?.push({
-            treeBytes,
-            kind: 'restore',
-            ms: rewoke.ms,
-            outcome: rewoke.attach.kind,
-            attachKind: rewoke.attach.kind,
-            wakeOps: restoreOps,
-          });
-        } catch (error) {
-          const words = describeThrown({ cause: error }).slice(0, 240);
-          notes.push(`complexity restore at ${treeBytes}B did not answer: ${words}`);
-          result.complexity?.push({ treeBytes, kind: 'restore', ms: null, outcome: `error: ${words}` });
-        }
-      }
-    }
+    ladderBytes = await measureComplexityRung(fixture, box, kib, rung, ladderBytes, complexityScope, result, notes, startup);
   }
   // THE PUBLISH-TIME PROBE READS. The ladder just published, so the control
   // row and the incident ledger name this publication's own window. Both are
@@ -5401,20 +5439,7 @@ async function measureArm(
   result.wakeDetail = woke.attach.detail;
   result.wakeBootId = woke.state.state?.bootId ?? null;
   result.wakeOps = await closeWakeOpsWindow(fixture, box, opsBeforeWake, notes);
-  // THE LAST RUNG'S RESTORE IS THIS WAKE ITSELF. The ladder's third rung took
-  // no extra stop and wake, so its restore row is transcribed here from the
-  // wake the arm just took — `settle('the wake')` below persists it with the
-  // rest. Measured 2026-09-05.
-  if (complexityScope) {
-    result.complexity?.push({
-      treeBytes: ladderBytes,
-      kind: 'restore',
-      ms: result.wakeMs,
-      outcome: result.wakeKind,
-      attachKind: result.wakeKind,
-      wakeOps: result.wakeOps,
-    });
-  }
+  recordFinalComplexityRestore(result, ladderBytes, complexityScope);
   settle('the wake');
   verify(
     'the wake attached durable bytes',
@@ -6229,6 +6254,46 @@ export function renderArmLifecycleRow(arm: ArmResult): string {
   return `| \`${arm.strategy}\` | ${arm.verifyPassed ? 'PASSED' : '**FAILED**'} | ${failing === '' ? '—' : failing} |`;
 }
 
+/**
+ * The tree-size complexity table: one fixed 64 KiB backup plus one restore
+ * per ladder rung. A rung the arm never reached reads NOT MEASURED, with the
+ * reason the probe scope or the absent row gives.
+ */
+function renderComplexitySection(arms: readonly ArmResult[]): string {
+  const out: string[] = [];
+  out.push('#### Restore and backup time versus tree size');
+  out.push('');
+  out.push(
+    'One fixed 64 KiB backup plus one stop then wake at each ladder rung’s cumulative tree size. '
+    + 'The last rung’s restore is the post-ladder wake itself, so no container work is duplicated. '
+    + 'Measured 2026-09-05.',
+  );
+  out.push('');
+  out.push('| arm | tree bytes | 64 KiB backup (ms) | restore (ms) | restore remote ops | restore payload bytes | outcome |');
+  out.push('| --- | --- | --- | --- | --- | --- | --- |');
+  for (const arm of arms) {
+    const complexity = decodeComplexityRows(arm.complexity);
+    for (const treeBytes of COMPLEXITY_TREE_BYTES) {
+      const backup = complexity.find((row) => row.treeBytes === treeBytes && row.kind === 'backup-64k');
+      const restore = complexity.find((row) => row.treeBytes === treeBytes && row.kind === 'restore');
+      if (backup === undefined && restore === undefined) {
+        const reason = arm.probe !== undefined
+          ? 'the verify-only probe keeps the ladder, stop, wake and teardown; the tree-size rows run in the decisive scope'
+          : `the arm recorded no tree-size row at ${num(treeBytes, 0)} bytes`;
+        out.push(`| \`${arm.strategy}\` | ${num(treeBytes, 0)} | NOT MEASURED: ${reason} | — | — | — | NOT MEASURED |`);
+        continue;
+      }
+      const bill = complexityRestoreBill(restore?.wakeOps);
+      const outcome = [backup?.outcome, restore?.outcome].filter((part) => part !== undefined).join('; ');
+      out.push(
+        `| \`${arm.strategy}\` | ${num(treeBytes, 0)} | ${num(backup?.ms ?? null, 0)} | ${num(restore?.ms ?? null, 0)} `
+        + `| ${num(bill.remoteOps, 0)} | ${num(bill.payloadBytes, 0)} | ${outcome} |`,
+      );
+    }
+  }
+  return out.join('\n');
+}
+
 export function render(
   arms: readonly ArmResult[],
   meta: RunMeta,
@@ -6455,36 +6520,7 @@ export function render(
     }
   }
   out.push('');
-  out.push('#### Restore and backup time versus tree size');
-  out.push('');
-  out.push(
-    'One fixed 64 KiB backup plus one stop then wake at each ladder rung’s cumulative tree size. '
-    + 'The last rung’s restore is the post-ladder wake itself, so no container work is duplicated. '
-    + 'Measured 2026-09-05.',
-  );
-  out.push('');
-  out.push('| arm | tree bytes | 64 KiB backup (ms) | restore (ms) | restore remote ops | restore payload bytes | outcome |');
-  out.push('| --- | --- | --- | --- | --- | --- | --- |');
-  for (const arm of arms) {
-    const complexity = decodeComplexityRows(arm.complexity);
-    for (const treeBytes of COMPLEXITY_TREE_BYTES) {
-      const backup = complexity.find((row) => row.treeBytes === treeBytes && row.kind === 'backup-64k');
-      const restore = complexity.find((row) => row.treeBytes === treeBytes && row.kind === 'restore');
-      if (backup === undefined && restore === undefined) {
-        const reason = arm.probe !== undefined
-          ? 'the verify-only probe keeps the ladder, stop, wake and teardown; the tree-size rows run in the decisive scope'
-          : `the arm recorded no tree-size row at ${num(treeBytes, 0)} bytes`;
-        out.push(`| \`${arm.strategy}\` | ${num(treeBytes, 0)} | NOT MEASURED: ${reason} | — | — | — | NOT MEASURED |`);
-        continue;
-      }
-      const bill = complexityRestoreBill(restore?.wakeOps);
-      const outcome = [backup?.outcome, restore?.outcome].filter((part) => part !== undefined).join('; ');
-      out.push(
-        `| \`${arm.strategy}\` | ${num(treeBytes, 0)} | ${num(backup?.ms ?? null, 0)} | ${num(restore?.ms ?? null, 0)} `
-        + `| ${num(bill.remoteOps, 0)} | ${num(bill.payloadBytes, 0)} | ${outcome} |`,
-      );
-    }
-  }
+  out.push(renderComplexitySection(arms));
   out.push('');
 
   out.push('#### Workload, per-operation p50 (ms)');

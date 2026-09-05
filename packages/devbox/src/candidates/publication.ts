@@ -637,12 +637,12 @@ export class PublicationCompletionPending extends Error {
  * object at a time and its quiesce took 516 s. Sixteen keeps a few chunks of
  * buffers live and fills the mount's request pipeline.
  */
-export const UPLOAD_WIDTH = 16;
+const UPLOAD_WIDTH = 16;
 
 /** Run `run` over `items` with at most `width` in flight, results in item
  *  order. The first failure stops the pool from starting anything further;
  *  what was already in flight finishes on its own and is discarded. */
-export async function runUploadPool<Item, Result>(
+async function runUploadPool<Item, Result>(
   items: readonly Item[],
   width: number,
   run: (item: Item) => Promise<Result>,
