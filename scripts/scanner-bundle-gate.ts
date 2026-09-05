@@ -42,6 +42,17 @@ export const BUNDLE_BANNER =
 /** A bare import is a dependency the bootstrap cannot satisfy. */
 const BARE_IMPORT = /^\s*import\b[^'"]*['"](?![./])/mu;
 
+/**
+ * One `// <path>` separator Bun writes before each bundled module. The path
+ * is the real path of the file, made relative to the working directory,
+ * so the same build reads `node_modules/...` on a real install and
+ * `../Proteus/node_modules/...` on a mirrored worktree. Bun.build keeps
+ * no option that changes this: `root` names entry structure only, and
+ * `preserveSymlinks` and `absWorkingDir` pass through with no effect.
+ * The gate compares bytes, so the build drops these lines here.
+ */
+const MODULE_PATH_COMMENT = /^\/\/ \S*\/\S+\.(?:[mc]?[jt]s|json)$/u;
+
 /** The bundle as `bun build` produces it from the source, in memory. */
 export async function buildScannerBundle(root: string = REPO_ROOT): Promise<string> {
   const built = await Bun.build({
@@ -55,7 +66,8 @@ export async function buildScannerBundle(root: string = REPO_ROOT): Promise<stri
   }
   const [artifact] = built.outputs;
   if (artifact === undefined) throw new Error(`building ${SCANNER_SOURCE} produced no output`);
-  return artifact.text();
+  const text = await artifact.text();
+  return text.split('\n').filter((line) => !MODULE_PATH_COMMENT.test(line)).join('\n');
 }
 
 export interface BundleVerdict {

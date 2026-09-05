@@ -3,7 +3,6 @@
 // Bun loads the install scanner before it installs anything, so the scanner
 // cannot import a dependency; this bundle carries its decoder inlined.
 
-// ../Proteus/node_modules/valibot/dist/index.mjs
 var store$4;
 var DEFAULT_CONFIG = {
   lang: undefined,
@@ -371,7 +370,6 @@ function safeParse(schema, input, config$1) {
   };
 }
 
-// scripts/security-scanner.ts
 var ADVISORY_ENDPOINT = "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk";
 var FEED_TIMEOUT_MS = 20000;
 var REPORT_ENV = "KINU_ADVISORY_REPORT";
