@@ -1,59 +1,58 @@
-# Data Model
+# Data model
 
-A hosted workspace has ONE durable authority: the OrchestratorAgent Durable
+A hosted workspace has one durable authority: the OrchestratorAgent Durable
 Object. Nimbus, held as a library over its `ctx.storage.sql`, owns the
-workspace files and execution state. The `OrchestratorAgent` Durable Object's
+workspace files and execution state. The `OrchestratorAgent` Durable Object
 SQLite owns relational actor state. Each subsystem owns its tables and creates
-them idempotently. There is no shadow VFS or synchronization path between the
-two.
+them idempotently. No shadow VFS or sync path runs between the two.
 
 Three other Durable Object classes hold isolated databases of their own.
 `SubordinateAgent` gets the full workspace schema plus a one-row
 `subordinate_identity`. `ExplorationAgent` gets `traces` from its own `onStart`
-and a one-row `facet_identity`; those two tables carry the isolation MCTS
-branches and heads depend on. `UserDO` holds the per-user `user_*` and
-`device_*` tables and the owner's `experience_library`, which belong to the
-user rather than to any workspace.
+and a one-row `facet_identity`. MCTS branches and heads depend on those two
+tables for isolation. `UserDO` holds the per-user `user_*` and
+`device_*` tables and the owner `experience_library`. Those tables belong to the
+user, not to any workspace.
 
-Four things live outside actor SQLite entirely: browser auth in the `AUTH_KV`
-KV namespace, sandbox `/workspace` backups in the `BACKUP_BUCKET` R2 bucket,
-the authoritative Nimbus workspace, and optional embedding recall in the
-`MEMORY_VECTORS` Vectorize index. Vectorize extends FTS5 and is never the
-source of truth.
+Four things live outside actor SQLite entirely. Browser auth lives in the `AUTH_KV`
+KV namespace. Sandbox `/workspace` backups live in the `BACKUP_BUCKET` R2 bucket.
+The authoritative Nimbus workspace lives in DO storage. Optional embedding recall
+lives in the `MEMORY_VECTORS` Vectorize index. Vectorize extends FTS5. It never
+serves as the source of truth.
 
 `AUTH_KV` holds only expiring records: browser sessions, one-time OAuth
 handoff state, CLI browser-approval state, each carrying its own TTL. None of
-it is a source of truth. A user's identity lives in their `UserDO`, keyed on a
-userId derived from the verified email, so an emptied namespace costs everyone
+it serves as a source of truth. A user identity lives in their `UserDO`, keyed on a
+userId derived from the verified email. An emptied namespace costs everyone
 a fresh sign-in and nothing more. The handoff record keeps the hash of a
-binding cookie the initiating browser holds, so a callback URL is worth nothing
+binding cookie the initiating browser holds. A callback URL is worth nothing
 away from the browser that started that sign-in.
 
-A session cookie's KV record is a projection. What the cookie stands for and
-whether it is still live are both one row in the signing-in user's own
-`UserDO`, written once at sign-in and read on every cookie check. KV needs up
+A session cookie KV record is a projection. What the cookie stands for and
+whether it is still live are both one row in the signing-in user own
+`UserDO`. That row is written once at sign-in and read on every cookie check. KV needs up
 to a minute to reach every colo in either direction, so it can answer neither
-question: a copied cookie replayed at a lagging colo would outlive logout by
-that window, and the first request after a sign-in redirect would read as
-signed out at a colo the write had not reached, then be sent back into a
+question. A copied cookie replayed at a lagging colo would outlive logout by
+that window. The first request after a sign-in redirect would read as
+signed out at a colo the write had not reached. It would then enter a
 sign-in that loses the same race. The row answers both, from every colo.
-Logout deletes it first, and the KV delete that follows is cleanup, so a failed
-cleanup does not report a revocation that landed as one that did not.
+Logout deletes it first. The KV delete that follows is cleanup. A failed
+cleanup never reports a revocation that landed as one that did not.
 
-A store that will not answer gives a 503. It is never an admitted request, and
-never the 401 that would tell a signed-in user to sign in again. A sign-out
-that cannot reach the store keeps the cookie and offers a retry: the cookie is
-the only handle that can still revoke that session, so clearing it would leave
+A store that will not answer gives a 503. That answer never admits the request.
+It never sends the 401 that would tell a signed-in user to sign in again. A sign-out
+that cannot reach the store keeps the cookie and offers a retry. The cookie is
+the only handle that can still revoke that session. Clearing it would leave
 the session live with nothing able to reach it. A session whose row is gone or
-lapsed is simply not signed in, and a record KV does not hold is not a sign-out
-on its own: the row still says what the cookie stands for, and every path that
-ends a session deletes that row first, so an absent record can never revive a
+lapsed is simply not signed in. A record KV does not hold is not a sign-out
+on its own. The row still says what the cookie stands for. Every path that
+ends a session deletes that row first. An absent record can never revive a
 revoked one. A record that no longer decodes is both a fault and a dead
-credential: it is reported once, cleared from the row and from KV, and still
-answered as not signed in, so the browser can sign in again instead of being
+credential. I report it once, clear it from the row and from KV, and still
+answer as not signed in. The browser can then sign in again instead of sitting
 trapped behind a cookie it cannot replace.
 
-## Entity Relationship
+## Entity relationship
 
 The relational workspace tables, as created by the Core schema initializers
 and agent-utils stores; workspace files live in the Nimbus filesystem below.
@@ -216,32 +215,32 @@ erDiagram
     scaffold_versions ||--o{ task_history : "scaffold_version"
 ```
 
-## Agent Identity (SOUL.md)
+## Agent identity (SOUL.md)
 
 The identity document is `SOUL.md` in the workspace filesystem, on both
-backends. `readSoul`/`writeSoul`/`seedSoul` (`core/src/identity/soul.ts`) are
-the accessors; the system prompt, evolution engine and `setSoul` RPC go through
-them. `writeSoul` also maintains `workspace_identity.mission`, so a
-read-only listing reads the mission from that row. The owner may edit SOUL.md;
-the agent does not rewrite its own identity.
+backends. `readSoul`, `writeSoul`, and `seedSoul` (`core/src/identity/soul.ts`) are
+the accessors. The system prompt, the evolution engine, and the `setSoul` RPC go through
+them. `writeSoul` also maintains `workspace_identity.mission`. A
+read-only listing reads the mission from that row. The owner may edit SOUL.md.
+The agent never rewrites its own identity.
 
 ## The workspace filesystem
 
-Both backends run Nimbus's workspace filesystem over their own SQLite. The
+Both backends run the Nimbus workspace filesystem over their own SQLite. The
 class is `SqliteVFS`, from `@nimbus-sh/core`. Nothing in this repository
 implements a filesystem.
 
-Hosted, the workspace lives in the actor's OWN Durable Object storage, reached
-through the remote session adapter in `core/src/execution/nimbus.ts`; the
-orchestrator DO creates none of the filesystem tables. Local, `createWorkspace`
+On hosted, the workspace lives in the actor OWN Durable Object storage. It is reached
+through the remote session adapter in `core/src/execution/nimbus.ts`. The
+orchestrator DO creates none of the filesystem tables. On local, `createWorkspace`
 (`core/src/vfs/nimbus-workspace.ts`, imported as `createWorkspaceFilesystem`)
-builds the same component over `bun:sqlite` in the session's own database
+builds the same component over `bun:sqlite` in the session own database
 (`cli-backend/src/runtime.ts:493`).
 
-Nimbus owns those bytes and their tables;
-`core/src/conformance/manifest.ts` declares the exact set, and that set is what
-`NimbusWorkspace.destroy()` drops, so an addition means the dependency changed
-its storage contract. It is
+Nimbus owns those bytes and their tables.
+`core/src/conformance/manifest.ts` declares the exact set. That set is what
+`NimbusWorkspace.destroy()` drops. An addition means the dependency changed
+its storage contract. The set is
 `inodes`, `file_chunks`, `content_lifecycle`, `vfs_schema_migrations`,
 `vfs_append_receipts`, `vfs_append_writer_state`, `vfs_append_module_state`,
 `vfs_append_pid_revocations`, `vfs_append_acked_gaps`, plus Kinu's own
@@ -256,38 +255,38 @@ Three properties follow:
 - Real POSIX semantics: one filesystem, addressed identically by
   `vfs.readFile('/etc/passwd')` and by `run "cat /etc/passwd"`. Relative paths
   resolve at `WORKSPACE_ROOT` (`/home/user`). Ownership is uid/gid/mode on real
-  inodes, which is how a swarm node's `/home/<node>` and its private `/tmp` are
+  inodes. That is how a swarm node `/home/<node>` and its private `/tmp` form
   a boundary rather than a convention (`core/src/vfs/agent-home.ts`).
 - Chunked blobs: `SqliteVFS` splits file content into `file_chunks` rows of
   `CHUNK_SIZE` bytes, 65,536 as `@nimbus-sh/platform` declares it. Merge-back
-  costs a write batch against the same constant, so this repository imports it
+  costs a write batch against the same constant. This repository imports it
   rather than restating the number (`core/src/strategy/merge-back.ts:55`).
 
 `packages/agent-utils` supplies the `VFS` interface both planes satisfy
 (`agent-utils/src/vfs/types.ts`) and nothing else on this axis: no filesystem
-implementation, no shell emulator. The shell is Nimbus's `runtime-bash`.
-Memory indexing reads through the active VFS on either backend, so relational
+implementation, no shell emulator. The shell is the Nimbus `runtime-bash`.
+Memory indexing reads through the active VFS on either backend. Relational
 `memory_chunks` never becomes a second file authority.
 
 One table named `vfs_files` still appears in the tree, in
-`packages/cli/tests/export-import.test.ts`, where the test creates it as a blob
+`packages/cli/tests/export-import.test.ts`. The test creates it there as a blob
 fixture for the archive reader. No product path creates or reads it.
 
-## MemoryStore (FTS5 Search)
+## MemoryStore (FTS5 search)
 
 `@kinu.run/agent-utils` provides FTS5 full-text search over markdown files in
-the workspace filesystem: a `memory_chunks` table with a `memory_chunks_fts`
-virtual table (external content via `content='memory_chunks'`), one DDL
+the workspace filesystem. It keeps a `memory_chunks` table with a `memory_chunks_fts`
+virtual table (external content via `content='memory_chunks'`) and one DDL
 (`initMemoryChunkTables`, which `MemoryStore.ensureSchema()` delegates to).
-Files are chunked with a line-aware sliding window
-(`DEFAULT_CHUNK_TARGET_CHARS` 1600, `DEFAULT_CHUNK_OVERLAP_CHARS` 320); each
+Files split into chunks with a line-aware sliding window
+(`DEFAULT_CHUNK_TARGET_CHARS` 1600, `DEFAULT_CHUNK_OVERLAP_CHARS` 320). Each
 chunk carries a SHA-256 hash so the next pass skips unchanged chunks. Search
-is FTS5 MATCH with BM25 ranking; `sanitizeFtsQuery` removes operators and stop
-words and falls back to OR-joined tokens when the AND query returns nothing.
+is FTS5 MATCH with BM25 ranking. `sanitizeFtsQuery` removes operators and stop
+words. It falls back to OR-joined tokens when the AND query returns nothing.
 
 ## Think message persistence
 
-Chat history belongs to the SDK. `Think` extends the agents SDK's
+Chat history belongs to the SDK. `Think` extends the agents SDK
 `Agent` and holds a `Session` from `agents/experimental/memory/session`, which owns:
 
 - `assistant_messages`: the durable message path
@@ -298,13 +297,13 @@ Chat history belongs to the SDK. `Think` extends the agents SDK's
 - `cf_agents_search_entries`: the session's own search index
 
 Kinu reads through `this.messages` and never writes these directly. The
-`messages` table in the ER diagram above is Kinu's own flattened projection,
-which is what `messages_fts` and the outcome joins read.
+`messages` table in the ER diagram above is the Kinu own flattened projection.
+`messages_fts` and the outcome joins read that projection.
 
 ## The rest of the schema
 
 The ER diagram above covers the shared actor substrate. Every subsystem added
-since owns its own DDL, all `IF NOT EXISTS`, all run from the same
+since owns its own DDL. All of it is `IF NOT EXISTS`. All of it runs from the same
 `initWorkspaceSchema()` pass:
 
 | Subsystem | Tables | Owner |
@@ -344,33 +343,33 @@ Five more groups are created outside that pass, by the root that owns each:
 | Ingress gates | `webhook_rate_windows`, `webhook_secrets` (both backends) | `core/src/events/ingress/rate-limit.ts`, `secrets.ts` |
 
 Three tables are created lazily: `session_window` and `turn_review_queue` by
-the evolution engine's constructor, `mission_budget` by the mission governor's
+the evolution engine constructor, `mission_budget` by the mission governor
 first write.
 
-Two durable retry outboxes are lazy too, created by `@nimbus-sh/fabric` on the
+Two durable retry outboxes are lazy too. `@nimbus-sh/fabric` creates them on the
 first queue or drain: `outbox_peer` for the peer transport and `outbox_email`
-for outbound mail. Their schema belongs to the library;
+for outbound mail. Their schema belongs to the library.
 `core/src/events/outbox.ts` supplies the SQL handle and the alarm.
 
 `core/src/conformance/manifest.ts` declares every one of these per root
 (`cf-orchestrator`, `cf-subordinate`, `cli`), wired or deliberately absent with
-a stated reason, and the conformance suite compares the declaration against the
-real `sqlite_master`. Read the manifest first; this page narrates over it.
+a stated reason. The conformance suite compares the declaration against the
+real `sqlite_master`. Read the manifest first. This page narrates over it.
 
 ## Schema initialization
 
 `initWorkspaceSchema()` (`core/src/identity/workspace-schema.ts`) is the one
 answer to which tables a workspace has. Every composition root calls it: the
-orchestrator DO's `ensureSchema()`, the subordinate DO's, `openWorkspaceCLI`,
+orchestrator DO `ensureSchema()`, the subordinate DO, `openWorkspaceCLI`,
 the local session constructor, and `kinu create`. It used to be four
 disagreeing lists, and the disagreements were real bugs. `craft_scores` was
-never created except by `kinu create`, so every EMA read on a workspace
+never created except by `kinu create`. Every EMA read on a workspace
 opened any other way silently no-opped.
 
 The pass runs in this order:
 
 1. `repairLegacyTables`: a `memory_chunks` predating the 7-column FTS5 schema
-   is dropped with its shadow index and rebuilt empty; `search_nodes` gains its
+   is dropped with its shadow index and rebuilt empty. `search_nodes` gains its
    post-release columns here, before the CREATE pass builds an index over
    `root_id`.
 2. `renameReleaseTables`: the five `product_*` tables become `release_*`,
@@ -385,17 +384,17 @@ The pass runs in this order:
 
 Then each root adds what only it carries. The orchestrator DO also runs
 `initWorkspaceBaselineTable`, `initWebhookRateLimitTables`,
-`subordinateRoster.ensureSchema()` and its two inline turn tables; the whole
-call is gated by an in-memory flag so it runs once per activation, and no
+`subordinateRoster.ensureSchema()` and its two inline turn tables. The whole
+call is gated by an in-memory flag so it runs once per activation. No
 persistent schema version is tracked because a cold activation always re-runs.
 
-Each table now has exactly one owning module; the duplicate copies that
+Each table now has exactly one owning module. The duplicate copies that
 `identity/schema.ts` used to carry are gone. A second definition of
-`search_nodes` is how `code_language` went missing on a live workspace, and a
+`search_nodes` is how `code_language` went missing on a live workspace. A
 second `scaffold_versions` is how `status` and `parent_version` did. Where a
 workspace predates a column, the owning module reconciles it by asking
-`pragma_table_info` (`reconcileColumns`) instead of attempting an ALTER and
-swallowing the failure. DO SQLite also cannot ALTER a `CHECK` constraint and
-forbids explicit transactions; widening one, as `turn_outcomes` and the
+`pragma_table_info` (`reconcileColumns`). It never attempts an ALTER and swallows
+the failure. DO SQLite also cannot ALTER a `CHECK` constraint and
+forbids explicit transactions. Widening one, as `turn_outcomes` and the
 events-hub tables have both needed, is an in-place table rebuild with a resume
 branch for a crash mid-sequence.

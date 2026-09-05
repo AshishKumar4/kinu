@@ -1,7 +1,7 @@
 # Configuration: `~/.kinu/config.json` and the environment
 
 Every CLI setting lives in one JSON file. `kinu setup`, `kinu auth`,
-`kinu provider connect` and `kinu create` write it for you; this page is
+`kinu provider connect` and `kinu create` write it for you. This page is
 for when you want to read or edit it yourself. The authoritative shape is
 `KinuConfig` in `packages/cli/src/config.ts`.
 
@@ -22,7 +22,7 @@ for when you want to read or edit it yourself. The authoritative shape is
 
 `KINU_HOME` moves all of it. The CLI keeps no state anywhere else, so backing
 up this directory backs up everything it knows. Files you name yourself, such as
-an export archive, land where you point them and are the one exception.
+an export archive, land where you point them. They are the one exception.
 
 ## Account
 
@@ -33,7 +33,7 @@ an export archive, land where you point them and are the one exception.
 | `tokenExpiresAt` | ISO date | When that token expires. The CLI refuses it after this and asks you to re-auth. |
 | `user` | `{id, email, displayName?}` | Who the token belongs to. `kinu whoami` prints it. |
 
-`KINU_TOKEN` overrides `accessToken` for CI; use a scoped token from
+`KINU_TOKEN` overrides `accessToken` for CI. Use a scoped token from
 `kinu tokens create`.
 
 ## Workspaces
@@ -63,25 +63,25 @@ not shadow a built-in command name.
 
 ## Providers
 
-**Signed in, `kinu provider connect` now sends your key to your Kinu account by
-default.** The key is encrypted at rest there, and this machine reaches it
+Signed in, `kinu provider connect` sends your key to your Kinu account by
+default. The key is encrypted at rest there, and this machine reaches it
 through the provider proxy without holding a copy. Pass `--local` to keep one
 here instead, for offline use or an endpoint only this machine can see.
 
-Two exceptions, both deliberate. Codex stays local because the Codex endpoint
+Two deliberate exceptions. Codex stays local: the Codex endpoint
 refuses Cloudflare Workers egress, so proxying it would break a credential that
-works today. And with no account signed in there is nowhere else to put a key,
+works today. With no account signed in, there is nowhere else to put a key,
 so it lands here.
 
 `providers` is therefore the local-override store. Cloud workspaces never read
 it.
 
 The model spec decides which credential answers a turn. `resolveLLMConfig` gives
-the account every spec the account hosts, so `@cf/…` and the provider ids the
+the account every spec the account hosts. `@cf/…` and the provider ids the
 proxy carries go to the proxy even when a local key is present. Every other spec
 falls to the local store, matched on the provider the spec names (`openai/…`,
 `anthropic/…`, `openrouter/…`, `codex/…`, `opencode/…`). A bare model id with no
-provider goes to a stored Codex or OpenAI credential, in that order, and
+provider goes to a stored Codex or OpenAI credential, in that order.
 `providers.openaiCompat.default` catches anything still unmatched. With no
 account session the local store is the only source.
 
@@ -115,12 +115,12 @@ by local workspaces. Cloud workspaces get MCP servers from your account instead.
 | Field | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `updateCheck` | boolean | `true` | The once-a-day "newer Kinu available" notice in an interactive terminal. Set `false` to silence it. |
-| `updateCheckedAt` | number | — | Throttle state for that notice. Nothing reads a version from it. |
-| `updateLatestSeen` | string | — | The newest served version the notice has seen. |
+| `updateCheckedAt` | number | none | Throttle state for that notice. Nothing reads a version from it. |
+| `updateLatestSeen` | string | none | The newest served version the notice has seen. |
 | `deviceConnectPromptDismissed` | boolean | `false` | "Don't ask again" for the chat device-connect prompt. |
 | `checkpointKeep` | number | `50` | Shadow-git file checkpoints kept per working directory. `/undo` restores from them. |
-| `providerRevision` | number | `0` | How many times this machine's provider configuration has changed. It exists to cross a process boundary: `kinu provider connect` runs in a different process from a resident daemon or a live chat session, so nothing there can raise a signal. Only inequality is read, so there is no clock and nothing expires. |
-| `localProfile` | envelope | — | The signed-out profile authority: one local envelope carrying `authority`, `version`, `digest` and the catalog. It is canonical when no account session governs this machine, and it never holds account data. |
+| `providerRevision` | number | `0` | How many times this machine's provider configuration has changed. It exists to cross a process boundary. `kinu provider connect` runs in a different process from a resident daemon or a live chat session. Nothing there can raise a signal. Only inequality is read, so there is no clock and nothing expires. |
+| `localProfile` | envelope | none | The signed-out profile authority: one local envelope carrying `authority`, `version`, `digest` and the catalog. It is canonical when no account session governs this machine, and it never holds account data. |
 
 ## Environment variables
 
@@ -136,11 +136,11 @@ Six apply to every command, and `kinu --help` lists exactly these.
 | `KINU_AUTH` | LLM auth header value. |
 
 `resolveLLMConfig` reads three more as fallbacks, each taken only when its
-`KINU_` counterpart is unset: `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_AUTH` and
-`AI_GATEWAY_MODEL`.
+`KINU_` counterpart is unset. The three are `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_AUTH`,
+and `AI_GATEWAY_MODEL`.
 
 `resolveProviderCredentials` reads the local provider keys from the environment
-before it reads `config.json`, so a shell override wins inside the shell that
+before it reads `config.json`. A shell override wins inside the shell that
 sets it.
 
 | Variable | What it stands in for |
@@ -152,12 +152,12 @@ sets it.
 
 Precedence is the same everywhere. An explicit flag beats the environment, and
 the environment beats `config.json`. `KINU_BASE_URL` and `KINU_AUTH` have
-no `config.json` counterpart, so a direct endpoint is only ever set by a flag or
+no `config.json` counterpart. A direct endpoint is only ever set by a flag or
 the environment.
 
 ## Editing it by hand
 
-The file is plain JSON and the CLI rewrites it whole on every change, so edit it
+The file is plain JSON. The CLI rewrites it whole on every change, so edit it
 while nothing else is running. It is created `0600` inside a `0700` directory
 because it holds tokens and API keys. If you copy it anywhere, copy those modes
 with it.

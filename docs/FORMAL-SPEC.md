@@ -1,17 +1,17 @@
-# Formal Specification
+# Formal specification
 
 `lean/` holds hand-maintained abstract models for selected agent, evolution,
-execution, exploration, MCTS, safety and storage behavior. Check with
-`bash scripts/verify-lean.sh`; plain `lake build` compiles declarations and
-skips the three audits under it. None of these checks shows that deployed
-TypeScript and SQLite refines the models.
+execution, exploration, MCTS, safety, and storage behavior. Check with
+`bash scripts/verify-lean.sh`. Plain `lake build` compiles declarations and
+skips the three audits under it. No check here shows that the deployed
+TypeScript and SQLite refine the models.
 
 Cite theorems by name, never line number: a line citation slid onto different
-code within one commit on 2026-08-19. Write `RecordsStore.lean — best_never_falls`,
-which `scripts/lean-citations.ts` resolves against the declaration, so a rename
-goes red. Canonical claim inventory:
-[`lean/traceability.yaml`](../lean/traceability.yaml): theorem names, modeled
-TypeScript locations, classification, missing evidence per requirement.
+code within one commit on 2026-08-19. Write `RecordsStore.lean`, `best_never_falls`.
+`scripts/lean-citations.ts` resolves that pair against the declaration, so a rename
+goes red. The canonical claim inventory is
+[`lean/traceability.yaml`](../lean/traceability.yaml). It holds theorem names, modeled
+TypeScript locations, classification, and missing evidence per requirement.
 
 ## Corpus
 
@@ -29,17 +29,17 @@ Counts: `lean/check-traceability.mjs --list-declarations` reports 485 named
 declarations, measured 2026-08-30. The traceability map enrolls 380
 `proved-in-abstract-model` entries and 105 `by-construction-witness` entries.
 
-**Two denominators.** Status declares on a REQUIREMENT and inherits to every
+Two denominators. Status declares on a requirement and inherits to every
 theorem it claims, so the same four words count twice over two totals. Name the
 denominator every time.
 
 The two status groups above cover every traceability-enrolled theorem.
 Near-definitional statements (nonnegativity of a `Nat` EMA score; a constructor
-cannot produce `SQLWrite`) are witnesses, not deep safety proofs.
+cannot produce `SQLWrite`) count as witnesses. They are not deep safety proofs.
 
-By requirement, over 52: **30 `proved-in-abstract-model`**, **16
-`by-construction-witness`**, **5 `specified-not-modeled`**, **1
-`trusted-model-assumption`**. Two statuses exist only in this total, because
+By requirement, over 52: 30 `proved-in-abstract-model`, 16
+`by-construction-witness`, 5 `specified-not-modeled`, 1
+`trusted-model-assumption`. Two statuses exist only in this total, because
 five requirements claim no theorem.
 
 ## Statuses
@@ -47,23 +47,22 @@ five requirements claim no theorem.
 Exactly one per requirement:
 
 - `proved-in-abstract-model`: Lean proves a substantive invariant of the stated
-  abstract model; implementation correspondence stays separate.
+  abstract model. Implementation correspondence stays separate.
 - `by-construction-witness`: follows mainly from constructors, result type, or
-  declared transition postconditions; a checked design witness, not advertised
-  as a deep proof.
+  declared transition postconditions. It is a checked design witness, not a deep proof.
 - `trusted-model-assumption`: concerns an external system Lean does not model;
   admitted explicitly, missing evidence recorded.
 - `specified-not-modeled`: property tracked, no Lean model or theorem exists.
 
-Five requirements have no theorems and stay `specified-not-modeled`: UCT-score
-monotonicity as implemented (`PR-MCTS-004`), production search convergence
-(`PR-MCTS-005`), verifier-discrimination counterfactual (`PR-DISCRIM-003`),
-publication seal under two concurrent runs (`PR-PUBLISH-004`), eventual
-improvement under a fallible verifier (`PR-EXPL-002`). The first two wait on a
-settled production selection algorithm; proving another textbook algorithm adds
-nothing about Kinu. The others lack, respectively, a verifier semantics, a
-concurrent step relation, and a candidate-quality distribution; each says so in
-its `remainingEvidence`.
+Five requirements have no theorems and stay `specified-not-modeled`. They are
+UCT-score monotonicity as implemented (`PR-MCTS-004`), production search
+convergence (`PR-MCTS-005`), the verifier-discrimination counterfactual
+(`PR-DISCRIM-003`), the publication seal under two concurrent runs
+(`PR-PUBLISH-004`), and eventual improvement under a fallible verifier
+(`PR-EXPL-002`). The first two wait on a settled production selection algorithm.
+Proving another textbook algorithm adds nothing about Kinu. The others lack a
+verifier semantics, a concurrent step relation, and a candidate-quality
+distribution, respectively. Each says so in its `remainingEvidence`.
 
 ## Axiom boundary
 
@@ -82,16 +81,16 @@ No published theorem depends on it. No covering `MemoryStore.indexFile` plus
 bash scripts/verify-lean.sh
 ```
 
-Four checks: `lake build` over the whole project; `check-no-false.sh` (the
-historical contradiction witness stays invalid, currently because its deleted
-assumption-module import cannot resolve; a narrow deletion regression check,
-while the axiom audit catches newly used non-kernel assumptions);
-`check-traceability.mjs` (builds `Kinu.Axioms`, parses every axiom report,
-checks the traceability map both directions); `scripts/lean-citations.ts`
-(every citation from anywhere in the tree: cited module exists, cited name has
-an exact `theorem <name>` declaration there).
+Four checks run. `lake build` compiles the whole project. `check-no-false.sh`
+keeps the historical contradiction witness invalid. It currently fails because
+its deleted assumption-module import cannot resolve. It is a narrow deletion
+regression check. The axiom audit catches newly used non-kernel assumptions.
+`check-traceability.mjs` builds `Kinu.Axioms`, parses every axiom report, and
+checks the traceability map both directions. `scripts/lean-citations.ts`
+checks every citation from anywhere in the tree. Each cited module must exist.
+Each cited name needs an exact `theorem <name>` declaration there.
 
-The dependency-free checker fails on: `sorry` in any Lean source; a published
+The dependency-free checker fails on each of these: `sorry` in any Lean source; a published
 theorem absent from audit or map; a YAML name lacking an exact declaration; a
 theorem touching any axiom beyond the three kernel ones unless its requirement
 has `trusted-model-assumption` and enrolls that exact axiom; a standalone axiom
@@ -100,28 +99,28 @@ claims, or a TypeScript reference whose file or line does not exist.
 
 ### Citation-gate blind spots
 
-Printed every pass; together they set what a citation is worth. Live figures
-via `bun scripts/lean-citations.ts`; counts below are a snapshot, the corpus
-moves. Measured 2026-08-24 over 1,740 files, against 95 module citations, 47
-theorem citations, 1 line citation:
+The gate prints them every pass. Together they set what a citation is worth. Live figures
+come from `bun scripts/lean-citations.ts`. Counts below are a snapshot. The corpus
+moves. Measured 2026-08-24 over 1,740 files: 95 module citations, 47
+theorem citations, 1 line citation.
 
 - Only theorem names verify. Resolution against the declaration turns renames red.
-- Line citations are bounded, not verified: endpoints must sit inside the
-  module, content is unchecked. An insertion above slides a range onto other
-  code with the gate green; hence citing by name.
-- 25 citations carry author-declared `CITATION_ILLUSTRATIVE`, trusted without
-  checking beyond site behaviour. The gallery fixture naming a nonexistent Lean
+- Line citations are bounded, not verified. Endpoints must sit inside the
+  module. Content is unchecked. An insertion above slides a range onto other
+  code with the gate green. That is why citations use names.
+- 25 citations carry author-declared `CITATION_ILLUSTRATIVE`. The gate trusts them
+  without checking beyond site behaviour. The gallery fixture naming a nonexistent Lean
   module is one of the 25.
-- 1 theorem name carries no underscore, invisible to the scanner, so its rename
-  goes uncaught. Enrolled rather than discovered: a new one fails the gate and
+- 1 theorem name carries no underscore. It is invisible to the scanner, so its rename
+  goes uncaught. It is enrolled rather than discovered. A new one fails the gate and
   names itself.
 
 ## Implementation correspondence
 
-The old checksum gate showed only that selected TypeScript changed, not that
-Lean and TypeScript still computed the same thing; removed. The current gate
-makes proof claims and assumptions auditable; the models are still maintained
-independently from the code. WP-F4 is the remaining bridge: executable
-differential fixtures and property-based tests running modeled behavior and
+The old checksum gate showed only that selected TypeScript changed. It did not
+show that Lean and TypeScript still computed the same thing. It is removed. The current gate
+makes proof claims and assumptions auditable. The models are still maintained
+independently from the code. WP-F4 is the remaining bridge. It pairs executable
+differential fixtures with property-based tests. Both run modeled behavior and
 production TypeScript on shared inputs. Until they exist, the traceability file
 states the gap explicitly for every requirement.

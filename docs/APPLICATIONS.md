@@ -1,6 +1,6 @@
 # Applications
 
-## 1. What Kinu Is
+## 1. What Kinu is
 
 Kinu is an agent platform with durable adaptation mechanisms. It:
 
@@ -21,7 +21,7 @@ Adaptation runs at four timescales:
 | **Session** | Session close with negative signal | A focused reflection in workspace memory |
 | **Lifetime** | Periodic or on demand | Search, tool retirement, and scaffold candidates |
 
-## 2. Web Version
+## 2. Web version
 
 The web version runs on Cloudflare Workers with Durable Objects, at
 [kinu.run](https://kinu.run).
@@ -53,7 +53,7 @@ claim a benchmark result for them.
 ### Multi-model comparison
 
 The model selector switches models mid-conversation across every connected
-provider. On Workers AI the usual spread:
+provider. On Workers AI the usual spread is:
 
 | Model | Description | Best For |
 |-------|-------------|----------|
@@ -69,12 +69,12 @@ workspaces, then compare their records. Reasoning effort is a separate dial:
 ### Hosted development environment
 
 Hosted workspaces use one authoritative Nimbus session for files and shell
-state: a real POSIX shell, on-demand language runtimes, git and package
-tooling, long-running processes, capability-hosted HTTP/WebSocket previews.
-Sandbox containers and connected devices stay separate, explicit environments;
-there is no second Nimbus executor or file copy between two workspace stores.
+state. It provides a real POSIX shell, on-demand language runtimes, git and package
+tooling, long-running processes, and capability-hosted HTTP/WebSocket previews.
+Sandbox containers and connected devices stay separate, explicit environments.
+There is no second Nimbus executor and no file copy between two workspace stores.
 
-## 3. CLI Version
+## 3. CLI version
 
 The CLI version runs locally on POSIX with bun:sqlite and provides the same
 core capabilities.
@@ -88,10 +88,10 @@ kinu chat dev-helper
 # Evolution happens locally; crafted tools persist in ~/.kinu/dev-helper/agent.db
 ```
 
-It executes code in a sandboxed subprocess with a sanitized environment, reads
-and writes files in its virtual filesystem, searches memory with FTS5, and
-keeps tool patterns across sessions. A caller may pass a timeout; nothing
-imposes one, so long work runs to completion.
+It executes code in a sandboxed subprocess with a sanitized environment. It
+reads and writes files in its virtual filesystem, searches memory with FTS5,
+and keeps tool patterns across sessions. A caller may pass a timeout, but
+nothing imposes one. Long work runs to completion.
 
 ### CI/CD integration
 
@@ -106,18 +106,18 @@ kinu export dev-helper -o dev-helper-v2.kinu.jsonl
 kinu import dev-helper-v2.kinu.jsonl --name dev-helper
 ```
 
-A local workspace keeps its whole state in one SQLite file; `kinu export`
+A local workspace keeps its whole state in one SQLite file. `kinu export`
 writes it as a `.kinu.jsonl` archive. Cloud and local workspaces produce the
-same archive, and `import` restores either as a local workspace, so you can
-back one up, version it, share it.
+same archive. `import` restores either as a local workspace. You can back one
+up, version it, or share it.
 
 ### Research experimentation
 
 The CLI keeps every round trip on your machine, so evolution parameters are
-cheap to try. MCTS parameters are durable per-workspace state: `DEFAULT_CONFIG`
-is frozen and read at import time, the workspace's `agent_config` table carries
-overrides on top of it, and a swarm takes its shape from the call instead,
-through `preset` and the six axes.
+cheap to try. MCTS parameters are durable per-workspace state.
+`DEFAULT_CONFIG` is frozen and read at import time. The workspace's `agent_config`
+table carries overrides on top of it. A swarm takes its shape from the call
+instead, through `preset` and the six axes.
 
 ```typescript
 import { createAgentConfigStore } from '@kinu.run/core';
@@ -129,18 +129,18 @@ config.setMctsOverrides({
 });
 ```
 
-`config.getMctsOverrides()` is what the search reads, so a change lands on the
-next turn without a restart, and survives one.
+The search reads `config.getMctsOverrides()`. A change lands on the
+next turn without a restart. It also survives a restart.
 
 ## 4. Design choices
 
-1. Shared Core policy. Cloud and local backends share orchestration, storage
-   contracts, tools, delegation, and adaptation policy.
-2. Versioned scaffold changes. Candidate agent-loop changes pass the configured
-   checks and retain a rollback version.
-3. Crafted tool lifecycle. Exponential moving score, relevance decay,
+1. One shared core policy covers both backends. Cloud and local share
+   orchestration, storage contracts, tools, delegation, and adaptation policy.
+2. Scaffold changes are versioned. A candidate agent-loop change passes the
+   configured checks and retains a rollback version.
+3. Crafted tools have a lifecycle: exponential moving score, relevance decay,
    retirement rules.
-4. Facet-backed hosted nodes. Hosted nodes run as facets with private shell and
+4. Hosted nodes run as facets. Each has private shell and
    scaffold state over the workspace's canonical files.
 
 ## 5. Current limitations
@@ -150,39 +150,39 @@ next turn without a restart, and survives one.
 A workspace hires durable `SubordinateAgent` facets through the `agents` tool.
 Each runs its own turn loop over shared files, and the same surface reaches
 your other workspaces. Swarm candidates are measured (`objective`, the verifier
-registry); hires are not. Nothing measures whether decomposition beats one long
-turn, how often subordinates duplicate each other's work, or what coordination
-costs.
+registry). Hires are not. Three questions are unmeasured. Does decomposition beat
+one long turn? How often do subordinates duplicate each other's work? What does
+coordination cost?
 
 ### Evolution is slow in practice
 
 - Turn-level pattern extraction fires reliably after an accepted turn that used tools
 - Session-level needs 5 turns *and* a turn that errored or drew negative feedback; scaffold mutation additionally needs 3+ conversations
-- Lifetime fires every 5 closed session windows (`lifetimeEvolutionInterval: 5`, `core/src/evolution/types.ts:154`), which is 25 turns; `kinu evolve` runs a search on demand
+- Lifetime fires every 5 closed session windows (`lifetimeEvolutionInterval: 5`, `core/src/evolution/types.ts:147`). That is 25 turns. `kinu evolve` runs a search on demand
 - Generalizing tool patterns into reusable code is inconsistent
 
 ### Evaluation exists; coverage is thin
 
-`scripts/eval.ts` runs one A/B over `core/src/eval/`: one `generateText` call
-per model per case, on corpus cases a model with no tools can answer, judged by
-a third model, exiting non-zero below a committed floor. That is the whole
-claim it makes. It uses no tools, no system prompt, no loop, so it does not
-measure the agent, and it runs only on request. `docs/BENCH.md` runs real
+`scripts/eval.ts` runs one A/B over `core/src/eval/`. Each case gets one `generateText` call
+per model. The corpus holds cases a model with no tools can answer. A third model judges.
+The run exits non-zero below a committed floor. That is the whole
+claim it makes. It uses no tools, no system prompt, and no loop. It does not
+measure the agent. It runs only on request. `docs/BENCH.md` runs real
 agent solvers against this repository's own checks.
 
 A replay eval (`runReplayEval`) re-runs labelled past turns through the live
 scaffold for a loss curve, on demand only. I removed it from the lifetime
 cadence because it re-executed the same graded turns GEPA's seed scoring
-already re-executes, for a curve no decision reads; shadow-veto promotion runs
+already re-executes, for a curve no decision reads. Shadow-veto promotion runs
 its own shadow trials instead.
 
 Still unmeasured: task completion before vs after evolution, tool reuse
-frequency, how much stored memory a turn reads. The seed corpus is small.
+frequency, and how much stored memory a turn reads. The seed corpus is small.
 
 ### Scaffold mutation rarely triggers
 
-Fully implemented (four-gate validation, version history, rollback), rarely
-fired:
+Scaffold mutation is fully implemented and rarely fires. It has four-gate validation,
+version history, and rollback:
 
 - Needs 3 or more session reflections to trigger
 - The LLM often writes scaffolds that fail structural validation, usually on a forbidden pattern such as `import`
@@ -191,9 +191,9 @@ fired:
 ### The search explorer
 
 The engine broadcasts the latest node-bearing search tree on every changed
-iteration. Embedded and full-page explorers share the same live run resource,
-retain stale data with visible retryable errors, and resolve historical runs by
-id rather than only through the recent-run window.
+iteration. Embedded and full-page explorers share the same live run resource.
+They retain stale data with visible retryable errors. They resolve historical runs by
+id, not only through the recent-run window.
 
 ## 6. Future roadmap
 
@@ -201,15 +201,15 @@ id rather than only through the recent-run window.
 
 Capability hosts already isolate preview origins and strip Kinu credentials.
 Sibling-preview cookie isolation additionally needs a preview suffix on a
-Public Suffix List boundary: a DNS/domain deployment prerequisite, not an
+Public Suffix List boundary. That is a DNS/domain deployment prerequisite, not an
 application fallback.
 
 ### Multi-agent coordination
 
 Delegation shipped through one `agents` surface: in-workspace subordinates and
-cross-workspace handoff. Remaining of the original idea:
+cross-workspace handoff. Three pieces of the original idea remain:
 
-- Share crafted tools via a global CraftStore (R2 for cross-DO storage)
+- Share crafted tools through a global CraftStore (R2 for cross-DO storage)
 - Coordinate search across agents, so one archive covers what several explored
 - Measure whether hiring actually beats working linearly
 
@@ -217,9 +217,9 @@ cross-workspace handoff. Remaining of the original idea:
 
 Broaden the harness beyond its seed corpus:
 
-- **CryptoHack** (308 crypto challenges): CTF-style verification with known flags
-- **SWE-bench**: software engineering tasks with automated verification
-- **Custom evolution benchmarks**: measure tool extraction rate, scaffold improvement, and memory reads
+- CryptoHack (308 crypto challenges) gives CTF-style verification with known flags
+- SWE-bench gives software engineering tasks with automated verification
+- Custom evolution benchmarks measure tool extraction rate, scaffold improvement, and memory reads
 
 ### Lean-to-TypeScript evidence
 
@@ -228,4 +228,4 @@ Extend the Lean pipeline:
 - Shared differential fixtures executing Lean models and TypeScript on the same inputs
 - Proved properties mirrored as property-based tests over production functions and SQL paths
 - Every theorem, trusted assumption, source reference, and missing-evidence item kept enrolled in the CI traceability gate
-- The missing FTS5 index-to-search and multi-chunk VFS integration coverage
+- Missing FTS5 index-to-search and multi-chunk VFS integration coverage

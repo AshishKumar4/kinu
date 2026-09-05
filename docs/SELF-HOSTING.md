@@ -2,7 +2,7 @@
 
 kinu.run is one deployment of this repository. A self-host uses the same Worker,
 containers, and search code. Hosted language runtimes are separate artifacts in
-`NIMBUS_RUNTIME_CACHE`; this repository does not yet include a reproducible
+`NIMBUS_RUNTIME_CACHE`. This repository does not yet include a reproducible
 catalog seed command for a fresh account.
 
 This is the path from an empty account to your own instance.
@@ -13,7 +13,7 @@ This is the path from an empty account to your own instance.
 The landing page carries a Deploy to Cloudflare button pointing at
 `https://deploy.workers.cloudflare.com/?url=https://github.com/AshishKumar4/kinu`.
 That flow forks the repository into your GitHub account and starts a Workers
-Build from the fork. That is all it can do, and it has not been rehearsed
+Build from the fork. That is all it can do. It has not been rehearsed
 against a fresh account. It cannot:
 
 - put your account on the Workers Paid plan. SQLite Durable Objects,
@@ -21,13 +21,13 @@ against a fresh account. It cannot:
 - hold a zone, or create the proxied DNS records that previews and a staging
   route need. wrangler has no DNS command at all.
 - create the KV namespaces. KV titles are not unique, so provisioning refuses
-  to create them, and their ids are pasted into
+  to create them. Their ids go into
   `packages/cf-backend/wrangler.jsonc` by hand.
-- create an AI Gateway. No wrangler command can; you make one in the dashboard.
+- create an AI Gateway. No wrangler command creates one. You make one in the dashboard.
 - seed the Nimbus runtime catalog. Creating its R2 bucket does not upload
   `catalog/v1.json`, manifests, or runtime blobs.
 - mint the root secret, `CREDENTIAL_ENCRYPTION_KEY`. A key the program invents
-  and never shows anyone is a key nobody can restore from, so it is a prompt at
+  and never shows anyone is a key nobody can restore from. It stays a prompt at
   a terminal, displayed exactly once.
 - register the OAuth applications sign-in needs. Those are created at Google,
   GitHub and Cloudflare, on their websites.
@@ -45,16 +45,16 @@ Prerequisites nothing here can create for you:
   Containers and Email scopes.
 
 Then name your deployment. Every value lives in
-`packages/cf-backend/wrangler.jsonc`: your `account_id`, your `routes`, your
-`CLI_PUBLIC_ORIGIN`, and the two KV namespace ids after
-`wrangler kv namespace create` prints them. `scripts/deploy.sh` reads the
+`packages/cf-backend/wrangler.jsonc`. Set your `account_id`, your `routes`, your
+`CLI_PUBLIC_ORIGIN`, and the two KV namespace ids that
+`wrangler kv namespace create` prints. `scripts/deploy.sh` reads the
 deploy account from `CLOUDFLARE_ACCOUNT_ID`, which defaults to the kinu.run
-account, so export your own. Commit the configuration: the deploy refuses a
+account. Export your own. Commit the configuration: the deploy refuses a
 dirty checkout, so the build stamp always names the exact bytes that shipped.
 
-The full prerequisite table, with the reason nothing here can create each item
-and the command that re-checks it, is in
-[docs/DEPLOYMENT.md](DEPLOYMENT.md#before-you-start). `bun run infra:provision`
+The full prerequisite table is in
+[docs/DEPLOYMENT.md](DEPLOYMENT.md#before-you-start). It gives the reason nothing here
+can create each item, and the command that re-checks it. `bun run infra:provision`
 prints the same worklist on every run.
 
 ## Step two: provision, deploy, provision
@@ -66,10 +66,10 @@ bun run infra:provision      # the secrets; `wrangler secret put` needs the Work
 ```
 
 Provisioning runs twice because `wrangler secret put` refuses on a Worker that
-does not exist yet. The first run says so; the second creates nothing the first
+does not exist yet. The first run says so. The second creates nothing the first
 created. `bun run deploy` runs its required gate roster before deployment.
 Preflight runs first, source gates run concurrently, and the two that need the
-machine or account to themselves — `gate:hammer`, `gate:infra` — run alone
+machine or account to themselves (`gate:hammer`, `gate:infra`) run alone
 at the end, in that order. A failed gate exits before Wrangler runs.
 
 The fresh deployment does not have hosted Python, Bash, Ruby, or Clang until an
@@ -83,10 +83,10 @@ fresh self-host until a seed command and content check exist.
 bun run gate:infra
 ```
 
-The gate checks that every resource `wrangler.jsonc` declares exists and that
-the deployed Worker is bound to it, one verdict per resource, and exits
+The gate checks that every resource `wrangler.jsonc` declares exists, and that
+the deployed Worker is bound to it. It gives one verdict per resource. It exits
 non-zero on any failure. What no CLI can observe is declared with its manual
-check instead of skipped; `scripts/infra-verify.ts` carries the reasoning.
+check instead of skipped. `scripts/infra-verify.ts` carries the reasoning.
 
 ## Sign-in
 
@@ -98,15 +98,15 @@ you want, with the redirect URL:
 https://<your-host>/auth/<provider>/callback
 ```
 
-Client ids are plain vars in `wrangler.jsonc`; client secrets are Wrangler
+Client ids are plain vars in `wrangler.jsonc`. Client secrets are Wrangler
 secrets, and the second provisioning run prompts for them. The Cloudflare
-provider is the one worth having: signing in with it also connects the user's
-own Workers AI, so their chat bills their account rather than yours. The exact
+provider is the one worth having. Signing in with it also connects the user's
+own Workers AI. Their chat bills their account rather than yours. The exact
 scopes and grant types are in [docs/DEPLOYMENT.md](DEPLOYMENT.md#oauth-setup).
 
 ## What works when
 
-Each surface stays off until its owner step is done, and absence means "off",
+Each surface stays off until its owner step is done. Absence means "off",
 not an error.
 
 | Surface | Works after |
@@ -121,8 +121,8 @@ not an error.
 | Fleet metrics on the control plane | an Account Analytics Read token in `ANALYTICS_SQL_API_TOKEN` |
 | The control plane at `/control` | `CONTROL_PLANE_ADMINS` names at least one operator |
 
-Unset values fail toward silence by design: no `EMAIL_DOMAIN` means no mail,
-an empty `PREVIEW_HOST_SUFFIX` means no previews, and a missing root secret
+Unset values fail toward silence by design. No `EMAIL_DOMAIN` means no mail.
+An empty `PREVIEW_HOST_SUFFIX` means no previews. A missing root secret
 means every signed-in surface answers 503 while the public pages answer 200.
 That last one makes a half-configured site look healthy, which is why step
 three exists.

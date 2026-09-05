@@ -6,9 +6,9 @@ is the generated reference for every command and flag.
 
 ---
 
-## 1. What you're creating
+## 1. What you are creating
 
-You create **workspaces**. A workspace owns files and execution environments,
+You create workspaces. A workspace owns files and execution environments,
 can hold more than one agent, and gives each agent one durable conversation
 and its own memory. [docs/WORKSPACES.md](WORKSPACES.md) has the object model.
 The day-one decision is where it runs.
@@ -23,7 +23,7 @@ The day-one decision is where it runs.
 | Runs commands on your machine | through the desktop daemon you connect | directly |
 | Needs an account | yes | no; account-backed Workers AI is billed to that Cloudflare account |
 
-You can have both, and you can move a cloud workspace onto your machine later
+You can have both. You can move a cloud workspace onto your machine later
 (§7). Everything else here works the same for either.
 
 ## 2. Day one
@@ -36,7 +36,7 @@ jarvis "what changed in this repo today?"
 
 The installer runs `kinu setup` in an interactive terminal: browser sign-in and
 optional local model credentials. A signed-in local workspace can use Workers AI
-without a separate API key; inference bills the connected Cloudflare account.
+without a separate API key. Inference bills the connected Cloudflare account.
 To bring your own provider instead:
 
 ```bash
@@ -45,7 +45,7 @@ kinu provider connect openai       # or anthropic, openrouter, codex, openai-com
 ```
 
 Signed in, keys live in your Kinu account, not this disk, and work from every
-machine you sign in on; connecting a provider in the web UI is enough. Add
+machine you sign in on. Connecting a provider in the web UI is enough. Add
 `--local` to keep a key here for offline work or an endpoint only this machine
 reaches. Which credential answers a turn depends on the model: your account
 serves the specs it hosts (`@cf/…` and proxied provider ids), a local key
@@ -68,11 +68,12 @@ kinu exec -w jarvis --json "…"      # line-delimited JSON events instead of pr
 kinu stop jarvis                    # stop the turn that's running
 ```
 
-In the full-screen TUI: `Ctrl+K` opens the command palette, `Alt+W` opens the
-workspace navigator, `Ctrl+,` opens settings, and `Ctrl+L` opens the model picker.
-`Ctrl+O` opens tool details, `Ctrl+G` opens the external editor, `Ctrl+P` cycles
-the inference tier, and `Shift+Tab` cycles reasoning effort. `Esc` interrupts the
-turn or closes the active panel. `/` filters commands in the composer.
+In the full-screen TUI, `Ctrl+K` opens the command palette, `Alt+W` opens the
+workspace navigator, `Ctrl+,` opens settings, and `Ctrl+L` opens the model
+picker. `Ctrl+O` opens tool details, `Ctrl+G` opens the external editor,
+`Ctrl+P` cycles the inference tier, and `Shift+Tab` cycles reasoning effort.
+`Esc` interrupts the turn or closes the active panel. `/` filters commands in
+the composer.
 
 Useful on day one:
 
@@ -90,9 +91,9 @@ Useful on day one:
 | `/role [id]` | show or switch this agent's active role |
 
 Transcripts record by default (`kinu transcripts` lists them). They are
-diagnostics of past runs, never conversations to reopen; your conversation
+diagnostics of past runs, never conversations to reopen. Your conversation
 lives in the workspace and loads when it opens. `--no-transcript` skips the
-record for one run, `--transcript-dir <dir>` chooses where they go.
+record for one run. `--transcript-dir <dir>` chooses where they go.
 
 ## 4. Letting it touch your machine
 
@@ -104,24 +105,24 @@ kinu desktop status   # is it attached?
 ```
 
 Kinu asks consent once per workspace and remembers it. The agent sees the
-folder you consented to by default; the whole-filesystem grant is an explicit
-switch in the web app's workspace settings, under Device access.
+folder you consented to by default. The whole-filesystem grant is an explicit
+switch in the web app's workspace settings.
 
 `kinu executors <name>` lists where a workspace can run commands (the canonical
-workspace, a sandbox container, or your connected machine);
+workspace, a sandbox container, or your connected machine).
 `kinu executors <name> <executor> <command…>` runs one directly.
 
-A long command is not killed for being long; nothing deadlines the work itself.
-A live session backgrounds a call still running after 30 seconds and wakes the
-agent when it settles. Under `kinu exec` the threshold is 300 seconds, because
-a one-shot process exits after the answer and a handle nobody reads is worse
-than waiting. A 60-second ceiling used to sit inside the container and kill
-work the layer above meant to detach. That ceiling is gone.
+A long command is not killed for being long. Nothing deadlines the work itself.
+A live session backgrounds a call still running after 30 seconds. It wakes the
+agent when the call settles. Under `kinu exec` the threshold is 300 seconds,
+because a one-shot process exits after the answer and a handle nobody reads is
+worse than waiting. A 60-second ceiling used to sit inside the container and
+kill work the layer above meant to detach. That ceiling is gone.
 
 In the sandbox container, commands run in `/workspace`, the directory that
 survives recycling. Bytes written elsewhere vanish at the next fresh instance.
 
-## 5. Work while you're away
+## 5. Work while you are away
 
 Cloud workspaces take work three ways with nobody at the keyboard:
 
@@ -135,17 +136,17 @@ kinu webhook jarvis deploys                   # a durable webhook endpoint
 
 `kinu webhook` prints the URL to give the other system, and the secret it must
 sign with. The URL carries a signature of its own, so it cannot be typed or
-guessed — a URL you assemble by hand is refused. If you lose it, read it back
+guessed. A URL you assemble by hand is refused. If you lose it, read it back
 with `kinu triggers <workspace>`, which prints the current URL for every
 webhook. Cancelling the trigger stops the URL working.
 
 Each workspace also has an email address once the mail domain is set up,
 `<workspace>@kinu.run` (see [docs/EMAIL-INGRESS.md](EMAIL-INGRESS.md)). Mail
-from your verified address starts a turn; the reply comes back on the thread.
+from your verified address starts a turn. The reply comes back on the thread.
 
 Background signals arriving mid-turn splice into its next step. Delegated Plan
-or Build work keeps its trusted mode and queues immediately for its own turn,
-so a busy workspace admits the message without blocking the sender.
+or Build work keeps its trusted mode and queues immediately for its own turn.
+A busy workspace admits the message without blocking the sender.
 
 ## 6. Watching it think
 
@@ -166,18 +167,18 @@ for, and calls no catalog could price. "Everything reported" and "92%, with
 the embedder silent" are different facts, and you can tell them apart.
 
 [kinu.run](https://kinu.run) serves the same information across six surfaces:
-**Output** (what it produced), **Work** (its plan, running jobs, settled
-results, anything awaiting you at the top), **Releases** (what it ships and
-what you approve), **Exploration** (every search), **Agent** (identity,
-memory, crafted tools, adaptation evidence), **Environment** (each executor,
+Output (what it produced), Work (its plan, running jobs, settled
+results, anything awaiting you at the top), Releases (what it ships and
+what you approve), Exploration (every search), Agent (identity,
+memory, crafted tools, adaptation evidence), Environment (each executor,
 its files, its terminal). The right-hand gauge carries context, cost, and
-cache-hit rate. Anything awaiting your decision is counted on **Work**, and
+cache-hit rate. Anything awaiting your decision is counted on Work, and
 each row opens where the decision happens: a release, a scaffold rewrite under
 trial, a failed job, unread self-changes.
 
-**Exploration** is where I go when the agent tried more than one thing. The
+Exploration is where I go when the agent tried more than one thing. The
 `agents` tool's `swarm` action grows a configured tree of nodes, every node a
-whole tool-calling agent. The agent picks a preset from the task; preset plus
+whole tool-calling agent. The agent picks a preset from the task. Preset plus
 task is a complete call. Name an objective and a registered verifier measures
 the search. Without one, the search falls back to a judged sweep instead of
 refusing. Ideation returns unranked candidates. Local nodes get private homes.
@@ -192,11 +193,11 @@ records carry into later searches. [docs/EXPLORATION.md](EXPLORATION.md)
 defines the six axes and presets.
 
 Kinu can add surfaces of its own. Ask for a dashboard and it publishes a
-**view**: a tab after the six, marked with a sparkle, labelled *Written by
+view: a tab after the six, marked with a sparkle, labelled *Written by
 Kinu*. A view reads state you can already see and draws it with the same
 components everything else uses, so it shows numbers and takes no input. Its
 surface names are reserved, retired ones included. "View source" shows exactly
-what it wrote; the Work tab's journal reverts it.
+what it wrote. The Work tab's journal reverts it.
 
 ## 7. Backup, and moving a workspace
 
@@ -209,14 +210,14 @@ kinu import ~/backups/jarvis.kinu.jsonl --name jarvis-restored
 ```
 
 Cloud and local exports write the same archive: transcripts, memory, files,
-crafted tools, evolution history. `import` restores it as a **local**
+crafted tools, evolution history. `import` restores it as a local
 workspace, which makes this the way to pull a cloud workspace onto your
 machine. The web app has the same button under workspace settings → Backup →
 *Download archive*.
 
-Exporting a cloud workspace needs an interactive session (`kinu auth`); a
+Exporting a cloud workspace needs an interactive session (`kinu auth`). A
 scoped CI token can run tasks but cannot take the database. Export is a live,
-paged read: pause workspace writes if you need consistency. The archive
+paged read, so pause workspace writes if you need consistency. The archive
 excludes capability secrets and may omit changes made during pagination. Keep
 it with your other sensitive data. `kinu workspace delete` is permanent, so
 export first.
@@ -269,7 +270,7 @@ conversation.
 
 ## 11. Feedback and the control plane
 
-Use **Feedback** in the app navigation to send a note, optionally with a
+Use Feedback in the app navigation to send a note, optionally with a
 full-page screenshot you annotate before submitting. Kinu blocks out secrets
 before the image exists: password fields, an issued webhook secret and the
 curl command carrying it, MCP server headers.
@@ -279,5 +280,5 @@ incidents, feedback, weighted fleet metrics, exact run history, jobs,
 approvals, executors, and its admin audit log. Destructive actions need a
 fresh sign-in and explicit confirmation.
 
-Feedback text and screenshot pointers are exact durable records; screenshot
-bytes live in R2; Analytics Engine receives a marker without note or image.
+Feedback text and screenshot pointers are exact durable records. Screenshot
+bytes live in R2. Analytics Engine receives a marker without note or image.

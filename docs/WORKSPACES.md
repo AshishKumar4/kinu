@@ -40,35 +40,34 @@ actors that work inside it.
 ## What this means concretely
 
 - The name is the workspace's. The Durable Object address, the container key
-  (`kinu-<name>`, `cf-backend/src/orchestrator.ts:2583`), the Nimbus session key
-  (`nimbusWorkspaceSessionId`, `cf-backend/src/nimbus-route.ts:11-19`), the email
+  (`kinu-<name>`, `cf-backend/src/sandbox-exec-lane.ts:178`), the email
   address (`<name>@EMAIL_DOMAIN`, `cf-backend/src/email/inbound.ts:35`), and the
   registry row all key on the workspace name. The default agent has no separate
-  name; it is the workspace's voice.
+  name. It is the workspace's voice.
 - A workspace preview hostname carries the name too, and a hostname label is
   narrower than the name grammar: lowercase letters, digits and hyphens, at
   most 31 characters, no case. Every auto-minted slug fits. A name chosen
   with `kinu create <name>` or the REST `name` field may not (uppercase, a
   dot, an underscore, more than 31 characters), and because the name is the
   object's address it cannot be brought into shape later. Such a workspace
-  keeps its shell, files and sandbox previews; its workspace previews have no
-  URL, and the Ports surface and the `expose` refusal say why
+  keeps its shell, files and sandbox previews. Its workspace previews have no
+  URL. The Ports surface and the `expose` refusal say why
   (`cf-backend/src/lib/nimbus-preview-host.ts`, `workspacePreviewNameRefusal`).
 - Ownership is workspace-level. `workspace_identity.owner_user_id` is the
-  single ownership root; the UserDO `user_workspaces` table is the user's
+  single ownership root. The UserDO `user_workspaces` table is the user's
   registry of workspaces (source of truth for the sidebar, CLI list, and the
   ownership check on every `/api/workspaces/<name>/*` request).
 - Locally, the virtual workspace is metadata, not a place: the pair
   `{ cwd, workspaceId }` on each root agent's ref
-  (`packages/core/src/tools/local-peer.ts`). Roots sharing the pair are EQUAL
-  PEERS, one physical directory and one shell, each with its own SQLite
-  identity, role and scaffold; none of them is the workspace, so mail between
+  (`packages/core/src/tools/local-peer.ts`). Roots sharing the pair are equal
+  peers: one physical directory and one shell, each with its own SQLite
+  identity, role and scaffold. None of them is the workspace, so mail between
   them is peer mail rather than a report up a tree. Subordinates stay
   children: they inherit their root's directory as their workspace plane, keep
   their own SQL identity, and never hold the peer transport. Each agent owns
-  ONE durable conversation, its id recorded in `agent_config`
-  (`canonicalConversationId`, `packages/core/src/config/conversation.ts`), so
-  an interactive CLI, a one-shot `kinu exec` and the daemon's agent host drive
+  one durable conversation, its id recorded in `agent_config`
+  (`canonicalConversationId`, `packages/core/src/config/conversation.ts`). An
+  interactive CLI, a one-shot `kinu exec` and the daemon's agent host drive
   the same conversation instead of minting one per process. Recorded JSONL
   files are diagnostics.
 - The file plane is the workspace's. Hosted, `Storage.vfs` is the
@@ -77,17 +76,17 @@ actors that work inside it.
   conversation, every ledger) always lives in its own SQLite-backed
   filesystem, while the WORKSPACE plane that `file`, `run`, `execute_tools`
   and AGENTS.md address binds to the directory on the agent's ref
-  (`CLIRuntimeConfig.cwd`, never `process.cwd()`); with no directory bound,
+  (`CLIRuntimeConfig.cwd`, never `process.cwd()`). With no directory bound,
   both planes are the one in-SQLite tree an isolated fixture or eval episode
   gets. Relative paths resolve at `/home/user` (`WORKSPACE_ROOT`,
   `core/src/vfs/workspace-path.ts:2`). The mount table adds a connected device
-  at `/pc` and a container at `/sandbox`; reads and writes cross through each
+  at `/pc` and a container at `/sandbox`. Reads and writes cross through each
   executor's own file API and retain its consent and access policy. Inside
   the container the working directory is `/workspace` (`DEVBOX_WORKDIR`,
   `devbox/src/storage.ts`) and every command starts there. The workspace
-  shell sees only the base tree; commands reach other machines through their
+  shell sees only the base tree. Commands reach other machines through their
   namespaces. `listMounts()` reports each live environment with its
-  `readOnly` and `consistency` policy; the web UI shows them on the
+  `readOnly` and `consistency` policy. The web UI shows them on the
   Environment work surface.
 - One default agent, more on demand. Three kinds of extra actor, and which
   one you get depends on whether the work is ephemeral, durable-in-workspace, or
@@ -96,16 +95,16 @@ actors that work inside it.
     the Core node turn loop, able to take multiple turns. A tool call past the
     detach window moves to the background and the node wakes when it settles:
     30 seconds on an interactive surface, 300 on a one-shot
-    (`BACKGROUND_POLICY`, `core/src/jobs/threshold.ts:71-72`); the work itself
-    carries no elapsed deadline once detached. The node reports a candidate: a
+    (`BACKGROUND_POLICY`, `core/src/jobs/threshold.ts:71-73`). The work itself
+    carries no elapsed deadline once detached. The node reports a candidate. A
     registered verifier scores measured searches, ideation returns unranked
-    candidates, judged searches use a model ensemble.
+    candidates, and judged searches use a model ensemble.
 
     Hosted nodes run over the canonical workspace with actor-private shell
     state and scaffold. `facetRuntime` gives each one a `node:<name>` shell id
     and a scaffold at `.kinu/nodes/<name>/scaffold/agent.js` over the
-    PARENT's file plane (`cf-backend/src/exploration.ts:273-283`). MCTS rollouts use
-    the same facet class in a separate toolless mode and acquire no runtime.
+    PARENT's file plane (`cf-backend/src/exploration.ts:418-444`). MCTS rollouts
+    use the same facet class in a separate toolless mode and acquire no runtime.
 
     Node isolation is one contract with two appliers.
     `AgentsForkDeps.provisionNodeHome` hands over one
@@ -119,15 +118,15 @@ actors that work inside it.
 
     Both then credential BOTH planes, because a node reaches the tree with
     commands and with file tools. A file plane pinned to the session user
-    refuses a node's writes inside its own home — measured `EACCES` — and
+    refuses a node's writes inside its own home. I measured `EACCES`. It
     refuses nothing to a sibling. Locally the node gets `SqliteVFS.as(cred)`
     and a second `Shell` over the SAME filesystem
-    (`WorkspaceBundle.asAgent`); on a hosted session it gets ONE fixed program
+    (`WorkspaceBundle.asAgent`). On a hosted session it gets ONE fixed program
     run as the node inside the same session (`nimbusSessionFiles(box, cred)`)
     plus `withHostedNodeExecution`. `CLIRuntime.nodeRuntime` and a node
     facet's `HostedNodeHome` are where each backend rebuilds that runtime.
 
-    The hosted program is the session's own `node`, driven by strict JSON: the
+    The hosted program is the session's own `node`, driven by strict JSON. The
     request rides one environment variable and the answer returns on stdout
     with the substrate's own errno. So no path or payload is shell text, a
     filename holding a newline or a quote round-trips exactly, and `stat`
@@ -145,7 +144,7 @@ actors that work inside it.
 
     A runtime bound to a physical directory builds no provisioner: a directory
     has no principal registry. A node always reports the isolation it actually
-    got, `private-home` or `shared-origin-plane`; nothing invents a boundary.
+    got, `private-home` or `shared-origin-plane`. Nothing invents a boundary.
     `docs/EXPLORATION.md` is the spec for the six axes, presets, report
     contract and isolation states.
 
@@ -154,23 +153,22 @@ actors that work inside it.
     using the canonical workspace files and the parent's sandbox/laptop
     planes. Locally it opens over its root's stored directory, keeping the
     parent's plane while memory, craft store and conversation stay its own.
-    Assigned tasks and reports ride the `subordinate` ingress; owner-driven
+    Assigned tasks and reports ride the `subordinate` ingress. Owner-driven
     chat is private, and `report` is exposed only on a parent-assigned turn.
   - Peers are the owner's other workspace agents, addressed through `agents`
     actions `ask`, `send`, `reply`, and `list`. `hire` with
     `scope: 'workspace'` spawns a whole specialist workspace instead of a
     subordinate, and only the workspace orchestrator may: a fresh workspace is
     the root of its own delegation tree, so a subordinate that could call it
-    could not be its child. The roster the UI shows comes from
-    `listSubordinates()` (RPC, plus the `subordinates_changed` socket event) —
-    this workspace's durable subordinates; nodes stay off it, because they live
-    only for the search that spawned them.
-  a fresh workspace by a new name and records `fork_lineage`
-  (`source_workspace_id/name`). `forkWorkspaceStorage`
-  (`core/src/identity/fork.ts#forkWorkspaceStorage`) does the copy in one
-  process; `deliverCloudFork`
-  (`cf-backend/src/user/workspace-fork.ts#deliverCloudFork`) is the hosted
-  entry point.
+    could not be its child. The hire names a fresh workspace and records
+    `fork_lineage` (`source_workspace_id/name`). `forkWorkspaceStorage`
+    (`core/src/identity/fork.ts#forkWorkspaceStorage`) does the copy in one
+    process; `deliverCloudFork`
+    (`cf-backend/src/user/workspace-fork.ts#deliverCloudFork`) is the hosted
+    entry point. The roster the UI shows comes from
+    `listSubordinates()` (RPC, plus the `subordinates_changed` socket event).
+    That is this workspace's durable subordinates. Nodes stay off it, because
+    they live only for the search that spawned them.
 
   On the hosted path the source and the target are two Durable Objects, and one
   serialized RPC argument is capped at 32 MiB (`do.facet.rpc_bytes`) while a
@@ -218,9 +216,9 @@ actors that work inside it.
 
 Actor-sense names stay. The `OrchestratorAgent`, `SubordinateAgent` and
 `ExplorationAgent` DO classes all still exist and are exported from
-`cf-backend/src/server.ts:74-79`, though only `OrchestratorAgent` has a
+`cf-backend/src/server.ts:86-91`, though only `OrchestratorAgent` has a
 namespace binding: the other two are facet classes, reached through it rather
-than by name (`cf-backend/wrangler.jsonc:89-119`).
+than by name (`cf-backend/wrangler.jsonc:106-113`).
 
 The other actor-sense names that stay: the wire paths
 `/agents/orchestrator-agent/<name>` and `…/sub/subordinate-agent/<sub>` that the

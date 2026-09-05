@@ -1,4 +1,4 @@
-# MCTS Exploration
+# MCTS exploration
 
 MCTS explores solution approaches. Cloud branches use isolated Durable Object
 facets; local branches use isolated processes with their own SQLite state.
@@ -16,7 +16,7 @@ Models use `action:'swarm'`, `depth`, the verifier registry and
 Every caller calls `runMCTS` directly: lifetime evolution
 (`evolution/engine.ts`, `lifetimeMCTSBudget`), `tests/evals/exploration.eval.test.ts`
 and `integration-mcts.test.ts`. The `createMCTSStrategy` adapter and the
-`StrategyRegistry` it was registered in are gone — no production path ever built
+`StrategyRegistry` it was registered in are gone. No production path ever built
 that registry, so the adapter only added a shape in front of the engine. `mcts_search_runs`
 (`mcts/search-store.ts`) retains config, iteration and budget under a lease
 epoch for resume. Swarm shares it (`engine: 'swarm'`; `findRunningSwarms` in
@@ -43,7 +43,7 @@ reflection are §4.2 operations.
   `passed_test_count / len(tests)`; here it positions the fail band. A pass is
   strictly higher, so clean code cannot lose to failing code.
 
-## Search Flow
+## Search flow
 
 ```mermaid
 flowchart TD
@@ -75,7 +75,7 @@ flowchart TD
     style Fail fill:#533483
 ```
 
-## UCT Formula
+## UCT formula
 
 ```
 UCT(node) = value + W × √(ln(parent_visits) / node_visits)
@@ -210,7 +210,7 @@ Each MCTS branch runs isolated:
 
 | Platform | Mechanism | Isolation |
 |----------|-----------|-----------|
-| CF Workers | `agent.subAgent(ExplorationAgent, branchId)`, Facets | Separate DO with own SQLite. Proven in Lean: `MCTS/StorageIsolation.lean — transition_preserves_isolation`. |
+| CF Workers | `agent.subAgent(ExplorationAgent, branchId)`, Facets | Separate DO with own SQLite. Proven in Lean: `MCTS/StorageIsolation.lean`, `transition_preserves_isolation`. |
 | CF Workers (fallback) | Inline LLM calls | No storage access at all. Captures only LLM config, never agent reference. |
 | CLI | `child_process.fork('branch-worker.ts')` | Separate OS process with its own SQLite file in a `branches/` directory beside the workspace database (`createBranchSpawner`) |
 
@@ -233,7 +233,7 @@ observation line.
 ### Why branches are toolless, and where the tool-using ones live
 
 MCTS branches are one model call, no `ToolSet`, no runtime. Paired `heads`
-(`core/src/strategy/heads.ts`) runs full loops in the same `ExplorationAgent`,
+(`core/src/heads/controller.ts`) runs full loops in the same `ExplorationAgent`,
 head mode, scored through `HeadController.scoreHeads` and `evaluation.ts`.
 
 | | `mcts` | `heads` |
@@ -270,7 +270,7 @@ mean the scorer is not a function of the proposal. Either refusal sets
 `converged: false`, records its reason, and marks open nodes failed rather
 than shipping an unearned answer.
 
-## search_nodes Table
+## search_nodes table
 
 | Column | Type | Description |
 |--------|------|-------------|

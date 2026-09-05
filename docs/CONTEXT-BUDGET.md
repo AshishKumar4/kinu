@@ -1,8 +1,10 @@
-# Context Budget: digest plus reference
+# Context budget: digest plus reference
 
 One rule governs model-bound bulk:
 
-> Anything bulk that enters the root's context arrives as a bounded digest plus a resolvable reference to the lossless whole. Below the threshold it inlines untouched. Making a root fetch its own ordinary material costs a round trip and buys nothing.
+> Bulk that enters the root's context arrives as a bounded digest. A resolvable
+> reference points at the lossless whole. Below the threshold it inlines untouched.
+> When a root fetches its own ordinary material, it pays a round trip and gains nothing.
 
 Tool-borne bulk (stdout, fetched pages, MCP responses) clamps at 40,000 chars
 (`DEFAULT_TOOL_RESULT_MAX_CHARS`). Message-borne bulk (attachments and pasted
@@ -25,8 +27,8 @@ is data loss.
 | Compacted history ranges | checkpoint summary | `.kinu/compaction/<session>/<range>.md` | `@kinu.run/compaction` `stores.ts` |
 
 `SPILL_DIRS` in `core/src/context-budget.ts` owns the four directories. Paths
-are unrooted and resolve at the workspace root. A `file` read writes nothing:
-its source path already addresses the whole, and the marker gives the next
+are unrooted and resolve at the workspace root. A `file` read writes nothing.
+Its source path already addresses the whole, and the marker gives the next
 offset.
 
 Accepted images are exempt. A spilled image is bytes the agent can read but
@@ -35,36 +37,34 @@ the sandbox or slice and summarise them.
 
 ## The turn-cumulative budget
 
-Eight individually valid results can still bury the root. `TurnContextBudget`
-therefore makes the clamp turn-cumulative:
+Eight individually valid results can still bury the root, so `TurnContextBudget`
+makes the clamp turn-cumulative:
 
 - Admit full per-result text through 120,000 chars, enough for three full-size
   navigation reads.
 - Then cap each result at 8,000 chars. Spill the full text and keep the same
   marker recipe.
 - Result N depends only on results 1..N-1, so replay clamps identically.
-- The budget is per root: use `TurnAccumulator.context`, reset with the turn,
+- The budget is per root. Use `TurnAccumulator.context`, reset with the turn,
   or a fresh `TurnContextBudget`. Roots never share a ledger.
 
 `buildNodeToolSet` (`core/src/strategy/node-agent.ts`) passes no
-`contextBudget`, so a swarm node has its own budget and no `context_budget` row.
+`contextBudget`. A swarm node has its own budget and no `context_budget` row.
 `clampToolResult` writes a tightened-cap reason into the marker, where the
-model can act on it, instead of the system prompt.
+model can act on it. It does not go in the system prompt.
 
-## The tool-definition budget
-
-A tool result is bulk that arrives once. A tool *definition* is different: the
-description and the JSON Schema ride every request of every step. For MCP a
+A tool result is bulk that arrives once. A tool *definition* is different.
+The description and the JSON Schema ride every request of every step. For MCP a
 third party writes them, so an unbounded catalog is a stranger spending the
 user's window.
 
 There is no MCP number. `stepContextLimit` (`core/src/prompting/step-prune.ts`)
-is the one request-level allocation: the resolved model's context window less
-the output allowance the answer needs (`outputReserveTokens`). The step-prune
+is the one request-level allocation. It holds the resolved model's context window
+minus the output allowance the answer needs (`outputReserveTokens`). The step-prune
 pass shrinks tool outputs toward it. A remote catalog is admitted against what
 that limit has left after the actor's own tool surface, measured on one shared
 scale (`toolSurfaceTokens`, `cf-backend/src/user/mcp.ts`). The actor's builtins
-are not negotiable, so they are priced first.
+are not negotiable. They are priced first.
 
 `admitMcpDescriptors` then admits in `(server, tool)` name order, so two turns
 that read the same rows admit the same set:
@@ -72,16 +72,16 @@ that read the same rows admit the same set:
 - A schema is never truncated. A clipped schema lies about what the tool
   accepts, so a descriptor whose schema will not fit is deferred whole.
 - Prose gets equal shares of what remains, re-divided at every descriptor. One
-  server's essay cannot crowd out the rest, and no per-description percentage
+  server's essay cannot crowd out the rest. No per-description percentage
   exists to tune.
 - Every deferral is reported through the same missing-capability channel a
-  disconnected server uses. A capability that is silently absent is one the
-  model plans without.
+  disconnected server uses. Nothing stays silently absent for the model to plan
+  without.
 
 ## The counters
 
 The settle spine (`core/src/orchestrator/turn-lifecycle.ts`) writes one durable
-`context_budget` event beside `turn_end`. That event is the denominator; turns
+`context_budget` event beside `turn_end`. That event is the denominator. Turns
 that neither admit nor spill bulk write none.
 
 | Field | Meaning |

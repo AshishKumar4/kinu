@@ -7,14 +7,14 @@ publication, and settlement at the origin.
 rule has no measured number behind it, I say so instead of inventing one.
 
 **Cite by name, never by number.** A heading is a stable citation handle:
-`docs/EXPLORATION.md — "The publication seal"`. Numbered headings rot when the
+`docs/EXPLORATION.md`, "The publication seal". Numbered headings rot when the
 document moves. I rename a heading only with every citation that names it.
 
 Where this document and the code disagree, the code runs. Report the difference.
 
 ## What a tree swarm is
 
-A swarm is a tree search whose nodes are agents. A **swarm node** is a node below.
+A swarm is a tree search whose nodes are agents. I call one such node a **swarm node**.
 
 `preset` and `task` are a complete call. A `verify` preset without an
 `objective` runs the judged sweep in *Presets*, not its measured shape. An
@@ -47,10 +47,9 @@ the enumeration.
 model call with no tools or observed environment. The engine reads this axis in
 exactly one place, to decide whether a node is an agent at all.
 
-`generator` was a third value here and is gone. It claimed to produce "the
-generator that writes candidates" rather than one candidate, but nothing branched
-on it, so it ran the identical node as `answer`. A caller who writes it is
-refused by name and pointed at `answer`; the `prove` preset now names `answer`.
+`generator` was a third value here and is gone. Nothing branched on it. A caller
+who writes it is refused by name and pointed at `answer`. The `prove` preset
+names `answer`.
 
 `fork` gives a child its parent's conversation verbatim, preserving one cacheable
 prefix for siblings. `fresh` gives only the task block and parent report. `fork`
@@ -148,13 +147,14 @@ Implemented across `strategy/swarm.ts`, `strategy/verifier-registry.ts`, and
 
 The engine rejects these shapes because it cannot execute them faithfully:
 
-- **vector objectives**: no scalar to climb.
-- **instanced objectives**: no per-instance measurement path.
-- **witness objectives with no scalar proxy**: nothing to optimise.
-- **closure verifiers**: `(ctx) => Promise<Measurement>` is unauthorable over a
-  JSON tool argument, so the arm is structurally unreachable.
-- **`advance:'pareto'`**: it needs per-instance measurement and dominance
-  comparison; a records store provides neither.
+- A vector objective has no scalar to climb.
+- An instanced objective has no per-instance measurement path.
+- A witness objective with no scalar proxy has nothing to optimise.
+- A closure verifier is unauthorable over a JSON tool argument.
+  `(ctx) => Promise<Measurement>` cannot cross that boundary, so the arm is
+  structurally unreachable.
+- `advance:'pareto'` needs per-instance measurement and dominance comparison.
+  A records store provides neither.
 
 Implemented by `strategy/swarm-run.ts` and `strategy/objective.ts`.
 
@@ -257,7 +257,7 @@ identity key, so the report states `records: null`, comparability rather than
 zero rows.
 
 Implemented by `strategy/records.ts` and `isBetter` in `strategy/objective.ts`.
-`RecordsStore.lean — best_never_falls` proves monotonicity; its guard is
+In `RecordsStore.lean`, `best_never_falls` proves monotonicity; its guard is
 load-bearing through `an_unguarded_write_lowers_the_best`.
 
 ## The archive
@@ -279,7 +279,7 @@ than a result to quote.
 A judged archive key is refused: a wrong rank can be corrected, a wrong bin loses
 an elite. The archive writer checks the seal.
 
-`ArchiveAdmission.lean — separated_cells_are_unboundedly_large` builds, for
+In `ArchiveAdmission.lean`, `separated_cells_are_unboundedly_large` builds, for
 every n, a separated cell of n occupants at the strictest unit-interval floor.
 Separation does not bound cardinality. Nothing evicts, so cells are paged and
 admission reads its cell linearly.
@@ -326,9 +326,10 @@ Three tool-using nodes still ran at 1,216,358 / 1,310,061 / 1,336,833 ms across
 Measured 2026-08-19 at `8afd45e8d`, on one credentialed depth-2 width-3
 `tests/evals/swarm.eval.ts` run against the shipped default model.
 
-A deadline cannot pre-empt a step. One measured step held 91% CPU for 26 minutes;
-neither deadline nor `AbortSignal` reached it. This is a stated limit, not a
-solved problem. Nothing measured fixes a bound on one step's request.
+A deadline cannot pre-empt a step. One measured step held 91% CPU for 26 minutes.
+I kept no date for that run, so quote it as an anecdote, not a result. Neither
+deadline nor `AbortSignal` reached it. This is a stated limit, not a solved
+problem. Nothing measured fixes a bound on one step's request.
 
 Implemented by `runNodeAgent`, `runNodeLoop`, `budgetExhausted`, and
 `UNBOUNDED_STEPS`. `packages/core/tests/unit-swarm-node-envelope.test.ts` holds
@@ -390,16 +391,16 @@ Each entry becomes one branch of a `BranchGrant`. `task` is the branch task and
 makes siblings comparable.
 
 **Per-node model routing.** `models: [spec, …]` assigns one model spec per
-expansion child, ROUND-ROBIN BY SLOT: the child at index `i` of its wave runs
-`models[i % models.length]`. The rule is deterministic — a re-drive routes the
-same slots the same way, because the slot is durable — and needs no relation to
-the width: a list of one names every node, and a list longer than the wave is
+expansion child, round-robin by slot: the child at index `i` of its wave runs
+`models[i % models.length]`. The rule is deterministic. A re-drive routes the
+same slots the same way because the slot is durable. The list needs no relation
+to the width: a list of one names every node, and a list longer than the wave is
 truncated by the modulo rather than refused. A fan-in's vertex is one child of
-one, so it runs the first spec. Each spec resolves through the ONE resolver a
+one, so it runs the first spec. Each spec resolves through the one resolver a
 delegation's tier already uses (`AgentsForkDeps.resolveModel`), an unresolvable
 spec is refused as `bad_input` naming it before any node runs, and the list is
 mutually exclusive with `tier` (run-level routing). Omitted, every node runs the
-one model the call resolved to — the unchanged default. The spec list is
+one model the call resolved to. That is the unchanged default. The spec list is
 digested into the record's `configDigest`, so two runs differing only in
 routing never collide in the store. Both transports honor the assignment: an
 in-isolate node runs the resolved model directly, and a hosted node carries its
@@ -459,10 +460,10 @@ and `/tmp/node-<id>`, mode `0o700`. Both are owned by the node's own uid.
 the local backend through its uid-0 `SqliteVFS` view, the hosted backend through
 the session's own coreutils run as uid 0.
 
-Both backends report `private-home`. Both credential BOTH planes, and both are
+Both backends report `private-home`. Both credential both planes, and both are
 required. A node reaches the tree with commands and with file tools. A file plane
-pinned to the session user refuses a node's writes inside its own home — measured
-`EACCES` on `/home/node-aX9` — and cannot refuse a sibling's, because every
+pinned to the session user refuses a node's writes inside its own home. I measured
+`EACCES` on `/home/node-aX9`. It cannot refuse a sibling's, because every
 pid-less filesystem call is the same identity. So the local backend gives a node
 `SqliteVFS.as(cred)` and a second `Shell` over the SAME filesystem
 (`WorkspaceBundle.asAgent`), and the hosted backend runs ONE fixed program as the
@@ -474,9 +475,9 @@ hosted facet rebuilds the same thing from `HostedNodeHome`.
 
 The hosted program is the session's own `node`, and the protocol is strict JSON:
 the request travels in one environment variable, the answer comes back on stdout
-carrying the substrate's OWN errno. Three consequences, each measured. No path or
+carrying the substrate's own errno. Three consequences, each measured. No path or
 payload is ever shell text, so a filename holding a newline, a quote or a leading
-dash lists, reads, renames and deletes exactly — which `ls` cannot express. No
+dash lists, reads, renames and deletes exactly. `ls` cannot express that. No
 error is matched as prose: `EACCES` arrives as `EACCES`. And `stat` answers
 `null` for `ENOENT` only, so a refusal never reads as an empty space.
 
@@ -496,8 +497,8 @@ needs, reset idempotence, and cleanup that removes bytes and keeps the uid row.
 Local dispatch plus absent-host coverage: 3 tests, 0 fail, measured 2026-08-19 in
 `packages/cli-backend/tests/swarm-node-home.test.ts`.
 
-One substrate limit, stated rather than papered over: a hosted session has no
-`confinePrincipal` — it is a `SqliteVFS` method with no RPC — so `TMPDIR` points
+One substrate limit: a hosted session has no `confinePrincipal`.
+`confinePrincipal` is a `SqliteVFS` method with no RPC, so `TMPDIR` points
 at `/tmp/node-<id>` and a command that hardcodes `/tmp/x` there lands in the
 shared `/tmp`. In this isolate the rewrite exists, so a bare `/tmp` write is
 private.

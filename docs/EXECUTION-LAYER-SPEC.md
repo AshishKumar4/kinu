@@ -1,4 +1,4 @@
-# Execution Layer Architecture
+# Execution layer architecture
 
 > Source of truth: `packages/core/src/execution/` and backend runtime assembly.
 > Everything here ships, re-checked on 2026-08-24. The rule in "When to leave
@@ -7,9 +7,7 @@
 
 ## One workspace, optional environments
 
-Kinu has one workspace file plane: Nimbus held as a library over the owning Durable Object's own `ctx.storage.sql` on
-Cloudflare and the local workspace on the CLI. The `file` tool, default `run`,
-`Storage.vfs`, and `workspace.*` all address the same paths and bytes.
+Kinu has one workspace file plane. Nimbus holds it as a library over the owning Durable Object's own `ctx.storage.sql` on Cloudflare, and over the local workspace on the CLI. The `file` tool, default `run`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
 
 | Namespace | Registered by | Filesystem relationship |
 |---|---|---|
@@ -18,7 +16,7 @@ Cloudflare and the local workspace on the CLI. The `file` tool, default `run`,
 | `laptop` | Cloudflare over the device tunnel (`createDeviceTunnelExecutor`); the CLI over its own host process (`createLocalLaptopExecutor`) | a separate user machine |
 | `parent` | CLI head runtimes only (`createParentExecutor`) | another workspace authority |
 
-Every registration lives in backend `runtime.ts`. `ExecutorKind` has FIVE
+Every registration lives in backend `runtime.ts`. `ExecutorKind` has five
 kinds: `nimbus` underlies `createNimbusWorkspaceExecutor` but is never its own
 namespace. Cloudflare registers no `parent`; only a CLI head does.
 
@@ -34,22 +32,22 @@ call it. The Environment surface labels this `Parent workspace`
 The mount table (`core/src/vfs/mounts.ts`) exposes the user's live device at
 `/pc` and a bound container at `/sandbox`. Mount paths route to the target
 `files` VFS with the prefix stripped, preserving its consent and path
-boundaries. An absent environment is explicit (`ENXIO: /pc — no device
+boundaries. An absent environment is explicit (`ENXIO`, `/pc`, `no device
 connected`), never an empty directory. There is no copy, sync, failover, or
 second Cloudflare `nimbus.*` provider. Name a runtime for commands; cross a
 mount for files.
 
 The user's account is a fleet: several machines can be linked and several live
 at once. One live machine keeps `/pc` as its own root, byte for byte. Two or
-more mount each machine under `/pc/<name>`, the segment being the machine's
+more mount each machine under `/pc/<name>`. The segment is the machine's
 user-chosen name, or its id when the name is shared or is not a usable path
 segment (`deviceMountSegment`, `core/src/execution/device-tunnel-executor.ts`).
 `/pc` itself then lists the machines. A path under no live machine is
 `ENXIO` naming the fleet. Commands name their machine the same way: every
-`laptop` tool and `run { runtime: "laptop" }` take `device: "<name>"`; with one
-machine live it may be omitted, with several a call that names none is refused
+`laptop` tool and `run { runtime: "laptop" }` take `device: "<name>"`. With one
+machine live it may be omitted. With several, a call that names none is refused
 with the classified ask (`deviceFleetAsk`, `core/src/execution/device-status.ts`).
-The hub routes on the device id, which rides every frame it sends, and never
+The hub routes on the device id, which rides every frame it sends. It never
 picks a machine for an unnamed call (`DeviceSocketHub.connectedDeviceId`,
 `cf-backend/src/user/device-hub.ts`). Grants stay per (workspace, device).
 
@@ -64,27 +62,26 @@ insertion above it.
 stable `name` and `kind`, capabilities and `unmeasuredCapabilities`, measured
 `resourceLimits`, `homeDir()`, namespaced codemode tools, optional real
 `files` VFS, and optional port operations. `isAvailable()` and `getStatus()`
-must be cheap and must not provision anything.
+must be cheap. Neither provisions anything.
 
 `ExecutionRouter` (`core/src/execution/router.ts`) registers providers, reports
 status, and gives codemode only available providers. Explicit `runtime` plus
 namespace is the routing decision. `register()` applies `gateProviderExec`
 (`core/src/execution/approval.ts`), so `run` and `<name>.exec()` share approval.
-`workspace.exec` is exempt because `withApprovalGatedShell` already gates it;
+`workspace.exec` is exempt. `withApprovalGatedShell` already gates it;
 `startProcess` is gated here.
 
 `AgentRuntime.executor` is Core's baseline execution primitive;
 `AgentRuntime.executionRouter` serves tools and UI. `storage.vfs` is the
 canonical VFS plus mounts. Memory indexing, fork snapshots and identity
-provisioning use the base tree only: services that touch workspace bytes must
+provisioning use the base tree only. Services that touch workspace bytes must
 never cross into a device or container. Agent-facing `file`, `workspace.*`,
-and VFS walks see the extended plane.
 
 `EXECUTOR_CAPABILITIES` (`core/src/execution/types.ts`) is ordered by runnable
 code, tooling, filesystem/network reach, then process rights. The order is
 load-bearing: unordered rendering re-fingerprints dynamic context without a
 meaningful change. Report only live capability. Do not advertise an absent
-cache, disconnected device, or unconfigured preview origin.
+cache, a disconnected device, or an unconfigured preview origin.
 
 Status separates `configured` (binding exists), `available` (callable now),
 `active` (touched this activation), and `status`/`reason` (stable state and
@@ -97,14 +94,14 @@ backend label.
 files, POSIX shell, code/runtime execution, processes, and ports. `run`,
 `file`, and codemode share a read-before-write ledger and approval policy.
 Actors share files and processes but retain a `shellId` across reconstruction:
-`agent:<name>` (`cf-backend/src/actor-agent.ts:491`),
-`subordinate:<name>` (`cf-backend/src/subordinate-agent.ts:176`), or
-`<scope>:<name>` (`cf-backend/src/exploration.ts:282`).
+`agent:<name>` (`cf-backend/src/actor-agent.ts:700`),
+`subordinate:<name>` (`cf-backend/src/subordinate-agent.ts:220`), or
+`<scope>:<name>` (`cf-backend/src/exploration.ts:443`).
 `createAgentNimbusHandle` passes it to `exec`, `startProcess`, and `runCode`.
 The CLI implements the same contract locally. It refuses programmatic Plan
-turns because it has no plan-review surface: `enqueueTurn` rejects them
-(`cli-backend/src/local-session.ts:1187-1192`) and reports
-`planSubmissionAvailable: false` (`core/src/prompting/surface.ts:135-138`).
+turns because it has no plan-review surface. `enqueueTurn` rejects them
+(`cli-backend/src/local-session.ts:1545`) and reports
+`planSubmissionAvailable: false` (`core/src/prompting/surface.ts:182`).
 It never exposes a partial Plan toolset.
 
 `sandbox` is hosted-only Linux, implemented by `KinuSandbox`
@@ -114,32 +111,33 @@ spot capacity: the platform can recycle it and return a blank disk. Devbox
 before `ensureReady()` returns, records a failure before delivery, and retries
 delivery until accepted. Each startup attempt owns a lifecycle generation and
 re-checks it after every await, so a superseded attempt writes nothing.
-`ensureReady()` resolving means the work directory is attached; it does not mean
+`ensureReady()` resolving means the work directory is attached. It does not mean
 every service came back. `DevboxReport.ready` means both, and `unready` gives the
 reason when it does not. A port is exposed only after its own listener answers.
 `devbox/src/lifecycle.ts` holds the pure lifecycle rules (`quiesceStep`,
 `restartPlan`, `incidentRetryDelayMs`, `classifyRecovery`, `recoveryStep`);
 `DEFAULT_DEVBOX_POLICY` is their timing override. A failed attach walks one
-bounded ladder — retry the identity, replace the identity, refuse — and
-exhaustion and permanent configuration refuse at once. One budget
+bounded ladder: retry the identity, replace the identity, refuse. Exhaustion
+and permanent configuration refuse at once. One budget
 (`attachBudgetMs`) covers every restoration phase, and each listener proof takes
 the smaller of its own cap and a share of what is left, so silent ports cannot
 add a window each.
 
 `DevboxStorage` (`devbox/src/storage.ts`) has five `DevboxStrategyName`
-strategies, and `Devbox.#buildStorage` dispatches all five exhaustively —
-an unrecognised name refuses to build the box rather than falling through to the
+strategies, and `Devbox.#buildStorage` dispatches all five exhaustively.
+An unrecognised name refuses to build the box rather than falling through to the
 chain wearing another strategy's name. Every one of them needs an R2 store
-binding; without one the box builds a stub whose checkpoints skip and nothing is
-durable. `snapshotChainStorage` mounts immutable squashfs plus cumulative
+binding. Without one the box builds a stub whose checkpoints skip and nothing is
+durable.
+`snapshotChainStorage` mounts immutable squashfs plus cumulative
 R2 delta as lazy FUSE layers. `r2fsStorage` mounts R2 through s3fs and has no
 archive or restore. `overlayCasStorage` replays only post-cursor journal
 entries over a read-only `tree/`, staging blobs before one journal object per
-64 entries; a red-first test pins that batch, and it additionally needs its
+64 entries. A red-first test pins that batch, and it additionally needs its
 bundled runner at `CAS_RUNNER_PATH` in the image. `bounded-layers` and
 `merkle-pack` are the two `DURABLE_ROOT_FORMATS` candidates and share one
-container path (`candidateContainerStorage`); each additionally needs a bundled
-candidate runner — absent, the box refuses by name — and the journal daemon at
+container path (`candidateContainerStorage`). Each additionally needs a bundled
+candidate runner. Absent, the box refuses by name. The journal daemon lives at
 `CANDIDATE_JOURNAL_BINARY`. No deployed run has compared
 these strategies across Worker, Durable Object, Container, or R2. Treat cost
 claims as designed and unit-proven, not observed. Bytes written by one
@@ -158,8 +156,7 @@ true means only HTTP/S and DNS leave, through the vault-substituting handler
 `SANDBOX_LIFECYCLE_STAGES` is the closed failure-stage set;
 `initSandboxLifecycleTable` creates its ledger; `sandboxLifecycleIncidentKey`
 deduplicates delivery (`cf-backend/src/sandbox-lifecycle.ts`). Deletion opens
-`kinu-<name>`, calls `discardState()`, then destroys the container
-(`destroyAgent`, `cf-backend/src/orchestrator.ts:2574-2596`). The order is
+(`destroyAgent`, `cf-backend/src/orchestrator.ts:3681`). The order is
 load-bearing: after object storage disappears, no one can name its R2 objects.
 A later same-name workspace inherits no container state.
 
@@ -174,7 +171,7 @@ PATHs, pinned by `cli-backend/tests/path-resolver-parity.test.ts`.
 
 A named capability is evidenced; one searched inside probe scope but absent is
 known absent; all others are unmeasured. A stale or too-old probe is not an
-absence. The model reports unmeasured as `— not measured here: …`. `gpu` and
+absence. The model reports unmeasured as `not measured here: …`. `gpu` and
 `docker` remain unmeasured: PATH cannot prove usable hardware or a reachable
 daemon (`TOOLCHAIN_UNPROBEABLE`). Evidence expires after
 `DEVICE_TOOLCHAIN_TTL_MS`, 120 seconds
@@ -196,22 +193,22 @@ The inventories were probed. `scripts/nimbus-runtime-probe.ts` covers the
 workspace. `executeInExecutor` found `git` 2.34.1, `npm` 10.9.8, `node`
 v22.23.2, `bun`, `sh`, `bash`, `jq`, `curl` present; `python3`, `python`,
 `ruby`, `clang`, `gcc`, `make`, `tsc`, `docker` absent at exit 127. A local
-pull was byte-identical. The `createSandboxExecutor` comment records this on
-2026-08-18 (`93276f1e`), but `cf-backend/wrangler.jsonc:127` now pins
+pull was byte-identical. The inventory comment lives at
+`core/src/execution/sandbox.ts:747`, but `cf-backend/wrangler.jsonc:164` now pins
 `cloudflare/sandbox:0.12.8`: re-probe before trusting a version string.
 
 Escalate only for structural needs:
 
-- **Native Linux binaries.** Nimbus runs wasm32-wasi and JavaScript; ELF,
-  `.node`, and native Python wheels are `native-unsupported` by ABI. The
+- Native Linux binaries: Nimbus runs wasm32-wasi and JavaScript, so ELF,
+  `.node`, and native Python wheels cannot run there. The
   container runs binaries but cannot build them: no `gcc`, `clang`, or `make`.
   "Compile this C" is unavailable on both.
-- **Parallel CPU work.** Nimbus threads are cooperative, not parallel. The
+- Parallel CPU work: Nimbus threads are cooperative, not parallel. The
   container is 2 vCPU.
-- **More memory or disk.** On 2026-08-17 (`1ff86316`), deployed-container
+- More memory or disk. On 2026-08-17 (`1ff86316`), deployed-container
   `free -m` reported 6185 MiB, `df -h /` 7.3G, `nproc` 2. This agrees with
   declared `vcpu 2 / memory_mib 6144 / disk_mb 8000`
-  (`cf-backend/wrangler.jsonc:129-133`); 6185 versus 6144 is the normal
+  (`cf-backend/wrangler.jsonc:167-169`); 6185 versus 6144 is the normal
   total-versus-usable gap. It is a reported total, never a proven OOM
   threshold. Escalate above a couple GB of RAM or two dedicated cores.
 
@@ -220,13 +217,14 @@ Escalate only for structural needs:
   `core/src/platform-catalog.ts`, not a number here: the catalog records
   conflicts, a published figure, deployed bisect, and the shared quota across
   an exploration tree.
-- **A throwaway or destructive tree.** A container is disposable and restores
+- A throwaway or destructive tree: a container is disposable and restores
   `/workspace`; the workspace filesystem is durable.
 
-Do not escalate for `docker` (both `docker` and `dockerd` exit 127), Python or
-pip (the container has no `python3`), inbound previews (workspace supports
-them when configured), long-running processes (`startProcess`, table, logs,
-signals, kill), or hosted `git` (isomorphic-git already supplies it). Local
+Do not escalate for `docker` (both `docker` and `dockerd` exit 127). Do not
+escalate for Python or pip (the container has no `python3`), inbound previews
+(workspace supports them when configured), long-running processes
+(`startProcess`, table, logs, signals, kill), or hosted `git`
+(isomorphic-git already supplies it). Local
 git work belongs on `laptop`. The container's `git` 2.34.1 needs the outbound
 interception path (`cf-backend/src/egress/configure.ts`, `egress/outbound.ts`),
 whose production state is not verified here; `scripts/egress-interception.ts`
@@ -235,7 +233,7 @@ records it.
 A cold container costs about 2.8s, warm call 0.22s, both measured on
 2026-08-17 (`1ff86316` cold, `1d1b2489` warm). The cold figure is also in
 `core/src/execution/sandbox.ts`; the warm one survives only here. An escalated
-command has no elapsed deadline: absent `SandboxHandle.exec` `timeout` means
+command has no elapsed deadline. Absent `SandboxHandle.exec` `timeout` means
 "no deadline" and uses the process lane, not SDK `exec`
 (`core/src/execution/sandbox.ts`). WAIT is bounded: background after 30s
 interactive or 300s one-shot (`BACKGROUND_POLICY`,
@@ -244,25 +242,24 @@ would silently outrank detach windows, so there is none.
 
 The platform refuses, never queues. `max_instances` returns HTTP 503 (10 in
 production, 5 in the second environment,
-`cf-backend/wrangler.jsonc:128,416`); rapid starts return HTTP 429, "you are
+`cf-backend/wrangler.jsonc:165,513`); rapid starts return HTTP 429, "you are
 requesting too many containers per second". `withSandboxRetry` treats both as
 transient (`TRANSIENT_MARKERS`, `core/src/execution/sandbox.ts`) but allows
 three attempts and only 500ms then 1000ms, 1.5s total, less than one cold
-provision. A forty-way workload fails; size work to one instance before
+provision. A forty-way workload fails. Size work to one instance before
 splitting it across instances that do not exist.
 
 I keep escalation explicit. A "compute-heavy" heuristic is unauditable and
-wrong in both directions; a declared rule is reviewable against capabilities
+wrong in both directions. A declared rule is reviewable against capabilities
 rendered into the agent's execution block.
 
 ## Files, security, and provider changes
 
 The Environment surface shows one native tree per provider, with raw `files`
 where supplied; it never merges them. The agent sees those same trees through
-`/pc` and `/sandbox`. The Outputs Diff reader is read-only: Git uses Git data
-without touching its index; non-Git compares re-markable `vfs_baseline`, set at
-birth (`core/src/read-models/workspace-diff.ts:1-13`). Reads never advance it,
-so old changes and read/snapshot failures remain visible. Preview discovery
+`/pc` and `/sandbox`. The Outputs Diff reader is read-only. Git
+uses Git data without touching its index; non-Git compares re-markable
+`vfs_baseline`, set at
 asks `workspace` and `sandbox` for ports
 (`cf-backend/src/hooks/use-kinu.ts:1023-1044`); transport failure retains the
 last result with an error, successful empty output removes stale previews
@@ -272,10 +269,8 @@ A shell command passes central approval. Device actions require owner-scoped
 capability and consent. Preview hosts require configured suffix and provider
 capability. Nimbus previews strip Kinu credentials and require a random,
 revocable port capability before guest code
-(`cf-backend/src/nimbus-route.ts:125-143`, `lib/nimbus-preview-host.ts`).
+(`cf-backend/src/nimbus-route.ts:5-39`, `lib/nimbus-preview-host.ts`).
 Workspace ownership precedes every Nimbus-backed file operation.
-
-`workspace.createTool` applies the `craft_tool` misevolution surface before it
 persists a reusable tool. That surface rejects references to version machinery,
 rollout configuration, self-modification entry points, and consent settings.
 It does not reject network calls. The same codemode Worker exposes raw network
@@ -285,21 +280,21 @@ creates. `SURFACE_CRITERIA` in `core/src/scaffold/misevolution.ts` owns this
 split, and `core/src/execution/inline.ts` applies it.
 
 Plan mode keeps ordinary tools but removes Release structurally:
-`SUBMIT_PLAN_TOOL` exists only on Plan turns (`core/src/tools/registry.ts:125`)
-and `release.*` is codemode-only (`core/src/tools/registry.ts:619`). `WorkMode`
-(`plan` or `build`) propagates to delegation, jobs, and exploration;
+`SUBMIT_PLAN_TOOL` exists only on Plan turns (`core/src/tools/registry.ts:184`)
+and `release.*` is codemode-only (`core/src/tools/registry.ts:102`). `WorkMode`
+(`plan` or `build`) propagates to delegation, jobs, and exploration.
 `kinuMode: job.workMode` prevents wakes weakening Plan to build
 (`core/src/prompting/surface.ts:64-65,78-85`). Plan heads and subordinates
 report research to their parent. Both engines set `executionPolicy` to
 `judge-only`, spending no executor call
-(`core/src/mcts/engine.ts:304`, `core/src/strategy/swarm-run.ts:1558-1560`).
+(`core/src/mcts/engine.ts:311`, `core/src/strategy/swarm-scoring.ts:289`).
 
-To add a provider: implement one `ExecutorProvider` at the external boundary;
-declare only measured capabilities and use `unmeasuredCapabilities` for the
-rest; expose `files` only for its real filesystem; enforce approval, ownership,
-consent, and credentials in provider or transport, never prompt prose;
-register once in backend runtime assembly; test files, shell state, process
+To add a provider: implement one `ExecutorProvider` at the external boundary.
+Declare only measured capabilities and use `unmeasuredCapabilities` for the
+rest. Expose `files` only for its real filesystem. Enforce approval, ownership,
+consent, and credentials in provider or transport, never prompt prose.
+Register once in backend runtime assembly. Test files, shell state, process
 lifecycle, previews, reconstruction, teardown, errors, and absent silent
-fallback; update the existing prompt/status/UI source of truth, never a second
+fallback. Update the existing prompt/status/UI source of truth, never a second
 provider list. The reusable `nimbus` kind and Core factory are extension
 points; Cloudflare registers one Nimbus environment.
