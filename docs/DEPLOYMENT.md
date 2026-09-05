@@ -79,6 +79,8 @@ Provisioning cannot create these; without them a fresh account fails. The provis
 | OAuth applications at Google, GitHub and/or Cloudflare | Created on three other websites. See § OAuth Setup for the exact redirect URLs and scopes. |
 | Email Routing onboarding for `EMAIL_DOMAIN` | MX records, a verified destination, and a rule delivering to this Worker. The `send_email` binding is OUTBOUND only. See `docs/EMAIL-INGRESS.md`. |
 
+Staging and evaluation deploy credentials must name a staging-only Cloudflare account. Issue their token under a separate account, or use an account-scoped token whose account holds no production resources. Workers Scripts permissions cover an account and cannot select one Worker by name. Before installing the token in a protected GitHub environment, list its policy resources with `GET /user/tokens/{token_id}` or `GET /accounts/{account_id}/tokens/{token_id}`, then list `GET /accounts/{account_id}/workers/scripts` using that token. Keep the policy and Worker names as evidence that production is outside its authority. A 403 from the token-policy API leaves this check incomplete.
+
 Universal SSL on `kinu.run` covers the app host, staging, and every preview host. No Advanced Certificate Manager needed.
 
 ### What each command does
