@@ -107,6 +107,52 @@ function reportStored(where: 'account' | 'local', label: string, model: string):
   console.log(DIM(`Default model: ${model}`));
 }
 
+/** Everything the setup preflight reads: the command flags and whether the
+ *  account is signed in. */
+interface SetupPreflightContext {
+  readonly opts: {
+    readonly origin?: string;
+    readonly provider?: string;
+    readonly model?: string;
+    readonly yes?: boolean;
+    readonly skipCloud?: boolean;
+    readonly localModel?: boolean;
+    readonly accountOnly?: boolean;
+    readonly local?: boolean;
+  };
+  readonly cloudReady: boolean;
+}
+
+/** Account-only and non-interactive early exits. Answers 'handled' when setup
+ *  ends here and 'continue' when provider setup runs next. */
+async function runSetupPreflight(ctx: SetupPreflightContext): Promise<'handled' | 'continue'> {
+  if (ctx.opts.accountOnly) {
+    if (ctx.cloudReady) {
+      console.log(`${OK('✓')} Kinu account ready.`);
+      console.log(DIM('Cloud workspaces can use Workers AI through your Cloudflare account, if you granted AI permissions at sign-in.'));
+      console.log(DIM('Run kinu provider connect codex for local workspaces that should use your ChatGPT Codex subscription.'));
+    } else {
+      console.log(`${WARN('!')} Kinu account was not connected.`);
+      console.log(DIM(`Run kinu auth${ctx.opts.origin ? ` --origin ${ctx.opts.origin}` : ''} when you are ready.`));
+    }
+    return 'handled';
+  }
+
+  if (!ctx.opts.yes && !ctx.opts.provider && !ctx.opts.localModel && !canPrompt()) {
+    if (ctx.cloudReady) {
+      console.log(`${OK('✓')} Kinu account ready.`);
+      console.log(DIM('Workers AI uses the Cloudflare account you signed in with.'));
+    } else {
+      console.log(`${WARN('!')} Kinu account was not connected (no interactive terminal).`);
+      console.log(DIM(`Run kinu auth${ctx.opts.origin ? ` --origin ${ctx.opts.origin}` : ''} when you are ready.`));
+    }
+    console.log(DIM('Run kinu provider connect <provider> to configure local workspace model access.'));
+    return 'handled';
+  }
+
+  return 'continue';
+}
+
 export async function setupCommand(opts: {
   origin?: string;
   provider?: string;
@@ -141,29 +187,7 @@ export async function setupCommand(opts: {
     }
   }
 
-  if (opts.accountOnly) {
-    if (cloudReady) {
-      console.log(`${OK('✓')} Kinu account ready.`);
-      console.log(DIM('Cloud workspaces can use Workers AI through your Cloudflare account, if you granted AI permissions at sign-in.'));
-      console.log(DIM('Run kinu provider connect codex for local workspaces that should use your ChatGPT Codex subscription.'));
-    } else {
-      console.log(`${WARN('!')} Kinu account was not connected.`);
-      console.log(DIM(`Run kinu auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
-    }
-    return;
-  }
-
-  if (!opts.yes && !opts.provider && !opts.localModel && !canPrompt()) {
-    if (cloudReady) {
-      console.log(`${OK('✓')} Kinu account ready.`);
-      console.log(DIM('Workers AI uses the Cloudflare account you signed in with.'));
-    } else {
-      console.log(`${WARN('!')} Kinu account was not connected (no interactive terminal).`);
-      console.log(DIM(`Run kinu auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
-    }
-    console.log(DIM('Run kinu provider connect <provider> to configure local workspace model access.'));
-    return;
-  }
+  if (await runSetupPreflight({ opts, cloudReady }) === 'handled') return;
 
   const provider = normalizeProvider(opts.provider ?? (opts.yes ? 'workers-ai' : await chooseProvider(cloudReady)));
   if (provider === 'skip') {
