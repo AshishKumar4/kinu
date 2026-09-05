@@ -534,6 +534,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- `nimbus.readFile` on a missing path refuses with reason `missing` instead of answering an empty string. `sandbox.exists` answers a refusal instead of throwing when the transport fails.
+
 - A reset connection classifies as `io`, so a one-shot approval is not refunded for work that may have run. An unparseable URL classifies as `bad_input`.
 
 - Event redaction masks camelCase secret fields such as `authToken` and `clientSecret`.

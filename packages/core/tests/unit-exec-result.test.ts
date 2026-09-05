@@ -147,4 +147,40 @@ describe('the surfaces the model reads', () => {
     expect(out).toStartWith('Error (exit 1)');
     expect(out).toContain('test_add - assert 3 == 4');
   });
+  test('nimbus readFile on a missing path refuses with reason missing, not an empty string', async () => {
+    const nimbus = createNimbusExecutor({
+      box: {
+        ready: async () => {},
+        exec: async () => ({ stdout: '', stderr: '', exitCode: 0, command: 'noop', success: true }),
+        files: {
+          read: async () => null,
+          write: async () => {},
+          list: async () => [],
+          exists: async () => false,
+          delete: async () => {},
+        },
+      },
+    });
+    const out = String(await nimbus.tools.readFile!.execute('/missing.txt'));
+    expect(parseRefusal(out)?.reason).toBe('missing');
+  });
+
+  test('nimbus readFile on an empty file stays success — empty content is not a refusal', async () => {
+    const nimbus = createNimbusExecutor({
+      box: {
+        ready: async () => {},
+        exec: async () => ({ stdout: '', stderr: '', exitCode: 0, command: 'noop', success: true }),
+        files: {
+          read: async () => '',
+          write: async () => {},
+          list: async () => [],
+          exists: async () => true,
+          delete: async () => {},
+        },
+      },
+    });
+    const out = String(await nimbus.tools.readFile!.execute('/empty.txt'));
+    expect(parseRefusal(out)).toBeNull();
+    expect(out).toBe('');
+  });
 });

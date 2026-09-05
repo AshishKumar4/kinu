@@ -414,7 +414,9 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
           return refusalText(new KinuError('bad_input', 'nimbus readFile: path must be a string'));
         }
         try {
-          return await touch(() => box.files.read(path)) ?? '';
+          const content = await touch(() => box.files.read(path));
+          if (content === null) return refusalText(new KinuError('missing', `nimbus readFile ${path}: no such file or directory`));
+          return content;
         } catch (err) {
           return refusalText(nimbusFailure({ doing: `nimbus readFile ${path}`, cause: err }));
         }

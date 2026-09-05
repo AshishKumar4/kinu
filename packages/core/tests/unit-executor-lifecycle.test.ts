@@ -245,6 +245,16 @@ describe("executor lifecycle state", () => {
     expect(handle.calls).toContain(`exec:test -e '${path}' && echo true || echo false`);
   });
 
+  test("sandbox exists maps a transport failure to a refusal, not a rejection", async () => {
+    const handle = sandboxHandle();
+    handle.exec = async () => { throw new Error("transport down"); };
+    const executor = createSandboxExecutor(handle);
+
+    const out = await executor.tools.exists.execute("/workspace/a.md");
+    expect(String(out)).toContain("transport down");
+    expect(JSON.parse(String(out))).toMatchObject({ reason: "io" });
+  });
+
   test("sandbox port discovery preserves a real SDK failure", async () => {
     const handle = sandboxHandle();
     handle.getExposedPorts = async () => { throw new Error("preview registry unavailable"); };
