@@ -9,8 +9,7 @@
  * Sandbox containers and Nimbus sessions both get a capability hostname per
  * exposed port, so each preview is its own origin and may keep it.
  */
-import { afterAll, describe, expect, mock, test } from 'bun:test';
-import { createHmac } from 'node:crypto';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -21,12 +20,11 @@ import {
   isPreviewHostRequest,
   previewHostSuffix,
 } from '../src/lib/preview-origin';
-import { appDocumentCsp, publicHtmlHeaders, withAppSecurityHeaders } from '../src/lib/security-headers';
+import { publicHtmlHeaders, withAppSecurityHeaders } from '../src/lib/security-headers';
 import {
   CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, crossSiteRejection,
 } from '../src/auth/session';
 import {
-  base32,
   handleNimbusPreviewHostRequest,
   nimbusPreviewConfigured,
   nimbusPreviewUrl,
@@ -36,6 +34,8 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { makeKv } from './helpers/kv';
 import { sandboxPreviewExposures } from '../src/lib/preview-exposures';
 import type { KvStore } from '../src/lib/kv';
+import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
+import type { SandboxOptions } from '@cloudflare/sandbox';
 
 // The SDK's entry point pulls in `cloudflare:workers`, which only exists inside
 // workerd. proxyToSandbox is the seam the Worker delegates preview routing to,
@@ -49,49 +49,35 @@ let sdkForwards = 0;
 // What the repair path did. `getSandbox` used to throw here because nothing in
 // this suite reached it; the stale-preview repair does, and WHICH object it
 // reaches is the property that matters most.
-/** The options every Kinu callsite passes for one sandbox id; the repair must
- *  pass the same ones or the SDK drops in-flight requests for that id. */
-interface SandboxLookupOptions {
-  normalizeId: boolean;
-  transport: string;
-}
-let repairs: Array<{ id: string; options: SandboxLookupOptions }> = [];
+/** The id the repair addressed and the options it passed. Every Kinu call
+ *  site passes the same ones or the SDK drops in-flight requests for that id. */
+let repairs: Array<{ id: string; options?: SandboxOptions }> = [];
 let repairFailure: Error | null = null;
-// The recorder outlives this file (`mock.module` is process-wide), and a
-// LATER file's forward must not read this suite's leftovers: a scripted null
-// means "no exposed port" only while this suite is the caller.
-let suiteDone = false;
-afterAll(() => { suiteDone = true; });
-// `mock.module` replaces the whole module for the rest of the run, so the stub
-// keeps the REAL module for every export it does not fake — a hand-maintained
-// export list here is drift: it omitted `streamFile` and turned every later
-// file that binds it into a load-time SyntaxError.
-import * as actualSandboxSdk from '@cloudflare/sandbox';
-await mock.module('@cloudflare/sandbox', () => ({
-  ...actualSandboxSdk,
+// The suite's doubles for the preview forward and the stale-preview repair:
+// the shared stand-in owns the module, this file only points it. Reset in
+// `afterAll`, so a later file meets the real SDK.
+await installSandboxSdkMock();
+setSandboxSdk({
   proxyToSandbox: async (request: Request) => {
     sdkRequest = request;
     sdkForwards += 1;
-    // After this suite, a forward answers a neutral 204: the caller is another
-    // file that never scripted anything here. Within the suite, a Response is
-    // one-shot and the real SDK mints a new one per forward, so the recorder
-    // hands out a CLONE and keeps the scripted original pristine — returning
-    // the same instance twice arrives disturbed, which is what
-    // unit-transport-security inherited under full-suite order. A scripted
-    // null stays null: that is the SDK's own "no exposed port" answer.
-    if (suiteDone) return new Response(null, { status: 204 });
+    // Within the suite, a Response is one-shot and the real SDK mints a new
+    // one per forward, so the recorder hands out a CLONE and keeps the
+    // scripted original pristine — returning the same instance twice arrives
+    // disturbed. A scripted null stays null: that is the SDK's own "no
+    // exposed port" answer.
     const scripted = sdkQueue.shift() ?? sdkResponse;
     return scripted === null ? null : scripted.clone();
   },
-  Sandbox: class {},
-  getSandbox: (_namespace: NonNullable<Env['Sandbox']>, id: string, options: SandboxLookupOptions) => ({
+  getSandbox: (_namespace: NonNullable<Env['Sandbox']>, id: string, options?: SandboxOptions) => ({
     ensureReady: async () => {
       repairs.push({ id, options });
       if (repairFailure) throw repairFailure;
     },
   }),
-}));
-const { SDK_FORWARD_FAILURE, SDK_STALE_PREVIEW, servePreviewRequest } =
+});
+afterAll(() => { setSandboxSdk(null); });
+const { servePreviewRequest } =
   await import('../src/preview-proxy');
 
 const root = join(import.meta.dir, '..');
@@ -196,10 +182,12 @@ async function serveWithRepair(
 }
 
 function stalePreview(): Response {
-  return new Response(SDK_STALE_PREVIEW.body, {
-    status: SDK_STALE_PREVIEW.status,
-    headers: { 'content-type': 'application/json' },
-  });
+  // The transcription of the SDK's `stalePreviewURLResponse`, fixed here so a
+  // change on either side fails loudly instead of following the other.
+  return new Response(
+    '{"error":"Preview URL is stale because the sandbox runtime is not active","code":"STALE_PREVIEW_URL"}',
+    { status: 410, headers: { 'content-type': 'application/json' } },
+  );
 }
 
 describe('preview sandbox policy', () => {
@@ -439,7 +427,7 @@ describe('serving the preview host', () => {
   });
 
   test('a failed forward becomes a page the user can act on', async () => {
-    const res = await serve(PREVIEW_URL, new Response(SDK_FORWARD_FAILURE.body, { status: SDK_FORWARD_FAILURE.status }));
+    const res = await serve(PREVIEW_URL, new Response('Proxy routing error', { status: 500 }));
     expect(res.status).toBe(503);
     const html = await res.text();
     expect(html).toContain('Preview not ready');
@@ -450,7 +438,7 @@ describe('serving the preview host', () => {
   test("the SDK's forward-failure response is still the shape we match", () => {
     // If an upgrade renames it, the friendly page silently stops appearing.
     const sdk = readFileSync(join(root, '../../node_modules/@cloudflare/sandbox/dist/index.js'), 'utf8');
-    expect(sdk.includes(SDK_FORWARD_FAILURE.body)).toBe(true);
+    expect(sdk.includes('Proxy routing error')).toBe(true);
   });
 
   test('the error page escapes what it echoes from the hostname', () => {
@@ -742,15 +730,15 @@ describe('serving a Nimbus preview host', () => {
     expect(touched).toBe(false);
   });
 
-  /** A token keyed DIRECTLY by a secret over the label, in the shape the edge
-   *  accepted while it was keyed by the raw user-plane secret. */
-  function rawKeyToken(secret: string, version: string): string {
-    const digest = createHmac('sha256', secret)
-      .update(`kinu:workspace-preview:${version}:hello:4321:${NIMBUS_CAPABILITY.slice(0, 10)}`)
-      .digest();
-    return base32(digest).slice(0, 15);
-  }
-
+  /** Tokens keyed DIRECTLY by the master secret, in the shape the edge accepted
+   *  while it was keyed that way. The values stay frozen. v3 digests
+   *  b107b7…14583a and reads `wed3oyud2twt3et`; v4 digests e73cab…af273e and
+   *  reads `446kx4mrl653aua` (HMAC-SHA256 over
+   *  `kinu:workspace-preview:<version>:hello:4321:0123456789` under the test
+   *  seal key, RFC-4648 base32 without padding). A computed value would follow
+   *  an alphabet change along. These break loudly instead. */
+  const RAW_KEY_V3_TOKEN = 'wed3oyud2twt3et';
+  const RAW_KEY_V4_TOKEN = '446kx4mrl653aua';
   /** An env whose Durable Object namespace records whether it was touched. */
   function untouchableEnv(bindings: PreviewTestBindings) {
     let touched = false;
@@ -768,15 +756,15 @@ describe('serving a Nimbus preview host', () => {
     // The same secret seals the owner's stored credentials. A signature keyed
     // by it directly shares key material with that cipher; the subkey does not.
     const token = new URL(NIMBUS_URL).hostname.split('-')[2];
-    expect(token).not.toBe(rawKeyToken(TEST_CREDENTIAL_ENCRYPTION_KEY, 'v3'));
-    expect(token).not.toBe(rawKeyToken(TEST_CREDENTIAL_ENCRYPTION_KEY, 'v4'));
+    expect(token).not.toBe(RAW_KEY_V3_TOKEN);
+    expect(token).not.toBe(RAW_KEY_V4_TOKEN);
   });
 
   test('a v3 URL minted before the key changed fails closed and touches no object', async () => {
     // A preview URL has no expiry of its own, so every v3 link outlives the
     // change; the edge answers each the same 404 a forged label gets.
     const { env, touched } = untouchableEnv(ENV);
-    const label = `${(4321).toString(36)}-${NIMBUS_CAPABILITY.slice(0, 10)}-${rawKeyToken(TEST_CREDENTIAL_ENCRYPTION_KEY, 'v3')}-hello`;
+    const label = `${(4321).toString(36)}-${NIMBUS_CAPABILITY.slice(0, 10)}-${RAW_KEY_V3_TOKEN}-hello`;
     const response = await handleNimbusPreviewHostRequest(new Request(`https://${label}.${SUFFIX}/`), env);
     expect(response?.status).toBe(404);
     expect(touched()).toBe(false);
@@ -859,6 +847,16 @@ describe('what the app is willing to frame', () => {
   });
 });
 
+/** The CSP the app document policy sets, read off a document response. */
+function cspOf(previewOrigin: string | null): string {
+  const res = withAppSecurityHeaders(
+    new Response('<!doctype html>', { headers: { 'content-type': 'text/html; charset=utf-8' } }),
+    new URL(APP),
+    previewOrigin,
+  );
+  return res.headers.get('content-security-policy') ?? '';
+}
+
 describe('the app document policy', () => {
   test('authenticated app HTML carries a CSP', () => {
     const res = withAppSecurityHeaders(
@@ -875,9 +873,9 @@ describe('the app document policy', () => {
   });
 
   test('only preview hosts may be framed', () => {
-    expect(appDocumentCsp(new URL(APP), `https://*.${SUFFIX}`))
+    expect(cspOf(`https://*.${SUFFIX}`))
       .toContain(`frame-src 'self' https://*.${SUFFIX}`);
-    expect(appDocumentCsp(new URL(APP), null)).toContain("frame-src 'self'");
+    expect(cspOf(null)).toContain("frame-src 'self'");
   });
 
   test('the app names the preview wildcard, not a single host', () => {
@@ -885,14 +883,14 @@ describe('the app document policy', () => {
   });
 
   test('the chat WebSocket survives the connect-src rule', () => {
-    expect(appDocumentCsp(new URL(APP), null)).toContain("connect-src 'self' wss://kinu.example.com");
+    expect(cspOf(null)).toContain("connect-src 'self' wss://kinu.example.com");
   });
 
   // KaTeX_Size3-Regular.woff2 is under Vite's inline threshold, so the bundle
   // carries it as `data:font/woff2;base64,…`. Unset, `font-src` falls back to
   // `default-src 'self'` and the browser refuses it.
   test('the inlined maths font survives the font-src rule', () => {
-    expect(appDocumentCsp(new URL(APP), null)).toContain("font-src 'self' data:");
+    expect(cspOf(null)).toContain("font-src 'self' data:");
   });
 
   test('non-document responses are left alone', () => {

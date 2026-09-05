@@ -452,3 +452,19 @@ describe('hosted workspace facets', () => {
     }
   });
 });
+
+describe('hosted file reads report absence by code, not by message', () => {
+  test('a non-absence failure still throws when its path contains ENOENT', async () => {
+    // The read helper matched the rendered message, so reading a directory
+    // named `/ENOENT-probe` answered `null` (EISDIR's text holds the
+    // substring) while any other directory threw. The tolerance now reads the
+    // VFS `code`.
+    const actor = hostActor();
+    const files = actor.hosted.box('probe').files;
+    if (!files) throw new Error('the hosted box carries no files plane');
+    if (!files.mkdir) throw new Error('the hosted files plane carries no mkdir');
+    await files.mkdir('/ENOENT-probe');
+    await expect(files.read('/ENOENT-probe')).rejects.toThrow('EISDIR');
+    await expect(files.read('/no-such-file')).resolves.toBeNull();
+  });
+});

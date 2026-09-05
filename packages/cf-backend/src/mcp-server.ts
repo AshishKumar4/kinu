@@ -23,7 +23,7 @@
  *
  * This makes Kinu a real MCP server — external clients (Cursor, Claude
  * Code, browser AI, other agents) can connect, list tools, invoke them,
- * read memory, trigger splits, manage scaffold versions. The distribution
+ * read memory, test scaffolds, and drive release changes. The distribution
  * play: Kinu becomes a tool other agents can use, not just a chat app.
  *
  * v1 read tools:
@@ -44,7 +44,6 @@
  *
  * v1 resources:
  *   • kinu://workspace/<name>/memory       — full memory content
- *   • kinu://workspace/<name>/scaffold     — current scaffold code
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";

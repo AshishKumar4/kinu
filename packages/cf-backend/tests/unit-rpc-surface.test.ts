@@ -8,23 +8,22 @@
  * never meet a gate. The first test here performs exactly that theft against a
  * real `UserDO` holding a real credential, and then shows the same call denied.
  *
- * Reachability is modelled by `rpcReachableNames`, the rule this repo verified
- * against workerd 1.20260601.1 with one Durable Object calling another: members
- * anywhere on the prototype chain resolve (including superclass members and
- * TypeScript `private` ones); own instance properties do not, and workerd
- * rejects them with `The RPC receiver does not implement the method "x".` —
- * the same error it gives for a name that was never declared.
+ * Reachability is modelled below by the suite's own statement of workerd's
+ * rule, verified against real workerd 1.20260601.1 with one Durable Object
+ * calling another. Members anywhere on the prototype chain resolve, including
+ * superclass members and TypeScript `private` ones. Own instance properties do
+ * not resolve. Workerd rejects those with `The RPC receiver does not implement
+ * the method "x".`, the same error it gives for a name that was never
+ * declared. The mechanism tests pin that model against `sealRpcSurface` from
+ * both directions, so the two cannot drift silently.
  */
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import {
-  AGENTS_FACET_RPC_SURFACE,
   EXPLORATION_RPC_SURFACE,
   ORCHESTRATOR_RPC_SURFACE,
-  PLATFORM_RPC_SURFACE,
   SUBORDINATE_RPC_SURFACE,
   USER_DO_RPC_SURFACE,
-  rpcReachableNames,
   sealRpcSurface,
 } from '../src/rpc-surface';
 import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
@@ -37,6 +36,44 @@ import * as v from 'valibot';
 type UserDOInstance = ReturnType<typeof createTestUserDO>['userDO'];
 type RpcTarget = UserDOInstance | Leaf | Middle2;
 
+
+/**
+ * The suite states workerd's stub-resolution rule on its own side. Every member
+ * on the prototype chain below `Object.prototype` resolves, minus anything an
+ * own instance property shadows. `sealRpcSurface` works from the same rule on
+ * the module side. The mechanism tests at the bottom pin the two against each
+ * other. A change to one that the other does not share goes red there.
+ */
+function rpcReachableNames<Target extends object>(target: Target): string[] {
+  const own = new Set(Object.getOwnPropertyNames(target));
+  const reachable = new Set<string>();
+  for (let proto: object | null = Object.getPrototypeOf(target);
+       proto !== null && proto !== Object.prototype;
+       proto = Object.getPrototypeOf(proto)) {
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (name !== 'constructor' && !own.has(name)) reachable.add(name);
+    }
+  }
+  return [...reachable].sort();
+}
+
+/**
+ * The platform and facet name lists, read as data out of the one declaration
+ * in src/rpc-surface.ts. The drift guards below already read class sources
+ * this way, so the suite checks that declaration instead of restating it. A
+ * rename or reformat that the pattern no longer matches throws loudly here. It
+ * never passes against an empty list.
+ */
+function surfaceLiteral(constName: string): string[] {
+  const body = source('rpc-surface.ts').match(
+    new RegExp(`const ${constName}[^=]*= \\[([\\s\\S]*?)\\] as const`),
+  )?.[1];
+  if (!body) throw new Error(`surface literal ${constName} is not declared in rpc-surface.ts`);
+  return [...body.matchAll(/'([^']+)'/g)]
+    .map((match) => match[1])
+    .filter((name): name is string => name !== undefined)
+    .sort();
+}
 /** What a stub-holder gets. Denial reproduces workerd's own wording. */
 async function callOverRpc(target: RpcTarget, method: string, args: JsonValue[]) {
   if (!rpcReachableNames(target).includes(method)) {
@@ -194,6 +231,8 @@ describe('the UserDO RPC surface cannot drift from the class', () => {
 
 const SRC = join(import.meta.dir, '..', 'src');
 const source = (file: string) => readFileSync(join(SRC, file), 'utf8');
+const PLATFORM_RPC_SURFACE = surfaceLiteral('PLATFORM_RPC_SURFACE');
+const AGENTS_FACET_RPC_SURFACE = surfaceLiteral('AGENTS_FACET_RPC_SURFACE');
 
 /** Every Durable Object class in the Worker, and the surface it must seal to.
  *  `KinuSandbox` is the one omission — see the test that pins it. */

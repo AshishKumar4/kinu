@@ -9,9 +9,9 @@
  * second attempt against a healthy object, and none of them says anything about
  * the request that was made.
  *
- * THIS IS NOT A BLANKET WRAPPER, and it must not become one. It is applied only
- * where the operation is idempotent — a read, or a converge-to-a-value write —
- * and where a dropped call has been observed to cost the user something. An
+ * THIS IS NOT A BLANKET WRAPPER, and it must not become one. It applies only
+ * to idempotent operations such as reads and converge-to-a-value writes, and
+ * only where a dropped call has been observed to cost the user something. An
  * operation that appends, sends, charges or mints is never wrapped: a dropped
  * call there may already have run, so a retry is a correctness bug wearing
  * resilience as a costume, and the honest answer is the error.
@@ -146,8 +146,8 @@ const BASE_DELAY_MS = 60;
 
 /**
  * Run an idempotent cross-DO call, retrying only the platform transients above.
- * Any other error — and a transient one that outlives the attempts — throws
- * unchanged, so the caller still reports honestly.
+ * Any other error throws unchanged, including a transient one that outlives
+ * the attempts, so the caller still reports honestly.
  *
  * `operation` names the call in the log a retry emits, so a flaky object is
  * visible in Workers Logs rather than silently absorbed.

@@ -24,7 +24,7 @@ import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
 import { buildCliInstallCommand } from '../src/cli/install-command';
-import { KINU_BUN_VERSION, bunResolutionShell, bunVersionKey } from '../src/cli/bun-runtime';
+import { bunResolutionShell } from '../src/cli/bun-runtime';
 import { CLI_DIST_PATHS } from '../src/lib/deployed-assets';
 
 const ORIGIN = 'https://kinu.example.com';
@@ -81,6 +81,14 @@ async function launcherScript(): Promise<string> {
   return response.text();
 }
 
+/** The approved Bun, read out of the rendered resolution the module hands out
+ *  rather than imported: the served text is the contract both scripts ship. */
+function approvedBun(): string {
+  const match = /KINU_BUN_VERSION="([^"]+)"/.exec(bunResolutionShell());
+  if (!match) throw new Error('rendered resolution names no KINU_BUN_VERSION');
+  return match[1];
+}
+
 /** A Bun stand-in that records the path it was invoked through, answers
  *  `--version`, and prints the CLI help line for `run` — so a test can prove
  *  WHICH Bun binary ran, not merely that something did. */
@@ -123,7 +131,7 @@ function makeDistTarballs(home: string): void {
  *  or system side effects. The stub curl "downloads" the launcher, the Bun
  *  installer, and the two published build artifacts. */
 function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
-  const ambientBun = options.ambientBun === undefined ? KINU_BUN_VERSION : options.ambientBun;
+  const ambientBun = options.ambientBun === undefined ? approvedBun() : options.ambientBun;
   const home = mkdtempSync(join(tmpdir(), 'kinu-install-test-'));
   tempDirs.push(home);
   const stubBin = join(home, 'stub-bin');
@@ -488,8 +496,9 @@ describe('Bun runtime resolution is one source of truth', () => {
   test('the approved Bun is the version this repository itself pins', () => {
     const manifest = readFileSync(join(import.meta.dir, '../../../package.json'), 'utf8');
     const pin = v.parse(v.object({ packageManager: v.string() }), JSON.parse(manifest)).packageManager;
-    expect(pin).toBe(`bun@${KINU_BUN_VERSION}`);
-    expect(bunVersionKey(KINU_BUN_VERSION)).toBeGreaterThan(0);
+    expect(pin).toBe(`bun@${approvedBun()}`);
+    const minKey = /KINU_BUN_MIN_KEY=(\d+)/.exec(bunResolutionShell())?.[1];
+    expect(Number(minKey)).toBeGreaterThan(0);
   });
 
   test('both served scripts carry the same resolution and neither probes Bun on its own', async () => {
@@ -589,7 +598,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'kinu-bun-cwd-'));
     try {
       const decoy = join(cwd, 'bun');
-      writeFileSync(decoy, `#!/bin/sh\nprintf '%s\\n' '${KINU_BUN_VERSION}'\n`);
+      writeFileSync(decoy, `#!/bin/sh\nprintf '%s\\n' '${approvedBun()}'\n`);
       chmodSync(decoy, 0o755);
       const probe = spawnSync('bash', ['-c', [
         'set -eu',
@@ -627,11 +636,11 @@ describe('Bun runtime resolution is one source of truth', () => {
     const result = await runHeadlessInstall(script, home, stubBin);
 
     expect(result.timedOut).toBe(false);
-    expect(result.output).toContain(`Installing Bun ${KINU_BUN_VERSION}...`);
-    expect(result.output).toContain(`Using Bun ${KINU_BUN_VERSION} at ${managedBun}.`);
+    expect(result.output).toContain(`Installing Bun ${approvedBun()}...`);
+    expect(result.output).toContain(`Using Bun ${approvedBun()} at ${managedBun}.`);
     expect(existsSync(managedBun)).toBe(true);
     // Once. A second install path is how the two sides drifted apart before.
-    expect(result.output.split(`Installing Bun ${KINU_BUN_VERSION}...`).length - 1).toBe(1);
+    expect(result.output.split(`Installing Bun ${approvedBun()}...`).length - 1).toBe(1);
     expect(result.exitCode).toBe(0);
   }, 30_000);
 
@@ -640,7 +649,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     const { home, stubBin, managedBun } = makeSandbox({ ambientBun: null });
     const result = await runHeadlessInstall(script, home, stubBin, { KINU_INSTALL_BUN: '0' });
 
-    expect(result.output).toContain(`Bun ${KINU_BUN_VERSION} or newer is required.`);
+    expect(result.output).toContain(`Bun ${approvedBun()} or newer is required.`);
     expect(existsSync(managedBun)).toBe(false);
     expect(result.exitCode).toBe(1);
   }, 30_000);
@@ -653,7 +662,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     const install = await runHeadlessInstall(script, home, stubBin);
 
     expect(install.timedOut).toBe(false);
-    expect(install.output).toContain(`Installing Bun ${KINU_BUN_VERSION}...`);
+    expect(install.output).toContain(`Installing Bun ${approvedBun()}...`);
     expect(install.output).toContain('Kinu CLI is ready.');
     expect(install.exitCode).toBe(0);
 

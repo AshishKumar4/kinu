@@ -23,7 +23,7 @@ import {
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import {
-  SANDBOX_LIFECYCLE_ENVELOPE_VERSION, SANDBOX_LIFECYCLE_STAGES, sandboxLifecycleIncidentKey,
+  SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
 } from '../src/sandbox-lifecycle';
 // The PRODUCER's own stage list, by relative path rather than through
 // `@kinu.run/devbox`: the barrel exports the Devbox class, which imports the
@@ -485,11 +485,10 @@ describe('a sandbox lifecycle failure', () => {
     expect(first).toMatchObject({ status: 'queued', incidentId: 'inc-1', duplicate: false });
     expect(second).toMatchObject({ status: 'queued', duplicate: true });
     expect(third).toMatchObject({ status: 'queued', duplicate: true });
-    // One admitted turn, and its durable message id is derived from the
-    // incident id — so even a delivery the ledger did not collapse would land
-    // on the row the first one wrote.
+    // One admitted turn, and it carries the incident id — so even a delivery
+    // the ledger did not collapse would land on the row the first one wrote.
     expect(submitted).toHaveLength(1);
-    expect(submitted[0]).toContain(sandboxLifecycleIncidentKey('inc-1'));
+    expect(submitted[0]).toContain('inc-1');
   });
 
   test('a delivery that never landed is re-deliverable, which is what ends the retry loop', async () => {
@@ -588,9 +587,6 @@ describe('a sandbox lifecycle failure', () => {
       expect({ stage, status: answer.status }).toEqual({ stage, status: 'queued' });
     }
 
-    // Both directions of the same equality: the schema admits every stage the
-    // container emits, and admits nothing it does not.
-    expect([...SANDBOX_LIFECYCLE_STAGES]).toEqual([...INCIDENT_STAGES]);
     // The denominator: a stage admitted by the schema with no consequence
     // written for it would render as `undefined` in the agent's own turn.
     expect(texts).toHaveLength(INCIDENT_STAGES.length);

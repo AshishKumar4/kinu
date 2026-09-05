@@ -102,7 +102,6 @@ const ProviderFailureSchema = v.object({
 const ModelMenuSchema = v.object({
   models: v.array(ModelMenuEntrySchema), failures: v.array(ProviderFailureSchema),
 });
-const StringConfigSchema = v.record(v.string(), v.string());
 const ConfigEntrySchema = v.object({ key: v.string(), value: v.nullable(v.string()) });
 
 export interface DeviceFlowStart {
@@ -276,7 +275,6 @@ export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
   .then((r) => { invalidateModelsCache(); return r; });
 
 // ── Config / defaults ──────────────────────────────────────────────
-export const listConfig       = () => api(StringConfigSchema, 'GET', '/config');
 export const getConfig        = (key: string) => api(ConfigEntrySchema, 'GET', `/config/${encodeURIComponent(key)}`);
 export const setConfig        = (key: string, value: string) =>
   api(OkSchema, 'PUT', `/config/${encodeURIComponent(key)}`, { value });
@@ -300,9 +298,7 @@ export function listAvailableModels(): Promise<ModelMenu> {
   }
   return _modelsCache;
 }
-export function invalidateModelsCache(): void { _modelsCache = null; }
-export const listConnectedProviders = () =>
-  api(v.array(v.object({ id: v.string(), label: v.string(), credentialKeys: v.array(v.string()) })), 'GET', '/providers');
+function invalidateModelsCache(): void { _modelsCache = null; }
 
 /** One connectable provider (BYO API key) from the models.dev catalog. */
 export interface ProviderCatalogEntry {
@@ -410,8 +406,6 @@ export const addMcpServer   = (input: McpServerInput) =>
   api(v.object({ id: v.string(), authUrl: v.nullable(v.string()) }), 'POST', '/mcp/servers', input);
 export const removeMcpServer = (id: string) =>
   api(OkSchema, 'DELETE', `/mcp/servers/${encodeURIComponent(id)}`);
-export const updateMcpServer = (id: string, patch: Partial<Pick<McpServerInput, 'name' | 'headers' | 'allowedTools'>>) =>
-  api(OkSchema, 'PATCH', `/mcp/servers/${encodeURIComponent(id)}`, patch);
 
 // ── EventsHub: triggers + events (per-agent endpoints) ─────────────
 

@@ -136,7 +136,11 @@ export class LineTerminalState {
    *  continuation line instead of joining it to the line above. */
   backspace(): boolean {
     if (this.#buffer === '' || this.#buffer.endsWith('\n')) return false;
-    this.#buffer = this.#buffer.slice(0, -1);
+    // One code point, not one UTF-16 unit: input arrives by code point, so
+    // slicing one unit off an astral character submits a lone surrogate.
+    const points = [...this.#buffer];
+    points.pop();
+    this.#buffer = points.join('');
     return true;
   }
 

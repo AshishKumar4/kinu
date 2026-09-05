@@ -82,7 +82,7 @@ import {
 export const CONTAINER_EVENT_HOST = 'events.kinu.internal';
 
 /** The one path on that host. Anything else is a mistake worth naming. */
-export const CONTAINER_EVENT_PATH = '/v1/events';
+const CONTAINER_EVENT_PATH = '/v1/events';
 
 /** Named handlers, referenced by these keys from `setOutboundHandler` /
  *  `setOutboundByHost`. Kept as constants because the string is the contract

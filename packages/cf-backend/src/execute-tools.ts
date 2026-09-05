@@ -133,14 +133,16 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
       const crafted = selectInjectableCraftedTools(rt.craftStore, sql);
       // The `tools` namespace: native tools dispatched to the host, crafted
       // tools defined in the prelude. The declaration is rendered from the set
-      // as it is NOW; the callable half is re-read on every call below. Core's
-      // two contract functions skip the sandbox's own entry.
+      // as it is NOW; the callable half, prelude included, is re-read on every
+      // call below. Core's two contract functions skip the sandbox's own entry.
+      // This build passes no prelude: createCodeTool resolves providers to name
+      // plus fns and drops it, so building one here would parse and stringify
+      // every crafted tool and discard the result each build.
       const toolsProvider: CodemodeProvider = {
         name: CRAFTED_TOOL_NAMESPACE,
         tools: nativeToolFunctions(native),
         types: renderToolsDeclaration(native, crafted),
         positionalArgs: true,
-        prelude: renderToolsPrelude(crafted, { workspace: options.workspace }),
       };
       const providers: Parameters<typeof createCodeTool>[0]["tools"] = [toolsProvider, stateProvider];
       if (agentsProvider) providers.push(agentsProvider);

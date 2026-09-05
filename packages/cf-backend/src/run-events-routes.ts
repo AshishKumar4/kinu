@@ -16,7 +16,7 @@
 
 import { getAgentByName } from "agents";
 import type { OrchestratorAgent } from "./orchestrator";
-import { boundRunEventQuery, type RunEventType } from "@kinu.run/core";
+import { boundRunEventQuery, RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX, type RunEventType } from "@kinu.run/core";
 import * as v from 'valibot';
 import {
   decodeRunEventWire, resumeIndexFromLastEventId, type RunEventWire,
@@ -191,13 +191,18 @@ function streamRunEvents(
       try {
         // Initial replay — drain everything strictly after sinceIndex.
         let backlog = decodeRunEventWire(
-          await stub.getRunEventsWire(runId, { since: cursor + 1, limit: 500 }),
+          await stub.getRunEventsWire(runId, { since: cursor + 1, limit: RUN_EVENT_LIMIT_MAX }),
         );
         for (const ev of backlog) send(ev);
         // Reported even when the replay is EMPTY: a run with nothing new to say
         // still made the reader wait for the round trip, and a measurement that
         // only counted streams with a backlog would report the fast half.
         reportFirstByte(backlog.length);
+        // A run that already ended has nothing more to say. The loop below
+        // only tests batches it fetched itself, so without this a run_end in
+        // the replay above never ends the stream and the poll loop runs dead
+        // reads until the timeout.
+        if (backlog.some((e) => e.type === 'run_end')) { controller.close(); return; }
 
         // Poll loop until run_end, client disconnect, or timeout. Cloudflare
         // Workers can hold a single SSE connection for up to several minutes;
@@ -206,7 +211,7 @@ function streamRunEvents(
           await new Promise((r) => setTimeout(r, SSE_POLL_MS));
           if (closed) break;
           backlog = decodeRunEventWire(
-            await stub.getRunEventsWire(runId, { since: cursor + 1, limit: 200 }),
+            await stub.getRunEventsWire(runId, { since: cursor + 1, limit: RUN_EVENT_LIMIT_DEFAULT }),
           );
           for (const ev of backlog) send(ev);
           const hasRunEnd = backlog.some((e) => e.type === 'run_end');

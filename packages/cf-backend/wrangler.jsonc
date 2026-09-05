@@ -624,19 +624,4 @@
       }
     }
   }
-  // ── OPTIONAL: Vectorize binding for semantic memory ─────────────
-  //
-  // First create the index:
-  //   wrangler vectorize create kinu-memory \
-  //     --dimensions=384 --metric=cosine
-  //
-  // Then add the binding:
-  //   ,"vectorize": [
-  //     { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory" }
-  //   ]
-  //
-  // Once present, runtime.ts auto-detects it and constructs
-  // CloudflareVectorStore; search_memory + searchMemoryHybrid return
-  // RRF-merged FTS5 + Vectorize hits. Without it, agent transparently
-  // falls back to FTS5-only.
 }

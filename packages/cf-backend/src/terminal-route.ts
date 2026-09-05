@@ -383,7 +383,7 @@ export async function handleTerminalRequest(
   const size: PtyOptions = {};
   for (const axis of ["cols", "rows"] as const) {
     const value = Number(url.searchParams.get(axis));
-    if (Number.isInteger(value) && value > 0 && value <= 1000) size[axis] = value;
+    if (Number.isInteger(value) && value > 0 && value <= DEVICE_PTY_MAX_AXIS) size[axis] = value;
   }
 
   // ONE OWNER, AND IT IS THIS REQUEST — for everything from here down, which is

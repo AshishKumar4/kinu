@@ -60,12 +60,8 @@ export const EGRESS_FAILURE_HEADER = 'x-kinu-egress-failure';
 
 /**
  * Judge, then forward.
- *
- * Exported apart from the entrypoint class so the destination table can be
- * exercised without a runtime that has `exports` — the same split
- * `codemode-sandbox.ts` uses for its prelude text.
  */
-export async function forwardCodemodeEgress(request: Request): Promise<Response> {
+async function forwardCodemodeEgress(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const refusal = refusedHostname(url.hostname);
   if (refusal !== null) {

@@ -25,7 +25,18 @@ import { asFetchFunction } from '@kinu.run/core';
 import {
   createRecordingLogger, setDiagnosticsSink, type RecordingLogger,
 } from '@kinu.run/core/obs';
-import { EGRESS_FAILURE_HEADER, forwardCodemodeEgress } from '../src/codemode-egress';
+import { CodemodeEgress, EGRESS_FAILURE_HEADER } from '../src/codemode-egress';
+/** The loopback entrypoint under test, outside workerd. Its fetch override
+ *  reads no instance state, so an empty env and a bare execution context are
+ *  the whole construction. */
+const entryContext: ExecutionContext = {
+  waitUntil: () => {},
+  passThroughOnException: () => {},
+  props: {},
+};
+const entry = new CodemodeEgress(entryContext, {});
+const egressFetch = (url: string, init?: RequestInit): Promise<Response> =>
+  entry.fetch(new Request(url, init));
 
 const originalFetch = globalThis.fetch;
 let logs: RecordingLogger;
@@ -77,7 +88,7 @@ const REFUSED = [
 
 describe('a program may not reach a destination no untrusted code may reach', () => {
   test.each(REFUSED)('refuses %s without touching the network', async (url) => {
-    const response = await forwardCodemodeEgress(new Request(url));
+    const response = await egressFetch(url);
 
     expect(response.status).toBe(403);
     expect(attempted).toEqual([]);
@@ -89,7 +100,7 @@ describe('a program may not reach a destination no untrusted code may reach', ()
   });
 
   test('the refusal is reported with the host and the seam, and no URL', async () => {
-    await forwardCodemodeEgress(new Request('http://169.254.169.254/latest/meta-data/?key=SECRET'));
+    await egressFetch('http://169.254.169.254/latest/meta-data/?key=SECRET');
 
     const refusal = logs.emitted.find((line) => line.event === 'egress.private_destination');
     expect(refusal).toBeDefined();
@@ -100,7 +111,7 @@ describe('a program may not reach a destination no untrusted code may reach', ()
 
 describe('a public destination is still the program\'s own business', () => {
   test('is forwarded, and forwarded with redirects handed back', async () => {
-    const response = await forwardCodemodeEgress(new Request('https://api.example.com/v1/things'));
+    const response = await egressFetch('https://api.example.com/v1/things');
 
     expect(response.status).toBe(200);
     expect(attempted).toHaveLength(1);
@@ -114,7 +125,7 @@ describe('a public destination is still the program\'s own business', () => {
   });
 
   test('a caller that refuses redirects outright keeps that mode', async () => {
-    await forwardCodemodeEgress(new Request('https://api.example.com/', { redirect: 'error' }));
+    await egressFetch('https://api.example.com/', { redirect: 'error' });
 
     const sent = attempted[0];
     if (!sent) throw new Error('expected the request to reach the network');
@@ -126,7 +137,7 @@ describe('a public destination is still the program\'s own business', () => {
       throw new TypeError('getaddrinfo ENOTFOUND');
     });
 
-    const response = await forwardCodemodeEgress(new Request('https://nowhere.invalid/'));
+    const response = await egressFetch('https://nowhere.invalid/');
 
     expect(response.status).toBe(502);
     expect(response.headers.get(EGRESS_FAILURE_HEADER)).toBe('1');

@@ -1,9 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { asFetchFunction } from '@kinu.run/core';
+import { asFetchFunction, type JsonValue, type OAuthCredential } from '@kinu.run/core';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cloudflareTokenJsonToResponse, cloudflareUserResultToProfile } from '../src/auth/routes';
-import { getConfiguredOAuthProviders, listConfiguredOAuthProviders } from '../src/auth/providers';
+import { getOAuthProvider, listConfiguredOAuthProviders } from '../src/auth/providers';
 import {
   CLOUDFLARE_WORKERS_AI_SCOPES,
   accountIdFromCloudflareCredential,
@@ -18,6 +17,12 @@ import { buildCliInstallCommand } from '../src/cli/install-command';
 import { handleCliRequest } from '../src/cli/routes';
 import { escapeHtml } from '../src/lib/http';
 import { sanitizeReturnTo } from '../src/auth/store';
+import { handleAuthRequest } from '../src/auth/routes';
+import { OAUTH_STATE_COOKIE_NAME } from '../src/auth/session';
+import { makeKv } from './helpers/kv';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import type { BrowserSessionIdentity } from '../src/user/user-do';
+import type { UserCaller } from '../src/user/workspace-capability';
 
 const root = join(import.meta.dir, '..');
 
@@ -116,10 +121,11 @@ describe('auth and desktop security invariants', () => {
   });
 
   test('Cloudflare OAuth requests user billing scopes for Workers AI', () => {
-    const [provider] = getConfiguredOAuthProviders({
+    const provider = getOAuthProvider({
       CLOUDFLARE_OAUTH_CLIENT_ID: 'cid',
       CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec',
-    });
+    }, 'cloudflare');
+    if (!provider) throw new Error('expected the Cloudflare provider to resolve');
     const routes = source('src/auth/routes.ts');
     const userDO = source('src/user/user-do.ts');
     expect(provider.id).toBe('cloudflare');
@@ -321,50 +327,125 @@ describe('auth and desktop security invariants', () => {
     expect(cloudflareAIGatewayId({ CLOUDFLARE_AI_GATEWAY_ID: '  custom-gateway  ' })).toBe('custom-gateway');
   });
 
-  test('Cloudflare OAuth profile uses the Cloudflare API user shape', () => {
-    expect(cloudflareUserResultToProfile({
+/** A sign-in through the real /auth/cloudflare/callback handler, faking only
+ *  the network: discovery, the token exchange, the user lookup and accounts.
+ *  The observable outcomes are the redirect, the stored credential and the
+ *  session row the UserDO stub recorded. */
+function cloudflareCallbackEnv() {
+  const kv = makeKv();
+  const credentials: Array<{ key: string; credential: OAuthCredential }> = [];
+  const configs = new Map<string, string>();
+  const sessions = new Map<string, { expiresAt: number; identity: BrowserSessionIdentity }>();
+  const userDO = {
+    async ensureProfile(_caller: UserCaller) {},
+    async registerBrowserSession(
+      _caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity,
+    ) { sessions.set(tokenHash, { expiresAt, identity }); },
+    async setCredential(_caller: UserCaller, key: string, credential: OAuthCredential) {
+      credentials.push({ key, credential });
+    },
+    async getConfig(_caller: UserCaller, key: string) { return configs.get(key) ?? null; },
+    async setConfig(_caller: UserCaller, key: string, value: string) { configs.set(key, value); },
+  };
+  const bindings = {
+    AUTH_KV: kv,
+    UserDO: { idFromName: (name: string) => name, get: () => userDO },
+    OrchestratorAgent: { idFromName: (name: string) => name, get: () => ({ async onCredentialsChanged() {} }) },
+    CLOUDFLARE_OAUTH_CLIENT_ID: 'cf-client-id',
+    CLOUDFLARE_OAUTH_CLIENT_SECRET: 'cf-client-secret',
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  };
+  const env: Partial<Env> = {};
+  Object.assign(env, bindings);
+  // SAFETY: the callback reads exactly the constructed KV namespace, the two
+  // namespaces, the OAuth client values and the credential key, all present above.
+  return { env: env as Env, credentials, sessions };
+}
+
+async function cloudflareSignIn(env: Env, tokenJson: JsonValue, userResult: JsonValue): Promise<Response> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new Request(input, init).url;
+    if (url === 'https://dash.cloudflare.com/.well-known/openid-configuration') {
+      return Response.json({
+        issuer: 'https://dash.cloudflare.com',
+        authorization_endpoint: 'https://dash.cloudflare.com/oauth2/auth',
+        token_endpoint: 'https://dash.cloudflare.com/oauth2/token',
+      });
+    }
+    if (url === 'https://dash.cloudflare.com/oauth2/token') return Response.json(tokenJson);
+    if (url === 'https://api.cloudflare.com/client/v4/user') {
+      return Response.json({ success: true, result: userResult });
+    }
+    if (url === 'https://api.cloudflare.com/client/v4/accounts') {
+      return Response.json({ success: true, result: [] });
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  });
+  try {
+    const origin = 'https://kinu.example.com';
+    const start = await handleAuthRequest(new Request(`${origin}/auth/cloudflare/start`), env);
+    if (!start) throw new Error('auth route did not handle the sign-in start');
+    const state = new URL(start.headers.get('location') ?? '').searchParams.get('state');
+    const setCookie = start.headers.getSetCookie()
+      .find((value) => value.startsWith(`${OAUTH_STATE_COOKIE_NAME}=`));
+    if (!state || !setCookie) throw new Error('sign-in start handed out no bound handoff');
+    const callback = new URL(`${origin}/auth/cloudflare/callback`);
+    callback.searchParams.set('state', state);
+    callback.searchParams.set('code', 'auth-code-1');
+    const done = await handleAuthRequest(new Request(callback.toString(), {
+      headers: { cookie: setCookie.split(';')[0] },
+    }), env);
+    if (!done) throw new Error('auth route did not handle the callback');
+    return done;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+  test('Cloudflare OAuth profile uses the Cloudflare API user shape', async () => {
+    const named = cloudflareCallbackEnv();
+    const doneAda = await cloudflareSignIn(named.env, { access_token: 'cf-a' }, {
+      id: 'cf-user-2',
+      email: 'person@example.com',
+      first_name: 'Ada',
+      last_name: 'Lovelace',
+    });
+    expect(doneAda.status).toBe(302);
+    expect([...named.sessions.values()].map((row) => row.identity.displayName)).toEqual(['Ada Lovelace']);
+
+    const handle = cloudflareCallbackEnv();
+    const doneAsh = await cloudflareSignIn(handle.env, { access_token: 'cf-b' }, {
       id: 'cf-user-1',
       email: 'ashish@example.com',
       first_name: null,
       last_name: null,
       username: 'ashish',
-    })).toEqual({
-      provider: 'cloudflare',
-      providerSub: 'cf-user-1',
-      email: 'ashish@example.com',
-      emailVerified: true,
-      displayName: 'ashish',
     });
-
-    expect(cloudflareUserResultToProfile({
-      id: 'cf-user-2',
-      email: 'person@example.com',
-      first_name: 'Ada',
-      last_name: 'Lovelace',
-    }).displayName).toBe('Ada Lovelace');
+    expect(doneAsh.status).toBe(302);
+    expect([...handle.sessions.values()].map((row) => row.identity.displayName)).toEqual(['ashish']);
   });
 
-  test('Cloudflare OAuth token parser accepts Cloudflare token response variants', () => {
-    expect(cloudflareTokenJsonToResponse({
+  test('Cloudflare OAuth token variants survive the callback into the stored credential', async () => {
+    const { env, credentials } = cloudflareCallbackEnv();
+    const done = await cloudflareSignIn(env, {
       access_token: 'cf-access',
       token_type: 'bearer',
       expires_in: '900',
       scope: ['user-details.read'],
-      resource: 'https://dash.cloudflare.com',
-    })).toEqual({
-      access_token: 'cf-access',
-      token_type: 'bearer',
-      expires_in: 900,
-      scope: 'user-details.read',
-      resource: 'https://dash.cloudflare.com',
+    }, {
+      id: 'cf-user-1',
+      email: 'ashish@example.com',
+      username: 'ashish',
     });
-
-    expect(cloudflareTokenJsonToResponse({
-      access_token: 'cf-access',
-    })).toMatchObject({
-      access_token: 'cf-access',
-      token_type: 'bearer',
-    });
+    expect(done.status).toBe(302);
+    expect(credentials).toHaveLength(1);
+    // A string expiry and an array scope arrive normalized: seconds of
+    // lifetime minus clock skew, and one scope string.
+    expect(credentials[0].credential.metadata?.scopes).toEqual(['user-details.read']);
+    const lifetime = (credentials[0].credential.expiresAt ?? 0) - Date.now();
+    expect(lifetime).toBeGreaterThan(800_000);
+    expect(lifetime).toBeLessThanOrEqual(900_000);
   });
 
   test('browser UI uses app auth routes rather than Cloudflare Access logout/login URLs', () => {

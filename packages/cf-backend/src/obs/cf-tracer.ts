@@ -10,10 +10,10 @@
  *    no native OUTCOME either, which is why a failure is an attribute here.
  * 2. `ctx.tracing` is `undefined`. Only the module import works. Probing
  *    `typeof tracing` proves nothing; the member is what can be absent.
- * 3. An absent or non-callable `enterSpan` used to take the CALLER down with it.
- *    `tests/workerd/tracing-fallback.test.ts` measured it on real workerd: the
- *    wrapped callback ran zero times and a `TypeError` escaped, so an
- *    instrumented request would have failed for no reason but the instrument.
+ * 3. An absent or non-callable `enterSpan` takes the CALLER down with it.
+ *    `tests/workerd/tracing-fallback.test.ts` measures it on real workerd: the
+ *    wrapped callback runs zero times and a `TypeError` escapes, so an
+ *    instrumented request fails for no reason but the instrument.
  *    The pinned runtime does supply a callable member, which is why this is a
  *    guard and not a migration — but a capability that is checked only by being
  *    used is one whose absence is indistinguishable from a broken caller.

@@ -87,7 +87,6 @@ export interface HubDeviceTransportOpts {
   /** Current turn identity for the daemon's pre-mutation shadow-git snapshot
    *  (deduped daemon-side per turn). Null outside turns / when unwired. */
   checkpointMeta?: () => { turnId: string; sessionId: string } | null;
-  now?: () => number;
 }
 
 interface StatusRefresh {
@@ -95,7 +94,6 @@ interface StatusRefresh {
 }
 
 export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTransport {
-  const now = opts.now ?? Date.now;
   let snapshot: DeviceStatus = DISCONNECTED;
   let checkedAt = 0;
   let inFlight: StatusRefresh | null = null;
@@ -114,7 +112,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
     const hub = opts.hub();
     if (!hub) {
       snapshot = DISCONNECTED;
-      checkedAt = now();
+      checkedAt = Date.now();
       return { promise: Promise.resolve(snapshot) };
     }
     const owner: StatusRefresh = { promise: null };
@@ -133,7 +131,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           otherwise: 'unavailable',
         }));
       } finally {
-        checkedAt = now();
+        checkedAt = Date.now();
         if (inFlight === owner) inFlight = null;
       }
       return snapshot;
@@ -154,7 +152,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
      * rejection to lose.
      */
     status: (): DeviceStatus => {
-      if (!inFlight && now() - checkedAt >= DEVICE_STATUS_TTL_MS) beginStatusRefresh();
+      if (!inFlight && Date.now() - checkedAt >= DEVICE_STATUS_TTL_MS) beginStatusRefresh();
       return snapshot;
     },
     refreshStatus,
@@ -167,7 +165,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         // told an owner to run `kinu connect` for a machine they may already
         // have linked.
         snapshot = DISCONNECTED;
-        checkedAt = now();
+        checkedAt = Date.now();
         throw new Error(WORKSPACE_HAS_NO_OWNER);
       }
       try {
@@ -206,14 +204,14 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         // forward rather than dropped. Overwriting it here would blank the row
         // the moment the agent used the device.
         snapshot = { ...snapshot, connected: true, registered: true };
-        checkedAt = now();
+        checkedAt = Date.now();
         return rawResult === undefined
           ? undefined
           : v.parse(JsonValueSchema, JSON.parse(rawResult));
       } catch (err) {
         if (isDeviceNotConnectedError(err)) {
           snapshot = { ...snapshot, connected: false };
-          checkedAt = now();
+          checkedAt = Date.now();
         }
         // Several machines are live and the call named none. The hub's
         // message already names them; the class is the caller's, not the

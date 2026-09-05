@@ -14,7 +14,7 @@
  * the container may stop.
  */
 
-import { describe, expect, mock, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
@@ -22,20 +22,18 @@ import * as v from 'valibot';
 import { LINE_MODE_LABEL, LineTerminalState, terminalLane } from '../src/lib/terminal-lane';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
+import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
 
 // `getSandbox` resolves through whatever `env.Sandbox` binding each test
-// installs, exactly like the SDK's own resolution — and, as
-// unit-nimbus-lifecycle.test.ts records, `mock.module` state is process-wide,
-// so this file owns the module for its own run rather than inheriting a
-// throwing stub from whichever file bun loaded first. For the same reason the
-// mock keeps the REAL module for everything it does not fake: a throwing
-// `proxyToSandbox` stub here is what a later file's preview test would call.
-import * as actualSandboxSdk from '@cloudflare/sandbox';
-await mock.module('@cloudflare/sandbox', () => ({
-  ...actualSandboxSdk,
-  getSandbox: (namespace: SandboxProbe, name: string) => namespace.get(namespace.idFromName(name)),
-  Sandbox: class {},
-}));
+// installs, exactly like the SDK's own resolution. The shared stand-in owns
+// the module; this file only points it. Reset in `afterAll`, so a later file
+// meets the real SDK.
+await installSandboxSdkMock();
+setSandboxSdk({
+  getSandbox: (namespace: NonNullable<Env['Sandbox']>, name: string) =>
+    namespace.get(namespace.idFromName(name)),
+});
+afterAll(() => { setSandboxSdk(null); });
 
 // The route imports `getAgentByName` from `agents`, whose module graph reaches
 // `cloudflare:email`. One shared mock, then the dynamic import — the ordering
@@ -47,11 +45,6 @@ const { handleTerminalRequest } = await import('../src/terminal-route');
 /** The vocabulary a person is never shown: our primitives, our transports, our
  *  missing methods. Read by the label case and by the route's refusal body. */
 const FORBIDDEN_IN_COPY = /pty|pseudo-terminal|JSON-RPC|daemon|Nimbus|startProcess|stdin|resize|socket/i;
-
-interface SandboxProbe {
-  idFromName(name: string): string;
-  get(id: string): TerminalDouble;
-}
 
 interface PtySize { cols?: number; rows?: number; shell?: string }
 

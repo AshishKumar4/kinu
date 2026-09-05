@@ -87,8 +87,7 @@ export function buildTree(nodes: MctsRow[]): ForkNode {
       visits: unevaluated ? null : n.visits,
       value: unevaluated ? null : n.value,
       status: n.status, action: n.action,
-      task: n.task, observation: n.observation, codeUsed: n.code_used,
-      branchAgentKey: n.branch_agent_key, msgId: n.msg_id, createdAt: n.created_at,
+      task: n.task, observation: n.observation, codeUsed: n.code_used, createdAt: n.created_at,
       children: [],
     };
   });

@@ -123,9 +123,8 @@ async function previewToken(secret: string, workspace: string, port: number, han
 
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 
-/** Lowercase RFC-4648 base32 without padding — the alphabet a DNS label admits.
- *  Exported so a suite can spell a token the way the edge does. */
-export function base32(bytes: Uint8Array): string {
+/** Lowercase RFC-4648 base32 without padding — the alphabet a DNS label admits. */
+function base32(bytes: Uint8Array): string {
   let bits = 0;
   let buffer = 0;
   let encoded = '';

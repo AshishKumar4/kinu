@@ -77,7 +77,7 @@ export interface AuthIdentity {
 
 /** Step-up (fresh-auth) window for sensitive operations — creating webhook
  *  ingress endpoints requires an interactive sign-in within this window. */
-export const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
+const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
 
 /** Single step-up rule for every webhook-creation path: web sessions check
  *  the session auth time; the CLI checks its token mint time (minting

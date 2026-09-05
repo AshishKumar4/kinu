@@ -44,7 +44,7 @@ export function listConfiguredOAuthProviders(env: OAuthProviderEnv): PublicOAuth
   return getConfiguredOAuthProviders(env).map(({ id, label }) => ({ id, label }));
 }
 
-export function getConfiguredOAuthProviders(env: OAuthProviderEnv): OAuthProviderConfig[] {
+function getConfiguredOAuthProviders(env: OAuthProviderEnv): OAuthProviderConfig[] {
   const out: OAuthProviderConfig[] = [];
 
   const google = providerFromEnv(env, 'google', 'GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET');

@@ -65,7 +65,7 @@ export function publicHtmlHeaders() {
  * manages to get in front of the app, only a preview host can be framed. Null
  * (previews unconfigured) falls back to `'self'`.
  */
-export function appDocumentCsp(url: URL, previewOrigin: string | null): string {
+function appDocumentCsp(url: URL, previewOrigin: string | null): string {
   const frameSrc = previewOrigin ? `'self' ${previewOrigin}` : "'self'";
   return [
     ...BASE_CSP,

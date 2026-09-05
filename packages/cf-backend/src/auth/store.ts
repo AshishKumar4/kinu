@@ -251,7 +251,7 @@ export class SessionAuthorityUnavailableError extends Error {
  *
  *  Whether the session still EXISTS is the authority's answer, on every
  *  request, with nothing cached in front of it. The identity is the one written
- *  at sign-in — a rename lands on the next sign-in — read from the KV
+ *  at sign-in (a rename lands on the next sign-in), read from the KV
  *  projection when that has arrived at this colo and from the authority's own
  *  row when it has not, which is what the first request after a sign-in
  *  redirect can get. Both copies were written from one value, so neither can

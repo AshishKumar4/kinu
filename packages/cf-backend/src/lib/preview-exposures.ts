@@ -90,7 +90,7 @@ export function isKinuSandboxId(sandboxId: string): boolean {
  * and short enough that an abandoned record cannot outlive its workspace by a
  * season. It is a bound on the projection's staleness, not a rate limit.
  */
-export const PREVIEW_EXPOSURE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const PREVIEW_EXPOSURE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Half a life: past this, an observation refreshes the record, so a preview in
  *  use is never refused for age and a busy Ports panel writes ~nothing. */

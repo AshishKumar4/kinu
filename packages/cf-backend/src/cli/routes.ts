@@ -1,7 +1,7 @@
 import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, USER_AI_PROXY_PATH, timingSafeEqual, type JsonValue } from '@kinu.run/core';
 import type { AuthIdentity } from '../auth/session';
 import {
-  AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime,
+  AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime, readCookie,
 } from '../auth/session';
 import { publicHtmlHeaders } from '../lib/security-headers';
 import { approvalDocument, installDocument } from '../lib/public-pages';
@@ -915,15 +915,6 @@ function csrfCookie(value: string): string {
 
 function clearCsrfCookie(): string {
   return `${CLI_APPROVAL_CSRF_COOKIE_NAME}=; Path=/cli/auth; Max-Age=0; HttpOnly; Secure; SameSite=Strict`;
-}
-
-function readCookie(request: Request, name: string): string | null {
-  const cookie = request.headers.get('cookie') ?? '';
-  for (const part of cookie.split(';')) {
-    const [k, ...rest] = part.trim().split('=');
-    if (k === name) return rest.join('=') || null;
-  }
-  return null;
 }
 
 function isSameOriginPost(request: Request): boolean {

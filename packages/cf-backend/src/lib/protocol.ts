@@ -56,8 +56,6 @@ export interface ForkNode {
 	task?: string;
 	observation?: string;
 	codeUsed?: string | null;
-	branchAgentKey?: string | null;
-	msgId?: string | null;
 	createdAt?: number;
 	/**
 	 * What this branch's own store recorded, when the store was the head journal.
@@ -114,8 +112,8 @@ export interface ToolInfo {
 	/**
 	 * Whether THIS agent actually wires it. Reach is what the capability is;
 	 * this is what this actor has. `report` is declared `both` and is wired only
-	 * on a subordinate — the orchestrator IS the report sink — so its row is
-	 * honestly `both` + `wired: false` rather than silently mislabelled.
+	 * on a subordinate (the orchestrator is the report sink), so its row reads
+	 * `both` + `wired: false` rather than a silent mislabel.
 	 */
 	wired: boolean;
 	qualityScore: number;

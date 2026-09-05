@@ -241,7 +241,7 @@ async function completeOAuth(request: Request, env: Env, ctx: ExecutionContext |
  *
  * Runs after the session exists, and never throws: the operator is already
  * signed in by this point, and a billing lookup must not be able to undo that.
- * A token that sees no account — or a Cloudflare API that is down — leaves the
+ * A token that sees no account, or a Cloudflare API that is down, leaves the
  * credential unusable, which the "Connect Cloudflare Workers AI" notice
  * already reports on its own.
  */
@@ -393,7 +393,7 @@ async function processCloudflareTokenResponse(response: Response): Promise<oauth
   return cloudflareTokenJsonToResponse(body);
 }
 
-export function cloudflareTokenJsonToResponse<Input>(input: Input): oauth.TokenEndpointResponse {
+function cloudflareTokenJsonToResponse<Input>(input: Input): oauth.TokenEndpointResponse {
   const body = v.parse(JsonObjectSchema, input);
   const accessToken = stringClaim(body.access_token);
   if (!accessToken) throw new Error('Cloudflare token endpoint did not return an access token.');
@@ -435,7 +435,7 @@ async function fetchCloudflareProfile(accessToken: string | undefined): Promise<
   return cloudflareUserResultToProfile(body.result);
 }
 
-export function cloudflareUserResultToProfile<Input>(input: Input): OAuthProfile {
+function cloudflareUserResultToProfile<Input>(input: Input): OAuthProfile {
   const user = v.parse(CloudflareUserSchema, input);
   const id = String(user.id);
   const email = user.email.trim();

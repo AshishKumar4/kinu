@@ -53,7 +53,7 @@ mockAgentsSdk();
 
 const { ORCHESTRATOR_RPC_SURFACE } = await import('../src/rpc-surface');
 const {
-  CONTAINER_EVENT_HOST, CONTAINER_EVENT_PATH,
+  CONTAINER_EVENT_HOST,
   handleContainerEgress, handleContainerEvent, parseEgressParams,
 } = await import('../src/egress/outbound');
 
@@ -332,9 +332,8 @@ describe('reachability of the container event channel', () => {
     expect(read('src/orchestrator.ts')).toContain('async acceptContainerEvent(');
   });
 
-  test('the event channel has exactly one route, on a name that resolves nowhere public', () => {
+  test('the event channel lives on a name that resolves nowhere public', () => {
     expect(CONTAINER_EVENT_HOST.endsWith('.internal')).toBe(true);
-    expect(CONTAINER_EVENT_PATH.startsWith('/')).toBe(true);
   });
 });
 
@@ -604,7 +603,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
     let response: Response | undefined;
     const emitted = await recordDiagnostics(async () => {
       response = await handleContainerEvent(
-        new Request(`https://${CONTAINER_EVENT_HOST}${CONTAINER_EVENT_PATH}`, {
+        new Request(`https://${CONTAINER_EVENT_HOST}/v1/events`, {
           method: 'POST', body: JSON.stringify({ kind: 'note' }),
         }),
         throwingEventEnv({ cause: new Error('object evicted mid-write') }),

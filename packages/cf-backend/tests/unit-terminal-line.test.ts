@@ -249,6 +249,14 @@ describe('what the keyboard puts into a command', () => {
     expect(state.buffer).toBe('ls');
   });
 
+  test('backspace after an astral character erases the whole character', () => {
+    const state = editor();
+    const term = new Recorder();
+    feedInput(term, state, '🌱');
+    feedInput(term, state, '\x7f');
+    expect(state.buffer).toBe('');
+  });
+
   test('an astral character stays one character', () => {
     const state = editor();
     const term = new Recorder();

@@ -17,7 +17,7 @@
  * spawnBranchFacet, still cannot build one at all.
  */
 
-import { describe, expect, mock, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import type { WorkspaceBoxOp, WorkspaceBoxResult } from '../src/workspace-box-rpc';
@@ -37,6 +37,7 @@ import {
 } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { platformGatewayEnv } from './helpers/platform-gateway';
+import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
 import * as v from 'valibot';
 
 mockAgentsSdk();
@@ -49,13 +50,12 @@ const lastRequestedSandboxId = (): string | null => requestedSandboxId;
  *  container it does not own, so this must stay at zero however it is touched. */
 let restoresPerformed = 0;
 let egressConfigured = 0;
-// Keep the REAL module for everything this file does not fake: the mock is
-// process-wide, and a missing `proxyToSandbox`/`Sandbox` export is a load-time
-// failure for whichever later file binds them.
-import * as actualSandboxSdk from '@cloudflare/sandbox';
-await mock.module('@cloudflare/sandbox', () => ({
-  ...actualSandboxSdk,
-  getSandbox: (_ns: DurableObjectNamespace, id: string) => {
+// The suite's double for the container a head rides: the shared stand-in owns
+// the module, this file only points it. Reset in `afterAll`, so a later file
+// meets the real SDK.
+await installSandboxSdkMock();
+setSandboxSdk({
+  getSandbox: (_ns: NonNullable<Env['Sandbox']>, id: string) => {
     requestedSandboxId = id;
     return {
       ensureReady: async () => {},
@@ -87,7 +87,8 @@ await mock.module('@cloudflare/sandbox', () => ({
       configureEgress: async () => { egressConfigured += 1; },
     };
   },
-}));
+});
+afterAll(() => { setSandboxSdk(null); });
 
 const { ExplorationAgent } = await import('../src/exploration');
 

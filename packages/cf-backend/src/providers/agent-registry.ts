@@ -59,7 +59,6 @@ export interface AgentProviderDeps {
    *  usable. */
   userDO?: UserCredentialSource | null;
   fetch?: typeof fetch;
-  refererURL?: string;
   appTitle?: string;
   workersAI?: WorkersAIOptions;
 }
@@ -121,7 +120,6 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   registry.register(createOpenAIProvider());
   registry.register(createAnthropicProvider());
   registry.register(createOpenRouterProvider({
-    refererURL: opts.refererURL,
     appTitle: opts.appTitle,
   }));
   registry.register(createOpenAICompatProvider());

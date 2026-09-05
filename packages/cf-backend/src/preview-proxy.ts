@@ -39,22 +39,22 @@ import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
  * is how the friendly page below gets shown; `unit-preview-origin.test.ts`
  * pins the shape so an SDK upgrade that changes it fails loudly.
  */
-export const SDK_FORWARD_FAILURE = { status: 500, body: 'Proxy routing error' } as const;
+const SDK_FORWARD_FAILURE = { status: 500, body: 'Proxy routing error' } as const;
 
 /**
  * The Durable Object's answer when the port token IS VALID but the exposure it
  * names is not live: the container is stopped or unhealthy, or the activation
  * belongs to a runtime generation that has been replaced
  * (`stalePreviewURLResponse` / `validatePreviewURLForRuntime` in the shipped
- * bundle). Built from the SDK's own object rather than a hand-typed string so
- * the two cannot drift apart silently.
+ * bundle). Transcribed from that method — a method, not an importable value,
+ * so the transcription is pinned by the suite instead of the type checker.
  *
  * AUTHENTICATED BY CONSTRUCTION, and that is what makes it safe to act on: the
  * DO returns 404 `INVALID_TOKEN` for a token that does not match the port's
  * stored one, and only reaches this answer after the match. A request that
  * guessed a hostname cannot make Kinu touch a container.
  */
-export const SDK_STALE_PREVIEW = {
+const SDK_STALE_PREVIEW = {
   status: 410,
   body: JSON.stringify({
     error: 'Preview URL is stale because the sandbox runtime is not active',

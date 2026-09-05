@@ -53,6 +53,15 @@ const CLI_SCOPES_TAG_PREFIX = 'cli-scopes:';
  *  like the scopes header, so clients cannot smuggle either. */
 export const CLI_BEARER_HEADER = 'x-kinu-cli-bearer';
 
+/** Worker→DO header carrying the verified user id. Written by the edge from
+ *  the authenticated identity beside the scope and bearer headers, so DO code
+ *  names the same header the edge sets. */
+export const USER_ID_HEADER = 'x-kinu-user-id';
+
+/** Worker→DO header carrying the session auth time the step-up gate compares.
+ *  Same writer and same rule as the user id header. */
+export const AUTH_TIME_HEADER = 'x-kinu-auth-time';
+
 /** Connection tag persisting that bearer, so a socket restored from
  *  hibernation still knows WHOSE authority it is running on. Without it the
  *  connection came back with its scopes intact and nothing that named the
@@ -375,7 +384,7 @@ export function cliScopesConnectionTag(headerValue: string | null): string | nul
 }
 
 /** Scopes persisted on a connection's tags; null when unrestricted. */
-export function cliScopesFromTags(tags: Iterable<string>): AccessTokenScope[] | null {
+function cliScopesFromTags(tags: Iterable<string>): AccessTokenScope[] | null {
   for (const tag of tags) {
     if (!tag.startsWith(CLI_SCOPES_TAG_PREFIX)) continue;
     const parsed = normalizeAccessTokenScopes(tag.slice(CLI_SCOPES_TAG_PREFIX.length).split(','));
@@ -415,7 +424,7 @@ export function rejectOutOfScopeRpc<Message>(tags: Iterable<string>, message: Me
   // The refused METHOD and the scope it wanted, never the token and never the
   // frame. A scoped token asking for something outside its scope is either a
   // client we shipped with the wrong scope set or someone probing the surface,
-  // and neither is distinguishable from the other — or from nothing at all —
+  // and neither is distinguishable from the other, or from nothing at all,
   // while the denial is only a string handed back down the socket.
   //
   // `outcome` is stated rather than left to default: the sink reads 'ok' from a

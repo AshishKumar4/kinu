@@ -24,7 +24,7 @@ export const CLOUDFLARE_AI_GATEWAY_CRED_KEY = 'cloudflare.ai-gateway';
 // the my-gateway provider uses for discovery) and `aig.run` covers inference.
 // Users who connected before a scope was added need one re-login to grant it.
 export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write aig.write aig.run offline_access';
-export const DEFAULT_CLOUDFLARE_AI_GATEWAY_ID = 'default';
+const DEFAULT_CLOUDFLARE_AI_GATEWAY_ID = 'default';
 
 const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
 const CLOUDFLARE_TOKEN_URL = 'https://dash.cloudflare.com/oauth2/token';
@@ -59,7 +59,7 @@ export class CloudflareOAuthTokenError extends Error {
   }
 }
 
-export async function requestCloudflareOAuthToken(
+async function requestCloudflareOAuthToken(
   env: CloudflareOAuthEnv,
   fields: Record<string, string>,
 ): Promise<JsonObject> {
@@ -91,7 +91,7 @@ export async function requestCloudflareOAuthToken(
   return payload;
 }
 
-export async function fetchCloudflareAccounts(accessToken: string): Promise<CloudflareAccount[]> {
+async function fetchCloudflareAccounts(accessToken: string): Promise<CloudflareAccount[]> {
   const response = await fetch(`${CLOUDFLARE_API}/accounts`, {
     headers: {
       accept: 'application/json',

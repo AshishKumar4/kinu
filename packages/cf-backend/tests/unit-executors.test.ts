@@ -5,7 +5,7 @@ import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  EXECUTOR_LABELS, EXECUTOR_ORDER, executorLabel, pickDefaultExecutor, releaseSubstrate,
+  executorLabel, executorSortKey, pickDefaultExecutor, releaseSubstrate,
   type ExecutorInfo,
 } from "../src/lib/executors";
 
@@ -82,29 +82,33 @@ describe("releaseSubstrate", () => {
  * there is deliberately no second Nimbus row.
  */
 describe("executor labels name one environment each", () => {
+  // The environments this build knows, as the Environment surface lists them.
+  // A fifth environment added to the module needs a row here: nothing else
+  // enumerates the whole set.
+  const NAMES = ["laptop", "sandbox", "workspace", "parent"];
+
   test("no two environments share a name", () => {
-    const labels = EXECUTOR_ORDER.map(executorLabel);
+    const labels = NAMES.map(executorLabel);
     expect(new Set(labels).size).toBe(labels.length);
   });
 
   test("only the agent's own filesystem is called the Workspace", () => {
     // `parent` is legitimately a workspace too — someone else's, and its label
     // says whose. What no other environment may do is answer to the bare word.
-    expect(EXECUTOR_LABELS.workspace).toBe("Workspace");
-    for (const [name, label] of Object.entries(EXECUTOR_LABELS)) {
+    expect(executorLabel("workspace")).toBe("Workspace");
+    for (const name of NAMES) {
       if (name === "workspace") continue;
-      expect(label).not.toBe("Workspace");
+      expect(executorLabel(name)).not.toBe("Workspace");
     }
   });
 
   test("there is no redundant Nimbus executor row", () => {
-    expect(EXECUTOR_ORDER).not.toContain("nimbus");
-    expect(Object.hasOwn(EXECUTOR_LABELS, "nimbus")).toBe(false);
+    expect(executorLabel("nimbus")).toBe("nimbus");
+    expect(executorSortKey("nimbus")).toBe(99);
   });
 
-  test("every ordered executor has a name of its own — none falls back to its namespace", () => {
-    for (const name of EXECUTOR_ORDER) {
-      expect(Object.entries(EXECUTOR_LABELS).some(([key]) => key === name)).toBe(true);
+  test("every known executor has a name of its own — none falls back to its namespace", () => {
+    for (const name of NAMES) {
       expect(executorLabel(name)).not.toBe(name);
     }
   });

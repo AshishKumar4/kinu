@@ -39,10 +39,11 @@ function requiredCall(calls: RpcCall[], index: number): RpcCall {
   return call;
 }
 
-function makeClock(start = 1_000_000) {
-  let t = start;
-  return { now: () => t, advance: (ms: number) => { t += ms; } };
-}
+const sleep = (ms: number): Promise<void> => {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
+};
 
 describe('createHubDeviceTransport', () => {
   test('refreshStatus is authoritative: a device that connected mid-session becomes visible', async () => {
@@ -61,7 +62,6 @@ describe('createHubDeviceTransport', () => {
   });
 
   test('status() serves the cached snapshot inside the TTL without re-querying the hub', async () => {
-    const clock = makeClock();
     let listCalls = 0;
     const hub: DeviceHubClient = {
       deviceRuntimeStatus: async () => {
@@ -72,7 +72,7 @@ describe('createHubDeviceTransport', () => {
       acknowledgeDeviceRequest: async () => {},
     };
     const transport = createHubDeviceTransport({
-      hub: () => hub, agentName: 'agent-1', cliCwd: () => null, now: clock.now,
+      hub: () => hub, agentName: 'agent-1', cliCwd: () => null,
       caller,
     });
 
@@ -81,12 +81,16 @@ describe('createHubDeviceTransport', () => {
     transport.status();
     transport.status();
     expect(listCalls).toBe(1);          // fresh — no background re-check
-    clock.advance(6_000);
+    // Past the 5 s status TTL, on the wall clock: the transport reads the
+    // platform clock directly, so nothing here advances it deterministically.
+    // Measured 5.3 s on 2026-09-05.
+    await sleep(5100);
     transport.status();                 // stale — kicks ONE background re-check
     transport.status();
-    await Promise.resolve();
+    await sleep(50); // let the kicked re-check land
     expect(listCalls).toBe(2);
-  });
+  // A wall-clock wait past a 5 s TTL; measured ~5.3 s in this tree.
+  }, 15_000);
 
   test('no owner hub → the workspace is unattached, which is not an unlinked machine', async () => {
     // This pin said "rpc rejects with the connect guidance", and the guidance
@@ -121,7 +125,6 @@ describe('createHubDeviceTransport', () => {
   });
 
   test('rpc outcomes re-seed the snapshot: success → connected, hub rejection → offline', async () => {
-    const clock = makeClock();
     let hubUp = true;
     const hub = fakeHub(() => NO_DEVICE);
     const failingHub: DeviceHubClient = {
@@ -134,7 +137,6 @@ describe('createHubDeviceTransport', () => {
       caller,
       agentName: 'agent-1',
       cliCwd: () => null,
-      now: clock.now,
     });
 
     await transport.rpc('exec', ['echo hi']);

@@ -46,7 +46,7 @@ const WORKSPACE_NAME_KEY = "kinu:workspace-name";
 
 /** Our own teardown margin inside the platform's cancel point: the attach has
  *  to finish AND this object has to log and return before the runtime resets
- *  it. Five seconds, the same margin the previous implementation carried. */
+ *  it. */
 const ATTACH_MARGIN_MS = 5_000;
 
 /** What Devbox may ask the owning workspace. A narrow projection of the real

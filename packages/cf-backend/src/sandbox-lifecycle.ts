@@ -84,7 +84,7 @@ import type {
 const MAX_REASON_CHARS = INCIDENT_REASON_MAX_CHARS;
 
 /** The `kinuEvent` name a lifecycle failure's turn is stamped with. */
-export const SANDBOX_LIFECYCLE_SIGNAL_KIND = 'sandbox_lifecycle_failure';
+const SANDBOX_LIFECYCLE_SIGNAL_KIND = 'sandbox_lifecycle_failure';
 
 /**
  * What each stage costs the agent, in the agent's own terms.
@@ -130,7 +130,7 @@ const STAGE_CONSEQUENCE = {
 // above, so its own keys are exactly the incident stages.
 const STAGE_KEYS = Object.keys(STAGE_CONSEQUENCE) as readonly IncidentStage[];
 
-export const SANDBOX_LIFECYCLE_STAGES = STAGE_KEYS;
+const SANDBOX_LIFECYCLE_STAGES = STAGE_KEYS;
 
 export type SandboxLifecycleStage = IncidentStage;
 
@@ -146,7 +146,7 @@ export type SandboxLifecycleStage = IncidentStage;
  */
 export const SANDBOX_LIFECYCLE_ENVELOPE_VERSION = 2;
 
-export const SandboxLifecycleFailureSchema = v.strictObject({
+const SandboxLifecycleFailureSchema = v.strictObject({
   /** Which envelope shape this is. Refused by name when it does not match, so a
    *  caller that predates the current fields is told what it sent rather than
    *  told which field it left out. */
@@ -200,7 +200,7 @@ export type SandboxLifecycleFailureResult =
 /** The signal's stable identity — one announcement per incident, whichever
  *  path delivers it. The queued turn's durable message id is derived from
  *  this, which is what makes a re-delivery land on the same row. */
-export function sandboxLifecycleIncidentKey(incidentId: string): string {
+function sandboxLifecycleIncidentKey(incidentId: string): string {
   return `sandbox-lifecycle:${incidentId}`;
 }
 
@@ -376,9 +376,7 @@ export async function acceptSandboxLifecycleFailure(
     // NAMES ITS OWN FACT. Without this the signal has no identity, so
     // `signals.deliver` takes the non-idempotent path and a re-delivery of the
     // same incident lands as a second message instead of being recognised as
-    // the one already announced. The header has promised this since the module
-    // was written, and the key helper existed for it — exported, with a test
-    // asserting the key reaches the wire, and nothing putting it there.
+    // the one already announced.
     idempotencyKey: sandboxLifecycleIncidentKey(incident.incidentId),
   };
   let outcome: SignalOutcome;

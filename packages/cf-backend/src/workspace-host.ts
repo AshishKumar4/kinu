@@ -51,7 +51,7 @@ import type {
   JsonValue,
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult,
 } from '@kinu.run/core';
-import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { KinuError, tolerate } from '@kinu.run/core/obs';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
@@ -70,14 +70,14 @@ import {
  * while a permission failure or a torn chunk is not something to report as
  * absence. Synchronous on purpose — the durable filesystem is, so the throw
  * happens on this stack and nothing has to inspect a rejection.
+ *
+ * The tolerance is declared through `obs`, not matched on rendered text.
+ * Rendered text reports a directory as absent when its path holds the
+ * substring. The VFS sets `code` on every error it raises, and this reads
+ * that.
  */
 function absentAsNull<T>(read: () => T): T | null {
-  try {
-    return read();
-  } catch (error) {
-    if (renderThrownChain({ cause: error }).includes('ENOENT')) return null;
-    throw error;
-  }
+  return tolerate(read, 'enoent') ?? null;
 }
 
 /**

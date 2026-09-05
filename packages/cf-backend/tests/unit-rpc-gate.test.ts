@@ -14,7 +14,6 @@ import {
   AGENT_RPC_ACCESS,
   CLI_SCOPES_HEADER,
   cliScopesConnectionTag,
-  cliScopesFromTags,
   rejectOutOfScopeRpc,
   requiredRpcAccess,
   rpcAccessScope,
@@ -44,19 +43,21 @@ const READ_EXEC = [scopeTag('workspace.read,workspace.exec')];
 describe('connect-ticket scope tags', () => {
   test('interactive sessions carry no tag and stay unrestricted', () => {
     expect(cliScopesConnectionTag(null)).toBeNull();
-    expect(cliScopesFromTags([])).toBeNull();
-    expect(cliScopesFromTags(['some-other-tag'])).toBeNull();
+    expect(rejectOutOfScopeRpc([], rpcFrame('getAgentStatus'))).toBeNull();
+    expect(rejectOutOfScopeRpc(['some-other-tag'], rpcFrame('setModel'))).toBeNull();
   });
 
   test('scoped headers round-trip through the connection tag', () => {
-    expect(cliScopesFromTags(READ_EXEC)).toEqual(['workspace.read', 'workspace.exec']);
-    expect(cliScopesFromTags(EXEC_ONLY)).toEqual(['workspace.exec']);
+    expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame('getAgentStatus'))).toBeNull();
+    expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame('executeInExecutor'))).toBeNull();
+    expect(rejectOutOfScopeRpc(EXEC_ONLY, rpcFrame('executeInExecutor'))).toBeNull();
+    expect(rejectOutOfScopeRpc(EXEC_ONLY, rpcFrame('getAgentStatus'))).not.toBeNull();
   });
 
   test('an unparseable scope header fails closed, never open', () => {
     const tag = scopeTag('totally-bogus');
-    expect(cliScopesFromTags([tag])).toEqual([]);
     expect(rejectOutOfScopeRpc([tag], rpcFrame('getAgentStatus'))).not.toBeNull();
+    expect(rejectOutOfScopeRpc([tag], rpcFrame('setModel'))).not.toBeNull();
   });
 });
 

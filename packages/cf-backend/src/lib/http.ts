@@ -63,10 +63,10 @@ export async function safeJson<Schema extends v.GenericSchema>(
  * failing, not the read, and a route that streams onward (the file plane's
  * upload) has to tell those two apart to decide whether to abort a transfer.
  *
- * Two shapes read bodies here — one materialises, one streams onward — and this
- * is the one policy under both. They each had their own loop, which is how the
- * materialising one came to be missing the declared-length pre-filter its own
- * comment promised.
+ * Two shapes read bodies here. One materialises and one streams onward, and
+ * this is the one policy under both. They each had their own loop, which is
+ * how the materialising one came to be missing the declared-length pre-filter
+ * its own comment promised.
  */
 export async function readBoundedStream(
   request: Request,

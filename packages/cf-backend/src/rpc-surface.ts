@@ -75,7 +75,7 @@ import type { UserDO } from './user/user-do';
  *     instance. Denying them would risk the DO's own lifecycle for no gain:
  *     their arguments (a live WebSocket) cannot cross an RPC boundary.
  */
-export const PLATFORM_RPC_SURFACE: readonly string[] = [
+const PLATFORM_RPC_SURFACE: readonly string[] = [
   'fetch',
   'setName',
   '_initAndFetch',
@@ -102,7 +102,7 @@ export const PLATFORM_RPC_SURFACE: readonly string[] = [
  * everything this module closes. They are only used by `getSubAgentByName` and
  * by `parentAgent()` from a facet nested two deep; Kinu uses neither.
  */
-export const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
+const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
   '_cf_acquireFacetKeepAlive',
   '_cf_broadcastToSubAgent',
   '_cf_cancelScheduleForFacet',
@@ -130,10 +130,12 @@ export const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
 /**
  * The names Cloudflare will resolve on a stub for `target` — every member on
  * the prototype chain below `Object.prototype`, minus anything an own instance
- * property shadows. This is the rule workerd implements, and it is the single
- * definition both `sealRpcSurface` and its tests work from.
+ * property shadows. This is the rule workerd implements, and `sealRpcSurface`
+ * works from it. The suite states the same rule on its own side
+ * (unit-rpc-surface.test.ts). The mechanism tests pin the two against each
+ * other. A change here that the model does not share goes red there.
  */
-export function rpcReachableNames<Target extends object>(target: Target): string[] {
+function rpcReachableNames<Target extends object>(target: Target): string[] {
   const own = new Set(Object.getOwnPropertyNames(target));
   const reachable = new Set<string>();
   for (let proto: object | null = Object.getPrototypeOf(target);
@@ -301,6 +303,9 @@ const USER_DO_METHODS = [
   'revokeAllCliTokens',
   'getCredentialsRevision',
 ] as const satisfies readonly (keyof UserDO)[];
+
+/** A method name on the UserDO surface above, for typing a stub of it. */
+export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];
 
 export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
 

@@ -69,7 +69,7 @@ import {
 import { withAppSecurityHeaders } from "./lib/security-headers";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do";
 import { ownerCaller } from "./user/workspace-capability";
-import { CLI_BEARER_HEADER, CLI_SCOPES_HEADER, SESSION_BEARER_HEADER } from "./cli/rpc-gate";
+import { AUTH_TIME_HEADER, CLI_BEARER_HEADER, CLI_SCOPES_HEADER, SESSION_BEARER_HEADER, USER_ID_HEADER } from "./cli/rpc-gate";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
 import { err } from "./lib/http";
 import { handleFeedbackRequest } from "./feedback/routes";
@@ -106,39 +106,54 @@ export { UserDO } from "./user/user-do";
 export { MonitorDO } from "./monitor/monitor-do";
 // The admin control plane's index and audit log. One instance ("site").
 export { ControlPlaneDO } from "./control-plane/control-plane-do";
-// NONE of these is bound by `class_name` any more. The workspace Durable Object
-// is gone: Nimbus is held as a LIBRARY in the OrchestratorAgent that owns each
-// workspace (workspace-host.ts), so there is no `NimbusSession` to export and no
-// `NIMBUS_SESSION` namespace to bind.
+// This module's exports are the names workerd hangs on `ctx.exports`
+// (`enable_ctx_exports`; compatibility date 2025-12-01 clears the >= 2025-11-17
+// threshold). Three consumers read names out of that bag. The agents SDK
+// resolves a facet's class by its export name (`_cf_resolveSubAgent` reads
+// `ctx.exports[className]` and throws "not found in worker exports" when the
+// name is absent — agents/dist/index.js:5766). The Sandbox SDK builds its
+// outbound-interception fetchers from `ctx.exports.ContainerProxy`
+// (@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js:11509). The fabric mints each
+// facet's `env.SUPERVISOR` binding from the composed supervisor entrypoint
+// (`supervisorEntrypoint` in nimbus-programmatic.ts).
 //
-// The eight that remain are resolved by workerd's `enable_ctx_exports`, which
-// walks THIS module's exports and auto-populates loopback Service Bindings —
-// Nimbus then looks them up by string key (`ctxExports.NimbusDOStub`), so a
-// missing export is an absent property: no build error, no type error, a runtime
-// failure when that path first runs. Our compatibility_date 2025-12-01 clears
-// the >= 2025-11-17 threshold by 14 days (Nimbus's inline "2026-04-01+" comments
-// are its dogfood's date, not the real bound).
+// REQUIRED, and the binding or lookup that requires each one.
+//   OrchestratorAgent carries the `OrchestratorAgent` durable_objects binding
+//     in wrangler.jsonc, the fabric's `hostNamespace`, and the `/agents/*`
+//     route.
+//   ExplorationAgent carries no binding. It runs as a facet of an
+//     OrchestratorAgent through `ActorAgent.explorationFacet()`
+//     (actor-agent.ts). The SDK resolves that class by name, so this export
+//     lets the resolution succeed. It is named in wrangler.jsonc migrations
+//     `v1`.
+//   SubordinateAgent carries no binding. It runs as a facet through
+//     `OrchestratorAgent.subordinateFacet()` (orchestrator.ts), resolved by
+//     name the same way. It is named in migrations `v1`.
+//   KinuSandbox carries the `KinuSandbox` durable_objects binding (bound as
+//     `Sandbox`) and the `containers` entry of the same class.
+//   CodemodeEgress carries the loopback stub `codemodeEgress()` hands to
+//     `execute_tools` sandboxes (codemode-egress.ts).
+//   ContainerProxy carries the Sandbox SDK's outbound-interception fetchers.
+//   UserDO, MonitorDO, and ControlPlaneDO carry their durable_objects
+//     bindings.
+//   SupervisorRPC carries the composed supervisor entrypoint. Every hosted
+//     workspace's facets reach their host through it, including the git-network
+//     facet, so `git clone` refuses without it.
 //
-// SupervisorRPC is the load-bearing one: every hosted workspace's facets reach
-// their host through it. The fabric mints each facet's `env.SUPERVISOR` binding
-// from `ctxExports.SupervisorRPC` (adopted off the orchestrator's own `ctx` at
-// workspace boot), and the entrypoint resolves the hosting object through the
-// composed `OrchestratorAgent` namespace onto its mounted `supervisorOp`. Drop
-// this export and `git clone` refuses before it spawns anything — the failure
-// this composition exists to close. The six shims at least throw by name.
-// Measured 2026-08-18 the whole surface was 10.70 KiB gzip; the ~1,369 KiB that
-// dominated it was the NimbusSession subgraph, and dropping the class drops
-// most of that with it.
-export {
-  SupervisorRPC,
-  NimbusAssetsRPC,
-  NimbusLoaderRPC,
-  NimbusLoadedWorker,
-  NimbusLoadedEntrypoint,
-  NimbusDurableObjectNamespace,
-  NimbusDOStub,
-  CirrusHmrRPC,
-} from "@nimbus-sh/sdk/worker";
+// NOT EXPORTED, because no live path reads them. Kinu holds Nimbus as a
+// library in the orchestrator that owns each workspace (workspace-host.ts) and
+// never composes a Nimbus wrangler config, an inner worker, an inner Durable
+// Object class, or a Vite dev server. That leaves the asset binding
+// (NimbusAssetsRPC), the worker-loader binding (NimbusLoaderRPC), the inner
+// worker stubs (NimbusLoadedWorker, NimbusLoadedEntrypoint), the inner
+// namespace and stub (NimbusDurableObjectNamespace, NimbusDOStub), and the HMR
+// binding (CirrusHmrRPC) without a reader. Their lookups sit behind paths Kinu
+// never enters. The config bindings resolve in nimbus-wrangler.js. The worker
+// stubs and the inner stub resolve in the fabric's inner loader paths and the
+// facet manager Kinu leaves null. The HMR binding resolves in cirrus-real.js.
+// A missing export is an absent property, so removing one breaks only a path
+// that reads it.
+export { SupervisorRPC } from "@nimbus-sh/sdk/worker";
 
 /** The SPA and every other static asset, under the app's document policy. */
 async function serveApp(request: Request, env: Env): Promise<Response> {
@@ -252,8 +267,12 @@ async function authenticateCliAgentTicketRequest(
       request: new Request(url.toString(), request),
     };
   } catch (err) {
+    // Ticket problems answer above through `verified.ok`. A throw past that
+    // point is infrastructure (the UserDO call, the owner capability), so it
+    // answers 500. A 401 would send the owner to mint a fresh ticket for an
+    // outage.
     return new Response(JSON.stringify({ error: renderThrownChain({ cause: err }) }), {
-      status: 401,
+      status: 500,
       headers: { 'content-type': 'application/json' },
     });
   }
@@ -316,8 +335,8 @@ export default {
 
 function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
   const next = new Headers(h);
-  next.set('x-kinu-user-id', identity.userId);
-  if (identity.authTime) next.set('x-kinu-auth-time', String(identity.authTime));
+  next.set(USER_ID_HEADER, identity.userId);
+  if (identity.authTime) next.set(AUTH_TIME_HEADER, String(identity.authTime));
   // Always rewritten from the verified identity so a client can never smuggle
   // (or strip) the scope restriction the DO websocket boundary enforces.
   next.delete(CLI_SCOPES_HEADER);
@@ -562,7 +581,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   if (feedbackResp) return feedbackResp;
 
   // 8a. /api/client-errors — the browser's own render failures. Behind the auth
-  //     and CSRF gates for the same reason feedback is: the endpoint writes to
+  //     unguarded. Entered only with the Access identity step 2b verified, which
   //     the operator's log sink, and an unauthenticated writer would be a
   //     log-injection endpoint. The route refuses a null identity itself as
   //     well, so its guard does not depend on this call site.

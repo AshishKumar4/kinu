@@ -6,7 +6,7 @@
  * `command -v bun`, and on a miss installed Bun, did
  * `export PATH="$HOME/.bun/bin:$PATH"` **in its own process**, re-checked
  * there and printed "Kinu CLI is ready." Nothing persisted that directory to
- * any profile — only `$KINU_HOME/bin` was appended — so the next shell ran the
+ * any profile (only `$KINU_HOME/bin` was appended), so the next shell ran the
  * launcher, which re-derived Bun from whatever ambient PATH it happened to
  * have, missed the same Bun sitting on disk and answered "Bun is required."
  * One runtime, two resolutions, and the install transcript said the opposite
@@ -29,25 +29,26 @@
  */
 
 /**
- * The approved Bun. `tests/unit-install-script.test.ts` asserts this equals the
- * repository's own `packageManager` pin: two spellings of one version is how a
- * shipped installer drifts from the tree it installs.
+ * The approved Bun. `tests/unit-install-script.test.ts` reads it back out of
+ * the rendered resolution and asserts it equals the repository's own
+ * `packageManager` pin: two spellings of one version is how a shipped
+ * installer drifts from the tree it installs.
  */
-export const KINU_BUN_VERSION = '1.4.0';
+const KINU_BUN_VERSION = '1.4.0';
 
 /**
  * A `major.minor.patch` version as one comparable integer. Anything that is not
  * three dot-separated numbers is not comparable, and the shell half treats that
  * as incompatible rather than guessing.
  */
-export function bunVersionKey(version: string): number {
+function bunVersionKey(version: string): number {
   const parts = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
   if (!parts) throw new Error(`Not a major.minor.patch version: ${version}`);
   return Number(parts[1]) * 1_000_000 + Number(parts[2]) * 1_000 + Number(parts[3]);
 }
 
 /** Where the installer puts the Bun it installs, relative to `$KINU_HOME`. */
-export const KINU_MANAGED_BUN_SUBPATH = 'runtime/bin/bun';
+const KINU_MANAGED_BUN_SUBPATH = 'runtime/bin/bun';
 
 /**
  * The shared resolution, as shell. Requires `$KINU_HOME` to be set already and

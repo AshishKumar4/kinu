@@ -36,7 +36,7 @@ export interface ExecutorInfo {
  * `workspace` is the agent's filesystem and its Nimbus shell, the durable one,
  * so "Agent state" would undersell it into looking like a debug pane.
  */
-export const EXECUTOR_LABELS = {
+const EXECUTOR_LABELS = {
   laptop:    "Your PC",
   sandbox:   "Sandbox",
   workspace: "Workspace",
@@ -54,7 +54,7 @@ export function executorLabel(name: string): string {
  * execution-status block); what the user needs is what lives there and what
  * happens to files they put in it.
  */
-export const EXECUTOR_DESCRIPTIONS = {
+const EXECUTOR_DESCRIPTIONS = {
   workspace: "The agent's own files and shell — everything it makes lives here.",
   sandbox: "A full Linux container for builds, servers and heavy work, with live previews.",
   laptop: "Your own machine over the device tunnel — commands and files run there with your consent.",
@@ -68,7 +68,7 @@ export function executorDescription(name: string): string {
     ?? "An execution environment with its own filesystem.";
 }
 
-export const EXECUTOR_ORDER = ["laptop", "sandbox", "workspace", "parent"];
+const EXECUTOR_ORDER = ["laptop", "sandbox", "workspace", "parent"];
 
 export function executorSortKey(name: string): number {
   const idx = EXECUTOR_ORDER.indexOf(name);

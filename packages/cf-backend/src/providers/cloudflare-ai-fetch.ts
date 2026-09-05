@@ -44,7 +44,7 @@ export interface CloudflareAIFetchOptions {
  *  sentence, two decision points: the shared path answers with it when the
  *  consumer has no mapper, and {@link mapGatewayError} answers with it when no
  *  gateway-specific code claimed the failure first. */
-export const DEAD_CLOUDFLARE_LOGIN =
+const DEAD_CLOUDFLARE_LOGIN =
   'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.';
 
 export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof globalThis.fetch {
