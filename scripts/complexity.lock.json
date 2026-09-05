@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-04",
-  "files": 2016,
-  "functions": 52345,
+  "measuredAt": "2026-09-05",
+  "files": 2021,
+  "functions": 52428,
   "ceiling": 125,
   "line": 39,
   "inventory": [
@@ -146,12 +146,12 @@
       "complexity": 46
     },
     {
-      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
+      "key": "packages/devbox/tests/journal-daemon-runtime-matrix.ts#verifyManifest",
       "complexity": 45
     },
     {
-      "key": "packages/devbox/tests/journal-daemon-runtime-matrix.ts#verifyManifest",
-      "complexity": 45
+      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
+      "complexity": 44
     },
     {
       "key": "packages/core/src/tools/agents-tool.ts#runSwarmAction",
