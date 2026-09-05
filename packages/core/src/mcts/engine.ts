@@ -101,7 +101,14 @@ export async function runMCTS(
   // `config.costModel`, not `effective.costModel`: this is a host seam (like
   // `reportModelCall` and `onProgress` below), never a persisted knob, so a
   // resume must not be able to restore a stale one.
-  const estimate = estimateCost(effective.budget, N_BRANCHES, maxEvalLLMCalls, config.costModel?.());
+  // A resume prices what it will still spend — the REMAINING budget — never the
+  // persisted initial one. Spent iterations are gone; refusing on the full
+  // initial budget would turn every price rise after an eviction into a refusal
+  // of work the cap still funds. `effective` keeps the initial budget (the
+  // loop's phase still counts down from the checkpoint); only the gate reads
+  // the remainder.
+  const estimateBudget = resumed?.budget ?? effective.budget;
+  const estimate = estimateCost(estimateBudget, N_BRANCHES, maxEvalLLMCalls, config.costModel?.());
   if (estimate.estimatedUSD > maxCostUSD) {
     // The BASIS is named, not just the number. A refusal that says only
     // "$19.08 exceeds $10" is unactionable when the $19.08 came from a blended
@@ -110,7 +117,7 @@ export async function runMCTS(
     throw new Error(
       `Estimated cost $${estimate.estimatedUSD.toFixed(2)} exceeds limit $${maxCostUSD} `
       + `(${describeCostBasis(estimate.basis)}). `
-      + `Reduce budget (${effective.budget}) or branches (${N_BRANCHES}).`,
+      + `Reduce budget (${estimateBudget}) or branches (${N_BRANCHES}).`,
     );
   }
 

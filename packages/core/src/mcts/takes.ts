@@ -278,16 +278,23 @@ export function claimAlternateTakesForTurn(
   },
 ): number {
   void sql`DELETE FROM alternate_takes WHERE turn_id IS NULL AND created_at < ${input.startedAt}`;
-  const unclaimed = input.takeIds === undefined
-    ? sql<{ id: string }>`SELECT id FROM alternate_takes WHERE turn_id IS NULL`
-    : input.takeIds.map((id) => ({ id }));
+  if (input.takeIds === undefined) {
+    // One guarded statement: only rows still unclaimed move, and RETURNING
+    // counts exactly the rows this call claimed.
+    const claimed = sql<{ id: string }>`UPDATE alternate_takes
+        SET turn_id = ${input.turnId}, session_id = ${input.sessionId}
+        WHERE turn_id IS NULL RETURNING id`;
+    return claimed.length;
+  }
   let claimed = 0;
-  for (const row of unclaimed) {
+  for (const id of input.takeIds) {
     // Guarded on STILL being unclaimed: a recorded id another turn already
-    // claimed is not this turn's to take back.
-    void sql`UPDATE alternate_takes SET turn_id = ${input.turnId}, session_id = ${input.sessionId}
-        WHERE id = ${row.id} AND turn_id IS NULL`;
-    claimed += 1;
+    // claimed, or that never existed, claims nothing here. RETURNING counts
+    // only the row this call actually moved.
+    const moved = sql<{ id: string }>`UPDATE alternate_takes
+        SET turn_id = ${input.turnId}, session_id = ${input.sessionId}
+        WHERE id = ${id} AND turn_id IS NULL RETURNING id`;
+    claimed += moved.length;
   }
   return claimed;
 }
@@ -371,8 +378,13 @@ export function recordTakePick(
   // Branch-sourced candidates are synthetic (live answer vs head answer) —
   // there is no convergence record in search_nodes to re-point.
   if (changedAnswer && set.source === 'mcts') {
-    void sql`UPDATE search_nodes SET status = 'pruned' WHERE id = ${set.winnerNodeId}`;
-    void sql`UPDATE search_nodes SET status = 'terminal' WHERE id = ${chosen.nodeId}`;
+    // One statement: a crash between two updates could leave the previous
+    // winner pruned while the chosen sibling is still open — neither terminal.
+    void sql`UPDATE search_nodes SET status = CASE
+        WHEN id = ${set.winnerNodeId} THEN 'pruned'
+        WHEN id = ${chosen.nodeId} THEN 'terminal'
+        ELSE status END
+      WHERE id IN (${set.winnerNodeId}, ${chosen.nodeId})`;
   }
   void sql`UPDATE alternate_takes
       SET chosen_node_id = ${chosen.nodeId}, winner_node_id = ${chosen.nodeId}, picked_at = ${now}

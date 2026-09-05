@@ -16,7 +16,8 @@ import { createTestRuntime, createMockSession, makeSql, makeExecRaw, captureCons
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
+import { MctsSearchStore, initMctsSearchTable, persistableMCTSConfig } from '../src/mcts/search-store';
+import { recordNode } from '../src/mcts/record-node';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 
 function initTables(rt: AgentRuntime): void {
@@ -393,5 +394,62 @@ describe('the search ledger is created whole', () => {
        judge_samples_realised, created_at, updated_at)
       VALUES ('r1', ${TASK}, 'swarm', '', '{"branches":3}', 0, 3, 'running', 0, NULL, 1000, 1000)`;
     expect(() => store.findRunningSwarms(TASK)).toThrow('carries no budget');
+  });
+});
+
+/**
+ * The upfront spend gate prices what the resume will still spend, not what the
+ * search already spent. A search begun at budget 10 with 6 iterations behind it
+ * has 4 left; a price that refuses a fresh 10 but funds the remaining 4 must
+ * let the resume through. Pricing the persisted initial budget instead refuses
+ * based on iterations that already ran.
+ */
+describe('a resume prices its remaining budget, not its initial one', () => {
+  test('a resume whose remaining budget fits the cap runs its remainder', async () => {
+    const { rt, db } = createTestRuntime();
+    initTables(rt);
+    const sql = makeSql(db);
+    const store = new MctsSearchStore(sql);
+    const session = createMockSession();
+
+    // A search begun at budget 10, evicted with 6 iterations done and 4 left.
+    const rootId = 'resume-budget-root';
+    const rootMsgId = await recordNode(session, rt.storage.sql, {
+      nodeId: rootId,
+      parentNodeId: null,
+      parentMsgId: null,
+      rootId,
+      task: TASK,
+      action: '',
+      observation: TASK,
+      codeUsed: null,
+      depth: 0,
+    });
+    store.begin({
+      rootId, task: TASK, engine: 'mcts', rootMsgId,
+      config: persistableMCTSConfig({
+        budget: 10, branches: 1, judgeSamples: 1, maxEvalLLMCalls: 1, maxCostUSD: 0.5,
+      }),
+      budget: 10, now: 1_000,
+    });
+    store.checkpoint(rootId, 0, 6, 4, 2_000);
+
+    // $10-in/$50-out prices 10 fresh iterations at ~$0.92 (over the $0.50 cap)
+    // but the 4 remaining at ~$0.40 (under it). The resume must run those 4 —
+    // iterations 7 through 10 — rather than refuse on the spent 6.
+    let lastIteration = 0;
+    const result = await runMCTS(rt, createMockSession(), TASK, {
+      budget: 10, branches: 1, search: store,
+      costModel: () => ({ spec: 'anthropic/claude-fable-5', pricing: { input: 10, output: 50 } }),
+      onProgress: (event) => {
+        if (event.type === 'iteration-complete') lastIteration = event.iteration;
+      },
+    });
+
+    expect(result).toBeDefined();
+    // The resume spent ONLY its remainder: 6 done plus 4 more is 10, not a
+    // fresh 10 on top (which would end at 16).
+    expect(lastIteration).toBe(10);
+    expect(store.get(rootId)).toMatchObject({ status: 'converged', budget: 0 });
   });
 });

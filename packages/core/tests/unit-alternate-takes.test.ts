@@ -109,6 +109,20 @@ describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn
     expect(latestAlternateTakeSet(sql)).toBeNull();
   });
 
+  test('an explicit-id replay after the claim counts nothing and keeps the first turn', () => {
+    const { sql } = setup();
+    insertNode(sql, { id: 'w1', value: 0.9, text: 'a' });
+    insertNode(sql, { id: 'r1', value: 0.88, text: 'b' });
+    const id = captureAlternateTakes(sql, { rootId: 'r', task: 'the task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
+    if (!id) throw new Error('expected captureAlternateTakes to produce a take set');
+    expect(claimAlternateTakesForTurn(sql, { turnId: 'msg-1', sessionId: 'default', startedAt: 500 })).toBe(1);
+    // A replay names the already-claimed set; a missing id names nothing —
+    // neither moves a row, so both count zero and the first claim stands.
+    expect(claimAlternateTakesForTurn(sql, { turnId: 'msg-2', sessionId: 'default', startedAt: 500, takeIds: [id] })).toBe(0);
+    expect(claimAlternateTakesForTurn(sql, { turnId: 'msg-2', sessionId: 'default', startedAt: 500, takeIds: ['take-nope'] })).toBe(0);
+    expect(latestAlternateTakeSet(sql)).toMatchObject({ turnId: 'msg-1', sessionId: 'default' });
+  });
+
   test('purgeUnclaimedAlternateTakes drops unclaimed sets and keeps claimed ones', () => {
     const { sql } = setup();
     insertNode(sql, { id: 'w1', value: 0.9, text: 'a' });
@@ -180,6 +194,20 @@ describe('recordTakePick — the preference signal', () => {
     const set = capturedSet(sql);
     recordTakePick(sql, { takeId: set.id, nodeId: 'alt' });
     recordTakePick(sql, { takeId: set.id, nodeId: 'alt' });
+    expect(listTurnOutcomes(sql)).toHaveLength(1);
+  });
+
+  test('switching the pick moves the terminal marker to the newly chosen take', () => {
+    const { sql } = setup();
+    const set = capturedSet(sql);
+    recordTakePick(sql, { takeId: set.id, nodeId: 'alt' });
+    const switched = recordTakePick(sql, { takeId: set.id, nodeId: 'win' });
+    expect(switched).toMatchObject({ outcome: 'corrected', changedAnswer: true });
+    const win = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0]!;
+    const alt = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0]!;
+    expect(win.status).toBe('terminal');
+    expect(alt.status).toBe('pruned');
+    expect(latestAlternateTakeSet(sql)).toMatchObject({ chosenNodeId: 'win', winnerNodeId: 'win' });
     expect(listTurnOutcomes(sql)).toHaveLength(1);
   });
 
