@@ -27,6 +27,7 @@ import { resolve as resolveHostname } from 'node:dns/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
+import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 
 const REPO = new URL('..', import.meta.url).pathname;
 /** wrangler resolves `wrangler.jsonc`, `.dev.vars` and the account from its cwd. */
@@ -416,22 +417,40 @@ export async function servesWorker(hostname: string): Promise<Observation> {
   const url = `https://${hostname}/api/health`;
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
-    if (response.status >= 500) {
-      return unknown(`${url} answered ${String(response.status)} — reachable but unwell`);
-    }
-    const stamp = v.safeParse(HealthStamp, await response.json());
-    if (!stamp.success) {
-      return unknown(`${url} answered ${String(response.status)} without the health document — `
-        + 'the hostname resolves and something other than this Worker is answering');
-    }
-    return present(stamp.output.build === null
-      ? `${hostname} → a Kinu Worker, stampless (no full deploy has landed yet)`
-      : `${hostname} → a Kinu Worker, build ${stamp.output.build.sha}`);
+    return routeAnswer(url, response.status, v.parse(JsonValueSchema, await response.json()));
   } catch (error) {
     const code = error instanceof Error && 'code' in error ? String(error.code) : '';
     if (code === 'ENOTFOUND' || code === 'ECONNREFUSED') return absent;
     return unknown(`${url}: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+/** A Kinu Worker's own refusal of a hostname it does not know, the shape
+ *  `preview-proxy.ts` answers on the wildcard preview route. */
+const PreviewRefusal = v.object({ code: v.literal('NOT_A_PREVIEW') });
+
+/** What a hostname's answer to `GET /api/health` says about its own route.
+ *  Pure, so the classification is testable without the network. */
+export function routeAnswer(url: string, status: number, body: JsonValue): Observation {
+  if (status >= 500) return unknown(`${url} answered ${String(status)} — reachable but unwell`);
+  const stamp = v.safeParse(HealthStamp, body);
+  if (stamp.success) {
+    const hostname = new URL(url).hostname;
+    return present(stamp.output.build === null
+      ? `${hostname} → a Kinu Worker, stampless (no full deploy has landed yet)`
+      : `${hostname} → a Kinu Worker, build ${stamp.output.build.sha}`);
+  }
+  // Another Kinu Worker's wildcard preview route caught the hostname, which is
+  // only possible while this hostname's own, more specific route is gone: a
+  // positive observation of absence, and the state a deleted Worker leaves
+  // behind until the deploy that declares the route lands. Measured
+  // 2026-09-05 on staging.kinu.run against production's `*.kinu.run/*`.
+  if (v.safeParse(PreviewRefusal, body).success) {
+    return { state: 'absent', detail: `${url} answered ${String(status)} NOT_A_PREVIEW: the wildcard `
+      + 'preview route of another Kinu Worker caught the hostname, so its own route is not there' };
+  }
+  return unknown(`${url} answered ${String(status)} without the health document — `
+    + 'the hostname resolves and something other than this Worker is answering');
 }
 
 /** The label prepended to a suffix to ask a wildcard record whether it exists.

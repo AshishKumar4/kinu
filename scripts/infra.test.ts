@@ -19,7 +19,7 @@ import {
   requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
 import {
-  type AccessApplicationView, accessCovering, accessDestinations, accessOverreach,
+  type AccessApplicationView, accessCovering, accessDestinations, accessOverreach, routeAnswer,
 } from './infra-cloudflare';
 import {
   type Phase, type Row, PHASES, audit, observedRow, phaseFrom, supplyDrift, supplyRows,
@@ -502,6 +502,31 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
     // With no detail it falls back to the manual step, exactly as every other
     // resource does.
     expect(observedRow(scope, { state: 'absent' }).detail).toBe(manual);
+  });
+});
+
+describe('what a hostname says about its own route', () => {
+  const url = 'https://staging.kinu.run/api/health';
+
+  test('a health stamp is this Worker; a 5xx is wired and unwell', () => {
+    expect(routeAnswer(url, 200, { build: { sha: 'abc' } }).state).toBe('present');
+    expect(routeAnswer(url, 503, {}).state).toBe('unknown');
+  });
+
+  test('a Kinu preview refusal means the wildcard caught it, so this route is absent', () => {
+    // Measured 2026-09-05: with kinu-staging deleted, staging.kinu.run answered
+    // 404 {code:"NOT_A_PREVIEW"} from production's `*.kinu.run/*` route. That
+    // is a positive observation of the specific route being gone, which the
+    // bootstrap phase defers because the deploy creates it; an `unknown` here
+    // refused the deploy that would have restored the route.
+    const caught = routeAnswer(url, 404, { error: 'This host serves sandbox previews only.', code: 'NOT_A_PREVIEW' });
+    expect(caught.state).toBe('absent');
+    expect(caught.state === 'absent' ? caught.detail : '').toContain('NOT_A_PREVIEW');
+  });
+
+  test('any other document is something else answering, which stays unknown', () => {
+    expect(routeAnswer(url, 404, { error: 'not found' }).state).toBe('unknown');
+    expect(routeAnswer(url, 200, 'text').state).toBe('unknown');
   });
 });
 
