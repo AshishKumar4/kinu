@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DEPS_GATED_TOOLS, REPORT_TOOL, type ReportToolDeps } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
+import { orchestratorHarness } from './helpers/actor-harness';
 
 const source = (path: string) => readFileSync(join(import.meta.dir, '..', 'src', path), 'utf8');
 
@@ -174,31 +175,32 @@ describe('subordinate wiring', () => {
     expect(orchestrator).not.toContain('createTeamToolDeps({');
   });
 
-  test('a subordinate holds the parent workspace capability token, pushed never pulled', () => {
+  test('a subordinate holds the parent workspace capability token, pushed never pulled', async () => {
     const actor = source('actor-agent.ts');
-    const orchestrator = source('orchestrator.ts');
     const subordinate = source('subordinate-agent.ts');
 
     // One store, inherited by both actor classes: a facet's token IS the
     // parent's, so §B6 taint inheritance needs no per-facet bookkeeping.
-    expect(actor).toContain('protected async workspaceCapabilityToken(): Promise<string | null>');
+    expect(actor).toContain('protected workspaceCapabilityToken(): string | null');
     expect(actor).toContain('async installWorkspaceCapability(token: string)');
 
     // Push, both at spawn and whenever the parent's token is (re)issued.
-    expect(actor).toContain('const capabilityToken = await this.workspaceCapabilityToken();');
+    expect(actor).toContain('const capabilityToken = this.workspaceCapabilityToken();');
     expect(actor).toContain('await stub.installWorkspaceCapability(token);');
     expect(subordinate).toContain('if (input.capabilityToken) await this.installWorkspaceCapability(input.capabilityToken);');
 
     // Never pull: the bootstrap RPC any stub-holder can reach must not carry a
-    // secret, and nothing reads the token back out of a workspace DO.
-    const bootstrap = orchestrator.slice(
-      orchestrator.indexOf('async getSubordinateBootstrapIdentity()'),
-      orchestrator.indexOf('async receiveSubordinateEvent('),
-    );
-    expect(bootstrap).not.toContain('capabilityToken');
-    expect(actor).not.toMatch(/@callable\(\)\s*\n\s*async (installWorkspaceCapability|workspaceCapabilityToken)/);
+    // secret. Driven rather than read, because the earlier source slice was
+    // anchored on two members that had moved and passed over an empty string.
+    // The harness root holds `harness-capability`, so a leak would be in the
+    // answer itself.
+    const { agent } = orchestratorHarness();
+    const bootstrap = await agent.getSubordinateBootstrapIdentity();
+    expect(Object.keys(bootstrap).sort()).toEqual(['depth', 'model', 'ownerUserId', 'parentWorkspace']);
+    expect(JSON.stringify(bootstrap)).not.toContain('harness-capability');
+    expect(actor).not.toMatch(/@callable\(\)\s*\n\s*(async )?(installWorkspaceCapability|workspaceCapabilityToken)/);
     for (const file of ['actor-agent.ts', 'orchestrator.ts', 'subordinate-agent.ts']) {
-      expect(source(file)).not.toMatch(/async get\w*CapabilityToken\w*\(\)/);
+      expect(source(file)).not.toMatch(/get\w*CapabilityToken\w*\(\)/);
     }
   });
 

@@ -722,12 +722,9 @@ export abstract class ActorAgent extends Think<Env> {
    *  surface. There is deliberately no RPC that reads it back out — the token
    *  only ever travels parent -> facet, so nothing name-addressable can be
    *  asked for another workspace's secret. */
-  protected async workspaceCapabilityToken(): Promise<string | null> {
-    // A plain read. It used to create the table it selects from and swallow
-    // every failure as `null`, which is what made a missing `workspace_capability`
-    // read as "this workspace holds no token" — indistinguishable from the truth,
-    // and the reason nobody noticed the table had no owner. The constructor owns
-    // it now (`initCapabilitySchema`), so a failure here is a real failure.
+  protected workspaceCapabilityToken(): string | null {
+    // A plain read; the constructor owns the table (`initCapabilitySchema`),
+    // so a failure here is a real failure and never reads as "no token".
     const rows = this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`;
     return rows[0]?.token || null;
   }
@@ -736,7 +733,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  Safe to hand out — it is what lets the owner's UserDO detect that the two
    *  sides disagree without either of them exchanging the secret. */
   protected async workspaceCapabilityHash(): Promise<string | null> {
-    const token = await this.workspaceCapabilityToken();
+    const token = this.workspaceCapabilityToken();
     return token ? sha256Hex(token) : null;
   }
 
@@ -806,7 +803,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  Idempotent by construction — the push is the same one `installWorkspaceCapability`
    *  runs, and the token is the same one the registry already committed. */
   async repushWorkspaceCapability(): Promise<{ missed: number }> {
-    const token = await this.workspaceCapabilityToken();
+    const token = this.workspaceCapabilityToken();
     if (!token) return { missed: 0 };
     const result = await this.installWorkspaceCapability(token);
     return { missed: result.missed };
@@ -1190,7 +1187,7 @@ export abstract class ActorAgent extends Think<Env> {
         const ownerUserId = this.getOwnerUserId();
         if (!ownerUserId) throw new Error('Agent has no owner yet — subordinate creation needs an owned workspace.');
         const stub = await this.subAgent(facet, input.name);
-        const capabilityToken = await this.workspaceCapabilityToken();
+        const capabilityToken = this.workspaceCapabilityToken();
         try {
           const identity = {
             name: input.name,
@@ -1551,7 +1548,7 @@ export abstract class ActorAgent extends Think<Env> {
     this._cliCwd = null;
     const activeTurnId = this._turnCheckpoint?.turnId;
     if (activeTurnId) {
-      this.ctx.storage.sql.exec('DELETE FROM active_durable_turn WHERE turn_id = ?', activeTurnId);
+      void this.sql`DELETE FROM active_durable_turn WHERE turn_id = ${activeTurnId}`;
     }
     // Order matters: the flag is already clear, so the leftover steer enqueues
     // as a turn of its own instead of buffering for a turn that is over.
@@ -1672,9 +1669,6 @@ export abstract class ActorAgent extends Think<Env> {
     }
   }
 
-  /** The one place a steer's lifecycle reaches connected surfaces. Written as a
-   *  literal so the broadcast-wiring gate can see the channel it must prove has
-   *  a consumer. */
   /** The reconnect snapshot reads SQL, not the RAM drain: RAM vanishes on an
    *  eviction while these rows are the acknowledged steers still awaiting a
    *  step boundary. */
@@ -1684,6 +1678,9 @@ export abstract class ActorAgent extends Think<Env> {
       .map((row) => ({ ...row, state: 'queued' as const, atStep: null }));
   }
 
+  /** The one place a steer's lifecycle reaches connected surfaces. Written as a
+   *  literal so the broadcast-wiring gate can see the channel it must prove has
+   *  a consumer. */
   private broadcastSteerStatus(detail: SteerStatusDetail): void {
     this.broadcast(JSON.stringify({ type: 'steer_status', ...detail } satisfies SteerStatusEvent));
   }
@@ -1741,7 +1738,7 @@ export abstract class ActorAgent extends Think<Env> {
                   && (queued.durable.status === 'pending' || queued.durable.status === 'running'
                     || queued.durable.status === 'completed');
                 if (queued.status !== 'queued' && !duplicateAdmission) continue;
-                for (const row of group) this.ctx.storage.sql.exec('DELETE FROM pending_steers WHERE id = ?', row.id);
+                for (const row of group) void this.sql`DELETE FROM pending_steers WHERE id = ${row.id}`;
               } finally {
                 this._rerunningSteerKeys.delete(idempotencyKey);
               }
@@ -2456,12 +2453,6 @@ export abstract class ActorAgent extends Think<Env> {
     this.compactionState.armForceCompaction(this.name);
   }
 
-  /** Better-compact is THE default (and only) compaction path: the staged
-   *  pruning ladder runs as a transformContext extension once per turn
-   *  assembly, replaying its persisted plan byte-stably until the context
-   *  regrows. Registered unconditionally at construction; every port
-   *  dereferences `this` lazily, so nothing heavy (the CF runtime, the model)
-   *  is built before it is first needed. */
   /** One compaction logger for both compaction entries — the per-turn extension and the
    *  swarm shared-prefix ladder — so the two cannot drift into different outcome names. */
   private readonly compactionLogger: CompactionLogger = {
@@ -2480,6 +2471,12 @@ export abstract class ActorAgent extends Think<Env> {
     },
   };
 
+  /** Better-compact is THE default (and only) compaction path: the staged
+   *  pruning ladder runs as a transformContext extension once per turn
+   *  assembly, replaying its persisted plan byte-stably until the context
+   *  regrows. Registered unconditionally at construction; every port
+   *  dereferences `this` lazily, so nothing heavy (the CF runtime, the model)
+   *  is built before it is first needed. */
   private registerCompactionExtension(): void {
     this.extensions.register(createCompactionExtension({
       ports: {
@@ -2961,7 +2958,7 @@ export abstract class ActorAgent extends Think<Env> {
           // workspace that has not been issued a capability token yet reaches
           // nothing, and that is an ordinary state rather than a failure to report.
           // Asked rather than caught, so a real failure reading one still travels.
-          if (!(await this.workspaceCapabilityToken())) return;
+          if (!this.workspaceCapabilityToken()) return;
           const { stub, caller } = await this.userHub();
           await stub.userMcp_warmConnections(caller);
         });
@@ -2977,42 +2974,6 @@ export abstract class ActorAgent extends Think<Env> {
     })();
   }
 
-  /**
-   * The advisor lane: one review of the turn that just ended.
-   *
-   * Detached for the same reason the evolution lane is — it is a model call on
-   * a path the turn queue is holding — and durable for the same reason: a
-   * deploy or an alarm-boundary reset used to take the review with it, leaving
-   * no row and no event, so a turn silently got no advice and nothing said so.
-   * A reviewer that FAILS leaves a turn with no advice, never a failed turn, so
-   * nothing here can reach the caller.
-   *
-   * The stash carries the WHOLE review, not a pointer to it: the completed
-   * turn, the tool names it ran with, the severity floor and the dedupe window.
-   * That snapshot is what makes {@link recoverAdvisorLane} a re-drive rather
-   * than an obituary — a lane interrupted near a deploy used to terminalize as
-   * lost, so a turn that ended at the wrong moment silently got no advice.
-   * Nothing is truncated to fit: `AdvisorRecoverySnapshotSchema` mirrors the
-   * lane's own deps through the same `CompletedTurnSchema` that the unified
-   * `completed_turns` table already persists a turn with, so a turn that could
-   * not be snapshotted here could not have been stored there either — the size
-   * policy lives upstream where the turn's parts are clamped, and a second
-   * weaker copy of it here would be the bound nobody measured.
-   *
-   * Both reads off `_lastTurnOpts` happen BEFORE the fiber starts. `runFiber`
-   * awaits `keepAlive()` before it runs the body, so reading them inside would
-   * be reading them after an await — which is how a later turn's tool set
-   * bleeds into this turn's review.
-   *
-   * Governed off the TURN's labels rather than the governor's active scope, the
-   * same way the engine's own review is: this runs after the turn ended, when
-   * the active scope is either empty or some later turn's, and debiting a
-   * mission for work it did not cause is worse than not debiting at all.
-   *
-   * There is no completion gate on this backend — it is the one-shot CLI
-   * surface's mechanism — so `gateOpen` is false here by construction rather
-   * than by omission.
-   */
   /** The advisor's whole input, read while the turn is still in memory. Recorded
    *  by the caller that OWES the review, because `_lastTurnOpts` is null on a
    *  cold activation and an advisor that re-derived `reachable` there would
@@ -3029,18 +2990,43 @@ export abstract class ActorAgent extends Think<Env> {
     };
   }
 
+  private readonly _advisorReviewTasks = new Map<string, AsyncTaskOwner>();
+
   /**
-   * Start the advisor review on its own durable lane, and resolve once that lane
-   * has CHECKPOINTED — not once the review is done.
+   * The advisor lane: one review of the turn that just ended, started on its
+   * own durable lane. Resolves once that lane has CHECKPOINTED, not once the
+   * review is done.
+   *
+   * Detached because it is a model call on a path the turn queue is holding,
+   * and durable because a deploy or an alarm-boundary reset would otherwise
+   * take the review with it, leaving no row and no event. A reviewer that
+   * FAILS leaves a turn with no advice, never a failed turn.
    *
    * The caller is a terminal effect, and what it owes is a recoverable review
    * rather than a finished one. Resolving at the checkpoint is what makes those
    * the same thing: before it, an eviction between the effect's completion and
-   * the fiber's first tick left recovery reading a null snapshot and terminalizing
-   * a review that never ran. After it, the fiber is re-drivable on its own.
+   * the fiber's first tick left recovery reading a null snapshot and
+   * terminalizing a review that never ran. After it, the fiber is re-drivable
+   * on its own.
+   *
+   * The stash carries the WHOLE review: the completed turn, the tool names it
+   * ran with, the severity floor and the dedupe window. That snapshot is what
+   * makes {@link recoverAdvisorLane} a re-drive rather than an obituary.
+   * `AdvisorRecoverySnapshotSchema` mirrors the lane's own deps through the same
+   * `CompletedTurnSchema` the `completed_turns` table persists a turn with, so
+   * the size policy lives upstream where the turn's parts are clamped.
+   *
+   * Both reads off `_lastTurnOpts` happen BEFORE the fiber starts. `runFiber`
+   * awaits `keepAlive()` before it runs the body, so reading them inside would
+   * read them after an await, which is how a later turn's tool set bleeds into
+   * this turn's review.
+   *
+   * Governed off the TURN's labels rather than the governor's active scope, as
+   * the engine's own review is: this runs after the turn ended, when the active
+   * scope is either empty or some later turn's. There is no completion gate on
+   * this backend (it is the one-shot CLI surface's mechanism), so `gateOpen` is
+   * false here by construction.
    */
-  private readonly _advisorReviewTasks = new Map<string, AsyncTaskOwner>();
-
   protected reviewTurnInBackground(turn: CompletedTurn, recorded?: AdvisorRecoverySnapshot): Promise<void> {
     if (this.rt.advisorLlm === undefined || !this.config.getAdvisorEnabled()) return Promise.resolve();
     // ONE lane per turn, ever STARTED. A terminal replay arriving after the
@@ -3675,7 +3661,7 @@ export abstract class ActorAgent extends Think<Env> {
   //   - TriggerRegistry durable subscriptions (webhooks, timers, watches)
   //   - ReplyChannelStore  durable reply-channel rows + dispatchers
   // Spec: docs/ARCHITECTURE.md — "Events and ingress"
-  private _eventLog: import('@kinu.run/core').EventLog | null = null;
+  private _eventLog: EventLog | null = null;
   protected get eventLog(): EventLog {
     if (!this._eventLog) {
       this._eventLog = new EventLog(this.ctx.storage.sql);
@@ -4062,11 +4048,11 @@ export abstract class ActorAgent extends Think<Env> {
   protected _currentRunId = '';
 
   // ── Skills (turn-scoped) ───────────────────────────────────────
-  /** Resolved active set for the current turn. Built in beforeTurn, read by
-   *  the system-prompt assembly via TurnConfig.system override. */
   /** Immutable role/tier/tool profile resolved once for the active turn. */
   private _turnProfileInputs: ProfileAuthorityInputs | null = null;
   private _turnProfile: ResolvedTurnProfile | null = null;
+  /** Resolved active skill set for the current turn. Built in beforeTurn, read
+   *  by the per-step dynamic context and the turn-local tail. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
   /** Lazy SkillsVfs shim around rt.storage.vfs — built once, reused. */
   private _skillsVfs: SkillsVfs | null = null;
@@ -4094,9 +4080,9 @@ export abstract class ActorAgent extends Think<Env> {
   /** Bound once — a facet replaces this with the root authority snapshot. */
   private _instructionTrust: InstructionTrustResolver | null = null;
   protected instructionTrust(): InstructionTrustResolver {
-    if (this._workspaceInstructionApprovals !== null) {
-      return (path, content) =>
-        trustOfInstructionApprovals(this._workspaceInstructionApprovals!, path, content);
+    const approvals = this._workspaceInstructionApprovals;
+    if (approvals !== null) {
+      return (path, content) => trustOfInstructionApprovals(approvals, path, content);
     }
     const store = this.instructionApprovals();
     this._instructionTrust ??= store.trustOf.bind(store);
@@ -4130,7 +4116,7 @@ export abstract class ActorAgent extends Think<Env> {
           this.rt.storage.vfs,
           limits,
           () => 'unverified',
-          this.rt.executionRouter?.getProvider('sandbox') ?? undefined,
+          this.rt.executionRouter?.getProvider('sandbox'),
         );
         const entries = await snapshotExistingInstructions({
           agentsMd,
@@ -4203,7 +4189,7 @@ export abstract class ActorAgent extends Think<Env> {
       this.rt.storage.vfs,
       { contextWindow: this.sessionContextWindow(), modelOutputLimit: this.modelCatalog.modelOutputLimit() },
       this.instructionTrust(),
-      this.rt.executionRouter?.getProvider('sandbox') ?? undefined,
+      this.rt.executionRouter?.getProvider('sandbox'),
     );
   }
 
@@ -4614,7 +4600,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  Throws rather than falling back when no token exists — an unclaimed
    *  workspace reaches nothing. */
   protected async userCaller(): Promise<UserCaller> {
-    const workspaceToken = await this.workspaceCapabilityToken();
+    const workspaceToken = this.workspaceCapabilityToken();
     if (!workspaceToken) {
       throw new Error('This workspace has not been issued a capability token yet. Open it through the authenticated app or CLI first.');
     }
@@ -5226,7 +5212,7 @@ export abstract class ActorAgent extends Think<Env> {
       host: this,
       identity: async () => ({
         ownerUserId,
-        capabilityToken: await this.workspaceCapabilityToken(),
+        capabilityToken: this.workspaceCapabilityToken(),
         // The REGISTERED workspace, never this actor's own DO name — the file
         // plane is keyed by it, so a self-named head derives a second, empty
         // filesystem (unit-head-fork.test.ts).
@@ -5277,7 +5263,7 @@ export abstract class ActorAgent extends Think<Env> {
       try {
         const node = await spawnNodeFacet(this, spec, {
           ownerUserId,
-          capabilityToken: await this.workspaceCapabilityToken(),
+          capabilityToken: this.workspaceCapabilityToken(),
           // The PARENT's workspace, never this facet's own name: the file plane
           // is keyed by it, so a self-named node would derive a second, empty
           // filesystem — the regression unit-head-fork.test.ts pins.
@@ -5463,7 +5449,7 @@ export abstract class ActorAgent extends Think<Env> {
     // no longer dispatch just spends context on calls that will be refused.
     // Asked rather than caught: userCaller() throws only when no token has been
     // issued, and a real failure reading one must not silently empty the surface.
-    if (!(await this.workspaceCapabilityToken())) return {};
+    if (!this.workspaceCapabilityToken()) return {};
     const caller = await this.userCaller();
 
     try {
@@ -5656,13 +5642,10 @@ export abstract class ActorAgent extends Think<Env> {
     // Tag this turn for device-side file checkpoints: the user message id is
     // what the web turn card holds, so restore-by-turn resolves directly.
     {
-      const userMessages = this.messages.filter((m) => m.role === 'user');
-      const lastUserId = userMessages[userMessages.length - 1]?.id;
+      const lastUserId = this.messages.filter((m) => m.role === 'user').at(-1)?.id;
       this._turnCheckpoint = { turnId: lastUserId ?? this._currentRunId, sessionId: 'default' };
-      this.ctx.storage.sql.exec(
-        'INSERT INTO active_durable_turn (id, turn_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET turn_id = excluded.turn_id',
-        this._turnCheckpoint.turnId,
-      );
+      void this.sql`INSERT INTO active_durable_turn (id, turn_id) VALUES (1, ${this._turnCheckpoint.turnId})
+        ON CONFLICT(id) DO UPDATE SET turn_id = excluded.turn_id`;
       // A reset loses UserSteerDrain RAM, never the acknowledged rows. This turn
       // may restore only its OWN steers; rows from a finished turn are handled by
       // terminal leftover routing, never spliced into a later conversation.
@@ -5783,7 +5766,7 @@ export abstract class ActorAgent extends Think<Env> {
         modelOutputLimit: this.modelCatalog.modelOutputLimit(),
       },
       trust,
-      this.rt.executionRouter?.getProvider('sandbox') ?? undefined,
+      this.rt.executionRouter?.getProvider('sandbox'),
     );
 
     // The per-turn system prompt is ALWAYS assembled here (TurnConfig.system
@@ -6157,7 +6140,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  — a signal's `kinuEvent` / `signalId` / mission labels, or nothing at
    *  all for a chat turn the operator typed. */
   protected turnUserMetadata(): JsonObject | undefined {
-    const source = this.messages.filter(m => m.role === 'user').at(-1);
+    const source = this.messages.filter((m) => m.role === 'user').at(-1);
     if (!source) return undefined;
     const parsed = v.safeParse(JsonObjectSchema, source.metadata);
     return parsed.success ? parsed.output : undefined;

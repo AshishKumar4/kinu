@@ -163,7 +163,7 @@ export interface ActorRuntimeIdentity {
   scaffoldPath: string;
   /** The workspace capability token this actor presents to the UserDO — its
    *  own for a workspace DO, its parent's for a facet. Null until claimed. */
-  capabilityToken(): Promise<string | null>;
+  capabilityToken(): string | null;
 }
 
 interface RuntimeUserDOClient extends UserCredentialClient, DeviceHubClient {
@@ -223,7 +223,7 @@ interface EgressVaultClient {
 /** This actor's identity for a privileged UserDO call. Rejects — rather than
  *  degrading to some weaker principal — when the workspace has no token. */
 async function userCallerFor(actor: ActorRuntimeIdentity): Promise<UserCaller> {
-  const workspaceToken = await actor.capabilityToken();
+  const workspaceToken = actor.capabilityToken();
   if (!workspaceToken) throw new Error('This workspace has not been issued a capability token yet.');
   return { workspaceToken };
 }
@@ -1009,7 +1009,7 @@ function createFacetSpawner(agent: AgentHost, env: Env, actor: ActorRuntimeIdent
     try {
       return await spawnBranchFacet(agent, branchId, {
         ownerUserId: actor.ownerUserId(),
-        capabilityToken: await actor.capabilityToken(),
+        capabilityToken: actor.capabilityToken(),
         // Without this a branch has no parent stub, so it cannot reach the
         // profile that decides its tier — and `mcts` is `invocation`-routed, so
         // every branch ran the account default at an effort nothing chose while

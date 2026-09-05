@@ -442,7 +442,7 @@ export class ExplorationAgent extends Agent<Env> {
       workspaceName,
       shellId: `${scope}:${this.name}`,
       scaffoldPath: `.kinu/${scope}s/${encodeURIComponent(this.name)}/scaffold/agent.js`,
-      capabilityToken: async () => this.identity.capabilityToken(),
+      capabilityToken: () => this.identity.capabilityToken(),
     }, runtimeHooks);
   }
 

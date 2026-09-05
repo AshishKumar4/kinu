@@ -1856,7 +1856,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   protected override async titlingRefusal(): Promise<string | null> {
     if (!this.getOwnerUserId()) return 'this workspace has no owner to hold its title';
-    if (!(await this.workspaceCapabilityToken())) {
+    if (!this.workspaceCapabilityToken()) {
       return 'this workspace holds no capability token, so its title registry is unreachable';
     }
     return null;
