@@ -21,7 +21,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_CANCEL_VERSION_REFUSAL,
+  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_CANCEL_VERSION_REFUSAL, DEVICE_EXEC_ACK_METHOD,
+  DEVICE_PTY_CLOSE, DEVICE_PTY_EXIT, DEVICE_PTY_INPUT, DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_OUTPUT, DEVICE_PTY_RESIZE,
   DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
   type DeviceStatus, type DeviceTransport, type TunnelSocket,
 } from '@kinu.run/core';
@@ -70,6 +71,12 @@ const PcAgentModuleSchema = v.object({
   CANCEL_METHOD: v.string(),
   CANCEL_PROTOCOL: v.number(),
   EXEC_ACK_METHOD: v.string(),
+  PTY_OPEN_METHOD: v.string(),
+  PTY_INPUT_FRAME: v.string(),
+  PTY_RESIZE_FRAME: v.string(),
+  PTY_CLOSE_FRAME: v.string(),
+  PTY_OUTPUT_FRAME: v.string(),
+  PTY_EXIT_FRAME: v.string(),
   requestDirectory: v.function(),
   supervisionSupported: v.function(),
   waitForFile: v.function(),
@@ -298,6 +305,18 @@ describe('pc-agent command cancellation', () => {
   test('the daemon and core name the same cancellation protocol', () => {
     expect(pcAgent.CANCEL_METHOD).toBe(DEVICE_CANCEL_METHOD);
     expect(pcAgent.CANCEL_PROTOCOL).toBe(DEVICE_CANCEL_PROTOCOL);
+    expect(pcAgent.EXEC_ACK_METHOD).toBe(DEVICE_EXEC_ACK_METHOD);
+  });
+
+  // The daemon ships dependency-free and cannot import these, so a rename on
+  // either side of the tunnel has only this test to go red.
+  test('the daemon and core name the same terminal protocol', () => {
+    expect(pcAgent.PTY_OPEN_METHOD).toBe(DEVICE_PTY_OPEN_METHOD);
+    expect(pcAgent.PTY_INPUT_FRAME).toBe(DEVICE_PTY_INPUT);
+    expect(pcAgent.PTY_RESIZE_FRAME).toBe(DEVICE_PTY_RESIZE);
+    expect(pcAgent.PTY_CLOSE_FRAME).toBe(DEVICE_PTY_CLOSE);
+    expect(pcAgent.PTY_OUTPUT_FRAME).toBe(DEVICE_PTY_OUTPUT);
+    expect(pcAgent.PTY_EXIT_FRAME).toBe(DEVICE_PTY_EXIT);
   });
 
   test('cancellation waits for the owned command group to die', async () => {

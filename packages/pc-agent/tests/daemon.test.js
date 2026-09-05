@@ -1270,4 +1270,62 @@ describe('daemon process under Bun against a local hub', () => {
   // Two daemon spawns, one exec, and the supervisor's 1 s orphan poll, each
   // with its own named wait inside.
   }, 60_000);
+
+  // A signal never reaches the socket's close handler, which is where the
+  // terminals were hung up. When the daemon's pty master closes, the kernel
+  // hangs up the shell, and the shell passes the hangup on to the jobs it
+  // still owns. A job the shell has disowned sits in a process group of its
+  // own with nobody left to pass it on, so a signalled restart left it
+  // running with nothing left to reach it.
+  test('a signalled daemon hangs up every job in its terminals before it exits', async () => {
+    // `sessionGroups` sweeps the whole session on Linux only; a Mac signals the
+    // shell's own group and says so.
+    if (process.platform !== 'linux') return;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-signal-'));
+    let job = 0;
+    try {
+      const hub = startFakeHub();
+      try {
+        makeConfig(root, hub.origin);
+        const { child, logPath } = spawnDaemon(root);
+        try {
+          const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
+          expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).not.toBeNull();
+          hub.socket().send(JSON.stringify({ id: 'rpc-ptysignal0-1', method: 'ptyOpen', params: ['sig', 80, 24] }));
+          const opened = await untilHub(() => hub.frames.find((f) => f.id === 'rpc-ptysignal0-1'));
+          if (!opened) throw new Error(`no ptyOpen reply: log says ${daemonLog()}`);
+          expect(opened.result.pid).toBeGreaterThan(0);
+
+          const output = () => hub.frames
+            .filter((f) => f.type === 'PTY_OUT' && f.session === 'sig')
+            .map((f) => Buffer.from(f.data, 'base64').toString('utf-8'))
+            .join('');
+          hub.socket().send(JSON.stringify({
+            type: 'PTY_IN',
+            session: 'sig',
+            data: Buffer.from('sleep 600 & job=$!; disown $job; echo started $job\r').toString('base64'),
+          }));
+          const started = await untilHub(() => /started (\d+)/.exec(output()));
+          if (!started) throw new Error(`the shell never started the job: log says ${daemonLog()}`);
+          job = Number(started[1]);
+          expect(processAlive(job)).toBe(true);
+
+          child.kill('SIGTERM');
+          await child.exited;
+          expect(await until(() => !processAlive(job), 10_000)).toBe(true);
+          expect(daemonLog()).toContain('device.terminals_closed_with_daemon sig');
+        } finally {
+          child.kill('SIGTERM');
+          await child.exited;
+        }
+      } finally {
+        await hub.close();
+      }
+    } finally {
+      if (job > 0) tolerate(() => process.kill(job, 'SIGKILL'), 'esrch');
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  // One daemon spawn, one terminal, and the shell's own prompt inside it,
+  // each with its own named wait.
+  }, 60_000);
 });

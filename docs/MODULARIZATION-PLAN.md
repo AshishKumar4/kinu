@@ -134,11 +134,14 @@ One, declared and dev-only: `core` lists `@kinu.run/test-utils` under
 5. **A re-export crosses a seam.** `cli-backend/src/model-resolver.ts:104-106`
    forwards `CLOUD_PROXY_PROVIDER_IDS` and `cloudProxyBaseURL` from core;
    `cli/src/config.ts:31-32` takes them from `cli-backend`.
-6. **The device wire protocol is written twice with no gate.**
-   `pc-agent/src/index.js:31,98,119,693` declares `'ROTATE'`, `'execCancel'`,
-   `'ptyOpen'`, `'execAck'`; `core/src/execution/device-tunnel.ts:126,195,199,215`
-   declares the same four. The daemon is "one dependency-free file"
-   (`index.js:30`) shipped as text (`cli/src/device-connect.ts:26-27`). No test reads both.
+6. **The device wire protocol is written twice, and a test reads both.**
+   `pc-agent/src/index.js` declares `'ROTATE'`, `'execCancel'`, `'execAck'`,
+   `'ptyOpen'` and the five `PTY_*` frames; `core/src/execution/device-tunnel.ts`
+   declares the same names. The daemon is "one dependency-free file"
+   (`index.js:30`) shipped as text (`cli/src/device-connect.ts:26-27`), so it
+   cannot import them. `cf-backend/tests/unit-pc-agent-exec.test.ts` pins the
+   cancel, ack and terminal names by value and `unit-device-hub.test.ts` pins
+   the rotation pair; a rename on one side goes red there.
 7. **Core carries four workarounds for a package that sits above it.**
    `orchestrator/turn-context.ts:110-114` and `orchestrator/turn-lifecycle.ts:372-376`
    declare structural stand-ins for `compaction`'s store; `state/agent-stores.ts:18-20`

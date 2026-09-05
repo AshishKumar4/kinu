@@ -2104,10 +2104,23 @@ function main() {
     return;
   }
   process.on('exit', () => { releaseMachine(); });
+  // The terminals this daemon holds. Live state, never durable: a terminal
+  // is something a person is watching, so one whose socket is gone has
+  // nobody to draw for.
+  const sessions = pty.createSessions({ log });
   // A signalled daemon terminates without running exit hooks, so the machine
-  // would stay claimed by a dead pid until the next daemon reaped it.
+  // would stay claimed by a dead pid until the next daemon reaped it. The
+  // terminals go first: a signal never reaches the socket's close handler,
+  // and the kernel's own hangup on the closing pty reaches the shell and the
+  // jobs it still owns, not a job it disowned into a group of its own. The
+  // commands stay: a supervisor outlives this daemon by design and the next
+  // one reconciles it.
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
-    process.on(signal, () => { process.exit(0); });
+    process.on(signal, () => {
+      const ended = sessions.closeAll();
+      if (ended.length > 0) log('device.terminals_closed_with_daemon', ended.join(' '));
+      process.exit(0);
+    });
   }
 
   const cfg = readDeviceConfig(CONFIG_PATH);
@@ -2116,10 +2129,7 @@ function main() {
   const WS_ORIGIN = HTTP_ORIGIN.replace(/^http/, 'ws');
   const ctx = {
     checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }),
-    // The terminals this daemon holds. Live state, never durable: a terminal
-    // is something a person is watching, so one whose socket is gone has
-    // nobody to draw for.
-    sessions: pty.createSessions({ log }),
+    sessions,
   };
 
   // The daemon's one WebSocket: the runtime's global. Kinu launches this
