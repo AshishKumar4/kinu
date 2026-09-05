@@ -455,17 +455,24 @@ holds `search_nodes` and `head_journal`; `hasSearchTree` and
 `hasNodeTranscripts` stay independent. `fork-runs.ts` unions root ids and
 `exploration-canvas.ts` composes both halves.
 
+A recursive split writes its heads into the same root journal, each at its own
+depth. Only the root records the run and caches its synthesis; a nested
+synthesis returns to the head that asked for it and settles nothing. The CLI
+journals every depth in the root as well, so a child's report survives the
+release of its private scratch. Implemented by `heads/controller.ts`.
+
 `mcts_search_runs` under `engine: 'swarm'` persists actual budget, branching
 factor, depth cap, mode, and judge clamp. A clamp disclosed once but not stored
 is an *Accepted and ignored* measurement.
 
 ## Isolation
 
-A host-provisioned node owns `/home/node-<id>` in one global view, mode `0o755`,
-and `/tmp/node-<id>`, mode `0o700`. Both are owned by the node's own uid.
-`agentHomeLayout` is the one table that says so, and each backend applies it:
-the local backend through its uid-0 `SqliteVFS` view, the hosted backend through
-the session's own coreutils run as uid 0.
+A host-provisioned facet owns its home in one global view, mode `0o755`, and its
+tmp, mode `0o700`. Both are owned by the facet's own uid. The kind rides in the
+name: `/home/node-<id>`, `/home/sub-<slug>`, `/home/head-<id>`, so one namespace
+holds every facet kind. `agentHomeLayout` is the one table that says so, and
+each backend applies it: the local backend through its uid-0 `SqliteVFS` view,
+the hosted backend through the session's own coreutils run as uid 0.
 
 Both backends report `private-home`. Both credential both planes, and both are
 required. A node reaches the tree with commands and with file tools. A file plane
@@ -504,18 +511,20 @@ needs, reset idempotence, and cleanup that removes bytes and keeps the uid row.
 Local dispatch plus absent-host coverage: 3 tests, 0 fail, measured 2026-08-19 in
 `packages/cli-backend/tests/swarm-node-home.test.ts`.
 
-One substrate limit: a hosted session has no `confinePrincipal`.
-`confinePrincipal` is a `SqliteVFS` method with no RPC, so `TMPDIR` points
-at `/tmp/node-<id>` and a command that hardcodes `/tmp/x` there lands in the
-shared `/tmp`. In this isolate the rewrite exists, so a bare `/tmp` write is
-private.
+A bare `/tmp` resolves to the facet's own tmp on both backends. The hosted
+provisioner runs on the object that owns the workspace and registers the rewrite
+on that object's own principal registry, so a command that hardcodes `/tmp/x`
+stays private, and a rename inside that `/tmp` resolves through the same
+registry.
 
 `shared-origin-plane` remains the honest state of a runtime with no provisioner:
 a harness runtime, or a plane bound to a physical directory, which has no
-principal registry. Grader and merge-back need the home, hence `0o755` and not
-`0o700`. One view preserves the user's repository. Exactly two isolation states
-exist; "partially isolated" cannot guide behaviour. Shared-plane runs grade
-reported candidates, never diffs with no concurrent-writer owner.
+principal registry. A directory-bound facet still runs its commands with `HOME`
+and `TMPDIR` in its own scratch under the workspace state, and the tree stays
+shared. Grader and merge-back need the home, hence `0o755` and not `0o700`. One
+view preserves the user's repository. Exactly two isolation states exist;
+"partially isolated" cannot guide behaviour. Shared-plane runs grade reported
+candidates, never diffs with no concurrent-writer owner.
 
 Malformed credentials fall through to the session user, so the boundary returns
 the substrate credential type, and `NodeWorkspace` is a union: a provisioned node
@@ -568,6 +577,7 @@ callers cannot choose one. The mapping is total. `best` applies its winner.
 `archive` and `front` rebase in dependency order. `merge` synthesises reports.
 Conflict merge-node spawning is outside it because conflict is discovered while
 applying diffs.
+
 **Dependency order.** Multi-member settles use dependency order, never tree
 order. A dropped edge refuses rather than degrading.
 
