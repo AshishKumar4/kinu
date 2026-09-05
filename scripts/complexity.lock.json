@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-05",
   "files": 2059,
-  "functions": 53610,
+  "functions": 53626,
   "ceiling": 125,
   "line": 38,
   "inventory": [
@@ -18,12 +18,12 @@
       "complexity": 114
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#measureArm",
-      "complexity": 95
-    },
-    {
       "key": "packages/core/src/tools/agents-tool.ts#dispatchAgentsAction",
       "complexity": 93
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#measureArm",
+      "complexity": 91
     },
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
@@ -223,10 +223,6 @@
     },
     {
       "key": "packages/devbox/src/cas/overlay-runner.ts#scanUpper",
-      "complexity": 38
-    },
-    {
-      "key": "scripts/bench-devbox-strategies.ts#runDecisive",
       "complexity": 38
     }
   ]
