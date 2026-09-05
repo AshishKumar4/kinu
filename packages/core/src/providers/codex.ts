@@ -240,7 +240,9 @@ function parseCodexModels<T>(body: T): ModelInfo[] {
     .map(({ priority: _priority, ...model }) => model);
 }
 
-function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestInit | undefined {
+const CODEX_DEFAULT_INSTRUCTIONS = 'You are Kinu, a helpful coding agent.';
+
+export function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestInit | undefined {
   if (!init) return init;
   const serializedBody = v.safeParse(v.string(), init.body);
   if (!serializedBody.success) return init;
@@ -255,9 +257,20 @@ function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestI
   const parsedBody = v.safeParse(JsonObjectSchema, decoded);
   if (!parsedBody.success) return init;
   const body = parsedBody.output;
-  if (nonEmptyString(body.instructions)) return init;
+  if (nonEmptyString(body.instructions)) {
+    return {
+      ...init,
+      body: JSON.stringify({ ...body, store: false }),
+    };
+  }
   const parsedInput = v.safeParse(JsonArraySchema, body.input);
-  const input = parsedInput.success ? parsedInput.output : [];
+  if (!parsedInput.success) {
+    return {
+      ...init,
+      body: JSON.stringify({ ...body, instructions: CODEX_DEFAULT_INSTRUCTIONS, store: false }),
+    };
+  }
+  const input = parsedInput.output;
   const instructionParts: string[] = [];
   const remainingInput: JsonValue[] = [];
 
@@ -271,7 +284,7 @@ function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestI
     }
   }
 
-  const instructions = instructionParts.join('\n\n').trim() || 'You are Kinu, a helpful coding agent.';
+  const instructions = instructionParts.join('\n\n').trim() || CODEX_DEFAULT_INSTRUCTIONS;
   return {
     ...init,
     body: JSON.stringify({

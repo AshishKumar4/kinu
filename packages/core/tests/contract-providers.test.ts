@@ -12,6 +12,7 @@
 // auth scheme).
 import { describe, test, expect } from 'bun:test';
 import { asFetchFunction } from '../src/providers/fetch-shim';
+import { normalizeCodexResponsesRequest } from '../src/providers/codex';
 import { generateText } from 'ai';
 import * as v from 'valibot';
 import {
@@ -30,6 +31,11 @@ const CodexRequestBodySchema = v.object({
   instructions: v.optional(v.string()),
   store: v.optional(v.boolean()),
   input: v.optional(v.array(v.object({ role: v.optional(v.string()) }))),
+});
+const CodexStoredBodySchema = v.object({
+  instructions: v.optional(v.string()),
+  store: v.optional(v.boolean()),
+  input: v.optional(v.unknown()),
 });
 const CodexFailureSurfaceSchema = v.object({
   message: v.optional(v.string()),
@@ -229,6 +235,39 @@ describe('Codex provider contract', () => {
     expect(body.instructions).toBe('You are concise.');
     expect(body.store).toBe(false);
     expect(body.input?.some((item) => item.role === 'developer' || item.role === 'system')).toBe(false);
+  });
+
+  test('opts out of storage even when instructions are already set', async () => {
+    const mock = createMockFetch([
+      { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
+    ]);
+    const deps = makeDeps({
+      [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } },
+    }, mock.fetch);
+    const provider = createCodexProvider();
+    const model = provider.createModel('gpt-5.5', deps);
+    await generateText({
+      model, prompt: 'hello', maxOutputTokens: 16,
+      providerOptions: { openai: { instructions: 'Stay sharp.', store: true } },
+    });
+
+    expect(mock.requests.length).toBeGreaterThan(0);
+    const body = v.parse(CodexStoredBodySchema, JSON.parse(String(mock.requests[0].body)));
+    expect(body.instructions).toBe('Stay sharp.');
+    expect(body.store).toBe(false);
+  });
+
+  test('leaves a non-array input untouched while opting out of storage', () => {
+    const out = normalizeCodexResponsesRequest({
+      method: 'POST',
+      body: JSON.stringify({ model: 'gpt-5.5', instructions: 'Stay sharp.', store: true, input: 'hello' }),
+    });
+
+    expect(out).toBeDefined();
+    const body = v.parse(CodexStoredBodySchema, JSON.parse(String(out?.body)));
+    expect(body.instructions).toBe('Stay sharp.');
+    expect(body.store).toBe(false);
+    expect(body.input).toBe('hello');
   });
 
   test('refreshes on 401 by calling getAuth with forceRefresh', async () => {
