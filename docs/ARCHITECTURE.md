@@ -222,7 +222,7 @@ What the boxes are:
 | `beforeToolCall` / `afterToolCall` | `emitToolCall` / `emitToolResult`; the evolution engine records each call | `orchestrator.ts` |
 | `_transformInferenceResult` | the **mutable scaffold** hook. An evolved `agent.js` becomes the turn's inference loop; un-evolved passes through untouched | `core/src/scaffold/inference-transform.ts` |
 | `onChatResponse` | `emitTurnEnd` → fire-and-forget evolution (never blocks the queue); the turn-failure classifier may arm a one-shot force-compaction retry | `orchestrator.ts`, `core/src/turn-failure.ts` |
-| `getModel` / `getSystemPrompt` / `getTools` | model from `agent_config`; `SOUL.md` from the VFS; the eight builtin tools, filtered to the actor's wired deps | `core/src/tools/registry.ts` |
+| `getModel` / `getSystemPrompt` / `getTools` | model from `agent_config`; the cached `SOUL.md` text as Think's fallback prompt (the turn's prompt comes from `beforeTurn`); the eight builtin tools, filtered to the actor's wired deps | `core/src/tools/registry.ts` |
 
 Two extensions register at construction on both backends:
 

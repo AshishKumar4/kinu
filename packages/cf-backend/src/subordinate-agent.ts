@@ -464,7 +464,6 @@ export class SubordinateAgent extends ActorAgent {
     // No concrete model is pinned from the caller: the child's own turn
     // resolution maps its tier (or the default) onto a model at its next turn.
     this._cachedSoulText = null;
-    this._cachedSystemPrompt = null;
     this.invalidateModelCaches();
     await this.ensureOwnedScaffold();
     return { ok: true };
@@ -482,7 +481,6 @@ export class SubordinateAgent extends ActorAgent {
     this.ensureSchema();
     this.config.setDisplayNameOrigin(displayName, nameOrigin);
     this._cachedSoulText = null;
-    this._cachedSystemPrompt = null;
     this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
     return { ok: true };
   }
@@ -502,7 +500,6 @@ export class SubordinateAgent extends ActorAgent {
     if (this.config.getNameOrigin() === 'user') return false;
     this.config.setDisplayNameOrigin(displayName, 'auto');
     this._cachedSoulText = null;
-    this._cachedSystemPrompt = null;
     this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
     return true;
   }

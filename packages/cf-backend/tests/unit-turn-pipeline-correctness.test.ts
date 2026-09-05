@@ -87,24 +87,23 @@ function effortDerivationSites(): string[] {
 }
 
 describe('turn-pipeline correctness wiring', () => {
-  test('the actor prompt contains its loaded SOUL on both prompt-build paths', () => {
+  test('the turn prompt carries the loaded SOUL', async () => {
+    // `beforeTurn` refreshes the soul only when nothing is cached, so the
+    // observed text is the one the turn renders.
     const harness = orchestratorHarness();
     const agent = harness.agent;
     agent.setObservedSoul('You are Atlas. Preserve the owner\'s exact requirements.');
 
-    const prompt = agent.getSystemPrompt();
+    const config = await agent.beforeTurn({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'summarise this file' }],
+      tools: {} satisfies ToolSet,
+      model: 'harness-model',
+      continuation: false,
+      body: {},
+    });
 
-    expect(prompt).toContain('You are Atlas. Preserve the owner\'s exact requirements.');
-    const base = actor.slice(
-      actor.indexOf('base = buildSystemPromptSync(this.rt, {'),
-      actor.indexOf('this._cachedSystemPrompt = base;'),
-    );
-    const perTurn = actor.slice(
-      actor.indexOf('const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {'),
-      actor.indexOf('this.recordSystemPromptHash(systemOverride)'),
-    );
-    expect(base).toContain('soulOverride: this.getSoulText()');
-    expect(perTurn).toContain('soulOverride: this.getSoulText()');
+    expect(config?.system ?? '').toContain('You are Atlas. Preserve the owner\'s exact requirements.');
   });
 
   test('client RPC policy runs before SDK dispatch and defaults to allow', () => {
@@ -820,14 +819,11 @@ describe('turn-pipeline correctness wiring', () => {
     expect(turnMode).toContain('if (!this._activeProgrammaticUserMessage) return this.turnUserMetadata();');
   });
 
-  test('BOTH prompt paths advertise the temporary rung the child substrate always wires', async () => {
+  test('the turn prompt advertises the temporary rung the child substrate always wires', async () => {
     // Every cf actor with room below it holds team deps, so the temporary rung is
-    // wired on every turn this backend runs — and the flag used to be set on the
-    // cached base alone. TurnConfig.system overrides that base for every turn, so
-    // the ONE prompt the model actually receives was the one surface that never
-    // said the capability existed: the ladder's middle rung, absent from every
-    // shipped turn. Both paths, because one path knowing is exactly the state
-    // that shipped.
+    // wired on every turn this backend runs. `TurnConfig.system` is the one
+    // prompt the model receives, so it is the one surface that must name the
+    // ladder's middle rung.
     const { agent } = orchestratorHarness();
     const config = await agent.beforeTurn({
       system: 'sys',
@@ -837,9 +833,7 @@ describe('turn-pipeline correctness wiring', () => {
       continuation: false,
       body: {},
     });
-    for (const prompt of [config?.system ?? '', agent.getSystemPrompt()]) {
-      expect(prompt).toContain('`ask` with `role` runs one temporary agent for one question');
-    }
+    expect(config?.system ?? '').toContain('`ask` with `role` runs one temporary agent for one question');
   });
 
   test('the role the agent set is in the next prompt the DO builds', async () => {

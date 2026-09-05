@@ -4884,23 +4884,12 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Delegates to @kinu.run/core's canonical prompt builder, which documents the
-   * one crafted-tool call form core's sandbox contract declares —
-   * `tools.<name>`, defined by the sandbox prelude. Cached across turns;
-   * invalidated when the soul text or the registered executor set changes.
-   */
-  protected _cachedSystemPrompt: string | null = null;
-  protected _cachedSystemPromptKey: string = "";
-  /**
    * Cached SOUL.md text, refreshed at turn start and invalidated by setSoul().
    *
-   * A cache rather than a read because `getSystemPrompt` is synchronous — Think
-   * calls it that way, and the prompt it builds is the byte-stable cacheable
-   * prefix — while the soul is a FILE in the workspace filesystem. So the read
-   * happens where there is a promise to await (refreshSoulText, from
-   * beforeTurn), and the prefix builder only ever consults what is already
-   * loaded. A cold activation that has not reached a turn yet renders the
-   * default identity, exactly as an unwritten SOUL.md always did.
+   * A cache rather than a read because the soul is a FILE in the workspace
+   * filesystem and `beforeTurn` is the one place with a promise to await it on.
+   * A cold activation that has not reached a turn yet renders the default
+   * identity, exactly as an unwritten SOUL.md always did.
    */
   protected _cachedSoulText: string | null = null;
   protected async loadSoulText(): Promise<string> {
@@ -5086,53 +5075,15 @@ export abstract class ActorAgent extends Think<Env> {
     }, mission);
   }
 
+  /**
+   * Think's fallback system prompt. Never the prompt a turn runs on: Think
+   * reads it before `beforeTurn` and keeps it only when the turn config
+   * carries no `system` (`think.js` `_prepareTurn`), and `beforeTurn` below
+   * always returns one. The soul is the honest answer for the one path that
+   * can still read it.
+   */
   getSystemPrompt(): string {
-    this.logActivity("getsystemprompt_start");
-    const execs = this.rt.executionRouter?.listExecutors() ?? [];
-    const execKey = execs.map(e =>
-      `${e.name}:${e.available ? 1 : 0}:${e.configured ? 1 : 0}:${e.active ? 1 : 0}:${e.status}`,
-    ).join(",");
-    const model = this.promptModelContext();
-    const actorDeps = this.actorToolDeps();
-    const availableTools = actorActiveTools(actorDeps);
-    const agentsActions = actorAgentsActions(actorDeps);
-    const profileDigest = this._turnProfile?.digest ?? '';
-    // The temporary rung is NOT a constant of this backend, and treating it as
-    // one made the cached base advertise `ask` by `role` on an actor whose
-    // dispatch refuses it: a depth-capped subordinate wires no team deps at all
-    // (`teamProfile`), so the rung is absent from its schema, its sandbox
-    // namespace and its authoritative beforeTurn prompt. Read from the SAME fact
-    // that path reads, and keyed, because depth is per-actor.
-    const temporaryAsk = !delegationExhausted(this.delegationBudget());
-    const key = `${this.getSoulText()}\u0000${execKey}\u0000${model.provider ?? ''}/${model.id ?? ''}\u0000${availableTools.join(',')}\u0000${agentsActions.join(',')}\u0000${profileDigest}\u0000${String(temporaryAsk)}`;
-    let base: string;
-    if (this._cachedSystemPrompt && this._cachedSystemPromptKey === key) {
-      base = this._cachedSystemPrompt;
-      this.logActivity("getsystemprompt_end", "cache hit");
-    } else {
-      // Always build the BASE prompt here — no turn-scoped state. The
-      // authoritative per-turn prompt (skills, MCP tools, fresh device
-      // status, change notice) is assembled in `beforeTurn` and ALWAYS
-      // returned via TurnConfig.system, which overrides this one for chat
-      // turns (Think calls getSystemPrompt() BEFORE beforeTurn()). Mixing
-      // turn state in here would poison the cache across turns.
-      base = buildSystemPromptSync(this.rt, {
-        soulOverride: this.getSoulText(),
-        executors: execs,
-        availableTools,
-        agentsActions,
-        temporaryAsk,
-        backend: 'cf',
-        model,
-      });
-      this._cachedSystemPrompt = base;
-      this._cachedSystemPromptKey = key;
-      this.logActivity("getsystemprompt_end", `${base.length} chars`);
-    }
-    // BYTE-STABLE: no per-turn state rides here. The volatile half (facts,
-    // executor status, device notice, skill activations) is appended to the
-    // turn's MESSAGES in beforeTurn — see prompting/volatile-context.ts.
-    return base;
+    return this.getSoulText();
   }
 
   /**
@@ -5555,12 +5506,12 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   configureSession(session: Session): Session {
-    // The agent's durable context is `getSystemPrompt()` (soul + tools) plus
-    // the persisted conversation and the dynamic/turn-local context split —
-    // a single source of truth, not Think's freezable context blocks. No
-    // Session policy attaches here: compaction is the transformContext
-    // extension (registerCompactionExtension), which rewrites the turn's
-    // model-visible history without ever touching the stored messages.
+    // The turn's context is the system prompt `beforeTurn` assembles plus the
+    // persisted conversation and the dynamic/turn-local split, never Think's
+    // freezable context blocks. No Session policy attaches here: compaction
+    // is the transformContext extension (registerCompactionExtension), which
+    // rewrites the turn's model-visible history without touching the stored
+    // messages.
     return session;
   }
 

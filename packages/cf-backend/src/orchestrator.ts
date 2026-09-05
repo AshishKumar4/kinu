@@ -4518,11 +4518,8 @@ export class OrchestratorAgent extends ActorAgent {
       text,
       (_path, content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
     );
-    // Invalidate the cached SOUL.md + system prompt so the next turn
-    // picks up the new identity.
+    // The next turn re-reads the soul from the workspace filesystem.
     this._cachedSoulText = null;
-    this._cachedSystemPrompt = null;
-    this._cachedSystemPromptKey = '';
     return { soul: text, purpose: summarizeSoul(text) };
   }
 
