@@ -106,6 +106,7 @@ function makeScene(options: {
   /** Fail the release too, to observe a run whose cleanup also throws. */
   failRelease?: boolean;
   delegation?: { depth: number };
+  duringAssignment?: () => Promise<void>;
   /** Leave the temporary port UNWIRED — the actor with no child substrate. */
   withoutTemporary?: boolean;
 } = {}): Scene {
@@ -129,6 +130,7 @@ function makeScene(options: {
       calls.push(`assign:${name}`);
       briefs.push(input.body);
       if (options.fail === 'assign') throw new Error('admission refused');
+      await options.duringAssignment?.();
       return HANDOFF;
     },
     async status() {
@@ -220,9 +222,7 @@ function makeScene(options: {
  *  what the roster contract promises. */
 function startRun(scene: Scene, input: Omit<AgentsToolInput, 'action'>, signal?: AbortSignal) {
   const settled = scene.call({ action: 'ask', ...input }, signal);
-  // Parked and correlatable is `task_event_id` written on the row — the same id
-  // the waiter is keyed on. Polled rather than counted in microtasks so a run
-  // that also authorizes context refs is observed at the same point.
+  // Observe the assignment acknowledgement rather than counting asynchronous turns.
   const ready = (async () => {
     for (let attempt = 0; attempt < 50; attempt++) {
       if (scene.roster.get(TEMP_NAME)?.taskEventId) return;
@@ -357,6 +357,24 @@ describe('a role-targeted ask returns one completed answer', () => {
 });
 
 describe('the roster shows a temporary agent while it runs and keeps its history after', () => {
+  test('an answer before the assignment acknowledgement settles the ask before later cancellation', async () => {
+    const controller = new AbortController();
+    const scene = makeScene({
+      duringAssignment: async () => {
+        await scene.report({ content: 'The answer reaches the parent before its assignment acknowledgement.' });
+        controller.abort();
+      },
+    });
+    const outcome = await scene.call({ action: 'ask', role: 'auditor', message: 'Audit the ledger.' }, controller.signal);
+    expect(outcome).toMatchObject({
+      status: 'completed', answer: 'The answer reaches the parent before its assignment acknowledgement.',
+      transcript: 'kept',
+    });
+    expect(scene.published()).toBe(0);
+    expect(scene.wakes).toEqual([]);
+    expect(await scene.call({ action: 'list' })).toMatchObject({ subordinates: [] });
+  });
+
   test('running under lifetime task, released into history, never a subordinate', async () => {
     const scene = makeScene();
     expect(await scene.call({ action: 'list' })).toEqual({

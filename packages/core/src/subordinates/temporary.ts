@@ -38,7 +38,6 @@
 
 import type { WorkMode } from '../prompting/surface';
 import type { RoleSelection } from '../config/store';
-import type { SubordinateHandoff } from '../tools/agents-tool';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import { classifyErrorCode, type ErrorCode } from '../obs/error';
 import { renderThrownChain } from '../obs/index';
@@ -359,41 +358,29 @@ export function createTemporaryAgentPort(deps: {
    */
   statRef?(path: string): Promise<boolean>;
 }): TemporaryAgentPort {
-  /** Live waiters by the ASSIGNMENT id they are waiting on — the same id the
-   *  caller was handed and the report cites, so a stale row cannot resolve a
-   *  newer question. */
+  // A task-lifetime agent receives one assignment. Its name exists before the assignment RPC can report.
   const waiters = new Map<string, (answer: TemporarySettlement) => void>();
 
-  const registerWaiter = (assignmentId: () => string | null, signal?: AbortSignal) => {
-    let cancel!: () => void;
-    let key: string | null = null;
-    const promise = new Promise<TemporarySettlement | 'cancelled'>((resolve) => {
-      let finished = false;
-      const cleanup = (): boolean => {
-        if (finished) return false;
-        finished = true;
-        if (key !== null) waiters.delete(key);
-        signal?.removeEventListener('abort', onAbort);
-        return true;
-      };
-      const onAbort = () => {
-        if (cleanup()) resolve('cancelled');
-      };
-      cancel = onAbort;
-      if (signal?.aborted) {
-        onAbort();
-        return;
-      }
-      signal?.addEventListener('abort', onAbort, { once: true });
-      // Armed after the assignment exists, because the id IS the key. Until then
-      // there is nothing to correlate against and nothing has been asked.
-      key = assignmentId();
-      if (key === null) return;
-      waiters.set(key, (answer) => {
-        if (cleanup()) resolve(answer);
+  const registerWaiter = (name: string, signal?: AbortSignal) => {
+    const { promise, resolve } = Promise.withResolvers<TemporarySettlement | 'cancelled'>();
+    const cleanup = () => {
+      waiters.delete(name);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      resolve('cancelled');
+    };
+    if (signal?.aborted) {
+      onAbort();
+    } else {
+      waiters.set(name, (answer) => {
+        cleanup();
+        resolve(answer);
       });
-    });
-    return { promise, cancel };
+      signal?.addEventListener('abort', onAbort, { once: true });
+    }
+    return { promise, cancel: onAbort };
   };
 
   return {
@@ -403,9 +390,9 @@ export function createTemporaryAgentPort(deps: {
       // subordinate's report is its parent's event however it arrives, which is
       // the behaviour this rung must not touch.
       if (!entry || entry.lifetime !== TEMPORARY_LIFETIME) return false;
-      if (input.taskEventId === null) return false;
+      if (input.taskEventId !== entry.taskEventId) return false;
       if (!temporaryRunSettles(input)) return false;
-      const waiter = waiters.get(input.taskEventId);
+      const waiter = waiters.get(input.name);
       if (!waiter) return false;
       waiter({ status: input.status, content: input.content });
       return true;
@@ -522,7 +509,8 @@ export function createTemporaryAgentPort(deps: {
         );
       }
 
-      let handoff: SubordinateHandoff;
+      // A child can report before the assignment acknowledgement returns.
+      const waiter = registerWaiter(name, request.signal);
       try {
         const assignment: Parameters<SubordinateRuntime['assign']>[1] = {
           body: renderTemporaryTaskBrief({ task, contextRefs: refs }),
@@ -530,9 +518,10 @@ export function createTemporaryAgentPort(deps: {
         };
         const inherited = deps.renderInheritedContext();
         if (inherited) Object.assign(assignment, { inheritedContext: inherited });
-        handoff = await deps.runtime.assign(name, assignment);
+        const handoff = await deps.runtime.assign(name, assignment);
         deps.roster.recordAssignmentEvent(name, handoff.eventId);
       } catch (error) {
+        waiter.cancel();
         try {
           await release();
         } catch (releaseError) {
@@ -557,10 +546,6 @@ export function createTemporaryAgentPort(deps: {
         );
       }
 
-      // Armed AFTER the assignment, on the id the report will cite. A report
-      // that beats this line has no waiter and stays a correlated event, which
-      // is the same outcome an eviction produces and needs no second path.
-      const waiter = registerWaiter(() => handoff.eventId, request.signal);
       const settlement = await waiter.promise;
       await release();
       if (settlement === 'cancelled') {

@@ -1,21 +1,7 @@
 /**
- * Subordinate ingress — a delegate's outbound message reaches the agent that
- * delegated to it.
- *
- * TWO REGISTERS, ONE INGRESS. A child's report is addressed by NAME, and the
- * sender does not know — and must not have to know — which lifetime it was
- * created under. So this is where that is decided:
- *
- *   a temporary run  → the answer settles the run and is returned to the
- *                      `agents.ask` call waiting on it. It NEVER enters the
- *                      parent's event rail, because that rail wakes a turn and
- *                      bills it, and one answer must not be paid for twice.
- *   a roster row     → the report enters the rail: spill → admit → roster-apply
- *                      → announce → drain, exactly as before.
- *
- * The only host-shaped step is the transaction the admit + roster write share:
- * on a Durable Object that is `ctx.storage.transactionSync`, and a backend
- * without one runs the body directly.
+ * One roster and one report ingress for durable and task-lifetime children.
+ * A live task waiter consumes its answer; every other admitted report enters
+ * the parent event rail. The host supplies the admission transaction and wake.
  */
 
 import type { EventLog } from '../hub/log';
@@ -84,15 +70,7 @@ export interface SubordinateIngressDeps {
   announce(report: AdmittedSubordinateReport): void;
   /** A fresh event was admitted — wake the agent loop (debounced drain). */
   onAdmitted(): void;
-  /**
-   * This actor's temporary-run register, consulted BEFORE the roster.
-   *
-   * Absent is an actor with no temporary rung, and then this reads exactly as
-   * it did before the rung existed. Present, it owns any name it holds a
-   * running row for — which is why a temporary child needs no flag of its own
-   * and no second report path: the PARENT knows which register the name is in,
-   * and it is the only side that can know.
-   */
+  /** Live task waiters. Lifetime and assignment identity come from the same roster as durable children. */
   temporary?: TemporaryAgentPort;
 }
 
@@ -117,14 +95,9 @@ export async function receiveSubordinateEvent(
   if (!subordinate) {
     return { id: '', disposition: 'not_awaited' };
   }
-  // A LIVE WAITER takes the answer, and only a live waiter. `settle` is handed
-  // the row's own open-assignment id, so it answers exactly the call that asked
-  // — and it answers FALSE for a durable subordinate, for a stale assignment,
-  // and for an activation that has since died. In every one of those cases the
-  // report carries on down this function and becomes the ordinary correlated
-  // `subordinate_report` event, which is why an eviction costs the return value
-  // and nothing else.
-  //
+  // A task name belongs to one assignment; its receiver exists before the assignment acknowledgement.
+  // With no live receiver (including after eviction), the report continues down the event rail.
+
   // Asked BEFORE the dismissal below because a waiter is somebody blocked right
   // now: a row dismissed while its caller is still holding the line is exactly
   // the case where the answer is most wanted, and the durable event it does not
