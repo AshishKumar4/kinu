@@ -36,8 +36,3 @@ export type RestoreReceipt = v.InferOutput<typeof RestoreReceiptSchema>;
 export function renderRestoreReceipt(receipt: RestoreReceipt): string {
   return JSON.stringify(v.parse(RestoreReceiptSchema, receipt));
 }
-
-/** Read back what the attach detail carried. It throws on anything else. */
-export function parseRestoreReceipt(text: string): RestoreReceipt {
-  return v.parse(RestoreReceiptSchema, JSON.parse(text));
-}

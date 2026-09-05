@@ -5053,6 +5053,29 @@ async function releaseArm(
   });
 }
 
+/**
+ * THE SERVED TREE'S ENTRY COUNT, after the wake window closed. A chain wake
+ * mounts layers and materializes nothing, so its `cpuSteps` is what the
+ * mount serves: the count the conformance machine takes from its own
+ * snapshot. `printf x` per entry, so a newline in a name cannot count twice.
+ * Recorded on the row for an attached chain wake; a count that did not
+ * answer is a note, and any other arm's wake serves no tree to count.
+ */
+async function recordServedEntries(
+  fixture: Fixture,
+  box: string,
+  strategy: Strategy,
+  result: ArmResult,
+  notes: string[],
+): Promise<void> {
+  if (strategy !== 'snapshot-chain' || result.wakeKind !== 'attached') return;
+  const served = await retryTransient('served entry count', async () =>
+    await execInBox(fixture, box, 'find /workspace -mindepth 1 -printf x | wc -c'));
+  const count = Number((served.stdout ?? '').trim());
+  if (served.exitCode === 0 && Number.isSafeInteger(count) && count >= 0) result.wakeServedEntries = count;
+  else notes.push(`the served entry count did not answer: ${(served.stderr ?? served.error ?? '').trim().slice(0, 120)}`);
+}
+
 async function measureArm(
   fixture: Fixture,
   strategy: Strategy,
@@ -5256,17 +5279,7 @@ async function measureArm(
   // theirs against the `/candidate` reply's own mount expectations inside the
   // retention, so nothing is restated for them here.
   result.wakeMountLines = retainWakeMountLines(strategy, mountText);
-  // THE SERVED TREE'S ENTRY COUNT, after the wake window closed. A chain wake
-  // mounts layers and materializes nothing, so its `cpuSteps` is what the
-  // mount serves: the count the conformance machine takes from its own
-  // snapshot. `printf x` per entry, so a newline in a name cannot count twice.
-  if (strategy === 'snapshot-chain' && result.wakeKind === 'attached') {
-    const served = await retryTransient('served entry count', async () =>
-      await execInBox(fixture, box, 'find /workspace -mindepth 1 -printf x | wc -c'));
-    const count = Number((served.stdout ?? '').trim());
-    if (served.exitCode === 0 && Number.isSafeInteger(count) && count >= 0) result.wakeServedEntries = count;
-    else notes.push(`the served entry count did not answer: ${(served.stderr ?? served.error ?? '').trim().slice(0, 120)}`);
-  }
+  await recordServedEntries(fixture, box, strategy, result, notes);
 
   const survived = await retryTransient('marker read after wake', async () =>
     await execInBox(fixture, box, `cat ./${markerFile} 2>/dev/null || echo MISSING`),
@@ -6635,6 +6648,76 @@ export function restoreReceiptOf(detail: string): ReceiptRead {
   return { receipt: parsed.output, refusal: null };
 }
 
+/** The arguments `countedRestoreWork` counts from: what the run retained of one wake. */
+interface WakeRestoreArgs {
+  readonly strategy: Strategy;
+  readonly wakeKind: string;
+  readonly wakeDetail: string;
+  readonly wakeOps: OpTally | null;
+  readonly wakeMountLines: readonly string[];
+  readonly wakeServedEntries?: number | null;
+}
+
+/**
+ * REPLAY UNITS: what the wake re-applied over its base. A chain re-mounts its
+ * delta layers, so their mount lines are the count; the candidate receipt
+ * carries the layers or nodes its runner consulted; overlay-cas publishes its
+ * folded count. Null with the missing source named when the field went
+ * uncounted.
+ */
+function replayUnitsOf(
+  args: WakeRestoreArgs,
+  receipt: RestoreReceipt | null,
+  mounts: number | null,
+  missing: string[],
+): number | null {
+  const { strategy, wakeKind, wakeDetail, wakeMountLines } = args;
+  if (strategy === 'overlay-cas') {
+    const replayed = replayedEntries(wakeDetail);
+    if (replayed !== null) return replayed;
+    missing.push(
+      `replayUnits: the wake detail "${wakeDetail || 'empty'}" carries no folded count, so the replay went uncounted rather than zero`,
+    );
+    return null;
+  }
+  if (strategy === 'snapshot-chain') {
+    if (mounts !== null) {
+      return wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)).length;
+    }
+    missing.push('replayUnits: the chain counts its delta layers from the mount lines the wake read, and that read is refused above');
+    return null;
+  }
+  if (strategy === 'r2fs') {
+    missing.push('replayUnits: r2fs mounts with no replay and publishes no count');
+    return null;
+  }
+  if (receipt !== null) return receipt.work.replayUnits;
+  return wakeKind === 'already-attached' ? 0 : null;
+}
+
+/**
+ * CPU STEPS are the entries the restore materialized. The candidate runner
+ * counts them on its receipt. A chain wake materializes nothing and serves
+ * the whole tree through its mounts, so its count is the served tree's
+ * entries, read after the wake window closed. Null with the missing source
+ * named when the field went uncounted.
+ */
+function cpuStepsOf(args: WakeRestoreArgs, receipt: RestoreReceipt | null, missing: string[]): number | null {
+  const { strategy, wakeKind } = args;
+  if (strategy === 'bounded-layers' || strategy === 'merkle-pack') {
+    if (receipt !== null) return receipt.work.cpuSteps;
+    return wakeKind === 'already-attached' ? 0 : null;
+  }
+  if (strategy !== 'snapshot-chain') {
+    missing.push('cpuSteps: r2fs and overlay-cas meter no materialized entries on their wake paths');
+    return null;
+  }
+  if (wakeKind === 'already-attached') return 0;
+  if (args.wakeServedEntries !== undefined && args.wakeServedEntries !== null) return args.wakeServedEntries;
+  missing.push('cpuSteps: the served entry count after the chain wake did not answer');
+  return null;
+}
+
 /**
  * Count one arm's wake restore from what the run retained: the wake's detail
  * string, the flushed operation and byte window across it, its mount lines
@@ -6644,14 +6727,7 @@ export function restoreReceiptOf(detail: string): ReceiptRead {
  * a fabricated full window counts exactly, an unparseable detail refuses to
  * parse, and a backwards window refuses to price.
  */
-export function countedRestoreWork(args: {
-  readonly strategy: Strategy;
-  readonly wakeKind: string;
-  readonly wakeDetail: string;
-  readonly wakeOps: OpTally | null;
-  readonly wakeMountLines: readonly string[];
-  readonly wakeServedEntries?: number | null;
-}): CountedRestore {
+export function countedRestoreWork(args: WakeRestoreArgs): CountedRestore {
   const { strategy, wakeKind, wakeDetail, wakeOps, wakeMountLines } = args;
   if (wakeKind !== 'attached' && wakeKind !== 'already-attached') {
     return {
@@ -6719,30 +6795,7 @@ export function countedRestoreWork(args: {
       'mounts: the post-wake mount read matched none of the arm’s points on an attached wake — either the restore took no mounts or the read failed, and the two are indistinguishable, so the count is refused',
     );
   }
-  // REPLAY UNITS: what the wake re-applied over its base. A chain re-mounts
-  // its delta layers, so their mount lines are the count; the candidate
-  // receipt carries the layers or nodes its runner consulted; overlay-cas
-  // publishes its folded count.
-  let replayUnits: number | null = null;
-  if (strategy === 'overlay-cas') {
-    const replayed = replayedEntries(wakeDetail);
-    if (replayed === null) {
-      missing.push(
-        `replayUnits: the wake detail "${wakeDetail || 'empty'}" carries no folded count, so the replay went uncounted rather than zero`,
-      );
-    } else replayUnits = replayed;
-  } else if (strategy === 'snapshot-chain') {
-    if (mounts !== null) {
-      replayUnits = wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)).length;
-    } else {
-      missing.push('replayUnits: the chain counts its delta layers from the mount lines the wake read, and that read is refused above');
-    }
-  } else if (candidate) {
-    if (receipt !== null) replayUnits = receipt.work.replayUnits;
-    else if (wakeKind === 'already-attached') replayUnits = 0;
-  } else {
-    missing.push('replayUnits: r2fs mounts with no replay and publishes no count');
-  }
+  const replayUnits = replayUnitsOf(args, receipt, mounts, missing);
   // BYTES come from the fixture's byte tally over the same window as the
   // operations: what `get` served, split by whether the key holds a
   // candidate control envelope. A window without a tally stays uncounted.
@@ -6757,21 +6810,7 @@ export function countedRestoreWork(args: {
       'metadataBytes/payloadBytes: the wake-window /ops bracket carried no byte tally, so the bytes the restore moved are uncounted',
     );
   }
-  // CPU STEPS are the entries the restore materialized. The candidate runner
-  // counts them on its receipt. A chain wake materializes nothing and serves
-  // the whole tree through its mounts, so its count is the served tree's
-  // entries, read after the wake window closed.
-  let cpuSteps: number | null = null;
-  if (candidate) {
-    if (receipt !== null) cpuSteps = receipt.work.cpuSteps;
-    else if (wakeKind === 'already-attached') cpuSteps = 0;
-  } else if (strategy === 'snapshot-chain') {
-    if (wakeKind === 'already-attached') cpuSteps = 0;
-    else if (args.wakeServedEntries !== undefined && args.wakeServedEntries !== null) cpuSteps = args.wakeServedEntries;
-    else missing.push('cpuSteps: the served entry count after the chain wake did not answer');
-  } else {
-    missing.push('cpuSteps: r2fs and overlay-cas meter no materialized entries on their wake paths');
-  }
+  const cpuSteps = cpuStepsOf(args, receipt, missing);
   const counts: WakeRestoreCounts = { serialRemoteOps, totalRemoteOps, metadataBytes, payloadBytes, cpuSteps, mounts, replayUnits };
   const work = restoreWorkFromCounts(counts);
   const window = totalRemoteOps === null ? 'no operation bill' : `${totalRemoteOps} windowed store call(s)`;
@@ -7632,25 +7671,11 @@ function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
 }
 
 /**
- * This instrument's own requirements, per gate.
- *
- * The shared gates judge a RECORD. They cannot know that a devbox run must
- * carry a tally for every arm it requested, that a cold attach has a contract
- * ceiling of its own, or that the measured arm set must be exactly the
- * requested one. Those reasons belong to the gate each one is about, so a
- * refusal names the missing evidence rather than only a gate id.
+ * EXACTLY THE REQUESTED SET, on all three gates it feeds: a restore class, a
+ * complete cell and a repetition count are each claims about the whole arm
+ * set, and none of them survives an arm that vanished or one that appeared.
  */
-
-function devboxRequirements(input: DevboxAdmissionInput) {
-  const g0 = identityProblems(input.identity);
-  const g5: string[] = [];
-  const g6: string[] = [];
-  const g7: string[] = [];
-  const g9: string[] = [];
-
-  // EXACTLY THE REQUESTED SET, on all three gates: a restore class, a complete
-  // cell and a repetition count are each claims about the whole arm set, and
-  // none of them survives an arm that vanished or one that appeared.
+function armSetProblems(input: DevboxAdmissionInput): string[] {
   const armSet: string[] = [];
   if (input.requested.length === 0) {
     armSet.push('the run requested no arms, so there is no expected arm set to complete');
@@ -7677,6 +7702,27 @@ function devboxRequirements(input: DevboxAdmissionInput) {
       armSet.push(`arm \`${arm.strategy}\` produced a result row without being requested`);
     }
   }
+  return armSet;
+}
+
+/**
+ * This instrument's own requirements, per gate.
+ *
+ * The shared gates judge a RECORD. They cannot know that a devbox run must
+ * carry a tally for every arm it requested, that a cold attach has a contract
+ * ceiling of its own, or that the measured arm set must be exactly the
+ * requested one. Those reasons belong to the gate each one is about, so a
+ * refusal names the missing evidence rather than only a gate id.
+ */
+
+function devboxRequirements(input: DevboxAdmissionInput) {
+  const g0 = identityProblems(input.identity);
+  const g5: string[] = [];
+  const g6: string[] = [];
+  const g7: string[] = [];
+  const g9: string[] = [];
+
+  const armSet = armSetProblems(input);
   g5.push(...armSet);
   g6.push(...armSet);
   g9.push(...armSet);

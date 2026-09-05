@@ -143,9 +143,9 @@ async function runCells(
 
 describe('security cell namespace', () => {
   test('rejects a hostile nonce before any prefix exists', () => {
-    expect(() => securityPrefixFor('boxes/id/', '../escape')).toThrow();
-    expect(() => securityPrefixFor('boxes/id/', '')).toThrow();
-    expect(() => securityPrefixFor('boxes/id/', 'short')).toThrow();
+    for (const hostile of ['../escape', '', 'short']) {
+      expect(() => securityPrefixFor('boxes/id/', hostile)).toThrow('security nonce is not an 8-64 char id');
+    }
   });
 
   test('derives the isolated prefix inside the box prefix', () => {
@@ -211,10 +211,17 @@ describe('F10 hostile metadata discrimination', () => {
       closureObject: { key: 'obj/closure', byteLength: '1', sha256: sha },
     };
     const id = envelopeIdOf(envelope);
-    expect(() => parseEnvelopeBytes(envelopeBytes(envelope), id)).not.toThrow();
-    const tampered = new Uint8Array(envelopeBytes(envelope));
-    tampered[tampered.length - 2] = tampered[tampered.length - 2] === 0x31 ? 0x32 : 0x31;
-    expect(() => parseEnvelopeBytes(tampered, id)).toThrow();
+    const canonical = envelopeBytes(envelope);
+    expect(parseEnvelopeBytes(canonical, id)).toEqual(envelope);
+    // A field changed under the same pointer: the bytes still parse, and the
+    // digest the pointer names is no longer theirs.
+    const relabeled = encoder.encode(new TextDecoder().decode(canonical).replace('"generation":"1"', '"generation":"2"'));
+    expect(relabeled).not.toEqual(canonical);
+    expect(() => parseEnvelopeBytes(relabeled, id)).toThrow(`candidate envelope does not match pointer ${id}`);
+    // The same envelope in a second encoding: it parses to the pointer's
+    // digest and is refused anyway, so one envelope has exactly one body.
+    const reencoded = encoder.encode(`${JSON.stringify(envelope, null, 1)}\n`);
+    expect(() => parseEnvelopeBytes(reencoded, id)).toThrow(`candidate envelope body at ${id} is not canonical`);
   });
 
   test('hostile chain ids never become storage keys', () => {

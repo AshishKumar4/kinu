@@ -1137,16 +1137,16 @@ async function body(request: Request): Promise<DriverBody> {
 
 
 /**
- * The deployed probe's two diagnostic reads: the candidate control dump and
- * the incident ledger. Both are read-only facts about one box — the control
- * row the publish path wrote, every failure the box filed — and the probe
- * archives both after the ladder and after the wake, so they ride ahead of
- * the operation router rather than inside it. The switch below stays the
- * router for the operations that arm, write, or tear down. Null answers any
- * other route.
+ * The routes that reach storage and never the box's live tree, served ahead
+ * of the operation router: the deployed probe's two diagnostic reads (the
+ * candidate control dump and the incident ledger, archived after the ladder
+ * and after the wake) and the G4 fault cells, which run against an isolated
+ * per-call namespace. The switch below stays the router for the operations
+ * that arm, write, or tear down. Null answers any other route.
  */
-async function serveProbeDiagnostics(
+async function serveStorageOnlyRoutes(
   route: string,
+  input: DriverBody,
   env: BenchEnv,
   strategy: DevboxStrategyName,
   box: BenchStub,
@@ -1159,6 +1159,20 @@ async function serveProbeDiagnostics(
     // before teardown, with full arrays archived.
     const incidents = await box.devboxIncidentReasons();
     return json({ ok: true, strategy, box: name, incidents, ms: Date.now() - started });
+  }
+  if (route === 'POST /security') {
+    // G4 FAULT CELLS, storage-only. `op` doubles as the isolated namespace
+    // nonce: one call, one `security-cells/<op>/` prefix and one set of
+    // `__security:*:<op>` durable keys, so a re-post with the same op reuses
+    // the namespace and a new op cannot collide with it. No new body field:
+    // DriverBodySchema stays closed.
+    const nonce = input.op ?? '';
+    if (nonce.length === 0) return json({ ok: false, error: 'op is required' }, 400);
+    if (!/^[A-Za-z0-9-]{8,64}$/.test(nonce)) {
+      return json({ ok: false, error: 'op must be an 8-64 char id for the isolated namespace' }, 400);
+    }
+    const security = await box.runSecurityCells(nonce);
+    return json({ ok: true, strategy, box: name, security, ms: Date.now() - started });
   }
   if (route !== 'GET /candidate') return null;
   // FACTS ONLY, and only for an arm that has candidate control state.
@@ -1223,8 +1237,8 @@ export default {
 
     try {
       const route = `${request.method} ${url.pathname}`;
-      const probe = await serveProbeDiagnostics(route, env, strategy, box, name, started);
-      if (probe !== null) return probe;
+      const aside = await serveStorageOnlyRoutes(route, input, env, strategy, box, name, started);
+      if (aside !== null) return aside;
       switch (route) {
         case 'POST /create': {
           await box.kickStartup();
@@ -1326,21 +1340,6 @@ export default {
             // driver's poll cadence never enters a measured number.
             ms: row.ms,
           });
-        }
-
-        case 'POST /security': {
-          // G4 FAULT CELLS, storage-only. `op` doubles as the isolated
-          // namespace nonce: one call, one `security-cells/<op>/` prefix and
-          // one set of `__security:*:<op>` durable keys, so a re-post with the
-          // same op reuses the namespace and a new op cannot collide with it.
-          // No new body field: DriverBodySchema stays closed.
-          const nonce = input.op ?? '';
-          if (nonce.length === 0) return json({ ok: false, error: 'op is required' }, 400);
-          if (!/^[A-Za-z0-9-]{8,64}$/.test(nonce)) {
-            return json({ ok: false, error: 'op must be an 8-64 char id for the isolated namespace' }, 400);
-          }
-          const security = await box.runSecurityCells(nonce);
-          return json({ ok: true, strategy, box: name, security, ms: Date.now() - started });
         }
 
         case 'POST /kill': {

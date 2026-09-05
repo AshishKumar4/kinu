@@ -202,14 +202,39 @@ describe('G0-G9 storage run admission', () => {
   test('an arm whose cells OBSERVED every preregistered witness satisfies G2 and still ranks', () => {
     // THE RULING THIS PINS. A preregistered defect is a MEASURED COST, so an arm
     // that reproduced all of its own is admitted AND rank-eligible. It used to
-    // be neither: `devboxArmEvidence` marked these three `kind: 'control'` with
-    // `rankEligible: false`, and G2 would have refused any attempt to rank them.
+    // be neither: `devboxArmEvidence` marked the incumbent `kind: 'control'`
+    // with `rankEligible: false`, and G2 would have refused any attempt to
+    // rank it.
     //
     // The repair the witness cells exist for: the expectations are unchanged and
     // the observation now happens, so a control that failed as predicted stops
-    // refusing the run it was meant to validate.
-    const observed = (strategy: 'snapshot-chain' | 'r2fs' | 'overlay-cas'): ArmEvidence =>
-      devboxArmEvidence({
+    // refusing the run it was meant to validate. The incumbent is the one
+    // frozen arm that preregisters witnesses; a retired arm keeps its witnesses
+    // and stays out of the ranking by the scope freeze, which the next test
+    // covers.
+    const observed = devboxArmEvidence({
+      strategy: 'snapshot-chain',
+      verifyPassed: true,
+      verifyChecks: [],
+      phases: [],
+      checkpoints: [],
+      decisiveTicks: [],
+      witnessChecks: controlWitnessChecks('snapshot-chain', WITNESSED_FACTS),
+    });
+    expect(observed.expectedRedChecks).toEqual(['mutable-delta', 'delta-layer-collapse']);
+    const record: StorageRunRecord = {
+      ...validRecord(),
+      arms: [...validRecord().arms, observed],
+    };
+    const g2 = evaluateRun(record).gates.find((row) => row.gate === 'G2');
+    expect(g2?.reasons).toEqual([]);
+    expect(g2?.ok).toBe(true);
+    expect(observed.rankEligible).toBe(true);
+  });
+
+  test('a retired arm that observed every witness is still refused a rank', () => {
+    for (const strategy of ['r2fs', 'overlay-cas'] as const) {
+      const retired = devboxArmEvidence({
         strategy,
         verifyPassed: true,
         verifyChecks: [],
@@ -218,15 +243,11 @@ describe('G0-G9 storage run admission', () => {
         decisiveTicks: [],
         witnessChecks: controlWitnessChecks(strategy, WITNESSED_FACTS),
       });
-    const record: StorageRunRecord = {
-      ...validRecord(),
-      arms: [...validRecord().arms, observed('snapshot-chain'), observed('r2fs'), observed('overlay-cas')],
-    };
-    const g2 = evaluateRun(record).gates.find((row) => row.gate === 'G2');
-    expect(g2?.reasons).toEqual([]);
-    expect(g2?.ok).toBe(true);
-    for (const strategy of ['snapshot-chain', 'r2fs', 'overlay-cas'] as const) {
-      expect(observed(strategy).rankEligible).toBe(true);
+      expect(retired.expectedRedChecks).toEqual(retired.observedRedChecks);
+      expect(retired.rankEligible).toBe(false);
+      const g2 = evaluateRun({ ...validRecord(), arms: [...validRecord().arms, retired] })
+        .gates.find((row) => row.gate === 'G2');
+      expect(g2?.reasons).toEqual([`competing arm \`${strategy}\` is marked rank-ineligible`]);
     }
   });
 
@@ -653,12 +674,13 @@ describe('the devbox run\'s own admission requirements', () => {
   test('G5 refuses every requested arm for an uncounted restore instead of passing an empty array', () => {
     const verdict = devboxVerdict(completeArms());
     expect(gateHeld(verdict, 'G5')).toBe(false);
-    // The refusal names the missing source per field, not the old blanket
-    // sentence: an arm whose bracket never landed says which bill is missing.
+    // The refusal names the missing source per field, not a blanket sentence:
+    // an arm whose bracket never landed says which bill is missing, and the
+    // byte fields refuse on their own line.
     for (const strategy of CANDIDATE_ARMS) {
       expect(gateReasons(verdict, 'G5')).toContain(`arm \`${strategy}\` totalRemoteOps: the wake-window /ops bracket never landed`);
+      expect(gateReasons(verdict, 'G5')).toContain(`arm \`${strategy}\` metadataBytes/payloadBytes: the wake-window /ops bracket carried no byte tally`);
     }
-    expect(gateReasons(verdict, 'G5')).toContain('no live byte counter');
   });
 
   test('G6 refuses a cold attach past the admission ceiling, whatever the fixture budget allows', () => {

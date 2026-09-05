@@ -534,6 +534,17 @@ async function awaitOrigin(origin: string, token: string): Promise<void> {
   }
 }
 
+/** P0: the deployed product names the decided strategy, with a store behind it. */
+async function probeStrategyDecision(origin: string, token: string): Promise<NonNullable<ProbeEvidence['P0']>> {
+  const picked = await callParsed(origin, token, "/state", {}, StrategyStateSchema);
+  const decision = await callParsed(origin, token, "/strategyDecision", {}, StrategyDecisionSchema);
+  if (picked.strategy !== decision.decided) {
+    throw new Error(`P0: the product reports strategy ${picked.strategy}; the package's decision is ${decision.decided}`);
+  }
+  if (!picked.durable) throw new Error("P0: the product reports no durable store, so the strategy has nothing to write through");
+  return { strategy: picked.strategy, durable: true };
+}
+
 export async function run(): Promise<DurabilityProbeArtifact> {
   const token = process.env.PROBE_TOKEN ?? randomUUID();
   const runId = randomUUID().slice(0, 8);
@@ -557,15 +568,8 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     console.log(`probe origin ${origin}`);
     await awaitOrigin(origin, token);
 
-    // P0 — the deployed product names the decided strategy, with a store behind it.
-    const picked = await callParsed(origin, token, "/state", {}, StrategyStateSchema);
-    const decision = await callParsed(origin, token, "/strategyDecision", {}, StrategyDecisionSchema);
-    if (picked.strategy !== decision.decided) {
-      throw new Error(`P0: the product reports strategy ${picked.strategy}; the package's decision is ${decision.decided}`);
-    }
-    if (!picked.durable) throw new Error("P0: the product reports no durable store, so the strategy has nothing to write through");
-    evidence.P0 = { strategy: picked.strategy, durable: true };
-    console.log(`P0 strategy ${picked.strategy} ok (matches the decided default; durable store bound)`);
+    evidence.P0 = await probeStrategyDecision(origin, token);
+    console.log(`P0 strategy ${evidence.P0.strategy} ok (matches the decided default; durable store bound)`);
 
     // P1 — base layer.
     const bigId = `big-${Date.now()}.bin`;

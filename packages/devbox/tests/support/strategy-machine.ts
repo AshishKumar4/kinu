@@ -139,7 +139,6 @@ import {
   baseObjectKey,
   ChainRecordAdvanced,
   chainStoreRoot,
-  deltaLayerMountPoint,
   deltaObjectKey,
   snapshotChainStorage,
   type ChainState,
@@ -156,6 +155,15 @@ import {
  *  DERIVED through the strategy's own exported helper, never spelled here, so
  *  there is no second copy of the layout to drift from. */
 const STORE_ROOT = chainStoreRoot('boxes/conformance-box');
+
+/** Where the chain mounts one generation's delta layer, restated from
+ *  `lowerDeltaRoot` in `src/snapshot-chain.ts`: the strategy keeps that path
+ *  to itself, and this machine has to serve an evicted delta where the
+ *  strategy's own `deltaLayerServed` looks for it. Drift is loud: a layer
+ *  mounted anywhere else is not seen as served, the next commit archives an
+ *  empty upper, and the chain cells read the tree back short. */
+const CHAIN_DELTA_LAYER_ROOT = '/var/tmp/devbox/lower-delta';
+const deltaLayerMountPoint = (chainId: string): string => `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`;
 
 // ── deaths ──────────────────────────────────────────────────────────────────
 
@@ -525,7 +533,7 @@ export class ContainerDisk {
     // neither costs disk quota. Asked here rather than at each call site, so
     // no writer needs to know which paths are disk and which are not.
     if (path.startsWith('/dev/shm/') || path === '/dev/shm') return;
-    if (path.startsWith('/var/tmp/devbox/lower-base') || path.startsWith('/var/tmp/devbox/lower-delta/') || path.startsWith('/var/tmp/devbox/lower-empty')) return;
+    if (path.startsWith('/var/tmp/devbox/lower-base') || path.startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`) || path.startsWith('/var/tmp/devbox/lower-empty')) return;
     if (delta > 0 && this.quotaBytes !== null && this.usedBytes + delta > this.quotaBytes) {
       throw new DiskFull(path, delta, Math.max(0, this.quotaBytes - this.usedBytes));
     }

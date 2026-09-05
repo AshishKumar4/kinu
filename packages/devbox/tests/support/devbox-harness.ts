@@ -619,6 +619,154 @@ export class FakeSandbox {
     }
   }
 
+  /**
+   * THE RUNNER RESULT'S RETIREMENT and the chain's directory resets: `rm -f
+   * '<reply>'` after one attempt, `rm -rf '<dir>'` when the candidate is
+   * discarded, and a `rm -rf` of several directories at once, which is how
+   * `resetDirs` empties the upper and the stage. Every quoted path loses its
+   * subtree in the file table the runner writes into, so a reply the box
+   * retired cannot be read again by the next attempt on the same fixed result
+   * path. `rm -rf` of nothing absent is still success. Null for any other
+   * command.
+   */
+  #execRemoval(command: string): { stdout: string; stderr: string; exitCode: number } | null {
+    const removed = /^rm -r?f '([^']+)'$/.exec(command);
+    const targets = removed !== null
+      ? [removed[1] ?? '']
+      : command.startsWith('rm -rf ') ? quotedSegments(command) : null;
+    if (targets === null) return null;
+    for (const target of targets) {
+      for (const path of this.files.keys()) {
+        if (path === target || path.startsWith(`${target}/`)) this.files.delete(path);
+      }
+    }
+    return { stdout: '', stderr: '', exitCode: 0 };
+  }
+
+  /**
+   * THE HOLDER-RELEASE COMMAND, answered the way the real container answers
+   * it: the signal work happens inside the same command, and STDOUT IS WHO IS
+   * STILL HOLDING WHEN IT ENDS. That last part is the repair — the command
+   * used to echo the list it captured BEFORE signalling, so a writer it had
+   * just killed successfully was still named as a holder, which is how
+   * deployed runs `probe09011530` and `hp0901170218` both blamed a `bun` pid
+   * that the `/proc` report taken afterwards shows was already gone.
+   *
+   * The fake's `workdirHolder` IS its process table, so clearing it is what
+   * the real command's SIGTERM achieves; a holder marked `survives` is one the
+   * TERM and the KILL both failed on, one marked `session` is an ancestor of
+   * the scan's own shell, and one marked `cwdOnly` holds by working directory
+   * and is invisible to an fd match. None of the last three is signalled, so
+   * all three are still holding when the scan ends and all three are named.
+   *
+   * MATCHED ON THE SCAN ITSELF, not on the command's first word: the first
+   * word changed the moment the command grew its ancestor walk, and a fake
+   * keyed on it answered the empty string to a command it no longer
+   * recognised — a silent, wrong answer to a real command. Null for any other
+   * command.
+   */
+  #execHolderRelease(command: string): { stdout: string; stderr: string; exitCode: number } | null {
+    if (!command.includes('/proc/$pid/fd')) return null;
+    const holder = this.workdirHolder;
+    if (holder === undefined) return { stdout: 'none', stderr: '', exitCode: 0 };
+    const named = `${String(holder.pid)}:${holder.comm}`;
+    if (holder.session === true) {
+      return { stdout: named, stderr: `not signalled, this session's own: ${named}`, exitCode: 0 };
+    }
+    if (holder.cwdOnly === true) {
+      return { stdout: named, stderr: `not signalled, cwd-only holders: ${named}`, exitCode: 0 };
+    }
+    if (holder.survives) return { stdout: named, stderr: `signalling: ${named}`, exitCode: 0 };
+    // Signalled, and it died: the re-scan at the end of the real command finds
+    // nothing, so this answers `none` rather than the name it started with.
+    this.workdirHolder = undefined;
+    return { stdout: 'none', stderr: `signalling: ${named}`, exitCode: 0 };
+  }
+
+  /**
+   * THE SNAPSHOT-CHAIN COMMANDS, answered the way the container answers
+   * them: a FUSE mount is a mount `/proc/mounts` reports, an archive build
+   * reports `<exit> <bytes>` for the bytes it staged, and a publish through
+   * the store mount lands those bytes under the object key the box's
+   * `objectFacts` reads back. Matched on the binary each command runs, the
+   * one part of the template the strategy's own builders own. Null for any
+   * other command.
+   */
+  #execChainCommand(command: string): { stdout: string; stderr: string; exitCode: number } | null {
+    if (command.includes('/usr/bin/fuse-overlayfs')) {
+      const quoted = quotedSegments(command);
+      const target = quoted.at(-1);
+      if (target !== undefined) this.overlayMounts.add(target);
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    if (command.includes('/usr/bin/squashfuse')) {
+      const quoted = quotedSegments(command);
+      const mountPoint = quoted.at(-1);
+      if (mountPoint !== undefined) this.layerMounts.add(mountPoint);
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    if (command.includes('/usr/bin/mksquashfs')) {
+      const tail = command.slice(command.indexOf('/usr/bin/mksquashfs'));
+      const quoted = quotedSegments(tail);
+      const sourceDir = quoted[0];
+      const archivePath = quoted[1];
+      if (sourceDir === undefined || archivePath === undefined) {
+        throw new Error(`the archiver command names no source and target: ${command}`);
+      }
+      const bytes = this.synthesizeArchive(sourceDir);
+      this.stagedArchives.set(archivePath, bytes);
+      return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
+    }
+    if (command.includes('conv=fsync')) return this.#execPublish(command);
+    // THE UPPER FINGERPRINT: a hash of what the changed set holds, so an
+    // unchanged upper skips the commit the way the container's own walk
+    // decides. Content-hashed rather than metadata-hashed: this stand-in
+    // keeps no inodes or times, and a fingerprint that moved without a byte
+    // changing would commit where the box skips.
+    if (command.startsWith('bash -o pipefail -c ') && command.includes('/var/tmp/devbox/upper')) {
+      // The shipped caller fingerprints exactly one directory, the overlay
+      // upper, and nests its quoting inside another quoted command, so the
+      // path is matched rather than parsed out of the quoting.
+      return { stdout: sha256Hex(this.synthesizeArchive('/var/tmp/devbox/upper')), stderr: '', exitCode: 0 };
+    }
+    if (command.includes('then seen=1; break; fi')) {
+      // The layer-visibility probe: `ready` exactly when the store holds the
+      // object, which is what a re-list through the mount would find.
+      const seen = /test -e '([^']+)'/.exec(command)?.[1];
+      const store = this.chainStore;
+      const relative = seen?.startsWith('/backups/') === true ? seen.slice('/backups/'.length) : undefined;
+      const held = relative !== undefined && store?.objects.has(`${store.root}/${relative}`) === true;
+      if (held) return { stdout: 'ready', stderr: '', exitCode: 0 };
+      const holds = store === undefined
+        ? ''
+        : [...store.objects.keys()].filter((key) => key.startsWith(`${store.root}/`)).join(' ');
+      return { stdout: `missing ${holds}`.trimEnd(), stderr: '', exitCode: 0 };
+    }
+    return null;
+  }
+
+  /** The chain's publish: `dd if='<archive>' of='<mounted path>' conv=fsync`
+   *  lands a staged archive under the object key the store mount exposes. */
+  #execPublish(command: string) {
+    const archivePath = /if='([^']+)'/.exec(command)?.[1];
+    const mountedPath = /of='([^']+)'/.exec(command)?.[1];
+    const store = this.chainStore;
+    if (archivePath === undefined || mountedPath === undefined || store === undefined) {
+      throw new Error(`the publish command names no archive, target or store: ${command}`);
+    }
+    const bytes = this.stagedArchives.get(archivePath);
+    if (bytes === undefined) throw new Error(`the publish reads an archive nothing staged: ${archivePath}`);
+    // The store mount exposes the chain root: the shipped `mountedLayerPath`
+    // joins the fixed `/backups` mount and the key relative to that root, so
+    // the same join here cannot drift from it without failing loudly below.
+    const relative = mountedPath.startsWith('/backups/')
+      ? mountedPath.slice('/backups/'.length)
+      : undefined;
+    if (relative === undefined) throw new Error(`the publish target is outside the store mount: ${mountedPath}`);
+    store.objects.set(`${store.root}/${relative}`, bytes.slice());
+    return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
+  }
+
   async exec(
     command: string,
     options?: { readonly cwd?: string },
@@ -701,30 +849,8 @@ export class FakeSandbox {
       const serving = this.journalRunning() && this.journalMounts && this.journalSocketUp;
       return { stdout: serving ? 'yes\n' : 'no\n', stderr: '', exitCode: 0 };
     }
-    // THE RUNNER RESULT'S RETIREMENT: `rm -f '<reply>'` after one attempt and
-    // `rm -rf '<dir>'` when the candidate is discarded. Answered against the
-    // file table the runner writes into, so a reply the box retired cannot be
-    // read again by the next attempt on the same fixed result path.
-    const removed = /^rm -r?f '([^']+)'$/.exec(command);
-    if (removed !== null) {
-      const target = removed[1] ?? '';
-      for (const path of this.files.keys()) {
-        if (path === target || path.startsWith(`${target}/`)) this.files.delete(path);
-      }
-      return { stdout: '', stderr: '', exitCode: 0 };
-    }
-    // A `rm -rf` of several directories at once, which is how the chain's
-    // `resetDirs` empties the upper and the stage: every quoted path loses its
-    // subtree, the way the removal really deletes. `rm -rf` of nothing absent
-    // is still success.
-    if (command.startsWith('rm -rf ')) {
-      for (const target of quotedSegments(command)) {
-        for (const path of this.files.keys()) {
-          if (path === target || path.startsWith(`${target}/`)) this.files.delete(path);
-        }
-      }
-      return { stdout: '', stderr: '', exitCode: 0 };
-    }
+    const removal = this.#execRemoval(command);
+    if (removal !== null) return removal;
     const probed = /127\.0\.0\.1:(\d+)/.exec(command);
     if (probed !== null) {
       // '200|0' is an answer; '000|7' is curl's connection-refused exit.
@@ -754,41 +880,8 @@ export class FakeSandbox {
       this.workdirHolder = undefined;
       return { stdout: '', stderr: '', exitCode: 0 };
     }
-    // THE HOLDER-RELEASE COMMAND, answered the way the real container answers
-    // it: the signal work happens inside the same command, and STDOUT IS WHO IS
-    // STILL HOLDING WHEN IT ENDS. That last part is the repair — the command
-    // used to echo the list it captured BEFORE signalling, so a writer it had
-    // just killed successfully was still named as a holder, which is how
-    // deployed runs `probe09011530` and `hp0901170218` both blamed a `bun` pid
-    // that the `/proc` report taken afterwards shows was already gone.
-    //
-    // The fake's `workdirHolder` IS its process table, so clearing it is what
-    // the real command's SIGTERM achieves; a holder marked `survives` is one the
-    // TERM and the KILL both failed on, one marked `session` is an ancestor of
-    // the scan's own shell, and one marked `cwdOnly` holds by working directory
-    // and is invisible to an fd match. None of the last three is signalled, so
-    // all three are still holding when the scan ends and all three are named.
-    //
-    // MATCHED ON THE SCAN ITSELF, not on the command's first word: the first
-    // word changed the moment the command grew its ancestor walk, and a fake
-    // keyed on it answered the empty string to a command it no longer
-    // recognised — a silent, wrong answer to a real command.
-    if (command.includes('/proc/$pid/fd')) {
-      const holder = this.workdirHolder;
-      if (holder === undefined) return { stdout: 'none', stderr: '', exitCode: 0 };
-      const named = `${String(holder.pid)}:${holder.comm}`;
-      if (holder.session === true) {
-        return { stdout: named, stderr: `not signalled, this session's own: ${named}`, exitCode: 0 };
-      }
-      if (holder.cwdOnly === true) {
-        return { stdout: named, stderr: `not signalled, cwd-only holders: ${named}`, exitCode: 0 };
-      }
-      if (holder.survives) return { stdout: named, stderr: `signalling: ${named}`, exitCode: 0 };
-      // Signalled, and it died: the re-scan at the end of the real command finds
-      // nothing, so this answers `none` rather than the name it started with.
-      this.workdirHolder = undefined;
-      return { stdout: 'none', stderr: `signalling: ${named}`, exitCode: 0 };
-    }
+    const release = this.#execHolderRelease(command);
+    if (release !== null) return release;
     // THE JOURNAL READINESS PROBE, answered as the container answers it: the
     // daemon serves once it has been started, unless a test says the mount
     // never lands. The command WAITS inside the container, so one exec is the
@@ -807,79 +900,8 @@ export class FakeSandbox {
         exitCode: 0,
       };
     }
-    // THE SNAPSHOT-CHAIN COMMANDS, answered the way the container answers
-    // them: a FUSE mount is a mount `/proc/mounts` reports, an archive build
-    // reports `<exit> <bytes>` for the bytes it staged, and a publish through
-    // the store mount lands those bytes under the object key the box's
-    // `objectFacts` reads back. Matched on the binary each command runs, the
-    // one part of the template the strategy's own builders own.
-    if (command.includes('/usr/bin/fuse-overlayfs')) {
-      const quoted = quotedSegments(command);
-      const target = quoted.at(-1);
-      if (target !== undefined) this.overlayMounts.add(target);
-      return { stdout: '', stderr: '', exitCode: 0 };
-    }
-    if (command.includes('/usr/bin/squashfuse')) {
-      const quoted = quotedSegments(command);
-      const mountPoint = quoted.at(-1);
-      if (mountPoint !== undefined) this.layerMounts.add(mountPoint);
-      return { stdout: '', stderr: '', exitCode: 0 };
-    }
-    if (command.includes('/usr/bin/mksquashfs')) {
-      const tail = command.slice(command.indexOf('/usr/bin/mksquashfs'));
-      const quoted = quotedSegments(tail);
-      const sourceDir = quoted[0];
-      const archivePath = quoted[1];
-      if (sourceDir === undefined || archivePath === undefined) {
-        throw new Error(`the archiver command names no source and target: ${command}`);
-      }
-      const bytes = this.synthesizeArchive(sourceDir);
-      this.stagedArchives.set(archivePath, bytes);
-      return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
-    }
-    if (command.includes('conv=fsync')) {
-      const archivePath = /if='([^']+)'/.exec(command)?.[1];
-      const mountedPath = /of='([^']+)'/.exec(command)?.[1];
-      const store = this.chainStore;
-      if (archivePath === undefined || mountedPath === undefined || store === undefined) {
-        throw new Error(`the publish command names no archive, target or store: ${command}`);
-      }
-      const bytes = this.stagedArchives.get(archivePath);
-      if (bytes === undefined) throw new Error(`the publish reads an archive nothing staged: ${archivePath}`);
-      // The store mount exposes the chain root: the shipped `mountedLayerPath`
-      // joins the fixed `/backups` mount and the key relative to that root, so
-      // the same join here cannot drift from it without failing loudly below.
-      const relative = mountedPath.startsWith('/backups/')
-        ? mountedPath.slice('/backups/'.length)
-        : undefined;
-      if (relative === undefined) throw new Error(`the publish target is outside the store mount: ${mountedPath}`);
-      store.objects.set(`${store.root}/${relative}`, bytes.slice());
-      return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
-    }
-    // THE UPPER FINGERPRINT: a hash of what the changed set holds, so an
-    // unchanged upper skips the commit the way the container's own walk
-    // decides. Content-hashed rather than metadata-hashed: this stand-in
-    // keeps no inodes or times, and a fingerprint that moved without a byte
-    // changing would commit where the box skips.
-    if (command.startsWith('bash -o pipefail -c ') && command.includes('/var/tmp/devbox/upper')) {
-      // The shipped caller fingerprints exactly one directory, the overlay
-      // upper, and nests its quoting inside another quoted command, so the
-      // path is matched rather than parsed out of the quoting.
-      return { stdout: sha256Hex(this.synthesizeArchive('/var/tmp/devbox/upper')), stderr: '', exitCode: 0 };
-    }
-    if (command.includes('then seen=1; break; fi')) {
-      // The layer-visibility probe: `ready` exactly when the store holds the
-      // object, which is what a re-list through the mount would find.
-      const seen = /test -e '([^']+)'/.exec(command)?.[1];
-      const store = this.chainStore;
-      const relative = seen?.startsWith('/backups/') === true ? seen.slice('/backups/'.length) : undefined;
-      const held = relative !== undefined && store?.objects.has(`${store.root}/${relative}`) === true;
-      if (held) return { stdout: 'ready', stderr: '', exitCode: 0 };
-      const holds = store === undefined
-        ? ''
-        : [...store.objects.keys()].filter((key) => key.startsWith(`${store.root}/`)).join(' ');
-      return { stdout: `missing ${holds}`.trimEnd(), stderr: '', exitCode: 0 };
-    }
+    const chain = this.#execChainCommand(command);
+    if (chain !== null) return chain;
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 

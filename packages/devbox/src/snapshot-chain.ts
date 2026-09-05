@@ -633,7 +633,7 @@ const lowerEmpty = `${DEVBOX_RUNTIME_DIR}/lower-empty`;
  *  the record names is served as a layer. One fixed path could not tell that
  *  apart from a mount left by the generation a collapse superseded, and every
  *  commit afterwards would collapse again. */
-export function deltaLayerMountPoint(chainId: string): string {
+function deltaLayerMountPoint(chainId: string): string {
   return `${lowerDeltaRoot}/${assertChainId(chainId)}`;
 }
 
