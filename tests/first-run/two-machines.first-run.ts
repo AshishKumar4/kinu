@@ -83,7 +83,11 @@ describe(SUITE, () => {
               account, name, home: scratchDir(`first-run-${name}`),
             });
             attached.push(machine);
-            await grantDeviceConsent(account, machine.deviceId, session.workspace);
+            // Named: with two live the fleet refuses an unnamed call with the
+            // ask and raises no card, so the second grant can never mint one
+            // unnamed (docs/EXECUTION-LAYER-SPEC.md "The user's account is a
+            // fleet"). The name is what the owner would tap.
+            await grantDeviceConsent(account, machine.deviceId, session.workspace, name);
           }
           const [alpha, beta] = attached;
           if (alpha === undefined || beta === undefined) {

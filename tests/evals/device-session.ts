@@ -217,13 +217,13 @@ export async function listDevicesOverCliRoute(account: DeviceAccount): Promise<D
  * other name is a grant the device call will not find.
  */
 export async function grantDeviceConsent(
-  account: DeviceAccount, deviceId: string, agentName: string,
+  account: DeviceAccount, deviceId: string, agentName: string, deviceName?: string,
 ): Promise<void> {
   // This helper is now the FIRST-CALL route a case can use to reach a machine it
   // owns: make one `laptop` call with a harmless `true`, let the deployment raise
   // the real consent card for that workspace, and answer it `always` through the
   // RPC the card's own button calls. See `grantDeviceAccess` for the work.
-  await grantDeviceAccess(account, deviceId, agentName);
+  await grantDeviceAccess(account, deviceId, agentName, deviceName);
 }
 
 /**
@@ -241,7 +241,7 @@ export async function grantDeviceConsent(
  * the card then settles itself.
  */
 export async function grantDeviceAccess(
-  account: DeviceAccount, deviceId: string, agentName: string,
+  account: DeviceAccount, deviceId: string, agentName: string, deviceName?: string,
 ): Promise<void> {
   // ONE call that raises the card, retried past the transport's warm-up.
   //
@@ -251,6 +251,11 @@ export async function grantDeviceAccess(
   // with "not available" while the kick its own status() read started is still
   // in flight. A person sees this once and their next click works; this harness
   // waits it out rather than concluding the machine is unreachable.
+  //
+  // The call names its machine when the caller knows it
+  // (docs/EXECUTION-LAYER-SPEC.md "The user's account is a fleet"): with
+  // several live, an unnamed call is refused with the fleet ask and raises no
+  // card, so a grant for the second machine can never mint one unnamed.
   const rpcUrl = `${account.origin}/api/cli/workspaces/${encodeURIComponent(agentName)}/rpc`;
   const raiseOnce = (): Promise<{ ok: boolean; detail: string }> => infraBoundary(
     `POST ${rpcUrl} (device consent raise)`,
@@ -261,7 +266,8 @@ export async function grantDeviceAccess(
           authorization: `Bearer ${account.cliToken}`,
           'content-type': 'application/json',
         },
-        body: JSON.stringify({ method: 'executeInExecutor', args: ['laptop', 'true'] }),
+        body: JSON.stringify({ method: 'executeInExecutor',
+          args: deviceName === undefined ? ['laptop', 'true'] : ['laptop', 'true', deviceName] }),
       });
       const text = await response.text();
       if (!response.ok) {
@@ -291,15 +297,21 @@ export async function grantDeviceAccess(
   // caller's own frame.
   const raising = (async (): Promise<Error | null> => {
     try {
+      // Warm-up wears two shapes: the transport's ("not available", "no device
+      // connected") arrives as an error, the fleet's ("not known here yet",
+      // "no connected machine is named") as a stdout refusal — so the loop
+      // retries on the WORDS, not on the envelope, and a refusal that is still
+      // warm-up after the budget reads as unreachable with its own words.
+      const warmup = /not available|no device connected|not known here yet|no connected machine is named/i;
       let raised = await raiseOnce();
-      for (let attempt = 0; attempt < 12 && !raised.ok; attempt += 1) {
-        if (!/not available|no device connected/i.test(raised.detail)) break;
+      for (let attempt = 0; attempt < 12 && warmup.test(raised.detail); attempt += 1) {
         const tick = Promise.withResolvers<void>();
         setTimeout(tick.resolve, 1_000);
         await tick.promise;
         raised = await raiseOnce();
       }
-      if (!raised.ok && !/queued|approval|denied/i.test(raised.detail)) {
+      if (warmup.test(raised.detail)
+        || (!raised.ok && !/queued|approval|denied/i.test(raised.detail))) {
         return new Error(`the laptop executor never became reachable for ${agentName}: `
           + `${raised.detail}`);
       }
