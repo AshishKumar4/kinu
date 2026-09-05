@@ -27,8 +27,8 @@ describe('Plan mode browser contract', () => {
     // The composer send: mode threaded AND admission-guarded — a refused send
     // returns before any state mutation, which is what the latch is for.
     expect(page).toContain('if (!state.sendChat(t, [...attachments.parts], effectiveChatMode)) return;');
-    expect(page).toContain('planReviewAwaitingDecision(state.activePlan)');
-    expect(page).toContain('locked: planAwaitingDecision');
+    expect(page).toContain('usePlanGatedMode(subName === undefined ? state.activePlan : null, ui)');
+    expect(page).toContain('locked: planGate.locked');
     expect(composer).toContain('aria-label="Turn mode"');
     // Build is unreachable while a plan awaits a decision, and the whole
     // segment is inert mid-turn. Both halves matter: the first is the trust

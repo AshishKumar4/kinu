@@ -490,7 +490,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
  * quiet on upgrade, but they were never read by you — which is why they say so,
  * and why revoking one is a click.
  */
-export function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
+function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<InstructionSourceView | null>(null);

@@ -9,11 +9,12 @@
  * is proved in the browser against the gallery's fresh-workspace and
  * with-content frames.
  */
-
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
-import type { ForkNode, TabPresence } from '../src/lib/protocol';
-import { SURFACES } from '../src/components/surfaces/WorkSurface';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { ForkNode, Rpc, TabPresence } from '../src/lib/protocol';
+import { WorkSurface } from '../src/components/surfaces/WorkSurface';
 import {
   resolveGatedSurface,
   surfaceHasContent,
@@ -26,9 +27,37 @@ const oneTree = (): ReadonlyMap<string, ForkNode> => new Map([
     status: 'open', action: '', children: [],
   }],
 ]);
-
 const FRESH: TabPresence = { releases: false, explorations: false };
 const FULL: TabPresence = { releases: true, explorations: true };
+
+const SILENT_RPC: Rpc = () => Promise.withResolvers<never>().promise;
+
+const renderStrip = (tabPresence: TabPresence | undefined): string =>
+  renderToStaticMarkup(createElement(WorkSurface, {
+    surface: 'Work',
+    onSurface: () => {},
+    pinnedPorts: [],
+    previewError: null,
+    onRefreshPorts: () => {},
+    plan: null,
+    snapshot: { status: 'loading' },
+    tools: [],
+    memory: [],
+    memoryContent: '',
+    onSearchMemory: () => {},
+    onRetryLoad: () => {},
+    mctsTrees: EMPTY_TREES,
+    headActivity: new Map(),
+    isStreaming: false,
+    executors: [],
+    executorOutputs: new Map(),
+    onExecute: () => Promise.withResolvers<never>().promise,
+    backgroundJobs: [],
+    onRefreshJobs: () => {},
+    pendingActions: [],
+    tabPresence,
+    rpc: SILENT_RPC,
+  }));
 
 
 describe('the gated tabs appear only with content', () => {
@@ -37,12 +66,19 @@ describe('the gated tabs appear only with content', () => {
     expect(surfaceHasContent('Exploration', FRESH, EMPTY_TREES)).toBe(false);
   });
 
-
   test('every ungated surface stays visible on a fresh workspace', () => {
-    for (const surface of SURFACES) {
-      if (surface === 'Releases' || surface === 'Exploration') continue;
-      expect(surfaceHasContent(surface, FRESH, EMPTY_TREES)).toBe(true);
+    const html = renderStrip(FRESH);
+    for (const surface of ['Output', 'Work', 'Files', 'Agent', 'Environment']) {
+      expect(html).toContain(`aria-label="${surface}"`);
     }
+    expect(html).not.toContain('aria-label="Releases"');
+    expect(html).not.toContain('aria-label="Exploration"');
+  });
+
+  test('a workspace with content shows the gated tabs in the strip', () => {
+    const html = renderStrip(FULL);
+    expect(html).toContain('aria-label="Releases"');
+    expect(html).toContain('aria-label="Exploration"');
   });
 
 

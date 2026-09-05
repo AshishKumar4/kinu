@@ -14,6 +14,7 @@ import {
   type ModelMenu, type ModelMenuEntry, type ProviderFailure,
 } from "../lib/user-api";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
+import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import * as v from 'valibot';
 
 const ModelMenuEntrySchema = v.object({
@@ -123,10 +124,14 @@ export function ConnectedModelPicker({
 }) {
   const [menu, setMenu] = useState<ModelMenu | null | "error">(null);
   const fetchModels = useCallback(() => {
+    const loadFailed = <Thrown,>(thrown: Thrown): void => {
+      diagnostics.event("model_picker.load_failed", { error: renderThrownChain({ cause: thrown }) });
+      setMenu("error");
+    };
     setMenu(null);
     listAvailableModels()
       .then(setMenu)
-      .catch(() => setMenu("error"));
+      .catch(loadFailed);
   }, []);
   useEffect(() => { fetchModels(); }, [fetchModels]);
   if (menu === null) {

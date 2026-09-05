@@ -45,7 +45,7 @@ const TRANSPORT_ENDPOINTS = ['get-messages'] as const;
 // name, but another literal `sub` segment may not: the agents SDK treats that
 // marker as recursive facet routing. The orchestrator's own name may ALSO be
 // followed by one of the transport endpoints enumerated above.
-export const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(
+const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(
   `^${ROOT_AGENT_PATH}/([^/]+)(?:$`
   + `|/(?:${TRANSPORT_ENDPOINTS.join('|')})/?$`
   + `|/sub/${SUBORDINATE_AGENT_SLUG}/[^/]+(?:/(?!sub(?:/|$))[^/]+)*/?$)`,

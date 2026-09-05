@@ -214,7 +214,7 @@ export function losingBranchIds(root: ForkNode): Set<string> {
 
 /** Radii bracket: small enough that a hundred rows stay distinct, large
  *  enough that a heavily-rolled-out node is unmistakable. */
-export const NODE_R_MIN = 3.5;
+const NODE_R_MIN = 3.5;
 export const NODE_R_MAX = 11;
 /** Every branch of an unscored fork is the same size, because none of them was
  *  paid for more than another. Mid-bracket rather than the floor: a handful of

@@ -18,8 +18,7 @@ import type { ConnectionStatus } from "@/hooks/use-kinu";
 import { useTheme, toggleMode } from "@/hooks/use-theme";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-export const ALTITUDES = ["run", "supervise"] as const;
-export type Altitude = (typeof ALTITUDES)[number];
+export type Altitude = "run" | "supervise";
 
 const ALTITUDE_TAB_CLASS = "!my-0.5 !rounded-full !px-[18px] !text-[12.5px] !leading-[18px] !font-semibold !text-[var(--c-text-4)] hover:!text-[var(--c-accent)] aria-selected:!text-[var(--c-accent-on)]";
 

@@ -143,7 +143,7 @@ export function installDocument(command: string): string {
       <code id="install-command">${escapeHtml(command)}</code>
       <button class="copy" type="button" data-copy="install-command">Copy</button>
     </div>
-    <p class="dim">Script only, with no sign-in and no local setup: add <code>--no-setup</code>.</p>
+    <p class="dim">Add <code>--no-setup</code> for a script-only install with no sign-in and no local setup.</p>
   </section>
   <section class="section">
     <p class="label"><b>§ 01</b>What the installer sets up</p>

@@ -46,7 +46,7 @@ type AppRoute = (typeof APP_ROUTES)[keyof typeof APP_ROUTES];
  * someone added to the router and not to `APP_ROUTES` — which is a finding
  * rather than a crash.
  */
-export const UNMATCHED_ROUTE = '/unmatched';
+const UNMATCHED_ROUTE = '/unmatched';
 
 /** Everything the `route` field of a client report may hold. */
 export type ReportedRoute = AppRoute | typeof UNMATCHED_ROUTE;

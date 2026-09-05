@@ -1,23 +1,22 @@
 /**
- * The stale-chunk recovery policy, driven without a browser.
+ * The stale-chunk recovery policy, driven without a browser through
+ * `loadRouteChunk` — the seam the module hands out.
  *
  * Two claims are worth pinning here rather than only in a browser, because both
  * are about what the policy REFUSES to do:
  *
  *   1. The recognised set is closed. A reload is the most destructive thing this
  *      app does to a reader without being asked — it discards whatever they had
- *      on screen — so the four engine messages that authorise one are a list, and
- *      this suite is what stops a fifth being waved through by a substring.
+ *      on screen — so each engine wording that authorises one is a case below,
+ *      and anything else rethrows the original failure and touches nothing.
  *   2. Every arm that is not a recognised, confirmed, unclaimed stale chunk
- *      rethrows the ORIGINAL failure and touches nothing. That is the whole
- *      safety property: the feature can only ever add one narrow recovery, never
- *      change another outcome.
+ *      rethrows the ORIGINAL failure. That is the whole safety property: the
+ *      feature can only ever add one narrow recovery, never change another
+ *      outcome.
  */
 import { describe, expect, test } from 'bun:test';
 import {
   CHUNK_RELOAD_KEY,
-  claimChunkReload,
-  isStaleChunkFailure,
   loadRouteChunk,
   type ChunkReloadStore,
   type ChunkRecoveryDeps,
@@ -98,56 +97,84 @@ async function stillOpen(pending: Promise<unknown>): Promise<boolean> {
 
 describe('recognising a module that would not load', () => {
   for (const [engine, message] of Object.entries(ENGINE_MESSAGES)) {
-    test(`${engine}'s wording is recognised`, () => {
-      expect(isStaleChunkFailure(new TypeError(message))).toBe(true);
+    test(`${engine}'s wording reloads once the origin has moved`, async () => {
+      const run = drive();
+      const pending = loadRouteChunk(async (): Promise<never> => { throw new TypeError(message); }, run.deps);
+      await run.reloaded;
+      expect(await stillOpen(pending)).toBe(true);
+      expect(run.reloads()).toBe(1);
+      expect(run.claimed()).toBe(LIVE);
     });
   }
 
-  test('an application error is not', () => {
+  test('an application error is not, even with the origin moved', async () => {
     // The case that must never reload: a page whose own code threw. Reloading
     // would discard the reader's context and land them on the same fault.
-    expect(isStaleChunkFailure(new TypeError("Cannot read properties of undefined (reading 'kind')"))).toBe(false);
+    const run = drive();
+    const thrown = new TypeError("Cannot read properties of undefined (reading 'kind')");
+    await expect(loadRouteChunk(async (): Promise<never> => { throw thrown; }, run.deps)).rejects.toBe(thrown);
+    expect(run.liveReads()).toBe(0);
+    expect(run.reloads()).toBe(0);
+    expect(run.claimed()).toBeNull();
   });
 
-  test('prose that merely mentions a module is not', () => {
-    expect(isStaleChunkFailure(new Error('the module registry is confusing'))).toBe(false);
+  test('prose that merely mentions a module is not', async () => {
+    const run = drive();
+    await expect(loadRouteChunk(async (): Promise<never> => {
+      throw new Error('the module registry is confusing');
+    }, run.deps)).rejects.toThrow('the module registry is confusing');
+    expect(run.liveReads()).toBe(0);
+    expect(run.reloads()).toBe(0);
+    expect(run.claimed()).toBeNull();
   });
 
-  test('a thrown non-Error is not', () => {
-    expect(isStaleChunkFailure('Failed to fetch dynamically imported module')).toBe(false);
-    expect(isStaleChunkFailure(null)).toBe(false);
-    expect(isStaleChunkFailure(undefined)).toBe(false);
+  test('a thrown non-Error is not', async () => {
+    for (const thrown of ['Failed to fetch dynamically imported module', null, undefined]) {
+      const run = drive();
+      await expect(loadRouteChunk(async (): Promise<never> => { throw thrown; }, run.deps)).rejects.toBe(thrown);
+      expect(run.reloads()).toBe(0);
+      expect(run.claimed()).toBeNull();
+    }
   });
 
-  test('an empty message is not', () => {
-    expect(isStaleChunkFailure(new Error(''))).toBe(false);
+  test('an empty message is not', async () => {
+    const run = drive();
+    await expect(loadRouteChunk(async (): Promise<never> => { throw new Error(''); }, run.deps)).rejects.toThrow('');
+    expect(run.reloads()).toBe(0);
+    expect(run.claimed()).toBeNull();
   });
 });
 
 describe('the one-reload-per-build guard', () => {
-  test('the first claim for a build is granted', () => {
-    const session = store();
-    expect(claimChunkReload(session, LIVE)).toBe(true);
-    expect(session.read()).toBe(LIVE);
+  const stale = async (): Promise<never> => { throw new TypeError(ENGINE_MESSAGES.chromium); };
+
+  test('the first attempt for a build reloads and records it', async () => {
+    const run = drive();
+    const pending = loadRouteChunk(stale, run.deps);
+    await run.reloaded;
+    expect(await stillOpen(pending)).toBe(true);
+    expect(run.reloads()).toBe(1);
+    expect(run.claimed()).toBe(LIVE);
   });
 
-  test('the second claim for the same build is refused', () => {
-    const session = store();
-    claimChunkReload(session, LIVE);
-    expect(claimChunkReload(session, LIVE)).toBe(false);
+  test('the second attempt for the same build is an error, not a reload', async () => {
+    // The loop bound. Reached when the first reload did not fix it, which means
+    // the assumption behind reloading was wrong and the reader deserves the
+    // error rather than another round trip.
+    const run = drive({ seed: LIVE });
+    await expect(loadRouteChunk(stale, run.deps)).rejects.toThrow(TypeError);
+    expect(run.reloads()).toBe(0);
   });
 
-  test('a claim already on record refuses without being asked twice', () => {
-    expect(claimChunkReload(store(LIVE), LIVE)).toBe(false);
-  });
-
-  test('a further build earns its own single reload', () => {
+  test('a further build earns its own single reload', async () => {
     // The bound is one reload per build TRANSITION, not one per tab: a tab left
     // open across three deploys may recover from each, once.
-    const session = store();
-    expect(claimChunkReload(session, LIVE)).toBe(true);
-    expect(claimChunkReload(session, 'c0ffee0')).toBe(true);
-    expect(claimChunkReload(session, 'c0ffee0')).toBe(false);
+    const run = drive({ seed: 'c0ffee0' });
+    const pending = loadRouteChunk(stale, run.deps);
+    await run.reloaded;
+    expect(await stillOpen(pending)).toBe(true);
+    expect(run.reloads()).toBe(1);
+    expect(run.claimed()).toBe(LIVE);
   });
 });
 

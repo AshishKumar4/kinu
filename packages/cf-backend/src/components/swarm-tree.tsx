@@ -74,6 +74,7 @@ import {
 	NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, viewNoteFor,
 	type ExplorerSelection,
 } from "./swarm-tree-model";
+import { scoreBand } from "@/components/ui/score-bar";
 
 /** One search's band on the canvas. */
 export interface SwarmTreeRegion {
@@ -443,7 +444,8 @@ function scoreRamp(): (t: number) => string {
 }
 
 function scoreToken(value: number): string {
-	return value >= 0.7 ? "var(--c-success)" : value >= 0.4 ? "var(--c-warning)" : "var(--c-danger)";
+	const band = scoreBand(value);
+	return band === "success" ? "var(--c-success)" : band === "warning" ? "var(--c-warning)" : "var(--c-danger)";
 }
 
 function nodeFill(node: ForkNode, ramp: (t: number) => string): string {

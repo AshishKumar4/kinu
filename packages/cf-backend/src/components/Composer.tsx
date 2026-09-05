@@ -149,7 +149,7 @@ function ModeSegment({ value, onChange, locked, disabled }: {
  * two receipts can share a name, byte length, MIME type and timestamp while
  * holding different bytes, so the old metadata key silently dropped one.
  */
-export function pastedFiles(data: DataTransfer): FileList {
+function pastedFiles(data: DataTransfer): FileList {
   const { files, items } = data;
   if (files.length < 2) return files;
   const seenItems = new Set<DataTransferItem>();

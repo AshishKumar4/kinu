@@ -71,7 +71,7 @@ const STALE_CHUNK_MESSAGES = [
 ] as const;
 
 /** Whether a caught value is a module that would not load. */
-export function isStaleChunkFailure<Failure>(cause: Failure): boolean {
+function isStaleChunkFailure<Failure>(cause: Failure): boolean {
   if (!(cause instanceof Error)) return false;
   const message = cause.message.toLowerCase();
   return STALE_CHUNK_MESSAGES.some((known) => message.includes(known));
@@ -109,7 +109,7 @@ export interface ChunkReloadStore {
  * and earns its own single reload, so the bound is one reload per build
  * transition per tab, and a loop is impossible in either direction.
  */
-export function claimChunkReload(session: ChunkReloadStore, target: string): boolean {
+function claimChunkReload(session: ChunkReloadStore, target: string): boolean {
   if (session.getItem(CHUNK_RELOAD_KEY) === target) return false;
   session.setItem(CHUNK_RELOAD_KEY, target);
   return true;

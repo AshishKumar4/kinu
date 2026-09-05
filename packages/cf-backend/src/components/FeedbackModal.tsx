@@ -283,7 +283,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
    *  under the reporter's cursor. */
   const stop = useCallback(() => {
     inFlight.current?.abort();
-    setSend({ phase: "failed", reason: "you stopped it" });
+    setSend({ phase: "failed", reason: "You stopped it" });
   }, []);
 
   if (send.phase === "sent") {

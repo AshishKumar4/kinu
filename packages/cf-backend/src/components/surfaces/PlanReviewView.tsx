@@ -28,7 +28,7 @@ function annotationType(value: PlanReviewAnnotation["type"]): AnnotationType {
   return AnnotationType.COMMENT;
 }
 
-export function parsePlanAnnotations<Values>(values: Values): Annotation[] {
+function parsePlanAnnotations<Values>(values: Values): Annotation[] {
   const admission = admitPlanReviewAnnotations(values);
   if (!admission.ok) return [];
   return admission.annotations.map((annotation) => ({

@@ -272,7 +272,15 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
   pending?: HeadDelta;
 }) {
   const live = view.status === "running";
-  const allSteps = older ? [...older.steps, ...view.steps.items] : view.steps.items;
+  // Memoised on the two page identities, never rebuilt per render. The spread
+  // used to hand the memo below a fresh array every render, so every step
+  // re-folded and every MessageView re-rendered on any parent update.
+  const olderSteps = older?.steps;
+  const viewSteps = view.steps.items;
+  const allSteps = useMemo(
+    () => (olderSteps ? [...olderSteps, ...viewSteps] : viewSteps),
+    [olderSteps, viewSteps],
+  );
   const messages = useMemo(
     () => allSteps.map((step, index) => stepAsMessage(step, index, view.nodeId)),
     [allSteps, view.nodeId],

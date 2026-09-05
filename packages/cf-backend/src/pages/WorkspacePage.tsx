@@ -10,7 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES, DEVICE_PROVISION_METHOD,
-  isPlaceholderMission, planReviewAwaitingDecision, summarizeRestorePlan,
+  isPlaceholderMission, summarizeRestorePlan,
 } from "@kinu.run/core";
 import type {
   AlternateTakeSet, FileCheckpointEntry, FileCheckpointListing,
@@ -19,7 +19,7 @@ import type {
 import { useKinu } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useChatThread } from "@/hooks/use-chat-thread";
-import { useConversationUiState } from "@/hooks/use-conversation-ui-state";
+import { useConversationUiState, usePlanGatedMode } from "@/hooks/use-conversation-ui-state";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
@@ -428,15 +428,10 @@ function SubordinateChatColumn({
   const ui = useConversationUiState(`${workspace}/agents/${subName}`);
   const input = ui.draft;
   const setInput = ui.setDraft;
-  // The same Plan gate as the workspace column: an additional agent runs the
-  // same turn pipeline, so a plan it submitted locks its composer to Plan
-  // until the owner decides.
-  const planAwaitingDecision = planReviewAwaitingDecision(state.activePlan);
-  const effectiveMode = planAwaitingDecision ? "plan" : ui.mode;
-  useEffect(() => {
-    if (planAwaitingDecision) ui.setMode("plan");
-    else if (state.activePlan?.status === "approved") ui.setMode("build");
-  }, [planAwaitingDecision, state.activePlan?.status, ui.setMode]);
+  // The Plan gate lives in the hook both chat columns share: a submitted plan
+  // locks this composer to Plan until the owner decides.
+  const planGate = usePlanGatedMode(state.activePlan, ui);
+  const effectiveMode = planGate.mode;
   // The same older-history walk the workspace column runs, over this facet's
   // own storage. A subordinate keeps its own conversation, and a helper that
   // worked for an hour has more of one than the SDK's hydration window holds.
@@ -574,7 +569,7 @@ function SubordinateChatColumn({
           streaming={state.isStreaming}
           onSteer={steer}
           onStop={stop}
-          mode={{ value: effectiveMode, onChange: ui.setMode, locked: planAwaitingDecision }}
+          mode={{ value: effectiveMode, onChange: ui.setMode, locked: planGate.locked }}
           modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" />}
           notices={[
             ...(state.error
@@ -690,8 +685,8 @@ export default function WorkspacePage() {
   const ui = useConversationUiState(`${agentId ?? ""}/main`);
   const chatMode = ui.mode;
   const setChatMode = ui.setMode;
-  const planAwaitingDecision = planReviewAwaitingDecision(state.activePlan);
-  const effectiveChatMode = planAwaitingDecision ? "plan" : chatMode;
+  const planGate = usePlanGatedMode(subName === undefined ? state.activePlan : null, ui);
+  const effectiveChatMode = planGate.mode;
   const chatInput = ui.draft;
   const setChatInput = ui.setDraft;
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
@@ -826,15 +821,8 @@ export default function WorkspacePage() {
       ? `${subName ?? "main"}/${visiblePlan.id}/${visiblePlan.revision}`
       : null;
     if (key && key !== previousPlanRef.current) setSurface("Output");
-    if (subName === undefined) {
-      if (planAwaitingDecision) setChatMode("plan");
-      else if (state.activePlan?.status === "approved") setChatMode("build");
-    }
     previousPlanRef.current = key;
   }, [
-    planAwaitingDecision,
-    setChatMode,
-    state.activePlan?.status,
     subName,
     visiblePlan?.id,
     visiblePlan?.revision,
@@ -1277,7 +1265,7 @@ export default function WorkspacePage() {
                 onSteer={handleSteer}
                 onStop={handleStop}
                 onBranch={handleBranch}
-                mode={{ value: effectiveChatMode, onChange: setChatMode, locked: planAwaitingDecision }}
+                mode={{ value: effectiveChatMode, onChange: setChatMode, locked: planGate.locked }}
                 attachments={{
                   parts: [...attachments.parts],
                   onAdd: attachments.add,

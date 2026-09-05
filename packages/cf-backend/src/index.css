@@ -817,11 +817,6 @@ body { background: var(--c-bg); color: var(--c-text); }
   box-shadow: var(--shadow-composer), 0 0 0 3px var(--c-accent-subtle);
 }
 
-.p-nav-active {
-  background: var(--c-accent-subtle);
-  color: var(--c-accent-fg);
-}
-
 .p-row-hover:hover { background: var(--c-elevated); }
 
 /* MCTS tree labels. Below the zoom where an 11px label lands under ~8px on

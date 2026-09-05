@@ -13,5 +13,7 @@ import { primePageDeployedBuildSha } from "./hooks/session-recovery";
 primePageDeployedBuildSha();
 
 // Theme is initialized in index.html <head> to prevent flash
-const root = createRoot(document.getElementById("root")!);
+const mount = document.getElementById("root");
+if (mount === null) throw new Error("missing #root mount point");
+const root = createRoot(mount);
 root.render(<App />);

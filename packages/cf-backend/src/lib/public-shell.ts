@@ -1,16 +1,11 @@
 /**
  * The one HTML shell every signed-out page is built from.
  *
- * Four public surfaces render outside React and outside the bundle: the front
- * page, sign-in, the OAuth result pages, and the CLI install and approval
- * pages. Each used to carry its own `<style>` block with its own copy of the
- * umber hexes, `color-scheme: dark` pinned, and its own header. Four copies is
- * four designs: they drifted on hairline alpha, on control height, on whether
- * light mode existed at all, and a token edit in `index.css` reached none of
- * them.
- *
- * So this module owns the public face: tokens, chrome, the type scale, the
- * controls and the responsive rules. A page supplies a title and a body.
+ * Four public surfaces render outside React and outside the bundle. They are
+ * the front page, sign-in, the OAuth result pages, and the CLI install and
+ * approval pages. One module owns their shared shell. It carries the tokens,
+ * the chrome, the type scale, the controls and the responsive rules, so a
+ * token edit lands on every surface. A page supplies a title and a body.
  *
  * ## Tokens
  *
@@ -107,7 +102,7 @@ const LIGHT = {
  * Every block declares the COMPLETE set: a token one block omitted would
  * resolve by source order instead of by intent.
  */
-export const THEME_BLOCKS: ReadonlyArray<{
+const THEME_BLOCKS: ReadonlyArray<{
   readonly selector: string;
   readonly mode: Mode;
   readonly tokens: TokenSet;
@@ -122,7 +117,7 @@ export type RadiusRole = '--r-control' | '--r-row' | '--r-card' | '--r-overlay';
 /** Radii, as the roles `index.css` states them. The mock's two 14px measures
  *  (outer card, composer) are literals there now, not Tailwind rungs, so the
  *  parity test compares these strings to the role declarations directly. */
-export const RADII = {
+const RADII = {
   '--r-control': '6px',
   '--r-row': '8px',
   '--r-card': '14px',
@@ -138,7 +133,7 @@ export const RADII = {
  *
  * The app's own bootstrap in `index.html` resolves the same way.
  */
-export const THEME_BOOT = `(() => {
+const THEME_BOOT = `(() => {
   var root = document.documentElement;
   var stored = null;
   try { stored = localStorage.getItem('theme'); } catch (e) {}
@@ -204,7 +199,7 @@ export function mark(size: number, id: MarkId = KINU_MARK): string {
 export const MARK_IDS: readonly MarkId[] = ['kana', 'node', 'loom', 'brush'];
 
 /** Mark plus name, as one link home. */
-export function wordmark(size = 21): string {
+function wordmark(size = 21): string {
   return `<a class="brand" href="/" aria-label="Kinu.run home">${mark(size)}<span>Kinu.run</span></a>`;
 }
 

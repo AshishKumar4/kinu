@@ -40,7 +40,7 @@ import { AgentViewSurface } from "./AgentViewSurface";
 import { resolveGatedSurface, surfaceHasContent } from "./presence";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
-export const SURFACES = ["Output", "Work", "Files", "Releases", "Exploration", "Agent", "Environment"] as const;
+const SURFACES = ["Output", "Work", "Files", "Releases", "Exploration", "Agent", "Environment"] as const;
 
 /** Not one of the segmented work surfaces: Activity is about the run rather
  *  than a place to work in it, so it sits apart at the right of the strip and
@@ -52,8 +52,8 @@ export const ACTIVITY_SURFACE = "Activity";
 export type AgentViewSurfaceKind = `view:${string}`;
 export type SurfaceKind = (typeof SURFACES)[number] | typeof ACTIVITY_SURFACE | AgentViewSurfaceKind;
 
-export const agentViewSurface = (slug: string): AgentViewSurfaceKind => `view:${slug}`;
-export const agentViewSlug = (surface: SurfaceKind): string | null =>
+const agentViewSurface = (slug: string): AgentViewSurfaceKind => `view:${slug}`;
+const agentViewSlug = (surface: SurfaceKind): string | null =>
   surface.startsWith("view:") ? surface.slice("view:".length) : null;
 
 const SURFACE_LABEL = {

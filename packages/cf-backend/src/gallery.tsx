@@ -81,6 +81,7 @@
  *                                  asserted about without asserting about a clock.
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
+ * The dispatch in `mount()` is the full frame list.
  */
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -2086,7 +2087,7 @@ const RUNNING_ACTIVITY: ReadonlyMap<string, number> = new Map(
  * other fork frame photographs would be a fixture testing itself.
  */
 const LIVE_STAGE_ROWS = [0, 1, 4, 12, MCTS_ROWS.length] as const;
-export const LIVE_STAGES = LIVE_STAGE_ROWS.length;
+const LIVE_STAGES = LIVE_STAGE_ROWS.length;
 
 /** The run row as the ledger holds it at `stage` — the fact the list renders,
  *  and the one that decides whether the surface polls fast or idles. */
@@ -3315,7 +3316,7 @@ function MarksFrame() {
                 <span className="p-heading text-[17px] p-text">Kinu</span>
               </div>
               <div className="p-eyebrow px-2">Workspaces</div>
-              <div className="px-2 py-1.5 rounded-lg p-nav-active p-row-text font-medium">Checkout coupon bug</div>
+              <div className="px-2 py-1.5 rounded-lg bg-[var(--c-elevated)] p-row-text font-medium">Checkout coupon bug</div>
               <div className="px-2 py-1.5 p-row-text p-text-2">Perf audit — landing</div>
             </div>
           </div>

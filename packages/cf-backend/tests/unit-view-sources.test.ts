@@ -97,7 +97,7 @@ describe('view data sources', () => {
 describe('reserved view titles', () => {
   test('cover every host work surface, so no agent tab can wear one of their names', () => {
     const source = read('components/surfaces/WorkSurface.tsx');
-    const tuple = /export const SURFACES = \[([^\]]+)\]/.exec(source);
+    const tuple = /(?:export )?const SURFACES = \[([^\]]+)\]/.exec(source);
     const surfaceList = tuple?.[1];
     if (!surfaceList) throw new Error('WorkSurface.tsx must declare SURFACES');
     const surfaces = [...surfaceList.matchAll(/"([^"]+)"/g)].flatMap((match) => {

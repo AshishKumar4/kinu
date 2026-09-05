@@ -9,7 +9,6 @@ export interface LandingActionLinkProps {
   readonly external?: boolean;
   readonly primary?: boolean;
   readonly size?: LinkSize;
-  readonly className?: string;
 }
 
 export function LandingActionLink({
@@ -18,9 +17,8 @@ export function LandingActionLink({
   external = false,
   primary = false,
   size = 'lg',
-  className,
 }: LandingActionLinkProps): ReactElement {
-  const actionClass = `${primary ? 'p-btn !text-[var(--c-accent-on)]' : ''} !rounded-full${className ? ` ${className}` : ''}`;
+  const actionClass = `${primary ? 'p-btn !text-[var(--c-accent-on)]' : ''} !rounded-full`;
   return (
     <LinkButton
       href={href}

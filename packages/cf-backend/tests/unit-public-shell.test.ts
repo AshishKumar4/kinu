@@ -25,8 +25,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
-  RADII, THEME_BLOCKS, THEME_BOOT, mark, markDocument, publicPage,
-  MARK_IDS, KINU_MARK,
+  mark, markDocument, publicPage, MARK_IDS, KINU_MARK,
 } from '../src/lib/public-shell';
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
@@ -72,19 +71,63 @@ function resolved(theme: string) {
 }
 
 
+/** The stylesheet the shell ships, as the document carries it. The parity
+ *  below reads the projection out of this text rather than out of the
+ *  module's internals, so it holds the shipped bytes to the app. */
+function shippedStyle(): string {
+  const page = publicPage({ title: 't', body: '' });
+  const start = page.indexOf('<style>');
+  const end = page.indexOf('</style>');
+  if (start === -1 || end === -1 || end < start) throw new Error('public page carries no stylesheet');
+  return page.slice(start + '<style>'.length, end);
+}
+
+/** One `selector{...}` rule of the shipped stylesheet, as name → value. */
+function shippedBlock(style: string, selector: string) {
+  const at = style.indexOf(`${selector}{`);
+  if (at === -1) throw new Error(`shipped stylesheet carries no ${selector} block`);
+  const open = style.indexOf('{', at);
+  let depth = 0;
+  let i = open;
+  for (; i < style.length; i++) {
+    if (style[i] === '{') depth++;
+    else if (style[i] === '}' && --depth === 0) break;
+  }
+  return Object.fromEntries(
+    style.slice(open + 1, i).split(';').flatMap((entry) => {
+      const colon = entry.indexOf(':');
+      if (colon === -1) return [];
+      const name = entry.slice(0, colon).trim();
+      return name.startsWith('--') ? [[name, entry.slice(colon + 1).trim()]] : [];
+    }),
+  );
+}
+
 const UI_FONT_PATH = '/assets/fonts/schibsted-latin-var.woff2';
 const MONO_FONT_PATH = '/assets/fonts/fragmentmono-latin.woff2';
 
 describe('public shell tokens are the app palette', () => {
-  test('both themes are projected', () => {
-    const projected: string[] = THEME_BLOCKS.map((b) => b.mode);
-    expect(projected.sort()).toEqual(Object.keys(CASCADE).sort());
+  const style = shippedStyle();
+
+  test('both themes are projected before the shell', () => {
+    const rootAt = style.indexOf(':root{');
+    const lightAt = style.indexOf('[data-mode="light"]{');
+    const shellAt = style.indexOf('@font-face');
+    expect(rootAt).toBeGreaterThanOrEqual(0);
+    expect(lightAt).toBeGreaterThan(rootAt);
+    // The projection precedes the shell it themes, so a theme edit cannot
+    // hide under it.
+    expect(shellAt).toBeGreaterThan(lightAt);
   });
 
-  for (const { mode, tokens, selector } of THEME_BLOCKS) {
+  for (const [mode, selectors] of Object.entries(CASCADE)) {
     test(`${mode} matches index.css`, () => {
       const app = resolved(mode);
-      for (const [token, value] of Object.entries(tokens)) {
+      const selector = selectors.at(-1);
+      if (selector === undefined) throw new Error(`no block modelled for ${mode}`);
+      const emitted = shippedBlock(style, selector);
+      for (const [token, value] of Object.entries(emitted)) {
+        if (token.startsWith('--r-')) continue;
         expect(app[token], `${token} in ${selector}`).toBe(value);
       }
     });
@@ -94,9 +137,7 @@ describe('public shell tokens are the app palette', () => {
     // A token the projection carries but a palette block never declares would
     // resolve to whichever theme declared it last — the failure mode
     // `index.css` states its own completeness rule against.
-    // SAFETY: `Object.keys` over the closed CASCADE literal, narrowed to its
-    // own key union.
-    const names = Object.keys(THEME_BLOCKS[0]!.tokens);
+    const names = Object.keys(shippedBlock(style, ':root')).filter((name) => !name.startsWith('--r-'));
     for (const theme of Object.keys(CASCADE)) {
       const app = resolved(theme);
       for (const token of names) expect(app[token], `${token} in ${theme}`).toBeString();
@@ -110,14 +151,17 @@ describe('public shell tokens are the app palette', () => {
     // browser would.
     const root = block(':root');
     const rungs = block('@theme');
+    const shipped = shippedBlock(style, ':root');
     const remToPx = (rem: string) => `${Number(rem.replace(/rem.*$/, '').trim()) * 16}px`;
-    // SAFETY: each tuple is a closed literal pairing a RADII role with the
-    // rung `index.css` declares for it; both members exist by construction.
     for (const [role, rung] of [['--r-control', '--radius-sm'], ['--r-row', '--radius-md']] as const) {
-      expect(RADII[role], `${role} resolves through ${rung}`).toBe(remToPx(rungs[rung]!));
+      const rungValue = rungs[rung];
+      if (rungValue === undefined) throw new Error(`no ${rung} rung in index.css`);
+      expect(shipped[role], `${role} resolves through ${rung}`).toBe(remToPx(rungValue));
     }
     for (const role of ['--r-card', '--r-overlay'] as const) {
-      expect(RADII[role], `${role} is its own literal`).toBe(remToPx(root[role]!));
+      const rootValue = root[role];
+      if (rootValue === undefined) throw new Error(`no ${role} role in index.css`);
+      expect(shipped[role], `${role} is its own literal`).toBe(remToPx(rootValue));
     }
   });
 
@@ -174,6 +218,17 @@ describe('public shell tokens are the app palette', () => {
 
 
 describe('the pre-paint theme script', () => {
+  /** The pre-paint script the document ships, as the document carries it. */
+  function shippedBoot(): string {
+    const page = publicPage({ title: 't', body: '' });
+    const match = /<script>([\s\S]*?)<\/script>/.exec(page);
+    const text = match?.[1];
+    if (text === undefined || !text.includes('data-mode')) {
+      throw new Error('public page carries no theme boot script');
+    }
+    return text;
+  }
+
   /** Run the shipped snippet against stubbed storage and report what it set. */
   function boot(stored: Record<string, string>, prefersLight: boolean) {
 
@@ -193,7 +248,7 @@ describe('the pre-paint theme script', () => {
     // by call rather than by reading it.
     // SAFETY: the snippet is this repo's own text, evaluated against the three
     // stub globals declared immediately above.
-    new Function('document', 'localStorage', 'window', THEME_BOOT)(scope.document, scope.localStorage, scope.window);
+    new Function('document', 'localStorage', 'window', shippedBoot())(scope.document, scope.localStorage, scope.window);
     return { mode: root.attrs['data-mode'], colorScheme: root.style.colorScheme };
   }
 

@@ -7,7 +7,7 @@ import type { HeadRunView } from '@kinu.run/core';
 import { explorationForkTree, type MctsRow } from '../src/lib/fork-tree-rows';
 import {
   ancestorIds, cleanNodeLabel, clipToWidth, findForkNode, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits,
-  NODE_R_MAX, NODE_R_MIN, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats,
+  NODE_R_MAX, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats,
   viewNoteFor,
 } from '../src/components/swarm-tree-model';
 
@@ -145,7 +145,7 @@ describe('settled winner', () => {
 
 describe('size scales', () => {
   test('radius grows with visits and stays inside its bracket', () => {
-    expect(nodeRadius(0, 20)).toBeCloseTo(NODE_R_MIN, 5);
+    expect(nodeRadius(0, 20)).toBeCloseTo(nodeRadius(0, 0), 5);
     expect(nodeRadius(20, 20)).toBeCloseTo(NODE_R_MAX, 5);
     expect(nodeRadius(5, 20)).toBeGreaterThan(nodeRadius(1, 20));
     expect(nodeRadius(5, 20)).toBeLessThan(nodeRadius(20, 20));
@@ -153,13 +153,13 @@ describe('size scales', () => {
 
   test('area, not diameter, tracks visits', () => {
     // Four times the rollouts is twice the radius above the floor.
-    const quarter = nodeRadius(5, 20) - NODE_R_MIN;
-    const full = nodeRadius(20, 20) - NODE_R_MIN;
+    const quarter = nodeRadius(5, 20) - nodeRadius(0, 20);
+    const full = nodeRadius(20, 20) - nodeRadius(0, 20);
     expect(full / quarter).toBeCloseTo(2, 5);
   });
 
   test('an unvisited tree does not divide by zero', () => {
-    expect(nodeRadius(0, 0)).toBeCloseTo(NODE_R_MIN, 5);
+    expect(nodeRadius(0, 0)).toBeLessThan(nodeRadius(1, 1));
     expect(linkWidth(0, 0)).toBeGreaterThan(0);
   });
 

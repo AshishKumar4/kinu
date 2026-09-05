@@ -8,7 +8,7 @@ import { toggleMode, useTheme } from '@/hooks/use-theme';
 
 import { LandingActionLink } from './LandingActionLink';
 import { LandingHero } from './LandingHero';
-import { LandingShowcases } from './LandingShowcases';
+import { LandingShowcases, RuleLabel } from './LandingShowcases';
 
 const REPOSITORY = 'https://github.com/AshishKumar4/kinu';
 const storageLimit = platformFact('do.storage.bytes').limit;
@@ -33,10 +33,6 @@ const FEATURES = [
   ['Builds subagent DAGs', 'Specialists work in parallel and pass evidence onward.'],
   ['Your cloud, or ours', 'Use kinu.run or deploy to your Cloudflare account.'],
 ] as const;
-
-function RuleLabel({ children }: { children: ReactNode }): ReactElement {
-  return <div className="mb-4 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] shrink-0 bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />{children}</div>;
-}
 
 function SectionTitle({ children, className = '' }: { children: ReactNode; className?: string }): ReactElement {
   return <h2 className={`text-[clamp(30px,3.4vw,44px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty ${className}`}>{children}</h2>;

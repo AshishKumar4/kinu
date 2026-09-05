@@ -29,7 +29,7 @@ import { explorationForkTree } from "@/lib/fork-tree-rows";
 import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
 import { swarmResolutionOf, type SwarmResolution } from "./swarm-resolution";
 
-export const FORK_RUN_LIMIT = 30;
+const FORK_RUN_LIMIT = 30;
 
 /** One allocation for a caller with no activity channel — the CLI-facing reads
  *  and every test that only wants the polled halves. */

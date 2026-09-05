@@ -4,15 +4,16 @@
  * Every agent conversation in a workspace — the orchestrator's and each
  * additional agent's — owns its draft, its Auto/Plan mode, and where its
  * reader was scrolled to. The components that render a conversation unmount
- * when another one opens, so this state cannot live in them; and it must NOT
- * live in one shared `useState` above them, which is exactly how a draft
- * typed to one agent used to surface in another's composer.
+ *  when another one opens, so this state cannot live in them; and it must NOT
+ *  live in one shared `useState` above them, where a draft typed to one agent
+ *  surfaces in another's composer.
  *
  * A module-level map rather than context: the state must survive full
  * remounts (WorkspacePage is keyed by workspace), and it is deliberately
  * session-scoped — a reload starts clean, like the transcript scroll does.
  */
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { planReviewAwaitingDecision, type PlanReview } from "@kinu.run/core";
 import type { ChatMode } from "@/components/Composer";
 
 /** A reader at the live edge saves 'pinned', not a pixel offset: the newest
@@ -95,4 +96,32 @@ export function useConversationUiState(key: string): ConversationUiState {
     savedScroll: entryFor(key).scroll,
     rememberScroll,
   };
+}
+
+/** What the plan gate decides for a composer: the mode it shows and whether
+ *  the owner may change it. */
+export interface PlanGatedMode {
+  readonly mode: ChatMode;
+  readonly locked: boolean;
+}
+
+/**
+ * The plan gate for every chat column.
+ *
+ * A plan that waits for a decision locks the composer to Plan mode. The lock
+ * lifts when the plan leaves that state. Both chat columns need this answer,
+ * so one statement here keeps them the same.
+ */
+export function usePlanGatedMode(
+  plan: PlanReview | null,
+  ui: Pick<ConversationUiState, "mode" | "setMode">,
+): PlanGatedMode {
+  const locked = planReviewAwaitingDecision(plan);
+  const approved = plan?.status === "approved";
+  const setMode = ui.setMode;
+  useEffect(() => {
+    if (locked) setMode("plan");
+    else if (approved) setMode("build");
+  }, [locked, approved, setMode]);
+  return { mode: locked ? "plan" : ui.mode, locked };
 }

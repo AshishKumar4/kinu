@@ -1,12 +1,16 @@
 import { Button, Tabs, type TabsItem } from '@cloudflare/kumo';
 import { CHANGE_KIND_GLYPH, TUI_ADVERTISED_HINTS, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS } from '@kinu.run/core';
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import type { UIMessage } from 'ai';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
 import { MessageView } from '@/components/MessageView';
 
 import { BugFixDemo } from './BugFixDemo';
+
+export function RuleLabel({ children }: { children: ReactNode }): ReactElement {
+  return <div className="mb-4 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] shrink-0 bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />{children}</div>;
+}
 
 const RUN_TABS: TabsItem[] = [{ value: 'run', label: 'Run' }, { value: 'supervise', label: 'Supervise' }];
 
@@ -59,7 +63,7 @@ function WorkspacePreview(): ReactElement {
       <div className="grid min-h-[760px] grid-cols-1 md:grid-cols-[minmax(0,1fr)_280px] lg:grid-cols-[190px_minmax(0,1fr)_330px]">
         <aside className="hidden border-r p-border p-recessed px-3 py-3.5 lg:block">
           <div className="px-2 pb-2.5 text-[11px] p-text-4">Workspaces</div>
-          <div className="flex items-center gap-2 rounded-lg p-card-active px-2.5 py-2">
+          <div className="flex items-center gap-2 rounded-lg bg-[var(--c-elevated)] px-2.5 py-2">
             <span className="size-[5px] rounded-full p-dot-accent" /><span className="flex-1 text-[12.5px] font-semibold">Jarvis</span><span className="text-[10.5px] p-text-4">4h</span>
           </div>
           <div className="ml-[18px] mt-0.5 border-l p-border pl-[9px]">
@@ -389,21 +393,21 @@ export function LandingShowcases({
       </section>
       <section data-showcase="bugfix" className="pt-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
-          <div><div className="mb-3.5 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />One bug, end to end</div><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">From bug report <span className="p-gold">to green tests.</span></h2></div>
+          <div><RuleLabel>One bug, end to end</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">From bug report <span className="p-gold">to green tests.</span></h2></div>
           <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Watch Kinu reproduce a failure, revise its plan, compare three patches, and run the focused suite.</p>
         </div>
         <BugFixDemo />
       </section>
       <section data-showcase="tui" className="pt-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
-          <div><div className="mb-3.5 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />The terminal</div><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Let your agents live <span className="p-gold">locally.</span></h2></div>
+          <div><RuleLabel>The terminal</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Let your agents live <span className="p-gold">locally.</span></h2></div>
           <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Create local workspaces or open cloud workspaces from your terminal.</p>
         </div>
         <TuiPreview />
       </section>
       <section data-showcase="cli" className="py-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
-          <div><div className="mb-3.5 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />The CLI</div><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Automate focused work <span className="p-gold">from any shell.</span></h2></div>
+          <div><RuleLabel>The CLI</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Automate focused work <span className="p-gold">from any shell.</span></h2></div>
           <p className="max-w-[580px] text-base leading-[1.65] p-text-3"><code className="font-mono text-[.9em] p-text-2">kinu run</code> streams one task for scripts or CI, returns the answer, then exits with its status.</p>
         </div>
         <CliPreview />

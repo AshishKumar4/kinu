@@ -137,9 +137,9 @@ export interface AgentStatus {
  *
  *  Everything a workspace needs before the chat pane can paint, and nothing a
  *  surface that is not open needs. The exploration canvas and the run timeline
- *  used to ride along and were 95% of the bytes on every workspace open; the
- *  Exploration surface reads its own canvas page and nothing read the timeline
- *  at all. See the server RPC's note for the measurements. */
+ *  stay off: they are 95% of the bytes on every workspace open, the
+ *  Exploration surface reads its own canvas page, and nothing reads the
+ *  timeline at all. See the server RPC's note for the measurements. */
 export interface WorkspaceSnapshot {
   status: AgentStatus;
   tools: ToolDescResult;
@@ -371,7 +371,7 @@ function parseSocketMessage(data: MessageEvent["data"]) {
 
 /** Runtime admission for plan broadcasts/RPC results. The browser treats the
  * actor boundary as untrusted even though both ends share the TypeScript type. */
-export function parsePlanReview<Value>(value: Value): PlanReview | null {
+function parsePlanReview<Value>(value: Value): PlanReview | null {
   const parsed = v.safeParse(PlanReviewSchema, value);
   return parsed.success ? parsed.output : null;
 }
@@ -508,8 +508,8 @@ function collectReadFailures(errors: LiveRefreshErrors) {
  * shown any is a claim about data the reader cannot see.
  *
  * Every read shares one sentence and each distinct reason appears once. One
- * dropped connection fails the snapshot and every poll in the same instant,
- * and this banner used to print that single reason twice in one line:
+ *  dropped connection fails the snapshot and every poll in the same instant,
+ *  and the line prints that single reason once, not once per surface:
  *
  *   Workspace snapshot failed: Network connection lost. Couldn't refresh live
  *   data for memory content. Showing last known data. Network connection lost.
@@ -815,8 +815,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // error card in the thread shows the honest body. Fed by BOTH channels a
   // terminal error can arrive on: useChat's live stream error, and the
   // on-connect `cf_agent_use_chat_response` replay frame (whose request id is
-  // no longer active, so the ws transport drops it — the reason a reload used
-  // to show nothing). Cleared on the next send.
+  // no longer active, so the ws transport drops it). Cleared on the next send.
   //
   // `replayed` separates the two, because they are not the same claim. The
   // server RETAINS its last terminal record until a later turn supersedes it
@@ -1742,7 +1741,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     try {
       const r = await rpc<{ ok?: boolean; spec?: string }>("setModel", [modelId]);
       // Server may have normalized the spec — sync the UI to authoritative value.
-      if (r?.spec) setAgentStatus(prev => prev ? { ...prev, model: r.spec! } : prev);
+      const spec = r?.spec;
+      if (spec) setAgentStatus((prev) => prev ? { ...prev, model: spec } : prev);
       setSourceError("model", null);
       return null;
     } catch (err) {
@@ -1985,7 +1985,9 @@ function combineErrorMessages(primary: string | null, live: string | null): stri
 
 function parseActivePlanReview<Value>(value: Value): PlanReview | null {
   const parsed = v.safeParse(v.nullable(PlanReviewSchema), value);
-  if (!parsed.success) throw new Error("Active plan returned an invalid response");
+  if (!parsed.success) {
+    throw new Error("Active plan returned an invalid response", { cause: parsed.issues });
+  }
   return parsed.output;
 }
 

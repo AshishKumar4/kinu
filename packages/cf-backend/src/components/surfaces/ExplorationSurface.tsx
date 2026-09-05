@@ -310,7 +310,7 @@ function nodeTally(counted: Pick<RunLiveness, "running" | "reported" | "failed" 
  * which nodes fanned a level in and of the preset the run resolved, so skipping it
  * for a search is what left both invisible.
  */
-export function useForkRunDetail(run: ForkRunSummary, rpc: Rpc, hasActiveWork: boolean) {
+function useForkRunDetail(run: ForkRunSummary, rpc: Rpc, hasActiveWork: boolean) {
   const load = useCallback(
     () => run.hasNodeTranscripts
       ? rpc<HeadRunView | null>("getHeadRun", [run.id])
