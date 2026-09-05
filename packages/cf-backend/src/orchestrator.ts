@@ -1667,11 +1667,8 @@ export class OrchestratorAgent extends ActorAgent {
     // how it ended.
     const { overflowRecovery, end } =
       this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
-    // The identity of THIS terminal sequence — the durable turn plus the response
-    // being settled. Both, because Think fires this hook once per response and a
-    // continuation keeps the turn's user-message id: keyed on the turn alone, the
-    // first continuation's sequence closed the claim and the final one, carrying
-    // the actual answer, read `done` and skipped everything it owed.
+    // The identity of THIS terminal sequence comes from the shared helper, so
+    // the root and its facets key one response the same way.
     //
     // NOTHING FROM HERE TO `settle` MAY AWAIT. Think has already persisted the
     // assistant message, so an await before the claim exists is a window where a
@@ -1679,28 +1676,10 @@ export class OrchestratorAgent extends ActorAgent {
     // to replay — the whole suffix is simply lost. The response-to-model-message
     // conversion used to sit here and was exactly that window; it is now inside
     // the `turn_end_extensions` body, where the claim already exists.
-    const durableTurnId = this.durableTurnId();
-    // An EMPTY assistant id is not an identity. Think reports a completed stream
-    // whose assistant row was never written, and every per-effect scope derives
-    // from this value — so two such turns would share one scope and the second
-    // would read the first's tombstones as its own work already done.
-    const transition = durableTurnId === null || result.message.id === ''
-      ? null
-      : { turnId: durableTurnId, messageId: result.message.id };
-    // Everything the settle needs, read BEFORE the status branch: an aborted
-    // turn carries a message too (partial chunks are persisted, so `parts` is
-    // simply empty), and its text and its user turn are what make it evidence.
-    const userMessages = this.messages.filter(m => m.role === "user");
-    const lastUserMsg = programmaticUserMessage ?? userMessages[userMessages.length - 1];
-    const userText = lastUserMsg?.parts
-      ?.filter(p => p.type === "text")
-      .map(p => p.text)
-      .join("") ?? "";
-
-    const assistantText = result.message.parts
-      ?.filter(p => p.type === "text")
-      .map(p => p.text)
-      .join("") ?? "";
+    const transition = this.transitionFor(result);
+    const { userText, assistantText } = this.turnTextParts(result, programmaticUserMessage);
+    // Read for every status: an aborted turn carries a message too, and its
+    // text and its user turn are what make it evidence.
 
     // The turn record, for every status. `hadError` comes off the accumulator's
     // per-step flag, and core's settle corrects it on the `'error'` arm — a turn

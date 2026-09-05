@@ -16,7 +16,8 @@
  */
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext, FiberRecoveryContext, FiberRecoveryResult } from 'agents';
-import type { ToolSet } from 'ai';
+import type { ToolSet, UIMessage } from 'ai';
+import type { ChatResponseResult } from '@cloudflare/think';
 import type { UserCaller } from '../../src/user/workspace-capability';
 import type { UserDO } from '../../src/user/user-do';
 import { shadowTrialPlan, claimToolEffect } from '@kinu.run/core';
@@ -154,6 +155,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  that `applyWorkspaceTitle`'s `suggest` slot wires into. */
   harnessSuggestWorkspaceTitle(mission: string): Promise<string | null> {
     return this.suggestTitle(mission);
+  }
+  /** The shared settle preamble, for suites asserting the driving-text preference. */
+  observeTurnTextParts(result: ChatResponseResult, message: UIMessage | null) {
+    return this.turnTextParts(result, message);
   }
   /** Admit one event, through the only writer allowed to: `publish` is the
    *  single admitted author of `kind='event'` rows, so a test that wants an

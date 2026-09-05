@@ -1513,6 +1513,37 @@ export abstract class ActorAgent extends Think<Env> {
     };
   }
 
+  protected turnTextParts(
+    result: ChatResponseResult,
+    programmaticUserMessage: UIMessage | null,
+  ) {
+    const userMessages = this.messages.filter((message) => message.role === 'user');
+    const lastUserMessage = programmaticUserMessage ?? userMessages.at(-1);
+    const userText = lastUserMessage?.parts
+      ?.filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('') ?? '';
+    const assistantText = result.message.parts
+      ?.filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('') ?? '';
+    return { userText, assistantText };
+  }
+
+  /**
+   * The identity of one terminal sequence: the durable turn plus the response
+   * being settled. Both travel because Think fires the hook once per response
+   * and a continuation keeps the turn's user-message id. An empty assistant id
+   * is not an identity: every per-effect scope derives from this value, so two
+   * such responses would share one scope and the second would read the first's
+   * work as its own.
+   */
+  protected transitionFor(result: ChatResponseResult): { turnId: string; messageId: string } | null {
+    const durableTurnId = this.durableTurnId();
+    if (durableTurnId === null || result.message.id === '') return null;
+    return { turnId: durableTurnId, messageId: result.message.id };
+  }
+
   /**
    * Accept a message the user typed while a turn is running — or, when the turn
    * ended before it arrived, commit it as the NEXT ordinary user turn right

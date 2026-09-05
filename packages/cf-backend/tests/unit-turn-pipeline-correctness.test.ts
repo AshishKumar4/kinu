@@ -10,7 +10,7 @@ import {
 } from './helpers/actor-harness';
 import type { ModelMessage, ToolSet, UIMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import type { PrepareStepContext } from '@cloudflare/think';
+import type { ChatResponseResult, PrepareStepContext } from '@cloudflare/think';
 import * as v from 'valibot';
 
 /** The provider handle a live streamText also passes. `beforeStep` forwards
@@ -682,9 +682,27 @@ describe('turn-pipeline correctness wiring', () => {
     expect(settle).toContain('this._activeDrainTurnId');
     expect(settle).toContain('this._pendingDrainReplyTurns.get(result.requestId)');
     expect(settle).toContain('this.turnDrainTurnId()');
+    // Behavioral: the driving text prefers the programmatic (drain) message.
+    const drained = orchestratorHarness();
+    const programmatic: UIMessage = {
+      id: 'drain-1', role: 'user', parts: [{ type: 'text', text: 'the drain text' }],
+    };
+    const answered: ChatResponseResult = {
+      message: { id: 'a-9', role: 'assistant', parts: [{ type: 'text', text: 'the answer' }] },
+      requestId: 'req-drain', continuation: false, status: 'completed',
+    };
+    expect(drained.agent.observeTurnTextParts(answered, programmatic).userText).toBe('the drain text');
+    expect(drained.agent.observeTurnTextParts(answered, null).assistantText).toBe('the answer');
+    // Neither settle body derives the drain id from message metadata. The
+    // enqueue seam stamps it there; the settle reads the stamped message
+    // itself, which is what keeps one drain answerable as one turn.
     const response = source.slice(source.indexOf('async onChatResponse(result: ChatResponseResult)'));
-    expect(response).toContain('const lastUserMsg = programmaticUserMessage ??');
     expect(response).not.toContain('metadata.drainTurnId');
+    const preamble = actor.slice(
+      actor.indexOf('protected turnTextParts('),
+      actor.indexOf('protected transitionFor('),
+    );
+    expect(preamble).not.toContain('metadata.drainTurnId');
   });
 
   test('delivery leases close only after reply dispatch completes', () => {

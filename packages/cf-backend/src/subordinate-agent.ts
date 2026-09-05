@@ -728,33 +728,16 @@ export class SubordinateAgent extends ActorAgent {
     // same verdict instead of classifying the identical facts a second time.
     const { overflowRecovery, end } =
       this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
-    // The identity of THIS terminal sequence: the durable turn plus the response
-    // being settled. Both, because Think fires this hook once per response and a
-    // continuation keeps the turn's user-message id.
+    // The identity of THIS terminal sequence comes from the shared helper, so
+    // the root and its facets key one response the same way.
     //
-    // NOTHING FROM HERE TO `settle` MAY AWAIT, for the reason the root says it
-    // there: Think has already persisted the answer, so an await before the claim
-    // exists is a window where recovery finds a durable answer with no incomplete
-    // transition and replays nothing. The response-to-model-message conversion
-    // lives inside the `turn_end_extensions` body, where the claim already exists.
-    // An EMPTY assistant id is not an identity, exactly as the root reads it:
-    // every per-effect scope derives from this value, so two such responses would
-    // share one scope and the second would read the first's work as its own.
-    const durableTurnId = this.durableTurnId();
-    const transition = durableTurnId === null || result.message.id === ''
-      ? null
-      : { turnId: durableTurnId, messageId: result.message.id };
-
-    const userMessages = this.messages.filter((message) => message.role === 'user');
-    const lastUserMessage = programmaticUserMessage ?? userMessages.at(-1);
-    const userText = lastUserMessage?.parts
-      ?.filter((part) => part.type === 'text')
-      .map((part) => part.text)
-      .join('') ?? '';
-    const assistantText = result.message.parts
-      ?.filter((part) => part.type === 'text')
-      .map((part) => part.text)
-      .join('') ?? '';
+    // NOTHING FROM HERE TO `settle` MAY AWAIT: Think has already persisted the
+    // answer, so an await before the claim exists is a window where recovery
+    // finds a durable answer with no incomplete transition and replays nothing.
+    // The response-to-model-message conversion lives inside the
+    // `turn_end_extensions` body, where the claim already exists.
+    const transition = this.transitionFor(result);
+    const { userText, assistantText } = this.turnTextParts(result, programmaticUserMessage);
 
     // One read of who drove this turn, feeding both the turn's recorded origin
     // and whether its answer is the parent's to hear.
