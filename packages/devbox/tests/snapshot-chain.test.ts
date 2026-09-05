@@ -2068,15 +2068,16 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     expect(record.calls).toContain(`makeSquashfs:${UPPER}:${CHAIN_EXCLUDES.length}`);
   });
 
-  test('no room to stage is a FAILED checkpoint naming the shortfall, never a crash',
+  test('disk full stages in memory and commits, never a crash',
     async () => {
-      // An archiver that fills the container disk takes the box down with it.
+      // A disk archiver that fills the container disk would take the box down
+      // with it, so a disk gate that refuses stages in memory instead, where
+      // tmpfs costs no disk quota. The checkpoint commits rather than refuses.
       const record = harness({ state: chainState(), mounts: MOUNTED, freeBytes: 1 });
       const outcome = await checkpointOf(record, 'quiesce');
-      expect(outcome.kind).toBe('failed');
-      expect(outcome.reason).toContain('Refusing to archive');
-      // Nothing was archived and nothing was recorded as archived.
-      expect(record.calls.filter(c => c.startsWith('makeSquashfs'))).toEqual([]);
+      expect(outcome.kind).toBe('committed');
+      // The archiver ran (to memory, safe) and the layer landed.
+      expect(record.calls.filter(c => c.startsWith('makeSquashfs'))).not.toEqual([]);
     });
 
   test('every later commit archives ONLY the upper, into the one replaceable delta',

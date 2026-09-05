@@ -612,6 +612,12 @@ const upperDir = `${DEVBOX_RUNTIME_DIR}/upper`;
 const workDir = `${DEVBOX_RUNTIME_DIR}/work`;
 /** Where an archive is built before it is streamed into the store. */
 const stageDir = `${DEVBOX_RUNTIME_DIR}/stage`;
+/** Memory-backed staging for a checkpoint the disk cannot stage. tmpfs lives
+ *  in memory rather than on the container disk, so an archive built here
+ *  costs no disk quota. Used only when the disk gate refuses, never by
+ *  default: memory is smaller than disk, and a large tree that fits on disk
+ *  must not be forced through it. */
+const tmpStageDir = `/dev/shm/devbox-stage`;
 /** Mount point for the base layer: the overlay's bottom lower, mounted for
  *  as long as the overlay is. */
 const lowerBase = `${DEVBOX_RUNTIME_DIR}/lower-base`;
@@ -627,7 +633,7 @@ const lowerEmpty = `${DEVBOX_RUNTIME_DIR}/lower-empty`;
  *  the record names is served as a layer. One fixed path could not tell that
  *  apart from a mount left by the generation a collapse superseded, and every
  *  commit afterwards would collapse again. */
-function deltaLayerMountPoint(chainId: string): string {
+export function deltaLayerMountPoint(chainId: string): string {
   return `${lowerDeltaRoot}/${assertChainId(chainId)}`;
 }
 
@@ -766,8 +772,9 @@ function chainShell(exec: ContainerExec, root: string) {
     makeSquashfs: async (
       sourceDir: string, archivePath: string, excludes: readonly string[],
     ): Promise<number> => {
+      const excludeFile = `${archivePath.slice(0, archivePath.lastIndexOf('/'))}/excludes.txt`;
       const result = await exec(archiveCommand({
-        sourceDir, archivePath, excludeFile: `${stageDir}/excludes.txt`, excludes,
+        sourceDir, archivePath, excludeFile, excludes,
       }));
       const [code, size] = result.stdout.trim().split(/\s+/);
       if (code !== '0') {
@@ -810,9 +817,9 @@ function chainShell(exec: ContainerExec, root: string) {
       }
       return bytes;
     },
-    /** Why there is not room to stage an archive of `sourceDir`, or null. THE
-     *  ESTIMATE WALKS WHAT THE ARCHIVE WILL WALK: squashfs never exceeds its
-     *  uncompressed input, and {@link archiveSizeCommand} and
+    /** Why there is not room to stage an archive of `sourceDir` on the disk, or
+     *  null. THE ESTIMATE WALKS WHAT THE ARCHIVE WILL WALK: squashfs never
+     *  exceeds its uncompressed input, and {@link archiveSizeCommand} and
      *  {@link archiveExcludeFile} come off one policy list. Both readings are
      *  in one command, so a container replacement cannot make them describe
      *  different disks. */
@@ -831,9 +838,7 @@ function chainShell(exec: ContainerExec, root: string) {
       // because a probe could not parse would lose more than a full disk.
       if (!Number.isFinite(need) || !Number.isFinite(free)) return null;
       if (free! >= need!) return null;
-      return `staging ${sourceDir} needs up to ${need} bytes and ${stageDir} has ${free} free. `
-        + 'Refusing to archive rather than filling the container disk and taking the box '
-        + 'down mid-checkpoint.';
+      return `staging ${sourceDir} needs up to ${need} bytes and ${stageDir} has ${free} free.`;
     },
     /** The skip-gate fingerprint of the upper, or empty when it cannot be
      *  taken. Walks metadata, not content: O(entries). The gate in
@@ -1358,18 +1363,29 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const archivePath = `${stageDir}/layer.sqsh`;
     // ROOM TO WRITE IT, ASKED BEFORE WRITING IT. An archiver that fills the
     // container's disk takes the box down mid-checkpoint. The requirement is
-    // the tree's own worst case, and refusing is a returned failure the caller
-    // turns into an incident. The archive is still staged on the disk because
-    // mksquashfs seeks back to its superblock at the end, which an object
-    // store's filesystem cannot do.
+    // the tree's own worst case. A disk without that room stages in tmpfs,
+    // which lives in memory and costs no disk quota, so a full disk keeps a
+    // checkpoint rather than refusing it. The archive is staged on a
+    // filesystem because mksquashfs seeks back to its superblock at the end,
+    // which an object store's filesystem cannot do.
     const short = await shell.stagingShortfall(sourceDir, excludes);
-    if (short !== null) throw new Error(short);
-    await shell.makeSquashfs(sourceDir, archivePath, excludes);
+    const staged = short === null ? archivePath : `${tmpStageDir}/layer.sqsh`;
+    if (short !== null) ports.log(`${short} Staging ${sourceDir} in memory at ${tmpStageDir} instead.`);
+    await shell.makeSquashfs(sourceDir, staged, excludes);
     if (!storeHeld) await mountStoreOnce();
-    const published = await shell.publishArchive(
-      archivePath, mountedLayerPath(CHAIN_STORE_MOUNT, root, key),
-    );
+    const published = await shell.publishArchive(staged, mountedLayerPath(CHAIN_STORE_MOUNT, root, key));
     const landed = await ports.objectFacts(key);
+    if (short !== null) {
+      // The archive is published; memory is returned whether or not the
+      // record below is written. A failed removal is a console line, because
+      // the layer is in the store and the record is what the caller owes.
+      try {
+        const removed = await ports.exec(`rm -rf ${shellPath(tmpStageDir)}`);
+        if (removed.exitCode !== 0) ports.log(`${tmpStageDir} could not be cleared after publishing ${key}: ${removed.stderr.trim()}`);
+      } catch (error) {
+        ports.log(`${tmpStageDir} could not be cleared after publishing ${key}: ${describe({ cause: error })}`);
+      }
+    }
     if (landed === undefined) {
       throw new Error(
         `the container published ${key} through ${CHAIN_STORE_MOUNT} and the store holds no `
@@ -1466,6 +1482,33 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     await stampFailure(stamps, committed, reason);
   };
 
+  /** Seat a first base as the overlay's sole lower with an empty upper, so the
+   *  next delta archives only what was written since the base. A first base
+   *  archives the merged view while the overlay still stands over an empty
+   *  lower, so the upper holds the base files too and every later delta would
+   *  carry them again. The reseat mounts the new base as the lower and clears
+   *  the upper, which keeps the live view while making the changed set small.
+   *  Quiesce only: clearing a live upper races writers, and a tick appends.
+   *  After the record is durable, and without a second record write: the
+   *  empty-upper skip in `checkpoint` covers the idle tick that follows, and
+   *  the first write into the fresh upper moves the mark. A failure leaves the
+   *  old overlay for the next wake, never a half-moved tree. */
+  const reseatAfterFirstBase = async (chainId: string): Promise<void> => {
+    try {
+      await shell.unmountPath(DEVBOX_WORKDIR);
+      await shell.releaseDeltaLayers();
+      await shell.resetDirs([lowerBase, lowerDeltaRoot, upperDir, workDir]);
+      await shell.mountLayer(baseObjectKey(root, chainId), lowerBase);
+      await shell.overlayAttach(DEVBOX_WORKDIR, [lowerBase]);
+      await assertOverlayLanded(`chain ${chainId}`);
+    } catch (error) {
+      ports.log(
+        `${DEVBOX_WORKDIR} base ${chainId} is committed and its overlay could not be reseated onto it, `
+        + `so the next delta still archives the upper as it stands: ${describe({ cause: error })}`,
+      );
+    }
+  };
+
   /** Commit a delta, a first base, or a REBASE onto a fresh generation: the
    *  merged work directory archived as a new base under a NEW generation id,
    *  the old generation deleted only after the new record is durable. */
@@ -1474,6 +1517,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     version: string,
     rebasing = false,
     upperMark?: string,
+    kind?: CheckpointKind,
   ): Promise<CheckpointOutcome> => {
     const first = previous === null;
     const fresh = first || rebasing;
@@ -1564,6 +1608,13 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     if (!fresh && committed.delta !== undefined) {
       await stampSeededUpper(chainId, committed.delta);
     }
+    // A first base leaves its files in the upper, so the next delta would carry
+    // the base again. Seating the new base as the lower with an empty upper
+    // keeps the live view while making that delta small. Quiesce only, and only
+    // a first base: a rebase keeps its layers until the next wake proves them.
+    if (first && kind === 'quiesce') {
+      await reseatAfterFirstBase(chainId);
+    }
     ports.log(
       `${DEVBOX_WORKDIR} ${rebasing ? 'rebase' : first ? 'base' : 'delta'} ${chainId} `
       + `(${layer.bytes} bytes)`,
@@ -1645,11 +1696,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       if (mark !== '' && mark === state?.upperMark) {
         return { kind: 'skipped', ...idle, reason: 'work directory is unchanged' };
       }
-      // NOTHING WRITTEN SINCE A COMPOSED ATTACH IS NOTHING TO SAY. A collapse
-      // archives the whole merged view, and the durable chain already holds
-      // every byte the layers serve. An empty upper is the proof: a deletion
-      // leaves a whiteout in it, and a metadata change copies its file up.
-      if (layered && (await ports.countEntries(upperDir)) === 0) {
+      // AN EMPTY UPPER IS NOTHING TO SAY. Every lower is durable already: the
+      // base, the base plus its delta layer, or the empty lower a fresh box
+      // attaches over. A deletion leaves a whiteout in the upper and a
+      // metadata change copies its file up, so an empty upper proves that
+      // nothing was written since the attach or the reseat.
+      if ((await ports.countEntries(upperDir)) === 0) {
         return { kind: 'skipped', ...idle, reason: 'nothing has been written since the attach' };
       }
       if (kind === 'tick'
@@ -1659,7 +1711,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       try {
         // COLLAPSE RATHER THAN APPEND while a delta is served as a layer
         // (header, "What the composition costs").
-        return await commitChain(state, version, layered || shouldRebase(state, kind), mark);
+        return await commitChain(state, version, layered || shouldRebase(state, kind), mark, kind);
       } catch (error) {
         return await commitFailed(state, { cause: error });
       }
@@ -1698,7 +1750,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // A box attaches the way it was checkpointed, so the mode comes from
       // the record; commitChain decides it for a box with no record.
       if (state?.mode === 'extract') return await commitExtract(state, version);
-      return await commitChain(state, version, shouldRebase(state, kind));
+      return await commitChain(state, version, shouldRebase(state, kind), undefined, kind);
     } catch (error) {
       return await commitFailed(state, { cause: error });
     }
@@ -1760,7 +1812,8 @@ export function archiveCommand(input: {
     bytes += String.fromCharCode(byte);
   }
   const encoded = btoa(bytes);
-  return `printf %s ${shellPath(encoded)} | base64 -d > ${shellPath(input.excludeFile)} `
+  const parent = input.archivePath.slice(0, input.archivePath.lastIndexOf('/'));
+  return `mkdir -p ${shellPath(parent)} && printf %s ${shellPath(encoded)} | base64 -d > ${shellPath(input.excludeFile)} `
     + `&& /usr/bin/mksquashfs ${shellPath(input.sourceDir)} ${shellPath(input.archivePath)} `
     + `-comp zstd -no-progress -wildcards -ef ${shellPath(input.excludeFile)} >/dev/null; `
     + `rc=$?; printf '%s %s' "$rc" `

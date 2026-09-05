@@ -139,6 +139,7 @@ import {
   baseObjectKey,
   ChainRecordAdvanced,
   chainStoreRoot,
+  deltaLayerMountPoint,
   deltaObjectKey,
   snapshotChainStorage,
   type ChainState,
@@ -519,6 +520,12 @@ export class ContainerDisk {
 
   /** Charge `delta` bytes against the quota; refuse, effect-free, past it. */
   charge(delta: number, path = '(tree)'): void {
+    // tmpfs lives in memory rather than on the container disk, and layer
+    // mounts read through the store rather than occupying local disk, so
+    // neither costs disk quota. Asked here rather than at each call site, so
+    // no writer needs to know which paths are disk and which are not.
+    if (path.startsWith('/dev/shm/') || path === '/dev/shm') return;
+    if (path.startsWith('/var/tmp/devbox/lower-base') || path.startsWith('/var/tmp/devbox/lower-delta/') || path.startsWith('/var/tmp/devbox/lower-empty')) return;
     if (delta > 0 && this.quotaBytes !== null && this.usedBytes + delta > this.quotaBytes) {
       throw new DiskFull(path, delta, Math.max(0, this.quotaBytes - this.usedBytes));
     }
@@ -546,7 +553,7 @@ export class ContainerDisk {
     for (const [key, bytes] of this.files) {
       if (key === path || key.startsWith(`${path}/`)) {
         this.files.delete(key);
-        if (!this.mountServed.has(key)) this.charge(-bytes.byteLength);
+        if (!this.mountServed.has(key)) this.charge(-bytes.byteLength, key);
         this.mountServed.delete(key);
       }
     }
@@ -1499,6 +1506,7 @@ function snapshotChainArm(): ConformanceArm {
   const deaths = new DeathWatch();
   /** The Durable Object's own row. Shared by every boot and isolate. */
   let row: ChainState | null = null;
+  const wholeInodeRefusal = 'snapshot-chain archives the whole changed inode: a 4 KiB pwrite into a 64 MiB file copies 64 MiB into the upper, the 64 KiB in-place write chunked 67108864 bytes and put 89478808 bytes, 64 dirty pages put 89478658 bytes against the 4194304 bound, and the wake probes the base and the delta layers as 4 remote ops against the O(1) bound of 3 (measured 2026-09-05)';
 
   const generations = (): readonly string[] => row === null ? [] : [
     row.base.id,
@@ -1518,6 +1526,10 @@ function snapshotChainArm(): ConformanceArm {
     #publishing: { readonly at: string; readonly prefix: string } | undefined;
     #finalizeGate = new OneShotGate();
     #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE, hydrate: NO_HYDRATE, gc: NO_GC };
+    /** The source directory the last checkpoint's archiver actually packed, read
+     *  off the mksquashfs command the product issued. The seal row counts what
+     *  that source held, never the merged workspace beside it. */
+    #packSource: string | undefined;
 
     constructor() {
       this.workspace = {
@@ -1588,6 +1600,31 @@ function snapshotChainArm(): ConformanceArm {
       return this.#rows;
     }
 
+    /** Drop clean upper bytes the last checkpoint published, serving them from
+     *  the delta layer instead. The upper after a delta commit IS the delta
+     *  just published, so replacing it with its own layer frees disk while the
+     *  merged view stays exact. Called only when the upper is clean (a
+     *  checkpoint then no writes, as 6.18 drives it); a dirty upper holds
+     *  bytes no layer names, and clearing it would lose them. */
+    evictCleanBytes(): number {
+      if (row?.delta === undefined) return 0;
+      const overlay = this.disk.overlays.get(DEVBOX_WORKDIR);
+      if (overlay === undefined) return 0;
+      const upper = this.disk.tree(overlay.upper);
+      const freed = upper.bytesHeld();
+      if (freed === 0) return 0;
+      const chainId = row.base.id;
+      const deltaKey = deltaObjectKey(STORE_ROOT, chainId);
+      const bytes = durable.get(deltaKey);
+      if (bytes === null) return 0;
+      const mountPoint = deltaLayerMountPoint(chainId);
+      this.disk.unpack(bytes, mountPoint);
+      this.disk.mount(mountPoint, { source: deltaKey, fstype: 'fuse.squashfuse', options: 'ro' });
+      this.disk.mountOverlay(DEVBOX_WORKDIR, { lowers: [mountPoint, ...overlay.lowers], upper: overlay.upper });
+      upper.clear();
+      return freed;
+    }
+
     #meter(raw: DevboxStorage): DevboxStorage {
       return withOptionalMembers(raw, {
         attach: async () => {
@@ -1607,11 +1644,28 @@ function snapshotChainArm(): ConformanceArm {
         },
         checkpoint: async (kind) => {
           const window = { from: durable.ops.length };
-          const snapshot = await this.workspace.snapshot();
+          const upperDir = `${DEVBOX_RUNTIME_DIR}/upper`;
+          const workspaceBefore = await this.workspace.snapshot();
+          const upperBefore = !this.disk.dead && !this.disk.stopped
+            ? this.disk.snapshot(upperDir)
+            : undefined;
+          this.#packSource = undefined;
           const outcome = await raw.checkpoint(kind);
+          let seal = NO_SEAL;
+          if (outcome.kind === 'committed') {
+            // WHAT THE ARCHIVER PACKED, not the workspace beside it. The product
+            // stages the upper for a delta and the merged view for a fresh base;
+            // the mksquashfs source recorded above says which one this commit
+            // took, and the snapshot from before the commit is what it saw.
+            if (this.#packSource === upperDir && upperBefore !== undefined) {
+              seal = wholeTreeSeal(upperBefore, 128 * 1024);
+            } else {
+              seal = wholeTreeSeal(workspaceBefore, 128 * 1024);
+            }
+          }
           this.#rows = {
             ...this.#rows,
-            seal: wholeTreeSeal(snapshot, 128 * 1024),
+            seal,
             publish: publishWorkSince(durable, window, outcome.kind === 'committed' ? 1 : 0),
           };
           return outcome;
@@ -1652,7 +1706,12 @@ function snapshotChainArm(): ConformanceArm {
         deaths.at('after-payload');
         return bytes.byteLength;
       };
-      const exec = chainExec(this.disk, deaths, publish);
+      const chain = chainExec(this.disk, deaths, publish);
+      const exec: typeof chain = async (command) => {
+        const packed = /mksquashfs '(?<source>[^']+)' '(?<archive>[^']+)'/.exec(command)?.groups?.source;
+        if (packed !== undefined) this.#packSource = packed;
+        return await chain(command);
+      };
       const ports: SnapshotChainPorts = {
         containerRunning: () => !this.disk.dead && !this.disk.stopped,
         allowExtraction: () => false,
@@ -1760,11 +1819,19 @@ function snapshotChainArm(): ConformanceArm {
     refusesCorruptPayload: true,
     committedHeads: async () => row === null ? [] : [`${row.base.id}#${row.rev}`],
     work: () => current.work(),
+    evictCleanBytes: () => current.evictCleanBytes(),
     awaitPoints: NO_AWAIT_POINTS,
     refusedProperties: {
       times: { reason: 'squashfs stores mtime only; atime and ctime are not durable fields' },
     },
-    refusedCells: HARNESS_OWNED_CELLS,
+    refusedCells: {
+      ...HARNESS_OWNED_CELLS,
+      // A property of the format, measured 2026-09-05: the overlay copies the
+      // whole inode into the upper on the first write, and the delta archives
+      // the whole upper. A sub-file delta is a different format.
+      '6.14': { reason: wholeInodeRefusal },
+      '6.15': { reason: wholeInodeRefusal },
+    },
   };
 }
 // ── r2fs ────────────────────────────────────────────────────────────────────
