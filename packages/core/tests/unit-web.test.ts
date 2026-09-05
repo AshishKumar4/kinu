@@ -247,6 +247,77 @@ describe('web provider — fetch', () => {
     const provider = createDefaultWebSearchProvider({ fetch });
     await expect(provider.fetch('https://example.com/missing')).rejects.toBeInstanceOf(WebFetchError);
   });
+
+  test('SECURITY: a redirect to a private/metadata address is refused before the second hop', async () => {
+    // The fake models the platform redirect contract: with redirect:'follow'
+    // the platform itself chases Location (so the fake performs that hop);
+    // with redirect:'manual' it hands the 302 back untouched.
+    const calls: string[] = [];
+    const fakeFetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new Request(input).url;
+      calls.push(url);
+      if (url === 'https://example.com/start') {
+        if ((init?.redirect ?? 'follow') === 'follow') {
+          calls.push('http://169.254.169.254/');
+          return new Response('metadata secret', { headers: { 'content-type': 'text/plain' } });
+        }
+        return new Response('', { status: 302, headers: { location: 'http://169.254.169.254/' } });
+      }
+      return new Response('unexpected hop', { headers: { 'content-type': 'text/plain' } });
+    }, { preconnect: fetch.preconnect }) satisfies typeof fetch;
+    const provider = createDefaultWebSearchProvider({ fetch: fakeFetch });
+    const attempt = provider.fetch('https://example.com/start');
+    await expect(attempt).rejects.toBeInstanceOf(WebFetchError);
+    // The refusal leads with the guard's reason, like the initial-URL check.
+    await expect(attempt).rejects.toThrow(/169\.254\.169\.254/);
+    expect(calls).toEqual(['https://example.com/start']); // never left for the metadata host
+  });
+
+  test('a safe relative redirect succeeds and reports the final URL', async () => {
+    const { fetch, calls } = stubFetch((url): StubResponse => {
+      if (url === 'https://example.com/start') {
+        return { status: 302, body: '', headers: { location: '/final' } };
+      }
+      return { body: '# Final page', headers: { 'content-type': 'text/markdown' } };
+    });
+    const provider = createDefaultWebSearchProvider({ fetch });
+    const res = await provider.fetch('https://example.com/start');
+    expect(res.url).toBe('https://example.com/final');
+    expect(res.markdown).toBe('# Final page');
+    expect(calls.map((c) => c.url)).toEqual(['https://example.com/start', 'https://example.com/final']);
+  });
+
+  test('a redirect loop stops at the fetch-standard bound instead of hanging', async () => {
+    const { fetch, calls } = stubFetch(() => ({ status: 302, body: '', headers: { location: '/loop' } }));
+    const provider = createDefaultWebSearchProvider({ fetch });
+    await expect(provider.fetch('https://example.com/loop')).rejects.toThrow(/too many redirects/);
+    expect(calls.length).toBe(21); // the initial request plus 20 bound follows
+  });
+
+  test('an oversize body stops at the cap instead of buffering everything', async () => {
+    let pulls = 0;
+    const chunk = new Uint8Array(65_536);
+    const totalChunks = 40; // ~2.5 MB, over the 2 MB cap
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls > totalChunks) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    });
+    const bigFetch = Object.assign(
+      async () => new Response(stream, { headers: { 'content-type': 'text/plain' } }),
+      { preconnect: fetch.preconnect },
+    ) satisfies typeof fetch;
+    const provider = createDefaultWebSearchProvider({ fetch: bigFetch });
+    const res = await provider.fetch('https://example.com/big');
+    expect(res.markdown).toContain('[fetch truncated: kept the first');
+    expect(pulls).toBeLessThan(totalChunks);
+  });
+
 });
 
 describe('url safety (SSRF + exfil guards)', () => {

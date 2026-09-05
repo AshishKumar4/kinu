@@ -92,6 +92,12 @@ const TavilyResponseSchema = v.object({
 const WebSearchOptionsSchema = v.object({ limit: v.optional(v.number()) });
 /** Body cap before conversion — protects against multi-MB pages. */
 const MAX_FETCH_BYTES = 2_000_000;
+/** Manual-follow bound: the WHATWG Fetch standard stops automatic following
+ *  after 20 redirects ("If request's redirect count is 20, then return a
+ *  network error", https://fetch.spec.whatwg.org/#http-redirect-fetch). The
+ *  provider follows one validated hop at a time instead of handing Location
+ *  to the platform, so it carries the same bound rather than an invented one. */
+const MAX_REDIRECTS = 20;
 
 export class WebFetchError extends Error {
   constructor(message: string, public readonly retriable = false, options?: ErrorOptions) {
@@ -211,45 +217,119 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         if (error instanceof UnsafeUrlError) throw new WebFetchError(error.reason, false, { cause: error });
         throw error;
       }
-      const res = await withTimeout((signal) =>
-        fetchImpl(parsed.toString(), {
-          headers: {
-            // Markdown-for-Agents: Cloudflare-proxied zones return clean
-            // markdown directly. Non-CF origins ignore it and serve HTML,
-            // which we convert below.
-            accept: 'text/markdown, text/html;q=0.9, text/plain;q=0.8',
-            'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
-          },
-          redirect: 'follow',
-          signal,
-        }),
-      );
+      // Manual redirect chain: the initial URL is validated above, and every
+      // Location below passes the same guard before its hop leaves. With
+      // `redirect: 'follow'` the platform chased Location unchecked, so a
+      // benign public page could bounce the agent's fetch onto a metadata or
+      // private address the initial check had refused.
+      let finalUrl = parsed.toString();
+      const res = await withTimeout(async (signal) => {
+        let target = finalUrl;
+        for (let redirects = 0; ; redirects++) {
+          const hop = await fetchImpl(target, {
+            headers: {
+              // Markdown-for-Agents: Cloudflare-proxied zones return clean
+              // markdown directly. Non-CF origins ignore it and serve HTML,
+              // which we convert below.
+              accept: 'text/markdown, text/html;q=0.9, text/plain;q=0.8',
+              'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
+            },
+            redirect: 'manual',
+            signal,
+          });
+          const location =
+            hop.status === 301 || hop.status === 302 || hop.status === 303 || hop.status === 307 || hop.status === 308
+              ? hop.headers.get('location')
+              : null;
+          if (!location) {
+            finalUrl = target;
+            return hop;
+          }
+          if (redirects >= MAX_REDIRECTS) {
+            throw new WebFetchError(`too many redirects (over ${MAX_REDIRECTS}) for ${parsed.toString()}`);
+          }
+          let next: URL;
+          try {
+            // Relative Location resolves against the hop that sent it.
+            next = new URL(location, target);
+          } catch (error) {
+            throw new WebFetchError(`redirect from ${target} names an unparseable location`, false, { cause: error });
+          }
+          try {
+            assertSafeUrl(next.toString());
+          } catch (error) {
+            if (error instanceof UnsafeUrlError) throw new WebFetchError(error.reason, false, { cause: error });
+            throw error;
+          }
+          target = next.toString();
+        }
+      });
       if (res.status === 429) throw new WebFetchError('fetch rate-limited (429) — retry shortly', true);
-      if (!res.ok) throw new WebFetchError(`fetch failed (${res.status}) for ${parsed.toString()}`);
+      if (!res.ok) throw new WebFetchError(`fetch failed (${res.status}) for ${finalUrl}`);
 
       const contentType = res.headers.get('content-type') ?? '';
-      const buf = await res.arrayBuffer();
-      const clipped = buf.byteLength > MAX_FETCH_BYTES;
-      const bytes = clipped ? buf.slice(0, MAX_FETCH_BYTES) : buf;
+      const { bytes, clipped } = await readCappedBody(res, MAX_FETCH_BYTES);
       const raw = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
 
       const markdown = looksLikeHtml(raw, contentType)
-        ? await convert(raw, parsed.toString())
+        ? await convert(raw, finalUrl)
         : stripBase64Images(raw);
 
       // The byte guard is a memory ceiling; when it binds, the reader must be
       // able to tell a complete page from a cut one.
       const note = clipped
-        ? `\n\n[fetch truncated: kept the first ${MAX_FETCH_BYTES} of ${buf.byteLength} bytes]`
+        ? `\n\n[fetch truncated: kept the first ${MAX_FETCH_BYTES} of more than ${MAX_FETCH_BYTES} bytes]`
         : '';
       return {
-        url: parsed.toString(),
+        url: finalUrl,
         title: extractTitle(raw) || extractMarkdownTitle(markdown) || undefined,
         retrievedAt: new Date().toISOString(),
         markdown: markdown.trim() + note,
       };
     },
   };
+}
+
+/** Read at most `cap` body bytes, cancelling the stream once the cap binds —
+ *  so the cap is a real memory ceiling instead of a post-hoc slice of a fully
+ *  buffered body. `clipped` is set only after a byte past the cap is seen, so
+ *  a body of exactly `cap` bytes still reads as complete. The total past the
+ *  cap is deliberately not measured (that would download the whole body to
+ *  count it), so callers must not report an exact full length. */
+async function readCappedBody(res: Response, cap: number): Promise<{ bytes: Uint8Array; clipped: boolean }> {
+  if (!res.body) {
+    const buf = await res.arrayBuffer();
+    const clipped = buf.byteLength > cap;
+    return { bytes: new Uint8Array(clipped ? buf.slice(0, cap) : buf), clipped };
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let kept = 0;
+  let clipped = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (kept + value.byteLength > cap) {
+      const room = cap - kept;
+      if (room > 0) {
+        chunks.push(value.slice(0, room));
+        kept = cap;
+      }
+      clipped = true;
+      // Cancelling stops the transport; the rest of the body is never read.
+      await reader.cancel();
+      break;
+    }
+    chunks.push(value);
+    kept += value.byteLength;
+  }
+  const bytes = new Uint8Array(kept);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return { bytes, clipped };
 }
 
 /** The `web.*` declaration the sandbox shows the model.
