@@ -9,6 +9,11 @@ import {
   type CandidateControlStateV1,
   type CandidateRunControlV1,
 } from '../durability/contracts';
+import {
+  CandidateRestoreBoundSchema,
+  CandidateRestoreWorkSchema,
+  renderRestoreReceipt,
+} from './restore-receipt';
 import { DEVBOX_RUNTIME_DIR, DEVBOX_WORKDIR } from '../storage';
 import type { AttachOutcome, CheckpointKind, CheckpointOutcome, DevboxStorage } from '../storage';
 import { describeThrown } from '../lifecycle';
@@ -144,7 +149,10 @@ export interface CandidateContainerPorts {
 const RestoreReplySchema = v.strictObject({
   ok: v.literal(true),
   rootId: v.nullable(v.string()),
+  work: v.optional(CandidateRestoreWorkSchema),
+  bound: v.optional(CandidateRestoreBoundSchema),
 });
+type RestoreReply = v.InferOutput<typeof RestoreReplySchema>;
 const SeedReplySchema = v.strictObject({
   ok: v.literal(true),
 });
@@ -285,6 +293,19 @@ function servedOutcome(rootId: string | null, how: 'restored' | 'repaired'): Att
 }
 
 /**
+ * What a fresh restore serves: the head beside the counted cost of
+ * materializing it. The receipt rides the detail because the detail is the one
+ * line the wake row retains. A result without one serves the head alone.
+ */
+function restoreOutcome(restored: RestoreReply): AttachOutcome {
+  if (restored.rootId === null || restored.work === undefined || restored.bound === undefined) {
+    return servedOutcome(restored.rootId, 'restored');
+  }
+  const receipt = renderRestoreReceipt({ work: restored.work, bound: restored.bound });
+  return { kind: 'attached', detail: `restored candidate root ${restored.rootId} work ${receipt}` };
+}
+
+/**
  * The candidate arms share one container path. The runner moves payload only
  * through that mount. The Durable Object supplies and updates small control
  * metadata; it never receives a payload body.
@@ -337,7 +358,7 @@ export function candidateContainerStorage(ports: CandidateContainerPorts): Devbo
       await ports.stopJournal();
       await ports.startJournal();
       await seedJournal(ports, control);
-      return servedOutcome(restored.rootId, 'restored');
+      return restoreOutcome(restored);
     }
 
     await ports.mountStore();
@@ -348,7 +369,7 @@ export function candidateContainerStorage(ports: CandidateContainerPorts): Devbo
     const restored = await invokeRestore(ports, control, bootId);
     await ports.startJournal();
     await seedJournal(ports, control);
-    return servedOutcome(restored.rootId, 'restored');
+    return restoreOutcome(restored);
   };
 
   /**

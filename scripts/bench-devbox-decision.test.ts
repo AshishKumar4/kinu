@@ -4006,7 +4006,9 @@ describe('the counted restore (G5)', () => {
       wakeOps: { calls: { get: 1, list: 1 }, total: 2 },
       wakeMountLines: casMountLines,
     });
-    expect(counted.counts).toEqual({ serialRemoteOps: 2, totalRemoteOps: 2, mounts: 2, replayUnits: 0 });
+    expect(counted.counts).toEqual({
+      serialRemoteOps: 2, totalRemoteOps: 2, metadataBytes: null, payloadBytes: null, cpuSteps: null, mounts: 2, replayUnits: 0,
+    });
     expect(counted.work).toBeNull();
     expect(counted.missing.map((reason) => reason.split(':')[0]).sort()).toEqual([
       'cpuSteps',
@@ -4022,7 +4024,9 @@ describe('the counted restore (G5)', () => {
       wakeOps: { calls: { get: 4, list: 1 }, total: 5 },
       wakeMountLines: casMountLines,
     });
-    expect(counted.counts).toEqual({ serialRemoteOps: null, totalRemoteOps: 5, mounts: 2, replayUnits: 3 });
+    expect(counted.counts).toEqual({
+      serialRemoteOps: null, totalRemoteOps: 5, metadataBytes: null, payloadBytes: null, cpuSteps: null, mounts: 2, replayUnits: 3,
+    });
     expect(counted.work).toBeNull();
     expect(counted.missing.join(' ')).toContain('store pool');
   });
@@ -4054,6 +4058,73 @@ describe('the counted restore (G5)', () => {
     expect(diffOpTallies(null, { calls: {} })).toBeNull();
     expect(diffOpTallies({ calls: { get: 1 } }, { calls: { get: 1, list: 1 } }))
       .toEqual({ calls: { list: 1 }, total: 1 });
+    // The byte tally rides the bracket when both sides carry one, and stays
+    // absent when either side predates it.
+    expect(diffOpTallies(
+      { calls: { get: 1 }, bytes: { payload: 100 } },
+      { calls: { get: 3 }, bytes: { payload: 4196, metadata: 512 } },
+    )).toEqual({ calls: { get: 2 }, total: 2, bytes: { payload: 4096, metadata: 512 } });
+    expect(diffOpTallies({ calls: { get: 1 } }, { calls: { get: 2 }, bytes: { payload: 9 } })).toEqual({ calls: { get: 1 }, total: 1 });
+    expect(diffOpTallies({ calls: { get: 1 }, bytes: { payload: 9 } }, { calls: { get: 2 }, bytes: { payload: 3 } })).toBeNull();
+  });
+
+  test('a chain wake counts from the byte tally, the mount lines and the served tree', () => {
+    const lines = [
+      's3fs /backups fuse.s3fs rw 0 0',
+      'overlay /workspace overlay rw 0 0',
+      'squashfuse /var/tmp/devbox/lower-base fuse.squashfuse ro 0 0',
+      'squashfuse /var/tmp/devbox/lower-delta/abc123 fuse.squashfuse ro 0 0',
+    ];
+    const counted = countedRestoreWork({
+      strategy: 'snapshot-chain',
+      wakeKind: 'attached',
+      wakeDetail: 'chain abc 4096B base+delta layered',
+      wakeOps: { calls: { head: 2, get: 4, list: 1 }, total: 7, bytes: { payload: 65536 } },
+      wakeMountLines: lines,
+      wakeServedEntries: 12,
+    });
+    expect(counted.work).toEqual({
+      serialRemoteOps: 7, totalRemoteOps: 7, metadataBytes: 0, payloadBytes: 65536, cpuSteps: 12, mounts: 4, replayUnits: 1,
+    });
+    // Without the byte tally or the served count the row refuses, field by field.
+    const uncounted = countedRestoreWork({
+      strategy: 'snapshot-chain', wakeKind: 'attached', wakeDetail: 'chain abc 4096B base',
+      wakeOps: { calls: { get: 2 }, total: 2 }, wakeMountLines: lines.slice(0, 3), wakeServedEntries: null,
+    });
+    expect(uncounted.work).toBeNull();
+    expect(uncounted.missing.map((reason) => reason.split(':')[0]).sort()).toEqual(['cpuSteps', 'metadataBytes/payloadBytes']);
+  });
+
+  test('a candidate wake counts from its receipt, and names an unreadable one', () => {
+    const receipt = {
+      work: { serialRemoteOps: 4, totalRemoteOps: 7, metadataBytes: 2370, payloadBytes: 24, cpuSteps: 2, replayUnits: 3 },
+      bound: { openReads: 2, layersConsulted: null, maxNodeDepth: 2, nodeFetches: 3, pathsResolved: 2 },
+    };
+    const root = '9f'.repeat(32);
+    const counted = countedRestoreWork({
+      strategy: 'merkle-pack',
+      wakeKind: 'attached',
+      wakeDetail: `restored candidate root ${root} work ${JSON.stringify(receipt)}`,
+      wakeOps: { calls: { get: 9, list: 1 }, total: 10, bytes: { payload: 4096, metadata: 2370 } },
+      wakeMountLines: casMountLines,
+    });
+    expect(counted.work).toEqual({
+      serialRemoteOps: 4, totalRemoteOps: 10, metadataBytes: 2370, payloadBytes: 4096, cpuSteps: 2, mounts: 2, replayUnits: 3,
+    });
+    expect(counted.receipt).toEqual(receipt);
+    expect(candidateRootId(`restored candidate root ${root} work ${JSON.stringify(receipt)}`)).toBe(root);
+    const unreadable = countedRestoreWork({
+      strategy: 'merkle-pack', wakeKind: 'attached',
+      wakeDetail: `restored candidate root ${root} work {"work":1}`,
+      wakeOps: { calls: { get: 9 }, total: 9, bytes: { payload: 4096 } }, wakeMountLines: casMountLines,
+    });
+    expect(unreadable.work).toBeNull();
+    expect(unreadable.missing.join(' ')).toContain('misses its contract');
+    const bare = countedRestoreWork({
+      strategy: 'merkle-pack', wakeKind: 'attached', wakeDetail: `restored candidate root ${root}`,
+      wakeOps: { calls: { get: 9 }, total: 9, bytes: { payload: 4096 } }, wakeMountLines: casMountLines,
+    });
+    expect(bare.missing.join(' ')).toContain('carries no readable restore receipt');
   });
 
   test('promotion needs all seven fields, never six', () => {
@@ -4080,27 +4151,49 @@ describe('the counted restore (G5)', () => {
       'squashfuse /var/tmp/devbox/lower-base fuse.squashfuse ro 0 0',
       'squashfuse /var/tmp/devbox/lower-delta/abc123 fuse.squashfuse ro 0 0',
     ];
-    expect(verifyRestoreBound('snapshot-chain', row(4), lines).verified).toBe(true);
+    expect(verifyRestoreBound('snapshot-chain', row(4), lines, null).verified).toBe(true);
     const tooMany = verifyRestoreBound(
-      'snapshot-chain', row(5), [...lines, 'squashfuse /var/tmp/devbox/lower-delta/def456 fuse.squashfuse ro 0 0'],
+      'snapshot-chain', row(5), [...lines, 'squashfuse /var/tmp/devbox/lower-delta/def456 fuse.squashfuse ro 0 0'], null,
     );
     expect(tooMany.verified).toBe(false);
     expect(tooMany.reason).toContain('past the at-most-two-deep serve');
   });
 
-  test('every other claim refuses with the cell that would verify it named', () => {
+  test('r2fs and overlay-cas refuse with the cell that would verify them named', () => {
     const row = {
       serialRemoteOps: 1, totalRemoteOps: 1, metadataBytes: 1, payloadBytes: 0,
       cpuSteps: 0, mounts: 1, replayUnits: 0,
     };
-    for (const strategy of ['r2fs', 'overlay-cas', 'bounded-layers', 'merkle-pack'] as const) {
-      expect(verifyRestoreBound(strategy, row, []).verified).toBe(false);
-    }
-    expect(verifyRestoreBound('r2fs', row, []).reason).toContain('two-size');
-    expect(verifyRestoreBound('overlay-cas', row, []).reason).toContain('red witness');
-    expect(verifyRestoreBound('bounded-layers', row, []).reason).toContain('MAX_LAYER_DEPTH');
-    expect(verifyRestoreBound('merkle-pack', row, []).reason).toContain('log-p');
-    expect(verifyRestoreBound('snapshot-chain', null, []).verified).toBe(false);
+    expect(verifyRestoreBound('r2fs', row, [], null).reason).toContain('two-size');
+    expect(verifyRestoreBound('overlay-cas', row, [], null).reason).toContain('red witness');
+    expect(verifyRestoreBound('snapshot-chain', null, [], null).verified).toBe(false);
+  });
+
+  test('a candidate bound is held to its receipt, and refuses without one', () => {
+    const row = {
+      serialRemoteOps: 3, totalRemoteOps: 3, metadataBytes: 600, payloadBytes: 24,
+      cpuSteps: 2, mounts: 2, replayUnits: 1,
+    };
+    expect(verifyRestoreBound('bounded-layers', row, [], null).reason).toContain('carried none');
+    const work = { serialRemoteOps: 3, totalRemoteOps: 3, metadataBytes: 600, payloadBytes: 24, cpuSteps: 2, replayUnits: 1 };
+    const layered = { work, bound: { openReads: 2, layersConsulted: 1, maxNodeDepth: null, nodeFetches: null, pathsResolved: 2 } };
+    expect(verifyRestoreBound('bounded-layers', row, [], layered).verified).toBe(true);
+    // Nine layers consulted is past MAX_LAYER_DEPTH; a root that read more
+    // documents than layers plus one is past the open the claim describes.
+    expect(verifyRestoreBound('bounded-layers', row, [], {
+      work, bound: { ...layered.bound, openReads: 10, layersConsulted: 9 },
+    }).reason).toContain('past the bounded-k claim');
+    expect(verifyRestoreBound('bounded-layers', row, [], {
+      work, bound: { ...layered.bound, openReads: 3 },
+    }).verified).toBe(false);
+    const merkle = { work, bound: { openReads: 2, layersConsulted: null, maxNodeDepth: 2, nodeFetches: 3, pathsResolved: 2 } };
+    expect(verifyRestoreBound('merkle-pack', row, [], merkle).verified).toBe(true);
+    // A third opening read, more node fetches than paths times depth, or a
+    // depth past log2 of the paths each fall outside the log-p claim.
+    expect(verifyRestoreBound('merkle-pack', row, [], { work, bound: { ...merkle.bound, openReads: 3 } }).verified).toBe(false);
+    expect(verifyRestoreBound('merkle-pack', row, [], { work, bound: { ...merkle.bound, nodeFetches: 5 } }).verified).toBe(false);
+    expect(verifyRestoreBound('merkle-pack', row, [], { work, bound: { ...merkle.bound, maxNodeDepth: 9 } }).reason)
+      .toContain('past the log-p claim');
   });
 
   test('mount lines match by point, delta layers by prefix', () => {
@@ -4421,6 +4514,14 @@ describe('the instruments restate nothing unchecked', () => {
     for (const value of values) expect(script).toContain(value ?? '(absent)');
     expect(script).toContain('.json');
     expect(types).toContain('.json');
+  });
+
+  test('the bounded-layers depth the G5 bound holds to is the codec’s', () => {
+    const codec = repo('packages', 'devbox', 'src', 'candidates', 'bounded-layers.ts');
+    const product = /export const MAX_LAYER_DEPTH = (\d+);/.exec(codec)?.[1];
+    const restated = /CANDIDATE_MAX_LAYER_DEPTH = (\d+);/.exec(driver)?.[1];
+    expect(product).toBeDefined();
+    expect(restated).toBe(product);
   });
 
   test('the chain store mount is the product’s', () => {

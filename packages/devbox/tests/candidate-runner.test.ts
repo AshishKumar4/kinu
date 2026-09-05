@@ -35,6 +35,7 @@ import type {
 import { BeneathRoot } from '../src/native-openat2';
 import { openMerklePack } from '../src/candidates/merkle-pack';
 import type { MerklePackReader } from '../src/candidates/merkle-pack';
+import { CandidateRestoreBoundSchema, CandidateRestoreWorkSchema } from '../src/candidates/restore-receipt';
 import { readBarrier } from './support/read-barrier';
 import type { ReadBarrier } from './support/read-barrier';
 import { candidateContainerStorage } from '../src/candidates/container';
@@ -1118,7 +1119,10 @@ describe('candidate container runner', () => {
       const restore = Bun.spawn({ cmd: argv('restore'), stdout: 'pipe', stderr: 'pipe' });
       expect(await restore.exited).toBe(0);
       expect(await new Response(restore.stdout).text()).toBe('');
-      expect(JSON.parse(await readFile(resultPath, 'utf8'))).toEqual({ ok: true, rootId: publishedRoot });
+      const reply: unknown = JSON.parse(await readFile(resultPath, 'utf8'));
+      expect(reply).toMatchObject({ ok: true, rootId: publishedRoot });
+      const receipt = v.parse(v.object({ work: CandidateRestoreWorkSchema, bound: CandidateRestoreBoundSchema }), reply);
+      expect(receipt.bound.pathsResolved).toBe(1001);
       expect(await readFile(join(place.workspace, 'k', 'f0000.txt'), 'utf8')).toBe('file 0');
       expect(await readFile(join(place.workspace, 'k', 'f0999.txt'), 'utf8')).toBe('file 999');
 
@@ -1412,6 +1416,176 @@ describe('a merkle restore walks the tree in parallel', () => {
         expect(await readFile(join(place.workspace, `pkg/leaf-${index}.bin`), 'utf8'))
           .toBe(`leaf ${index} `.repeat(400));
       }
+    } finally {
+      await rm(join(place.workspace, '..'), { recursive: true, force: true });
+    }
+  });
+});
+describe('a restore counts the work it did', () => {
+  const workSchema = v.object({
+    serialRemoteOps: v.nullable(v.number()),
+    totalRemoteOps: v.number(),
+    metadataBytes: v.number(),
+    payloadBytes: v.number(),
+    cpuSteps: v.number(),
+    replayUnits: v.number(),
+  });
+  const boundSchema = v.object({
+    openReads: v.number(),
+    layersConsulted: v.nullable(v.number()),
+    maxNodeDepth: v.nullable(v.number()),
+    nodeFetches: v.nullable(v.number()),
+    pathsResolved: v.number(),
+  });
+  test.each(['bounded-layers', 'merkle-pack'] as const)(
+    '%s reports measured store reads, bytes, and materialized entries',
+    async (format) => {
+      const place = paths(`restore-work-${format}`);
+      try {
+        await mkdir(place.workspace, { recursive: true });
+        const host = new Host(`box-restore-work-${format}`, place.store);
+        const journal = new MutationLog();
+        const first = enc.encode('restore work first file');
+        const second = enc.encode('second');
+        await journal.perform({ op: 'write', path: 'a.txt', content: { kind: 'dense', bytes: first } });
+        await journal.perform({ op: 'write', path: 'b.txt', content: { kind: 'dense', bytes: second } });
+        await checkpoint(host, format, place, journal, `restore-work-${format}`);
+        await rm(place.workspace, { recursive: true, force: true });
+        const reply = restored(await runCandidate({
+          ...runOptions(format, place, await host.restoreControl()),
+          action: 'restore',
+        }));
+        expect(await readFile(join(place.workspace, 'a.txt'), 'utf8')).toBe('restore work first file');
+        expect(await readFile(join(place.workspace, 'b.txt'), 'utf8')).toBe('second');
+        if (!('work' in reply) || reply.work === undefined) {
+          throw new Error(`restore reported no measured work: ${JSON.stringify(reply)}`);
+        }
+        const work = v.parse(workSchema, reply.work);
+        if (!('bound' in reply) || reply.bound === undefined) {
+          throw new Error(`restore reported no bound evidence: ${JSON.stringify(reply)}`);
+        }
+        const bound = v.parse(boundSchema, reply.bound);
+        const fileBytes = first.byteLength + second.byteLength;
+        expect(work.totalRemoteOps).toBeGreaterThanOrEqual(2);
+        expect(work.metadataBytes).toBeGreaterThan(0);
+        expect(work.payloadBytes).toBeGreaterThanOrEqual(fileBytes);
+        expect(work.cpuSteps).toBe(2);
+        expect(work.replayUnits).toBeGreaterThanOrEqual(1);
+        expect(bound.pathsResolved).toBe(2);
+        if (format === 'bounded-layers') {
+          expect(work.serialRemoteOps).toBe(work.totalRemoteOps);
+          expect(bound.layersConsulted).toBeGreaterThanOrEqual(1);
+          expect(bound.openReads).toBe((bound.layersConsulted ?? 0) + 1);
+          if (bound.layersConsulted === null) throw new Error('a bounded restore left layersConsulted null');
+          expect(work.replayUnits).toBe(bound.layersConsulted);
+        } else {
+          // The walk pages through pools, so the critical path is shorter
+          // than the total and longer than the two opening reads.
+          expect(work.serialRemoteOps).toBeGreaterThan(2);
+          expect(work.serialRemoteOps).toBeLessThanOrEqual(work.totalRemoteOps);
+          expect(bound.maxNodeDepth).toBe(2);
+          expect(bound.nodeFetches).toBeGreaterThanOrEqual(2);
+          expect(bound.nodeFetches ?? 0).toBeLessThanOrEqual(bound.pathsResolved * (bound.maxNodeDepth ?? 0));
+        }
+      } finally {
+        await rm(join(place.workspace, '..'), { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe('a live restore bills by tree size', () => {
+  const workSchema = v.object({
+    serialRemoteOps: v.nullable(v.number()),
+    totalRemoteOps: v.number(),
+    metadataBytes: v.number(),
+    payloadBytes: v.number(),
+    cpuSteps: v.number(),
+    replayUnits: v.number(),
+  });
+  test.each(['bounded-layers', 'merkle-pack'] as const)(
+    '%s charges a larger tree more: the container path materializes every byte',
+    async (format) => {
+      const smallPlace = paths(`restore-scale-small-${format}`);
+      const largePlace = paths(`restore-scale-large-${format}`);
+      try {
+        const publish = async (label: string, place: { workspace: string; store: string; journal: string }, files: number) => {
+          await mkdir(place.workspace, { recursive: true });
+          const host = new Host(`box-${label}`, place.store);
+          const journal = new MutationLog();
+          for (let index = 0; index < files; index += 1) {
+            await journal.perform({
+              op: 'write',
+              path: `f-${index}.txt`,
+              content: { kind: 'dense', bytes: enc.encode(`file ${index} bytes`) },
+            });
+          }
+          await checkpoint(host, format, place, journal, label);
+          return host;
+        };
+        const restoreWork = async (
+          place: { workspace: string; store: string; journal: string },
+          host: Host,
+        ) => {
+          await rm(place.workspace, { recursive: true, force: true });
+          const reply = restored(await runCandidate({
+            ...runOptions(format, place, await host.restoreControl()),
+            action: 'restore',
+          }));
+          if (!('work' in reply) || reply.work === undefined) {
+            throw new Error(`restore reported no measured work: ${JSON.stringify(reply)}`);
+          }
+          return v.parse(workSchema, reply.work);
+        };
+        const smallHost = await publish(`restore-scale-small-${format}`, smallPlace, 2);
+        const small = await restoreWork(smallPlace, smallHost);
+        expect(await restoreWork(smallPlace, smallHost)).toEqual(small);
+        const largeHost = await publish(`restore-scale-large-${format}`, largePlace, 60);
+        const large = await restoreWork(largePlace, largeHost);
+        expect(large.totalRemoteOps).toBeGreaterThan(small.totalRemoteOps);
+        expect(large.payloadBytes).toBeGreaterThan(small.payloadBytes);
+        expect(large.cpuSteps).toBeGreaterThan(small.cpuSteps);
+      } finally {
+        await rm(join(smallPlace.workspace, '..'), { recursive: true, force: true });
+        await rm(join(largePlace.workspace, '..'), { recursive: true, force: true });
+      }
+    },
+  );
+});
+describe('a counted restore rides the attach detail', () => {
+  test('a result with work serves the head with its receipt', async () => {
+    const place = paths('restore-receipt');
+    try {
+      await mkdir(place.workspace, { recursive: true });
+      const host = new Host('box-restore-receipt', place.store);
+      const journal = new MutationLog();
+      await journal.perform({ op: 'write', path: 'state.txt', content: { kind: 'dense', bytes: enc.encode('receipt') } });
+      await checkpoint(host, 'bounded-layers', place, journal, 'restore-receipt');
+      const control = await host.restoreControl();
+      const root = control.head?.pointer.rootEnvelopeId;
+      if (root === undefined) throw new Error('the receipt fixture published no head');
+      const work = {
+        serialRemoteOps: 4,
+        totalRemoteOps: 4,
+        metadataBytes: 585,
+        payloadBytes: 7,
+        cpuSteps: 1,
+        replayUnits: 1,
+      };
+      const bound = {
+        openReads: 2,
+        layersConsulted: 1,
+        maxNodeDepth: null,
+        nodeFetches: null,
+        pathsResolved: 1,
+      };
+      const fake = runnerFake({ control, result: JSON.stringify({ ok: true, rootId: root, work, bound }) });
+      const attached = await candidateContainerStorage(fake.ports).attach();
+      expect(attached.kind).toBe('attached');
+      const prefix = `restored candidate root ${root} work `;
+      if (!attached.detail.startsWith(prefix)) throw new Error(`attach detail carries no receipt: ${attached.detail}`);
+      const parsed: unknown = JSON.parse(attached.detail.slice(prefix.length));
+      expect(parsed).toEqual({ work, bound });
     } finally {
       await rm(join(place.workspace, '..'), { recursive: true, force: true });
     }

@@ -58,12 +58,13 @@ import {
   sqliteFinding, totalsFor, type DecisionVerdict, type TickRecord,
 } from './fixtures/r2-bench/decision';
 import {
-  R2_OP_VOCABULARY, cleanupEvidenceFromReport, evaluateRun, expectedCells, findCredentialLeaks,
+  R2_OP_VOCABULARY, cleanupEvidenceFromReport, evaluateRun, expectedCells,
   refusalText, requireAdmitted, type AccountingEvidence, type AdmissionVerdict, type ArmEvidence,
   type CellCompletion, type CleanupEvidence, type GateId, type PublicationEvidence,
   type RestoreClaim, type RestoreEvidence, type RunProvenance, type StorageRunRecord,
 } from './fixtures/storage-matrix/admission';
 import type { RestoreWork } from '@kinu.run/devbox/durability/contracts';
+import { RestoreReceiptSchema, type RestoreReceipt } from '@kinu.run/devbox/candidates/restore-receipt';
 import type { MeasuredCell, StageId } from './fixtures/storage-matrix/protocol';
 import {
   checkCleanup, createManifest, recoverAbandonedRuns, replayTeardown, writeManifest,
@@ -72,10 +73,14 @@ import {
 } from './fixtures/storage-matrix/cleanup';
 import { parseJsonc } from './jsonc';
 import { trackedFiles } from './sources';
-/**
- * instrument now follows: a payload that disagreed with its contract used to
- * become a silent `undefined` and take a later segment down with it.
- */
+import {
+  runSecurityFaultCells,
+  securityExclusion,
+  securityNonce,
+  summarizeSecurity,
+  type SecurityCellsObservation,
+} from './fixtures/r2-bench/security/cells';
+
 /**
  * The chain's generation, as the fixture reports it.
  *
@@ -1644,9 +1649,17 @@ export async function deployFixture(
 // ── measurement ─────────────────────────────────────────────────────────────
 
 /** The R2 operation tally as `/ops` answers it, and what the report's cost
- *  columns read. Written into the artifact whole; the reply-contract note above
- *  says why an undeclared key survives. */
-interface OpTally { calls?: Record<string, number>; classA?: number; classB?: number; classFree?: number; total?: number }
+ *  columns read: calls by operation, and the bytes `get` served by what the
+ *  key holds (`payload`, `metadata`). Written into the artifact whole; the
+ *  reply-contract note above says why an undeclared key survives. */
+interface OpTally {
+  calls?: Record<string, number>;
+  classA?: number;
+  classB?: number;
+  classFree?: number;
+  total?: number;
+  bytes?: Record<string, number>;
+}
 
 const OpTallySchema: v.GenericSchema<OpTally> = v.looseObject({
   calls: v.optional(v.record(v.string(), v.number())),
@@ -1654,6 +1667,7 @@ const OpTallySchema: v.GenericSchema<OpTally> = v.looseObject({
   classB: v.optional(v.number()),
   classFree: v.optional(v.number()),
   total: v.optional(v.number()),
+  bytes: v.optional(v.record(v.string(), v.number())),
 });
 
 /** One lifecycle assertion. The driver retains every failed row in the
@@ -2980,6 +2994,10 @@ export interface ArmResult {
    *  mounts the restore took, retained line by line so the count carries its
    *  method. Empty when the wake never attached. */
   wakeMountLines?: string[];
+  /** The entries the served tree holds after a chain wake, read with `find`
+   *  after the wake window closed. The chain materializes nothing, so this is
+   *  its `cpuSteps`. Null when the count did not answer, or on any other arm. */
+  wakeServedEntries?: number | null;
   checkpoints: CheckpointRow[];
   phases: ProbeRun[];
   /** Per-checkpoint rows from the decisive experiment, with their R2 operation
@@ -3022,6 +3040,10 @@ export interface ArmResult {
    *  cut with its reason in `notes`. The run-level publication block is built
    *  from these, one per requested arm. */
   cut?: FaultCutObservation | null;
+  /** What this arm's G4 security cells observed, or null when they never ran:
+   *  the arm is excluded, the cell threw, or the fixture predates /security.
+   *  The run-level security block is built from these, one per requested arm. */
+  security?: SecurityCellsObservation | null;
   /** The candidate control row as the ladder's publication left it. Absent on
    *  arms that publish no control row, and on runs whose fixture predates the
    *  dump. The probe compares this against `wakeControl` byte for byte; a gap
@@ -3661,6 +3683,12 @@ const CHAIN_DELTA_LAYER_ROOT = '/var/tmp/devbox/lower-delta';
  *  restore's mount lines against it, and `bench-devbox-decision.test.ts`
  *  compares this restatement against that source. */
 const CHAIN_STORE_MOUNT_DIR = '/backups';
+/** The most layers a bounded-layers root may name, restated from
+ *  `MAX_LAYER_DEPTH` in `packages/devbox/src/candidates/bounded-layers.ts`.
+ *  The G5 bound check holds a wake's consulted layers to it, and
+ *  `bench-devbox-decision.test.ts` compares this restatement against that
+ *  source. */
+const CANDIDATE_MAX_LAYER_DEPTH = 8;
 
 /** Entry counts the two scan cells run at, and pending sizes the two replay
  *  cells leave. Small enough to cost seconds, far enough apart that a cost
@@ -3756,14 +3784,15 @@ export function foldedCursor(detail: string): number | null {
 const OVERLAY_FOLDED_PATTERN = /folded (\d+) (\d+)P/;
 
 /**
- * The candidate attach detail's shape, restated from `servedOutcome` in
- * `packages/devbox/src/candidates/container.ts`
- * (`${how} candidate root ${rootId}`, `how` one of `restored`, `repaired`).
- * Same reason, same check: the fault-cut cell compares the root the attach
- * claims to serve against the head the store reports, and a detail outside
- * this shape is evidence the cell cannot read rather than a root it can use.
+ * The candidate attach detail's shape, restated from `servedOutcome` and
+ * `restoreOutcome` in `packages/devbox/src/candidates/container.ts`
+ * (`${how} candidate root ${rootId}`, `how` one of `restored`, `repaired`,
+ * followed by ` work <receipt>` when a fresh restore counted itself). Same
+ * reason, same check: the fault-cut cell compares the root the attach claims
+ * to serve against the head the store reports, and a detail outside this
+ * shape is evidence the cell cannot read rather than a root it can use.
  */
-const CANDIDATE_ROOT_PATTERN = /^(restored|repaired) candidate root (\S+)$/;
+const CANDIDATE_ROOT_PATTERN = /^(restored|repaired) candidate root (\S+)(?: work (.+))?$/;
 
 /** The root a candidate attach claims to serve, or null when the detail speaks
  *  a shape the cut cell cannot read — a rewording, or a new attach path. */
@@ -4936,6 +4965,36 @@ async function runFaultCutPhase(
 }
 
 /**
+ * THE SECURITY-CELL PHASE, after the fault cut and before the teardown.
+ *
+ * Storage-only against an isolated per-call namespace, so it needs no
+ * lifecycle gate: it never judges the arm's publication and never touches a
+ * live prefix. An excluded arm reports a null observation with its reason,
+ * and G4 refuses the run.
+ */
+async function runSecurityCellsPhase(
+  fixture: Fixture,
+  box: string,
+  strategy: Strategy,
+): Promise<{ observation: SecurityCellsObservation | null; notes: string[] }> {
+  const exclusion = securityExclusion(strategy);
+  if (exclusion !== undefined) {
+    return { observation: null, notes: [`security cells not run: ${exclusion}`] };
+  }
+  log('security cells');
+  try {
+    const nonce = securityNonce();
+    const outcome = await retryTransient('security fault cells', async (): Promise<{
+      observation: SecurityCellsObservation; notes: string[]; error?: string;
+    }> => await runSecurityFaultCells(fixture, box, strategy, nonce));
+    return { observation: outcome.observation, notes: outcome.notes };
+  } catch (error) {
+    const reason = describeThrown({ cause: error }).slice(0, 240);
+    return { observation: null, notes: [`security cells did not complete: ${reason}`] };
+  }
+}
+
+/**
  * Everything below measurement is CLEANUP, and a cleanup failure is not a
  * measurement failure. The 2026-08-29 02:42 run lost a fully measured
  * `bounded-layers` arm and never started `merkle-pack` because the release
@@ -5197,6 +5256,17 @@ async function measureArm(
   // theirs against the `/candidate` reply's own mount expectations inside the
   // retention, so nothing is restated for them here.
   result.wakeMountLines = retainWakeMountLines(strategy, mountText);
+  // THE SERVED TREE'S ENTRY COUNT, after the wake window closed. A chain wake
+  // mounts layers and materializes nothing, so its `cpuSteps` is what the
+  // mount serves: the count the conformance machine takes from its own
+  // snapshot. `printf x` per entry, so a newline in a name cannot count twice.
+  if (strategy === 'snapshot-chain' && result.wakeKind === 'attached') {
+    const served = await retryTransient('served entry count', async () =>
+      await execInBox(fixture, box, 'find /workspace -mindepth 1 -printf x | wc -c'));
+    const count = Number((served.stdout ?? '').trim());
+    if (served.exitCode === 0 && Number.isSafeInteger(count) && count >= 0) result.wakeServedEntries = count;
+    else notes.push(`the served entry count did not answer: ${(served.stderr ?? served.error ?? '').trim().slice(0, 120)}`);
+  }
 
   const survived = await retryTransient('marker read after wake', async () =>
     await execInBox(fixture, box, `cat ./${markerFile} 2>/dev/null || echo MISSING`),
@@ -5478,6 +5548,13 @@ async function measureArm(
   result.cut = faultCut.cut;
   notes.push(...faultCut.notes);
   settle('the fault-cut cell');
+
+  // THE SECURITY-CELL PHASE, after the fault cut and before the teardown.
+  // Storage-only and past every priced window, like the witness cells.
+  const securityCells = await runSecurityCellsPhase(fixture, box, strategy);
+  result.security = securityCells.observation;
+  notes.push(...securityCells.notes);
+  settle('the security cells');
 
   // CLEANUP, through the shared release: a cleanup failure is not a
   // measurement failure, and the arm still returns what it measured.
@@ -6476,10 +6553,24 @@ export function diffOpTallies(before: OpTally | null, after: OpTally | null): Op
   const start = before?.calls;
   const end = after?.calls;
   if (start === undefined || end === undefined) return null;
-  const calls: Record<string, number> = {};
-  let total = 0;
-  // The union of both sides' operation names, without a Set: the names are
-  // dynamic tally keys, deduplicated inline.
+  const calls = diffCounts(start, end);
+  if (calls === null) return null;
+  const total = Object.values(calls).reduce((sum, count) => sum + count, 0);
+  // The byte tally rides the same bracket. A fixture that predates it answers
+  // no `bytes` on either side, and the window then carries none: the bytes
+  // stay uncounted rather than zero.
+  if (before?.bytes === undefined || after?.bytes === undefined) return { calls, total };
+  const bytes = diffCounts(before.bytes, after.bytes);
+  if (bytes === null) return null;
+  return { calls, total, bytes };
+}
+
+/** The per-name growth between two cumulative counters, or null when either
+ *  side holds a non-integer or the window runs backwards. */
+function diffCounts(start: Record<string, number>, end: Record<string, number>): Record<string, number> | null {
+  const grown: Record<string, number> = {};
+  // The union of both sides' names, without a Set: the names are dynamic
+  // tally keys, deduplicated inline.
   const names = [...Object.keys(start), ...Object.keys(end)].filter((name, index, all) => all.indexOf(name) === index);
   for (const name of names) {
     const from = start[name] ?? 0;
@@ -6487,31 +6578,27 @@ export function diffOpTallies(before: OpTally | null, after: OpTally | null): Op
     if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < 0 || to < from) {
       return null;
     }
-    if (to > from) calls[name] = to - from;
-    total += to - from;
+    if (to > from) grown[name] = to - from;
   }
-  return { calls, total };
+  return grown;
 }
 
 export const RESTORE_FIELD_SOURCES = {
-  serialRemoteOps: 'the wake-window /ops total, when the arm restores sequentially; null under a pooled restore',
+  serialRemoteOps: 'the runner’s longest chain of awaited store reads, carried on the wake detail as the restore receipt; the chain restores sequentially, so its window total',
   totalRemoteOps: 'the flushed /ops window across the stop-to-wake restore, summed over operation names',
-  metadataBytes: 'no live source: the tally counts operations, never bytes',
-  payloadBytes: 'no live source: the tally counts operations, never bytes',
-  cpuSteps: 'no live source: nothing on any wake path meters CPU',
+  metadataBytes: 'the bytes `get` served under a candidate-control key inside the wake window, from the fixture’s byte tally',
+  payloadBytes: 'the bytes `get` served under every other key inside the wake window, from the fixture’s byte tally',
+  cpuSteps: 'the entries the restore materialized: the receipt for a candidate arm, the served tree’s entry count after a chain wake',
   mounts: 'the post-wake /proc/mounts lines at the arm’s own mount points',
-  replayUnits: 'the overlay-cas attach detail’s `folded <cursor> <n>P` receipt; no other arm publishes one',
+  replayUnits: 'the receipt’s layers consulted (bounded-layers) or node fetches (merkle-pack), the chain’s delta layer mount lines, the overlay-cas `folded <cursor> <n>P` receipt',
 } satisfies Record<keyof RestoreWork, string>;
 
-/** The live-observable slice of a wake restore: every `RestoreWork` field the
- *  fixture boundary can actually carry. Bytes and cpu steps are not among
- *  them — see above — so this slice goes green while the full row refuses. */
-export interface WakeRestoreCounts {
-  readonly serialRemoteOps: number | null;
-  readonly totalRemoteOps: number | null;
-  readonly mounts: number | null;
-  readonly replayUnits: number | null;
-}
+/** Every field of a wake restore, each null while its source did not answer. */
+export type WakeRestoreCounts = { readonly [field in keyof RestoreWork]: number | null };
+
+const UNCOUNTED: WakeRestoreCounts = {
+  serialRemoteOps: null, totalRemoteOps: null, metadataBytes: null, payloadBytes: null, cpuSteps: null, mounts: null, replayUnits: null,
+};
 
 export interface CountedRestore {
   /** The observed slice of this wake's cost. */
@@ -6522,11 +6609,36 @@ export interface CountedRestore {
   readonly missing: readonly string[];
   /** The observed evidence in one line, for the run notes. */
   readonly detail: string;
+  /** The runner's receipt when the wake detail carried one. */
+  readonly receipt: RestoreReceipt | null;
+}
+
+/** What a candidate wake detail carried after its root: the receipt, or the
+ *  reason a present receipt is unreadable. A detail with no receipt answers
+ *  null for both. */
+export interface ReceiptRead {
+  readonly receipt: RestoreReceipt | null;
+  readonly refusal: string | null;
+}
+
+export function restoreReceiptOf(detail: string): ReceiptRead {
+  const encoded = CANDIDATE_ROOT_PATTERN.exec(detail)?.[3];
+  if (encoded === undefined) return { receipt: null, refusal: null };
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(encoded);
+  } catch (error) {
+    return { receipt: null, refusal: `the receipt is not JSON: ${describeThrown({ cause: error })}` };
+  }
+  const parsed = v.safeParse(RestoreReceiptSchema, decoded);
+  if (!parsed.success) return { receipt: null, refusal: `the receipt misses its contract: ${issueText(parsed.issues)}` };
+  return { receipt: parsed.output, refusal: null };
 }
 
 /**
  * Count one arm's wake restore from what the run retained: the wake's detail
- * string, the flushed operation window across it, and its mount lines.
+ * string, the flushed operation and byte window across it, its mount lines
+ * and, for a chain, the served tree's entry count.
  *
  * Pure, so the decision suite drives it green and red without a deployment:
  * a fabricated full window counts exactly, an unparseable detail refuses to
@@ -6538,16 +6650,18 @@ export function countedRestoreWork(args: {
   readonly wakeDetail: string;
   readonly wakeOps: OpTally | null;
   readonly wakeMountLines: readonly string[];
+  readonly wakeServedEntries?: number | null;
 }): CountedRestore {
   const { strategy, wakeKind, wakeDetail, wakeOps, wakeMountLines } = args;
   if (wakeKind !== 'attached' && wakeKind !== 'already-attached') {
     return {
-      counts: { serialRemoteOps: null, totalRemoteOps: null, mounts: null, replayUnits: null },
+      counts: UNCOUNTED,
       work: null,
       missing: [
         `no counted restore: the wake answered "${wakeKind || 'nothing'}", so the restore never ran and none of the seven fields was observed`,
       ],
       detail: `wake kind "${wakeKind || 'none'}"`,
+      receipt: null,
     };
   }
   const missing: string[] = [];
@@ -6564,21 +6678,28 @@ export function countedRestoreWork(args: {
       missing.push('totalRemoteOps: the wake-window tally holds a non-integer count, so its sum is not a bill');
     }
   }
-  // SERIAL is a claim about the restore's shape, not a second measurement.
-  // The candidate runner pages payload ranges through a pool, and an
-  // overlay-cas wake with pending entries fetches its batches and blobs
-  // through one too, so neither has a critical path the tally can show. The
-  // unchanged overlay-cas wake is two sequential reads by product invariant
-  // (one cursor GET, one `journal/` LIST that names no batch), and the chain
-  // and r2fs wakes probe and mount sequentially — their whole window is serial.
+  const candidate = strategy === 'bounded-layers' || strategy === 'merkle-pack';
+  const read = candidate ? restoreReceiptOf(wakeDetail) : { receipt: null, refusal: null };
+  const receipt = read.receipt;
+  if (candidate && receipt === null && wakeKind === 'attached') {
+    missing.push(
+      `receipt: the wake detail "${wakeDetail.slice(0, 120) || 'empty'}" carries no readable restore receipt`
+      + `${read.refusal === null ? '' : ` (${read.refusal})`}, so the runner's chain, entries and replay went uncounted`,
+    );
+  }
+  // SERIAL is the critical path. The chain and r2fs probe and mount one read
+  // after another, so their whole window is serial. The candidate runner
+  // counts the longest chain of awaited reads through its pools and carries
+  // it on the receipt. An overlay-cas wake that replayed pending entries ran
+  // its batch and blob fetches through the store pool; only its unchanged
+  // wake (cursor GET plus journal LIST) is serial by product invariant.
   let serialRemoteOps: number | null = null;
   const pending = strategy === 'overlay-cas' ? replayedEntries(wakeDetail) : null;
-  if (totalRemoteOps === null) {
+  if (candidate) {
+    if (receipt !== null) serialRemoteOps = receipt.work.serialRemoteOps;
+    else if (wakeKind === 'already-attached') serialRemoteOps = 0;
+  } else if (totalRemoteOps === null) {
     missing.push('serialRemoteOps: unobservable without the operation bill it is a path through');
-  } else if (strategy === 'bounded-layers' || strategy === 'merkle-pack') {
-    missing.push(
-      'serialRemoteOps: the candidate runner pages payload ranges through a pool (RESTORE_POOL_WIDTH in candidate-runner.ts), so the window total has no observable critical path',
-    );
   } else if (strategy === 'overlay-cas' && pending !== 0) {
     missing.push(
       'serialRemoteOps: this wake replayed pending entries whose batch and blob fetches run through the store pool, so only the unchanged wake (cursor GET plus journal LIST) has an observable critical path',
@@ -6598,6 +6719,10 @@ export function countedRestoreWork(args: {
       'mounts: the post-wake mount read matched none of the arm’s points on an attached wake — either the restore took no mounts or the read failed, and the two are indistinguishable, so the count is refused',
     );
   }
+  // REPLAY UNITS: what the wake re-applied over its base. A chain re-mounts
+  // its delta layers, so their mount lines are the count; the candidate
+  // receipt carries the layers or nodes its runner consulted; overlay-cas
+  // publishes its folded count.
   let replayUnits: number | null = null;
   if (strategy === 'overlay-cas') {
     const replayed = replayedEntries(wakeDetail);
@@ -6606,42 +6731,57 @@ export function countedRestoreWork(args: {
         `replayUnits: the wake detail "${wakeDetail || 'empty'}" carries no folded count, so the replay went uncounted rather than zero`,
       );
     } else replayUnits = replayed;
+  } else if (strategy === 'snapshot-chain') {
+    if (mounts !== null) {
+      replayUnits = wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)).length;
+    } else {
+      missing.push('replayUnits: the chain counts its delta layers from the mount lines the wake read, and that read is refused above');
+    }
+  } else if (candidate) {
+    if (receipt !== null) replayUnits = receipt.work.replayUnits;
+    else if (wakeKind === 'already-attached') replayUnits = 0;
+  } else {
+    missing.push('replayUnits: r2fs mounts with no replay and publishes no count');
+  }
+  // BYTES come from the fixture's byte tally over the same window as the
+  // operations: what `get` served, split by whether the key holds a
+  // candidate control envelope. A window without a tally stays uncounted.
+  let metadataBytes: number | null = null;
+  let payloadBytes: number | null = null;
+  const bytes = wakeOps?.bytes;
+  if (bytes !== undefined && calls !== undefined) {
+    metadataBytes = bytes['metadata'] ?? 0;
+    payloadBytes = bytes['payload'] ?? 0;
   } else {
     missing.push(
-      'replayUnits: no arm but overlay-cas publishes a replay count — the chain serves layers in words rather than counts, r2fs mounts with no replay, and the candidate runner pages without counting',
+      'metadataBytes/payloadBytes: the wake-window /ops bracket carried no byte tally, so the bytes the restore moved are uncounted',
     );
   }
-  // BYTES AND CPU have no live source on any arm. The byte figures two details
-  // carry are named here so nobody mistakes them for observations: the chain
-  // detail's "<N>B" names archive sizes its layers serve lazily through FUSE —
-  // bytes a reader may never pull — and the r2fs detail's "<N> objects <M>B"
-  // is the prefix inventory at mount time, not bytes the mount read.
-  if (strategy === 'snapshot-chain') {
-    missing.push(
-      'metadataBytes/payloadBytes: no live byte counter — the tally counts operations, and the chain detail’s byte figure names lazily-served archive sizes, not bytes read',
-    );
-  } else if (strategy === 'r2fs') {
-    missing.push(
-      'metadataBytes/payloadBytes: no live byte counter — the tally counts operations, and the r2fs detail’s byte figure is the mount-time inventory, not bytes read',
-    );
-  } else if (strategy === 'overlay-cas') {
-    missing.push(
-      'metadataBytes/payloadBytes: no live byte counter — the folded detail carries entry counts, and cursor, batch and blob sizes are never tallied',
-    );
+  // CPU STEPS are the entries the restore materialized. The candidate runner
+  // counts them on its receipt. A chain wake materializes nothing and serves
+  // the whole tree through its mounts, so its count is the served tree's
+  // entries, read after the wake window closed.
+  let cpuSteps: number | null = null;
+  if (candidate) {
+    if (receipt !== null) cpuSteps = receipt.work.cpuSteps;
+    else if (wakeKind === 'already-attached') cpuSteps = 0;
+  } else if (strategy === 'snapshot-chain') {
+    if (wakeKind === 'already-attached') cpuSteps = 0;
+    else if (args.wakeServedEntries !== undefined && args.wakeServedEntries !== null) cpuSteps = args.wakeServedEntries;
+    else missing.push('cpuSteps: the served entry count after the chain wake did not answer');
   } else {
-    missing.push(
-      'metadataBytes/payloadBytes: no live byte counter — the runner ranges read through the store mount with no byte meter, and the sidecar’s bytesFetched counter is not launched in the bench',
-    );
+    missing.push('cpuSteps: r2fs and overlay-cas meter no materialized entries on their wake paths');
   }
-  missing.push('cpuSteps: no live CPU counter — nothing on any wake path meters materialized entries');
-  const counts: WakeRestoreCounts = { serialRemoteOps, totalRemoteOps, mounts, replayUnits };
-  const work = restoreWorkFromCounts({ ...counts, metadataBytes: null, payloadBytes: null, cpuSteps: null });
+  const counts: WakeRestoreCounts = { serialRemoteOps, totalRemoteOps, metadataBytes, payloadBytes, cpuSteps, mounts, replayUnits };
+  const work = restoreWorkFromCounts(counts);
   const window = totalRemoteOps === null ? 'no operation bill' : `${totalRemoteOps} windowed store call(s)`;
+  const served = payloadBytes === null ? 'bytes uncounted' : `${payloadBytes + (metadataBytes ?? 0)} bytes served`;
   return {
     counts,
     work,
     missing,
-    detail: `wake "${wakeDetail || 'no detail'}" — ${window} — ${wakeMountLines.length} mount line(s)`,
+    detail: `wake "${wakeDetail.slice(0, 120) || 'no detail'}" — ${window} — ${served} — ${wakeMountLines.length} mount line(s)`,
+    receipt,
   };
 }
 
@@ -6670,15 +6810,17 @@ export interface BoundVerdict {
 }
 
 /**
- * Hold a counted row against the restore class its arm claims. A single wake
- * cannot show a size-independence shape, so most claims refuse here with the
- * cell that would verify them named — except the chain's two-deep serve,
- * which one wake's mount lines do show.
+ * Hold a counted row against the restore class its arm claims, with the
+ * evidence one wake carries: the chain's mount lines show its two-deep serve,
+ * and a candidate's receipt shows what its open read and how deep its
+ * resolutions went. A size-independence shape (r2fs) and the preregistered
+ * unbounded witness (overlay-cas) stay unverifiable from one wake.
  */
 export function verifyRestoreBound(
   strategy: Strategy,
   work: RestoreWork | null,
   wakeMountLines: readonly string[],
+  receipt: RestoreReceipt | null,
 ): BoundVerdict {
   if (work === null) return { verified: false, reason: 'no counted row to hold to any bound' };
   if (strategy === 'snapshot-chain') {
@@ -6709,15 +6851,38 @@ export function verifyRestoreBound(
       reason: 'unbounded is the preregistered red witness, not a verifiable class; the two-size pending/replay cell witnesses the shape under G2',
     };
   }
+  if (receipt === null) {
+    return { verified: false, reason: `the ${RESTORE_CLAIMS[strategy]} claim is checked against the restore receipt, and this wake carried none` };
+  }
+  const bound = receipt.bound;
   if (strategy === 'bounded-layers') {
+    // bounded-k: one resolution consults at most MAX_LAYER_DEPTH layers
+    // (`packages/devbox/src/candidates/bounded-layers.ts`), and the open reads
+    // the root plus one document per consulted layer.
+    if (bound.layersConsulted === null) {
+      return { verified: false, reason: 'the receipt names no consulted layer count, so the bounded-k claim has nothing to hold to' };
+    }
+    const held = bound.layersConsulted <= CANDIDATE_MAX_LAYER_DEPTH && bound.openReads === bound.layersConsulted + 1;
     return {
-      verified: false,
-      reason: 'the bounded-k bound counts consulted layers per resolution against MAX_LAYER_DEPTH, and a wake row resolves nothing',
+      verified: held,
+      reason: `the open consulted ${bound.layersConsulted} layer(s) in ${bound.openReads} read(s) against MAX_LAYER_DEPTH ${CANDIDATE_MAX_LAYER_DEPTH}`
+        + (held ? '' : ', past the bounded-k claim'),
     };
   }
+  // log-p: the open reads the root record and the ledger, whatever the tree
+  // holds, and a resolution walks at most one node per level of a tree whose
+  // depth stays within log2 of the paths it resolved plus its root and leaf.
+  if (bound.maxNodeDepth === null || bound.nodeFetches === null) {
+    return { verified: false, reason: 'the receipt names no node depth or node fetch count, so the log-p claim has nothing to hold to' };
+  }
+  const depthBound = Math.floor(Math.log2(Math.max(bound.pathsResolved, 1))) + 2;
+  const held = bound.openReads === 2
+    && bound.nodeFetches <= bound.pathsResolved * bound.maxNodeDepth
+    && bound.maxNodeDepth <= depthBound;
   return {
-    verified: false,
-    reason: 'the log-p claim is a digest-tree depth shape, and one wake row cannot show it',
+    verified: held,
+    reason: `the open took ${bound.openReads} read(s), ${bound.pathsResolved} path(s) resolved through ${bound.nodeFetches} node fetch(es) at depth ${bound.maxNodeDepth} against log2 bound ${depthBound}`
+      + (held ? '' : ', past the log-p claim'),
   };
 }
 
@@ -7421,17 +7586,14 @@ function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
         cut: armOf(strategy)?.cut ?? null,
       })),
     ),
-    security: {
-      credentialLeaks: findCredentialLeaks(
-        JSON.stringify({ meta: input.meta, arms: input.arms }),
-        [input.token],
-      ),
-      securityCellsComplete: false,
-      prefixEscapes: 0,
-      capabilityEscapesOrReplays: 0,
-      staleWriterAccepted: false,
-      hostileMetadataAccepted: false,
-    },
+    security: summarizeSecurity({
+      rows: input.requested.map((strategy) => ({
+        strategy,
+        observation: armOf(strategy)?.security ?? null,
+      })),
+      token: input.token,
+      driverText: JSON.stringify({ meta: input.meta, arms: input.arms }),
+    }),
     // ONE ROW PER REQUESTED ARM, counted where the boundary serves counters
     // and null where it does not. The builder names the missing source per
     // field, and G5 refuses on every null — which is the honest answer while
@@ -7446,6 +7608,7 @@ function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
           wakeDetail: arm.wakeDetail ?? '',
           wakeOps: arm.wakeOps ?? null,
           wakeMountLines: arm.wakeMountLines ?? [],
+          wakeServedEntries: arm.wakeServedEntries ?? null,
         });
       const work = counted?.work ?? null;
       return {
@@ -7455,7 +7618,7 @@ function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
         claim: RESTORE_CLAIMS[strategy],
         mechanicalBoundVerified: work === null
           ? false
-          : verifyRestoreBound(strategy, work, arm?.wakeMountLines ?? []).verified,
+          : verifyRestoreBound(strategy, work, arm?.wakeMountLines ?? [], counted?.receipt ?? null).verified,
       };
     }),
     declaredStages: [...DEVBOX_DECLARED_STAGES],
@@ -7611,12 +7774,13 @@ function devboxRequirements(input: DevboxAdmissionInput) {
       wakeDetail: arm.wakeDetail ?? '',
       wakeOps: arm.wakeOps ?? null,
       wakeMountLines: arm.wakeMountLines ?? [],
+      wakeServedEntries: arm.wakeServedEntries ?? null,
     });
     for (const missing of counted.missing) {
       g5.push(`arm \`${strategy}\` ${missing} (counted: ${counted.detail})`);
     }
     if (counted.work !== null) {
-      const bound = verifyRestoreBound(strategy, counted.work, arm.wakeMountLines ?? []);
+      const bound = verifyRestoreBound(strategy, counted.work, arm.wakeMountLines ?? [], counted.receipt);
       if (!bound.verified) {
         g5.push(`arm \`${strategy}\` claims a \`${RESTORE_CLAIMS[strategy]}\` restore bound that was never mechanically verified: ${bound.reason}`);
       }

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { closeSync, constants as FS, createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -17,6 +18,7 @@ import { issueVerifiedJournalCapture, manifestSha256 } from '../src/capture/mode
 import type { Capture, NodeEntry } from '../src/capture/model';
 import type { PosixMetadata } from '../src/capture/model';
 import { FileCandidateObjectSink, envelopeBytes, recoverPublishedParent, requireEnvelopeAt, stageCandidatePayload } from '../src/candidates/publication';
+import type { CandidateRestoreBound, CandidateRestoreWork } from '../src/candidates/restore-receipt';
 import { BeneathRoot } from '../src/native-openat2';
 import type {
   CandidatePayloadStore,
@@ -75,6 +77,10 @@ export interface CandidateSeedResult {
 export interface CandidateRestoreResult {
   readonly ok: true;
   readonly rootId: string | null;
+  /** The counted cost of this restore. It stays absent when no head was restored. */
+  readonly work?: CandidateRestoreWork;
+  /** The evidence the restore bound is checked against. It stays absent with `work`. */
+  readonly bound?: CandidateRestoreBound;
 }
 
 type StoredHead = CandidateRunHeadV1;
@@ -158,6 +164,79 @@ class FusePayloadStore implements CandidatePayloadStore {
     const end = start + Number(intent.byteLength);
     return new Uint8Array(await Bun.file(objectPath(this.store, intent.exactKey)).slice(start, end).arrayBuffer());
   }
+}
+
+/** Which side of a restore a store read serves. The restore sets it at each phase. */
+type RestoreReadClass = 'metadata' | 'payload';
+
+/** One async path's chain of awaited store reads. `runRestorePool` forks it
+ *  per worker, so a chain counts the reads one path issued in sequence and
+ *  the longest chain is the restore's critical path. */
+interface ReadChain {
+  length: number;
+}
+const readChains = new AsyncLocalStorage<ReadChain>();
+
+/** The store reads one restore issued, split by what each read served, and
+ *  the longest chain of them one path awaited in sequence. */
+interface RestoreReadTotals {
+  readonly ops: number;
+  readonly metadataBytes: number;
+  readonly payloadBytes: number;
+  readonly criticalPath: number;
+}
+
+class RestoreReadCounter {
+  private ops = 0;
+  private metadataBytes = 0;
+  private payloadBytes = 0;
+  private criticalPath = 0;
+
+  note(byteLength: number, cls: RestoreReadClass): void {
+    this.ops += 1;
+    if (cls === 'metadata') this.metadataBytes += byteLength;
+    else this.payloadBytes += byteLength;
+    const chain = readChains.getStore();
+    if (chain === undefined) throw new Error('a restore read ran outside its read chain');
+    chain.length += 1;
+    if (chain.length > this.criticalPath) this.criticalPath = chain.length;
+  }
+
+  snapshot(): RestoreReadTotals {
+    return { ops: this.ops, metadataBytes: this.metadataBytes, payloadBytes: this.payloadBytes, criticalPath: this.criticalPath };
+  }
+}
+
+/** Run one restore inside a fresh read chain, so every read it issues is
+ *  counted on a path. */
+function withReadChain<T>(run: () => Promise<T>): Promise<T> {
+  return readChains.run({ length: 0 }, run);
+}
+
+/** A payload store that counts every range read for the restore it serves. */
+class CountedRestoreStore {
+  cls: RestoreReadClass = 'metadata';
+
+  constructor(
+    private readonly inner: FusePayloadStore,
+    private readonly counter: RestoreReadCounter,
+  ) {}
+
+  async readRange(intent: RangeReadIntent): Promise<Uint8Array> {
+    const bytes = await this.inner.readRange(intent);
+    this.counter.note(bytes.byteLength, this.cls);
+    return bytes;
+  }
+}
+
+/** What a Merkle restore reports through its tally: one call per resolved path. */
+export interface RestoreMerkleTally {
+  /** One non-root path the walk resolved. */
+  readonly resolve: (path: string) => void;
+  /** The walk finished and the first byte fetch is next. It runs exactly once. */
+  readonly materializing: () => void;
+  /** One entry the restore finished materializing. */
+  readonly materialize: () => void;
 }
 
 /** Accept the host snapshot only when its envelope matches the digest its pointer names. */
@@ -282,10 +361,20 @@ function restoreMetadata(
     else root.setxattr(path, name, bytes);
   }
 }
-async function restoreBounded(options: CandidateRunOptions, head: StoredHead, store: FusePayloadStore): Promise<void> {
-  const view = await openBounded(head.envelope.rootObject, store, restoreIdentity(options, head));
+async function restoreBounded(
+  options: CandidateRunOptions,
+  head: StoredHead,
+  store: FusePayloadStore,
+): Promise<{ readonly work: CandidateRestoreWork; readonly bound: CandidateRestoreBound }> {
+  const counter = new RestoreReadCounter();
+  const counted = new CountedRestoreStore(store, counter);
+  const view = await openBounded(head.envelope.rootObject, counted, restoreIdentity(options, head));
+  const layersConsulted = view.layers.length;
+  const openReads = counter.snapshot().ops;
+  counted.cls = 'payload';
   const root = new BeneathRoot(options.workspace);
   const inodes = new Map<number, string>();
+  let cpuSteps = 0;
   try {
     const directories: { readonly path: string; readonly metadata: PosixMetadata | undefined }[] = [];
     for (const path of view.entryPaths()) {
@@ -293,14 +382,17 @@ async function restoreBounded(options: CandidateRunOptions, head: StoredHead, st
       if (entry.kind === 'dir') {
         root.mkdir(path, entry.mode);
         directories.push({ path, metadata: entry.metadata });
+        cpuSteps += 1;
       } else if (entry.kind === 'symlink') {
         root.symlink(entry.target!, path);
         restoreMetadata(root, path, entry.metadata, true);
+        cpuSteps += 1;
       } else {
         if (entry.size === undefined) throw new Error(`published bounded file has no size: ${path}`);
         const source = inodes.get(entry.ino);
         if (source !== undefined) {
           root.hardlink(source, path);
+          cpuSteps += 1;
           continue;
         }
         createCandidateRestoreFile(root, path, entry.mode, entry.size);
@@ -316,6 +408,7 @@ async function restoreBounded(options: CandidateRunOptions, head: StoredHead, st
         }
         restoreMetadata(root, path, entry.metadata);
         inodes.set(entry.ino, path);
+        cpuSteps += 1;
       }
     }
     for (const directory of directories.reverse()) {
@@ -324,6 +417,25 @@ async function restoreBounded(options: CandidateRunOptions, head: StoredHead, st
   } finally {
     root.close();
   }
+  const figured = counter.snapshot();
+  const totalRemoteOps = figured.ops;
+  return {
+    work: {
+      serialRemoteOps: figured.criticalPath,
+      totalRemoteOps,
+      metadataBytes: figured.metadataBytes,
+      payloadBytes: figured.payloadBytes,
+      cpuSteps,
+      replayUnits: layersConsulted,
+    },
+    bound: {
+      openReads,
+      layersConsulted,
+      maxNodeDepth: null,
+      nodeFetches: null,
+      pathsResolved: cpuSteps,
+    },
+  };
 }
 
 /**
@@ -353,7 +465,17 @@ async function runRestorePool<Item>(
       await run(items[index]!);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(RESTORE_POOL_WIDTH, items.length) }, () => worker()));
+  // Each worker forks the caller's read chain and the caller continues from
+  // the longest fork, so the chain length is the longest sequence of awaited
+  // reads through the pool rather than their total.
+  const parent = readChains.getStore();
+  const forks: ReadChain[] = [];
+  await Promise.all(Array.from({ length: Math.min(RESTORE_POOL_WIDTH, items.length) }, () => {
+    const fork: ReadChain = { length: parent?.length ?? 0 };
+    forks.push(fork);
+    return readChains.run(fork, worker);
+  }));
+  if (parent !== undefined) parent.length = Math.max(parent.length, ...forks.map((fork) => fork.length));
 }
 
 interface InodeClaim {
@@ -395,6 +517,7 @@ export async function restoreMerkleTree(
   view: MerklePackView,
   root: BeneathRoot,
   notes: string[] = [],
+  tally?: RestoreMerkleTally,
 ): Promise<void> {
   let phaseAt = Date.now();
   const mark = (phase: string): void => {
@@ -416,6 +539,7 @@ export async function restoreMerkleTree(
   const discover = async (path: string): Promise<void> => {
     const entry = await view.stat(path);
     if (entry === null) throw new Error(`published Merkle path disappeared: ${path}`);
+    if (path !== '') tally?.resolve(path);
     if (entry.kind === 'dir') {
       if (path !== '') {
         root.mkdir(path, entry.mode);
@@ -429,6 +553,7 @@ export async function restoreMerkleTree(
     if (entry.kind === 'symlink') {
       root.symlink(entry.target!, path);
       restoreMetadata(root, path, entry.metadata, true);
+      tally?.materialize();
       return;
     }
     if (entry.size === undefined || entry.ino === undefined) {
@@ -454,6 +579,7 @@ export async function restoreMerkleTree(
 
   await discover('');
   mark(`tree walk (${String(directories.length)} dirs, ${String(files.length)} files, ${String(links.length)} links)`);
+  tally?.materializing();
 
   let restoredBytes = 0;
   const materializing = runRestorePool(files, async (file) => {
@@ -466,6 +592,7 @@ export async function restoreMerkleTree(
     }
     restoreMetadata(root, file.path, file.metadata);
     file.claim.complete();
+    tally?.materialize();
   });
   // A link worker waits on its source WITHOUT taking a data worker's slot. A
   // directory with many aliases therefore cannot deadlock by filling the pool
@@ -473,6 +600,7 @@ export async function restoreMerkleTree(
   const linking = runRestorePool(links, async (link) => {
     await link.claim.ready;
     root.hardlink(link.claim.source, link.path);
+    tally?.materialize();
   });
   await Promise.all([materializing, linking]);
   mark(`data (${String(restoredBytes)} bytes)`);
@@ -486,7 +614,11 @@ export async function restoreMerkleTree(
   mark('directory metadata');
 }
 
-async function restoreMerkle(options: CandidateRunOptions, head: StoredHead, store: FusePayloadStore): Promise<void> {
+async function restoreMerkle(
+  options: CandidateRunOptions,
+  head: StoredHead,
+  store: FusePayloadStore,
+): Promise<{ readonly work: CandidateRestoreWork; readonly bound: CandidateRestoreBound }> {
   // WHERE THE TIME WENT, phase by phase, on stderr. The overrun this repairs
   // reported one line — that it had overrun — and nothing about which half of
   // the walk spent the budget. The container hands this stream back with a
@@ -494,19 +626,62 @@ async function restoreMerkle(options: CandidateRunOptions, head: StoredHead, sto
   const startedAt = Date.now();
   const notes: string[] = [];
   const identity = restoreIdentity(options, head);
+  const counter = new RestoreReadCounter();
+  const counted = new CountedRestoreStore(store, counter);
+  let pathsResolved = 0;
+  let maxNodeDepth = 0;
+  let cpuSteps = 0;
+  let walkedOps = 0;
+  let walkedMetadataBytes = 0;
+  const tally: RestoreMerkleTally = {
+    resolve: (path) => {
+      pathsResolved += 1;
+      const depth = path.split('/').length + 1;
+      if (depth > maxNodeDepth) maxNodeDepth = depth;
+    },
+    materializing: () => {
+      const walked = counter.snapshot();
+      walkedOps = walked.ops;
+      walkedMetadataBytes = walked.metadataBytes;
+      counted.cls = 'payload';
+    },
+    materialize: () => {
+      cpuSteps += 1;
+    },
+  };
   try {
-    const manifestBytes = await store.readRange({
+    const manifestBytes = await counted.readRange({
       ...identity, exactKey: head.envelope.rootObject.key, method: 'GET', byteOffset: '0',
       byteLength: head.envelope.rootObject.byteLength, sha256: head.envelope.rootObject.sha256,
     });
-    const view = await openMerklePack({ rootId: sha256Hex(manifestBytes), manifestBytes }, store, identity);
+    const view = await openMerklePack({ rootId: sha256Hex(manifestBytes), manifestBytes }, counted, identity);
+    const openReads = counter.snapshot().ops;
     notes.push(`manifest+index ${String(Date.now() - startedAt)} ms`);
     const root = new BeneathRoot(options.workspace);
     try {
-      await restoreMerkleTree(view, root, notes);
+      await restoreMerkleTree(view, root, notes, tally);
     } finally {
       root.close();
     }
+    const figured = counter.snapshot();
+    const nodeFetches = walkedOps - openReads;
+    return {
+      work: {
+        serialRemoteOps: figured.criticalPath,
+        totalRemoteOps: figured.ops,
+        metadataBytes: walkedMetadataBytes,
+        payloadBytes: figured.payloadBytes,
+        cpuSteps,
+        replayUnits: nodeFetches,
+      },
+      bound: {
+        openReads,
+        layersConsulted: null,
+        maxNodeDepth,
+        nodeFetches,
+        pathsResolved,
+      },
+    };
   } finally {
     process.stderr.write(`merkle-pack restore: ${notes.join(', ')}, `
       + `wall ${String(Date.now() - startedAt)} ms\n`);
@@ -767,9 +942,10 @@ async function restoreCandidate(options: CandidateRunOptions): Promise<Candidate
   const head = controlState(options).head;
   if (head === null) return { ok: true, rootId: null };
   const payload = new FusePayloadStore(options.store);
-  if (head.envelope.format === 'bounded-layers/v1') await restoreBounded(options, head, payload);
-  else await restoreMerkle(options, head, payload);
-  return { ok: true, rootId: head.pointer.rootEnvelopeId };
+  const counted = await withReadChain(async () => head.envelope.format === 'bounded-layers/v1'
+    ? await restoreBounded(options, head, payload)
+    : await restoreMerkle(options, head, payload));
+  return { ok: true, rootId: head.pointer.rootEnvelopeId, work: counted.work, bound: counted.bound };
 }
 
 export async function runCandidate(

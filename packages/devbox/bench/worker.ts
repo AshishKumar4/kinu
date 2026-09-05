@@ -81,6 +81,7 @@ import {
   type R2OperationTally as OpTally,
 } from './r2-operations';
 import { bindingFor, storePrefixOf, strategyIsDeployed } from './strategy-dispatch';
+import { runBenchSecurityCells, type SecurityCellsObservation } from './security-cells';
 
 interface BenchEnv {
   BACKUP_BUCKET: R2Bucket;
@@ -154,7 +155,17 @@ export interface CandidateContainerFacts {
  *  `waitUntil`, which has no effect here and would drop the write on eviction. */
 const FLUSH_EVERY = 64;
 
+/** What a `get` served, by what the key holds. A candidate control envelope
+ *  is metadata; every other object in the store is payload. The snapshot
+ *  chain keeps its control record in Durable Object storage, so its wake
+ *  serves payload bytes alone. No other operation moves an object body into
+ *  the box. */
+const BYTE_CLASSES = ['payload', 'metadata'] as const;
+type ByteClass = (typeof BYTE_CLASSES)[number];
+export type ByteTally = Partial<Record<ByteClass, number>>;
+
 const pending: OpTally = {};
+const pendingBytes: ByteTally = {};
 let pendingCount = 0;
 let inFlight: Promise<void> | undefined;
 let flushEnv: BenchEnv | undefined;
@@ -162,6 +173,20 @@ let flushEnv: BenchEnv | undefined;
 function countOp(name: OpName): void {
   pending[name] = (pending[name] ?? 0) + 1;
   pendingCount += 1;
+}
+
+function countBytes(key: string, served: number): void {
+  const cls: ByteClass = key.includes('/candidate-control/') ? 'metadata' : 'payload';
+  pendingBytes[cls] = (pendingBytes[cls] ?? 0) + served;
+}
+
+/** The bytes one `get` served: the range R2 answered when one was asked for,
+ *  the whole object otherwise. */
+function servedBytes(object: R2ObjectBody): number {
+  const range = object.range;
+  if (range === undefined) return object.size;
+  if ('suffix' in range) return range.suffix;
+  return range.length ?? object.size - (range.offset ?? 0);
 }
 
 /** Push the tally to the counter object, coalesced to one write in flight.
@@ -173,11 +198,13 @@ async function flushOps(env: BenchEnv): Promise<void> {
   if (inFlight !== undefined) await inFlight;
   if (pendingCount === 0) return;
   const batch = { ...pending } satisfies OpTally;
+  const bytes = { ...pendingBytes } satisfies ByteTally;
   for (const name of OP_NAMES) delete pending[name];
+  for (const cls of BYTE_CLASSES) delete pendingBytes[cls];
   pendingCount = 0;
   const run = (async () => {
     try {
-      await env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops')).bump(batch);
+      await env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops')).bump(batch, bytes);
     } finally {
       inFlight = undefined;
     }
@@ -237,7 +264,11 @@ function countingBucket(bucket: R2Bucket): R2Bucket {
     get: async (key: string, options?: R2GetOptions) => {
       countOp('get');
       await maybeFlush();
-      return await bucket.get(key, options);
+      const object = await bucket.get(key, options);
+      // A conditional `get` whose condition failed answers an `R2Object` with
+      // no body, so it served nothing.
+      if (object !== null && 'body' in object) countBytes(key, servedBytes(object));
+      return object;
     },
     put: async (
       key: string,
@@ -272,16 +303,19 @@ function countingMultipart(upload: R2MultipartUpload): R2MultipartUpload {
   };
 }
 
-/** The tally, plus every class total a cost estimate needs. */
+/** The tally, plus every class total a cost estimate needs, plus the bytes
+ *  `get` served. */
 interface OpSummary {
   readonly calls: OpTally;
   readonly classA: number;
   readonly classB: number;
   readonly classFree: number;
   readonly total: number;
+  readonly bytes: ByteTally;
 }
 
-function summarize(calls: OpTally): OpSummary {
+function summarize(counts: OpCounts): OpSummary {
+  const calls = counts.calls;
   let classA = 0;
   let classB = 0;
   let classFree = 0;
@@ -290,28 +324,44 @@ function summarize(calls: OpTally): OpSummary {
   for (const name of CLASS_A) classA += calls[name] ?? 0;
   for (const name of CLASS_B) classB += calls[name] ?? 0;
   for (const name of CLASS_FREE) classFree += calls[name] ?? 0;
-  return { calls, classA, classB, classFree, total };
+  return { calls, classA, classB, classFree, total, bytes: counts.bytes };
+}
+
+/** The two tallies the counter object keeps: calls by operation, and the
+ *  bytes `get` served by what the key holds. */
+export interface OpCounts {
+  readonly calls: OpTally;
+  readonly bytes: ByteTally;
 }
 
 export class BenchOpCounter extends DurableObject<BenchEnv> {
-  async bump(batch: OpTally): Promise<void> {
+  async bump(batch: OpTally, bytes: ByteTally): Promise<void> {
     const tally = (await this.ctx.storage.get<OpTally>('tally')) ?? {};
     for (const name of OP_NAMES) {
       const count = batch[name];
       if (count === undefined) continue;
       tally[name] = (tally[name] ?? 0) + count;
     }
-    await this.ctx.storage.put('tally', tally);
+    const served = (await this.ctx.storage.get<ByteTally>('bytes')) ?? {};
+    for (const cls of BYTE_CLASSES) {
+      const count = bytes[cls];
+      if (count === undefined) continue;
+      served[cls] = (served[cls] ?? 0) + count;
+    }
+    await this.ctx.storage.put({ tally, bytes: served });
   }
 
-  async read(): Promise<OpTally> {
-    return (await this.ctx.storage.get<OpTally>('tally')) ?? {};
+  async read(): Promise<OpCounts> {
+    return {
+      calls: (await this.ctx.storage.get<OpTally>('tally')) ?? {},
+      bytes: (await this.ctx.storage.get<ByteTally>('bytes')) ?? {},
+    };
   }
 
-  async reset(): Promise<OpTally> {
-    const tally = await this.read();
-    await this.ctx.storage.delete('tally');
-    return tally;
+  async reset(): Promise<OpCounts> {
+    const counts = await this.read();
+    await this.ctx.storage.delete(['tally', 'bytes']);
+    return counts;
   }
 }
 
@@ -423,6 +473,53 @@ class BenchBox extends Devbox<BenchEnv> {
    */
   async flushOpTally(): Promise<void> {
     await flushOps(this.env);
+  }
+
+  /**
+   * Run the G4 security fault cells (F7 stale writer, F10 hostile metadata,
+   * F11 capability escape/replay, F12 credential exposure) inside this box.
+   *
+   * Storage-only: no container exec, no mount, no checkpoint. The cells run
+   * the production controls against an isolated per-call namespace
+   * `<boxPrefix>security-cells/<nonce>/` with isolated durable keys, so the
+   * live control record and live payload prefixes are never touched. The box
+   * prefix is derived from this object's own id — the same id
+   * `storePrefixOf` derives from the driver's box name — so the cells cannot
+   * name another box's keys whatever nonce the driver supplies.
+   *
+   * The live fixture secret (BENCH_TOKEN) is read from this object's own env
+   * for the F12 scan and never leaves in the answer: F12 reports surfaces,
+   * never values. This env carries no account credential to copy.
+   */
+  async runSecurityCells(nonce: string): Promise<SecurityCellsObservation> {
+    const strategy = this.strategy;
+    const id = this.ctx.id.toString();
+    const base = `boxes/${id}/`;
+    const boxPrefix = strategy === 'bounded-layers' || strategy === 'merkle-pack'
+      ? `${base}candidate/${strategy}/`
+      : base;
+    // The F12 scan surface: the declared string env beside the token, named
+    // one by one so no representation check decides what counts. BENCH_TOKEN
+    // itself is the scanned secret, never a scanned surface.
+    const envValues: Array<{ readonly name: string; readonly value: string }> = [];
+    for (const entry of [
+      { name: 'ALLOW_EXTRACTION', value: this.env.ALLOW_EXTRACTION },
+      { name: 'BENCH_SELECTED_ARMS', value: this.env.BENCH_SELECTED_ARMS },
+    ]) {
+      if (entry.value !== undefined && entry.value.length > 0) {
+        envValues.push({ name: entry.name, value: entry.value });
+      }
+    }
+    return await runBenchSecurityCells({
+      strategy,
+      boxPrefix,
+      nonce,
+      bucket: this.env.BACKUP_BUCKET,
+      storage: this.ctx.storage,
+      boxId: id,
+      fixtureSecret: this.env.BENCH_TOKEN ?? '',
+      envValues,
+    });
   }
 
   /**
@@ -1229,6 +1326,21 @@ export default {
             // driver's poll cadence never enters a measured number.
             ms: row.ms,
           });
+        }
+
+        case 'POST /security': {
+          // G4 FAULT CELLS, storage-only. `op` doubles as the isolated
+          // namespace nonce: one call, one `security-cells/<op>/` prefix and
+          // one set of `__security:*:<op>` durable keys, so a re-post with the
+          // same op reuses the namespace and a new op cannot collide with it.
+          // No new body field: DriverBodySchema stays closed.
+          const nonce = input.op ?? '';
+          if (nonce.length === 0) return json({ ok: false, error: 'op is required' }, 400);
+          if (!/^[A-Za-z0-9-]{8,64}$/.test(nonce)) {
+            return json({ ok: false, error: 'op must be an 8-64 char id for the isolated namespace' }, 400);
+          }
+          const security = await box.runSecurityCells(nonce);
+          return json({ ok: true, strategy, box: name, security, ms: Date.now() - started });
         }
 
         case 'POST /kill': {

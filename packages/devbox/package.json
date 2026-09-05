@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./durability/contracts": "./src/durability/contracts.ts",
+    "./candidates/restore-receipt": "./src/candidates/restore-receipt.ts",
     "./incidents": "./src/incidents.ts"
   },
   "dependencies": {
