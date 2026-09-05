@@ -27,6 +27,8 @@ import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "./events/webhook-route";
 import { getSandbox } from "@cloudflare/sandbox";
+import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
+import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import type {
   ActivitySnapshot,
   SubordinateRosterEntry,
@@ -455,6 +457,27 @@ export class OrchestratorAgent extends ActorAgent {
       return { error: 'This workspace has no owner yet, so there is no experience library to reach.' };
     }
     return runExperienceAction(deps, input);
+  }
+
+  /**
+   * The one method a workspace host mounts for its facets.
+   *
+   * A facet runs in its own isolate and reaches the object that owns the
+   * filesystem through the supervisor entrypoint, which resolves this object
+   * out of the composed `OrchestratorAgent` namespace and calls this. The
+   * envelope carries only an op name and arguments — the pid, the
+   * append-writer incarnation and the mutation-lease owner are stamped by the
+   * entrypoint from its own trusted props, never by the facet — so a process
+   * can neither choose nor drop the credential its writes land under.
+   *
+   * Deliberately NOT `@callable`: like `workspaceBoxOp` below, this is how a
+   * Durable Object in this Worker reaches the object that owns the
+   * filesystem, and a browser socket that could reach it could ask for any
+   * operation under any pid. `sealRpcSurface` keeps it on the stub transport
+   * and off the public one.
+   */
+  async supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult> {
+    return await this.hostedWorkspace().supervisorOp(envelope);
   }
 
   async workspaceBoxOp(shellId: string, op: WorkspaceBoxOp): Promise<WorkspaceBoxResult> {

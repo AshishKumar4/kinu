@@ -182,10 +182,13 @@
     },
   },
   "patchedDependencies": {
+    "@nimbus-sh/fabric@0.2.0": "patches/@nimbus-sh%2Ffabric@0.2.0.patch",
+    "@plannotator/ui@0.30.0": "patches/@plannotator%2Fui@0.30.0.patch",
+    "@nimbus-sh/worker@0.4.0": "patches/@nimbus-sh%2Fworker@0.4.0.patch",
     "@nimbus-sh/core@0.6.0": "patches/@nimbus-sh%2Fcore@0.6.0.patch",
     "@cloudflare/sandbox@0.12.8": "patches/@cloudflare%2Fsandbox@0.12.8.patch",
-    "@plannotator/ui@0.30.0": "patches/@plannotator%2Fui@0.30.0.patch",
     "agents@0.20.1": "patches/agents@0.20.1.patch",
+    "@nimbus-sh/platform@0.1.0": "patches/@nimbus-sh%2Fplatform@0.1.0.patch",
   },
   "overrides": {
     "@cloudflare/containers": "0.3.7",

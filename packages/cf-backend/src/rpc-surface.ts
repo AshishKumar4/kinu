@@ -439,6 +439,12 @@ const ORCHESTRATOR_METHODS = [
   // signature, and re-checks the capability handle inside the object.
   'routeWorkspacePreview',
   'workspaceBoxOp',
+  // The one method the supervisor entrypoint calls on the object that owns a
+  // workspace: a facet's filesystem calls arrive here through the composed
+  // `OrchestratorAgent` namespace. Listed (not sealed away) but never
+  // `@callable`, exactly like `workspaceBoxOp` — reachable by a Durable
+  // Object stub in this Worker, unreachable from the browser or CLI.
+  'supervisorOp',
   // A subagent asks its workspace what it is called: its prompt names the
   // workspace it works in, and it holds only the slug.
   'workspaceTitle',

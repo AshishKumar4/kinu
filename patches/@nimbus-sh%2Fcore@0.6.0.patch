@@ -1,3 +1,187 @@
+diff --git a/dist/_shared/tarball.d.ts b/dist/_shared/tarball.d.ts
+index 98b8f268bb5acd4c6e7856c168477e747c300fad..e4c1269ad82b6e36af588d3dd330557f6d9b24a6 100644
+--- a/dist/_shared/tarball.d.ts
++++ b/dist/_shared/tarball.d.ts
+@@ -1,17 +1,61 @@
+ /**
+- * tarball.ts — a whole tarball, in memory, as a path→bytes map.
++ * tarball.ts — a tarball into a filesystem, or into memory when a caller
++ * genuinely needs both layers open at once.
+  *
+- * The streaming primitives it walks with (`parseTarHeader`, `streamTarEntries`,
+- * `readableStreamToAsyncIterable`) live in `./tarball-stream.ts` — a
+- * dependency-free leaf, because `bundle-facet-workers.mjs` esbuilds that file
+- * into a string the loader pool injects into dynamic workers, where an import
+- * would not resolve.
++ * The streaming primitives these walk with (`parseTarHeader`,
++ * `streamTarEntries`, `readableStreamToAsyncIterable`) live in
++ * `./tarball-stream.ts` — a dependency-free leaf, because
++ * `bundle-facet-workers.mjs` esbuilds that file into a string the loader pool
++ * injects into dynamic workers, where an import would not resolve.
+  *
+- * This half is for a caller that already holds the bytes: `gem install`, which
+- * fetches a `.gem` (a tar holding a gzipped tar) and needs both layers open at
+- * once. An installer streaming a tarball it is still downloading should drive
+- * `streamTarEntries` itself and never hold the whole thing.
++ * {@link writeTarballStream} is what an installer wants: it never holds more
++ * than one entry, and it is the ONE place an installed package's completion
++ * is decided. {@link extractTarball} is for a caller that already holds the
++ * bytes and needs the whole map — `gem install`, which fetches a `.gem` (a
++ * tar holding a gzipped tar).
+  */
++/** The filesystem surface {@link writeTarballStream} needs. */
++export interface TarballWriteTarget {
++    exists(path: string): boolean;
++    mkdir(path: string, options?: {
++        recursive?: boolean;
++    }): void;
++    writeFile(path: string, data: Uint8Array | string): unknown;
++}
++/** What one package's extraction produced. */
++export interface TarballWriteResult {
++    /** Regular files written, including the manifest. */
++    files: number;
++    /** Their total decompressed bytes. */
++    bytes: number;
++}
++/**
++ * Write a gzipped tarball stream into `targetDir`, one entry at a time.
++ *
++ * Two invariants, both of which a previous buffered implementation broke:
++ *
++ * MEMORY. Nothing here holds the tarball, the decompressed tarball, or the
++ * set of entries. `streamTarEntries` yields one completed file at a time and
++ * this writes it before reading the next header, so peak transient heap is
++ * the largest single file plus the held-back manifest.
++ *
++ * COMPLETION. Every write is performed and its failure propagates: a package
++ * that fails part-way through answers a rejection, never a shorter tree. The
++ * manifest is deliberately written LAST, whatever order the tarball carries
++ * it in, because `package.json` is what every caller reads to decide a
++ * package is already installed. A tree whose manifest is absent is a tree
++ * the next install re-extracts; a tree whose manifest arrived first and whose
++ * later files failed would be trusted forever. That costs holding one
++ * manifest — kilobytes — for the duration of one package, and it is the same
++ * discipline the facet installer already applies to its shared write waves.
++ *
++ * Entry names arrive already stripped of npm's `package/` prefix and already
++ * canonicalized (see `parseTarHeader`), so this does not re-derive them. The
++ * previous rewrite of this logic re-stripped a prefix that was no longer
++ * there, found no `/` in `package.json`, and skipped every top-level entry
++ * with a bare `continue` — writing nothing while throwing nothing.
++ */
++export declare function writeTarballStream(body: ReadableStream<Uint8Array>, targetDir: string, vfs: TarballWriteTarget): Promise<TarballWriteResult>;
+ /** Extract every regular file. Gzipped input is decompressed first. */
+ export declare function extractTarball(tarball: ArrayBuffer): Promise<Map<string, Uint8Array>>;
+ //# sourceMappingURL=tarball.d.ts.map
+\ No newline at end of file
+diff --git a/dist/_shared/tarball.d.ts.map b/dist/_shared/tarball.d.ts.map
+index e5d52b03f13f753ceb1a39b015ad90944e789ab9..773ad7b90de8febb14edc8e4a0a736a3b69b3050 100644
+--- a/dist/_shared/tarball.d.ts.map
++++ b/dist/_shared/tarball.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"tarball.d.ts","sourceRoot":"","sources":["../../src/_shared/tarball.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;GAaG;AAOH,uEAAuE;AACvE,wBAAsB,cAAc,CAClC,OAAO,EAAE,WAAW,GACnB,OAAO,CAAC,GAAG,CAAC,MAAM,EAAE,UAAU,CAAC,CAAC,CAsBlC"}
+\ No newline at end of file
++{"version":3,"file":"tarball.d.ts","sourceRoot":"","sources":["../../src/_shared/tarball.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;GAeG;;AAOH,+DAA+D;AAC/D,MAAM,WAAW,kBAAkB;IACjC,MAAM,CAAC,IAAI,EAAE,MAAM,GAAG,OAAO,CAAC;IAC9B,KAAK,CAAC,IAAI,EAAE,MAAM,EAAE,OAAO,CAAC,EAAE;QAAE,SAAS,CAAC,EAAE,OAAO,CAAA;KAAE,GAAG,IAAI,CAAC;IAC7D,SAAS,CAAC,IAAI,EAAE,MAAM,EAAE,IAAI,EAAE,UAAU,GAAG,MAAM,GAAG,OAAO,CAAC;CAC7D;AAED,8CAA8C;AAC9C,MAAM,WAAW,kBAAkB;IACjC,qDAAqD;IACrD,KAAK,EAAE,MAAM,CAAC;IACd,sCAAsC;IACtC,KAAK,EAAE,MAAM,CAAC;CACf;AAQD;;;;;;;;;;;;;;;;;;;;;;;;;GAyBG;AACH,wBAAsB,kBAAkB,CACtC,IAAI,EAAE,cAAc,CAAC,UAAU,CAAC,EAChC,SAAS,EAAE,MAAM,EACjB,GAAG,EAAE,kBAAkB,GACtB,OAAO,CAAC,kBAAkB,CAAC,CAmC7B;AAED,uEAAuE;AACvE,wBAAsB,cAAc,CAClC,OAAO,EAAE,WAAW,GACnB,OAAO,CAAC,GAAG,CAAC,MAAM,EAAE,UAAU,CAAC,CAAC,CAsBlC"}
+\ No newline at end of file
+diff --git a/dist/_shared/tarball.js b/dist/_shared/tarball.js
+index 191add4476ef819a3ee6475466976d54dfabb595..f526330ef791bb0900ff98798d39c11e21248230 100644
+--- a/dist/_shared/tarball.js
++++ b/dist/_shared/tarball.js
+@@ -1,18 +1,83 @@
+ /**
+- * tarball.ts — a whole tarball, in memory, as a path→bytes map.
++ * tarball.ts — a tarball into a filesystem, or into memory when a caller
++ * genuinely needs both layers open at once.
+  *
+- * The streaming primitives it walks with (`parseTarHeader`, `streamTarEntries`,
+- * `readableStreamToAsyncIterable`) live in `./tarball-stream.ts` — a
+- * dependency-free leaf, because `bundle-facet-workers.mjs` esbuilds that file
+- * into a string the loader pool injects into dynamic workers, where an import
+- * would not resolve.
++ * The streaming primitives these walk with (`parseTarHeader`,
++ * `streamTarEntries`, `readableStreamToAsyncIterable`) live in
++ * `./tarball-stream.ts` — a dependency-free leaf, because
++ * `bundle-facet-workers.mjs` esbuilds that file into a string the loader pool
++ * injects into dynamic workers, where an import would not resolve.
+  *
+- * This half is for a caller that already holds the bytes: `gem install`, which
+- * fetches a `.gem` (a tar holding a gzipped tar) and needs both layers open at
+- * once. An installer streaming a tarball it is still downloading should drive
+- * `streamTarEntries` itself and never hold the whole thing.
++ * {@link writeTarballStream} is what an installer wants: it never holds more
++ * than one entry, and it is the ONE place an installed package's completion
++ * is decided. {@link extractTarball} is for a caller that already holds the
++ * bytes and needs the whole map — `gem install`, which fetches a `.gem` (a
++ * tar holding a gzipped tar).
+  */
+ import { streamTarEntries, readableStreamToAsyncIterable, } from './tarball-stream.js';
++/**
++ * The manifest an npm package is identified by, and the marker that says its
++ * tree is complete.
++ */
++const PACKAGE_MANIFEST = 'package.json';
++/**
++ * Write a gzipped tarball stream into `targetDir`, one entry at a time.
++ *
++ * Two invariants, both of which a previous buffered implementation broke:
++ *
++ * MEMORY. Nothing here holds the tarball, the decompressed tarball, or the
++ * set of entries. `streamTarEntries` yields one completed file at a time and
++ * this writes it before reading the next header, so peak transient heap is
++ * the largest single file plus the held-back manifest.
++ *
++ * COMPLETION. Every write is performed and its failure propagates: a package
++ * that fails part-way through answers a rejection, never a shorter tree. The
++ * manifest is deliberately written LAST, whatever order the tarball carries
++ * it in, because `package.json` is what every caller reads to decide a
++ * package is already installed. A tree whose manifest is absent is a tree
++ * the next install re-extracts; a tree whose manifest arrived first and whose
++ * later files failed would be trusted forever. That costs holding one
++ * manifest — kilobytes — for the duration of one package, and it is the same
++ * discipline the facet installer already applies to its shared write waves.
++ *
++ * Entry names arrive already stripped of npm's `package/` prefix and already
++ * canonicalized (see `parseTarHeader`), so this does not re-derive them. The
++ * previous rewrite of this logic re-stripped a prefix that was no longer
++ * there, found no `/` in `package.json`, and skipped every top-level entry
++ * with a bare `continue` — writing nothing while throwing nothing.
++ */
++export async function writeTarballStream(body, targetDir, vfs) {
++    const ensureDir = (path) => {
++        // Not a swallowed mkdir: an existing directory is the expected case, and
++        // anything else — a permission denial, a file in the way — must reach the
++        // caller rather than become a write into nowhere.
++        if (!vfs.exists(path))
++            vfs.mkdir(path, { recursive: true });
++    };
++    ensureDir(targetDir);
++    let files = 0;
++    let bytes = 0;
++    let manifest = null;
++    const entries = streamTarEntries(readableStreamToAsyncIterable(body.pipeThrough(new DecompressionStream('gzip'))));
++    for await (const entry of entries) {
++        if (entry.name === PACKAGE_MANIFEST) {
++            manifest = entry.data;
++            continue;
++        }
++        const fullPath = `${targetDir}/${entry.name}`;
++        const cut = fullPath.lastIndexOf('/');
++        if (cut > 0)
++            ensureDir(fullPath.slice(0, cut));
++        await vfs.writeFile(fullPath, entry.data);
++        files++;
++        bytes += entry.data.length;
++    }
++    if (!manifest) {
++        throw new Error(`tarball for ${targetDir} carried no ${PACKAGE_MANIFEST}`);
++    }
++    await vfs.writeFile(`${targetDir}/${PACKAGE_MANIFEST}`, manifest);
++    return { files: files + 1, bytes: bytes + manifest.length };
++}
+ /** Extract every regular file. Gzipped input is decompressed first. */
+ export async function extractTarball(tarball) {
+     const files = new Map();
 diff --git a/dist/runtime/esbuild-service.d.ts b/dist/runtime/esbuild-service.d.ts
 index d07f6ea2dd282ecd8b761d8861d5a6108251fa2f..691b3064c5c446ca80b72b681194f9b4930a7429 100644
 --- a/dist/runtime/esbuild-service.d.ts
@@ -24,6 +208,881 @@ index 3f3fb83bd240e98247945f044983cd0bfc8e7bb7..57d6cef1361d34fc05c619da12e43238
          _esbuildMod = mod;
          return _esbuildMod;
      })();
+diff --git a/dist/substrate/lifo/commands/system/npm.d.ts b/dist/substrate/lifo/commands/system/npm.d.ts
+index 455223fda18674d9d73e5e7761124f868f34b06c..8cceba20f90177bad99099416eacc14662f08c59 100644
+--- a/dist/substrate/lifo/commands/system/npm.d.ts
++++ b/dist/substrate/lifo/commands/system/npm.d.ts
+@@ -17,9 +17,42 @@ interface PackageJson {
+     };
+ }
+ export type ShellExecuteFn = (cmd: string, ctx: CommandContext) => Promise<number>;
++/**
++ * The installer a host that can run dynamic workers hands this command.
++ *
++ * Nimbus already had the right installer — `NpmInstaller`, wave-based,
++ * extracting inside facets and writing through `writeBatchStream` — but it
++ * sat behind the session's own `ensureNpmInstaller`, so the `npm install` a
++ * user or an agent TYPED never reached it and extracted in whatever isolate
++ * the shell was running in instead. A host with a composed fabric supplies
++ * this and gets that pipeline; a host without one streams in-process through
++ * `_shared/tarball.ts`. Those are the only two paths, and neither is a copy
++ * of the other.
++ */
++export interface NpmInstallPort {
++    install(projectDir: string, options: {
++        packages?: string[];
++        production?: boolean;
++        pid?: number;
++    }): Promise<{
++        installed: string[];
++        failed: string[];
++        totalFiles: number;
++        elapsed: number;
++        cachedHits?: number;
++    }>;
++}
++/** What the npm command needs from its host beyond the registry and kernel. */
++export interface NpmCommandDeps {
++    /**
++     * The facet-based installer, when the host can reach dynamic workers.
++     * Absent, installs stream in-process.
++     */
++    readonly installer?: NpmInstallPort;
++}
+ export declare function getBinEntries(pkg: PackageJson): Record<string, string>;
+ export declare function registerBinCommand(registry: CommandRegistry, binName: string, scriptPath: string, kernel?: Kernel): void;
+-export declare function createNpmCommand(registry: CommandRegistry, shellExecute?: ShellExecuteFn, kernel?: Kernel): Command;
++export declare function createNpmCommand(registry: CommandRegistry, shellExecute?: ShellExecuteFn, kernel?: Kernel, deps?: NpmCommandDeps): Command;
+ export declare function createNpxCommand(registry: CommandRegistry, shellExecute?: ShellExecuteFn): Command;
+ export declare function npmInstallGlobal(packageName: string, ctx: CommandContext, registry: CommandRegistry, kernel?: Kernel): Promise<number>;
+ export {};
+diff --git a/dist/substrate/lifo/commands/system/npm.d.ts.map b/dist/substrate/lifo/commands/system/npm.d.ts.map
+index b5fdd20cb788e8bb6b792458c33e3509125255cf..fd28661803fcd40daeaf97ee6809a4ef78512b76 100644
+--- a/dist/substrate/lifo/commands/system/npm.d.ts.map
++++ b/dist/substrate/lifo/commands/system/npm.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"npm.d.ts","sourceRoot":"","sources":["../../../../../src/substrate/lifo/commands/system/npm.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,OAAO,EAAE,cAAc,EAAuB,MAAM,aAAa,CAAC;AAChF,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,gBAAgB,CAAC;AAEtD,OAAO,KAAK,EAAE,MAAM,EAAE,MAAM,uBAAuB,CAAC;AAapD,eAAO,MAAM,WAAW,WAAW,CAAC;AAIpC,UAAU,WAAW;IACpB,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,OAAO,CAAC,EAAE,MAAM,CAAC;IACjB,WAAW,CAAC,EAAE,MAAM,CAAC;IACrB,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,GAAG,CAAC,EAAE,MAAM,GAAG,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,CAAC;IACtC,OAAO,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,CAAC;IACjC,YAAY,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,CAAC;IACtC,eAAe,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,CAAC;IACzC,OAAO,CAAC,EAAE,MAAM,CAAC;IACjB,MAAM,CAAC,EAAE,MAAM,GAAG;QAAE,IAAI,EAAE,MAAM,CAAA;KAAE,CAAC;CACnC;AAED,MAAM,MAAM,cAAc,GAAG,CAC5B,GAAG,EAAE,MAAM,EACX,GAAG,EAAE,cAAc,KACf,OAAO,CAAC,MAAM,CAAC,CAAC;AAoNrB,wBAAgB,aAAa,CAAC,GAAG,EAAE,WAAW,GAAG,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,CAMtE;AAED,wBAAgB,kBAAkB,CAAC,QAAQ,EAAE,eAAe,EAAE,OAAO,EAAE,MAAM,EAAE,UAAU,EAAE,MAAM,EAAE,MAAM,CAAC,EAAE,MAAM,GAAG,IAAI,CAaxH;AA0kBD,wBAAgB,gBAAgB,CAAC,QAAQ,EAAE,eAAe,EAAE,YAAY,CAAC,EAAE,cAAc,EAAE,MAAM,CAAC,EAAE,MAAM,GAAG,OAAO,CA+CnH;AAiCD,wBAAgB,gBAAgB,CAC/B,QAAQ,EAAE,eAAe,EACzB,YAAY,CAAC,EAAE,cAAc,GAC3B,OAAO,CAyGT;AAED,wBAAsB,gBAAgB,CACrC,WAAW,EAAE,MAAM,EACnB,GAAG,EAAE,cAAc,EACnB,QAAQ,EAAE,eAAe,EACzB,MAAM,CAAC,EAAE,MAAM,GACb,OAAO,CAAC,MAAM,CAAC,CA2BjB"}
+\ No newline at end of file
++{"version":3,"file":"npm.d.ts","sourceRoot":"","sources":["../../../../../src/substrate/lifo/commands/system/npm.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,OAAO,EAAE,cAAc,EAAuB,MAAM,aAAa,CAAC;AAChF,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,gBAAgB,CAAC;AAEtD,OAAO,KAAK,EAAE,MAAM,EAAE,MAAM,uBAAuB,CAAC;AAgBpD,eAAO,MAAM,WAAW,WAAW,CAAC;AAIpC,UAAU,WAAW;IACpB,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,OAAO,CAAC,EAAE,MAAM,CAAC;IACjB,WAAW,CAAC,EAAE,MAAM,CAAC;IACrB,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,GAAG,CAAC,EAAE,MAAM,GAAG,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,CAAC;IACtC,OAAO,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,CAAC;IACjC,YAAY,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,CAAC;IACtC,eAAe,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,CAAC;IACzC,OAAO,CAAC,EAAE,MAAM,CAAC;IACjB,MAAM,CAAC,EAAE,MAAM,GAAG;QAAE,IAAI,EAAE,MAAM,CAAA;KAAE,CAAC;CACnC;AAED,MAAM,MAAM,cAAc,GAAG,CAC5B,GAAG,EAAE,MAAM,EACX,GAAG,EAAE,cAAc,KACf,OAAO,CAAC,MAAM,CAAC,CAAC;AAErB;;;;;;;;;;;GAWG;AACH,MAAM,WAAW,cAAc;IAC9B,OAAO,CACN,UAAU,EAAE,MAAM,EAClB,OAAO,EAAE;QAAE,QAAQ,CAAC,EAAE,MAAM,EAAE,CAAC;QAAC,UAAU,CAAC,EAAE,OAAO,CAAC;QAAC,GAAG,CAAC,EAAE,MAAM,CAAA;KAAE,GAClE,OAAO,CAAC;QACV,SAAS,EAAE,MAAM,EAAE,CAAC;QACpB,MAAM,EAAE,MAAM,EAAE,CAAC;QACjB,UAAU,EAAE,MAAM,CAAC;QACnB,OAAO,EAAE,MAAM,CAAC;QAChB,UAAU,CAAC,EAAE,MAAM,CAAC;KACpB,CAAC,CAAC;CACH;AAED,+EAA+E;AAC/E,MAAM,WAAW,cAAc;IAC9B;;;OAGG;IACH,QAAQ,CAAC,SAAS,CAAC,EAAE,cAAc,CAAC;CACpC;AAyMD,wBAAgB,aAAa,CAAC,GAAG,EAAE,WAAW,GAAG,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,CAMtE;AAED,wBAAgB,kBAAkB,CAAC,QAAQ,EAAE,eAAe,EAAE,OAAO,EAAE,MAAM,EAAE,UAAU,EAAE,MAAM,EAAE,MAAM,CAAC,EAAE,MAAM,GAAG,IAAI,CAaxH;AAonBD,wBAAgB,gBAAgB,CAC/B,QAAQ,EAAE,eAAe,EACzB,YAAY,CAAC,EAAE,cAAc,EAC7B,MAAM,CAAC,EAAE,MAAM,EACf,IAAI,CAAC,EAAE,cAAc,GACnB,OAAO,CA+CT;AAiCD,wBAAgB,gBAAgB,CAC/B,QAAQ,EAAE,eAAe,EACzB,YAAY,CAAC,EAAE,cAAc,GAC3B,OAAO,CAyGT;AAED,wBAAsB,gBAAgB,CACrC,WAAW,EAAE,MAAM,EACnB,GAAG,EAAE,cAAc,EACnB,QAAQ,EAAE,eAAe,EACzB,MAAM,CAAC,EAAE,MAAM,GACb,OAAO,CAAC,MAAM,CAAC,CA2BjB"}
+\ No newline at end of file
+diff --git a/dist/substrate/lifo/commands/system/npm.js b/dist/substrate/lifo/commands/system/npm.js
+index caf113f6bebd3884e4b95e3cdbc3be5279b986de..4b554fbb827239ed168ef9e1c755aedc198e4ff0 100644
+--- a/dist/substrate/lifo/commands/system/npm.js
++++ b/dist/substrate/lifo/commands/system/npm.js
+@@ -1,5 +1,5 @@
+ import { resolve, join } from '../../utils/path.js';
+-import { decompressGzip, parseTar } from '../../utils/archive.js';
++import { writeTarballStream, } from '../../../../_shared/tarball.js';
+ import { RegistryPackumentSchema, RegistrySearchResponseSchema, RegistryVersionInfoSchema, } from './registry-schemas.js';
+ const GLOBAL_MODULES = '/usr/lib/node_modules';
+ const GLOBAL_BIN = '/usr/bin';
+@@ -132,48 +132,32 @@ async function fetchWithRange(registry, name, range, signal) {
+     }
+     return data.versions[matching[0].version];
+ }
+-async function downloadAndExtract(tarballUrl, targetDir, vfs, signal) {
++/**
++ * Fetch one package and stream it into the filesystem.
++ *
++ * This replaces a `downloadAndExtract` that read `response.arrayBuffer()`,
++ * gunzipped the whole thing, parsed every entry into an array and only then
++ * wrote — holding the compressed tarball, the decompressed tarball and every
++ * file in it at once, per package, recursively through the dependency tree.
++ * Measured 2026-09-04 (`scripts/measure-npm-extract-memory.mjs`), that cost
++ * 5.6x to 8.4x the tarballs' own bytes in peak heap where streaming costs
++ * 1.3x to 4.0x: 31.6 MiB against 16.1 MiB above the interpreter floor for
++ * typescript@5.7.2 alone. In the 128 MB isolate an embedder shares with
++ * everything else it is doing, that was the heaviest thing this command did.
++ *
++ * The extraction itself lives in `_shared/tarball.ts` rather than here, so
++ * the entry-name and completion rules have one home: the previous attempt at
++ * this change kept its own copy of them and silently wrote nothing.
++ */
++async function fetchAndStreamPackage(tarballUrl, targetDir, vfs, signal) {
+     const response = await fetch(tarballUrl, { signal });
+     if (!response.ok) {
+         throw new Error(`Failed to download tarball: ${response.status}`);
+     }
+-    const arrayBuffer = await response.arrayBuffer();
+-    const compressed = new Uint8Array(arrayBuffer);
+-    // Decompress gzip → parse tar
+-    const decompressed = await decompressGzip(compressed);
+-    const entries = parseTar(decompressed);
+-    // Ensure target directory
+-    try {
+-        vfs.mkdir(targetDir, { recursive: true });
+-    }
+-    catch { /* exists */ }
+-    // Extract, stripping the first path component (npm tarballs use "package/")
+-    for (const entry of entries) {
+-        const slashIdx = entry.path.indexOf('/');
+-        if (slashIdx === -1)
+-            continue;
+-        const relativePath = entry.path.slice(slashIdx + 1);
+-        if (!relativePath)
+-            continue;
+-        const fullPath = join(targetDir, relativePath);
+-        if (entry.type === 'directory') {
+-            try {
+-                vfs.mkdir(fullPath, { recursive: true });
+-            }
+-            catch { /* exists */ }
+-        }
+-        else {
+-            // Ensure parent exists
+-            const parent = fullPath.slice(0, fullPath.lastIndexOf('/'));
+-            if (parent) {
+-                try {
+-                    vfs.mkdir(parent, { recursive: true });
+-                }
+-                catch { /* exists */ }
+-            }
+-            vfs.writeFile(fullPath, entry.data);
+-        }
++    if (!response.body) {
++        throw new Error(`Registry served no body for ${tarballUrl}`);
+     }
++    return writeTarballStream(response.body, targetDir, vfs);
+ }
+ function readProjectPackageJson(vfs, cwd) {
+     const pkgPath = join(cwd, 'package.json');
+@@ -220,7 +204,17 @@ async function installSinglePackage(name, version, targetBase, vfs, npmRegistry,
+     }
+     stdout.write(`  ${name}${version ? '@' + version : ''}...\n`);
+     const info = await fetchPackageInfo(npmRegistry, name, version, signal);
+-    await downloadAndExtract(info.dist.tarball, targetDir, vfs, signal);
++    const written = await fetchAndStreamPackage(info.dist.tarball, targetDir, vfs, signal);
++    // What landed, not what was attempted. The previous rewrite of this path
++    // skipped every entry and still counted the package, so `added 1 package`
++    // was printed over an empty directory. Both halves are checked because
++    // they fail differently: an extraction that yielded nothing writes no
++    // files, and one that failed after its first files were written leaves no
++    // manifest — writeTarballStream writes that last precisely so its absence
++    // means "not installed" to this check and to the skip above.
++    if (written.files === 0 || !vfs.exists(join(targetDir, 'package.json'))) {
++        throw new Error(`${name}: extraction wrote ${written.files} files and left no package.json in ${targetDir}`);
++    }
+     let installed = 1;
+     // Global install: link binaries
+     if (isGlobal) {
+@@ -285,7 +279,7 @@ async function npmInit(ctx) {
+     ctx.stdout.write(JSON.stringify(pkg, null, 2) + '\n');
+     return 0;
+ }
+-async function npmInstall(ctx, registry, kernel) {
++async function npmInstall(ctx, registry, kernel, deps) {
+     const args = ctx.args.slice(1);
+     let isGlobal = false;
+     let saveDev = false;
+@@ -319,6 +313,28 @@ async function npmInstall(ctx, registry, kernel) {
+         }
+         catch { /* exists */ }
+     }
++    // A host that can reach dynamic workers runs the installer it already
++    // owns: the tarballs are fetched and extracted in facets and the bytes
++    // land in bounded write waves, so no part of the tree is resident in the
++    // host's isolate. Reached here rather than reimplemented, because the one
++    // thing this command must not have is a second installer.
++    if (deps?.installer) {
++        const projectDir = isGlobal ? GLOBAL_MODULES : ctx.cwd;
++        const result = await deps.installer.install(projectDir, {
++            packages: packages.length > 0 ? packages : undefined,
++            production: saveDev ? false : undefined,
++            pid: ctx.pid,
++        });
++        for (const failure of result.failed) {
++            ctx.stderr.write(`npm ERR! ${failure}\n`);
++        }
++        ctx.stdout.write(`\nadded ${result.installed.length} package${result.installed.length === 1 ? '' : 's'}`
++            + ` (${result.totalFiles} files) in ${(result.elapsed / 1000).toFixed(1)}s\n`);
++        // Bins become commands the same way either path leaves them: the
++        // installed tree is scanned and each entry registered.
++        registerLocalBins(ctx.vfs, projectDir, registry, kernel);
++        return result.failed.length > 0 ? 1 : 0;
++    }
+     if (packages.length === 0) {
+         // Install from package.json
+         if (isGlobal) {
+@@ -734,7 +750,7 @@ async function npmSearch(ctx) {
+     return 0;
+ }
+ // ─── Factory ───
+-export function createNpmCommand(registry, shellExecute, kernel) {
++export function createNpmCommand(registry, shellExecute, kernel, deps) {
+     return async (ctx) => {
+         const subcommand = ctx.args[0];
+         if (!subcommand || subcommand === '--help' || subcommand === '-h') {
+@@ -747,7 +763,7 @@ export function createNpmCommand(registry, shellExecute, kernel) {
+             case 'install':
+             case 'i':
+             case 'add':
+-                return npmInstall(ctx, registry, kernel);
++                return npmInstall(ctx, registry, kernel, deps);
+             case 'uninstall':
+             case 'remove':
+             case 'rm':
+diff --git a/dist/workspace/nimbus-workspace.d.ts b/dist/workspace/nimbus-workspace.d.ts
+index 818b4118eebcf2a6d9266affd6e32966a299e8b7..837cefd25752fc46c9d007760a285f6f39ee80bb 100644
+--- a/dist/workspace/nimbus-workspace.d.ts
++++ b/dist/workspace/nimbus-workspace.d.ts
+@@ -27,8 +27,11 @@ import type { CommandResult, RunOptions, SandboxFs } from '../substrate/lifo/san
+ import type { ITerminal } from '../substrate/lifo/terminal/ITerminal.js';
+ import { SqliteVFS } from '../vfs/sqlite-vfs.js';
+ import type { SqlDatabase, TransactionHost } from '../runtime/os-contracts.js';
++import { SessionProcessSupervisor } from '../runtime/session-process-supervisor.js';
+ import type { FacetHost } from '../runtime/facet-host.js';
+ import { type RuntimePackage } from '../runtime/runtime-package.js';
++import { type CtxExports, type FabricComposition } from '@nimbus-sh/platform/composition.js';
++import { type SupervisorOpEnvelope, type SupervisorOpHandler } from './supervisor-op.js';
+ export interface NimbusWorkspaceOptions {
+     /** The host's SQLite. In a Durable Object: `ctx.storage.sql`. */
+     readonly sql: SqlDatabase;
+@@ -106,6 +109,65 @@ export interface NimbusWorkspaceOptions {
+      * carry REPLs and a resident-process substrate this cannot reach.
+      */
+     readonly facets?: FacetHost;
++    /**
++     * The embedder's fabric composition, stated once.
++     *
++     * A workspace whose host can run dynamic workers reaches them through the
++     * fabric, and the fabric needs one fact the embedder alone knows: the
++     * `ctx.exports` name of the supervisor WorkerEntrypoint it mints
++     * `env.SUPERVISOR` from. Pass it here and every facet-backed command —
++     * `git clone`, `git fetch`, `git pull`, `git push`, the npm installer —
++     * works; leave it out and they refuse, because there is nothing that could
++     * answer a facet's filesystem calls.
++     *
++     * First-write-wins per isolate, so a host that already called
++     * `composeFabric` in its module scope may pass nothing.
++     */
++    readonly fabric?: FabricComposition;
++    /**
++     * `ctx.exports`, when the host holds it somewhere other than the object
++     * passed as {@link NimbusWorkspaceOptions.transactions}.
++     *
++     * Normally unnecessary: a Durable Object passes its own `ctx` as
++     * `transactions`, and `ctx.exports` is read from it. This option is for a
++     * host whose transaction port is not the `ctx` — and it WINS over the
++     * implicit one, because a host that names the bag explicitly is stating
++     * which one is right.
++     */
++    readonly ctxExports?: CtxExports;
++    /**
++     * The process table this workspace's pids come from.
++     *
++     * A facet's filesystem calls are credentialed by the pid the supervisor
++     * stamped them with, and that pid means something only against the table
++     * that allocated it. A host that spawns through its own supervisor passes
++     * it here, so a facet's writes land as the user whose command started it;
++     * absent, {@link NimbusWorkspace.supervisorOp} acts as the session user,
++     * which is the identity `.exec` already runs as.
++     *
++     * The same table the {@link NimbusWorkspaceOptions.identity} shell runs
++     * under: two tables over one filesystem would hand out pids whose write
++     * authority the other has already revoked.
++     */
++    readonly processes?: SessionProcessSupervisor;
++    /**
++     * Where a facet's stdout and stderr go.
++     *
++     * Absent, a facet's progress output is discarded: a host with no terminal
++     * has nowhere to put it, and inventing a destination would put a facet's
++     * bytes somewhere the host never asked for.
++     */
++    readonly processOutput?: (stream: 'stdout' | 'stderr', pid: number, data: string) => void;
++    /**
++     * Supervisor operations this host serves itself, beyond the filesystem and
++     * process-output surface a workspace owns.
++     *
++     * The hosted session passes its own here — process brokering, port
++     * routing, the R2 npm cache — which is how it reaches its whole surface
++     * through the one method every host mounts. A name the library owns cannot
++     * be shadowed, so a host cannot redefine what a filesystem write means.
++     */
++    readonly supervisorOps?: Readonly<Record<string, SupervisorOpHandler>>;
+ }
+ /**
+  * A durable filesystem and a shell over it.
+@@ -139,6 +201,11 @@ export declare class NimbusWorkspace {
+      */
+     readonly env: Record<string, string>;
+     private readonly commands;
++    /**
++     * The dispatch table behind {@link supervisorOp}. Built once, because it
++     * caches one filesystem bridge per calling process.
++     */
++    private readonly supervisorOps;
+     private constructor();
+     static create(options: NimbusWorkspaceOptions): Promise<NimbusWorkspace>;
+     exec(command: string, options?: RunOptions): Promise<CommandResult>;
+@@ -150,6 +217,23 @@ export declare class NimbusWorkspace {
+      * files, and either may name a command the host has yet to supply.
+      */
+     start(): Promise<void>;
++    /**
++     * Answer one supervisor operation on behalf of a facet this workspace's
++     * host is running.
++     *
++     * The one method a host mounts. A facet reaches its host through the
++     * supervisor entrypoint, which resolves the hosting object from the `doId`
++     * its binding carries and calls this — so a Durable Object of any class
++     * becomes a workspace host by forwarding one method:
++     *
++     *   async supervisorOp(op) { return (await this.workspace()).supervisorOp(op); }
++     *
++     * Every operation is performed against THIS workspace's filesystem, under
++     * the credential of the pid the envelope carries. See
++     * workspace/supervisor-op.ts for the operations and why the identity rides
++     * the envelope rather than the arguments.
++     */
++    supervisorOp(envelope: SupervisorOpEnvelope): Promise<unknown>;
+     /**
+      * Files, directories and bytes this workspace occupies.
+      *
+diff --git a/dist/workspace/nimbus-workspace.d.ts.map b/dist/workspace/nimbus-workspace.d.ts.map
+index 4f87686c7ef3c59df23c823fb94916581af030a1..22fc9ae570d29fc54f973d707b85c6d3ae620f67 100644
+--- a/dist/workspace/nimbus-workspace.d.ts.map
++++ b/dist/workspace/nimbus-workspace.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"nimbus-workspace.d.ts","sourceRoot":"","sources":["../../src/workspace/nimbus-workspace.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
++{"version":3,"file":"nimbus-workspace.d.ts","sourceRoot":"","sources":["../../src/workspace/nimbus-workspace.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
+diff --git a/dist/workspace/nimbus-workspace.js b/dist/workspace/nimbus-workspace.js
+index 78cd6fe11c27f75ae813246021b7677ac673251a..662637f19f030a6416366ee3c4427c551a02ba39 100644
+--- a/dist/workspace/nimbus-workspace.js
++++ b/dist/workspace/nimbus-workspace.js
+@@ -34,6 +34,8 @@ import { rehydrateInstalledRuntimesView, } from '../runtime/installed-runtimes.j
+ import { seedRuntimePackage } from '../runtime/runtime-package.js';
+ import { registerUnixCommands } from '../shell/unix-commands.js';
+ import { installPathExecResolver } from '../shell/exec-dispatch.js';
++import { adoptCtxExports, composeFabric, } from '@nimbus-sh/platform/composition.js';
++import { createSupervisorOpHandler, } from './supervisor-op.js';
+ /**
+  * A durable filesystem and a shell over it.
+  *
+@@ -66,7 +68,12 @@ export class NimbusWorkspace {
+      */
+     env;
+     commands;
+-    constructor(vfs, kernel, shell, registry, env, sql) {
++    /**
++     * The dispatch table behind {@link supervisorOp}. Built once, because it
++     * caches one filesystem bridge per calling process.
++     */
++    supervisorOps;
++    constructor(vfs, kernel, shell, registry, env, sql, supervisorOps) {
+         this.sql = sql;
+         this.vfs = vfs;
+         this.kernel = kernel;
+@@ -74,12 +81,14 @@ export class NimbusWorkspace {
+         this.registry = registry;
+         this.env = env;
+         this.commands = new SandboxCommandsImpl(shell, registry);
++        this.supervisorOps = supervisorOps;
+         // NOT the kernel VFS as it stands, which is kernel-credentialed because
+         // the shell re-credentials per command; a host calling `.fs` has no
+         // process behind it and must not inherit that.
+         this.fs = new SandboxFsImpl(kernel.vfs.as(CRED_SESSION_USER), () => shell.getCwd());
+     }
+     static async create(options) {
++        adoptHostComposition(options);
+         const vfs = options.vfs ?? openFilesystem(options);
+         const mounts = options.mounts ?? DEFAULT_MOUNT_POINTS;
+         seedBaseFilesystem(vfs, mounts);
+@@ -118,7 +127,16 @@ export class NimbusWorkspace {
+                 home,
+             });
+         }
+-        return new NimbusWorkspace(vfs, kernel, shell, registry, env, options.sql);
++        // The facet-facing supervisor surface, over this workspace's own
++        // filesystem and process table. A host mounts one method that forwards
++        // to it; see workspace/supervisor-op.ts.
++        const supervisorOps = createSupervisorOpHandler({
++            vfs,
++            processes: options.processes,
++            output: options.processOutput,
++            extend: options.supervisorOps,
++        });
++        return new NimbusWorkspace(vfs, kernel, shell, registry, env, options.sql, supervisorOps);
+     }
+     exec(command, options) {
+         return this.commands.run(command, options);
+@@ -136,6 +154,25 @@ export class NimbusWorkspace {
+         // Nimbus's own rc file, which the shell's list predates.
+         await this.shell.sourceFile(`${this.shell.getEnv().HOME ?? DEFAULT_HOME}/.nimbusrc`);
+     }
++    /**
++     * Answer one supervisor operation on behalf of a facet this workspace's
++     * host is running.
++     *
++     * The one method a host mounts. A facet reaches its host through the
++     * supervisor entrypoint, which resolves the hosting object from the `doId`
++     * its binding carries and calls this — so a Durable Object of any class
++     * becomes a workspace host by forwarding one method:
++     *
++     *   async supervisorOp(op) { return (await this.workspace()).supervisorOp(op); }
++     *
++     * Every operation is performed against THIS workspace's filesystem, under
++     * the credential of the pid the envelope carries. See
++     * workspace/supervisor-op.ts for the operations and why the identity rides
++     * the envelope rather than the arguments.
++     */
++    supervisorOp(envelope) {
++        return this.supervisorOps(envelope);
++    }
+     /**
+      * Files, directories and bytes this workspace occupies.
+      *
+@@ -161,6 +198,39 @@ export class NimbusWorkspace {
+         }
+     }
+ }
++/**
++ * Take the two things a host holds that the facet substrate cannot find by
++ * itself: the composition, and `ctx.exports`.
++ *
++ * This is the seam that made library mode a different product from the hosted
++ * one. `NimbusSession`'s constructor calls `adoptCtxExports(ctx.exports)` and
++ * the worker's module scope calls `composeFabric`; an embedder holding a
++ * workspace inside its own Durable Object runs neither, so
++ * `getCtxExports()` stayed null, no `env.SUPERVISOR` binding could be minted,
++ * and every facet-backed command refused before it spawned anything — a
++ * `git clone` answered "SupervisorRPC binding not available" and did no work
++ * at all. Doing it here means an embedder cannot forget, because the call it
++ * already makes to get a workspace is the call that does it.
++ *
++ * Both holders are first-write-wins per isolate, so this is idempotent across
++ * every workspace a host composes, and a host that already stated its own
++ * composition in module scope keeps it.
++ *
++ * A bare-Node embedder passes neither option and holds no `ctx`, so nothing
++ * here runs and the workspace is exactly what it was: the filesystem, the
++ * shell and the coreutils, with no facet substrate to reach.
++ */
++function adoptHostComposition(options) {
++    if (options.fabric)
++        composeFabric(options.fabric);
++    // The explicit option wins: a host that names the bag is stating which one
++    // is right. Otherwise it comes off the transaction port, which in a Durable
++    // Object IS `ctx` — the object workerd hangs `exports` on.
++    const ctxExports = options.ctxExports
++        ?? options.transactions?.exports;
++    if (ctxExports)
++        adoptCtxExports(ctxExports);
++}
+ /**
+  * Open the durable filesystem for a host that has not opened one itself.
+  *
+diff --git a/dist/workspace/supervisor-op.d.ts b/dist/workspace/supervisor-op.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3681e5813e801d2a6d393b156da84256855e9b00
+--- /dev/null
++++ b/dist/workspace/supervisor-op.d.ts
+@@ -0,0 +1,97 @@
++/**
++ * supervisor-op.ts — the one call a facet's host answers.
++ *
++ * A facet runs in its own isolate and reaches the object that owns the
++ * filesystem through a supervisor entrypoint, which runs in a THIRD isolate.
++ * That entrypoint has to get from "a facet called `SUPERVISOR.stat(path)`" to
++ * "the host that owns this workspace performed a stat". Before this seam it
++ * did that by resolving one hard-wired Durable Object namespace and calling
++ * one of sixty methods on the class it found there — so hosting a workspace
++ * meant BEING that class.
++ *
++ * Now the host mounts one method. It takes an envelope naming the operation
++ * and forwards it to the handler a workspace already carries:
++ *
++ *   class MyActor extends DurableObject {
++ *     async supervisorOp(op) {
++ *       return (await this.workspace()).supervisorOp(op);
++ *     }
++ *   }
++ *
++ * The operation names are the supervisor entrypoint's own method names, so a
++ * facet's call site is unchanged and the wire is greppable from both ends.
++ *
++ * The table IS the interface: an operation this handler does not name does
++ * not exist, and asking for one is an error rather than a reflective call
++ * into whatever the host happens to expose. A host with capabilities of its
++ * own — the hosted session has process brokering, port routing and an R2
++ * cache — passes them as `extend`, which is how `NimbusSession` reaches its
++ * own surface through this same one method.
++ */
++import type { SqliteVFS } from '../vfs/sqlite-vfs.js';
++import type { SessionProcessSupervisor } from '../runtime/session-process-supervisor.js';
++/**
++ * What crosses the supervisor→host boundary.
++ *
++ * `pid`, `writerId` and `mutationOwner` are stamped by the supervisor
++ * entrypoint from the props its binding was minted with, never by the facet:
++ * a process can neither choose nor drop the identity its writes are
++ * credentialed under. They ride the envelope rather than `args` because they
++ * are authority, not arguments — a host reading this envelope can tell what
++ * the caller IS from what it ASKED FOR.
++ *
++ * `stream` carries a `ReadableStream` for the streaming write path. It is a
++ * top-level field because a byte stream crossing an RPC boundary has its
++ * underlying source transferred, and keeping it out of the serialized
++ * argument list makes that transfer the obvious thing it is.
++ */
++export interface SupervisorOpEnvelope {
++    /** The operation name — the supervisor entrypoint's own method name. */
++    readonly op: string;
++    /** Positional arguments, in the order the operation names them. */
++    readonly args?: readonly unknown[];
++    /** The invoking process. Absent means a host call with no process behind it. */
++    readonly pid?: number;
++    /** The active append-writer incarnation, for the append operations. */
++    readonly writerId?: string;
++    /** The exclusive-mutation lease owner, for the streaming write path. */
++    readonly mutationOwner?: string;
++    /** The byte stream, for `writeBatchStream`. */
++    readonly stream?: ReadableStream<Uint8Array>;
++}
++/** One named operation. */
++export type SupervisorOpHandler = (envelope: SupervisorOpEnvelope) => unknown;
++/** What a workspace needs to answer the operations it owns. */
++export interface SupervisorOpDeps {
++    /** The filesystem the workspace owns. */
++    readonly vfs: SqliteVFS;
++    /**
++     * The process table the pids are allocated from. A pid resolves to the
++     * credential its writes are performed under; absent, every operation acts
++     * as the unprivileged session user, which is the identity `.exec` runs as.
++     */
++    readonly processes?: SessionProcessSupervisor;
++    /**
++     * Where a facet's stdout and stderr go. Absent, a facet's progress output
++     * is discarded — a host with no terminal has nowhere to put it, and
++     * inventing one would put a facet's bytes somewhere the host never asked
++     * for.
++     */
++    readonly output?: (stream: 'stdout' | 'stderr', pid: number, data: string) => void;
++    /**
++     * Operations the host serves itself. A name the library owns cannot be
++     * shadowed, so a host cannot silently redefine what a filesystem write
++     * means.
++     */
++    readonly extend?: Readonly<Record<string, SupervisorOpHandler>>;
++}
++/**
++ * Build the handler a host mounts.
++ *
++ * The bridge is cached per caller rather than per call: it holds the symlink
++ * resolution and open-handle state a facet's repeated reads walk, and
++ * rebuilding it per operation would discard that between two reads of one
++ * file.
++ */
++export declare function createSupervisorOpHandler(deps: SupervisorOpDeps): (envelope: SupervisorOpEnvelope) => Promise<unknown>;
++//# sourceMappingURL=supervisor-op.d.ts.map
+\ No newline at end of file
+diff --git a/dist/workspace/supervisor-op.d.ts.map b/dist/workspace/supervisor-op.d.ts.map
+new file mode 100644
+index 0000000000000000000000000000000000000000..246b245d4bb114e1ea1681f6cb9bd59ee2a1ba9c
+--- /dev/null
++++ b/dist/workspace/supervisor-op.d.ts.map
+@@ -0,0 +1 @@
++{"version":3,"file":"supervisor-op.d.ts","sourceRoot":"","sources":["../../src/workspace/supervisor-op.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;;;;;;;;;;;;;;GA6BG;;AAEH,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,sBAAsB,CAAC;AAItD,OAAO,KAAK,EAAE,wBAAwB,EAAE,MAAM,0CAA0C,CAAC;AAEzF;;;;;;;;;;;;;;GAcG;AACH,MAAM,WAAW,oBAAoB;IACnC,wEAAwE;IACxE,QAAQ,CAAC,EAAE,EAAE,MAAM,CAAC;IACpB,mEAAmE;IACnE,QAAQ,CAAC,IAAI,CAAC,EAAE,SAAS,OAAO,EAAE,CAAC;IACnC,gFAAgF;IAChF,QAAQ,CAAC,GAAG,CAAC,EAAE,MAAM,CAAC;IACtB,uEAAuE;IACvE,QAAQ,CAAC,QAAQ,CAAC,EAAE,MAAM,CAAC;IAC3B,wEAAwE;IACxE,QAAQ,CAAC,aAAa,CAAC,EAAE,MAAM,CAAC;IAChC,+CAA+C;IAC/C,QAAQ,CAAC,MAAM,CAAC,EAAE,cAAc,CAAC,UAAU,CAAC,CAAC;CAC9C;AAED,2BAA2B;AAC3B,MAAM,MAAM,mBAAmB,GAAG,CAAC,QAAQ,EAAE,oBAAoB,KAAK,OAAO,CAAC;AAE9E,+DAA+D;AAC/D,MAAM,WAAW,gBAAgB;IAC/B,yCAAyC;IACzC,QAAQ,CAAC,GAAG,EAAE,SAAS,CAAC;IACxB;;;;OAIG;IACH,QAAQ,CAAC,SAAS,CAAC,EAAE,wBAAwB,CAAC;IAC9C;;;;;OAKG;IACH,QAAQ,CAAC,MAAM,CAAC,EAAE,CAAC,MAAM,EAAE,QAAQ,GAAG,QAAQ,EAAE,GAAG,EAAE,MAAM,EAAE,IAAI,EAAE,MAAM,KAAK,IAAI,CAAC;IACnF;;;;OAIG;IACH,QAAQ,CAAC,MAAM,CAAC,EAAE,QAAQ,CAAC,MAAM,CAAC,MAAM,EAAE,mBAAmB,CAAC,CAAC,CAAC;CACjE;AAiDD;;;;;;;GAOG;AACH,wBAAgB,yBAAyB,CACvC,IAAI,EAAE,gBAAgB,GACrB,CAAC,QAAQ,EAAE,oBAAoB,KAAK,OAAO,CAAC,OAAO,CAAC,CAmFtD"}
+\ No newline at end of file
+diff --git a/dist/workspace/supervisor-op.js b/dist/workspace/supervisor-op.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..d0cb7783baeb28507673dce8515a523108aface5
+--- /dev/null
++++ b/dist/workspace/supervisor-op.js
+@@ -0,0 +1,163 @@
++/**
++ * supervisor-op.ts — the one call a facet's host answers.
++ *
++ * A facet runs in its own isolate and reaches the object that owns the
++ * filesystem through a supervisor entrypoint, which runs in a THIRD isolate.
++ * That entrypoint has to get from "a facet called `SUPERVISOR.stat(path)`" to
++ * "the host that owns this workspace performed a stat". Before this seam it
++ * did that by resolving one hard-wired Durable Object namespace and calling
++ * one of sixty methods on the class it found there — so hosting a workspace
++ * meant BEING that class.
++ *
++ * Now the host mounts one method. It takes an envelope naming the operation
++ * and forwards it to the handler a workspace already carries:
++ *
++ *   class MyActor extends DurableObject {
++ *     async supervisorOp(op) {
++ *       return (await this.workspace()).supervisorOp(op);
++ *     }
++ *   }
++ *
++ * The operation names are the supervisor entrypoint's own method names, so a
++ * facet's call site is unchanged and the wire is greppable from both ends.
++ *
++ * The table IS the interface: an operation this handler does not name does
++ * not exist, and asking for one is an error rather than a reflective call
++ * into whatever the host happens to expose. A host with capabilities of its
++ * own — the hosted session has process brokering, port routing and an R2
++ * cache — passes them as `extend`, which is how `NimbusSession` reaches its
++ * own surface through this same one method.
++ */
++import { CRED_SESSION_USER } from '../runtime/os-contracts.js';
++import { SqliteRuntimeFsBridge } from '../runtime/sqlite-runtime-fs-bridge.js';
++import { getSymlinkRegistry } from '../vfs/symlink-registry.js';
++/** Read a string argument, or refuse. The caller is another isolate. */
++function stringArg(envelope, index) {
++    const value = (envelope.args ?? [])[index];
++    if (typeof value !== 'string') {
++        throw new Error(`supervisor op ${envelope.op}: argument ${index} must be a string`);
++    }
++    return value;
++}
++/** Read a finite number argument, or refuse. */
++function numberArg(envelope, index) {
++    const value = (envelope.args ?? [])[index];
++    if (typeof value !== 'number' || !Number.isFinite(value)) {
++        throw new Error(`supervisor op ${envelope.op}: argument ${index} must be a number`);
++    }
++    return value;
++}
++/** Read a bytes-or-text argument, which is what the write operations take. */
++function contentArg(envelope, index) {
++    const value = (envelope.args ?? [])[index];
++    if (typeof value === 'string' || value instanceof Uint8Array)
++        return value;
++    if (value instanceof ArrayBuffer)
++        return new Uint8Array(value);
++    throw new Error(`supervisor op ${envelope.op}: argument ${index} must be bytes or text`);
++}
++/**
++ * The credential an operation acts under.
++ *
++ * A pid always wins, because the supervisor stamps it from its own props. An
++ * absent pid is a host call — the SDK over a binding, a static asset read —
++ * and those act as the session user. A supplied-but-invalid pid is refused
++ * rather than downgraded: a write credentialed to nothing is worse than a
++ * refused write.
++ */
++function credFor(deps, pid) {
++    if (pid === undefined)
++        return CRED_SESSION_USER;
++    if (!Number.isInteger(pid) || pid <= 0) {
++        throw new Error('supervisor op: filesystem operation requires a valid process pid');
++    }
++    if (!deps.processes)
++        return CRED_SESSION_USER;
++    return deps.processes.cred(pid);
++}
++/** Pid-less host callers share one bridge; pids can never collide with it. */
++const HOST_CALLER_KEY = 0;
++/**
++ * Build the handler a host mounts.
++ *
++ * The bridge is cached per caller rather than per call: it holds the symlink
++ * resolution and open-handle state a facet's repeated reads walk, and
++ * rebuilding it per operation would discard that between two reads of one
++ * file.
++ */
++export function createSupervisorOpHandler(deps) {
++    const bridges = new Map();
++    const bridgeFor = (pid) => {
++        const key = pid ?? HOST_CALLER_KEY;
++        const credentialed = deps.vfs.as(credFor(deps, pid));
++        const held = bridges.get(key);
++        if (held) {
++            held.updateCredential(credentialed);
++            return held;
++        }
++        const built = new SqliteRuntimeFsBridge(credentialed, deps.vfs);
++        bridges.set(key, built);
++        return built;
++    };
++    const ops = {
++        // ── Filesystem reads ────────────────────────────────────────────────
++        readFile: async (e) => {
++            const bytes = await bridgeFor(e.pid).readFile(stringArg(e, 0));
++            return bytes === null ? null : new TextDecoder().decode(bytes);
++        },
++        readFileBytes: (e) => bridgeFor(e.pid).readFile(stringArg(e, 0)),
++        stat: (e) => bridgeFor(e.pid).stat(stringArg(e, 0)),
++        lstat: (e) => bridgeFor(e.pid).stat(stringArg(e, 0), { followSymlinks: false }),
++        exists: async (e) => (await bridgeFor(e.pid).stat(stringArg(e, 0))) !== null,
++        readdir: (e) => bridgeFor(e.pid).readdir(stringArg(e, 0)),
++        readlink: (e) => bridgeFor(e.pid).readlink(stringArg(e, 0)),
++        fsReadRange: (e) => bridgeFor(e.pid).readRange(stringArg(e, 0), numberArg(e, 1), numberArg(e, 2)),
++        fsReadRangeUncached: (e) => bridgeFor(e.pid).readRange(stringArg(e, 0), numberArg(e, 1), numberArg(e, 2), {
++            cached: false,
++        }),
++        fsRevision: (e) => bridgeFor(e.pid).revision((e.args ?? [])[0] === undefined ? undefined : stringArg(e, 0)),
++        hasLegacySymlinkUnder: (e) => getSymlinkRegistry(deps.vfs).hasAtOrBelow(stringArg(e, 0)),
++        // ── Filesystem writes ───────────────────────────────────────────────
++        writeFile: (e) => bridgeFor(e.pid).writeFile(stringArg(e, 0), contentArg(e, 1)),
++        mkdir: (e) => bridgeFor(e.pid).mkdir(stringArg(e, 0), { recursive: true }),
++        rmdir: (e) => bridgeFor(e.pid).rmdir(stringArg(e, 0)),
++        unlink: (e) => bridgeFor(e.pid).unlink(stringArg(e, 0)),
++        rename: (e) => bridgeFor(e.pid).rename(stringArg(e, 0), stringArg(e, 1)),
++        symlink: (e) => bridgeFor(e.pid).symlink(stringArg(e, 0), stringArg(e, 1)),
++        chmod: (e) => bridgeFor(e.pid).chmod(stringArg(e, 0), numberArg(e, 1)),
++        utimes: (e) => bridgeFor(e.pid).utimes(stringArg(e, 0), numberArg(e, 1), numberArg(e, 2)),
++        fsTruncate: (e) => bridgeFor(e.pid).truncate(stringArg(e, 0), numberArg(e, 1)),
++        /**
++         * The streaming bulk write. The lease owner rides the envelope, so the
++         * VFS enforces the same exclusive-mutation scope it enforces for the
++         * hosted session: a clone's committed prefix stays inside the root its
++         * caller holds a lease on.
++         */
++        writeBatchStream: (e) => {
++            if (!e.stream)
++                throw new Error('supervisor op writeBatchStream: no stream');
++            return deps.vfs.as(credFor(deps, e.pid)).writeStream(e.stream, {
++                mutationOwner: e.mutationOwner,
++            });
++        },
++        // ── Process output ──────────────────────────────────────────────────
++        stdout: (e) => { deps.output?.('stdout', e.pid ?? 0, stringArg(e, 0)); },
++        stderr: (e) => { deps.output?.('stderr', e.pid ?? 0, stringArg(e, 0)); },
++    };
++    const extend = deps.extend ?? {};
++    return async (envelope) => {
++        if (!envelope || typeof envelope.op !== 'string') {
++            throw new Error('supervisor op: envelope names no operation');
++        }
++        // A host that serves an operation itself is authoritative for it: the
++        // hosted session's own `writeBatchStream` carries W7 drain accounting and
++        // its `stdout` carries prior-generation attribution, and neither is
++        // something the library can perform on its behalf. The table below is
++        // what a host that serves nothing gets, which is the whole filesystem.
++        const handler = extend[envelope.op] ?? ops[envelope.op];
++        if (!handler) {
++            throw new Error(`supervisor op: '${envelope.op}' is not served by this host`);
++        }
++        return handler(envelope);
++    };
++}
+diff --git a/src/_shared/tarball.ts b/src/_shared/tarball.ts
+index baaae3bc6cfcc091f6a5b928191ec94a05a7cbc2..c103c6c9d39fce359267014944610f2b1530049d 100644
+--- a/src/_shared/tarball.ts
++++ b/src/_shared/tarball.ts
+@@ -1,16 +1,18 @@
+ /**
+- * tarball.ts — a whole tarball, in memory, as a path→bytes map.
++ * tarball.ts — a tarball into a filesystem, or into memory when a caller
++ * genuinely needs both layers open at once.
+  *
+- * The streaming primitives it walks with (`parseTarHeader`, `streamTarEntries`,
+- * `readableStreamToAsyncIterable`) live in `./tarball-stream.ts` — a
+- * dependency-free leaf, because `bundle-facet-workers.mjs` esbuilds that file
+- * into a string the loader pool injects into dynamic workers, where an import
+- * would not resolve.
++ * The streaming primitives these walk with (`parseTarHeader`,
++ * `streamTarEntries`, `readableStreamToAsyncIterable`) live in
++ * `./tarball-stream.ts` — a dependency-free leaf, because
++ * `bundle-facet-workers.mjs` esbuilds that file into a string the loader pool
++ * injects into dynamic workers, where an import would not resolve.
+  *
+- * This half is for a caller that already holds the bytes: `gem install`, which
+- * fetches a `.gem` (a tar holding a gzipped tar) and needs both layers open at
+- * once. An installer streaming a tarball it is still downloading should drive
+- * `streamTarEntries` itself and never hold the whole thing.
++ * {@link writeTarballStream} is what an installer wants: it never holds more
++ * than one entry, and it is the ONE place an installed package's completion
++ * is decided. {@link extractTarball} is for a caller that already holds the
++ * bytes and needs the whole map — `gem install`, which fetches a `.gem` (a
++ * tar holding a gzipped tar).
+  */
+ 
+ import {
+@@ -18,6 +20,94 @@ import {
+   readableStreamToAsyncIterable,
+ } from './tarball-stream.js';
+ 
++/** The filesystem surface {@link writeTarballStream} needs. */
++export interface TarballWriteTarget {
++  exists(path: string): boolean;
++  mkdir(path: string, options?: { recursive?: boolean }): void;
++  writeFile(path: string, data: Uint8Array | string): unknown;
++}
++
++/** What one package's extraction produced. */
++export interface TarballWriteResult {
++  /** Regular files written, including the manifest. */
++  files: number;
++  /** Their total decompressed bytes. */
++  bytes: number;
++}
++
++/**
++ * The manifest an npm package is identified by, and the marker that says its
++ * tree is complete.
++ */
++const PACKAGE_MANIFEST = 'package.json';
++
++/**
++ * Write a gzipped tarball stream into `targetDir`, one entry at a time.
++ *
++ * Two invariants, both of which a previous buffered implementation broke:
++ *
++ * MEMORY. Nothing here holds the tarball, the decompressed tarball, or the
++ * set of entries. `streamTarEntries` yields one completed file at a time and
++ * this writes it before reading the next header, so peak transient heap is
++ * the largest single file plus the held-back manifest.
++ *
++ * COMPLETION. Every write is performed and its failure propagates: a package
++ * that fails part-way through answers a rejection, never a shorter tree. The
++ * manifest is deliberately written LAST, whatever order the tarball carries
++ * it in, because `package.json` is what every caller reads to decide a
++ * package is already installed. A tree whose manifest is absent is a tree
++ * the next install re-extracts; a tree whose manifest arrived first and whose
++ * later files failed would be trusted forever. That costs holding one
++ * manifest — kilobytes — for the duration of one package, and it is the same
++ * discipline the facet installer already applies to its shared write waves.
++ *
++ * Entry names arrive already stripped of npm's `package/` prefix and already
++ * canonicalized (see `parseTarHeader`), so this does not re-derive them. The
++ * previous rewrite of this logic re-stripped a prefix that was no longer
++ * there, found no `/` in `package.json`, and skipped every top-level entry
++ * with a bare `continue` — writing nothing while throwing nothing.
++ */
++export async function writeTarballStream(
++  body: ReadableStream<Uint8Array>,
++  targetDir: string,
++  vfs: TarballWriteTarget,
++): Promise<TarballWriteResult> {
++  const ensureDir = (path: string): void => {
++    // Not a swallowed mkdir: an existing directory is the expected case, and
++    // anything else — a permission denial, a file in the way — must reach the
++    // caller rather than become a write into nowhere.
++    if (!vfs.exists(path)) vfs.mkdir(path, { recursive: true });
++  };
++
++  ensureDir(targetDir);
++
++  let files = 0;
++  let bytes = 0;
++  let manifest: Uint8Array | null = null;
++
++  const entries = streamTarEntries(
++    readableStreamToAsyncIterable(body.pipeThrough(new DecompressionStream('gzip'))),
++  );
++  for await (const entry of entries) {
++    if (entry.name === PACKAGE_MANIFEST) {
++      manifest = entry.data;
++      continue;
++    }
++    const fullPath = `${targetDir}/${entry.name}`;
++    const cut = fullPath.lastIndexOf('/');
++    if (cut > 0) ensureDir(fullPath.slice(0, cut));
++    await vfs.writeFile(fullPath, entry.data);
++    files++;
++    bytes += entry.data.length;
++  }
++
++  if (!manifest) {
++    throw new Error(`tarball for ${targetDir} carried no ${PACKAGE_MANIFEST}`);
++  }
++  await vfs.writeFile(`${targetDir}/${PACKAGE_MANIFEST}`, manifest);
++  return { files: files + 1, bytes: bytes + manifest.length };
++}
++
+ /** Extract every regular file. Gzipped input is decompressed first. */
+ export async function extractTarball(
+   tarball: ArrayBuffer,
 diff --git a/src/runtime/esbuild-service.ts b/src/runtime/esbuild-service.ts
 index 3d58d8c5d8e35f2da06771cd7f5a24b7ff1893b7..bc72758f2bc01c4d1e1819c1c07f16dc7dd54883 100644
 --- a/src/runtime/esbuild-service.ts
@@ -46,3 +1105,673 @@ index 3d58d8c5d8e35f2da06771cd7f5a24b7ff1893b7..bc72758f2bc01c4d1e1819c1c07f16dc
      _esbuildMod = mod as unknown as typeof esbuild;
      return _esbuildMod;
    })();
+diff --git a/src/substrate/lifo/commands/system/npm.ts b/src/substrate/lifo/commands/system/npm.ts
+index ead37adb8906f1e66cb300f31db5394f481179a3..5117de7816bd31070a21e9c7a0e875ab24405bae 100644
+--- a/src/substrate/lifo/commands/system/npm.ts
++++ b/src/substrate/lifo/commands/system/npm.ts
+@@ -3,7 +3,10 @@ import type { CommandRegistry } from '../registry.js';
+ import type { VFS } from '../../kernel/vfs/index.js';
+ import type { Kernel } from '../../kernel/index.js';
+ import { resolve, join } from '../../utils/path.js';
+-import { decompressGzip, parseTar } from '../../utils/archive.js';
++import {
++	writeTarballStream,
++	type TarballWriteResult,
++} from '../../../../_shared/tarball.js';
+ import {
+ 	RegistryPackumentSchema,
+ 	RegistrySearchResponseSchema,
+@@ -36,6 +39,40 @@ export type ShellExecuteFn = (
+ 	ctx: CommandContext,
+ ) => Promise<number>;
+ 
++/**
++ * The installer a host that can run dynamic workers hands this command.
++ *
++ * Nimbus already had the right installer — `NpmInstaller`, wave-based,
++ * extracting inside facets and writing through `writeBatchStream` — but it
++ * sat behind the session's own `ensureNpmInstaller`, so the `npm install` a
++ * user or an agent TYPED never reached it and extracted in whatever isolate
++ * the shell was running in instead. A host with a composed fabric supplies
++ * this and gets that pipeline; a host without one streams in-process through
++ * `_shared/tarball.ts`. Those are the only two paths, and neither is a copy
++ * of the other.
++ */
++export interface NpmInstallPort {
++	install(
++		projectDir: string,
++		options: { packages?: string[]; production?: boolean; pid?: number },
++	): Promise<{
++		installed: string[];
++		failed: string[];
++		totalFiles: number;
++		elapsed: number;
++		cachedHits?: number;
++	}>;
++}
++
++/** What the npm command needs from its host beyond the registry and kernel. */
++export interface NpmCommandDeps {
++	/**
++	 * The facet-based installer, when the host can reach dynamic workers.
++	 * Absent, installs stream in-process.
++	 */
++	readonly installer?: NpmInstallPort;
++}
++
+ // ─── Helpers ───
+ 
+ function getRegistry(env: Record<string, string>): string {
+@@ -188,48 +225,37 @@ async function fetchWithRange(
+ 	return data.versions[matching[0].version];
+ }
+ 
+-async function downloadAndExtract(
++/**
++ * Fetch one package and stream it into the filesystem.
++ *
++ * This replaces a `downloadAndExtract` that read `response.arrayBuffer()`,
++ * gunzipped the whole thing, parsed every entry into an array and only then
++ * wrote — holding the compressed tarball, the decompressed tarball and every
++ * file in it at once, per package, recursively through the dependency tree.
++ * Measured 2026-09-04 (`scripts/measure-npm-extract-memory.mjs`), that cost
++ * 5.6x to 8.4x the tarballs' own bytes in peak heap where streaming costs
++ * 1.3x to 4.0x: 31.6 MiB against 16.1 MiB above the interpreter floor for
++ * typescript@5.7.2 alone. In the 128 MB isolate an embedder shares with
++ * everything else it is doing, that was the heaviest thing this command did.
++ *
++ * The extraction itself lives in `_shared/tarball.ts` rather than here, so
++ * the entry-name and completion rules have one home: the previous attempt at
++ * this change kept its own copy of them and silently wrote nothing.
++ */
++async function fetchAndStreamPackage(
+ 	tarballUrl: string,
+ 	targetDir: string,
+ 	vfs: VFS,
+ 	signal: AbortSignal,
+-): Promise<void> {
++): Promise<TarballWriteResult> {
+ 	const response = await fetch(tarballUrl, { signal });
+ 	if (!response.ok) {
+ 		throw new Error(`Failed to download tarball: ${response.status}`);
+ 	}
+-
+-	const arrayBuffer = await response.arrayBuffer();
+-	const compressed = new Uint8Array(arrayBuffer);
+-
+-	// Decompress gzip → parse tar
+-	const decompressed = await decompressGzip(compressed);
+-	const entries = parseTar(decompressed);
+-
+-	// Ensure target directory
+-	try { vfs.mkdir(targetDir, { recursive: true }); } catch { /* exists */ }
+-
+-	// Extract, stripping the first path component (npm tarballs use "package/")
+-	for (const entry of entries) {
+-		const slashIdx = entry.path.indexOf('/');
+-		if (slashIdx === -1) continue;
+-
+-		const relativePath = entry.path.slice(slashIdx + 1);
+-		if (!relativePath) continue;
+-
+-		const fullPath = join(targetDir, relativePath);
+-
+-		if (entry.type === 'directory') {
+-			try { vfs.mkdir(fullPath, { recursive: true }); } catch { /* exists */ }
+-		} else {
+-			// Ensure parent exists
+-			const parent = fullPath.slice(0, fullPath.lastIndexOf('/'));
+-			if (parent) {
+-				try { vfs.mkdir(parent, { recursive: true }); } catch { /* exists */ }
+-			}
+-			vfs.writeFile(fullPath, entry.data);
+-		}
++	if (!response.body) {
++		throw new Error(`Registry served no body for ${tarballUrl}`);
+ 	}
++	return writeTarballStream(response.body, targetDir, vfs);
+ }
+ 
+ function readProjectPackageJson(vfs: VFS, cwd: string): PackageJson | null {
+@@ -300,7 +326,19 @@ async function installSinglePackage(
+ 
+ 	const info = await fetchPackageInfo(npmRegistry, name, version, signal);
+ 
+-	await downloadAndExtract(info.dist.tarball, targetDir, vfs, signal);
++	const written = await fetchAndStreamPackage(info.dist.tarball, targetDir, vfs, signal);
++	// What landed, not what was attempted. The previous rewrite of this path
++	// skipped every entry and still counted the package, so `added 1 package`
++	// was printed over an empty directory. Both halves are checked because
++	// they fail differently: an extraction that yielded nothing writes no
++	// files, and one that failed after its first files were written leaves no
++	// manifest — writeTarballStream writes that last precisely so its absence
++	// means "not installed" to this check and to the skip above.
++	if (written.files === 0 || !vfs.exists(join(targetDir, 'package.json'))) {
++		throw new Error(
++			`${name}: extraction wrote ${written.files} files and left no package.json in ${targetDir}`,
++		);
++	}
+ 
+ 	let installed = 1;
+ 
+@@ -378,7 +416,12 @@ async function npmInit(ctx: CommandContext): Promise<number> {
+ 	return 0;
+ }
+ 
+-async function npmInstall(ctx: CommandContext, registry: CommandRegistry, kernel?: Kernel): Promise<number> {
++async function npmInstall(
++	ctx: CommandContext,
++	registry: CommandRegistry,
++	kernel?: Kernel,
++	deps?: NpmCommandDeps,
++): Promise<number> {
+ 	const args = ctx.args.slice(1);
+ 
+ 	let isGlobal = false;
+@@ -409,6 +452,31 @@ async function npmInstall(ctx: CommandContext, registry: CommandRegistry, kernel
+ 		try { ctx.vfs.mkdir(GLOBAL_BIN, { recursive: true }); } catch { /* exists */ }
+ 	}
+ 
++	// A host that can reach dynamic workers runs the installer it already
++	// owns: the tarballs are fetched and extracted in facets and the bytes
++	// land in bounded write waves, so no part of the tree is resident in the
++	// host's isolate. Reached here rather than reimplemented, because the one
++	// thing this command must not have is a second installer.
++	if (deps?.installer) {
++		const projectDir = isGlobal ? GLOBAL_MODULES : ctx.cwd;
++		const result = await deps.installer.install(projectDir, {
++			packages: packages.length > 0 ? packages : undefined,
++			production: saveDev ? false : undefined,
++			pid: ctx.pid,
++		});
++		for (const failure of result.failed) {
++			ctx.stderr.write(`npm ERR! ${failure}\n`);
++		}
++		ctx.stdout.write(
++			`\nadded ${result.installed.length} package${result.installed.length === 1 ? '' : 's'}`
++			+ ` (${result.totalFiles} files) in ${(result.elapsed / 1000).toFixed(1)}s\n`,
++		);
++		// Bins become commands the same way either path leaves them: the
++		// installed tree is scanned and each entry registered.
++		registerLocalBins(ctx.vfs, projectDir, registry, kernel);
++		return result.failed.length > 0 ? 1 : 0;
++	}
++
+ 	if (packages.length === 0) {
+ 		// Install from package.json
+ 		if (isGlobal) {
+@@ -853,7 +921,12 @@ async function npmSearch(ctx: CommandContext): Promise<number> {
+ 
+ // ─── Factory ───
+ 
+-export function createNpmCommand(registry: CommandRegistry, shellExecute?: ShellExecuteFn, kernel?: Kernel): Command {
++export function createNpmCommand(
++	registry: CommandRegistry,
++	shellExecute?: ShellExecuteFn,
++	kernel?: Kernel,
++	deps?: NpmCommandDeps,
++): Command {
+ 	return async (ctx) => {
+ 		const subcommand = ctx.args[0];
+ 
+@@ -868,7 +941,7 @@ export function createNpmCommand(registry: CommandRegistry, shellExecute?: Shell
+ 			case 'install':
+ 			case 'i':
+ 			case 'add':
+-				return npmInstall(ctx, registry, kernel);
++				return npmInstall(ctx, registry, kernel, deps);
+ 			case 'uninstall':
+ 			case 'remove':
+ 			case 'rm':
+diff --git a/src/workspace/nimbus-workspace.ts b/src/workspace/nimbus-workspace.ts
+index 6d018c0df83d753085be093d402ae164f793fa6d..b8a7856471fc1b9c477c6264d2518c2b9157af23 100644
+--- a/src/workspace/nimbus-workspace.ts
++++ b/src/workspace/nimbus-workspace.ts
+@@ -48,6 +48,17 @@ import { seedRuntimePackage, type RuntimePackage } from '../runtime/runtime-pack
+ import type { EsbuildService } from '../runtime/esbuild-service.js';
+ import { registerUnixCommands } from '../shell/unix-commands.js';
+ import { installPathExecResolver } from '../shell/exec-dispatch.js';
++import {
++  adoptCtxExports,
++  composeFabric,
++  type CtxExports,
++  type FabricComposition,
++} from '@nimbus-sh/platform/composition.js';
++import {
++  createSupervisorOpHandler,
++  type SupervisorOpEnvelope,
++  type SupervisorOpHandler,
++} from './supervisor-op.js';
+ 
+ export interface NimbusWorkspaceOptions {
+   /** The host's SQLite. In a Durable Object: `ctx.storage.sql`. */
+@@ -126,6 +137,65 @@ export interface NimbusWorkspaceOptions {
+    * carry REPLs and a resident-process substrate this cannot reach.
+    */
+   readonly facets?: FacetHost;
++  /**
++   * The embedder's fabric composition, stated once.
++   *
++   * A workspace whose host can run dynamic workers reaches them through the
++   * fabric, and the fabric needs one fact the embedder alone knows: the
++   * `ctx.exports` name of the supervisor WorkerEntrypoint it mints
++   * `env.SUPERVISOR` from. Pass it here and every facet-backed command —
++   * `git clone`, `git fetch`, `git pull`, `git push`, the npm installer —
++   * works; leave it out and they refuse, because there is nothing that could
++   * answer a facet's filesystem calls.
++   *
++   * First-write-wins per isolate, so a host that already called
++   * `composeFabric` in its module scope may pass nothing.
++   */
++  readonly fabric?: FabricComposition;
++  /**
++   * `ctx.exports`, when the host holds it somewhere other than the object
++   * passed as {@link NimbusWorkspaceOptions.transactions}.
++   *
++   * Normally unnecessary: a Durable Object passes its own `ctx` as
++   * `transactions`, and `ctx.exports` is read from it. This option is for a
++   * host whose transaction port is not the `ctx` — and it WINS over the
++   * implicit one, because a host that names the bag explicitly is stating
++   * which one is right.
++   */
++  readonly ctxExports?: CtxExports;
++  /**
++   * The process table this workspace's pids come from.
++   *
++   * A facet's filesystem calls are credentialed by the pid the supervisor
++   * stamped them with, and that pid means something only against the table
++   * that allocated it. A host that spawns through its own supervisor passes
++   * it here, so a facet's writes land as the user whose command started it;
++   * absent, {@link NimbusWorkspace.supervisorOp} acts as the session user,
++   * which is the identity `.exec` already runs as.
++   *
++   * The same table the {@link NimbusWorkspaceOptions.identity} shell runs
++   * under: two tables over one filesystem would hand out pids whose write
++   * authority the other has already revoked.
++   */
++  readonly processes?: SessionProcessSupervisor;
++  /**
++   * Where a facet's stdout and stderr go.
++   *
++   * Absent, a facet's progress output is discarded: a host with no terminal
++   * has nowhere to put it, and inventing a destination would put a facet's
++   * bytes somewhere the host never asked for.
++   */
++  readonly processOutput?: (stream: 'stdout' | 'stderr', pid: number, data: string) => void;
++  /**
++   * Supervisor operations this host serves itself, beyond the filesystem and
++   * process-output surface a workspace owns.
++   *
++   * The hosted session passes its own here — process brokering, port
++   * routing, the R2 npm cache — which is how it reaches its whole surface
++   * through the one method every host mounts. A name the library owns cannot
++   * be shadowed, so a host cannot redefine what a filesystem write means.
++   */
++  readonly supervisorOps?: Readonly<Record<string, SupervisorOpHandler>>;
+ }
+ 
+ /**
+@@ -160,6 +230,11 @@ export class NimbusWorkspace {
+   readonly env: Record<string, string>;
+ 
+   private readonly commands: SandboxCommandsImpl;
++  /**
++   * The dispatch table behind {@link supervisorOp}. Built once, because it
++   * caches one filesystem bridge per calling process.
++   */
++  private readonly supervisorOps: (envelope: SupervisorOpEnvelope) => Promise<unknown>;
+ 
+   private constructor(
+     vfs: SqliteVFS,
+@@ -168,6 +243,7 @@ export class NimbusWorkspace {
+     registry: CommandRegistry,
+     env: Record<string, string>,
+     private readonly sql: SqlDatabase,
++    supervisorOps: (envelope: SupervisorOpEnvelope) => Promise<unknown>,
+   ) {
+     this.vfs = vfs;
+     this.kernel = kernel;
+@@ -175,6 +251,7 @@ export class NimbusWorkspace {
+     this.registry = registry;
+     this.env = env;
+     this.commands = new SandboxCommandsImpl(shell, registry);
++    this.supervisorOps = supervisorOps;
+     // NOT the kernel VFS as it stands, which is kernel-credentialed because
+     // the shell re-credentials per command; a host calling `.fs` has no
+     // process behind it and must not inherit that.
+@@ -182,6 +259,8 @@ export class NimbusWorkspace {
+   }
+ 
+   static async create(options: NimbusWorkspaceOptions): Promise<NimbusWorkspace> {
++    adoptHostComposition(options);
++
+     const vfs = options.vfs ?? openFilesystem(options);
+     const mounts = options.mounts ?? DEFAULT_MOUNT_POINTS;
+     seedBaseFilesystem(vfs, mounts);
+@@ -234,7 +313,17 @@ export class NimbusWorkspace {
+       });
+     }
+ 
+-    return new NimbusWorkspace(vfs, kernel, shell, registry, env, options.sql);
++    // The facet-facing supervisor surface, over this workspace's own
++    // filesystem and process table. A host mounts one method that forwards
++    // to it; see workspace/supervisor-op.ts.
++    const supervisorOps = createSupervisorOpHandler({
++      vfs,
++      processes: options.processes,
++      output: options.processOutput,
++      extend: options.supervisorOps,
++    });
++
++    return new NimbusWorkspace(vfs, kernel, shell, registry, env, options.sql, supervisorOps);
+   }
+ 
+   exec(command: string, options?: RunOptions): Promise<CommandResult> {
+@@ -255,6 +344,26 @@ export class NimbusWorkspace {
+     await this.shell.sourceFile(`${this.shell.getEnv().HOME ?? DEFAULT_HOME}/.nimbusrc`);
+   }
+ 
++  /**
++   * Answer one supervisor operation on behalf of a facet this workspace's
++   * host is running.
++   *
++   * The one method a host mounts. A facet reaches its host through the
++   * supervisor entrypoint, which resolves the hosting object from the `doId`
++   * its binding carries and calls this — so a Durable Object of any class
++   * becomes a workspace host by forwarding one method:
++   *
++   *   async supervisorOp(op) { return (await this.workspace()).supervisorOp(op); }
++   *
++   * Every operation is performed against THIS workspace's filesystem, under
++   * the credential of the pid the envelope carries. See
++   * workspace/supervisor-op.ts for the operations and why the identity rides
++   * the envelope rather than the arguments.
++   */
++  supervisorOp(envelope: SupervisorOpEnvelope): Promise<unknown> {
++    return this.supervisorOps(envelope);
++  }
++
+   /**
+    * Files, directories and bytes this workspace occupies.
+    *
+@@ -282,6 +391,38 @@ export class NimbusWorkspace {
+   }
+ }
+ 
++/**
++ * Take the two things a host holds that the facet substrate cannot find by
++ * itself: the composition, and `ctx.exports`.
++ *
++ * This is the seam that made library mode a different product from the hosted
++ * one. `NimbusSession`'s constructor calls `adoptCtxExports(ctx.exports)` and
++ * the worker's module scope calls `composeFabric`; an embedder holding a
++ * workspace inside its own Durable Object runs neither, so
++ * `getCtxExports()` stayed null, no `env.SUPERVISOR` binding could be minted,
++ * and every facet-backed command refused before it spawned anything — a
++ * `git clone` answered "SupervisorRPC binding not available" and did no work
++ * at all. Doing it here means an embedder cannot forget, because the call it
++ * already makes to get a workspace is the call that does it.
++ *
++ * Both holders are first-write-wins per isolate, so this is idempotent across
++ * every workspace a host composes, and a host that already stated its own
++ * composition in module scope keeps it.
++ *
++ * A bare-Node embedder passes neither option and holds no `ctx`, so nothing
++ * here runs and the workspace is exactly what it was: the filesystem, the
++ * shell and the coreutils, with no facet substrate to reach.
++ */
++function adoptHostComposition(options: NimbusWorkspaceOptions): void {
++  if (options.fabric) composeFabric(options.fabric);
++  // The explicit option wins: a host that names the bag is stating which one
++  // is right. Otherwise it comes off the transaction port, which in a Durable
++  // Object IS `ctx` — the object workerd hangs `exports` on.
++  const ctxExports = options.ctxExports
++    ?? (options.transactions as { exports?: CtxExports } | undefined)?.exports;
++  if (ctxExports) adoptCtxExports(ctxExports);
++}
++
+ /**
+  * Open the durable filesystem for a host that has not opened one itself.
+  *
+diff --git a/src/workspace/supervisor-op.ts b/src/workspace/supervisor-op.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d56d8e768aabef3d5cd33261d573cdb418a61d17
+--- /dev/null
++++ b/src/workspace/supervisor-op.ts
+@@ -0,0 +1,236 @@
++/**
++ * supervisor-op.ts — the one call a facet's host answers.
++ *
++ * A facet runs in its own isolate and reaches the object that owns the
++ * filesystem through a supervisor entrypoint, which runs in a THIRD isolate.
++ * That entrypoint has to get from "a facet called `SUPERVISOR.stat(path)`" to
++ * "the host that owns this workspace performed a stat". Before this seam it
++ * did that by resolving one hard-wired Durable Object namespace and calling
++ * one of sixty methods on the class it found there — so hosting a workspace
++ * meant BEING that class.
++ *
++ * Now the host mounts one method. It takes an envelope naming the operation
++ * and forwards it to the handler a workspace already carries:
++ *
++ *   class MyActor extends DurableObject {
++ *     async supervisorOp(op) {
++ *       return (await this.workspace()).supervisorOp(op);
++ *     }
++ *   }
++ *
++ * The operation names are the supervisor entrypoint's own method names, so a
++ * facet's call site is unchanged and the wire is greppable from both ends.
++ *
++ * The table IS the interface: an operation this handler does not name does
++ * not exist, and asking for one is an error rather than a reflective call
++ * into whatever the host happens to expose. A host with capabilities of its
++ * own — the hosted session has process brokering, port routing and an R2
++ * cache — passes them as `extend`, which is how `NimbusSession` reaches its
++ * own surface through this same one method.
++ */
++
++import type { SqliteVFS } from '../vfs/sqlite-vfs.js';
++import { CRED_SESSION_USER, type VfsCred } from '../runtime/os-contracts.js';
++import { SqliteRuntimeFsBridge } from '../runtime/sqlite-runtime-fs-bridge.js';
++import { getSymlinkRegistry } from '../vfs/symlink-registry.js';
++import type { SessionProcessSupervisor } from '../runtime/session-process-supervisor.js';
++
++/**
++ * What crosses the supervisor→host boundary.
++ *
++ * `pid`, `writerId` and `mutationOwner` are stamped by the supervisor
++ * entrypoint from the props its binding was minted with, never by the facet:
++ * a process can neither choose nor drop the identity its writes are
++ * credentialed under. They ride the envelope rather than `args` because they
++ * are authority, not arguments — a host reading this envelope can tell what
++ * the caller IS from what it ASKED FOR.
++ *
++ * `stream` carries a `ReadableStream` for the streaming write path. It is a
++ * top-level field because a byte stream crossing an RPC boundary has its
++ * underlying source transferred, and keeping it out of the serialized
++ * argument list makes that transfer the obvious thing it is.
++ */
++export interface SupervisorOpEnvelope {
++  /** The operation name — the supervisor entrypoint's own method name. */
++  readonly op: string;
++  /** Positional arguments, in the order the operation names them. */
++  readonly args?: readonly unknown[];
++  /** The invoking process. Absent means a host call with no process behind it. */
++  readonly pid?: number;
++  /** The active append-writer incarnation, for the append operations. */
++  readonly writerId?: string;
++  /** The exclusive-mutation lease owner, for the streaming write path. */
++  readonly mutationOwner?: string;
++  /** The byte stream, for `writeBatchStream`. */
++  readonly stream?: ReadableStream<Uint8Array>;
++}
++
++/** One named operation. */
++export type SupervisorOpHandler = (envelope: SupervisorOpEnvelope) => unknown;
++
++/** What a workspace needs to answer the operations it owns. */
++export interface SupervisorOpDeps {
++  /** The filesystem the workspace owns. */
++  readonly vfs: SqliteVFS;
++  /**
++   * The process table the pids are allocated from. A pid resolves to the
++   * credential its writes are performed under; absent, every operation acts
++   * as the unprivileged session user, which is the identity `.exec` runs as.
++   */
++  readonly processes?: SessionProcessSupervisor;
++  /**
++   * Where a facet's stdout and stderr go. Absent, a facet's progress output
++   * is discarded — a host with no terminal has nowhere to put it, and
++   * inventing one would put a facet's bytes somewhere the host never asked
++   * for.
++   */
++  readonly output?: (stream: 'stdout' | 'stderr', pid: number, data: string) => void;
++  /**
++   * Operations the host serves itself. A name the library owns cannot be
++   * shadowed, so a host cannot silently redefine what a filesystem write
++   * means.
++   */
++  readonly extend?: Readonly<Record<string, SupervisorOpHandler>>;
++}
++
++/** Read a string argument, or refuse. The caller is another isolate. */
++function stringArg(envelope: SupervisorOpEnvelope, index: number): string {
++  const value = (envelope.args ?? [])[index];
++  if (typeof value !== 'string') {
++    throw new Error(`supervisor op ${envelope.op}: argument ${index} must be a string`);
++  }
++  return value;
++}
++
++/** Read a finite number argument, or refuse. */
++function numberArg(envelope: SupervisorOpEnvelope, index: number): number {
++  const value = (envelope.args ?? [])[index];
++  if (typeof value !== 'number' || !Number.isFinite(value)) {
++    throw new Error(`supervisor op ${envelope.op}: argument ${index} must be a number`);
++  }
++  return value;
++}
++
++/** Read a bytes-or-text argument, which is what the write operations take. */
++function contentArg(envelope: SupervisorOpEnvelope, index: number): string | Uint8Array {
++  const value = (envelope.args ?? [])[index];
++  if (typeof value === 'string' || value instanceof Uint8Array) return value;
++  if (value instanceof ArrayBuffer) return new Uint8Array(value);
++  throw new Error(`supervisor op ${envelope.op}: argument ${index} must be bytes or text`);
++}
++
++/**
++ * The credential an operation acts under.
++ *
++ * A pid always wins, because the supervisor stamps it from its own props. An
++ * absent pid is a host call — the SDK over a binding, a static asset read —
++ * and those act as the session user. A supplied-but-invalid pid is refused
++ * rather than downgraded: a write credentialed to nothing is worse than a
++ * refused write.
++ */
++function credFor(deps: SupervisorOpDeps, pid: number | undefined): VfsCred {
++  if (pid === undefined) return CRED_SESSION_USER;
++  if (!Number.isInteger(pid) || pid <= 0) {
++    throw new Error('supervisor op: filesystem operation requires a valid process pid');
++  }
++  if (!deps.processes) return CRED_SESSION_USER;
++  return deps.processes.cred(pid);
++}
++
++/** Pid-less host callers share one bridge; pids can never collide with it. */
++const HOST_CALLER_KEY = 0;
++
++/**
++ * Build the handler a host mounts.
++ *
++ * The bridge is cached per caller rather than per call: it holds the symlink
++ * resolution and open-handle state a facet's repeated reads walk, and
++ * rebuilding it per operation would discard that between two reads of one
++ * file.
++ */
++export function createSupervisorOpHandler(
++  deps: SupervisorOpDeps,
++): (envelope: SupervisorOpEnvelope) => Promise<unknown> {
++  const bridges = new Map<number, SqliteRuntimeFsBridge>();
++
++  const bridgeFor = (pid: number | undefined): SqliteRuntimeFsBridge => {
++    const key = pid ?? HOST_CALLER_KEY;
++    const credentialed = deps.vfs.as(credFor(deps, pid));
++    const held = bridges.get(key);
++    if (held) {
++      held.updateCredential(credentialed);
++      return held;
++    }
++    const built = new SqliteRuntimeFsBridge(credentialed, deps.vfs);
++    bridges.set(key, built);
++    return built;
++  };
++
++  const ops: Readonly<Record<string, SupervisorOpHandler>> = {
++    // ── Filesystem reads ────────────────────────────────────────────────
++    readFile: async (e) => {
++      const bytes = await bridgeFor(e.pid).readFile(stringArg(e, 0));
++      return bytes === null ? null : new TextDecoder().decode(bytes);
++    },
++    readFileBytes: (e) => bridgeFor(e.pid).readFile(stringArg(e, 0)),
++    stat: (e) => bridgeFor(e.pid).stat(stringArg(e, 0)),
++    lstat: (e) => bridgeFor(e.pid).stat(stringArg(e, 0), { followSymlinks: false }),
++    exists: async (e) => (await bridgeFor(e.pid).stat(stringArg(e, 0))) !== null,
++    readdir: (e) => bridgeFor(e.pid).readdir(stringArg(e, 0)),
++    readlink: (e) => bridgeFor(e.pid).readlink(stringArg(e, 0)),
++    fsReadRange: (e) =>
++      bridgeFor(e.pid).readRange(stringArg(e, 0), numberArg(e, 1), numberArg(e, 2)),
++    fsReadRangeUncached: (e) =>
++      bridgeFor(e.pid).readRange(stringArg(e, 0), numberArg(e, 1), numberArg(e, 2), {
++        cached: false,
++      }),
++    fsRevision: (e) => bridgeFor(e.pid).revision(
++      (e.args ?? [])[0] === undefined ? undefined : stringArg(e, 0),
++    ),
++    hasLegacySymlinkUnder: (e) => getSymlinkRegistry(deps.vfs).hasAtOrBelow(stringArg(e, 0)),
++
++    // ── Filesystem writes ───────────────────────────────────────────────
++    writeFile: (e) => bridgeFor(e.pid).writeFile(stringArg(e, 0), contentArg(e, 1)),
++    mkdir: (e) => bridgeFor(e.pid).mkdir(stringArg(e, 0), { recursive: true }),
++    rmdir: (e) => bridgeFor(e.pid).rmdir(stringArg(e, 0)),
++    unlink: (e) => bridgeFor(e.pid).unlink(stringArg(e, 0)),
++    rename: (e) => bridgeFor(e.pid).rename(stringArg(e, 0), stringArg(e, 1)),
++    symlink: (e) => bridgeFor(e.pid).symlink(stringArg(e, 0), stringArg(e, 1)),
++    chmod: (e) => bridgeFor(e.pid).chmod(stringArg(e, 0), numberArg(e, 1)),
++    utimes: (e) => bridgeFor(e.pid).utimes(stringArg(e, 0), numberArg(e, 1), numberArg(e, 2)),
++    fsTruncate: (e) => bridgeFor(e.pid).truncate(stringArg(e, 0), numberArg(e, 1)),
++    /**
++     * The streaming bulk write. The lease owner rides the envelope, so the
++     * VFS enforces the same exclusive-mutation scope it enforces for the
++     * hosted session: a clone's committed prefix stays inside the root its
++     * caller holds a lease on.
++     */
++    writeBatchStream: (e) => {
++      if (!e.stream) throw new Error('supervisor op writeBatchStream: no stream');
++      return deps.vfs.as(credFor(deps, e.pid)).writeStream(e.stream, {
++        mutationOwner: e.mutationOwner,
++      });
++    },
++
++    // ── Process output ──────────────────────────────────────────────────
++    stdout: (e) => { deps.output?.('stdout', e.pid ?? 0, stringArg(e, 0)); },
++    stderr: (e) => { deps.output?.('stderr', e.pid ?? 0, stringArg(e, 0)); },
++  };
++
++  const extend = deps.extend ?? {};
++  return async (envelope: SupervisorOpEnvelope): Promise<unknown> => {
++    if (!envelope || typeof envelope.op !== 'string') {
++      throw new Error('supervisor op: envelope names no operation');
++    }
++    // A host that serves an operation itself is authoritative for it: the
++    // hosted session's own `writeBatchStream` carries W7 drain accounting and
++    // its `stdout` carries prior-generation attribution, and neither is
++    // something the library can perform on its behalf. The table below is
++    // what a host that serves nothing gets, which is the whole filesystem.
++    const handler = extend[envelope.op] ?? ops[envelope.op];
++    if (!handler) {
++      throw new Error(`supervisor op: '${envelope.op}' is not served by this host`);
++    }
++    return handler(envelope);
++  };
++}

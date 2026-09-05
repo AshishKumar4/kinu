@@ -1,0 +1,434 @@
+diff --git a/dist/composition.d.ts b/dist/composition.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6751d77db3d17c9617c5644253249eba63308ef2
+--- /dev/null
++++ b/dist/composition.d.ts
+@@ -0,0 +1,129 @@
++/**
++ * composition.ts — the ONE seam an embedder wires the fabric through.
++ *
++ * The fabric mints supervisor bindings and assembles staged boots for the
++ * programs it hosts, but the entrypoint class that answers those bindings and
++ * the artifact sources a stage names both belong to the embedder. The
++ * embedder states them once, in its composition root, with one call:
++ *
++ *   composeFabric({
++ *     supervisorEntrypoint: 'SupervisorRPC',
++ *     stagedBootAssembler: (env, stage) => assembleConfig(env, stage),
++ *   });
++ *
++ * First-write-wins, like every holder in this module: the composition root's
++ * module scope runs once per isolate, before any request.
++ *
++ * `ctx.exports` is runtime state, not composition: workerd mints it per
++ * instance, so the embedder captures it where the platform hands it over —
++ * the first fetch, or the DO constructor — with {@link adoptCtxExports}.
++ *
++ * It lives in `@nimbus-sh/platform`, the zero-dependency leaf, rather than in
++ * `@nimbus-sh/fabric` where it started, because BOTH halves of Nimbus have to
++ * reach it and they sit on opposite sides of a dependency edge: the fabric
++ * mints the bindings, and `@nimbus-sh/core`'s workspace — the form an embedder
++ * actually constructs — is what gets handed the `ctx.exports` to adopt. Core
++ * cannot import the fabric, which depends on core. `@nimbus-sh/fabric/composition.js`
++ * re-exports every name here, so the fabric's own callers are unchanged.
++ *
++ * Staying a leaf is also what lets the loader pool read `ctx.exports` without
++ * transitively importing the Durable Object classes, which is what makes the
++ * pool unit-testable in a plain Node or bun process.
++ */
++/**
++ * One entry of `ctx.exports`: a top-level entrypoint's loopback factory, which
++ * mints a Service Binding stub for that entrypoint when called with props.
++ *
++ * The stub's RPC surface belongs to the entrypoint CLASS, which this leaf
++ * cannot see — `Cloudflare.Exports` is derived from the embedder's own main
++ * module, so for a library it evaluates to `{}`. A caller that knows the class
++ * names the surface it expects (`factory<MySupervisorRpc>({ props })`); one
++ * that does not gets `unknown` and has to narrow, same as
++ * `DurableObjectNamespace<T>` and `RpcStub<T>` in @cloudflare/workers-types.
++ */
++export type EntrypointLoopbackFactory = <Stub = unknown>(options: {
++    props: object;
++}) => Stub;
++/**
++ * `ctx.exports` itself — one factory per top-level entrypoint export, keyed by
++ * export name. Absent names read as undefined, which is how a caller finds out
++ * the embedder's entry module does not re-export the class it needs.
++ */
++export type CtxExports = Record<string, EntrypointLoopbackFactory | undefined>;
++/**
++ * Assemble a complete Worker Loader config from a staged-artifact spec. The
++ * embedder supplies this: a stage names artifact sources only the embedder
++ * knows how to fetch (Nimbus's largest staged artifact is a ~23 MB module map
++ * from ASSETS), and the assembler runs inside the loader's cache-miss callback
++ * so those sources are materialized only while the facet actually loads.
++ * `env` is whichever hosting actor's env the facet is opened with.
++ */
++export type StagedBootAssembler = (env: unknown, stage: unknown) => Promise<object>;
++/** What an embedder states about itself, once, in its composition root. */
++export interface FabricComposition {
++    /**
++     * The ctx.exports name of the embedder's supervisor WorkerEntrypoint. The
++     * fabric mints one supervisor binding per hosted program from it
++     * (`env.SUPERVISOR` inside the facet).
++     */
++    supervisorEntrypoint: string;
++    /** Only embedders that use 'staged' boot specs supply one. */
++    stagedBootAssembler?: StagedBootAssembler;
++    /**
++     * The env binding name of the Durable Object namespace whose objects host
++     * workspaces. Defaults to `NIMBUS_SESSION`, the hosted product's own.
++     *
++     * The supervisor entrypoint runs in its own isolate and reaches the object
++     * that owns the filesystem through this namespace, resolving it from the
++     * `doId` its binding was minted with. Naming it here is what lets a
++     * Durable Object of any class host a workspace: before, the supervisor
++     * resolved `env.NIMBUS_SESSION` for a class an embedder does not run, so
++     * an embedder's facet could reach nothing even holding a valid binding.
++     */
++    hostNamespace?: string;
++    /**
++     * The one method a host mounts for the supervisor to reach it through.
++     * Defaults to `supervisorOp`.
++     *
++     * One method, not the sixty the session happens to expose: a host that
++     * wants to hold a workspace should have to mount one thing, and forwarding
++     * it to `workspace.supervisorOp` is the whole obligation.
++     */
++    hostDispatchMethod?: string;
++}
++/** The hosted product's namespace binding, and the default for an embedder. */
++export declare const DEFAULT_HOST_NAMESPACE = "NIMBUS_SESSION";
++/** The one method a workspace host mounts. */
++export declare const DEFAULT_HOST_DISPATCH_METHOD = "supervisorOp";
++/** Register the embedder's composition. First-write-wins. */
++export declare function composeFabric(composition: FabricComposition): void;
++/**
++ * Capture `ctx.exports` for the helpers that mint loopback bindings. The
++ * embedder calls this where the platform hands the bag over — the first
++ * fetch, or the DO constructor. First-write-wins.
++ */
++export declare function adoptCtxExports(value: CtxExports): void;
++export declare function getCtxExports(): CtxExports | null;
++/**
++ * Resolve the composed supervisor entrypoint on an exports object —
++ * `exportsObj` when given (a WorkerEntrypoint reads its own ctx.exports),
++ * the adopted ctx.exports otherwise. Calling the result with props mints one
++ * supervisor binding (`env.SUPERVISOR`) for one hosted program. Null when
++ * either half is missing; the caller decides whether that degrades or throws.
++ */
++export declare function supervisorEntrypoint(exportsObj?: unknown): EntrypointLoopbackFactory | null;
++/** The composed name, for error messages that point at the missing export. */
++export declare function supervisorEntrypointName(): string | null;
++/**
++ * The env binding name of the namespace whose objects host workspaces.
++ *
++ * Defaults rather than throwing: the hosted product composes nothing here and
++ * means `NIMBUS_SESSION`, so an unstated host namespace is the hosted product
++ * asking for its own.
++ */
++export declare function hostNamespace(): string;
++/** The one method a host mounts for the supervisor to reach it through. */
++export declare function hostDispatchMethod(): string;
++/** The composed assembler; a 'staged' boot spec cannot assemble without one. */
++export declare function stagedBootAssembler(): StagedBootAssembler;
++//# sourceMappingURL=composition.d.ts.map
+\ No newline at end of file
+diff --git a/dist/composition.d.ts.map b/dist/composition.d.ts.map
+new file mode 100644
+index 0000000000000000000000000000000000000000..4b58ab38099d3434698eb311657ed19731e851f7
+--- /dev/null
++++ b/dist/composition.d.ts.map
+@@ -0,0 +1 @@
++{"version":3,"file":"composition.d.ts","sourceRoot":"","sources":["../src/composition.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;GA+BG;AAEH;;;;;;;;;;GAUG;AACH,MAAM,MAAM,yBAAyB,GAAG,CAAC,IAAI,GAAG,OAAO,EAAE,OAAO,EAAE;IAAE,KAAK,EAAE,MAAM,CAAA;CAAE,KAAK,IAAI,CAAC;AAE7F;;;;GAIG;AACH,MAAM,MAAM,UAAU,GAAG,MAAM,CAAC,MAAM,EAAE,yBAAyB,GAAG,SAAS,CAAC,CAAC;AAE/E;;;;;;;GAOG;AACH,MAAM,MAAM,mBAAmB,GAAG,CAChC,GAAG,EAAE,OAAO,EACZ,KAAK,EAAE,OAAO,KACX,OAAO,CAAC,MAAM,CAAC,CAAC;AAErB,2EAA2E;AAC3E,MAAM,WAAW,iBAAiB;IAChC;;;;OAIG;IACH,oBAAoB,EAAE,MAAM,CAAC;IAC7B,8DAA8D;IAC9D,mBAAmB,CAAC,EAAE,mBAAmB,CAAC;IAC1C;;;;;;;;;;OAUG;IACH,aAAa,CAAC,EAAE,MAAM,CAAC;IACvB;;;;;;;OAOG;IACH,kBAAkB,CAAC,EAAE,MAAM,CAAC;CAC7B;AAED,+EAA+E;AAC/E,eAAO,MAAM,sBAAsB,mBAAmB,CAAC;AAEvD,8CAA8C;AAC9C,eAAO,MAAM,4BAA4B,iBAAiB,CAAC;AAI3D,6DAA6D;AAC7D,wBAAgB,aAAa,CAAC,WAAW,EAAE,iBAAiB,GAAG,IAAI,CAGlE;AAID;;;;GAIG;AACH,wBAAgB,eAAe,CAAC,KAAK,EAAE,UAAU,GAAG,IAAI,CAGvD;AAED,wBAAgB,aAAa,IAAI,UAAU,GAAG,IAAI,CAEjD;AAED;;;;;;GAMG;AACH,wBAAgB,oBAAoB,CAAC,UAAU,CAAC,EAAE,OAAO,GAAG,yBAAyB,GAAG,IAAI,CAO3F;AAED,8EAA8E;AAC9E,wBAAgB,wBAAwB,IAAI,MAAM,GAAG,IAAI,CAExD;AAED;;;;;;GAMG;AACH,wBAAgB,aAAa,IAAI,MAAM,CAEtC;AAED,2EAA2E;AAC3E,wBAAgB,kBAAkB,IAAI,MAAM,CAE3C;AAED,gFAAgF;AAChF,wBAAgB,mBAAmB,IAAI,mBAAmB,CASzD"}
+\ No newline at end of file
+diff --git a/dist/composition.js b/dist/composition.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..cbd9fc749f435cf6e66e63007b37832d519b760a
+--- /dev/null
++++ b/dist/composition.js
+@@ -0,0 +1,101 @@
++/**
++ * composition.ts — the ONE seam an embedder wires the fabric through.
++ *
++ * The fabric mints supervisor bindings and assembles staged boots for the
++ * programs it hosts, but the entrypoint class that answers those bindings and
++ * the artifact sources a stage names both belong to the embedder. The
++ * embedder states them once, in its composition root, with one call:
++ *
++ *   composeFabric({
++ *     supervisorEntrypoint: 'SupervisorRPC',
++ *     stagedBootAssembler: (env, stage) => assembleConfig(env, stage),
++ *   });
++ *
++ * First-write-wins, like every holder in this module: the composition root's
++ * module scope runs once per isolate, before any request.
++ *
++ * `ctx.exports` is runtime state, not composition: workerd mints it per
++ * instance, so the embedder captures it where the platform hands it over —
++ * the first fetch, or the DO constructor — with {@link adoptCtxExports}.
++ *
++ * It lives in `@nimbus-sh/platform`, the zero-dependency leaf, rather than in
++ * `@nimbus-sh/fabric` where it started, because BOTH halves of Nimbus have to
++ * reach it and they sit on opposite sides of a dependency edge: the fabric
++ * mints the bindings, and `@nimbus-sh/core`'s workspace — the form an embedder
++ * actually constructs — is what gets handed the `ctx.exports` to adopt. Core
++ * cannot import the fabric, which depends on core. `@nimbus-sh/fabric/composition.js`
++ * re-exports every name here, so the fabric's own callers are unchanged.
++ *
++ * Staying a leaf is also what lets the loader pool read `ctx.exports` without
++ * transitively importing the Durable Object classes, which is what makes the
++ * pool unit-testable in a plain Node or bun process.
++ */
++/** The hosted product's namespace binding, and the default for an embedder. */
++export const DEFAULT_HOST_NAMESPACE = 'NIMBUS_SESSION';
++/** The one method a workspace host mounts. */
++export const DEFAULT_HOST_DISPATCH_METHOD = 'supervisorOp';
++let _composition = null;
++/** Register the embedder's composition. First-write-wins. */
++export function composeFabric(composition) {
++    if (_composition)
++        return;
++    _composition = composition;
++}
++let _ctxExports = null;
++/**
++ * Capture `ctx.exports` for the helpers that mint loopback bindings. The
++ * embedder calls this where the platform hands the bag over — the first
++ * fetch, or the DO constructor. First-write-wins.
++ */
++export function adoptCtxExports(value) {
++    if (_ctxExports)
++        return;
++    _ctxExports = value;
++}
++export function getCtxExports() {
++    return _ctxExports;
++}
++/**
++ * Resolve the composed supervisor entrypoint on an exports object —
++ * `exportsObj` when given (a WorkerEntrypoint reads its own ctx.exports),
++ * the adopted ctx.exports otherwise. Calling the result with props mints one
++ * supervisor binding (`env.SUPERVISOR`) for one hosted program. Null when
++ * either half is missing; the caller decides whether that degrades or throws.
++ */
++export function supervisorEntrypoint(exportsObj) {
++    const exports = exportsObj ?? _ctxExports;
++    const name = _composition?.supervisorEntrypoint;
++    if (!name)
++        return null;
++    if ((typeof exports !== 'object' && typeof exports !== 'function') || exports === null)
++        return null;
++    const factory = exports[name];
++    return typeof factory === 'function' ? factory : null;
++}
++/** The composed name, for error messages that point at the missing export. */
++export function supervisorEntrypointName() {
++    return _composition?.supervisorEntrypoint ?? null;
++}
++/**
++ * The env binding name of the namespace whose objects host workspaces.
++ *
++ * Defaults rather than throwing: the hosted product composes nothing here and
++ * means `NIMBUS_SESSION`, so an unstated host namespace is the hosted product
++ * asking for its own.
++ */
++export function hostNamespace() {
++    return _composition?.hostNamespace ?? DEFAULT_HOST_NAMESPACE;
++}
++/** The one method a host mounts for the supervisor to reach it through. */
++export function hostDispatchMethod() {
++    return _composition?.hostDispatchMethod ?? DEFAULT_HOST_DISPATCH_METHOD;
++}
++/** The composed assembler; a 'staged' boot spec cannot assemble without one. */
++export function stagedBootAssembler() {
++    const assembler = _composition?.stagedBootAssembler;
++    if (!assembler) {
++        throw new Error('fabric: no staged-boot assembler composed; a \'staged\' boot spec '
++            + 'cannot be assembled without one (composeFabric)');
++    }
++    return assembler;
++}
+diff --git a/src/composition.ts b/src/composition.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d1738a10e6b69cf64963fa208d8a439fbeeed8b5
+--- /dev/null
++++ b/src/composition.ts
+@@ -0,0 +1,177 @@
++/**
++ * composition.ts — the ONE seam an embedder wires the fabric through.
++ *
++ * The fabric mints supervisor bindings and assembles staged boots for the
++ * programs it hosts, but the entrypoint class that answers those bindings and
++ * the artifact sources a stage names both belong to the embedder. The
++ * embedder states them once, in its composition root, with one call:
++ *
++ *   composeFabric({
++ *     supervisorEntrypoint: 'SupervisorRPC',
++ *     stagedBootAssembler: (env, stage) => assembleConfig(env, stage),
++ *   });
++ *
++ * First-write-wins, like every holder in this module: the composition root's
++ * module scope runs once per isolate, before any request.
++ *
++ * `ctx.exports` is runtime state, not composition: workerd mints it per
++ * instance, so the embedder captures it where the platform hands it over —
++ * the first fetch, or the DO constructor — with {@link adoptCtxExports}.
++ *
++ * It lives in `@nimbus-sh/platform`, the zero-dependency leaf, rather than in
++ * `@nimbus-sh/fabric` where it started, because BOTH halves of Nimbus have to
++ * reach it and they sit on opposite sides of a dependency edge: the fabric
++ * mints the bindings, and `@nimbus-sh/core`'s workspace — the form an embedder
++ * actually constructs — is what gets handed the `ctx.exports` to adopt. Core
++ * cannot import the fabric, which depends on core. `@nimbus-sh/fabric/composition.js`
++ * re-exports every name here, so the fabric's own callers are unchanged.
++ *
++ * Staying a leaf is also what lets the loader pool read `ctx.exports` without
++ * transitively importing the Durable Object classes, which is what makes the
++ * pool unit-testable in a plain Node or bun process.
++ */
++
++/**
++ * One entry of `ctx.exports`: a top-level entrypoint's loopback factory, which
++ * mints a Service Binding stub for that entrypoint when called with props.
++ *
++ * The stub's RPC surface belongs to the entrypoint CLASS, which this leaf
++ * cannot see — `Cloudflare.Exports` is derived from the embedder's own main
++ * module, so for a library it evaluates to `{}`. A caller that knows the class
++ * names the surface it expects (`factory<MySupervisorRpc>({ props })`); one
++ * that does not gets `unknown` and has to narrow, same as
++ * `DurableObjectNamespace<T>` and `RpcStub<T>` in @cloudflare/workers-types.
++ */
++export type EntrypointLoopbackFactory = <Stub = unknown>(options: { props: object }) => Stub;
++
++/**
++ * `ctx.exports` itself — one factory per top-level entrypoint export, keyed by
++ * export name. Absent names read as undefined, which is how a caller finds out
++ * the embedder's entry module does not re-export the class it needs.
++ */
++export type CtxExports = Record<string, EntrypointLoopbackFactory | undefined>;
++
++/**
++ * Assemble a complete Worker Loader config from a staged-artifact spec. The
++ * embedder supplies this: a stage names artifact sources only the embedder
++ * knows how to fetch (Nimbus's largest staged artifact is a ~23 MB module map
++ * from ASSETS), and the assembler runs inside the loader's cache-miss callback
++ * so those sources are materialized only while the facet actually loads.
++ * `env` is whichever hosting actor's env the facet is opened with.
++ */
++export type StagedBootAssembler = (
++  env: unknown,
++  stage: unknown,
++) => Promise<object>;
++
++/** What an embedder states about itself, once, in its composition root. */
++export interface FabricComposition {
++  /**
++   * The ctx.exports name of the embedder's supervisor WorkerEntrypoint. The
++   * fabric mints one supervisor binding per hosted program from it
++   * (`env.SUPERVISOR` inside the facet).
++   */
++  supervisorEntrypoint: string;
++  /** Only embedders that use 'staged' boot specs supply one. */
++  stagedBootAssembler?: StagedBootAssembler;
++  /**
++   * The env binding name of the Durable Object namespace whose objects host
++   * workspaces. Defaults to `NIMBUS_SESSION`, the hosted product's own.
++   *
++   * The supervisor entrypoint runs in its own isolate and reaches the object
++   * that owns the filesystem through this namespace, resolving it from the
++   * `doId` its binding was minted with. Naming it here is what lets a
++   * Durable Object of any class host a workspace: before, the supervisor
++   * resolved `env.NIMBUS_SESSION` for a class an embedder does not run, so
++   * an embedder's facet could reach nothing even holding a valid binding.
++   */
++  hostNamespace?: string;
++  /**
++   * The one method a host mounts for the supervisor to reach it through.
++   * Defaults to `supervisorOp`.
++   *
++   * One method, not the sixty the session happens to expose: a host that
++   * wants to hold a workspace should have to mount one thing, and forwarding
++   * it to `workspace.supervisorOp` is the whole obligation.
++   */
++  hostDispatchMethod?: string;
++}
++
++/** The hosted product's namespace binding, and the default for an embedder. */
++export const DEFAULT_HOST_NAMESPACE = 'NIMBUS_SESSION';
++
++/** The one method a workspace host mounts. */
++export const DEFAULT_HOST_DISPATCH_METHOD = 'supervisorOp';
++
++let _composition: FabricComposition | null = null;
++
++/** Register the embedder's composition. First-write-wins. */
++export function composeFabric(composition: FabricComposition): void {
++  if (_composition) return;
++  _composition = composition;
++}
++
++let _ctxExports: CtxExports | null = null;
++
++/**
++ * Capture `ctx.exports` for the helpers that mint loopback bindings. The
++ * embedder calls this where the platform hands the bag over — the first
++ * fetch, or the DO constructor. First-write-wins.
++ */
++export function adoptCtxExports(value: CtxExports): void {
++  if (_ctxExports) return;
++  _ctxExports = value;
++}
++
++export function getCtxExports(): CtxExports | null {
++  return _ctxExports;
++}
++
++/**
++ * Resolve the composed supervisor entrypoint on an exports object —
++ * `exportsObj` when given (a WorkerEntrypoint reads its own ctx.exports),
++ * the adopted ctx.exports otherwise. Calling the result with props mints one
++ * supervisor binding (`env.SUPERVISOR`) for one hosted program. Null when
++ * either half is missing; the caller decides whether that degrades or throws.
++ */
++export function supervisorEntrypoint(exportsObj?: unknown): EntrypointLoopbackFactory | null {
++  const exports = exportsObj ?? _ctxExports;
++  const name = _composition?.supervisorEntrypoint;
++  if (!name) return null;
++  if ((typeof exports !== 'object' && typeof exports !== 'function') || exports === null) return null;
++  const factory = (exports as Record<string, unknown>)[name];
++  return typeof factory === 'function' ? (factory as EntrypointLoopbackFactory) : null;
++}
++
++/** The composed name, for error messages that point at the missing export. */
++export function supervisorEntrypointName(): string | null {
++  return _composition?.supervisorEntrypoint ?? null;
++}
++
++/**
++ * The env binding name of the namespace whose objects host workspaces.
++ *
++ * Defaults rather than throwing: the hosted product composes nothing here and
++ * means `NIMBUS_SESSION`, so an unstated host namespace is the hosted product
++ * asking for its own.
++ */
++export function hostNamespace(): string {
++  return _composition?.hostNamespace ?? DEFAULT_HOST_NAMESPACE;
++}
++
++/** The one method a host mounts for the supervisor to reach it through. */
++export function hostDispatchMethod(): string {
++  return _composition?.hostDispatchMethod ?? DEFAULT_HOST_DISPATCH_METHOD;
++}
++
++/** The composed assembler; a 'staged' boot spec cannot assemble without one. */
++export function stagedBootAssembler(): StagedBootAssembler {
++  const assembler = _composition?.stagedBootAssembler;
++  if (!assembler) {
++    throw new Error(
++      'fabric: no staged-boot assembler composed; a \'staged\' boot spec '
++        + 'cannot be assembled without one (composeFabric)',
++    );
++  }
++  return assembler;
++}

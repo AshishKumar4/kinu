@@ -26,6 +26,7 @@
  * this file's import specifiers change and no other module notices.
  */
 
+import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type * as programmaticModule from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
 import type * as routesModule from '../../../node_modules/@nimbus-sh/worker/dist/session/routes.js';
 import type * as gitModule from '../../../node_modules/@nimbus-sh/worker/dist/git/commands.js';
@@ -95,3 +96,25 @@ export function nimbusProgrammatic(): Promise<NimbusProgrammatic> {
   })();
   return loading;
 }
+
+/**
+ * The fabric every workspace this Worker hosts is composed with.
+ *
+ * A facet runs in its own isolate and reaches the object that owns the
+ * filesystem through the supervisor entrypoint — and the entrypoint can only
+ * mint that binding from `ctx.exports` against a composed name, and can only
+ * reach the host through a composed namespace and method. Each half names
+ * something Kinu already has: `SupervisorRPC` is re-exported from
+ * `server.ts`, `OrchestratorAgent` is this deployment's own Durable Object
+ * namespace binding, and `supervisorOp` is the one method the orchestrator
+ * mounts for its facets. `NIMBUS_SESSION` is deliberately NOT named: the
+ * class is gone (wrangler.jsonc migrations `v3`) and no binding carries that
+ * name, so composing it would point every facet at a namespace that does not
+ * exist. `hostDispatchMethod` repeats the default on purpose — a reader must
+ * not have to know the default to see which method a facet lands on.
+ */
+export const HOST_FABRIC_COMPOSITION: FabricComposition = {
+  supervisorEntrypoint: 'SupervisorRPC',
+  hostNamespace: 'OrchestratorAgent',
+  hostDispatchMethod: 'supervisorOp',
+};

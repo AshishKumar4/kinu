@@ -120,7 +120,6 @@
   "movable packages/cf-backend/src/user/validate.ts",
   "movable packages/cf-backend/src/user/workspace-capability.ts",
   "movable packages/cf-backend/src/workspace-box-rpc.ts",
-  "movable packages/cf-backend/src/workspace-shell-guard.ts",
   "movable packages/cli-backend/src/agent-host/driver-lease.ts",
   "movable packages/cli-backend/src/craft-executor.ts",
   "movable packages/cli-backend/src/fiber.ts",

@@ -105,6 +105,11 @@
   },
   "durable_objects": {
     "bindings": [
+      // The binding NAME is load-bearing beyond routing: it is the workspace
+      // host namespace the fabric resolves every hosted workspace's facets
+      // through (`hostNamespace: 'OrchestratorAgent'` in
+      // src/nimbus-programmatic.ts). Rename it and the supervisor entrypoint
+      // resolves a namespace that does not exist.
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
       // Per-user DO: profile + agent registry + credentials + defaults.
       // Keyed by the stable Kinu userId derived from the verified email.

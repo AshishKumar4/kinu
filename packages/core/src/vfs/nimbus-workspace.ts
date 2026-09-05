@@ -35,6 +35,7 @@
 // graph — the Worker pays it at cold start and the workerd test pool cannot
 // load it at all. The boot is already lazy; the import belongs to it.
 import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
+import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
@@ -42,6 +43,7 @@ import type { SqlDatabase, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.
 import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
+import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type { HomeRootVfs, TmpConfiner } from './agent-home';
 import { provisionWorkspaceRuntimes } from './workspace-runtimes';
 import * as v from 'valibot';
@@ -249,13 +251,22 @@ export interface WorkspacePrivileged {
 }
 
 /**
+ * What the workspace's dispatch answers. A host forwards it to the supervisor
+ * entrypoint without looking inside: the entrypoint's own typed methods
+ * narrow each answer, and this follows the library's declaration so a
+ * narrower answer upstream narrows every host for free.
+ */
+export type SupervisorOpResult = Awaited<ReturnType<NimbusWorkspace['supervisorOp']>>;
+
+/**
  * This workspace's own Nimbus primitives, as a host's process/port surface
  * binds to them.
  *
- * Four members and no more: the shell commands actually run on, the raw
- * credentialed filesystem, the registry a host adds `git` to, and the process
- * owner whose pids this filesystem's append capabilities are keyed by. Anything
- * a host can compose from those is the host's, not this module's.
+ * Five members and no more: the shell commands actually run on, the raw
+ * credentialed filesystem, the registry a host adds `git` to, the process
+ * owner whose pids this filesystem's append capabilities are keyed by, and
+ * the one dispatch a facet reaches its host through. Anything a host can
+ * compose from those is the host's, not this module's.
  */
 export interface WorkspaceSession {
   readonly shell: NimbusWorkspace['shell'];
@@ -264,6 +275,16 @@ export interface WorkspaceSession {
   /** The ONE process owner of this filesystem. A host that spawns through its
    *  own would hand out pids at or below the revoked generation floor. */
   readonly processes: SessionProcessSupervisor;
+  /**
+   * The one method a workspace host mounts for its facets.
+   *
+   * Every filesystem call a dynamic worker makes arrives here, credentialed
+   * to the process whose command started the work. A Durable Object that
+   * hosts this workspace forwards its own mounted method to this one — that
+   * forwarding is the whole host obligation, and without it `git clone` and
+   * `npm install` refuse before they spawn anything.
+   */
+  readonly supervisorOp: (envelope: SupervisorOpEnvelope) => Promise<SupervisorOpResult>;
 }
 
 export interface WorkspaceBundle {
@@ -344,11 +365,18 @@ export interface WorkspaceOptions {
    * see `provisionWorkspaceRuntimes`' own `facets`, which this is.
    */
   runtimeFacets?: FacetHost;
+  /**
+   * The embedder's fabric composition, for a host that can run dynamic
+   * workers. A Durable Object host passes its supervisor entrypoint, its own
+   * namespace binding and the method it mounts; the local CLI passes nothing
+   * and keeps the filesystem, the shell and the coreutils with no facet
+   * substrate to reach.
+   */
+  fabric?: FabricComposition;
 }
 
 /**
  * Build the workspace filesystem and its shell over a host's SQLite.
- *
  * Returns synchronously over a workspace that opens on its first operation.
  * Booting one is genuinely async — Nimbus sources `/etc/profile` — while
  * runtime construction and the Durable Object constructor behind it are not,
@@ -369,6 +397,16 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
             transactions: opts.transactions,
             generation: opts.generation,
             cwd: WORKSPACE_ROOT,
+            // The embedder's fabric, stated once per isolate. A workspace
+            // whose host can run dynamic workers reaches them through this:
+            // the fabric mints every facet's `env.SUPERVISOR` binding from
+            // the composed entrypoint, and `ctx.exports` is adopted off
+            // `transactions` (in a Durable Object that IS `ctx`). Absent —
+            // the local CLI passes none — the workspace stays the
+            // filesystem, the shell and the coreutils, and anything needing
+            // a dynamic worker refuses before it spawns. First-write-wins
+            // per isolate, so passing it on every create is idempotent.
+            fabric: opts.fabric,
           });
           // Before the first command, and after the substrate's own
           // registrations so a coreutil is never shadowed by a runtime bin of
@@ -427,6 +465,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         vfs: workspace.vfs,
         registry: workspace.registry,
         processes,
+        // Bound to the origin workspace: the dispatch table is built over
+        // its filesystem at create, and a facet's writes must land there
+        // rather than in an agent plane's shell-only second compose.
+        supervisorOp: (envelope: SupervisorOpEnvelope) => workspace.supervisorOp(envelope),
       };
     },
     async destroy() { (await open()).destroy(); },
@@ -456,6 +498,8 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
               setUmask: (mask: number) => { processes.setUmask(process.pid, mask); },
               runAs: origin.shell.getRunAsHost(),
             },
+            // The origin create already stated it; this re-states nothing new.
+            fabric: opts.fabric,
           });
           return {
             vfs: agentVfs(origin.vfs.as(agent.cred)),

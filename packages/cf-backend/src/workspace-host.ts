@@ -45,7 +45,7 @@
 
 import * as v from 'valibot';
 import { createWorkspace, nextWorkspaceGeneration } from '@kinu.run/core/workspace';
-import type { WorkspaceBundle, WorkspaceSession } from '@kinu.run/core/workspace';
+import type { SupervisorOpResult, WorkspaceBundle, WorkspaceSession } from '@kinu.run/core/workspace';
 import { decodeJsonValue } from '@kinu.run/core';
 import type {
   JsonValue,
@@ -54,12 +54,13 @@ import type {
 import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import {
+  HOST_FABRIC_COMPOSITION,
   nimbusProgrammatic,
   type ProgrammaticHost,
 } from './nimbus-programmatic';
-import { guardHostedShell } from './workspace-shell-guard';
 
 /**
  * A read whose only tolerated failure is "there is no such path".
@@ -185,6 +186,14 @@ export interface HostedWorkspace {
    */
   box(shellId: string): NimbusSandboxHandle;
   /**
+   * The one method a workspace host mounts for its facets, forwarded to the
+   * workspace's own dispatch. The orchestrator's mounted method delegates
+   * here, and this answers against the booted workspace — so the first facet
+   * call boots the workspace exactly like any other first touch, through the
+   * same memoized open with the same failure-clearing retry.
+   */
+  supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult>;
+  /**
    * Route a preview request whose signed hostname the edge has already
    * verified. `handle` is the capability prefix that hostname carried — the full
    * capability never leaves this object.
@@ -257,6 +266,12 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
     sql,
     transactions: deps.ctx,
     generation: nextWorkspaceGeneration(sql),
+    // What makes this object a workspace HOST rather than a bare filesystem
+    // holder: the fabric mints every facet's `env.SUPERVISOR` binding, and
+    // `ctx.exports` is adopted off `transactions` — which here IS the Durable
+    // Object's own `ctx`, the object workerd hangs `exports` on. Without both
+    // halves `git clone` refuses before it spawns anything.
+    fabric: HOST_FABRIC_COMPOSITION,
   });
 
   // One registry per isolate, exactly as a session has one: a port is a live
@@ -279,8 +294,12 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // both are real here.
         const { registerGitCommands } = await nimbusProgrammatic();
         registerGitCommands(session.registry, session.vfs, deps.ctx, deps.env);
-        // 2026-09-03: the heavy git/npm commands exhausted this isolate's memory (exceededMemory on kinu_OrchestratorAgent), so refuse them here and run them in the container instead.
-        await guardHostedShell(session.registry);
+        // The guard that used to refuse the network `git` subcommands and the
+        // fetching `npm` subcommands here is gone. `git clone` and friends now
+        // reach their dynamic-worker facets through the composed fabric, and
+        // `npm install` streams in process — one tarball entry at a time,
+        // never a buffered whole — so neither exhausts this isolate the way
+        // the guard's refusal claimed they would.
         return programmaticHost(session, portRegistry, deps);
       } catch (cause) {
         // Same rule as the bundle's `booting` and `planes`: this host lives for
@@ -299,6 +318,9 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
 
   return {
     bundle,
+    async supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult> {
+      return (await bundle.session()).supervisorOp(envelope);
+    },
     box(shellId) {
       const held = boxes.get(shellId);
       if (held) return held;

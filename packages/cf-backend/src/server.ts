@@ -119,13 +119,16 @@ export { ControlPlaneDO } from "./control-plane/control-plane-do";
 // the >= 2025-11-17 threshold by 14 days (Nimbus's inline "2026-04-01+" comments
 // are its dogfood's date, not the real bound).
 //
-// They are retained because Nimbus's npm client and git-network subcommands
-// reach them: SupervisorRPC is the trap, since loader-pool.js guards
-// `if (ctxExports?.SupervisorRPC)` and skips wiring env.SUPERVISOR, so a facet
-// gets undefined and npm/git break later with unrelated errors. The six shims at
-// least throw by name. Measured 2026-08-18 the whole surface was 10.70 KiB gzip;
-// the ~1,369 KiB that dominated it was the NimbusSession subgraph, and dropping
-// the class drops most of that with it.
+// SupervisorRPC is the load-bearing one: every hosted workspace's facets reach
+// their host through it. The fabric mints each facet's `env.SUPERVISOR` binding
+// from `ctxExports.SupervisorRPC` (adopted off the orchestrator's own `ctx` at
+// workspace boot), and the entrypoint resolves the hosting object through the
+// composed `OrchestratorAgent` namespace onto its mounted `supervisorOp`. Drop
+// this export and `git clone` refuses before it spawns anything — the failure
+// this composition exists to close. The six shims at least throw by name.
+// Measured 2026-08-18 the whole surface was 10.70 KiB gzip; the ~1,369 KiB that
+// dominated it was the NimbusSession subgraph, and dropping the class drops
+// most of that with it.
 export {
   SupervisorRPC,
   NimbusAssetsRPC,
