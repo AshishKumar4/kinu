@@ -276,7 +276,7 @@ import {
   type PromptCacheStrategy,
 } from "@kinu.run/core";
 import type { CodemodeProvider, DeferredApprovalChannel } from "@kinu.run/core";
-import { diagnostics, KinuError, toKinuError, tolerate } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, toKinuError, tolerate, type ErrorCode } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserCaller } from "./user/workspace-capability";
 import { sha256Hex } from "./lib/crypto";
@@ -664,6 +664,11 @@ export type SteerTurnLanding = 'mid-turn' | 'queued';
  * agent's working directory out from under its next command.
  */
 const NODE_HOME_SHELL_ID = 'hosted-node-home';
+
+/** The failure classes under which a turn runs on builtins alone because the
+ *  owner's MCP catalog could not be reached or finished: a hop that failed, timed
+ *  out or broke mid-read. Every other class is the turn's own fault. */
+const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable', 'timeout', 'io']);
 
 export abstract class ActorAgent extends Think<Env> {
   // ── The actor profile — what a concrete actor class supplies ─────────
@@ -5475,14 +5480,18 @@ export abstract class ActorAgent extends Think<Env> {
       this.logActivity('mcp_tools_served', `${Object.keys(tools).length} tools`);
       return tools;
     } catch (err) {
-      // An unreadable catalog is not an unconfigured one. The turn proceeds on
-      // builtins alone, the failure is recorded whole, and the surface state
-      // records what this turn will actually advertise: none of it, by name.
-      diagnostics.failure('mcp.tool_surface_failed', toKinuError({
+      const failure = toKinuError({
         doing: 'building the user MCP tool adapters for this turn',
         cause: err,
         otherwise: 'unavailable',
-      }));
+      });
+      // Only a catalog the turn could not REACH or FINISH reading is tolerated:
+      // the turn proceeds on builtins alone, the failure is recorded whole, and
+      // the surface state records what this turn will actually advertise —
+      // none of it, by name. A denied caller, a bad descriptor or a cancelled
+      // turn is a fault of this turn, and builtins-only would paper over it.
+      if (!MCP_CATALOG_READ_FAILURES.has(failure.code)) throw failure;
+      diagnostics.failure('mcp.tool_surface_failed', failure);
       this._mcpUnavailable = [{
         source: 'MCP catalog',
         reason: 'The descriptor read failed. No MCP tool is available for this turn.',

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { KinuError } from '@kinu.run/core/obs';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { memberBody, toolExecute } from '@kinu.run/test-utils';
@@ -104,6 +105,37 @@ describe('turn-pipeline correctness wiring', () => {
     });
 
     expect(config?.system ?? '').toContain('You are Atlas. Preserve the owner\'s exact requirements.');
+  });
+
+  test('a catalog the turn cannot reach runs on builtins; any other failure is the turn\'s own', async () => {
+    // The MCP descriptor read is one owner-plane hop. A hop that fails, times
+    // out or breaks mid-read is tolerated: the turn runs on builtins and the
+    // surface says the catalog is unavailable. A denied caller is not a read
+    // failure, and a turn that swallowed it would advertise "no MCP" for a
+    // fault that needs fixing. The class decides, never the mere presence of
+    // a catch.
+    const turn = {
+      system: 'sys',
+      messages: [{ role: 'user' as const, content: 'hello' }],
+      tools: {} satisfies ToolSet,
+      model: 'harness-model',
+      continuation: false,
+      body: {},
+    };
+    const unreachable = orchestratorHarness({
+      warmConnections: [], failWarm: null, titles: [],
+      failDescriptors: new Error('socket hang up'),
+    });
+    unreachable.agent.setObservedSoul('You are Vesta. Answer on the tools you hold.');
+    const config = await unreachable.agent.beforeTurn(turn);
+    expect(config?.system ?? '').toContain('You are Vesta. Answer on the tools you hold.');
+
+    const denied = orchestratorHarness({
+      warmConnections: [], failWarm: null, titles: [],
+      failDescriptors: new KinuError('denied', 'the caller holds no capability'),
+    });
+    await expect(denied.agent.beforeTurn(turn))
+      .rejects.toThrow('building the user MCP tool adapters for this turn');
   });
 
   test('client RPC policy runs before SDK dispatch and defaults to allow', () => {

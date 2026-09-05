@@ -793,6 +793,11 @@ export interface RecordedUserPlaneCalls {
   /** Set to make `userMcp_warmConnections` reject, the way an unreachable
    *  third-party server makes it. */
   failWarm: Error | null;
+  /** Set to make the turn's `userMcp_toolDescriptors` read reject with exactly
+   *  this error, so a suite can drive the failure CLASS the turn tolerates and
+   *  the class it must not. Unset, the read is unreachable like every other
+   *  undeclared owner-plane member. */
+  failDescriptors?: Error;
   /** The owner profile `getProfile` answers with. Null is a claimed workspace
    *  whose owner carries no verified address, which the email trust gate
    *  refuses on — a different refusal from an unauthorized sender. */
@@ -872,6 +877,10 @@ function makeEnv(
             userPlane?.warmConnections.push(caller);
             if (userPlane?.failWarm) throw userPlane.failWarm;
             return { servers: 1 };
+          },
+          userMcp_toolDescriptors: async (): Promise<never> => {
+            throw userPlane?.failDescriptors
+              ?? new Error('harness UserDO: userMcp_toolDescriptors is not reachable under bun');
           },
           getProfile: async (): Promise<{ email: string } | null> => userPlane?.profile ?? null,
           // An EMPTY board, which is the honest answer for a workspace no test
