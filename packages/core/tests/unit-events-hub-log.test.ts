@@ -17,7 +17,7 @@ const DEFAULT_PAGE = boundEventQuery().limit;
 const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).limit;
 
 import type { JsonValue } from '../src/utils/json';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { createRecordingLogger, setDiagnosticsSink, KinuError } from '../src/obs/index';
 import { makeSqlExec } from './helpers';
 
 function makeSql(): SqlExec {
@@ -406,5 +406,37 @@ describe('EventLog skips corrupt payload rows', () => {
       ['event.row_unreadable', { id: bad }],
       ['event.row_unreadable', { id: bad }],
     ]);
+  });
+
+  test('an aborted decode propagates instead of reading as an empty drain', () => {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+    log.publish({ descriptor: chatDescriptor('good'), now: 1 });
+    const realParse = JSON.parse;
+    JSON.parse = function parseAbort(): never {
+      throw new KinuError('cancelled', 'injected abort');
+    };
+    try {
+      // A cancelled decode is the caller's own abort, not a corrupt payload:
+      // it must throw with its class intact, never read as "no events". (The
+      // message names the seam's `doing`; the class rides on `code`.)
+      let pendingPropagated = false;
+      try { log.pending(); } catch (error) {
+        if (!(error instanceof KinuError)) throw error;
+        expect(error.code).toBe('cancelled');
+        pendingPropagated = true;
+      }
+      expect(pendingPropagated).toBe(true);
+      let queryPropagated = false;
+      try { log.query({}); } catch (error) {
+        if (!(error instanceof KinuError)) throw error;
+        expect(error.code).toBe('cancelled');
+        queryPropagated = true;
+      }
+      expect(queryPropagated).toBe(true);
+    } finally {
+      JSON.parse = realParse;
+    }
   });
 });

@@ -174,6 +174,6 @@ describe('boundedInt is the one shape a row bound may take', () => {
   });
 
   test('an inverted range throws instead of silently answering the max', () => {
-    expect(() => boundedInt(5, 5, 10, 1)).toThrow();
+    expect(() => boundedInt(5, 5, 10, 1)).toThrow('boundedInt: min 10 exceeds max 1');
   });
 });

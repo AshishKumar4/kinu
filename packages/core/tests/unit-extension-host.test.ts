@@ -19,7 +19,7 @@ import {
   type ChatEvent,
   type Usage,
 } from '../src/index';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { createRecordingLogger, setDiagnosticsSink, KinuError } from '../src/obs/index';
 
 /** A v2 language-model stub that requests the `ping` tool on step 1, then
  *  answers with text on step 2. Captures the tool names it was handed so a test
@@ -390,6 +390,46 @@ describe('ExtensionHost', () => {
       restore();
     }
   });
+  test('an aborted or out-of-memory hook propagates instead of reading as silent', async () => {
+    const aborted = new ExtensionHost().register({
+      name: 'aborted',
+      onTurnStart: () => { throw new KinuError('cancelled', 'injected abort'); },
+    });
+    // The caller's own abort is not the plugin's failure: it must propagate
+    // with its class intact, never read as a silent skip. (The message names
+    // the seam's `doing`; the class rides on `code`, the detail on `cause`.)
+    let abortPropagated = false;
+    try {
+      await aborted.emitTurnStart({ system: 's', history: [] });
+    } catch (error) {
+      if (!(error instanceof KinuError)) throw error;
+      expect(error.code).toBe('cancelled');
+      expect(error.message).toBe('run an extension onTurnStart hook');
+      abortPropagated = true;
+    }
+    expect(abortPropagated).toBe(true);
+    const starved = new ExtensionHost().register({
+      name: 'starved',
+      onTurnStart: () => { throw new KinuError('oom', 'injected oom'); },
+    });
+    let oomPropagated = false;
+    try {
+      await starved.emitTurnStart({ system: 's', history: [] });
+    } catch (error) {
+      if (!(error instanceof KinuError)) throw error;
+      expect(error.code).toBe('oom');
+      oomPropagated = true;
+    }
+    expect(oomPropagated).toBe(true);
+    // A plain Error stays fail-open: an unclassified plugin failure is the
+    // plugin's fault, and the turn continues past it.
+    const clumsy = new ExtensionHost().register({
+      name: 'clumsy',
+      onTurnStart: () => { throw new Error('clumsy exploded'); },
+    });
+    await expect(clumsy.emitTurnStart({ system: 's', history: [] })).resolves.toBeUndefined();
+  });
+
 
   test('runTransformContext is awaited, chained, and fail-open', async () => {
     const seen: string[][] = [];

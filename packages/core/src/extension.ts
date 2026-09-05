@@ -203,7 +203,9 @@ export class ExtensionHost {
 
   /** Run one extension hook fail-open — a plugin must never break a turn. A
    *  throwing hook is recorded (which extension, which hook) and skipped, and
-   *  the caller sees `undefined` as if the hook had stayed silent. */
+   *  the caller sees `undefined` as if the hook had stayed silent — except the
+   *  caller's own abort and an out-of-memory kill, which are not the plugin's
+   *  and propagate instead of reading as a silent skip. */
   private async guardHook<T>(
     hook: string,
     extension: string,
@@ -212,11 +214,13 @@ export class ExtensionHost {
     try {
       return await run();
     } catch (err) {
-      diagnostics.failure(
-        'extension.hook_failed',
-        toKinuError({ doing: `run an extension ${hook} hook`, cause: err, otherwise: 'io' }),
-        { extension, hook },
-      );
+      const failure = toKinuError({ doing: `run an extension ${hook} hook`, cause: err, otherwise: 'io' });
+      // Every plugin failure is tolerated EXCEPT a cancelled turn and an oom:
+      // neither is the plugin's fault, and swallowing the turn's own abort
+      // (or a memory kill) as a silent skip would paper over it. A plain
+      // Error classifies as io and stays fail-open.
+      if (failure.code === 'cancelled' || failure.code === 'oom') throw failure;
+      diagnostics.failure('extension.hook_failed', failure, { extension, hook });
       return undefined;
     }
   }

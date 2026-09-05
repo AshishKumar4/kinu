@@ -288,7 +288,11 @@ describe('the JSON boundary refuses what JSON cannot carry', () => {
   test('decodeJsonValue rejects non-finite numbers', () => {
     // A tool result of Infinity would otherwise store as Infinity and
     // serialize as null — a silent corruption of what the call returned.
-    expect(() => decodeJsonValue({ value: Number.POSITIVE_INFINITY })).toThrow();
-    expect(() => decodeJsonValue({ value: Number.NaN })).toThrow();
+    expect(() => decodeJsonValue({ value: Number.POSITIVE_INFINITY })).toThrow(
+      'Invalid finite: Received Infinity',
+    );
+    expect(() => decodeJsonValue({ value: Number.NaN })).toThrow(
+      'Invalid type: Expected (string | number | boolean | null | Array | Object) but received NaN',
+    );
   });
 });

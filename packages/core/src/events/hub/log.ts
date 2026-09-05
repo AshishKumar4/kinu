@@ -820,11 +820,13 @@ function tryRowToEvent(row: v.InferOutput<typeof EventRowSchema>): KinuEvent | n
   try {
     return rowToEvent(row);
   } catch (err) {
-    diagnostics.failure(
-      'event.row_unreadable',
-      toKinuError({ doing: 'decode an event row', cause: err, otherwise: 'bad_input' }),
-      { id: row.id },
-    );
+    const failure = toKinuError({ doing: 'decode an event row', cause: err, otherwise: 'bad_input' });
+    // Only a corrupt payload is tolerated: it is the one value the caller
+    // treats as skip (flatMap null → []), so one bad row cannot wedge the
+    // drain behind it. Any other class — a cancelled drain, a denied read,
+    // an oom — is this read's own fault and propagates.
+    if (failure.code !== 'bad_input') throw failure;
+    diagnostics.failure('event.row_unreadable', failure, { id: row.id });
     return null;
   }
 }
