@@ -421,6 +421,46 @@ index caf113f6bebd3884e4b95e3cdbc3be5279b986de..4b554fbb827239ed168ef9e1c755aedc
              case 'uninstall':
              case 'remove':
              case 'rm':
+diff --git a/dist/vfs/sqlite-vfs.js b/dist/vfs/sqlite-vfs.js
+index 26d4cb755b4d6c0509bebf44b942df9c68708a8b..c8eb2eb5135f08cd9541724a8a601ae4f920965d 100644
+--- a/dist/vfs/sqlite-vfs.js
++++ b/dist/vfs/sqlite-vfs.js
+@@ -2507,7 +2507,15 @@ export class SqliteVFS {
+     }
+     rename(oldPath, newPath, cred) {
+         this.assertMutationsAllowed([oldPath, newPath]);
+-        this.checkAccess(oldPath, 0, cred, { followLeaf: false });
++        // Both names resolve to storage keys before any read or write: a confined
++        // principal names its private `/tmp` root by the shared spelling.
++        const source = this.checkAccess(oldPath, 0, cred, { followLeaf: false });
++        const inode = source.inode;
++        if (!inode)
++            throw vfsError('ENOENT', oldPath);
++        const target = this.checkAccess(newPath, 0, cred, { followLeaf: false, allowMissingLeaf: true });
++        oldPath = source.path;
++        newPath = target.path;
+         this.checkParentAccess(oldPath, cred);
+         this.checkParentAccess(newPath, cred);
+         if (oldPath === newPath)
+@@ -2515,9 +2523,6 @@ export class SqliteVFS {
+         if (newPath.startsWith(`${oldPath}/`)) {
+             throw new Error(`EINVAL: cannot move ${oldPath} inside itself`);
+         }
+-        const inode = this.inodes.get(oldPath);
+-        if (!inode)
+-            throw new Error("ENOENT: " + oldPath);
+         this.checkStickyParentMutation(oldPath, inode, cred);
+         // W-3 (WASI filesystem WASI): if newPath already exists, unlink it first so the
+         // SQL UPDATE doesn't conflict on inodes.path uniqueness. POSIX rename(2)
+@@ -2526,7 +2531,7 @@ export class SqliteVFS {
+         // a 2nd `make` after a prior successful build throws on UPDATE
+         // failure. Pre-unlink covers both file-over-file and file-over-dir
+         // (the latter is rare but POSIX permits it for empty dirs).
+-        const destInode = this.inodes.get(newPath);
++        const destInode = target.inode;
+         if (destInode) {
+             this.checkStickyParentMutation(newPath, destInode, cred);
+             if (destInode.isDir) {
 diff --git a/dist/workspace/nimbus-workspace.d.ts b/dist/workspace/nimbus-workspace.d.ts
 index 818b4118eebcf2a6d9266affd6e32966a299e8b7..837cefd25752fc46c9d007760a285f6f39ee80bb 100644
 --- a/dist/workspace/nimbus-workspace.d.ts
@@ -1323,6 +1363,43 @@ index ead37adb8906f1e66cb300f31db5394f481179a3..5117de7816bd31070a21e9c7a0e875ab
  			case 'uninstall':
  			case 'remove':
  			case 'rm':
+diff --git a/src/vfs/sqlite-vfs.ts b/src/vfs/sqlite-vfs.ts
+index cd3b184280b5093ec2a519db46fb1222c80217bd..b36fd440e4309700609191ec5d9225766383b19f 100644
+--- a/src/vfs/sqlite-vfs.ts
++++ b/src/vfs/sqlite-vfs.ts
+@@ -3199,15 +3199,20 @@ export class SqliteVFS {
+ 
+   private rename(oldPath: string, newPath: string, cred: VfsCred): void {
+     this.assertMutationsAllowed([oldPath, newPath]);
+-    this.checkAccess(oldPath, 0, cred, { followLeaf: false });
++    // Both names resolve to storage keys before any read or write: a confined
++    // principal names its private `/tmp` root by the shared spelling.
++    const source = this.checkAccess(oldPath, 0, cred, { followLeaf: false });
++    const inode = source.inode;
++    if (!inode) throw vfsError('ENOENT', oldPath);
++    const target = this.checkAccess(newPath, 0, cred, { followLeaf: false, allowMissingLeaf: true });
++    oldPath = source.path;
++    newPath = target.path;
+     this.checkParentAccess(oldPath, cred);
+     this.checkParentAccess(newPath, cred);
+     if (oldPath === newPath) return;
+     if (newPath.startsWith(`${oldPath}/`)) {
+       throw new Error(`EINVAL: cannot move ${oldPath} inside itself`);
+     }
+-    const inode = this.inodes.get(oldPath);
+-    if (!inode) throw new Error("ENOENT: " + oldPath);
+     this.checkStickyParentMutation(oldPath, inode, cred);
+ 
+     // W-3 (WASI filesystem WASI): if newPath already exists, unlink it first so the
+@@ -3217,7 +3222,7 @@ export class SqliteVFS {
+     // a 2nd `make` after a prior successful build throws on UPDATE
+     // failure. Pre-unlink covers both file-over-file and file-over-dir
+     // (the latter is rare but POSIX permits it for empty dirs).
+-    const destInode = this.inodes.get(newPath);
++    const destInode = target.inode;
+     if (destInode) {
+       this.checkStickyParentMutation(newPath, destInode, cred);
+       if (destInode.isDir) {
 diff --git a/src/workspace/nimbus-workspace.ts b/src/workspace/nimbus-workspace.ts
 index 6d018c0df83d753085be093d402ae164f793fa6d..b8a7856471fc1b9c477c6264d2518c2b9157af23 100644
 --- a/src/workspace/nimbus-workspace.ts

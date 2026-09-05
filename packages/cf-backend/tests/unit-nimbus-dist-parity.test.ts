@@ -84,6 +84,13 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
   expect(seen).toContain('tmp/note.txt');
   expect(seen.some((p: string) => p.includes('agent-b'))).toBe(false);
 
+  // rename resolves both names through the private root
+  vfs.as(A).rename('/tmp/note.txt', '/tmp/moved.txt');
+  expect(vfs.as(A).readFileString('/tmp/moved.txt')).toBe('A bytes');
+  expect(vfs.as(B).readFileString('/tmp/note.txt')).toBe('B bytes');
+  expect([...sql.exec("SELECT path FROM inodes WHERE path LIKE 'tmp/agent-a/%'")].map((row) => String(row.path)))
+    .toEqual(['tmp/agent-a/moved.txt']);
+
   // confined chmod: owner triad moves, widening refused, nothing clamped
   root.mkdir('home/agent-a', { recursive: true });
   root.chown('home/agent-a', A.uid, A.gid);

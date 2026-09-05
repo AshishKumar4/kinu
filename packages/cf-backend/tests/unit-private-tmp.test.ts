@@ -238,6 +238,25 @@ describe('per-credential /tmp holds on both surfaces', () => {
     expect(f.storageKeys()).toContain('tmp/keep.txt');
   });
 
+  test('a rename stays inside the private tree, on both planes', async () => {
+    const f = await openFixture();
+    f.confine(AGENT_A, 'agent-a');
+    const pidA = f.pidFor(AGENT_A);
+    await _rpcWriteFile(f.host, '/tmp/draft.txt', 'first', pidA);
+    await _rpcWriteFile(f.host, '/tmp/final.txt', 'old', pidA);
+
+    // The file plane replaces atomically: write beside, rename over.
+    f.workspace.vfs.as(AGENT_A).rename('/tmp/draft.txt', '/tmp/final.txt');
+    expect(await _rpcReadFile(f.host, '/tmp/final.txt', pidA)).toBe('first');
+    expect(f.storageKeys()).toEqual(['tmp', 'tmp/agent-a', 'tmp/agent-a/final.txt']);
+
+    // The shell resolves the same rewrite.
+    expect(await rpcExec(f.host, 'mv /tmp/final.txt /tmp/moved.txt', { cred: AGENT_A }))
+      .toMatchObject({ exitCode: 0 });
+    expect(await _rpcReadFile(f.host, '/tmp/moved.txt', pidA)).toBe('first');
+    expect(f.storageKeys()).toEqual(['tmp', 'tmp/agent-a', 'tmp/agent-a/moved.txt']);
+  });
+
   test('releasing a principal detaches its scratch — /tmp dies with the node', async () => {
     const f = await openFixture();
     f.confine(AGENT_A, 'agent-a');
