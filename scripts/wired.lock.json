@@ -486,6 +486,7 @@
   "packages/core/src/vfs/diff.ts#computeWorkspaceDiff (unreached-export)",
   "packages/core/src/vfs/errno.ts#VfsError (unreached-export)",
   "packages/core/src/vfs/observe.ts#WriteEvent.before (unsupplied-field)",
+  "packages/core/src/vfs/workspace-runtimes.ts#wireWorkspaceLoopback (unreached-export)",
   "packages/core/src/views/spec.ts#VIEW_SPEC_VERSION (unreached-export)",
   "packages/core/src/views/store.ts#listViewVersions (unreached-export)",
   "packages/core/src/web/provider.ts#DefaultWebSearchProviderDeps.htmlToMarkdown (unsupplied-field)",
