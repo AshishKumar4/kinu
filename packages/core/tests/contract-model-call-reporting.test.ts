@@ -64,11 +64,12 @@ const EXEMPT = {
   // window that only means something over one prompt lineage.
   'packages/core/src/chat.ts':
     'the turn loop reports through step_finish, which the total reads as `agent`',
-  // A child PROCESS. Its usage is normalized and shipped back over IPC, and
-  // `mcts/engine.ts` — its one consumer, in the parent, where the event log is —
-  // reports it. The worker has no run-event log to write to.
-  'packages/cli-backend/src/branch-worker.ts':
-    'usage travels back over IPC and is reported by mcts/engine.ts in the parent',
+  // The toolless rollout runs where the search runs: in the CLI's branch worker
+  // process, which ships the usage back over IPC, and inline on the hosted
+  // backend. Neither site holds the run-event log; `mcts/engine.ts`, the one
+  // consumer, reports what comes back.
+  'packages/core/src/mcts/rollout.ts':
+    'the one toolless rollout for every substrate returns its usage to the caller; mcts/engine.ts reports it over reportModelCall on both backends (CLI over IPC from the branch worker, hosted inline)',
   // Runs in the CLI process BEFORE the workspace exists: `home-app.tsx:176`
   // suggests the identity, `:177` then creates the agent, so at the moment of
   // this call there is no database and no run-event log to attribute it to. Not

@@ -453,6 +453,16 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: { absent: 'lives in each local subordinate actor-state database, not the root workspace database' },
     },
+    // One uid/gid row per facet home, on the root that provisions the homes:
+    // `facetHomeProvisioner` creates the table on the first provision, and the
+    // workspace that owns the file plane is the only root that provisions
+    // (orchestrator.ts provisionFacetHome; the CLI runtime's nodeRuntime). A
+    // subordinate asks its owner for a home and holds no uid rows of its own.
+    kinu_agent_identity: {
+      'cf-orchestrator': LAZY_ON_FIRST_USE('facetHomeProvisioner'),
+      'cf-subordinate': { absent: 'the owning workspace provisions every facet home and keeps the uid rows' },
+      cli: LAZY_ON_FIRST_USE('facetHomeProvisioner'),
+    },
     // The webhook gate — auth, replay window, rate limit — is core's, and the
     // cloud orchestrator provisions its tables at boot. A local workspace has
     // no inbound HTTP transport in front of it: it mints no URL, `kinu triggers
