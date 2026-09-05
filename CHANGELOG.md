@@ -554,6 +554,21 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   sentence that survives, `the daemon reported no reason`, now appears only
   when the daemon said nothing.
 
+- **A conversation can move to another Workers AI model after a tool call.**
+  Replaying a history that holds a completed tool call through the direct
+  Workers AI binding was refused whole: the AI SDK spells an assistant turn
+  that only called tools as `content: null` beside its `tool_calls`, which
+  OpenAI accepts, and the binding's validator answered AiError 5006 "Type
+  mismatch of '/messages/1/content', 'string' not in 'null'" — on
+  `@cf/qwen/qwen3-30b-a3b-fp8` and `@cf/openai/gpt-oss-20b` alike. So a
+  development or staging workspace that switched model, or resolved a
+  different one for a role, lost every turn after its first tool call. The
+  adapter now writes that turn's content as the empty string, the same
+  message in the spelling the binding admits, with its tool calls and
+  reasoning intact; a text-part array, which the binding accepts, still
+  travels as it is. Proved on staging: GPT-OSS-20b answered a tool call, and
+  the same history replayed to Qwen3-30b produced the sum.
+
 - **An idle overlay-cas box no longer rewrites its whole scan cache every
   interval.** The runner wrote `scan.json` whenever staging took fewer entries
   than the scan measured, as a stand-in for "some cached row is now stale". That

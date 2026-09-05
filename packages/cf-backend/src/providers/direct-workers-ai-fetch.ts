@@ -49,10 +49,18 @@ import * as v from 'valibot';
 import { errorResponse } from './cloudflare-ai-fetch';
 import { createCachedUsageRepair } from './stream-usage-repair';
 
+/** The route this adapter reads off a chat-completions request: the model the
+ *  binding takes as its own argument, whether the caller asked to stream, and
+ *  the transcript, typed here so {@link bindingInputs} can rewrite one spelling
+ *  in it without re-establishing what a message is. Everything else travels
+ *  through untouched. */
 const ChatCompletionRequestSchema = v.looseObject({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
   stream: v.optional(v.boolean(), false),
+  messages: v.optional(v.array(JsonObjectSchema)),
 });
+
+type ChatCompletionRequest = v.InferOutput<typeof ChatCompletionRequestSchema>;
 
 /** A native text-generation payload: one whole answer when the request was not
  *  streamed, one delta when it was. `response` and `tool_calls` are nullable
@@ -126,7 +134,7 @@ export function createDirectWorkersAIFetch(binding: Ai): typeof globalThis.fetch
     const startedAt = Date.now();
     let answer: Response | ReadableStream<Uint8Array> | JsonObject;
     try {
-      answer = await runner.run(route.model, bindingInputs(body, route.stream), options);
+      answer = await runner.run(route.model, bindingInputs(body, route), options);
     } catch (caught) {
       const failure = toKinuError({
         doing: `Workers AI binding inference for ${route.model}`,
@@ -148,7 +156,7 @@ export function createDirectWorkersAIFetch(binding: Ai): typeof globalThis.fetch
 /** The binding takes the model separately and the rest of the OpenAI body as
  *  its inputs.
  *
- *  The replayed transcript inside `messages` travels verbatim, tool-call ids
+ *  The replayed transcript inside `messages` travels as it came, tool-call ids
  *  included. Their one requirement here is EQUALITY between an assistant
  *  message's `tool_calls[].id` and the `tool_call_id` of the `tool` message
  *  answering it, which is what the upstream pairs on, and forwarding preserves
@@ -158,10 +166,25 @@ export function createDirectWorkersAIFetch(binding: Ai): typeof globalThis.fetch
  *  pair that currently matches. Nothing between here and the wire re-encodes
  *  the string either — the body is serialized as JSON, which carries any id
  *  losslessly. Minting is where the id has to be made unique and portable
- *  ({@link toolCallIdFor}), and that happens on the way out. */
-function bindingInputs(body: JsonObject, stream: boolean): JsonObject {
-  const inputs: JsonObject = { ...body, stream };
+ *  ({@link toolCallIdFor}), and that happens on the way out.
+ *
+ *  One spelling is rewritten. The binding validates `messages[].content` as a
+ *  string or an array of text parts — the "Messages" branch of every text
+ *  model's input schema — and an OpenAI chat request writes `null` there for
+ *  an assistant turn that only called tools: `@ai-sdk/openai-compatible` emits
+ *  `content: text || null` beside `tool_calls`, and OpenAI's own endpoint
+ *  accepts it. The binding refuses the whole request instead, AiError 5006
+ *  "Type mismatch of '/messages/1/content', 'string' not in 'null'", the same
+ *  on @cf/qwen/qwen3-30b-a3b-fp8 and @cf/openai/gpt-oss-20b (staging,
+ *  2026-09-05), so every replay of a tool-calling turn over this binding was
+ *  refused. `null` and `''` both say the turn carried no text; the empty string
+ *  is that message in the spelling the schema admits, with its `tool_calls`
+ *  and `reasoning_content` untouched. Text-part arrays are accepted as they
+ *  are and stay as they are. */
+function bindingInputs(body: JsonObject, route: ChatCompletionRequest): JsonObject {
+  const inputs: JsonObject = { ...body, stream: route.stream };
   delete inputs.model;
+  if (route.messages) inputs.messages = route.messages.map(withoutNullContent);
   // @ai-sdk/openai-compatible asks for stream usage only when its `includeUsage`
   // config is set, and workers-ai.ts does not set it. This adapter used to read
   // usage off a buffered completion, which always carries it; a real stream
@@ -169,10 +192,14 @@ function bindingInputs(body: JsonObject, stream: boolean): JsonObject {
   // tokens at all. `stream_options.include_usage` is declared on the
   // chat-completions input the binding accepts (@cloudflare/workers-types
   // `ChatCompletionsStreamOptions`), and a caller that states its own keeps it.
-  if (stream && inputs.stream_options === undefined) {
+  if (route.stream && inputs.stream_options === undefined) {
     inputs.stream_options = { include_usage: true };
   }
   return inputs;
+}
+
+function withoutNullContent(message: JsonObject): JsonObject {
+  return message.content === null ? { ...message, content: '' } : message;
 }
 
 /** A request that asked for a whole completion. */

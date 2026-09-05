@@ -13,7 +13,7 @@
 //   * a model that will not stream is refused by name instead of being served
 //     from a buffer, which is the failure the buffering hid.
 import { describe, test, expect, afterEach } from 'bun:test';
-import { streamText, tool, jsonSchema } from 'ai';
+import { generateText, streamText, tool, jsonSchema, type ModelMessage } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink, type RecordingLogger } from '@kinu.run/core/obs';
@@ -903,5 +903,56 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
     // second step's result would answer the first step's call.
     expect(answered.size).toBe(2);
     expect([...answered.values()]).toEqual(commands);
+  });
+
+  test('a replayed assistant turn that only called tools reaches the binding with string content', async () => {
+    // KINU-085, the wire half. An OpenAI chat request spells that turn as
+    // `content: null` beside `tool_calls` and OpenAI's endpoint takes it; the
+    // binding's validator refuses the whole request instead — AiError 5006,
+    // "Type mismatch of '/messages/1/content', 'string' not in 'null'" — on
+    // @cf/qwen/qwen3-30b-a3b-fp8 and @cf/openai/gpt-oss-20b alike (staging,
+    // 2026-09-05), so every replay of a tool-calling turn was refused. The
+    // empty string is the same message in the spelling the schema admits.
+    const { fetch: direct, runs } = directFetch(() => ({ response: '999' }));
+    const model = createOpenAICompatible({
+      name: 'workers-ai',
+      baseURL: 'https://kinu-direct-workers-ai.invalid',
+      fetch: direct,
+    }).chatModel(MODEL);
+    const tools = {
+      add: tool({
+        description: 'Add two integers.',
+        inputSchema: jsonSchema<{ a: number; b: number }>({
+          type: 'object', required: ['a', 'b'], properties: { a: { type: 'number' }, b: { type: 'number' } },
+        }),
+      }),
+    };
+    const history: ModelMessage[] = [
+      { role: 'user', content: 'Call add for 142 and 857, then give the sum.' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: 'Adding them with the tool.' },
+          { type: 'tool-call', toolCallId: 'call-kinu-i-0', toolName: 'add', input: { a: 142, b: 857 } },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [{ type: 'tool-result', toolCallId: 'call-kinu-i-0', toolName: 'add', output: { type: 'json', value: 999 } }],
+      },
+      { role: 'user', content: 'Use the completed tool result. Give only the sum.' },
+    ];
+
+    const result = await generateText({ model, tools, messages: history });
+
+    expect(result.text).toBe('999');
+    const sent = v.parse(v.array(JsonObjectSchema), runs[0]?.inputs.messages);
+    expect(sent[1]).toEqual({
+      role: 'assistant',
+      content: '',
+      reasoning_content: 'Adding them with the tool.',
+      tool_calls: [{ id: 'call-kinu-i-0', type: 'function', function: { name: 'add', arguments: '{"a":142,"b":857}' } }],
+    });
+    expect(sent[2]).toEqual({ role: 'tool', tool_call_id: 'call-kinu-i-0', content: '999' });
   });
 });
