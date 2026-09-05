@@ -43,7 +43,7 @@ import {
   type GadgetMcpTool, type GadgetProblem, type GadgetRecord, type GadgetSummary, type JsonObject, type JsonValue,
   type ShellApprovalPolicy, type VFS,
 } from '@kinu.run/core';
-import { KinuError, diagnostics, refusalOf, renderThrownChain, toKinuError, tolerateAsync } from '@kinu.run/core/obs';
+import { KinuError, refusalOf, renderThrownChain, toKinuError, tolerateAsync } from '@kinu.run/core/obs';
 import { GADGET_BINDING_ENTRYPOINT, type GadgetBindingEntrypoint, type GadgetBindingProps, type GadgetBindingRequest } from './bindings';
 
 /** The runtime a gadget's isolate is pinned to. The same date the Worker
@@ -344,10 +344,4 @@ export class GadgetHost {
 
 function facetName(slug: string): string {
   return `gadget:${slug}`;
-}
-
-/** Diagnostics for a facet that failed to start or answer, named so the log
- *  is greppable across Workers Logs. */
-export function reportGadgetFailure(slug: string, cause: Error): void {
-  diagnostics.failure('gadget.call_failed', toKinuError({ doing: `gadget ${slug}`, cause, otherwise: 'io' }), { slug });
 }
