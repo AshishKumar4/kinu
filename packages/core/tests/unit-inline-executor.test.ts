@@ -13,7 +13,7 @@ import { createTestRuntime } from './helpers';
 import { createInlineExecutor } from '../src/execution/inline';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode';
-import { VIEW_DATA_SOURCES, initViewTables, listViews, readView } from '../src/views/index';
+import { GADGET_DATA_SOURCES } from '../src/gadgets/index';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
 import { TurnFileLedger } from '../src/tools/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
@@ -500,54 +500,56 @@ describe('workspace.createTool — the tool is born scorable', () => {
   });
 });
 
-// ── views ───────────────────────────────────────────────────────────────────
+// ── gadgets ─────────────────────────────────────────────────────────────────
 
-describe('workspace.createView / deleteView', () => {
-  const spec = {
-    v: 1,
-    title: 'Deploy health',
-    blocks: [{ type: 'stat', label: 'Open changes', source: { rpc: 'getReleaseBoard', path: 'changes' }, agg: 'count' }],
-  };
+describe('workspace.gadgets / workspace.gadget', () => {
+  const manifest = JSON.stringify({ v: 1, title: 'Deploy health', bindings: { WORKSPACE: { kind: 'workspace' } } });
 
-  test('publishes a view the host can list and read back', async () => {
+  test('lists what the file plane holds, problems beside the valid gadgets', async () => {
     const { rt } = createTestRuntime();
-    initViewTables(rt.storage.execRaw);
+    await rt.storage.vfs.mkdir('gadgets/health', { recursive: true });
+    await rt.storage.vfs.writeFile('gadgets/health/gadget.json', manifest);
+    await rt.storage.vfs.writeFile('gadgets/health/client.js', 'document.body.textContent = "hi"');
+    await rt.storage.vfs.mkdir('gadgets/broken', { recursive: true });
+    await rt.storage.vfs.writeFile('gadgets/broken/gadget.json', '{"v":1,"title":"Approvals"}');
     const exec = buildExec(rt);
 
-    const made = await exec.tools.createView.execute('Deploy Health', spec);
-    expect(made).toMatchObject({ ok: true, slug: 'deploy-health', version: 1, action: 'created' });
-
-    expect(listViews(rt.storage.sql).map((v) => v.title)).toEqual(['Deploy health']);
-    const read = await readView({ vfs: rt.storage.vfs, sql: rt.storage.sql }, 'deploy-health');
-    expect(read.ok).toBe(true);
+    const listed = v.parse(v.object({
+      gadgets: v.array(v.object({ slug: v.string(), title: v.string(), hasClient: v.boolean(), hasServer: v.boolean(), bindings: v.array(v.string()) })),
+      problems: v.array(v.object({ slug: v.string(), error: v.string() })),
+    }), await exec.tools.gadgets.execute());
+    expect(listed.gadgets).toEqual([{ slug: 'health', title: 'Deploy health', hasClient: true, hasServer: false, bindings: ['WORKSPACE'] }]);
+    expect(listed.problems.map((p) => p.slug)).toEqual(['broken']);
+    expect(listed.problems[0]?.error).toContain('host owns');
   });
 
-  test('refuses a spec the vocabulary does not cover, and stores nothing', async () => {
+  test('a call on a backend with no gadget host is unsupported, and a bad name is refused before it', async () => {
     const { rt } = createTestRuntime();
-    initViewTables(rt.storage.execRaw);
     const exec = buildExec(rt);
-
-    const out = v.parse(ErrorResultSchema, await exec.tools.createView.execute('evil', {
-      v: 1, title: 'Approve', blocks: [{ type: 'html', text: '<script>1</script>' }],
-    }));
-    expect(out.error).toContain('view spec invalid');
-    expect(listViews(rt.storage.sql)).toEqual([]);
+    expect(await exec.tools.gadget.execute('health', 'list')).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect(await exec.tools.gadget.execute('../x', 'list')).toMatchObject({ ok: false, reason: 'bad_input' });
+    expect(await exec.tools.gadget.execute('health', 'fetch')).toMatchObject({ ok: false, reason: 'bad_input' });
   });
 
-  test('deleting through the bridge takes the tab away', async () => {
+  test('a call reaches the host with the slug, the method and JSON arguments, and answers its value', async () => {
     const { rt } = createTestRuntime();
-    initViewTables(rt.storage.execRaw);
-    const exec = buildExec(rt);
-
-    await exec.tools.createView.execute('Deploy Health', spec);
-    expect(await exec.tools.deleteView.execute('Deploy Health')).toMatchObject({ ok: true });
-    expect(listViews(rt.storage.sql)).toEqual([]);
+    const calls: Array<[string, string, unknown[]]> = [];
+    const exec = createInlineExecutor({
+      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+      gadgetCall: async (slug, method, args) => {
+        calls.push([slug, method, args]);
+        return { ok: true, value: { added: args[0] } };
+      },
+    });
+    expect(await exec.tools.gadget.execute('todo', 'addItem', 'milk', 2)).toEqual({ ok: true, value: { added: 'milk' } });
+    expect(calls).toEqual([['todo', 'addItem', ['milk', 2]]]);
+    expect(await exec.tools.gadget.execute('todo', 'addItem', () => 1)).toMatchObject({ ok: false, reason: 'bad_input' });
   });
 
-  test('the codemode declarations name every source the schema accepts', () => {
-    // The model authors against `types`; the validator enforces VIEW_DATA_SOURCES.
-    // A source in one and not the other is a spec the model writes and we reject.
+  test('the codemode declarations name every read model a workspace binding may read', () => {
+    // The model authors against `types`; the binding enforces GADGET_DATA_SOURCES.
     const exec = buildExec(createTestRuntime().rt);
-    for (const source of VIEW_DATA_SOURCES) expect(exec.types).toContain(`'${source}'`);
+    for (const source of GADGET_DATA_SOURCES) expect(exec.types).toContain(source);
   });
 });

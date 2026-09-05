@@ -25,8 +25,9 @@
 
 import type {
   NimbusExecOptions, NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult,
-  JsonValue,
+  JsonValue, GadgetCallResult,
 } from '@kinu.run/core';
+import type { GadgetBindingRequest } from './gadgets/bindings';
 
 type BoxFiles = NimbusSandboxHandle['files'];
 type BoxPorts = NonNullable<NimbusSandboxHandle['ports']>;
@@ -115,21 +116,37 @@ export interface WorkspaceBoxRpc {
   ): Promise<WorkspaceBoxResults[Op['op']]>;
 }
 
+/**
+ * Every method a caller in this Worker reaches on the object that owns a
+ * workspace, as one named owner contract: the file-plane op a facet makes,
+ * and the two gadget calls a binding entrypoint or a facet actor makes.
+ * Declared here, beside the narrowing that hands it out, so the concrete
+ * type is constructed once and each caller takes the slice it needs.
+ */
+export interface WorkspaceOwnerRpc extends WorkspaceBoxRpc {
+  gadgetCall(slug: string, method: string, args: JsonValue[]): Promise<GadgetCallResult>;
+  gadgetBindingCall(slug: string, name: string, request: GadgetBindingRequest): Promise<GadgetCallResult>;
+}
+
 interface WorkspaceOwnerNamespace {
   idFromName(name: string): DurableObjectId;
-  get(id: DurableObjectId): WorkspaceBoxRpc;
+  get(id: DurableObjectId): WorkspaceOwnerRpc;
 }
 
 /**
- * The object that owns one workspace's bytes, as the one method a facet needs.
+ * The object that owns one workspace's bytes, as the methods a caller in this
+ * Worker needs of it.
  *
  * Narrowed the way `userDOStubFor` narrows the UserDO binding, and for the same
  * reason: instantiating `DurableObjectStub<OrchestratorAgent>` here makes the
  * SDK's mapped stub type walk that class's entire RPC surface, which TypeScript
  * gives up on ("type instantiation is excessively deep"). The narrow view also
- * says what a facet may reach, which is exactly this.
+ * says what a caller may reach, which is exactly this.
  */
-export function workspaceBoxOwner(env: Env, workspaceName: string): WorkspaceBoxRpc {
+export function workspaceOwner(
+  env: { OrchestratorAgent: Pick<DurableObjectNamespace, 'idFromName' | 'get'> },
+  workspaceName: string,
+): WorkspaceOwnerRpc {
   const view: Partial<WorkspaceOwnerNamespace> = {};
   Object.assign(view, {
     idFromName: (name: string) => env.OrchestratorAgent.idFromName(name),
@@ -139,9 +156,18 @@ export function workspaceBoxOwner(env: Env, workspaceName: string): WorkspaceBox
   // WorkspaceOwnerNamespace declares, and orchestrator.ts declares
   // `workspaceBoxOp` delegating to `applyWorkspaceBoxOp` — whose switch answers
   // every op with the `WorkspaceBoxResults` member keyed by that op's own name,
-  // the correspondence the interface's generic promises.
+  // the correspondence the interface's generic promises — and `gadgetCall` and
+  // `gadgetBindingCall` with these signatures, delegating to `GadgetHost`.
   const namespace = view as WorkspaceOwnerNamespace;
   return namespace.get(namespace.idFromName(workspaceName));
+}
+
+/** The one method a facet needs of the object that owns its workspace. */
+export function workspaceBoxOwner(
+  env: { OrchestratorAgent: Pick<DurableObjectNamespace, 'idFromName' | 'get'> },
+  workspaceName: string,
+): WorkspaceBoxRpc {
+  return workspaceOwner(env, workspaceName);
 }
 
 /**

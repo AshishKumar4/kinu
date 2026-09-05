@@ -19,7 +19,6 @@ import type { FactsStore } from '../memory/facts';
 import { listScaffoldArchive } from '../scaffold/archive';
 import { getPendingScaffold, applyPromotionDecision } from '../scaffold/shadow';
 import { rollbackScaffold } from '../scaffold/rollback';
-import { revertView } from '../views/store';
 import { listGepaRuns } from './gepa/persistence';
 import {
   applyPromptSectionDecision, getPendingPromptSection,
@@ -45,12 +44,11 @@ const ScaffoldRunEventSchema = v.object({
 });
 
 export type ChangelogEntryKind =
-  'scaffold' | 'tool' | 'view' | 'fact' | 'gepa' | 'replay' | 'outcomes' | 'prompt_section'
+  'scaffold' | 'tool' | 'fact' | 'gepa' | 'replay' | 'outcomes' | 'prompt_section'
   | 'refinement';
 
 export type ChangelogRevertAction =
   | { type: 'scaffold_rollback'; target: string }
-  | { type: 'view_revert'; target: string }
   | { type: 'fact_forget'; target: string }
   | { type: 'fact_forget_many'; targets: string[] }
   /** `<sectionId>:<version>` — a section's versions are numbered per section,
@@ -185,32 +183,6 @@ function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
       summary: `${verb === 'Crafted tool' ? 'Created' : 'Updated'} a tool: ${readableName}`,
       evidence: `${verb} ${r.name}${r.description ? ` — ${r.description}` : ''} · ${score}`,
     };
-  });
-}
-
-/** Views the agent published. The revert restores the previous version, or
- *  removes the tab when there was no previous version — the owner-facing undo
- *  for a dashboard, kept in host chrome rather than inside the view itself. */
-function viewEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  const rows = sql<{ slug: string; title: string; version: number; written_at: number; status: string }>`
-    SELECT slug, title, version, written_at, status
-    FROM agent_views ORDER BY written_at DESC LIMIT ${limit}`;
-  return rows.map((r) => {
-    const entry: ChangelogEntry = {
-      id: `view:${r.slug}:v${r.version}`,
-      kind: 'view',
-      at: r.written_at,
-      summary: r.version === 1
-        ? `Added a view to the workspace UI: ${r.title}`
-        : `Updated the ${r.title} view (v${r.version})`,
-      evidence: r.status === 'deleted'
-        ? `views/${r.slug}.json v${r.version} — removed`
-        : `views/${r.slug}.json v${r.version} — ${r.status}`,
-      // Only the live version is revertible: an older row is already reverted,
-      // and a deleted one has no tab to take back.
-    };
-    if (r.status === 'current') entry.revert = { type: 'view_revert', target: r.slug };
-    return entry;
   });
 }
 
@@ -538,7 +510,6 @@ export function buildChangelog(sql: SqlExecutor, opts: BuildChangelogOptions = {
   const entries = [
     ...scaffoldEntries(sql),
     ...toolEntries(sql, limit),
-    ...viewEntries(sql, limit),
     ...gepaEntries(sql, limit),
     ...replayEntries(sql, limit),
     ...promptSectionEntries(sql, limit),
@@ -710,19 +681,6 @@ export async function executeChangelogRevert(
         return { ok: false, error: `invalid prompt-section target: ${action.target}` };
       }
       return revertPromptSection(ctx.rt.storage.sql, sectionId, version);
-    }
-    case 'view_revert': {
-      const result = await revertView(
-        { vfs: ctx.rt.storage.vfs, sql: ctx.rt.storage.sql },
-        action.target,
-      );
-      if (!result.ok) return { ok: false, error: result.error ?? `could not revert view ${action.target}` };
-      return {
-        ok: true,
-        detail: result.revertedTo === undefined
-          ? `removed the ${action.target} view`
-          : `restored the ${action.target} view to v${result.revertedTo}`,
-      };
     }
     case 'fact_forget': {
       if (!ctx.facts.recall(action.target)) {

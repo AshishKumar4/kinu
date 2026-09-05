@@ -248,36 +248,21 @@ export type * from './types/evaluation';
 // Views — agent-authored dashboards the host renders from JSON. Ungated, like
 // crafted tools: the containment is the vocabulary, not an approval.
 export {
-  RESERVED_VIEW_TITLES,
-  VIEW_DATA_SOURCES,
-  VIEW_LIMITS,
-  VIEW_SPEC_VERSION,
-  ViewSpecSchema,
-  createView,
-  deleteView,
-  initViewTables,
-  listViewVersions,
-  listViews,
-  normalizeViewTitle,
-  parseViewSpec,
-  readView,
-  resolveViewPath,
-  revertView,
-  viewSlug,
-  type AgentViewSummary,
-  type AgentViewVersion,
-  type CreateViewResult,
-  type ReadViewResult,
-  type ViewBlock,
-  type ViewColumn,
-  type ViewDataSource,
-  type ViewLeafBlock,
-  type ViewSource,
-  type ViewSpec,
-  type ViewSpecResult,
-  type ViewStatus,
-  type ViewStoreDeps,
-} from './views/index';
+  GADGET_DIR, GADGET_MANIFEST_FILE, GADGET_SERVER_FILE, GADGET_CLIENT_FILE, GADGET_CLIENT_STYLE_FILE,
+  GADGET_SERVER_CLASS, GADGET_LIMITS, GADGET_DATA_SOURCES, GADGET_HOST_METHODS, GADGETS_CHANGED_EVENT,
+  GADGET_MCP_ACTION_RULE, RESERVED_GADGET_TITLES,
+  GadgetManifestSchema, GadgetBindingSchema,
+  parseGadgetManifest, gadgetBindings, gadgetFilesRoot, isGadgetSlug, isGadgetBindingName,
+  isGadgetDataSource, normalizeGadgetTitle,
+  gadgetPath, listGadgets, readGadget, readGadgetClient, readGadgetServer,
+  isGadgetMethodName, gadgetSummary, gadgetExecutor,
+  resolveGadgetFilePath, resolveGadgetDataSource, reviewGadgetMcpCall,
+  type GadgetManifest, type GadgetManifestResult, type GadgetBinding, type GadgetBindingKind,
+  type GadgetFilesBinding, type GadgetMcpBinding, type GadgetDataSource,
+  type GadgetRecord, type GadgetProblem, type GadgetListing, type GadgetReadResult,
+  type GadgetCallResult, type GadgetsChangedEvent, type GadgetSummary,
+  type GadgetMcpTool, type GadgetMcpReview,
+} from './gadgets/index';
 
 // Release lane — governed patch/deploy over a bound source — separate from scaffold evolution.
 export {
@@ -1033,6 +1018,7 @@ export {
   type VfsError, type VfsErrorCode,
 } from './vfs/errno';
 export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
+export { ensureDir } from './utils/vfs-helpers';
 export {
   withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
   readBoundedWithVfsOps, listWithVfsOps,
@@ -1299,6 +1285,7 @@ export {
   type ShellApprovalPolicy,
   type InheritedApprovalSource,
   type DeferredApprovalChannel,
+  type ApprovalSpend,
   EGRESS_PLACEHOLDER_PREFIX,
   EGRESS_PLACEHOLDER_BYTES,
   isEgressPlaceholder,

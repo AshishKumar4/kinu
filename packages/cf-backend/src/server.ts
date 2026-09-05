@@ -95,6 +95,10 @@ export { KinuSandbox } from "./kinu-sandbox";
 // (codemode-egress.ts). Resolved by `enable_ctx_exports` like the Nimbus
 // entrypoints below; absent, the sandbox has no network at all.
 export { CodemodeEgress } from "./codemode-egress";
+// The loopback entrypoints a gadget server's `env` is made of: minted per
+// manifest binding with `ctx.exports.<Class>({ props })` (gadgets/host.ts) and
+// resolved here by export name, exactly as `CodemodeEgress` is.
+export { GadgetFilesBinding, GadgetWorkspaceBinding, GadgetMcpBinding } from "./gadgets/bindings";
 // REQUIRED for outbound interception, and silent if forgotten. The Sandbox DO
 // builds its interception fetchers from `ctx.exports.ContainerProxy`, so
 // without this export `applyOutboundInterception` throws and no egress handler

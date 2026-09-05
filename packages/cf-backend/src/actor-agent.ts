@@ -275,7 +275,8 @@ import {
   promptCachePlan, hasCacheMarkers, markLastToolForAnthropicCache,
   type PromptCacheStrategy,
 } from "@kinu.run/core";
-import type { CodemodeProvider, DeferredApprovalChannel } from "@kinu.run/core";
+import type { CodemodeProvider, DeferredApprovalChannel, GadgetCallResult } from "@kinu.run/core";
+import { gadgetOwner } from "./gadgets/bindings";
 import { diagnostics, KinuError, toKinuError, tolerate, type ErrorCode } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserDoRpcMethod } from "./rpc-surface";
@@ -4381,6 +4382,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this._rt) {
       const hooks: CFRuntimeHooks = {
         deferrals: () => this.deferralChannel(),
+        gadgetCall: (slug, method, args) => this.gadgetCall(slug, method, args),
         reportModelCall: (report) => this.reportModelCall(report),
         turnProfile: () => this._turnProfile,
         resolveProfile: () => this.routingProfile(),
@@ -4434,6 +4436,15 @@ export abstract class ActorAgent extends Think<Env> {
    * runtime is built inside this actor's own lazy `rt` getter.
    */
   protected deferralChannel(): DeferredApprovalChannel | undefined { return undefined; }
+
+  /**
+   * A call into a gadget's server. The facet lives on the object that owns
+   * the workspace, so a facet actor — a subordinate, a head — reaches it over
+   * that object's stub; the orchestrator overrides this with its own host.
+   */
+  async gadgetCall(slug: string, method: string, args: JsonValue[]): Promise<GadgetCallResult> {
+    return gadgetOwner(this.env, this.workspaceName()).gadgetCall(slug, method, args);
+  }
 
   /** `memory.*` / `tasks.*` — unconditional on every ActorAgent (orchestrator
    *  and subordinate alike), the same way the native `memory` and `tasks`

@@ -12,6 +12,7 @@ import type { UserDO } from "./src/user/user-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { CodemodeEgress } from "./src/codemode-egress";
+import type { GadgetFilesBinding, GadgetWorkspaceBinding, GadgetMcpBinding } from "./src/gadgets/bindings";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
 
 // This file has top-level imports (for the DO class generics below), which
@@ -184,7 +185,12 @@ declare global {
      *  Only the entrypoint this code reads is declared: naming the whole main
      *  module would drag every Durable Object class into one recursive type. */
     interface GlobalProps {
-      mainModule: { CodemodeEgress: typeof CodemodeEgress };
+      mainModule: {
+        CodemodeEgress: typeof CodemodeEgress;
+        GadgetFilesBinding: typeof GadgetFilesBinding;
+        GadgetWorkspaceBinding: typeof GadgetWorkspaceBinding;
+        GadgetMcpBinding: typeof GadgetMcpBinding;
+      };
     }
   }
 }

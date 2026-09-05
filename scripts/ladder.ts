@@ -1077,12 +1077,12 @@ export const LADDER: readonly Gate[] = [
       + 'independent instrument bugs cost us to learn.',
   },
   {
-    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts',
+    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts scripts/gadget-sandbox-ux.test.ts',
     tier: 'ci',
     // Measured 2026-08-24 after the six plan checks joined this row:
     // 177.63s and 175.02s over two runs.
     seconds: 190,
-    catches: 'the five UI gates\' own decision logic, including the one that would have '
+    catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
       + 'built, deliberately kept off the deploy path for their Chrome cost, and their '
@@ -1249,6 +1249,24 @@ export const LADDER: readonly Gate[] = [
       + 'of the ~29 gallery frames; the subordinate column and the node transcript walk '
       + 'the same contract and are measured by neither this nor any other browser. '
       + 'Chrome cost keeps it out of the commit tier.',
+  },
+  {
+    run: 'bun test scripts/gadget-sandbox-ux.test.ts',
+    tier: 'ci',
+    // Measured 2026-09-05 on the 24-thread box: 2.0/2.0/2.5s over three runs,
+    // gallery build and Chromium included. Declared with headroom for CI cold cache.
+    seconds: 5,
+    catches: 'a gadget client that can reach the network, the host document, or '
+      + 'anything but the MessagePort it handed over: the `?frame=gadget` fixture '
+      + 'probes all three from inside the sandbox and the gate reads the exact '
+      + 'sandbox token, the exact content policy, and the three probe outcomes. '
+      + 'Proven red by forcing the fixture to report `reached`: exactly the fetch '
+      + 'assertion fails, the other four stay green.',
+    blind: 'everything the client DOES with its one allowed call. The fixture rpc '
+      + 'answers `echo`, so a gadget server that refuses, a binding the manifest '
+      + 'withdrew, and a client that never calls are unmeasured here — the workerd '
+      + 'gadget-facet probe owns the server half. Chrome cost keeps it out of the '
+      + 'commit tier.',
   },
   {
     run: 'bun run layergate',

@@ -324,11 +324,11 @@ describe('workspace live refresh failures', () => {
       memoryContent: 'offline',
       tools: 'offline',
       executors: 'offline',
-      views: 'offline',
+      gadgets: 'offline',
       consents: 'offline',
       plan: 'offline',
     }, true)).toBe(
-      "Couldn't refresh background jobs, pending actions, MCTS, memory content, tools, executors, agent views, device consents, and active plan. Showing last known data. offline",
+      "Couldn't refresh background jobs, pending actions, MCTS, memory content, tools, executors, gadgets, device consents, and active plan. Showing last known data. offline",
     );
   });
 
@@ -364,15 +364,15 @@ describe('workspace live refresh failures', () => {
         admission.admit(TEST_ACTOR, 'tools'),
       ),
       refreshLiveResource(
-        'views',
+        'gadgets',
         () => Promise.reject('catalog offline'),
         keep,
         errors.report,
-        admission.admit(TEST_ACTOR, 'views'),
+        admission.admit(TEST_ACTOR, 'gadgets'),
       ),
     ]);
     expect(formatWorkspaceError(errors.errors, true)).toBe(
-      "Couldn't refresh tools and agent views. Showing last known data. catalog offline",
+      "Couldn't refresh tools and gadgets. Showing last known data. catalog offline",
     );
 
     await refreshLiveResource(
@@ -383,15 +383,15 @@ describe('workspace live refresh failures', () => {
       admission.admit(TEST_ACTOR, 'tools'),
     );
     expect(formatWorkspaceError(errors.errors, true)).toBe(
-      "Couldn't refresh agent views. Showing last known data. catalog offline",
+      "Couldn't refresh gadgets. Showing last known data. catalog offline",
     );
 
     await refreshLiveResource(
-      'views',
+      'gadgets',
       () => Promise.resolve(['ready']),
       keep,
       errors.report,
-      admission.admit(TEST_ACTOR, 'views'),
+      admission.admit(TEST_ACTOR, 'gadgets'),
     );
     expect(formatWorkspaceError(errors.errors, true)).toBeNull();
   });

@@ -21,6 +21,7 @@ export {
   type ApprovalResult,
   type ApprovalHarm,
   type ApprovalGrant,
+  type ApprovalSpend,
   type ShellApprovalRequest,
   type ShellApprovalOutcome,
   type ShellApprovalPolicy,

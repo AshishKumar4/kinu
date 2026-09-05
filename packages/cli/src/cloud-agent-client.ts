@@ -131,13 +131,12 @@ const AdditionalAgentEnvelopeSchema = v.object({
 });
 const ChangelogRevertActionSchema = v.variant('type', [
   v.object({ type: v.literal('scaffold_rollback'), target: v.string() }),
-  v.object({ type: v.literal('view_revert'), target: v.string() }),
   v.object({ type: v.literal('fact_forget'), target: v.string() }),
   v.object({ type: v.literal('fact_forget_many'), targets: v.array(v.string()) }),
 ]);
 const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() => v.object({
   id: v.string(),
-  kind: v.picklist(['scaffold', 'tool', 'view', 'fact', 'gepa', 'replay', 'outcomes']),
+  kind: v.picklist(['scaffold', 'tool', 'fact', 'gepa', 'replay', 'outcomes']),
   at: v.number(),
   summary: v.string(),
   evidence: v.string(),

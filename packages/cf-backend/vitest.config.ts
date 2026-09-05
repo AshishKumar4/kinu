@@ -130,6 +130,8 @@ export default defineConfig({
           FILES_EIO_PROBE: { className: 'FilesEioProbeDO', useSQLite: true },
           PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
+          GADGET_FACET_PROBE: { className: 'GadgetFacetProbeDO', useSQLite: true },
+          OrchestratorAgent: { className: 'GadgetFacetProbeDO', useSQLite: true },
         },
       },
     }),

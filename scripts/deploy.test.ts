@@ -67,7 +67,7 @@ const REQUIRED_GATES = [
   "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts",
   "bun test scripts/gate-set-equality.test.ts",
   "bun test scripts/wired.test.ts",
-  "bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts",
+  "bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts scripts/gadget-sandbox-ux.test.ts",
   "bun test scripts/public-pages.test.ts",
   "bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts",
   "bun test scripts/react-runtime-identity.test.ts",

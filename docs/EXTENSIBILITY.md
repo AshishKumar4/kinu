@@ -278,7 +278,7 @@ owner-facing `experience` RPC.
 Inside `execute_tools`, the LLM also sees:
 
 - `workspace.*`: VFS, including exact-match `editFile`, shell, memory,
-  `createTool`, `createView`; always available, and where `run` and `file`
+  `createTool`, `gadgets`, `gadget`; always available, and where `run` and `file`
   project.
 - `sandbox.*`: Linux container exec and port preview when bound.
 - `agents.*`, `memory.*`, `tasks.*`, `web.*`, `report.*`: codemode projections

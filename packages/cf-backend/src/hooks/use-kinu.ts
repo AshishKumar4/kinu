@@ -6,8 +6,8 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
-  branchHeadId, ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
-  type AgentViewSummary, type PendingAction, type PlanReview, type RoleId,
+  branchHeadId, GADGETS_CHANGED_EVENT, ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
+  type GadgetSummary, type PendingAction, type PlanReview, type RoleId,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
@@ -343,6 +343,7 @@ const SocketMessageSchema = v.variant("type", [
   v.object({ type: v.literal("device_consent_resolved"), consentId: v.string() }),
   v.object({ type: v.literal("work_cancelled") }),
   v.object({ type: v.literal("pending_actions_changed") }),
+  v.object({ type: v.literal(GADGETS_CHANGED_EVENT), slugs: v.array(v.string()) }),
   v.object({
     type: v.literal("branch_status"), branchId: v.string(), task: v.optional(v.string()),
     status: v.optional(v.string()), takeSetId: v.optional(v.string()),
@@ -409,7 +410,7 @@ export type LiveRefreshSource =
   | "memoryContent"
   | "tools"
   | "executors"
-  | "views"
+  | "gadgets"
   | "consents"
   | "consentResolution"
   | "plan";
@@ -431,7 +432,7 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "tools", label: "tools" },
   { source: "presence", label: "tab presence" },
   { source: "executors", label: "executors" },
-  { source: "views", label: "agent views" },
+  { source: "gadgets", label: "gadgets" },
   { source: "consents", label: "device consents" },
   { source: "consentResolution", label: "device consents" },
   { source: "plan", label: "active plan" },
@@ -767,10 +768,13 @@ export function useKinu(target?: string | KinuActorAddress) {
   // Background jobs (auto-detached >30s tool calls) — single source for the
   // Work surface's Now half and its journal.
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
-  // Dashboards Kinu published for this workspace — the agent-authored tabs
-  // at the right of the work-surface strip. Refreshed with the rest of the
-  // live data, because publishing one is a mid-turn `workspace.createView`.
-  const [agentViews, setAgentViews] = useState<AgentViewSummary[]>([]);
+  // Gadgets Kinu published for this workspace — the agent-authored tabs at
+  // the right of the work-surface strip. Refreshed with the rest of the live
+  // data, because publishing one is a mid-turn workspace write. The
+  // `gadgets_changed` broadcast re-lists at once and bumps the remount
+  // counter of every open tab among its slugs.
+  const [gadgets, setGadgets] = useState<GadgetSummary[]>([]);
+  const [gadgetReloads, setGadgetReloads] = useState<ReadonlyMap<string, number>>(new Map());
   // Pending device-consent requests — an agent wants to use a connected device;
   // the chat renders a card and the user decides (ask-once-then-remember).
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
@@ -1178,14 +1182,19 @@ export function useKinu(target?: string | KinuActorAddress) {
     },
   ), [refreshCurrentLiveResource, rpc]);
 
-  // The gated tabs' presence rides the same live cycle as every other
-  // workspace read — no loop of its own. A release created or a search run
-  // started mid-session therefore surfaces within one refresh tick (and at
-  // once when the turn that created it ends).
   const refreshTabPresence = useCallback(() => refreshCurrentLiveResource(
     "presence",
     () => rpc<TabPresence>("getWorkspaceTabPresence", []),
     setTabPresence,
+  ), [refreshCurrentLiveResource, rpc]);
+
+  // The gadget tabs ride the same live cycle as every other workspace read.
+  // `listGadgets` answers the summaries with their problems; the strip draws
+  // the summaries, so the problems stay server-side here.
+  const refreshGadgets = useCallback(() => refreshCurrentLiveResource(
+    "gadgets",
+    () => rpc<{ gadgets: GadgetSummary[] }>("listGadgets", []).then((listing) => listing.gadgets),
+    setGadgets,
   ), [refreshCurrentLiveResource, rpc]);
 
   // Stable identity: it is an effect dependency in the changelog hook, which
@@ -1305,6 +1314,24 @@ export function useKinu(target?: string | KinuActorAddress) {
               otherwise: 'io',
             }));
           }
+        } else if (msg.type === GADGETS_CHANGED_EVENT) {
+          // A gadget's files changed on disk. Re-list at once so the strip
+          // learns renames the next poll would only find later, and remount
+          // every open tab among the changed slugs so its frame re-reads.
+          setGadgetReloads((previous) => {
+            const next = new Map(previous);
+            for (const slug of msg.slugs) next.set(slug, (next.get(slug) ?? 0) + 1);
+            return next;
+          });
+          try {
+            await refreshGadgets();
+          } catch (cause) {
+            diagnostics.failure('workspace.gadgets_refresh_failed', toKinuError({
+              doing: 'refreshing live workspace data',
+              cause,
+              otherwise: 'io',
+            }));
+          }
         } else if (msg.type === "branch_status") {
           const status = msg.status === "settled" ? "settled" : msg.status === "error" ? "error" : "running";
           // A branch that has stopped is writing nothing. Its head id is
@@ -1377,7 +1404,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       forgetDeltas();
     };
   }, [
-    agent, bumpHeadActivity, forgetDeltas, refreshBackgroundJobs, refreshPendingActions,
+    agent, bumpHeadActivity, forgetDeltas, refreshBackgroundJobs, refreshGadgets, refreshPendingActions,
     retireDelta, setConsentResolutionError, setMctsTreeFromProgress, isSubordinate,
   ]);
 
@@ -1432,9 +1459,8 @@ export function useKinu(target?: string | KinuActorAddress) {
           ),
           refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
           refreshBackgroundJobs(),
-          refreshCurrentLiveResource("views", () => rpc<AgentViewSummary[]>("listAgentViews", []), setAgentViews),
           refreshPendingActions(),
-          refreshTabPresence(),
+          refreshGadgets(),
           refreshCurrentLiveResource(
             "consents",
             () => rpc<PendingConsent[]>("listPendingConsents", []),
@@ -1461,6 +1487,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     refreshBackgroundJobs,
     refreshCurrentLiveResource,
     refreshExposedPorts,
+    refreshGadgets,
     refreshPendingActions,
     refreshTabPresence,
     rpc,
@@ -1631,7 +1658,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     setPinnedPorts([]);
     setPreviewError(null);
     setBackgroundJobs([]);
-    setAgentViews([]);
+    setGadgets([]);
+    setGadgetReloads(new Map());
     setPendingConsents([]);
     setActivePlan(null);
     setPendingActions([]);
@@ -1879,8 +1907,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     refreshPendingActions,
     /** Whether the gated tabs (Releases, Exploration) have content. */
     tabPresence,
-    /** Agent-authored dashboards, as tabs. */
-    agentViews,
+    /** Agent-authored gadgets, as tabs, with their per-slug remount counters. */
+    gadgets,
+    gadgetReloads,
     /** Pending device-consent requests + the resolver (chat consent cards). */
     pendingConsents,
     resolveConsent,

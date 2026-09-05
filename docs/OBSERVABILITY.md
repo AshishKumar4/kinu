@@ -454,9 +454,6 @@ unattached laptop as exit 0. It now calls `isFailingResultText`.
 - `run` workspace-shell success. `formatExecResult(...)`
   (`exec-result.ts:105`) keeps non-zero exits as `Error (exit N)` prose. The
   prefix steers the model and `read-models/tool-failures.ts` parses its exit.
-- `views/store.ts`. Its `{ ok: false; error: string }`
-  (`views/store.ts:47,51`) leaves `missing` and `bad_input` as
-  `returned_error` in `broke`. Its codemode type has no `reason`.
 - `ExecutorProvider` ports. Typed `{ supported, reason }` differs from parsed
   strings. `sandbox.listExposedPorts` and `nimbus.listExposedPorts` still use
   `[]` for an absent handle or preview host.

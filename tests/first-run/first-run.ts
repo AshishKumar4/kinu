@@ -43,7 +43,7 @@
  *
  * This module is the half every case shares: the plan, the corpus declaration,
  * the fresh-workspace-per-case invariant, the spend recording, the record. The
- * five cases are the `*.first-run.ts` files beside it; the credential-free
+ * six cases are the `*.first-run.ts` files beside it; the credential-free
  * assertions over this wiring are `wiring.test.ts`, which runs at every tier and
  * costs nothing.
  */
@@ -66,15 +66,16 @@ import {
 export const FIRST_RUN_FAMILY = 'first-run';
 
 /** Every case this tier declares, in the order the defects were found. The list
- *  is DATA and lives here rather than in the five files, because "the set this
+ *  is DATA and lives here rather than in the six files, because "the set this
  *  tier measures equals the set it governs" is the property `wiring.test.ts`
- *  asserts, and a set spread across five modules cannot be asserted at all. */
+ *  asserts, and a set spread across six modules cannot be asserted at all. */
 export const FIRST_RUN_CASES = [
   'codemode-craft',
   'approve-clears',
   'two-machines',
   'enter-sends',
   'files-outside-tree',
+  'gadget',
 ] as const;
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
 
@@ -156,6 +157,19 @@ export const FIRST_RUN_DEFECTS = {
     provedRedAt: '675444233',
     redDirection: 'the parent of 675444233 has no native ranged read on the box file plane, so '
       + 'the first read of a path outside the workspace tree answers EIO on the deployment.',
+  },
+  'gadget': {
+    id: 'gadget',
+    found: 'An agent-built gadget that never answers: the tab draws, the bridge forwards, '
+      + 'and the method fails or the client shows nothing.',
+    missedBecause: 'every gadget suite below the product drives a host the TEST composed — a '
+      + 'fixture manifest, a fixture server, a probe object — so files the MODEL wrote from '
+      + 'words were never read back through the surfaces the tab uses.',
+    provedRedAt: null,
+    redDirection: 'RED on any build without the gadget host: listGadgets names no hello tab '
+      + 'and gadgetCall answers missing. It could not be proved red against a deployed build '
+      + 'in this lane — no deploy runs from this lane — so provedRedAt stays null until the '
+      + 'tier runs it.',
   },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
@@ -255,6 +269,7 @@ const SHORT_SUBJECT = {
   'two-machines': 'fleet',
   'enter-sends': 'enter',
   'files-outside-tree': 'files',
+  'gadget': 'gadget',
 } satisfies Record<FirstRunCase, string>;
 /** What a case's body is handed, and what it hands back. */
 export interface FirstRunRun {
@@ -345,7 +360,7 @@ export async function runFirstRunCase(
 /**
  * A subgoal's verdict as a THROW rather than a matcher.
  *
- * This module is imported by the five case files and by nothing that runs under
+ * This module is imported by the case files and by nothing that runs under
  * a test runner's globals, so it raises rather than reaching for `expect`: the
  * failure text is the whole point, and a plain `Error` carries it identically in
  * every runner.

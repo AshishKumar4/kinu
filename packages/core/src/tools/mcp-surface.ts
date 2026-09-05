@@ -49,6 +49,10 @@ export interface SerializableToolDescriptor {
    *  orchestrator passes this straight to `tool({ inputSchema: jsonSchema(...) })`. */
   inputSchema?: JsonObject;
   outputSchema?: JsonObject;
+  /** The server's `readOnlyHint` annotation, present exactly when it said so.
+   *  The one annotation a gadget's MCP gatekeeper reads: a read-only tool is
+   *  an observation, anything else is the owner's decision. */
+  readOnly?: true;
 }
 
 export const SerializableToolDescriptorSchema = v.object({
@@ -60,6 +64,7 @@ export const SerializableToolDescriptorSchema = v.object({
   title: v.optional(v.string()),
   inputSchema: v.optional(JsonObjectSchema),
   outputSchema: v.optional(JsonObjectSchema),
+  readOnly: v.optional(v.literal(true)),
 });
 /** The whole descriptor surface `userMcp_toolDescriptors` serializes. */
 export const McpToolSurfaceSchema = v.object({
@@ -75,7 +80,7 @@ export interface RemoteMcpTool {
   name: string;
   description?: string;
   title?: string;
-  annotations?: { title?: string };
+  annotations?: { title?: string; readOnlyHint?: boolean };
   inputSchema: unknown;
   outputSchema?: unknown;
 }
@@ -106,6 +111,7 @@ export function describeMcpTool(
   const title = nonBlank(tool.title) ?? nonBlank(tool.annotations?.title);
   if (title !== undefined) descriptor.title = title;
   if (tool.outputSchema) descriptor.outputSchema = v.parse(JsonObjectSchema, tool.outputSchema);
+  if (tool.annotations?.readOnlyHint === true) descriptor.readOnly = true;
   return descriptor;
 }
 

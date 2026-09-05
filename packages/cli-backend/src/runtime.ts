@@ -767,8 +767,8 @@ export function buildCLIHeadRuntime(
   // lineage of its own. `initActorTables` is exactly that distinction, and the
   // three stores below are not the whole of what a head reads. The inline
   // executor registered on this same `sql` quotes the crafted-tool EMA from
-  // `crafted_tools quality columns` in `listTools`, seeds it in `createTool`, files a
-  // misevolution veto in `evolution_events` and publishes to `agent_views`;
+  // `crafted_tools quality columns` in `listTools`, seeds it in `createTool` and
+  // files a misevolution veto in `evolution_events`;
   // with only the VFS, memory and craft schemas below, a head raised
   // `no such table: crafted_tools` on its first `workspace.listTools()` and a
   // tool it crafted was written and then reported as a failure.

@@ -11,7 +11,6 @@ import { initSearchTables } from '../mcts/schemas';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { initScaffoldTables } from '../scaffold/schemas';
 import { initCodemodeStateTable } from '../tools/state-codemode';
-import { initViewTables } from '../views/store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
 export const WORKSPACE_IDENTITY_DDL =
@@ -36,10 +35,6 @@ const ACTOR_DDL = [
   // ── Scaffold management + task history ─────────────────────────
   // Canonical DDL owned by scaffold/schemas.ts (initScaffoldTables, run below),
   // for the same reason: one owner per table.
-
-  // ── Agent-authored views ───────────────────────────────────────
-  // Canonical DDL owned by views/store.ts (initViewTables, run below), for the
-  // same reason the scaffold tables are: one owner per table.
 
   // ── Durable fibers (CLI equivalent of cf_agents_runs) ──────────
   `CREATE TABLE IF NOT EXISTS fibers (
@@ -169,9 +164,9 @@ export function initActorTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   initSearchTables(execRaw);
   initScaffoldTables(execRaw);
   initCraftedToolsTables(sql);
-  initViewTables(execRaw);
   // The `state.*` sandbox namespace: what an execute_tools program saved for
-  // the next one. Actor-local for the same reason `agent_views` is.
+  // the next one. Actor-local: a program's saved state belongs to the actor
+  // that ran it.
   initCodemodeStateTable(execRaw);
 }
 

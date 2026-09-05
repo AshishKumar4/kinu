@@ -12,7 +12,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { buildPendingActions, type PendingActionInputs } from '../src/read-models/pending-actions';
-import { VIEW_DATA_SOURCES } from '../src/views/sources';
+import { GADGET_DATA_SOURCES } from '../src/gadgets/sources';
 import type { BackgroundJob } from '../src/jobs/store';
 import type { DeferredApproval } from '../src/safety/deferred-approval';
 
@@ -196,10 +196,10 @@ describe('buildPendingActions', () => {
 });
 
 describe('the needs-you queue stays host-owned', () => {
-  test('listPendingActions is not a source an agent-authored view may name', () => {
-    // Same doctrine as listPendingConsents: a view that can draw the queue an
+  test('listPendingActions is not a source a gadget may read', () => {
+    // Same doctrine as listPendingConsents: a gadget that can read the queue an
     // owner reads before approving something can draw a plausible fake of it.
-    const viewDataSources = new Set<string>(VIEW_DATA_SOURCES);
-    expect(viewDataSources.has('listPendingActions')).toBe(false);
+    const gadgetDataSources = new Set<string>(GADGET_DATA_SOURCES);
+    expect(gadgetDataSources.has('listPendingActions')).toBe(false);
   });
 });

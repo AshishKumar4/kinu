@@ -33,8 +33,9 @@
  *                                  components over a scripted roster, driven
  *                                  by the chat-and-files browser gate
  *   /gallery.html?frame=markdown → everything MarkdownContent has to render
- *   /gallery.html?frame=views    → an agent-authored View, in Column C's chrome
- *   /gallery.html?frame=viewfail → the same View when its spec stops validating
+ *   /gallery.html?frame=gadget   → an agent-authored gadget, sandboxed: the
+ *                                  real GadgetFrame over a fixture client that
+ *                                  probes its own containment
  *   /gallery.html?frame=releases → the Releases board with a pending approval
  *   /gallery.html?frame=work     → the Work surface: needs-you, the plan and
  *                                  running jobs, and the settled journal
@@ -107,7 +108,7 @@ import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
-import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
+import { GadgetFrame } from "@/components/gadgets/GadgetFrame";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { LogBlock } from "@/components/surfaces/ActivitySurface";
@@ -3370,124 +3371,64 @@ const BRAIN_STATUS = {
   soul: "# Checkout coupon bug", forkLineage: null, createdAt: NOW - 7 * 864e5,
 } satisfies AgentStatus;
 
-/* ── Agent-authored view ────────────────────────────────────────── */
+/* ── Agent-authored gadget ──────────────────────────────────── */
 
-// A spec of the shape `workspace.createView` accepts, over a release board of
-// the shape `getReleaseBoard` returns. Both are real: the frame below exercises
-// the production renderer, not a mock of it.
-const VIEW_SPEC = {
-  v: 1,
-  title: "Deploy health",
-  subtitle: "Everything I have shipped this week, and what is waiting on you.",
-  refreshMs: 15000,
-  blocks: [
-    { type: "stat", label: "Open changes", source: { rpc: "getReleaseBoard", path: "changes" }, agg: "count" },
-    { type: "stat", label: "Deployments", source: { rpc: "getReleaseBoard", path: "deployments" }, agg: "count" },
-    { type: "stat", label: "Jobs running", source: { rpc: "listBackgroundJobs" }, agg: "count" },
-    {
-      type: "table", title: "Recent changes",
-      source: { rpc: "getReleaseBoard", path: "changes", limit: 5 },
-      columns: [
-        { field: "userPrompt", label: "Change" },
-        { field: "status", label: "Status", as: "badge" },
-        { field: "updatedAt", label: "Updated", as: "time" },
-      ],
-    },
-    {
-      type: "section", title: "Background work",
-      blocks: [
-        { type: "list", title: "Jobs", source: { rpc: "listBackgroundJobs" }, field: "label" },
-        {
-          type: "kv", title: "Latest deployment",
-          source: { rpc: "getReleaseBoard", path: "deployments.0" },
-          rows: [
-            { field: "environment", label: "Environment" },
-            { field: "versionId", label: "Version" },
-            { field: "status", label: "Status" },
-          ],
-        },
-      ],
-    },
-    { type: "markdown", text: "Two checks are still red on `chg_4f2`. I have not requested approval for it." },
-  ],
-};
+// A client of the shape `getGadgetClient` answers, run by the production
+// GadgetFrame — not a mock of it — over a fake rpc. The fixture probes its
+// own containment and reports into its document: whether a network fetch
+// escaped the sandbox, whether the host document was reachable, and what the
+// one allowed call back out answered. Plain JS text, exactly as a gadget
+// publishes it: no imports, no syntax a data: URL module could not carry.
+const GADGET_SLUG = "sandbox-probe";
 
-const VIEW_BOARD = {
-  changes: [
-    { id: "chg_4f2", userPrompt: "Warm up the empty-state copy", status: "deployed", updatedAt: NOW - 36e5 },
-    { id: "chg_9a1", userPrompt: "Collapse the duplicate model picker", status: "awaiting_approval", updatedAt: NOW - 72e5 },
-    { id: "chg_2c8", userPrompt: "Stop the timeline flickering on reconnect", status: "preview_ready", updatedAt: NOW - 108e5 },
-    { id: "chg_7b3", userPrompt: "Retire the second markdown pipeline", status: "failed", updatedAt: NOW - 20e5 },
-  ],
-  deployments: [{ environment: "production", versionId: "a8d02b4f", status: "deployed" }],
-};
+const GADGET_CLIENT_JS = [
+  "const probe = { fetch: 'blocked', parent: 'blocked', rpc: 'unanswered' };",
+  "try {",
+  "  await fetch('https://example.com/');",
+  "  probe.fetch = 'reached';",
+  "} catch { probe.fetch = 'blocked'; }",
+  "try {",
+  "  void window.parent.document;",
+  "  probe.parent = 'reached';",
+  "} catch { probe.parent = 'blocked'; }",
+  "try {",
+  "  probe.rpc = String(await gadget.echo('ping'));",
+  "} catch (error) {",
+  "  probe.rpc = 'failed:' + (error instanceof Error ? error.message : String(error));",
+  "}",
+  "const el = document.createElement('p');",
+  "el.setAttribute('data-gadget-probe', '');",
+  "el.setAttribute('data-fetch', probe.fetch);",
+  "el.setAttribute('data-parent', probe.parent);",
+  "el.setAttribute('data-rpc', probe.rpc);",
+  "el.textContent = 'fetch=' + probe.fetch + ' parent=' + probe.parent + ' rpc=' + probe.rpc;",
+  "document.body.append(el);",
+].join("\n");
 
-const VIEW_JOBS = [
-  { label: "bun test packages/core (2,454 tests)" },
-  { label: "GEPA pass over the release prompt" },
-  { label: "replay eval — 40 turns" },
-];
-
-const viewRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getAgentView") return rpcResult({ ok: true, version: 3, spec: VIEW_SPEC }).json<T>();
-  if (method === "getReleaseBoard") return rpcResult(VIEW_BOARD).json<T>();
-  if (method === "listBackgroundJobs") return rpcResult(VIEW_JOBS).json<T>();
+const gadgetRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getGadgetClient") {
+    return rpcResult({ ok: true, value: { js: GADGET_CLIENT_JS, css: null } }).json<T>();
+  }
+  if (method === "gadgetCall") {
+    // The bridge calls as gadgetCall(slug, name, callArgs). The one method
+    // the fixture knows answers echo:ping; anything else is a finding.
+    const parsed = v.safeParse(v.tuple([v.string(), v.string(), v.array(JsonValueSchema)]), args);
+    const name = parsed.success ? parsed.output[1] : "";
+    const first = parsed.success ? parsed.output[2][0] : null;
+    const echoArg = v.safeParse(v.string(), first);
+    const value = name === "echo" && echoArg.success ? `echo:${echoArg.output}` : null;
+    return rpcResult({ ok: true, value }).json<T>();
+  }
   return stubRpc<T>(method, args);
 };
 
-const VIEW_TABS = [
-  { slug: "deploy-health", title: "Deploy health", subtitle: null, version: 3, writtenAt: NOW - 36e5 },
-  { slug: "coupon-drift", title: "Coupon drift", subtitle: null, version: 1, writtenAt: NOW - 72e5 },
-];
-
-/** Column C at its real width, so the agent tab group is seen where it lives:
- *  after the six host surfaces, behind a divider, marked with a sparkle. */
-function ViewsFrame() {
-  return (
-    <div className="p-bg min-h-screen flex justify-center">
-      <div className="w-[720px] h-screen border-x p-border">
-        <WorkSurface
-          surface="view:deploy-health" onSurface={() => {}}
-          agentViews={VIEW_TABS}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
-          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
-          executors={[]} executorOutputs={new Map()}
-          onExecute={async () => ({})}
-          backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
-          rpc={viewRpc}
-        />
-      </div>
-    </div>
-  );
-}
-
-/** What the owner sees when the live spec no longer validates — the shape of a
- *  view whose file was rewritten on disk after it was published. */
-function ViewFailFrame() {
-  const failRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === "getAgentView") {
-      return rpcResult({
-        ok: false,
-        error: "view spec invalid — blocks.0.type: Invalid type: Expected (\"stat\" | \"table\" | \"list\" | \"kv\" | \"markdown\" | \"section\") but received \"html\"",
-      }).json<T>();
-    }
-    return viewRpc<T>(method, args);
-  };
+/** The real frame over the fixture client, so the sandbox the gate asserts
+ *  is the one the product mounts — policy, bridge, and refusal path alike. */
+function GadgetSandboxFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] min-h-screen border-x p-border p-5">
-        <AgentViewSurface slug="deploy-health" rpc={failRpc} />
-      </div>
-    </div>
-  );
-}
-
-/** The renderer alone, wide, for reading the block vocabulary. */
-function ViewBlocksFrame() {
-  return (
-    <div className="p-bg min-h-screen flex justify-center">
-      <div className="w-[720px] min-h-screen border-x p-border p-5">
-        <AgentViewSurface slug="deploy-health" rpc={viewRpc} />
+        <GadgetFrame slug={GADGET_SLUG} rpc={gadgetRpc} />
       </div>
     </div>
   );
@@ -5355,9 +5296,7 @@ async function mount() {
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;
-  else if (frame === "views") node = <ViewsFrame />;
-  else if (frame === "viewblocks") node = <ViewBlocksFrame />;
-  else if (frame === "viewfail") node = <ViewFailFrame />;
+  else if (frame === "gadget") node = <GadgetSandboxFrame />;
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
   else if (frame === "work") node = <WorkFrame />;

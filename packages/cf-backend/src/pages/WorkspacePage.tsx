@@ -1346,7 +1346,8 @@ export default function WorkspacePage() {
             pendingActions={state.pendingActions}
             onRefreshQueue={state.refreshPendingActions}
             onChangelogSeen={state.clearChangelogUnseen}
-            agentViews={state.agentViews}
+            gadgets={state.gadgets}
+            gadgetReloads={state.gadgetReloads}
             tabPresence={state.tabPresence}
             rpc={state.rpc}
           />

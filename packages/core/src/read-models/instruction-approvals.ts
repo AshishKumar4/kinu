@@ -9,8 +9,8 @@
  * is a spam surface pointed at the one queue the owner trusts.
  *
  * SECURITY: like `pending-actions.ts`, this must never join
- * `VIEW_DATA_SOURCES`. An agent-drawn view that could render this list could
- * render a convincing fake of it, and this is precisely the surface an owner
+ * `GADGET_DATA_SOURCES`. A gadget that could read this list could render a
+ * convincing fake of it, and this is precisely the surface an owner
  * reads before granting instruction bytes real force. It stays host-owned.
  *
  * Pure: the host owns the file planes and does the gathering, so "what is

@@ -417,18 +417,10 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // reviews.
     refinement_requests: EVERYWHERE,
 
-    // ── agent-authored views ──
-    // One table per workspace, wherever a workspace lives: `initViewTables` is
-    // part of `initActorTables`, so every root that can run a turn can publish
-    // a dashboard. The subordinate gets it too — its UI surface is the parent's,
-    // but its storage is its own and a half-initialized schema is worse than an
-    // unused table.
-    agent_views: EVERYWHERE,
-
     // ── execute_tools state ──
     // The `state.*` sandbox namespace: what one program saved for the next.
-    // In `initActorTables` beside `agent_views`, for the same reason: every root
-    // that can run a program can keep something between two of them.
+    // In `initActorTables`, because every root that can run a program can keep
+    // something between two of them.
     codemode_state: EVERYWHERE,
 
     // ── release change ──

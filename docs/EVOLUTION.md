@@ -221,13 +221,12 @@ The archive keeps every version: a read model over `scaffold_versions` joined to
 
 ## Evolution changelog
 
-Every self-modification surfaces as a human-readable card (`core/src/evolution/changelog.ts`), a pure read model over the durable ledgers whose only owned state is a `changelog_seen_at` marker. `ChangelogEntryKind` has nine kinds:
+Every self-modification surfaces as a human-readable card (`core/src/evolution/changelog.ts`), a pure read model over the durable ledgers whose only owned state is a `changelog_seen_at` marker. `ChangelogEntryKind` has eight kinds:
 
 | Kind | Source | Revertable via |
 |---|---|---|
 | `scaffold` | the archive plus promotion and rollback run events | `scaffold_rollback` |
 | `tool` | `crafted_tools` joined to `craft_scores` | `craft_retire` |
-| `view` | `agent_views`, live version only | `view_revert` |
 | `fact` | `agent_facts`, collapsed into one card with children | `fact_forget` / `fact_forget_many` |
 | `gepa` | completed GEPA runs | not revertable |
 | `replay` | replay-eval scores with their intervals, plus the direction against the previous run when the intervals separate | not revertable |
@@ -235,7 +234,7 @@ Every self-modification surfaces as a human-readable card (`core/src/evolution/c
 | `prompt_section` | `prompt_section_versions`, keyed `<sectionId>:<version>` because versions are numbered per section | `prompt_section_rollback` |
 | `refinement` | `refinement_requests`, one card per request with one child per routed edit | the children carry the owner's own revert |
 
-Reverts dispatch to the real code paths rather than a separate undo log (`executeChangelogRevert`, `core/src/evolution/changelog.ts:589`): `revertScaffoldVersion`, `craftStore.delete` with the matching `craft_scores` row, `revertView`, `facts.forget`, and the prompt-section rollback.
+Reverts dispatch to the real code paths rather than a separate undo log (`executeChangelogRevert`, `core/src/evolution/changelog.ts:589`): `revertScaffoldVersion`, `craftStore.delete` with the matching `craft_scores` row, `facts.forget`, and the prompt-section rollback.
 
 ## Continual refinement
 

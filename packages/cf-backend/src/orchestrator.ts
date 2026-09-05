@@ -24,6 +24,9 @@ import {
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
+import { exports } from "cloudflare:workers";
+import { GadgetHost } from "./gadgets/host";
+import type { GadgetBindingRequest, GadgetLoopbackFactories } from "./gadgets/bindings";
 import { applyWorkspaceBoxOp, type WorkspaceBoxOp, type WorkspaceBoxResult } from "./workspace-box-rpc";
 import {
   hostedFacetAgentName, type HostedFacetHomes, type HostedFacetKind, type HostedNodeHome,
@@ -66,8 +69,10 @@ import {
   nanoid, type HeadRunView,
   // Canonical memory-note write primitive
   appendMemoryNote,
-  // Agent-authored views — core owns the spec, the ledger and the validation.
-  listViews, readView, type AgentViewSummary, type ReadViewResult,
+  // Gadgets — core owns the manifest, the file layout and the binding rules;
+  // this object hosts the facets (gadgets/host.ts).
+  McpToolSurfaceSchema,
+  type GadgetCallResult, type GadgetDataSource, type GadgetMcpTool, type GadgetProblem, type GadgetSummary,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   type ScaffoldRunResult,
   // The scaffold evolution control plane (core owns the drivers; this actor
@@ -2393,7 +2398,11 @@ export class OrchestratorAgent extends ActorAgent {
     // activation completes and the next workspace touch retries, rather than
     // wedging the object behind a thrown gate.
     try {
-      await this.hostedWorkspace().bundle.session();
+      const session = await this.hostedWorkspace().bundle.session();
+      // The file plane's own event bus: a write under `gadgets/` restarts the
+      // gadget's facet and tells the UI, whichever path wrote it — the `file`
+      // tool, the shell, a facet over `workspaceBoxOp`, the Files tab.
+      session.vfs.events.on((batch) => this.gadgets.filesChanged(batch.map((event) => event.path)));
     } catch (err) {
       diagnostics.failure('workspace.activation_boot_failed', toKinuError({
         doing: 'booting the workspace at activation',
@@ -2844,11 +2853,10 @@ export class OrchestratorAgent extends ActorAgent {
   /**
    * Everything asynchronous that is waiting on the owner, in one queue.
    *
-   * Host-owned by design: this is NOT in `VIEW_DATA_SOURCES` and must not be
-   * added. An agent-authored view that could draw the needs-you queue could
-   * draw a plausible fake of it — the same argument that keeps
-   * `listPendingConsents` off that list, on the surface an owner reads right
-   * before authorising something.
+   * Host-owned by design: this is NOT in `GADGET_DATA_SOURCES` and must not be
+   * added. A gadget that could read the needs-you queue could draw a plausible
+   * fake of it — the same argument that keeps `listPendingConsents` off that
+   * list, on the surface an owner reads right before authorising something.
    *
    * An unclaimed workspace has no release hub to ask, so it contributes no
    * approvals and no changes. Anything else that fails is a real failure and
@@ -3932,21 +3940,116 @@ export class OrchestratorAgent extends ActorAgent {
     return await this.rt.memory.read("memory/MEMORY.md") ?? "";
   }
 
-  // ── Agent-authored views ───────────────────────────────────────
-  // Two reads and nothing else. Publishing is `workspace.createView` inside
-  // execute_tools; reverting is the Evolution Changelog, which is host chrome.
-  // Neither of those belongs on a surface the rendered view can reach.
+  // ── Gadgets ────────────────────────────────────────────────────
+  // Agent-written apps under `gadgets/<slug>/`, hosted by `GadgetHost`: the
+  // server in a dynamic-worker facet of this object, the client in the UI's
+  // sandboxed iframe. There is no publish RPC — the agent writes files and
+  // this object reacts to the write (`onStart` subscribes to the file plane's
+  // event bus). See docs/LIVE-UI.md.
 
-  /** The tabs to draw. Titles are agent-authored, so the UI marks them. */
-  @callable() async listAgentViews(): Promise<AgentViewSummary[]> {
-    return listViews(this.boundSql);
+  private _gadgets: GadgetHost | undefined;
+
+  private get gadgets(): GadgetHost {
+    // SAFETY: server.ts re-exports the binding classes gadgets/bindings.ts declares
+    // as WorkerEntrypoint subclasses constructed with `{ props }`; the platform's
+    // loopback form calls each export with exactly that shape and answers a
+    // Fetcher, verified against codemode-egress.ts, which reads `exports.CodemodeEgress` the same way.
+    // Each export is narrowed on its own line so the assertion stays a single
+    // hop: the chained form, and the record-wide view of `exports`, both make
+    // type instantiation excessively deep (TS2589).
+    const loopbacks: GadgetLoopbackFactories = {
+      GadgetFilesBinding: exports.GadgetFilesBinding as GadgetLoopbackFactories['GadgetFilesBinding'],
+      GadgetWorkspaceBinding: exports.GadgetWorkspaceBinding as GadgetLoopbackFactories['GadgetWorkspaceBinding'],
+      GadgetMcpBinding: exports.GadgetMcpBinding as GadgetLoopbackFactories['GadgetMcpBinding'],
+    };
+    this._gadgets ??= new GadgetHost({
+      workspace: this.name,
+      vfs: () => this.rt.storage.vfs,
+      loader: this.env.LOADER,
+      facets: this.ctx.facets,
+      mint: (entrypoint, props) => loopbacks[entrypoint]({ props }),
+      broadcast: (event) => this.broadcast(JSON.stringify(event)),
+      data: (source) => this.gadgetDataSource(source),
+      mcp: {
+        tools: (server) => this.gadgetMcpTools(server),
+        call: async (server, tool, args) => {
+          const { stub, caller } = await this.userHub();
+          const raw = await stub.userMcp_callTool(caller, server, tool, args);
+          return v.parse(JsonValueSchema, JSON.parse(raw));
+        },
+      },
+      approval: {
+        mode: () => getShellApprovalMode(this.config).mode,
+        granted: (grant) => getShellApprovalGrants(this.config).grants
+          .some((g) => g.rule === grant.rule && g.executor === grant.executor),
+        deferrals: this.deferrals.channel,
+      },
+    });
+    return this._gadgets;
   }
 
-  /** The spec for one tab. Re-validated in core against the live file, so a
-   *  spec edited on disk after it was published fails here rather than in the
-   *  browser. */
-  @callable() async getAgentView(slug: string): Promise<ReadViewResult> {
-    return readView({ vfs: this.rt.storage.vfs, sql: this.boundSql }, String(slug));
+  /** One read model by name, for a gadget's `workspace` binding. The name has
+   *  passed `resolveGadgetDataSource`; each member is `@callable` and classed
+   *  `workspace.read` (tests/unit-gadget-sources.test.ts holds that). */
+  private async gadgetDataSource(source: GadgetDataSource): Promise<JsonValue> {
+    // No annotation: each thunk keeps its getter's own type, and indexing by
+    // `GadgetDataSource` still fails the build when a source has no thunk.
+    const reads = {
+      getAlignmentConvergence: () => this.getAlignmentConvergence(),
+      getExecutors: () => this.getExecutors(),
+      getGepaRuns: () => this.getGepaRuns(),
+      getHeadRuns: () => this.getHeadRuns(),
+      getMctsTree: () => this.getMctsTree(),
+      getOutcomeCalibration: () => this.getOutcomeCalibration(),
+      getReleaseBoard: () => this.getReleaseBoard(),
+      getRunTimeline: () => this.getRunTimeline(),
+      getToolDescriptions: () => this.getToolDescriptions(),
+      getWorkspaceSnapshot: () => this.getWorkspaceSnapshot(),
+      listBackgroundJobs: () => this.listBackgroundJobs(),
+      listTriggers: () => this.listTriggers(),
+    };
+    return v.parse(JsonValueSchema, await reads[source]());
+  }
+
+  /** One connection's tools, with the read-only annotation the gatekeeper
+   *  reads, as the owner's UserDO describes them. */
+  private async gadgetMcpTools(server: string): Promise<GadgetMcpTool[]> {
+    const { stub, caller } = await this.userHub();
+    const surface = v.parse(McpToolSurfaceSchema, JSON.parse(await stub.userMcp_toolDescriptors(caller)));
+    return surface.descriptors
+      .filter((descriptor) => descriptor.serverId === server || descriptor.serverName === server)
+      .map((descriptor) => ({ name: descriptor.name, readOnly: descriptor.readOnly === true }));
+  }
+
+  /** The tabs to draw, and the directories that failed to be one. Titles are
+   *  agent-authored, so the UI marks them. */
+  @callable() async listGadgets(): Promise<{ gadgets: GadgetSummary[]; problems: GadgetProblem[] }> {
+    return this.gadgets.list();
+  }
+
+  /** The client half of one gadget — the module and stylesheet the UI runs in
+   *  its sandboxed iframe. Read fresh from the file plane on every call. */
+  @callable() async getGadgetClient(slug: string): Promise<GadgetCallResult> {
+    return this.gadgets.client(String(slug));
+  }
+
+  /** One call from a gadget's client to its server, forwarded by the UI's
+   *  bridge: the facet's method, JSON in, JSON out. Interactive-only in the
+   *  RPC gate: a call may act through an MCP binding. */
+  @callable() async gadgetCall(slug: string, method: string, args: JsonValue[]): Promise<GadgetCallResult> {
+    return this.gadgets.call(String(slug), String(method), args);
+  }
+
+  /**
+   * A gadget server's call through one of its bindings, back from its
+   * isolate. Reached by the loopback entrypoints in gadgets/bindings.ts over
+   * this object's stub, and by nothing else: deliberately NOT `@callable`,
+   * because a browser socket that could name a binding could reach the
+   * owner's MCP connections as a gadget. `sealRpcSurface` keeps it on the
+   * stub transport.
+   */
+  async gadgetBindingCall(slug: string, name: string, request: GadgetBindingRequest): Promise<GadgetCallResult> {
+    return this.gadgets.bindingCall(String(slug), String(name), request);
   }
 
   @callable() async getToolDescriptions() {

@@ -633,6 +633,31 @@ const ToolDescriptionsSchema = v.object({ crafted: v.array(CraftedToolSchema) })
 /** One tool the model built for itself, as the Tools pane lists it. */
 export type PublicCraftedTool = v.InferOutput<typeof CraftedToolSchema>;
 
+/** One agent-written tab, as `listGadgets` draws it. Narrowed to what a case
+ *  asserts: the slug the strip draws and the halves behind it. */
+const GadgetSummarySchema = v.object({
+  slug: v.string(),
+  title: v.string(),
+  subtitle: v.optional(v.string()),
+  hasServer: v.optional(v.boolean()),
+  hasClient: v.optional(v.boolean()),
+  bindings: v.optional(v.array(v.string())),
+});
+const GadgetListingSchema = v.object({ gadgets: v.array(GadgetSummarySchema) });
+
+/** One agent-written tab, as the tab strip draws it. */
+export type PublicGadget = v.InferOutput<typeof GadgetSummarySchema>;
+
+/** What `gadgetCall` answers: the method's value, or the refusal with its
+ *  class first. The case pins the value it asked for. */
+const GadgetCallResultSchema = v.variant('ok', [
+  v.object({ ok: v.literal(true), value: JsonValueSchema }),
+  v.object({ ok: v.literal(false), reason: v.string(), error: v.string() }),
+]);
+
+/** One call into a gadget's server, as the tab bridge made it. */
+export type PublicGadgetCall = v.InferOutput<typeof GadgetCallResultSchema>;
+
 /** What `readExecutorFile` answers, exactly as `ExecutorTextFile` declares it
  *  (core/src/read-models/files.ts): the preview's text, or the reason there is
  *  none. Both optional, because the read model answers one or the other. */
@@ -914,6 +939,25 @@ export class KinuPublicSession {
       () => this.rpc('getToolDescriptions', []),
     );
     return v.parse(ToolDescriptionsSchema, answer).crafted;
+  }
+
+  /** The agent-written tabs, as the tab strip draws them. */
+  async listGadgets(): Promise<readonly PublicGadget[]> {
+    const answer = await infraBoundary(
+      `listGadgets on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('listGadgets', []),
+    );
+    return v.parse(GadgetListingSchema, answer).gadgets;
+  }
+
+  /** One call into a gadget's server, the way the tab's bridge makes it:
+   *  the same socket RPC the UI forwards over. */
+  async gadgetCall(slug: string, method: string, args: readonly JsonValue[]): Promise<PublicGadgetCall> {
+    const answer = await infraBoundary(
+      `gadgetCall(${slug}.${method}) on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('gadgetCall', [slug, method, [...args]]),
+    );
+    return v.parse(GadgetCallResultSchema, answer);
   }
 
   /** The durable transcript the web pane is seeded from. */

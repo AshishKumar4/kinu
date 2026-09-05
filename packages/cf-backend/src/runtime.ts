@@ -30,6 +30,7 @@ import type {
   DeferredApprovalChannel,
   WriteObserver,
   ModelCallSink, SpendSource, ResolvedTurnProfile,
+  GadgetCallResult, JsonValue,
 } from "@kinu.run/core";
 import {
   nimbusSessionFiles, nimbusSessionShell,
@@ -310,6 +311,9 @@ export interface CFRuntimeHooks {
    * from, so 'strict' keeps its explanatory refusal there.
    */
   deferrals?: () => DeferredApprovalChannel | undefined;
+  /** `workspace.gadget(slug, method, ...args)`: a call into a gadget's server,
+   *  answered by the workspace object that hosts the facet. */
+  gadgetCall?: (slug: string, method: string, args: JsonValue[]) => Promise<GadgetCallResult>;
   /** Attribute writes made through this actor's canonical workspace file
    * plane. Used by heads to report only their own direct file mutations while
    * every actor still addresses the same workspace. */
@@ -410,9 +414,9 @@ export function createCFRuntime(
   // by the same measurement: `agent_config` was the first table an exploration
   // facet was found to be missing, not the only one. The workspace executor
   // registered below is handed this same `sql`, and its `listTools` quotes the
-  // crafted-tool quality columns ON `crafted_tools`, its `createTool` seeds
-  // that row and files a refused one in `evolution_events`, and its view tools
-  // write `agent_views` — so a head missing those tables on its first
+  // crafted-tool quality columns ON `crafted_tools`, and its `createTool` seeds
+  // that row and files a refused one in `evolution_events` — so a head missing
+  // those tables on its first
   // `workspace.listTools()`, and a tool it crafted was written and then
   // reported to the model as a failure. `initActorTables` is the declared set
   // for storage that belongs to one full-loop actor and carries no workspace
@@ -537,6 +541,7 @@ export function createCFRuntime(
       // unconditionally and read the supplied turn accumulator only when called.
       ledger: () => access.acc?.().files,
       budget: () => access.acc?.().context,
+      gadgetCall: hooks.gadgetCall,
     },
   }));
   // Register Sandbox executor — Kinu's primary remote exec surface.

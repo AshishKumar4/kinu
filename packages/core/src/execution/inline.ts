@@ -11,7 +11,7 @@
  *   workspace.searchMemory("how to handle errors")
  *   workspace.saveNote("User prefers TypeScript strict mode")
  *   workspace.listTools()
- *   workspace.createView("deploy-health", { v: 1, title: "Deploy health", blocks: [...] })
+ *   workspace.gadgets()  /  workspace.gadget("todo", "addItem", "milk")
  */
 
 import * as v from 'valibot';
@@ -27,12 +27,13 @@ import { KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
-import { createView, deleteView, viewSlug } from '../views/store';
-import { VIEW_DATA_SOURCES } from '../views/sources';
+import {
+  GADGET_DATA_SOURCES, listGadgets, gadgetSummary, isGadgetSlug, isGadgetMethodName, type GadgetCallResult,
+} from '../gadgets/index';
 import { createFileDispatcher } from '../tools/file-tool';
 import { TurnFileLedger } from '../tools/file-ledger';
 import { TurnContextBudget } from '../context-budget';
-import type { JsonValue } from '../utils/json';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
 
 const StringSchema = v.string();
 const OptionalPathSchema = v.optional(v.string());
@@ -117,6 +118,13 @@ export interface InlineExecutorDeps {
    * the same list that decides which commands get registered.
    */
   toolchain?: readonly ExecutorCapability[];
+  /**
+   * Call a method on a gadget's server — the facet the host runs `server.js`
+   * in. Supplied by a backend that hosts gadget servers (the Cloudflare
+   * workspace object); absent on one that cannot, where `workspace.gadget`
+   * answers `unsupported` and `workspace.gadgets()` still lists the files.
+   */
+  gadgetCall?: (slug: string, method: string, args: JsonValue[]) => Promise<GadgetCallResult>;
 }
 
 /**
@@ -411,41 +419,53 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       },
     },
 
-    // Views sit here rather than on a top-level tool for the same reason
+    // Gadgets sit here rather than on a top-level tool for the same reason
     // crafted tools do: this is the lane for artifacts the agent authors for
-    // itself, ungated because the containment is the vocabulary rather than an
-    // approval. A tenth tool would cost the cacheable prefix a full schema to
-    // say what two lines of the codemode surface already say.
-    createView: {
+    // itself. There is no publish call — a gadget is the directory the agent
+    // writes with the file plane, and the host reacts to the write.
+    gadgets: {
       description:
-        'Publish a dashboard as a tab in the workspace UI. `spec` is declarative JSON — ' +
-        'blocks are stat | table | list | kv | markdown | section, and every block reads from ' +
-        'one of the allowed workspace RPCs. Upserts by name. Returns { ok, slug, version, action }.',
-      execute: async (...args: unknown[]) => {
-        // `unsupported`: a workspace built without a SQL store will not grow one
-        // on a retry, which is the line between this and `unavailable`.
-        if (!sql) {
-          return { ok: false, ...refusalOf(new KinuError('unsupported',
-            'This workspace has no SQL store, so views cannot be published.')) };
-        }
-        return createView({ vfs, sql }, args[0], args[1]);
+        'List the gadgets under gadgets/<slug>/ — agent-written apps with a server.js the host runs ' +
+        'in an isolated facet and a client.js it renders as a workspace tab. Broken manifests are ' +
+        'reported beside the valid ones.',
+      execute: async (): Promise<JsonValue> => {
+        const listing = await listGadgets(vfs);
+        return {
+          gadgets: listing.gadgets.map((record) => {
+            const summary = gadgetSummary(record);
+            return { ...summary, bindings: [...summary.bindings] };
+          }),
+          problems: listing.problems.map((problem) => ({ ...problem })),
+        };
       },
     },
 
-    deleteView: {
-      description: 'Remove a published view. Its versions stay in the changelog and can be restored.',
-      execute: async (...args: unknown[]) => {
-        if (!sql) {
-          return { ok: false, ...refusalOf(new KinuError('unsupported',
-            'This workspace has no SQL store, so views cannot be removed.')) };
-        }
-        const name = parseInput(StringSchema, { value: args[0] });
-        const slug = viewSlug(name ?? '');
-        if (!slug) {
+    gadget: {
+      description:
+        'Call a method on a gadget\'s server, exactly as its client.js would: ' +
+        'workspace.gadget("todo", "addItem", "milk"). Answers the method\'s JSON value, or a refusal with `reason`.',
+      execute: async (...args: unknown[]): Promise<JsonValue> => {
+        const slug = parseInput(StringSchema, { value: args[0] });
+        const method = parseInput(StringSchema, { value: args[1] });
+        if (slug === undefined || !isGadgetSlug(slug)) {
           return { ok: false, ...refusalOf(new KinuError('bad_input',
-            'A view name must contain at least one letter or digit.')) };
+            'workspace.gadget: the first argument is the gadget\'s slug (its directory name under gadgets/)')) };
         }
-        return deleteView({ vfs, sql }, slug);
+        if (method === undefined || !isGadgetMethodName(method)) {
+          return { ok: false, ...refusalOf(new KinuError('bad_input',
+            `workspace.gadget: "${String(method)}" is not a method name the bridge forwards`)) };
+        }
+        if (!deps.gadgetCall) {
+          return { ok: false, ...refusalOf(new KinuError('unsupported',
+            'This workspace cannot run gadget servers; the hosted workspace runs them in a facet.')) };
+        }
+        const rest = v.safeParse(v.array(JsonValueSchema), args.slice(2));
+        if (!rest.success) {
+          return { ok: false, ...refusalOf(new KinuError('bad_input',
+            'workspace.gadget: arguments after the method name must be JSON values')) };
+        }
+        const result = await deps.gadgetCall(slug, method, rest.output);
+        return result.ok ? { ok: true, value: result.value } : { ok: false, reason: result.reason, error: result.error };
       },
     },
   };
@@ -501,23 +521,22 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   function createTool(
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | ({ ok: false } & Refusal)>;
-  /** Publish a dashboard tab in the workspace UI, upserting by name. The host
-   *  draws it: no code, no HTML, no links, no images, nothing clickable.
-   *  Every refusal carries \`reason\`; a spec or name the store rejects is
-   *  \`bad_input\`. */
-  function createView(name: string, spec: ViewSpec): Promise<{ ok: boolean; slug?: string; version?: number; error?: string; reason?: Refusal['reason'] }>;
-  function deleteView(name: string): Promise<{ ok: boolean; error?: string; reason?: Refusal['reason'] }>;
-  type ViewSpec = { v: 1; title: string; subtitle?: string; refreshMs?: number; blocks: ViewBlock[] };
-  /** \`path\`/\`field\` are dotted paths into the RPC's result; omit for the whole result. */
-  type ViewSource = { rpc: ${VIEW_DATA_SOURCES.map(s => `'${s}'`).join(' | ')}; limit?: number; path?: string };
-  type ViewCell = { field: string; label: string; as?: 'text' | 'number' | 'badge' | 'time' };
-  type ViewBlock =
-    | { type: 'stat'; label: string; source: ViewSource; agg?: 'count' | 'value'; suffix?: string }
-    | { type: 'table'; title?: string; source: ViewSource; columns: ViewCell[] }
-    | { type: 'list'; title?: string; source: ViewSource; field?: string }
-    | { type: 'kv'; title?: string; source: ViewSource; rows: ViewCell[] }
-    | { type: 'markdown'; text: string }
-    | { type: 'section'; title: string; blocks: Exclude<ViewBlock, { type: 'section' }>[] };
+  /**
+   * Gadgets: agent-written apps under gadgets/<slug>/. Write the files with the
+   * file plane; the host reacts to the write (no publish call).
+   *   gadget.json  { v: 1, title, subtitle?, bindings?: Record<NAME, Binding> }
+   *                Binding = { kind: 'files', root?: string }        // a workspace directory, default gadgets/<slug>/data
+   *                        | { kind: 'workspace' }                   // the read models: ${GADGET_DATA_SOURCES.join(', ')}
+   *                        | { kind: 'mcp', server: string, tools?: string[] }  // an owner-configured MCP connection; side effects need the owner's approval
+   *   server.js    \`export class Gadget extends DurableObject { async list() { ... } }\` (import { DurableObject } from 'cloudflare:workers').
+   *                Runs with NO network; \`this.ctx.storage.sql\` is its own SQLite; \`this.env.<NAME>\` is exactly the manifest's bindings:
+   *                files: read(path)/write(path, text)/list(dir)/remove(path) · workspace: read(source) · mcp: tools()/call(tool, args)
+   *   client.js    an ES module in a sandboxed iframe with no network; \`gadget\` is in scope as a stub of the server: \`await gadget.list()\`
+   *   client.css   optional stylesheet, inlined
+   * Every server method is callable here too:
+   */
+  function gadgets(): Promise<{ gadgets: Array<{ slug: string; title: string; subtitle: string | null; hasServer: boolean; hasClient: boolean; bindings: string[] }>; problems: Array<{ slug: string; error: string }> }>;
+  function gadget(slug: string, method: string, ...args: unknown[]): Promise<{ ok: true; value: unknown } | ({ ok: false } & Refusal)>;
 }`;
 
   const provider: ExecutorProvider = {

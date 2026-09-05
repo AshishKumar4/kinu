@@ -19,7 +19,9 @@ import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
-
+import type {
+  GadgetFilesBinding, GadgetMcpBinding, GadgetWorkspaceBinding,
+} from '../../src/gadgets/bindings';
 declare global {
   namespace Cloudflare {
     interface Env {
@@ -44,13 +46,23 @@ declare global {
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
+      /** The gadget probe. Bare, the way `gadgetOwner` takes the orchestrator:
+       *  calling through a stub mapped over the probe's JSON-recursive methods
+       *  makes type instantiation excessively deep (TS2589), so `open()` in the
+       *  test re-reads the stub as the probe's narrow RPC view instead. */
+      GADGET_FACET_PROBE: DurableObjectNamespace;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }
     /** The test worker re-exports the production egress entrypoint, so
      *  `exports.CodemodeEgress` is a loopback stub here as it is in production. */
     interface GlobalProps {
-      mainModule: { CodemodeEgress: typeof CodemodeEgress };
+      mainModule: {
+        CodemodeEgress: typeof CodemodeEgress;
+        GadgetFilesBinding: typeof GadgetFilesBinding;
+        GadgetWorkspaceBinding: typeof GadgetWorkspaceBinding;
+        GadgetMcpBinding: typeof GadgetMcpBinding;
+      };
     }
   }
 }

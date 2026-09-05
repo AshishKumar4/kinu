@@ -329,7 +329,6 @@ since owns its own DDL. All of it is `IF NOT EXISTS`. All of it runs from the sa
 | Plan review | `plan_reviews` | `core/src/plans/review.ts` |
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
 | Release lane | `release_sources`, `release_changes`, `release_checks`, `release_approvals`, `release_deployments` | `core/src/release/sql-store.ts` (CLI session; on cf the board lives in the owner's UserDO) |
-| Agent views | `agent_views` (one row per published version; the specs themselves live in the workspace filesystem at `views/<slug>.json[.vN]`) | `core/src/views/store.ts` |
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
 | Compaction | `compaction_state`, `compaction_archive` | `core/src/identity/workspace-schema.ts` (the DDL lives in core because `@kinu.run/compaction` sits above it in the dependency graph) |
 | Typed config | `agent_config` | `core/src/config/store.ts` |
@@ -372,9 +371,9 @@ opened any other way silently no-opped.
 The pass runs in this order:
 
 1. `initAllTables` (`core/src/identity/schema.ts`): `workspace_identity`, then
-   `initActorTables` (the actor substrate plus `initSearchTables`,
-   `initScaffoldTables` and `initViewTables`), then `fork_lineage`,
-   `fork_transfer` and `fork_staged_files`.
+   `initActorTables` (the actor substrate plus `initSearchTables` and
+   `initScaffoldTables`), then `fork_lineage`, `fork_transfer` and
+   `fork_staged_files`.
 2. Each subsystem's own `init*` from the tables above.
 
 Then each root adds what only it carries. The orchestrator DO also runs

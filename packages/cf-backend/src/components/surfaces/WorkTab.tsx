@@ -11,12 +11,12 @@
  *   Needs you — the pending-action queue. Rendered only when non-empty. Every
  *               row deep-links to where the decision is actually made; nothing
  *               is decided twice. Host-owned: `listPendingActions` is
- *               deliberately not a data source an agent-authored view can read
- *               (core/src/views/sources.ts).
+ *               deliberately not a data source a gadget can read
+ *               (core/src/gadgets/sources.ts).
  *   Now       — the plan's open half and the jobs still running.
  *   Journal   — one reverse-chronological feed of everything settled: jobs,
  *               closed tasks, self-changes. The chips filter that one list;
- *               they are views, not homes.
+ *               they are filters, not homes.
  *
  * What it does NOT absorb: chat cards stay chat cards. A job settling
  * mid-conversation still gets its transcript card — the journal is where it can
@@ -41,7 +41,7 @@ import type { SurfaceKind } from "./WorkSurface";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
 /** Which filter a journal row answers to. `All` is not a filter, it is no
- *  filter — the chips are views over one list. */
+ *  filter — the chips are filters over one list. */
 type JournalFilter = "all" | "jobs" | "plan" | "self";
 
 const FILTERS: Array<{ id: JournalFilter; label: string }> = [
@@ -106,7 +106,7 @@ export function WorkTab({
 
   const loadTasks = useCallback(() => rpc<AgentTaskTree[]>("listAgentTasks", []), [rpc]);
   // The agent writes its plan mid-turn and the server never pushes it, so the
-  // view revalidates while anything is still open and stands down once
+  // tab revalidates while anything is still open and stands down once
   // everything has settled.
   const revalidate = useCallback((tasks: AgentTaskTree[] | null) => {
     if (isStreaming) return 4000;

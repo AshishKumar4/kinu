@@ -48,14 +48,6 @@
     "created_at",
     "updated_at"
   ],
-  "agent_views@packages/core/src/views/store.ts": [
-    "slug",
-    "version",
-    "title",
-    "subtitle",
-    "written_at",
-    "status"
-  ],
   "alternate_takes@packages/core/src/mcts/takes.ts": [
     "id",
     "turn_id",

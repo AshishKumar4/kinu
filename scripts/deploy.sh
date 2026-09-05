@@ -506,7 +506,7 @@ run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schem
 run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts
 run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
 run_required_gate "Wired gate self-tests" bun test scripts/wired.test.ts
-run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts
+run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts scripts/gadget-sandbox-ux.test.ts
 run_required_gate "Public pages render" bun test scripts/public-pages.test.ts
 run_required_gate "Client failure recovery" bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts
 run_required_gate "React runtime identity" bun test scripts/react-runtime-identity.test.ts
