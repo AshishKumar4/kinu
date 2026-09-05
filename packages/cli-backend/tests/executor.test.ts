@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { scratchDir } from '@kinu.run/test-utils';
 import { createSandboxedExecutor } from '../src/executor';
 
 describe('createSandboxedExecutor', () => {
@@ -34,5 +37,19 @@ describe('createSandboxedExecutor', () => {
       [],
     );
     expect(result).toEqual({ result: 'done' });
+  });
+
+  // Red on 2026-09-05: the wrapper ran the expression form, caught its runtime
+  // throw, and ran the statement form too, so a side effect before the throw
+  // landed twice. The form is now chosen by parsing, and the code runs once.
+  test('a throwing expression runs its side effect once, and the throw is reported', async () => {
+    const marker = join(scratchDir('executor-once'), 'count.txt');
+    const append = JSON.stringify(`echo x >> ${marker}`);
+    const result = await createSandboxedExecutor().execute(
+      `await (async () => { Bun.spawnSync(["sh", "-c", ${append}]); throw new Error("boom"); })()`,
+      [],
+    );
+    expect(result).toEqual({ result: undefined, error: 'boom' });
+    expect(readFileSync(marker, 'utf8').trim().split('\n')).toHaveLength(1);
   });
 });

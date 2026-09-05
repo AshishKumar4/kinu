@@ -167,15 +167,20 @@ async function runToCompletion(
 
 /** Execute in a Bun subprocess with timeout. */
 async function executeInSubprocess(code: string, timeoutMs?: number): Promise<ExecuteResult> {
-  // LLMs often send bare expressions (e.g., "7 * 13") without return.
-  // Strategy: try as expression first, fall back to statements with
-  // auto-return on the last line if it looks like an expression.
+  // LLMs often send bare expressions (e.g., "7 * 13") without return. The
+  // expression form is PARSED first and RUN only if it parsed: deciding by a
+  // failed run re-executed a throwing expression as statements, so a side
+  // effect before the throw landed twice (measured 2026-09-05: an appended
+  // marker file held two lines for one call).
   const autoReturned = addImplicitReturn(code);
   const wrapper = `
     const __code = ${JSON.stringify(code)};
+    let __expression;
+    try { __expression = (0, eval)("(async () => (" + __code + "))"); }
+    catch (e) { if (!(e instanceof SyntaxError)) throw e; }
     async function __run() {
-      try { return await (0, eval)("(async () => (" + __code + "))()"); }
-      catch { return await (async () => { ${autoReturned} })(); }
+      if (__expression) return await __expression();
+      return await (async () => { ${autoReturned} })();
     }
     try {
       const result = await __run();
