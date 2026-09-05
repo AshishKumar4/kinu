@@ -25,6 +25,24 @@ const TOKEN_RE = /^[a-z2-7]{15}$/;
  *  be read as another label's field or escape the label at all. */
 const WORKSPACE_RE = /^[a-z0-9](?:[a-z0-9-]{0,29}[a-z0-9])?$/;
 
+/**
+ * Why a workspace name cannot be carried in a preview hostname, or null when
+ * it can.
+ *
+ * Every name `workspaceSlug` mints passes. An operator-chosen one may not: the
+ * workspace-name grammar (`user/validate.ts`) admits uppercase, dots,
+ * underscores and 64 characters, none of which a label can carry. DNS folds
+ * case, so a hostname could only ever address a different Durable Object than
+ * `MyAgent`. A workspace's name is its object's address and cannot change
+ * after creation, so such a workspace has no preview URL for as long as it
+ * exists. The words are for the Ports surface, where the owner reads them.
+ */
+export function workspacePreviewNameRefusal(workspace: string): string | null {
+  if (WORKSPACE_RE.test(workspace)) return null;
+  return `the workspace name "${workspace}" cannot be a preview hostname label`
+    + ' (a label holds lowercase letters, digits and hyphens, at most 31 characters, and carries no case)';
+}
+
 const HANDLE_LENGTH = 10;
 const TOKEN_LENGTH = 15;
 

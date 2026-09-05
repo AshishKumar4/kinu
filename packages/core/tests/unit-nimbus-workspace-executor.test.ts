@@ -150,4 +150,56 @@ describe('hosted Nimbus workspace provider', () => {
       inboundNetwork: false,
     }).capabilities.has('net_inbound')).toBe(false);
   });
+
+  test('a listening port the host cannot address reaches the Ports surface as a reason, not as nothing', async () => {
+    // The host says why a port has no URL (a deployment with no preview host,
+    // a workspace whose name no hostname label can carry). Dropping the entry
+    // showed the owner an empty Ports panel over live servers.
+    const { rt } = createTestRuntime();
+    const box = fakeBox();
+    const reason = 'the workspace name "MyAgent" cannot be a preview hostname label';
+    box.ports = {
+      expose: async (port) => ({ port, listening: true }),
+      unexpose: async () => ({ ok: true }),
+      list: async () => [{ port: 4321, unavailable: reason }],
+    };
+    const provider = createNimbusWorkspaceExecutor({
+      box,
+      inline: {
+        vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box),
+        memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+      },
+    });
+
+    await expect(provider.listExposedPorts()).rejects.toMatchObject({
+      name: 'KinuError', code: 'unsupported', message: expect.stringContaining(reason),
+    });
+    // The model reads the same reason on its own listing.
+    expect(JSON.parse(String(await provider.tools.listPorts.execute()))).toEqual([
+      { port: 4321, unavailable: reason },
+    ]);
+  });
+
+  test('a port with a URL still lists, and one the host merely could not price is dropped', async () => {
+    // No reason means no claim: an entry with neither URL nor reason is the
+    // pre-existing shape (an SDK that answers no URL) and stays filtered.
+    const { rt } = createTestRuntime();
+    const box = fakeBox();
+    box.ports = {
+      expose: async (port) => ({ port, listening: true }),
+      unexpose: async () => ({ ok: true }),
+      list: async () => [{ port: 4321, url: 'https://4321.example.test' }, { port: 9090 }],
+    };
+    const provider = createNimbusWorkspaceExecutor({
+      box,
+      inline: {
+        vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box),
+        memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+      },
+    });
+
+    expect(await provider.listExposedPorts()).toEqual([
+      { port: 4321, url: 'https://4321.example.test', status: 'unknown' },
+    ]);
+  });
 });

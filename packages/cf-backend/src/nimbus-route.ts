@@ -41,10 +41,12 @@
 
 import { previewHostSuffix } from './lib/preview-origin';
 import { timingSafeEqual } from './lib/crypto';
-import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from './lib/nimbus-preview-host';
+import {
+  buildWorkspacePreviewHost, parseWorkspacePreviewLabel, workspacePreviewNameRefusal,
+} from './lib/nimbus-preview-host';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { reoriginateRequest } from './lib/http';
-import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from './workspace-host';
+import { PREVIEW_CAPABILITY_HANDLE_LENGTH, type WorkspacePreviewUrl } from './workspace-host';
 
 const HKDF_SALT = 'kinu.workspace-preview.salt';
 const HKDF_INFO = 'kinu.workspace-preview.v4';
@@ -141,28 +143,42 @@ export function base32(bytes: Uint8Array): string {
 }
 
 /**
- * The public URL for one exposed workspace port, or undefined when this
- * deployment cannot mint one.
+ * The public URL for one exposed workspace port, or the reason this
+ * deployment cannot mint one for this workspace.
  *
- * Undefined rather than a throw: a deployment with no preview host still runs
- * servers in its workspace, and the port surface says the URL is unavailable
- * instead of failing the exposure.
+ * A reason rather than a throw: a deployment with no preview host still runs
+ * servers in its workspace, and the port surface reports why the URL is
+ * unavailable instead of failing the exposure. The reason is per workspace
+ * as well as per deployment, because the workspace-name grammar admits names
+ * a hostname label cannot carry (`lib/nimbus-preview-host.ts`), and a
+ * workspace so named keeps every other port surface while its previews
+ * report exactly that.
  */
 export async function nimbusPreviewUrl(
   env: Env,
   workspaceName: string,
   port: number,
   capability: string,
-): Promise<string | undefined> {
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) return undefined;
-  if (!/^[a-f0-9]{24}$/.test(capability)) return undefined;
+): Promise<WorkspacePreviewUrl> {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    return { unavailable: `${String(port)} is not a TCP port` };
+  }
+  if (!/^[a-f0-9]{24}$/.test(capability)) {
+    return { unavailable: 'the port registry handed out a capability this deployment cannot sign' };
+  }
   const suffix = previewHostSuffix(env);
+  if (!suffix) return { unavailable: 'this deployment has no preview host (PREVIEW_HOST_SUFFIX is not set)' };
   const secret = previewSecrets(env)[0];
-  if (!suffix || !secret) return undefined;
+  if (!secret) return { unavailable: 'this deployment has no preview signing secret (CREDENTIAL_ENCRYPTION_KEY is not set)' };
+  const refusal = workspacePreviewNameRefusal(workspaceName);
+  if (refusal !== null) return { unavailable: refusal };
   const handle = capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH);
   const token = await previewToken(secret, workspaceName, port, handle);
   const host = buildWorkspacePreviewHost({ port, workspace: workspaceName, handle, token, suffix });
-  return host === null ? undefined : `https://${host}/`;
+  // The name passed the label grammar above, so the label fits by the budget
+  // that grammar was cut to; a null here is a fault in that arithmetic.
+  if (host === null) throw new Error(`the preview label for "${workspaceName}" did not fit a hostname`);
+  return { url: `https://${host}/` };
 }
 
 /**

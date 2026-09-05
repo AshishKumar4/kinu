@@ -173,7 +173,10 @@ export interface NimbusSandboxHandle {
   ports?: {
     expose?(port: number): Promise<{ port: number; url?: string; listening?: boolean; pid?: number | null; registeredAt?: number | null; capability?: string | null }>;
     unexpose?(port: number): Promise<JsonValue | undefined>;
-    list?(): Promise<Array<{ port: number; url?: string; pid?: number; registeredAt?: number; capability?: string }>>;
+    /** `unavailable` says why an exposed port has no `url`, when the host
+     *  knows: a deployment with no preview host, or a workspace whose name a
+     *  hostname label cannot carry. Absent when there is a URL. */
+    list?(): Promise<Array<{ port: number; url?: string; unavailable?: string; pid?: number; registeredAt?: number; capability?: string }>>;
     url?(port: number): string | undefined;
   };
 }
@@ -763,11 +766,21 @@ ${SESSION_CONTROL_TYPES}
       const unexpose = ports.unexpose.bind(ports);
       await touch(() => unexpose(port));
     },
+    // A port the host reports as exposed with no URL used to be dropped here,
+    // so the Ports surface showed nothing for a workspace whose previews could
+    // not be addressed and never said why. The host's reason travels as a
+    // refusal: the surface renders it, and the code says a retry cannot help.
     async listExposedPorts() {
       const ports = box?.ports;
       if (!ports?.list) return [];
       const list = ports.list.bind(ports);
-      return (await touch(() => list())).map((p) => ({
+      const exposed = await touch(() => list());
+      const unaddressed = exposed.find((p) => p.url === undefined && p.unavailable !== undefined);
+      if (unaddressed?.unavailable !== undefined) {
+        throw new KinuError('unsupported',
+          `workspace port ${unaddressed.port} is listening and has no preview URL: ${unaddressed.unavailable}`);
+      }
+      return exposed.map((p) => ({
         port: p.port,
         url: p.url ?? ports.url?.(p.port) ?? '',
         status: 'unknown' as const,

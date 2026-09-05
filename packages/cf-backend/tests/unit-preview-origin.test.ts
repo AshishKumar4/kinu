@@ -165,7 +165,7 @@ function testEnv(bindings: PreviewTestBindings): Env {
 }
 
 const NIMBUS_CAPABILITY = '0123456789abcdef01234567';
-const configuredNimbusUrl = await nimbusPreviewUrl(testEnv(ENV), 'hello', 4321, NIMBUS_CAPABILITY);
+const configuredNimbusUrl = (await nimbusPreviewUrl(testEnv(ENV), 'hello', 4321, NIMBUS_CAPABILITY)).url;
 if (!configuredNimbusUrl) throw new Error('Nimbus preview test URL is not configured');
 const NIMBUS_URL = configuredNimbusUrl;
 
@@ -270,6 +270,31 @@ describe('preview host resolution', () => {
       ...ENV,
       CREDENTIAL_ENCRYPTION_KEY: '',
     }))).toBe(false);
+  });
+
+  test('a workspace whose name no hostname label can carry is told why it has no URL', async () => {
+    // `validateWorkspaceName` admits uppercase, dots, underscores and 64
+    // characters; the label grammar is lowercase, hyphens, 31. A workspace's
+    // name is its Durable Object address, so the mismatch is permanent for
+    // that workspace, and the Ports surface reads the reason rather than an
+    // empty list.
+    for (const name of ['MyAgent', 'my_agent', 'my.agent', 'a'.repeat(32)]) {
+      const answer = await nimbusPreviewUrl(testEnv(ENV), name, 4321, NIMBUS_CAPABILITY);
+      expect(answer.url).toBeUndefined();
+      expect(answer.unavailable).toContain(`"${name}"`);
+      expect(answer.unavailable).toContain('31 characters');
+    }
+    // The longest name the slug minter produces, and the 31-character budget itself, both fit.
+    for (const name of ['balanced-elephant-0123abcd', 'a'.repeat(31)]) {
+      expect((await nimbusPreviewUrl(testEnv(ENV), name, 4321, NIMBUS_CAPABILITY)).url).toContain(`-${name}.${SUFFIX}/`);
+    }
+  });
+
+  test('a deployment that cannot mint names what is missing', async () => {
+    const noHost = await nimbusPreviewUrl(testEnv({ ...ENV, PREVIEW_HOST_SUFFIX: '' }), 'hello', 4321, NIMBUS_CAPABILITY);
+    expect(noHost.unavailable).toContain('PREVIEW_HOST_SUFFIX');
+    const noSecret = await nimbusPreviewUrl(testEnv({ ...ENV, CREDENTIAL_ENCRYPTION_KEY: '' }), 'hello', 4321, NIMBUS_CAPABILITY);
+    expect(noSecret.unavailable).toContain('CREDENTIAL_ENCRYPTION_KEY');
   });
 
   test('the configured zone is the suffix', () => {
@@ -763,7 +788,8 @@ describe('serving a Nimbus preview host', () => {
       CREDENTIAL_ENCRYPTION_KEY: 'a-second-credential-encryption-key-9876543210',
       CREDENTIAL_ENCRYPTION_KEY_PREVIOUS: TEST_CREDENTIAL_ENCRYPTION_KEY,
     };
-    const minted = await nimbusPreviewUrl(testEnv(rotated), 'hello', 4321, NIMBUS_CAPABILITY);
+    const minted = (await nimbusPreviewUrl(testEnv(rotated), 'hello', 4321, NIMBUS_CAPABILITY)).url;
+    expect(minted).toBeDefined();
     expect(minted).not.toBe(NIMBUS_URL);
     let routed = 0;
     const env = testEnv({
