@@ -36,6 +36,7 @@
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import { sqlCheckList } from '../identity/schema';
 import { checkMisevolution, recordMisevolutionVeto } from '../scaffold/misevolution';
 import { modifyScaffold } from '../scaffold/modify';
 import { getPendingScaffold } from '../scaffold/shadow';
@@ -78,7 +79,7 @@ export function initImportedExperienceTable(execRaw: RawSqlExec, sql: SqlExecuto
   const ddl = `(
     id               TEXT PRIMARY KEY,
     library_id       TEXT NOT NULL UNIQUE,
-    kind             TEXT NOT NULL CHECK (kind IN (${EXPERIENCE_KINDS.map((k) => `'${k}'`).join(',')})),
+    kind             TEXT NOT NULL CHECK (kind IN (${sqlCheckList(EXPERIENCE_KINDS)})),
     key              TEXT NOT NULL,
     title            TEXT NOT NULL,
     payload_json     TEXT NOT NULL,

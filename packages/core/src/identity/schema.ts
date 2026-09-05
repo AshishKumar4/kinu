@@ -242,6 +242,12 @@ export function tableExists(sql: SqlExecutor, table: string): boolean {
   `.length > 0;
 }
 
+/** The quoted, comma-joined form of a declared vocabulary for a DDL CHECK
+ *  constraint, so a table's CHECK derives from the same list its type does. */
+export function sqlCheckList(values: readonly string[]): string {
+  return values.map((value) => `'${value}'`).join(',');
+}
+
 /** Move the pre-rename `agent_identity` row (identical columns) into
  *  workspace_identity. Without it an older local workspace loses its id, name
  *  and creation date, and openWorkspace rejects it as having no identity. */

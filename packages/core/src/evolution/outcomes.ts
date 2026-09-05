@@ -22,6 +22,7 @@ import type { EvalInstance } from './gepa/types';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { reconcileColumns } from '../identity/columns';
+import { sqlCheckList } from '../identity/schema';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
@@ -74,8 +75,16 @@ export const TURN_OUTCOME_SOURCES = [
   'explicit', 'classifier', 'session_end', 'take_pick', 'execution',
 ] as const;
 
-
 export type TurnOutcomeSource = (typeof TURN_OUTCOME_SOURCES)[number];
+
+/** Which observation of one turn is its EFFECTIVE verdict, strongest first:
+ *  a thumb outranks a take pick, which outranks the classifier, which outranks
+ *  the environment. `session_end` is absent and ranks last. Both ledger reads
+ *  that resolve a verdict bind this list into their ORDER BY, so the rule
+ *  lives here once. */
+export const TURN_OUTCOME_SOURCE_PRECEDENCE = [
+  'explicit', 'take_pick', 'classifier', 'execution',
+] as const satisfies readonly TurnOutcomeSource[];
 
 /** Sources that carry a HUMAN's opinion of the turn. The complement is
  *  `execution` — real evidence about what happened, silent about whether the
@@ -319,9 +328,9 @@ const TURN_OUTCOMES_DDL = `(
     id TEXT PRIMARY KEY,
     turn_id TEXT,
     session_id TEXT NOT NULL DEFAULT 'default',
-    outcome TEXT NOT NULL CHECK (outcome IN (${TURN_OUTCOMES.map((o) => `'${o}'`).join(',')})),
+    outcome TEXT NOT NULL CHECK (outcome IN (${sqlCheckList(TURN_OUTCOMES)})),
     confidence REAL NOT NULL,
-    source TEXT NOT NULL CHECK (source IN (${TURN_OUTCOME_SOURCES.map((s) => `'${s}'`).join(',')})),
+    source TEXT NOT NULL CHECK (source IN (${sqlCheckList(TURN_OUTCOME_SOURCES)})),
     user_message TEXT NOT NULL,
     assistant_response TEXT NOT NULL,
     followup TEXT,
@@ -412,7 +421,7 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): vo
   execRaw(`CREATE TABLE IF NOT EXISTS outcome_labels (
     id TEXT PRIMARY KEY,
     outcome_id TEXT NOT NULL,
-    label TEXT NOT NULL CHECK (label IN (${OUTCOME_LABELS.map((l) => `'${l}'`).join(',')})),
+    label TEXT NOT NULL CHECK (label IN (${sqlCheckList(OUTCOME_LABELS)})),
     labeler TEXT NOT NULL,
     created_at INTEGER NOT NULL
   )`);
@@ -424,7 +433,7 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): vo
     id TEXT PRIMARY KEY,
     outcome_id TEXT NOT NULL,
     model TEXT NOT NULL,
-    label TEXT NOT NULL CHECK (label IN (${OUTCOME_LABELS.map((l) => `'${l}'`).join(',')})),
+    label TEXT NOT NULL CHECK (label IN (${sqlCheckList(OUTCOME_LABELS)})),
     created_at INTEGER NOT NULL
   )`);
 }
@@ -640,11 +649,12 @@ export function listTurnOutcomes(
 }
 
 /** One effective-verdict read over the append-only ledger, shared by every
- *  operational consumer (rates, splits, gates). The CASE ranks sources in the
- *  order {@link TURN_OUTCOME_SOURCE_PRECEDENCE} declares — keep them in step.
- *  A fixed four-slot IN list expresses every outcome filter with the
- *  tagged-template executor's fixed-arity binding; unused slots bind '' — a
- *  value the CHECK constraint forbids, so it matches nothing. */
+ *  operational consumer (rates, splits, gates). The CASE ranks sources by
+ *  {@link TURN_OUTCOME_SOURCE_PRECEDENCE}, bound member by member because the
+ *  tagged-template executor binds values, never SQL text. A fixed four-slot IN
+ *  list expresses every outcome filter with the same fixed-arity binding;
+ *  unused slots bind '' — a value the CHECK constraint forbids, so it matches
+ *  nothing. */
 function selectEffectiveTurnOutcomes(
   sql: SqlExecutor,
   limit: number | undefined,
@@ -652,12 +662,13 @@ function selectEffectiveTurnOutcomes(
 ): TurnOutcomeRow[] {
   const wanted = TURN_OUTCOMES.filter((o) => !outcomes || outcomes.includes(o));
   const [w0, w1, w2, w3] = [wanted[0] ?? '', wanted[1] ?? '', wanted[2] ?? '', wanted[3] ?? ''];
+  const [p0, p1, p2, p3] = TURN_OUTCOME_SOURCE_PRECEDENCE;
   const ranked = sql<RawOutcomeRow & { eff_rn: number }>`
     SELECT * FROM (
       SELECT *, ROW_NUMBER() OVER (
         PARTITION BY turn_id
-        ORDER BY CASE source WHEN 'explicit' THEN 0 WHEN 'take_pick' THEN 1
-                 WHEN 'classifier' THEN 2 WHEN 'execution' THEN 3 ELSE 4 END ASC,
+        ORDER BY CASE source WHEN ${p0} THEN 0 WHEN ${p1} THEN 1
+                 WHEN ${p2} THEN 2 WHEN ${p3} THEN 3 ELSE 4 END ASC,
                  created_at DESC, id DESC
       ) AS eff_rn
       FROM turn_outcomes
@@ -689,18 +700,20 @@ export function takePickOutcome(sql: SqlExecutor, turnId: string | null | undefi
  * re-classifies — and a classifier that answers differently the second time
  * would run corroboration, import settlement, reflection and pattern extraction
  * against a verdict the ledger does not hold. The recorded row is the verdict.
- * Ranked exactly as {@link selectEffectiveTurnOutcomes} ranks it, so this reads
- * the same answer the rest of the system does.
+ * Ranked by the same {@link TURN_OUTCOME_SOURCE_PRECEDENCE} as
+ * `selectEffectiveTurnOutcomes`, so this reads the answer the rest of the
+ * system reads.
  */
 export function recordedTurnVerdict(
   sql: SqlExecutor, turnId: string | null | undefined,
 ): { outcome: TurnOutcome; source: TurnOutcomeSource; confidence: number } | null {
   if (!turnId) return null;
+  const [p0, p1, p2, p3] = TURN_OUTCOME_SOURCE_PRECEDENCE;
   const rows = sql<{ outcome: TurnOutcome; source: TurnOutcomeSource; confidence: number }>`
     SELECT outcome, source, confidence FROM turn_outcomes
     WHERE turn_id = ${turnId}
-    ORDER BY CASE source WHEN 'explicit' THEN 0 WHEN 'take_pick' THEN 1
-             WHEN 'classifier' THEN 2 WHEN 'execution' THEN 3 ELSE 4 END ASC,
+    ORDER BY CASE source WHEN ${p0} THEN 0 WHEN ${p1} THEN 1
+             WHEN ${p2} THEN 2 WHEN ${p3} THEN 3 ELSE 4 END ASC,
              created_at DESC, id DESC
     LIMIT 1`;
   return rows[0] ?? null;
@@ -914,7 +927,7 @@ const LESSONS_DDL = `(
     id TEXT PRIMARY KEY,
     turn_ids TEXT NOT NULL,
     text TEXT NOT NULL,
-    source TEXT NOT NULL CHECK (source IN (${LESSON_SOURCES.map((s) => `'${s}'`).join(',')})),
+    source TEXT NOT NULL CHECK (source IN (${sqlCheckList(LESSON_SOURCES)})),
     status TEXT NOT NULL CHECK (status IN ('provisional','corroborated')),
     created_at INTEGER NOT NULL,
     corroborated_at INTEGER

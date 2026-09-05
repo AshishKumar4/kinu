@@ -51,6 +51,7 @@
 import * as v from 'valibot';
 
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import { sqlCheckList } from '../identity/schema';
 import type { FactsStore } from '../memory/facts';
 import type { InstructionApprovalStore } from '../safety/instruction-trust';
 import type { TemporaryAgentPort } from '../subordinates/temporary';
@@ -356,10 +357,9 @@ export function refinementRequestView(request: RefinementRequest): RefinementReq
 export function initRefinementTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   execRaw(`CREATE TABLE IF NOT EXISTS refinement_requests (
     id         TEXT PRIMARY KEY,
-    trigger    TEXT NOT NULL CHECK (trigger IN ('explicit','evolution_debt')),
-    scope      TEXT NOT NULL CHECK (scope IN ('workspace','account')),
-    stage      TEXT NOT NULL CHECK (stage IN (
-                 'requested','planning','gated','evaluating','applied','rolled_back','refused')),
+    trigger    TEXT NOT NULL CHECK (trigger IN (${sqlCheckList(REFINEMENT_TRIGGERS)})),
+    scope      TEXT NOT NULL CHECK (scope IN (${sqlCheckList(REFINEMENT_SCOPES)})),
+    stage      TEXT NOT NULL CHECK (stage IN (${sqlCheckList(REFINEMENT_STAGES)})),
     -- The pass holding this row, non-null exactly while it is planning. A lease
     -- identity, never a deadline: it says WHO is planning, and nothing at all
     -- about for how long.

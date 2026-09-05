@@ -25,13 +25,14 @@ import {
   type PublishableCandidate,
 } from './types';
 import type { SqlExec } from '../types/primitives';
+import { sqlCheckList } from '../identity/schema';
 import type { SqlValue } from '../types/primitives';
 import * as v from 'valibot';
 
 export function initExperienceLibraryTables(sql: SqlExec): void {
   const ddl = `(
       id               TEXT PRIMARY KEY,
-      kind             TEXT NOT NULL CHECK (kind IN (${EXPERIENCE_KINDS.map((k) => `'${k}'`).join(',')})),
+      kind             TEXT NOT NULL CHECK (kind IN (${sqlCheckList(EXPERIENCE_KINDS)})),
       source_workspace TEXT NOT NULL,
       key              TEXT NOT NULL,
       title            TEXT NOT NULL,
