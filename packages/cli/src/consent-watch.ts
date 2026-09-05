@@ -5,10 +5,11 @@
  * While a turn is processing, the watcher polls the client's pending device
  * consents and presents each one at most once: answered or instruction-printed
  * ids are remembered until they leave the pending list, so a poll tick that
- * races the server-side resolution can never re-prompt. Stopping the watcher
- * (the turn settled) aborts an in-flight question cleanly and best-effort
- * denies it so the blocked device RPC unblocks instead of waiting out its
- * timeout.
+ * races the server-side resolution can never re-prompt. The loop is the one
+ * every CLI wait shares (`waitForAnswer`), so a question in flight is never
+ * overlapped by the next poll. Stopping the watcher (the turn settled) aborts
+ * an in-flight question cleanly and best-effort denies it so the blocked
+ * device RPC unblocks instead of waiting out its timeout.
  */
 
 import type {
@@ -18,6 +19,7 @@ import type {
 } from './agent-client';
 import { DIM, ERR, MUTED, WARN } from './display';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { waitForAnswer } from './wait';
 
 const CONSENT_POLL_MS = 750;
 
@@ -37,11 +39,12 @@ export interface ConsentWatchOptions {
   ): Promise<DeviceConsentDecision | 'cancelled' | null>;
   /** Surface the outcome of a presented consent. */
   note(kind: ConsentNoteKind, message: string): void;
-  pollMs?: number;
 }
 
 export interface ConsentWatcher {
   stop(): void;
+  /** Settles once the loop has ended after `stop`; nothing polls after it. */
+  done: Promise<void>;
 }
 
 export function watchDeviceConsents(
@@ -50,10 +53,8 @@ export function watchDeviceConsents(
 ): ConsentWatcher {
   const abort = new AbortController();
   const handled = new Set<string>();
-  let presenting = false;
 
   const tick = async () => {
-    if (abort.signal.aborted || presenting) return;
     try {
       const pending = await consents.listPending();
       if (abort.signal.aborted) return;
@@ -66,7 +67,6 @@ export function watchDeviceConsents(
       const consent = pending.find((item) => !handled.has(item.consentId));
       if (!consent) return;
 
-      presenting = true;
       const outcome = await opts.present(consent, abort.signal);
       handled.add(consent.consentId);
       if (outcome === 'cancelled') {
@@ -89,43 +89,31 @@ export function watchDeviceConsents(
       if (!abort.signal.aborted) {
         opts.note('error', renderThrownChain({ cause: err }));
       }
-    } finally {
-      presenting = false;
     }
   };
 
-  // The interval is the watcher's process-level owner. Retain every started
-  // poll through its settlement so a slow poll is never detached from the
-  // watcher merely because the next interval fired. Each link resolves to void,
-  // releasing the previous settled outcome instead of retaining poll history.
-  let pendingTicks: Promise<void> = Promise.resolve();
-  const runTick = () => {
-    const task = (async () => {
-      try {
+  // The watcher never answers: it runs until `stop` aborts it. A failure
+  // thrown past the tick's own reporting (a surface whose `note` throws)
+  // ends the loop and is recorded, so a rejection nobody awaits cannot take
+  // the process down.
+  const done = (async () => {
+    try {
+      await waitForAnswer(async () => {
         await tick();
-      } catch (cause) {
-        diagnostics.failure(
-          'consent.poll_failed',
-          toKinuError({
-            doing: 'polling pending device consents',
-            cause,
-            otherwise: 'io',
-          }),
-        );
-      }
-    })();
-    const previous = pendingTicks;
-    pendingTicks = (async () => {
-      await Promise.allSettled([previous, task]);
-    })();
-  };
-  const interval = setInterval(runTick, opts.pollMs ?? CONSENT_POLL_MS);
-  runTick();
+        return undefined;
+      }, { intervalMs: CONSENT_POLL_MS, signal: abort.signal });
+    } catch (cause) {
+      diagnostics.failure(
+        'consent.poll_failed',
+        toKinuError({ doing: 'polling pending device consents', cause, otherwise: 'io' }),
+      );
+    }
+  })();
   return {
     stop() {
       abort.abort();
-      clearInterval(interval);
     },
+    done,
   };
 }
 
@@ -148,7 +136,7 @@ export function watchTerminalConsents(
   consents: DeviceConsentSurface,
   agentName: string,
   askLine: ConsentAskLine,
-): { stop(): void } {
+): ConsentWatcher {
   const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
   return watchDeviceConsents(consents, {
     present: (consent, signal) => {
@@ -176,7 +164,7 @@ export function watchHeadlessConsents(
   consents: DeviceConsentSurface,
   agentName: string,
   opts: { json: boolean; onDenied(): void },
-): { stop(): void } {
+): ConsentWatcher {
   const instructions = `Pre-authorize with "always allow" via kinu chat ${agentName} or the Kinu app, then re-run.`;
   return watchDeviceConsents(consents, {
     present: (consent) => {

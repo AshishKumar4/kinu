@@ -15,6 +15,7 @@ import { classify, diagnostics, KinuError, renderThrownChain, tolerate } from '@
 import type { JsonObject, ModelProvider, ModelInfo, ProviderDeps, Usage } from '@kinu.run/core';
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as v from 'valibot';
+import { readAllOutcome } from './spawned-output';
 
 export const CLAUDE_CLI_PROVIDER_ID = 'claude';
 
@@ -34,7 +35,7 @@ const MODEL_ALIASES: ModelAliases = {
   'claude-haiku-4-x': 'haiku',
 };
 
-export const CLAUDE_CLI_DEFAULT_MODEL = 'claude-sonnet-4-x';
+const CLAUDE_CLI_DEFAULT_MODEL = 'claude-sonnet-4-x';
 
 const MODELS: ModelInfo[] = [
   { id: 'claude-opus-4-x', label: 'Claude Opus (subscription)', capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 200_000 },
@@ -167,31 +168,6 @@ async function runToString(spawn: ClaudeSpawn, args: string[]): Promise<{ code: 
   return { code, stdout: '' };
 }
 
-async function readAll(stream: SpawnedClaude['stdout']): Promise<string> {
-  const decoder = new TextDecoder();
-  let out = '';
-  for await (const chunk of stream) {
-    const text = v.safeParse(v.string(), chunk);
-    out += text.success
-      ? text.output
-      : decoder.decode(v.parse(v.instance(Uint8Array), chunk), { stream: true });
-  }
-  out += decoder.decode();
-  return out;
-}
-
-/** `readAll`, with a read failure carried out as a value rather than thrown:
- *  every caller here has an exit outcome that says whether the failure is
- *  already explained, and that decision cannot be made inside a catch. */
-async function readAllOutcome(
-  stream: SpawnedClaude['stdout'],
-): Promise<{ text: string } | { error: unknown }> {
-  try {
-    return { text: await readAll(stream) };
-  } catch (error) {
-    return { error };
-  }
-}
 
 function createClaudeCliModel(specModelId: string, spawn: ClaudeSpawn): LanguageModelV2 {
   const alias = MODEL_ALIASES[specModelId] ?? specModelId;

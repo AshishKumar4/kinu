@@ -45,6 +45,7 @@
  */
 
 import * as v from 'valibot';
+import { walkRecursive } from '@kinu.run/agent-utils/vfs';
 import type { SqlExecutor, VFS } from '../types/primitives';
 import { SOUL_PATH, summarizeSoul } from './soul';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../config/store';
@@ -791,15 +792,15 @@ export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
  */
 export async function* forkFilePaths(vfs: VFS): AsyncGenerator<string> {
   if (await vfs.exists(SOUL_PATH)) yield SOUL_PATH;
-  const walk = async function* (dir: string): AsyncGenerator<string> {
-    for (const name of await vfs.readdir(dir)) {
-      const full = `${dir}/${name}`;
-      const st = await vfs.stat(full);
-      if (st?.isDir) yield* walk(full);
-      else if (st) yield full;
-    }
-  };
-  if (await vfs.exists('memory')) yield* walk('memory');
+  if (!(await vfs.exists('memory'))) return;
+  // The one walk every plane shares, files only. A fork carries the whole
+  // memory tree whatever its size: the walker's bounds are runaway guards for
+  // other callers, and a database-backed tree has no loop to run away into,
+  // so neither is set here and neither can trip.
+  const walk = await walkRecursive(vfs, 'memory', Infinity, Infinity);
+  for (const entry of walk.entries) {
+    if (!entry.stat.isDir) yield entry.path;
+  }
 }
 
 /** The files a fork inherits, read whole — the in-process shape, over the one

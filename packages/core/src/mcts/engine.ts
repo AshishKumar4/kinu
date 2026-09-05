@@ -47,11 +47,11 @@ import { UsageSchema } from '../usage';
  */
 export const SEARCH_FIBER_NAME = 'mcts';
 
-const BranchExplorationSchema = v.object({
+export const BranchExplorationSchema = v.object({
   text: v.string(),
   usage: v.optional(UsageSchema),
 });
-const BranchReflectionSchema = v.object({
+export const BranchReflectionSchema = v.object({
   text: v.string(),
   usage: v.optional(UsageSchema),
 });

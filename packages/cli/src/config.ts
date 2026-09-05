@@ -45,8 +45,7 @@ import * as v from 'valibot';
 export const AGENT_HOME = kinuHome();
 export const CONFIG_PATH = join(AGENT_HOME, 'config.json');
 export const BIN_DIR = join(AGENT_HOME, 'bin');
-const AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const ALIAS_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const KINU_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const RESERVED_ALIASES = new Set([
   'kinu',
   'create',
@@ -269,7 +268,7 @@ export function defaultVirtualWorkspaceId(cwd = process.cwd()): string {
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/gu, '-')
     .replace(/^-+|-+$/gu, '');
-  return candidate && AGENT_NAME_RE.test(candidate) ? candidate : 'workspace';
+  return candidate && KINU_IDENTIFIER_RE.test(candidate) ? candidate : 'workspace';
 }
 
 /** The one owner of local agent state paths. Nothing else joins AGENT_HOME
@@ -312,7 +311,7 @@ function placedRef(agent: KinuAgentConfig): LocalAgentRef | null {
   // directory would make its agents disappear from every roster.
   if (!existsSync(agent.cwd)) return null;
   const name = agent.localName ?? agent.name;
-  if (!AGENT_NAME_RE.test(name)) return null;
+  if (!KINU_IDENTIFIER_RE.test(name)) return null;
   return {
     name,
     cwd: agent.cwd,
@@ -352,7 +351,7 @@ export function listLegacyAgentNames(): string[] {
   if (!existsSync(AGENT_HOME)) return [];
   const placed = new Set(listLocalRefsAllProjects().map((ref) => ref.name));
   return readdirSync(AGENT_HOME)
-    .filter((name) => AGENT_NAME_RE.test(name)
+    .filter((name) => KINU_IDENTIFIER_RE.test(name)
       && !placed.has(name)
       && existsSync(join(AGENT_HOME, name, 'agent.db')))
     .sort();
@@ -678,7 +677,7 @@ export function removeCloudAgentConfig(cloudName: string): boolean {
   return removed;
 }
 
-export function setAliasConfig(agentName: string, alias: string): void {
+function setAliasConfig(agentName: string, alias: string): void {
   validateAgentName(agentName);
   validateAliasName(alias);
   updateConfigFile((config) => {
@@ -693,7 +692,7 @@ export function setAliasConfig(agentName: string, alias: string): void {
   });
 }
 
-export function removeAliasConfig(alias: string): void {
+function removeAliasConfig(alias: string): void {
   updateConfigFile((config) => {
     const agentName = config.aliases?.[alias];
     if (config.aliases) delete config.aliases[alias];
@@ -703,7 +702,7 @@ export function removeAliasConfig(alias: string): void {
   });
 }
 
-export function aliasPath(alias: string): string {
+function aliasPath(alias: string): string {
   validateAliasName(alias);
   return join(BIN_DIR, alias);
 }
@@ -738,24 +737,24 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-export function validateAgentName(name: string): void {
-  if (!AGENT_NAME_RE.test(name)) {
-    throw new Error('Agent name must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.');
+function validateIdentifier(value: string, noun: string): void {
+  if (!KINU_IDENTIFIER_RE.test(value)) {
+    throw new Error(`${noun} must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.`);
   }
+}
+
+function validateAgentName(name: string): void {
+  validateIdentifier(name, 'Agent name');
 }
 
 /** A virtual workspace label. Same shape as an agent name because a user
  *  types both on the command line. */
 export function validateWorkspaceId(workspaceId: string): void {
-  if (!AGENT_NAME_RE.test(workspaceId)) {
-    throw new Error('Workspace id must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.');
-  }
+  validateIdentifier(workspaceId, 'Workspace id');
 }
 
-export function validateAliasName(alias: string): void {
-  if (!ALIAS_RE.test(alias)) {
-    throw new Error('Alias must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.');
-  }
+function validateAliasName(alias: string): void {
+  validateIdentifier(alias, 'Alias');
   if (RESERVED_ALIASES.has(alias)) {
     throw new Error(`Alias "${alias}" is reserved. Choose another alias.`);
   }

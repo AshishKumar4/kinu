@@ -147,6 +147,16 @@ function localRefsByDirName(refs: readonly KinuAgentConfig[]): Map<string, KinuA
 }
 
 /**
+ * Every local workspace on this machine: this directory's placed agent
+ * directories plus legacy names no project claims, deduped. The roster `kinu
+ * list`, `kinu transcripts` and the chat picker all read — one function, so a
+ * workspace cannot show on one surface and miss another.
+ */
+export function listLocalAgentNames(cwd = process.cwd()): string[] {
+  return [...new Set([...listAgentDirs(cwd), ...listLegacyAgentNames()])];
+}
+
+/**
  * The TUI navigator roster for one directory: this project's placed agents,
  * unplaced legacy agents (openable here; opening one adopts it), and the
  * signed-in account's cloud workspaces. A cloud ref sharing a local agent's
@@ -156,8 +166,7 @@ export function listSidebarAgents(cwd = process.cwd()): ListedAgent[] {
   const refs = listConfiguredAgentRefs();
   const byDirName = localRefsByDirName(refs);
   return [
-    ...listAgentDirs(cwd).map((name) => localRow(byDirName.get(name), name)),
-    ...listLegacyAgentNames().map((name) => localRow(byDirName.get(name), name)),
+    ...listLocalAgentNames(cwd).map((name) => localRow(byDirName.get(name), name)),
     ...refs
       .filter((agent) => agent.mode === 'cloud')
       .map((agent) => ({
@@ -194,7 +203,7 @@ export function reconcileAgentRefs(
 }
 
 export function listKnownAgents(): ListedAgent[] {
-  const localAgents = new Set([...listAgentDirs(), ...listLegacyAgentNames()]);
+  const localAgents = new Set(listLocalAgentNames());
   const refs = listConfiguredAgentRefs();
   const byDirName = localRefsByDirName(refs);
   return [

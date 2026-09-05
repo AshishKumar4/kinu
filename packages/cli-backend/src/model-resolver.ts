@@ -3,9 +3,7 @@ import {
   CODEX_CRED_KEY,
   DEFAULT_WORKERS_AI_MODEL_ID,
   MODEL_CAPABILITIES,
-  codexAccessTokenExpiring,
   codexCredentialToHeaders,
-  createCodexOAuthClient,
   createAnthropicProvider,
   createCodexProvider,
   availableJudgeSpecs,
@@ -40,12 +38,11 @@ import {
   type CountableRequest,
   type InputTokenCount,
 } from '@kinu.run/core';
-import type { OAuthCredential } from '@kinu.run/core';
 import { generateText, streamText } from 'ai';
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import type { LLM } from '@kinu.run/core';
-import { createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude-cli-provider';
-import { createOpenCodeProvider, type OpenCodeProviderOptions } from './opencode-provider';
+import { CLAUDE_CLI_PROVIDER_ID, createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude-cli-provider';
+import { OPENCODE_PROVIDER_ID, createOpenCodeProvider } from './opencode-provider';
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import * as v from 'valibot';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
@@ -82,7 +79,6 @@ export interface LocalProviderCredentials {
   anthropicApiKey?: string;
   openrouterApiKey?: string;
   codexAccessToken?: string;
-  codexOAuth?: OAuthCredential;
   openaiCompat?: Record<string, LocalOpenAICompatCredential>;
 }
 
@@ -173,15 +169,10 @@ export interface LocalModelResolverConfig {
    *  `kinu auth` hint. */
   cloud?: LocalCloudSession;
   fetch?: typeof fetch;
-  onCodexRefresh?: (credential: OAuthCredential) => void;
-  /** Seams for the local Claude-subscription provider (tests inject a fake
+  /** Seam for the local Claude-subscription provider (tests inject a fake
    *  `claude` binary). Production leaves this undefined — the provider spawns
    *  the real binary and probes `claude auth status`. */
   claudeCli?: ClaudeCliProviderOptions;
-  /** Seam for the local opencode bridge provider. Production leaves this
-   *  undefined — the provider probes the real opencode binary and reads
-   *  ~/.local/share/opencode/auth.json. */
-  opencode?: OpenCodeProviderOptions;
 }
 
 /** One shape for both paths of the seam below, so a source label and a spec
@@ -214,10 +205,10 @@ function reportCall(
  * compute call in a local workspace comes through here, and each of them used to
  * discard the provider's usage report on the line that received it — so `spend`
  * is the whole difference between a workspace total that counts them and one
- * that silently omits them. Only a COMPLETED call reports: a call that threw
- * produced no usage and, as far as this seam can see, was not billed, so
- * counting it would depress the coverage fraction with requests that genuinely
- * cost nothing.
+ * that silently omits them. Only a completed call reports. A call that threw
+ * produced no usage. This seam cannot tell whether that call was billed.
+ * Counting it would understate the coverage fraction with requests that cost
+ * nothing.
  */
 export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   spec?: string | null;
@@ -284,11 +275,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const registry = createProviderRegistry();
   const localEndpoint = opts.llm;
   const credentials = opts.credentials ?? {};
-  const authStore = buildAuthStore(localEndpoint, credentials, {
-    codexAuthStore: opts.codexAuthStore,
-    fetch: opts.fetch,
-    onCodexRefresh: opts.onCodexRefresh,
-  });
+  const authStore = buildAuthStore(localEndpoint, credentials, opts.codexAuthStore);
 
   const cloud = opts.cloud;
   // An explicit direct endpoint (KINU_BASE_URL → llm.name workers-ai) keeps
@@ -348,7 +335,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   }
 
   registry.register(createClaudeCliProvider(opts.claudeCli));
-  registry.register(createOpenCodeProvider(opts.opencode));
+  registry.register(createOpenCodeProvider());
   registry.register(createCodexProvider());
   registry.register(createOpenAIProvider());
   registry.register(createAnthropicProvider());
@@ -747,21 +734,22 @@ type CliProviderId =
  * This half is genuinely local: it reads adapter state — an endpoint, and below
  * a registry — that core has no business reading, which is why
  * `providers/default-spec.ts` declares it platform-specific at the seam rather
- * than hoisting it. Exported so it is the adapter's ONE answer: the create path
- * carried a second copy of this table that had never gained the `opencode`,
- * `claude` or `@cf/` rows, so creating a workspace against a Claude
- * subscription wrote `openai-compat/<model>` into its config and the first turn
- * resolved the wrong provider.
+ * than hoisting it. This table is the adapter's ONE answer, read through
+ * `defaultSpecForEndpoint` below. The create path carried a second copy of
+ * this table that had never gained the `opencode`, `claude` or `@cf/` rows,
+ * so creating a workspace against a Claude subscription wrote
+ * `openai-compat/<model>` into its config and the first turn resolved the
+ * wrong provider.
  */
-export function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null {
+function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null {
   if (llm === null) return null;
   if (llm.name === 'workers-ai' || llm.model.startsWith('@cf/')) return 'workers-ai';
   if (llm.name === 'codex') return 'codex';
   if (llm.name === 'openai') return 'openai';
   if (llm.name === 'anthropic') return 'anthropic';
   if (llm.name === 'openrouter') return 'openrouter';
-  if (llm.name === 'opencode') return 'opencode';
-  if (llm.name === 'claude') return 'claude';
+  if (llm.name === OPENCODE_PROVIDER_ID) return OPENCODE_PROVIDER_ID;
+  if (llm.name === CLAUDE_CLI_PROVIDER_ID) return CLAUDE_CLI_PROVIDER_ID;
   return 'openai-compat';
 }
 
@@ -795,14 +783,9 @@ interface OpenAICompatHeaders {
 function buildAuthStore(
   localEndpoint: LLMProviderConfig | null,
   credentials: LocalProviderCredentials,
-  opts: {
-    codexAuthStore?: LocalCodexAuthStore;
-    fetch?: typeof fetch;
-    onCodexRefresh?: (credential: OAuthCredential) => void;
-  } = {},
+  codexAuthStore?: LocalCodexAuthStore,
 ): LocalAuthStore {
   const store = new Map<string, AuthResolution>();
-  let codexCredential = credentials.codexOAuth;
 
   if (credentials.openaiApiKey) {
     store.set('openai.bearer', bearer(credentials.openaiApiKey));
@@ -856,9 +839,9 @@ function buildAuthStore(
     });
   }
 
-  const hasCodex = (): boolean => (opts.codexAuthStore
-    ? opts.codexAuthStore.hasCredential()
-    : Boolean(codexCredential?.accessToken || credentials.codexAccessToken));
+  const hasCodex = (): boolean => (codexAuthStore
+    ? codexAuthStore.hasCredential()
+    : Boolean(credentials.codexAccessToken));
 
   return {
     has(key: string): boolean {
@@ -870,21 +853,7 @@ function buildAuthStore(
     },
     async get(key: string, authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null> {
       if (key !== CODEX_CRED_KEY) return store.get(key) ?? null;
-      if (opts.codexAuthStore) return opts.codexAuthStore.getAuth(authOpts);
-      if (codexCredential?.accessToken) {
-        if (codexCredential.refreshToken && (authOpts?.forceRefresh || codexAccessTokenExpiring(codexCredential.accessToken))) {
-          const refreshed = await createCodexOAuthClient(opts.fetch).refresh(codexCredential.refreshToken);
-          codexCredential = {
-            kind: 'oauth',
-            accessToken: refreshed.accessToken,
-            refreshToken: refreshed.refreshToken,
-            expiresAt: refreshed.expiresAt,
-            metadata: codexCredential.metadata,
-          };
-          opts.onCodexRefresh?.(codexCredential);
-        }
-        return { headers: codexCredentialToHeaders(codexCredential) };
-      }
+      if (codexAuthStore) return codexAuthStore.getAuth(authOpts);
       if (credentials.codexAccessToken) {
         return {
           headers: codexCredentialToHeaders({

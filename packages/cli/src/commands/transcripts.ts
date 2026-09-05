@@ -1,4 +1,5 @@
-import { listAgentDirs, listLegacyAgentNames, loadConfigFile, resolveAgentRef } from '../config';
+import { listLocalAgentNames } from '../agent-list';
+import { loadConfigFile, resolveAgentRef } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { findTranscriptPath, listCliSessions } from '../session';
 
@@ -52,7 +53,6 @@ function resolveAgentNames(input: string | undefined): string[] {
   for (const [name, agent] of Object.entries(cfg.agents ?? {})) names.add(agent.name || name);
   // Project-scoped refs, then the workspaces no project claims yet: a
   // transcript recorded before placement existed is still worth listing.
-  for (const name of listAgentDirs()) names.add(name);
-  for (const name of listLegacyAgentNames()) names.add(name);
+  for (const name of listLocalAgentNames()) names.add(name);
   return [...names].sort();
 }

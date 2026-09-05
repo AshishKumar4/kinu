@@ -27,8 +27,9 @@ import {
   listRuns,
   listScaffoldVersions,
   loadGepaCandidates,
-  nextCronFire,
   releaseSqlFromExec,
+  createTimerTrigger,
+  tableExists as coreTableExists,
   workspaceSpend,
   runCorpusEval,
   runEnsemble,
@@ -65,6 +66,7 @@ import {
   type SearchNode,
   type SearchNodeDetail,
   type TriggerRow,
+  type TimerTrigger,
   type MctsSearchRunSummary,
   type ReasoningEffort,
   reconcileColumns,
@@ -730,27 +732,10 @@ export async function cancelLocalTrigger(name: string, id: string): Promise<{ ch
   });
 }
 
-export async function createLocalTimerTrigger(name: string, input: { cron?: string; atMs?: number; label?: string }): Promise<TriggerRow | null> {
+export async function createLocalTimerTrigger(name: string, input: { cron?: string; atMs?: number; label?: string }): Promise<TimerTrigger> {
   return withLocalWritableDb(name, async (db) => {
     initEventsHubTables(hubSql(db));
-    const now = Date.now();
-    const registry = new TriggerRegistry(hubSql(db), NOOP_ALARM);
-    const nextFireAt = input.cron
-      ? nextCronFire(input.cron, now)
-      : input.atMs;
-    if (input.cron && nextFireAt === null) throw new Error(`Unsupported cron expression: ${input.cron}`);
-    if (!nextFireAt) throw new Error('A future trigger time is required.');
-    const spec: JsonObject = {};
-    if (input.cron) spec.cron = input.cron;
-    else spec.atMs = nextFireAt;
-    if (input.label) spec.label = input.label;
-    const id = await registry.register({
-      kind: input.cron ? 'timer_cron' : 'timer_oneshot',
-      spec,
-      creator_trust: 'owner',
-      next_fire_at: nextFireAt,
-    }, now);
-    return registry.get(id);
+    return createTimerTrigger(new TriggerRegistry(hubSql(db), NOOP_ALARM), { ...input, trust: 'owner' }, Date.now());
   });
 }
 
@@ -852,12 +837,7 @@ function get<T>(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): T | n
 }
 
 function tableExists(db: SqliteDb, name: string): boolean {
-  const row = get<{ name: string }>(
-    db,
-    `SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name = ? LIMIT 1`,
-    name,
-  );
-  return Boolean(row);
+  return coreTableExists(makeSql(db), name);
 }
 
 function columnSet(db: SqliteDb, table: string): Set<string> {

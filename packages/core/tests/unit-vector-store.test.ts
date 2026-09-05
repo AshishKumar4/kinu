@@ -11,7 +11,7 @@ import {
   createWorkersAIEmbedder,
   type VectorizeIndex,
   type Embedder,
-  type VectorMemoryChunk,
+  type IndexedChunk,
   type JsonObject,
   type VectorRecord,
 } from '../src/index';
@@ -120,7 +120,7 @@ describe('CloudflareVectorStore', () => {
     const { index, records } = makeMockIndex();
     const store = createCloudflareVectorStore({ index, embedder: constEmbedder });
 
-    const chunk: VectorMemoryChunk = {
+    const chunk: IndexedChunk = {
       id: 'mem-1', path: 'memory/MEMORY.md',
       startLine: 1, endLine: 5,
       text: 'apples and bananas',
@@ -140,7 +140,7 @@ describe('CloudflareVectorStore', () => {
   test('upsertChunks (batched) inserts all + survives single embedBatch path', async () => {
     const { index } = makeMockIndex();
     const store = createCloudflareVectorStore({ index, embedder: constEmbedder });
-    const chunks: VectorMemoryChunk[] = [
+    const chunks: IndexedChunk[] = [
       { id: 'a', path: 'p', startLine: 0, endLine: 0, text: 'apple' },
       { id: 'b', path: 'p', startLine: 1, endLine: 1, text: 'banana' },
       { id: 'c', path: 'p', startLine: 2, endLine: 2, text: 'zebra' },
@@ -186,7 +186,7 @@ describe('CloudflareVectorStore', () => {
       async getByIds() { return []; },
     };
     const store = createCloudflareVectorStore({ index: failingIndex, embedder: constEmbedder });
-    const chunk: VectorMemoryChunk = { id: 'x', path: 'p', startLine: 1, endLine: 2, text: 'hello' };
+    const chunk: IndexedChunk = { id: 'x', path: 'p', startLine: 1, endLine: 2, text: 'hello' };
 
     // Swallowing these is what let the backfill mark itself done over chunks
     // it never embedded — a caller cannot tell an indexed chunk from a lost one.

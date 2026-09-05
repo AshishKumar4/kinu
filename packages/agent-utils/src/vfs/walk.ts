@@ -1,10 +1,8 @@
-import type { VFSStat } from "./types";
-
-/** What a walk actually asks of a filesystem: listing and stat, over either
- *  stat dialect — this package's VFSStat with predicates, or core's
- *  VfsEntryStat with a bare `isDir` (the workspace plane and its mount
- *  table). One walk primitive serves both. */
-export type WalkStat = VFSStat | { size: number; mtimeMs: number; isDir: boolean };
+/** What a walk actually asks of a filesystem: listing and stat, where a stat
+ *  is a size, a timestamp and a bare `isDir` — the narrow shape the workspace
+ *  plane and its mount table speak. One walk primitive serves every plane
+ *  shaped that way. */
+export type WalkStat = { size: number; mtimeMs: number; isDir: boolean };
 
 export type WalkableVFS = {
 	readdir(path: string): Promise<string[]>;
@@ -52,21 +50,16 @@ export async function walkRecursive(
 			const full = dir ? `${dir}/${name}` : name;
 			let caught: WalkStat | null;
 			try { caught = await vfs.stat(full); } catch (error) {
-				// VFSError is Node-errno shaped: ENOENT is an entry that vanished
-				// between readdir and stat; anything else is a real walk failure.
+				// ENOENT is an entry that vanished between readdir and stat.
+				// Anything else is a real walk failure.
 				if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
 				continue;
 			}
-			// The core dialect stats a vanished entry as null rather than throwing
-			// ENOENT — the same skip, for the same reason.
+			// A null stat is the same skip, for the same reason. The workspace
+			// plane stats a vanished entry as null instead of throwing ENOENT.
 			if (caught === null) continue;
-			const st: WalkStat = caught;
-			entries.push({ path: full, stat: st });
-			// Two stat dialects share this seam: this package's VFSStat carries
-			// predicates, core's VfsEntryStat a bare `isDir`. The workspace plane
-			// (and its mount table) speaks the second, so the walk reads either.
-			const isDir = 'isDir' in st ? st.isDir === true : st.isDirectory();
-			if (isDir) {
+			entries.push({ path: full, stat: caught });
+			if (caught.isDir) {
 				if (depth + 1 > maxDepth) { depthPruned = true; continue; }
 				await walk(full, depth + 1);
 			}

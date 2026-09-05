@@ -364,3 +364,54 @@ describe('the sidebar roster for one directory', () => {
     expect(parsed.grouped.remote.map((agent) => `${agent.mode}:${agent.name}`)).toEqual(['cloud:audit', 'cloud:jarvis']);
   });
 });
+
+describe('the local roster is one function', () => {
+  test('transcripts with no agent lists the set list shows locally', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kinu-roster-home-'));
+    const projectDir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-roster-proj-')));
+    tempDirs.push(home, projectDir);
+    for (const name of ['alpha', 'beta', 'gamma']) {
+      mkdirSync(join(home, name));
+      writeFileSync(join(home, name, 'agent.db'), '');
+    }
+    const stamp = '2026-06-08T00:00:00.000Z';
+    const placed = (name: string) => ({
+      name, mode: 'local', localName: name, cwd: projectDir, workspaceId: 'shop',
+      createdAt: stamp, updatedAt: stamp,
+    });
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      agents: { alpha: placed('alpha'), beta: placed('beta') },
+      aliases: {},
+    }));
+
+    // Both commands through their real entry points: the sets they print
+    // must match, because both now read listLocalAgentNames.
+    const script = `
+      const { listCommand } = await import('./packages/cli/src/commands/list.ts');
+      const { transcriptsCommand } = await import('./packages/cli/src/commands/transcripts.ts');
+      process.chdir(${JSON.stringify(projectDir)});
+      const lines = [];
+      console.log = (...args) => { lines.push(args.map(String).join(' ')); };
+      await listCommand();
+      const listed = [...lines];
+      lines.length = 0;
+      await transcriptsCommand(undefined, {});
+      process.stdout.write(JSON.stringify({ listed, transcripted: lines }) + '\\n');
+    `;
+    const proc = Bun.spawnSync({
+      cmd: [process.execPath, '-e', script],
+      cwd: repoRoot,
+      env: { ...process.env, KINU_HOME: home, NO_COLOR: '1' },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(proc.exitCode).toBe(0);
+    const parsed = v.parse(v.object({
+      listed: v.array(v.string()),
+      transcripted: v.array(v.string()),
+    }), JSON.parse(proc.stdout.toString()));
+    const names = (lines: string[]) => ['alpha', 'beta', 'gamma'].filter((name) => lines.some((line) => line.includes(name)));
+    expect(names(parsed.listed)).toEqual(['alpha', 'beta', 'gamma']);
+    expect(names(parsed.transcripted)).toEqual(names(parsed.listed));
+  });
+});

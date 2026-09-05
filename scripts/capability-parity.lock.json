@@ -120,12 +120,15 @@
   "movable packages/cf-backend/src/user/workspace-capability.ts",
   "movable packages/cf-backend/src/workspace-box-rpc.ts",
   "movable packages/cli-backend/src/agent-host/driver-lease.ts",
+  "movable packages/cli-backend/src/branch-protocol.ts",
   "movable packages/cli-backend/src/craft-executor.ts",
   "movable packages/cli-backend/src/fiber.ts",
   "movable packages/cli-backend/src/host-toolchain.ts",
+  "movable packages/cli-backend/src/spawned-output.ts",
   "movable packages/cli/src/model-catalog.ts",
   "movable packages/cli/src/provider-guidance.ts",
   "movable packages/cli/src/tui/context-status.ts",
   "movable packages/cli/src/tui/format.ts",
-  "movable packages/cli/src/tui/input-state.ts"
+  "movable packages/cli/src/tui/input-state.ts",
+  "movable packages/cli/src/wait.ts"
 ]

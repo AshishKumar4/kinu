@@ -2,9 +2,8 @@ import { describe, test, expect } from 'bun:test';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
 import {
   contextWindowForSpec,
-  dedupeModelEntries,
   filterModels,
-  normalizeModelEntries,
+  normalizeModelMenu,
   validateModelSpec,
   type AgentModelEntry,
 } from '../src/model-catalog';
@@ -17,9 +16,11 @@ const FEED: AgentModelEntry[] = [
   { spec: 'anthropic/claude-haiku-4-5', label: 'Claude Haiku 4.5', provider: 'anthropic' },
 ];
 
-describe('dedupeModelEntries', () => {
+describe('menu model dedupe', () => {
+  const menuModels = (models: unknown[]) =>
+    normalizeModelMenu({ payload: { models, failures: [] } }).models;
   test('pins the platform default, then groups providers in feed order', () => {
-    const out = dedupeModelEntries(FEED);
+    const out = menuModels(FEED);
     expect(out.map((m) => m.spec)).toEqual([
       DEFAULT_WORKERS_AI_MODEL_SPEC,
       'workers-ai/@cf/meta/llama-4',
@@ -30,7 +31,7 @@ describe('dedupeModelEntries', () => {
   });
 
   test('collapses duplicate specs and unions capabilities', () => {
-    const out = dedupeModelEntries([
+    const out = menuModels([
       { spec: 'groq/m', label: 'M', provider: 'groq', capabilities: ['tools'] },
       { spec: 'groq/m', label: 'M', provider: 'groq', capabilities: ['vision'] },
     ]);
@@ -39,11 +40,11 @@ describe('dedupeModelEntries', () => {
   });
 });
 
-describe('normalizeModelEntries + contextWindowForSpec', () => {
+describe('menu entry normalization + contextWindowForSpec', () => {
   test('keeps contextWindow through normalization and looks it up by spec', () => {
-    const rows = normalizeModelEntries({ rows: [
+    const rows = normalizeModelMenu({ payload: { models: [
       { spec: 'groq/llama-3.3-70b-versatile', label: 'Llama 3.3 70B', provider: 'groq', contextWindow: 131072 },
-    ] });
+    ], failures: [] } }).models;
     expect(contextWindowForSpec(rows, 'groq/llama-3.3-70b-versatile')).toBe(131072);
     expect(contextWindowForSpec(rows, 'missing/spec')).toBeUndefined();
   });
@@ -51,13 +52,13 @@ describe('normalizeModelEntries + contextWindowForSpec', () => {
   test('maps local resolver rows (provider + id) to picker entries with metadata', () => {
     // The exact shape LocalAgentClient.listModels feeds /model: the signed-in
     // resolver lists ModelInfo rows under their provider id.
-    const rows = normalizeModelEntries({ rows: [
+    const rows = normalizeModelMenu({ payload: { models: [
       {
         provider: 'workers-ai', id: '@cf/zai-org/glm-5.3', label: 'GLM 5.3',
         capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 1048576,
       },
       { provider: 'my-gateway', id: 'openai/gpt-4.1', label: 'GPT-4.1', contextWindow: 1047576 },
-    ] });
+    ], failures: [] } }).models;
     expect(rows).toEqual([
       {
         spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'GLM 5.3', provider: 'workers-ai',

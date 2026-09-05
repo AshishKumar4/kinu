@@ -2,10 +2,12 @@ import { spawn } from 'node:child_process';
 import { hostname, platform } from 'node:os';
 import {
   defaultOrigin, listCliSessions, logout, pollCliAuth, revokeCliSessionByHash, revokeAllCliSessions, startCliAuth, whoami,
+  type CliAuthPoll,
 } from '../cloud-api';
 import { bumpProviderRevision, loadConfigFile, requireAuthConfig, updateConfigFile } from '../config';
 import { ACCENT, DIM, formatWhen, OK, WARN } from '../display';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { waitForAnswer } from '../wait';
 
 export interface CliAuthCallbacks {
   started?(flow: { verificationUrl: string; userCode: string }): void;
@@ -22,30 +24,25 @@ export async function authenticateCli(
   callbacks.started?.({ verificationUrl: flow.verificationUrl, userCode: flow.userCode });
   openBrowser(flow.verificationUrl);
 
-  const expiresAt = Date.parse(flow.expiresAt);
-  while (Date.now() < expiresAt) {
-    await delay(Math.max(1, flow.intervalSeconds) * 1000);
-    const status = await pollCliAuth(origin, flow.deviceToken);
-    if (status.status === 'pending') {
-      callbacks.pending?.();
-      continue;
-    }
-    if (status.status === 'expired') throw new Error(status.message ?? 'CLI auth expired.');
-    if (!status.token || !status.user) throw new Error('Auth approved but no token returned.');
-    updateConfigFile((config) => {
-      config.origin = status.origin ?? origin;
-      config.accessToken = status.token;
-      config.tokenExpiresAt = status.expiresAt;
-      config.user = status.user;
-    });
-    // Signing in changes which providers a model resolution can reach — the
-    // account's credentials become available through the proxy — so a resident
-    // session's cached provider listing is now stale.
-    bumpProviderRevision();
-    callbacks.completed?.(status.user.email);
-    return;
-  }
-  throw new Error('CLI auth expired. Start sign-in again.');
+  // The hub owns the request's deadline: once it passes, the poll answers
+  // `expired` by itself, so the wait ends on that answer or on approval.
+  const status = await waitForAnswer(async (): Promise<CliAuthPoll | undefined> => {
+    const poll = await pollCliAuth(origin, flow.deviceToken);
+    return poll.status === 'pending' ? undefined : poll;
+  }, { intervalMs: Math.max(1, flow.intervalSeconds) * 1000, onWaiting: () => callbacks.pending?.() });
+  if (status.status === 'expired') throw new Error(status.message ?? 'CLI auth expired.');
+  if (!status.token || !status.user) throw new Error('Auth approved but no token returned.');
+  updateConfigFile((config) => {
+    config.origin = status.origin ?? origin;
+    config.accessToken = status.token;
+    config.tokenExpiresAt = status.expiresAt;
+    config.user = status.user;
+  });
+  // Signing in changes which providers a model resolution can reach — the
+  // account's credentials become available through the proxy — so a resident
+  // session's cached provider listing is now stale.
+  bumpProviderRevision();
+  callbacks.completed?.(status.user.email);
 }
 
 export async function authCommand(opts: { origin?: string }): Promise<void> {
@@ -163,8 +160,4 @@ export function openBrowser(url: string): void {
   const child = spawn(command, args, { detached: true, stdio: 'ignore' });
   child.on('error', () => {});
   child.unref();
-}
-
-export function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }

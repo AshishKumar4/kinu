@@ -9,8 +9,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHostCheckpoints } from '@kinu.run/cli-backend';
 import { DEFAULT_ADVISOR_MIN_SEVERITY } from '@kinu.run/core';
-import type { EvolutionConfigView, FileCheckpointEntry } from '@kinu.run/core';
-import { commandsForClient, executeSlashCommand, filterCommands, groupCheckpointsByTurn, performUndo } from '../src/slash-commands';
+import type { EvolutionConfigView, FileCheckpointEntry, FileRestoreChange } from '@kinu.run/core';
+import { commandsForClient, executeSlashCommand, filterCommands, performUndo } from '../src/slash-commands';
 import type { AgentClient, FileCheckpointSurface } from '../src/agent-client';
 import { createCliSession } from '../src/session';
 
@@ -220,14 +220,39 @@ describe('/undo command surface', () => {
   const entry = (id: string, turnId: string | null, at: number): FileCheckpointEntry =>
     ({ id, dir: '/tmp/p', at, turnId, sessionId: 's', reason: 'pre-mutation' });
 
-  test('groups checkpoints by turn, newest first, keeping multi-dir turns together', () => {
-    const groups = groupCheckpointsByTurn([
+  test('undo addresses turns newest-first, keeping multi-dir turns together', async () => {
+    const entries = [
       { ...entry('c3', 'turn-2', 30) },
       { ...entry('c2b', 'turn-1', 21), dir: '/tmp/other' },
       { ...entry('c2a', 'turn-1', 20) },
       { ...entry('c1', null, 10) },
+    ];
+    const change: FileRestoreChange = { kind: 'modify', path: 'a.txt' };
+    const restored: Array<{ dir: string; id: string }> = [];
+    const surface: FileCheckpointSurface = {
+      list: async (_limit?: number, turnId?: string) => ({
+        availability: { available: true },
+        entries: turnId === undefined ? entries : entries.filter((e) => e.turnId === turnId),
+      }),
+      plan: async (dir: string, id: string) => ({ dir, id, files: [change] }),
+      restore: async (dir: string, id: string) => {
+        restored.push({ dir, id });
+        return { dir, id, files: [], preRestoreId: null };
+      },
+    };
+    const client = slashClient(surface);
+
+    const first = await performUndo(client);
+    expect(first.restored).toBe(true);
+    expect(restored).toEqual([{ dir: '/tmp/p', id: 'c3' }]);
+
+    restored.length = 0;
+    const second = await performUndo(client, '2');
+    expect(second.restored).toBe(true);
+    expect(restored).toEqual([
+      { dir: '/tmp/other', id: 'c2b' },
+      { dir: '/tmp/p', id: 'c2a' },
     ]);
-    expect(groups.map((g) => g.map((e) => e.id))).toEqual([['c3'], ['c2b', 'c2a'], ['c1']]);
   });
 
   test('is offered only when the client has a checkpoint surface', async () => {

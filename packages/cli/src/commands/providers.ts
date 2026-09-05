@@ -3,7 +3,7 @@ import { deleteCloudCredential, listCloudCredentials, type CloudCredentialSummar
 import { bumpProviderRevision, loadConfigFile, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { authCommand } from './auth';
-import { INSTALL_HINT_OPENCODE, LOGIN_HINT_OPENCODE, setupCommand } from './setup';
+import { canonicalProviderName, CLAUDE_LOGIN_HINT, connectClaude, INSTALL_HINT_OPENCODE, LOGIN_HINT_OPENCODE, setupCommand } from './setup';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -33,10 +33,6 @@ interface LocalCredential {
   /** The account-side key the same provider is stored under, when it can be. */
   credKey?: string;
 }
-
-const CLAUDE_INSTALL_HINT = 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup';
-const CLAUDE_LOGIN_HINT = 'Run `claude` once to sign in to your Claude subscription.';
-const CLAUDE_READY = 'Claude subscription ready. Use kinu create --model claude/claude-opus-4-x';
 
 export async function providersCommand(actionOrProvider: string | undefined, providerArg: string | undefined, opts: {
   origin?: string;
@@ -94,32 +90,6 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
   });
 }
 
-/** Claude subscription "connect" is a status check, not a credential we store:
- *  the official `claude` binary owns its own Claude Code login. We probe PATH +
- *  `claude auth status` and print the next step. LOCAL ONLY — cloud agents need
- *  an Anthropic API key (kinu provider connect anthropic), not this. */
-async function connectClaude(): Promise<void> {
-  console.log('');
-  console.log(ACCENT('Claude subscription (via Claude Code)'));
-  console.log(DIM('Drives the `claude` binary with your Claude Code login. Local workspaces only.'));
-  const { binary, loggedIn } = await checkClaudeAvailability();
-  console.log('');
-  if (binary && loggedIn) {
-    console.log(`${OK('✓')} ${CLAUDE_READY}`);
-    // Nothing was written here — the `claude` binary owns its own login — but
-    // this command is how the user says they have just connected it, and its
-    // availability is what a listing sweep probes. A resident session has no
-    // other way to learn that the probe now succeeds.
-    bumpProviderRevision();
-  } else if (binary) {
-    console.log(`${WARN('!')} ${CLAUDE_LOGIN_HINT}`);
-  } else {
-    console.log(`${WARN('!')} ${CLAUDE_INSTALL_HINT}`);
-    console.log(DIM('Then run `claude` once to sign in.'));
-  }
-  console.log(DIM('Cloud workspaces cannot use the subscription. Connect an Anthropic API key for those.'));
-}
-
 /** opencode bridge "connect" — probes the local opencode CLI for
  *  availability and delegates to the full setup flow which reads auth.json,
  *  discovers models, and writes the model spec. */
@@ -147,7 +117,7 @@ async function connectOpenCode(opts: { model?: string }): Promise<void> {
 function parseArgs(actionOrProvider: string | undefined, providerArg: string | undefined): ParsedProviderArgs {
   if (!actionOrProvider) return { action: 'list' };
 
-  const first = normalizeToken(actionOrProvider);
+  const first = actionOrProvider.trim().toLowerCase();
   if (first === 'list' || first === 'ls' || first === 'status') return { action: 'list' };
 
   if (first === 'connect' || first === 'login' || first === 'add') {
@@ -334,25 +304,6 @@ function normalizeProvider(value: string): ProviderName {
     throw new Error('Provider must be cloudflare, claude, codex, openai, openrouter, anthropic, openai-compatible, or opencode.');
   }
   return provider;
-}
-
-/** The aliases users actually type, folded onto canonical provider names. */
-function canonicalProviderName(value: string): string {
-  const token = normalizeToken(value);
-  return token === 'cf' || token === 'workers-ai' || token === 'account'
-    ? 'cloudflare'
-    : token === 'claude-code' || token === 'subscription' || token === 'claude-subscription'
-      ? 'claude'
-      : token === 'chatgpt' || token === 'chatgpt-codex'
-        ? 'codex'
-        : token === 'compat' || token === 'ollama'
-          ? 'openai-compatible'
-          : token === 'opencode' ? 'opencode'
-          : token;
-}
-
-function normalizeToken(value: string): string {
-  return value.trim().toLowerCase();
 }
 
 /** What the account holds, or why it could not be asked. An unreachable account

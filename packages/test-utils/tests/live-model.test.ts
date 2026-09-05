@@ -17,8 +17,9 @@
  */
 import { describe, test, expect, beforeEach } from 'bun:test';
 import type { LanguageModelUsage } from 'ai';
+import { cloudProxyBaseURL } from '@kinu.run/core';
 import {
-  liveModelSpend, recordLiveModelSpend, reportLiveModelSpend, resetLiveModelSpend,
+  liveModelSpend, recordLiveModelSpend, reportLiveModelSpend, resetLiveModelSpend, workerSession,
 } from '../src/live-model';
 
 // Module-level counters, so each case starts from a stated zero rather than from
@@ -142,5 +143,30 @@ describe('resetLiveModelSpend — a scripted suite clears instead of publishing'
     // This is the ONLY state in which a clean zero is the truth, and it is what
     // distinguishes it from a tier that drove episodes it could not account for.
     expect(spend.episodesUnmeasured).toBe(0);
+  });
+});
+
+describe('workerSession — the deployment behind a worker-proxy target', () => {
+  test('a base URL built by cloudProxyBaseURL recovers its origin and bearer', () => {
+    // workerSession is the inverse of cloudProxyBaseURL. The route both name
+    // is one constant, so moving it cannot strand this direction.
+    const origin = 'https://staging.example';
+    const session = workerSession({
+      name: 'workers-ai',
+      baseURL: cloudProxyBaseURL(origin),
+      headers: { Authorization: 'Bearer token-1' },
+      model: 'model-1',
+    });
+    expect(session.origin).toBe(origin);
+    expect(session.token).toBe('token-1');
+  });
+
+  test('a target fronting a model and no deployment is refused, not misrouted', () => {
+    expect(() => workerSession({
+      name: 'openai',
+      baseURL: 'https://api.example/v1',
+      headers: { Authorization: 'Bearer token-1' },
+      model: 'model-1',
+    })).toThrow('is not a worker AI-proxy base URL');
   });
 });

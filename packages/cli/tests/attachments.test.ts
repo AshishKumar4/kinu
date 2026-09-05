@@ -9,7 +9,6 @@ import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu.run/core';
 import { LOCAL_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu.run/cli-backend';
 import {
   describePromptAttachment,
-  extractPathTokens,
   resolvePromptAttachments,
 } from '../src/attachments';
 
@@ -31,25 +30,43 @@ function makeDir(): string {
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-describe('extractPathTokens', () => {
-  test('finds @mentions, quoted tokens, and ~ paths — bare words stay prose', () => {
-    const tokens = extractPathTokens(`look at @/tmp/shot.png and "/home/u/my notes.txt" plus ~/docs/spec.pdf but not src/index.ts`);
-    expect(tokens.map((t) => ({ path: t.path, mention: t.mention }))).toEqual([
-      { path: '/tmp/shot.png', mention: true },
-      { path: '/home/u/my notes.txt', mention: false },
-      { path: '~/docs/spec.pdf', mention: false },
-    ]);
+describe('prompt token shapes through resolution', () => {
+  test('@mentions, quoted tokens, and ~ paths resolve; bare words stay prose', async () => {
+    const dir = makeDir();
+    const img = join(dir, 'shot.png');
+    writeFileSync(img, PNG_BYTES);
+    const notes = join(dir, 'my notes.txt');
+    writeFileSync(notes, 'remember the milk');
+
+    const result = await resolvePromptAttachments(
+      `look at @${img} and "${notes}" plus ~/docs/spec.pdf but not src/index.ts`,
+      { limitBytes: CAP, cwd: dir },
+    );
+    // The @mention inlines and loses its @. The quoted path stays quoted.
+    // The ~ path and the bare word name nothing on disk and pass through.
+    expect(result.text).toBe(`look at ${img} and "${notes}" plus ~/docs/spec.pdf but not src/index.ts`);
+    expect(result.attached.map((a) => a.path).sort()).toEqual([img, notes].sort());
+    expect(result.errors).toEqual([]);
   });
 
-  test('supports quoted @mentions for paths with spaces', () => {
-    const tokens = extractPathTokens(`compare @"/tmp/two words.png" please`);
-    expect(tokens).toHaveLength(1);
-    expect(tokens[0]!.path).toBe('/tmp/two words.png');
-    expect(tokens[0]!.mention).toBe(true);
+  test('quoted @mentions with spaces resolve and lose the @', async () => {
+    const dir = makeDir();
+    const img = join(dir, 'two words.png');
+    writeFileSync(img, PNG_BYTES);
+
+    const result = await resolvePromptAttachments(`compare @"${img}" please`, { limitBytes: CAP, cwd: dir });
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]!.filename).toBe('two words.png');
+    expect(result.text).toBe(`compare ${img} please`);
   });
 
-  test('an email-style @ inside a word is not a mention', () => {
-    expect(extractPathTokens('mail me@example.com today')).toEqual([]);
+  test('an email-style @ inside a word resolves to nothing', async () => {
+    const dir = makeDir();
+    const result = await resolvePromptAttachments('mail me@example.com today', { limitBytes: CAP, cwd: dir });
+    expect(result.text).toBe('mail me@example.com today');
+    expect(result.attached).toEqual([]);
+    expect(result.files).toEqual([]);
+    expect(result.errors).toEqual([]);
   });
 });
 
@@ -215,11 +232,6 @@ describe('a quoted sentence is prose, not a path', () => {
     expect(result.files).toEqual([]);
     expect(result.errors).toEqual([]);
     expect(result.text).toBe(`Answer: "${SENTENCE}"`);
-  });
-
-  test('the token is still lexically extracted — the bound is on resolution, not detection', async () => {
-    const [token] = extractPathTokens(`Answer: "${SENTENCE}"`);
-    expect(token?.path).toBe(SENTENCE);
   });
 
   test('a quoted filename shorter than the bound still attaches', async () => {

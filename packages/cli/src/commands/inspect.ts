@@ -1,5 +1,5 @@
 import {
-  decodeJsonValue, formatScoreInterval, JsonArraySchema, JsonObjectSchema, JsonValueSchema,
+  decodeJsonValue, formatScoreInterval, JsonArraySchema, JsonValueSchema,
   renderAlignmentConvergence, renderCalibrationReport, SPEND_SOURCE_LABEL, usageTotal,
   type AlignmentConvergence, type GepaOptimizationResult, type JsonObject, type JsonValue,
   type SearchNode, type Usage, type WorkspaceSpend,
@@ -14,7 +14,7 @@ import {
   type CloudWebhookTriggerInput,
 } from '../cloud-api';
 import { ACCENT, DIM, ERR, OK, plural, printJson, printSearchTree, WARN } from '../display';
-import { normalizeWebhookAuthMode, parsePositiveInt, parseTime } from '../options';
+import { asRecord, normalizeWebhookAuthMode, parsePositiveInt, parseTime } from '../options';
 import {
   executeLocalExecutor,
   getLocalAgentState,
@@ -473,37 +473,33 @@ function printPretty(data: JsonValue): void {
 }
 
 function formatEventRow(item: JsonValue): string {
-  const row = asRecord({ value: item });
+  const row = asRecord({ value: item }, 'value');
   return `${ACCENT(String(row.id ?? 'event'))} ${String(row.variant ?? '')} ${DIM(String(row.ingress ?? ''))} ${formatDate(row.received_at ?? row.receivedAt)}`;
 }
 
 function formatTimelineRow(item: JsonValue): string {
-  const row = asRecord({ value: item });
+  const row = asRecord({ value: item }, 'value');
   const label = row.label ?? row.message ?? row.kind ?? row.id ?? 'entry';
   return `${formatDate(row.ts ?? row.received_at ?? row.created_at)} ${ACCENT(String(row.kind ?? row.type ?? 'event'))} ${DIM(String(label).slice(0, 120))}`;
 }
 
 function formatHeadRow(item: JsonValue): string {
-  const row = asRecord({ value: item });
+  const row = asRecord({ value: item }, 'value');
   return `${ACCENT(String(row.rootId ?? row.id ?? 'head'))} ${String(row.status ?? '')} ${DIM(String(row.task ?? row.rationale ?? '').slice(0, 100))}`;
 }
 
 function formatGepaRow(item: JsonValue): string {
-  const row = asRecord({ value: item });
+  const row = asRecord({ value: item }, 'value');
   return `${ACCENT(String(row.runId ?? row.id ?? 'gepa'))} ${String(row.status ?? '')} ${DIM(String(row.target ?? row.stopReason ?? '').slice(0, 100))}`;
 }
 
 function formatExecutorRow(item: JsonValue): string {
-  const row = asRecord({ value: item });
+  const row = asRecord({ value: item }, 'value');
   const capabilities = v.safeParse(v.array(v.string()), row.capabilities);
   const caps = capabilities.success ? capabilities.output.join(', ') : '';
   return `${ACCENT(String(row.name ?? row.id ?? 'executor'))} ${DIM(String(row.kind ?? ''))} ${String(row.status ?? '')} ${DIM(caps)}`;
 }
 
-function asRecord(input: { value: JsonValue }): JsonObject {
-  const parsed = v.safeParse(JsonObjectSchema, input.value);
-  return parsed.success ? parsed.output : {};
-}
 
 function formatDate(value: JsonValue | undefined): string {
   const parsed = v.safeParse(v.pipe(v.number(), v.finite()), value);

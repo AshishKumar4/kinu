@@ -52,7 +52,7 @@ function stripQuotes(s: string): string {
 
 /** Candidate file-path tokens in a prompt. Purely lexical — resolution
  *  (stat + size policy) happens in resolvePromptAttachments. */
-export function extractPathTokens(text: string): PathToken[] {
+function extractPathTokens(text: string): PathToken[] {
   const tokens: PathToken[] = [];
   for (const m of text.matchAll(TOKEN_RE)) {
     const raw = m[2]!;

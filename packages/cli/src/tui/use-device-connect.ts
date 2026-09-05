@@ -45,6 +45,8 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
   const stateRef = useRef<DeviceConnectPromptState | null>(null);
   const doneRef = useRef<(() => void) | null>(null);
   const lingerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Ends the connect wait early; the daemon itself keeps running. */
+  const stopWaitingRef = useRef<AbortController | null>(null);
 
   const update = useCallback((next: DeviceConnectPromptState | null) => {
     stateRef.current = next;
@@ -80,13 +82,16 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
 
   const startConnect = useCallback((session: boolean) => {
     update({ phase: 'connecting', session, ticks: 0 });
+    const stopWaiting = new AbortController();
+    stopWaitingRef.current = stopWaiting;
     startTransition(async () => {
       try {
         const auth = requireAuthConfig();
         const result = await connectDevice(auth, {
           session,
           label: defaultDeviceName(),
-          onPoll: () => {
+          signal: stopWaiting.signal,
+          onWaiting: () => {
             const current = stateRef.current;
             if (current?.phase === 'connecting') update({ ...current, ticks: current.ticks + 1 });
           },
@@ -96,6 +101,7 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
       } catch (cause) {
         update({ phase: 'result', ok: false, message: renderThrownChain({ cause }) });
       } finally {
+        stopWaitingRef.current = null;
         lingerRef.current = setTimeout(close, RESULT_LINGER_MS);
       }
     });
@@ -118,6 +124,7 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
       close();
       return true;
     }
+    if (dispatcher.feed(key, ['device']).actionId === 'device.not-now') stopWaitingRef.current?.abort();
     return true;
   }, [close, dispatcher, startConnect]);
 

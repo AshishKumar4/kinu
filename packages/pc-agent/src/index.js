@@ -53,7 +53,8 @@ const PONG_DEADLINE_MS = 10_000;
 const { KINU_INFLIGHT_ROOT } = process.env;
 
 /** The environment a command runs with, built by ALLOW-LIST out of this
- *  daemon's own.
+ *  daemon's own. The list lives in sandbox.js, shared with the sandbox tiers.
+ *  One edit reaches both paths, so the two cannot drift.
  *
  *  The daemon inherits the shell that ran `kinu connect`, so its environment
  *  can hold the CLI bearer (KINU_TOKEN), SSH_AUTH_SOCK, cloud keys and a
@@ -66,20 +67,14 @@ const { KINU_INFLIGHT_ROOT } = process.env;
  *  starts, and nobody can enumerate the rest. LC_* is a family, so it is
  *  matched; the others are named.
  */
-const COMMAND_ENV_NAMES = [
-  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM', 'TMPDIR',
-  'XDG_RUNTIME_DIR', 'KINU_HOME',
-];
-const COMMAND_ENV_FAMILY = /^LC_[A-Z_]+$/;
-
 function commandEnvironment(source = process.env) {
   const env = {};
-  for (const name of COMMAND_ENV_NAMES) {
+  for (const name of sandbox.ENV_ALLOWLIST) {
     const value = source[name];
     if (value !== undefined) env[name] = value;
   }
   for (const name of Object.keys(source)) {
-    if (COMMAND_ENV_FAMILY.test(name) && source[name] !== undefined) env[name] = source[name];
+    if (sandbox.ENV_ALLOWLIST_FAMILY.test(name) && source[name] !== undefined) env[name] = source[name];
   }
   return env;
 }

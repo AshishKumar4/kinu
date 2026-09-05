@@ -1,13 +1,12 @@
 /**
  * Branch worker process — runs inside a forked child process.
  *
- * Each MCTS branch gets its own isolated SQLite database.
- * Loads crafted tools from the PARENT's DB so branches can leverage
- * the agent's learned capabilities during exploration.
+ * Each MCTS branch gets its own isolated SQLite database. The worker loads
+ * crafted tools from the parent database, so a branch uses what the agent
+ * learned during exploration.
  *
- * Protocol:
- *   Parent → Child: { method: 'explore'|'reflect', args: any }
- *   Child → Parent: { method: string, result?: any, error?: string }
+ * The whole wire lives in branch-protocol.ts. This file parses calls with
+ * BranchCallSchema and answers with BranchReplySchema.
  *
  * There is deliberately no 'evaluate' method: branch scoring happens in the
  * parent process at the engine seam (core mcts/evaluation.ts), grounded in
@@ -24,14 +23,17 @@ import {
   parseModelSpec,
   reasoningEffortOptions,
   reflectionPrompt,
-  type BranchExploration,
-  type BranchReflection,
   type ExploreToolHint,
   type JsonValue,
   type LLMProviderConfig,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import {
+  BRANCH_EXPLORE, BRANCH_READY, BRANCH_REFLECT,
+  BranchCallSchema, BranchCallAttributionSchema,
+  type BranchReply,
+} from './branch-protocol';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver';
 import { createFileCodexAuthStore } from './codex-auth-store';
 
@@ -57,23 +59,6 @@ const localProviderCredentialsSchema = v.object({
     extraHeaders: v.optional(stringMapSchema),
   }))),
 });
-const branchWorkerMessageSchema = v.variant('method', [
-  v.object({
-    method: v.literal('explore'),
-    args: v.object({
-      history: v.array(v.object({ role: v.string(), content: v.string() })),
-      languages: v.pipe(v.array(v.string()), v.minLength(1)),
-      mode: v.picklist(['plan', 'build']),
-      siblings: v.optional(v.array(v.string()), []),
-    }),
-  }),
-  v.object({
-    method: v.literal('reflect'),
-    args: v.object({ task: v.string(), outcome: v.optional(v.string()) }),
-  }),
-]);
-const branchWorkerEnvelopeSchema = v.object({ method: v.string() });
-const BRANCH_METHODS = new Set<string>(['explore', 'reflect']);
 
 /** The parent's default endpoint, or null when the parent had none: an empty
  *  KINU_LLM_NAME is that absence, and bare ids then fail at resolution with
@@ -123,14 +108,31 @@ if (parentDbPath) {
 }
 
 process.on('message', async (rawMessage: JsonValue) => {
-  let method = 'unknown';
+  const parsed = v.safeParse(BranchCallSchema, rawMessage);
+  if (!parsed.success) {
+    const attributed = v.safeParse(BranchCallAttributionSchema, rawMessage);
+    if (!attributed.success) {
+      diagnostics.failure(
+        'branch.call_malformed',
+        new KinuError(
+          'bad_input',
+          `branch call carries no usable id or method: ${parsed.issues.map((issue) => issue.message).join('; ')}`,
+        ),
+      );
+      return;
+    }
+    const { id, method } = attributed.output;
+    send({
+      method,
+      id,
+      error: `branch call is not a well-formed ${method} call: ${parsed.issues.map((issue) => issue.message).join('; ')}`,
+    });
+    return;
+  }
+  const msg = parsed.output;
   try {
-    method = v.parse(branchWorkerEnvelopeSchema, rawMessage).method;
-    if (!BRANCH_METHODS.has(method)) throw new Error(`Unknown method: ${method}`);
-    const msg = v.parse(branchWorkerMessageSchema, rawMessage);
-    let result: BranchExploration | BranchReflection;
     switch (msg.method) {
-      case 'explore': {
+      case BRANCH_EXPLORE: {
         const { history, siblings } = msg.args;
         const [language, ...alternates] = msg.args.languages;
         if (!language) throw new Error('Branch exploration requires at least one executor language');
@@ -155,10 +157,10 @@ process.on('message', async (rawMessage: JsonValue) => {
         // The spend travels back with the proposal: this process resolves its
         // own model, so the parent's mission ledger cannot see the call any
         // other way (mcts/engine.ts debits it).
-        result = { text: trimmed, usage: normalizeUsage(usage) };
+        send({ method: msg.method, id: msg.id, result: { text: trimmed, usage: normalizeUsage(usage) } });
         break;
       }
-      case 'reflect': {
+      case BRANCH_REFLECT: {
         const { task, outcome } = msg.args;
         // Read the branch's own trace table (mirror cf generateReflection): the
         // reflection is about the attempt this branch actually made, not the
@@ -174,20 +176,25 @@ process.on('message', async (rawMessage: JsonValue) => {
         };
         if (providerOptions) request.providerOptions = providerOptions;
         const { text, usage } = await generateText(request);
-        result = { text: text.trim(), usage: normalizeUsage(usage) };
+        send({ method: msg.method, id: msg.id, result: { text: text.trim(), usage: normalizeUsage(usage) } });
         break;
       }
     }
-    process.send!({ method, result });
   } catch (err) {
     // Always carry a message: an empty one reads as "no error" to any
     // presence-checking caller and hides the real failure.
-    const message = renderThrownChain({ cause: err }) || 'branch worker failed';
-    process.send!({ method, error: message });
+    send({ method: msg.method, id: msg.id, error: renderThrownChain({ cause: err }) || 'branch worker failed' });
   }
 });
 
-process.send?.({ method: 'ready' });
+/** A forked worker always has its parent's IPC channel. The throw states the
+ *  invariant without a non-null assertion. */
+function send(reply: BranchReply): void {
+  if (!process.send) throw new KinuError('unavailable', 'branch worker has no IPC channel to its parent');
+  process.send(reply);
+}
+
+send({ method: BRANCH_READY });
 
 process.once('exit', () => {
   parentDb?.close();

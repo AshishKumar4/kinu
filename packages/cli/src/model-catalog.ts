@@ -98,7 +98,7 @@ function normalizeProviderFailures(input: { rows: unknown[] }): ProviderFailure[
   });
 }
 
-export function normalizeModelEntries(input: { rows: unknown[] }): AgentModelEntry[] {
+function normalizeModelEntries(input: { rows: unknown[] }): AgentModelEntry[] {
   return input.rows.flatMap((row) => {
     const parsed = v.safeParse(ModelEntryPayloadSchema, row);
     if (!parsed.success) return [];
@@ -131,7 +131,7 @@ export function normalizeModelEntries(input: { rows: unknown[] }): AgentModelEnt
  *  provider in feed order (= the backend's connection-preference order), and
  *  pin the platform default first — used by the cloud catalog, which merges
  *  many provider feeds now that the full models.dev catalog is exposed. */
-export function dedupeModelEntries(rows: AgentModelEntry[]): AgentModelEntry[] {
+function dedupeModelEntries(rows: AgentModelEntry[]): AgentModelEntry[] {
   const bySpec = new Map<string, AgentModelEntry>();
   const providerOrder = new Map<string, number>();
   for (const row of rows) {

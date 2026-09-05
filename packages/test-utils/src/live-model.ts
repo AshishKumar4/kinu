@@ -39,7 +39,7 @@
  */
 import {
   addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
-  RunEventRecorder, usageReported, workspaceSpend, WORKSPACE_RUN_ID,
+  RunEventRecorder, USER_AI_PROXY_PATH, usageReported, workspaceSpend, WORKSPACE_RUN_ID,
   type LLMProviderConfig, type ModelCallSink, type SqlExecutor, type Usage,
   type WorkspaceSpend,
 } from '@kinu.run/core';
@@ -193,7 +193,9 @@ export interface LiveModelSession {
  * AI-gateway target has no origin to give.
  */
 export function workerSession(llm: LLMProviderConfig): LiveModelSession {
-  const origin = llm.baseURL.replace(/\/api\/user\/ai\/v1$/, '');
+  const origin = llm.baseURL.endsWith(USER_AI_PROXY_PATH)
+    ? llm.baseURL.slice(0, -USER_AI_PROXY_PATH.length)
+    : llm.baseURL;
   if (origin === llm.baseURL) {
     throw new Error(`${llm.baseURL} is not a worker AI-proxy base URL, so no worker origin can be `
       + 'recovered from it. This target fronts a model and no Kinu deployment, so there is no '

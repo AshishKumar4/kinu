@@ -10,9 +10,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { git } from '@kinu.run/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { summarizeRestorePlan } from '@kinu.run/core';
+import { Database } from 'bun:sqlite';
+import { createAgentConfigStore, summarizeRestorePlan } from '@kinu.run/core';
 import { createHostCheckpoints } from '../src/checkpoints';
-import { createHostShell, withCheckpointedShell } from '../src/runtime';
+import { createCLIRuntime } from '../src/runtime';
 
 function setup(opts: { keep?: number; gitBin?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'kinu-ckpt-'));
@@ -333,22 +334,39 @@ describe('createHostCheckpoints', () => {
   });
 });
 
-describe('withCheckpointedShell', () => {
+describe('checkpointed runtime shell', () => {
   test('any shell exec snapshots the cwd before running (first mutation per turn)', async () => {
-    const { work, engine, cleanup } = setup();
+    const { root, work, cleanup } = setup();
+    const db = new Database(':memory:');
     try {
       writeFileSync(join(work, 'precious.txt'), 'original');
-      const shell = withCheckpointedShell(createHostShell(work), engine, work);
+      // Checkpoint storage is global per agent name, so this fixture mints a
+      // unique one. A stable test name would read valid stores from prior runs.
+      const rt = createCLIRuntime(db, {
+        dbPath: join(root, 'agent.db'),
+        cwd: work,
+        agentName: `ckpt-shell-test-${String(Date.now())}-${String(process.pid)}`,
+        llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
+      });
+      // The default is 'strict', which asks a channel this runtime has none of.
+      createAgentConfigStore(rt.storage.sql).setShellApprovalMode('allow_all');
+      const shell = rt.shell;
+      if (!shell) throw new Error('a bound runtime must have a shell');
+      const checkpoints = rt.checkpoints;
+      if (!checkpoints) throw new Error('a bound runtime must have a checkpoint engine');
 
-      engine.beginTurn({ turnId: 'shell-turn', sessionId: 's' });
+      checkpoints.beginTurn({ turnId: 'shell-turn', sessionId: 's' });
       const result = await shell.exec('echo CLOBBERED > precious.txt');
       expect(result.exitCode).toBe(0);
       expect(readFileSync(join(work, 'precious.txt'), 'utf8').trim()).toBe('CLOBBERED');
 
-      const [entry] = await engine.list();
+      const [entry] = await checkpoints.list();
       expect(entry!.turnId).toBe('shell-turn');
-      await engine.restore(work, entry!.id);
+      await checkpoints.restore(work, entry!.id);
       expect(readFileSync(join(work, 'precious.txt'), 'utf8')).toBe('original');
-    } finally { cleanup(); }
+    } finally {
+      db.close();
+      cleanup();
+    }
   });
 });

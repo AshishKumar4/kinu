@@ -23,9 +23,9 @@ import { chmodSync, statSync, writeFileSync, renameSync, mkdirSync, unlinkSync }
 import { dirname } from 'node:path';
 
 /** Owner read/write only. */
-export const SECRET_FILE_MODE = 0o600;
+const SECRET_FILE_MODE = 0o600;
 /** Owner traverse only. */
-export const SECRET_DIR_MODE = 0o700;
+const SECRET_DIR_MODE = 0o700;
 
 /** Group and world bits — none of these may be set on a secret file. */
 const SHARED_BITS = 0o077;

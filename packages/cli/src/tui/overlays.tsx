@@ -738,6 +738,7 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
             width={innerWidth}
             color={colors.intent.accent}
           />
+          <PaletteLine text={`${keybindings.hint('device.not-now')} stop waiting`} width={innerWidth} color={colors.text.muted} />
         </>
       ) : (
         <>

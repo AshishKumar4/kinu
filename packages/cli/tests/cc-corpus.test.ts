@@ -356,7 +356,7 @@ describe('what the reader could not read is reported', () => {
 // ── Selection and determinism ────────────────────────────────────
 
 describe('the corpus a caller asks for is the corpus they get', () => {
-  test('--projects filters, --limit takes a stable prefix', () => {
+  test('--projects filters, and the traversal order is stable', () => {
     const root = newRoot();
     for (const project of ['alpha', 'beta']) {
       new Session()
@@ -369,12 +369,10 @@ describe('the corpus a caller asks for is the corpus they get', () => {
     expect(mineTranscripts({ root, projects: ['alpha'] }).turns.map((t) => t.project))
       .toEqual(['alpha', 'alpha', 'alpha']);
 
-    const first = mineTranscripts({ root, limit: 4 });
-    expect(first.turns).toHaveLength(4);
-    expect(mineTranscripts({ root, limit: 4 }).turns.map((t) => t.item.outcomeId))
+    const first = mineTranscripts({ root });
+    expect(first.turns).toHaveLength(6);
+    expect(mineTranscripts({ root }).turns.map((t) => t.item.outcomeId))
       .toEqual(first.turns.map((t) => t.item.outcomeId));
-    expect(first.turns.map((t) => t.item.outcomeId))
-      .toEqual(mineTranscripts({ root }).turns.slice(0, 4).map((t) => t.item.outcomeId));
   });
 
   test('a missing transcript root is empty, not an error', () => {

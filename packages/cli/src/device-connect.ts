@@ -23,6 +23,8 @@ import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix } from '@kinu.r
 import { enforceOwnerOnly, ensureSecretDir } from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
 import { listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
+import { rotateDaemonLogIfNeeded } from './daemon-log';
+import { waitForAnswer, type StoppableWaitOptions } from './wait';
 import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PC_AGENT_PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
@@ -55,12 +57,10 @@ export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
  *  hub on HELLO and the hub composes `<root>/<workspace>/home` per command, so
  *  the CLI creates the root and the daemon owns everything under it. */
 const AGENT_ROOT = join(AGENT_HOME, 'agents');
-export const DEVICE_CONNECT_DEADLINE_MS = 20_000;
 const CONNECT_POLL_MS = 1_000;
-const DAEMON_EARLY_EXIT_GRACE_MS = 250;
 
 /** The name a machine has when nobody named it. */
-export const UNNAMED_DEVICE_NAME = 'Your PC';
+const UNNAMED_DEVICE_NAME = 'Your PC';
 
 /**
  * What this machine offers as its own name: `user@hostname`, which is what a
@@ -99,8 +99,11 @@ export interface ConnectDeviceOptions {
   label?: string;
   /** Tie the daemon to this CLI process instead of installing it persistently. */
   session?: boolean;
-  /** Called once per verification poll tick (~1/s) while waiting for the daemon. */
-  onPoll?: () => void;
+  /** Called after every poll that found the daemon not connected yet (about once a second). */
+  onWaiting?: () => void;
+  /** Ends the wait for the daemon; the result is then `cancelled`. The daemon
+   *  itself keeps running and keeps trying to connect. */
+  signal?: AbortSignal;
 }
 
 
@@ -111,7 +114,8 @@ export interface ConnectOutcomeDescription {
 
 export type ConnectDeviceResult =
   | { kind: 'connected'; deviceId: string; sandbox: CloudDeviceSandbox }
-  | { kind: 'timeout'; deviceId: string }
+  /** The caller's `signal` aborted before the daemon connected. */
+  | { kind: 'cancelled'; deviceId: string }
   /** Session mode found a persistent daemon already running and left it alone. */
   | { kind: 'already-running'; connected: boolean };
 
@@ -126,11 +130,10 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
   const device = await registerDeviceForConnect(auth, opts.label);
   installDaemonFiles(device);
   const launch = startInstalledDaemon(opts.session === true, runtime);
-  if (launch !== null) await waitForDaemonStart(launch);
   // Don't trust the spawn — the daemon must show up as connected on the
   // server before we claim success.
-  const connected = await waitForDeviceConnected(auth, device.deviceId, opts.onPoll);
-  if (connected === undefined) return { kind: 'timeout', deviceId: device.deviceId };
+  const connected = await waitForDeviceConnected(auth, device.deviceId, launch, opts);
+  if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId };
   anyDeviceConnected = true;
   return { kind: 'connected', deviceId: device.deviceId, sandbox: connected.sandbox };
 }
@@ -152,12 +155,6 @@ export function daemonStatus(): DaemonStatus {
     daemonPid: runningDaemonPid(),
     sessionActive: sessionDaemon !== null && sessionDaemon.exitCode === null && !sessionDaemon.killed,
   };
-}
-
-export function readDaemonLogTail(lines: number): string {
-  if (!existsSync(DAEMON_LOG_PATH)) return '(no log file)';
-  const content = readFileSync(DAEMON_LOG_PATH, 'utf-8').trimEnd();
-  return content ? content.split('\n').slice(-lines).join('\n') : '(log is empty)';
 }
 
 // ── Connect prompt policy ────────────────────────────────────────
@@ -225,8 +222,8 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
       return result.connected
         ? { ok: true, message: 'This PC is already connected.' }
         : { ok: false, message: 'The daemon is installed here but not connected. Run: kinu connect' };
-    case 'timeout':
-      return { ok: false, message: `The daemon did not connect within ${DEVICE_CONNECT_DEADLINE_MS / 1000}s. Check: kinu desktop logs` };
+    case 'cancelled':
+      return { ok: false, message: 'Stopped waiting for the daemon. It keeps trying to connect; check: kinu desktop logs' };
     case 'connected':
       return {
         ok: true,
@@ -490,25 +487,54 @@ function syncAgentDirectory(): void {
   }
 }
 
-/** The connected device row the server reports, or undefined once the deadline
- *  passes. The row carries what the machine said about its own sandbox, so the
- *  caller states that without a second request. */
-async function waitForDeviceConnected(auth: DeviceAuth, deviceId: string, onPoll?: () => void): Promise<CloudDevice | undefined> {
-  const deadline = Date.now() + DEVICE_CONNECT_DEADLINE_MS;
-  while (Date.now() < deadline) {
-    const nextPoll = Promise.withResolvers<void>();
-    setTimeout(nextPoll.resolve, CONNECT_POLL_MS);
-    await nextPoll.promise;
-    onPoll?.();
-    const devices = await listDevicesForConnect(auth, 'checking whether the device daemon connected');
-    const connected = devices.find((device) => device.id === deviceId && device.connected);
-    if (connected) return connected;
+/**
+ * The connected device row the server reports. The wait ends on the daemon's
+ * own signals: its row turning connected, or its exit or spawn failure, which
+ * is the definitive failure (a daemon that died cannot connect). The caller's
+ * `signal` ends it early with `undefined`. There is no clock: a daemon that is
+ * still dialling has not failed. The row carries what the machine said about
+ * its own sandbox, so the caller states that without a second request.
+ */
+async function waitForDeviceConnected(
+  auth: DeviceAuth,
+  deviceId: string,
+  launch: DaemonLaunch,
+  opts: Pick<ConnectDeviceOptions, 'onWaiting' | 'signal'>,
+): Promise<CloudDevice | undefined> {
+  const stop = new AbortController();
+  const stopOnCaller = () => stop.abort();
+  opts.signal?.addEventListener('abort', stopOnCaller, { once: true });
+  const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    const outcome = signal ?? (code === null ? 'unknown exit' : `exit code ${code}`);
+    launch.failure = new KinuError(
+      'unavailable',
+      `the device daemon exited before it could connect (${outcome}). See ${DAEMON_LOG_PATH}`,
+    );
+    stop.abort();
+  };
+  const onError = () => stop.abort();
+  launch.child.once('exit', onExit);
+  // spawnDaemonChild's own listener records the failure; this one ends the wait.
+  launch.child.once('error', onError);
+  if (launch.failure !== null) stop.abort();
+  const wait: StoppableWaitOptions = { intervalMs: CONNECT_POLL_MS, signal: stop.signal };
+  if (opts.onWaiting) wait.onWaiting = opts.onWaiting;
+  try {
+    const connected = await waitForAnswer(async () => {
+      const devices = await listDevicesForConnect(auth, 'checking whether the device daemon connected');
+      return devices.find((device) => device.id === deviceId && device.connected);
+    }, wait);
+    if (connected !== undefined) return connected;
+    if (launch.failure !== null) throw launch.failure;
+    return undefined;
+  } finally {
+    launch.child.off('exit', onExit);
+    launch.child.off('error', onError);
+    opts.signal?.removeEventListener('abort', stopOnCaller);
   }
-  return undefined;
 }
 
-function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch | null {
-  if (session && runningDaemonPid() !== null) return null;
+function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch {
   assertDaemonPlatformSupported();
   try {
     ensureAgentHome();
@@ -548,6 +574,10 @@ function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch 
 function spawnDaemonChild(runtime: string, session: boolean): DaemonLaunch {
   let logDescriptor: number;
   try {
+    // The daemon writes through this append fd for its whole life, so the
+    // roll happens here, before the handle exists: copy-truncate keeps the
+    // inode, which is what lets a later roll cap a still-running daemon too.
+    rotateDaemonLogIfNeeded(DAEMON_LOG_PATH);
     logDescriptor = openSync(DAEMON_LOG_PATH, 'a');
   } catch (cause) {
     throw toKinuError({
@@ -570,39 +600,6 @@ function spawnDaemonChild(runtime: string, session: boolean): DaemonLaunch {
   } finally {
     closeSync(logDescriptor);
   }
-}
-
-function waitForDaemonStart(launch: DaemonLaunch): Promise<void> {
-  const completion = Promise.withResolvers<void>();
-  let settled = false;
-
-  function finish(error?: KinuError): void {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    launch.child.off('exit', onExit);
-    launch.child.off('error', onError);
-    if (error) completion.reject(error);
-    else completion.resolve();
-  }
-
-  function onExit(code: number | null, signal: NodeJS.Signals | null): void {
-    const outcome = signal ?? (code === null ? 'unknown exit' : `exit code ${code}`);
-    finish(new KinuError(
-      'unavailable',
-      `the device daemon exited before it could connect (${outcome}). See ${DAEMON_LOG_PATH}`,
-    ));
-  }
-
-  function onError(cause: Error): void {
-    finish(toKinuError({ doing: 'starting the device daemon', cause, otherwise: 'io' }));
-  }
-
-  const timer = setTimeout(() => finish(), DAEMON_EARLY_EXIT_GRACE_MS);
-  launch.child.once('exit', onExit);
-  launch.child.once('error', onError);
-  if (launch.failure !== null) finish(launch.failure);
-  return completion.promise;
 }
 
 /** The pid the pidfile names, whether or not that process still exists. */

@@ -9,7 +9,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { ReactNode } from 'react';
 
-import { SLASH_COMMANDS } from '../src/slash-commands';
+import { commandsForClient } from '../src/slash-commands';
 import {
   ChangelogOverlay,
   CommandHintOverlay,
@@ -422,19 +422,22 @@ describe('CLI TUI layout', () => {
   }, 15_000);
 
   test('slash command hints render as a palette without numeric hotkeys', async () => {
+    // The offered list, not the raw table: capability-gated commands are
+    // absent for this client, exactly as the chat app renders them.
+    const commands = commandsForClient({ localControls: null, consents: null, checkpoints: null });
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
-          <CommandHintOverlay commands={SLASH_COMMANDS} terminal={{ width: 80, height: 24 }} />
+          <CommandHintOverlay commands={commands} terminal={{ width: 80, height: 24 }} />
         </box>,
       );
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
       expect(frame).toContain('Commands');
       expect(frame).toContain('/help');
-      expect(frame).toContain(`… ${String(SLASH_COMMANDS.length - 5)} more commands.`);
+      expect(frame).toContain(`… ${String(commands.length - 5)} more commands.`);
       expect(frame).toContain('/status');
       expect(frame).toContain('more commands');
       expect(frame).not.toContain('/sessions');
@@ -528,7 +531,7 @@ describe('CLI TUI layout', () => {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
           <CommandPaletteOverlay
-            commands={SLASH_COMMANDS}
+            commands={commandsForClient({ localControls: null, consents: null, checkpoints: null })}
             terminal={{ width: 72, height: 24 }}
             onSelect={(command) => { selected.push(command.name); }}
           />

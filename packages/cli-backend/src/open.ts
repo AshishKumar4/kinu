@@ -6,7 +6,6 @@
  */
 
 import type { LLMProviderConfig } from '@kinu.run/core';
-import type { OAuthCredential } from '@kinu.run/core';
 import {
   initWorkspaceBaselineTable, initWorkspaceSchema, readSoul, summarizeSoul,
   getCurrentScaffoldVersion, memoryBytes,
@@ -36,7 +35,6 @@ export interface CLIOpenConfig {
   providerCredentials?: LocalProviderCredentials;
   codexAuthStore?: LocalCodexAuthStore;
   codexConfigPath?: string;
-  onCodexRefresh?: (credential: OAuthCredential) => void;
   /** The canonical physical directory every agent in this virtual workspace
    *  shares as its file and shell plane. See CLIRuntimeConfig.cwd. */
   cwd?: string | null;
@@ -89,7 +87,6 @@ export async function openWorkspaceCLI(
     providerCredentials: config.providerCredentials,
     codexAuthStore: config.codexAuthStore,
     codexConfigPath: config.codexConfigPath,
-    onCodexRefresh: config.onCodexRefresh,
     checkpointKeep: config.checkpointKeep,
     hostRoot: config.hostRoot,
     cwd: config.cwd,

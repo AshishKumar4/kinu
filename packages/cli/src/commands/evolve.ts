@@ -13,6 +13,10 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 
 export async function evolveCommand(name: string, opts: {
   budget?: string; branches?: string; maxCost?: string; model?: string; baseUrl?: string; auth?: string;
+}, deps?: {
+  /** A stand-in for the search engine. Commander passes its own Command
+   *  object here at runtime; it carries no runMcts, so the real engine runs. */
+  runMcts?: typeof runMCTS;
 }): Promise<void> {
   const configured = resolveAgentRef(name);
   if (configured?.mode === 'cloud') {
@@ -59,7 +63,8 @@ export async function evolveCommand(name: string, opts: {
   let failed = 0;
 
   try {
-    const result = await runMCTS(rt, session, task, {
+    const run = deps?.runMcts ?? runMCTS;
+    const result = await run(rt, session, task, {
       budget, branches, maxCostUSD,
       onProgress: (event) => {
         if (event.type === 'branch-failed') failed++;
@@ -122,7 +127,7 @@ const PHASE_LABEL = {
 } as const;
 
 /** Render one search event for the terminal. Pure — the sink decides where it goes. */
-export function formatMctsProgress(event: MCTSProgressEvent, totalBudget: number): ProgressLine {
+function formatMctsProgress(event: MCTSProgressEvent, totalBudget: number): ProgressLine {
   switch (event.type) {
     case 'phase':
       return {

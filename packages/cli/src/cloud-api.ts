@@ -254,11 +254,11 @@ const CreatedAccessTokenSchema = v.object({ token: v.string(), name: v.string(),
  *  through the same meter every other arm uses. Two copies of a
  *  `GenericSchema<WorkspaceSpend>` would compile independently and disagree
  *  about the same wire. */
-export const ProducerSpendSchema: v.GenericSchema<ProducerSpend> = v.object({
+const ProducerSpendSchema: v.GenericSchema<ProducerSpend> = v.object({
   source: v.picklist(SPEND_SOURCES), calls: v.number(), callsWithoutUsage: v.number(),
   usage: UsageSchema, usd: v.optional(v.number()), unpricedCalls: v.number(),
 });
-export const MissionBudgetSnapshotSchema: v.GenericSchema<MissionBudgetSnapshot> = v.object({
+const MissionBudgetSnapshotSchema: v.GenericSchema<MissionBudgetSnapshot> = v.object({
   label: v.string(), parent: v.nullable(v.string()),
   limits: v.object({ usd: v.optional(v.number()), tokens: v.optional(v.number()) }),
   spent: v.object({ tokens: v.number(), usd: v.number() }),
@@ -268,7 +268,7 @@ export const MissionBudgetSnapshotSchema: v.GenericSchema<MissionBudgetSnapshot>
   }),
   calls: v.number(), spawns: v.number(), exhausted: v.boolean(),
 });
-export const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
+const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
   producers: v.array(ProducerSpendSchema),
   total: v.object({
     calls: v.number(), callsWithoutUsage: v.number(), usage: UsageSchema,

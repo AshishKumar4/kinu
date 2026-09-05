@@ -13,6 +13,8 @@ import {
   snapshotWorkspaceForFork, writeForkSnapshot,
 } from '../src/index';
 import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers';
+import { forkFilePaths } from '../src/identity/fork';
+import type { VFS } from '../src/types/primitives';
 
 /** Seed a source DB with identity, SOUL.md, N messages, and some crafted tools.
  *  A message with no explicit `parent_id` is linked to the previous one, which
@@ -732,5 +734,62 @@ describe('fork snapshot payload', () => {
 
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
     expect(await tgt.vfs.readFile('memory/huge.md', { encoding: 'utf8' })).toBe('y'.repeat(1_500_000));
+  });
+});
+
+describe('forkFilePaths carries the whole memory tree', () => {
+  function fakeVfs(files: string[]): VFS {
+    const children = new Map<string, string[]>();
+    const fileSet = new Set(files);
+    for (const path of files) {
+      const parts = path.split('/');
+      for (let i = 1; i < parts.length; i++) {
+        const dir = parts.slice(0, i).join('/');
+        const list = children.get(dir) ?? [];
+        if (!list.includes(parts[i])) list.push(parts[i]);
+        children.set(dir, list);
+      }
+    }
+    const missing = (op: string, path: string) =>
+      Object.assign(new Error(`ENOENT: ${op} ${path}`), { code: 'ENOENT' });
+    return {
+      readFile: async (path) => { throw missing('read', path); },
+      writeFile: async () => undefined,
+      readdir: async (path) => {
+        const list = children.get(path);
+        if (list === undefined) throw missing('readdir', path);
+        return [...list];
+      },
+      stat: async (path) => {
+        if (fileSet.has(path)) return { size: 1, mtimeMs: 0, isDir: false };
+        if (children.has(path)) return { size: 0, mtimeMs: 0, isDir: true };
+        return null;
+      },
+      unlink: async () => undefined,
+      mkdir: async () => undefined,
+      exists: async (path) => fileSet.has(path) || children.has(path),
+    };
+  }
+
+  async function collect(vfs: VFS): Promise<string[]> {
+    const out: string[] = [];
+    for await (const path of forkFilePaths(vfs)) out.push(path);
+    return out;
+  }
+
+  test('a memory tree deeper and wider than the shared walk\'s guards is carried whole', async () => {
+    // Forty levels under memory/ with one file at the bottom, beside two
+    // hundred directories of sixty files: past both of walkRecursive's guard
+    // units. A fork that reused the walker's bounds would refuse or truncate
+    // here; a fork carries every file and no directory.
+    let deep = 'memory';
+    for (let i = 0; i < 40; i++) deep += `/d${i}`;
+    const files = [`${deep}/note.md`];
+    for (let d = 0; d < 200; d++) {
+      for (let f = 0; f < 60; f++) files.push(`memory/dir${d}/note${f}.md`);
+    }
+    const carried = await collect(fakeVfs(files));
+    expect(carried.length).toBe(files.length);
+    expect(new Set(carried)).toEqual(new Set(files));
   });
 });

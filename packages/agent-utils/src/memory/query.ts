@@ -1,6 +1,6 @@
 const FTS_OPERATORS = new Set(["AND", "OR", "NOT", "NEAR"]);
 
-export const STOP_WORDS = new Set([
+const STOP_WORDS = new Set([
 	"a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
 	"have", "has", "had", "do", "does", "did", "will", "would", "shall",
 	"should", "may", "might", "must", "can", "could", "am", "it", "its",

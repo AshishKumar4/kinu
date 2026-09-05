@@ -11,7 +11,8 @@ import { setCloudCredential } from '../cloud-api';
 import { bumpProviderRevision, loadConfigFile, resolveCloudSession, setDefaultModel, updateConfigFile, type KinuConfig } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { ask, askSecret, canPrompt, confirm } from '../prompt';
-import { authCommand, delay, openBrowser } from './auth';
+import { authCommand, openBrowser } from './auth';
+import { pause } from '../wait';
 
 /**
  * Where a provider secret is written.
@@ -37,12 +38,14 @@ export async function storeProviderSecret(opts: {
   clearLocally: () => void;
   /** Set as the default model either way — a pointer, not a secret. */
   model: string;
-  /** An endpoint the proxy could never reach (loopback, plain http) forces the
-   *  local answer whatever the account could hold — otherwise the key would be
-   *  stored somewhere it can never be used from. */
-  reachableOnlyLocally?: boolean;
+  /** The endpoint the key is for, when the provider has one. An endpoint the
+   *  proxy could never reach (loopback, a private range, plain http) forces
+   *  the local answer whatever the account could hold. Otherwise the key would
+   *  be stored somewhere it can never be used from. */
+  endpoint?: string;
 }): Promise<'account' | 'local'> {
-  const cloud = opts.local || opts.reachableOnlyLocally ? null : resolveCloudSession();
+  const reachable = opts.endpoint === undefined || reachableFromTheInternet(opts.endpoint);
+  const cloud = opts.local || !reachable ? null : resolveCloudSession();
   if (!cloud) {
     opts.storeLocally();
     return 'local';
@@ -69,12 +72,32 @@ export async function storeProviderSecret(opts: {
 }
 
 /** Whether the Kinu Worker could reach this endpoint at all: https, and not
- *  a loopback or link-local host. */
+ *  a loopback, private, link-local, IPv6 ULA or CGNAT host. */
 function reachableFromTheInternet(baseURL: string): boolean {
   const url = tolerate(() => new URL(baseURL), 'malformed-input');
   if (!url) return false;
   if (url.protocol !== 'https:') return false;
-  return !/^(localhost|127\.|0\.0\.0\.0|\[?::1\]?|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(url.hostname);
+  const hostname = url.hostname;
+  const host = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+  if (isIPv6Ula(host) || isCgnat(host)) return false;
+  return !/^(localhost|127\.|0\.0\.0\.0|\[?::1\]?|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname);
+}
+
+/** IPv6 unique-local addresses (fc00::/7): routable nowhere the proxy runs. */
+function isIPv6Ula(host: string): boolean {
+  if (!host.includes(':')) return false;
+  const first = Number.parseInt(host.split(':')[0] ?? '', 16);
+  if (!Number.isFinite(first)) return false;
+  const top = first >>> 8;
+  return top === 0xfc || top === 0xfd;
+}
+
+/** Carrier-grade NAT (100.64.0.0/10): one provider's customers, not the internet. */
+function isCgnat(host: string): boolean {
+  const octets = host.split('.');
+  if (octets.length !== 4 || octets.some((o) => !/^\d+$/.test(o))) return false;
+  const [first, second] = octets.map(Number);
+  return first === 100 && (second ?? 0) >= 64 && (second ?? 0) <= 127;
 }
 
 function reportStored(where: 'account' | 'local', label: string, model: string): void {
@@ -173,6 +196,10 @@ export async function setupCommand(opts: {
     console.log(DIM('No API key on this machine. Requests go through your Kinu account.'));
     return;
   }
+  if (provider === 'claude') {
+    await connectClaude();
+    return;
+  }
 
   const next = loadConfigFile();
   if (provider === 'codex') {
@@ -269,7 +296,7 @@ export async function setupCommand(opts: {
       // The usual openai-compat endpoint is Ollama or vLLM on this machine.
       // The proxy sends to https only and could not reach a loopback address
       // from a Worker anyway, so that key belongs here.
-      reachableOnlyLocally: !reachableFromTheInternet(baseURL),
+      endpoint: baseURL,
     }), 'the OpenAI-compatible endpoint', spec);
     return;
   }
@@ -373,17 +400,96 @@ async function chooseProvider(cloudReady: boolean): Promise<string> {
   return value;
 }
 
-function normalizeProvider(value: string): 'workers-ai' | 'codex' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'opencode' | 'skip' {
+/**
+ * The aliases users type on either surface, folded onto one canonical name.
+ * Both `kinu setup --provider` and `kinu provider connect` resolve through
+ * this map, so an alias learned on one surface works on the other. Menu
+ * positions ('1'-'8') are not aliases: the interactive prompt owns those, so
+ * they never reach this map. Unknown tokens pass through for the caller to
+ * reject with its own usage text.
+ */
+export function canonicalProviderName(value: string): string {
+  const token = value.trim().toLowerCase();
+  switch (token) {
+    case 'cf':
+    case 'workers-ai':
+    case 'workersai':
+    case 'account':
+      return 'cloudflare';
+    case 'claude-code':
+    case 'subscription':
+    case 'claude-subscription':
+    case 'claude':
+      return 'claude';
+    case 'chatgpt':
+    case 'chatgpt-codex':
+      return 'codex';
+    case 'compat':
+    case 'ollama':
+      return 'openai-compatible';
+    default:
+      return token;
+  }
+}
+
+function normalizeProvider(value: string): 'workers-ai' | 'claude' | 'codex' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'opencode' | 'skip' {
   const v = value.trim().toLowerCase();
-  if (v === '1' || v === 'workers-ai' || v === 'cloudflare' || v === 'workersai') return 'workers-ai';
-  if (v === '2' || v === 'codex' || v === 'chatgpt' || v === 'chatgpt-codex') return 'codex';
-  if (v === '3' || v === 'openai') return 'openai';
-  if (v === '4' || v === 'openrouter') return 'openrouter';
-  if (v === '5' || v === 'anthropic' || v === 'claude') return 'anthropic';
-  if (v === '6' || v === 'openai-compatible' || v === 'compat' || v === 'ollama') return 'openai-compatible';
-  if (v === '7' || v === 'opencode') return 'opencode';
+  // Menu positions on the --provider flag. The prompt resolves these same
+  // answers interactively; the flag keeps accepting them, pinned by
+  // setup-default-provider.test.ts which cannot drive the prompt headlessly.
+  if (v === '1') return 'workers-ai';
+  if (v === '2') return 'codex';
+  if (v === '3') return 'openai';
+  if (v === '4') return 'openrouter';
+  if (v === '5') return 'anthropic';
+  if (v === '6') return 'openai-compatible';
+  if (v === '7') return 'opencode';
   if (v === '8' || v === 'skip' || v === 'none') return 'skip';
-  throw new Error('Provider must be workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, or skip.');
+  // Anything else is a name, resolved through the one alias map. `cloudflare`
+  // is this command's `workers-ai` branch; bare `claude` is the subscription,
+  // not the Anthropic API key one position down the menu.
+  switch (canonicalProviderName(value)) {
+    case 'cloudflare': return 'workers-ai';
+    case 'claude': return 'claude';
+    case 'codex': return 'codex';
+    case 'openai': return 'openai';
+    case 'openrouter': return 'openrouter';
+    case 'anthropic': return 'anthropic';
+    case 'openai-compatible': return 'openai-compatible';
+    case 'opencode': return 'opencode';
+    default:
+      throw new Error('Provider must be workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, or skip.');
+  }
+}
+
+const CLAUDE_INSTALL_HINT = 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup';
+export const CLAUDE_LOGIN_HINT = 'Run `claude` once to sign in to your Claude subscription.';
+const CLAUDE_READY = 'Claude subscription ready. Use kinu create --model claude/claude-opus-4-x';
+
+/** Claude subscription "connect" is a status check, not a credential we store:
+ *  the official `claude` binary owns its own Claude Code login. We probe PATH +
+ *  `claude auth status` and print the next step. LOCAL ONLY — cloud agents need
+ *  an Anthropic API key (kinu provider connect anthropic), not this. */
+export async function connectClaude(): Promise<void> {
+  console.log('');
+  console.log(ACCENT('Claude subscription (via Claude Code)'));
+  console.log(DIM('Drives the `claude` binary with your Claude Code login. Local workspaces only.'));
+  const { binary, loggedIn } = await checkClaudeAvailability();
+  console.log('');
+  if (binary && loggedIn) {
+    console.log(`${OK('✓')} ${CLAUDE_READY}`);
+    // Nothing was written here — the `claude` binary owns its own login — but
+    // this command is how the user says they have just connected it, and its
+    // availability is what a listing sweep probes. A resident session has no
+    // other way to learn that the probe now succeeds.
+    bumpProviderRevision();
+  } else if (binary) {
+    console.log(`${WARN('!')} ${CLAUDE_LOGIN_HINT}`);
+  } else {
+    console.log(`${WARN('!')} ${CLAUDE_INSTALL_HINT}`);
+    console.log(DIM('Then run `claude` once to sign in.'));
+  }
+  console.log(DIM('Cloud workspaces cannot use the subscription. Connect an Anthropic API key for those.'));
 }
 
 async function runCodexDeviceFlow() {
@@ -397,7 +503,7 @@ async function runCodexDeviceFlow() {
 
   const deadline = Date.now() + 15 * 60 * 1000;
   while (Date.now() < deadline) {
-    await delay(Math.max(3, flow.pollIntervalSec) * 1000);
+    await pause(Math.max(3, flow.pollIntervalSec) * 1000);
     const tokens = await client.pollDeviceFlow(flow.deviceAuthId, flow.userCode);
     if (!tokens) {
       process.stdout.write('.');

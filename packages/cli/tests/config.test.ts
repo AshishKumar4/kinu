@@ -9,7 +9,7 @@ import {
 } from "@kinu.run/core";
 import { Database } from "bun:sqlite";
 import {
-  readWorkspaceDisplayName, readWorkspaceIdentityId, validateAliasName, validateAgentName,
+  readWorkspaceDisplayName, readWorkspaceIdentityId,
 } from "../src/config";
 import * as v from 'valibot';
 
@@ -21,19 +21,27 @@ afterEach(() => {
 
 describe("CLI config safety", () => {
   test("validates local agent names", () => {
-    expect(() => validateAgentName("jarvis")).not.toThrow();
-    expect(() => validateAgentName("build-agent_2")).not.toThrow();
-    expect(() => validateAgentName("../outside")).toThrow("Agent name must");
-    expect(() => validateAgentName("bad/name")).toThrow("Agent name must");
-    expect(() => validateAgentName(".hidden")).toThrow("Agent name must");
+    // agentDir is the exported seam that refuses a bad name: it joins the
+    // home directory, so a name that could escape it must fail here.
+    const out = runNameChecks();
+    expect(out.slice(0, 2).map((r) => r.ok)).toEqual([true, true]);
+    expect(out.slice(2, 5).map((r) => r.error)).toEqual([
+      expect.stringContaining("Agent name must"),
+      expect.stringContaining("Agent name must"),
+      expect.stringContaining("Agent name must"),
+    ]);
   });
 
   test("validates aliases as executable names", () => {
-    expect(() => validateAliasName("jarvis")).not.toThrow();
-    expect(() => validateAliasName("jarvis-2")).not.toThrow();
-    expect(() => validateAliasName("../outside")).toThrow("Alias must");
-    expect(() => validateAliasName("bad/name")).toThrow("Alias must");
-    expect(() => validateAliasName("kinu")).toThrow("reserved");
+    // upsertAgentConfig is the exported seam that refuses a bad alias,
+    // including a reserved one, before it reaches the config file.
+    const out = runNameChecks();
+    expect(out.slice(5, 7).map((r) => r.ok)).toEqual([true, true]);
+    expect(out.slice(7, 9).map((r) => r.error)).toEqual([
+      expect.stringContaining("Alias must"),
+      expect.stringContaining("Alias must"),
+    ]);
+    expect(out[9].error).toContain("reserved");
   });
 
   test("honors KINU_HOME before falling back to the OS home", () => {
@@ -74,7 +82,7 @@ describe("CLI config safety", () => {
 
   test("model and effort selections update the account-wide default tier", () => {
     const out = runPreferenceWrite();
-    expect(out.modelResult).toEqual({ spec: "openai/gpt-5.5" });
+    expect(out.modelResult).toEqual({ kind: "model-set", spec: "openai/gpt-5.5" });
     const profile = v.parse(ProfileCatalogEnvelopeSchema, out.config.localProfile);
     expect(profile.catalog.tiers.default).toEqual({
       model: 'openai/gpt-5.5',
@@ -326,6 +334,49 @@ function runRequireAuth(tokenExpiresAt: string, envToken?: string) {
   });
 }
 
+interface NameCheck {
+  ok: boolean;
+  error: string | null;
+}
+
+/** Name and alias validation through the exported seams that enforce it
+ *  (agentDir, upsertAgentConfig), in a clean subprocess with a throwaway home
+ *  so the config write lands nowhere real. Order: five agentDir cases, then
+ *  five upsertAgentConfig alias cases. */
+function runNameChecks(): NameCheck[] {
+  const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-names-"));
+  tempDirs.push(kinuHome);
+  const script = `
+    import { agentDir, upsertAgentConfig } from './packages/cli/src/config.ts';
+    const results = [];
+    const check = (fn) => {
+      try { fn(); results.push({ ok: true, error: null }); }
+      catch (error) { results.push({ ok: false, error: error instanceof Error ? error.message : String(error) }); }
+    };
+    check(() => agentDir("jarvis"));
+    check(() => agentDir("build-agent_2"));
+    check(() => agentDir("../outside"));
+    check(() => agentDir("bad/name"));
+    check(() => agentDir(".hidden"));
+    const withAlias = (alias) => () => upsertAgentConfig({ name: "jarvis", mode: "local", alias });
+    check(withAlias("jarvis"));
+    check(withAlias("jarvis-2"));
+    check(withAlias("../outside"));
+    check(withAlias("bad/name"));
+    check(withAlias("kinu"));
+    console.log(JSON.stringify(results));
+  `;
+  const proc = Bun.spawnSync({
+    cmd: [process.execPath, "-e", script],
+    cwd: resolve(__dirname, "../../.."),
+    env: { ...process.env, KINU_HOME: kinuHome },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(proc.exitCode).toBe(0);
+  return JSON.parse(proc.stdout.toString());
+}
+
 interface PreferenceWriteResult {
   modelResult: JsonValue;
   effortShow: JsonValue;
@@ -350,17 +401,12 @@ function runPreferenceWrite(): PreferenceWriteResult {
   const script = `
     import { writeFileSync } from 'node:fs';
     import { CONFIG_PATH, loadConfigFile } from './packages/cli/src/config.ts';
-    import { executeEffortCommand, setModelPreference } from './packages/cli/src/slash-commands.ts';
-    const modelClient = { setModel: async (spec: string) => ({ spec }) };
-    let effort: 'low' | 'medium' | 'high' | null = null;
-    const effortClient = {
-      getReasoningEffort: async () => effort,
-      setReasoningEffort: async (next: 'low' | 'medium' | 'high') => ({ effort: effort = next }),
-    };
-    const modelResult = await setModelPreference(modelClient, 'openai/gpt-5.5');
-    const effortShow = await executeEffortCommand(effortClient, '');
-    const effortSet = await executeEffortCommand(effortClient, 'high');
-    const invalid = await executeEffortCommand(effortClient, 'extreme');
+    import { executeSlashCommand } from './packages/cli/src/slash-commands.ts';
+    const client = {};
+    const modelResult = await executeSlashCommand(client, '/model openai/gpt-5.5');
+    const effortShow = await executeSlashCommand(client, '/effort');
+    const effortSet = await executeSlashCommand(client, '/effort high');
+    const invalid = await executeSlashCommand(client, '/effort extreme');
     const config = loadConfigFile();
     writeFileSync(CONFIG_PATH, JSON.stringify({ ...config, reasoningEffort: 'extreme' }));
     let invalidRejection: string | null = null;

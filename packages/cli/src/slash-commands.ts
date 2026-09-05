@@ -6,8 +6,9 @@
  */
 
 import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REFINEMENT_DECISIONS, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
-import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView, AgentSearchNode } from './agent-client';
+import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
 import { loadActiveProfile, updateDefaultTier } from './profiles';
+import { renderSearchTreeLines } from './display';
 
 export interface SlashCommandInfo {
   name: string;
@@ -17,7 +18,7 @@ export interface SlashCommandInfo {
   requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename';
 }
 
-export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
+const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/help', description: 'Show command help' },
   { name: '/status', description: 'Show agent state and stats' },
   { name: '/tools', description: 'List available tools' },
@@ -57,7 +58,7 @@ export function commandsForClient(
   });
 }
 
-export function commandHelp(
+function commandHelp(
   client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename'>,
 ): string {
   const lines = ['Commands'];
@@ -447,7 +448,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       if (nodes.length === 0) {
         return { kind: 'text', text: 'No MCTS nodes yet. Ask something that needs a search, or run kinu evolve <name> from a shell.' };
       }
-      return { kind: 'text', text: `MCTS Tree (${nodes.length} nodes):\n${renderSearchTree(nodes)}` };
+      return { kind: 'text', text: `MCTS Tree (${nodes.length} nodes):\n${renderSearchTreeLines(nodes).join('\n')}` };
     }
     case '/jobs': {
       const jobs = await client.listJobs(20);
@@ -510,7 +511,7 @@ export async function setReasoningEffortPreference(
   return { effort: envelope.catalog.tiers.default.reasoningEffort ?? 'medium' };
 }
 
-export async function executeEffortCommand(
+async function executeEffortCommand(
   client: Pick<AgentClient, 'getReasoningEffort' | 'setReasoningEffort'>,
   arg: string,
 ): Promise<SlashOutcome> {
@@ -538,7 +539,7 @@ export interface UndoResult {
 
 /** Group checkpoints by turn, newest first — /undo n addresses the nth most
  *  recent turn that has a file checkpoint (a turn may snapshot several dirs). */
-export function groupCheckpointsByTurn(entries: ReadonlyArray<FileCheckpointEntry>): FileCheckpointEntry[][] {
+function groupCheckpointsByTurn(entries: ReadonlyArray<FileCheckpointEntry>): FileCheckpointEntry[][] {
   const groups: FileCheckpointEntry[][] = [];
   const byTurn = new Map<string, FileCheckpointEntry[]>();
   for (const entry of entries) {
@@ -776,13 +777,7 @@ export function describeTakePick(result: TakePickOutcome, n: number): string {
     (result.continuationQueued ? ', and the agent will continue with this approach.' : '.');
 }
 
-export function renderSearchTree(nodes: readonly AgentSearchNode[]): string {
-  return nodes.map((node) => {
-    const marker = node.status === 'pruned' ? '◌' : node.status === 'terminal' ? '★' : '○';
-    const prefix = '  '.repeat(node.depth) + marker;
-    return `${prefix} ${node.value.toFixed(3)} n=${node.visits} ${node.action?.slice(0, 40) ?? ''}`;
-  }).join('\n');
-}
+/** The classic-REPL takes listing (`/takes` without a pick). */
 
 export function renderStatusLines(status: AgentClientStatus): string[] {
   const row = (label: string, value: string | number | undefined) =>

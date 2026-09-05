@@ -405,7 +405,7 @@ async function runDeviceConnect(session: boolean): Promise<void> {
     const result = await connectDevice(auth, {
       session,
       label: defaultDeviceName(),
-      onPoll: () => {
+      onWaiting: () => {
         if (!waiting) {
           process.stdout.write(DIM('  Waiting for the daemon to connect'));
           waiting = true;

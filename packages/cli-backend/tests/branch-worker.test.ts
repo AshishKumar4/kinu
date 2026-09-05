@@ -130,21 +130,9 @@ async function spawnWorker(): Promise<ChildProcess> {
   return child;
 }
 
-function rpc(proc: ChildProcess, method: string, args: JsonValue) {
-  return new Promise<{ method: string; result?: JsonValue; error?: string }>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('rpc timeout')), 10_000);
-    const handler = (message: JsonValue) => {
-      const parsed = v.safeParse(replySchema, message);
-      if (parsed.success && parsed.output.method === method) {
-        clearTimeout(timeout);
-        proc.off('message', handler);
-        resolve(parsed.output);
-      }
-    };
-    proc.on('message', handler);
-    proc.send({ method, args });
-  });
-}
+// The worker answers only what BranchCallSchema parses. A method outside the
+// protocol is unattributable, so it is logged and dropped, never executed and
+// never answered — that silence is what keeps a branch from rating itself.
 
 describe('branch-worker protocol — no self-rating', () => {
   test('neither exploration nor reflection caps the branch model output', async () => {
@@ -197,9 +185,22 @@ describe('branch-worker protocol — no self-rating', () => {
 
   test("'evaluate' is not part of the protocol anymore", async () => {
     const proc = await spawnWorker();
-    const reply = await rpc(proc, 'evaluate', { task: 'rate yourself' });
-    expect(reply.error).toContain('Unknown method: evaluate');
-    expect(reply.result).toBeUndefined();
+    const seen: Array<JsonValue> = [];
+    const listener = (message: JsonValue): void => {
+      seen.push(message);
+    };
+    proc.on('message', listener);
+    try {
+      proc.send({ method: 'evaluate', id: 99, args: { task: 'rate yourself' } });
+      // A real delay: the worker is a separate process, so no in-process
+      // event marks "it chose silence" — the wait IS the assertion.
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 1000);
+      await promise;
+      expect(seen).toEqual([]);
+    } finally {
+      proc.off('message', listener);
+    }
   });
 
   test('the BranchHandle the spawner builds exposes only explore + generateReflection', async () => {
@@ -244,7 +245,6 @@ describe('branch worker failure replies', () => {
       expect(replies[0]?.result).toBeUndefined();
       expect(replies[0]?.error).toBeDefined();
       expect(replies[0]?.error).not.toBe('');
-
       // And when the provider did say something, that is what comes back —
       // never a constant standing in for it.
       endpoint.reply.body = { error: { message: 'upstream exploded' } };
@@ -263,16 +263,20 @@ describe('branch worker failure replies', () => {
     const { spawn, abort } = createBranchSpawner(dir, { llm: endpoint.llm });
     const handle = await spawn('policy-branch');
     const proc = forkedChild();
+    // The parent tags every call on a child with ascending ids from 1, and a
+    // reply settles the wait with its id. This handle is fresh, so the forged
+    // replies below name the reflection wait 1 and the explore wait 2.
     try {
       // Falsy but PRESENT: a truthiness check reads this as "no error".
       const falsyError = handle.generateReflection('ship a parser');
-      proc.emit('message', { method: 'reflect', error: '' });
+      proc.emit('message', { method: 'reflect', id: 1, error: '' });
       await expect(falsyError).rejects.toThrow('Branch worker failed reflect without a message');
 
-      // Neither error nor result: resolving this hands the engine `undefined`.
+      // Neither error nor result: the reply is outside the protocol, and the
+      // wait rejects instead of handing the engine `undefined`.
       const noResult = handle.explore(HISTORY, [], LANGUAGES, 'plan', []);
-      proc.emit('message', { method: 'explore' });
-      await expect(noResult).rejects.toThrow('Branch worker returned no result for explore');
+      proc.emit('message', { method: 'explore', id: 2 });
+      await expect(noResult).rejects.toThrow('Branch worker sent a malformed reply');
     } finally {
       await abort('policy-branch');
       await endpoint.stop();

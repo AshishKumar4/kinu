@@ -17,7 +17,6 @@ import {
   type ExplorationWrite, type ObjectiveIdentity,
 } from '@kinu.run/core';
 import { makeSql } from '@kinu.run/cli-backend';
-import { redactSecrets } from '../src/commands/debug';
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];
@@ -50,7 +49,8 @@ async function result(proc: ReturnType<typeof runCli>) {
 
 const SECRET_TOKEN = ['sk-ant-', 'api03-thisisaplantedsecretfortest1234567890abcdefgh'].join('');
 const SECRET_KINU_TOKEN = 'pta_' + 'x'.repeat(40);
-
+const AKIA = ['AKIA', 'ABCDEFGHIJKLMNOP'].join('');
+const BEARER_SECRET = 'abcdefghijklmnopqrstuvwxyz';
 /**
  * A workspace with exactly the shape the investigation needs: two runs (one
  * that backgrounded a call and was then polled anyway — symptom 1 — and a
@@ -144,7 +144,13 @@ function seedInvestigationWorkspace(dbPath: string): void {
     input: `token=${SECRET_KINU_TOKEN}`, now: 5050,
   });
   jobs.settle('job-1', 0, JSON.stringify({ ok: true }), 5050 + 125_000);
-  jobs.create({ id: 'job-2', kind: 'agents', workMode: 'build', input: '{}', now: 5060 });
+  // The remaining secret shapes live in this job's input: an AWS key, an
+  // auth header, and a key/value secret. The bundle must scrub all three.
+  jobs.create({
+    id: 'job-2', kind: 'agents', workMode: 'build',
+    input: `{"api_key": "verysecretvalue1234"} ${AKIA} Authorization: Bearer ${BEARER_SECRET}`,
+    now: 5060,
+  });
 
   // ── The records store: two comparable sets, one unfloored with NO descriptor
   // partition and one partitioned across three cells, five occupants in the
@@ -188,14 +194,29 @@ function seedInvestigationWorkspace(dbPath: string): void {
 }
 
 describe('kinu debug — redaction', () => {
-  test('redactSecrets scrubs every planted secret shape', () => {
-    expect(redactSecrets(`bearer ${SECRET_KINU_TOKEN}`)).not.toContain(SECRET_KINU_TOKEN);
-    expect(redactSecrets(SECRET_TOKEN)).not.toContain(SECRET_TOKEN);
-    expect(redactSecrets(['AKIA', 'ABCDEFGHIJKLMNOP'].join(''))).toBe('[REDACTED]');
-    expect(redactSecrets('Authorization: Bearer abcdefghijklmnopqrstuvwxyz')).not.toContain('abcdefghijklmnopqrstuvwxyz');
-    expect(redactSecrets('{"api_key": "verysecretvalue1234"}')).toContain('[REDACTED]');
-    expect(redactSecrets('{"api_key": "verysecretvalue1234"}')).not.toContain('verysecretvalue1234');
-    expect(redactSecrets('plain text with no secrets')).toBe('plain text with no secrets');
+  test('the bundle scrubs every planted secret shape but keeps the surrounding rows', async () => {
+    const home = scratch('kinu-debug-redact-');
+    const out = scratch('kinu-debug-redact-out-');
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
+    mkdirSync(join(home, 'invest'), { recursive: true });
+    seedInvestigationWorkspace(join(home, 'invest', 'agent.db'));
+
+    const bundle = join(out, 'invest.debug.jsonl');
+    const r = await result(runCli(home, ['debug', 'invest', '--out', bundle], repoRoot));
+    expect(r.exitCode).toBe(0);
+
+    const raw = readFileSync(bundle, 'utf8');
+    // Every planted shape is gone: the tool-result token, the job-input
+    // session token, the AWS key, the auth header, the key/value secret.
+    expect(raw).not.toContain(SECRET_TOKEN);
+    expect(raw).not.toContain(SECRET_KINU_TOKEN);
+    expect(raw).not.toContain(AKIA);
+    expect(raw).not.toContain(BEARER_SECRET);
+    expect(raw).not.toContain('verysecretvalue1234');
+    expect(raw).toContain('[REDACTED]');
+    // The rows around them survive: the job id and the benign label.
+    expect(raw).toContain('job-2');
+    expect(raw).toContain('pick a migration-backfill approach');
   });
 });
 
@@ -401,6 +422,10 @@ describe('kinu debug — cloud backend', () => {
       expect(r.stderr).toBe('');
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain('skywriter');
+      // The identity fields the bundle wrote still read back onto the summary
+      // through the shared field helpers: name, purpose, version and model.
+      expect(r.stdout).toContain('identity  skywriter — p');
+      expect(r.stdout).toContain('scaffold  v1  x');
       expect(r.stdout).toContain('Runs (1)');
 
       // The two RPCs that had NO remote read path before this command needed

@@ -67,7 +67,7 @@ import {
   type LocalProfileAuthority, type LocalProfileModelPlane,
 } from './profile-authority';
 import type { LocalCodexAuthStore } from './codex-auth-store';
-import type { OAuthCredential, FileCheckpoints } from '@kinu.run/core';
+import type { FileCheckpoints } from '@kinu.run/core';
 import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -94,7 +94,6 @@ export interface CLIRuntimeConfig {
   providerCredentials?: LocalProviderCredentials;
   codexAuthStore?: LocalCodexAuthStore;
   codexConfigPath?: string;
-  onCodexRefresh?: (credential: OAuthCredential) => void;
   /**
    * Where the HOST plane is rooted — the `laptop` executor and the checkpointed
    * host shell behind it, i.e. the developer's own filesystem. Defaults to the
@@ -431,7 +430,6 @@ export function createCLIRuntime(
         llm: config.llm,
         credentials: config.providerCredentials,
         codexAuthStore: config.codexAuthStore,
-        onCodexRefresh: config.onCodexRefresh,
       });
       return specResolver.normalizeSpecSync(spec);
     },
@@ -466,7 +464,6 @@ export function createCLIRuntime(
     llm: config.llm,
     credentials: config.providerCredentials,
     codexAuthStore: config.codexAuthStore,
-    onCodexRefresh: config.onCodexRefresh,
     spec: resolution.model,
     spend: { source: resolution.source, report, operations },
   });
@@ -717,10 +714,11 @@ export function buildCLIHeadRuntime(
   // scaffold_versions`.
   initScaffoldTables(execRaw, sql);
 
+  const workspaceSql = nimbusSql(db);
   const workspace = createWorkspaceFilesystem({
-    sql: nimbusSql(db),
+    sql: workspaceSql,
     transactions: localTransactions(db),
-    generation: nextWorkspaceGeneration(nimbusSql(db)),
+    generation: nextWorkspaceGeneration(workspaceSql),
     runtimes: WORKSPACE_RUNTIMES,
     runtimeFacets: localFacetHost(),
   } satisfies WorkspaceOptions);
@@ -911,7 +909,7 @@ export function createHostShell(cwd: string): Shell {
 
 /** Snapshot before any shell command — a command may mutate anything in the
  *  cwd; the engine dedupes to one snapshot per turn and skips no-op trees. */
-export function withCheckpointedShell(shell: Shell, checkpoints: FileCheckpoints, cwd: string): Shell {
+function withCheckpointedShell(shell: Shell, checkpoints: FileCheckpoints, cwd: string): Shell {
   return {
     async exec(command, stdinOrOptions) {
       await checkpoints.ensureCheckpoint(cwd, 'shell exec');

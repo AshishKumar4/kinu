@@ -32,8 +32,13 @@ import type { Subprocess } from 'bun';
 
 import { infraBoundary } from '@kinu.run/test-utils';
 import { listCloudDevices, registerCloudDevice } from '../../packages/cli/src/cloud-api';
-import { DEVICE_CONNECT_DEADLINE_MS } from '../../packages/cli/src/device-connect';
 import { grantDeviceConsent, revokeDeviceOverUserRoute, type DeviceAccount } from '../evals/device-session';
+
+/** How long a spawned daemon is given to report connected. The product's own
+ *  connect waits on the daemon's signals with no clock; a first-run case has
+ *  to end, so this is the tier's bound. 20 s is the figure the product carried
+ *  until 2026-09-05; the tier keeps it as its own. */
+const ARRIVAL_DEADLINE_MS = 20_000;
 
 /** The daemon this release ships, and the policy it requires beside itself. */
 const DAEMON_ENTRY = resolve(import.meta.dirname, '../../packages/pc-agent/src/index.js');
@@ -166,7 +171,7 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
   if (!arrived) {
     machine.stop();
     throw new Error(`the machine ${name} (${registration.deviceId}) never reported connected `
-      + `within ${String(DEVICE_CONNECT_DEADLINE_MS)}ms — the daemon's own log: `
+      + `within ${String(ARRIVAL_DEADLINE_MS)}ms — the daemon's own log: `
       + `${readDaemonLogTail(logPath)}`);
   }
   return machine;
@@ -207,11 +212,11 @@ export async function detachMachine(
 export { grantDeviceConsent };
 
 /** Whether the deployment reports this device connected, polled inside the
- *  product's own connect deadline. A machine's arrival is OBSERVED, never
- *  assumed from a spawn that returned. */
+ *  tier's own arrival bound. A machine's arrival is OBSERVED, never assumed
+ *  from a spawn that returned. */
 async function machineArrives(account: DeviceAccount, deviceId: string): Promise<boolean> {
-  const deadline = Date.now() + DEVICE_CONNECT_DEADLINE_MS;
-  const between = Math.floor(DEVICE_CONNECT_DEADLINE_MS / ARRIVAL_PROBES);
+  const deadline = Date.now() + ARRIVAL_DEADLINE_MS;
+  const between = Math.floor(ARRIVAL_DEADLINE_MS / ARRIVAL_PROBES);
   for (;;) {
     const devices = await listCloudDevices(account.origin, account.cliToken);
     if (devices.some((device) => device.id === deviceId && device.connected)) return true;

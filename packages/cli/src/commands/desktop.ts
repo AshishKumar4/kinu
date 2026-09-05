@@ -4,16 +4,22 @@ import {
   daemonStatus,
   DAEMON_LOG_PATH,
   defaultDeviceName,
+  describeConnectOutcome,
   describeDeviceSandbox,
   DEVICE_CONFIG_PATH,
-  DEVICE_CONNECT_DEADLINE_MS,
   DEVICE_CONNECT_DISCLOSURE,
-  readDaemonLogTail,
+  type ConnectDeviceResult,
 } from '../device-connect';
+import { readDaemonLogTail } from '../daemon-log';
 import { ACCENT, DIM, ERR, OK } from '../display';
 import { ask, canPrompt, confirm } from '../prompt';
 import { authCommand } from './auth';
 import { renderThrownChain } from '@kinu.run/core/obs';
+
+/** What `kinu desktop logs` and a failed connect print. */
+function daemonLogTail(lines: number): string {
+  return readDaemonLogTail(DAEMON_LOG_PATH, lines) ?? DIM(`No daemon log at ${DAEMON_LOG_PATH}`);
+}
 
 export async function desktopCommand(action: string | undefined, opts: { label?: string }): Promise<void> {
   const sub = action ?? 'status';
@@ -25,22 +31,28 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
       return;
     }
     let waiting = false;
-    const result = await connectDevice(auth, {
-      label: name,
-      onPoll: () => {
-        if (!waiting) {
-          process.stdout.write(DIM('Waiting for the daemon to connect'));
-          waiting = true;
-        }
-        process.stdout.write(DIM('.'));
-      },
-    });
+    let result: ConnectDeviceResult;
+    try {
+      result = await connectDevice(auth, {
+        label: name,
+        onWaiting: () => {
+          if (!waiting) {
+            process.stdout.write(DIM('Waiting for the daemon to connect'));
+            waiting = true;
+          }
+          process.stdout.write(DIM('.'));
+        },
+      });
+    } catch (err) {
+      if (waiting) process.stdout.write('\n');
+      console.error(`${ERR('✗')} ${renderThrownChain({ cause: err })}`);
+      console.error(`${DIM('Daemon log tail')} (${DAEMON_LOG_PATH}):`);
+      console.error(daemonLogTail(15));
+      process.exit(1);
+    }
     if (waiting) process.stdout.write('\n');
     if (result.kind !== 'connected') {
-      const device = result.kind === 'timeout' ? ` (device ${result.deviceId})` : '';
-      console.error(`${ERR('✗')} Daemon did not connect within ${DEVICE_CONNECT_DEADLINE_MS / 1000}s${device}.`);
-      console.error(`${DIM('Daemon log tail')} (${DAEMON_LOG_PATH}):`);
-      console.error(readDaemonLogTail(15));
+      console.error(`${ERR('✗')} ${describeConnectOutcome(result, false).message}`);
       process.exit(1);
     }
     console.log('');
@@ -59,8 +71,7 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
     return;
   }
   if (sub === 'logs') {
-    if (!daemonStatus().logPresent) throw new Error(`No desktop daemon log at ${DAEMON_LOG_PATH}`);
-    console.log(readDaemonLogTail(80));
+    console.log(daemonLogTail(80));
     return;
   }
   throw new Error('Usage: kinu desktop [connect|status|logs]');

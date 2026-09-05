@@ -45,10 +45,10 @@ import { SessionRecorder } from './session-recorder';
 import { normalizeModelMenu, type AgentModelMenu } from './model-catalog';
 import {
   findForkPivot,
-  asRecord,
   promptFiles,
   promptText,
 } from './agent-client';
+import { asRecord } from './options';
 import type {
   AgentChangelogView,
   AgentRefinementView,
@@ -723,7 +723,7 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
         hadError: event.turn.hadError,
         toolCalls: event.turn.toolCalls.map((call) => ({
           name: call.name,
-          args: asRecord({ value: decodeJsonValue({ value: call.args }) }),
+          args: asRecord({ value: decodeJsonValue({ value: call.args }) }, 'input'),
           result: call.result === undefined ? undefined : String(call.result),
         })),
       };

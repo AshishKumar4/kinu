@@ -58,9 +58,8 @@ import {
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier,
 } from '@kinu.run/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
-import {
-  DEVICE_CONNECT_DEADLINE_MS, connectDevice, daemonStatus, killSessionDaemon, readDaemonLogTail,
-} from '../../packages/cli/src/device-connect';
+import { connectDevice, daemonStatus, DAEMON_LOG_PATH, killSessionDaemon } from '../../packages/cli/src/device-connect';
+import { readDaemonLogTail } from '../../packages/cli/src/daemon-log';
 import { disposeFailedCase } from './episode-failure';
 import { resolvePublicSessionPlan, type KinuPublicSession, type PublicSessionPlan } from './public-session';
 import {
@@ -83,11 +82,13 @@ const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
  */
 const ROUNDTRIP_MARKER = 'KINU_DEVICE_ROUNDTRIP_OK';
 
-/** How long the deployment's device state is given to settle after a revoke.
- *  The PRODUCT's own figure — `connectDevice` waits exactly this long for a
- *  device to appear connected — rather than a number invented here, so the two
- *  directions of the same state change are held to one bound. */
-const SETTLE_DEADLINE_MS = DEVICE_CONNECT_DEADLINE_MS;
+/** How long this eval gives the deployment's device state to settle, in both
+ *  directions: the daemon appearing connected after `connectDevice`, and
+ *  disappearing after a revoke. The product itself waits on the daemon's own
+ *  signals with no clock; an eval has to end, so this is the eval's bound,
+ *  passed to `connectDevice` as its abort signal. 20 s is the figure the
+ *  product carried until 2026-09-05; this eval keeps it as its own. */
+const SETTLE_DEADLINE_MS = 20_000;
 
 /**
  * How many times the deployment's view is read inside that bound.
@@ -255,12 +256,13 @@ describe('Device evals — one machine, linked and driven through the deployed A
       const result = await connectDevice({ origin: account.origin, token: account.cliToken }, {
         session: true,
         label: `kinu-eval-${String(Date.now())}`,
+        signal: AbortSignal.timeout(SETTLE_DEADLINE_MS),
       });
       if (result.kind !== 'already-running') state.deviceId = result.deviceId;
       if (!note('connect', result.kind === 'connected',
-        `connectDevice → ${result.kind}${result.kind === 'timeout'
-          ? ` after ${String(DEVICE_CONNECT_DEADLINE_MS)}ms; daemon log tail: `
-            + readDaemonLogTail(6)
+        `connectDevice → ${result.kind}${result.kind === 'cancelled'
+          ? ` after ${String(SETTLE_DEADLINE_MS)}ms; daemon log tail: `
+            + (readDaemonLogTail(DAEMON_LOG_PATH, 6) ?? '(no log file)')
           : ''}`)) return;
 
       // ── listed ─────────────────────────────────────────────────────────
@@ -304,7 +306,7 @@ describe('Device evals — one machine, linked and driven through the deployed A
       // The daemon is still ALIVE and retrying — a revoked device is a closed
       // socket, not a dead process, and the CLI's own reconnect loop is what
       // makes that true. So the proof is its log, not its exit status.
-      const log = readDaemonLogTail(12);
+      const log = readDaemonLogTail(DAEMON_LOG_PATH, 12) ?? '';
       const closed = /Disconnected|credentials were rejected/.test(log);
       if (!note('revoked', state.revoked && gone && closed,
         `DELETE → ${String(revocation.status)}${revocation.status === 200 ? '' : ` ${revocation.body}`}; `

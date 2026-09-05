@@ -37,9 +37,10 @@ const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml',
  *
  * The two subcommands that scale with the user's project rather than with the
  * change are `add -A --ignore-errors` (stage the whole work tree before a
- * mutation) and `checkout-index -a -f` (write it all back on restore). Measured
- * against this repository — 1,689 tracked files, 22 MB, node_modules excluded by
- * .gitignore — on a warm page cache: staging 0.24 s, restoring 0.07 s. So 30_000
+ * mutation) and `checkout-index -a -f` (write it all back on restore).
+ * Measured 2026-08-19 against this repository — 1,689 tracked files, 22 MB,
+ * node_modules excluded by .gitignore — on a warm page cache: staging 0.24 s,
+ * restoring 0.07 s. So 30_000
  * carries roughly 125x that tree, which is the number to re-measure against
  * rather than re-reason about when someone reports a checkpoint timing out on a
  * project two orders of magnitude larger.
@@ -382,7 +383,8 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       // probed. Both spellings bound it — `resolve` normalizes `..` and never
       // follows a symlink, so the real path is compared too. Unbounded, one
       // stray `pyproject.toml` there claimed every host write beneath it:
-      // 24,483 ms for one `laptop.writeFile` (scripts/preflight.ts refuses it).
+      // 24,483 ms for one `laptop.writeFile`, measured 2026-09-02
+      // (scripts/preflight.ts refuses it).
       const temp = resolve(tmpdir());
       const realTemp = tolerate(() => realpathSync(temp), 'enoent') ?? temp;
       let probe = candidate;

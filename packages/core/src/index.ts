@@ -788,7 +788,7 @@ export { collectDynamicContext, subordinateDelegatesOf } from './state/dynamic-c
 export type { DynamicContextInput } from './state/dynamic-context';
 
 // MCTS engine
-export { runMCTS, SEARCH_FIBER_NAME } from './mcts/engine';
+export { runMCTS, SEARCH_FIBER_NAME, BranchExplorationSchema, BranchReflectionSchema } from './mcts/engine';
 export { selectNode } from './mcts/uct';
 export { backpropagate } from './mcts/backpropagation';
 export { recordNode } from './mcts/record-node';
@@ -1067,7 +1067,7 @@ export {
   type VectorizeIndex,
   type VectorRecord,
   type VectorMatch,
-  type VectorMemoryChunk,
+  type IndexedChunk,
   type VectorSearchHit,
 } from './memory/vector-store';
 export {

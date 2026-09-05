@@ -197,8 +197,6 @@ export interface MineOptions {
   /** Keep only projects whose directory name contains one of these. Empty
    *  means every project. */
   projects?: ReadonlyArray<string>;
-  /** Stop after this many turns. 0 or absent means the whole corpus. */
-  limit?: number;
 }
 
 /** Everything the reader declined to read, by reason. Printed on every report:
@@ -255,10 +253,9 @@ const COMMAND_CHARS = 400;
 const COMMANDS_PER_TURN = 40;
 
 /**
- * Walk every project under `root` and return the turns it yields.
- *
- * Projects are visited in sorted order and sessions oldest-file-first, so a
- * `--limit` takes a stable prefix rather than a different corpus each run.
+ * Walk every project under `root` and return the turns it yields. Projects
+ * visit in sorted order and sessions oldest-file-first, so every run mines
+ * the same corpus.
  */
 export function mineTranscripts(opts: MineOptions): MineResult {
   const skips: MineSkips = {
@@ -267,18 +264,16 @@ export function mineTranscripts(opts: MineOptions): MineResult {
   };
   const versions = new Set<string>();
   const turns: CorpusTurn[] = [];
-  const limit = opts.limit && opts.limit > 0 ? opts.limit : Number.POSITIVE_INFINITY;
   let files = 0;
   let sessions = 0;
 
   for (const project of listProjects(opts.root, opts.projects)) {
     for (const file of listSessions(join(opts.root, project))) {
-      if (turns.length >= limit) return { turns, files, sessions, versions: [...versions].sort(), skips };
       files++;
       const mined = mineSession(project, file, skips, versions);
       if (mined.length === 0) continue;
       sessions++;
-      turns.push(...mined.slice(0, limit - turns.length));
+      turns.push(...mined);
     }
   }
   return { turns, files, sessions, versions: [...versions].sort(), skips };

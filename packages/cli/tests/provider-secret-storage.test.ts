@@ -24,7 +24,7 @@ function storedConfig(home: string): JsonObject {
 
 /** The real command module, run in a child process so KINU_HOME is read
  *  fresh and nothing touches the developer's own ~/.kinu. */
-async function runStore(home: string, opts: { local: boolean; origin?: string }) {
+async function runStore(home: string, opts: { local: boolean; origin?: string; endpoint?: string }) {
   const runner = `
     const { storeProviderSecret } = await import('./packages/cli/src/commands/setup.ts');
     const { loadConfigFile, updateConfigFile } = await import('./packages/cli/src/config.ts');
@@ -39,6 +39,7 @@ async function runStore(home: string, opts: { local: boolean; origin?: string })
         },
         clearLocally: () => updateConfigFile((config) => { delete config.providers?.openrouter; }),
         model: 'openrouter/anthropic/claude-x',
+        ${opts.endpoint === undefined ? '' : `endpoint: ${JSON.stringify(opts.endpoint)},`}
       });
       console.log('WHERE:' + where);
     } catch (e) {
@@ -113,6 +114,37 @@ describe('where a provider secret is written', () => {
 
     expect(res.stdout).toContain('WHERE:local');
     expect(JSON.stringify(storedConfig(home))).toContain('sk-or-secret');
+  });
+
+  // An endpoint the Worker cannot reach keeps its key here whatever the
+  // account could hold. IPv6 unique-local (fc00::/7) and carrier-grade NAT
+  // (100.64.0.0/10) read as reachable until 2026-09-05, so the key went to
+  // the account, where the proxy could never use it.
+  test.each([
+    'https://[fd00::1]:11434/v1',
+    'https://100.64.3.4/v1',
+    'http://localhost:11434/v1',
+    'https://10.0.0.8/v1',
+  ])('an endpoint the proxy cannot reach keeps the key on this machine: %s', async (endpoint) => {
+    const home = kinuHome({ origin: 'http://127.0.0.1:1', accessToken: 'ptc_test_token' });
+    const res = await runStore(home, { local: false, endpoint });
+
+    expect(res.stdout).toContain('WHERE:local');
+    expect(JSON.stringify(storedConfig(home))).toContain('sk-or-secret');
+  });
+
+  test('a public https endpoint lets the account hold the key', async () => {
+    const server = Bun.serve({
+      port: 0, hostname: '127.0.0.1',
+      fetch: () => Response.json({ ok: true }, { status: 201 }),
+    });
+    const home = kinuHome({ origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_test_token' });
+    try {
+      const res = await runStore(home, { local: false, endpoint: 'https://[2606:4700:4700::1111]/v1' });
+      expect(res.stdout).toContain('WHERE:account');
+    } finally {
+      await server.stop(true);
+    }
   });
 });
 

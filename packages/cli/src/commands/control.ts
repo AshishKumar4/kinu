@@ -1,5 +1,5 @@
 import { requireAuthConfig } from '../config';
-import { isReasoningEffort, projectJsonValue, type JsonValue, type ModelMenu, type ReasoningEffort } from '@kinu.run/core';
+import { isReasoningEffort, projectJsonValue, type JsonValue, type ModelMenu, type ReasoningEffort, type TimerTrigger, type TimerTriggerOpts } from '@kinu.run/core';
 import { resolveAgentTarget } from '../agent-target';
 import {
   cancelLocalJob,
@@ -234,34 +234,42 @@ export async function triggersCommand(
       present(created, opts, (webhook) => printCreatedWebhook(webhook, auth.origin));
       return;
     }
-    const input = timerInput(normalized, value);
-    // trust:'owner' — an interactive session token IS the owner (the old
-    // per-route matcher stamped the same value server-side).
-    const created = await callAgentRpc(
-      auth.origin, auth.token, target.cloudName, 'createTimerTrigger', TimerTriggerSchema, [{ ...input, trust: 'owner' }],
-    );
-    present(created, opts, () =>
-      console.log(`${OK('scheduled')} ${created.id} ${DIM(created.kind)} ${formatTime(created.nextFireAt)}`));
-    return;
+  } else {
+    if (normalized === 'webhook') throw new Error('Webhook triggers require a cloud workspace.');
+    if (normalized === 'list') {
+      present(listLocalTriggers(target.localName).triggers, opts, printTriggers);
+      return;
+    }
+    if (normalized === 'cancel') {
+      if (!value) throw new Error('trigger id required');
+      const cancelled = await cancelLocalTrigger(target.localName, value);
+      present({ id: value, ...cancelled }, opts, () =>
+        console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
+      return;
+    }
   }
 
-  if (normalized === 'webhook') throw new Error('Webhook triggers require a cloud workspace.');
+  // Timer creation is the only action past this point, so both backends share
+  // the one scheduled line below.
+  const created = target.mode === 'cloud'
+    ? await createCloudTimerTrigger(target.cloudName, normalized, value)
+    : await createLocalTimerTrigger(target.localName, timerInput(normalized, value));
+  present(created, opts, () => printScheduled(created));
+}
 
-  if (normalized === 'list') {
-    present(listLocalTriggers(target.localName).triggers, opts, printTriggers);
-    return;
-  }
-  if (normalized === 'cancel') {
-    if (!value) throw new Error('trigger id required');
-    const cancelled = await cancelLocalTrigger(target.localName, value);
-    present({ id: value, ...cancelled }, opts, () =>
-      console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
-    return;
-  }
-  const created = await createLocalTimerTrigger(target.localName, timerInput(normalized, value));
-  if (!created) throw new Error('Trigger was registered but could not be read back.');
-  present(created, opts, () =>
-    console.log(`${OK('scheduled')} ${created.id} ${DIM(created.kind)} ${formatTime(created.next_fire_at)}`));
+async function createCloudTimerTrigger(cloudName: string, action: string, value: string | undefined): Promise<TimerTrigger> {
+  const auth = requireAuthConfig();
+  const input = timerInput(action, value);
+  // trust:'owner' — an interactive session token IS the owner (the old
+  // per-route matcher stamped the same value server-side).
+  return callAgentRpc(
+    auth.origin, auth.token, cloudName, 'createTimerTrigger', TimerTriggerSchema, [{ ...input, trust: 'owner' }],
+  );
+}
+
+/** One `scheduled` line for both backends: creation answers the same shape. */
+function printScheduled(trigger: { id: string; kind: string; nextFireAt: number | null }): void {
+  console.log(`${OK('scheduled')} ${trigger.id} ${DIM(trigger.kind)} ${formatTime(trigger.nextFireAt)}`);
 }
 
 export async function jobsCommand(name: string, action: string | undefined, id: string | undefined, opts: ControlOpts): Promise<void> {
@@ -298,13 +306,7 @@ function present<T extends JsonValue | object>(data: T, opts: ControlOpts, human
   else human(data);
 }
 
-interface TimerInput {
-  cron?: string;
-  atMs?: number;
-  label?: string;
-}
-
-function timerInput(action: string, value: string | undefined): TimerInput {
+function timerInput(action: string, value: string | undefined): Pick<TimerTriggerOpts, 'cron' | 'atMs' | 'label'> {
   if (action === 'every') {
     if (!value) throw new Error('cron expression required');
     return { cron: value };

@@ -12,6 +12,7 @@
  * it to the actual Vectorize/AI bindings.
  */
 
+import type { IndexedChunk } from '@kinu.run/agent-utils/memory';
 import type { JsonObject } from '../utils/json';
 import type { ModelCallSink } from '../events/model-call';
 import { diagnostics, toKinuError } from '../obs/index';
@@ -58,17 +59,9 @@ export interface Embedder {
   readonly dimensions: number;
 }
 
-export interface VectorMemoryChunk {
-  /** Stable chunk id (typically the row id from memory_chunks). */
-  id: string;
-  /** Source file path within the VFS. */
-  path: string;
-  /** Inclusive line range in the source. */
-  startLine: number;
-  endLine: number;
-  /** Verbatim chunk text — what we embed. */
-  text: string;
-}
+/** The chunk the embed path indexes: the FTS store's own row, declared once in
+ *  `@kinu.run/agent-utils/memory`. */
+export type { IndexedChunk } from '@kinu.run/agent-utils/memory';
 
 export interface VectorSearchHit {
   id: string;
@@ -92,9 +85,9 @@ export interface VectorStore {
   readonly available: boolean;
   /** Embed + insert a chunk. Idempotent on id. Rejects when the write did not
    *  land, so no caller can record it as indexed. */
-  upsertChunk(chunk: VectorMemoryChunk): Promise<void>;
+  upsertChunk(chunk: IndexedChunk): Promise<void>;
   /** Embed + insert many chunks (batched). Rejects when the write did not land. */
-  upsertChunks(chunks: readonly VectorMemoryChunk[]): Promise<void>;
+  upsertChunks(chunks: readonly IndexedChunk[]): Promise<void>;
   /** Delete chunks by id. Rejects when the delete did not land. */
   deleteChunks(ids: readonly string[]): Promise<void>;
   /** Semantic search — returns top-K hits with their scores. Degrades to [] on
@@ -193,7 +186,7 @@ export function createCloudflareVectorStore(opts: {
     return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 40);
   }
 
-  async function toRecords(chunks: readonly VectorMemoryChunk[]): Promise<VectorRecord[]> {
+  async function toRecords(chunks: readonly IndexedChunk[]): Promise<VectorRecord[]> {
     const vectors = embedder.embedBatch
       ? await embedder.embedBatch(chunks.map((c) => c.text))
       : await Promise.all(chunks.map((c) => embedder.embed(c.text)));
@@ -205,7 +198,7 @@ export function createCloudflareVectorStore(opts: {
     })));
   }
 
-  async function upsertRecords(chunks: readonly VectorMemoryChunk[], op: string): Promise<void> {
+  async function upsertRecords(chunks: readonly IndexedChunk[], op: string): Promise<void> {
     try {
       await index.upsert(await toRecords(chunks));
     } catch (err) {
@@ -244,11 +237,11 @@ export function createCloudflareVectorStore(opts: {
   return {
     get available() { return Date.now() >= unavailableUntil; },
 
-    async upsertChunk(chunk: VectorMemoryChunk) {
+    async upsertChunk(chunk: IndexedChunk) {
       await upsertRecords([chunk], 'upsert');
     },
 
-    async upsertChunks(chunks: readonly VectorMemoryChunk[]) {
+    async upsertChunks(chunks: readonly IndexedChunk[]) {
       if (chunks.length === 0) return;
       await upsertRecords(chunks, 'batch upsert');
     },

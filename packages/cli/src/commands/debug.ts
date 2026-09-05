@@ -47,7 +47,7 @@ import { resolveAgentTarget } from '../agent-target';
 import { requireAuthConfig } from '../config';
 import { callAgentRpc } from '../cloud-api';
 import { ACCENT, DIM, ERR, OK, printJson, WARN } from '../display';
-import { parsePositiveInt } from '../options';
+import { asRecord, numberField, parsePositiveInt, stringField } from '../options';
 import {
   getLocalAgentInfo, getLocalChangelog, getLocalChatHistory, getLocalFacts,
   getLocalScaffoldVersions, listLocalGepaRuns, listLocalHeads, listLocalJobs,
@@ -399,16 +399,19 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bsk-[A-Za-z0-9]{20,}\b/g, // OpenAI-shaped
   /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
   /\bBearer\s+[A-Za-z0-9._-]{15,}\b/gi,
+];
+
+/** Key/value patterns keep their two surrounding groups. They stand apart
+ *  from SECRET_PATTERNS so the replacement shape is declared, not sniffed
+ *  out of the pattern source. */
+const SECRET_KEY_VALUE_PATTERNS: RegExp[] = [
   /("(?:token|secret|password|api[_-]?key|credential|access[_-]?token|refresh[_-]?token)"\s*:\s*")[^"]{4,}(")/gi,
 ];
 
-export function redactSecrets(text: string): string {
+function redactSecrets(text: string): string {
   let out = text;
-  for (const pattern of SECRET_PATTERNS) {
-    out = pattern.source.includes('token|secret')
-      ? out.replace(pattern, '$1[REDACTED]$2')
-      : out.replace(pattern, '[REDACTED]');
-  }
+  for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, '[REDACTED]');
+  for (const pattern of SECRET_KEY_VALUE_PATTERNS) out = out.replace(pattern, '$1[REDACTED]$2');
   return out;
 }
 
@@ -747,13 +750,13 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     for (const g of gepaRuns) writer.write({ t: 'gepa_run', ...g });
 
     const releaseBoard = await safe('release_board', source.releaseBoard(sectionLimit), null);
-    if (releaseBoard) writer.write({ t: 'release_board', ...asRecord({ value: releaseBoard }) });
+    if (releaseBoard) writer.write({ t: 'release_board', ...asRecord({ value: releaseBoard }, 'value') });
 
     const triggers = await safe('triggers', source.triggers(), null);
-    if (triggers) writer.write({ t: 'triggers', ...asRecord({ value: triggers }) });
+    if (triggers) writer.write({ t: 'triggers', ...asRecord({ value: triggers }, 'value') });
 
     const tools = await safe('tools', source.toolDescriptions(), null);
-    if (tools) writer.write({ t: 'tools', ...asRecord({ value: tools }) });
+    if (tools) writer.write({ t: 'tools', ...asRecord({ value: tools }, 'value') });
 
     const facts = await safe('facts', source.facts(sectionLimit), []);
     summary.factCount = facts.length;
@@ -777,11 +780,6 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
   }
 }
 
-function asRecord(input: { value: JsonValue }): JsonObject {
-  const parsed = v.safeParse(JsonObjectSchema, input.value);
-  return parsed.success ? parsed.output : { value: input.value };
-}
-
 /** Human-readable elapsed duration ("45s", "12m", "3h 4m", "2d 1h") — the
  *  unit an operator reads at a glance, not raw milliseconds or a timestamp
  *  they have to subtract themselves. Negative/NaN inputs (a clock skew, a
@@ -798,19 +796,8 @@ function formatElapsed(ms: number): string {
   const remHours = totalHours % 24;
   return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
-
 function printJsonSummary(summary: DebugSummary, outPath: string): void {
   printJson(redactDeep(decodeJsonValue({ value: { bundle: outPath, ...summary } })));
-}
-
-function stringField(record: JsonObject, key: string): string | undefined {
-  const parsed = v.safeParse(v.string(), record[key]);
-  return parsed.success ? parsed.output : undefined;
-}
-
-function numberField(record: JsonObject, key: string): number | undefined {
-  const parsed = v.safeParse(v.number(), record[key]);
-  return parsed.success ? parsed.output : undefined;
 }
 
 function printHumanSummary(name: string, mode: string, summary: DebugSummary, outPath: string): void {

@@ -27,9 +27,10 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as v from 'valibot';
+import { readAllOutcome } from './spawned-output';
 
 export const OPENCODE_PROVIDER_ID = 'opencode';
-export const OPENCODE_LABEL = 'OpenCode (shared auth)';
+const OPENCODE_LABEL = 'OpenCode (shared auth)';
 
 const DEFAULT_AUTH_PATH = join(homedir(), '.local', 'share', 'opencode', 'auth.json');
 const DEFAULT_OPENCODE_BIN = 'opencode';
@@ -402,7 +403,7 @@ function createOpenCodeModel(
 
 /** Cold-map fallback only (metadata wins when loaded): OpenAI's gpt-5.x and
  *  o-series are Responses-API reasoning models; chat-completions rejects them. */
-export function isOpenAIReasoningFamily(modelId: string): boolean {
+function isOpenAIReasoningFamily(modelId: string): boolean {
   const upstream = modelId.slice(modelId.indexOf('/') + 1);
   return /^(gpt-[5-9]|o[0-9])/.test(upstream);
 }
@@ -547,35 +548,10 @@ function jsonObjectEnd(text: string, start: number): number {
   return -1;
 }
 
-async function readAll(stream: SpawnedOpenCode['stdout']): Promise<string> {
-  const decoder = new TextDecoder();
-  let out = '';
-  for await (const chunk of stream) {
-    const text = v.safeParse(v.string(), chunk);
-    out += text.success
-      ? text.output
-      : decoder.decode(v.parse(v.instance(Uint8Array), chunk), { stream: true });
-  }
-  out += decoder.decode();
-  return out;
-}
-
-/** `readAll`, with a read failure carried out as a value rather than thrown:
- *  the child's exit code says whether a dead stream is already explained, and
- *  that decision cannot be made inside a catch. */
-async function readAllOutcome(
-  stream: SpawnedOpenCode['stdout'],
-): Promise<{ text: string } | { error: unknown }> {
-  try {
-    return { text: await readAll(stream) };
-  } catch (error) {
-    return { error };
-  }
-}
 
 // ─── Availability probe ──────────────────────────────────────────────────────
 
-export async function probeOpenCode(
+async function probeOpenCode(
   authPath: string,
   spawnFn: OpenCodeSpawn,
 ): Promise<OpenCodeAvailability> {

@@ -385,6 +385,32 @@ describe("CLI inspection commands", () => {
       expect(JSON.parse(run.stdout.toString())).toEqual([]);
     }
   }, CLI_SPAWN_TIMEOUT_MS);
+
+  // The local one-shot registration wrote its fire time into the spec
+  // (`atMs`) where core keeps it in next_fire_at only. Both halves are
+  // pinned: the stored row and the printed line.
+  test("a one-shot local trigger stores its fire time in next_fire_at, not the spec", () => {
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-timer-"));
+    tempDirs.push(home);
+    createLocalAgent(home, "localtest");
+
+    const at = "2030-01-02T03:04:05Z";
+    const run = runCli(home, ["triggers", "localtest", "at", at]);
+    expect([run.exitCode, run.stderr.toString()]).toEqual([0, ""]);
+    expect(run.stdout.toString()).toContain("scheduled");
+
+    const db = new Database(join(home, "localtest", "agent.db"), { readonly: true });
+    try {
+      const row = v.parse(
+        v.object({ spec: v.string(), nextFireAt: v.number() }),
+        db.query("SELECT spec, next_fire_at AS nextFireAt FROM triggers").get(),
+      );
+      expect(row.nextFireAt).toBe(Date.parse(at));
+      expect(JSON.parse(row.spec)).not.toHaveProperty("atMs");
+    } finally {
+      db.close();
+    }
+  }, CLI_SPAWN_TIMEOUT_MS);
 });
 
 /**

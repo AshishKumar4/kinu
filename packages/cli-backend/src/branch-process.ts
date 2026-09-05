@@ -6,14 +6,17 @@
  * On Linux: child_process.fork(branch-worker.ts) with its own SQLite DB
  */
 
-import type {
-  BranchHandle, BranchExploration, BranchReflection, SpawnBranch, AbortBranch,
-} from '@kinu.run/core';
-import type { CraftedTool, LLMProviderConfig, WorkMode } from '@kinu.run/core';
+import type { BranchExploration, BranchHandle, JsonValue, SpawnBranch, AbortBranch, LLMProviderConfig } from '@kinu.run/core';
 import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
+import * as v from 'valibot';
+import { diagnostics, KinuError } from '@kinu.run/core/obs';
+import {
+  BRANCH_EXPLORE, BRANCH_READY, BRANCH_REFLECT, BranchReplySchema,
+  type BranchCall, type BranchCallReply, type BranchMethod,
+} from './branch-protocol';
 import type { LocalProviderCredentials } from './model-resolver';
 
 const activeBranches = new Map<string, ChildProcess>();
@@ -28,14 +31,26 @@ const activeBranches = new Map<string, ChildProcess>();
  *
  * What makes a clock unnecessary is wiring, not patience: the two ways a promise
  * here could hang are both handled at their cause. A child that DIES has its
- * pending RPCs rejected by the exit hook in `rpc` below (this file previously let
+ * pending RPCs rejected by the exit hook in `call` below (this file previously let
  * them dangle — the clock was silently doing that job too). A child that LIVES but
  * stops answering is bounded from inside its own turns, and its failure arrives as
  * an error message over this same pipe. The residue — a live worker wedged outside
  * every instrumented await — is the same residue every unbounded surface carries
  * under the ruling, disclosed rather than papered over with a number nobody
  * measured.
+ *
+ * Startup carries no clock either. The wait ends on the worker's ready reply,
+ * on its error, or on its exit. A non-zero exit rejects with the code. A zero
+ * exit before ready rejects too, because a worker that left without answering
+ * never will. The residue — a live child that never sends ready — is the same
+ * residue as above.
  */
+
+interface PendingCall {
+  readonly method: BranchMethod;
+  readonly resolve: (reply: BranchCallReply) => void;
+  readonly reject: (reason: Error) => void;
+}
 
 export interface BranchSpawnerConfig {
   /** The parent's default endpoint for bare ids — null when nothing derives
@@ -50,22 +65,6 @@ export interface BranchSpawner {
   spawn: SpawnBranch;
   abort: AbortBranch;
 }
-
-interface ExploreBranchArgs {
-  history: Array<{ role: string; content: string }>;
-  tools: CraftedTool[];
-  languages: readonly [string, ...string[]];
-  mode: WorkMode;
-  siblings: readonly string[];
-}
-
-interface ReflectBranchArgs {
-  task: string;
-  /** The environment's verdict on this branch's proposal, when it reached one. */
-  outcome?: string;
-}
-
-type BranchRpcArgs = ExploreBranchArgs | ReflectBranchArgs;
 
 /**
  * `basePath` is the agent database's path with `.db` removed — the directory a
@@ -109,7 +108,7 @@ export function createBranchSpawner(
       KINU_AUTH: config.llm?.headers.Authorization ?? config.llm?.headers.authorization ?? '',
       KINU_MODEL: config.llm?.model ?? '',
       KINU_LLM_HEADERS: JSON.stringify(config.llm?.headers ?? {}),
-      KINU_PROVIDER_CREDENTIALS: JSON.stringify(branchSafeCredentials(config.providerCredentials)),
+      KINU_PROVIDER_CREDENTIALS: JSON.stringify(config.providerCredentials ?? {}),
       KINU_PARENT_DB: `${basePath}.db`,
     };
     if (config.codexConfigPath) env.KINU_CONFIG_PATH = config.codexConfigPath;
@@ -121,75 +120,94 @@ export function createBranchSpawner(
       // No execArgv needed — when running under bun, fork() inherits bun's runtime
     });
     activeBranches.set(branchId, child);
-    child.once('exit', () => {
-      activeBranches.delete(branchId);
-      disposeBranchFiles(dbPath);
-    });
-
-    const rpc = <T>(method: string, args: BranchRpcArgs): Promise<T> => {
-      const { promise, resolve, reject } = Promise.withResolvers<T>();
-      let settled = false;
-      // A DEAD CHILD ENDS ITS PENDING RPCS. Without this a worker that exits
-      // mid-call leaves its caller's promise pending forever — the removed wall
-      // clock was silently doing this job, and this is the job: liveness at the
-      // cause, not timekeeping.
-      const onExit = () => {
-        if (settled) return;
-        settled = true;
-        reject(new Error(`Branch worker exited before answering ${method}`));
-      };
-      child.once('exit', onExit);
-      const handler = (msg: { method: string; result?: T; error?: string }) => {
-        if (msg.method === method) {
-          child.off('message', handler);
-          child.off('exit', onExit);
-          settled = true;
-          // Presence, not truthiness: an error whose message is empty is
-          // still a failure, and treating it as success used to surface far
-          // away as a TypeError inside the search loop.
-          if (msg.error !== undefined) {
-            reject(new Error(msg.error || `Branch worker failed ${method} without a message`));
-          } else if (msg.result === undefined) {
-            reject(new Error(`Branch worker returned no result for ${method}`));
-          } else {
-            resolve(msg.result);
-          }
-        }
-      };
-      child.on('message', handler);
-      child.send({ method, args });
-      return promise;
+    let nextId = 1;
+    const pending = new Map<number, PendingCall>();
+    const startup = Promise.withResolvers<void>();
+    const failEveryCall = (error: Error): void => {
+      for (const waiter of pending.values()) waiter.reject(error);
+      pending.clear();
     };
 
+    // The one listener on this child. Every inbound message parses against
+    // the shared reply schema. Ready settles startup; a call reply settles
+    // exactly the wait with its id.
+    const onMessage = (raw: JsonValue): void => {
+      const parsed = v.safeParse(BranchReplySchema, raw);
+      if (!parsed.success) {
+        diagnostics.failure('branch.reply_malformed', new KinuError(
+          'bad_input',
+          `branch worker sent a reply outside the protocol: ${parsed.issues.map((issue) => issue.message).join('; ')}`,
+        ));
+        failEveryCall(new Error('Branch worker sent a malformed reply'));
+        return;
+      }
+      const reply = parsed.output;
+      if (reply.method === BRANCH_READY) {
+        startup.resolve();
+        return;
+      }
+      const waiter = pending.get(reply.id);
+      if (!waiter) {
+        diagnostics.event('branch.reply_unmatched', { id: reply.id, method: reply.method });
+        return;
+      }
+      pending.delete(reply.id);
+      waiter.resolve(reply);
+    };
+    child.on('message', onMessage);
+    // `error` fires for a spawn that failed and for a send the closed channel
+    // refused; either way nothing pending can be answered. Settling an
+    // already-settled startup is a no-op, so one listener covers the child's
+    // whole life.
+    child.on('error', (error) => {
+      startup.reject(error);
+      failEveryCall(error);
+    });
+    // A DEAD CHILD ENDS ITS PENDING RPCS. Without this a worker that exits
+    // mid-call leaves its caller's promise pending forever — the removed wall
+    // clock was silently doing this job, and this is the job: liveness at the
+    // cause, not timekeeping.
+    child.once('exit', (code) => {
+      child.off('message', onMessage);
+      activeBranches.delete(branchId);
+      disposeBranchFiles(dbPath);
+      startup.reject(code === 0 || code === null
+        ? new Error('Branch worker exited before sending ready')
+        : new Error(`Branch worker exited with code ${code}`));
+      for (const waiter of pending.values()) {
+        waiter.reject(new Error(`Branch worker exited before answering ${waiter.method}`));
+      }
+      pending.clear();
+    });
+
+    const call = <M extends BranchMethod>(
+      method: M,
+      args: Extract<BranchCall, { method: M }>['args'],
+    ): Promise<BranchCallReply> => {
+      const id = nextId;
+      nextId += 1;
+      const { promise, resolve, reject } = Promise.withResolvers<BranchCallReply>();
+      pending.set(id, { method, resolve, reject });
+      child.send({ method, id, args });
+      return promise;
+    };
     try {
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
-        const handler = (msg: { method: string }) => {
-          if (msg.method === 'ready') {
-            clearTimeout(timeout);
-            child.off('message', handler);
-            resolve();
-          }
-        };
-        child.on('message', handler);
-        child.on('error', (err) => { clearTimeout(timeout); reject(err); });
-        child.on('exit', (code) => {
-          if (code !== 0) { clearTimeout(timeout); reject(new Error(`Branch worker exited with code ${code}`)); }
-        });
-      });
+      await startup.promise;
     } catch (error) {
       child.kill('SIGTERM');
       throw error;
     }
 
     return {
-      explore: (history: Array<{ role: string; content: string }>, tools: CraftedTool[], languages: readonly [string, ...string[]], mode: WorkMode, siblings: readonly string[] = []) =>
-        rpc<BranchExploration>('explore', { history, tools, languages, mode, siblings }),
-      generateReflection: (task: string, outcome?: string) => {
-        const args: ReflectBranchArgs = { task };
-        if (outcome) args.outcome = outcome;
-        return rpc<BranchReflection>('reflect', args);
-      },
+      // The handle still takes tools because BranchHandle names them. They
+      // never reach the wire: the worker reads crafted tools from the parent
+      // database.
+      explore: (history, _tools, languages, mode, siblings = []) =>
+        call(BRANCH_EXPLORE, { history, languages: [...languages], mode, siblings: [...siblings] })
+          .then((reply) => resultOf(reply, BRANCH_EXPLORE)),
+      generateReflection: (task, outcome) =>
+        call(BRANCH_REFLECT, outcome ? { task, outcome } : { task })
+          .then((reply) => resultOf(reply, BRANCH_REFLECT)),
     };
   };
 
@@ -210,8 +228,15 @@ function disposeBranchFiles(dbPath: string): void {
   for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(dbPath + suffix, { force: true });
 }
 
-function branchSafeCredentials(credentials: LocalProviderCredentials | undefined): LocalProviderCredentials {
-  if (!credentials) return {};
-  const { codexOAuth: _codexOAuth, ...safe } = credentials;
-  return safe;
+/**
+ * What a call reply carries for the method that was called. Presence, not
+ * truthiness, decides failure: an error whose message is empty is still a
+ * failure, and treating it as success used to surface far away as a
+ * TypeError inside the search loop.
+ */
+function resultOf(reply: BranchCallReply, method: BranchMethod): BranchExploration {
+  if ('error' in reply) throw new Error(reply.error || `Branch worker failed ${method} without a message`);
+  if (reply.method !== method) throw new Error(`Branch worker answered ${method} with ${reply.method}`);
+  return reply.result;
 }
+

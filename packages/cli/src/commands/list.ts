@@ -1,8 +1,8 @@
 import { statSync } from 'node:fs';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { listCloudAgents } from '../cloud-api';
-import { reconcileAgentRefs } from '../agent-list';
-import { agentDbPath, listAgentDirs, listLegacyAgentNames, loadConfigFile, resolveCloudSession } from '../config';
+import { listLocalAgentNames, reconcileAgentRefs } from '../agent-list';
+import { agentDbPath, loadConfigFile, resolveCloudSession } from '../config';
 import { printAgentList } from '../display';
 import { getLocalAgentInfo } from '../local-inspection';
 
@@ -19,7 +19,7 @@ function databaseSize(name: string): number | undefined {
 export async function listCommand(): Promise<void> {
   // This project's agents, then the ones no project claims yet, so listing
   // stays machine-wide while grouping stays honest about placement.
-  const localAgents = [...listAgentDirs(), ...listLegacyAgentNames()];
+  const localAgents = listLocalAgentNames();
   const configuredAgents = Object.values(loadConfigFile().agents ?? {});
   const cloudSession = resolveCloudSession();
   const cloudAgents = cloudSession
@@ -34,7 +34,6 @@ export async function listCommand(): Promise<void> {
         mode: agent.mode,
         purpose: agent.label,
         scaffoldVersion: 0,
-        toolCount: 0,
         dbSize: undefined,
       };
     }
@@ -46,7 +45,6 @@ export async function listCommand(): Promise<void> {
         mode: agent.mode,
         purpose: agent.label,
         scaffoldVersion: 0,
-        toolCount: 0,
         dbSize: databaseSize(name),
       };
     }
@@ -60,7 +58,6 @@ export async function listCommand(): Promise<void> {
         mode: agent.mode,
         purpose: info.purpose,
         scaffoldVersion: info.scaffoldVersion,
-        toolCount: info.craftedToolCount,
         dbSize: databaseSize(name),
       };
     } catch (caught) {
@@ -74,7 +71,7 @@ export async function listCommand(): Promise<void> {
         toKinuError({ doing: 'reading a local workspace', cause: caught, otherwise: 'io' }),
         { workspace: name },
       );
-      return { name, mode: agent.mode, purpose: `(unreadable: ${reason})`, scaffoldVersion: 0, toolCount: 0 };
+      return { name, mode: agent.mode, purpose: `(unreadable: ${reason})`, scaffoldVersion: 0 };
     }
   });
 

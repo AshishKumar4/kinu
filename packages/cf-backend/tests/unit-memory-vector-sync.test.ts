@@ -9,7 +9,7 @@ import { createWorkspaceBundle, makeSql } from '../../core/tests/helpers';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import {
   createAgentConfigStore, createCloudflareVectorStore, VECTOR_BACKEND_COOLDOWN_MS,
-  type Embedder, type VectorizeIndex, type VectorStore, type VectorMemoryChunk,
+  type Embedder, type VectorizeIndex, type VectorStore, type IndexedChunk,
 } from '@kinu.run/core';
 import { adaptMemory, backfillMemoryVectors } from '../src/memory-sync';
 
@@ -25,9 +25,9 @@ function createStore() {
 
 /** A VectorStore that records upserts/deletes for assertions. */
 function fakeVectorStore(available = true) {
-  const upserted: VectorMemoryChunk[] = [];
+  const upserted: IndexedChunk[] = [];
   const deleted: string[] = [];
-  const live = new Map<string, VectorMemoryChunk>();
+  const live = new Map<string, IndexedChunk>();
   const store: VectorStore = {
     available,
     async upsertChunk(c) { upserted.push(c); live.set(c.id, c); },

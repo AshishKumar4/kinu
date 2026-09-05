@@ -20,7 +20,7 @@ import { tolerate } from '@kinu.run/core/obs';
 
 /** Rotate at 1 MiB, keeping exactly one predecessor: ~2 MiB of history is
  *  plenty to explain a misfiring trigger and costs nothing to keep. */
-export const DAEMON_LOG_MAX_BYTES = 1024 * 1024;
+const DAEMON_LOG_MAX_BYTES = 1024 * 1024;
 
 const PREVIOUS_SUFFIX = '.1';
 

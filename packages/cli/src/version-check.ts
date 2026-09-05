@@ -15,7 +15,7 @@ import { loadConfigFile, updateConfigFile, type KinuConfig } from './config';
 import * as v from 'valibot';
 import { classify, classifyErrorCode, renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
 
-export const CLI_VERSION_PATH = '/downloads/kinu-version.json';
+const CLI_VERSION_PATH = '/downloads/kinu-version.json';
 const FETCH_TIMEOUT_MS = 1_500;
 const CHECK_INTERVAL_MS = 24 * 60 * 60_000;
 const ServedVersionSchema = v.object({
@@ -81,7 +81,7 @@ export interface NoticeContext {
 
 /** Whether to spend a network round-trip on the startup notice. Pure so the
  *  suppression rules are testable without a clock, a terminal, or a server. */
-export function shouldCheckForUpdate(ctx: NoticeContext): boolean {
+function shouldCheckForUpdate(ctx: NoticeContext): boolean {
   if (!ctx.isTTY) return false;                       // CI, pipes, --json
   if (ctx.config.updateCheck === false) return false; // explicit opt-out
   if (!ctx.config.origin) return false;               // not signed in anywhere
@@ -90,7 +90,7 @@ export function shouldCheckForUpdate(ctx: NoticeContext): boolean {
 }
 
 /** The one muted line, or null when the installed build is current. */
-export function updateNotice(installed: string, served: ServedVersion | null): string | null {
+function updateNotice(installed: string, served: ServedVersion | null): string | null {
   if (!served || isSameBuild(installed, served.version)) return null;
   return `A newer Kinu is available (${served.version}). Run: kinu update`;
 }

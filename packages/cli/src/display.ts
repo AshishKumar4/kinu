@@ -234,7 +234,6 @@ export function printAgentList(agents: Array<{
   mode: 'local' | 'cloud';
   purpose: string;
   scaffoldVersion: number;
-  toolCount: number;
   lastActive?: string;
   dbSize?: number;
 }>): void {
@@ -266,7 +265,7 @@ export function printAgentList(agents: Array<{
     const name = ACCENT(a.name.padEnd(nameW));
     const mode = DIM(a.mode.padEnd(modeW));
     const purpose = DIM(a.purpose.slice(0, purposeW - 2).padEnd(purposeW));
-    const ver = `v${a.scaffoldVersion}`.padEnd(4);
+    const ver = (a.mode === 'cloud' ? '—' : `v${a.scaffoldVersion}`).padEnd(4);
     const size = a.dbSize ? DIM(formatBytes(a.dbSize).padStart(8)) : DIM('    —   ');
     console.log(`  ${name}${mode}${purpose} ${ver}  ${size}`);
   }
@@ -275,6 +274,32 @@ export function printAgentList(agents: Array<{
 
 // ── Search tree visualization ────────────────────────────────────
 
+/** The fields every MCTS-tree surface renders. Core SearchNode and the
+ *  AgentSearchNode projection both narrow to this. */
+export interface SearchTreeNode {
+  depth: number;
+  status: string;
+  action: string | null;
+  value: number;
+  visits: number;
+}
+
+/** One terminal line per node. The glyphs name all four engine statuses:
+ *  terminal, failed and pruned each read apart, open reads as pending. */
+export function renderSearchTreeLines(nodes: readonly SearchTreeNode[]): string[] {
+  return nodes.map((node) => {
+    const indent = '  '.repeat(node.depth + 1);
+    const icon = node.status === 'terminal' ? OK('●')
+      : node.status === 'pruned' ? ERR('○')
+      : node.status === 'failed' ? ERR('✗')
+      : WARN('◌');
+    const value = WARN(node.value.toFixed(3));
+    const visits = DIM(`n=${node.visits}`);
+    const action = clipText((node.action ?? '').replace(/\n/g, ' '), 50);
+    return `${indent}${icon} ${value} ${visits} ${DIM(action)}`;
+  });
+}
+
 export function printSearchTree(nodes: SearchNode[]): void {
   if (nodes.length === 0) {
     console.log(DIM('  (no search history)'));
@@ -282,17 +307,7 @@ export function printSearchTree(nodes: SearchNode[]): void {
   }
 
   console.log(`\n${DIM('MCTS Search Tree:')}`);
-  for (const n of nodes) {
-    const indent = '  '.repeat(n.depth + 1);
-    const icon = n.status === 'terminal' ? OK('●')
-      : n.status === 'pruned' ? ERR('○')
-      : n.status === 'failed' ? ERR('✗')
-      : WARN('◌');
-    const value = WARN(n.value.toFixed(3));
-    const visits = DIM(`n=${n.visits}`);
-    const action = clipText(n.action.replace(/\n/g, ' '), 50);
-    console.log(`${indent}${icon} ${value} ${visits} ${DIM(action)}`);
-  }
+  for (const line of renderSearchTreeLines(nodes)) console.log(line);
   console.log('');
 }
 
@@ -451,7 +466,7 @@ function argumentSuffix(cmd: Command): string {
  * curated by hand here, so `--help` cannot drift from what the CLI accepts;
  * grouping and wording live on the registrations themselves (src/program.ts).
  */
-export function renderHelp(program: Command): string {
+function renderHelp(program: Command): string {
   const entries = commandEntries(program);
   const width = termWidth();
   const termColumn = Math.min(Math.max(0, ...entries.map((e) => e.term.length)) + 2, 34);

@@ -1,5 +1,5 @@
-export const DEFAULT_CHUNK_TARGET_CHARS = 1600;
-export const DEFAULT_CHUNK_OVERLAP_CHARS = 320;
+const DEFAULT_CHUNK_TARGET_CHARS = 1600;
+const DEFAULT_CHUNK_OVERLAP_CHARS = 320;
 
 export interface Chunk {
 	text: string;

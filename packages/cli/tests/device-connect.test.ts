@@ -64,7 +64,7 @@ afterEach(async () => {
 
 interface StubCloud {
   origin: string;
-  hits: { register: number; list: number; daemonScript: number };
+  hits: { register: number; list: number; daemonScript: number; ticket: number };
 }
 
 interface StubCloudOptions {
@@ -76,6 +76,10 @@ interface StubCloudOptions {
   registrationFailure?: { status: number; error: string };
   /** The registration body, so a test can assert the NAME the CLI sent. */
   onRegister?: (body: { label?: string }) => void;
+  /** Answer the daemon's ticket exchanges with these statuses in order, the
+   *  last one repeating. 401 is the hub revoking the credential, and the
+   *  daemon exits on it; 404 it retries after a backoff. Unset: 404. */
+  ticketStatuses?: readonly number[];
 }
 
 /** The file the poisoned daemon writes if it ever runs. */
@@ -99,7 +103,7 @@ const POISON_DAEMON = [
 /** Minimal cloud origin: device register/list, plus the retired daemon route
  *  serving poison so any fetch of it is visible in the installed bytes. */
 function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
-  const hits = { register: 0, list: 0, daemonScript: 0 };
+  const hits = { register: 0, list: 0, daemonScript: 0, ticket: 0 };
   const server = Bun.serve({
     port: 0,
     async fetch(req: Request): Promise<Response> {
@@ -125,6 +129,11 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
       if (url.pathname === '/api/cli/devices' && req.method === 'GET') {
         hits.list += 1;
         return Response.json(opts.devices?.() ?? []);
+      }
+      if (url.pathname === '/pc/connect-ticket' && opts.ticketStatuses !== undefined) {
+        const status = opts.ticketStatuses[Math.min(hits.ticket, opts.ticketStatuses.length - 1)];
+        hits.ticket += 1;
+        return Response.json({ error: 'refused by the stub' }, { status });
       }
       if (url.pathname === '/pc/daemon.js') {
         hits.daemonScript += 1;
@@ -716,7 +725,9 @@ describe('device-connect install hardening', () => {
   });
 
   test('fails fast when the daemon exits at startup', async () => {
-    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+    // A daemon that died never connected, so the hub's row for it stays
+    // disconnected; the exit is what ends the wait.
+    const stub = startStubCloud({ devices: () => [connectedDevice(false)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
     // A file where the daemon's in-flight root belongs. The daemon cannot read
     // its own request registry and dies before it reaches the connect loop.
@@ -734,6 +745,57 @@ describe('device-connect install hardening', () => {
     `, { KINU_INFLIGHT_ROOT: inflight });
 
     expect(failure).toContain('exited before it could connect');
+  }, 20_000);
+
+  test('the connect wait ends on the daemon exiting, not on a clock', async () => {
+    // The hub's first ticket answer is a 404 the daemon retries a second
+    // later; the second is a 401, so the daemon logs the rejection and exits
+    // 4 about 1.2 s in. That exit is the definitive failure, and the wait
+    // ends on it. It used to wait out a 20 s bound and report the bound as
+    // the daemon's failure (red 2026-09-05: `{"kind":"timeout"}` after
+    // 20429 ms, 20 list polls).
+    const stub = startStubCloud({ devices: () => [connectedDevice(false)], ticketStatuses: [404, 401] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const failure = await scriptFailure(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      try {
+        const result = await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
+        console.log(JSON.stringify(result));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    `);
+
+    expect(failure).toContain('exited before it could connect (exit code 4)');
+    // The daemon exits inside its first connect attempt; a wait that ran out
+    // a 20 s bound instead would have asked the hub about twenty times.
+    expect(stub.hits.list).toBeLessThan(5);
+  }, 30_000);
+
+  test('a caller ends the wait through its signal and the result says so', async () => {
+    // The hub never reports the daemon connected (its ticket exchange keeps
+    // failing with 404, which the daemon retries). Only the caller's signal
+    // ends this wait.
+    const stub = startStubCloud({ devices: () => [connectedDevice(false)] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const out = await runScript(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      const stop = new AbortController();
+      let polls = 0;
+      const result = await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, {
+        session: true,
+        signal: stop.signal,
+        onWaiting: () => { polls += 1; if (polls === 2) stop.abort(); },
+      });
+      console.log(JSON.stringify({ result, polls }));
+      // The session daemon is this process's child; exiting is what stops it.
+      process.exit(0);
+    `);
+
+    expect(JSON.parse(out.trim())).toEqual({ result: { kind: 'cancelled', deviceId: 'dev_1' }, polls: 2 });
   }, 20_000);
 
   test('never signals an unrelated live process named by a stale pidfile', async () => {
@@ -1088,16 +1150,13 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     const home = makeHome({ origin: 'https://example.invalid', accessToken: 'ptc_test' });
     const out = await runScript(home, `
       import { hostname } from 'node:os';
-      import { defaultDeviceName, UNNAMED_DEVICE_NAME } from './packages/cli/src/device-connect.ts';
-      console.log(JSON.stringify({ name: defaultDeviceName(), host: hostname(), fallback: UNNAMED_DEVICE_NAME }));
+      import { defaultDeviceName } from './packages/cli/src/device-connect.ts';
+      console.log(JSON.stringify({ name: defaultDeviceName(), host: hostname() }));
     `);
-    const { name, host, fallback } = v.parse(v.object({
-      name: v.string(), host: v.string(), fallback: v.string(),
-    }), JSON.parse(out.trim()));
-    expect(fallback).toBe('Your PC');
-    // On any POSIX box with a passwd entry this is user@host; the fallback is
-    // the only other legal answer, and it is never the empty string.
-    expect(name === fallback || name.endsWith(`@${host}`)).toBe(true);
+    const { name, host } = v.parse(v.object({ name: v.string(), host: v.string() }), JSON.parse(out.trim()));
+    // On any POSIX box with a passwd entry this is user@host; 'Your PC' is the
+    // only other legal answer, and it is never the empty string.
+    expect(name === 'Your PC' || name.endsWith(`@${host}`)).toBe(true);
     expect(name.length).toBeGreaterThan(0);
   });
 });

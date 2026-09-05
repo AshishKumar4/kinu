@@ -12,7 +12,7 @@ import { ensureLocalDaemonRunning } from './daemon';
 import { resolvePromptAttachments } from '../attachments';
 import { watchHeadlessConsents, watchTerminalConsents } from '../consent-watch';
 import { ERR, formatFailure, printFailure, printToolCall, printToolResult } from '../display';
-import { normalizeWebhookAuthMode } from '../options';
+import { normalizeWebhookAuthMode, numberField, stringField } from '../options';
 import { guideFailure } from '../provider-guidance';
 import {
   executeLocalExecutor,
@@ -489,22 +489,6 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
     default:
       throw new Error('Unsupported command');
   }
-}
-
-function stringField(cmd: JsonObject, key: string): string | undefined {
-  const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), cmd[key]);
-  return parsed.success ? parsed.output : undefined;
-}
-
-function numberField(cmd: JsonObject, key: string): number | undefined {
-  const value = cmd[key];
-  const number = v.safeParse(v.pipe(v.number(), v.finite()), value);
-  if (number.success) return number.output;
-  const string = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value);
-  if (!string.success) return undefined;
-  const parsed = Number(string.output);
-  if (Number.isFinite(parsed)) return parsed;
-  return undefined;
 }
 
 /** Plain streaming renderer for one-shot runs (pipe-friendly: raw deltas). */

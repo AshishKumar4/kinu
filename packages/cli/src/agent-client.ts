@@ -6,7 +6,6 @@
  * one backend supports is exposed through the capability surfaces below.
  */
 
-import { JsonObjectSchema } from '@kinu.run/core';
 import type {
   BroadcastEvent, ChangelogEntry, ChangelogRevertResult, PromptFile, ShellApprovalMode,
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
@@ -14,7 +13,7 @@ import type {
   EvolutionConfigView,
   EvolutionDebt, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView,
   StagedSkillResult,
-  ReasoningEffort, TierId, Usage, RunEvent, JsonObject, JsonValue,
+  ReasoningEffort, TierId, Usage, RunEvent, JsonObject,
   AdmittedInstructionDecision,
   InstructionSourceRow, InstructionSourceView, Page, PageRequest,
 } from '@kinu.run/core';
@@ -409,9 +408,4 @@ export function createUserUiMessage(text: string, files: ReadonlyArray<PromptFil
     role: 'user',
     parts,
   };
-}
-
-export function asRecord(input: { value: JsonValue }): JsonObject {
-  const parsed = v.safeParse(JsonObjectSchema, input.value);
-  return parsed.success ? parsed.output : { input: input.value };
 }

@@ -4,13 +4,13 @@
 
 export {
   createCLIRuntime, buildCLIHeadRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql,
-  createHostShell, withCheckpointedShell,
+  createHostShell,
   type CLIRuntime, type CLIRuntimeConfig, type LocalDb,
 } from './runtime';
 export { createHostCheckpoints, type HostCheckpointsOpts } from './checkpoints';
 export { kinuHome } from './home';
 export {
-  writeSecretFile, enforceOwnerOnly, ensureSecretDir, SECRET_FILE_MODE, SECRET_DIR_MODE,
+  writeSecretFile, enforceOwnerOnly, ensureSecretDir,
 } from './secret-file';
 export { openWorkspaceCLI, type WorkspaceInfo, type CLIOpenConfig } from './open';
 export { withConfigLock, withConfigLockAsync } from './config-lock';
@@ -46,20 +46,20 @@ export {
 } from './agent-host';
 export {
   createLocalModelResolver, cloudProxyBaseURL, CLOUD_PROXY_PROVIDER_IDS,
-  defaultProviderFor, defaultSpecForEndpoint,
+  defaultSpecForEndpoint,
   type LocalModelResolver, type LocalModelResolverConfig, type LocalCloudSession,
   type LocalProviderCredentials, type LocalOpenAICompatCredential,
 } from './model-resolver';
 export { createFileCodexAuthStore, type LocalCodexAuthStore } from './codex-auth-store';
 export {
   createClaudeCliProvider, checkClaudeAvailability, buildClaudePrompt,
-  CLAUDE_CLI_PROVIDER_ID, CLAUDE_CLI_DEFAULT_MODEL,
+  CLAUDE_CLI_PROVIDER_ID,
   type ClaudeCliProviderOptions, type ClaudeSpawn, type SpawnedClaude, type ClaudeAvailability,
 } from './claude-cli-provider';
 
 export {
-  createOpenCodeProvider, probeOpenCode, checkOpenCodeAvailability,
-  OPENCODE_PROVIDER_ID, OPENCODE_LABEL,
+  createOpenCodeProvider, checkOpenCodeAvailability,
+  OPENCODE_PROVIDER_ID,
   type OpenCodeProviderOptions, type OpenCodeAvailability,
   type OpenCodeModelInfo, type OpenCodeSpawn, type SpawnedOpenCode,
 } from './opencode-provider';

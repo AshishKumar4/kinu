@@ -68,7 +68,8 @@ const { StatusBar } = await import('../packages/cli/src/tui/status-bar');
 const { PhaseLine, TakesOverlay, CommandHintOverlay } = await import('../packages/cli/src/tui/overlays');
 const { BUILTIN_TUI_THEMES, createThemeRegistry } = await import('../packages/cli/src/tui/theme');
 const captureColors = createThemeRegistry(BUILTIN_TUI_THEMES).get('kinu-dark').colors;
-const { renderSearchTree, SLASH_COMMANDS } = await import('../packages/cli/src/slash-commands');
+const { renderSearchTreeLines } = await import('../packages/cli/src/display');
+const { commandsForClient } = await import('../packages/cli/src/slash-commands');
 
 async function settle(renderOnce: () => Promise<void>, passes = 12): Promise<void> {
   for (let i = 0; i < passes; i++) {
@@ -197,7 +198,7 @@ try {
   })));
   await shoot('tree-88x28', 88, 28, chatScreen([
     ...TOOLS,
-    message('tree', 'system', `MCTS Tree (${TREE_NODES.length} nodes):\n${renderSearchTree(TREE_NODES)}`),
+    message('tree', 'system', `MCTS Tree (${TREE_NODES.length} nodes):\n${renderSearchTreeLines(TREE_NODES).join('\n')}`),
   ], null, false));
 
   // Status bar across widths.
@@ -214,7 +215,7 @@ try {
     'box',
     { style: { width: '100%', height: '100%' } },
     React.createElement(CommandHintOverlay, {
-      commands: SLASH_COMMANDS,
+      commands: commandsForClient({ localControls: null, consents: null, checkpoints: null }),
       terminal: { width: 80, height: 24 },
     }),
   ));

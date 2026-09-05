@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Command } from 'commander';
 import { buildProgram } from '../src/program';
-import { renderHelp } from '../src/display';
+import { printHelp } from '../src/display';
 
 /** Every runnable path in the registered tree, as the user would type it. */
 function registeredPaths(cmd: Command, prefix = ''): string[] {
@@ -17,7 +17,16 @@ function stripAnsi(text: string): string {
 
 describe('root help', () => {
   const program = buildProgram();
-  const help = stripAnsi(renderHelp(program));
+  // printHelp is the seam bin/cli.ts serves --help from; capture what it prints.
+  const logged: string[] = [];
+  const originalLog = console.log;
+  console.log = (message?: string) => { logged.push(message ?? ''); };
+  try {
+    printHelp(program);
+  } finally {
+    console.log = originalLog;
+  }
+  const help = stripAnsi(logged.join('\n'));
 
   test('lists every registered command', () => {
     const missing = registeredPaths(program).filter(

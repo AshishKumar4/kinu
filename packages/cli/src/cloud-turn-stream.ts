@@ -17,7 +17,8 @@ import {
   type JsonValue,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
-import { asRecord, type AgentClientEvent, type AgentTurnResult } from './agent-client';
+import { asRecord } from './options';
+import type { AgentClientEvent, AgentTurnResult } from './agent-client';
 
 export class CloudTurnStream {
   /** Whether this turn's resume has been acked on the LIVE socket. The DO
@@ -107,7 +108,7 @@ export class CloudTurnStream {
       case 'tool-input-available': {
         const toolName = jsonString(chunk.toolName, 'tool');
         const toolCallId = jsonString(chunk.toolCallId, '');
-        const args = asRecord({ value: chunk.input ?? null });
+        const args = asRecord({ value: chunk.input ?? null }, 'input');
         const call = { name: toolName, args, result: undefined };
         this.toolCalls.push(call);
         if (toolCallId) this.toolById.set(toolCallId, call);

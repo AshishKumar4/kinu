@@ -19,8 +19,8 @@ export interface MemoryConfig {
 interface FtsRow { id: string; path: string; start_line: number; end_line: number; text: string; rank: number }
 
 /** A memory chunk with its verbatim text — the unit a semantic index embeds.
- *  Structurally matches core's `VectorMemoryChunk`; kept local so agent-utils
- *  stays free of a @kinu.run/core dependency (core depends on agent-utils). */
+ *  Core's vector store re-exports it. The declaration lives here because core
+ *  depends on agent-utils and not the reverse. */
 export interface IndexedChunk {
 	id: string;
 	path: string;
