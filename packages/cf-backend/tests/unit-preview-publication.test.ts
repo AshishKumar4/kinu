@@ -24,6 +24,7 @@ import {
   PREVIEW_EXPOSURE_TTL_MS,
   sandboxPreviewExposed,
   sandboxPreviewExposures,
+  type SandboxPreviewExposures,
 } from '../src/lib/preview-exposures';
 import { makeKv, type FakeKv } from './helpers/kv';
 import type { KvStore } from '../src/lib/kv';
@@ -89,11 +90,14 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
   return { exposed, revoked, removed, box };
 }
 
-function lane(kv: FakeKv | null, box: KinuSandbox) {
+/** The lane as the workspace's Durable Object composes it. `writer` is the
+ *  exposures writer that object built when it woke; a test that needs the
+ *  writer to predate a revocation hands it in instead of minting one per call. */
+function lane(kv: FakeKv | null, box: KinuSandbox, writer?: SandboxPreviewExposures) {
   return adaptCloudflareSandbox(
     box,
     async () => {},
-    kv === null ? null : sandboxPreviewExposures(kv, SANDBOX_ID),
+    writer ?? (kv === null ? null : sandboxPreviewExposures(kv, SANDBOX_ID)),
   );
 }
 
@@ -250,5 +254,76 @@ describe('listing ports re-observes what the container still reports', () => {
     });
 
     expect(emitted.map((line) => line.event)).toContain('preview.refresh_failed');
+  });
+});
+
+describe('a revoked exposure is never resurrected by the lane that published it', () => {
+  // `destroyAgent` writes the watermark first and then spends several awaits
+  // destroying the container object. A Ports listing, or an expose whose
+  // container call was already in flight, runs in those gaps on the same
+  // object, and its writer was built when the object woke — before the
+  // watermark. Neither may put a record back that the edge would then prove.
+  const claim = { sandboxId: SANDBOX_ID, port: PORT, token: TOKEN };
+
+  test('a listing racing the destroy does not refresh a record the watermark withdrew', async () => {
+    const kv = makeKv();
+    const { box } = portBox();
+    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+    const writer = sandboxPreviewExposures(kv, SANDBOX_ID);
+    await writer.publish(PORT, TOKEN);
+
+    // Late enough in the record's life that a listing would rewrite it.
+    setSystemTime(new Date(Date.now() + (PREVIEW_EXPOSURE_TTL_MS * 2) / 3));
+    await writer.revokeAll();
+    setSystemTime(new Date(Date.now() + 1));
+    const rows = await lane(kv, box, writer).getExposedPorts(SUFFIX);
+
+    // The listing itself stands: the container still reports the port.
+    expect(rows.map((row) => row.port)).toEqual([PORT]);
+    expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
+    setSystemTime();
+  });
+
+  test('a listing under a watermark does not create a record for an exposure it cannot vouch for', async () => {
+    const kv = makeKv();
+    const { box } = portBox();
+    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+    const writer = sandboxPreviewExposures(kv, SANDBOX_ID);
+    await writer.revokeAll();
+    setSystemTime(new Date(Date.now() + 1));
+
+    await lane(kv, box, writer).getExposedPorts(SUFFIX);
+
+    expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
+    setSystemTime();
+  });
+
+  test('an expose in flight when the workspace is destroyed publishes nothing', async () => {
+    const kv = makeKv();
+    const { box } = portBox();
+    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+    const writer = sandboxPreviewExposures(kv, SANDBOX_ID);
+    await writer.revokeAll();
+    setSystemTime(new Date(Date.now() + 1));
+
+    // A URL the edge would refuse is a failure here, never a dead link.
+    await expect(lane(kv, box, writer).exposePort(PORT, { hostname: SUFFIX }))
+      .rejects.toThrow('revoked');
+
+    expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
+    setSystemTime();
+  });
+
+  test('the recreated workspace, whose object woke after the destroy, publishes again', async () => {
+    const kv = makeKv();
+    const { box } = portBox();
+    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+    await sandboxPreviewExposures(kv, SANDBOX_ID).revokeAll();
+    setSystemTime(new Date(Date.now() + 1));
+
+    await lane(kv, box).exposePort(PORT, { hostname: SUFFIX });
+
+    expect(await sandboxPreviewExposed(kv, claim)).toBe(true);
+    setSystemTime();
   });
 });

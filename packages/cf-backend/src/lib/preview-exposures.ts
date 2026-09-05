@@ -150,12 +150,22 @@ export async function sandboxPreviewExposed(
  * Held by the executor lane the workspace's own Durable Object runs, so every
  * write is on an authenticated path: nothing reachable from the preview host
  * publishes anything.
+ *
+ * Every write consults the watermark, because the lane outlives the moment its
+ * workspace is destroyed: `destroyAgent` writes the watermark and then spends
+ * several awaits tearing the container object down, and a Ports listing or an
+ * expose whose container call was already in flight runs in those gaps on the
+ * same object. A record either would put back proves an exposure whose object
+ * is gone, and the SDK's forward would create an empty one to answer it.
  */
 export interface SandboxPreviewExposures {
-  /** Record a port as exposed on `token`, replacing whatever it held. */
+  /** Record a port as exposed on `token`, replacing whatever it held. Throws
+   *  once this writer's workspace has been destroyed: the URL the caller is
+   *  about to hand out is one the edge refuses. */
   publish(port: number, token: string): Promise<void>;
   /** Re-observe an exposure the container still reports, writing only when the
-   *  record is missing or halfway through its life. */
+   *  record is missing or halfway through its life, and never when the
+   *  watermark has withdrawn it. */
   refresh(port: number, token: string): Promise<void>;
   /** Withdraw one port. The edge refuses it from the next read. */
   withdraw(port: number): Promise<void>;
@@ -170,6 +180,15 @@ export function sandboxPreviewExposures(
   kv: KvStore,
   sandboxId: string,
 ): SandboxPreviewExposures {
+  // When this writer came to be. A revocation stamped at or after it was
+  // written by this writer's own workspace being destroyed, since only that
+  // workspace's object writes one: every later write from here belongs to an
+  // incarnation that no longer exists. A recreated same-name workspace builds a
+  // new writer after the destroy finished, so it publishes again. The tie is
+  // fail-closed, the same side `sandboxPreviewExposed` takes.
+  const born = Date.now();
+  const readRevocation = (): Promise<{ revokedBefore: number } | null> =>
+    readKvJson(kv, revocationKey(sandboxId), REVOCATION_SCHEMA);
   const write = async (port: number, token: string): Promise<void> => {
     const now = Date.now();
     await writeKvJson(
@@ -180,9 +199,26 @@ export function sandboxPreviewExposures(
     );
   };
   return {
-    publish: write,
+    async publish(port, token) {
+      const revocation = await readRevocation();
+      if (revocation !== null && revocation.revokedBefore >= born) {
+        throw new Error(`sandbox previews for ${sandboxId} were revoked: the workspace is being destroyed`);
+      }
+      await write(port, token);
+    },
     async refresh(port, token) {
-      const held = await readKvJson(kv, exposureKey(sandboxId, port), EXPOSURE_SCHEMA);
+      const [held, revocation] = await Promise.all([
+        readKvJson(kv, exposureKey(sandboxId, port), EXPOSURE_SCHEMA),
+        readRevocation(),
+      ]);
+      // Under a watermark, the only record worth keeping alive is one
+      // published after it. A withdrawn record, or none at all, means the
+      // exposure the container reports is not one this projection vouches
+      // for, and re-observing it must not make it so.
+      if (revocation !== null
+        && (revocation.revokedBefore >= born
+          || held === null
+          || held.publishedAt <= revocation.revokedBefore)) return;
       if (held !== null
         && held.publishedAt > Date.now() - REFRESH_AFTER_MS
         && timingSafeEqual(held.tokenHash, await sha256Hex(token))) return;
