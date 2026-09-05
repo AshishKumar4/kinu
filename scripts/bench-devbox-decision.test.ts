@@ -81,7 +81,7 @@ import {
   SANDBOX_IMAGE,
   SANDBOX_IMAGE_DIGEST,
   startupOperation,
-  STRATEGIES,
+  STRATEGIES, DECISIVE_ARMS,
   startupPollVerdict,
   stopOperation,
   recommend,
@@ -1722,11 +1722,7 @@ describe('the preregistered witness cells', () => {
     expect(evidence.observedRedChecks).toEqual(['open-write-loss', 'non-atomic-rename', 'POSIX-gap']);
   });
 
-  test('a witness is a cost, not an eligibility filter: every arm ranks', () => {
-    // THE FILTER THIS REMOVES. `devboxArmEvidence` answered
-    // `kind: 'control', rankEligible: false` for the three shipped arms, so G2
-    // refused them a place in the ranking whatever they measured — an arm's
-    // documented defects decided the outcome before a single tick was taken.
+  test('the frozen scope ranks while retired arms retain their witnesses', () => {
     for (const strategy of STRATEGIES) {
       const evidence = devboxArmEvidence({
         strategy,
@@ -1739,17 +1735,14 @@ describe('the preregistered witness cells', () => {
       });
 
       expect(evidence.kind).toBe('candidate');
-      expect(evidence.rankEligible).toBe(true);
+      expect(evidence.rankEligible).toBe(strategy === 'snapshot-chain' || strategy === 'bounded-layers' || strategy === 'merkle-pack');
       // And the preregistration still binds: an arm that promised witnesses
       // still has to produce exactly those, which is what makes the cost real.
       expect(evidence.expectedRedChecks).toEqual(evidence.observedRedChecks);
     }
   });
 
-  test('a rank-eligible arm whose promised witness vanished still refuses the run', () => {
-    // Witness enforcement used to live on the non-candidate branch of the
-    // admission gate, so making these arms rank-eligible would have silently
-    // switched their drift detector off. It keys off the preregistration now.
+  test('a retired arm retains a missing-witness finding', () => {
     const drifted = devboxArmEvidence({
       strategy: 'overlay-cas',
       verifyPassed: true,
@@ -1763,7 +1756,7 @@ describe('the preregistered witness cells', () => {
       }),
     });
 
-    expect(drifted.rankEligible).toBe(true);
+    expect(drifted.rankEligible).toBe(false);
     expect(drifted.expectedRedChecks).toContain('unbounded-pending-replay');
     expect(drifted.observedRedChecks).not.toContain('unbounded-pending-replay');
   });
@@ -1953,7 +1946,7 @@ describe('the lifecycle-proof gate at the rule', () => {
  */
 const MONEY_LANGUAGE = /\$|usd|price|pricing|priced|cost|billing|billed|dollar/i;
 
-describe('the recommendation ranks every measured arm', () => {
+describe('the recommendation ranks the frozen scope', () => {
   const ADMITTED = { admitted: true, gates: [] };
   /** One arm with the fields `recommend` reads and nothing else. */
   const rankArm = (
@@ -1977,11 +1970,7 @@ describe('the recommendation ranks every measured arm', () => {
     notes: [],
   });
 
-  test('every arm appears in the ranking, ordered by decisive tick time', () => {
-    // THE FILTER THIS REPLACES. `recommend` scored on metadata latency and named
-    // one best and one worst, over arms `devboxArmEvidence` had already narrowed
-    // to {bounded-layers, merkle-pack}. All five are ranked now, and `r2fs` —
-    // which no declared pair even contained — is one of the rows.
+  test('frozen arms rank by decisive tick time while retired arms stay excluded', () => {
     const report = recommend([
       rankArm('snapshot-chain', { git: 1200, npm: 400 }),
       rankArm('r2fs', { git: 900, npm: 380 }, ['open-write-loss', 'POSIX-gap']),
@@ -1990,29 +1979,27 @@ describe('the recommendation ranks every measured arm', () => {
       rankArm('merkle-pack', { git: 150, npm: 120 }),
     ], ADMITTED);
 
-    for (const strategy of STRATEGIES) expect(report).toContain(`\`${strategy}\``);
+    for (const strategy of DECISIVE_ARMS) expect(report).toContain(`\`${strategy}\``);
     const order = STRATEGIES
       .map((strategy) => ({ strategy, at: report.indexOf(`| \`${strategy}\``) }))
       .filter((row) => row.at !== -1)
       .sort((a, b) => a.at - b.at)
       .map((row) => row.strategy);
     expect(order).toEqual([
-      'bounded-layers', 'merkle-pack', 'overlay-cas', 'r2fs', 'snapshot-chain',
+      'bounded-layers', 'merkle-pack', 'snapshot-chain',
     ]);
     expect(report).toContain(`\`${INCUMBENT}\` (incumbent)`);
   });
 
-  test('an observed witness is named beside the arm, never used to drop it', () => {
+  test('a faster retired arm cannot displace the incumbent', () => {
     const report = recommend([
       rankArm('snapshot-chain', { git: 1200, npm: 400 }),
       rankArm('r2fs', { git: 20, npm: 20 }, ['open-write-loss', 'non-atomic-rename']),
+      rankArm('overlay-cas', { git: 10, npm: 10 }),
     ], ADMITTED);
-
-    // r2fs carries three documented semantic defects and still wins the ranking
-    // on cost; the defects are reported as the price of adopting it.
-    expect(report).toContain('`open-write-loss`, `non-atomic-rename`');
-    expect(report).toContain('DEFAULT TO `r2fs`');
-    expect(report).toContain('preregistered defect(s) this run OBSERVED');
+    expect(report).toContain('`snapshot-chain` STAYS DEFAULT');
+    expect(report).not.toContain('DEFAULT TO `r2fs`');
+    expect(report).not.toContain('DEFAULT TO `overlay-cas`');
   });
 
   test('ranking first does not displace the incumbent without clearing the bar', () => {
@@ -2040,14 +2027,14 @@ describe('the recommendation ranks every measured arm', () => {
   });
 
   test('an arm missing a decisive workload is named unranked, not silently dropped', () => {
-    const partial = rankArm('overlay-cas', { git: 100, npm: 100 });
+    const partial = rankArm('bounded-layers', { git: 100, npm: 100 });
     const report = recommend([
       rankArm('snapshot-chain', { git: 1200, npm: 400 }),
-      { ...partial, decisiveTicks: [tick('overlay-cas', 'git', 100)] },
+      { ...partial, decisiveTicks: [tick('bounded-layers', 'git', 100)] },
     ], ADMITTED);
 
     expect(report).toContain('unranked: no ticks on npm');
-    expect(report).toContain('`overlay-cas`');
+    expect(report).toContain('`bounded-layers`');
   });
 
   test('the recommendation carries no money language', () => {
@@ -2055,15 +2042,15 @@ describe('the recommendation ranks every measured arm', () => {
     // cost at all, so the recommendation ranks on measured time and
     // names observed defects — never a rate, a total or a currency.
     const report = recommend([
-      rankArm('snapshot-chain', { git: 1200, npm: 400 }),
-      rankArm('r2fs', { git: 900, npm: 380 }, ['open-write-loss']),
+      rankArm('snapshot-chain', { git: 1200, npm: 400 }, ['mutable-delta']),
+      rankArm('bounded-layers', { git: 900, npm: 380 }),
     ], ADMITTED);
 
     expect(report).not.toMatch(MONEY_LANGUAGE);
     // And what it must still say: the ranked quantity and the defect column.
     expect(report).toContain('Σ decisive tick ms');
     expect(report).toContain('observed defects');
-    expect(report).toContain('`open-write-loss`');
+    expect(report).toContain('`mutable-delta`');
   });
 });
 
@@ -2526,12 +2513,12 @@ describe('arm selection and frozen historical context', () => {
     ],
   });
 
-  test('every arm runs by default, a subset is named outright, and controls are strategy-qualified', () => {
-    // NO PRIVILEGED SUBSET. `--candidates-only` used to select
-    // {bounded-layers, merkle-pack} — the two arms the old taxonomy allowed to
-    // win — so the default shape of a run encoded the conclusion. The default
-    // is now every arm, and a subset has to be asked for by name.
-    expect(parseOptions([]).arms).toEqual([...STRATEGIES]);
+  test('the frozen scope is the default and controls retain retired strategies', () => {
+    expect(parseOptions([]).arms).toEqual(['snapshot-chain', 'bounded-layers', 'merkle-pack']);
+    for (const retired of ['r2fs', 'overlay-cas'] as const) {
+      expect(() => parseOptions(['--decisive', '--arms', retired])).toThrow('red-structural cells 6.10');
+      expect(parseOptions(['--verify-only', '--arms', retired]).arms).toEqual([retired]);
+    }
     expect(parseOptions(['--arms', 'bounded-layers,merkle-pack']).arms)
       .toEqual(['bounded-layers', 'merkle-pack']);
 
@@ -2586,14 +2573,14 @@ describe('arm selection and frozen historical context', () => {
     expect(plan.stdout.toString()).toContain(`controls      snapshot-chain=${path}`);
   });
 
-  test('a plan with no --arms deploys every strategy', () => {
+  test('a plan without --arms selects the frozen scope', () => {
     const plan = Bun.spawnSync(
       ['bun', 'scripts/bench-devbox-strategies.ts', '--plan'],
       { stdout: 'pipe', stderr: 'pipe' },
     );
 
     expect(plan.exitCode, plan.stderr.toString()).toBe(0);
-    expect(plan.stdout.toString()).toContain(`arms          ${STRATEGIES.join(', ')}`);
+    expect(plan.stdout.toString()).toContain(`arms          ${DECISIVE_ARMS.join(', ')}`);
   });
 
   test('documents strategy-qualified controls in CLI help', () => {
@@ -2913,18 +2900,14 @@ describe('every challenger is compared against the incumbent', () => {
 
     expect(comparison.kind).toBe('pairs');
     expect(challengers(STRATEGIES.map((strategy) => ({ strategy })))).toEqual([
-      'r2fs', 'overlay-cas', 'bounded-layers', 'merkle-pack',
+      'bounded-layers', 'merkle-pack',
     ]);
     expect(comparison.kind === 'pairs' ? comparison.pairs.every((pair) => pair.baseline === INCUMBENT) : false)
       .toBe(true);
   });
 
-  test('r2fs is a challenger like any other, and is no longer uncomparable', () => {
-    // THE TAXONOMY DEFECT THIS PINS. `DECISION_PAIRS` held two hand-written
-    // pairs and neither contained `r2fs`, so the one arm with a full set of
-    // preregistered semantic defects was also the one arm whose tick cost was
-    // never put beside anything. It answered `absent` here.
-    expect(challengers([{ strategy: 'snapshot-chain' }, { strategy: 'r2fs' }])).toEqual(['r2fs']);
+  test('retired arms create no decisive ratio', () => {
+    expect(challengers([{ strategy: 'snapshot-chain' }, { strategy: 'r2fs' }, { strategy: 'overlay-cas' }])).toEqual([]);
   });
 
   test('a challenger-only run yields no ratio, and says the incumbent is missing', () => {

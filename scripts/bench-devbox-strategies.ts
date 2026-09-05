@@ -1,9 +1,7 @@
 #!/usr/bin/env bun
 /**
- * Devbox storage strategies, measured against each other. Five arms, one per
- * `DevboxStrategyName`: `snapshot-chain`, `r2fs`, `overlay-cas`,
- * `bounded-layers` and `merkle-pack` (`FIXTURE_CLASS_BY_STRATEGY` below is the
- * list the driver actually dispatches).
+ * Devbox storage strategies share one lifecycle and one admission contract.
+ * DECISIVE_ARMS names the frozen comparison. STRATEGIES retains diagnostic arms.
  *
  * This is the decision the whole storage question turns on. The raw-layout
  * benchmark beside it (`scripts/bench-r2-workspace.ts`) answers "what does an R2
@@ -797,16 +795,7 @@ const CHANGE_SIZES_KIB = [64, 4_096, 65_536] as const;
 const POLL_MS = 10_000;
 const PROCESS_DEADLINE_MS = 1_500_000;
 
-/**
- * The arms. `overlay-cas` is the promoted form of the overlay/sync concept that
- * the layout benchmark measured as the shape worth keeping: writes land on the
- * container disk and R2 receives content-addressed state, rather than every
- * write traversing FUSE.
- *
- * Every arm is measured by the same driver against the same workloads and the
- * same routes. Nothing below this line knows which arm it is running, which is
- * what makes a five-way comparison the same experiment as a two-way one.
- */
+/** All stored artifact formats remain readable, including retired strategies. */
 export type Strategy = 'snapshot-chain' | 'r2fs' | 'overlay-cas' | 'bounded-layers' | 'merkle-pack';
 export const STRATEGIES: readonly Strategy[] = [
   'snapshot-chain',
@@ -816,31 +805,17 @@ export const STRATEGIES: readonly Strategy[] = [
   'merkle-pack',
 ];
 
-/**
- * The arm production actually runs, and therefore the one every other strategy
- * has to beat in order to replace it.
- *
- * THE TAXONOMY THIS REPLACES. The instrument used to split the arms into
- * `CANDIDATE_STRATEGIES = {bounded-layers, merkle-pack}` and
- * `CONTROL_STRATEGIES = {snapshot-chain, r2fs, overlay-cas}`, and only a
- * candidate could be ranked: `devboxArmEvidence` marked the other three
- * rank-INELIGIBLE, and the decision pairs did not contain `r2fs` at all. A
- * shipped arm that beat both candidates on every workload therefore could not
- * be reported as the winner, and one arm could not be compared at all. That is
- * a conclusion written into the instrument rather than measured by it.
- *
- * The ruling this encodes instead: every strategy competes against the
- * incumbent, on the same admission gates and the same decisive workloads. A
- * strategy's preregistered defects are MEASURED COSTS carried beside its
- * numbers (see `PREREGISTERED_WITNESSES`), never a filter that removes it from
- * the ranking before its numbers are read.
- */
+export const DECISIVE_ARMS: readonly Strategy[] = [
+  'snapshot-chain', 'bounded-layers', 'merkle-pack',
+];
+export const SCOPE_FREEZE = 'Scope frozen 2026-09-05. snapshot-chain, bounded-layers and merkle-pack compete. '
+  + 'r2fs and overlay-cas retire from the decision. Both have red-structural cells 6.10 (racing containers) '
+  + 'and 6.17 (two containers, one head). Neither can be a durable default. Their code and conformance rows remain.';
+
+/** The incumbent at scope freeze. A later product default cannot move this baseline. */
 export const INCUMBENT = 'snapshot-chain' as const satisfies Strategy;
 
-/** Every arm that must beat the incumbent to become the default. DERIVED from
- *  `STRATEGIES`, so an arm added above competes without this line being
- *  edited — a stale copy here is how `r2fs` came to be uncomparable. */
-export const CHALLENGERS: readonly Strategy[] = STRATEGIES.filter((arm) => arm !== INCUMBENT);
+export const CHALLENGERS: readonly Strategy[] = DECISIVE_ARMS.filter((arm) => arm !== INCUMBENT);
 const NonEmptyString = v.pipe(v.string(), v.minLength(1));
 
 interface FrozenControlArtifact {
@@ -5899,22 +5874,7 @@ export interface RunMeta {
   INCOMPLETE?: string;
 }
 
-/**
- * Every ratio this instrument may take: one challenger against the incumbent.
- *
- * DERIVED FROM `STRATEGIES`, never listed. The hand-written list this replaces
- * held two pairs — `bounded-layers` vs `merkle-pack` and `snapshot-chain` vs
- * `overlay-cas` — and its header said the shipped arms "can never be a
- * production winner". Both halves were instrument bugs. `r2fs` appeared in no
- * pair, so the one arm with a full set of preregistered semantic defects was
- * also the one arm whose cost was never compared to anything; and a
- * candidate-versus-candidate ratio decides which challenger is better without
- * ever asking whether either beats what production runs today.
- *
- * The ruling: every strategy competes against `INCUMBENT`. A challenger
- * replaces it by beating it on the decisive workloads under the same admission
- * gates — not by belonging to a set the instrument declared eligible.
- */
+/** Each frozen challenger must beat the incumbent on the same admitted run. */
 const DECISION_PAIRS: readonly {
   readonly baseline: Strategy;
   readonly candidate: Strategy;
@@ -6033,7 +5993,7 @@ export function render(
   out.push(`### Devbox storage strategies: ${compared}`);
   out.push('');
   for (const [key, value] of Object.entries(meta)) out.push(`- ${key}: \`${value}\``);
-  out.push('');
+  out.push('', SCOPE_FREEZE, '');
 
   out.push('#### Lifecycle proof, first, per arm');
   if (renderControlContext || frozenControls.length > 0) {
@@ -6301,30 +6261,10 @@ export function render(
   return out.join('\n');
 }
 
-/**
- * The ranking, over every arm this run measured, derived from the rows rather
- * than written beside them.
- *
- * WHAT THIS REPLACES. The predecessor scored on metadata latency alone and
- * named a best and a worst — and `devboxArmEvidence` had already marked three
- * of the five arms rank-INELIGIBLE before it ran, so the "recommendation" was a
- * two-name comparison whose outcome was fixed by taxonomy rather than by
- * measurement. Every arm that clears the one gate applying to all of them, the
- * lifecycle proof, is ranked here, on the workloads the decision rule reads.
- *
- * A PREREGISTERED DEFECT IS A MEASURED FINDING, NOT A FILTER. An arm's observed
- * witnesses are named in the last column and beside the winner; they never
- * remove it from the table. `r2fs` losing on POSIX semantics is a fact a reader
- * weighs against its numbers, not a reason to withhold the numbers.
- *
- * DISPLACEMENT STILL NEEDS THE BAR. Ranking says which arm ran fastest; it does
- * not license changing the default. `INCUMBENT` keeps it unless a challenger
- * clears the preregistered 10x/3x bar `decide` applies, so the ranking and the
- * decision rule cannot disagree about what ships.
- */
+/** Rank the frozen scope. A challenger must still clear the 10x/3x displacement bar. */
 export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdict): string {
   requireAdmitted(admission);
-  const proven = arms.filter((arm) => arm.verifyPassed);
+  const proven = arms.filter((arm) => arm.verifyPassed && DECISIVE_ARMS.includes(arm.strategy));
   if (proven.length === 0) {
     return 'NO DEFAULT IS DERIVABLE FROM THIS RUN. No arm completed the lifecycle proof, which means every arm '
       + 'measured the container\'s own blank disk rather than its strategy. The lifecycle rows above '
@@ -6353,7 +6293,7 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
 
   const out: string[] = [
     `RANKED ON THE DECISIVE WORKLOADS (${RULE_WORKLOADS.join(' + ')}), over every arm that completed the `
-    + 'lifecycle proof, under the same gate. No arm is excluded by what kind of strategy it is.',
+    + 'lifecycle proof within the frozen scope.',
     '',
     '| rank | arm | Σ decisive tick ms | `' + DECIDING_METRIC + '` p50 (ms) | observed defects |',
     '| --- | --- | --- | --- | --- |',
@@ -6417,21 +6357,7 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
   return out.join('\n');
 }
 
-/** The admission evidence one devbox arm contributes. Exported so the gate's
- *  red tests can prove a current-only run cannot recommend without a deploy.
- *
- *  EVERY ARM IS A COMPETITOR. This used to answer `kind: 'control'` and
- *  `rankEligible: false` for `snapshot-chain`, `r2fs` and `overlay-cas`, which
- *  made G2 refuse those arms a place in the ranking no matter what they
- *  measured — the taxonomy decided the outcome before the run started. A
- *  strategy's preregistered defects are carried below as observed witnesses and
- *  named by `recommend`; they are findings, not eligibility.
- *
- *  The witnesses are preregistered in `PREREGISTERED_WITNESSES` and OBSERVED by
- *  the cells `runControlWitnessCells` runs; this only carries what those cells
- *  saw. A witness the cells did not observe is absent here, and G2 refuses the
- *  run — which is the correct answer both when a cell could not run and when
- *  the defect it exists to catch has silently gone away. */
+/** G2 keeps every declared witness, including historical diagnostic arms. */
 export function devboxArmEvidence(
   arm: Pick<
     ArmResult,
@@ -6441,7 +6367,7 @@ export function devboxArmEvidence(
   return {
     arm: arm.strategy,
     kind: 'candidate',
-    rankEligible: true,
+    rankEligible: DECISIVE_ARMS.includes(arm.strategy),
     expectedRedChecks: [...PREREGISTERED_WITNESSES[arm.strategy]],
     // OBSERVED, not asserted: every name here comes from a cell that RAN
     // against the deployed arm and saw the defect. A witness the cells could
@@ -7847,8 +7773,8 @@ function workerServingBox(box: string): string | null {
 const HELP = `Usage: bun scripts/bench-devbox-strategies.ts [options]
 
 Options:
-  --arms <strategy,...>             Measure named strategies. Defaults to every arm:
-                                    ${STRATEGIES.join(', ')}.
+  --arms <strategy,...>             Measure named strategies. Defaults to the frozen scope:
+                                    ${DECISIVE_ARMS.join(', ')}.
   --control <strategy>=<path>       Add frozen historical context for one strategy,
                                     from a previous run's artifact. Any of:
                                     ${STRATEGIES.join(', ')}.
@@ -7901,7 +7827,7 @@ export function parseOptions(argv: readonly string[]): Options {
     index += 1;
   }
   const runId = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-  const requestedArms = value('arms', STRATEGIES.join(',')).split(',').map((raw): Strategy => {
+  const requestedArms = value('arms', DECISIVE_ARMS.join(',')).split(',').map((raw): Strategy => {
     const arm = STRATEGIES.find((strategy) => strategy === raw.trim());
     if (arm === undefined) {
       throw new Error(`--arms names "${raw.trim()}"; known arms: ${STRATEGIES.join(', ')}`);
@@ -7912,9 +7838,6 @@ export function parseOptions(argv: readonly string[]): Options {
   if (duplicate !== undefined) {
     throw new Error(`--arms repeats "${duplicate}"; each requested arm must appear exactly once`);
   }
-  // NO PRIVILEGED SUBSET. `--candidates-only` used to select
-  // {bounded-layers, merkle-pack} behind the operator's back; every arm now
-  // competes, so a subset is named outright with `--arms` or it is all of them.
   // REPETITIONS ARE THE ONLY THING G9 CAN SCORE, so the default follows the
   // gate rather than the operator's memory: a decisive run asks for the fewest
   // a dispersion claim can rest on, and an ordinary run — a smoke check that
@@ -7925,6 +7848,9 @@ export function parseOptions(argv: readonly string[]): Options {
   // walk's decisive block reads this field, and a probe that ran it anyway
   // would be the failure mode its own suite refuses.
   const decisive = argv.includes('--decisive') && !argv.includes('--verify-only');
+  if (decisive && requestedArms.some((arm) => !DECISIVE_ARMS.includes(arm))) {
+    throw new Error(SCOPE_FREEZE);
+  }
   const rawRepetitions = value('repetitions', String(decisive ? DECISIVE_REPETITIONS : 1));
   // THE WHOLE TEXT, not `parseInt`'s prefix of it: `parseInt('1.5')` is 1, so a
   // fractional count would silently become a single repetition and the run
@@ -7965,7 +7891,7 @@ async function main(): Promise<number> {
       ? 'none (optional)'
       : options.controls.map((control) => `${control.strategy}=${control.path}`).join(', ');
     process.stdout.write(
-      `Devbox strategy A/B plan\n\narms          ${options.arms.join(', ')}\n`
+      `Devbox strategy A/B plan\n\n${SCOPE_FREEZE}\n\narms          ${options.arms.join(', ')}\n`
       + `controls      ${controls}\n`
       + `phases        ${PHASES.join(',')}\n`
       + `process-driven ${[...PROCESS_PHASES].join(',')}\n`
