@@ -154,7 +154,9 @@ describe('the layout — one function answers for every agent', () => {
   });
 
   test('a name that could escape /home is refused, not sanitised', () => {
-    for (const bad of ['../etc', 'a/b', '/abs', '', 'Node-A', 'a'.repeat(65)]) {
+    // The cap is 96, not 64: the longest valid subordinate slug runs to 64
+    // and the `sub-` kind prefix must not push it out of the namespace.
+    for (const bad of ['../etc', 'a/b', '/abs', '', 'Node-A', 'a'.repeat(97)]) {
       expect(() => agentHome(bad)).toThrow(/not a usable agent name/);
     }
   });

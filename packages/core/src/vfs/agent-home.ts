@@ -97,11 +97,17 @@ export const AGENT_UID_FLOOR = 2000;
  * The first character is narrower than the rest, and that asymmetry is the
  * point: a node id is a `nanoid`, whose alphabet includes `-`, and a directory
  * named `-rf` is a command-line argument at every callsite that ever expands
- * it. Derived names are prefixed (`nodeAgentName`) so the prefix supplies a
- * safe first character and the id keeps its case, which is what makes the
- * mapping from node to home injective rather than merely tidy.
+ * it. Derived names are prefixed (`nodeAgentName`, `subordinateAgentName`,
+ * `headAgentName`) so the prefix supplies a safe first character and the id
+ * keeps its case, which is what makes the mapping from facet to home
+ * injective rather than merely tidy.
+ *
+ * The length covers the longest valid subordinate slug (64 characters by its
+ * own validation) under the four-character `sub-` prefix. Length is not the
+ * security property here — the charset is — and directory entries allow far
+ * more, so the cap states room rather than a boundary.
  */
-const AGENT_NAME_RE = /^[a-z0-9][A-Za-z0-9_-]{0,63}$/;
+const AGENT_NAME_RE = /^[a-z0-9][A-Za-z0-9_-]{0,95}$/;
 
 /** Where this agent's own writes belong. */
 export function agentHome(agentName: string): string {
@@ -124,6 +130,38 @@ export function agentTmpRoot(agentName: string): string {
   return `/tmp/${agentName}`;
 }
 
+/**
+ * A subordinate's name as an agent, and therefore its directory under `/home`.
+ *
+ * The slug arrives validated by the roster that minted it, and it is validated
+ * again here: a home is a path, and the roster's rule and this module's rule
+ * are checked at different times by different callers, so either one could
+ * drift. The `sub-` prefix keeps the kind visible in a listing and keeps one
+ * namespace for every facet kind without a subordinate ever sharing a home
+ * with a node or a head.
+ */
+export function subordinateAgentName(subordinateName: string): string {
+  const agentName = `sub-${subordinateName}`;
+  assertAgentName(agentName);
+  return agentName;
+}
+
+/**
+ * A head's name as an agent, and therefore its directory under `/home`.
+ *
+ * Head ids are engine-minted like node ids, so the same prefix rule applies:
+ * `head-` supplies the safe first character and the id stays untouched, which
+ * keeps the mapping injective. An id the engine never mints — one holding a
+ * slash, a quote, a space — is refused here rather than escaped, because an
+ * escaped home is a home no other reader can derive, and the grader and
+ * merge-back must derive it.
+ */
+export function headAgentName(headId: string): string {
+  const agentName = `head-${headId}`;
+  assertAgentName(agentName);
+  return agentName;
+}
+
 /** The private tmp root's storage key. Keep this at the confinement boundary:
  * every other caller addresses the one logical path from {@link agentTmpRoot}. */
 function agentTmpStorageRoot(agentName: string): string {
@@ -135,7 +173,7 @@ function assertAgentName(agentName: string): void {
   if (!AGENT_NAME_RE.test(agentName)) {
     throw new Error(
       `'${agentName}' is not a usable agent name: a home is a directory under /home, so a name is `
-      + 'lowercase alphanumeric with - and _, at most 64 characters, and never a path.',
+      + 'lowercase alphanumeric with - and _, at most 96 characters, and never a path.',
     );
   }
 }

@@ -145,34 +145,50 @@ export interface NodeHomeHost {
 }
 
 /**
+ * The real provisioner for any facet kind: a private home and a private `/tmp`
+ * per agent name, in this isolate.
+ *
+ * One function for subordinates, heads and swarm nodes, because the boundary
+ * is one thing — uid/gid/mode on real inodes plus a confined `/tmp` — and a
+ * second implementation per kind is how two backends started disagreeing
+ * about the same directory. The caller names the agent with its kind's
+ * function (`nodeAgentName`, `subordinateAgentName`, `headAgentName`), so
+ * the namespace stays disjoint by construction.
+ *
+ * Synchronous underneath and `async` only to satisfy the seam — every substrate
+ * call here returns `void`. The host may arrive as a promise, because a
+ * filesystem that lives in this isolate BOOTS: a caller that had to resolve
+ * the three members up front would either serialise its own startup on that
+ * boot or wire nothing. Awaited per agent and therefore resolved once, exactly
+ * as `createWorkspace`'s own `booting` is — and `await` on a plain host is a
+ * no-op, so a host that already has all three passes one.
+ */
+export function facetHomeProvisioner(
+  host: NodeHomeHost | Promise<NodeHomeHost>,
+): (agentName: string) => Promise<NodeWorkspace> {
+  return async (agentName) => {
+    const { root, confiner, sql } = await host;
+    const identity = agentIdentity(sql, agentName);
+    const home = provisionAgentHome(root, agentName, identity);
+    // The bare `/tmp` rewrite as well as the directory, because a command that
+    // hardcodes `/tmp/x` is a command this isolate can still keep private.
+    const tmp = confineAgentTmp(confiner, agentName, identity);
+    return { home, tmp, cred: agentCred(identity), isolation: 'private-home' };
+  };
+}
+
+/**
  * The real provisioner: a private home and a private `/tmp` per node, in this
  * isolate.
  *
- * Synchronous underneath and `async` only to satisfy the seam — every substrate
- * call here returns `void`. The workspace plane's mount table (`vfs/mounts.ts`)
- * is the file-plane counterpart of that fact: it routes reads and writes, while
- * anything needing a synchronous substrate call goes through an executor.
- *
- * The host may arrive as a promise, because a filesystem that lives in this
- * isolate BOOTS: a caller that had to resolve the three members up front would
- * either serialise its own startup on that boot or wire nothing. Awaited per
- * node and therefore resolved once, exactly as `createWorkspace`'s own `booting`
- * is — and `await` on a plain host is a no-op, so a host that already has all
- * three passes one.
+ * A node's name over {@link facetHomeProvisioner}, which owns the whole of
+ * what provisioning means; this stays the seam a search hands its host to.
  */
 export function agentHomeNodeProvisioner(
   host: NodeHomeHost | Promise<NodeHomeHost>,
 ): NodeWorkspaceProvisioner {
-  return async (node) => {
-    const { root, confiner, sql } = await host;
-    const name = nodeAgentName(node.nodeId);
-    const identity = agentIdentity(sql, name);
-    const home = provisionAgentHome(root, name, identity);
-    // The bare `/tmp` rewrite as well as the directory, because a command that
-    // hardcodes `/tmp/x` is a command this isolate can still keep private.
-    const tmp = confineAgentTmp(confiner, name, identity);
-    return { home, tmp, cred: agentCred(identity), isolation: 'private-home' };
-  };
+  const provision = facetHomeProvisioner(host);
+  return async (node) => provision(nodeAgentName(node.nodeId));
 }
 
 /**
