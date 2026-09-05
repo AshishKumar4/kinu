@@ -79,7 +79,8 @@ export type DeferredApprovalStatus =
   | 'queued'
   /** The owner said yes. The command has not run; the grant is unspent. */
   | 'approved'
-  /** The owner said no. */
+  /** The owner said no. Stands for {@link DENIAL_STANDING_MS}, then the row
+   *  is swept and the queue asks again. */
   | 'denied'
   /** The grant has been handed to a command that is running RIGHT NOW, and no
    *  longer answers `standing()`. Not a resting state: the gate closes every
@@ -95,6 +96,21 @@ export type DeferredApprovalStatus =
  *  tripped on the executor it was bound for — the same ask-once-then-remember
  *  shape device consent uses for a device. */
 export type DeferredApprovalAnswer = Extract<DeferredApprovalStatus, 'approved' | 'denied'> | 'always';
+
+/**
+ * How long the owner's "no" answers for a command before the queue will ask
+ * again.
+ *
+ * A denial answers the re-issue an agent makes minutes after the refusal,
+ * which is the noise device consent's doctrine names. It is not a standing
+ * policy: `deny_all` and the rule grants are, and they live in agent_config.
+ * So a denied row expires, for two reasons. A refusal from last week must not
+ * answer for a command the owner would decide differently today, and a row
+ * per refused command must not accumulate for the life of the workspace,
+ * because nothing else ever moves a denied row. A day covers the night this
+ * queue exists for and every retry the same run makes.
+ */
+export const DENIAL_STANDING_MS = 24 * 60 * 60 * 1000;
 
 /** One action parked on the owner. */
 export interface DeferredApproval {
@@ -179,12 +195,12 @@ export class DeferredApprovalStore {
 
   /** The live row for this exact command ON THIS EXECUTOR, if there is one.
    *  'queued' (waiting) and 'approved' (grant unspent) are the two live
-   *  states; 'denied' is the owner's standing answer and is also read back
-   *  here, so a refusal is reported rather than re-asked. A grant that is out
-   *  with a running command is 'spent' and is deliberately NOT here: while it
-   *  is out it answers for nobody. The executor is part of the key because an
-   *  approval for the agent's own workspace is not an approval for the owner's
-   *  laptop.
+   *  states; 'denied' is the owner's answer for {@link DENIAL_STANDING_MS}
+   *  after it was given and is also read back here, so a refusal is reported
+   *  rather than re-asked. A grant that is out with a running command is
+   *  'spent' and is deliberately NOT here: while it is out it answers for
+   *  nobody. The executor is part of the key because an approval for the
+   *  agent's own workspace is not an approval for the owner's laptop.
    *
    *  A DECISION outranks a pending ask, and only then does the newest win. One
    *  key can hold both once a refund puts a grant back while a second re-issue
@@ -194,15 +210,26 @@ export class DeferredApprovalStore {
    *  which is the complaint, not the fix. Between two decisions the newest
    *  still wins, so the owner's latest word governs.
    */
-  standing(command: string, executor: string): DeferredApproval | null {
+  standing(command: string, executor: string, now: number): DeferredApproval | null {
     const rows = this.sql<Row>`
       SELECT id, command, executor, reason, status, requested_at, decided_at
       FROM deferred_approvals
       WHERE command = ${command} AND executor = ${executor}
-        AND status IN ('queued','approved','denied')
+        AND (status IN ('queued','approved')
+          OR (status = 'denied' AND decided_at > ${now - DENIAL_STANDING_MS}))
       ORDER BY CASE WHEN status = 'queued' THEN 1 ELSE 0 END, requested_at DESC
       LIMIT 1`;
     return rows[0] ? toAction(rows[0]) : null;
+  }
+
+  /** Delete every denial that has stopped answering. Run on the queue's write
+   *  paths, so the table holds at most a day of refusals plus whatever is
+   *  still live; reports how many rows went. */
+  sweepDenials(now: number): number {
+    return this.sql<{ id: string }>`
+      DELETE FROM deferred_approvals
+      WHERE status = 'denied' AND decided_at <= ${now - DENIAL_STANDING_MS}
+      RETURNING id`.length;
   }
 
   create(action: Omit<DeferredApproval, 'status' | 'decidedAt'>): DeferredApproval {
@@ -438,7 +465,11 @@ export class DeferredApprovalQueue {
    * (orchestrator/turn-steering.ts) instead of a queue filling with duplicates.
    */
   park(req: ShellApprovalRequest): DeferredApprovalVerdict {
-    const standing = this.deps.store.standing(req.command, req.executor);
+    const now = this.now();
+    // Housekeeping on the agent's own write path: a refusal that has stopped
+    // answering is deleted here rather than left for a sweep nobody schedules.
+    this.deps.store.sweepDenials(now);
+    const standing = this.deps.store.standing(req.command, req.executor, now);
     if (standing?.status === 'denied') return { outcome: 'denied', action: standing };
     if (standing?.status === 'approved') {
       // The grant leaves `standing()` HERE, before the command runs, so a crash
@@ -455,7 +486,7 @@ export class DeferredApprovalQueue {
       command: req.command,
       executor: req.executor,
       reason: formatApproval(req.review),
-      requestedAt: this.now(),
+      requestedAt: now,
     });
     this.notify({ kind: 'queued', action });
     return { outcome: 'queued', action };
@@ -503,6 +534,7 @@ export class DeferredApprovalQueue {
    */
   async decide(ids: readonly string[], answer: DeferredApprovalAnswer): Promise<DeferredApproval[]> {
     const now = this.now();
+    this.deps.store.sweepDenials(now);
     const decided: DeferredApproval[] = [];
     // Deduped: a UI that sends an id twice must not report it twice, or the
     // wake would name one command as two decisions.

@@ -12,7 +12,7 @@ import { Database } from 'bun:sqlite';
 import { toolExecute } from '@kinu.run/test-utils';
 import {
   DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
-  DEFERRED_APPROVAL_SIGNAL, withApprovalGatedShell, buildBuiltinTools,
+  DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools,
   formatApprovalGrant,
   type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome,
   type AgentRuntime, type AgentSignal, type Shell,
@@ -48,6 +48,8 @@ function setup(opts: {
    *  would hold it. */
   const granted: string[] = [];
   let seq = 0;
+  /** Wall-clock offset a test moves to let a denial age. */
+  let elapsed = 0;
   /** The durable audit trail a consumed grant must leave behind — what proves
    *  an approval was spent once the row that held it is gone. */
   const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
@@ -56,7 +58,7 @@ function setup(opts: {
     signals: { deliver: async (signal) => { delivered.push(signal); return 'queued'; } },
     remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
     newId: () => `defer-${++seq}`,
-    now: () => 1_000 + seq,
+    now: () => 1_000 + seq + elapsed,
     audit: (record) => { audited.push(record); },
   });
 
@@ -80,7 +82,10 @@ function setup(opts: {
   const run: RunTool = {
     execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run),
   };
-  return { queue, store, shell, executed, delivered, granted, audited, run };
+  return {
+    queue, store, shell, executed, delivered, granted, audited, run,
+    advance: (ms: number) => { elapsed += ms; },
+  };
 }
 
 describe('deferred approval schema repair', () => {
@@ -353,6 +358,41 @@ describe('what an approval actually buys', () => {
     expect(queue.list()).toEqual([]);
   });
 
+  test('a refusal stands for a bounded time, then the row is gone and the queue asks again', async () => {
+    // A denial is the owner's answer to THIS ask, and the re-issue an agent
+    // makes minutes later is the noise it exists to absorb. It is not a
+    // standing policy: `deny_all` and the rule grants are. So the row expires
+    // rather than answering for the life of the workspace, and rather than
+    // accumulating one denied row per refused command forever.
+    const { run, queue, store, executed, advance } = setup();
+    await run.execute({ command: GATED });
+    await queue.decide(['defer-1'], 'denied');
+    expect(await run.execute({ command: GATED })).toContain('the owner refused this (defer-1)');
+
+    advance(DENIAL_STANDING_MS + 1);
+    const out = await run.execute({ command: GATED });
+
+    expect(executed).toEqual([]);
+    expect(out).toContain('NOT RUN — queued for owner approval (defer-2)');
+    expect(queue.list().map((a) => a.id)).toEqual(['defer-2']);
+    // The expired refusal did not merely stop answering: its row is gone.
+    expect(store.get('defer-1')).toBeNull();
+  });
+
+  test('an expired refusal is swept even when nothing re-issues its command', async () => {
+    const { run, queue, store, advance } = setup();
+    await run.execute({ command: 'npm publish a' });
+    await queue.decide(['defer-1'], 'denied');
+    advance(DENIAL_STANDING_MS + 1);
+
+    // Any write to the queue is a sweep: here, the owner deciding something else.
+    await run.execute({ command: 'npm publish b' });
+    await queue.decide(['defer-2'], 'approved');
+
+    expect(store.get('defer-1')).toBeNull();
+    expect(store.get('defer-2')?.status).toBe('approved');
+  });
+
   test('"always" runs this command AND stops the queue asking about that rule again', async () => {
     // The owner's ask: mark auto-approval for similar commands, not this exact
     // string. A second, DIFFERENT command of the same kind never reaches the
@@ -426,14 +466,14 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
     const spent = store.spend('defer-s');
     expect(spent?.action.id).toBe('defer-s');
     expect(store.spend('defer-s')).toBeNull();
-    expect(store.standing(GATED, 'workspace')).toBeNull();
+    expect(store.standing(GATED, 'workspace', 3)).toBeNull();
     if (!spent) throw new Error('an approved grant must be spendable');
 
     expect(store.settle(spent.spend, 'spent')).toBe(true);
     expect(store.get('defer-s')).toBeNull();
     // Closed once. A replay finds nothing and cannot bring the grant back.
     expect(store.settle(spent.spend, 'did-not-run')).toBe(false);
-    expect(store.standing(GATED, 'workspace')).toBeNull();
+    expect(store.standing(GATED, 'workspace', 3)).toBeNull();
   });
 
   test('re-opening the workspace keeps parked and approved rows intact', () => {
@@ -450,7 +490,7 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
     const reopened = new DeferredApprovalStore(makeSql(db));
     expect(reopened.get('defer-parked')?.status).toBe('queued');
     expect(reopened.get('defer-blessed')?.status).toBe('approved');
-    expect(reopened.standing(GATED, 'workspace')?.id).toBe('defer-parked');
+    expect(reopened.standing(GATED, 'workspace', 6)?.id).toBe('defer-parked');
   });
 });
 
@@ -505,7 +545,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
     const parked = reopened.listQueued();
 
     expect(parked.map((a: DeferredApproval) => a.id)).toEqual(['defer-9']);
-    expect(reopened.standing(GATED, 'workspace')?.status).toBe('queued');
+    expect(reopened.standing(GATED, 'workspace', 6)?.status).toBe('queued');
   });
 
   test('the decision is durable before the wake is attempted', async () => {
@@ -615,8 +655,8 @@ describe('an approval outlives an attempt that never reached the machine', () =>
 
     // The owner approved a RUN, and no run happened: the grant they gave is
     // still theirs to spend, and they are not asked a second time.
-    expect(store.standing(GATED, 'laptop')?.status).toBe('approved');
-    expect(store.standing(GATED, 'laptop')?.id).toBe('defer-1');
+    expect(store.standing(GATED, 'laptop', 1_010)?.status).toBe('approved');
+    expect(store.standing(GATED, 'laptop', 1_010)?.id).toBe('defer-1');
     expect(queue.list()).toEqual([]);
   });
 
@@ -631,7 +671,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     expect(await exec(GATED)).toBe('ran');
 
     expect(executed).toEqual([GATED, GATED]);
-    expect(store.standing(GATED, 'laptop')).toBeNull();
+    expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
     // One approval, one execution — and one audit for the spend that stuck.
     expect(audited).toEqual([{ approvalId: 'defer-1', command: GATED, executor: 'laptop' }]);
@@ -650,7 +690,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     answerWith(() => formatExecResult({ stdout: '', stderr: 'rejected', exitCode: 1 }));
     expect(await exec(GATED)).toContain('Error (exit 1)');
 
-    expect(store.standing(GATED, 'laptop')).toBeNull();
+    expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
   });
 
@@ -666,7 +706,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     answerWith(() => refusalText(new KinuError('io', 'the tunnel closed mid-call')));
     expect(parseRefusal(await exec(GATED))?.reason).toBe('io');
 
-    expect(store.standing(GATED, 'laptop')).toBeNull();
+    expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
   });
 
   test('a throw out of the executor does not refund', async () => {
@@ -679,7 +719,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     answerWith(() => { throw new Error('socket died'); });
     await expect(exec(GATED)).rejects.toThrow('socket died');
 
-    expect(store.standing(GATED, 'laptop')).toBeNull();
+    expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
   });
 
   test('two refunds of one spend change nothing', async () => {
@@ -695,10 +735,10 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     if (!spend) throw new Error('the approved grant must be spendable');
 
     queue.channel.settle(spend.spend, 'did-not-run');
-    expect(store.standing(GATED, 'laptop')?.id).toBe('defer-1');
+    expect(store.standing(GATED, 'laptop', 1_010)?.id).toBe('defer-1');
 
     queue.channel.settle(spend.spend, 'did-not-run');
-    expect(store.standing(GATED, 'laptop')?.id).toBe('defer-1');
+    expect(store.standing(GATED, 'laptop', 1_010)?.id).toBe('defer-1');
 
     // …and a replay that arrives after a LATER spend cannot undo it.
     const second = store.spend('defer-1');
@@ -706,7 +746,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     if (!second) throw new Error('the refunded grant must be spendable again');
     queue.channel.settle(second.spend, 'spent');
     queue.channel.settle(spend.spend, 'did-not-run');
-    expect(store.standing(GATED, 'laptop')).toBeNull();
+    expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
   });
 

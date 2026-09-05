@@ -49,7 +49,7 @@ describe('the local SQL adapter returns the rows a write produces', () => {
 
     // And exactly once: the grant is out, so a second claim has nothing to take.
     expect(store.spend('act-1')).toBeNull();
-    expect(store.standing('rm -rf ./build', 'laptop')).toBeNull();
+    expect(store.standing('rm -rf ./build', 'laptop', Date.now())).toBeNull();
     if (!claimed) throw new Error('the approved grant must be claimable');
 
     // `settle` is the other keyword this adapter used to swallow:

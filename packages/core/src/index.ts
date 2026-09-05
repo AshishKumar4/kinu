@@ -1326,6 +1326,7 @@ export {
   deniedActionMessage,
   decisionWakeMessage,
   DEFERRED_APPROVAL_SIGNAL,
+  DENIAL_STANDING_MS,
   type DeferredApproval,
   type DeferredApprovalStatus,
   type DeferredApprovalAnswer,
