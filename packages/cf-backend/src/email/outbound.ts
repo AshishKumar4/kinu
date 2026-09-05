@@ -62,7 +62,7 @@ function replySubject(subject: string): string {
  * for a usable In-Reply-To, so the `??` is the compiler's question, not a
  * second policy.
  */
-export function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'references'>): EmailThreadingHeaders {
+function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'references'>): EmailThreadingHeaders {
   const inReplyTo = boundedMessageId(addr.message_id, 'In-Reply-To');
   if (!inReplyTo) return {};
   return {

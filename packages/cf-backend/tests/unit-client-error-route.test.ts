@@ -10,11 +10,12 @@
  * the schema, prose where a stack frame belongs — plus the four release verdicts
  * and the exact field set one accepted report writes. The client half's own claim
  * (that a message, a path and a component label never enter the payload at all)
- * is asserted here too, through the pure builder, because it is the claim that
- * needs no network.
+ * is asserted here too, through the production send with a stubbed transport,
+ * because the claim is about what leaves the browser.
  */
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { asFetchFunction } from '@kinu.run/core';
 import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
@@ -24,14 +25,13 @@ import {
   CLIENT_ERROR_ENDPOINT,
   CLIENT_ERROR_MAX_REQUEST_BYTES,
   CLIENT_RENDER_FAILED,
+  ClientErrorReportSchema,
   fitClientErrorReport,
-  RELEASE_MATCHES,
-  reportBytes,
   type ClientErrorReport,
   type ReleaseMatch,
 } from '../src/client-error/contract';
-import { renderFailureReport } from '../src/client-error/report';
-import { APP_ROUTES, UNMATCHED_ROUTE, routeTemplateOf } from '../src/app-routes';
+import { reportRenderFailure } from '../src/client-error/report';
+import { APP_ROUTES, routeTemplateOf } from '../src/app-routes';
 
 const ORIGIN = 'https://kinu.example.com';
 const URL_ = `${ORIGIN}${CLIENT_ERROR_ENDPOINT}`;
@@ -89,12 +89,16 @@ function post(body: string, init: RequestInit = {}): Request {
 }
 
 /** The route's verdict, parsed rather than asserted: the response SHAPE is part
- *  of the contract, so a body that is not this is a failure here too. */
-const AcceptedSchema = v.object({ releaseMatch: v.picklist(RELEASE_MATCHES) });
-
+ *  of the contract, so a body that is not this is a failure here too. The arms
+ *  restate the contract's `ReleaseMatch`, so the suite pins the wire answer on
+ *  its own terms instead of borrowing the implementation's list. */
+const AcceptedSchema = v.object({
+  releaseMatch: v.picklist(['match', 'stale', 'unreported', 'undeployed'] as const),
+});
 async function verdict(response: Response): Promise<ReleaseMatch> {
   return v.parse(AcceptedSchema, await response.json()).releaseMatch;
 }
+
 
 async function send(
   body: string,
@@ -334,7 +338,8 @@ describe('the route a report is addressed by', () => {
   });
 
   test('a path the router does not know is a finding, not a leak', () => {
-    expect(routeTemplateOf('/nope/acme-billing-q3')).toBe(UNMATCHED_ROUTE);
+    // The literal wire value: the server validates reports against REPORTED_ROUTES.
+    expect(routeTemplateOf('/nope/acme-billing-q3')).toBe('/unmatched');
   });
 
   test('a static path is never mistaken for a parameterised one', () => {
@@ -355,56 +360,91 @@ describe('the payload the browser builds', () => {
     '    at ErrorBoundary (https://kinu.example.com/assets/index-a1b2c3.js:1:4444)',
   ].join('\n');
 
-  function built(): ClientErrorReport {
-    const error = new TypeError('Cannot read properties of undefined (reading \'kind\') for coupon SAVE20');
-    error.stack = V8_STACK;
-    return renderFailureReport(error, COMPONENT_STACK, {
-      release: STAMP.sha, route: APP_ROUTES.workspace,
+  /** Bodies the production send POSTed, in order. */
+  const posts: { url: string; body: string }[] = [];
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    posts.length = 0;
+    // A page on a workspace route, whose health endpoint is unreachable: every
+    // report below is one a page with no build identity produced.
+    Object.assign(globalThis, { location: { pathname: '/workspace/demo' } });
+    globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/health')) throw new TypeError('offline');
+      if (init?.method === 'POST') posts.push({ url, body: String(init.body ?? '') });
+      return new Response('{}', { status: 202 });
     });
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    Reflect.deleteProperty(globalThis, 'location');
+  });
+
+  /** One caught render error through the production send, parsed back. */
+  async function posted(error: Error, componentStack: string): Promise<ClientErrorReport> {
+    await reportRenderFailure(error, componentStack);
+    expect(posts).toHaveLength(1);
+    expect(posts[0].url).toBe(CLIENT_ERROR_ENDPOINT);
+    return v.parse(ClientErrorReportSchema, JSON.parse(posts[0].body));
   }
 
-  test('the message never leaves, in any field', () => {
+  function failedRender(): Error {
+    const error = new TypeError('Cannot read properties of undefined (reading \'kind\') for coupon SAVE20');
+    error.stack = V8_STACK;
+    return error;
+  }
+
+  test('the message never leaves, in any field', async () => {
     // V8 puts `${name}: ${message}` on the first line of `stack`, which is the
     // one line that must not travel.
-    expect(JSON.stringify(built())).not.toContain('SAVE20');
-    expect(JSON.stringify(built())).not.toContain('Cannot read properties');
+    const body = JSON.stringify(await posted(failedRender(), COMPONENT_STACK));
+    expect(body).not.toContain('SAVE20');
+    expect(body).not.toContain('Cannot read properties');
   });
 
-  test('the error’s CLASS does travel, because that is the greppable part', () => {
-    expect(built().errorName).toBe('TypeError');
+  test('the error’s CLASS does travel, because that is the greppable part', async () => {
+    expect((await posted(failedRender(), COMPONENT_STACK)).errorName).toBe('TypeError');
   });
 
-  test('every frame the browser produced is kept, in order', () => {
-    expect(built().stack.split('\n')).toEqual([
+  test('every frame the browser produced is kept, in order', async () => {
+    expect((await posted(failedRender(), COMPONENT_STACK)).stack.split('\n')).toEqual([
       '    at applyCoupon (https://kinu.example.com/assets/index-a1b2c3.js:1:2345)',
       '    at ChatMessages (https://kinu.example.com/assets/index-a1b2c3.js:1:9876)',
     ]);
   });
 
-  test('React’s bare host frames are kept: the component path is the value', () => {
-    expect(built().componentStack.split('\n')).toContain('    at div');
+  test('React’s bare host frames are kept: the component path is the value', async () => {
+    expect((await posted(failedRender(), COMPONENT_STACK)).componentStack.split('\n'))
+      .toContain('    at div');
   });
 
-  test('a name assigned over the identifier shape falls back rather than travels', () => {
+  test('the report carries the route template, never the path', async () => {
+    expect((await posted(new Error('x'), '')).route).toBe(APP_ROUTES.workspace);
+  });
+
+  test('a name assigned over the identifier shape falls back rather than travels', async () => {
     // Built at runtime: exercises the production token pattern without placing
     // a credential-shaped literal in source (which the push-time scanner must
     // treat as real until proven otherwise).
     const syntheticToken = ['ptc', 'deadbeef'].join('_');
     const error = new Error('boom');
     error.name = `the user said: my token is ${syntheticToken}`;
-    const sent = renderFailureReport(error, '', { release: null, route: APP_ROUTES.home });
+    const sent = await posted(error, '');
     expect(sent.errorName).toBe('Error');
     expect(JSON.stringify(sent)).not.toContain(syntheticToken);
   });
 
-  test('a page with no build identity still produces a report', () => {
-    const sent = renderFailureReport(new Error('x'), '', { release: null, route: APP_ROUTES.home });
+  test('a page with no build identity still produces a report', async () => {
+    const sent = await posted(new Error('x'), '');
     expect(sent.release).toBeUndefined();
     expect(sent.event).toBe(CLIENT_RENDER_FAILED);
   });
 
   test('the built payload is accepted by the route it is built for', async () => {
-    const { response } = await recorded(JSON.stringify(built()));
+    const sent = await posted(failedRender(), COMPONENT_STACK);
+    const { response } = await recorded(JSON.stringify(sent));
     expect(response.status).toBe(202);
   });
 });
@@ -423,10 +463,11 @@ describe('fitting a report to the one bound', () => {
     const small = report();
     expect(fitClientErrorReport(small)).toEqual(small);
   });
-
   test('an oversized report comes back inside the bound', () => {
     const fitted = fitClientErrorReport(oversized(400, 400));
-    expect(reportBytes(fitted)).toBeLessThanOrEqual(CLIENT_ERROR_MAX_REQUEST_BYTES);
+    // The bound is on arriving bytes, measured here in the test's own terms.
+    expect(new TextEncoder().encode(JSON.stringify(fitted)).byteLength)
+      .toBeLessThanOrEqual(CLIENT_ERROR_MAX_REQUEST_BYTES);
   });
 
   test('the fixed fields are never what gets dropped', () => {
@@ -472,6 +513,7 @@ describe('fitting a report to the one bound', () => {
     const fitted = fitClientErrorReport(report({
       stack: Array.from({ length: 400 }, () => wide).join('\n'),
     }));
-    expect(reportBytes(fitted)).toBeLessThanOrEqual(CLIENT_ERROR_MAX_REQUEST_BYTES);
+    expect(new TextEncoder().encode(JSON.stringify(fitted)).byteLength)
+      .toBeLessThanOrEqual(CLIENT_ERROR_MAX_REQUEST_BYTES);
   });
 });

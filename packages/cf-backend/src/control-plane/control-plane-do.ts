@@ -91,6 +91,11 @@ export class ControlPlaneDO extends DurableObject<Env> {
     await this.gate(caller, 'index.workspace');
     store.observeWorkspace(this.store, observation);
   }
+  /** Records activity. The use feed only knows the slug, so it claims no title. */
+  async touchWorkspace(caller: PresentedCaller, observation: WorkspaceObservation): Promise<void> {
+    await this.gate(caller, 'index.workspace');
+    store.touchWorkspace(this.store, observation);
+  }
 
   async forgetWorkspace(
     caller: PresentedCaller, target: { userId: string; name: string; at?: number },

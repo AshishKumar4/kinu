@@ -2,14 +2,14 @@
  * The public webhook delivery path, and the capability that makes it public
  * without making a workspace name a door.
  *
- * A delivery URL used to be `/api/workspaces/<name>/webhook/<trigger>`: a
- * string anyone could type. The Worker resolved the Orchestrator stub for that
- * name before it knew whether the workspace or the trigger existed, so an
- * unauthenticated caller could ACTIVATE a persistent Durable Object for any
- * name they liked, at their chosen rate. Nothing upstream could answer instead:
- * the control-plane workspace index is best-effort by design, and the owner's
- * UserDO registry cannot be consulted because the URL names no owner. Bounding
- * the knock (`lib/ingress-budget.ts`) priced that door; it did not close it.
+ * A bare `/api/workspaces/<name>/webhook/<trigger>` is a string anyone can
+ * type. Resolving the Orchestrator stub for that name before knowing whether
+ * the workspace or the trigger exists lets an unauthenticated caller ACTIVATE
+ * a persistent Durable Object for any name they like, at their chosen rate.
+ * Nothing upstream can answer instead: the control-plane workspace index is
+ * best-effort by design, and the owner's UserDO registry cannot be consulted
+ * because the URL names no owner. Bounding the knock (`lib/ingress-budget.ts`)
+ * prices that door; it does not close it.
  *
  * So the path carries the routing decision. Its last segment is
  * `v1-<32 lowercase hex>`: a truncated HMAC-SHA-256 over this workspace's and
@@ -41,10 +41,10 @@
  *
  * What this does NOT do: expire, or notice revocation. A capability outlives
  * the trigger it was minted for, and a delivery to a revoked trigger is refused
- * by the trigger registry inside the workspace, as it always was. Revoking one
- * URL is revoking its trigger; revoking every URL a deployment issued is
- * rotating the secret. The guarantee is narrower, and is the one that was
- * missing: only an identity this deployment minted for can be addressed at all.
+ * by the trigger registry inside the workspace. Revoking one URL is revoking
+ * its trigger; revoking every URL a deployment issued is rotating the secret.
+ * The guarantee is narrower: only an identity this deployment minted for can
+ * be addressed at all.
  */
 
 import { isUlid } from '@kinu.run/core';

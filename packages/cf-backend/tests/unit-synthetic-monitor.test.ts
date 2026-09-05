@@ -138,6 +138,27 @@ describe('synthetic probes', () => {
     expect(outcome(outcomes, 'login').detail).toContain('nobody can sign in');
   });
 
+  test('an artifact body that cannot be read is a failure, not an exception', async () => {
+    const unreadable = () => new Response(new ReadableStream({
+      start(c) { c.error(new Error('connection reset')); },
+    }));
+    const outcomes = await probe({ [CLI_DIST_PATHS[0] ?? '']: unreadable });
+    expect(outcome(outcomes, 'downloads').ok).toBe(false);
+    expect(outcome(outcomes, 'downloads').detail).toContain('could not be read');
+    expect(outcome(outcomes, 'health').ok).toBe(true);
+    expect(outcome(outcomes, 'login').ok).toBe(true);
+  });
+
+  test('a sign-in page body that cannot be read is a failure, not an exception', async () => {
+    const unreadable = () => new Response(new ReadableStream({
+      start(c) { c.error(new Error('connection reset')); },
+    }));
+    const outcomes = await probe({ '/login': unreadable });
+    expect(outcome(outcomes, 'login').ok).toBe(false);
+    expect(outcome(outcomes, 'login').detail).toContain('could not be read');
+    expect(outcome(outcomes, 'health').ok).toBe(true);
+  });
+
   test('an origin that does not answer is a failure, not an exception', async () => {
     const unavailableFetch: ProbeDeps['fetch'] = async () => {
       throw new Error('connection refused');

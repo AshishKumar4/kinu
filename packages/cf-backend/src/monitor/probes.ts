@@ -162,13 +162,19 @@ async function probeDownloads(deps: ProbeDeps): Promise<ProbeOutcome> {
     if (archive.status !== 200) return fail(`GET ${path} returned HTTP ${archive.status}`);
     if (checksum.status !== 200) return fail(`GET ${checksumPath} returned HTTP ${checksum.status}`);
 
-    const declared = (await checksum.text()).trim().split(/\s+/)[0] ?? '';
+    let declared: string;
+    let actual: string;
+    try {
+      declared = ((await checksum.text()).trim().split(/\s+/)[0] ?? '');
+      actual = await sha256Hex(await archive.arrayBuffer());
+    } catch (err) {
+      return fail(`the CLI download ${path} could not be read: ${renderThrownChain({ cause: err })}`);
+    }
     if (!/^[0-9a-f]{64}$/.test(declared)) {
       return fail(
         `${checksumPath} is not a sha256 line — the SPA shell is being served in place of the checksum`,
       );
     }
-    const actual = await sha256Hex(await archive.arrayBuffer());
     if (actual !== declared) {
       return fail(
         `${path} hashes to ${actual} but ${checksumPath} declares ${declared}`
@@ -188,7 +194,12 @@ async function probeLogin(deps: ProbeDeps): Promise<ProbeOutcome> {
     return fail(`GET /login did not answer: ${renderThrownChain({ cause: err })}`);
   }
   if (response.status !== 200) return fail(`GET /login returned HTTP ${response.status}`);
-  const body = await response.text();
+  let body: string;
+  try {
+    body = await response.text();
+  } catch (err) {
+    return fail(`GET /login could not be read: ${renderThrownChain({ cause: err })}`);
+  }
   if (!body.includes('Sign in to Kinu')) {
     return fail('GET /login did not render the sign-in page');
   }

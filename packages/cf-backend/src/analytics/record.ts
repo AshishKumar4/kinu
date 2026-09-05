@@ -249,10 +249,9 @@ export function recordJobSettled(env: AnalyticsEnv, input: JobRowInput): void {
  *
  * A container lifecycle failure is made durable by the box before anyone is
  * told, and the box re-delivers it until this Worker accepts it. This row is
- * what happened to ONE of those deliveries, and the reason it is a row at all is
- * that the boundary previously had none: an incident that reached the agent and
- * an incident that reached nobody produced the same observable result, which is
- * nothing.
+ * what happened to ONE of those deliveries. Without the row, an incident that
+ * reached the agent and one that reached nobody would produce the same
+ * observable result, which is nothing.
  *
  * `outcome` carries the verdict and `code` the class of failure, so a successful
  * recovery and a refused envelope are separate values of one dimension rather

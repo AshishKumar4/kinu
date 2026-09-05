@@ -92,6 +92,16 @@ function requestAuthTimeMs(request: Request): number | null {
   return null;
 }
 
+/**
+ * The step-up rule the grant routes share: widening who can drive turns needs
+ * a sign-in from the last 5 minutes. One spelling, so the two arms cannot
+ * drift into two different freshnesses or two different refusals.
+ */
+function requireStepUp(request: Request): Response | null {
+  if (isFreshAuthTime(requestAuthTimeMs(request))) return null;
+  return err(401, 'step-up auth required (re-login within 5 minutes)');
+}
+
 // ── Route entry point ────────────────────────────────────────────
 
 export async function handleHubRequest(
@@ -172,11 +182,9 @@ async function handleEmailConfigRoute(
     return json(await agent.getEmailIngress());
   }
   if (request.method === 'PUT') {
-    // Widening who can drive turns by email is a grant — same step-up rule
-    // as webhook trigger creation.
-    if (!isFreshAuthTime(requestAuthTimeMs(request))) {
-      return err(401, 'step-up auth required (re-login within 5 minutes)');
-    }
+    // Widening who can drive turns by email is a grant.
+    const stepUp = requireStepUp(request);
+    if (stepUp) return stepUp;
     const body = await safeJson(request, v.object({
       allow: v.optional(v.array(v.string())),
       notifications: v.optional(v.boolean()),
@@ -280,11 +288,10 @@ async function handleTriggersRoute(
       return json(decodeJsonWire(await agent.listTriggersWire()));
     }
     if (method === 'POST') {
-      // Step-up auth required for trigger creation (shared rule with the
-      // CLI webhook route — see auth/session.ts isFreshAuthTime).
-      if (!isFreshAuthTime(requestAuthTimeMs(request))) {
-        return err(401, 'step-up auth required (re-login within 5 minutes)');
-      }
+      // Creating a trigger is a grant (shared rule with the CLI webhook
+      // route — see auth/session.ts isFreshAuthTime).
+      const stepUp = requireStepUp(request);
+      if (stepUp) return stepUp;
       // A trigger whose delivery URL cannot be signed is a row no delivery
       // could ever reach, so an unconfigured deployment is reported here
       // instead of writing one. Public delivery says none of this; it 404s.
@@ -335,8 +342,8 @@ async function handleEventsList(request: Request, env: Env, agentName: string): 
   // The same closed parser the object behind this RPC applies, so a request
   // that skips the route gets the identical ceiling. `parseInt('abc', 10)` is
   // NaN, which the parser reads as "unstated" — the route never has to decide
-  // what a garbage query string meant, and SQLite never sees the NaN it used to
-  // refuse as a datatype mismatch.
+  // what a garbage query string meant, and SQLite never sees a NaN datatype
+  // mismatch.
   const bounds = boundEventQuery({
     since: url.searchParams.has('since')
       ? parseInt(url.searchParams.get('since') ?? '', 10) : undefined,

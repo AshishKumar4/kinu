@@ -59,8 +59,8 @@ export interface EmailDeliveryTarget {
  * ORDER IS THE PROPERTY, cheapest refusal first: a recipient this deployment
  * does not serve, an auto-reply, a message over the byte ceiling, a sender the
  * receiving agent does not accept — and only then the MIME parse, which is the
- * expensive step an unauthorized sender used to be able to buy with one
- * platform-maximum message.
+ * expensive step. Parsing first would let an unauthorized sender spend it with
+ * one platform-maximum message.
  */
 export async function routeInboundEmail(
   message: InboundEmailMessage,

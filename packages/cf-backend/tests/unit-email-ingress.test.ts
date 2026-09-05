@@ -12,8 +12,7 @@ import {
   type EmailIngressDeps, type IncomingEmail, type KinuEvent, type SqlExec,
 } from '@kinu.run/core';
 import {
-  agentEmailAddress, agentNameFromRecipient,
-  parseInboundMime, stripQuotedReply,
+  agentEmailAddress, agentNameFromRecipient, parseInboundMime,
 } from '../src/email/inbound';
 import {
   routeInboundEmail, type EmailDeliveryTarget,
@@ -90,20 +89,34 @@ describe('addressing', () => {
   });
 });
 
-describe('stripQuotedReply', () => {
-  test('cuts Gmail-style quoted history', () => {
+/** The text MIME part `text` parses to, through the production parse. */
+async function strippedBody(text: string): Promise<string> {
+  const raw = [
+    'From: owner@example.com',
+    `To: scout-a1b2c3@${DOMAIN}`,
+    'Subject: strip',
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    text,
+    '',
+  ].join('\r\n');
+  return (await parseInboundMime(await new Blob([raw]).arrayBuffer())).body_text;
+}
+
+describe('quoted history never reaches turn input', () => {
+  test('cuts Gmail-style quoted history', async () => {
     const text = 'Yes please deploy.\n\nOn Mon, Jun 1, 2026 at 9:00 AM Agent <a@b.c> wrote:\n> earlier\n> stuff';
-    expect(stripQuotedReply(text)).toBe('Yes please deploy.');
+    expect(await strippedBody(text)).toBe('Yes please deploy.');
   });
-  test('cuts Outlook original-message blocks and signatures', () => {
-    expect(stripQuotedReply('Do it.\n-----Original Message-----\nFrom: x')).toBe('Do it.');
-    expect(stripQuotedReply('Do it.\n-- \nSent from my phone')).toBe('Do it.');
+  test('cuts Outlook original-message blocks and signatures', async () => {
+    expect(await strippedBody('Do it.\n-----Original Message-----\nFrom: x')).toBe('Do it.');
+    expect(await strippedBody('Do it.\n-- \nSent from my phone')).toBe('Do it.');
   });
-  test('falls back to the full text when stripping would leave nothing', () => {
-    expect(stripQuotedReply('> just a quote\n> nothing else')).toBe('> just a quote\n> nothing else');
+  test('falls back to the full text when stripping would leave nothing', async () => {
+    expect(await strippedBody('> just a quote\n> nothing else')).toBe('> just a quote\n> nothing else');
   });
 });
-
 describe('parseInboundMime', () => {
   test('extracts subject, new text, threading headers, attachment metadata', async () => {
     const raw = [

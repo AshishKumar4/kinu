@@ -286,8 +286,8 @@ async function handleFeedbackSubmission(
   };
 
   const part = form.get(FEEDBACK_FIELDS.screenshot);
-  // A string in the screenshot field is not a degenerate file, it is a caller
-  // sending something else under that name.
+  // A string in the screenshot field means a caller sent something else under
+  // that name.
   const shot = part instanceof Blob ? part : null;
   if (part !== null && shot === null) {
     return refuse(deps, 415, 'The screenshot must be a PNG file.', 'bad_content_type', observed);

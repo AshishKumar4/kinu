@@ -90,9 +90,9 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     site: 'packages/cf-backend/src/run-events-routes.ts',
     mechanism: 'diagnostics',
     emitter: 'failure',
-    means: 'A run-event list or page answered 500. The route used to answer with '
-      + 'a rendered cause and record nothing, so a workspace whose history was '
-      + 'unreachable produced no fleet signal at all.',
+    means: 'A run-event list or page answered 500. The route answers with a '
+      + 'rendered cause and records the failure, so a workspace whose history '
+      + 'is unreachable still produces a fleet signal.',
   },
   {
     id: 'capability.denied',
@@ -147,9 +147,9 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     means: 'One delivery of a container lifecycle failure to the agent settled: '
       + 'which stage failed, whether the announcement reached the agent, which '
       + 'attempt it was, and how long since the incident was first reported. A '
-      + 'SUCCESSFUL recovery is a row here too, which is the point — the seam '
-      + 'used to produce no rows at all, so an incident nobody was told about '
-      + 'and one the agent acted on were both silence.',
+      + 'SUCCESSFUL recovery is a row here too, which is the point: without it '
+      + 'an incident nobody was told about and one the agent acted on would '
+      + 'both read as silence.',
   },
   {
     id: 'turn.settled',

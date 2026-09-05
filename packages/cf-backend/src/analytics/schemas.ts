@@ -231,7 +231,7 @@ export const AGENT_METRICS_SCHEMA = defineSchema({
     { name: 'source', maxBytes: 48 },
     // WHY a refusal was refused, as one closed word. `code` names the CLASS of
     // failure from core's nine-member vocabulary; a denial's reason is the arm
-    // that decided it, and `tier_too_low` versus `unrecognized_workspace` imply
+    // that decided it, and `unrecognized_workspace` versus `owner_only` imply
     // opposite responses while both are `denied`. APPENDED rather than inserted:
     // slot order IS the wire format, so a new slot may only go last.
     { name: 'reason', maxBytes: 32 },

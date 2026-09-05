@@ -40,8 +40,9 @@ import { unindexWorkspace } from './index-feed';
 import type { ControlPlaneEnv } from './stub';
 
 /** The account an action is bound to. A UserDO name, which is what makes the
- *  workspace name beside it an address rather than a guess. */
-const UserIdSchema = v.pipe(v.string(), v.regex(/^[a-f0-9]{32}$/));
+ *  workspace name beside it an address rather than a guess. Exported because
+ *  the drilldown routes refuse anything else with the same shape. */
+export const UserIdSchema = v.pipe(v.string(), v.regex(/^[a-f0-9]{32}$/));
 const WorkspaceSchema = v.pipe(v.string(), v.nonEmpty());
 const JobIdSchema = v.pipe(v.string(), v.nonEmpty());
 

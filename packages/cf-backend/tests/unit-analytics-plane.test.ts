@@ -813,7 +813,7 @@ describe('a denial is a row that says denied', () => {
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'event')).toBe('capability.denied');
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'outcome')).toBe('denied');
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'source')).toBe('workspace_capability');
-    // The arm that decided it. `denied` alone pools `tier_too_low`, a policy
+    // The arm that decided it. `denied` alone pools `owner_only`, a policy
     // outcome, with `unrecognized_workspace`, a broken identity — and those two
     // ask an operator for opposite responses.
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'reason')).toBe('no_caller_identity');

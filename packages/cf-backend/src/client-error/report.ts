@@ -58,15 +58,16 @@ function isTolerableSendFailure<Failure>(cause: Failure): boolean {
 /**
  * The report a caught render error becomes.
  *
- * Pure, and exported, because two different claims live here and only one of
- * them needs a network: that the payload carries no message, no path and no user
- * content, and that it is fitted to the bound before it is sent.
+ * Pure, so both claims hold without a network: the payload carries no message,
+ * no path and no user content, and it is fitted to the bound before it is sent.
+ * `reportRenderFailure` below is the only caller, which keeps the page and
+ * transport reads at the I/O boundary.
  *
  * `release` is the build this PAGE loaded, never the one live now. That
  * distinction is the whole value of the field — a tab open across a deploy is
  * running code the origin no longer serves — and the route compares the two.
  */
-export function renderFailureReport(
+function renderFailureReport(
   error: Error,
   componentStack: string,
   page: PageIdentity,

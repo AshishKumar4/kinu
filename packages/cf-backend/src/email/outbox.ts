@@ -42,10 +42,11 @@ export type OutboundSendResult =
 
 /** Retry policy for the reconciliation sweep — exponential backoff from 30s over
  *  at most 8 attempts, so the longest wait an intent gets is 30_000·2⁶ = 1,920 s
- *  and then it dead-letters. There is no ceiling constant — the 1h one that used to
- *  sit here could not bind at 8 attempts, so it was a bound that could not fail.
- *  The 30s base is this outbox's own (an outbound provider, not the in-process peer
- *  hub, whose base is 5s); only the dead-letter discipline is shared. */
+ *  and then it dead-letters. There is no ceiling constant beside the attempts:
+ *  the longest wait above is the binding one, so an hour ceiling could never
+ *  bind and would be a bound that cannot fail. The 30s base is this outbox's
+ *  own (an outbound provider, not the in-process peer hub, whose base is 5s);
+ *  only the dead-letter discipline is shared. */
 const MAX_SEND_ATTEMPTS = 8;
 const RETRY_BASE_MS = 30_000;
 

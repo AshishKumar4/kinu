@@ -291,7 +291,17 @@ describe('the index', () => {
     expect(rows[0]?.displayName).toBe('v2');
     close();
   });
-
+  test('a use-feed touch keeps the supplied title and advances last-seen', () => {
+    // The use feed only knows the slug. Writing it as the title flapped every
+    // renamed workspace back to its slug on next open.
+    const { sql, close } = freshStore();
+    store.observeWorkspace(sql, { userId: 'u1', name: 'research', displayName: 'My Research', createdAt: 1_000, at: 1_000 });
+    store.touchWorkspace(sql, { userId: 'u1', name: 'research', displayName: 'research', at: 2_000 });
+    const row = store.listWorkspaces(sql, {}, { userId: 'u1' }).items[0];
+    expect(row?.displayName).toBe('My Research');
+    expect(row?.lastSeenAt).toBe(2_000);
+    close();
+  });
   test('reconciling against the registry tombstones what the registry no longer has', () => {
     const { sql, close } = freshStore();
     for (const name of ['keep', 'drop']) {
@@ -303,6 +313,17 @@ describe('the index', () => {
 
     expect(outcome).toEqual({ present: 1, tombstoned: 1 });
     expect(store.listWorkspaces(sql).items.map((w) => w.name)).toEqual(['keep']);
+    close();
+  });
+  test('reconciling never moves last-seen backwards', () => {
+    // The use feed advances this clock on observations the registry never
+    // sees. Overwriting it with an older registry clock reordered the list.
+    const { sql, close } = freshStore();
+    store.observeWorkspace(sql, { userId: 'u1', name: 'other', displayName: 'other', at: 9_000 });
+    store.replaceUserWorkspaces(sql, 'u1', [
+      { name: 'other', displayName: 'other', createdAt: 1_000, lastVisited: 1_000 },
+    ], 9_500);
+    expect(store.listWorkspaces(sql, {}, { userId: 'u1' }).items[0]?.lastSeenAt).toBe(9_000);
     close();
   });
 

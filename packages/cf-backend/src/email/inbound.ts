@@ -71,7 +71,7 @@ const QUOTE_MARKERS: ReadonlyArray<RegExp> = [
 
 /** Keep the sender's new text; drop quoted history and the signature. Falls
  *  back to the full text when stripping would leave nothing. */
-export function stripQuotedReply(text: string): string {
+function stripQuotedReply(text: string): string {
   let cut = text.length;
   for (const re of QUOTE_MARKERS) {
     const m = re.exec(text);

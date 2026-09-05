@@ -157,7 +157,8 @@ export function listIncidents(sql: SqlExec): IncidentRow[] {
 interface Notice { subject: string; text: string; key: string }
 
 function openedNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
-  const what = rows.length === 1 ? `${rows[0]!.probe} is failing` : `${rows.length} checks are failing`;
+  const [single] = rows;
+  const what = rows.length === 1 && single !== undefined ? `${single.probe} is failing` : `${rows.length} checks are failing`;
   const body = [
     `${deps.origin} — synthetic monitoring found a problem.`,
     '',
@@ -183,7 +184,8 @@ function openedNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
 }
 
 function recoveredNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
-  const what = rows.length === 1 ? `${rows[0]!.probe} recovered` : `${rows.length} checks recovered`;
+  const [single] = rows;
+  const what = rows.length === 1 && single !== undefined ? `${single.probe} recovered` : `${rows.length} checks recovered`;
   return {
     subject: `Health: ${what}`,
     key: argumentDigest({ kind: 'recovered', rows: rows.map((r) => [r.probe, r.opened_at]) }),

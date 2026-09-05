@@ -70,6 +70,11 @@ function harness(owned: readonly string[]) {
       async observeWorkspace(_caller: PresentedCaller, observation: { userId: string; name: string }) {
         index.workspaces.push({ userId: observation.userId, name: observation.name });
       },
+      // The owned-request feed touches activity without claiming the title.
+      // Recorded beside observes. The ownership property is identical.
+      async touchWorkspace(_caller: PresentedCaller, observation: { userId: string; name: string }) {
+        index.workspaces.push({ userId: observation.userId, name: observation.name });
+      },
     }),
   };
 

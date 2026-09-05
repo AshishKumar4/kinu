@@ -163,7 +163,7 @@ export type ClientErrorReport = v.InferOutput<typeof ClientErrorReportSchema>;
 const ENCODER = new TextEncoder();
 
 /** The encoded size of one report, which is the quantity the bound is on. */
-export function reportBytes(report: ClientErrorReport): number {
+function reportBytes(report: ClientErrorReport): number {
   return ENCODER.encode(JSON.stringify(report)).byteLength;
 }
 
@@ -239,5 +239,4 @@ export function fitClientErrorReport(report: ClientErrorReport): ClientErrorRepo
  * running code the origin no longer serves, which is a whole class of render
  * failure that reads as a mystery until this field names it.
  */
-export const RELEASE_MATCHES = ['match', 'stale', 'unreported', 'undeployed'] as const;
-export type ReleaseMatch = (typeof RELEASE_MATCHES)[number];
+export type ReleaseMatch = 'match' | 'stale' | 'unreported' | 'undeployed';

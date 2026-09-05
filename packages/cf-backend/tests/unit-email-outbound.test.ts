@@ -15,7 +15,7 @@ import {
 import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
-  sendInboundEmailReceipt, sendOwnerEmail, threadingHeaders,
+  sendInboundEmailReceipt, sendOwnerEmail,
 } from '../src/email/outbound';
 import { EmailOutbox } from '../src/email/outbox';
 import { sqlExec } from './helpers/user-do';
@@ -60,17 +60,6 @@ function fakeSendBinding(opts: { fail?: boolean } = {}) {
   return { binding, sent };
 }
 
-describe('threadingHeaders', () => {
-  test('reply points In-Reply-To at the inbound id and extends References', () => {
-    expect(threadingHeaders({ message_id: '<a@x>', references: null })).toEqual({
-      'In-Reply-To': '<a@x>', References: '<a@x>',
-    });
-    expect(threadingHeaders({ message_id: '<c@x>', references: '<a@x> <b@x>' })).toEqual({
-      'In-Reply-To': '<c@x>', References: '<a@x> <b@x> <c@x>',
-    });
-    expect(threadingHeaders({ message_id: null, references: '<a@x>' })).toEqual({});
-  });
-});
 
 describe('inbound email → turn → threaded reply (the full flow at the seams)', () => {
   function setup(sendOpts: { fail?: boolean } = {}) {
@@ -337,6 +326,18 @@ describe('the receipt an accepted message gets immediately', () => {
     expect(sent).toHaveLength(0);
   });
 
+  test('a thread with no usable Message-ID carries no threading headers', async () => {
+    const { binding, sent } = fakeSendBinding();
+    const ok = await sendInboundEmailReceipt(
+      { email: binding, agentDisplayName: 'Scout', outbox: freshOutbox() },
+      { ...THREAD, message_id: null },
+      'evt-noid',
+    );
+    expect(ok).toBe(true);
+    expect(sent[0].headers?.['In-Reply-To']).toBeUndefined();
+    expect(sent[0].headers?.['References']).toBeUndefined();
+  });
+
   test('the reply this thread later gets is a second message, not a repeat of the receipt', async () => {
     // Different outbox keys, so the receipt never suppresses the answer and
     // the answer never re-sends the receipt.
@@ -369,19 +370,45 @@ describe('the receipt an accepted message gets immediately', () => {
 describe('threading headers stay inside the line a receiver must accept', () => {
   const REFERENCES_BUDGET = 998 - 'References'.length - 2;
 
-  test('a long inherited chain is trimmed from the middle, never from either end', () => {
+  /** The threading headers one receipt carried, through the production send. */
+  async function receiptHeaders(
+    thread: { message_id: string | null; references: string | null },
+    eventId: string,
+  ): Promise<Record<string, string>> {
+    const { binding, sent } = fakeSendBinding();
+    await sendInboundEmailReceipt(
+      { email: binding, agentDisplayName: 'Scout', outbox: freshOutbox() },
+      {
+        to: 'owner@example.com',
+        from: 'scout-a1b2c3@agents.example.com',
+        subject: 'Check the deploy',
+        ...thread,
+      },
+      eventId,
+    );
+    return sent[0].headers ?? {};
+  }
+
+  test('a long inherited chain is trimmed from the middle, never from either end', async () => {
     const chain = Array.from({ length: 200 }, (_, i) => `<r${String(i).padStart(3, '0')}@x>`);
-    const headers = threadingHeaders({ message_id: '<answered@x>', references: chain.join(' ') });
+    const headers = await receiptHeaders(
+      { message_id: '<answered@x>', references: chain.join(' ') }, 'evt-long',
+    );
     expect(headers['In-Reply-To']).toBe('<answered@x>');
 
-    const kept = headers.References!.split(' ');
-    expect(headers.References!.length).toBeLessThanOrEqual(REFERENCES_BUDGET);
+    const references = headers['References'] ?? '';
+    const kept = references.split(' ');
+    expect(references.length).toBeLessThanOrEqual(REFERENCES_BUDGET);
     expect(kept[0]).toBe('<r000@x>');
     expect(kept[kept.length - 1]).toBe('<answered@x>');
     expect(kept).not.toContain('<r001@x>');
   });
 
-  test('a Message-ID no line can carry threads on nothing rather than on a truncation', () => {
-    expect(threadingHeaders({ message_id: `<${'x'.repeat(1_200)}@x>`, references: '<a@x>' })).toEqual({});
+  test('a Message-ID no line can carry threads on nothing rather than on a truncation', async () => {
+    const headers = await receiptHeaders(
+      { message_id: `<${'x'.repeat(1_200)}@x>`, references: '<a@x>' }, 'evt-wide',
+    );
+    expect(headers['In-Reply-To']).toBeUndefined();
+    expect(headers['References']).toBeUndefined();
   });
 });

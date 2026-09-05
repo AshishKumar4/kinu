@@ -2,7 +2,7 @@
 // the same isFreshAuthTime rule the CLI webhook route enforces.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
-import { STEP_UP_WINDOW_MS, isFreshAuthTime } from '../src/auth/session';
+import { isFreshAuthTime } from '../src/auth/session';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
@@ -71,7 +71,7 @@ describe('web trigger-creation step-up gate', () => {
 
   test('stale auth time → 401, orchestrator never invoked', async () => {
     const { env, calls } = hubEnv();
-    const res = await handleHubRequest(createTriggerRequest(Date.now() - STEP_UP_WINDOW_MS - 1000), env, 'jarvis');
+    const res = await handleHubRequest(createTriggerRequest(Date.now() - 5 * 60 * 1000 - 1000), env, 'jarvis');
     expect(res?.status).toBe(401);
     expect(calls).toHaveLength(0);
   });
@@ -88,8 +88,8 @@ describe('isFreshAuthTime', () => {
   test('boundary behavior', () => {
     const now = Date.now();
     expect(isFreshAuthTime(now, now)).toBe(true);
-    expect(isFreshAuthTime(now - STEP_UP_WINDOW_MS, now)).toBe(true);
-    expect(isFreshAuthTime(now - STEP_UP_WINDOW_MS - 1, now)).toBe(false);
+    expect(isFreshAuthTime(now - 5 * 60 * 1000, now)).toBe(true);
+    expect(isFreshAuthTime(now - 5 * 60 * 1000 - 1, now)).toBe(false);
     expect(isFreshAuthTime(null, now)).toBe(false);
     expect(isFreshAuthTime(undefined, now)).toBe(false);
     expect(isFreshAuthTime(0, now)).toBe(false);

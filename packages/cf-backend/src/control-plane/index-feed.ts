@@ -117,10 +117,9 @@ export function observeWorkspaceUse(
   const key = `${identity.userId}\u0000${workspace}`;
   if (!shouldWrite(key, now)) return;
   options.retain.waitUntil(retained(key, true, async () => {
-    // `displayName` is the slug until the create feed or a reconcile supplies
-    // the real title. Stating the slug is honest; inventing a prettier string
-    // here would put a second title source in the tree.
-    await controlPlaneStub(env).observeWorkspace(await internalCaller(env), {
+    // The path carries only the slug. `touchWorkspace` preserves a title the
+    // create feed or a reconcile already supplied.
+    await controlPlaneStub(env).touchWorkspace(await internalCaller(env), {
       userId: identity.userId, name: workspace, displayName: workspace, at: now,
     });
   }));

@@ -54,14 +54,16 @@ import {
 import { isControlPlaneApiPath, type AccessIdentity } from './access-gate';
 import { controlPlaneStub } from './stub';
 import {
-  ControlActionSchema, describeAction, runControlAction,
+  ControlActionSchema, describeAction, runControlAction, UserIdSchema,
   type ActionEnv, type ActionIdentity,
 } from './actions';
 import { controlPlaneMetrics, type MetricsRequest } from './metrics';
 import type {
   AuditOutcome, AuditSettlement, ControlAuditRow, OperationMarker,
 } from './control-plane-do';
-import type { AuditDraft, WorkspaceFilter } from './store';
+import type {
+  AuditDraft, RosterWorkspace, WorkspaceFilter,
+} from './store';
 
 /** Bound on the per-workspace detail reads. Each is a separate Durable Object
  *  query and the panel shows a recent window, not a history — the history has
@@ -173,7 +175,7 @@ async function dispatch(
       // Durable Object for whatever account happens to hold that name first,
       // which is the reach this route exists to bound.
       const owner = url.searchParams.get('userId');
-      if (owner === null || !USER_ID.test(owner)) {
+      if (owner === null || !v.is(UserIdSchema, owner)) {
         return err(400, 'a workspace read must name the account that owns it (?userId=)');
       }
       return await handleWorkspaceDetail(env, owner, name);
@@ -376,11 +378,6 @@ function reportAuditFailure(
 
 /* ── Reads that reach through to the owning object ───────────────────────── */
 
-/** A UserDO name. The one shape a `userId` may take on this surface, spelled
- *  once because the detail route and the workspace route both refuse anything
- *  else. */
-const USER_ID = /^[a-f0-9]{32}$/;
-
 /**
  * One account: its index row, and a cursored page of the workspaces it owns.
  *
@@ -403,7 +400,9 @@ async function handleUserDetail(
   userId: string,
   url: URL,
 ): Promise<Response> {
-  if (!USER_ID.test(userId)) return err(400, 'not a user id');
+  // A UserDO name. The action schema demands the same shape, so the drilldown
+  // and the actions cannot disagree about what a userId is.
+  if (!v.is(UserIdSchema, userId)) return err(400, 'not a user id');
   const stub = controlPlaneStub(env);
   const user = await stub.getUser(caller, userId);
 
@@ -439,15 +438,6 @@ async function reconcileRoster(
   if (roster.status !== 'ok') return { status: 'failed', reason: roster.reason };
   await controlPlaneStub(env).replaceUserWorkspaces(caller, userId, roster.workspaces);
   return { status: 'ok' };
-}
-
-/** The subset of a roster entry the index stores. Named because both the walk
- *  and `replaceUserWorkspaces`' parameter are shaped by it. */
-interface RosterWorkspace {
-  name: string;
-  displayName: string;
-  createdAt: number;
-  lastVisited: number;
 }
 
 type RosterRead =

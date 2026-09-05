@@ -140,10 +140,9 @@ export function writeFeedbackMarker(env: AnalyticsEnv, marker: FeedbackMarker): 
     rejectReason: marker.rejectReason,
     routeFamily: marker.routeFamily,
     count: 1,
-    // Both facts, each written once. `screenshotBytes` used to be gated on the
-    // flag, which meant a refusal that carried a screenshot and was refused
-    // before the bytes were measured wrote 0 — and 0 bytes is what a note-only
-    // report writes too, so the two populations pooled.
+    // Both facts, each written once: the byte count travels beside the flag
+    // because a refusal can arrive before the bytes are measured, and 0 bytes
+    // is also what a note-only report writes.
     screenshot: marker.hasScreenshot ? 1 : 0,
     screenshotBytes: marker.screenshotBytes,
     noteLength: marker.noteLength,

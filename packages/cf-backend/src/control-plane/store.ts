@@ -360,6 +360,26 @@ export function observeWorkspace(
     observation.createdAt ?? at, at);
 }
 
+/** Record that a workspace was used, without claiming its title.
+ *
+ * The ownership-gated use feed only knows the slug from the request path, so
+ * it leaves a supplied title alone. Writing the slug as the title reset every
+ * renamed workspace on next open. New rows still take the slug until a feed
+ * that knows the title writes one. */
+export function touchWorkspace(
+  sql: ControlPlaneSql, observation: WorkspaceObservation, now = Date.now(),
+): void {
+  const at = observation.at ?? now;
+  run(sql,
+    `INSERT INTO cp_workspaces (user_id, name, display_name, created_at, last_seen_at, removed_at)
+     VALUES (?, ?, ?, ?, ?, NULL)
+     ON CONFLICT(user_id, name) DO UPDATE SET
+       last_seen_at = MAX(cp_workspaces.last_seen_at, excluded.last_seen_at),
+       removed_at = NULL`,
+    observation.userId, observation.name, observation.displayName,
+    observation.createdAt ?? at, at);
+}
+
 /**
  * Mark a workspace gone.
  *
@@ -421,14 +441,16 @@ export function replaceUserWorkspaces(
   sql: ControlPlaneSql, userId: string, live: readonly RosterWorkspace[], now = Date.now(),
 ): ReconcileOutcome {
   for (const row of live) {
+    // Keep last_seen_at monotone. The use feed advances this clock on
+    // observations the registry never sees, so an overwrite moves it backwards.
     run(sql,
       `INSERT INTO cp_workspaces (user_id, name, display_name, created_at, last_seen_at, removed_at)
        VALUES (?, ?, ?, ?, ?, NULL)
-       ON CONFLICT(user_id, name) DO UPDATE SET
-         display_name = excluded.display_name,
-         created_at = excluded.created_at,
-         last_seen_at = excluded.last_seen_at,
-         removed_at = NULL`,
+      ON CONFLICT(user_id, name) DO UPDATE SET
+        display_name = excluded.display_name,
+        created_at = excluded.created_at,
+        last_seen_at = MAX(cp_workspaces.last_seen_at, excluded.last_seen_at),
+        removed_at = NULL`,
       userId, row.name, row.displayName, row.createdAt, row.lastVisited);
   }
   const names = live.map((row) => row.name);
