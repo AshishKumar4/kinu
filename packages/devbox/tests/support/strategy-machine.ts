@@ -3223,6 +3223,7 @@ function boundedLayersArm(): ConformanceArm {
       const ports: CandidateContainerPorts = {
         format: 'bounded-layers',
         runnerPath: '/opt/kinu/candidate-runner.bundle.mjs',
+        payloadUrl: 'http://r2.internal/BACKUP_BUCKET',
         mountStore: async () => {
           if (this.disk.dead) throw new ContainerDied('mountStore on a dead container');
           if (this.disk.stopped) throw new ContainerStopped('mountStore');

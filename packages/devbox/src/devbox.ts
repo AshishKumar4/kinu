@@ -125,6 +125,7 @@ import {
   CANDIDATE_STORE_MOUNT,
   candidateCheckpointRunnerPaths,
   candidateContainerStorage,
+  candidatePayloadUrl,
   candidateStorePaths,
   type CandidateContainerFormat,
   type CandidateContainerPorts,
@@ -3618,6 +3619,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return {
       format: strategy,
       runnerPath,
+      payloadUrl: candidatePayloadUrl(store.binding),
       mountStore: async () => {
         // The runner slots' directory too: a fresh container's first runner
         // start reads its control file from there before anything else runs.

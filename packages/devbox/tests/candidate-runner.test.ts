@@ -54,6 +54,7 @@ import type {
 } from '../src/candidates/container';
 import type { AttachOutcome } from '../src/storage';
 import { MemoryControlStore, MemoryEnvelopeStore } from './support/candidate-control';
+import { EgressFake } from './support/cas-cost-probe';
 
 const RUNNER = join(import.meta.dir, '..', 'bench', 'candidate-runner.ts');
 const enc = new TextEncoder();
@@ -351,6 +352,7 @@ function runnerFake(options: RunnerFakeOptions = {}) {
   const ports: CandidateContainerPorts = {
     format: 'bounded-layers',
     runnerPath: '/runner.ts',
+    payloadUrl: 'http://r2.internal/BACKUP_BUCKET',
     mountStore: async () => {
       mounts += 1;
     },
@@ -525,6 +527,12 @@ describe('candidate supervised runner', () => {
     await expect(candidateContainerStorage(fake.ports).attach()).resolves.toEqual(attached);
     expect(fake.starts).toHaveLength(2);
     expect(fake.resultPaths).toHaveLength(2);
+  });
+
+  test('a restore runner receives the egress endpoint, not just the mount', async () => {
+    const fake = runnerFake({ control: publishedControl, result: publishedResult });
+    await candidateContainerStorage(fake.ports).attach();
+    expect(fake.starts[0]?.command).toContain("'--payload-url' 'http://r2.internal/BACKUP_BUCKET'");
   });
 
   /**
@@ -1185,6 +1193,39 @@ async function bytesRead(): Promise<number> {
 }
 
 describe('the publish path moves each object once', () => {
+  test('a runner sends one store PUT per object without existence probes', async () => {
+    const place = paths('direct-publish');
+    const egress = new EgressFake();
+    try {
+      const host = new Host('box-direct-publish', place.store);
+      const journal = new MutationLog();
+      for (let index = 0; index < 24; index += 1) {
+        await journal.perform({
+          op: 'write', path: `file-${index}.txt`,
+          content: { kind: 'dense', bytes: enc.encode(`file ${index}`) },
+        });
+      }
+      const begun = await host.begin();
+      const operation = transferringOperation(begun);
+      const options = { ...runOptions('bounded-layers', place, begun), payloadUrl: egress.url };
+      const publication = await publishCapturedCandidate(options, captureFor(journal, {
+        captureId: operation.operationId, epoch: operation.epoch, baseRevision: operation.baseRevision,
+      }, 'direct-publish'));
+      const refs = [...publication.draft.dependencyReceipts, publication.draft.rootReceipt];
+      expect(egress.requests.length / refs.length).toBe(1);
+      expect([...egress.requests].sort()).toEqual(refs.map(ref => `PUT /STORE/${ref.key}`).sort());
+      expect(egress.requests.at(-1)).toBe(`PUT /STORE/${publication.draft.root.key}`);
+      for (const ref of refs) {
+        const object = egress.objects.get(ref.key);
+        expect(object?.bytes.byteLength).toBe(Number(ref.byteLength));
+        expect(sha256Hex(object!.bytes)).toBe(ref.sha256);
+      }
+    } finally {
+      await egress.stop();
+      await rm(join(place.workspace, '..'), { recursive: true, force: true });
+    }
+  });
+
   test('a checkpoint writes every object at its own key, once, and never reads it back', async () => {
     const place = paths('publish-path');
     const data = 8 * 1024 * 1024;

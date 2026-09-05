@@ -48,8 +48,10 @@ export interface CandidateRunOptions extends CandidateRunnerPort {
   readonly format: CandidateFormat;
   /** The tree a restore materializes: the journal's backing root, not its mount. */
   readonly workspace: string;
-  /** A FUSE-mounted R2 prefix. Payload data moves only through this mount. */
+  /** A FUSE-mounted R2 prefix. Reads serve from here; writes leave by direct PUT. */
   readonly store: string;
+  /** The SDK egress endpoint writes address: `http://r2.internal/<binding>`. */
+  readonly payloadUrl?: string;
   /** Container-local disk where a checkpoint stages its objects before they
    *  move to the store. One directory per operation, removed when it ends. */
   readonly stage: string;
@@ -187,9 +189,9 @@ async function writeDigested(
   return { byteLength, sha256: hash.digest('hex') };
 }
 
-/** Container-local FUSE adapter. Payload streams never cross the host boundary. */
+/** Container-local payload adapter. Reads serve from the mount; writes leave by one direct PUT. */
 class FusePayloadStore implements CandidatePayloadStore {
-  constructor(private readonly store: string) {}
+  constructor(private readonly store: string, private readonly payloadUrl?: string) {}
 
   async issuePayloadGrant(intent: UploadIntent): Promise<PayloadGrant> {
     return {
@@ -201,6 +203,7 @@ class FusePayloadStore implements CandidatePayloadStore {
   }
 
   async uploadObject(grant: PayloadGrant, body: ReadableStream<Uint8Array>): Promise<ObjectReceipt> {
+    if (this.payloadUrl !== undefined) return await this.putDirect(grant, body);
     const digest = await writeDigested(objectPath(this.store, grant.opaque), body);
     return {
       operationId: grant.operationId,
@@ -209,6 +212,33 @@ class FusePayloadStore implements CandidatePayloadStore {
       byteLength: String(digest.byteLength),
       sha256: digest.sha256,
       etag: `fuse-${digest.sha256.slice(0, 16)}`,
+      verified: true,
+    };
+  }
+
+  private async putDirect(grant: PayloadGrant, body: ReadableStream<Uint8Array>): Promise<ObjectReceipt> {
+    const bytes = new Uint8Array(await new Response(body).arrayBuffer());
+    const sha = sha256Hex(bytes);
+    const md5 = createHash('md5').update(bytes).digest('hex');
+    const response = await fetch(`${this.payloadUrl!.replace(/\/+$/u, '')}/${grant.opaque}`, {
+      method: 'PUT',
+      headers: { 'content-length': String(bytes.byteLength), 'content-type': 'application/octet-stream' },
+      body: bytes,
+    });
+    if (response.status !== 200) {
+      const words = (await response.text()).trim().slice(0, 200);
+      throw new Error(`direct PUT of ${grant.opaque} answered ${String(response.status)}${words.length > 0 ? ` (${words})` : ''}`);
+    }
+    const etag = response.headers.get('etag')?.replace(/^"|"$/g, '');
+    await response.arrayBuffer();
+    if (etag !== md5) throw new Error(`direct PUT of ${grant.opaque} returned ETag ${etag ?? 'absent'} for MD5 ${md5}`);
+    return {
+      operationId: grant.operationId,
+      attemptId: grant.attemptId,
+      key: grant.opaque,
+      byteLength: String(bytes.byteLength),
+      sha256: sha,
+      etag: `"${etag}"`,
       verified: true,
     };
   }
@@ -798,7 +828,7 @@ export class CandidateCaptureUnavailable extends Error {
   }
 }
 
-/** Stages FUSE-owned payloads and returns a draft for the host to finalize. */
+/** Writes leave by one direct PUT when the host supplies the egress endpoint. */
 export async function publishCapturedCandidate(
   options: CandidateRunOptions,
   capture: AuditedCapture,
@@ -813,7 +843,7 @@ export async function publishCapturedCandidate(
     throw new Error('captured cut does not belong to the host checkpoint grant');
   }
   const head = control.head;
-  const payload = new FusePayloadStore(options.store);
+  const payload = new FusePayloadStore(options.store, options.payloadUrl);
   // THE STAGE IS LOCAL DISK. The builder seals each object here and the
   // upload streams it to the mount once; nothing is written to the mount
   // until it moves to its final key. The directory is this operation's and
@@ -980,7 +1010,7 @@ async function seedCandidateJournal(options: CandidateRunOptions): Promise<Candi
 async function restoreCandidate(options: CandidateRunOptions): Promise<CandidateRestoreResult> {
   const head = controlState(options).head;
   if (head === null) return { ok: true, rootId: null };
-  const payload = new FusePayloadStore(options.store);
+  const payload = new FusePayloadStore(options.store, options.payloadUrl);
   const counted = await withReadChain(async () => head.envelope.format === 'bounded-layers/v1'
     ? await restoreBounded(options, head, payload)
     : await restoreMerkle(options, head, payload));
@@ -1008,6 +1038,10 @@ async function parseCli(argv: readonly string[]): Promise<CandidateRunnerCliOpti
     if (index === -1 || argv[index + 1] === undefined) throw new Error(`missing ${key}`);
     return argv[index + 1]!;
   };
+  const optional = (key: string): string | undefined => {
+    const index = argv.indexOf(key);
+    return index === -1 ? undefined : argv[index + 1];
+  };
   const action = value('--action');
   const format = value('--format');
   if (
@@ -1022,6 +1056,7 @@ async function parseCli(argv: readonly string[]): Promise<CandidateRunnerCliOpti
       format,
       workspace: value('--workspace'),
       store: value('--store'),
+      payloadUrl: optional('--payload-url'),
       stage: value('--stage'),
       boxId: value('--box'),
       journalSocket: value('--journal-socket'),

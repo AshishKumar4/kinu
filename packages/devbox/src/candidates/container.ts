@@ -53,6 +53,11 @@ export function candidateStorePaths(
     mountPrefix: `/${payloadPrefix}`,
   };
 }
+
+/** The runner's `--payload-url`: the SDK egress endpoint for the mounted binding. */
+export function candidatePayloadUrl(binding: string): string {
+  return `http://r2.internal/${binding}`;
+}
 /** Runner results remain local control replies, never DO payload. */
 export const CANDIDATE_RUNNER_RESULT_DIR = `${DEVBOX_RUNTIME_DIR}/candidate-results`;
 
@@ -116,6 +121,8 @@ async function retireRunnerAttempt(
 export interface CandidateContainerPorts {
   readonly format: CandidateContainerFormat;
   readonly runnerPath: string;
+  /** The SDK egress endpoint writes address; the mount registers it. */
+  readonly payloadUrl: string;
   readonly mountStore: () => Promise<void>;
   readonly unmountStore: () => Promise<void>;
   readonly clearStore: () => Promise<void>;
@@ -237,6 +244,7 @@ function runnerCommand(
     '--workspace', CANDIDATE_JOURNAL_ROOT,
     '--journal-socket', CANDIDATE_JOURNAL_SOCKET,
     '--store', CANDIDATE_STORE_MOUNT,
+    '--payload-url', ports.payloadUrl,
     '--stage', CANDIDATE_STAGE_DIR,
     '--box', ports.boxId(),
     '--control', paths.controlPath,
