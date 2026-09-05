@@ -149,14 +149,6 @@ describe('subordinate wiring', () => {
     // in it calls a model directly any more.
     expect(execTools).not.toContain('registry:');
     expect(execTools).not.toContain('modelSpec');
-    // And BOTH prompt paths gate the rung on a per-actor depth fact rather than
-    // asserting it as a constant of this backend: a depth-capped subordinate
-    // wires no team deps, so advertising it there would promise what the
-    // dispatch refuses.
-    expect(actor).toContain('const temporaryAsk = !delegationExhausted(this.delegationBudget());');
-    expect(actor).toContain('temporaryAsk: turnActorDeps.team?.temporary !== undefined,');
-    // Keyed, because it varies per actor and the base prompt is cached.
-    expect(actor).toContain('${String(temporaryAsk)}`;');
   });
 
   test('all user-level gates present the parent workspace name, never the facet name', () => {

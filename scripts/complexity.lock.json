@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-05",
-  "files": 2021,
-  "functions": 52428,
+  "files": 2022,
+  "functions": 52476,
   "ceiling": 125,
   "line": 39,
   "inventory": [
@@ -174,16 +174,16 @@
       "complexity": 42
     },
     {
-      "key": "packages/cf-backend/src/actor-agent.ts#ActorAgent.beforeTurn",
-      "complexity": 41
-    },
-    {
       "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
       "complexity": 41
     },
     {
       "key": "scripts/bench-pilot.ts#validatePilotReport",
       "complexity": 41
+    },
+    {
+      "key": "packages/cf-backend/src/actor-agent.ts#ActorAgent.beforeTurn",
+      "complexity": 40
     },
     {
       "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",

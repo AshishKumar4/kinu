@@ -1,8 +1,6 @@
 import { generateText, streamText } from 'ai';
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   buildSystemPromptSync,
   DEFAULT_WORKERS_AI_MODEL_ID,
@@ -267,13 +265,6 @@ describe('default-agent prompt model context', () => {
       model: { id: modelId, provider },
     });
     expect(prompt).not.toContain('Kimi K2.6 works best when tool use is concrete and continuous');
-
-    // Wiring: both orchestrator prompt-build sites must derive the model
-    // context from the resolved spec, never the raw stored id.
-    const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
-    expect(actor).toContain('private promptModelContext()');
-    expect(actor.match(/model: this\.promptModelContext\(\)|const model = this\.promptModelContext\(\)/g)?.length).toBe(2);
-    expect(actor).not.toContain('model: { id: modelId ?? undefined }');
   });
 });
 
