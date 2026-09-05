@@ -107,6 +107,9 @@ describe(SUITE, () => {
           const firstText = `${first.stdout ?? ''}${first.stderr ?? ''}${first.error ?? ''}`;
           const queued = await session.parkedCommands();
           const row = queued.find((entry) => entry.command === command) ?? null;
+          // Read while parked: the approval wakes the agent and the approved
+          // command runs before the next read, so a later read cannot show this.
+          const survivedTheAsk = existsSync(doomed);
 
           // ── decided ─────────────────────────────────────────────────
           const decided = row === null ? [] : await session.decideParkedCommands([row.id], 'approved');
@@ -116,7 +119,6 @@ describe(SUITE, () => {
           // ── the effect ──────────────────────────────────────────────
           // Re-issued, which is when an approved command runs: the grant is
           // spent at the gate and the command reaches the machine.
-          const survivedTheAsk = existsSync(doomed);
           const second = row === null
             ? null
             : await session.execute('laptop', command);
