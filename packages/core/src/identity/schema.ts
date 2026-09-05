@@ -122,7 +122,7 @@ const ACTOR_DDL = [
     elapsed_ms INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
-
+  `CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at DESC, id DESC)`,
 ];
 
 // ── Fork lineage — single-row table populated when this workspace is a

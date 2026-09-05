@@ -286,9 +286,7 @@ const KINU_TIMER_CALLBACK = '_kinuTimerTick';
 const ORPHAN_SEAL_MAX_ROWS = 256;
 const STALE_SCHEDULE_HORIZON_MS = FIBER_RECOVERY_MAX_AGE_MS;
 
-// The Activity surface's retained sample. Bounded because `run_events` and
-// `activity_log` are append-only: 400 steps is deep enough for a p95 that
-// means something and shallow enough to stay one cheap indexed read.
+// These windows bound the Activity response. Stored history remains append-only.
 const ACTIVITY_STEP_WINDOW = 400;
 const ACTIVITY_LOG_WINDOW = 200;
 

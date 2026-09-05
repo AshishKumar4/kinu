@@ -534,6 +534,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- Activity log windows use the timestamp and id index instead of sorting the full history.
+  Stored history remains append-only.
+
 - **A machine that cannot sandbox tells the model and the owner what its
   daemon said.** The daemon's probe has six statuses. The hub's vocabulary
   had five of them. When bwrap ran and failed in words the daemon does not
