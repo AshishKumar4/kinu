@@ -426,9 +426,9 @@ export class MctsSearchStore {
    * return the root ids it closed.
    *
    * THE SEAM A FAILED JOB WAS MISSING. A search's own loop writes converge/fail
-   * from inside its executor; when the durable job driving it gives up — the
-   * resume cap exhausted, the kind not re-drivable — that executor is gone and
-   * nothing ever writes the terminal row. Measured on the owner's workspace:
+   * from inside its executor; when the durable job driving it settles without
+   * one — the kind not re-drivable, or its resumer threw — that executor is
+   * gone and nothing ever writes the terminal row. Measured on the owner's workspace:
    * `2rye1eyny1efm9583sqye` read `running` eleven hours after its job had
    * settled `failed`, because the only writers left were fenced on an epoch
    * whose holder would never wake.

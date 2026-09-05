@@ -162,8 +162,8 @@ export type SplitPhaseEvent =
  * and rendered verbatim on the Exploration surface. It was the fork twin of the swarm's
  * own defect and it multiplied the same way: the run id was reclaimed, its rows were
  * retired, and then the split minted a FRESH id per head, so one request accumulated
- * `heads.length` aborted rows per re-drive up to the runner's attempt cap. The owner
- * read that as `Systemfork interrupted` over a pile of failed branches.
+ * `heads.length` aborted rows per re-drive. The owner read that as
+ * `Systemfork interrupted` over a pile of failed branches.
  *
  * A head that was spawned and never reported is UNFINISHED WORK. A re-drive re-runs
  * it under its OWN id, so the row is RE-OPENED rather than retired — the shared
@@ -195,9 +195,9 @@ export class HeadController {
    * background job is re-driven by evict/exit recovery, which for heads means
    * re-running them — they are ephemeral facets with no durable checkpoint, so
    * a resume has nothing else to continue from. Minting a fresh id there turned
-   * ONE request into one run per re-drive, up to the runner's attempt cap: the
-   * owner saw four near-identical `merged · 5 branches` rows for a single ask,
-   * each of which had really spawned and paid for its own five heads.
+   * ONE request into one run per re-drive: the owner saw four near-identical
+   * `merged · 5 branches` rows for a single ask, each of which had really spawned
+   * and paid for its own five heads.
    *
    * THE RECLAIMED ATTEMPT'S HEADS ARE RE-RUN, not retired. Their ids are derived
    * rather than minted (see {@link run}), so re-spawning them re-opens the rows they

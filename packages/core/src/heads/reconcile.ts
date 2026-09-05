@@ -68,9 +68,13 @@ const RUN_INTERRUPTED_REASON = 'interrupted';
  * activation that has just started owns no fork, and the only thing that can
  * continue one is a durable job row. So "can this run be continued" is exactly
  * "was its job re-driven", which the sweep answers by reclaiming under a fresh
- * lease. A job past its resume-attempt cap is failed there rather than re-driven,
- * so it is absent from the result and its run is refused here — which is what
- * makes this terminate instead of protecting a dead root forever.
+ * lease. What ends a run here is a job that settled. A resumer that throws fails
+ * its job terminally, and a kind with no resume path settles with what it
+ * already produced. A settled job is absent from the result, so its run is
+ * refused and retired. The sweep never gives a job up on a count of
+ * interruptions, so a job that is only ever interrupted stays in the result and
+ * protects its root for as long as the interruptions last. The runner states
+ * that doctrine in `BackgroundJobRunner.recoverJob`.
  *
  * THE JOIN IS THE TASK, because that is the key every re-entry already uses:
  * `MctsSearchStore.findRunningSwarms` and `HeadJournal.findResumableRun` are both

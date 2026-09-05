@@ -101,7 +101,8 @@ export async function resumeBackgroundJob(
 
 /**
  * WHAT AN UNFINISHED `agents` JOB ALREADY HAS, for the paths that will not drive it
- * again — the resume cap and the lifetime bound in `jobs/runner.ts`.
+ * again — a kind with no resume path, and a resumer that declines the checkpoint
+ * (`settleBounded` in `jobs/runner.ts`).
  *
  * The gate is the SAME predicate the detach and the resume use, deliberately: a kind
  * that could not be re-driven has no durable state to read either, so a third
