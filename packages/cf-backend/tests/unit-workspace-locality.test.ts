@@ -135,7 +135,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
-      previewUrl: () => undefined,
+      previewUrl: async () => undefined,
     });
 
     // Nothing has been asked of the workspace yet, so nothing but the generation
@@ -164,7 +164,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
-      previewUrl: () => undefined,
+      previewUrl: async () => undefined,
     });
 
     await workspace.bundle.vfs.mkdir('proof', { recursive: true });
@@ -199,7 +199,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
-      previewUrl: () => undefined,
+      previewUrl: async () => undefined,
     });
     await workspace.bundle.vfs.mkdir('alpha', { recursive: true });
     await workspace.bundle.vfs.mkdir('beta', { recursive: true });
@@ -218,7 +218,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       // Only the runtime catalogue bucket is legitimately read, and this
       // deployment binds none — so EVERY property access throws by name.
       env: strictEnv(WORKSPACE_BINDINGS),
-      previewUrl: () => undefined,
+      previewUrl: async () => undefined,
     });
     await workspace.bundle.vfs.writeFile('proof.txt', 'no binding was read');
     expect(await workspace.box('agent:main').exec('cat proof.txt'))
@@ -238,7 +238,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
-      previewUrl: () => undefined,
+      previewUrl: async () => undefined,
     });
     const store = new MemoryStore(workspace.bundle.vfs, sqlOver(actor.database));
     store.ensureSchema();
@@ -263,7 +263,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
-      previewUrl: () => undefined,
+      previewUrl: async () => undefined,
     });
     actor.ctx.storage.sql.exec('CREATE TABLE actor_rows (id INTEGER PRIMARY KEY)');
     actor.ctx.storage.sql.exec('INSERT INTO actor_rows (id) VALUES (1)');
@@ -296,7 +296,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
-      previewUrl: () => undefined,
+      previewUrl: async () => undefined,
     });
     // Armed AFTER construction: the boot is lazy, so the first operation is
     // what meets the failure.
@@ -318,7 +318,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
-      previewUrl: () => undefined,
+      previewUrl: async () => undefined,
     });
     const capability = 'abcdef0123456789abcdef01';
     kv.set('nimbus_preview_capability:3000', capability);

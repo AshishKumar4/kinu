@@ -10,6 +10,7 @@
  * exposed port, so each preview is its own origin and may keep it.
  */
 import { afterAll, describe, expect, mock, test } from 'bun:test';
+import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -25,6 +26,7 @@ import {
   CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, crossSiteRejection,
 } from '../src/auth/session';
 import {
+  base32,
   handleNimbusPreviewHostRequest,
   nimbusPreviewConfigured,
   nimbusPreviewUrl,
@@ -143,6 +145,8 @@ interface PreviewTestBindings {
   CLI_PUBLIC_ORIGIN?: string;
   PREVIEW_HOST_SUFFIX?: string;
   CREDENTIAL_ENCRYPTION_KEY?: string;
+  /** The retired secrets a rotation keeps readable, comma-separated. */
+  CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
   /** Present only where a repair is expected to be possible: without the
    *  binding there is no container to re-drive, and the stale answer stands. */
   Sandbox?: object;
@@ -161,7 +165,7 @@ function testEnv(bindings: PreviewTestBindings): Env {
 }
 
 const NIMBUS_CAPABILITY = '0123456789abcdef01234567';
-const configuredNimbusUrl = nimbusPreviewUrl(testEnv(ENV), 'hello', 4321, NIMBUS_CAPABILITY);
+const configuredNimbusUrl = await nimbusPreviewUrl(testEnv(ENV), 'hello', 4321, NIMBUS_CAPABILITY);
 if (!configuredNimbusUrl) throw new Error('Nimbus preview test URL is not configured');
 const NIMBUS_URL = configuredNimbusUrl;
 
@@ -711,6 +715,74 @@ describe('serving a Nimbus preview host', () => {
     const response = await handleNimbusPreviewHostRequest(new Request(forged), env);
     expect(response?.status).toBe(404);
     expect(touched).toBe(false);
+  });
+
+  /** A token keyed DIRECTLY by a secret over the label, in the shape the edge
+   *  accepted while it was keyed by the raw user-plane secret. */
+  function rawKeyToken(secret: string, version: string): string {
+    const digest = createHmac('sha256', secret)
+      .update(`kinu:workspace-preview:${version}:hello:4321:${NIMBUS_CAPABILITY.slice(0, 10)}`)
+      .digest();
+    return base32(digest).slice(0, 15);
+  }
+
+  /** An env whose Durable Object namespace records whether it was touched. */
+  function untouchableEnv(bindings: PreviewTestBindings) {
+    let touched = false;
+    const env = testEnv({
+      ...bindings,
+      OrchestratorAgent: {
+        idFromName(name: string) { touched = true; return name; },
+        get() { touched = true; return {}; },
+      },
+    });
+    return { env, touched: () => touched };
+  }
+
+  test('the token is keyed by a subkey nothing else holds, never by the master secret itself', () => {
+    // The same secret seals the owner's stored credentials. A signature keyed
+    // by it directly shares key material with that cipher; the subkey does not.
+    const token = new URL(NIMBUS_URL).hostname.split('-')[2];
+    expect(token).not.toBe(rawKeyToken(TEST_CREDENTIAL_ENCRYPTION_KEY, 'v3'));
+    expect(token).not.toBe(rawKeyToken(TEST_CREDENTIAL_ENCRYPTION_KEY, 'v4'));
+  });
+
+  test('a v3 URL minted before the key changed fails closed and touches no object', async () => {
+    // A preview URL has no expiry of its own, so every v3 link outlives the
+    // change; the edge answers each the same 404 a forged label gets.
+    const { env, touched } = untouchableEnv(ENV);
+    const label = `${(4321).toString(36)}-${NIMBUS_CAPABILITY.slice(0, 10)}-${rawKeyToken(TEST_CREDENTIAL_ENCRYPTION_KEY, 'v3')}-hello`;
+    const response = await handleNimbusPreviewHostRequest(new Request(`https://${label}.${SUFFIX}/`), env);
+    expect(response?.status).toBe(404);
+    expect(touched()).toBe(false);
+  });
+
+  test('a URL minted under a retired secret still verifies while that secret is listed', async () => {
+    const rotated = {
+      ...ENV,
+      CREDENTIAL_ENCRYPTION_KEY: 'a-second-credential-encryption-key-9876543210',
+      CREDENTIAL_ENCRYPTION_KEY_PREVIOUS: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    };
+    const minted = await nimbusPreviewUrl(testEnv(rotated), 'hello', 4321, NIMBUS_CAPABILITY);
+    expect(minted).not.toBe(NIMBUS_URL);
+    let routed = 0;
+    const env = testEnv({
+      ...rotated,
+      OrchestratorAgent: {
+        idFromName(name: string) { return name; },
+        get() {
+          return { async routeWorkspacePreview() { routed += 1; return new Response(null, { status: 204 }); } };
+        },
+      },
+    });
+    // The URL minted under the OLD secret, and the one minted under the new.
+    expect((await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL), env))?.status).toBe(204);
+    expect((await handleNimbusPreviewHostRequest(new Request(String(minted)), env))?.status).toBe(204);
+    expect(routed).toBe(2);
+    // Dropped from the list, the old secret's URLs stop resolving.
+    const dropped = untouchableEnv({ ...rotated, CREDENTIAL_ENCRYPTION_KEY_PREVIOUS: '' });
+    expect((await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL), dropped.env))?.status).toBe(404);
+    expect(dropped.touched()).toBe(false);
   });
 });
 

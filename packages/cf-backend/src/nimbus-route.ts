@@ -16,27 +16,65 @@
  *
  * WHAT AUTHENTICATES ONE. Two independent things, and the request needs both:
  *
- *   - `token`, an HMAC over (workspace, port, capability handle) keyed by the
- *     user-plane secret. Checked HERE, before anything touches a Durable Object,
- *     so a guessed hostname cannot make Kinu do work.
+ *   - `token`, an HMAC over (workspace, port, capability handle) keyed by a
+ *     subkey of the user-plane secret that only this module derives. Checked
+ *     HERE, before anything touches a Durable Object, so a guessed hostname
+ *     cannot make Kinu do work.
  *   - the capability, minted by the workspace's own port registry when the port
  *     was exposed. Only its first 10 characters travel in the hostname; the
  *     owning object compares them against the live capability and routes with
  *     the whole one. Unexposing a port mints a new capability, so old links stop
  *     resolving — which is what makes "stop sharing this" mean something.
  *
+ * WHY A SUBKEY. `CREDENTIAL_ENCRYPTION_KEY` also seals every credential the
+ * owner stores (`user/credential-envelope.ts`), and a signature keyed by the
+ * raw secret shares key material with that cipher, so a weakness in either
+ * construction would implicate the other. HKDF with this module's own salt
+ * and info diverges a key nothing else holds; the envelope does the same on
+ * its side. The secret's rotation list still applies, because the subkey is
+ * derived from whichever secret is being tried.
+ *
  * A preview is agent-controlled guest code on a host that is a different origin
  * from the app, so the browser's Kinu session and every `x-kinu-*` header are
  * stripped on the way in and this must never become a path that puts them back.
  */
 
-import { createHmac } from 'node:crypto';
 import { previewHostSuffix } from './lib/preview-origin';
 import { timingSafeEqual } from './lib/crypto';
 import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from './lib/nimbus-preview-host';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { reoriginateRequest } from './lib/http';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from './workspace-host';
+
+const HKDF_SALT = 'kinu.workspace-preview.salt';
+const HKDF_INFO = 'kinu.workspace-preview.v4';
+
+/** Signing keys, cached by secret. The derivation is deterministic over
+ *  material the isolate already holds, so the cache adds no exposure and
+ *  removes an HKDF from every preview request. */
+const signingKeys = new Map<string, Promise<CryptoKey>>();
+
+function signingKey(secret: string): Promise<CryptoKey> {
+  let pending = signingKeys.get(secret);
+  if (!pending) {
+    pending = (async () => {
+      const material = await crypto.subtle.importKey('raw', utf8(secret), 'HKDF', false, ['deriveKey']);
+      return crypto.subtle.deriveKey(
+        { name: 'HKDF', hash: 'SHA-256', salt: utf8(HKDF_SALT), info: utf8(HKDF_INFO) },
+        material,
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign'],
+      );
+    })();
+    signingKeys.set(secret, pending);
+  }
+  return pending;
+}
+
+function utf8(value: string): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(value);
+}
 
 /** The Durable Object method a preview request reaches. Declared here so the
  *  route holds the narrowest view of the orchestrator it needs. */
@@ -62,21 +100,30 @@ export function nimbusPreviewConfigured(env: Env): boolean {
 }
 
 /**
- * The label's signature. `v3` because the identity it covers changed from a
- * digest of owner+workspace to the workspace's own name, and a token that
- * verified under the old payload must not verify under the new one.
+ * The label's signature.
+ *
+ * `v4` because the key changed: `v3` was keyed by the raw user-plane secret,
+ * and a token minted under it must not verify under the subkey. There is no
+ * grace period, because a preview URL has no expiry of its own: the token is
+ * a deterministic function of (workspace, port, handle), and the handle lives
+ * as long as the port stays exposed. Every v3 URL therefore fails closed at
+ * the edge from this build on, and the Ports surface mints v4 URLs from the
+ * same still-live capabilities on its next listing.
  */
-function previewToken(secret: string, workspace: string, port: number, handle: string): string {
-  const digest = createHmac('sha256', secret)
-    .update(`kinu:workspace-preview:v3:${workspace}:${port}:${handle}`)
-    .digest();
-  return base32(digest).slice(0, 15);
+async function previewToken(secret: string, workspace: string, port: number, handle: string): Promise<string> {
+  const digest = await crypto.subtle.sign(
+    'HMAC',
+    await signingKey(secret),
+    utf8(`kinu:workspace-preview:v4:${workspace}:${port}:${handle}`),
+  );
+  return base32(new Uint8Array(digest)).slice(0, 15);
 }
 
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 
-/** Lowercase RFC-4648 base32 without padding — the alphabet a DNS label admits. */
-function base32(bytes: Uint8Array): string {
+/** Lowercase RFC-4648 base32 without padding — the alphabet a DNS label admits.
+ *  Exported so a suite can spell a token the way the edge does. */
+export function base32(bytes: Uint8Array): string {
   let bits = 0;
   let buffer = 0;
   let encoded = '';
@@ -101,19 +148,19 @@ function base32(bytes: Uint8Array): string {
  * servers in its workspace, and the port surface says the URL is unavailable
  * instead of failing the exposure.
  */
-export function nimbusPreviewUrl(
+export async function nimbusPreviewUrl(
   env: Env,
   workspaceName: string,
   port: number,
   capability: string,
-): string | undefined {
+): Promise<string | undefined> {
   if (!Number.isInteger(port) || port < 1 || port > 65_535) return undefined;
   if (!/^[a-f0-9]{24}$/.test(capability)) return undefined;
   const suffix = previewHostSuffix(env);
   const secret = previewSecrets(env)[0];
   if (!suffix || !secret) return undefined;
   const handle = capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH);
-  const token = previewToken(secret, workspaceName, port, handle);
+  const token = await previewToken(secret, workspaceName, port, handle);
   const host = buildWorkspacePreviewHost({ port, workspace: workspaceName, handle, token, suffix });
   return host === null ? undefined : `https://${host}/`;
 }
@@ -142,7 +189,10 @@ export async function handleNimbusPreviewHostRequest(request: Request, env: Env)
       headers: { 'cache-control': 'no-store' },
     });
   }
-  if (!secrets.some((secret) => timingSafeEqual(token, previewToken(secret, workspace, port, handle)))) {
+  const expected = await Promise.all(
+    secrets.map((secret) => previewToken(secret, workspace, port, handle)),
+  );
+  if (!expected.some((candidate) => timingSafeEqual(token, candidate))) {
     return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   }
 

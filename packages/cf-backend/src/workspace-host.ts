@@ -154,10 +154,11 @@ export interface HostedWorkspaceDeps {
   /**
    * The public URL an exposed port is reachable at, or undefined when this
    * deployment has no preview host or no signing secret. Supplied by the actor
-   * because a preview URL names the workspace and is signed with the user-plane
-   * secret, neither of which the workspace itself has any business holding.
+   * because a preview URL names the workspace and is signed with a key derived
+   * from the user-plane secret, neither of which the workspace itself has any
+   * business holding.
    */
-  previewUrl(port: number, capability: string): string | undefined;
+  previewUrl(port: number, capability: string): Promise<string | undefined>;
 }
 
 export interface HostedWorkspace {
@@ -425,7 +426,7 @@ function workspaceBox(deps: {
   host: () => Promise<ProgrammaticHost>;
   files: NimbusSandboxHandle['files'];
   shellId: string;
-  previewUrl(port: number, capability: string): string | undefined;
+  previewUrl(port: number, capability: string): Promise<string | undefined>;
 }): NimbusSandboxHandle {
   const { host, shellId } = deps;
   return {
@@ -458,7 +459,7 @@ function workspaceBox(deps: {
       expose: async (port) => {
         const exposed = await (await nimbusProgrammatic()).rpcExposePort(await host(), port);
         if (!exposed.capability) throw new Error(`No process is listening on workspace port ${port}`);
-        const url = deps.previewUrl(port, exposed.capability);
+        const url = await deps.previewUrl(port, exposed.capability);
         if (!url) {
           throw new Error(
             'Workspace preview URLs are unavailable because the preview host '
@@ -468,10 +469,12 @@ function workspaceBox(deps: {
         return { ...exposed, url };
       },
       unexpose: async (port) => await json((await nimbusProgrammatic()).rpcUnexposePort(await host(), port)),
-      list: async () => (await (await nimbusProgrammatic()).rpcListPorts(await host())).map((entry): NimbusPortInfo & { url?: string } => {
-        const url = deps.previewUrl(entry.port, entry.capability);
-        return url === undefined ? entry : { ...entry, url };
-      }),
+      list: async () => await Promise.all(
+        (await (await nimbusProgrammatic()).rpcListPorts(await host())).map(async (entry): Promise<NimbusPortInfo & { url?: string }> => {
+          const url = await deps.previewUrl(entry.port, entry.capability);
+          return url === undefined ? entry : { ...entry, url };
+        }),
+      ),
     },
   };
 }

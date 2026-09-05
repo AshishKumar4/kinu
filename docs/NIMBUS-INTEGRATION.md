@@ -121,11 +121,18 @@ logs, signals, ports, and runtime availability come from Nimbus rather than
 from frontend inference.
 
 Exposing a port returns a random per-registration capability. Kinu encodes
-the session, the port, the capability, and an HMAC in a dedicated preview
-hostname under `PREVIEW_HOST_SUFFIX`. The edge validates that hostname before
+the workspace, the port, the capability, and an HMAC in a dedicated preview
+hostname under `PREVIEW_HOST_SUFFIX`. The HMAC is keyed by an HKDF subkey of
+`CREDENTIAL_ENCRYPTION_KEY` (`info: kinu.workspace-preview.v4`), never by the
+secret itself, so the signature and the credential cipher that share that
+secret share no key material. The edge validates that hostname before
 routing. An unexpose clears the capability, and exposing the same port again
 creates a different URL. Capabilities survive Nimbus Durable Object
-reconstruction and are restored before routing.
+reconstruction and are restored before routing. A preview URL has no expiry
+of its own: it stays valid while the port stays exposed. So a URL minted
+before the subkey change (`v3`) answers 404 at the edge from that build on,
+and the Ports surface mints a new one from the same capability on its next
+listing.
 
 The preview edge:
 
