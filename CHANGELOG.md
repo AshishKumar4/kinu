@@ -534,6 +534,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- The verify scorer removes the harness modules it writes beside the solution.
+
 - Scope-less scaffold tool calls carry unique ids, so two identical calls in one millisecond both run. A throwing extension hook is recorded and skipped instead of breaking the turn.
 
 - A judge failure rejects the eval run instead of scoring a tie at the quality floor.

@@ -30,7 +30,7 @@ import { describe, expect, test } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { archiveCellOf } from '../src/strategy/archive';
 import { resolveVerifier } from '../src/strategy/verifier-registry';
-import { runRatioMeasurement, SOLUTION_FILE } from '../src/strategy/exec-ratio';
+import { preflightRatioHarness, runRatioMeasurement, SOLUTION_FILE } from '../src/strategy/exec-ratio';
 import type { RatioMeasurement } from '../src/strategy/exec-ratio';
 import type { Measurement, MeasurementContext } from '../src/strategy/objective';
 
@@ -224,5 +224,75 @@ describe('every quantity the instrument reports is a key an archive can bin', ()
       expect(archiveCellOf(key, asFound.measured).kind).toBe('cell');
       expect(archiveCellOf(key, candidate.measured).kind).toBe('cell');
     }
+  }, 60_000);
+});
+
+/**
+ * THE FILES A MEASUREMENT WRITES, AND WHERE THEY GO.
+ *
+ * A measurement snapshots the agent solution under a fresh `_candidate_` name and
+ * writes the harness beside it under a fresh `_measure_` name. A preflight writes
+ * one `_measure_probe_` module. Each name is unique per verification, so without
+ * cleanup every verification leaves two modules (one for a preflight) in the
+ * workspace forever. The agent reads that same directory for its own files, so
+ * the strays pile up where the search works.
+ *
+ * The cleanup belongs to the instrument rather than to the caller: the caller
+ * never learns the stamped names, so only the writer can remove them. A valid
+ * measurement still reports its numbers, and the agent solution stays exactly
+ * as the agent wrote it — only the two stamped modules go.
+ */
+describe('a measurement removes the modules it wrote', () => {
+  test('a valid measurement reports its numbers, keeps the solution, and leaves no stamped module', async () => {
+    const { rt } = createTestRuntime();
+    const { shell } = rt;
+    if (!shell) throw new Error('this runtime has no shell, so nothing can run a measurement in it');
+    const ctx: MeasurementContext = { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
+    const candidate = candidateSpending(REFERENCE_CALLS * 2);
+    await rt.storage.vfs.writeFile(SOLUTION_FILE, candidate);
+    const measured = await runRatioMeasurement(ctx, {
+      params: { n: REFERENCE_CALLS },
+      reference: REFERENCE,
+      body: BODY,
+      targetOps: REFERENCE_CALLS,
+      lowerBoundOps: 1,
+    });
+    expect(measured.failure).toBeNull();
+    expect(measured.correct).toBe(true);
+    const entries = await rt.storage.vfs.readdir('');
+    expect(entries.filter((name) => name.startsWith('_candidate_') || name.startsWith('_measure_'))).toEqual([]);
+    expect(await rt.storage.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' })).toBe(candidate);
+  }, 60_000);
+
+  test('a passing preflight leaves no probe module', async () => {
+    const { rt } = createTestRuntime();
+    const { shell } = rt;
+    if (!shell) throw new Error('this runtime has no shell, so nothing can run a preflight in it');
+    const ctx: MeasurementContext = { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
+    expect(await preflightRatioHarness(ctx)).toBeNull();
+    const entries = await rt.storage.vfs.readdir('');
+    expect(entries.filter((name) => name.startsWith('_measure_'))).toEqual([]);
+  }, 60_000);
+
+  test('a measurement that cannot run still reports its own failure and leaves no stamped module', async () => {
+    const { rt } = createTestRuntime();
+    const candidate = candidateSpending(REFERENCE_CALLS * 2);
+    await rt.storage.vfs.writeFile(SOLUTION_FILE, candidate);
+    const ctx: MeasurementContext = {
+      vfs: rt.storage.vfs,
+      exec: async () => {
+        throw new Error('the shell is down');
+      },
+    };
+    await expect(runRatioMeasurement(ctx, {
+      params: { n: REFERENCE_CALLS },
+      reference: REFERENCE,
+      body: BODY,
+      targetOps: REFERENCE_CALLS,
+      lowerBoundOps: 1,
+    })).rejects.toThrow('the shell is down');
+    const entries = await rt.storage.vfs.readdir('');
+    expect(entries.filter((name) => name.startsWith('_candidate_') || name.startsWith('_measure_'))).toEqual([]);
+    expect(await rt.storage.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' })).toBe(candidate);
   }, 60_000);
 });

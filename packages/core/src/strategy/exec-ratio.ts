@@ -60,7 +60,7 @@ import * as v from 'valibot';
 import { sha256Hex } from '../safety/argument-digest';
 import type { ExecOutcome } from '../execution/exec-result';
 import type { MeasurementContext } from './objective';
-import { renderThrownChain } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError, tolerateAsync } from '../obs/index';
 
 /** The file every task asks the agent to write. */
 export const SOLUTION_FILE = 'solution.mjs';
@@ -345,6 +345,20 @@ const RESULT_LINE = /^RESULT (.*)$/m;
 export const REFERENCE_SOLVE_DECLARATION = 'export function solve(';
 
 /**
+ * Remove the modules one verification wrote, and nothing else.
+ *
+ * The caller never learns the stamped names, so only the writer can remove
+ * them. A name that is already gone is the expected case when the write never
+ * landed, so it stays silent. Any other failure reaches the caller: a module
+ * left behind piles up where the agent works.
+ */
+async function removeOwnedFiles(ctx: MeasurementContext, files: readonly string[]): Promise<void> {
+  for (const file of files) {
+    await tolerateAsync(() => ctx.vfs.unlink(file), 'enoent');
+  }
+}
+
+/**
  * Can this instrument run in this workspace's shell AT ALL? `null` when it can,
  * otherwise why not.
  *
@@ -360,6 +374,9 @@ export const REFERENCE_SOLVE_DECLARATION = 'export function solve(';
  * does — write a module, run it under `node`, read a RESULT line off stdout — so a
  * shell that passes it can run the harness, and a shell that fails it says why in
  * the executor's own words.
+ *
+ * The probe module goes before this returns, on the passing path and on every
+ * failing one. Only the probe goes: the agent solution stays as found.
  */
 export async function preflightRatioHarness(ctx: MeasurementContext): Promise<string | null> {
   verifications += 1;
@@ -370,17 +387,29 @@ export async function preflightRatioHarness(ctx: MeasurementContext): Promise<st
     return `the workspace filesystem would not accept the harness file ${probeFile}: `
       + renderThrownChain({ cause: error });
   }
-  let run: ExecOutcome;
+  let result: string | null;
   try {
-    run = await ctx.exec(`node ${probeFile}`);
+    const run: ExecOutcome = await ctx.exec(`node ${probeFile}`);
+    const stdout = run.stdout ?? '';
+    if (RESULT_LINE.test(stdout)) result = null;
+    else {
+      result = `\`node ${probeFile}\` printed no RESULT line (exit ${String(run.exitCode)}). `
+        + `stdout: ${stdout.slice(0, 400)} | stderr: ${(run.stderr ?? '').slice(0, 400)}`;
+    }
   } catch (error) {
-    return `\`node ${probeFile}\` could not be run in this workspace's shell: `
+    result = `\`node ${probeFile}\` could not be run in this workspace's shell: `
       + renderThrownChain({ cause: error });
   }
-  const stdout = run.stdout ?? '';
-  if (RESULT_LINE.test(stdout)) return null;
-  return `\`node ${probeFile}\` printed no RESULT line (exit ${String(run.exitCode)}). `
-    + `stdout: ${stdout.slice(0, 400)} | stderr: ${(run.stderr ?? '').slice(0, 400)}`;
+  try {
+    await removeOwnedFiles(ctx, [probeFile]);
+  } catch (swept) {
+    if (result === null) throw swept;
+    diagnostics.failure(
+      'strategy.exec_ratio_cleanup_failed',
+      toKinuError({ doing: `remove owned preflight probe ${probeFile}`, cause: swept, otherwise: 'io' }),
+    );
+  }
+  return result;
 }
 
 /**
@@ -400,6 +429,10 @@ export async function preflightRatioHarness(ctx: MeasurementContext): Promise<st
  * Throws only when the HARNESS could not run: that is a broken instrument and must
  * be red. A solution that failed to parse, threw, ran past its budget or answered
  * wrongly is a legitimate zero and comes back as `failure`.
+ *
+ * The candidate snapshot and the harness go before this returns, on the measured
+ * path and on every throwing one. Only those two stamped modules go: the agent
+ * solution stays as found, beside nothing the agent did not write.
  */
 export async function runRatioMeasurement(
   ctx: MeasurementContext, problem: RatioProblem,
@@ -409,37 +442,55 @@ export async function runRatioMeasurement(
   const candidateFile = `${CANDIDATE_PREFIX}${stamp}.mjs`;
   const measureFile = `${MEASURE_PREFIX}${stamp}.mjs`;
 
-  let submitted: string;
   try {
-    const read = await ctx.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' });
-    submitted = read instanceof Uint8Array ? new TextDecoder().decode(read) : read;
-  } catch (error) {
-    submitted = `throw new Error(${JSON.stringify(
-      `${SOLUTION_FILE} could not be read: ${renderThrownChain({ cause: error })}`,
-    )});\n`;
-  }
-  await ctx.vfs.writeFile(candidateFile, submitted);
+    let submitted: string;
+    try {
+      const read = await ctx.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' });
+      submitted = read instanceof Uint8Array ? new TextDecoder().decode(read) : read;
+    } catch (error) {
+      submitted = `throw new Error(${JSON.stringify(
+        `${SOLUTION_FILE} could not be read: ${renderThrownChain({ cause: error })}`,
+      )});\n`;
+    }
+    await ctx.vfs.writeFile(candidateFile, submitted);
 
-  const params = { ...problem.params, budgetMultiple: BUDGET_MULTIPLE, deadlineMs: DEADLINE_MS };
-  const source = [
-    `const P = ${JSON.stringify(params)};`,
-    HARNESS_PROLOGUE,
-    `const refSolve = ${referenceAsExpression(problem.reference)};`,
-    `const cand = await loadSolve('./${candidateFile}');`,
-    problem.body,
-  ].join('\n');
-  await ctx.vfs.writeFile(measureFile, source);
+    const params = { ...problem.params, budgetMultiple: BUDGET_MULTIPLE, deadlineMs: DEADLINE_MS };
+    const source = [
+      `const P = ${JSON.stringify(params)};`,
+      HARNESS_PROLOGUE,
+      `const refSolve = ${referenceAsExpression(problem.reference)};`,
+      `const cand = await loadSolve('./${candidateFile}');`,
+      problem.body,
+    ].join('\n');
+    await ctx.vfs.writeFile(measureFile, source);
 
-  const run: ExecOutcome = await ctx.exec(`node ${measureFile}`);
-  const stdout = run.stdout ?? '';
-  const match = RESULT_LINE.exec(stdout);
-  if (!match?.[1]) {
-    throw new Error(
-      `measurement harness produced no RESULT line (exit ${String(run.exitCode)}). `
-      + `stdout: ${stdout.slice(0, 400)} | stderr: ${(run.stderr ?? '').slice(0, 400)}`,
-    );
+    const run: ExecOutcome = await ctx.exec(`node ${measureFile}`);
+    const stdout = run.stdout ?? '';
+    const match = RESULT_LINE.exec(stdout);
+    if (!match?.[1]) {
+      throw new Error(
+        `measurement harness produced no RESULT line (exit ${String(run.exitCode)}). `
+        + `stdout: ${stdout.slice(0, 400)} | stderr: ${(run.stderr ?? '').slice(0, 400)}`,
+      );
+    }
+    const measured = parseMeasurement(match[1]);
+    await removeOwnedFiles(ctx, [candidateFile, measureFile]);
+    return measured;
+  } catch (primary) {
+    try {
+      await removeOwnedFiles(ctx, [candidateFile, measureFile]);
+    } catch (swept) {
+      diagnostics.failure(
+        'strategy.exec_ratio_cleanup_failed',
+        toKinuError({
+          doing: `remove owned measurement files ${candidateFile} and ${measureFile}`,
+          cause: swept,
+          otherwise: 'io',
+        }),
+      );
+    }
+    throw primary;
   }
-  return parseMeasurement(match[1]);
 }
 
 /**
