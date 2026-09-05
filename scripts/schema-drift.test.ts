@@ -193,10 +193,12 @@ describe('schema-drift over this tree', () => {
 
     expect(state.violations).toEqual([]);
     // The census is the governed set: a gate whose corpus quietly shrinks is the
-    // defect this file exists to make impossible. 116 is the count at the reset
+    // defect this file exists to make impossible. 115 is the count at the reset
     // genesis, after `crafted_tools` lost its two duplicate declarations and
-    // kept one owner (`@kinu.run/agent-utils`).
-    expect(state.tables.length).toBeGreaterThanOrEqual(116);
+    // kept one owner (`@kinu.run/agent-utils`), and after `agent_views` left
+    // with the views DSL (8d6444f4f). A table that leaves lowers this number
+    // in the same commit, with its reason here.
+    expect(state.tables.length).toBeGreaterThanOrEqual(115);
   });
 
   test('the census reads every CREATE TABLE IF NOT EXISTS the corpus holds', () => {
