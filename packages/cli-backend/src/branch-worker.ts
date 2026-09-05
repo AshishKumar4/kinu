@@ -14,15 +14,14 @@
  */
 
 import { Database } from 'bun:sqlite';
-import { generateText } from 'ai';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
-  explorePrompt,
+  exploreRollout,
   formatInheritedContext,
-  normalizeUsage,
   parseModelSpec,
-  reasoningEffortOptions,
-  reflectionPrompt,
+  reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
+  reflectRollout,
+  type BranchRoute,
   type ExploreToolHint,
   type JsonValue,
   type LLMProviderConfig,
@@ -137,46 +136,31 @@ process.on('message', async (rawMessage: JsonValue) => {
         const [language, ...alternates] = msg.args.languages;
         if (!language) throw new Error('Branch exploration requires at least one executor language');
         const languages: [string, ...string[]] = [language, ...alternates];
-        const { system, user } = explorePrompt({
+        const result = await exploreRollout(lowEffortRoute(), {
           mode: msg.args.mode,
           context: formatInheritedContext(history),
           craftedTools,
           languages,
           siblings,
         });
-        const { model, providerOptions } = resolveLowEffortModel();
-        const request: Parameters<typeof generateText>[0] = {
-          model,
-          system,
-          messages: [{ role: 'user', content: user }],
-        };
-        if (providerOptions) request.providerOptions = providerOptions;
-        const { text, usage } = await generateText(request);
-        const trimmed = text.trim();
-        db.run('INSERT INTO traces (step, text) VALUES (?, ?)', [1, trimmed]);
+        db.run('INSERT INTO traces (step, text) VALUES (?, ?)', [1, result.text]);
         // The spend travels back with the proposal: this process resolves its
         // own model, so the parent's mission ledger cannot see the call any
         // other way (mcts/engine.ts debits it).
-        send({ method: msg.method, id: msg.id, result: { text: trimmed, usage: normalizeUsage(usage) } });
+        send({ method: msg.method, id: msg.id, result });
         break;
       }
       case BRANCH_REFLECT: {
-        const { task, outcome } = msg.args;
-        // Read the branch's own trace table (mirror cf generateReflection): the
-        // reflection is about the attempt this branch actually made, not the
-        // bare task string — and `outcome` carries the environment's verdict on
-        // it, which lives on the engine side and never reaches this process
-        // any other way.
+        // The branch's own trace table holds the attempt this reflection is
+        // about; `outcome` carries the environment's verdict, which lives on the
+        // engine side and reaches this process no other way.
         const traces = db.query<{ text: string }, []>('SELECT text FROM traces ORDER BY step').all();
-        const attempt = traces.map(t => t.text).join('\n');
-        const { model, providerOptions } = resolveLowEffortModel();
-        const request: Parameters<typeof generateText>[0] = {
-          model,
-          messages: [{ role: 'user', content: reflectionPrompt(task, attempt, outcome) }],
-        };
-        if (providerOptions) request.providerOptions = providerOptions;
-        const { text, usage } = await generateText(request);
-        send({ method: msg.method, id: msg.id, result: { text: text.trim(), usage: normalizeUsage(usage) } });
+        const result = await reflectRollout(lowEffortRoute(), {
+          task: msg.args.task,
+          attempt: traces.map((trace) => trace.text).join('\n'),
+          outcome: msg.args.outcome,
+        });
+        send({ method: msg.method, id: msg.id, result });
         break;
       }
     }
@@ -206,12 +190,14 @@ function readStoredModelSpec(): string | null {
   return row?.value ?? null;
 }
 
-function resolveLowEffortModel() {
+/** The stored chat model at rollout effort: what a rollout in this process runs. */
+function lowEffortRoute(): BranchRoute {
   const spec = modelResolver.normalizeSpecSync(readStoredModelSpec());
-  return {
-    model: modelResolver.resolveModel(spec),
-    providerOptions: reasoningEffortOptions('low', parseModelSpec(spec).provider),
-  };
+  const providerOptions = reasoningEffortOptions(
+    REASONING_EFFORT_FOR_STAGE.mcts_rollout, parseModelSpec(spec).provider,
+  );
+  const route: BranchRoute = { model: modelResolver.resolveModel(spec) };
+  return providerOptions ? { ...route, providerOptions } : route;
 }
 
 function readJson<T>(schema: v.GenericSchema<T>, raw: string | undefined): T | null {

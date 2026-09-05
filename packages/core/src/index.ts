@@ -802,6 +802,7 @@ export {
   explorePrompt, reflectionPrompt,
   type ExplorePrompt, type ExplorePromptInput, type ExploreToolHint,
 } from './mcts/explore-prompt';
+export { exploreRollout, reflectRollout, type BranchRoute } from './mcts/rollout';
 export {
   canonicalLanguage, fencedBlocks, readProposalCode,
   type FencedBlock, type ProposalCode,
@@ -1826,7 +1827,7 @@ export {
   type RoleChangeRefusal, type RoleStateStore,
 } from './profiles';
 export type { ReasoningEffort } from './strategy/effort';
-export { REASONING_EFFORTS } from './strategy/effort';
+export { REASONING_EFFORTS, REASONING_EFFORT_FOR_STAGE } from './strategy/effort';
 export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 // Rendered from the preset table in the same module, so a surface reading this cannot
 // describe a shape the resolver does not produce.

@@ -43,9 +43,9 @@ import {
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
-  decodeJsonValue, effortFor,
+  decodeJsonValue,
   createAgentConfigStore, initAgentConfigTable, initActorTables,
-  parseModelSpec, reasoningEffortOptions, resolveModelRoute,
+  parseModelSpec, reasoningEffortOptions, resolveModelRoute, REASONING_EFFORT_FOR_STAGE,
   createScaffoldSurface,
   type FixedTierSource,
   type VectorStore,
@@ -79,7 +79,9 @@ import {
 } from "./providers/agent-registry";
 import { ownerCaller, type UserCaller } from "./user/workspace-capability";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
-import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@kinu.run/core";
+import {
+  agentAffinityKey, exploreRollout, formatInheritedContext, normalizeUsage, reflectRollout, type BranchRoute,
+} from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 
 /**
@@ -1089,40 +1091,26 @@ function createInlineBranch(agent: AgentHost, env: Env): BranchHandle {
     workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
   });
   const spec = reg.normalizeSpecSync(null);
-  const getModel = () => reg.resolveModel(spec);
+  // The same rollout every facet runs, at the rollout stage's effort for this
+  // model's own provider family; a fallback branch is scored beside a facet one.
+  const route = (): BranchRoute => {
+    const providerOptions = reasoningEffortOptions(
+      REASONING_EFFORT_FOR_STAGE.mcts_rollout, parseModelSpec(spec).provider,
+    );
+    const model = reg.resolveModel(spec);
+    return providerOptions ? { model, providerOptions } : { model };
+  };
 
   return {
-    explore: async (history, craftedTools, languages, mode, siblings = []) => {
-      // The SAME question the facet asks (core explorePrompt), so a fallback
-      // branch is comparable with a facet one — they are scored against each
-      // other. This path once asked a materially weaker version of it while
-      // claiming to match, which is exactly what the shared prompt prevents.
-      const { system, user } = explorePrompt({
-        mode,
-        context: formatInheritedContext(history),
-        craftedTools,
-        languages,
-        siblings,
-      });
-      const result = await generateText({
-        model: getModel(),
-        system,
-        messages: [{ role: "user" as const, content: user }],
-        ...effortFor('mcts_rollout'),
-      });
-      const text = result.text.trim();
-      return { text, usage: normalizeUsage(result.usage) };
-    },
-    // No trace table on this path — the reflection is about the task and the
-    // environment's verdict alone, and the shared prompt drops the attempt
-    // heading rather than showing an empty one.
-    generateReflection: async (task, outcome) => {
-      const result = await generateText({
-        model: getModel(),
-        messages: [{ role: "user" as const, content: reflectionPrompt(task, '', outcome) }],
-        ...effortFor('reflection'),
-      });
-      return { text: result.text.trim(), usage: normalizeUsage(result.usage) };
-    },
+    explore: (history, craftedTools, languages, mode, siblings = []) => exploreRollout(route(), {
+      mode,
+      context: formatInheritedContext(history),
+      craftedTools,
+      languages,
+      siblings,
+    }),
+    // No trace table on this path, so the attempt is empty and the shared
+    // prompt drops its heading.
+    generateReflection: (task, outcome) => reflectRollout(route(), { task, attempt: '', outcome }),
   };
 }

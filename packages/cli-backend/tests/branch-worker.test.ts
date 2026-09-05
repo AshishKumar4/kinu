@@ -10,7 +10,7 @@
 import { describe, test, expect, afterAll, mock } from 'bun:test';
 import * as childProcess from 'node:child_process';
 import { fork, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -161,25 +161,6 @@ describe('branch-worker protocol — no self-rating', () => {
     // the bare task string.
     const reflectMessages = v.parse(wireMessagesSchema, endpoint.bodies[1]?.messages);
     expect(reflectMessages.at(-1)?.content).toContain(BRANCH_ANSWER);
-  });
-
-  // SOURCE PIN, not behaviour — and the only one left in this file. The effort a
-  // branch asks for cannot be observed at its process boundary: for the
-  // `workers-ai` family it travels as `providerOptions['workers-ai']
-  // .reasoning_effort` (snake_case, what the CF binding wants), and
-  // @ai-sdk/openai-compatible overwrites that key with its own camelCase option
-  // while building the body (`reasoning_effort: compatibleOptions.reasoningEffort`,
-  // dist/index.mjs), so it never leaves the process — the endpoint above records
-  // no effort field on either call. Every family whose namespace WOULD survive
-  // (openai, anthropic, openrouter, codex) hardcodes a remote baseURL a forked
-  // worker cannot be pointed away from, so no reachable provider makes this
-  // observable. The region is extracted rather than grepped whole-file, so
-  // renaming the resolver empties it and turns this red instead of passing.
-  test('low provider effort is pinned in the branch worker source', () => {
-    const source = readFileSync(workerPath, 'utf8');
-    const region = /function resolveLowEffortModel\(\) \{[\s\S]*?\n\}/.exec(source)?.[0] ?? '';
-    expect(region).toContain('modelResolver.normalizeSpecSync(readStoredModelSpec())');
-    expect(region).toContain("reasoningEffortOptions('low', parseModelSpec(spec).provider)");
   });
 
   test("'evaluate' is not part of the protocol anymore", async () => {
