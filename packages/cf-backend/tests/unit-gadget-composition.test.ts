@@ -10,7 +10,7 @@ test('a gadget names the MCP connection id on discovery and dispatch', async () 
   const user = createTestUserDO({ durableObjectId: ownerUserId });
   const capability = await provisionTestWorkspace(user, workspace);
   const actor = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId });
-  actor.agent.harnessHoldsCapability(capability);
+  await actor.agent.installWorkspaceCapability(capability);
   const owner = await testOwner();
   await user.userDO.userMcp_list(owner);
   user.sql.exec(`INSERT INTO user_mcp_servers
