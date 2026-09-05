@@ -38,6 +38,7 @@ const BENCH_GATE_FILES = [
   "scripts/deploy-substrate.test.ts",
   "scripts/payload-transport.test.ts",
   "scripts/devbox-e2e.test.ts",
+  "scripts/fixtures/r2-bench/security/cells.test.ts",
 ] as const;
 
 const REQUIRED_GATES = [

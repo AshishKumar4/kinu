@@ -215,7 +215,7 @@ describe('the ladder measures something', () => {
       + ' scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts'
       + ' scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts'
       + ' scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts'
-      + ' scripts/devbox-e2e.test.ts',
+      + ' scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
     );
     // `bun run test` fans out through package.json into three package suites.
     expect(claims('bun run test', tracked).length).toBeGreaterThan(200);

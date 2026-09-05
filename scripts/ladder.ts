@@ -1046,7 +1046,7 @@ export const LADDER: readonly Gate[] = [
     // bench-payload-transports, and the r2-bench deploy substrate. Not one of
     // their names starts with `bench`, so all eight shipped tracked, passing by
     // hand, and claimed by NO tier: 89 tests that ran in no pipeline.
-    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts',
+    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
     tier: 'ci',
     // 5.42s: 420 tests over 21 files, median of 5.53 / 5.42 / 4.89 on the
     // 24-thread box, measured 2026-08-27 when the eight rig suites joined — 89 of
