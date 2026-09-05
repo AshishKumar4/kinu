@@ -240,6 +240,32 @@ async function reportsSettled(sent: readonly Sent[], count: number): Promise<voi
     throw new Error(`only ${String(sent.length)} of ${String(count)} report(s) left the page`);
   }
 }
+/** Wait until every issued report fetch has settled and the count holds still
+ *  for a full beat — the page's own settlement counter decides when the
+ *  duplicate window is over, not a fixed sleep. Capped at the previous fixed
+ *  window so a chattering page fails loudly instead of hanging. */
+async function reportsQuiesced(page: Page, sent: readonly Sent[], budgetMs: number): Promise<void> {
+  const deadline = Date.now() + budgetMs;
+  let lastSettled = -1;
+  let lastSent = -1;
+  let quietSince = -1;
+  for (;;) {
+    const settled = await page.evaluate(() => window.__clientErrorSettled ?? 0);
+    if (settled === lastSettled && sent.length === lastSent) {
+      if (quietSince === -1) quietSince = Date.now();
+      if (Date.now() - quietSince >= 200) return;
+    } else {
+      lastSettled = settled;
+      lastSent = sent.length;
+      quietSince = -1;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`reports never went quiet: ${sent.length} sent, ${settled} settled within ${budgetMs}ms`);
+    }
+    await pause(25);
+  }
+}
+
 
 interface Scenario {
   answer: Answer;
@@ -294,9 +320,10 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
     // The report, awaited as an event. Then a quiet window in which a duplicate
     // would have arrived: every send this endpoint makes is issued synchronously
     // from `componentDidCatch`, so a second one is already in flight by the time
-    // the fallback the gate waited for is on screen.
+    // the fallback the gate waited for is on screen. The window ends when the
+    // page's own settlement counter holds still, not when a fixed sleep runs out.
     await reportsSettled(sent, 1);
-    await pause(1_000);
+    await reportsQuiesced(page, sent, 1_000);
 
     const seen = await fallback(page);
     const sceneIntact = await page.$('[data-scene-copy]') !== null;

@@ -45,8 +45,10 @@ export async function waitForAnswer<T>(
   }
 }
 
-/** Resolve after `ms`, or as soon as `signal` aborts. */
-export function pause(ms: number, signal?: AbortSignal): Promise<void> {
+/** Resolve after `ms`, or as soon as `signal` aborts. Module-private: the only
+ *  production reader is `waitForAnswer` above, and an exported sleep is how a
+ *  suite stops waiting for the product's own signal. */
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
   if (signal?.aborted) {
     resolve();
