@@ -189,19 +189,15 @@ describe('a hosted node hardcoding /tmp stays private', () => {
       const asA = nimbusSessionFiles(sessionBoxFor(f.host, a), a);
       const asB = nimbusSessionFiles(sessionBoxFor(f.host, b), b);
 
-      // Created through the shell, because the runner's atomic publish
-      // renames beside the target and the substrate resolves a rename's
-      // source without the confinement rewrite (fail-closed ENOENT, owner
-      // notified separately). Reads, stats and listings resolve, which is
-      // what this test proves on the file plane.
-      expect(await rpcExec(f.host, 'echo from-a > /tmp/note', { cred: a }))
-        .toMatchObject({ exitCode: 0 });
+      // The whole write path, including the stage-and-rename commit, which
+      // resolves through the same rewrite as every other operation.
+      await asA.writeFile('/tmp/y', 'from a');
 
-      expect(await asA.readFile('/tmp/note', { encoding: 'utf8' })).toBe('from-a\n');
+      expect(await asA.readFile('/tmp/y', { encoding: 'utf8' })).toBe('from a');
       // Absent for the sibling is ENOENT, and stat answers null — a
       // boundary reads as an empty space, never as a refusal.
-      await expect(asB.readFile('/tmp/note')).rejects.toThrow(expect.objectContaining({ code: 'ENOENT' }));
-      expect(await asB.stat('/tmp/note')).toBeNull();
+      await expect(asB.readFile('/tmp/y')).rejects.toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      expect(await asB.stat('/tmp/y')).toBeNull();
     } finally {
       for (const database of f.databases) database.close();
     }

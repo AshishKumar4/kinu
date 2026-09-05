@@ -141,11 +141,8 @@ actors that work inside it.
     runs on the object that owns the workspace, so it registers the rewrite
     on that object's own principal registry — no RPC carries the call
     because none needs to. `TMPDIR` points at the same directory. Shell
-    commands resolve per credential, and file reads, stats and listings do
-    too. One substrate limit remains, measured 2026-09-05: the credentialed
-    plane stages a write beside its target and renames it onto place, and
-    the substrate resolves a rename's source without the rewrite, so a
-    file-plane write to a confined `/tmp` fails closed with `ENOENT`.
+    commands, file writes, reads, stats and listings all resolve per
+    credential on both planes.
 
     A runtime bound to a physical directory builds no uid provisioner: a
     directory has no principal registry. Each facet still gets its own
