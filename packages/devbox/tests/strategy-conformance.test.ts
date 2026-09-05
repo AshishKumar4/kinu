@@ -566,6 +566,25 @@ async function commitTree(arm: ConformanceArm, entries: readonly NodeEntry[], wh
   await arm.workspace.plant(entries);
   expectCommitted(await arm.storage().checkpoint('quiesce'), what);
 }
+/** One measured tree size in cell 6.21: wall ms beside the counted work rows.
+ *  Times are recorded, never asserted; the assertion reads only the counts. */
+interface ComplexitySample {
+  readonly files: number;
+  readonly bytes: number;
+  readonly fullBackupMs: number;
+  readonly fullObjectsPut: number;
+  readonly fullBytesPut: number;
+  backup64kMs: number;
+  backup64kBytesPut: number;
+  restoreMs: number;
+  restoreOps: number;
+  restorePayloadBytes: number;
+}
+
+/** Cell 6.21 leaves one row per tree size per arm; the afterAll block below
+ *  prints them beside the matrix. Set as each size lands, so a red arm still
+ *  shows what it measured before the assertion fired. */
+const complexitySamples = new Map<string, ComplexitySample[]>();
 
 /**
  * Which rule a faulted await point answers to, by where its durable effect
@@ -963,6 +982,69 @@ const CELLS: readonly Cell[] = [
       }
     },
   },
+  {
+    id: '6.21',
+    title: 'restore and backup time versus tree size at three sizes',
+    async run(arm) {
+      // Three tree sizes on a fresh arm each: 100, 1,000 and 10,000 files of
+      // 4 KiB. The largest holds 40 MiB, so the whole cell stays inside the
+      // 120 s per-test budget on every arm. Measured 2026-09-05.
+      const probe = 'x'.repeat(64 * 1024);
+      const rows: ComplexitySample[] = [];
+      for (const files of [100, 1_000, 10_000]) {
+        const fresh = CONFORMANCE_ARMS[arm.name]();
+        const fixture = generatedTree({ seed: 41, files, bytesPerFile: 4096 });
+        await attach(fresh);
+        await fresh.workspace.plant(fixture);
+        const fullStart = performance.now();
+        expectCommitted(await fresh.storage().checkpoint('quiesce'), `the ${files}-file full backup`);
+        const full = fresh.work().publish;
+        const row: ComplexitySample = {
+          files,
+          bytes: files * 4096,
+          fullBackupMs: performance.now() - fullStart,
+          fullObjectsPut: full.objectsPut,
+          fullBytesPut: full.bytesPut,
+          backup64kMs: 0,
+          backup64kBytesPut: 0,
+          restoreMs: 0,
+          restoreOps: 0,
+          restorePayloadBytes: 0,
+        };
+        await fresh.workspace.write('probe-64k.bin', probe);
+        const backupStart = performance.now();
+        expectCommitted(await fresh.storage().checkpoint('quiesce'), `the 64 KiB backup at ${files} files`);
+        row.backup64kMs = performance.now() - backupStart;
+        row.backup64kBytesPut = fresh.work().publish.bytesPut;
+        const expected = await fresh.workspace.snapshot();
+        const restoreStart = performance.now();
+        const woken = await wake(fresh);
+        row.restoreMs = performance.now() - restoreStart;
+        if (woken.kind !== 'attached') throw new Error(`${files} files: wake answered ${woken.kind}`);
+        const restore = fresh.work().restore;
+        row.restoreOps = restore.totalRemoteOps;
+        row.restorePayloadBytes = restore.payloadBytes;
+        await expectTreeExact(fresh, expected, `${files} files after the wake`);
+        rows.push(row);
+        complexitySamples.set(arm.name, [...rows]);
+      }
+      // THE ONLY ASSERTION: the deterministic shape, never the wall clock. A
+      // 64 KiB backup and a restore cost the same counted work at 1,000 files
+      // and at 10,000 — the same ratio rule cell 6.12 uses.
+      const middle = rows[1]!;
+      const large = rows[2]!;
+      const problems: string[] = [];
+      if (large.restoreOps !== middle.restoreOps) {
+        problems.push(`restore.totalRemoteOps is ${large.restoreOps} for 10,000 files and ${middle.restoreOps} for 1,000`);
+      }
+      const putSmall = Math.min(large.backup64kBytesPut, middle.backup64kBytesPut);
+      const putLarge = Math.max(large.backup64kBytesPut, middle.backup64kBytesPut);
+      if (putSmall !== putLarge && (putLarge - putSmall) / Math.max(putLarge, 1) > 0.1) {
+        problems.push(`64 KiB backup bytesPut is ${large.backup64kBytesPut} for 10,000 files and ${middle.backup64kBytesPut} for 1,000`);
+      }
+      if (problems.length > 0) throw new Error(problems.join('; '));
+    },
+  },
 ];
 
 async function runCell(cell: Cell, arm: ConformanceArm): Promise<Outcome> {
@@ -1261,6 +1343,19 @@ afterAll(() => {
   }
   lines.push(`${'6.19'.padEnd(8)}${arms.map(() => 'harness'.padEnd(width)).join('')}  stop then wake on the same instance: candidate-attach.test.ts`);
   lines.push('', ...legend, '');
+  // Cell 6.21 leaves numbers, not just a verdict: one table per arm beside
+  // the matrix, with the measured sizes in the header. Measured 2026-09-05.
+  lines.push('6.21 restore and backup time versus tree size — 100, 1,000 and 10,000 files of 4 KiB', '');
+  for (const name of arms) {
+    lines.push(`arm ${name}: files | tree bytes | full backup ms | 64 KiB backup ms | 64 KiB backup bytesPut | restore ms | restore ops | restore payload bytes`);
+    for (const row of complexitySamples.get(name) ?? []) {
+      lines.push(
+        `arm ${name}: ${row.files} | ${row.bytes} | ${row.fullBackupMs.toFixed(1)} | ${row.backup64kMs.toFixed(1)} `
+        + `| ${row.backup64kBytesPut} | ${row.restoreMs.toFixed(1)} | ${row.restoreOps} | ${row.restorePayloadBytes}`,
+      );
+    }
+    lines.push('');
+  }
   console.log(lines.join('\n'));
 });
 

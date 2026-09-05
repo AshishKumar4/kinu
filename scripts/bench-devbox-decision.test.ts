@@ -36,6 +36,7 @@ import {
   benchmarkExitCode,
   boxName,
   CANDIDATE_CONTAINER_CLASSES,
+  COMPLEXITY_TREE_BYTES,
   candidateProbePrecondition,
   candidateLifecycleChecks,
   chainArchiveExpectations,
@@ -45,6 +46,7 @@ import {
   contextCopySources,
   comparablePairs,
   createFixtureResources,
+  decodeComplexityRows,
   describeStartupState,
   devboxAdmission,
   devboxArmEvidence,
@@ -89,6 +91,7 @@ import {
   externallyAbortedArm,
   writeArmArtifact,
   type ArmResult,
+  type ComplexityRow,
   type ControlWitnessFacts,
   type CandidateFactsReply,
   type Strategy,
@@ -820,7 +823,9 @@ describe('an arm that fails mid-measurement', () => {
 
     // AND ITS INSTANCE WAS HANDED BACK, which is what stops one arm's death
     // from refusing the next arm's create with `Maximum number of instances`.
-    expect(fixture.asked.filter((route) => route === 'POST /stop')).toHaveLength(2);
+    // Four stops: the final, the bounded release, and the two tree-size rung
+    // restores the decisive scope measures beside the ladder since 2026-09-05.
+    expect(fixture.asked.filter((route) => route === 'POST /stop')).toHaveLength(4);
   }, 20_000);
 
   test('a failed stop never asks wake against the still-running box', async () => {
@@ -850,8 +855,9 @@ describe('an arm that fails mid-measurement', () => {
     expect(arm.notes.join(' ')).toContain(refusal);
     expect(arm.notes.join(' ')).toContain('arm failed mid-measurement');
     // The failed arm still asks stop once more through the bounded release
-    // path, but neither failed stop can be followed by a wake.
-    expect(fixture.asked.filter((route) => route === 'POST /stop')).toHaveLength(2);
+    // path, but neither failed stop can be followed by a wake. Four stops in
+    // all: the two rung restores fail here before any wake, like the final.
+    expect(fixture.asked.filter((route) => route === 'POST /stop')).toHaveLength(4);
   }, 20_000);
 });
 
@@ -2159,6 +2165,72 @@ describe('the rendered report carries no money', () => {
     // The tallies themselves survive, so nothing was dropped with the column.
     expect(report).toContain('912');
     expect(report).toContain('145');
+  });
+});
+
+describe('restore and backup time versus tree size', () => {
+  const complexityMeta = {
+    date: '2026-09-05',
+    run: 'kinu-devbox-bench-complexity-probe',
+    worker: 'kinu-devbox-bench-complexity-probe-snapshot-chain',
+    bucket: 'kinu-devbox-bench-complexity-probe-snapshot-chain',
+    image: SANDBOX_IMAGE,
+    seed: '20260905',
+    'loop budget ms': '8000',
+    'deciding repetitions': '2',
+  };
+  const backupRow = (treeBytes: number): ComplexityRow =>
+    ({ treeBytes, kind: 'backup-64k', ms: 120, outcome: 'committed' });
+  const restoreRow = (treeBytes: number): ComplexityRow => ({
+    treeBytes,
+    kind: 'restore',
+    ms: 5_100,
+    outcome: 'attached',
+    attachKind: 'attached',
+    wakeOps: { calls: { get: 7 }, bytes: { payload: 90_112 } },
+  });
+  const measuredRows = (): ComplexityRow[] =>
+    COMPLEXITY_TREE_BYTES.flatMap((treeBytes) => [backupRow(treeBytes), restoreRow(treeBytes)]);
+  const complexityArm = (strategy: Strategy, complexity?: ComplexityRow[]): ArmResult => {
+    const arm = measuredArm(strategy);
+    if (complexity !== undefined) arm.complexity = complexity;
+    return arm;
+  };
+  test('measured tree-size rows round-trip through the artifact and render', () => {
+    // RED WHEN THE SECTION OMITS A MEASURED ROW: every number the driver took
+    // is asserted in the rendered report, so a section that drops a rung fails
+    // here rather than publishing a short table. Measured 2026-09-05.
+    const root = scratchDir('devbox-complexity-rows');
+    const complexity = measuredRows();
+    const arm = complexityArm('snapshot-chain', complexity);
+    writeArmArtifact(root, 'complexity1', 'snapshot-chain', arm);
+    const read = readArmArtifact(root, 'complexity1', 'snapshot-chain');
+    expect(read.error).toBeNull();
+    expect(read.artifact?.schema).toBe('devbox-arm-artifact/1');
+    const rows = decodeComplexityRows(read.artifact?.row.complexity);
+    expect(rows).toEqual(complexity);
+    const report = render([{ ...arm, complexity: rows }], complexityMeta, { admitted: true, gates: [] });
+    expect(report).toContain('#### Restore and backup time versus tree size');
+    expect(report).toContain('| `snapshot-chain` | 65,536 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
+    expect(report).toContain('| `snapshot-chain` | 4,259,840 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
+    expect(report).toContain('| `snapshot-chain` | 71,368,704 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
+  });
+
+  test('a rung the arm never reached reads NOT MEASURED with its reason', () => {
+    // The first rung measured, the other two never reached: the table keeps
+    // its three lines and says which rungs are missing and why, instead of
+    // printing a short table or a zero a reader could mistake for a free
+    // restore. Measured 2026-09-05.
+    const first = COMPLEXITY_TREE_BYTES[0]!;
+    const report = render(
+      [complexityArm('r2fs', [backupRow(first), restoreRow(first)])],
+      complexityMeta,
+      { admitted: true, gates: [] },
+    );
+    expect(report).toContain('#### Restore and backup time versus tree size');
+    expect(report).toContain('| `r2fs` | 65,536 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
+    expect(report).toContain('NOT MEASURED: the arm recorded no tree-size row at 4,259,840 bytes');
+    expect(report).toContain('NOT MEASURED: the arm recorded no tree-size row at 71,368,704 bytes');
   });
 });
 

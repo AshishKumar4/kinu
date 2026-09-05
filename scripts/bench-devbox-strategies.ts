@@ -2951,6 +2951,92 @@ interface CheckpointRow {
 }
 
 /**
+ * One tree-size complexity measurement: a fixed 64 KiB backup plus a stop
+ * then wake at a ladder rung's cumulative tree size. Kept out of
+ * `checkpoints` on purpose — `EXPECTED_LADDER_ROWS` and the completeness
+ * checks count that field. Added 2026-09-05.
+ */
+export interface ComplexityRow {
+  /** Ladder bytes written so far when this row was taken, the size axis. */
+  readonly treeBytes: number;
+  readonly kind: 'backup-64k' | 'restore';
+  /** Wall ms, null when the operation never answered. */
+  readonly ms: number | null;
+  readonly outcome: string;
+  /** Restores only: the attach kind the wake answered. */
+  readonly attachKind?: string;
+  /** Restores only: the flushed `/ops` window across the stop-to-wake, the
+   *  same receipt the wake reads into `wakeOps`. Null when the window never
+   *  bracketed. */
+  readonly wakeOps?: OpTally | null;
+}
+
+/** The cumulative ladder bytes each complexity rung measures at, in rung
+ *  order: 64 KiB, then 64 KiB + 4 MiB, then the whole ladder. The report
+ *  reads this same list, so a rung the arm never reached is a named gap
+ *  rather than a missing line. */
+export const COMPLEXITY_TREE_BYTES: readonly number[] = (() => {
+  let total = 0;
+  return CHANGE_SIZES_KIB.map((kib) => (total += kib * 1024));
+})();
+
+const ComplexityRowSchema: v.GenericSchema<ComplexityRow> = v.looseObject({
+  treeBytes: v.number(),
+  kind: v.picklist(['backup-64k', 'restore']),
+  ms: v.nullable(v.number()),
+  outcome: v.string(),
+  attachKind: v.optional(v.string()),
+  // The same receipt shape the wake reads: reusing the tally schema keeps one
+  // definition of the `/ops` reply both sides trust.
+  wakeOps: v.optional(v.nullable(OpTallySchema)),
+});
+
+/**
+ * Read one arm's complexity rows off its artifact row. The parameter carries
+ * the named domain type the writer promised; the schema re-checks each row
+ * because an artifact is a file, and files are hand-edited. Old artifacts
+ * carry no `complexity` field and read as unmeasured; a row that fails its
+ * own shape is dropped rather than trusted. Added 2026-09-05.
+ */
+export function decodeComplexityRows(value: ArmResult['complexity']): ComplexityRow[] {
+  if (!Array.isArray(value)) return [];
+  const rows: ComplexityRow[] = [];
+  for (const entry of value) {
+    const parsed = v.safeParse(ComplexityRowSchema, entry);
+    if (parsed.success) rows.push(parsed.output);
+  }
+  return rows;
+}
+
+/**
+ * One restore's priced bill: the operation count and the payload bytes the
+ * `/ops` window observed, each null while its source did not answer.
+ */
+export interface ComplexityBill {
+  readonly remoteOps: number | null;
+  readonly payloadBytes: number | null;
+}
+
+/**
+ * One restore's bill from its `/ops` window: remote ops summed over operation
+ * names, payload bytes from the byte tally. The same derivation
+ * `countedRestoreWork` applies to the final wake, factored here so the
+ * tree-size table prices intermediate restores the same way. Added
+ * 2026-09-05.
+ */
+export function complexityRestoreBill(
+  wakeOps: OpTally | null | undefined,
+): ComplexityBill {
+  const calls = wakeOps?.calls;
+  if (calls === undefined) return { remoteOps: null, payloadBytes: null };
+  const total = Object.values(calls).reduce((sum, count) => sum + count, 0);
+  if (!Number.isSafeInteger(total)) return { remoteOps: null, payloadBytes: null };
+  const bytes = wakeOps?.bytes;
+  if (bytes === undefined) return { remoteOps: total, payloadBytes: null };
+  return { remoteOps: total, payloadBytes: bytes['payload'] ?? 0 };
+}
+
+/**
  * The verify-only probe's execution state, separate from an arm verdict.
  * A missing precondition means the probe did not run; a later failure means
  * its archived evidence is partial. Neither state is a measurement to score.
@@ -2999,6 +3085,10 @@ export interface ArmResult {
    *  its `cpuSteps`. Null when the count did not answer, or on any other arm. */
   wakeServedEntries?: number | null;
   checkpoints: CheckpointRow[];
+  /** Tree-size complexity rows: one fixed 64 KiB backup plus one restore per
+   *  ladder rung. Optional so artifacts written before 2026-09-05 still read;
+   *  absent reads as unmeasured, never as zero. */
+  complexity?: ComplexityRow[];
   phases: ProbeRun[];
   /** Per-checkpoint rows from the decisive experiment, with their R2 operation
    *  classes. */
@@ -4795,7 +4885,7 @@ function unmeasuredArm(strategy: Strategy, box: string, notes: string[]): ArmRes
     attachColdMs: null, attachColdKind: '', attachColdBootId: null,
     attachWarmMs: null, attachWarmKind: '', wakeBootId: null, attachWarmBootId: null,
     checkpoints: [], stopMs: null, wakeMs: null, wakeKind: '', wakeDetail: '',
-    wakeOps: null, wakeMountLines: [],
+    wakeOps: null, wakeMountLines: [], complexity: [],
     phases: [], decisiveTicks: [], quiescesBeforeDecisive: 0,
     generationBeforeLadder: null, generationAfterLadder: null,
     treeBytes: {}, ops: null, teardown: null, witnessChecks: [], cut: null, notes,
@@ -5187,7 +5277,13 @@ async function measureArm(
 
   // The checkpoint ladder writes known bytes, then records each commit.
   result.generationBeforeLadder = await chainGeneration(fixture, box);
-  for (const kib of CHANGE_SIZES_KIB) {
+  // TREE-SIZE COMPLEXITY runs beside the ladder in the decisive scope only.
+  // A verify-only probe keeps the ladder, stop and wake untouched, so it
+  // records no tree-size row. `ladderBytes` is the size axis: the ladder
+  // bytes written so far when the rung below measures.
+  const complexityScope = !options.verifyOnly;
+  let ladderBytes = 0;
+  for (const [rung, kib] of CHANGE_SIZES_KIB.entries()) {
     await retryTransient(`ladder ${kib}KiB write`, async () =>
       await execInBox(fixture, box, `mkdir -p /workspace/ladder && dd if=/dev/urandom of=/workspace/ladder/c${kib}.bin bs=1024 count=${kib} 2>/dev/null && sync`),
     );
@@ -5210,6 +5306,54 @@ async function measureArm(
         );
       }
       requireProbeCheckpoint(result.probe, cp, `ladder ${kib}KiB ${kind}`);
+    }
+    // TREE-SIZE COMPLEXITY at this rung's cumulative size: one fixed 64 KiB
+    // write plus quiesce, then a stop and wake for every rung but the last —
+    // the post-ladder stop and wake below stands as the last rung's restore,
+    // so no container work is duplicated. A failed extra measurement is a
+    // recorded row and a note, never a gate. Measured 2026-09-05.
+    if (complexityScope) {
+      ladderBytes += kib * 1024;
+      const treeBytes = ladderBytes;
+      try {
+        await retryTransient(`complexity 64KiB write at ${treeBytes}B`, async () =>
+          await execInBox(fixture, box, 'dd if=/dev/urandom of=/workspace/ladder/backup-64k.bin bs=1024 count=64 2>/dev/null && sync'),
+        );
+        result.quiescesBeforeDecisive++;
+        const backup = await checkpointOperation(fixture, box, 'quiesce', `complexity backup-64k at ${treeBytes}B`);
+        result.complexity?.push({
+          treeBytes,
+          kind: 'backup-64k',
+          ms: backup.ms ?? null,
+          outcome: backup.error !== undefined ? `error: ${backup.error}` : `${backup.outcome?.kind ?? 'unknown'}${backup.outcome?.reason !== undefined ? ` (${backup.outcome.reason})` : ''}`,
+        });
+      } catch (error) {
+        const words = describeThrown({ cause: error }).slice(0, 240);
+        notes.push(`complexity backup-64k at ${treeBytes}B did not answer: ${words}`);
+        result.complexity?.push({ treeBytes, kind: 'backup-64k', ms: null, outcome: `error: ${words}` });
+      }
+      if (rung < CHANGE_SIZES_KIB.length - 1) {
+        try {
+          await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
+          const opsBeforeRestore = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+          const restoreStop = await stopOperation(fixture, box, `complexity restore at ${treeBytes}B`);
+          requireConfirmedStop(restoreStop, `complexity restore at ${treeBytes}B: stop failed before wake`);
+          const rewoke = await startup('/wake', `complexity restore at ${treeBytes}B`, admittedAttachKinds('wake'));
+          const restoreOps = await closeWakeOpsWindow(fixture, box, opsBeforeRestore, notes);
+          result.complexity?.push({
+            treeBytes,
+            kind: 'restore',
+            ms: rewoke.ms,
+            outcome: rewoke.attach.kind,
+            attachKind: rewoke.attach.kind,
+            wakeOps: restoreOps,
+          });
+        } catch (error) {
+          const words = describeThrown({ cause: error }).slice(0, 240);
+          notes.push(`complexity restore at ${treeBytes}B did not answer: ${words}`);
+          result.complexity?.push({ treeBytes, kind: 'restore', ms: null, outcome: `error: ${words}` });
+        }
+      }
     }
   }
   // THE PUBLISH-TIME PROBE READS. The ladder just published, so the control
@@ -5257,6 +5401,20 @@ async function measureArm(
   result.wakeDetail = woke.attach.detail;
   result.wakeBootId = woke.state.state?.bootId ?? null;
   result.wakeOps = await closeWakeOpsWindow(fixture, box, opsBeforeWake, notes);
+  // THE LAST RUNG'S RESTORE IS THIS WAKE ITSELF. The ladder's third rung took
+  // no extra stop and wake, so its restore row is transcribed here from the
+  // wake the arm just took — `settle('the wake')` below persists it with the
+  // rest. Measured 2026-09-05.
+  if (complexityScope) {
+    result.complexity?.push({
+      treeBytes: ladderBytes,
+      kind: 'restore',
+      ms: result.wakeMs,
+      outcome: result.wakeKind,
+      attachKind: result.wakeKind,
+      wakeOps: result.wakeOps,
+    });
+  }
   settle('the wake');
   verify(
     'the wake attached durable bytes',
@@ -6293,6 +6451,37 @@ export function render(
       out.push(
         `| \`${arm.strategy}\` | ${row.changeKiB >= 1024 ? `${row.changeKiB / 1024} MiB` : `${row.changeKiB} KiB`} `
         + `| ${row.kind} | ${num(row.ms, 0)} | ${num(row.bytes, 0)} | ${row.outcome} |`,
+      );
+    }
+  }
+  out.push('');
+  out.push('#### Restore and backup time versus tree size');
+  out.push('');
+  out.push(
+    'One fixed 64 KiB backup plus one stop then wake at each ladder rung’s cumulative tree size. '
+    + 'The last rung’s restore is the post-ladder wake itself, so no container work is duplicated. '
+    + 'Measured 2026-09-05.',
+  );
+  out.push('');
+  out.push('| arm | tree bytes | 64 KiB backup (ms) | restore (ms) | restore remote ops | restore payload bytes | outcome |');
+  out.push('| --- | --- | --- | --- | --- | --- | --- |');
+  for (const arm of arms) {
+    const complexity = decodeComplexityRows(arm.complexity);
+    for (const treeBytes of COMPLEXITY_TREE_BYTES) {
+      const backup = complexity.find((row) => row.treeBytes === treeBytes && row.kind === 'backup-64k');
+      const restore = complexity.find((row) => row.treeBytes === treeBytes && row.kind === 'restore');
+      if (backup === undefined && restore === undefined) {
+        const reason = arm.probe !== undefined
+          ? 'the verify-only probe keeps the ladder, stop, wake and teardown; the tree-size rows run in the decisive scope'
+          : `the arm recorded no tree-size row at ${num(treeBytes, 0)} bytes`;
+        out.push(`| \`${arm.strategy}\` | ${num(treeBytes, 0)} | NOT MEASURED: ${reason} | — | — | — | NOT MEASURED |`);
+        continue;
+      }
+      const bill = complexityRestoreBill(restore?.wakeOps);
+      const outcome = [backup?.outcome, restore?.outcome].filter((part) => part !== undefined).join('; ');
+      out.push(
+        `| \`${arm.strategy}\` | ${num(treeBytes, 0)} | ${num(backup?.ms ?? null, 0)} | ${num(restore?.ms ?? null, 0)} `
+        + `| ${num(bill.remoteOps, 0)} | ${num(bill.payloadBytes, 0)} | ${outcome} |`,
       );
     }
   }
