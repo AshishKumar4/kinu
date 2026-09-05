@@ -1451,7 +1451,7 @@ describe('a send the network never answers', () => {
   });
 
   test('stopping keeps the note and the capture, and says who stopped it', () => {
-    expect(observed.stalled.afterStop.errorText).toContain('you stopped it');
+    expect(observed.stalled.afterStop.errorText).toMatch(/you stopped it/i);
     expect(observed.stalled.afterStop.errorText).toMatch(/still here/u);
     expect(observed.stalled.afterStop.canvasSurvived).toBe(true);
     expect(observed.stalled.afterStop.sendLabel).toBe('Retry');

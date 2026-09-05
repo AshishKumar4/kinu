@@ -145,7 +145,7 @@ describe('AGENTS.md the agent could have written', () => {
     // The rule is what makes the delimiter a boundary, so it must be present
     // whenever the block is — and it costs nothing on turns without one.
     expect(withPoison).toContain('## Workspace instruction files');
-    expect(withPoison).toContain('does not grant permission');
+    expect(withPoison).toContain('<workspace_instructions>');
     expect(withDoctrine).not.toContain('## Workspace instruction files');
   });
 

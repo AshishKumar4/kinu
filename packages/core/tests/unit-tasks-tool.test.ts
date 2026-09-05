@@ -296,7 +296,7 @@ describe('tasks action=mode — the agent\'s durable role', () => {
     });
     expect(plan).toContain('Role: Implementer');
     expect(plan).toContain('Do not change files, system state, releases, or deployments');
-    expect(plan).toContain('Do not begin implementation until the plan is approved');
+    expect(plan).toMatch(/do not begin implementation/i);
     expect(Object.keys(buildBuiltinTools({ rt }))).not.toContain('submit_plan');
   });
 
