@@ -51,7 +51,7 @@ const KEY_ID_LABEL = 'kinu.credential-envelope.key-id';
  *  32 base64 characters is 24 bytes of a `openssl rand -base64 32` value. */
 const MIN_SECRET_LENGTH = 32;
 
-export const CREDENTIAL_ENCRYPTION_KEY_HINT =
+const CREDENTIAL_ENCRYPTION_KEY_HINT =
   'Set the CREDENTIAL_ENCRYPTION_KEY secret (openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY).';
 
 export interface CredentialCipher {
@@ -105,7 +105,7 @@ export async function createCredentialCipher(env: CredentialEncryptionEnv): Prom
     },
 
     async open(aad, stored) {
-      if (!stored.startsWith(ENVELOPE_PREFIX)) return stored;
+      if (!isSealedCredential(stored)) return stored;
       const [keyId, ivPart, ctPart] = stored.slice(ENVELOPE_PREFIX.length).split('.');
       if (!keyId || !ivPart || !ctPart) {
         throw new Error(`Record "${aad}" is stored in an envelope this build cannot parse.`);
@@ -136,7 +136,7 @@ export async function createCredentialCipher(env: CredentialEncryptionEnv): Prom
 }
 
 /** True for a value this module wrote — the reader's test for "already sealed". */
-export function isSealedCredential(stored: string): boolean {
+function isSealedCredential(stored: string): boolean {
   return stored.startsWith(ENVELOPE_PREFIX);
 }
 

@@ -24,6 +24,8 @@ export async function handleCreateWorkspaceRequest(
     name: v.optional(v.string()),
     displayName: v.optional(v.string()),
     purpose: v.optional(v.string()),
+    model: v.optional(v.string()),
+    reasoningEffort: v.optional(v.picklist(['low', 'medium', 'high'])),
     role: v.optional(v.string()),
   }));
   if (!body) return err(400, 'Body must be JSON');
@@ -31,12 +33,15 @@ export async function handleCreateWorkspaceRequest(
   // The wire shape and the create input are two types. Passing the parsed body
   // straight through made them one object by structure, so a field either side
   // gained crossed silently in whichever direction: the `role` a `kinu create
-  // --role` asks for is read by `createCloudWorkspaceForUser`, and it arrives
-  // only because this mapping names it.
+  // --role` asks for, the `model` and `reasoningEffort` the CLI sends from its
+  // config defaults, are read by `createCloudWorkspaceForUser`, and each
+  // arrives only because this mapping names it.
   const input: CreateCloudWorkspaceInput = {
     name: body.name,
     displayName: body.displayName,
     purpose: body.purpose,
+    model: body.model,
+    reasoningEffort: body.reasoningEffort,
     role: body.role,
   };
   try {

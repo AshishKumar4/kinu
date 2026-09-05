@@ -13,7 +13,6 @@ import {
   type ReasoningEffort,
 } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import type { OrchestratorAgent } from '../orchestrator';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from './workspace-capability';
@@ -279,10 +278,9 @@ async function applyGeneratedDisplayName(
     ? await suggestDisplayName(mission)
     : await suggestCloudAgentDisplayName(env, userDO, caller, mission, modelSpec, agentName);
   if (!displayName) return;
-  // SAFETY: Env.OrchestratorAgent is generated from the OrchestratorAgent binding and exposes its RPC methods.
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
-  ) as DurableObjectStub<OrchestratorAgent>;
+  );
   await orchestrator.setAutoDisplayName(displayName);
 }
 
@@ -312,10 +310,9 @@ async function suggestCloudAgentDisplayName(
     // JSON, so a cap starves them into empty text and the generic name wins.
     ...effortFor('reflection'),
   });
-  // SAFETY: Env.OrchestratorAgent is generated from the OrchestratorAgent binding and exposes its RPC methods.
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
-  ) as DurableObjectStub<OrchestratorAgent>;
+  );
   const modelId = result.response?.modelId;
   const usage = normalizeUsage(result.usage);
   await orchestrator.reportFacetModelCall(modelId
@@ -342,10 +339,9 @@ async function initializeOrchestrator(input: InitializeOrchestratorInput): Promi
     env, userId, userDO, agentName, displayName, nameOrigin,
     mission, model, reasoningEffort, role,
   } = input;
-  // SAFETY: Env.OrchestratorAgent is generated from the OrchestratorAgent binding and exposes its RPC methods.
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
-  ) as DurableObjectStub<OrchestratorAgent>;
+  );
   const claim = await orchestrator.claimOwner(userId);
   // Before anything else touches it: a new workspace runs its first turn (its
   // own genesis turn, a peer's task, an auto-title, an inbound email) without

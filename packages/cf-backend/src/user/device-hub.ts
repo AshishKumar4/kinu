@@ -67,7 +67,7 @@ const DeviceToolchainSchema = v.object({
  *  answer. Recorded so the hub stops asking a socket that cannot reply, and
  *  kept distinct from an answer of "nothing found": this machine may well have
  *  python, and nobody knows. */
-export const PROBE_UNANSWERABLE = 'unanswerable';
+const PROBE_UNANSWERABLE = 'unanswerable';
 
 const DeviceProbeSchema = v.union([DeviceToolchainSchema, v.literal(PROBE_UNANSWERABLE)]);
 
@@ -87,7 +87,7 @@ export interface DeviceSocketCtx {
   getWebSockets(tag?: string): DeviceSocket[];
 }
 
-export function deviceTag(deviceId: string): string {
+function deviceTag(deviceId: string): string {
   return `${DEVICE_WS_TAG_PREFIX}${deviceId}`;
 }
 

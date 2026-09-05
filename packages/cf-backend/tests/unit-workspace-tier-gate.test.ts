@@ -1,9 +1,9 @@
 // The attenuation boundary, exercised against the REAL UserDO methods.
 //
-// Wave B1 ships with every workspace `full`, so nothing here changes observable
-// behaviour today; what it pins down is that when a workspace IS tainted, each
-// capability the design's matrix cuts is actually cut at the UserDO — and that
-// the agent can still think, because model-inference credentials survive.
+// A registered workspace reaches every capability except the account
+// authorities the matrix marks `owner_only`. What this pins down is that each
+// method actually passes through the gate — and that the agent can still
+// think, because model-inference credentials resolve.
 //
 // Every entry below names a real method. A denial is a CapabilityDeniedError;
 // anything else (a missing device, an unknown change id, a stubbed MCP client)
@@ -18,8 +18,6 @@ import { sha256Hex } from '../src/lib/crypto';
 import { BUILTIN_PROFILE_CATALOG, decodeJsonValue } from '@kinu.run/core';
 import {
   CapabilityDeniedError,
-  WORKSPACE_CAPABILITY_TIERS,
-  setWorkspaceTier,
   type UserCaller,
   type WorkspaceCapability,
 } from '../src/user/workspace-capability';
@@ -58,8 +56,8 @@ interface GatedCall {
  * reading this list against the design's table.
  */
 const GATED_CALLS: GatedCall[] = [
-  // Model providers — kept at both tiers: the agent must still function, and
-  // these headers attach inside trusted DO code, never in LLM context.
+  // Model providers — the agent must still function, and these headers attach
+  // inside trusted DO code, never in LLM context.
   { capability: 'credentials.model', name: 'getAuthHeaders(codex.oauth)', run: (u, c) => u.getAuthHeaders(c, 'codex.oauth') },
   { capability: 'credentials.model', name: 'getAuthHeaders(openai.bearer)', run: (u, c) => u.getAuthHeaders(c, 'openai.bearer') },
   { capability: 'credentials.model', name: 'getCredentialBaseURL(openai-compat.box)', run: (u, c) => u.getCredentialBaseURL(c, 'openai-compat.box') },
@@ -115,10 +113,10 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'device.rpc', name: 'deviceRuntimeStatus', run: (u, c) => u.deviceRuntimeStatus(c) },
   { capability: 'device.rpc', name: 'openDeviceTerminal', run: (u, c) => u.openDeviceTerminal(c, WORKSPACE, { cols: 80, rows: 24 }) },
 
-  // `device.consent.read_self` is the one device capability a workspace keeps:
-  // the file view narrows its own path scope with the answer, so refusing it
-  // would widen the scope rather than close it. Every other device method is
-  // an account authority and lives in OWNER_ONLY_CALLS below.
+  // `device.consent.read_self` answers for the calling workspace: the file view
+  // narrows its own path scope with the answer, so refusing it would widen the
+  // scope rather than close it. Every other device method is an account
+  // authority and lives in OWNER_ONLY_CALLS below.
   { capability: 'device.consent.read_self', name: 'getDeviceFileView', run: (u, c) => u.getDeviceFileView(c, WORKSPACE) },
 
   { capability: 'device.rpc', name: 'transferDeviceRequestToBackgroundJob', run: (u, c) => u.transferDeviceRequestToBackgroundJob(c, 'rpc-1', 'job-1') },
@@ -208,15 +206,16 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'auth_tokens', name: 'verifyBrowserSession', run: (u, c) => u.verifyBrowserSession(c, TOKEN_HASH) },
   { capability: 'auth_tokens', name: 'revokeBrowserSession', run: (u, c) => u.revokeBrowserSession(c, TOKEN_HASH) },
   // The frame-time revocation check a workspace runs on its own CLI sockets.
-  // `shared` on purpose (see its tier entry), so this row is also the proof
-  // that a tainted workspace can still ENFORCE a revocation.
+  // A workspace that could not ask would either keep serving a revoked CLI or
+  // lose its CLI entirely, so refusing here would make revocation
+  // unenforceable exactly where the workspace is least trusted.
   {
     capability: 'auth_tokens.socket',
     name: 'verifyCliSocketBearer',
     run: (u, c) => u.verifyCliSocketBearer(c, TOKEN_HASH),
   },
-  // The session-side twin of the row above: same tier, same reasoning — a
-  // tainted workspace must still be able to enforce a logout.
+  // The session-side twin of the row above: same reasoning — a workspace must
+  // still be able to enforce a logout.
   {
     capability: 'auth_tokens.socket',
     name: 'verifySocketSession',
@@ -249,7 +248,7 @@ interface OwnerOnlyCall {
 }
 
 /**
- * Methods no workspace token reaches at any tier, and an owner session does.
+ * Methods no workspace token reaches at all, and an owner session does.
  *
  * Two kinds sit here and the difference is where the rule is written. The
  * profile catalog is an owner-only METHOD inside `config`, a capability
@@ -305,12 +304,12 @@ async function refused(call: Pick<GatedCall, 'run'>, userDO: UserDOInstance, cal
 
 async function setupWorkspaces(
   options: { connectedDeviceId?: string } = {},
-): Promise<TestUserDO & { fullToken: string; otherToken: string }> {
+): Promise<TestUserDO & { token: string; otherToken: string }> {
   // A responder, so a call that PASSES the boundary completes instead of
   // hanging on a socket nobody listens to — the fixture cannot seed a binding
   // through the card the owner actually answers otherwise.
   const harness = createTestUserDO({ ...options, deviceResponder: daemon });
-  const fullToken = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
+  const token = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
   const otherToken = await provisionTestWorkspace(harness, OTHER_WORKSPACE, 'Workspace B');
   // A connected socket must belong to a registered device row. The real hub
   // cannot accept a slot whose row does not exist; the old fixture only
@@ -326,93 +325,32 @@ async function setupWorkspaces(
     // about.
     await harness.sendDeviceHello(CAPABLE_HELLO);
   }
-  return Object.assign(harness, { fullToken, otherToken });
+  return Object.assign(harness, { token, otherToken });
 }
 
-describe('a tainted workspace loses exactly the capabilities the matrix cuts', () => {
-  test('every cut capability is refused, and model inference still works', async () => {
+describe('a registered workspace reaches the whole surface', () => {
+  test('no gated call is refused', async () => {
     const harness = await setupWorkspaces();
-    setWorkspaceTier(harness.sql, WORKSPACE, 'shared');
-    const caller: UserCaller = { workspaceToken: harness.fullToken };
+    const caller: UserCaller = { workspaceToken: harness.token };
 
     const cut: string[] = [];
     const kept: string[] = [];
     for (const call of GATED_CALLS) {
       (await refused(call, harness.userDO, caller) ? cut : kept).push(`${call.capability}:${call.name}`);
     }
-
-    const expectedKept = GATED_CALLS
-      .filter((c) => WORKSPACE_CAPABILITY_TIERS[c.capability] === 'shared')
-      .map((c) => `${c.capability}:${c.name}`);
-    expect(kept.sort()).toEqual(expectedKept.sort());
-    expect(cut).toHaveLength(GATED_CALLS.length - expectedKept.length);
-    // Named explicitly so the confinement is legible, not just counted.
-    expect(cut).toContain('device.rpc:deviceRpc');
-    expect(cut).toContain('mcp.tools:userMcp_callTool');
-    expect(cut).toContain('credentials.other:getAuthHeaders(github)');
-    expect(cut).toContain('workspaces.read:listWorkspaces');
-    expect(cut).toContain('workspaces.write:registerWorkspace');
-    expect(cut).toContain('release:getReleaseBoard');
-    expect(cut).toContain('experience.read:searchExperience');
-    expect(cut).toContain('experience.write:publishExperience');
-    expect(cut).toContain('profile:getProfile');
-    expect(cut).toContain('auth_tokens:mintCliToken');
-    expect(kept).toContain('credentials.model:getAuthHeaders(codex.oauth)');
-    harness.close();
-  });
-
-  test('the credential store hides non-model keys from a tainted workspace', async () => {
-    const harness = await setupWorkspaces();
-    await harness.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-model' });
-    await harness.userDO.setCredential(await testOwner(), 'github', { kind: 'bearer', token: 'ghp_secret' });
-    const caller: UserCaller = { workspaceToken: harness.fullToken };
-
-    expect((await harness.userDO.listCredentials(caller)).map((c) => c.key)).toEqual(['github', 'openai.bearer']);
-
-    setWorkspaceTier(harness.sql, WORKSPACE, 'shared');
-    expect((await harness.userDO.listCredentials(caller)).map((c) => c.key)).toEqual(['openai.bearer']);
-    expect(await harness.userDO.getAuthHeaders(caller, 'openai.bearer')).toEqual({ Authorization: 'Bearer sk-model' });
-    await expect(harness.userDO.getAuthHeaders(caller, 'github')).rejects.toThrow(CapabilityDeniedError);
-    harness.close();
-  });
-
-  test('rename survives tainting but only for the calling workspace', async () => {
-    const harness = await setupWorkspaces();
-    setWorkspaceTier(harness.sql, WORKSPACE, 'shared');
-    const caller: UserCaller = { workspaceToken: harness.fullToken };
-
-    await harness.userDO.setWorkspaceDisplayName(caller, WORKSPACE, 'Renamed by itself', 'user');
-    await expect(harness.userDO.setWorkspaceDisplayName(caller, OTHER_WORKSPACE, 'Hijacked', 'user'))
-      .rejects.toThrow('may only rename itself');
-
-    const names = (await harness.userDO.listWorkspaces(await testOwner())).entries;
-    expect(names.find((w) => w.name === WORKSPACE)?.displayName).toBe('Renamed by itself');
-    expect(names.find((w) => w.name === OTHER_WORKSPACE)?.displayName).toBe('Workspace B');
-    harness.close();
-  });
-
-  test('tainting one workspace leaves its sibling at full reach', async () => {
-    const harness = await setupWorkspaces();
-    setWorkspaceTier(harness.sql, WORKSPACE, 'shared');
-
-    const tainted: UserCaller = { workspaceToken: harness.fullToken };
-    const sibling: UserCaller = { workspaceToken: harness.otherToken };
-    await expect(harness.userDO.listWorkspaces(tainted)).rejects.toThrow(CapabilityDeniedError);
-    expect((await harness.userDO.listWorkspaces(sibling)).entries).toHaveLength(2);
-    harness.close();
-  });
-});
-
-describe('a full workspace behaves exactly as before', () => {
-  test('no capability is refused', async () => {
-    const harness = await setupWorkspaces();
-    const caller: UserCaller = { workspaceToken: harness.fullToken };
-
-    const cut: string[] = [];
-    for (const call of GATED_CALLS) {
-      if (await refused(call, harness.userDO, caller)) cut.push(`${call.capability}:${call.name}`);
-    }
     expect(cut).toEqual([]);
+    // Named explicitly so the reach is legible, not just counted.
+    expect(kept).toContain('device.rpc:deviceRpc');
+    expect(kept).toContain('mcp.tools:userMcp_callTool');
+    expect(kept).toContain('credentials.other:getAuthHeaders(github)');
+    expect(kept).toContain('workspaces.read:listWorkspaces');
+    expect(kept).toContain('workspaces.write:registerWorkspace');
+    expect(kept).toContain('release:getReleaseBoard');
+    expect(kept).toContain('experience.read:searchExperience');
+    expect(kept).toContain('experience.write:publishExperience');
+    expect(kept).toContain('profile:getProfile');
+    expect(kept).toContain('auth_tokens:mintCliToken');
+    expect(kept).toContain('credentials.model:getAuthHeaders(codex.oauth)');
     harness.close();
   });
 
@@ -426,9 +364,47 @@ describe('a full workspace behaves exactly as before', () => {
     harness.close();
   });
 
+  test('the credential store shows every key to a workspace caller', async () => {
+    const harness = await setupWorkspaces();
+    await harness.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-model' });
+    await harness.userDO.setCredential(await testOwner(), 'github', { kind: 'bearer', token: 'ghp_secret' });
+    const caller: UserCaller = { workspaceToken: harness.token };
+
+    expect((await harness.userDO.listCredentials(caller)).map((c) => c.key)).toEqual(['github', 'openai.bearer']);
+    expect(await harness.userDO.getAuthHeaders(caller, 'openai.bearer')).toEqual({ Authorization: 'Bearer sk-model' });
+    expect(await harness.userDO.getAuthHeaders(caller, 'github')).toEqual({ Authorization: 'Bearer ghp_secret' });
+    harness.close();
+  });
+
+  test('rename scopes to the calling workspace', async () => {
+    const harness = await setupWorkspaces();
+    const caller: UserCaller = { workspaceToken: harness.token };
+
+    await harness.userDO.setWorkspaceDisplayName(caller, WORKSPACE, 'Renamed by itself', 'user');
+    await expect(harness.userDO.setWorkspaceDisplayName(caller, OTHER_WORKSPACE, 'Hijacked', 'user'))
+      .rejects.toThrow('may only rename itself');
+
+    const names = (await harness.userDO.listWorkspaces(await testOwner())).entries;
+    expect(names.find((w) => w.name === WORKSPACE)?.displayName).toBe('Renamed by itself');
+    expect(names.find((w) => w.name === OTHER_WORKSPACE)?.displayName).toBe('Workspace B');
+    harness.close();
+  });
+
+  test('sibling workspaces are admitted independently', async () => {
+    const harness = await setupWorkspaces();
+
+    const first: UserCaller = { workspaceToken: harness.token };
+    const sibling: UserCaller = { workspaceToken: harness.otherToken };
+    expect((await harness.userDO.listWorkspaces(first)).entries).toHaveLength(2);
+    expect((await harness.userDO.listWorkspaces(sibling)).entries).toHaveLength(2);
+    await expect(harness.userDO.setWorkspaceDisplayName(first, OTHER_WORKSPACE, 'Hijacked', 'user'))
+      .rejects.toThrow('may only rename itself');
+    harness.close();
+  });
+
   test('the pre-existing surfaces still answer: registry, credentials, consent', async () => {
     const harness = await setupWorkspaces();
-    const caller: UserCaller = { workspaceToken: harness.fullToken };
+    const caller: UserCaller = { workspaceToken: harness.token };
     await harness.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-1' });
 
     expect((await harness.userDO.listWorkspaces(caller)).entries.map((w) => w.name).sort())
@@ -479,19 +455,6 @@ describe('the boundary fails closed', () => {
     harness.close();
   });
 
-  test('a valid token whose registry row is gone is refused, not defaulted to full', async () => {
-    const harness = await setupWorkspaces();
-    harness.db.prepare('DELETE FROM workspace_tiers WHERE workspace_name = ?').run(WORKSPACE);
-    const caller: UserCaller = { workspaceToken: harness.fullToken };
-
-    const allowed: string[] = [];
-    for (const call of GATED_CALLS) {
-      if (!(await refused(call, harness.userDO, caller))) allowed.push(`${call.capability}:${call.name}`);
-    }
-    expect(allowed).toEqual([]);
-    harness.close();
-  });
-
   test('deleting a workspace kills its token', async () => {
     const harness = await setupWorkspaces();
     const caller: UserCaller = { workspaceToken: harness.otherToken };
@@ -505,7 +468,7 @@ describe('the boundary fails closed', () => {
 });
 
 describe('capability provisioning', () => {
-  test('provisioning issues a working identity registered as full', async () => {
+  test('provisioning issues a working identity', async () => {
     const harness = createTestUserDO();
     const token = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
 
@@ -516,12 +479,12 @@ describe('capability provisioning', () => {
 
   test('a workspace that already agrees with the registry is not re-minted', async () => {
     const harness = await setupWorkspaces();
-    const hash = await sha256Hex(harness.fullToken);
+    const hash = await sha256Hex(harness.token);
 
     await harness.userDO.ensureWorkspaceCapability(WORKSPACE, hash);
 
-    expect(harness.installed.get(WORKSPACE)).toBe(harness.fullToken);
-    expect((await harness.userDO.listWorkspaces({ workspaceToken: harness.fullToken })).entries).toHaveLength(2);
+    expect(harness.installed.get(WORKSPACE)).toBe(harness.token);
+    expect((await harness.userDO.listWorkspaces({ workspaceToken: harness.token })).entries).toHaveLength(2);
     harness.close();
   });
 
@@ -551,10 +514,10 @@ describe('capability provisioning', () => {
     // copy while the UserDO dropped the row.
     harness.db.prepare('DELETE FROM workspace_capability_tokens WHERE workspace_name = ?').run(WORKSPACE);
 
-    await harness.userDO.ensureWorkspaceCapability(WORKSPACE, await sha256Hex(harness.fullToken));
+    await harness.userDO.ensureWorkspaceCapability(WORKSPACE, await sha256Hex(harness.token));
 
     const repaired = harness.installed.get(WORKSPACE)!;
-    expect(repaired).not.toBe(harness.fullToken);
+    expect(repaired).not.toBe(harness.token);
     expect((await harness.userDO.listWorkspaces({ workspaceToken: repaired })).entries).toHaveLength(2);
     harness.close();
   });
@@ -567,24 +530,24 @@ describe('capability provisioning', () => {
     harness.close();
   });
 
-  test('a re-mint supersedes the old secret without restoring capability', async () => {
+  test('a re-mint supersedes the old secret and keeps admission', async () => {
     const harness = await setupWorkspaces();
-    setWorkspaceTier(harness.sql, WORKSPACE, 'shared');
+    await harness.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-model' });
     await harness.userDO.ensureWorkspaceCapability(WORKSPACE, null);
     const reminted = harness.installed.get(WORKSPACE)!;
 
-    await expect(harness.userDO.listWorkspaces({ workspaceToken: harness.fullToken }))
+    await expect(harness.userDO.listWorkspaces({ workspaceToken: harness.token }))
       .rejects.toThrow('Unrecognized workspace capability token');
-    await expect(harness.userDO.listWorkspaces({ workspaceToken: reminted }))
-      .rejects.toThrow(CapabilityDeniedError);
-    expect(await harness.userDO.getAuthHeaders({ workspaceToken: reminted }, 'openai.bearer')).toBeNull();
+    expect((await harness.userDO.listWorkspaces({ workspaceToken: reminted })).entries).toHaveLength(2);
+    expect(await harness.userDO.getAuthHeaders({ workspaceToken: reminted }, 'openai.bearer'))
+      .toEqual({ Authorization: 'Bearer sk-model' });
     harness.close();
   });
 
   test('the raw token is never persisted in the UserDO', async () => {
     const harness = await setupWorkspaces();
     const rows = harness.db.prepare('SELECT * FROM workspace_capability_tokens').all();
-    expect(JSON.stringify(rows)).not.toContain(harness.fullToken);
+    expect(JSON.stringify(rows)).not.toContain(harness.token);
     expect(JSON.stringify(rows)).not.toContain(harness.otherToken);
     harness.close();
   });
@@ -636,13 +599,14 @@ describe('facets attenuate with their workspace', () => {
   // A subordinate or head presents the PARENT workspace's token (pushed at
   // spawn, refreshed on reissue — see unit-subordinates / unit-facet-spawn).
   // What that BUYS is here: the token resolves as the parent no matter who
-  // holds it, so tainting the workspace taints every facet of it at once.
-  // These need a LIVE device: without one the device methods short-circuit on
-  // "no device connected" before ever reaching the identity substitution, and
-  // the assertions below would hold whether or not it existed.
+  // holds it, so scoping follows the workspace and no facet carries identity
+  // of its own. These need a LIVE device: without one the device methods
+  // short-circuit on "no device connected" before ever reaching the identity
+  // substitution, and the assertions below would hold whether or not it
+  // existed.
   test('device consent answers for the PROVEN workspace, not the name the caller passed', async () => {
     const harness = await setupWorkspaces({ connectedDeviceId: 'dev-1' });
-    const facetCaller: UserCaller = { workspaceToken: harness.fullToken };
+    const facetCaller: UserCaller = { workspaceToken: harness.token };
     // workspace-a is bound to the machine, and the owner has turned that
     // device's Sandbox switch off — the two facts that lift the file view.
     harness.consentDecision = 'always';
@@ -667,7 +631,7 @@ describe('facets attenuate with their workspace', () => {
     const harness = await setupWorkspaces({ connectedDeviceId: 'dev-1' });
     // workspace-a has already said "always" for this device.
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc({ workspaceToken: harness.fullToken }, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
+    await harness.userDO.deviceRpc({ workspaceToken: harness.token }, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
     harness.consentDecision = 'deny';
     const sibling: UserCaller = { workspaceToken: harness.otherToken };
 
@@ -690,34 +654,30 @@ describe('facets attenuate with their workspace', () => {
     harness.close();
   });
 
-  test('tainting the workspace cuts the facet in the same instant, with no facet bookkeeping', async () => {
+  test('a facet resolves as its parent workspace, live', async () => {
     const harness = await setupWorkspaces();
-    const facetCaller: UserCaller = { workspaceToken: harness.fullToken };
+    const facetCaller: UserCaller = { workspaceToken: harness.token };
     expect((await harness.userDO.listWorkspaces(facetCaller)).entries).toHaveLength(2);
 
-    setWorkspaceTier(harness.sql, WORKSPACE, 'shared');
-
-    // Same token, same facet, no re-issue anywhere: tier is read live.
-    await expect(harness.userDO.listWorkspaces(facetCaller)).rejects.toThrow(CapabilityDeniedError);
-    await expect(harness.userDO.deviceRpc(facetCaller, 'exec', ['ls'])).rejects.toThrow(CapabilityDeniedError);
-    await expect(harness.userDO.userMcp_callTool(facetCaller, 'srv', 'tool', {})).rejects.toThrow(CapabilityDeniedError);
-    // …while the facet can still run a model, which is what keeps it working.
-    expect(await harness.userDO.getAuthHeaders(facetCaller, 'openai.bearer')).toBeNull();
+    // Same token, same facet, no re-issue anywhere: the registry answers
+    // current state on every call.
+    await harness.userDO.setWorkspaceDisplayName(facetCaller, WORKSPACE, 'Renamed by its facet', 'user');
+    await expect(harness.userDO.setWorkspaceDisplayName(facetCaller, OTHER_WORKSPACE, 'Hijacked', 'user'))
+      .rejects.toThrow('may only rename itself');
+    const names = (await harness.userDO.listWorkspaces(await testOwner())).entries;
+    expect(names.find((w) => w.name === WORKSPACE)?.displayName).toBe('Renamed by its facet');
     harness.close();
   });
 
-  test('a facet cannot name a different workspace to escape its parent\'s tier', async () => {
+  test('a facet cannot name a different workspace to escape its parent', async () => {
     const harness = await setupWorkspaces();
-    setWorkspaceTier(harness.sql, WORKSPACE, 'shared');
-    const facetCaller: UserCaller = { workspaceToken: harness.fullToken };
+    const facetCaller: UserCaller = { workspaceToken: harness.token };
 
-    // Every remaining name argument is either scoped to the proven workspace
+    // Name arguments stay scoped to the proven workspace: the file view answers
+    // from the proven grant (pinned with a live device above), and a rename
+    // names its own workspace or fails.
     await expect(harness.userDO.setWorkspaceDisplayName(facetCaller, OTHER_WORKSPACE, 'Hijacked', 'user'))
       .rejects.toThrow('may only rename itself');
-    await expect(harness.userDO.getDeviceFileView(facetCaller, OTHER_WORKSPACE))
-      .rejects.toThrow(CapabilityDeniedError);
-    await expect(harness.userDO.getReleaseBoard(facetCaller, OTHER_WORKSPACE))
-      .rejects.toThrow(CapabilityDeniedError);
     harness.close();
   });
 });
@@ -763,7 +723,7 @@ describe('no privileged UserDO method escapes the gate', () => {
 
   test('owner-only profile writes reject every workspace token and accept an owner session', async () => {
     const harness = await setupWorkspaces();
-    const workspace: UserCaller = { workspaceToken: harness.fullToken };
+    const workspace: UserCaller = { workspaceToken: harness.token };
     for (const call of OWNER_ONLY_CALLS) {
       expect(await refused(call, harness.userDO, workspace)).toBe(true);
       expect(await refused(call, harness.userDO, await testOwner())).toBe(false);
@@ -771,7 +731,7 @@ describe('no privileged UserDO method escapes the gate', () => {
     harness.close();
   });
 
-  test('every gated method is exercised by the matrix above', () => {
+  test('every gated method is exercised by the lists above', () => {
     const declared = new Set(
       declaredMembers()
         .filter((m) => !isInternalMember(m) && m.params.startsWith('caller: UserCaller'))
@@ -784,27 +744,4 @@ describe('no privileged UserDO method escapes the gate', () => {
     expect([...declared].filter((name) => !exercised.has(name)).sort()).toEqual([]);
   });
 
-  test('every capability in the matrix has at least one call behind it', () => {
-    // A capability floored at `owner_only` is covered by the owner-only list,
-    // where its calls must be REFUSED for a workspace: a matrix entry with no
-    // call behind it in either list is policy nobody exercises.
-    const covered = new Set([
-      ...GATED_CALLS.map((c) => c.capability),
-      ...OWNER_ONLY_CALLS.flatMap((c) => c.capability === undefined ? [] : [c.capability]),
-    ]);
-    const declared = Object.keys(WORKSPACE_CAPABILITY_TIERS).filter(
-      (name): name is WorkspaceCapability => Object.hasOwn(WORKSPACE_CAPABILITY_TIERS, name),
-    );
-    expect(declared.filter((c) => !covered.has(c))).toEqual([]);
-  });
-
-  test('an owner-only capability admits no workspace and appears in no gated row', () => {
-    const ownerOnly = Object.entries(WORKSPACE_CAPABILITY_TIERS)
-      .filter(([, floor]) => floor === 'owner_only')
-      .map(([capability]) => capability);
-    expect(ownerOnly.sort()).toEqual(['device.consent', 'device.manage']);
-    // GATED_CALLS is the list a `full` workspace is expected to get THROUGH,
-    // so an owner-only capability appearing there would claim the opposite.
-    expect(GATED_CALLS.filter((c) => ownerOnly.includes(c.capability))).toEqual([]);
-  });
 });

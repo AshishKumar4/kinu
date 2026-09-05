@@ -8,7 +8,6 @@ import {
   catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL,
   type ModelsDevProviderInfo, type ProviderFailure,
 } from '@kinu.run/core';
-import type { UserDO } from './user-do';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
 import { retryTransientDO } from '../lib/do-rpc';
 import type { UserCaller } from './workspace-capability';
@@ -35,8 +34,8 @@ export interface ModelMenuResponse {
 }
 
 export async function listAvailableModels(env: Env, userId: string, caller: UserCaller): Promise<ModelMenuResponse> {
-  // SAFETY: The UserDO namespace binding declares UserDO as its stub contract.
-  const stub = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+  // The UserDO namespace binding declares UserDO as its stub contract.
+  const stub = env.UserDO.get(env.UserDO.idFromName(userId));
   const { registry, deps } = createAgentProviderRegistry({
     env,
     userDO: { stub, caller },
@@ -88,7 +87,7 @@ export interface ProviderCatalogEntry {
  *  openai-compat path can drive, plus catalog providers a bespoke static
  *  provider serves under the same id/credKey (openai, anthropic, openrouter).
  *  OAuth-connected providers (workers-ai, codex) have their own flows. */
-export function buildProviderCatalog(
+function buildProviderCatalog(
   providers: readonly ModelsDevProviderInfo[],
   staticIds: ReadonlySet<string>,
   storedKeys: ReadonlySet<string>,
@@ -110,8 +109,8 @@ export function buildProviderCatalog(
 }
 
 export async function listProviderCatalog(env: Env, userId: string, caller: UserCaller): Promise<ProviderCatalogEntry[]> {
-  // SAFETY: The UserDO namespace binding declares UserDO as its stub contract.
-  const stub = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+  // The UserDO namespace binding declares UserDO as its stub contract.
+  const stub = env.UserDO.get(env.UserDO.idFromName(userId));
   const { registry } = createAgentProviderRegistry({ env, userDO: { stub, caller }, fetch });
   const [providers, creds] = await Promise.all([
     listModelsDevProviders({ fetch }),

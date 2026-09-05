@@ -21,7 +21,6 @@
 import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import {
-  PREVIEW_EXPOSURE_TTL_MS,
   sandboxPreviewExposed,
   sandboxPreviewExposures,
   type SandboxPreviewExposures,
@@ -37,6 +36,9 @@ const SUFFIX = 'previews.example';
 const SANDBOX_ID = 'kinu-hello';
 const PORT = 8080;
 const TOKEN = 'p8080_ab12cd34';
+
+/** The exposure lifetime these cases pin: thirty days without observation. */
+const EXPOSURE_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 
 afterAll(() => { setSystemTime(); });
 
@@ -207,17 +209,17 @@ describe('listing ports re-observes what the container still reports', () => {
     await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
 
     // Two thirds of the way through the record's life, the Ports panel lists.
-    setSystemTime(new Date(Date.now() + (PREVIEW_EXPOSURE_TTL_MS * 2) / 3));
+    setSystemTime(new Date(Date.now() + (EXPOSURE_LIFETIME_MS * 2) / 3));
     await lane(kv, box).getExposedPorts(SUFFIX);
     // Two thirds again: past the first record's expiry, so a preview still in
     // use resolves only because the observation refreshed it.
-    setSystemTime(new Date(Date.now() + (PREVIEW_EXPOSURE_TTL_MS * 2) / 3));
+    setSystemTime(new Date(Date.now() + (EXPOSURE_LIFETIME_MS * 2) / 3));
 
     expect(await sandboxPreviewExposed(kv, claim)).toBe(true);
 
     // And it is a bound, not an immortal record: with nothing observing it, the
     // same wait lapses.
-    setSystemTime(new Date(Date.now() + PREVIEW_EXPOSURE_TTL_MS));
+    setSystemTime(new Date(Date.now() + EXPOSURE_LIFETIME_MS));
     expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
     setSystemTime();
   });
@@ -273,7 +275,7 @@ describe('a revoked exposure is never resurrected by the lane that published it'
     await writer.publish(PORT, TOKEN);
 
     // Late enough in the record's life that a listing would rewrite it.
-    setSystemTime(new Date(Date.now() + (PREVIEW_EXPOSURE_TTL_MS * 2) / 3));
+    setSystemTime(new Date(Date.now() + (EXPOSURE_LIFETIME_MS * 2) / 3));
     await writer.revokeAll();
     setSystemTime(new Date(Date.now() + 1));
     const rows = await lane(kv, box, writer).getExposedPorts(SUFFIX);

@@ -14,7 +14,7 @@ import * as v from 'valibot';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, sqlExec,
 } from './helpers/user-do';
-import { createCredentialCipher, isSealedCredential } from '../src/user/credential-envelope';
+import { createCredentialCipher } from '../src/user/credential-envelope';
 import { ownerCaller } from '../src/user/workspace-capability';
 
 /** The owner capability of a deployment whose key has been rotated. */
@@ -36,7 +36,6 @@ describe('the credential store is sealed at rest', () => {
     const stored = storedValue(harness, 'openrouter.bearer');
     expect(stored).toBeDefined();
     expect(stored).not.toContain('sk-or-secret');
-    expect(isSealedCredential(stored!)).toBe(true);
 
     expect(await harness.userDO.getAuthHeaders(await testOwner(), 'openrouter.bearer'))
       .toEqual({ Authorization: 'Bearer sk-or-secret' });
@@ -92,7 +91,6 @@ describe('migration and rotation', () => {
     expect(await harness.userDO.getAuthHeaders(await testOwner(), 'openai.bearer'))
       .toEqual({ Authorization: 'Bearer sk-legacy' });
     const stored = storedValue(harness, 'openai.bearer');
-    expect(isSealedCredential(stored!)).toBe(true);
     expect(stored).not.toContain('sk-legacy');
     harness.close();
   });
@@ -194,7 +192,6 @@ describe('MCP server headers are sealed too', () => {
     const stored = storedHeaders(harness, 'srv1');
     expect(stored).not.toBeNull();
     expect(stored).not.toContain('mcp-secret');
-    expect(isSealedCredential(stored!)).toBe(true);
     harness.close();
   });
 

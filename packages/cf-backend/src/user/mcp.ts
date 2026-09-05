@@ -152,7 +152,7 @@ const StringArraySchema = v.array(v.string());
  * `/mcp/` are different resources to a server, and guessing otherwise would
  * silently retarget somebody's endpoint.
  */
-export function canonicalMcpUrl(serverUrl: string): string {
+function canonicalMcpUrl(serverUrl: string): string {
   const url = new URL(serverUrl);
   url.hash = '';
   return url.href;

@@ -174,10 +174,24 @@ export async function handleUserRequest(
   if (path === '/workspaces' && method === 'GET') {
     const cursor = url.searchParams.get('cursor');
     const limitRaw = url.searchParams.get('limit');
-    return json(await stub.listWorkspaces(owner, {
-      cursor,
-      limit: limitRaw === null ? undefined : Number(limitRaw),
-    }));
+    const limit = limitRaw === null || limitRaw.trim() === '' ? undefined : Number(limitRaw);
+    // The roster bounds live in user-do's clampRosterLimit. This check only
+    // keeps a non-number from arriving as NaN, which otherwise reads as a
+    // throw from the registry rather than as a bad request.
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
+      return err(400, 'Workspace roster limit must be a positive integer.');
+    }
+    try {
+      return json(await stub.listWorkspaces(owner, { cursor, limit }));
+    } catch (e) {
+      const message = renderThrownChain({ cause: e });
+      // The cursor is an opaque token user-do mints. Garbage in it is a
+      // caller error, not an outage. Matched by message because the DO RPC
+      // boundary carries no error class. User-do holds this string verbatim
+      // as wire contract.
+      if (message.startsWith('Invalid workspace roster cursor')) return err(400, message);
+      throw e;
+    }
   }
   if (path === '/workspaces' && method === 'POST') {
     return handleCreateWorkspaceRequest(request, env, identity.userId, stub, ctx);

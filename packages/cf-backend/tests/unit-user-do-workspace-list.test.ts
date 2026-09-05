@@ -3,11 +3,15 @@
 // next page — so no roster row is unreachable, and a short page is never
 // mistaken for a complete roster. Server-side fans that must reach every
 // active workspace enumerate through the exact read, not the paged listing.
+import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
+  TEST_CREDENTIAL_ENCRYPTION_KEY,
   createTestUserDO, createdWorkspace, testOwner, type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
+import { handleUserRequest } from '../src/user/routes';
+import type { AuthIdentity } from '../src/auth/session';
 
 const OVERFLOW = 205;
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -369,5 +373,110 @@ describe('listWorkspaces pages', () => {
     await expect(harness.userDO.listWorkspaces(owner, { cursor: 'garbage' }))
       .rejects.toThrow('Invalid workspace roster cursor');
     harness.close();
+  });
+});
+
+const ErrorBodySchema = v.object({ error: v.string() });
+const RosterPageSchema = v.object({
+  entries: v.array(v.object({ name: v.string() })),
+  total: v.number(),
+  nextCursor: v.nullable(v.string()),
+});
+
+describe('malformed paging over HTTP', () => {
+  const IDENTITY: AuthIdentity = {
+    userId: USER_ID,
+    email: 'ashish@example.com',
+    sub: 'roster-paging',
+    provider: 'test',
+  };
+
+  /** The roster route over the real registry, recording what reached it. */
+  function routeHarness() {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const listed: unknown[] = [];
+    const inner = harness.userDO;
+    const stub = {
+      async ensureProfile(...args: Parameters<TestUserDO['userDO']['ensureProfile']>) {
+        return inner.ensureProfile(...args);
+      },
+      async listWorkspaces(...args: Parameters<TestUserDO['userDO']['listWorkspaces']>) {
+        listed.push(args[1]);
+        return inner.listWorkspaces(...args);
+      },
+    };
+    const partialEnv: Partial<Env> = {};
+    Object.assign(partialEnv, {
+      UserDO: { idFromName: (name: string) => name, get: () => stub },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    });
+    // SAFETY: The roster route reads exactly the constructed UserDO namespace
+    // plus credential key. Every typed binding reachable in this test is
+    // present.
+    const env = partialEnv as Env;
+    const call = async (query: string): Promise<Response> => {
+      const response = await handleUserRequest(
+        new Request(`https://kinu.example.com/api/user/workspaces${query}`), env, IDENTITY,
+      );
+      if (!response) throw new Error('roster route did not handle the request');
+      return response;
+    };
+    return { harness, call, listed };
+  }
+
+  test('a non-numeric limit is a 400 and never reaches the registry', async () => {
+    const { harness, call, listed } = routeHarness();
+    try {
+      const response = await call('?limit=abc');
+      expect(response.status).toBe(400);
+      expect(v.parse(ErrorBodySchema, await response.json())).toEqual({ error: 'Workspace roster limit must be a positive integer.' });
+      expect(listed).toEqual([]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('a non-positive limit is a 400', async () => {
+    const { harness, call } = routeHarness();
+    try {
+      for (const query of ['?limit=-5', '?limit=12.5']) {
+        const response = await call(query);
+        expect(response.status).toBe(400);
+      }
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('a garbage cursor is a 400, not an outage', async () => {
+    const { harness, call } = routeHarness();
+    try {
+      const response = await call('?cursor=%7Bnope');
+      expect(response.status).toBe(400);
+      const body = v.parse(ErrorBodySchema, await response.json());
+      // The rendered cause chain trails the contract sentence; the sentence
+      // itself is what user-do holds verbatim.
+      expect(body.error.startsWith('Invalid workspace roster cursor; start from page one.')).toBe(true);
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('a usable page still walks through the route', async () => {
+    const { harness, call } = routeHarness();
+    try {
+      const owner = await testOwner();
+      for (const name of ['ws-a', 'ws-b', 'ws-c']) await harness.userDO.registerWorkspace(owner, name);
+
+      const first = v.parse(RosterPageSchema, await (await call('?limit=2')).json());
+      expect(first.entries).toHaveLength(2);
+      expect(first.total).toBe(3);
+
+      const second = v.parse(RosterPageSchema, await (await call(`?cursor=${first.nextCursor}`)).json());
+      expect(second.entries).toHaveLength(1);
+      expect(second.nextCursor).toBeNull();
+    } finally {
+      harness.close();
+    }
   });
 });

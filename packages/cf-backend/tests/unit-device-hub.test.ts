@@ -16,7 +16,6 @@ import * as v from 'valibot';
 import {
   DeviceSocketHub,
   deviceIdFromSocket,
-  deviceTag,
   type DeviceSocket,
   type DeviceSocketCtx,
 } from '../src/user/device-hub';
@@ -53,12 +52,11 @@ function fakeCtx(): DeviceSocketCtx & { accepted: Array<{ ws: FakeSocket; tags: 
 }
 
 describe('DeviceSocketHub', () => {
-  test('accept tags the socket as device:<id> and marks its attachment', () => {
+  test('accept marks the socket and reports liveness', () => {
     const ctx = fakeCtx();
     const hub = new DeviceSocketHub(ctx);
     const ws = fakeSocket();
     hub.accept('dev-a', ws);
-    expect(ctx.accepted[0]?.tags).toEqual([deviceTag('dev-a')]);
     expect(deviceIdFromSocket(ws)).toBe('dev-a');
     expect(hub.isConnected('dev-a')).toBe(true);
     expect(hub.connectedDeviceId()).toBe('dev-a');

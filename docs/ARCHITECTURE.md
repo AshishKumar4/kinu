@@ -393,21 +393,17 @@ Every secret a user owns lives in one `UserDO`; every privileged method takes a
 (`cf-backend/src/user/workspace-capability.ts`). Worker routes act for the edge-
 verified owner and present `ownerCaller(env)`, an HMAC of the Worker's own
 secret, so owner authority is something the deployment holds rather than a
-string any module can type. A workspace presents the secret minted for it at
-claim time, stored hashed; the UserDO looks its tier up live in
-`workspace_tiers`. Tokens are identity rather than capability, so re-tainting a
-workspace is a single row update.
+A workspace presents the secret minted for it at claim time, stored hashed.
+Tokens are identity rather than capability: admission follows the matrix, and
+only the two `owner_only` entries refuse a workspace token.
 
 Neither kind attests who is calling; a sibling DO sharing `env` can derive the
 owner capability too. What the boundary buys: the tool surface (what an injected
 prompt can steer) reaches the UserDO only through code presenting a workspace
-token, attenuated by tier whichever tool gate someone forgets. Today every
-workspace registers `full`, the whole surface, exactly as before. The `shared`
-tier is what a second human gets: full capability inside itself, no reach into
-the wider account. Facets (subordinates, heads, MCTS branches) present their
-parent's token, so they attenuate with it and have no identity of their own to
-forget. Enforcement lives where the secrets are, so no forgotten tool gate can
-route around it.
+token, attenuated whichever tool gate someone forgets. Facets (subordinates,
+heads, MCTS branches) present their parent's token, so they attenuate with it
+and have no identity of their own to forget. Enforcement lives where the
+secrets are, so no forgotten tool gate can route around it.
 
 ## Evolution
 

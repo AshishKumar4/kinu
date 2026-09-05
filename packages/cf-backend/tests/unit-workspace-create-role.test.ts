@@ -7,7 +7,7 @@
 // named the field crossed by structural accident alone — which `gate:wired`
 // reported as a wire read at one end and connected at neither.
 import { describe, expect, test } from 'bun:test';
-import { asFetchFunction } from '@kinu.run/core';
+import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
 import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { UserCaller } from '../src/user/workspace-capability';
@@ -19,17 +19,19 @@ interface CreateBody {
   name: string;
   purpose: string;
   role?: string;
+  model?: string;
+  reasoningEffort?: string;
 }
 
 /** One `POST /workspaces`, and every RPC the new workspace received in order.
- *
  *  The whole route is driven rather than `createCloudWorkspaceForUser` alone,
  *  because the request-body-to-input mapping is the thing under test and
  *  calling the create directly would step over it. */
-async function postCreate(body: CreateBody): Promise<{ status: number; calls: string[] }> {
+async function postCreate(body: CreateBody): Promise<{ status: number; calls: string[]; configKeys: string[] }> {
   const calls: string[] = [];
+  const configKeys: string[] = [];
   const userDO = {
-    async getConfig(_caller: UserCaller) { return null; },
+    async getConfig(_caller: UserCaller, key: string) { configKeys.push(key); return null; },
     async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
     async getCredentialBaseURL(_caller: UserCaller) {
       return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
@@ -51,6 +53,7 @@ async function postCreate(body: CreateBody): Promise<{ status: number; calls: st
     async setSoul() {},
     async resetWorkspaceBaseline() {},
     async setModel() {},
+    async setReasoningEffort(effort: string) { calls.push(`effort:${effort}`); },
     async setRole(roleId: string) { calls.push(`role:${roleId}`); return { role: roleId }; },
     async beginGenesisTurn() { calls.push('genesis'); },
   };
@@ -80,7 +83,7 @@ async function postCreate(body: CreateBody): Promise<{ status: number; calls: st
       USER_ID,
       typed.UserDO.get(typed.UserDO.idFromName(USER_ID)),
     );
-    return { status: response.status, calls };
+    return { status: response.status, calls, configKeys };
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -112,5 +115,38 @@ describe('the role a create request asks for', () => {
 
     expect(created.status).toBe(201);
     expect(created.calls).toEqual(['genesis']);
+  });
+});
+
+describe('the model and effort a create request asks for', () => {
+  test('a supplied model short-circuits the stored default', async () => {
+    const created = await postCreate({
+      name: AGENT, purpose: 'Review the checkout flow.', model: DEFAULT_WORKERS_AI_MODEL_SPEC,
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.configKeys).not.toContain('default_model');
+  });
+
+  test('the stored default is consulted when the request names no model', async () => {
+    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' });
+
+    expect(created.status).toBe(201);
+    expect(created.configKeys).toContain('default_model');
+  });
+
+  test('effort reaches the new workspace, before its first turn runs', async () => {
+    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.', reasoningEffort: 'high' });
+
+    expect(created.status).toBe(201);
+    expect(created.calls).toContain('effort:high');
+    expect(created.calls.indexOf('effort:high')).toBeLessThan(created.calls.indexOf('genesis'));
+  });
+
+  test('an unknown effort is a bad request, not a workspace', async () => {
+    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.', reasoningEffort: 'ultra' });
+
+    expect(created.status).toBe(400);
+    expect(created.calls).not.toContain('genesis');
   });
 });

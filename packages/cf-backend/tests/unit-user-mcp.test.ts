@@ -15,7 +15,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import {
-  validateMcpServerInput, canonicalMcpUrl,
+  validateMcpServerInput,
   parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, mcpCredentialTransport,
 } from '../src/user/mcp';
@@ -120,16 +120,21 @@ describe('validateMcpServerInput', () => {
 
 describe('canonical MCP endpoint identity', () => {
   test('one endpoint has one spelling', () => {
-    expect(canonicalMcpUrl('HTTPS://MCP.Example.COM:443/v1')).toBe('https://mcp.example.com/v1');
-    expect(canonicalMcpUrl('https://mcp.example.com/v1#frag')).toBe('https://mcp.example.com/v1');
+    expect(validateMcpServerInput({ name: 'n', serverUrl: 'HTTPS://MCP.Example.COM:443/v1' }).serverUrl)
+      .toBe('https://mcp.example.com/v1');
+    expect(validateMcpServerInput({ name: 'n', serverUrl: 'https://mcp.example.com/v1#frag' }).serverUrl)
+      .toBe('https://mcp.example.com/v1');
   });
 
   test('the path and query are left exactly as written', () => {
     // `/mcp` and `/mcp/` are different resources to a server, and a query can
     // select the endpoint. Canonicalising those would silently retarget it.
-    expect(canonicalMcpUrl('https://a.example/mcp/')).toBe('https://a.example/mcp/');
-    expect(canonicalMcpUrl('https://a.example/mcp')).toBe('https://a.example/mcp');
-    expect(canonicalMcpUrl('https://a.example/mcp?tenant=b')).toBe('https://a.example/mcp?tenant=b');
+    expect(validateMcpServerInput({ name: 'n', serverUrl: 'https://a.example/mcp/' }).serverUrl)
+      .toBe('https://a.example/mcp/');
+    expect(validateMcpServerInput({ name: 'n', serverUrl: 'https://a.example/mcp' }).serverUrl)
+      .toBe('https://a.example/mcp');
+    expect(validateMcpServerInput({ name: 'n', serverUrl: 'https://a.example/mcp?tenant=b' }).serverUrl)
+      .toBe('https://a.example/mcp?tenant=b');
   });
 
   test('an accepted input is stored canonical', () => {

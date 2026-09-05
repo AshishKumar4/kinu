@@ -1,21 +1,18 @@
-// Workspace capability tokens + the taint registry — store-level behavior:
-// hashed at rest, identity separate from tier, fail closed on every unknown.
-// Run against real SQLite through the same SqlExec seam the UserDO provides.
+// Workspace capability tokens — store-level behavior: hashed at rest, identity
+// separate from admission, fail closed on every unknown. Run against real
+// SQLite through the same SqlExec seam the UserDO provides.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import type { SqlExec } from '@kinu.run/core';
 import {
   CapabilityDeniedError,
-  WORKSPACE_CAPABILITY_TIERS,
   ownerCaller,
-  getWorkspaceTier,
   initWorkspaceCapabilityTables,
   commitWorkspaceCapability,
   freshWorkspaceCapability,
   requireTier,
   revokeWorkspaceCapability,
-  setWorkspaceTier,
   type WorkspaceCapability,
 } from '../src/user/workspace-capability';
 import { isModelInferenceCredentialKey } from '../src/user/credential-headers';
@@ -40,11 +37,13 @@ async function mintWorkspaceCapability(
   return fresh;
 }
 
-function isWorkspaceCapability(value: string): value is WorkspaceCapability {
-  return Object.hasOwn(WORKSPACE_CAPABILITY_TIERS, value);
-}
-
-const CAPABILITIES = Object.keys(WORKSPACE_CAPABILITY_TIERS).filter(isWorkspaceCapability);
+/** One capability per floor, by public name. The gate holds no per-capability
+ *  logic beyond the floor, so representatives carry the behavior and no test
+ *  duplicates the matrix. */
+const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
+  'credentials.model', 'device.rpc', 'workspaces.rename_self',
+];
+const OWNER_ONLY_CAPABILITIES: WorkspaceCapability[] = ['device.consent', 'device.manage'];
 
 describe('capability token mint', () => {
   test('stores only the hash — the raw token never lands in SQLite', async () => {
@@ -66,21 +65,22 @@ describe('capability token mint', () => {
     db.close();
   });
 
-  test('registers the workspace as full — Wave B1 taints nothing', async () => {
+  test('a minted workspace is admitted', async () => {
     const { db, sql } = setup();
-    await mintWorkspaceCapability(sql, 'workspace-a');
-    expect(getWorkspaceTier(sql, 'workspace-a')).toBe('full');
+    const minted = await mintWorkspaceCapability(sql, 'workspace-a');
+    expect(await requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, 'credentials.model'))
+      .toEqual({ kind: 'workspace', workspace: 'workspace-a' });
     db.close();
   });
 
-  test('re-minting replaces the secret but never launders the tier', async () => {
+  test('re-minting replaces the secret and keeps admission', async () => {
     const { db, sql } = setup();
     const first = await mintWorkspaceCapability(sql, 'workspace-a');
-    setWorkspaceTier(sql, 'workspace-a', 'shared');
 
     const second = await mintWorkspaceCapability(sql, 'workspace-a');
     expect(second.token).not.toBe(first.token);
-    expect(getWorkspaceTier(sql, 'workspace-a')).toBe('shared');
+    expect(await requireTier(sql, TEST_USER_ENV, { workspaceToken: second.token }, 'credentials.model'))
+      .toEqual({ kind: 'workspace', workspace: 'workspace-a' });
 
     // The superseded token is dead; only one identity row per workspace exists.
     await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: first.token }, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
@@ -92,12 +92,11 @@ describe('capability token mint', () => {
     db.close();
   });
 
-  test('revoke drops both identity and tier so a same-name recreate starts clean', async () => {
+  test('revoke drops the identity so a same-name recreate starts clean', async () => {
     const { db, sql } = setup();
     const minted = await mintWorkspaceCapability(sql, 'workspace-a');
     revokeWorkspaceCapability(sql, 'workspace-a');
 
-    expect(getWorkspaceTier(sql, 'workspace-a')).toBeNull();
     await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
     db.close();
   });
@@ -147,80 +146,26 @@ describe('requireTier fails closed', () => {
     db.close();
   });
 
-  test('denies a valid token whose workspace lost its registry row', async () => {
-    const { db, sql } = setup();
-    const minted = await mintWorkspaceCapability(sql, 'workspace-a');
-    db.prepare('DELETE FROM workspace_tiers WHERE workspace_name = ?').run('workspace-a');
-
-    await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, 'credentials.model'))
-      .rejects.toThrow(/no capability tier registered/);
-    db.close();
-  });
-
-  test('denies a tier value the registry should never hold', async () => {
-    const { db, sql } = setup();
-    const minted = await mintWorkspaceCapability(sql, 'workspace-a');
-    // CHECK constraint blocks the normal path, so corrupt the row the only way
-    // a damaged database could.
-    db.exec(`
-      DROP TABLE workspace_tiers;
-      CREATE TABLE workspace_tiers (workspace_name TEXT PRIMARY KEY, tier TEXT NOT NULL, updated_at INTEGER NOT NULL);
-      INSERT INTO workspace_tiers VALUES ('workspace-a', 'admin', 1);
-    `);
-    await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, 'credentials.model'))
-      .rejects.toThrow(CapabilityDeniedError);
-    db.close();
-  });
 });
 
 describe('the attenuation matrix', () => {
-  test('a full workspace reaches every workspace capability, and no owner-only one', async () => {
+  test('a registered workspace reaches workspace capabilities, and no owner-only one', async () => {
     const { db, sql } = setup();
     const minted = await mintWorkspaceCapability(sql, 'workspace-a');
-    for (const capability of CAPABILITIES) {
-      const call = requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, capability);
-      if (WORKSPACE_CAPABILITY_TIERS[capability] === 'owner_only') {
-        // `owner_only` is a FLOOR, not a tier: `full` is the top workspace
-        // tier and is refused anyway, which is why the third value exists
-        // instead of a fourth rank above `full`.
-        await expect(call).rejects.toThrow(CapabilityDeniedError);
-      } else {
-        expect(await call).toEqual({ kind: 'workspace', workspace: 'workspace-a', tier: 'full' });
-      }
+    for (const capability of WORKSPACE_CAPABILITIES) {
+      expect(await requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, capability))
+        .toEqual({ kind: 'workspace', workspace: 'workspace-a' });
+    }
+    for (const capability of OWNER_ONLY_CAPABILITIES) {
+      await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, capability))
+        .rejects.toThrow(CapabilityDeniedError);
     }
     db.close();
-  });
-
-  test('a shared workspace keeps exactly the shared-tier capabilities', async () => {
-    const { db, sql } = setup();
-    const minted = await mintWorkspaceCapability(sql, 'workspace-a');
-    setWorkspaceTier(sql, 'workspace-a', 'shared');
-
-    for (const capability of CAPABILITIES) {
-      const call = requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, capability);
-      if (WORKSPACE_CAPABILITY_TIERS[capability] === 'shared') {
-        expect(await call).toEqual({ kind: 'workspace', workspace: 'workspace-a', tier: 'shared' });
-      } else {
-        await expect(call).rejects.toThrow(CapabilityDeniedError);
-      }
-    }
-    db.close();
-  });
-
-  test('the surviving capabilities are only the agent-function ones', () => {
-    const kept = CAPABILITIES.filter((c) => WORKSPACE_CAPABILITY_TIERS[c] === 'shared');
-    // `auth_tokens.socket` is not an exception to that rule: it grants a
-    // workspace nothing except the ability to close a socket ON ITSELF, and a
-    // tainted workspace that could not ask would be the one place a revocation
-    // could not be enforced.
-    expect(kept.sort()).toEqual([
-      'auth_tokens.socket', 'credentials.model', 'profile.resolve', 'workspaces.rename_self',
-    ]);
   });
 
   test('an owner session is never attenuated', async () => {
     const { db, sql } = setup();
-    for (const capability of CAPABILITIES) {
+    for (const capability of [...WORKSPACE_CAPABILITIES, ...OWNER_ONLY_CAPABILITIES]) {
       expect(await requireTier(sql, TEST_USER_ENV, await testOwner(), capability)).toEqual({ kind: 'owner_session' });
     }
     db.close();
@@ -230,12 +175,11 @@ describe('the attenuation matrix', () => {
     const { db, sql } = setup();
     const a = await mintWorkspaceCapability(sql, 'workspace-a');
     await mintWorkspaceCapability(sql, 'workspace-b');
-    setWorkspaceTier(sql, 'workspace-a', 'shared');
 
-    // b stays full; a's token must not inherit b's tier.
-    await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: a.token }, 'device.rpc')).rejects.toThrow(CapabilityDeniedError);
     const resolved = await requireTier(sql, TEST_USER_ENV, { workspaceToken: a.token }, 'credentials.model');
-    expect(resolved).toEqual({ kind: 'workspace', workspace: 'workspace-a', tier: 'shared' });
+    expect(resolved).toEqual({ kind: 'workspace', workspace: 'workspace-a' });
+    await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: a.token }, 'device.consent'))
+      .rejects.toThrow(CapabilityDeniedError);
     db.close();
   });
 });

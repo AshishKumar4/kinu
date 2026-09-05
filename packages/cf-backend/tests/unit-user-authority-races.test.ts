@@ -479,7 +479,7 @@ describe('a CLI bearer revoked under a live websocket', () => {
     await actor.agent.onMessage(after.wire, scopedFrame);
 
     expect(after.fake.closed).toEqual([
-      { code: 1008, reason: 'This CLI authorization is no longer valid. Sign in again with: kinu auth' },
+      { code: 1008, reason: 'This CLI authorization is invalid. Sign in again with: kinu auth' },
     ]);
     // The pending call is answered rather than left hanging on a socket that is
     // about to disappear — and answered by the BEARER gate, not the scope one.

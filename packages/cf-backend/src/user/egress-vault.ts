@@ -119,7 +119,7 @@ export function initEgressVaultTables(sql: SqlExec): void {
 
 /** A fresh placeholder. Independent of the secret by construction — this
  *  function never sees one. */
-export function mintEgressPlaceholder(): string {
+function mintEgressPlaceholder(): string {
   return `pxs1_${randomToken(EGRESS_PLACEHOLDER_BYTES)}`;
 }
 
@@ -185,10 +185,7 @@ export async function putEgressSecret(
 /** Revoke a secret. Returns whether a row went away, so a caller can tell
  *  "revoked" from "was never there" instead of reporting success either way. */
 export function revokeEgressSecret(sql: SqlExec, id: string): boolean {
-  const before = sql.exec(`SELECT id FROM user_egress_secrets WHERE id = ?`, id).toArray().length > 0;
-  if (!before) return false;
-  sql.exec(`DELETE FROM user_egress_secrets WHERE id = ?`, id);
-  return true;
+  return sql.exec(`DELETE FROM user_egress_secrets WHERE id = ? RETURNING id`, id).toArray().length > 0;
 }
 
 /**
