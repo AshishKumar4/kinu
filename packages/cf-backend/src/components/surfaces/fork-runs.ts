@@ -21,19 +21,40 @@
  */
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type {
-  ExplorationCanvasRun, ForkRunParams, ForkRunSummary, HeadRunView, Page, SeekCursor,
+  ExplorationCanvasRun, ForkRunParams, ForkRunSummary, Page, SeekCursor,
 } from "@kinu.run/core";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { explorationForkTree } from "@/lib/fork-tree-rows";
 import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
-import { swarmResolutionOf, type SwarmResolution } from "./swarm-resolution";
+import { swarmResolutionOf } from "./swarm-resolution";
+
+/** A settled Pareto front, as the canvas row carries it. Null on the row for
+ *  every run that settled to one number. */
+export type ExplorationFrontier = NonNullable<ExplorationCanvasRun["frontier"]>;
 
 const FORK_RUN_LIMIT = 30;
 
 /** One allocation for a caller with no activity channel — the CLI-facing reads
  *  and every test that only wants the polled halves. */
 const EMPTY_ACTIVITY: ReadonlyMap<string, number> = new Map();
+
+/**
+ * One canvas page indexed by run id. A null pick means the entry carries no
+ * such half — a summary-only run, a preset composition with no recorded axes —
+ * and reads as absence rather than as a row.
+ */
+function canvasIndex<T>(
+  entries: readonly ExplorationCanvasRun[] | null,
+  pick: (entry: ExplorationCanvasRun) => T | null,
+): ReadonlyMap<string, T> {
+  const byRoot = new Map<string, T>();
+  for (const entry of entries ?? []) {
+    const value = pick(entry);
+    if (value !== null) byRoot.set(entry.run.id, value);
+  }
+  return byRoot;
+}
 
 /** Matches the run timeline's mid-turn cadence: fast enough to read as live,
  *  slow enough that a long fork is not a poll storm. */
@@ -260,24 +281,25 @@ export function useExplorationCanvas(
     reload();
   }, [unexplained, reload]);
 
-  const params = useMemo(() => {
-    const byRoot = new Map<string, ForkRunParams>();
-    for (const entry of entries ?? []) {
-      if (entry.params) byRoot.set(entry.run.id, entry.params);
-    }
-    return byRoot;
-  }, [entries]);
+  const params = useMemo(
+    () => canvasIndex(entries, (entry) => entry.params),
+    [entries],
+  );
+
+  /** Each search's durable Pareto frontier, by root id. Absent for every run
+   *  that settled to one number — only `advance:'pareto'` writes the evidence
+   *  the canvas frontier read keeps. */
+  const frontiers = useMemo(
+    () => canvasIndex(entries, (entry) => entry.frontier),
+    [entries],
+  );
 
   /** Each search's per-node journal — the only record of why any individual node
    *  exists, and therefore of which of them fanned a level in. */
-  const journals = useMemo(() => {
-    const byRoot = new Map<string, HeadRunView>();
-    for (const entry of entries ?? []) {
-      if (entry.head !== null) byRoot.set(entry.run.id, entry.head);
-    }
-    return byRoot;
-  }, [entries]);
-
+  const journals = useMemo(
+    () => canvasIndex(entries, (entry) => entry.head),
+    [entries],
+  );
   /**
    * Each search's resolved resolution — the preset it resolved and the tuple it resolved
    * to. Derived ONCE here rather than per surface, so the canvas, the run list and
@@ -292,18 +314,16 @@ export function useExplorationCanvas(
    * sequence."` over a run that was never a search. Only a search writes both
    * stores, so holding both IS the discriminator.
    */
-  const resolutions = useMemo(() => {
-    const byRoot = new Map<string, SwarmResolution>();
-    for (const entry of entries ?? []) {
-      if (entry.head === null || entry.tree.length === 0) continue;
-      const resolution = swarmResolutionOf(entry.head.rationale);
-      if (resolution !== null) byRoot.set(entry.run.id, resolution);
-    }
-    return byRoot;
-  }, [entries]);
+  const resolutions = useMemo(
+    () => canvasIndex(entries, (entry) =>
+      entry.head === null || entry.tree.length === 0
+        ? null
+        : swarmResolutionOf(entry.head.rationale)),
+    [entries],
+  );
 
   return {
-    resource, reload, hasActiveWork, trees, params, journals, resolutions,
+    resource, reload, hasActiveWork, trees, params, journals, resolutions, frontiers,
     runs: entries === null ? null : entries.map((entry) => entry.run),
     /** A first page that already said 'end' is exhausted before the pager runs,
      *  and the pager has no way to know that. Never set by a failure. */

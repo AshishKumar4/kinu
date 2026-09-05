@@ -18,7 +18,7 @@
 import { describe, test, expect } from 'bun:test';
 import type { HeadRunView } from '@kinu.run/core';
 import {
-  fanInArity, fanInVertices, nodeRationales, runLiveness, runRefusal, swarmAxisRows,
+  fanInArity, fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows,
   swarmResolutionOf,
 } from '../src/components/surfaces/swarm-resolution';
 
@@ -258,5 +258,17 @@ describe('what a running search says about itself', () => {
       liveNode('a', 'interrupted'),
     ]));
     expect(live).toMatchObject({ running: 0, reported: 0, failed: 0, total: 1 });
+  });
+});
+
+describe('a frontier value in its own unit', () => {
+  test('integers print whole — a cost of 10 is not 1000%', () => {
+    expect(formatEvidenceValue(10)).toBe('10');
+    expect(formatEvidenceValue(0)).toBe('0');
+  });
+
+  test('fractions trim without trailing zeroes', () => {
+    expect(formatEvidenceValue(0.9)).toBe('0.9');
+    expect(formatEvidenceValue(0.333333)).toBe('0.333');
   });
 });

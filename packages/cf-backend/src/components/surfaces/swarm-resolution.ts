@@ -324,3 +324,16 @@ export function runLiveness(head: HeadRunView | null): RunLiveness | null {
       .map(([depth, counts]) => ({ depth, ...counts })),
   };
 }
+
+/**
+ * One Pareto evidence value, in its own raw unit.
+ *
+ * Never a percent: an axis keeps the instrument's unit (a cost of 10 is not
+ * 1000%), so the value prints as measured. Integers print whole; fractions
+ * trim to three decimals without trailing zeroes. Every axis measures finite —
+ * the call-time refusal admits nothing else — so no fallback reads here.
+ */
+export function formatEvidenceValue(value: number): string {
+  if (Number.isInteger(value)) return String(value);
+  return String(Math.round(value * 1000) / 1000);
+}

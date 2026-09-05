@@ -44,10 +44,10 @@ import { useElementSize } from "@/hooks/use-element-size";
 import { EmptyState, EMPTY_HINTS, formatScore, timeAgo } from "./shared";
 import {
   forkParamRows, FORK_REVALIDATE_MS, judgeEnsembleLabel,
-  useExplorationCanvas, type ForkParamRow,
+  useExplorationCanvas, type ExplorationFrontier, type ForkParamRow,
 } from "./fork-runs";
 import {
-  fanInVertices, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf,
+  fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf,
   type RunLevel, type RunLiveness, type RunRefusal, type SwarmAxis, type SwarmResolution,
 } from "./swarm-resolution";
 
@@ -90,7 +90,7 @@ export function ExplorationSurface({
   const [inspect, setInspect] = useState<{ runId: string; nodeId: string | null } | null>(null);
 
   const {
-    resource, reload, runs, params, trees, journals, resolutions,
+    resource, reload, runs, params, trees, journals, resolutions, frontiers,
     exhausted, loadingMore, pageError, loadMore,
   } = useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees, headActivity);
   // The list is the scroll container in both layouts, so the trigger lives on it
@@ -166,6 +166,7 @@ export function ExplorationSurface({
             resolution={resolutions.get(opened.id)}
             journal={journals.get(opened.id) ?? null}
             tree={trees.get(opened.id) ?? null}
+            frontier={frontiers.get(opened.id) ?? null}
             branchId={inspecting.nodeId}
             trees={trees} rpc={rpc} headActivity={headActivity} headDeltas={headDeltas}
             onOpenBranch={(nodeId) => setInspect({ runId: opened.id, nodeId })}
@@ -402,13 +403,15 @@ export function useForkRunTree(
  * the folded tree, which is where a node's score lives.
  */
 function RunDetailView({
-  run, params, resolution, journal, tree, branchId, trees, rpc, headActivity, headDeltas, onOpenBranch, onClose,
+  run, params, resolution, journal, tree, frontier, branchId, trees, rpc, headActivity, headDeltas, onOpenBranch, onClose,
 }: {
   run: ForkRunSummary;
   params: ForkRunParams | undefined;
   resolution: SwarmResolution | undefined;
   journal: HeadRunView | null;
   tree: ForkNode | null;
+  /** The settled Pareto front. Null for every run that settled to one number. */
+  frontier: ExplorationFrontier | null;
   /** The branch open inside this run, or null for the run itself. */
   branchId: string | null;
   trees: ReadonlyMap<string, ForkNode>;
@@ -449,6 +452,7 @@ function RunDetailView({
       </div>
       {refusal !== null && <RunRefusalNote refusal={refusal} />}
       {liveness !== null && <RunLivenessPanel live={liveness} running={run.status === "running"} />}
+      {frontier !== null && <FrontierPanel frontier={frontier} onOpen={onOpenBranch} />}
       <div className="shrink-0 border-b p-border px-3 py-1.5">
         <SwarmConfigDisclosure resolution={resolution}
           paramRows={forkParamRows(params)} judges={judgeEnsembleLabel(params)} />
@@ -529,6 +533,41 @@ function RunLevelRow({ level }: { level: RunLevel }) {
     <div className="flex items-baseline gap-2 text-[10px] tabular-nums">
       <span className="w-12 shrink-0 p-text-3">level {level.depth}</span>
       <span className="min-w-0 p-text-2">{nodeTally(level)}</span>
+    </div>
+  );
+}
+
+/**
+ * A settled Pareto front: the run's answer when it settled to a frontier
+ * rather than to one number.
+ *
+ * A `settle:'front'` run has no winner — `best` is null by design — so without
+ * this panel its header reads `completed` beside a tree and never says what the
+ * search found. Each candidate opens its branch, because a frontier row without
+ * the report behind it is a score without the work.
+ */
+export function FrontierPanel({ frontier, onOpen }: {
+  frontier: ExplorationFrontier;
+  onOpen: (nodeId: string) => void;
+}) {
+  return (
+    <div data-frontier className="shrink-0 border-b p-border px-3 py-2">
+      <div className="text-[10px] p-text-2 tabular-nums">
+        front · {frontier.candidates.length === 1 ? "1 candidate" : `${frontier.candidates.length} candidates`}
+      </div>
+      <div className="mt-1 space-y-0.5">
+        {frontier.candidates.map((candidate) => (
+          <button key={candidate.nodeId} type="button" onClick={() => onOpen(candidate.nodeId)}
+            className="w-full flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-md px-1.5 py-0.5 text-left font-mono text-[10px] p-card-hover transition-colors cursor-pointer">
+            <span className="p-text-2 truncate max-w-[10rem]" title={candidate.nodeId}>{candidate.nodeId}</span>
+            {frontier.axes.map((axis) => (
+              <span key={axis.id} className="whitespace-nowrap p-text-3" title={`${axis.id} — ${axis.direction}`}>
+                {axis.id} <span className="p-text-2">{formatEvidenceValue(candidate.evidence[axis.id])}</span>
+              </span>
+            ))}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

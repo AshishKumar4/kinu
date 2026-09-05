@@ -19,16 +19,17 @@ import {
 } from "@/components/swarm-tree-model";
 import { EmptyState, EMPTY_HINTS, formatScore } from "@/components/surfaces/shared";
 import {
-  runStateLine, RunLivenessPanel, RunRefusalNote, SwarmConfigDisclosure, useForkRunTree,
+  runStateLine, FrontierPanel, RunLivenessPanel, RunRefusalNote, SwarmConfigDisclosure, useForkRunTree,
 } from "@/components/surfaces/ExplorationSurface";
 import {
-  selectForkRun, useExactForkRun, useLiveForkRuns,
+  forkParamRows, judgeEnsembleLabel, selectForkRun, useExactForkRun, useLiveForkRuns,
+  type ExplorationFrontier,
 } from "@/components/surfaces/fork-runs";
-import { runLiveness } from "@/components/surfaces/swarm-resolution";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useKinu } from "@/hooks/use-kinu";
 import { useElementSize } from "@/hooks/use-element-size";
-import type { ForkRunSummary } from "@kinu.run/core";
+import { runLiveness } from "@/components/surfaces/swarm-resolution";
+import type { ForkRunParams, ForkRunSummary } from "@kinu.run/core";
 
 export default function MCTSExplorer() {
   const { agentId } = useParams();
@@ -59,6 +60,10 @@ export default function MCTSExplorer() {
   const run = runId === null
     ? (runs?.find((entry) => entry.id === implied) ?? newest)
     : exact.run;
+  // The permalink read answers the composed row — parameters and frontier with
+  // it — while the list answers summaries. The drill-down shows what its own
+  // read carried; the list path keeps the disclosure it has today.
+  const entry = runId === null ? null : exact.entry;
   const selectionResource = runId === null ? resource : exact.resource;
   const reloadSelection = runId === null ? reload : exact.reload;
   const requestedRunMissing = runId !== null
@@ -82,7 +87,7 @@ export default function MCTSExplorer() {
       )}
       {run ? (
         <ExplorerBody key={run.id} run={run} state={state} attach={attach} dims={dims}
-          hasActiveWork={hasActiveWork} />
+          hasActiveWork={hasActiveWork} params={entry?.params ?? undefined} frontier={entry?.frontier ?? null} />
       ) : (
         <div ref={attach} className="flex-1 relative overflow-hidden p-surface">
           {selectionResource.status === "error" ? (
@@ -108,13 +113,19 @@ export default function MCTSExplorer() {
 }
 
 function ExplorerBody({
-  run, state, attach, dims, hasActiveWork,
+  run, state, attach, dims, hasActiveWork, params, frontier,
 }: {
   run: ForkRunSummary;
   state: ReturnType<typeof useKinu>;
   attach: (el: HTMLDivElement | null) => void;
   dims: { w: number; h: number };
   hasActiveWork: boolean;
+  /** The run's own dispatch parameters. Present on the permalink path, whose
+   *  read answers the composed row; absent on the list path, whose read
+   *  answers summaries. */
+  params: ForkRunParams | undefined;
+  /** The settled Pareto front. Null for every run that settled to one number. */
+  frontier: ExplorationFrontier | null;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const {
@@ -148,13 +159,12 @@ function ExplorerBody({
           laid across the top of the full-screen tree, which is the clutter the
           owner named on this exact view.
 
-          No `judges`: the clamp is a DISPATCH parameter, and this page reads one run
-          by id through `getForkRun`, which answers a summary. `getExplorationCanvas`
-          is the only read that carries parameters and it is page-scoped, so there is
-          no per-run parameter read to make here. Column C shows the clamp because it
-          holds that page. */}
+          With the dispatch parameters beside it on the permalink path: `getForkRun`
+          answers the composed row, so the judge clamp the run asked for reads
+          here rather than only on the canvas page. */}
       <div className="shrink-0 border-b p-border px-5 py-1.5">
-        <SwarmConfigDisclosure resolution={resolution} />
+        <SwarmConfigDisclosure resolution={resolution}
+          paramRows={forkParamRows(params)} judges={judgeEnsembleLabel(params)} />
       </div>
       {/* Why this run reached nothing, above its tree rather than instead of it: a
           refused run still has a root and often has branches that failed for a
@@ -165,6 +175,7 @@ function ExplorerBody({
           running` chip in the footer and no statement of how many nodes were
           working or when anything last happened. */}
       {liveness !== null && <RunLivenessPanel live={liveness} running={run.status === "running"} />}
+      {frontier !== null && <FrontierPanel frontier={frontier} onOpen={setSelectedId} />}
       {/* Canvas and transcript side by side WHERE THERE IS ROOM: the whole point
           of a full-screen explorer is room, and a selected node that only
           produced a one-line footer chip was the reason opening one told the
@@ -227,6 +238,9 @@ function ExplorerBody({
               read `settle=mcts` under a panel that said what its axes resolved to. */}
           {winner?.value != null && (
             <span className="p-text-2">Winner: <span className="p-success font-medium">{formatScore(winner.value)}</span></span>
+          )}
+          {frontier !== null && (
+            <span className="p-text-2">Front: <span className="p-text font-medium">{frontier.candidates.length} {frontier.candidates.length === 1 ? "candidate" : "candidates"}</span></span>
           )}
           {/* Accent, not warning: the same tone the run's dot and every other
               working state in the product wears. */}
