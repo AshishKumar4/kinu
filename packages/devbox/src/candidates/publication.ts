@@ -639,15 +639,56 @@ export class PublicationCompletionPending extends Error {
 }
 
 
-/** Move immutable payloads directly from the container to R2, then return only receipts and refs. */
+/**
+ * How many objects one publication moves at once. Each upload is one round
+ * trip through the mount; run 20260905075659 moved a 64 MiB generation one
+ * object at a time and its quiesce took 516 s. Sixteen keeps a few chunks of
+ * buffers live and fills the mount's request pipeline.
+ */
+export const UPLOAD_WIDTH = 16;
+
+/** Run `run` over `items` with at most `width` in flight, results in item
+ *  order. The first failure stops the pool from starting anything further;
+ *  what was already in flight finishes on its own and is discarded. */
+export async function runUploadPool<Item, Result>(
+  items: readonly Item[],
+  width: number,
+  run: (item: Item) => Promise<Result>,
+): Promise<Result[]> {
+  const results: Result[] = [];
+  let next = 0;
+  let failed = false;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      if (failed) return;
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      try {
+        results[index] = await run(items[index]!);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, worker));
+  return results;
+}
+
+/**
+ * Move immutable payloads directly from the container to R2, then return only
+ * receipts and refs. Dependencies move side by side; the root moves only after
+ * every one of them has a verified receipt, and the closure after the root, so
+ * a crash at any point leaves nothing that names an absent object.
+ */
 export async function stageCandidatePayload(
   plan: CandidatePublicationPlan,
   input: PublishIdentityInput,
   store: CandidatePayloadStore,
 ): Promise<CandidatePublicationDraft> {
   const state = publicationPlanState(plan);
-  const receipts: ObjectReceipt[] = [];
-  for (const object of [...state.dependencies, state.root, state.closureObject]) {
+  const upload = async (object: StagedCandidateObject): Promise<ObjectReceipt> => {
     const ref = stagedCandidateObjectState(object).ref;
     const intent = v.parse(UploadIntentSchema, {
       operationId: input.operationId,
@@ -665,11 +706,11 @@ export async function stageCandidatePayload(
       streamStagedCandidateObject(object),
     ));
     verifyReceipt(receipt, intent);
-    receipts.push(receipt);
-  }
-  const closureReceipt = receipts.at(-1);
-  const rootReceipt = receipts.at(-2);
-  if (rootReceipt === undefined || closureReceipt === undefined) throw new Error('candidate plan lacks root or closure receipt');
+    return receipt;
+  };
+  const dependencyReceipts = await runUploadPool(state.dependencies, UPLOAD_WIDTH, upload);
+  const rootReceipt = await upload(state.root);
+  const closureReceipt = await upload(state.closureObject);
   return v.parse(CandidatePublicationDraftSchema, {
     operationId: input.operationId,
     attemptId: input.attemptId,
@@ -682,7 +723,7 @@ export async function stageCandidatePayload(
     closure: state.closure,
     closureObject: stagedCandidateObjectState(state.closureObject).ref,
     closureReceipt,
-    dependencyReceipts: receipts.slice(0, -2),
+    dependencyReceipts,
   });
 }
 

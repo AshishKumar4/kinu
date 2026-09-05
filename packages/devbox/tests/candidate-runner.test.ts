@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, watch } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
@@ -16,7 +16,7 @@ import {
 import { sha256Hex } from '../src/cas/hash';
 import { MutationLog, prefixState, toCapturedCut } from '../src/capture/model';
 import type { AuditedCapture, Capture } from '../src/capture/model';
-import type { CandidateRunControlV1, RangeReadIntent } from '../src/durability/contracts';
+import type { CandidateRunControlV1, PayloadGrant, RangeReadIntent, UploadIntent } from '../src/durability/contracts';
 import {
   CandidateCaptureUnavailable,
   CandidateFenceRefused,
@@ -33,6 +33,8 @@ import type {
   CandidateSeedResult,
 } from '../bench/candidate-runner';
 import { BeneathRoot } from '../src/native-openat2';
+import { build as buildBoundedLayers } from '../src/candidates/bounded-layers';
+import { stageCandidatePayload } from '../src/candidates/publication';
 import { openMerklePack } from '../src/candidates/merkle-pack';
 import type { MerklePackReader, PackRun } from '../src/candidates/merkle-pack';
 import { CandidateRestoreBoundSchema, CandidateRestoreWorkSchema } from '../src/candidates/restore-receipt';
@@ -52,11 +54,20 @@ const enc = new TextEncoder();
 
 let sequence = 0;
 
-function paths(label: string) {
+/** The directories one runner invocation works in. */
+interface RunnerPlace {
+  readonly workspace: string;
+  readonly store: string;
+  readonly stage: string;
+  readonly journal: string;
+}
+
+function paths(label: string): RunnerPlace {
   const base = join('/tmp', `devbox-candidate-runner-${label}-${process.pid}-${sequence++}`);
   return {
     workspace: join(base, 'journal-root'),
     store: join(base, 'r2-loopback'),
+    stage: join(base, 'stage'),
     journal: join(base, 'journal-state'),
   };
 }
@@ -133,7 +144,7 @@ function captureFor(
 
 function runOptions(
   format: CandidateFormat,
-  place: { readonly workspace: string; readonly store: string; readonly journal: string },
+  place: RunnerPlace,
   control: CandidateRunControlV1,
 ) {
   return {
@@ -141,6 +152,7 @@ function runOptions(
     format,
     workspace: place.workspace,
     store: place.store,
+    stage: place.stage,
     boxId: `box-${format}`,
     journalSocket: join(place.journal, 'control.sock'),
     control,
@@ -242,7 +254,7 @@ async function journalControl(socket: string, reply: FenceReply): Promise<() => 
 async function checkpoint(
   host: Host,
   format: CandidateFormat,
-  place: { readonly workspace: string; readonly store: string; readonly journal: string },
+  place: RunnerPlace,
   journal: MutationLog,
   handle: string,
 ) {
@@ -1109,6 +1121,7 @@ describe('candidate container runner', () => {
         '--format', 'bounded-layers',
         '--workspace', place.workspace,
         '--store', place.store,
+        '--stage', place.stage,
         '--box', 'box-cli',
         '--journal-socket', join(place.journal, 'control.sock'),
         '--control', controlPath,
@@ -1136,6 +1149,115 @@ describe('candidate container runner', () => {
     } finally {
       await rm(join(place.workspace, '..'), { recursive: true, force: true });
     }
+  });
+});
+
+// ── the publish path ──────────────────────────────────────────────────────────
+//
+// Run 20260905075659 spent 516 s on the bounded-layers 64 MiB quiesce and no
+// decisive checkpoint settled in 25 min. Every object went through the FUSE
+// mount four times: the sink wrote it there, the upload re-read it, wrote it
+// to a temporary name, renamed it (an s3fs copy plus delete), and then read
+// the whole object back for its digest. Through s3fs each of those is a store
+// request. This test measures the two halves a local directory can show:
+// what names the store ever sees, and how many bytes the process reads back.
+
+/** Bytes this process has read through read syscalls, as Linux accounts them. */
+async function bytesRead(): Promise<number> {
+  const match = /^rchar: (\d+)$/m.exec(await Bun.file('/proc/self/io').text());
+  if (match === null) throw new Error('/proc/self/io carries no rchar row');
+  return Number(match[1]);
+}
+
+describe('the publish path moves each object once', () => {
+  test('a checkpoint writes every object at its own key, once, and never reads it back', async () => {
+    const place = paths('publish-path');
+    const data = 8 * 1024 * 1024;
+    try {
+      await mkdir(place.workspace, { recursive: true });
+      await mkdir(place.store, { recursive: true });
+      const host = new Host('box-publish-path', place.store);
+      const journal = new MutationLog();
+      const bytes = new Uint8Array(data);
+      for (let at = 0; at < bytes.byteLength; at += 4096) bytes[at] = (at / 4096) % 251 + 1;
+      await journal.perform({ op: 'write', path: 'blob.bin', content: { kind: 'dense', bytes } });
+      const begun = await host.begin();
+      const operation = transferringOperation(begun);
+      const names = new Set<string>();
+      const watcher = watch(place.store, { recursive: true }, (_event, name) => {
+        if (name !== null) names.add(String(name));
+      });
+      const readBefore = await bytesRead();
+      const publication = await publishCapturedCandidate(
+        runOptions('bounded-layers', place, begun),
+        captureFor(journal, {
+          captureId: operation.operationId,
+          epoch: operation.epoch,
+          baseRevision: operation.baseRevision,
+        }, 'publish-path'),
+      );
+      const readAfter = await bytesRead();
+      // inotify delivers on the kernel's schedule and exposes no completion
+      // signal, so the only way to see the last event is to let the clock run.
+      const drained = Promise.withResolvers<void>();
+      setTimeout(drained.resolve, 200);
+      await drained.promise;
+      watcher.close();
+      expect(publication.draft.dependencyReceipts.length).toBeGreaterThanOrEqual(16);
+      // Every name the store saw is an object key or the directory holding one.
+      const strangers = [...names].filter((name) => !/^[a-z]+(\/[0-9a-f]{64})?$/.test(name)).sort();
+      expect(strangers).toEqual([]);
+      // The upload streams each object from the container's own disk once; a
+      // read-back for the digest would double it.
+      expect(readAfter - readBefore).toBeLessThan(1.5 * data);
+    } finally {
+      await rm(join(place.workspace, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('dependencies upload side by side, the root after all of them', async () => {
+    const inFlight = { now: 0, peak: 0 };
+    const order: string[] = [];
+    const store = {
+      issuePayloadGrant: async (intent: UploadIntent) => ({
+        operationId: intent.operationId,
+        attemptId: intent.attemptId,
+        expiresAt: intent.expiresAt,
+        opaque: intent.exactKey,
+      }),
+      uploadObject: async (grant: PayloadGrant, body: ReadableStream<Uint8Array>) => {
+        inFlight.now += 1;
+        inFlight.peak = Math.max(inFlight.peak, inFlight.now);
+        // One microtask turn is enough: a pool starts its whole width before
+        // any upload gets this far, and a serial loop never starts a second.
+        await Promise.resolve();
+        const bytes = await new Response(body).bytes();
+        inFlight.now -= 1;
+        order.push(grant.opaque);
+        return {
+          operationId: grant.operationId,
+          attemptId: grant.attemptId,
+          key: grant.opaque,
+          byteLength: String(bytes.byteLength),
+          sha256: sha256Hex(bytes),
+          etag: `test-${grant.opaque.slice(-8)}`,
+          verified: true as const,
+        };
+      },
+    };
+    const journal = new MutationLog();
+    for (let index = 0; index < 24; index += 1) {
+      await journal.perform({ op: 'write', path: `file-${index}.txt`, content: { kind: 'dense', bytes: enc.encode(`file ${index}`) } });
+    }
+    const capture = captureFor(journal, { captureId: 'op-parallel', epoch: '1', baseRevision: '0' }, 'parallel');
+    const built = await buildBoundedLayers(capture);
+    const draft = await stageCandidatePayload(built.plan, {
+      operationId: 'op-parallel', attemptId: 'try-1', boxId: 'box-parallel', epoch: '1', bootId: 'boot-1', kind: 'tick', expiresAt: String(Date.now() + 60_000),
+    }, store);
+    expect(draft.dependencyReceipts.length).toBe(built.plan.dependencies.length);
+    expect(inFlight.peak).toBeGreaterThan(1);
+    expect(inFlight.peak).toBeLessThanOrEqual(16);
+    expect(order.indexOf(draft.root.key)).toBe(built.plan.dependencies.length);
   });
 });
 describe('candidate bounded native restore ranges', () => {
@@ -1227,7 +1349,7 @@ describe('a merkle restore walks the tree in parallel', () => {
 
   /** One published tree with a hardlinked pair, a subdirectory and enough
    *  siblings for a walk to have something to overlap. */
-  async function publishTree(place: { readonly workspace: string; readonly store: string; readonly journal: string }) {
+  async function publishTree(place: RunnerPlace) {
     const host = new Host('box-merkle-pack', place.store);
     const journal = new MutationLog();
     await journal.perform({ op: 'mkdir', path: 'pkg' });
@@ -1515,7 +1637,7 @@ describe('a live restore bills by tree size', () => {
       const smallPlace = paths(`restore-scale-small-${format}`);
       const largePlace = paths(`restore-scale-large-${format}`);
       try {
-        const publish = async (label: string, place: { workspace: string; store: string; journal: string }, files: number) => {
+        const publish = async (label: string, place: RunnerPlace, files: number) => {
           await mkdir(place.workspace, { recursive: true });
           const host = new Host(`box-${label}`, place.store);
           const journal = new MutationLog();
@@ -1530,7 +1652,7 @@ describe('a live restore bills by tree size', () => {
           return host;
         };
         const restoreWork = async (
-          place: { workspace: string; store: string; journal: string },
+          place: RunnerPlace,
           host: Host,
         ) => {
           await rm(place.workspace, { recursive: true, force: true });

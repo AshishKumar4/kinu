@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
-import { closeSync, constants as FS, createReadStream, createWriteStream } from 'node:fs';
+import { closeSync, constants as FS, createWriteStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
@@ -50,6 +50,9 @@ export interface CandidateRunOptions extends CandidateRunnerPort {
   readonly workspace: string;
   /** A FUSE-mounted R2 prefix. Payload data moves only through this mount. */
   readonly store: string;
+  /** Container-local disk where a checkpoint stages its objects before they
+   *  move to the store. One directory per operation, removed when it ends. */
+  readonly stage: string;
   readonly boxId: string;
   /** The mutation journal's control socket; a checkpoint fences its cut here. */
   readonly journalSocket: string;
@@ -109,24 +112,34 @@ async function atomicWrite(path: string, body: Uint8Array): Promise<void> {
   }
 }
 
-async function writeStream(path: string, body: ReadableStream<Uint8Array>): Promise<void> {
+/**
+ * Write one object body to its content-addressed key and digest it on the
+ * way through. Through s3fs a write is one PUT; a temporary name plus a
+ * rename is a PUT, a COPY and a DELETE, and a read-back for the digest is a
+ * GET. A partial body is removed, so the key holds a whole object or none.
+ */
+async function writeDigested(
+  path: string,
+  body: ReadableStream<Uint8Array>,
+): Promise<{ readonly byteLength: number; readonly sha256: string }> {
   await mkdir(dirname(path), { recursive: true });
-  const temp = `${path}.tmp-${crypto.randomUUID()}`;
-  try {
-    await pipeline(Readable.fromWeb(body), createWriteStream(temp));
-    await rename(temp, path);
-  } catch (error) {
-    await rm(temp, { force: true });
-    throw error;
-  }
-}
-
-async function fileDigest(path: string): Promise<{ readonly byteLength: number; readonly sha256: string }> {
   const hash = createHash('sha256');
   let byteLength = 0;
-  for await (const chunk of createReadStream(path)) {
-    hash.update(chunk);
-    byteLength += chunk.byteLength;
+  try {
+    await pipeline(
+      Readable.fromWeb(body),
+      async function* digest(chunks: AsyncIterable<Uint8Array>) {
+        for await (const chunk of chunks) {
+          hash.update(chunk);
+          byteLength += chunk.byteLength;
+          yield chunk;
+        }
+      },
+      createWriteStream(path),
+    );
+  } catch (error) {
+    await rm(path, { force: true });
+    throw error;
   }
   return { byteLength, sha256: hash.digest('hex') };
 }
@@ -145,9 +158,7 @@ class FusePayloadStore implements CandidatePayloadStore {
   }
 
   async uploadObject(grant: PayloadGrant, body: ReadableStream<Uint8Array>): Promise<ObjectReceipt> {
-    const path = objectPath(this.store, grant.opaque);
-    await writeStream(path, body);
-    const digest = await fileDigest(path);
+    const digest = await writeDigested(objectPath(this.store, grant.opaque), body);
     return {
       operationId: grant.operationId,
       attemptId: grant.attemptId,
@@ -753,40 +764,55 @@ export async function publishCapturedCandidate(
   }
   const head = control.head;
   const payload = new FusePayloadStore(options.store);
+  // THE STAGE IS LOCAL DISK. The builder seals each object here and the
+  // upload streams it to the mount once; nothing is written to the mount
+  // until it moves to its final key. The directory is this operation's and
+  // goes with it, success or failure.
+  const stage = objectPath(options.stage, input.operationId);
+  await rm(stage, { recursive: true, force: true });
+  await mkdir(stage, { recursive: true });
   const sink = new FileCandidateObjectSink({
-    write: async (key, sealedBytes) => await atomicWrite(objectPath(options.store, key), sealedBytes),
-    open: (key) => Bun.file(objectPath(options.store, key)).stream(),
+    write: async (key, sealedBytes) => {
+      const path = objectPath(stage, key);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, sealedBytes);
+    },
+    open: (key) => Bun.file(objectPath(stage, key)).stream(),
   });
-  if (options.format === 'bounded-layers') {
-    const parent = head === null
-      ? undefined
-      : (await openBounded(head.envelope.rootObject, payload, input)).withPublishedParent(
+  try {
+    if (options.format === 'bounded-layers') {
+      const parent = head === null
+        ? undefined
+        : (await openBounded(head.envelope.rootObject, payload, input)).withPublishedParent(
+          await recoverParent(head, payload, input),
+        );
+      const built = await buildBounded(capture, parent, sink);
+      return await checkpointResult(await stageCandidatePayload(built.plan, input, payload), payload);
+    }
+    let parent = null;
+    if (head !== null) {
+      const manifestBytes = await payload.readRange({
+        operationId: input.operationId,
+        attemptId: input.attemptId,
+        boxId: input.boxId,
+        epoch: input.epoch,
+        exactKey: head.envelope.rootObject.key,
+        method: 'GET',
+        byteOffset: '0',
+        byteLength: head.envelope.rootObject.byteLength,
+        sha256: head.envelope.rootObject.sha256,
+        expiresAt: input.expiresAt,
+      });
+      parent = parentFromPublishedParent(
+        await openMerklePack({ rootId: sha256Hex(manifestBytes), manifestBytes }, payload, input),
         await recoverParent(head, payload, input),
       );
-    const built = await buildBounded(capture, parent, sink);
+    }
+    const built = await buildMerklePack(capture, { parent, sink });
     return await checkpointResult(await stageCandidatePayload(built.plan, input, payload), payload);
+  } finally {
+    await rm(stage, { recursive: true, force: true });
   }
-  let parent = null;
-  if (head !== null) {
-    const manifestBytes = await payload.readRange({
-      operationId: input.operationId,
-      attemptId: input.attemptId,
-      boxId: input.boxId,
-      epoch: input.epoch,
-      exactKey: head.envelope.rootObject.key,
-      method: 'GET',
-      byteOffset: '0',
-      byteLength: head.envelope.rootObject.byteLength,
-      sha256: head.envelope.rootObject.sha256,
-      expiresAt: input.expiresAt,
-    });
-    parent = parentFromPublishedParent(
-      await openMerklePack({ rootId: sha256Hex(manifestBytes), manifestBytes }, payload, input),
-      await recoverParent(head, payload, input),
-    );
-  }
-  const built = await buildMerklePack(capture, { parent, sink });
-  return await checkpointResult(await stageCandidatePayload(built.plan, input, payload), payload);
 }
 
 /** A lower cut proves corruption only after the daemon authenticated its base. */
@@ -998,6 +1024,7 @@ async function parseCli(argv: readonly string[]): Promise<CandidateRunnerCliOpti
       format,
       workspace: value('--workspace'),
       store: value('--store'),
+      stage: value('--stage'),
       boxId: value('--box'),
       journalSocket: value('--journal-socket'),
       control: JSON.parse(await readFile(value('--control'), 'utf8')),
