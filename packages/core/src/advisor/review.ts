@@ -30,6 +30,7 @@ import { CompletedTurnSchema } from '../evolution/session-window';
 import { codemodeProgramOf, codemodeReaches } from '../tools/codemode-reach';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { tolerate } from '../obs/index';
 import { stableStringify } from '../safety/argument-digest';
 
 /** How strongly a note asks to be weighed. ORDERED: a floor is a comparison of
@@ -370,7 +371,7 @@ export function buildAdvisorPrompt(turn: CompletedTurn, reachable: readonly stri
     '- "blocker": continuing without addressing this wastes the work.',
     '  e.g. "The migration ran against the live database before the suite ran once. Stop and confirm a backup exists before continuing."',
     '',
-    'One note, at most 240 characters, addressed to the agent. State the problem and what',
+    `One note, at most ${String(ADVISOR_NOTE_MAX_CHARS)} characters, addressed to the agent. State the problem and what`,
     'to do. No preamble, no praise, no restating the turn.',
     '',
     'JSON shape when you have something: {"note":"<the note>","severity":"nit"|"concern"|"blocker",'
@@ -394,7 +395,11 @@ export function buildAdvisorPrompt(turn: CompletedTurn, reachable: readonly stri
 export const ADVISOR_NOTE_MAX_CHARS = 240;
 
 export function parseAdvisorReply(raw: string): AdvisorNote | null {
-  const reply = v.parse(AdvisorReplySchema, extractJsonObject(raw));
+  const extracted = tolerate(() => extractJsonObject(raw), 'malformed-input');
+  if (extracted === undefined) return null;
+  const parsed = v.safeParse(AdvisorReplySchema, extracted);
+  if (!parsed.success) return null;
+  const reply = parsed.output;
   const note = reply.note?.trim();
   if (note === undefined || note.length === 0) return null;
   if (!isAdvisorSeverity(reply.severity)) return null;
@@ -547,7 +552,7 @@ export async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisp
   // Keyed on the FACT: one note per turn, so a re-delivery of the same turn's
   // review collapses onto the row it already opened. Absent on a turn with no
   // durable id, because a fabricated key would collide two different turns.
-  const keyed: AgentSignal = deps.turn.turnId === undefined
+  const keyed: AgentSignal = deps.turn.turnId === undefined || deps.turn.turnId === ''
     ? signal
     : { ...signal, idempotencyKey: `advisor:${deps.turn.turnId}` };
   await deps.deliver(keyed);

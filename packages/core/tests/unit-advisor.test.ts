@@ -280,6 +280,10 @@ describe('what the model is allowed to answer', () => {
     )).toEqual({ note: 'real finding', severity: 'nit', class: 'missed-capability' });
   });
 
+  test('prose with no JSON in it is an unreadable answer, not a throw', () => {
+    expect(parseAdvisorReply('the turn looks fine, nothing to add')).toBeNull();
+  });
+
   test('an over-long note is bounded rather than refused', () => {
     const long = 'x'.repeat(ADVISOR_NOTE_MAX_CHARS + 200);
     expect(parseAdvisorReply(JSON.stringify({ note: long, severity: 'nit', class: 'wrong-work' })))
@@ -465,6 +469,12 @@ describe('the user-dissatisfaction class', () => {
 describe('a turn with no durable id', () => {
   test('is delivered without an idempotency key rather than with a fabricated one', async () => {
     const run = await lane({ turn: aTurn({ turnId: undefined }) });
+    expect(run.disposition).toBe('deliver');
+    expect(run.delivered[0]).not.toHaveProperty('idempotencyKey');
+  });
+
+  test('an empty-string id is no id, so it is delivered without a key', async () => {
+    const run = await lane({ turn: aTurn({ turnId: '' }) });
     expect(run.disposition).toBe('deliver');
     expect(run.delivered[0]).not.toHaveProperty('idempotencyKey');
   });

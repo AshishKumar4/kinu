@@ -534,6 +534,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- The advisor answers no note for a reply with no JSON, and delivers a turn with an empty id without a fabricated idempotency key.
+
 - Codex requests opt out of storage on every request shape, including requests that already carry instructions.
 
 - Skill frontmatter keeps type-looking strings such as `"true"` and `"123"` as strings through a save and reload.
