@@ -227,8 +227,7 @@ export class HeadController {
    * Fires `onPhase` once on split (with the real head IDs) and once on
    * merge — used by the host to fan out to SSE / event log / UI.
    */
-  async run(opts: {
-    parentHeadId: HeadId | null;
+  async run(opts: ({ parentHeadId: null } | { parentHeadId: HeadId; parentDepth: number }) & {
     rootId?: HeadId;
     inheritedContext: SerializedMessage[];
     request: SplitRequest;
@@ -257,19 +256,11 @@ export class HeadController {
 
     const childBudget = deriveChildBudget(parentBudget);
 
-    // Anchor the run identity before spawning so its heads group under one root
-    // (top-level splits have a synthetic root with no head row of its own). On a
-    // reclaimed run this rewrites nothing: the row already carries this task.
-    //
-    // Awaited only when there IS something to await. The journal is a port now —
-    // a depth-2 split's rows cross an RPC to the root — but a local HeadJournal
-    // returns void, and `await`ing void still yields to the microtask queue.
-    // That reordering is load-bearing: a re-drive of the same fork resolves its
-    // run identity and retires the previous attempt's heads, so if this call
-    // yields before those heads are recorded, the reclamation finds nothing to
-    // retire and the interrupted attempt stays `running` forever.
-    const splitRecorded = this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
-    if (splitRecorded !== undefined) await splitRecorded;
+    // Only the root owns run identity and final settlement. Nested reports share its journal.
+    if (opts.parentHeadId === null) {
+      const splitRecorded = this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
+      if (splitRecorded !== undefined) await splitRecorded;
+    }
 
     // Spawn all children concurrently, each isolated: a spawn that throws
     // settles only its own head (errored report, journaled below) and never
@@ -296,7 +287,7 @@ export class HeadController {
         id,
         rootId,
         parentId: opts.parentHeadId,
-        depth: (parentBudget.maxDepth - childBudget.maxDepth),
+        depth: opts.parentHeadId === null ? 1 : opts.parentDepth + 1,
         task: h.task,
         mode: opts.mode,
         rationale: h.rationale,
@@ -415,7 +406,7 @@ export class HeadController {
       reports.map((r) => r.id),
       headScores,
     );
-    await this.journal.cacheMerge(rootId, mergeResult, strategy);
+    if (opts.parentHeadId === null) await this.journal.cacheMerge(rootId, mergeResult, strategy);
     opts.onPhase?.({
       kind: 'merge',
       rootId,

@@ -378,6 +378,7 @@ describe('recursive split budget', () => {
 
     await controller.run({
       parentHeadId: 'parent-head',
+      parentDepth: 0,
       rootId: 'root-head',
       inheritedContext: [],
       mode: 'build',

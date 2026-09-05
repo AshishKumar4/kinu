@@ -78,6 +78,7 @@ async function runSplitWithNestedSplit(opts: {
    *  separately from `nestedJournal` is what lets the third test reproduce the
    *  defect — head rows one store away from the steps that describe them. */
   stepSink: (headId: string, seq: number, step: { text: string; toolCalls: [] }) => void;
+  afterNested?: (parentId: string) => void;
 }): Promise<{ depth1Id: string; depth2Ids: string[] }> {
   const depth2Ids: string[] = [];
   let depth1Id = '';
@@ -109,12 +110,14 @@ async function runSplitWithNestedSplit(opts: {
             // wherever `nestedJournal` points — the one variable under test.
             await new HeadController(nestedRuntime, opts.nestedJournal).run({
               parentHeadId: input.id,
+              parentDepth: input.depth,
               rootId: input.rootId,
               inheritedContext: [],
               mode: 'build',
               request: { rationale: 'go deeper', heads: [{ task: 'deep dive', rationale: 'depth 2' }] },
               parentBudget: input.budget,
             });
+            opts.afterNested?.(input.id);
           }
           return runHead(input.id);
         },
@@ -143,6 +146,28 @@ async function runSplitWithNestedSplit(opts: {
 }
 
 describe('C2 — a depth-2 head is readable from the root', () => {
+  test('a nested synthesis keeps the root live and preserves its original task', async () => {
+    const { sql } = freshStore();
+    const journal = new HeadJournal(sql);
+    const observed: Array<{ status?: string; rationale?: string; merged: boolean; parentStatus?: string }> = [];
+    await runSplitWithNestedSplit({
+      rootJournal: journal,
+      nestedJournal: journal,
+      stepSink: (id, seq, step) => journal.appendStep(id, seq, step),
+      afterNested: (parentId) => {
+        const run = journal.readRun('root-run');
+        observed.push({
+          status: run?.status, rationale: run?.rationale, merged: run?.merge != null,
+          parentStatus: journal.readHead(parentId)?.status,
+        });
+      },
+    });
+    expect(observed).toEqual([{
+      status: 'running', rationale: 'split the investigation', merged: false, parentStatus: 'running',
+    }]);
+    expect(journal.readRun('root-run')?.merge?.narrative).toBe('merged');
+  });
+
   test("a depth-2 head's steps are readable, and sit beside its own journal row", async () => {
     const { sql } = freshStore();
     const journal = new HeadJournal(sql);
@@ -160,7 +185,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
     // The journal row exists on the root...
     const row = journal.readHead(depth2Id);
     expect(row).not.toBeNull();
-    expect(row?.depth).toBeGreaterThan(0);
+    expect(row?.depth).toBe(2);
 
     // ...and so do the step rows, which is what the surface joins to it. This is
     // the assertion that was impossible before: steps and head row one DO apart.

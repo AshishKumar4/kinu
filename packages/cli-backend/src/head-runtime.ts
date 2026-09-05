@@ -20,7 +20,7 @@ import {
   type HeadSplitRequest, type HeadSplitResult,
   type HeadMergeModelBinder, type ResolvedTurnProfile,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
-  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, HeadJournal, initHeadsTables,
+  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, type HeadJournal,
   createStateCodemodeProvider,
   headMergeLLM,
   localMissionScope,
@@ -29,7 +29,7 @@ import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { makeSql, makeExecRaw, buildCLIHeadRuntime, type CLIRuntime } from './runtime';
+import { buildCLIHeadRuntime, type CLIRuntime } from './runtime';
 import { createNodeExecuteToolFactory } from './execute-tools-factory';
 import { kinuHome } from './home';
 
@@ -216,7 +216,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
       rt,
       executeTool,
       webSearch: deps.webSearch,
-      split: (request) => runLocalSplit(db, request, input, deps),
+      split: (request) => runLocalSplit(request, input, deps),
     });
     const mission = localMissionScope(deps.governor(), input.missionLabels ?? []);
     const journal = deps.journal();
@@ -236,22 +236,16 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
   }
 }
 
-/** split_subheads — a head spawns 2-4 child heads recursively (depth-budgeted;
- *  the gate lives in buildHeadToolSet), their findings merged into one narrative.
- *  In-process: a nested HeadController over a fresh CLI head runtime sharing the
- *  same parent runtime + model + web. The subtree's journal lives in the
- *  splitting head's OWN scratch — the same place the cf head puts it (its facet
- *  storage) — and is discarded with it. */
+/** Child reports and steps remain in the root journal after their private storage is released. */
 async function runLocalSplit(
-  db: Database,
   request: HeadSplitRequest,
   input: HeadInput,
   deps: CLIHeadRuntimeDeps,
 ): Promise<HeadSplitResult> {
-  initHeadsTables(makeExecRaw(db), makeSql(db));
-  const controller = new HeadController(createCLIHeadRuntime(deps), new HeadJournal(makeSql(db)));
+  const controller = new HeadController(createCLIHeadRuntime(deps), deps.journal());
   const controllerInput: Parameters<HeadController['run']>[0] = {
     parentHeadId: input.id,
+    parentDepth: input.depth,
     rootId: input.rootId,
     inheritedContext: input.inheritedContext,
     request: { rationale: request.rationale, heads: request.heads, mergeStrategy: request.mergeStrategy },

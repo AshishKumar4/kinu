@@ -383,6 +383,56 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
       expect(head.lastStepAt).not.toBeNull();
     }
   });
+  test('nested heads keep their reports and transcripts in the root journal', async () => {
+    let split = false;
+    const model = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'recursive-head',
+      doGenerate: async (opts) => {
+        const prompt = JSON.stringify(opts.prompt);
+        let finishReason: 'tool-calls' | 'stop' = 'stop';
+        let content: Awaited<ReturnType<LanguageModelV2['doGenerate']>>['content'];
+        if (prompt.includes('merging the findings')) {
+          content = [{ type: 'text', text: JSON.stringify({
+            narrative: 'combined findings', selected_decisions: [], unresolved_questions: [],
+            recommendations: [], blind_spots: [],
+          }) }];
+        } else if (prompt.includes('Your task: parent investigation') && !split) {
+          split = true;
+          finishReason = 'tool-calls';
+          content = [{
+            type: 'tool-call', toolCallId: 'nested-split', toolName: 'split_subheads',
+            input: JSON.stringify({ rationale: 'deeper investigation', heads: [
+              { task: 'nested lexer', rationale: 'tokens' },
+              { task: 'nested grammar', rationale: 'parsing' },
+            ] }),
+          }];
+        } else {
+          content = [{ type: 'text', text: 'The branch preserves its findings.' }];
+        }
+        return {
+          content, finishReason, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          response: { id: 'recursive', modelId: 'recursive-head', timestamp: new Date(0) }, warnings: [],
+        };
+      },
+    });
+    const { controller, journal } = controllerWithCLIRuntime(model);
+    await controller.run({
+      mode: 'build', parentHeadId: null, rootId: 'nested-local', inheritedContext: [],
+      parentBudget: { maxDepth: 3, spawnedAt: Date.now() },
+      request: { rationale: 'review all layers', heads: [
+        { task: 'parent investigation', rationale: 'follow dependencies' },
+        { task: 'sibling investigation', rationale: 'independent review' },
+      ] },
+    });
+    const run = journal.readRun('nested-local');
+    expect(run?.heads.map((head) => head.task).sort()).toEqual([
+      'nested grammar', 'nested lexer', 'parent investigation', 'sibling investigation',
+    ]);
+    for (const head of run?.heads ?? []) {
+      expect(head.status).toBe('completed');
+      expect(journal.readSteps(head.id).some((step) => step.text.includes('preserves its findings'))).toBe(true);
+    }
+  });
 });
 
 describe('a local head forks the parent runtime (the caffe-fork capability)', () => {

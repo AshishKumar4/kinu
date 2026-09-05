@@ -974,6 +974,7 @@ export class ExplorationAgent extends Agent<Env> {
     const controller = new HeadController(runtime, journal);
     const controllerInput: Parameters<HeadController['run']>[0] = {
       parentHeadId: parentInput.id,
+      parentDepth: parentInput.depth,
       rootId: parentInput.rootId,
       inheritedContext: parentInput.inheritedContext,
       request: { rationale: request.rationale, heads: [...request.heads], mergeStrategy: request.mergeStrategy },

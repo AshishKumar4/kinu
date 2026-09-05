@@ -235,8 +235,8 @@ describe('a re-driven fork job stays one run', () => {
 
     await controller.run({ ...shared, parentHeadId: null });
     const [firstParent, secondParent] = spawned.map((head) => head.id);
-    await controller.run({ ...shared, parentHeadId: firstParent ?? '' });
-    await controller.run({ ...shared, parentHeadId: secondParent ?? '' });
+    await controller.run({ ...shared, parentHeadId: firstParent ?? '', parentDepth: 1 });
+    await controller.run({ ...shared, parentHeadId: secondParent ?? '', parentDepth: 1 });
 
     expect(new Set(spawned.map((head) => head.id)).size).toBe(spawned.length);
   });
@@ -351,6 +351,7 @@ describe('a re-driven fork job stays one run', () => {
     await new HeadController(runtime({ settles: true, spawned }), journal).run({
       mode: 'build',
       parentHeadId: 'parent-head-1',
+      parentDepth: 1,
       inheritedContext: [],
       request: splitRequest(2),
     });
