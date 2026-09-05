@@ -16,6 +16,7 @@ export { Devbox } from './devbox';
 export {
   ATTACH_OUTCOME_KINDS,
   CHECKPOINT_OUTCOME_KINDS,
+  DEFAULT_DEVBOX_STRATEGY,
   DEVBOX_RUNTIME_DIR,
   DEVBOX_WORKDIR,
   parseDevboxStrategyName,

@@ -25,8 +25,9 @@
  */
 
 import {
-  DEFAULT_DEVBOX_POLICY, Devbox,
-  type DevboxIncident, type DevboxPolicy, type DevboxStore, type IncidentDisposition,
+  DEFAULT_DEVBOX_POLICY, DEFAULT_DEVBOX_STRATEGY, Devbox,
+  type DevboxIncident, type DevboxPolicy, type DevboxStore, type DevboxStrategyName,
+  type IncidentDisposition,
 } from "@kinu.run/devbox";
 import { PLATFORM_CATALOG } from "@kinu.run/core";
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
@@ -92,6 +93,14 @@ export class KinuSandbox extends Devbox<Env> {
   protected override get store(): DevboxStore | undefined {
     const bucket = this.env.BACKUP_BUCKET;
     return bucket === undefined ? undefined : { binding: "BACKUP_BUCKET", bucket };
+  }
+
+  /** The format the bytes in that bucket are written in. Stated here, not
+   *  inherited silently: a box that already holds bytes cannot change it, and
+   *  the decision it restates is the decisive comparison's
+   *  (`packages/devbox/bench/measure-first/DECISIVE-2026-09-05.md`). */
+  protected override get strategy(): DevboxStrategyName {
+    return DEFAULT_DEVBOX_STRATEGY;
   }
 
   /** The zone preview URLs are minted on. Absent turns port publishing off and

@@ -166,6 +166,7 @@ import {
   type SnapshotChainPorts,
 } from './snapshot-chain';
 import {
+  DEFAULT_DEVBOX_STRATEGY,
   DEVBOX_RUNTIME_DIR,
   DEVBOX_WORKDIR,
   type AttachOutcome,
@@ -709,7 +710,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  and keeps it, which is why this is a class-level getter and not an
    *  argument. */
   protected get strategy(): DevboxStrategyName {
-    return 'snapshot-chain';
+    return DEFAULT_DEVBOX_STRATEGY;
   }
 
   /**

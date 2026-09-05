@@ -249,6 +249,12 @@ export type DevboxStrategyName =
   | 'bounded-layers'
   | 'merkle-pack';
 
+/** The strategy a devbox uses unless its class says otherwise: the arm the
+ * decisive comparison kept. `bench/measure-first/DECISIVE-2026-09-05.md`
+ * states the run and the numbers; a change here is a new decision and gets a
+ * new dated report beside that one, never an edit to the incumbent's. */
+export const DEFAULT_DEVBOX_STRATEGY: DevboxStrategyName = 'snapshot-chain';
+
 export function parseDevboxStrategyName(value: string | null | undefined): DevboxStrategyName | null {
   if (
     value === 'snapshot-chain' ||

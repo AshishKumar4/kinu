@@ -9,6 +9,8 @@
  * Raises the PRODUCT KinuSandbox class through `scripts/fixtures/kinu-durability/`
  * and proves, in order:
  *
+ *   P0 strategy    the product reports the decided default strategy with a
+ *                  durable store behind it, before any byte is written
  *   P1 base        a full base layer is written (chain mode), bytes recorded
  *   P2 lazy mount  after stop+wake, /workspace re-attaches by MOUNTING: restore
  *                  time stays flat while the base is large, and reading ONE small
@@ -135,6 +137,19 @@ const LifecycleStateSchema = v.object({
   ports: v.array(v.object({ port: v.number() })),
 });
 
+/** The two `devboxState()` fields P0 reads: what the box calls its format and
+ *  whether it has a store at all. */
+const StrategyStateSchema = v.object({
+  strategy: v.string(),
+  durable: v.boolean(),
+});
+
+/** The decided default, read from the deployed package rather than restated
+ *  here: the fixture answers it from `DEFAULT_DEVBOX_STRATEGY`. */
+const StrategyDecisionSchema = v.object({
+  decided: v.pipe(v.string(), v.minLength(1)),
+});
+
 const BASE_MIB = Number(process.env.PROBE_BASE_MIB ?? 64);
 const IDLE_MINUTES = Number(process.env.PROBE_IDLE_MINUTES ?? 11); // > platform default sleepAfter '10m'
 const PORT = 8080;
@@ -142,6 +157,7 @@ const PORT = 8080;
 interface Phase { readonly id: string; readonly name: string; readonly proves: string }
 
 export const PHASES: readonly Phase[] = [
+  { id: "P0", name: "strategy", proves: "the product reports the package's decided default strategy with a durable store before any write" },
   { id: "P1", name: "base layer", proves: "first tick writes ONE full base under backups/<uuid>/" },
   { id: "P2", name: "lazy restore", proves: "stop+wake re-attaches by mounting; single-slice read stays fast" },
   { id: "P3", name: "whiteouts", proves: "deletion survives base+delta restore" },
@@ -156,6 +172,12 @@ export const PHASES: readonly Phase[] = [
 ];
 
 export interface ProbeEvidence {
+  /** The strategy the deployed product names for itself, matched against the
+   *  package's decided default, and that it has a store to write through. */
+  P0?: {
+    readonly strategy: string;
+    readonly durable: true;
+  };
   P1?: {
     readonly bigFile: string;
     readonly baseMib: number;
@@ -534,6 +556,16 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     const origin = deployment.origin;
     console.log(`probe origin ${origin}`);
     await awaitOrigin(origin, token);
+
+    // P0 — the deployed product names the decided strategy, with a store behind it.
+    const picked = await callParsed(origin, token, "/state", {}, StrategyStateSchema);
+    const decision = await callParsed(origin, token, "/strategyDecision", {}, StrategyDecisionSchema);
+    if (picked.strategy !== decision.decided) {
+      throw new Error(`P0: the product reports strategy ${picked.strategy}; the package's decision is ${decision.decided}`);
+    }
+    if (!picked.durable) throw new Error("P0: the product reports no durable store, so the strategy has nothing to write through");
+    evidence.P0 = { strategy: picked.strategy, durable: true };
+    console.log(`P0 strategy ${picked.strategy} ok (matches the decided default; durable store bound)`);
 
     // P1 — base layer.
     const bigId = `big-${Date.now()}.bin`;

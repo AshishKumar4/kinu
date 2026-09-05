@@ -19,6 +19,7 @@
 import * as v from "valibot";
 
 import { ContainerProxy, getSandbox } from "@cloudflare/sandbox";
+import { DEFAULT_DEVBOX_STRATEGY } from "@kinu.run/devbox";
 import type { KinuSandbox } from "../../../packages/cf-backend/src/kinu-sandbox";
 
 export { KinuSandbox } from "../../../packages/cf-backend/src/kinu-sandbox";
@@ -132,6 +133,11 @@ export default {
           return json(await sandbox.listSchedules("devboxHeartbeat"));
         case "/state":
           return json(await sandbox.devboxState());
+        // The package's decided default, so the probe's P0 compares what the
+        // deployed product reports against the deployed decision, not a
+        // restatement of either.
+        case "/strategyDecision":
+          return json({ decided: DEFAULT_DEVBOX_STRATEGY });
         case "/setKeepAlive": {
           await sandbox.setKeepAlive(command.keepAlive ?? false);
           return json({ ok: true });
