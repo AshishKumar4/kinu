@@ -138,7 +138,7 @@ describe('UserDO schema bootstrap', () => {
       'revoked_at', 'prev_token_hash', 'expires_at', 'last_ip', 'last_agent', 'replaced_at', 'unstopped_at',
       // The device tiers: the base directory the owner named (F2) and the
       // sandbox contract (capability, reason, GPU nodes, agent root, tier).
-      'consented_root', 'device_home', 'sandbox_capability', 'sandbox_reason', 'sandbox_gpu',
+      'consented_root', 'device_home', 'sandbox_capability', 'sandbox_reason', 'sandbox_detail', 'sandbox_gpu',
       'agent_root', 'tier',
     ]);
     // The exact projection `UserDO.listDevices` runs, against the repaired row.
@@ -192,7 +192,7 @@ describe('UserDO schema bootstrap', () => {
       'id', 'token_hash', 'prev_token_hash', 'label', 'os', 'hostname',
       'created_at', 'connected_at', 'last_seen_at', 'expires_at', 'revoked_at',
       'last_ip', 'last_agent', 'replaced_at',
-      'consented_root', 'device_home', 'sandbox_capability', 'sandbox_reason', 'sandbox_gpu',
+      'consented_root', 'device_home', 'sandbox_capability', 'sandbox_reason', 'sandbox_detail', 'sandbox_gpu',
       'agent_root', 'tier', 'unstopped_at',
     ]);
     expect(columns(db, 'device_inflight_requests')).toEqual([
