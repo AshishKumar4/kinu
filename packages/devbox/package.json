@@ -19,6 +19,7 @@
   },
   "scripts": {
     "check": "tsc --noEmit && tsc --noEmit -p tests/workerd",
+    "proof": "cd proof && lake build",
     "test": "bun test tests/*.test.ts bench/*.test.ts && vitest run tests/workerd"
   },
   "devDependencies": {

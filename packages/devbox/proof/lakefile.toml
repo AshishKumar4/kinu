@@ -1,0 +1,8 @@
+name = "devbox-proof"
+defaultTargets = ["DevboxProof"]
+
+[leanOptions]
+autoImplicit = false
+
+[[lean_lib]]
+name = "DevboxProof"
