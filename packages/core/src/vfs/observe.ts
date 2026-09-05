@@ -9,7 +9,6 @@
  * smears all of their work into one pile.
  */
 
-import * as v from 'valibot';
 import type { VFS } from '../types/primitives';
 import { isVfsError } from './errno';
 
@@ -41,8 +40,25 @@ export type TextPayload =
 
 export function textPayload(value: string | Uint8Array | null | undefined): TextPayload {
   if (value === null || value === undefined) return { kind: 'absent' };
-  const parsed = v.safeParse(v.string(), value);
-  return parsed.success ? { kind: 'text', text: parsed.output } : { kind: 'binary' };
+  if (!(value instanceof Uint8Array)) return { kind: 'text', text: value };
+  const text = decodedText(value);
+  return text === null ? { kind: 'binary' } : { kind: 'text', text };
+}
+
+const utf8 = new TextDecoder();
+const encoder = new TextEncoder();
+
+/** The bytes as text, or null when they are not text. A plane answers bytes
+ *  for every raw read, so the representation says nothing about the file;
+ *  the content does: git's rule, a NUL byte means binary, and bytes that do
+ *  not survive a UTF-8 decode and re-encode unchanged are not text either. */
+function decodedText(bytes: Uint8Array): string | null {
+  if (bytes.includes(0)) return null;
+  const text = utf8.decode(bytes);
+  const again = encoder.encode(text);
+  if (again.byteLength !== bytes.byteLength) return null;
+  for (let i = 0; i < bytes.byteLength; i += 1) if (again[i] !== bytes[i]) return null;
+  return text;
 }
 
 /**
