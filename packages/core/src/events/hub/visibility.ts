@@ -32,22 +32,32 @@ import {
 
 // ── Secret-shape heuristics for `redact` ─────────────────────────
 
-/** Field names whose values are likely secrets. Lowercased match. */
+/** Field names that are always secrets, regardless of position. Lowercased match. */
 const SECRET_FIELD_PATTERNS: ReadonlyArray<RegExp> = [
   /^authorization$/i,
   /^cookie$/i,
-  /^(.*_)?token$/i,
-  /^(.*_)?key$/i,
-  /^(.*_)?secret$/i,
-  /^password$/i,
   /^api[_-]?key$/i,
   /^bearer$/i,
   /^x-api-key$/i,
 ];
 
+/** Secret suffix words, matched as the last `_`/`-`/camelCase-separated token.
+ *  A bare `key$` substring would also mask `monkey`/`turkey`, so the boundary
+ *  before the token is required. The split is case-sensitive (a camelCase
+ *  boundary is a case transition); only the final comparison is lowercased. */
+const SECRET_SUFFIX_TOKENS = new Set(['token', 'key', 'secret', 'password']);
+
+function lastNameToken(name: string): string {
+  const tokens = name
+    .split(/[_-]+/)
+    .flatMap((part) => part.split(/(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/));
+  const last = tokens[tokens.length - 1];
+  return last === undefined ? '' : last.toLowerCase();
+}
+
 function looksLikeSecretField(name: string): boolean {
   for (const p of SECRET_FIELD_PATTERNS) if (p.test(name)) return true;
-  return false;
+  return SECRET_SUFFIX_TOKENS.has(lastNameToken(name));
 }
 
 /**

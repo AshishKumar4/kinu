@@ -534,6 +534,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- Event redaction masks camelCase secret fields such as `authToken` and `clientSecret`.
+
+- Event redaction masks camelCase secret fields such as `authToken` and `clientSecret`.
+
 - An agent view refuses markdown links, images, autolinks and reference definitions, and refuses non-ASCII titles. A tab draws nothing clickable and cannot spoof a host tab name.
 
 - `web` fetch checks every redirect target before it follows the hop, so a page cannot bounce the agent onto a private or metadata address. The body reader stops at the byte cap instead of buffering the whole response.

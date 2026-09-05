@@ -57,6 +57,41 @@ describe('applyVisibilityForStorage — redact', () => {
     expect(stored.user.password).toBe('<redacted:password>');
     expect(stored.data).toBe('visible');
   });
+  test('redacts nested camelCase credentials while keeping ordinary fields', () => {
+    const StoredCamelSchema = v.object({
+      session: v.object({
+        authToken: v.string(),
+        accessToken: v.string(),
+        clientSecret: v.string(),
+        oldPassword: v.string(),
+        displayName: v.string(),
+        monkey: v.string(),
+        turkey: v.string(),
+      }),
+      data: v.string(),
+    });
+    const r = applyVisibilityForStorage({
+      session: {
+        authToken: 't1',
+        accessToken: 't2',
+        clientSecret: 's',
+        oldPassword: 'p',
+        displayName: 'alice',
+        monkey: 'not-a-secret',
+        turkey: 'also-visible',
+      },
+      data: 'visible',
+    }, 'redact');
+    const stored = v.parse(StoredCamelSchema, r.stored);
+    expect(stored.session.authToken).toBe('<redacted:authToken>');
+    expect(stored.session.accessToken).toBe('<redacted:accessToken>');
+    expect(stored.session.clientSecret).toBe('<redacted:clientSecret>');
+    expect(stored.session.oldPassword).toBe('<redacted:oldPassword>');
+    expect(stored.session.displayName).toBe('alice');
+    expect(stored.session.monkey).toBe('not-a-secret');
+    expect(stored.session.turkey).toBe('also-visible');
+    expect(stored.data).toBe('visible');
+  });
 });
 
 describe('applyVisibilityForStorage — hash', () => {
