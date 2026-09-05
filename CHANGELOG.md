@@ -534,6 +534,23 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A machine that cannot sandbox tells the model and the owner what its
+  daemon said.** The daemon's probe has six statuses. The hub's vocabulary
+  had five of them. When bwrap ran and failed in words the daemon does not
+  classify, the daemon reported `probe_failed` with the one line that
+  explains it, and the hub refused the WHOLE HELLO for the word it did not
+  know. Nothing was recorded, not even the platform, and every command was
+  refused with `the daemon reported no reason` while the daemon's own log held
+  the reason. Measured 2026-09-04 on the first-run tier, where an approved
+  command never ran. `probe_failed` is now a reason the hub knows. The
+  daemon's line travels on HELLO as `reasonDetail` and is stored beside the
+  reason as `sandbox_detail`. The refusal, the model's execution block, the
+  Settings row and `kinu connect` all print it. The HELLO schema reads each
+  sandbox word as a string and narrows it on its own, so a word the hub does
+  not know is kept inside the detail instead of costing the frame. The one
+  sentence that survives, `the daemon reported no reason`, now appears only
+  when the daemon said nothing.
+
 - **An idle overlay-cas box no longer rewrites its whole scan cache every
   interval.** The runner wrote `scan.json` whenever staging took fewer entries
   than the scan measured, as a stand-in for "some cached row is now stale". That

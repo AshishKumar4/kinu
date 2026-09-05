@@ -35,7 +35,7 @@ export {
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   deviceToolchainAnswer, freshDeviceToolchain,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
-  sandboxReasonFix, describeGpuNodes,
+  sandboxReasonFix, sandboxCause, describeGpuNodes,
   connectedDevices, deviceByName, deviceFleetAsk,
   DEVICE_PRESENCE_CONFIG_KEY, DEVICE_TOOLCHAIN_TTL_MS,
   DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS,

@@ -5178,9 +5178,9 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
   };
 }
 const SANDBOX_DEVICES: readonly UserDevice[] = [
-  galleryDevice("dev-sandboxed", "workstation", { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0", "/dev/nvidiactl"] }),
-  galleryDevice("dev-raw", "build-box", { tier: "raw", capability: "sandboxed", reason: null, gpu: [] }),
-  galleryDevice("dev-cannot", "old-laptop", { tier: "sandboxed", capability: "files_only", reason: "no_bwrap", gpu: [] }),
+  galleryDevice("dev-sandboxed", "workstation", { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: ["/dev/nvidia0", "/dev/nvidiactl"] }),
+  galleryDevice("dev-raw", "build-box", { tier: "raw", capability: "sandboxed", reason: null, detail: null, gpu: [] }),
+  galleryDevice("dev-cannot", "old-laptop", { tier: "sandboxed", capability: "files_only", reason: "no_bwrap", detail: null, gpu: [] }),
 ];
 
 function DeviceSandboxFrame() {

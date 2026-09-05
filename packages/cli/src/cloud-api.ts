@@ -65,7 +65,7 @@ export interface CloudDevice {
    *  own home and roots are not here — they live on the runtime status. */
   sandbox: CloudDeviceSandbox;
 }
-export type CloudDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'gpu'>;
+export type CloudDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
 
 export interface CloudAgentConnectTicket {
   ticket: string;
@@ -177,12 +177,15 @@ const CloudDeviceSandboxSchema = v.object({
   tier: v.picklist(DEVICE_TIERS),
   capability: v.picklist(DEVICE_SANDBOX_CAPABILITIES),
   reason: v.nullable(v.picklist(DEVICE_SANDBOX_REASONS)),
+  detail: v.optional(v.nullable(v.string()), null),
   gpu: v.array(v.string()),
 });
 /** A hub too old to report the switch: the sandbox is on, because it is on by
  *  default, and a machine that has not proved it can sandbox has not proved
  *  it can sandbox. An older hub must still list the devices. */
-const UNREPORTED_SANDBOX: CloudDeviceSandbox = { tier: 'sandboxed', capability: 'files_only', reason: null, gpu: [] };
+const UNREPORTED_SANDBOX: CloudDeviceSandbox = {
+  tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [],
+};
 const CloudDeviceSchema: v.GenericSchema<unknown, CloudDevice> = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()),

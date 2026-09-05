@@ -14,18 +14,67 @@
  *   3. Every command carries the CALLING workspace's own home, not a shared
  *      one — one machine, many workspaces, one home each.
  *   4. A UserDO created before these columns existed gets them.
+ *   5. The refusal carries what the daemon actually said. Every status the
+ *      shipped daemon can report lands on the row as itself, with the
+ *      daemon's own words beside it, and the sentence "the daemon reported
+ *      no reason" survives only where the daemon really said nothing.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { createRequire } from 'node:module';
+import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  DEVICE_SANDBOX_REASONS, SANDBOX_UNAVAILABLE, sandboxReasonFix,
+  DEVICE_SANDBOX_REASONS, SANDBOX_UNAVAILABLE, parseSandboxReason, sandboxReasonFix,
   type JsonValue,
 } from '@kinu.run/core';
 import { sqlExec, testOwner, type DeviceFrame } from './helpers/user-do';
 import { WORKSPACE, OTHER_WORKSPACE, daemon, deviceHarness } from './helpers/device-harness';
 import { initUserTables } from '../src/user/schema';
 import { CapabilityDeniedError } from '../src/user/workspace-capability';
+
+/** The shipped daemon's own sandbox module: the statuses its probe can answer
+ *  and the HELLO block it builds from one. Loaded rather than restated, so a
+ *  status the daemon gains is a status this suite sends. */
+const DaemonSandboxModuleSchema = v.object({
+  SANDBOX_STATUS: v.record(v.string(), v.string()),
+  PROBE_HINTS: v.record(v.string(), v.string()),
+  helloCapability: v.function(),
+});
+const DaemonHelloSandboxSchema = v.object({
+  capability: v.string(),
+  reason: v.nullable(v.string()),
+  reasonDetail: v.optional(v.nullable(v.string())),
+});
+const require_ = createRequire(import.meta.url);
+const daemonSandbox = v.parse(
+  DaemonSandboxModuleSchema, require_(join(import.meta.dir, '../../pc-agent/src/sandbox.js')),
+);
+
+/** One of the daemon's status words, by the daemon's own name for it. */
+function daemonStatus(key: 'OK' | 'PROBE_FAILED'): string {
+  const word = daemonSandbox.SANDBOX_STATUS[key];
+  if (word === undefined) throw new Error(`the daemon's SANDBOX_STATUS has no ${key}`);
+  return word;
+}
+
+/** The sandbox block the shipped daemon sends for one probe result, as JSON. */
+function daemonHello(status: string, detail: string | null): JsonValue {
+  const wire = v.parse(DaemonHelloSandboxSchema, daemonSandbox.helloCapability({ status, detail }));
+  return {
+    capability: wire.capability,
+    reason: wire.reason,
+    reasonDetail: wire.reasonDetail ?? null,
+    gpu: [],
+  };
+}
+
+/** The line the daemon's probe answered on the first-run tier's runner,
+ *  measured 2026-09-04. */
+const PROBE_FAILED_DETAIL =
+  "sandbox probe failed: bwrap: Can't chdir to /tmp/kinu-first-run-probe-6B5G: No such file or directory";
+
+const NO_REASON = 'the daemon reported no reason';
 
 /** The sandbox block of an EXEC frame, as the daemon reads it off the wire. */
 const ExecSandboxSchema = v.object({
@@ -89,17 +138,26 @@ describe('a machine that cannot sandbox runs no command', () => {
     await harness.closeDeviceHarness();
   });
 
-  test('a daemon that claims a sandbox but names no agent root is not sandboxed', async () => {
+  test('a daemon that claims a sandbox but names no agent root is not sandboxed, and is told which build to fix', async () => {
     // There is nowhere to put the agent's home, so there is no frame to build.
     // Recorded as incapable at the HELLO boundary rather than discovered by a
-    // command that has already been promised a sandbox.
+    // command that has already been promised a sandbox. The verdict is the
+    // hub's, so its words are the hub's, and the fix is the build, because
+    // every daemon that sends a verdict also sends the root.
     const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
     harness.consentDecision = 'always';
-    await harness.sendDeviceHello({ type: 'HELLO', sandbox: CAPABLE });
+    await harness.sendDeviceHello({ type: 'HELLO', os: 'linux', sandbox: CAPABLE });
 
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE }))
-      .rejects.toThrow(SANDBOX_UNAVAILABLE);
+    const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
+    await expect(refusal).rejects.toThrow(SANDBOX_UNAVAILABLE);
+    await expect(refusal).rejects.toThrow('daemon_outdated: the daemon proved a sandbox but did not say where agent homes live');
+    await expect(refusal).rejects.toThrow(sandboxReasonFix('daemon_outdated'));
+    await expect(refusal).rejects.not.toThrow(NO_REASON);
     expect(execFrames(harness)).toEqual([]);
+    expect((await harness.userDO.listDevices(await testOwner()))[0]?.sandbox).toEqual({
+      tier: 'sandboxed', capability: 'files_only', reason: 'daemon_outdated',
+      detail: 'the daemon proved a sandbox but did not say where agent homes live', gpu: CAPABLE.gpu,
+    });
     await harness.closeDeviceHarness();
   });
 
@@ -121,7 +179,7 @@ describe('a machine that cannot sandbox runs no command', () => {
 
     // The Settings row reads the same reason, so the owner sees the same fix.
     expect((await harness.userDO.listDevices(await testOwner()))[0]?.sandbox).toEqual({
-      tier: 'sandboxed', capability: 'files_only', reason: 'daemon_outdated', gpu: [],
+      tier: 'sandboxed', capability: 'files_only', reason: 'daemon_outdated', detail: null, gpu: [],
     });
     await harness.closeDeviceHarness();
   });
@@ -164,6 +222,7 @@ describe('the Sandbox switch belongs to the owner', () => {
       tier: 'raw',
       capability: 'sandboxed',
       reason: null,
+      detail: null,
       gpu: ['/dev/nvidia0', '/dev/nvidiactl'],
     });
     await harness.closeDeviceHarness();
@@ -224,6 +283,7 @@ describe('the frame carries the calling workspace own home', () => {
       tier: 'sandboxed',
       capability: 'sandboxed',
       reason: null,
+      detail: null,
       gpu: ['/dev/nvidia0', '/dev/nvidiactl'],
       agentHome: `/home/ashish/.kinu/agents/${WORKSPACE}/home`,
       roots: ['/home/ashish/projects/kinu'],
@@ -259,11 +319,105 @@ describe('the reason vocabulary is closed and every value carries a fix', () => 
     }
   });
 
-  test('a reason outside the vocabulary is recorded as no reason, not as itself', async () => {
+  test('a reason outside the vocabulary is recorded as no reason, and the HELLO still lands', async () => {
+    // The word is unknown to this hub; the machine is not. Everything else the
+    // daemon said (platform, verdict, its own words for the failure) is
+    // recorded, and the refusal repeats those words because they are the only
+    // cause there is.
     const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
-    await harness.sendDeviceHello(hello({ capability: 'files_only', reason: 'gremlins', gpu: [] }));
-    expect((await harness.userDO.listDevices(await testOwner()))[0]?.sandbox.reason).toBeNull();
+    harness.consentDecision = 'always';
+    await harness.sendDeviceHello(hello({
+      capability: 'files_only', reason: 'gremlins', reasonDetail: 'the gremlins ate the namespace', gpu: [],
+    }));
+    const device = (await harness.userDO.listDevices(await testOwner()))[0];
+    expect(device?.os).toBe('linux');
+    expect(device?.sandbox).toEqual({
+      tier: 'sandboxed', capability: 'files_only', reason: null,
+      detail: 'gremlins: the gremlins ate the namespace', gpu: [],
+    });
+
+    const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
+    await expect(refusal).rejects.toThrow('gremlins: the gremlins ate the namespace');
+    await expect(refusal).rejects.toThrow(sandboxReasonFix(null));
+    await expect(refusal).rejects.not.toThrow(NO_REASON);
     await harness.closeDeviceHarness();
+  });
+});
+
+describe('the refusal carries what the daemon actually said', () => {
+  test('a probe that failed in words the daemon does not classify reaches the model verbatim', async () => {
+    // THE FIRST-RUN DEFECT. The daemon's probe ran bwrap and bwrap failed in a
+    // way the daemon has no word for, so it reported `probe_failed` and the
+    // one line that says what happened. The hub had no such word, refused the
+    // whole HELLO for it, recorded nothing, and told the model "the daemon
+    // reported no reason" while the daemon's log held the reason.
+    const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
+    harness.consentDecision = 'always';
+    await harness.sendDeviceHello(hello(daemonHello(daemonStatus('PROBE_FAILED'), PROBE_FAILED_DETAIL)));
+
+    const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['rm -r doomed'], { agentName: WORKSPACE });
+    await expect(refusal).rejects.toThrow(SANDBOX_UNAVAILABLE);
+    await expect(refusal).rejects.toThrow(`probe_failed: ${PROBE_FAILED_DETAIL}`);
+    await expect(refusal).rejects.toThrow(sandboxReasonFix('probe_failed'));
+    await expect(refusal).rejects.not.toThrow(NO_REASON);
+    expect(execFrames(harness)).toEqual([]);
+
+    // The row holds the same words, so the Settings row and `kinu connect`
+    // show the owner what the model was told.
+    const device = (await harness.userDO.listDevices(await testOwner()))[0];
+    expect(device?.os).toBe('linux');
+    expect(device?.sandbox).toEqual({
+      tier: 'sandboxed', capability: 'files_only', reason: 'probe_failed',
+      detail: PROBE_FAILED_DETAIL, gpu: [],
+    });
+    await harness.closeDeviceHarness();
+  });
+
+  test('every status the shipped daemon can report lands on the row as itself, with its hint', async () => {
+    // Measured against the daemon's own status table, not a copy of it. The
+    // hub's vocabulary minus the one word the hub assigns must be exactly the
+    // words the daemon can send, in both directions.
+    const statuses = Object.values(daemonSandbox.SANDBOX_STATUS).filter((status) => status !== daemonStatus('OK'));
+    expect([...statuses].sort())
+      .toEqual(DEVICE_SANDBOX_REASONS.filter((reason) => reason !== 'daemon_outdated').sort());
+    for (const status of statuses) {
+      const reason = parseSandboxReason(status);
+      expect(reason).not.toBeNull();
+      const detail = daemonSandbox.PROBE_HINTS[status] ?? PROBE_FAILED_DETAIL;
+      const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
+      harness.consentDecision = 'always';
+      await harness.sendDeviceHello(hello(daemonHello(status, detail)));
+      const sandbox = (await harness.userDO.listDevices(await testOwner()))[0]?.sandbox;
+      expect(sandbox?.reason).toBe(reason);
+      expect(sandbox?.detail).toBe(detail);
+      // `raw_only` is a platform fact and the switch is the owner's only move;
+      // it is still refused while the switch is on, naming the platform.
+      const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
+      await expect(refusal).rejects.toThrow(`${status}: ${detail}`);
+      await expect(refusal).rejects.toThrow(sandboxReasonFix(reason));
+      await harness.closeDeviceHarness();
+    }
+  });
+
+  test('"the daemon reported no reason" survives only where the daemon said nothing', async () => {
+    // Two machines with nothing behind the verdict: one whose daemon answered
+    // `files_only` with no reason and no words, and one whose daemon has not
+    // said HELLO at all. The sentence is true of both and of nothing else.
+    const silent = await deviceHarness('ashish@studio', daemon, { hello: null });
+    silent.consentDecision = 'always';
+    await silent.sendDeviceHello(hello({ capability: 'files_only', reason: null, gpu: [] }));
+    const silentRefusal = silent.userDO.deviceRpc(silent.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
+    await expect(silentRefusal).rejects.toThrow(`(${NO_REASON})`);
+    await expect(silentRefusal).rejects.toThrow(sandboxReasonFix(null));
+    expect((await silent.userDO.listDevices(await testOwner()))[0]?.sandbox.detail).toBeNull();
+    await silent.closeDeviceHarness();
+
+    const unheard = await deviceHarness('ashish@studio', daemon, { hello: null });
+    unheard.consentDecision = 'always';
+    const unheardRefusal = unheard.userDO.deviceRpc(unheard.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
+    await expect(unheardRefusal).rejects.toThrow(`(${NO_REASON})`);
+    expect(execFrames(unheard)).toEqual([]);
+    await unheard.closeDeviceHarness();
   });
 });
 
@@ -293,7 +447,9 @@ describe('the columns reach a UserDO that predates them', () => {
 
     const columns = sql.exec(`PRAGMA table_info(user_devices)`).toArray()
       .map((row) => v.parse(v.object({ name: v.string() }), row).name);
-    for (const column of ['tier', 'sandbox_capability', 'sandbox_reason', 'sandbox_gpu', 'agent_root', 'consented_root']) {
+    for (const column of [
+      'tier', 'sandbox_capability', 'sandbox_reason', 'sandbox_detail', 'sandbox_gpu', 'agent_root', 'consented_root',
+    ]) {
       expect(columns).toContain(column);
     }
     // The switch is ON for a row written before the switch existed.

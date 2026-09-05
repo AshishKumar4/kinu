@@ -66,12 +66,15 @@ const USER_DEVICES_ADDED_COLUMNS = {
   // command on the machine to learn a path.
   consented_root: 'TEXT',
   device_home: 'TEXT',
-  // What the daemon PROVED about sandboxing when it started, and why it could
-  // not. A row with neither reads as `files_only`: a machine that has not
-  // proved it can sandbox has not proved it can sandbox, and the sandbox tier
-  // then runs nothing rather than quietly running everything unconfined.
+  // What the daemon PROVED about sandboxing when it started, why it could
+  // not, and the words behind that verdict (the daemon's own line when it
+  // sent one, the hub's when the hub made the verdict). A row with none of
+  // them reads as `files_only`: a machine that has not proved it can sandbox
+  // has not proved it can sandbox, and the sandbox tier then runs nothing
+  // rather than quietly running everything unconfined.
   sandbox_capability: 'TEXT',
   sandbox_reason: 'TEXT',
+  sandbox_detail: 'TEXT',
   // GPU device nodes the daemon found, as a JSON array.
   sandbox_gpu: 'TEXT',
   // Where this machine keeps agent homes (`<home>/.kinu/agents`), reported on
@@ -375,10 +378,12 @@ export function initUserTables(sql: SqlExec): void {
       -- besides its own agent home a workspace reaches here.
       consented_root  TEXT,
       device_home     TEXT,
-      -- What the daemon proved about sandboxing, why it could not, and the GPU
-      -- nodes it found (JSON array). Absent reads as files_only.
+      -- What the daemon proved about sandboxing, why it could not, the words
+      -- behind that verdict, and the GPU nodes it found (JSON array). Absent
+      -- reads as files_only.
       sandbox_capability TEXT,
       sandbox_reason  TEXT,
+      sandbox_detail  TEXT,
       sandbox_gpu     TEXT,
       -- Where this machine keeps agent homes. The hub composes one per
       -- workspace under it and never guesses a path on the machine.

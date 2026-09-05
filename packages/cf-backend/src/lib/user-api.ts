@@ -194,7 +194,7 @@ export interface UserDevice {
    *  own home and roots are not here — they live on the runtime status. */
   sandbox: UserDeviceSandbox;
 }
-export type UserDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'gpu'>;
+export type UserDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
 export interface RegisteredDevice {
   origin: string;
   installCommand: string;
@@ -203,13 +203,14 @@ const DeviceSandboxSchema = v.object({
   tier: v.picklist(DEVICE_TIERS),
   capability: v.picklist(DEVICE_SANDBOX_CAPABILITIES),
   reason: v.nullable(v.picklist(DEVICE_SANDBOX_REASONS)),
+  detail: v.optional(v.nullable(v.string()), null),
   gpu: v.array(v.string()),
 });
 /** A row written before the registry recorded a sandbox: the switch is on by
  *  default, and a machine that has not proved it can sandbox has not proved
  *  it can sandbox — the same reading `parseSandboxCapability` gives silence. */
 const UNREPORTED_SANDBOX: v.InferOutput<typeof DeviceSandboxSchema> =
-  { tier: 'sandboxed', capability: 'files_only', reason: null, gpu: [] };
+  { tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] };
 const UserDeviceSchema = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()), expiresAt: v.nullable(v.number()),

@@ -50,7 +50,7 @@ import {
 import { executorIsSelectable, type PromptExecutorInfo } from './surface';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
 import {
-  connectedDevices, describeGpuNodes, effectiveDeviceMode,
+  connectedDevices, describeGpuNodes, effectiveDeviceMode, sandboxCause,
   type DeviceFleetEntry,
 } from '../execution/device-status';
 import { deviceMountSegment } from '../execution/device-tunnel-executor';
@@ -427,7 +427,7 @@ function executorSandboxSuffix(exec: PromptExecutorInfo): string {
     case 'raw':
       return ' — Sandbox off for this device: commands run as the owner, with full access to the machine';
     case 'files_only':
-      return ` — device cannot sandbox: ${sandbox.reason ?? 'the daemon reported no reason'}`
+      return ` — device cannot sandbox: ${sandboxCause(sandbox)}`
         + ' — files only, no shell. Reading and writing files still works';
   }
 }

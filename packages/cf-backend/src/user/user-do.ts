@@ -136,12 +136,11 @@ import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_PROVISION_METHOD,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId,
-  DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, SANDBOX_UNAVAILABLE,
-  effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix,
+  DEVICE_TIERS, SANDBOX_UNAVAILABLE,
+  effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause,
   summarizeDeviceAction,
   type DeviceConsentDecision, type DeviceStatus,
   type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
-  type DeviceSandboxCapability, type DeviceSandboxReason,
   describeMcpTool, type SerializableToolDescriptor,
 } from '@kinu.run/core';
 import {
@@ -296,11 +295,19 @@ const DeviceHelloSchema = v.object({
   root: v.optional(v.string()),
   home: v.optional(v.string()),
   /** What the daemon PROVED at start. `capability` is its own probe's verdict,
-   *  `reason` names the failure from a closed vocabulary, `gpu` lists the
-   *  device nodes it found. */
+   *  `reason` is the probe's status word, `reasonDetail` is the probe's one
+   *  line about it, `gpu` lists the device nodes it found.
+   *
+   *  The words are plain strings here. The hub narrows each one on its own
+   *  (`sandboxVerdictFromHello`) and keeps the rest of the frame. A picklist
+   *  here refused the WHOLE HELLO for one word the hub did not know, so the
+   *  daemon that said the most, `probe_failed` with the bwrap line behind it,
+   *  was recorded as having said nothing. Measured 2026-09-04 on the first-run
+   *  tier. */
   sandbox: v.optional(v.object({
-    capability: v.optional(v.picklist(DEVICE_SANDBOX_CAPABILITIES)),
-    reason: v.optional(v.nullable(v.picklist(DEVICE_SANDBOX_REASONS))),
+    capability: v.optional(v.nullable(v.string())),
+    reason: v.optional(v.nullable(v.string())),
+    reasonDetail: v.optional(v.nullable(v.string())),
     gpu: v.optional(v.array(v.string())),
   })),
   /** Where this machine keeps agent homes (`<home>/.kinu/agents`). The hub
@@ -308,6 +315,65 @@ const DeviceHelloSchema = v.object({
    *  travels and the hub never guesses a path on someone else's machine. */
   agentRoot: v.optional(v.string()),
 });
+
+/** The verdict columns of `user_devices`. An object type rather than an
+ *  interface, so it satisfies the row constraint `sqlx` puts on its result
+ *  shape. */
+type SandboxColumns = {
+  sandbox_capability: string | null;
+  sandbox_reason: string | null;
+  sandbox_detail: string | null;
+  sandbox_gpu: string | null;
+};
+
+type SandboxVerdict = Pick<DeviceSandboxStatus, 'capability' | 'reason' | 'detail'>;
+
+/**
+ * The sandbox verdict a HELLO earns, in the hub's vocabulary, with the words
+ * behind it. Nothing the daemon said about why is dropped. A status word the
+ * hub knows becomes the reason. The daemon's own line becomes the detail. A
+ * word the hub does not know stays inside the detail, because that word and
+ * that line are the only cause there is.
+ *
+ * Two verdicts are the hub's own, and both name the build. A daemon that
+ * sends no sandbox field at all is every daemon deployed before this
+ * contract, and "it did not say" is nothing an owner can act on. A daemon
+ * that proved a sandbox but named no agent root has left the hub nowhere to
+ * put the agent's home, so no frame can be built from it. The boundary records
+ * that, so a command is never promised a sandbox it cannot get.
+ */
+function sandboxVerdictFromHello(
+  hello: v.InferOutput<typeof DeviceHelloSchema>, agentRoot: string | null,
+): SandboxVerdict {
+  if (hello.sandbox === undefined) return { capability: 'files_only', reason: 'daemon_outdated', detail: null };
+  const claimed = parseSandboxCapability(hello.sandbox.capability);
+  if (claimed === 'sandboxed' && agentRoot === null) {
+    return {
+      capability: 'files_only',
+      reason: 'daemon_outdated',
+      detail: 'the daemon proved a sandbox but did not say where agent homes live',
+    };
+  }
+  const word = hello.sandbox.reason ?? null;
+  const line = hello.sandbox.reasonDetail ?? null;
+  const reason = parseSandboxReason(word);
+  if (reason === null && word !== null) {
+    return { capability: claimed, reason, detail: line === null ? word : `${word}: ${line}` };
+  }
+  return { capability: claimed, reason, detail: line };
+}
+
+/** One reading of the verdict columns for every surface that shows them. An
+ *  absent or unrecognised word narrows to "not proved". The words behind the
+ *  verdict travel as written. */
+function readSandboxColumns(row: SandboxColumns | undefined): SandboxVerdict & Pick<DeviceSandboxStatus, 'gpu'> {
+  return {
+    capability: parseSandboxCapability(row?.sandbox_capability),
+    reason: parseSandboxReason(row?.sandbox_reason),
+    detail: row?.sandbox_detail ?? null,
+    gpu: v.parse(v.array(v.string()), JSON.parse(row?.sandbox_gpu ?? '[]')),
+  };
+}
 
 /** An absolute path, or null for anything else. A relative path names nothing
  *  the hub can send to a machine, and an older daemon sends none at all. */
@@ -2112,36 +2178,25 @@ export class UserDO extends Agent<Env> {
    * machine. The sandbox verdict is the opposite — it is a fact about THIS
    * daemon on THIS boot, so silence means "not proved" and overwrites a stale
    * yes. A machine that stops being able to sandbox must stop reading as able.
-   *
-   * A capability of `sandboxed` with no agent root is not a usable sandbox:
-   * there is nowhere to put the agent's home, so the frame cannot be built.
-   * That is recorded as `files_only` here, at the boundary, rather than
-   * discovered later by a command that has already been promised a sandbox.
    */
   private recordDeviceHello(deviceId: string, hello: v.InferOutput<typeof DeviceHelloSchema>): void {
     const agentRoot = absolutePathOrNull(hello.agentRoot);
-    const claimed = parseSandboxCapability(hello.sandbox?.capability);
-    const capability = claimed === 'sandboxed' && agentRoot === null ? 'files_only' : claimed;
-    // A daemon that sends no sandbox field at all is every daemon deployed
-    // before this contract. "It did not say" is not something an owner can act
-    // on, so the hub names the build and the fix instead: update the CLI.
-    const reason = hello.sandbox === undefined
-      ? 'daemon_outdated'
-      : parseSandboxReason(hello.sandbox.reason);
+    const verdict = sandboxVerdictFromHello(hello, agentRoot);
     this.sqlx(
       `UPDATE user_devices
           SET os = ?, hostname = ?, last_seen_at = ?,
               consented_root = COALESCE(?, consented_root),
               device_home = COALESCE(?, device_home),
               agent_root = COALESCE(?, agent_root),
-              sandbox_capability = ?, sandbox_reason = ?, sandbox_gpu = ?
+              sandbox_capability = ?, sandbox_reason = ?, sandbox_detail = ?, sandbox_gpu = ?
         WHERE id = ?`,
       hello.os ?? null, hello.hostname ?? null, Date.now(),
       absolutePathOrNull(hello.root),
       absolutePathOrNull(hello.home),
       agentRoot,
-      capability,
-      reason,
+      verdict.capability,
+      verdict.reason,
+      verdict.detail,
       JSON.stringify(hello.sandbox?.gpu ?? []),
       deviceId,
     );
@@ -2408,7 +2463,7 @@ export class UserDO extends Agent<Env> {
       // the tier never sees the command. The daemon refuses it again on its own
       // probe; neither end ever downgrades a sandboxed command to a raw one.
       if (mode === 'files_only') {
-        throw new Error(this.sandboxRefusal(deviceId, sandbox, sandbox.reason ?? 'the daemon reported no reason'));
+        throw new Error(this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
       }
       if (mode === 'sandboxed' && sandbox.agentHome === null) {
         throw new Error(this.sandboxRefusal(deviceId, sandbox, workspace === null
@@ -2678,11 +2733,8 @@ export class UserDO extends Agent<Env> {
    * home that resolves above the agent root.
    */
   private deviceSandboxFor(deviceId: string, workspace: string | null): DeviceSandboxStatus {
-    const row = this.sqlx<{
-      tier: string | null; sandbox_capability: string | null; sandbox_reason: string | null;
-      sandbox_gpu: string | null; agent_root: string | null; consented_root: string | null;
-    }>(
-      `SELECT tier, sandbox_capability, sandbox_reason, sandbox_gpu, agent_root, consented_root
+    const row = this.sqlx<SandboxColumns & { tier: string | null; agent_root: string | null; consented_root: string | null }>(
+      `SELECT tier, sandbox_capability, sandbox_reason, sandbox_detail, sandbox_gpu, agent_root, consented_root
          FROM user_devices WHERE id = ?`, deviceId,
     )[0];
     const agentRoot = row?.agent_root ?? null;
@@ -2690,9 +2742,7 @@ export class UserDO extends Agent<Env> {
     const consented = row?.consented_root ?? null;
     return {
       tier: parseDeviceTier(row?.tier),
-      capability: parseSandboxCapability(row?.sandbox_capability),
-      reason: parseSandboxReason(row?.sandbox_reason),
-      gpu: v.parse(v.array(v.string()), JSON.parse(row?.sandbox_gpu ?? '[]')),
+      ...readSandboxColumns(row),
       agentHome: agentRoot !== null && named ? `${agentRoot}/${workspace}/home` : null,
       roots: consented === null ? [] : [consented],
     };
@@ -2922,27 +2972,22 @@ export class UserDO extends Agent<Env> {
     connected: boolean; createdAt: number; lastSeenAt: number | null; expiresAt: number | null;
     lastIp: string | null; lastAgent: string | null; replacedAt: number | null;
     revokedAt: number | null; unstoppedAt: number | null;
-    /** The owner's Sandbox switch and what the machine proved about it. No
-     *  home or roots here: those are per workspace, and this is the account's
-     *  device registry, not one workspace's view of it. */
-    sandbox: {
-      tier: DeviceTier;
-      capability: DeviceSandboxCapability;
-      reason: DeviceSandboxReason | null;
-      gpu: string[];
-    };
+    /** The owner's Sandbox switch and what the machine proved about it, with
+     *  the words behind a verdict the Settings row has to explain. No home or
+     *  roots here: those are per workspace, and this is the account's device
+     *  registry, not one workspace's view of it. */
+    sandbox: Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
   }>> {
     await this.requireTier(caller, 'device.manage');
-    return this.sqlx<{
+    return this.sqlx<SandboxColumns & {
       id: string; label: string; os: string | null; hostname: string | null;
       created_at: number; last_seen_at: number | null; expires_at: number | null;
       last_ip: string | null; last_agent: string | null; replaced_at: number | null;
       revoked_at: number | null; unstopped_at: number | null;
-      tier: string | null; sandbox_capability: string | null;
-      sandbox_reason: string | null; sandbox_gpu: string | null;
+      tier: string | null;
     }>(`SELECT id, label, os, hostname, created_at, last_seen_at, expires_at,
                last_ip, last_agent, replaced_at, revoked_at, unstopped_at,
-               tier, sandbox_capability, sandbox_reason, sandbox_gpu
+               tier, sandbox_capability, sandbox_reason, sandbox_detail, sandbox_gpu
           FROM user_devices
          WHERE revoked_at IS NULL OR unstopped_at IS NOT NULL
          ORDER BY created_at DESC`)
@@ -2952,12 +2997,7 @@ export class UserDO extends Agent<Env> {
         createdAt: r.created_at, lastSeenAt: r.last_seen_at, expiresAt: r.expires_at,
         lastIp: r.last_ip, lastAgent: r.last_agent, replacedAt: r.replaced_at,
         revokedAt: r.revoked_at, unstoppedAt: r.unstopped_at,
-        sandbox: {
-          tier: parseDeviceTier(r.tier),
-          capability: parseSandboxCapability(r.sandbox_capability),
-          reason: parseSandboxReason(r.sandbox_reason),
-          gpu: v.parse(v.array(v.string()), JSON.parse(r.sandbox_gpu ?? '[]')),
-        },
+        sandbox: { tier: parseDeviceTier(r.tier), ...readSandboxColumns(r) },
       }));
   }
 

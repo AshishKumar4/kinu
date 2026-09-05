@@ -164,12 +164,21 @@ export type DeviceSandboxCapability = (typeof DEVICE_SANDBOX_CAPABILITIES)[numbe
 /** Why a machine cannot sandbox. A closed vocabulary, because each value has
  *  ONE documented fix the owner can act on and free text has none.
  *
- *  `daemon_outdated` is the one the hub assigns rather than the machine: every
+ *  The first six are the daemon's own probe statuses (`SANDBOX_STATUS` in
+ *  `packages/pc-agent/src/sandbox.js`, which ships dependency-free and cannot
+ *  import this). The hub's suite holds the two tables equal in both
+ *  directions. `probe_failed` is the one whose fix is not a fixed sentence.
+ *  The sandbox binary ran and failed in words the daemon does not classify,
+ *  so the daemon's own line (`DeviceSandboxStatus.detail`) is the cause. The
+ *  hub lacked the word, refused the whole HELLO for it, and told the owner to
+ *  fix nothing in particular. Measured 2026-09-04 on the first-run tier.
+ *
+ *  `daemon_outdated` is the one the hub assigns rather than the machine. Every
  *  daemon deployed before this contract sends no sandbox field at all, and
- *  "it did not say" is not something an owner can act on. It names the build,
- *  and its fix is the only fix. */
+ *  "it did not say" is nothing an owner can act on. It names the build, and
+ *  its fix is the only fix. */
 export const DEVICE_SANDBOX_REASONS = [
-  'no_bwrap', 'no_userns', 'wsl1', 'no_sandbox_exec', 'unsupported_platform',
+  'no_bwrap', 'no_userns', 'wsl1', 'no_sandbox_exec', 'unsupported_platform', 'probe_failed',
   'daemon_outdated',
 ] as const;
 export type DeviceSandboxReason = (typeof DEVICE_SANDBOX_REASONS)[number];
@@ -190,6 +199,11 @@ export interface DeviceSandboxStatus {
   /** Why the machine cannot sandbox, or null when it can — or when it could
    *  not say. */
   readonly reason: DeviceSandboxReason | null;
+  /** The words behind a verdict other than `sandboxed`. The daemon's own line
+   *  when it sent one (`reasonDetail` on HELLO), the hub's when the hub made
+   *  the verdict. Null when there is nothing to add, because the machine can
+   *  sandbox or the daemon named a reason and nothing more. */
+  readonly detail: string | null;
   /** GPU device nodes the daemon found, e.g. `/dev/nvidia0`. An empty list is
    *  MEASURED empty: the daemon looked. */
   readonly gpu: readonly string[];
@@ -257,6 +271,7 @@ const SANDBOX_REASON_FIX = {
   no_sandbox_exec: 'Turn Sandbox off for this device to run commands.',
   unsupported_platform:
     'The sandbox needs Linux or macOS. Turn Sandbox off for this device to run commands.',
+  probe_failed: 'Fix what the daemon named, then run `kinu connect` on that machine again.',
   daemon_outdated: 'Update the Kinu CLI, then run `kinu connect` again.',
 } satisfies Record<DeviceSandboxReason, string>;
 
@@ -266,6 +281,17 @@ export function sandboxReasonFix(reason: DeviceSandboxReason | null): string {
   return reason === null
     ? 'Run `kinu connect` on that machine to retry.'
     : SANDBOX_REASON_FIX[reason];
+}
+
+/** Why the machine cannot sandbox, as one phrase. The reason the daemon
+ *  named, the words behind it, or both when it gave both. The closing phrase
+ *  is reserved for a verdict with nothing behind it at all, from a daemon that
+ *  answered `files_only` and no more or one that has not said HELLO. Every
+ *  surface that renders a cause reads it from here, so the sentence cannot
+ *  stand in for a cause the row holds. */
+export function sandboxCause(sandbox: Pick<DeviceSandboxStatus, 'reason' | 'detail'>): string {
+  if (sandbox.reason !== null && sandbox.detail !== null) return `${sandbox.reason}: ${sandbox.detail}`;
+  return sandbox.reason ?? sandbox.detail ?? 'the daemon reported no reason';
 }
 
 /** The GPU nodes as one short phrase for a status line. `none` is measured

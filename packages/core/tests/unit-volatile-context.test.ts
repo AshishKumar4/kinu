@@ -337,6 +337,7 @@ describe('renderDynamicContextBlock', () => {
           tier: 'sandboxed',
           capability: 'sandboxed',
           reason: null,
+          detail: null,
           gpu: ['/dev/nvidia0', '/dev/nvidiactl'],
           agentHome: '/home/ashish/.kinu/agents/notes/home',
           roots: ['/home/ashish/projects/kinu'],
@@ -361,6 +362,7 @@ describe('renderDynamicContextBlock', () => {
           tier: 'sandboxed',
           capability: 'files_only',
           reason: 'no_userns',
+          detail: null,
           gpu: [],
           agentHome: null,
           roots: [],
@@ -373,6 +375,28 @@ describe('renderDynamicContextBlock', () => {
     expect(text).not.toContain('sandboxed full bash');
   });
 
+  test('a device whose probe failed in the daemon\'s own words hands the model those words', () => {
+    // `probe_failed` alone names nothing the model can relay to the owner;
+    // the daemon's line is the cause, and the prompt reads it from the same
+    // helper the refusal does, so the two never disagree.
+    const text = renderDynamicContextBlock({
+      executors: [{
+        ...connectedLaptop,
+        sandbox: {
+          tier: 'sandboxed',
+          capability: 'files_only',
+          reason: 'probe_failed',
+          detail: "sandbox probe failed: bwrap: Can't chdir to /tmp/kinu-first-run-probe-6B5G: No such file or directory",
+          gpu: [],
+          agentHome: null,
+          roots: [],
+        },
+      }],
+    })!;
+    expect(text).toContain("device cannot sandbox: probe_failed: sandbox probe failed: bwrap: Can't chdir to");
+    expect(text).not.toContain('the daemon reported no reason');
+  });
+
   test('a device with the sandbox switched off says the agent runs as the owner', () => {
     const text = renderDynamicContextBlock({
       executors: [{
@@ -381,6 +405,7 @@ describe('renderDynamicContextBlock', () => {
           tier: 'raw',
           capability: 'sandboxed',
           reason: null,
+          detail: null,
           gpu: ['/dev/dri'],
           agentHome: '/home/ashish/.kinu/agents/notes/home',
           roots: [],
@@ -397,7 +422,7 @@ describe('renderDynamicContextBlock', () => {
       executors: [{
         ...connectedLaptop,
         sandbox: {
-          tier: 'sandboxed', capability: 'sandboxed', reason: null, gpu: [],
+          tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [],
           agentHome: '/home/ashish/.kinu/agents/notes/home', roots: [],
         },
       }],

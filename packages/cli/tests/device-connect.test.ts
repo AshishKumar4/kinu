@@ -184,7 +184,7 @@ function connectedDevice(connected: boolean, overrides: Partial<CloudDevice> = {
     connected,
     createdAt: 0,
     lastSeenAt: null,
-    sandbox: { tier: 'sandboxed', capability: 'sandboxed', reason: null, gpu: [] },
+    sandbox: { tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] },
     ...overrides,
   };
 }
@@ -426,6 +426,7 @@ describe('the sandbox state the machine reported', () => {
     wsl1: 'wsl --set-version',
     no_sandbox_exec: 'Turn Sandbox off',
     unsupported_platform: 'Linux or macOS',
+    probe_failed: 'Fix what the daemon named',
     daemon_outdated: 'Update the Kinu CLI',
   } satisfies Record<DeviceSandboxReason, string>;
   const NO_COMMANDS_LINE =
@@ -439,7 +440,7 @@ describe('the sandbox state the machine reported', () => {
       const fix = sandboxReasonFix(reason);
       expect(fix.length).toBeGreaterThan(20);
       expect(fix).toContain(REASON_FIX_MARKER[reason]);
-      expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason, gpu: [] }))
+      expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason, detail: null, gpu: [] }))
         .toEqual(['This machine cannot sandbox.', fix, NO_COMMANDS_LINE]);
     }
   });
@@ -449,29 +450,29 @@ describe('the sandbox state the machine reported', () => {
     const SYSCTL = 'kernel.apparmor_restrict_unprivileged_userns=0';
     expect(sandboxReasonFix('no_userns')).toContain(SYSCTL);
     expect(source).not.toContain(SYSCTL);
-    expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: 'no_userns', gpu: [] })[1])
+    expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: 'no_userns', detail: null, gpu: [] })[1])
       .toContain(SYSCTL);
   });
 
   test('a machine that cannot sandbox says so, and the reason code stays out of it', () => {
-    expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: null, gpu: [] }))
+    expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] }))
       .toEqual(['This machine cannot sandbox.', sandboxReasonFix(null), NO_COMMANDS_LINE]);
   });
 
   test('sandbox on names what the agent sees and the GPU nodes found', () => {
     expect(describeDeviceSandbox({
-      tier: 'sandboxed', capability: 'sandboxed', reason: null, gpu: ['/dev/nvidia0', '/dev/nvidiactl'],
+      tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: ['/dev/nvidia0', '/dev/nvidiactl'],
     })).toEqual([
       'Sandbox on: agent home plus the folders you picked, your files invisible.'
       + ' GPU: nvidia0, nvidiactl.',
     ]);
-    expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'sandboxed', reason: null, gpu: [] })[0])
+    expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] })[0])
       .toContain('GPU: none.');
   });
 
   test('sandbox off says the agent runs with full access, whatever the machine proved', () => {
     for (const capability of DEVICE_SANDBOX_CAPABILITIES) {
-      expect(describeDeviceSandbox({ tier: 'raw', capability, reason: null, gpu: [] }))
+      expect(describeDeviceSandbox({ tier: 'raw', capability, reason: null, detail: null, gpu: [] }))
         .toEqual(['Sandbox OFF for this device: commands run as you, with full access.']);
     }
   });
@@ -482,11 +483,11 @@ describe('the sandbox state the machine reported', () => {
         connectedDevice(true, { label: 'studio' }),
         connectedDevice(true, {
           id: 'dev_2', label: 'tower',
-          sandbox: { tier: 'raw', capability: 'sandboxed', reason: null, gpu: [] },
+          sandbox: { tier: 'raw', capability: 'sandboxed', reason: null, detail: null, gpu: [] },
         }),
         connectedDevice(true, {
           id: 'dev_3', label: 'vm',
-          sandbox: { tier: 'sandboxed', capability: 'files_only', reason: 'no_userns', gpu: [] },
+          sandbox: { tier: 'sandboxed', capability: 'files_only', reason: 'no_userns', detail: null, gpu: [] },
         }),
         connectedDevice(false, { id: 'dev_4', label: 'retired' }),
       ],
@@ -513,7 +514,7 @@ describe('the sandbox state the machine reported', () => {
     const devices = await listCloudDevices(stub.origin, 'ptc_test');
 
     expect(devices).toHaveLength(1);
-    expect(devices[0].sandbox).toEqual({ tier: 'sandboxed', capability: 'files_only', reason: null, gpu: [] });
+    expect(devices[0].sandbox).toEqual({ tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] });
   });
 });
 

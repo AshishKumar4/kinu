@@ -87,7 +87,7 @@ function visibleFix(markup: string, fix: string): boolean {
 
 describe('the device row explains the switch in one line per state', () => {
   test('sandbox on, on a machine that can sandbox: the ON copy, the switch checked, the GPU line', () => {
-    const html = renderRow({ tier: 'sandboxed', capability: 'sandboxed', reason: null, gpu: ['/dev/nvidia0'] });
+    const html = renderRow({ tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: ['/dev/nvidia0'] });
     expect(switchState(html)).toEqual({ count: 1, checked: 'true' });
     expect(html).toContain('data-sandbox-mode="sandboxed"');
     expect(html).toContain(SANDBOXED_COPY);
@@ -98,7 +98,7 @@ describe('the device row explains the switch in one line per state', () => {
   });
 
   test('sandbox off: the OFF copy, the switch unchecked, no GPU line', () => {
-    const html = renderRow({ tier: 'raw', capability: 'sandboxed', reason: null, gpu: ['/dev/nvidia0'] });
+    const html = renderRow({ tier: 'raw', capability: 'sandboxed', reason: null, detail: null, gpu: ['/dev/nvidia0'] });
     expect(switchState(html)).toEqual({ count: 1, checked: 'false' });
     expect(html).toContain('data-sandbox-mode="raw"');
     expect(html).toContain(RAW_COPY);
@@ -107,14 +107,14 @@ describe('the device row explains the switch in one line per state', () => {
   });
 
   test('a machine without a GPU says so, measured rather than omitted', () => {
-    const html = renderRow({ tier: 'sandboxed', capability: 'sandboxed', reason: null, gpu: [] });
+    const html = renderRow({ tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] });
     expect(html).toContain('GPU: none');
   });
 });
 
 describe('a machine that cannot sandbox is never quietly run unconfined', () => {
   test('switch on, no bwrap: no commands run, and the fix core documents for that reason', () => {
-    const html = renderRow({ tier: 'sandboxed', capability: 'files_only', reason: 'no_bwrap', gpu: [] });
+    const html = renderRow({ tier: 'sandboxed', capability: 'files_only', reason: 'no_bwrap', detail: null, gpu: [] });
     expect(switchState(html)).toEqual({ count: 1, checked: 'true' });
     expect(html).toContain('data-sandbox-mode="files_only"');
     expect(html).toContain('Cannot sandbox');
@@ -127,13 +127,13 @@ describe('a machine that cannot sandbox is never quietly run unconfined', () => 
   });
 
   test('a daemon that named no reason gets the honest sentence, not an invented cause', () => {
-    const html = renderRow({ tier: 'sandboxed', capability: 'files_only', reason: null, gpu: [] });
+    const html = renderRow({ tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] });
     expect(html).toContain(CANNOT_COPY);
     expect(visibleFix(html, sandboxReasonFix(null))).toBe(true);
   });
 
   test('switch off on such a machine: the OFF copy, and the badge and fix stay — they are facts about the machine', () => {
-    const html = renderRow({ tier: 'raw', capability: 'raw_only', reason: 'unsupported_platform', gpu: [] });
+    const html = renderRow({ tier: 'raw', capability: 'raw_only', reason: 'unsupported_platform', detail: null, gpu: [] });
     expect(switchState(html)).toEqual({ count: 1, checked: 'false' });
     expect(html).toContain('data-sandbox-mode="raw"');
     expect(html).toContain(RAW_COPY);
@@ -184,9 +184,11 @@ describe('a device row written before the registry recorded a sandbox', () => {
       { preconnect: realFetch.preconnect },
     );
     const devices = await listDevices();
+    // `modern` carries no `detail`: a hub older than the field lists as
+    // having said nothing beyond the reason.
     expect(devices.map((row) => row.sandbox)).toEqual([
-      { tier: 'sandboxed', capability: 'files_only', reason: null, gpu: [] },
-      { tier: 'raw', capability: 'sandboxed', reason: null, gpu: [] },
+      { tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] },
+      { tier: 'raw', capability: 'sandboxed', reason: null, detail: null, gpu: [] },
     ]);
   });
 });

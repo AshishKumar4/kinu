@@ -973,7 +973,7 @@ export {
   deviceToolchainAnswer, freshDeviceToolchain,
   connectedDevices, deviceByName, deviceFleetAsk,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
-  sandboxReasonFix, describeGpuNodes,
+  sandboxReasonFix, sandboxCause, describeGpuNodes,
   DEVICE_PRESENCE_CONFIG_KEY, DEVICE_TOOLCHAIN_TTL_MS,
   DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS,
   type DeviceStatus, type DevicePresence, type DevicePresenceStore,
