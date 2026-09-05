@@ -143,6 +143,22 @@ const spawnerName = (callee: ESTree.Expression): string | null => {
 	if (!("property" in callee) || !("computed" in callee) || callee.computed) return null;
 	return callee.property.type === "Identifier" ? callee.property.name : null;
 };
+/** A `.exec(…)` whose receiver is itself a call result (`hosted.box('x').exec(…)`)
+ *  is a method on whatever that call returned, never one of the spawners above.
+ *  The hosted workspace shell is isomorphic-git in-process over SQLite — no child
+ *  process exists — and its `Shell` interface takes `(command, stdinOrOptions)`
+ *  with `{stdin, signal}` only, so naming `env` at the call site is structurally
+ *  inapplicable. Bare `exec(…)` and plain receivers (`child_process.exec(…)`)
+ *  still reach the matcher below. */
+function isChainedExec(node: ESTree.CallExpression): boolean {
+	return (
+		node.callee.type === "MemberExpression" &&
+		!node.callee.computed &&
+		node.callee.property.type === "Identifier" &&
+		node.callee.property.name === "exec" &&
+		node.callee.object.type === "CallExpression"
+	);
+}
 
 /** True when the call passes an `env` option. The rule does not try to decide
  *  whether that env is CLEAN — that needs types and would be guessable. Naming
@@ -171,14 +187,18 @@ function passesEnv(node: ESTree.CallExpression): boolean {
  *   `import { execFileSync as run }; run('git')` — spawner is a local alias
  *   `promisify(exec)('git status')`              — spawner is a returned function
  *   `spawnSync('sh', ['-c', 'git commit …'])`    — program is `sh`
+ *   `hosted.box('x').exec('git clone …')`        — receiver is a call result, not a spawner
  *
  * The first three need name resolution this rule does not have, and the fourth
  * needs to read shell strings inside argument arrays — which would fire on every
  * test that merely ASSERTS about a git command line, of which this repo has
  * several (`unit-tool-call-grouping.test.ts` expects `describeCommand('git commit
- * -m "fix"')`). Each is a narrower hole than the ones closed above, and none is
- * worth a matcher that cries wolf. The gate beside this rule pins this list as a
- * CAUGHT/MISSED table so a regression in either direction is visible.
+ * -m "fix"')`). The fifth is the price of the chained-`.exec` carve-out above: a
+ * real spawn spelled as a method on a call result is indistinguishable from the
+ * hosted shell without types. Each is a narrower hole than the ones closed
+ * above, and none is worth a matcher that cries wolf. The gate beside this rule
+ * pins this list as a CAUGHT/MISSED table so a regression in either direction is
+ * visible.
  */
 
 export const noAmbientGitInTestsRule = defineRule({
@@ -198,6 +218,7 @@ export const noAmbientGitInTestsRule = defineRule({
 			CallExpression(node) {
 				if (!TEST_FILE.test(context.filename)) return;
 				if (node.callee.type === "Super" || node.callee.type === "V8IntrinsicExpression") return;
+				if (isChainedExec(node)) return;
 				const spawner = spawnerName(node.callee);
 				if (spawner === null || !GIT_SPAWNERS.has(spawner)) return;
 				const program = spawnedProgram(node);

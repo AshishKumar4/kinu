@@ -33,6 +33,11 @@ tester.run("anti-slop/no-ambient-git-in-tests", noAmbientGitInTestsRule, {
     { code: "spawnSync('gitk', ['--all'], { cwd: repo });", filename: test },
     // Not a spawn.
     { code: "describe('git', () => {});", filename: test },
+    // A `.exec(…)` on a call result is a method on an in-process API object, never a spawn: the
+    // hosted workspace shell is isomorphic-git over SQLite with no child process behind it, and its
+    // `Shell` interface takes (command, stdinOrOptions) with {stdin, signal} only, so `env` cannot
+    // be named at the call site.
+    { code: "hosted.box('red').exec('git clone https://x');", filename: test },
     // A computed member cannot be resolved to a spawner name without types; reporting it would be a
     // guess, and the gate test asserts the live tree has none.
     { code: "child[method]('git', ['log'], { cwd: repo });", filename: test },
@@ -98,6 +103,11 @@ tester.run("anti-slop/no-ambient-git-in-tests", noAmbientGitInTestsRule, {
     { code: "execSync('git status', { cwd: repo });", filename: test, errors: [error] },
     { code: "execSync(`git rev-parse HEAD`, { cwd: repo });", filename: test, errors: [error] },
     { code: "spawnSync('git status', { shell: true, cwd: repo });", filename: test, errors: [error] },
+    // The carve-out is the chained receiver only: a bare `exec`, `Bun.$`, and a member spawn with
+    // a plain receiver still fire.
+    { code: "exec('git clone https://x');", filename: test, errors: [error] },
+    { code: "await Bun.$`git clone x`;", filename: test, errors: [error] },
+    { code: "child_process.execSync('git status');", filename: test, errors: [error] },
     // `Bun.$` cannot carry an options object, so a chain that never reaches `.env()` is ambient.
     { code: "await Bun.$`git commit -m seed`;", filename: test, errors: [error] },
     { code: "await Bun.$`git status`.nothrow().quiet();", filename: test, errors: [error] },

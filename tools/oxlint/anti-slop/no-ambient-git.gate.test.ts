@@ -225,6 +225,11 @@ assert.equal(
  * name resolution the rule does not have; the fourth would have to read shell strings inside
  * argument arrays, which fires on every test that merely ASSERTS about a git command line, and this
  * repo has those. A rule that cried wolf there would be disabled within a week.
+ *
+ * The chained-`.exec` carve-out (`hosted.box('x').exec(…)`, g09) is silent by a different logic:
+ * the receiver is a call result, an in-process shell object with no child process behind it, and
+ * its interface cannot name `env`. A real spawn spelled that way is the fifth known miss; the
+ * still-caught bare and plain-receiver spellings sit beside it (b17, b18).
  */
 const BOUNDARY: ReadonlyArray<{
   readonly file: string;
@@ -252,6 +257,10 @@ const BOUNDARY: ReadonlyArray<{
   // The scope arms: a `.eval.` suffix, and a helper under `tests/` with no suffix at all.
   { file: "b15.eval.ts", code: "execFileSync('git', ['worktree', 'add', d], { cwd: repo });", caught: true },
   { file: "tests/build-repo.ts", code: "execFileSync('git', ['init', '-q'], { cwd: scratch });", caught: true },
+  // The chained-`.exec` carve-out is the receiver only: a bare `exec` and a member spawn with a
+  // plain receiver still fire.
+  { file: "b17.test.ts", code: "exec('git clone https://x');", caught: true },
+  { file: "b18.test.ts", code: "child_process.execSync('git status');", caught: true },
 
   // Green states: the environment is named, so the author has thought about it.
   { file: "g01.test.ts", code: "execFileSync('git', ['status'], { cwd: repo, env: gitEnv() });", caught: false },
@@ -265,6 +274,9 @@ const BOUNDARY: ReadonlyArray<{
   // `sh -c` evasion below is left alone: catching it means reading argument strings, and this
   // shape is real — packages/cf-backend/tests/unit-tool-call-grouping.test.ts is full of it.
   { file: "g08.test.ts", code: "expect(describeCommand('git commit -m x')).toBe('Git commit');", caught: false },
+  // A `.exec(…)` on a call result is a method on an in-process API object — the hosted workspace
+  // shell is isomorphic-git over SQLite, with no child process behind it — never a spawn.
+  { file: "g09.test.ts", code: "hosted.box('red').exec('git clone https://x');", caught: false },
 
   // Known missed, deliberately. Each needs resolution this rule does not do.
   { file: "m01.test.ts", code: "const bin = 'git';\nspawnSync(bin, ['status'], { cwd: repo });", caught: false },
