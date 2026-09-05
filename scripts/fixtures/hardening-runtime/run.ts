@@ -105,18 +105,30 @@ try {
   const webhook = v.safeParse(v.object({ value: v.object({ victimId: v.string() }) }), evidence.get('/webhook'));
   if (webhook.success) evidence.set('unsignedVictimActivated', objectIds.has(webhook.output.value.victimId));
   evidence.set('stagingNamespace', namespace);
-  const trace = await api('/workers/observability/telemetry/query', 'POST', {
-    queryId: `hardening-${worker}`, timeframe: { from: started, to: Date.now() },
-    view: 'events', limit: 20, parameters: { filters: [
-      { key: '$metadata.service', type: 'string', operation: 'eq', value: worker },
-      { key: 'name', type: 'string', operation: 'eq', value: 'fetch.hardening_probe' },
-    ] },
-  });
-  const spans = v.parse(v.object({ result: v.object({ events: v.object({ events: v.array(v.object({
+  // The trace pipeline ingests a span minutes after the Worker recorded it, so
+  // one query straight after the probe reads nothing and says nothing. The
+  // query is repeated a bounded number of times and the count is recorded, so a
+  // run that ends without the span says how long it looked.
+  const SpansSchema = v.object({ result: v.object({ events: v.object({ events: v.array(v.object({
     source: v.object({ name: v.string(), traceId: v.string(), spanId: v.string(),
       kinu: v.object({ self_path: v.string(), isolate_gen: v.number() }) }),
-  })) }) }) }), await trace.json());
-  evidence.set('traceSpans', spans.result.events.events.map((event) => event.source));
+  })) }) }) });
+  let traceQueries = 0;
+  let traceSpans: v.InferOutput<typeof SpansSchema>['result']['events']['events'] = [];
+  while (traceSpans.length === 0 && traceQueries < 36) {
+    if (traceQueries > 0) await Bun.sleep(5000);
+    traceQueries += 1;
+    const trace = await api('/workers/observability/telemetry/query', 'POST', {
+      queryId: `hardening-${worker}`, timeframe: { from: started, to: Date.now() },
+      view: 'events', limit: 20, parameters: { filters: [
+        { key: '$metadata.service', type: 'string', operation: 'eq', value: worker },
+        { key: 'name', type: 'string', operation: 'eq', value: 'fetch.hardening_probe' },
+      ] },
+    });
+    traceSpans = v.parse(SpansSchema, await trace.json()).result.events.events;
+  }
+  evidence.set('traceQueries', traceQueries);
+  evidence.set('traceSpans', traceSpans.map((event) => event.source));
 } finally {
   if (deployed) {
     await api(`/workers/scripts/${worker}?force=true`, 'DELETE');
