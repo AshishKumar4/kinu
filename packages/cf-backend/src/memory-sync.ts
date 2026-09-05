@@ -63,7 +63,7 @@ export function adaptMemory(store: MemoryStore, vectorStore: VectorStore, config
 
 /** Chunks embedded per boot during the one-time backfill. Bounded so a large
  *  memory table is embedded across several boots rather than blocking one. */
-export const MEMORY_VECTOR_BACKFILL_CAP = 512;
+const MEMORY_VECTOR_BACKFILL_CAP = 512;
 
 /**
  * One-time backfill: memories indexed into FTS5 before the vector store existed

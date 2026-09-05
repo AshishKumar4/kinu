@@ -350,12 +350,12 @@ export class ExplorationAgent extends Agent<Env> {
    * route's when the parent named none.
    *
    * The pin wins deliberately — heterogeneous heads are a real feature, and a
-   * search that assigned one head a different model meant it. What changed is
-   * the fallback. An absent pin used to reach `resolveModel(null)`, which asks
-   * the REGISTRY for the account default and so never consults the profile at
-   * all: a role running on any tier but the default had its heads, its nodes and
-   * its crafted scripts served by a model it did not select, while its spend was
-   * filed against the route that chose differently.
+   * search that assigned one head a different model meant it. The fallback must
+   * resolve through the profile: reaching `resolveModel(null)` asks the REGISTRY
+   * for the account default and never consults it, so a role running on any tier
+   * but the default has its heads, its nodes and its crafted scripts served by a
+   * model it did not select, while its spend files against the route that chose
+   * differently.
    */
   private async facetModelSpec(
     source: 'head' | 'swarm',
@@ -520,10 +520,10 @@ export class ExplorationAgent extends Agent<Env> {
    *
    *  The model is the TURN's, resolved through `MODEL_ROUTE_POLICY.mcts` —
    *  `invocation`, so a rollout runs on the same tier the turn that ordered the
-   *  search runs on. It used to pass a null spec at a hardcoded `'low'`, which
-   *  never consults the profile at all: every branch ran the account default at
-   *  an effort nothing chose, so a role on any other tier was searched by models
-   *  it had not selected and the comparison was between the wrong things.
+   *  search runs on. A null spec at a hardcoded `'low'` never consults the
+   *  profile: every branch runs the account default at an effort nothing chose,
+   *  so a role on any other tier is searched by models it did not select and the
+   *  comparison is between the wrong things.
    *
    *  Spend is reported by the ENGINE, not here, and deliberately: it returns
    *  `usage` to `mcts/engine.ts`, which files one `mcts` row per branch call
@@ -946,8 +946,8 @@ export class ExplorationAgent extends Agent<Env> {
       }),
       models: this.ownedModelServices,
       // The merge resolves `judge` — the account-wide deep tier — off this
-      // profile. It used to pass `parentInput.model`, so a synthesis filed as
-      // deep-tier grading ran on whatever model the head itself was given.
+      // profile. Resolving off `parentInput.model` runs a synthesis filed as
+      // deep-tier grading on whatever model the head itself was given.
       profile: () => this.facetProfile(),
       // Reported to the root over the same cross-DO port the journal above uses,
       // because that is where the workspace's total is assembled.

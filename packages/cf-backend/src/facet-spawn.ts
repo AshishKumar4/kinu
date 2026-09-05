@@ -31,9 +31,8 @@
  *           facet again.
  *
  * These are not interchangeable in either direction. Releasing where an abort
- * belongs destroys a live worker's state; aborting where a release belongs is
- * the leak this module previously had, in which every head and every MCTS
- * branch abandoned a permanent database inside the orchestrator DO.
+ * belongs destroys a live worker's state; aborting where a release belongs leaks
+ * a permanent database per finished worker into the orchestrator DO.
  *
  * ── Containment ──────────────────────────────────────────────────────────
  *
@@ -250,13 +249,17 @@ async function runOnceAndReclaim<Result>(
         { cause },
       );
     }
+    // The run failed, so the wipe below is a best-effort reclaim rather than
+    // the terminal release. When it fails too both facts travel: the run's own
+    // error stays the cause (as the bootstrap twin keeps it) and the message
+    // names the stranded storage beside it.
     try {
       await deleteExplorationFacet(host, id);
     } catch (cleanupError) {
       throw new Error(
-        `${kind} facet ${id} settled but its storage was not reclaimed `
+        `${kind} facet ${id} failed and its storage was not reclaimed `
         + `(leaked into the root's quota): ${renderThrownChain({ cause: cleanupError })}`,
-        { cause: cleanupError },
+        { cause },
       );
     }
     throw cause;

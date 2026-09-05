@@ -27,7 +27,11 @@ import {
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import type { AgentSignal, CompletedTurn } from '@kinu.run/core';
 import { createChatFiberSnapshot, wrapChatFiberSnapshot } from 'agents/chat';
-import { CHAT_TURN_SNAPSHOT_KEY } from '../src/fiber-recovery';
+// The envelope Think's chat-turn snapshot rides in. Spelled here rather than
+// imported: fiber-recovery.ts keeps the same mirror for its read, and the SDK
+// exports the string nowhere — think.js `_runChatRecoveryFiber` hands this
+// literal to `wrapChatFiberSnapshot` at each call site.
+const CHAT_TURN_ENVELOPE_KEY = '__cfThinkChatFiberSnapshot';
 import { projectJsonValue, TERMINAL_EFFECT_RETRY_CEILING_MS } from '@kinu.run/core';
 
 /** One settled assistant response, as Think reports it. */
@@ -1033,11 +1037,12 @@ describe('a turn releases its tool claims only when no response can still run', 
   /**
    * The row Think leaves for one response of a turn.
    *
-   * Composed by the SDK's OWN builders rather than by a literal here: the
-   * snapshot's field names are the framework's, and a hand-written fixture
-   * would keep passing after a version renamed the one field the production
-   * read depends on. The row's NAME is decoration — the read matches on the
-   * snapshot — and is spelled as Think spells it so the fixture reads true.
+  * The snapshot body comes from the SDK's OWN builders rather than a literal:
+  * its field names are the framework's, and a hand-written fixture would keep
+  * passing after a version renamed the one field the production read depends
+  * on. Only the envelope key is spelled here — the SDK exports it nowhere. The
+  * row's NAME is decoration — the read matches on the snapshot — and is spelled
+  * as Think spells it so the fixture reads true.
    */
   function chatTurnFiber(
     harness: ActorHarness<HarnessOrchestratorAgent>, requestId: string, turnId: string,
@@ -1051,7 +1056,7 @@ describe('a turn releases its tool claims only when no response can still run', 
     });
     harness.agent.harnessSeedOrphanFiber(
       `__cf_internal_chat_turn:${requestId}`,
-      projectJsonValue({ value: wrapChatFiberSnapshot(CHAT_TURN_SNAPSHOT_KEY, snapshot, null) }),
+      projectJsonValue({ value: wrapChatFiberSnapshot(CHAT_TURN_ENVELOPE_KEY, snapshot, null) }),
     );
   }
 

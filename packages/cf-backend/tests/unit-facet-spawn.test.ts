@@ -308,4 +308,30 @@ describe('exploration-facet spawn seam', () => {
     expect(thrown?.cause).toMatchObject({ message: 'setOwner exploded' });
     expect(methods(calls)).toEqual(['subAgent', 'setOwner', 'deleteSubAgent']);
   });
+  test('a run failure whose reclaim also fails names both instead of masking the run', async () => {
+    const { host, calls } = makeHost({ runAsHeadRejects: true, deleteSubAgentThrows: true });
+    const head = await spawnHeadFacet(host, headInput(), {
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main',
+    });
+    calls.length = 0;
+
+    // The run failed AND a database was stranded by it. The bootstrap twin of
+    // this path keeps both facts; the run path must do the same, or the crash
+    // that caused the leak is the one fact the error does not carry.
+    let thrown: Error | null = null;
+    try {
+      await head.run();
+    } catch (cause) {
+      if (!(cause instanceof Error)) throw cause;
+      thrown = cause;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown?.message).toContain('head-1 failed');
+    expect(thrown?.message).toContain('was not reclaimed');
+    expect(thrown?.message).toContain('facet storage is unreachable');
+    // The run error survives as the cause rather than being replaced.
+    expect(thrown?.cause).toMatchObject({ message: 'the head crashed mid-run' });
+    expect(methods(calls)).toEqual(['runAsHead', 'deleteSubAgent']);
+  });
 });

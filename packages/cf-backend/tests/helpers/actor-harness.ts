@@ -90,7 +90,12 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** A cold activation: the owner row persists in SQL, in-memory latches do
    *  not — the state every claimOwner RPC meets on a freshly-activated DO. */
-  forgetActivationLatches(): void { this._scaffoldReady = false; }
+  forgetActivationLatches(): void {
+    this._scaffoldReady = false;
+    this._ownerUserId = undefined;
+    this._titleCache = null;
+    this._titleHydrated = false;
+  }
   /**
    * A further activation, through the ACTOR's own `onStart` — the sweep, the
    * wake reconcile, the stale-delivery unbind, exactly as the platform calls

@@ -6,14 +6,14 @@
  * none of this may live on the instance: every value is persisted and re-read
  * after a cold activation.
  *
- * Replaces the `facet_owner` + `facet_parent` pair that ExplorationAgent used to
- * hand-roll. They were two tables, two `CREATE TABLE` sites and two lookup
- * helpers for one question — "who owns me, and whose workspace am I forking?" —
- * and the owner lookup carried a read-path `ALTER TABLE` plus a
- * `catch { return null }` to survive its own migration. Both are gone: one table,
- * created in one place, so a missing column is not a condition that can arise and
- * an owner lookup can no longer silently answer "unowned" (which is how a head
- * loses its identity and then resolves the wrong model).
+ * One store replaces the `facet_owner` + `facet_parent` pair. Two tables, two
+ * `CREATE TABLE` sites and two lookup helpers answered one question — "who owns
+ * me, and whose workspace am I forking?" — and the owner lookup survived its own
+ * migration with a read-path `ALTER TABLE` plus a `catch { return null }`. One
+ * table, created in one place, leaves a missing column as a condition that
+ * cannot arise, and an owner lookup that answers null only when no owner was
+ * seeded (which is how a head loses its identity and then resolves the wrong
+ * model).
  *
  * Reads are memoized because the head path asks for the owner and the parent on
  * every step; writes invalidate, so the capability-token push a parent fans out

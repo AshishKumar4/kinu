@@ -147,9 +147,9 @@ export class FacetActivation {
   /** What this facet was initialized to run, or null when it never was. Reads
    *  are memoized like the identity's: the run path asks once per activation.
    *
-   *  PARSED, not asserted: the row was written by an earlier activation, and a
-   *  shape that no longer matches is a real condition on the cold-activation
-   *  path — it must fail by name here rather than reach the run path. */
+  *  PARSED, not asserted: the row was written by an earlier activation, and a
+  *  shape that fails to match is a real condition on the cold-activation path —
+  *  it must fail by name here rather than reach the run path. */
   read(): StoredActivation | null {
     if (this.cached) return this.cached;
     this.ensureSchema();

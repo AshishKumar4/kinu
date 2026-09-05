@@ -1,16 +1,16 @@
 /**
- * ActorAgent — the actor-agnostic substrate beneath every full-loop Kinu
+ * ActorAgent is the actor-agnostic substrate beneath every full-loop Kinu
  * actor on the Cloudflare backend.
  *
  * OrchestratorAgent (the top-level workspace DO) and any future facet actor
  * (a subordinate riding the workspace via subAgent()) are Think subclasses
- * that differ only in the profile members below — identity bootstrap
+ * that differ only in the profile members below: identity bootstrap
  * (getOwnerUserId), exec-plane keying (workspaceName), tool surface
  * (actorToolDeps / extraCodemodeProviders), evolution engine, and owner
- * notification. Everything else — the CF runtime assembly, the BackendHost,
- * the shared AgentOrchestrator, ExtensionHost + compaction, the dynamic
- * ledger, prompt/model/tool caches, and the Think hook bridge (beforeTurn /
- * beforeStep / tool hooks) — lives here, once.
+ * notification. Everything else lives here, once: the CF runtime assembly,
+ * the BackendHost, the shared AgentOrchestrator, ExtensionHost + compaction,
+ * the dynamic ledger, prompt/model/tool caches, and the Think hook bridge
+ * (beforeTurn / beforeStep / tool hooks).
  *
  * Tool gating is structural: an actor whose profile wires no `team` deps has
  * no hiring actions on its `agents` tool. No flags.
@@ -140,7 +140,7 @@ import {
   recordModelOperations,
   effectAlreadyDone, recordEffectDone,
   // The one builder for a model_call row: its shape AND the price-only-when-the
-  // -rate-is-this-call's-own guard, which used to be spelled three times.
+  // -rate-is-this-call's-own guard, spelled once for all three call sites.
   buildModelCallEvent,
   // The ONE catalog pricing, so a model_call row prices exactly as the ledger
   // debits — and only when the rate belongs to the model that served it.
@@ -278,6 +278,7 @@ import {
 import type { CodemodeProvider, DeferredApprovalChannel } from "@kinu.run/core";
 import { diagnostics, KinuError, toKinuError, tolerate, type ErrorCode } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
+import type { UserDoRpcMethod } from "./rpc-surface";
 import type { UserCaller } from "./user/workspace-capability";
 import { sha256Hex } from "./lib/crypto";
 import { installAnalyticsDiagnostics } from "./analytics/install";
@@ -338,84 +339,11 @@ interface AsyncTaskOwner {
   promise: Promise<void> | null;
 }
 
-interface UserHubCoreClient {
-  readonly hasPeerGrant: UserDO['hasPeerGrant'];
-  /** Whether the CLI bearer behind a live websocket on this workspace may
-   *  still act — asked at frame time, so the answer comes from the object that
-   *  owns revocation rather than from a verdict cached at the upgrade. */
-  readonly verifyCliSocketBearer: UserDO['verifyCliSocketBearer'];
-  /** Whether the browser session behind a live websocket on this workspace may
-   *  still act — the same question for the other token kind, answered by the
-   *  same authority for the same reason. */
-  readonly verifySocketSession: UserDO['verifySocketSession'];
-  /** The account's credential revision — the number a cached provider listing
-   *  is compared against at use, so a missed fan-out heals instead of standing. */
-  readonly getCredentialsRevision: UserDO['getCredentialsRevision'];
-  readonly hasWorkspace: UserDO['hasWorkspace'];
-  readonly listActiveWorkspaces: UserDO['listActiveWorkspaces'];
-  readonly publishExperience: UserDO['publishExperience'];
-  readonly searchExperience: UserDO['searchExperience'];
-  readonly getExperienceEntry: UserDO['getExperienceEntry'];
-  readonly getReleaseBoard: UserDO['getReleaseBoard'];
-  readonly upsertReleaseSource: UserDO['upsertReleaseSource'];
-  readonly createReleaseChange: UserDO['createReleaseChange'];
-  readonly updateReleaseChange: UserDO['updateReleaseChange'];
-  readonly transitionReleaseChange: UserDO['transitionReleaseChange'];
-  readonly recordReleaseCheck: UserDO['recordReleaseCheck'];
-  readonly requestReleaseApproval: UserDO['requestReleaseApproval'];
-  readonly recordReleaseDeployment: UserDO['recordReleaseDeployment'];
-  readonly getReleaseDetail: UserDO['getReleaseDetail'];
-  readonly decideReleaseApproval: UserDO['decideReleaseApproval'];
-  readonly getAuthHeaders: UserDO['getAuthHeaders'];
-  readonly listCredentials: UserDO['listCredentials'];
-  readonly getCredentialBaseURL: UserDO['getCredentialBaseURL'];
-  readonly getWorkspaceTitle: UserDO['getWorkspaceTitle'];
-  readonly setWorkspaceDisplayName: UserDO['setWorkspaceDisplayName'];
-  readonly deviceRpc: UserDO['deviceRpc'];
-  readonly getProfile: UserDO['getProfile'];
-  readonly getWorkspaceProfileCatalog: UserDO['getWorkspaceProfileCatalog'];
-  readonly getConfig: UserDO['getConfig'];
-  readonly registerWorkspace: UserDO['registerWorkspace'];
-  readonly reserveWorkspace: UserDO['reserveWorkspace'];
-  readonly renewWorkspaceReservation: UserDO['renewWorkspaceReservation'];
-  readonly releaseWorkspaceReservation: UserDO['releaseWorkspaceReservation'];
-  readonly publishWorkspaceReservation: UserDO['publishWorkspaceReservation'];
-  readonly ensureWorkspaceCapability: UserDO['ensureWorkspaceCapability'];
-  readonly removeWorkspace: UserDO['removeWorkspace'];
-}
+/** A UserDO stub as this actor sees it: the RPC methods rpc-surface.ts declares
+ *  reachable, plus fetch. A method outside that list is a compile error here,
+ *  which is the gate's own rule stated once. */
+type UserHubClient = Pick<UserDO, UserDoRpcMethod> & Pick<Fetcher, 'fetch'>;
 
-export interface UserHubClient extends UserHubCoreClient {
-  userMcp_toolDescriptors(caller: UserCaller): Promise<string>;
-  /** Stop the FOREGROUND device work of one durable turn. Rows a background job
-   *  now owns are excluded by the provider, so Stop never reaches work that
-   *  outlived the turn on screen. */
-  readonly cancelDeviceRequestsForTurn: UserDO['cancelDeviceRequestsForTurn'];
-  /** Hand ONE live device request to the durable job that now owns it. Per
-   *  request, because a turn can hold several parallel device calls and only the
-   *  detaching one changes hands. */
-  readonly transferDeviceRequestToBackgroundJob: UserDO['transferDeviceRequestToBackgroundJob'];
-  readonly cancelDeviceRequestsForBackgroundJob: UserDO['cancelDeviceRequestsForBackgroundJob'];
-
-  /** Open a terminal on one of this user's machines for a workspace, and
-   *  answer the session its pane attaches to. The hub decides whether it may
-   *  exist — the workspace's grant for that machine, and the owner's Sandbox
-   *  switch — exactly as it decides a command. */
-  readonly openDeviceTerminal: UserDO['openDeviceTerminal'];
-
-  /** Establish this user's MCP connections. The ONE establishment authority
-   *  (UserDO.hydrateUserMcp behind it), shared with the HTTP first-hit warmup —
-   *  the turn's settle calls the same method rather than a second one. */
-  userMcp_warmConnections(caller: UserCaller): Promise<{ servers: number }>;
-
-  userMcp_callTool(
-    caller: UserCaller,
-    serverId: string,
-    name: string,
-    args: JsonObject,
-  ): Promise<string>;
-}
-
-type UserHubRpcClient = UserHubClient & Pick<Fetcher, 'fetch'>;
 const ClientRpcFrameSchema = v.object({
   type: v.literal('rpc'), id: v.string(), method: v.string(), args: v.array(JsonValueSchema),
 });
@@ -432,7 +360,7 @@ function parseClientRpcFrame<Message>(message: Message): ClientRpcFrame | null {
  *  so a client whose authority is gone stops reconnecting and surfaces the
  *  reason instead of retrying a socket it can never hold again. */
 const WEBSOCKET_POLICY_CLOSE = 1008;
-const CLI_AUTHORITY_REVOKED = 'This CLI authorization is no longer valid. Sign in again with: kinu auth';
+const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again with: kinu auth';
 const SESSION_AUTHORITY_REVOKED = 'This session has been signed out. Sign in again.';
 
 
@@ -459,12 +387,11 @@ const RecordedUiMessageSchema = v.object({
  * The assistant message a terminal effect row recorded, back at the SDK boundary
  * it came from.
  *
- * `convertToModelMessages` is an AWAIT, and on the live path it used to run
- * between the answer Think had already persisted and the claim that makes that
- * answer's effects recoverable — so an eviction inside it left a durable answer
- * with no incomplete transition, and `resumeAll()` found nothing to replay. The
- * row carries the message instead and the conversion happens inside the effect,
- * where the claim already exists.
+ * `convertToModelMessages` is an AWAIT, so the conversion runs inside the
+ * effect where the claim already exists. On the live path between the
+ * persisted answer and that claim, an eviction leaves a durable answer with
+ * no incomplete transition and `resumeAll()` finds nothing to replay. The
+ * row carries the message instead.
  */
 function recordedUiMessage(value: JsonValue): Omit<UIMessage, 'id'> {
   const row = v.parse(RecordedUiMessageSchema, value);
@@ -486,7 +413,7 @@ function recordedUiMessage(value: JsonValue): Omit<UIMessage, 'id'> {
  *  they still reach the model — the evolved-scaffold path hands this flattened
  *  text to the scaffold as `task` while `host.defaultInference()` streams the
  *  prepared turn with all parts intact (see _transformInferenceResult). */
-export function extractLastUserText(messages: ReadonlyArray<ModelMessage>): string {
+function extractLastUserText(messages: ReadonlyArray<ModelMessage>): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m.role !== 'user') continue;
@@ -589,9 +516,9 @@ export interface ActorToolDeps {
  *  and the activeTools whitelist must not advertise structurally absent tools.
  *
  *  WHICH names are deps-gated is core's `DEPS_GATED_TOOLS`, and each is spelled
- *  by its registry constant. This file used to declare the set itself, as a bare
- *  `['report']` with no link to the tool it named, so renaming the builtin left
- *  a gate matching nothing. The `agents` tool is never dropped on cf — every
+ *  by its registry constant. A bare `['report']` spelled here would carry
+ *  no link to the tool it names, so renaming the builtin leaves a gate
+ *  matching nothing. The `agents` tool is never dropped on cf — every
  *  actor has the fork substrate — but its ACTIONS gate on the same profile (see
  *  actorAgentsActions). `release` is not a native tool anymore (release.* is
  *  codemode-only), so `deps.releases` gates nothing here; it feeds that codemode
@@ -600,7 +527,7 @@ export interface ActorToolDeps {
  *  That every gated name is answered here is asserted by test, not by the
  *  compiler: core declares the set as `readonly BuiltinToolName[]`, which is the
  *  right type for a shared list and cannot key an exhaustive table. */
-export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
+function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   const gate = {
     [REPORT_TOOL]: !!deps.report,
   } satisfies Partial<Record<BuiltinToolName, boolean>>;
@@ -611,7 +538,7 @@ export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
  *  Delegation ladder — the same gating rule the tool's enum uses. Fork is
  *  universal on cf (every ActorAgent owns the strategy registry + facet
  *  substrate); hiring and peer converse ride the actor profile. */
-export function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
+function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
   return agentsActionsFor({ fork: {}, team: deps.team, peers: deps.peers });
 }
 
@@ -821,11 +748,10 @@ export abstract class ActorAgent extends Think<Env> {
    *  and the orchestrator installs a token into a subordinate by a direct DO RPC
    *  that enters no root's `ensureSchema`.
    *
-   *  It earns that placement the hard way: it used to be created lazily by
-   *  `workspaceCapabilityToken()`, i.e. by a READ performing DDL, and its only
-   *  reliable creator turned out to be `onStart`'s scaffold probe failing on its
-   *  way into the workspace filesystem. A table that exists because an unrelated
-   *  call threw is a table with no owner.
+   *  Creation belongs in the constructor because it is the only point
+   *  guaranteed to precede every read and write on BOTH cf roots (see
+   *  above). A table that exists because an unrelated call threw is a
+   *  table with no owner.
    *
    *  Per-root by design — `cli` has no user plane, so core's
    *  `initWorkspaceSchema` must NOT own it: `core/conformance/manifest.ts`
@@ -1769,10 +1695,9 @@ export abstract class ActorAgent extends Think<Env> {
    *
    *  Hands back what the roster after it needs: the retry this turn earned, and
    *  the run's own classified end. The second one is handed OVER rather than
-   *  re-derived by each caller — the two actors used to classify the identical
-   *  four facts again for their roster's `status`, so one turn carried two
-   *  independent readings of how it ended and nothing but their purity kept them
-   *  equal. */
+   *  re-derived by each caller — deriving one answer twice lets two readers
+   *  disagree about how a turn ended, so the ledger and the roster agree by
+   *  construction. */
   protected recordTurnTelemetry(result: ChatResponseResult, turn: {
     errorText: string | undefined;
     completed: boolean;
@@ -1801,12 +1726,11 @@ export abstract class ActorAgent extends Think<Env> {
     }
     // Seal the durable run: turn_end + run_end (core turn-lifecycle).
     //
-    // `reason` used to be Think's `result.status` passed straight through, and
-    // `reason` was typed as a bare string, so the two backends spelled the same
-    // user action differently: a Stop sealed 'aborted' here and 'error' on the
-    // CLI, and every cross-backend reader of run ledgers counted local stops as
-    // failures. The vocabulary is core's now and the classifier takes RAW FACTS,
-    // so neither backend picks a string. It returns the error text too: a run
+    // `reason` is core's vocabulary and the classifier takes RAW FACTS, so
+    // neither backend picks a string. A bare string passed straight through
+    // from Think's `result.status` reads 'aborted' here and 'error' on the
+    // CLI for the same Stop, and every cross-backend reader of run ledgers
+    // counts local stops as failures. It returns the error text too: a run
     // sealed 'aborted' must not still carry an interruption sentence in `error`,
     // which is the same drift wearing a new label.
     //
@@ -1911,10 +1835,11 @@ export abstract class ActorAgent extends Think<Env> {
       turn_end_extensions: terminalEffect({
         input: v.object({ text: v.string(), message: JsonValueSchema }),
         // Keyed on the assistant message by its row, and replayed from the
-        // recorded text and the recorded message rather than from a live tree an
-        // interrupted activation no longer has. The host's own turn-end handlers
-        // are idempotent per turn, so the row is what stops a SECOND announcement
-        // of one answer without dropping the first when the cut came before it.
+        // recorded text and the recorded message rather than from a live tree,
+        // which an interrupted activation cannot supply. The host's own
+        // turn-end handlers are idempotent per turn, so the row is what stops
+        // a SECOND announcement of one answer without dropping the first
+        // when the cut came before it.
         //
         // The CONVERSION runs here, not at the hook. It is the only await between
         // the answer Think has already persisted and the claim that makes the
@@ -2007,10 +1932,10 @@ export abstract class ActorAgent extends Think<Env> {
           advisor: JsonValueSchema,
         }),
         // Every lane below is driven by a DURABLE queue or window, so re-entry
-        // reads its input from storage rather than from a snapshot of a turn that
-        // no longer exists. The verdict is core's one derivation, asked with the
-        // RECORDED mode so a fresh activation's default cannot open a lane the
-        // turn never earned.
+        // reads its input from storage rather than from a per-turn snapshot,
+        // which does not survive the turn. The verdict is core's one derivation,
+        // asked with the RECORDED mode so a fresh activation's default cannot
+        // open a lane the turn never earned.
         run: async ({ status, turn, workMode, advisor }) => {
           this.warmUserMcpInBackground();
           if (!this.orch.improvementLanesOpen(status, workMode)) {
@@ -2584,15 +2509,15 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Refuse a frame from a connection whose authority no longer holds — the
+   * Refuse a frame from a connection whose authority is gone. That is the
    * CLI bearer it upgraded with, or the browser session behind its cookie.
    *
    * FRAME TIME, AND AGAINST THE AUTHORITY, because the upgrade checks each
-   * exactly once and everything after that used to be unconditional trust:
-   * revoke the token or log out the session, and the socket kept its full
-   * @callable surface until the client disconnected, which for a CI runner is
-   * as long as it likes. Hibernation made it worse, since the connection came
-   * back from its tags with its scopes and no identity to check at all.
+   * exactly once: revoke the token or log out the session afterwards and a
+   * socket trusted at upgrade keeps its full @callable surface until the
+   * client disconnects, which for a CI runner is as long as it likes. A
+   * hibernated connection resumes without passing the upgrade again, so the
+   * upgrade check alone never sees it go stale.
    *
    * The question goes to the UserDO that owns the revocation, so there is no
    * cached verdict to be stale. Only connections carrying an identity tag pay
@@ -2610,15 +2535,14 @@ export abstract class ActorAgent extends Think<Env> {
     // instead of hanging until it notices the close — while the close reason is
     // the standing instruction for the token kind, which is the line a human
     // sees when the socket goes away. Collapsing them put a store-level
-    // sentence ('the CLI token behind this connection is no longer valid')
-    // where the client's next step belongs.
+    // sentence about the token where the client's next step belongs.
     if (rpc) connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: denial.why }));
     connection.close(WEBSOCKET_POLICY_CLOSE, denial.close);
     diagnostics.event('auth.socket_frame_denied', { outcome: 'denied', reason: 'authority_not_live' });
     return true;
   }
 
-  /** Why this connection's authority may no longer act, and what to tell the
+  /** Why this connection's authority cannot act, and what to tell the
    *  client to do about it — or null when it may act.
    *
    *  Names the CLI bearer and the browser session in ONE question, because
@@ -2668,7 +2592,7 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Why this connection's CLI bearer may no longer act, or null when it may.
+   * Why this connection's CLI bearer cannot act, or null when it may.
    *
    *  A generation from the FUTURE is refused as well: this workspace is asking
    *  the object that owns the counter, so a connection claiming to have been
@@ -3585,9 +3509,8 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * The turn loop's spend arrives as `step_finish` (`onStepEvent` above). This is
    * the other 25 producers — judges, the fast tier, the evolution engine,
-   * compaction, a scaffold's own loop, the
-   * platform AI bindings — each of which used to drop the provider's report on
-   * the line that received it. Same log, same `Usage`; a `model_call` row rather
+   * compaction, a scaffold's own loop, the platform AI bindings. Same log,
+   * same `Usage`; a `model_call` row rather
    * than a `step_finish` one, so a judge's cold prompt never enters the turn
    * loop's prefix-cache window.
    *
@@ -3642,8 +3565,8 @@ export abstract class ActorAgent extends Think<Env> {
       source: report.source,
       usage: report.usage,
       // The durable row's own number, not a second application of the guard —
-      // this line used to re-derive it and could disagree with the ledger if the
-      // catalog resolved a rate between the two reads.
+      // re-deriving it here disagrees with the ledger whenever the catalog
+      // resolves a rate between the two reads.
       usd: event.usd,
     });
   }
@@ -3835,8 +3758,8 @@ export abstract class ActorAgent extends Think<Env> {
         resume: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, input, mode, signal),
         // What a bounded-out job already produced. Same predicate as `resume` above,
         // so a kind that cannot be re-driven has nothing partial to read either —
-        // and a SEARCH does, which is the case that used to settle empty over two
-        // completed candidates.
+        // and a SEARCH does: two completed candidates are a harvestable
+        // partial.
         harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
           { sql: this.boundSql, ledger: this.mctsSearchStore }, kind, input,
         )),
@@ -4202,7 +4125,7 @@ export abstract class ActorAgent extends Think<Env> {
    * The owner grants THESE bytes at THIS path system placement.
    *
    * `digest` is the one the owner was shown. If the file has changed since, the
-   * approval binds bytes that are no longer there, the next turn's lookup misses
+   * approval binds stale bytes, the next turn's lookup misses
    * and the file stays reference material — so the approve/preview gap fails
    * closed instead of granting force to something nobody read.
    */
@@ -4325,8 +4248,8 @@ export abstract class ActorAgent extends Think<Env> {
   // so a replay of these opts is the same request modulo per-step cache
   // markers, which are inert decoration). The shadow eval replays these for
   // the pending scaffold's host.defaultInference so the A/B measures the
-  // scaffold delta, not a context handicap: the live answer saw the whole
-  // conversation while the shadow's reconstruction used to see only the task
+  // scaffold delta, not a context handicap: the live answer sees the whole
+  // conversation while a task-only reconstruction sees only the task
   // text — structurally tie-prone. Also the task source for the evolved-
   // scaffold inference transform. In-memory only: turns are serialized on
   // the TurnQueue and the shadow eval captures the reference synchronously
@@ -4590,9 +4513,11 @@ export abstract class ActorAgent extends Think<Env> {
     const userId = this.getOwnerUserId();
     if (!userId) return null;
     const stub: Pick<Fetcher, 'fetch'> = this.env.UserDO.get(this.env.UserDO.idFromName(userId));
-    // SAFETY: the generated UserDO namespace contract provides both the
-    // standard Fetcher surface and every UserDO RPC method in UserHubClient.
-    return stub as UserHubRpcClient;
+    // SAFETY: the stub carries every method on the declared UserDO RPC surface
+    // plus fetch. `DurableObjectStub<UserDO>` is the platform's own type for it,
+    // and its RPC mapping over the JSON-carrying experience methods exceeds
+    // TypeScript's instantiation depth (TS2589 at the publish call, 2026-09-05).
+    return stub as UserHubClient;
   }
 
   protected requireOwnerUserDO(): UserHubClient {
@@ -4625,7 +4550,7 @@ export abstract class ActorAgent extends Think<Env> {
    * emitted by the CLI only, so "why did this turn resolve this model, and what
    * did resolution cost" was answerable on a laptop and unanswerable in
    * production. Whether the row exists is not a per-backend choice, so this
-   * backend no longer makes it — it only says WHERE the row goes, which is the
+   * backend does not make it — it only says WHERE the row goes, which is the
    * one genuinely per-backend part: the same recorder and the same
    * run-or-workspace fallback every other non-turn row here uses.
    */
@@ -4704,9 +4629,9 @@ export abstract class ActorAgent extends Think<Env> {
   /**
    * Run a command in THIS workspace's shell on behalf of a fork.
    *
-   * The reason `parent` is worth being an executor rather than a file view: a
-   * fork searching its parent used to walk the tree one RPC per file through an
-   * emulated shell; this is one round trip into the real one, with the whole
+   * The reason `parent` is worth being an executor rather than a file view:
+   * walking the tree one RPC per file through an emulated shell costs a round
+   * trip per file; this is one round trip into the real shell, with the whole
    * coreutils set behind it.
    */
   async execWorkspaceCommand(command: string): Promise<ParentRpcResult<ParentExecResult>> {
@@ -4959,7 +4884,7 @@ export abstract class ActorAgent extends Think<Env> {
     });
     if (title) diagnostics.event('agent.auto_titled', { workspace: this.name, title });
     // ALWAYS, not only when this pass produced a title: persisting stamps
-    // `name_origin`, after which the naming policy above no longer matches — so a
+    // `name_origin`, which stops matching the naming policy above — so a
     // replay after a failed publish plans nothing, and a roster that never heard
     // about the stored title would keep the placeholder with nothing owed to fix
     // it. Throws, so the owed row carries the retry.
@@ -5328,7 +5253,7 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * In memory and not a table, because that is what it is: a verdict is decided
    * against a live remaining-children count, so an entry outliving its wave would
-   * be answering for a budget that no longer exists. A `Map` rather than a record
+   * answer for a budget with no wave behind it. A `Map` rather than a record
    * because the keys are minted ids and entries are added and deleted as waves
    * open and settle.
    */
@@ -5369,7 +5294,7 @@ export abstract class ActorAgent extends Think<Env> {
         return {
           kind: 'refused',
           policy: 'budget-exhausted',
-          error: 'The search that spawned this node is no longer arbitrating, so no branch can be '
+          error: 'The search that spawned this node is not arbitrating, so no branch can be '
             + 'reserved. Finish your own task and report.',
         };
       }
@@ -5449,8 +5374,8 @@ export abstract class ActorAgent extends Think<Env> {
     const userId = this.getOwnerUserId();
     if (!userId) return {};
 
-    // No identity, no user-level tools: advertising descriptors the actor can
-    // no longer dispatch just spends context on calls that will be refused.
+    // No identity, no user-level tools: advertising descriptors the actor cannot
+    // dispatch just spends context on calls that will be refused.
     // Asked rather than caught: userCaller() throws only when no token has been
     // issued, and a real failure reading one must not silently empty the surface.
     if (!this.workspaceCapabilityToken()) return {};
@@ -5531,9 +5456,9 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** Prompt model context from the RESOLVED spec. The raw stored id is null
-   *  on default-configured agents, which used to leave model-family guidance
-   *  inert on the primary hosted path — the same raw-spec class of bug
-   *  effectiveModelSpec() fixed for the compaction threshold. */
+   *  on default-configured agents, which leaves model-family guidance
+   *  inert on the primary hosted path without it — the same raw-spec class
+   *  of bug effectiveModelSpec() fixes for the compaction threshold. */
   private promptModelContext(): PromptModelContext {
     const spec = this.effectiveModelSpec();
     if (!spec) return {};
@@ -5650,7 +5575,13 @@ export abstract class ActorAgent extends Think<Env> {
     // Tag this turn for device-side file checkpoints: the user message id is
     // what the web turn card holds, so restore-by-turn resolves directly.
     {
-      const lastUserId = this.messages.filter((m) => m.role === 'user').at(-1)?.id;
+      let lastUserId: string | undefined;
+      for (let i = this.messages.length - 1; i >= 0; i--) {
+        const candidate = this.messages[i];
+        if (candidate.role !== 'user') continue;
+        lastUserId = candidate.id;
+        break;
+      }
       this._turnCheckpoint = { turnId: lastUserId ?? this._currentRunId, sessionId: 'default' };
       void this.sql`INSERT INTO active_durable_turn (id, turn_id) VALUES (1, ${this._turnCheckpoint.turnId})
         ON CONFLICT(id) DO UPDATE SET turn_id = excluded.turn_id`;
@@ -5826,8 +5757,8 @@ export abstract class ActorAgent extends Think<Env> {
 
     // The measured compaction trigger, read from the durable state by core in
     // the one correct order (orchestrator/turn-context.ts). Attachment
-    // sanitization is per-part in-place replacement, so the raw count IS the
-    // sanitized durable length — and it is stashed because
+    // sanitization is copy-on-write per message with per-part replacement, so
+    // the raw count IS the sanitized durable length — and it is stashed because
     // recordTurnTelemetry writes the next measurement against the same number.
     const rawMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
     this._turnDurableLength = rawMessages.length;
@@ -5936,12 +5867,9 @@ export abstract class ActorAgent extends Think<Env> {
 
     // THE TURN'S STEP BOUND, on the config Think actually consumes.
     //
-    // `UNBOUNDED_STEPS` used to be set on `_lastTurnOpts` alone — a mirror only
-    // the shadow-eval replay reads, and only ever for its `messages` and
-    // `tools`. So the one place the words "unbounded steps" appeared in this
-    // backend was a field the live loop never sees, and `git grep maxSteps --
-    // packages/cf-backend/src` returned nothing at all. Reading either was
-    // enough to conclude the cloud loop was unbounded. It was capped at ten.
+    // `_lastTurnOpts` is a mirror only the shadow-eval replay reads, and only
+    // ever for its `messages` and `tools`: a bound set there never reaches
+    // the live loop.
     //
     // `maxSteps` is the lever: Think resolves `config.maxSteps ?? this.maxSteps`
     // and OR-s `stepCountIs(...)` of it ahead of anything the caller passes.
@@ -6148,10 +6076,13 @@ export abstract class ActorAgent extends Think<Env> {
    *  — a signal's `kinuEvent` / `signalId` / mission labels, or nothing at
    *  all for a chat turn the operator typed. */
   protected turnUserMetadata(): JsonObject | undefined {
-    const source = this.messages.filter((m) => m.role === 'user').at(-1);
-    if (!source) return undefined;
-    const parsed = v.safeParse(JsonObjectSchema, source.metadata);
-    return parsed.success ? parsed.output : undefined;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const candidate = this.messages[i];
+      if (candidate.role !== 'user') continue;
+      const parsed = v.safeParse(JsonObjectSchema, candidate.metadata);
+      return parsed.success ? parsed.output : undefined;
+    }
+    return undefined;
   }
 
   async beforeToolCall(ctx: ThinkToolCallContext): Promise<void> {
@@ -6579,8 +6510,8 @@ export abstract class ActorAgent extends Think<Env> {
   // ── Credentials & Codex OAuth ─────────────────────────────────────
   //
   // All credentials live in UserDO (single source of truth across the user's
-  // agents). The orchestrator no longer stores, refreshes, or even reads
-  // raw credentials — providers resolve auth headers through the UserDO
+  // agents). The orchestrator stores, refreshes, and reads no raw
+  // credentials — providers resolve auth headers through the UserDO
   // stub at fetch time. Use the `/api/user/codex/*` routes (or the user
   // settings UI) to connect ChatGPT / save BYO API keys.
 

@@ -692,7 +692,7 @@ export class SubordinateAgent extends ActorAgent {
       auto_title: terminalEffect({
         input: v.object({ subject: v.string() }),
         // Once-only at its own boundary: persisting marks `name_origin`, after
-        // which the shared policy no longer matches. The lane verdict is core's
+        // which the shared policy does not match. The lane verdict is core's
         // one derivation, asked here rather than stashed by another effect, so a
         // replay whose spine ran on an earlier activation still gets an answer.
         run: async ({ subject }) => {
@@ -724,8 +724,8 @@ export class SubordinateAgent extends ActorAgent {
   async onChatResponse(result: ChatResponseResult): Promise<void> {
     const { programmaticUserMessage, errorText, completed, outputContinuation } =
       this.settleTurnEvents(result);
-    // The seal's own classification comes back with it — this facet used to
-    // classify the identical facts a second time for its roster's status.
+    // The seal's own classification comes back with it, so the roster reads the
+    // same verdict instead of classifying the identical facts a second time.
     const { overflowRecovery, end } =
       this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
     // The identity of THIS terminal sequence: the durable turn plus the response
@@ -736,11 +736,11 @@ export class SubordinateAgent extends ActorAgent {
     // there: Think has already persisted the answer, so an await before the claim
     // exists is a window where recovery finds a durable answer with no incomplete
     // transition and replays nothing. The response-to-model-message conversion
-    // used to sit here and is now inside the `turn_end_extensions` body.
-    const durableTurnId = this.durableTurnId();
+    // lives inside the `turn_end_extensions` body, where the claim already exists.
     // An EMPTY assistant id is not an identity, exactly as the root reads it:
     // every per-effect scope derives from this value, so two such responses would
     // share one scope and the second would read the first's work as its own.
+    const durableTurnId = this.durableTurnId();
     const transition = durableTurnId === null || result.message.id === ''
       ? null
       : { turnId: durableTurnId, messageId: result.message.id };
@@ -789,8 +789,8 @@ export class SubordinateAgent extends ActorAgent {
     // claimed effect below rather than by a detached send.
     //
     // A `task` child owes its caller a terminal answer on EVERY ending, because
-    // an `agents.ask` is blocked on it: the branch that used to return without
-    // one simply went quiet and the caller never came back. A `durable` child
+    // an `agents.ask` is blocked on it: a branch that returns without one simply
+    // goes quiet and the caller never comes back. A `durable` child
     // relays only a completed turn worth relaying. Both are suppressed by a
     // report that already SETTLED the run — a mere progress note leaves the
     // caller waiting and therefore leaves the answer owed, while a second

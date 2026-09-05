@@ -16,6 +16,7 @@ import { callable, type AgentContext, type SubAgentClass } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
+  type ExperienceEntry, type ExperienceKind, type PublishableCandidate,
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
   type NimbusSandboxHandle,
@@ -143,6 +144,7 @@ import {
   type FileRestorePlan, type FileRestoreResult,
   // Shared turn lifecycle
   snapshotCompletedTurn, creditedTurnId, 
+  runSleepTimeCompute, applySleepTimeUpdate,
   SleepTimeUpdateSchema, type SleepTimeUpdate,
   effectAlreadyDone, recordEffectDone,
   // Ingress — core owns the gates; this actor owns the transports in front
@@ -285,8 +287,8 @@ const KINU_TIMER_CALLBACK = '_kinuTimerTick';
  *  per-row cost is different in kind: every sealed head takes a durable report
  *  write and a broadcast, where the other sweeps take one DELETE. A pass that
  *  fills either budget arms the maintenance wake for the rest. */
-const ORPHAN_SEAL_MAX_ROWS = 256;
 const STALE_SCHEDULE_HORIZON_MS = FIBER_RECOVERY_MAX_AGE_MS;
+const ORPHAN_SEAL_MAX_ROWS = 256;
 
 // These windows bound the Activity response. Stored history remains append-only.
 const ACTIVITY_STEP_WINDOW = 400;
@@ -412,30 +414,44 @@ export class OrchestratorAgent extends ActorAgent {
     return this.hostedWorkspace().box(shellId);
   }
 
-  /**
-   * One op against this workspace's box, for a facet of it.
-   *
-   * Deliberately NOT `@callable`: `NimbusExecOptions.cred` names a uid, so a
-   * browser socket that could reach this could run a command as uid 0. The
-   * caller is another Durable Object in this Worker — a subordinate, an
-   * exploration head, a swarm node — and `sealRpcSurface` keeps it off the
-   * public transport.
-   */
   /** This workspace's own stores plus a client for the owner's library, every
    *  call of which crosses the UserDO capability gate. Absent until the
    *  workspace is claimed — there is no owner library to reach before that. */
   private getExperienceDeps(): ExperienceActionDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
-    const hub = () => this.userHub();
     return {
       rt: this.rt,
       facts: this.facts,
       library: {
-        publish: async (candidate) => { const { stub, caller } = await hub(); return stub.publishExperience(caller, candidate); },
-        search: async (options) => { const { stub, caller } = await hub(); return stub.searchExperience(caller, options); },
-        get: async (id) => { const { stub, caller } = await hub(); return stub.getExperienceEntry(caller, id); },
+        publish: (candidate: PublishableCandidate): Promise<ExperienceEntry> =>
+          this.publishExperienceEntry(candidate),
+        search: (options: { query?: string; kind?: ExperienceKind; limit?: number }): Promise<ExperienceEntry[]> =>
+          this.searchExperienceLibrary(options),
+        get: (id: string): Promise<ExperienceEntry | null> =>
+          this.getExperienceEntry(id),
       },
     };
+  }
+
+  /** One owner-library publish through this activation's hub. A method rather
+   *  than a closure so the stub call checks at method depth. */
+  private async publishExperienceEntry(candidate: PublishableCandidate): Promise<ExperienceEntry> {
+    const { stub, caller } = await this.userHub();
+    return stub.publishExperience(caller, candidate);
+  }
+
+  /** One owner-library search through this activation's hub. */
+  private async searchExperienceLibrary(
+    options: { query?: string; kind?: ExperienceKind; limit?: number },
+  ): Promise<ExperienceEntry[]> {
+    const { stub, caller } = await this.userHub();
+    return stub.searchExperience(caller, options);
+  }
+
+  /** One owner-library read through this activation's hub. */
+  private async getExperienceEntry(id: string): Promise<ExperienceEntry | null> {
+    const { stub, caller } = await this.userHub();
+    return stub.getExperienceEntry(caller, id);
   }
 
   /**
@@ -480,6 +496,15 @@ export class OrchestratorAgent extends ActorAgent {
     return await this.hostedWorkspace().supervisorOp(envelope);
   }
 
+  /**
+   * One op against this workspace's box, for a facet of it.
+   *
+   * Deliberately NOT `@callable`: `NimbusExecOptions.cred` names a uid, so a
+   * browser socket that could reach this could run a command as uid 0. The
+   * caller is another Durable Object in this Worker — a subordinate, an
+   * exploration head, a swarm node — and `sealRpcSurface` keeps it off the
+   * public transport.
+   */
   async workspaceBoxOp(shellId: string, op: WorkspaceBoxOp): Promise<WorkspaceBoxResult> {
     return await applyWorkspaceBoxOp(this.workspaceBox(shellId), op);
   }
@@ -549,32 +574,6 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * Finish what one interrupted terminal transition still owes: the reply an
-   * answered event batch never dispatched.
-   *
-   * This is the ONE effect of a settled turn that a later activation can
-   * re-derive, and every input it needs is already durable — which is why no
-   * new state was added to make the resume possible:
-   *
-   *   • WHICH batches are owed — the open recovery lease. `markConsumed` bound
-   *     the rows to a synthetic `evt-*` turn and stamped `consumed_at`; the
-   *     completion clears it. A lease still open is a delivery a turn was
-   *     handed and never closed.
-   *   • WHAT to reply with — the persisted assistant message of the turn that
-   *     absorbed the batch, found through the `drainTurnId` its own user row
-   *     carries.
-   *   • WHETHER a resend is safe — the reply channel's outbox key. Each reply
-   *     is keyed on its channel, so a re-drive puts the SAME Message-ID on the
-   *     wire and the receiver (and Kinu's own inbound dedupe) treats it as the
-   *     message it already has.
-   *
-   * A lease whose turn has no durable answer is left alone: nothing was
-   * answered, so there is nothing to send, and `unbindStale` re-pends it to be
-   * asked again. That ordering is why this runs BEFORE the unbind sweep — a
-   * batch that WAS answered must have its reply finished rather than the
-   * question asked a second time.
-   */
-  /**
    * Every open drain lease paired with the answer its turn already gave.
    *
    * Two durable reads and no new state: the leases come from the event log, the
@@ -615,10 +614,37 @@ export class OrchestratorAgent extends ActorAgent {
       || this.jobs.hasLiveJobs();
   }
 
-  /** The orchestrator's owed external lanes, prepended to the base terminal
-   *  replay so both ride the ONE durable wake. Replies first: an owed reply is
-   *  an answer somebody is actively waiting on, and the terminal replay's own
-   *  resume closes the same leases when it finishes a transition. */
+  /**
+   * Finish what one interrupted terminal transition still owes: the reply an
+   * answered event batch never dispatched.
+   *
+   * This is the ONE effect of a settled turn that a later activation can
+   * re-derive, and every input it needs is already durable — which is why no
+   * new state was added to make the resume possible:
+   *
+   *   • WHICH batches are owed — the open recovery lease. `markConsumed` bound
+   *     the rows to a synthetic `evt-*` turn and stamped `consumed_at`; the
+   *     completion clears it. A lease still open is a delivery a turn was
+   *     handed and never closed.
+   *   • WHAT to reply with — the persisted assistant message of the turn that
+   *     absorbed the batch, found through the `drainTurnId` its own user row
+   *     carries.
+   *   • WHETHER a resend is safe — the reply channel's outbox key. Each reply
+   *     is keyed on its channel, so a re-drive puts the SAME Message-ID on the
+   *     wire and the receiver (and Kinu's own inbound dedupe) treats it as the
+   *     message it already has.
+   *
+   * A lease whose turn has no durable answer is left alone: nothing was
+   * answered, so there is nothing to send, and `unbindStale` re-pends it to be
+   * asked again. That ordering is why this runs BEFORE the unbind sweep — a
+   * batch that WAS answered must have its reply finished rather than the
+   * question asked a second time.
+   *
+   * Replies run before the base terminal replay so both ride the ONE durable
+   * wake: an owed reply is an answer somebody is actively waiting on, and the
+   * terminal replay's own resume closes the same leases when it finishes a
+   * transition.
+   */
   protected override async owedDeliveryWork(): Promise<void> {
     // The lease JOIN lives here, in the alarm frame — the activation only
     // proved existence. Sweep first with the answered set excluded, so a
@@ -642,17 +668,12 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'io',
       }), { workspace: this.name });
     }
-    try {
-      for (const [drainTurnId, answer] of owed) {
-        const closed = await this.completeEventBatch(drainTurnId, answer);
-        diagnostics.event('event.owed_reply_resumed', { drainTurnId, closed });
-      }
-    } catch (err) {
-      diagnostics.failure('event.owed_reply_resume_failed', toKinuError({
-        doing: 'dispatching the event replies a previous activation still owed',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
+    // No catch: `completeEventBatch` answers false instead of throwing (its
+    // own catch covers the dispatch and the completion write), so a catch
+    // here could only fire for the announce line beside it.
+    for (const [drainTurnId, answer] of owed) {
+      const closed = await this.completeEventBatch(drainTurnId, answer);
+      diagnostics.event('event.owed_reply_resumed', { drainTurnId, closed });
     }
     await super.owedDeliveryWork();
   }
@@ -696,8 +717,8 @@ export class OrchestratorAgent extends ActorAgent {
   // Takes when the turn completes (onChatResponse).
   protected _pendingBranches: PendingBranch[] = [];
 
-  private _triggerRegistry: import('@kinu.run/core').TriggerRegistry | null = null;
-  private _replyChannels: import('@kinu.run/core').ReplyChannelStore | null = null;
+  private _triggerRegistry: TriggerRegistry | null = null;
+  private _replyChannels: ReplyChannelStore | null = null;
   /** Per-activation guard so the full table-init DDL runs once, not on every
    *  onStart + claimOwner. Resets on DO eviction, so a cold start always
    *  re-creates any newly-added tables (no schema-version bookkeeping). */
@@ -935,25 +956,6 @@ export class OrchestratorAgent extends ActorAgent {
     });
   }
 
-  /** Drop schedule rows that came due so long ago that nothing downstream can
-   *  still act on them — a chat-recovery continuation is only meaningful while
-   *  its fiber is recoverable, and the SDK stops recovering fibers past
-   *  `fiberRecoveryMaxAgeMs`. Dropping is safe rather than lossy because the
-   *  continuation is DERIVED state: `_checkRunFibers`/`_checkFacetRunFibers`
-   *  re-register it from the fiber snapshot on the same wake, after this runs.
-   *  Recurring rows are left alone — `cron`/`interval` re-date themselves to
-   *  the next fire after one catch-up run, so they cannot pile up. Running on
-   *  every wake (rather than as a one-shot migration) keeps this a standing
-   *  invariant: normally it matches nothing, and it stops any future backlog
-   *  from stampeding one alarm cycle.
-   *
-   *  The Kinu wake is EXEMPT, however overdue. It is not a continuation whose
-   *  moment passed: it is the chain itself, its work is state-driven (whatever
-   *  is due when it finally runs), and it is the workspace's only wake — so
-   *  dropping it stops triggers, peer retries and email reconciliation
-   *  permanently, while running it late costs one immediate tick. This sweep
-   *  runs BEFORE the SDK reads the due rows, which is exactly why the omission
-   *  mattered: the row was deleted on the activation that would have run it. */
   /**
    * The orchestrator's own budgeted sweeps folded onto the base seam.
    *
@@ -997,6 +999,25 @@ export class OrchestratorAgent extends ActorAgent {
     return callback in this;
   }
 
+  /** Drop schedule rows that came due so long ago that nothing downstream can
+   *  still act on them — a chat-recovery continuation is only meaningful while
+   *  its fiber is recoverable, and the SDK stops recovering fibers past
+   *  `fiberRecoveryMaxAgeMs`. Dropping is safe rather than lossy because the
+   *  continuation is DERIVED state: `_checkRunFibers`/`_checkFacetRunFibers`
+   *  re-register it from the fiber snapshot on the same wake, after this runs.
+   *  Recurring rows are left alone — `cron`/`interval` re-date themselves to
+   *  the next fire after one catch-up run, so they cannot pile up. Running on
+   *  every wake (rather than as a one-shot migration) keeps this a standing
+   *  invariant: normally it matches nothing, and it stops any future backlog
+   *  from stampeding one alarm cycle.
+   *
+   *  The Kinu wake is EXEMPT, however overdue. It is not a continuation whose
+   *  moment passed: it is the chain itself, its work is state-driven (whatever
+   *  is due when it finally runs), and it is the workspace's only wake — so
+   *  dropping it stops triggers, peer retries and email reconciliation
+   *  permanently, while running it late costs one immediate tick. This sweep
+   *  runs BEFORE the SDK reads the due rows, which is exactly why the omission
+   *  mattered: the row was deleted on the activation that would have run it. */
   private sweepUnrunnableSchedules(): boolean {
     const cutoffSec = Math.floor((Date.now() - STALE_SCHEDULE_HORIZON_MS) / 1000);
     // The terminal retry is exempt for the same reason the Kinu timer is: it is a
@@ -1113,10 +1134,19 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
 
+  /** The claimed owner, once read. A claim never changes hands mid-activation:
+   *  a second user claiming throws, so a cached non-null answer cannot go
+   *  stale. Null (unclaimed) is never cached — the next read must see a claim
+   *  that lands later. Protected so a harness cold activation drops it with
+   *  the other latches. */
+  protected _ownerUserId: string | undefined;
+
   /** Read the owner userId from workspace_identity; '' (empty) means unclaimed. */
   protected getOwnerUserId(): string | null {
+    if (this._ownerUserId !== undefined) return this._ownerUserId;
     const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity LIMIT 1`;
     const owner = rows[0]?.owner_user_id;
+    if (owner && owner !== '') this._ownerUserId = owner;
     return owner && owner !== '' ? owner : null;
   }
 
@@ -1311,6 +1341,7 @@ export class OrchestratorAgent extends ActorAgent {
       } else {
         void this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
       }
+      this._ownerUserId = userId;
       this.invalidateModelCaches();
       await this.ensureOwnedScaffold();
       return { owner: userId, capabilityHash };
@@ -1726,7 +1757,6 @@ export class OrchestratorAgent extends ActorAgent {
   ): Promise<void> {
     try {
       if (!this.config.getSleepTimeComputeEnabled()) return;
-      const { runSleepTimeCompute, applySleepTimeUpdate } = await import('@kinu.run/core');
       // The RECORDED update, when this call is one a terminal effect owes. The
       // model call and the fact mutation are two steps, and an eviction between
       // them used to mean a replay paid for another call and applied each decay
@@ -1826,13 +1856,18 @@ export class OrchestratorAgent extends ActorAgent {
    * scheduler) commits to the root. Sync readers use whatever is hydrated;
    * every mutation path hydrates BEFORE deciding.
    */
-  private _titleCache: { displayName: string; nameOrigin: 'user' | 'auto' } | null = null;
+  protected _titleCache: { displayName: string; nameOrigin: 'user' | 'auto' } | null = null;
+  /** Whether the registry was read this activation. A null row (untitled) is
+   *  an answer too — without this, every turn re-reads UserDO for a workspace
+   *  nobody named. Failures leave it false so the next read retries. Protected
+   *  so a harness cold activation drops it with the other latches. */
+  protected _titleHydrated = false;
   private async hydrateTitle(): Promise<void> {
     if (!this.getOwnerUserId()) return;
     try {
       const { stub, caller } = await this.userHub();
-      const row = await stub.getWorkspaceTitle(caller, this.name);
-      if (row) this._titleCache = row;
+      this._titleCache = await stub.getWorkspaceTitle(caller, this.name);
+      this._titleHydrated = true;
     } catch (err) {
       diagnostics.failure('workspace.title_hydration_failed', toKinuError({
         doing: 'reading the root registry title for this workspace',
@@ -1862,8 +1897,8 @@ export class OrchestratorAgent extends ActorAgent {
     // failure keeps the row owed until the authoritative read works. Reached only
     // once `titlingRefusal` has established the read can be made at all.
     const { stub, caller } = await this.userHub();
-    const row = await stub.getWorkspaceTitle(caller, this.name);
-    if (row) this._titleCache = row;
+    this._titleCache = await stub.getWorkspaceTitle(caller, this.name);
+    this._titleHydrated = true;
   }
 
   /**
@@ -1901,7 +1936,7 @@ export class OrchestratorAgent extends ActorAgent {
    * would buy nothing for its Durable Object hop.
    */
   async workspaceTitle(): Promise<string | null> {
-    if (this._titleCache === null) await this.hydrateTitle();
+    if (!this._titleHydrated) await this.hydrateTitle();
     return this.titleInputs().displayName;
   }
 
@@ -1924,6 +1959,7 @@ export class OrchestratorAgent extends ActorAgent {
     }
     if (!applied) return false;
     this._titleCache = { displayName, nameOrigin: origin };
+    this._titleHydrated = true;
     this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
     return true;
   }
@@ -3996,6 +4032,7 @@ export class OrchestratorAgent extends ActorAgent {
     // root registry. The activation cache is seeded from what was just
     // written; the root remains the authority.
     this._titleCache = { displayName, nameOrigin };
+    this._titleHydrated = true;
     return { displayName, nameOrigin };
   }
 
@@ -4703,6 +4740,7 @@ export class OrchestratorAgent extends ActorAgent {
     } else {
       void this.sql`UPDATE workspace_identity SET owner_user_id = ${ownerUserId}`;
     }
+    this._ownerUserId = ownerUserId;
     this.invalidateModelCaches();
 
     const receiver = this.#forkReceiverFor(forkName, frame.transferId, ownerUserId);

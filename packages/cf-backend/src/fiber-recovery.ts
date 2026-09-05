@@ -60,13 +60,12 @@ import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
  * on it — Kinu's declared value for the SDK option of the same name, and the
  * ONE place the number lives.
  *
- * It used to live in two: this is the SDK's own 24h default, and
- * `orchestrator.ts` hand-mirrored it to decide which overdue schedule rows are
- * unrunnable ("past it the framework stops recovering the fiber a continuation
- * callback would resume"). A hand-mirror of a vendor default is a value nobody
- * owns, so it is declared here, read by the schedule sweep, and handed to the
- * SDK through `ActorAgent.options` — which makes it the number the framework
- * actually enforces rather than a guess about it.
+ * Declared once here: this is the SDK's own 24h default, and a second spelling
+ * beside it (such as the schedule sweep's "past it the framework stops
+ * recovering the fiber a continuation callback would resume") is a hand-mirror
+ * of a vendor default nobody owns. It is read by the schedule sweep and handed
+ * to the SDK through `ActorAgent.options` — which makes it the number the
+ * framework actually enforces rather than a guess about it.
  */
 export const FIBER_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -154,14 +153,14 @@ export function fiberRowStore(sql: SqlExecutor): FiberRowStore {
  * `runFiber`, and the snapshot the framework writes before the body runs names
  * the request and the user message the turn opened on. The key is a literal
  * `_runChatRecoveryFiber` hands to `wrapChatFiberSnapshot` and the SDK exports
- * it nowhere, so it is declared once here and the suite that seeds rows uses
- * this rather than its own spelling.
+ * it nowhere — think.js spells it at each call site — so this mirrors Think's
+ * spelling for the read below.
  *
  * The ENVELOPE is what the read below matches on, not the fiber's name: one
  * coupling to the framework instead of two, and no other lane writes a snapshot
  * shaped like this.
  */
-export const CHAT_TURN_SNAPSHOT_KEY = '__cfThinkChatFiberSnapshot';
+const CHAT_TURN_SNAPSHOT_KEY = '__cfThinkChatFiberSnapshot';
 const CHAT_TURN_ID_PATH = `$.${CHAT_TURN_SNAPSHOT_KEY}.latestUserMessageId`;
 const CHAT_TURN_REQUEST_PATH = `$.${CHAT_TURN_SNAPSHOT_KEY}.requestId`;
 
@@ -414,7 +413,7 @@ function redriveBackgroundJobLane(
   transports.redrive(ctx.name, checkpoint, async () => {
     const redriven = await transports.jobs.recover(checkpoint);
     const inFlight = await transports.jobs.recoverOrphans();
-    // What the return value used to carry. A settled job's re-drive is a WAKE,
+    // The return value carries no outcome. A settled job's re-drive is a WAKE,
     // and delivering one queues a turn that resolves only when the turn ends —
     // so the outcome cannot be part of a classification, and this is the only
     // place left that can say which job it was.
@@ -652,11 +651,11 @@ function recordInterruptedSearch(
 /**
  * A fiber name this class does not know.
  *
- * It used to fall into the search branch above, which wrote the agent's own
- * MEMORY.md — so any lane added anywhere, by anyone, could put a line in the
- * agent's memory about platform plumbing it has no way to act on. An
- * unrecognised lane is an operational fact: it is classified, it is logged
- * once, and its row is released rather than re-offered for a day.
+ * Falling into the search branch above writes the agent's own MEMORY.md — so
+ * any lane added anywhere, by anyone, puts a line in the agent's memory about
+ * platform plumbing it has no way to act on. An unrecognised lane is an
+ * operational fact: it is classified, it is logged once, and its row is
+ * released rather than re-offered for a day.
  */
 function unrecognisedLane(ctx: FiberRecoveryContext): FiberRecoveryResult {
   const failure = new KinuError(

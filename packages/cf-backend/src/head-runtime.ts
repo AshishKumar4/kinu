@@ -15,12 +15,11 @@
  * and where the spend is filed (a root writes its own log; a facet's SQLite is one
  * Durable Object away from the total, so it reports over RPC).
  *
- * The merge MODEL, EFFORT and SPEND LABEL are not among those parameters, and
- * they are no longer decided here at all. `headMergeLLM` in core owns them, so
- * this backend and the local one resolve one policy rather than two agreeing by
- * inspection — they did not agree: the local merge ran the session's chat model
- * at a hardcoded effort and filed it as `judge` anyway. All that is left on this
- * side is `bindMergeModel`, which turns the routed (spec, effort) pair into a
+ * The merge MODEL, EFFORT and SPEND LABEL are parameters this backend does not
+ * decide. `headMergeLLM` in core owns them, so this backend and the local one
+ * resolve one policy rather than two agreeing by inspection: the local merge ran
+ * the session's chat model at a hardcoded effort and filed it as `judge` anyway.
+ * All that is left on this side is `bindMergeModel`, which turns the routed (spec, effort) pair into a
  * client through the owner's provider registry, because normalising a spec
  * against that registry is genuinely this backend's job and nothing else here is.
  */
@@ -53,10 +52,10 @@ interface HeadRuntimeDeps {
    *
    *  A profile rather than a spec, because the merge is not free to pick a
    *  model: it files its spend as `judge`, and `MODEL_ROUTE_POLICY.judge` is
-   *  the account-wide `deep` tier. This used to be the caller's stored chat
-   *  model — the actor's at the root, the parent head's in a recursive split —
-   *  so a synthesis reported as deep-tier grading ran on whatever the
-   *  conversation happened to be set to. */
+   *  the account-wide `deep` tier. The caller's stored chat model — the actor's
+   *  at the root, the parent head's in a recursive split — is whatever the
+   *  conversation happens to be set to, so it cannot stand behind spend filed
+   *  as deep-tier grading. */
   readonly profile: () => Promise<ResolvedTurnProfile>;
   /** Where the merge call's cost is filed. */
   readonly reportModelCall: ModelCallSink;

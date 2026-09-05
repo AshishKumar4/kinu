@@ -2,23 +2,17 @@
 // behaviour is covered in core (core/tests/unit-subordinates.test.ts); what is
 // backend-specific is which names this backend's source exposes where, so most
 // of these read that source directly. The exception is the deps gate, which is
-// a function and is exercised as one.
+// exercised through the raw ToolSet each actor class builds.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DEPS_GATED_TOOLS, REPORT_TOOL, type ReportToolDeps } from '@kinu.run/core';
+import { DEPS_GATED_TOOLS, REPORT_TOOL } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { orchestratorHarness, subordinateHarness } from './helpers/actor-harness';
 
 const source = (path: string) => readFileSync(join(import.meta.dir, '..', 'src', path), 'utf8');
 
 mockAgentsSdk();
-// Dynamic on purpose: the real `agents` dist reaches `cloudflare:*`, so the SDK
-// mock must be registered before actor-agent evaluates.
-const { actorActiveTools } = await import('../src/actor-agent');
-
-/** A wired report dep. Only its PRESENCE is read by the gate. */
-const REPORT_DEPS: ReportToolDeps = { report: async () => undefined };
 
 describe('subordinate wiring', () => {
   /**
@@ -232,17 +226,18 @@ describe('subordinate wiring', () => {
     // the owner's RPC on the orchestrator, and reaches no actor's profile.
     expect(profile).not.toContain('experience:');
     // …and absence is structural: a deps-gated name is dropped from the
-    // advertised surface too, not just from the ToolSet. `release` is not a
-    // native tool at all anymore (release.* is codemode-only), so it no
-    // longer needs a gate here. Asserted on the function rather than on the
-    // text of its table: the old pin quoted `const DEPS_GATED_TOOLS =
-    // ['report'] as const;` verbatim, so it broke the moment that array moved
-    // to core, and it would have passed against a gate that dropped nothing.
-    expect(actorActiveTools({})).not.toContain(REPORT_TOOL);
-    expect(actorActiveTools({ report: REPORT_DEPS })).toContain(REPORT_TOOL);
+    // built ToolSet too, not just from the prompt. `release` is not a
+    // native tool at all (release.* is codemode-only), so it needs no
+    // gate here. Asserted on the built ToolSet rather than on the gate
+    // function: what ships is the surface each actor class builds — the
+    // orchestrator wires no `report` deps while a subordinate does.
+    const orchTools = Object.keys(orchestratorHarness().agent.observeRawTools());
+    const subTools = Object.keys(subordinateHarness().agent.observeRawTools());
+    expect(orchTools).not.toContain(REPORT_TOOL);
+    expect(subTools).toContain(REPORT_TOOL);
     // Gating one name costs no other name.
-    expect(actorActiveTools({}).filter((name) => name !== REPORT_TOOL))
-      .toEqual(actorActiveTools({ report: REPORT_DEPS }).filter((name) => name !== REPORT_TOOL));
+    expect(orchTools.filter((name) => name !== REPORT_TOOL).sort())
+      .toEqual(subTools.filter((name) => name !== REPORT_TOOL).sort());
   });
 
   test('every deps-gated tool core declares is answered by this backend', () => {
@@ -251,7 +246,8 @@ describe('subordinate wiring', () => {
     // and cannot key an exhaustive table. So a name added to DEPS_GATED_TOOLS
     // with no dep check here would silently stay advertised on every actor —
     // which is the whole failure the gate exists to prevent. This is that check.
-    const ungated = DEPS_GATED_TOOLS.filter((name) => actorActiveTools({}).includes(name));
+    const orchToolNames = Object.keys(orchestratorHarness().agent.observeRawTools());
+    const ungated = DEPS_GATED_TOOLS.filter((name) => orchToolNames.includes(name));
     expect(ungated).toEqual([]);
     // And the set is not vacuously empty, which would make the line above pass
     // for the wrong reason.
