@@ -46,20 +46,21 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { LanguageModel, ToolSet } from 'ai';
+import type { LanguageModel, StepResult, ToolSet } from 'ai';
 import type { JsonValue } from '@vitest-evals/core';
 import * as v from 'valibot';
 
 import type {
   AgentRuntime, AgentsToolAction, AgentsForkDeps, AgentsToolDeps, BuiltinToolName,
   EvalCase, LLMProviderConfig, ProfileCatalog, ProfileCatalogEnvelope,
-  ProviderCatalogSnapshot, Shell,
+  ProviderCatalogSnapshot, SessionMessage, SessionWriter, Shell, ToolCallRecord,
 } from '../../packages/core/src/index';
 import {
   RunEventRecorder, activePromptSectionOverrides, agentsActionsFor, buildActorTools,
   buildSystemPromptSync, classifyToolFailure, createAgentConfigStore, createFactsStore,
   createAgentsCodemodeProvider, createMemoryCodemodeProvider, createTasksCodemodeProvider,
-  currentDateForPrompt, initWorkspaceSchema, isBuiltinToolName, TaskListStore,
+  currentDateForPrompt, initWorkspaceSchema, isBuiltinToolName, JsonObjectSchema,
+  projectJsonValue, TaskListStore,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
   WORKSPACE_RUN_ID,
 } from '../../packages/core/src/index';
@@ -210,6 +211,79 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     }),
   };
 }
+/**
+ * The tool-traffic half of one `generateText` turn, collected the same way by
+ * every suite that drives the inner API.
+ *
+ * Four suites spelled this `onStepFinish` inline beside their own system prompt
+ * and message list, and the block is the part that has to agree: a record whose
+ * `args` is not parsed through `JsonObjectSchema`, or whose result is not
+ * projected through `projectJsonValue`, is a row the ledger scorers read
+ * differently. One closure, so the turn drivers cannot drift from each other or
+ * from what the ledger expects a record to carry. The system prompt, the
+ * messages and the store writes stay with the caller: those are what differ.
+ */
+export interface StepToolCallLog {
+  readonly records: ToolCallRecord[];
+  steps: number;
+  onStepFinish(step: StepResult<ToolSet>): void;
+}
+
+export function createStepToolCallLog(): StepToolCallLog {
+  const log: StepToolCallLog = {
+    records: [],
+    steps: 0,
+    onStepFinish(step) {
+      log.steps += 1;
+      if (step.toolCalls) {
+        for (const tc of step.toolCalls) {
+          log.records.push({
+            name: tc.toolName,
+            args: v.parse(JsonObjectSchema, tc.input),
+            result: null,
+          });
+        }
+      }
+      if (step.toolResults) {
+        for (let i = 0; i < step.toolResults.length; i++) {
+          const toolResult = step.toolResults[i];
+          const idx = log.records.length - step.toolResults.length + i;
+          const record = log.records[idx];
+          if (record && toolResult) record.result = projectJsonValue({ value: toolResult.output });
+        }
+      }
+    },
+  };
+  return log;
+}
+
+/**
+ * Nowhere for an MCTS to put a trajectory that no suite measures.
+ *
+ * Two suites drove `runMCTS` with their own identical copy — same array, same
+ * leaf walk — because the engine requires a sink and what it holds is not the
+ * subject. One copy, so a fix to the walk cannot land in one suite and not the
+ * other.
+ */
+export function makeSessionWriter(): SessionWriter {
+  const msgs: Array<{ id: string; parentId?: string | null; role: string; content: string }> = [];
+  return {
+    async appendMessage(msg: SessionMessage, parentId?: string | null) {
+      msgs.push({ id: msg.id, parentId, role: msg.role, content: msg.parts.map((p) => p.text).join('') });
+    },
+    getHistory(leafId?: string | null) {
+      if (!leafId) return msgs.map((m) => ({ role: m.role, content: m.content }));
+      const result: Array<{ role: string; content: string }> = [];
+      let cur = msgs.find((m) => m.id === leafId);
+      while (cur) {
+        result.unshift({ role: cur.role, content: cur.content });
+        const parentId = cur.parentId;
+        cur = parentId ? msgs.find((m) => m.id === parentId) : undefined;
+      }
+      return result;
+    },
+  };
+}
 
 /**
  * WHAT THE PROVIDER WAS ACTUALLY ASKED WITH.
@@ -248,7 +322,7 @@ export interface RequestSurfaceEvidence {
 /** The swarm rung's marker in the RENDERED section (section-templates.ts:296):
  *  `action=swarm` appears only when the ladder was rendered WITH the swarm
  *  rung, which is the fact §9.5 wants — not merely that a heading exists. */
-const AGENTS_INDEX_MARKER = '- **agents** —';
+const AGENTS_INDEX_MARKER = '- **agents**:';
 
 /**
  * The two fields of a provider call this reads, in the shape BOTH model
@@ -329,9 +403,10 @@ export function recordRequestSurface(model: LanguageModel): RecordedRequestSurfa
     calls += 1;
     for (const entry of options.tools ?? []) offered.add(entry.name);
     const system = options.prompt
-      .map((message) => v.safeParse(SYSTEM_MESSAGE, message))
-      .filter((parsed) => parsed.success)
-      .map((parsed) => parsed.output.content)
+      .flatMap((message) => {
+        const parsed = v.safeParse(SYSTEM_MESSAGE, message);
+        return parsed.success ? [parsed.output.content] : [];
+      })
       .join('\n');
     systemChars = Math.max(systemChars, system.length);
     if (system.includes(AGENTS_INDEX_MARKER)) agentsIndexed = true;

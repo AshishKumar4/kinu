@@ -28,29 +28,22 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 
 import {
   DEFAULT_CONFIG,
-  initWorkspaceSchema,
   type LLMProviderConfig,
   type MCTSProgressEvent,
-  type SessionMessage,
-  type SessionWriter,
 } from '../../packages/core/src/index';
 import { runMCTS } from '../../packages/core/src/mcts/engine';
-import { createWorkspace } from '../../packages/core/src/identity/index';
-import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import { makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import { type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import {
-  buildEvalAgentSurface, installPreTurnProfile, recordRequestSurface,
-  requireSandboxedExecutors,
+  buildEvalAgentSurface, makeSessionWriter, recordRequestSurface,
   type EvalAgentSurface,
 } from './harness';
+import { provisionLocalTarget, type LocalAgentEvalTarget } from './target-local';
 import {
   liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
   reportLiveModelSpend, scoreExploration, scoreSettleVisibility, UNCONFIGURED_LLM,
@@ -61,7 +54,6 @@ const liveTest = test.skipIf(!TARGET);
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'kinu-eval-exploration-' + String(Date.now()));
-const DB_PATH = join(TEST_DIR, 'agent.db');
 
 /**
  * A task with several genuinely different defensible approaches and no obvious
@@ -97,30 +89,9 @@ const EXPLORATION_TASK =
 const EVAL_SEARCH_BUDGET = 1;
 const EVAL_SEARCH_BRANCHES = 3;
 
-/** Minimal in-memory session sink. MCTS needs somewhere to put a trajectory;
- *  what it holds is not what this suite measures. */
-function makeSessionWriter(): SessionWriter {
-  const msgs: { id: string; parentId?: string | null; role: string; content: string }[] = [];
-  return {
-    async appendMessage(msg: SessionMessage, parentId?: string | null) {
-      msgs.push({ id: msg.id, parentId, role: msg.role, content: msg.parts.map((p) => p.text).join('') });
-    },
-    getHistory(leafId?: string | null) {
-      if (!leafId) return msgs.map((m) => ({ role: m.role, content: m.content }));
-      const trail: { role: string; content: string }[] = [];
-      let cur = msgs.find((m) => m.id === leafId);
-      while (cur) {
-        trail.unshift({ role: cur.role, content: cur.content });
-        cur = cur.parentId ? msgs.find((m) => m.id === cur?.parentId) : undefined;
-      }
-      return trail;
-    },
-  };
-}
-
 describe('Exploration evals — MCTS reached, ranked, and readable', () => {
-  let db: InstanceType<typeof Database>;
   let rt: CLIRuntime;
+  let target: LocalAgentEvalTarget;
   let model: LanguageModel;
 
   /** The eval agent's surface from the PRODUCTION actor root. This used to
@@ -131,34 +102,27 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
   let surface: EvalAgentSurface;
 
   beforeAll(async () => {
-    mkdirSync(TEST_DIR, { recursive: true });
-    db = new Database(DB_PATH);
-    db.exec('PRAGMA journal_mode = WAL');
-    // Birth, then OPEN — the same two steps production takes (`kinu agent
-    // create` then every running surface). The runtime `createWorkspace`
+    // Provisioned through the seam: birth, the whole schema, open, the
+    // executor-surface and sandbox guards and the pre-turn profile — the same
+    // sequence every live suite drives, once. The runtime `createWorkspace`
     // returns is what open.ts:49-50 calls "degraded inline
     // VFS/Memory/Executor", and its `spawnBranch` is a HARDCODED MOCK whose
     // every branch resolves to the literal string 'exploration result'
     // (identity/create.ts:57-68). An MCTS suite driving that stub is scoring
     // the stub, not exploration. `initWorkspaceSchema` is also what makes
     // `head_journal` exist at all, which this suite's settle-visibility
-    // assertion requires of both halves.
-    await createWorkspace(db, {
-      name: 'exploration-eval',
+    // assertion requires of both halves. `hostRoot: null` keeps every executor
+    // off the repo this suite launched from, asserted rather than trusted
+    // because this suite spends real money to find out.
+    target = await provisionLocalTarget({
+      dir: TEST_DIR,
+      workspace: 'exploration-eval',
       purpose: 'An architecture advisor that compares competing designs before recommending one.',
       llm: LLM_CONFIG,
+      model: liveChatModel(LLM_CONFIG),
+      evolution: true,
     });
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    // `hostRoot: null` for the reason harness.ts states at length: an episode
-    // reaches every registered executor, and the default `laptop` plane is
-    // rooted at the repo this suite was launched from. Asserted rather than
-    // trusted, because this suite spends real money to find out.
-    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
-    requireSandboxedExecutors('exploration-eval', rt);
-    // The wiring `LocalAgentSession` does for every turn-driving surface. The
-    // driven search's judge ensemble takes `rt.judgeModel ?? rt.llm`, so without
-    // it every rollout scores zero on an unwired runtime.
-    installPreTurnProfile(rt, LLM_CONFIG);
+    rt = target.runtime;
     // The model first, then the surface through the shared production
     // construction (`buildEvalAgentSurface`, harness.ts): same factory, same
     // craftedToolExecute, same codemode providers, same fork-deps shape.
@@ -177,10 +141,11 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // less shape in front of it.
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     reportLiveModelSpend('Exploration Evals');
-    db.close();
-    rmSync(TEST_DIR, { recursive: true, force: true });
+    // Teardown owns the store and the directory. On a cloud target the same
+    // call DELETES the workspace, which is why it belongs to the target.
+    await target?.teardown();
   });
 
   test('the agent is actually offered the delegation tool', () => {
@@ -192,7 +157,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // offered in any sense that matters (PRD §9.5 — production prompt AND tool
     // projection). The tool index is the one prompt text about delegation.
     const system = surface.systemPrompt();
-    expect(system).toContain('- **agents** —');
+    expect(system).toContain('- **agents**:');
   });
 
   liveTest('DRIVEN (instructed): a direct mcts search branches and ranks, durably', async () => {

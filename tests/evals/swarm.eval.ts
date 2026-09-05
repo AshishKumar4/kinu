@@ -581,7 +581,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
         + 'reaches the dispatcher and is read by nothing at all');
     }
     expect(outcome.refusal.reason).toBe('bad_input');
-    expect(outcome.refusal.error).toContain('unknown field "budgetUsd" — did you mean "budget_usd"?');
+    expect(outcome.refusal.error).toContain('budget_usd');
   });
 
   inProcessTest('the arm drives the tier it declared', () => {

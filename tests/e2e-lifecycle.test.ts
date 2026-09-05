@@ -26,8 +26,6 @@ import {
   generateText, stepCountIs,
   type LanguageModel, type ModelMessage, type ToolSet, type StepResult,
 } from 'ai';
-import * as v from 'valibot';
-
 import {
   collectStepText,
   EvolutionEngine,
@@ -35,18 +33,13 @@ import {
   type LLMProviderConfig,
   type CompletedTurn,
   type EvolutionEvent,
-  type ToolCallRecord,
   type SearchNode,
-  type SessionWriter,
-  type SessionMessage,
   runMCTS,
   readSoul,
-  JsonObjectSchema,
-  projectJsonValue,
 } from '../packages/core/src/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import type { CLIRuntime } from '../packages/cli-backend/src/runtime';
-import { buildEvalAgentSurface } from './evals/harness';
+import { buildEvalAgentSurface, createStepToolCallLog, makeSessionWriter } from './evals/harness';
 import { provisionLocalTarget, type LocalAgentEvalTarget } from './evals/target-local';
 import {
   EVAL_BACKEND_ENV, liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode,
@@ -135,9 +128,7 @@ async function chatTurn(
   const start = Date.now();
   const soul = await readSoul(rt.storage.vfs) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
-
-  const tcRecords: ToolCallRecord[] = [];
-  let steps = 0;
+  const log = createStepToolCallLog();
 
   history.push({ role: 'user', content: userMessage });
   // Snapshotted BEFORE the call and returned: `history` keeps growing in place,
@@ -149,26 +140,7 @@ async function chatTurn(
     messages: history,
     tools,
     stopWhen: stepCountIs(500),
-    onStepFinish: (step: StepResult<ToolSet>) => {
-      steps++;
-      if (step.toolCalls) {
-        for (const tc of step.toolCalls) {
-          tcRecords.push({
-            name: tc.toolName,
-            args: v.parse(JsonObjectSchema, tc.input),
-            result: null,
-          });
-        }
-      }
-      if (step.toolResults) {
-        for (let i = 0; i < step.toolResults.length; i++) {
-          const toolResult = step.toolResults[i];
-          const idx = tcRecords.length - step.toolResults.length + i;
-          const record = tcRecords[idx];
-          if (record && toolResult) record.result = projectJsonValue({ value: toolResult.output });
-        }
-      }
-    },
+    onStepFinish: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
   });
 
   recordLiveModelSpend(result.usage);
@@ -183,28 +155,8 @@ async function chatTurn(
   return {
     sent,
     turn: {
-      userMessage, assistantResponse: responseText, toolCalls: tcRecords,
-      steps, durationMs: Date.now() - start, feedback: null, hadError: false,
-    },
-  };
-}
-
-function makeSessionWriter(): SessionWriter {
-  const msgs: Array<{ id: string; parentId?: string | null; role: string; content: string }> = [];
-  return {
-    async appendMessage(msg: SessionMessage, parentId?: string | null) {
-      msgs.push({ id: msg.id, parentId, role: msg.role, content: msg.parts.map(p => p.text).join('') });
-    },
-    getHistory(leafId?: string | null) {
-      if (!leafId) return msgs.map(m => ({ role: m.role, content: m.content }));
-      const result: Array<{ role: string; content: string }> = [];
-      let cur = msgs.find(m => m.id === leafId);
-      while (cur) {
-        result.unshift({ role: cur.role, content: cur.content });
-        const parentId = cur.parentId;
-        cur = parentId ? msgs.find(m => m.id === parentId) : undefined;
-      }
-      return result;
+      userMessage, assistantResponse: responseText, toolCalls: log.records,
+      steps: log.steps, durationMs: Date.now() - start, feedback: null, hadError: false,
     },
   };
 }

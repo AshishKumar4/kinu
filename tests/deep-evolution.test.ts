@@ -6,31 +6,23 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
-import * as v from 'valibot';
 
 import {
   EvolutionEngine,
-  initWorkspaceSchema,
   readSoul,
-  JsonObjectSchema,
-  projectJsonValue,
   type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
   type EvolutionEvent,
-  type ToolCallRecord,
 } from '../packages/core/src/index';
-import { createWorkspace } from '../packages/core/src/identity/index';
-import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
-import { makeWorkspaceSchemaSql, type CLIRuntime } from '../packages/cli-backend/src/runtime';
+import { type CLIRuntime } from '../packages/cli-backend/src/runtime';
 import {
-  buildEvalAgentSurface, installPreTurnProfile, requireSandboxedExecutors,
+  buildEvalAgentSurface, createStepToolCallLog,
 } from './evals/harness';
+import { provisionLocalTarget, type LocalAgentEvalTarget } from './evals/target-local';
 import {
   finalIntegerAnswer,
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
@@ -45,7 +37,6 @@ const liveTest = test.skipIf(!TARGET);
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'kinu-deep-' + Date.now());
-const DB_PATH = join(TEST_DIR, 'agent.db');
 
 interface Problem {
   id: number;
@@ -78,9 +69,7 @@ async function solveProblem(
   const soul = await readSoul(rt.storage.vfs) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
 
-  const toolNames: string[] = [];
-  const toolCallRecords: ToolCallRecord[] = [];
-  let stepCount = 0;
+  const log = createStepToolCallLog();
 
   const result = await generateText({
     model,
@@ -88,32 +77,15 @@ async function solveProblem(
     messages: [{ role: 'user' as const, content: problem.question }],
     tools,
     stopWhen: stepCountIs(500),
-    onStepFinish: (step: StepResult<ToolSet>) => {
-      stepCount++;
-      if (step.toolCalls) {
-        for (const tc of step.toolCalls) {
-          toolNames.push(tc.toolName);
-          toolCallRecords.push({
-            name: tc.toolName,
-            args: v.parse(JsonObjectSchema, tc.input),
-            result: null,
-          });
-        }
-      }
-      if (step.toolResults) {
-        for (let i = 0; i < step.toolResults.length; i++) {
-          const idx = toolCallRecords.length - step.toolResults.length + i;
-          const record = toolCallRecords[idx];
-          const toolResult = step.toolResults[i];
-          if (record && toolResult) record.result = projectJsonValue({ value: toolResult.output });
-        }
-      }
-    },
+    onStepFinish: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
   });
 
   recordLiveModelSpend(result.usage);
 
   const response = result.text.trim();
+  const toolCallRecords = log.records;
+  const toolNames = log.records.map((record) => record.name);
+  const stepCount = log.steps;
 
   // Store in DB
   const id = crypto.randomUUID();
@@ -134,8 +106,8 @@ async function solveProblem(
 }
 
 describe('Deep Evolution — 8 Algorithmic Challenges', () => {
-  let db: InstanceType<typeof Database>;
   let rt: CLIRuntime;
+  let target: LocalAgentEvalTarget;
   let tools: ToolSet;
   let engine: EvolutionEngine;
   let events: EvolutionEvent[];
@@ -147,27 +119,21 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
   }> = [];
 
   beforeAll(async () => {
-    mkdirSync(TEST_DIR, { recursive: true });
-    db = new Database(DB_PATH);
-    db.exec('PRAGMA journal_mode = WAL');
-
-    // BIRTH, then the WHOLE schema, then OPEN. This suite's purpose tells the
-    // model "Always use execute_tools to compute answers", and on the birth
-    // runtime that tool is not configured — measured live, the model called it,
-    // got "not configured", fell back to `run`, and the scorecard still printed
-    // "used execute_tools" because it counts the NAME. `openWorkspaceCLI` builds
-    // the runtime that actually carries the tool.
-    await createWorkspace(db, {
-      name: 'algo-solver',
+    // Provisioned through the seam: birth, the whole schema, open, the
+    // executor-surface and sandbox guards and the pre-turn profile — the same
+    // sequence every live suite drives, once. The purpose below is what tells
+    // the model to compute rather than guess; on the birth runtime that tool
+    // is not configured, which is why this goes through `openWorkspaceCLI`
+    // rather than driving the runtime `createWorkspace` returns.
+    target = await provisionLocalTarget({
+      dir: TEST_DIR,
+      workspace: 'algo-solver',
       purpose: 'An algorithmic problem solver. Always use execute_tools to compute answers. Never guess.',
       llm: LLM_CONFIG,
+      model: liveChatModel(LLM_CONFIG),
+      evolution: true,
     });
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
-    requireSandboxedExecutors('deep-evolution', rt);
-    // The wiring `LocalAgentSession` does for every turn-driving surface; this
-    // suite drives the inner API, so it installs it itself.
-    installPreTurnProfile(rt, LLM_CONFIG);
+    rt = target.runtime;
 
     events = [];
     engine = new EvolutionEngine(rt, { enabled: true });
@@ -181,10 +147,11 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     tools = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG }).tools;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     reportLiveModelSpend('Deep Evolution');
-    db.close();
-    rmSync(TEST_DIR, { recursive: true, force: true });
+    // Teardown owns the store and the directory. On a cloud target the same
+    // call DELETES the workspace, which is why it belongs to the target.
+    await target?.teardown();
   });
 
   liveTest('solve 8 algorithmic problems with native tool calling', async () => {
@@ -196,7 +163,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
       await engine.reviewTurn(turn, null);
 
       // THE ORACLE. `response.includes(String(problem.answer))` stood here and it
-      // was not one: four of these eight answers are single digits and two of
+      // was not one: four of these eight answers are single digits and three of
       // those digits are in their own QUESTION, so a response that echoed the
       // prompt scored CORRECT. Measured on the questions themselves, an echo
       // passed problems 8, 3 and 4. `finalIntegerAnswer` states the extraction

@@ -16,8 +16,6 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
@@ -26,22 +24,18 @@ import * as v from 'valibot';
 import {
   collectStepText,
   EvolutionEngine,
-  initWorkspaceSchema,
   readMemoryTail,
   renderDynamicContextBlock,
-  JsonObjectSchema,
-  projectJsonValue,
   type LLMProviderConfig,
   type CompletedTurn,
   type ToolCallRecord,
 } from '../packages/core/src/index';
-import { createWorkspace } from '../packages/core/src/identity/index';
-import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
-import { makeWorkspaceSchemaSql, type CLIRuntime } from '../packages/cli-backend/src/runtime';
+import { type CLIRuntime } from '../packages/cli-backend/src/runtime';
 import {
-  buildEvalAgentSurface, installPreTurnProfile, recordRequestSurface, requireSandboxedExecutors,
+  buildEvalAgentSurface, createStepToolCallLog, recordRequestSurface,
   type EvalAgentSurface, type RequestSurfaceEvidence,
 } from './evals/harness';
+import { provisionLocalTarget, type LocalAgentEvalTarget } from './evals/target-local';
 import {
   finalIntegerAnswer, letterKey,
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
@@ -94,7 +88,6 @@ interface ExposureTally {
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'kinu-evolution-proof-' + Date.now());
-const DB_PATH = join(TEST_DIR, 'agent.db');
 
 type ReuseMode = 'instructed' | 'autonomous';
 
@@ -134,8 +127,7 @@ async function chatTurn(
   const reuseMode: ReuseMode =
     /\b(?:must\s+)?use execute_tools\b/i.test(userMessage) ? 'instructed' : 'autonomous';
 
-  const tcRecords: ToolCallRecord[] = [];
-  let stepCount = 0;
+  const log = createStepToolCallLog();
 
   const result = await generateText({
     model: recorder.model,
@@ -146,26 +138,7 @@ async function chatTurn(
     ],
     tools: surface.tools,
     stopWhen: stepCountIs(500),
-    onStepFinish: (step: StepResult<ToolSet>) => {
-      stepCount++;
-      if (step.toolCalls) {
-        for (const tc of step.toolCalls) {
-          tcRecords.push({
-            name: tc.toolName,
-            args: v.parse(JsonObjectSchema, tc.input),
-            result: null,
-          });
-        }
-      }
-      if (step.toolResults) {
-        for (let i = 0; i < step.toolResults.length; i++) {
-          const toolResult = step.toolResults[i];
-          const idx = tcRecords.length - step.toolResults.length + i;
-          const record = tcRecords[idx];
-          if (record && toolResult) record.result = projectJsonValue({ value: toolResult.output });
-        }
-      }
-    },
+    onStepFinish: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
   });
 
   recordLiveModelSpend(result.usage);
@@ -178,8 +151,8 @@ async function chatTurn(
 
   return {
     text: responseText,
-    toolCalls: tcRecords,
-    steps: stepCount,
+    toolCalls: log.records,
+    steps: log.steps,
     durationMs: Date.now() - start,
     reuseMode,
     request: recorder.evidence(),
@@ -395,8 +368,8 @@ const DIJKSTRA_ANSWER_2 = shortestDistance(GRAPH_2);
 const CIPHER_ANSWER = atbash(CIPHER.ciphertext);
 
 describe('Evolution Proof', () => {
-  let db: InstanceType<typeof Database>;
   let rt: CLIRuntime;
+  let target: LocalAgentEvalTarget;
   let engine: EvolutionEngine;
   let model: LanguageModel;
   /** Built ONCE, in setup, from the production actor root. It was rebuilt per
@@ -407,38 +380,37 @@ describe('Evolution Proof', () => {
   let surface: EvalAgentSurface;
 
   beforeAll(async () => {
-    mkdirSync(TEST_DIR, { recursive: true });
-    db = new Database(DB_PATH);
-    db.exec('PRAGMA journal_mode = WAL');
-    // BIRTH, then OPEN, then the WHOLE schema — the three hand-picked init calls
-    // this replaced omitted `initShadowTables`, so `scaffold_evaluations` did not
-    // exist and `engine.onSessionComplete` below died on it 102s into a paid run.
-    // `initWorkspaceSchema` is the one function that declares a workspace's
-    // tables; a subset maintained by hand drifts from it by default.
-    await createWorkspace(db, {
-      name: 'evolution-proof',
+    // Provisioned through the seam: birth, the whole schema, open, the
+    // executor-surface and sandbox guards and the pre-turn profile — the same
+    // sequence every live suite drives, once. The hand-picked init calls this
+    // replaced omitted `initShadowTables`, so `scaffold_evaluations` did not
+    // exist and `engine.onSessionComplete` below died on it 102s into a paid
+    // run; `initWorkspaceSchema` is the one function that declares a
+    // workspace's tables. The real runtime rather than the birth one, so
+    // evolution reaches a genuine branch spawner.
+    target = await provisionLocalTarget({
+      dir: TEST_DIR,
+      workspace: 'evolution-proof',
       purpose: 'A crypto and algorithm expert that solves CTF-style challenges using code execution.',
       llm: LLM_CONFIG,
+      model: liveChatModel(LLM_CONFIG),
+      evolution: true,
     });
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    // The real runtime rather than the birth one, so evolution reaches a genuine
-    // branch spawner, and `hostRoot: null` keeps its executors off this repo.
-    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
-    requireSandboxedExecutors('evolution-proof', rt);
+    rt = target.runtime;
     // The wiring `LocalAgentSession` does for every turn-driving surface. Every
     // `reviewTurn` in this proof routes a reflection lane, so without it the
     // whole cross-session comparison dies on the second turn.
-    installPreTurnProfile(rt, LLM_CONFIG);
     model = liveChatModel(LLM_CONFIG);
     engine = new EvolutionEngine(rt, { enabled: true });
     surface = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG });
     engine.onEvent(e => console.log(`    [evolution] ${e.type}: ${e.message.slice(0, 80)}`));
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     reportLiveModelSpend('Evolution Proof');
-    db.close();
-    rmSync(TEST_DIR, { recursive: true, force: true });
+    // Teardown owns the store and the directory. On a cloud target the same
+    // call DELETES the workspace, which is why it belongs to the target.
+    await target?.teardown();
   });
 
   // ── SESSION 1: Solve challenges, build patterns ──────────────

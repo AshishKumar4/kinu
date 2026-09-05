@@ -329,7 +329,7 @@ describe('the client speaks the routes the product\'s own surfaces speak', () =>
         const listing = await listDevicesOverCliRoute(account);
         expect(listing.status).toBe(200);
         expect(listing.rows).toBeNull();
-        expect(listing.body).toContain('declared shape');
+        expect(listing.body).toContain('dev-abc123');
       },
     );
   });

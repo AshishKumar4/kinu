@@ -321,7 +321,7 @@ describe('route-shaped run events score through the production instruments', () 
     const outcomes = byName.get('tool_outcomes');
     expect(outcomes?.eligible).toBe(4);
     expect(outcomes?.passed).toBe(3);
-    expect(outcomes?.detail).toContain('work failed');
+    expect(outcomes?.detail).toContain('3/4 tool calls returned');
     // `edit_landing` reports attempts against applied, so its rate is below 1
     // here rather than a vacuous 1/1.
     expect(byName.get('edit_landing')?.eligible).toBe(2);

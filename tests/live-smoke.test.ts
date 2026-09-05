@@ -8,16 +8,18 @@
  * since the `spawnBranch` guard landed. A tier whose cheapest member costs six
  * minutes is a tier people learn to skip, and rot accumulates behind it.
  *
- * So this is the floor: two turns, ~40 seconds, one per backend. It does not
- * replace the six — it is the part that must never be allowed to rot, because
+ * So this is the floor: four tests — two turns, one per backend, plus the web
+ * app flow and the device-registry read. It does not replace the six — it is
+ * the part that must never be allowed to rot, because
  * everything else in the tier is downstream of "can the agent take a turn at
  * all". Each turn must reach the model, call a tool, and leave a DURABLE row
  * behind, because those are the three things a mocked test cannot prove and the
  * three things every richer suite assumes.
- *
+
  * WHY TWO BACKENDS AND NOT ONE. `packages/cli-backend/src/local-session.ts` and
- * `packages/cf-backend/src/{orchestrator,actor-agent}.ts` are 9,466 lines with no
- * shared turn implementation, so "the agent takes a turn" is TWO claims. The
+ * `packages/cf-backend/src/{orchestrator,actor-agent}.ts` are 17,063 lines
+ * (`wc -l`, measured 2026-09-05) with no shared turn implementation, so "the
+ * agent takes a turn" is TWO claims. The
  * hosted one runs inside the deployed Worker's Durable Object, reached over the
  * same ticket-authenticated websocket `kinu chat` uses; the local one runs
  * in-process through the same spine as `kinu exec`. Neither substitutes for
@@ -284,6 +286,7 @@ describe('Live Smoke — one real turn per backend', () => {
       await page.waitForFunction(() => location.pathname.startsWith('/workspace/'), { timeout: 90_000 });
       const name = new URL(page.url()).pathname.split('/').filter(Boolean).at(-1) ?? '';
       expect(name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{8}$/);
+      // The typed mission contains "checkout", so this proves the slug is generated rather than mission-derived.
       expect(name).not.toContain('checkout');
       createdCloudAgents.push(name);
 

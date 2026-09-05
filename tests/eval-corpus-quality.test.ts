@@ -4,7 +4,7 @@
  * `tests/evals/behaviour.eval.ts` asserts these on a live run, which costs money
  * and needs a credential. This asserts the same two predicates against the two
  * run records already on disk — `flash-a.json` and `flash-b.json`, the real
- * recorded observations of the real six-task corpus — so the claim "these
+ * recorded observations of the real seven-task corpus — so the claim "these
  * properties fail on the current corpus" is a measurement rather than a
  * prediction, and it re-checks itself on every `bun test` for free.
  *
@@ -68,7 +68,7 @@ function withOutcome(taskId: string, reached: number, total: number): EvalObserv
   };
 }
 
-describe('the shipped six-task corpus fails the corpus-quality properties', () => {
+describe('the shipped seven-task corpus fails the corpus-quality properties', () => {
   test('it declares NO ground truth — every recorded attempt is unverified', () => {
     // The property `behaviour.eval.ts` checks first. It fails here, and this is
     // the whole finding: pass@1 read 1.000 -> 1.000 over these two runs while

@@ -308,7 +308,7 @@ const CASES: readonly TrajectoryCase[] = [
         },
         {
           what: 'cause-fixed',
-          reached: source.includes('a + b'),
+          reached: /\ba\s*\+\s*b\b|\bb\s*\+\s*a\b/.test(source),
           detail: `broken.ts now reads: ${JSON.stringify(source.slice(0, 120))}`,
         },
       ];

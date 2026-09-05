@@ -8,7 +8,7 @@
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
@@ -18,24 +18,21 @@ import {
   BUILTIN_TOOLS,
   collectStepText,
   createFactsStore,
-  initWorkspaceSchema,
   readSoul,
-  JsonObjectSchema,
-  projectJsonValue,
   type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
-  type ToolCallRecord,
 } from '../packages/core/src/index';
-import { createWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import {
-  makeSql, makeWorkspaceSchemaSql, type CLIRuntime,
+  makeSql, type CLIRuntime,
 } from '../packages/cli-backend/src/runtime';
 import {
-  buildEvalAgentSurface, installPreTurnProfile, requireSandboxedExecutors,
+  buildEvalAgentSurface, createStepToolCallLog,
 } from './evals/harness';
+import { provisionLocalTarget } from './evals/target-local';
 import {
+  finalIntegerAnswer,
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
   UNCONFIGURED_LLM,
 } from '@kinu.run/test-utils';
@@ -97,8 +94,7 @@ async function chatTurn(
   const soul = await readSoul(rt.storage.vfs) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
 
-  const tcRecords: ToolCallRecord[] = [];
-  let stepCount = 0;
+  const log = createStepToolCallLog();
 
   const result = await generateText({
     model,
@@ -110,26 +106,7 @@ async function chatTurn(
     messages: [{ role: 'user' as const, content: userMessage }],
     tools,
     stopWhen: stepCountIs(500),
-    onStepFinish: (step: StepResult<ToolSet>) => {
-      stepCount++;
-      if (step.toolCalls) {
-        for (const tc of step.toolCalls) {
-          tcRecords.push({
-            name: tc.toolName,
-            args: v.parse(JsonObjectSchema, tc.input),
-            result: null,
-          });
-        }
-      }
-      if (step.toolResults) {
-        for (let i = 0; i < step.toolResults.length; i++) {
-          const toolResult = step.toolResults[i];
-          const idx = tcRecords.length - step.toolResults.length + i;
-          const record = tcRecords[idx];
-          if (record && toolResult) record.result = projectJsonValue({ value: toolResult.output });
-        }
-      }
-    },
+    onStepFinish: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
   });
 
   recordLiveModelSpend(result.usage);
@@ -143,8 +120,8 @@ async function chatTurn(
   return {
     userMessage,
     assistantResponse: responseText,
-    toolCalls: tcRecords,
-    steps: stepCount,
+    toolCalls: log.records,
+    steps: log.steps,
     durationMs: Date.now() - start,
     feedback: null,
     hadError: false,
@@ -162,32 +139,26 @@ describe('E2E Full Lifecycle', () => {
   let agentName: string;
 
   beforeAll(async () => {
-    mkdirSync(TEST_DIR, { recursive: true });
-    db = new Database(DB_PATH);
-    db.exec('PRAGMA journal_mode = WAL');
-
-    // BIRTH, then the WHOLE schema, then OPEN. The birth runtime carries no
+    // Provisioned through the seam: birth, the whole schema, open, the
+    // executor-surface and sandbox guards and the pre-turn profile — the same
+    // sequence every live suite drives, once. The birth runtime carries no
     // `preBuilt` deps, so `execute_tools` answered every call with
     // "execute_tools is not configured on this runtime" — measured live, while
     // step 4 ("code execution") still passed, because it asserts only that the
-    // reply is non-empty. `openWorkspaceCLI` builds `createCLIRuntime`, the same
-    // spine `kinu exec` runs, so the tool the prompt names actually exists.
-    await createWorkspace(db, {
-      name: 'lifecycle-test',
+    // reply is non-empty. `openWorkspaceCLI` builds `createCLIRuntime`, the
+    // same spine `kinu exec` runs, so the tool the prompt names exists.
+    // `db` and `rt` stay reassignable because step 6 closes and reopens the
+    // store; afterAll below therefore still closes whichever handle is live.
+    const target = await provisionLocalTarget({
+      dir: TEST_DIR,
+      workspace: 'lifecycle-test',
       purpose: 'A coding assistant that helps write and test JavaScript code.',
       llm: LLM_CONFIG,
+      model: liveChatModel(LLM_CONFIG),
+      evolution: true,
     });
-    // One function declares a workspace's tables. The three calls this replaced
-    // omitted `initShadowTables`, and a sibling suite died on the table it
-    // creates 102s into a paid run.
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    // `hostRoot: null` keeps every executor off the repo this suite launched
-    // from; the next line asserts that rather than trusting it.
-    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
-    requireSandboxedExecutors('e2e-full-lifecycle', rt);
-    // The wiring `LocalAgentSession` does for every turn-driving surface; this
-    // suite drives the inner API, so it installs it itself.
-    installPreTurnProfile(rt, LLM_CONFIG);
+    db = target.db;
+    rt = target.runtime;
 
     // Model first: the production actor root builds `agents` from deps carrying
     // the model a search expands with, so a surface built before it would be the
@@ -255,7 +226,9 @@ describe('E2E Full Lifecycle', () => {
     const result = await toolExecute<{ code: string }, unknown>(execute)({
       code: 'return 6 * 7;',
     });
-    expect(JSON.stringify(result)).toContain('42');
+    // Structural: the dispatcher answers `{result}`, the same shape the
+    // harness-wiring and evolution-proof suites hold it to.
+    expect(result).toEqual({ result: 42 });
   });
 
   // ── Step 3: Chat turn 1 — simple, no tools ──────────────────
@@ -265,7 +238,9 @@ describe('E2E Full Lifecycle', () => {
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 120)}`);
     console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
     expect(turn.assistantResponse.length).toBeGreaterThan(0);
-    expect(turn.assistantResponse.toLowerCase()).toContain('4');
+    // The extracted integer, not a substring: any '4' anywhere in the reply
+    // would satisfy `toContain`, including one from the question's echo.
+    expect(finalIntegerAnswer(turn.assistantResponse)).toBe(4);
   }, 120_000);
 
   // ── Step 4: Chat turn 2 — should use execute_tools ──────────
@@ -393,6 +368,14 @@ describe('E2E Full Lifecycle', () => {
 
     console.log('  ═══ END SUMMARY ═══\n');
 
-    expect(tables.length).toBeGreaterThan(0);
+    // The schema step 1 named, over the REOPENED store: this is the
+    // persistence claim, not a second copy of step 1. A bare `length > 0`
+    // stood here and passed over any store that opened at all.
+    for (const table of [
+      'workspace_identity', 'messages', 'inodes', 'search_nodes',
+      'scaffold_versions', 'crafted_tools', 'fibers',
+    ]) {
+      expect(tables).toContain(table);
+    }
   });
 });
