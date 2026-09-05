@@ -62,8 +62,9 @@ an ensemble median; `none` composes only with `advance:'none'`, because a
 selector without a signal makes row order win.
 
 `uct` re-widens against an exploration term. `best-first` takes the best
-unexpanded node. `archive` keeps cells. `none` expands once. `pareto` is not
-implemented; see *What the engine refuses outright*.
+unexpanded node. `archive` keeps cells. `none` expands once. `pareto` orders
+its frontier by the axes of an `instanced` or `vector` objective and settles
+to a nondominated front rather than one winner.
 
 `elites` and `artifacts` persist. `reflections` and `none` do not. `settle` is
 derived from `score` and `advance`, not a seventh axis: an independent setting
@@ -147,16 +148,22 @@ Implemented across `strategy/swarm.ts`, `strategy/verifier-registry.ts`, and
 
 The engine rejects these shapes because it cannot execute them faithfully:
 
-- A vector objective has no scalar to climb.
-- An instanced objective has no per-instance measurement path.
+- A run that settles one answer climbs one number. A vector objective has no
+  scalar to climb on that run, and an instanced objective has no per-instance
+  measurement path on it. `advance:'pareto'` is the run that takes either kind.
 - A witness objective with no scalar proxy has nothing to optimise.
 - A closure verifier is unauthorable over a JSON tool argument.
   `(ctx) => Promise<Measurement>` cannot cross that boundary, so the arm is
   structurally unreachable.
-- `advance:'pareto'` needs per-instance measurement and dominance comparison.
-  A records store provides neither.
+- `advance:'pareto'` with no `instanced` or `vector` objective has no axes to
+  order its frontier by. `advance:'pareto'` with a publishing carry has no
+  store to publish through. The frontier lives in node evidence, and the
+  scalar records store cannot hold a vector.
+- `expand:'aggregate'` with `advance:'pareto'` has no scalar verdict to
+  re-grade a merge node with. A frontier preserves its vector without
+  collapsing it.
 
-Implemented by `strategy/swarm-run.ts` and `strategy/objective.ts`.
+Implemented by `strategy/swarm-run.ts`, `strategy/swarm-setup.ts`, and `strategy/objective.ts`.
 
 ## The objective
 
@@ -526,9 +533,10 @@ negatively by `lean/Kinu/Exploration/Isolation.lean`.
 ## Settle is derived
 
 `settle` is a total function of exactly (score, advance), compiler-checked in
-TypeScript and Lean. A new value cannot fall through. The returned shape must
-match the resolved settle; a non-dominated front cannot stand in for one
-aggregate number.
+TypeScript and Lean. A new value cannot fall through. The returned shape
+follows the resolved settle: `best` carries the one aggregate answer, and
+`frontier` carries the nondominated candidates. `frontier` is null on every
+run that did not use `advance:'pareto'`.
 
 Implemented by `settleOf` and `lean/Kinu/Exploration/Settle.lean`.
 
@@ -556,9 +564,10 @@ Implemented by `fanInAtLevel`, `SwarmFanInReport`, and
 ## Merge-back
 
 Four named policies take settled work to the origin. Each derives from `settle`;
-callers cannot choose one. The mapping is total. Conflict merge-node spawning is
-outside it because conflict is discovered while applying diffs.
-
+callers cannot choose one. The mapping is total. `best` applies its winner.
+`archive` and `front` rebase in dependency order. `merge` synthesises reports.
+Conflict merge-node spawning is outside it because conflict is discovered while
+applying diffs.
 **Dependency order.** Multi-member settles use dependency order, never tree
 order. A dropped edge refuses rather than degrading.
 
