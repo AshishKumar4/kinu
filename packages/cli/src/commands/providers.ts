@@ -3,7 +3,7 @@ import { deleteCloudCredential, listCloudCredentials, type CloudCredentialSummar
 import { bumpProviderRevision, loadConfigFile, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { authCommand } from './auth';
-import { setupCommand } from './setup';
+import { INSTALL_HINT_OPENCODE, LOGIN_HINT_OPENCODE, setupCommand } from './setup';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -143,9 +143,6 @@ async function connectOpenCode(opts: { model?: string }): Promise<void> {
   }
   console.log(DIM('Cloud workspaces cannot use opencode. They need their own provider credentials.'));
 }
-
-const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
-const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `kinu setup` again.';
 
 function parseArgs(actionOrProvider: string | undefined, providerArg: string | undefined): ParsedProviderArgs {
   if (!actionOrProvider) return { action: 'list' };

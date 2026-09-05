@@ -46,7 +46,8 @@ import * as v from 'valibot';
 import { resolveAgentTarget } from '../agent-target';
 import { requireAuthConfig } from '../config';
 import { callAgentRpc } from '../cloud-api';
-import { ACCENT, DIM, ERR, OK, WARN } from '../display';
+import { ACCENT, DIM, ERR, OK, printJson, WARN } from '../display';
+import { parsePositiveInt } from '../options';
 import {
   getLocalAgentInfo, getLocalChangelog, getLocalChatHistory, getLocalFacts,
   getLocalScaffoldVersions, listLocalGepaRuns, listLocalHeads, listLocalJobs,
@@ -798,14 +799,8 @@ function formatElapsed(ms: number): string {
   return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
 
-function parsePositiveInt(value: string, label: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
-  return parsed;
-}
-
 function printJsonSummary(summary: DebugSummary, outPath: string): void {
-  console.log(JSON.stringify(redactDeep(decodeJsonValue({ value: { bundle: outPath, ...summary } })), null, 2));
+  printJson(redactDeep(decodeJsonValue({ value: { bundle: outPath, ...summary } })));
 }
 
 function stringField(record: JsonObject, key: string): string | undefined {

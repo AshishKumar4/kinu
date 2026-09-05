@@ -15,8 +15,9 @@ import {
   listCliAccessTokens,
   revokeCliAccessToken,
 } from '../cloud-api';
+import { projectJsonValue } from '@kinu.run/core';
 import { requireAuthConfig } from '../config';
-import { ACCENT, DIM, OK, WARN } from '../display';
+import { ACCENT, DIM, formatWhen, OK, printJson, WARN } from '../display';
 
 /** The scopes the server's access-token store accepts, in its own order
  *  (`cf-backend/src/cli/access-token-store.ts`). `ai.proxy` means "spend the
@@ -41,7 +42,7 @@ async function listTokens(opts: TokensOpts): Promise<void> {
   const auth = requireAuthConfig();
   const { tokens } = await listCliAccessTokens(auth.origin, auth.token);
   if (opts.json) {
-    console.log(JSON.stringify(tokens, null, 2));
+    printJson(projectJsonValue({ value: tokens }));
     return;
   }
   if (tokens.length === 0) {
@@ -63,7 +64,7 @@ async function createToken(positionalName: string | undefined, opts: TokensOpts)
   const auth = requireAuthConfig();
   const created = await createCliAccessToken(auth.origin, auth.token, { name, scopes });
   if (opts.json) {
-    console.log(JSON.stringify(created, null, 2));
+    printJson(projectJsonValue({ value: created }));
     return;
   }
   console.log(`${OK('✓')} Access token ${ACCENT(created.name)} created with scopes: ${created.scopes.join(', ')}`);
@@ -80,8 +81,4 @@ async function revokeToken(ref: string | undefined): Promise<void> {
   const auth = requireAuthConfig();
   await revokeCliAccessToken(auth.origin, auth.token, ref);
   console.log(`${OK('✓')} Access token ${ACCENT(ref)} revoked`);
-}
-
-function formatWhen(epochMs: number): string {
-  return new Date(epochMs).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
 }

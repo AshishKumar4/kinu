@@ -1,9 +1,6 @@
 [
   "cross-file packages/cf-backend/src/auth/routes.ts#readJsonObject | packages/cf-backend/src/lib/cloudflare-oauth.ts#readJsonObject",
   "cross-file packages/cli-backend/src/claude-cli-provider.ts#readAll | packages/cli-backend/src/opencode-provider.ts#readAll",
-  "cross-file packages/cli/src/commands/control.ts#normalizeWebhookAuthMode | packages/cli/src/commands/inspect.ts#normalizeWebhookAuthMode",
-  "cross-file packages/cli/src/commands/control.ts#parsePositiveInt | packages/cli/src/commands/debug.ts#parsePositiveInt | packages/cli/src/commands/inspect.ts#parsePositiveInt",
-  "cross-file packages/cli/src/commands/control.ts#parseTime | packages/cli/src/commands/inspect.ts#parseTime",
   "cross-file packages/core/src/tools/file-edit.ts#lineSpan | packages/core/src/tools/file-ledger.ts#lineCount",
   "cross-package packages/cf-backend/src/lib/crypto.ts#timingSafeEqual | packages/core/src/utils/crypto.ts#timingSafeEqual",
   "same-file packages/cf-backend/src/actor-agent.ts#listWorkspaceFiles | packages/cf-backend/src/actor-agent.ts#statWorkspaceFile",

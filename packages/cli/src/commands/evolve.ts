@@ -5,9 +5,10 @@ import { openWorkspaceCLI } from '@kinu.run/cli-backend';
 import { CONFIG_PATH, createCodexAuthStore, requireLLMConfig, resolveAgentRef, resolveProviderCredentials } from '../config';
 import { requireLocalAgent } from '../local-target';
 import {
-  printSearchTree, printError, createSpinner,
+  printSearchTree, printError, createSpinner, plural,
   BRAND, DIM, OK, WARN, ACCENT, MUTED,
 } from '../display';
+import { parsePositiveInt, parsePositiveNumber } from '../options';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 export async function evolveCommand(name: string, opts: {
@@ -25,9 +26,9 @@ export async function evolveCommand(name: string, opts: {
 
   // One set of defaults: the engine's (core DEFAULT_CONFIG.mcts). The CLI
   // used to half them silently — a weaker search than every other caller ran.
-  const budget = opts.budget !== undefined ? parseInt(opts.budget, 10) : DEFAULT_CONFIG.mcts.budget;
-  const branches = opts.branches !== undefined ? parseInt(opts.branches, 10) : DEFAULT_CONFIG.mcts.branches;
-  const maxCostUSD = opts.maxCost !== undefined ? Number(opts.maxCost) : DEFAULT_CONFIG.mcts.maxCostUSD;
+  const budget = opts.budget !== undefined ? parsePositiveInt(opts.budget, 'budget') : DEFAULT_CONFIG.mcts.budget;
+  const branches = opts.branches !== undefined ? parsePositiveInt(opts.branches, 'branches') : DEFAULT_CONFIG.mcts.branches;
+  const maxCostUSD = opts.maxCost !== undefined ? parsePositiveNumber(opts.maxCost, 'max-cost') : DEFAULT_CONFIG.mcts.maxCostUSD;
   const llmConfig = requireLLMConfig(opts);
   const codexAuthStore = createCodexAuthStore();
   const db = new Database(dbPath);
@@ -151,10 +152,6 @@ export function formatMctsProgress(event: MCTSProgressEvent, totalBudget: number
 
 function iterationTag(current: number, total: number): string {
   return DIM(`[${current}/${total}]`);
-}
-
-function plural(count: number, noun: string, pluralNoun = `${noun}s`): string {
-  return `${count} ${count === 1 ? noun : pluralNoun}`;
 }
 
 function createEvolveSession(rt: AgentRuntime): SessionWriter {

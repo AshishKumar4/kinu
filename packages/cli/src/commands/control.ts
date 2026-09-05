@@ -1,5 +1,5 @@
 import { requireAuthConfig } from '../config';
-import { isReasoningEffort, type ModelMenu, type ReasoningEffort } from '@kinu.run/core';
+import { isReasoningEffort, projectJsonValue, type JsonValue, type ModelMenu, type ReasoningEffort } from '@kinu.run/core';
 import { resolveAgentTarget } from '../agent-target';
 import {
   cancelLocalJob,
@@ -22,7 +22,8 @@ import {
   type CloudWebhookTriggerInput,
 } from '../cloud-api';
 import * as v from 'valibot';
-import { ACCENT, DIM, OK, WARN } from '../display';
+import { ACCENT, DIM, OK, printJson, WARN } from '../display';
+import { normalizeWebhookAuthMode, parsePositiveInt, parseTime } from '../options';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
 import {
   normalizeModelMenu,
@@ -292,8 +293,8 @@ export async function jobsCommand(name: string, action: string | undefined, id: 
 
 /** Raw JSON under `--json`, the human rendering otherwise — the inspector
  *  contract every read/mutate command in this CLI shares. */
-function present<T>(data: T, opts: ControlOpts, human: (data: T) => void): void {
-  if (opts.json) console.log(JSON.stringify(data, null, 2));
+function present<T extends JsonValue | object>(data: T, opts: ControlOpts, human: (data: T) => void): void {
+  if (opts.json) printJson(projectJsonValue({ value: data }));
   else human(data);
 }
 
@@ -310,28 +311,9 @@ function timerInput(action: string, value: string | undefined): TimerInput {
   }
   if (action === 'at') {
     if (!value) throw new Error('time required');
-    return { atMs: parseTime(value) };
+    return { atMs: parseTime(value, 'time') };
   }
   throw new Error('trigger action must be list, every, at, webhook, or cancel');
-}
-
-function normalizeWebhookAuthMode(value: string | undefined): 'hmac' | 'bearer' | 'mtls' {
-  const raw = (value ?? 'hmac').toLowerCase();
-  if (raw === 'hmac' || raw === 'bearer' || raw === 'mtls') return raw;
-  throw new Error('--auth-mode must be hmac, bearer, or mtls');
-}
-
-function parsePositiveInt(value: string, label: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
-  return parsed;
-}
-
-function parseTime(value: string): number {
-  if (/^\d+$/.test(value)) return Number(value);
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) throw new Error(`Invalid time: ${value}`);
-  return parsed;
 }
 
 function printTools(tools: Array<{ name: string; description?: string; group: string }>): void {

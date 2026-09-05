@@ -13,7 +13,8 @@ import {
   ActivitySpendSchema, callAgentRpc, createCloudWebhookTrigger,
   type CloudWebhookTriggerInput,
 } from '../cloud-api';
-import { ACCENT, DIM, ERR, OK, printSearchTree, WARN } from '../display';
+import { ACCENT, DIM, ERR, OK, plural, printJson, printSearchTree, WARN } from '../display';
+import { normalizeWebhookAuthMode, parsePositiveInt, parseTime } from '../options';
 import {
   executeLocalExecutor,
   getLocalAgentState,
@@ -111,7 +112,7 @@ export async function stopCommand(name: string, opts: InspectOpts = {}): Promise
     });
     return;
   }
-  if (cancelled.length > 0) console.log(`${OK('cancelled')} ${cancelled.length} background job${cancelled.length === 1 ? '' : 's'}`);
+  if (cancelled.length > 0) console.log(`${OK('cancelled')} ${plural(cancelled.length, 'background job')}`);
   console.log(`${WARN('local foreground turns are process-local')} use Ctrl+C in the terminal running that turn.`);
 }
 
@@ -198,8 +199,6 @@ function printSpend(spend: WorkspaceSpend): void {
   }
 }
 
-const plural = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? '' : 's'}`;
-
 /** One producer row's numbers. An absent count is printed as an em dash, never
  *  as 0 — a provider that reported nothing did not report nothing spent. */
 function spendCells(usage: Usage, usd: number | undefined, calls: number): string {
@@ -232,7 +231,7 @@ export async function memoryCommand(name: string, queryParts: string[] = [], opt
 export async function eventsCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
   const limit = parseLimit(opts.limit, 50);
-  const since = opts.since ? parseTime(opts.since) : undefined;
+  const since = opts.since ? parseTime(opts.since, 'time') : undefined;
   const filter: JsonObject = { limit };
   if (opts.variant) filter.variant = opts.variant;
   if (since !== undefined) filter.since = since;
@@ -439,25 +438,6 @@ function parseLimit(value: string | undefined, fallback: number): number {
   return parsePositiveInt(value, 'limit');
 }
 
-function parsePositiveInt(value: string, label: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
-  return parsed;
-}
-
-function parseTime(value: string): number {
-  if (/^\d+$/.test(value)) return Number(value);
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) throw new Error(`Invalid time: ${value}`);
-  return parsed;
-}
-
-function normalizeWebhookAuthMode(value: string | undefined): 'hmac' | 'bearer' | 'mtls' {
-  const raw = (value ?? 'hmac').toLowerCase();
-  if (raw === 'hmac' || raw === 'bearer' || raw === 'mtls') return raw;
-  throw new Error('--auth-mode must be hmac, bearer, or mtls');
-}
-
 function printData(data: JsonValue, opts: InspectOpts): void {
   if (opts.json) printJson(data);
   else printPretty(data);
@@ -486,14 +466,10 @@ function printRows(data: JsonValue, opts: InspectOpts, format: (item: JsonValue)
   for (const item of rows.output) console.log(format(item));
 }
 
-function printJson(data: JsonValue): void {
-  console.log(JSON.stringify(data, null, 2));
-}
-
 function printPretty(data: JsonValue): void {
   const text = v.safeParse(v.string(), data);
   if (text.success) console.log(text.output);
-  else console.log(JSON.stringify(data, null, 2));
+  else printJson(data);
 }
 
 function formatEventRow(item: JsonValue): string {

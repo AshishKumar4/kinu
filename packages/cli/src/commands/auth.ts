@@ -4,7 +4,7 @@ import {
   defaultOrigin, listCliSessions, logout, pollCliAuth, revokeCliSessionByHash, revokeAllCliSessions, startCliAuth, whoami,
 } from '../cloud-api';
 import { bumpProviderRevision, loadConfigFile, requireAuthConfig, updateConfigFile } from '../config';
-import { ACCENT, DIM, OK, WARN } from '../display';
+import { ACCENT, DIM, formatWhen, OK, WARN } from '../display';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 export interface CliAuthCallbacks {
@@ -153,10 +153,6 @@ export async function sessionsCommand(
   console.log(DIM('Revoke one: kinu sessions revoke <hash>   All: kinu sessions revoke --all'));
 }
 
-function formatWhen(epochMs: number): string {
-  return new Date(epochMs).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
-}
-
 export function openBrowser(url: string): void {
   const command = platform() === 'darwin'
     ? 'open'
@@ -169,6 +165,6 @@ export function openBrowser(url: string): void {
   child.unref();
 }
 
-function delay(ms: number): Promise<void> {
+export function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }

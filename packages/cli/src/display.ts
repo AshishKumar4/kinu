@@ -6,7 +6,7 @@
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall, parseRefusal } from '@kinu.run/core';
-import type { SearchNode, ReasoningEffort, JsonObject } from '@kinu.run/core';
+import type { SearchNode, ReasoningEffort, JsonObject, JsonValue } from '@kinu.run/core';
 import { clipText } from './tui/format';
 import { guideFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
@@ -525,4 +525,16 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function printJson(value: JsonValue): void {
+  console.log(JSON.stringify(value, null, 2));
+}
+
+export function plural(count: number, noun: string, pluralNoun = `${noun}s`): string {
+  return `${count} ${count === 1 ? noun : pluralNoun}`;
+}
+
+export function formatWhen(epochMs: number): string {
+  return new Date(epochMs).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
 }

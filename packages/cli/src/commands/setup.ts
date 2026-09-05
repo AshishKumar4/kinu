@@ -11,7 +11,7 @@ import { setCloudCredential } from '../cloud-api';
 import { bumpProviderRevision, loadConfigFile, resolveCloudSession, setDefaultModel, updateConfigFile, type KinuConfig } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { ask, askSecret, canPrompt, confirm } from '../prompt';
-import { authCommand, openBrowser } from './auth';
+import { authCommand, delay, openBrowser } from './auth';
 
 /**
  * Where a provider secret is written.
@@ -324,8 +324,8 @@ export async function setupCommand(opts: {
   throw new Error(`Unknown provider: ${provider}`);
 }
 
-const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
-const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `kinu setup` again.';
+export const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
+export const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `kinu setup` again.';
 
 /**
  * The one shape every LOCAL provider write takes: this machine's credential
@@ -416,8 +416,4 @@ async function runCodexDeviceFlow() {
 
 function stripProviderPrefix(model: string, provider: string): string {
   return model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }

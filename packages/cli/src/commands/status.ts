@@ -10,7 +10,7 @@ import {
   type CloudAgentStatus,
 } from '../cloud-api';
 import * as v from 'valibot';
-import { ACCENT, DIM, OK, printAgentStatus } from '../display';
+import { ACCENT, DIM, OK, plural, printAgentStatus } from '../display';
 import { resolveAgentTarget } from '../agent-target';
 import { requireLocalAgent } from '../local-target';
 import { getLocalAgentInfo, getLocalProfileCoordinates } from '../local-inspection';
@@ -80,8 +80,8 @@ function printCloudStatus(
   console.log(`${DIM('Effort')}     ${status.reasoningEffort ?? 'medium (chat default)'}`);
   console.log(`${DIM('Messages')}   ${status.messageCount}`);
   console.log(`${DIM('Scaffold')}   v${status.scaffoldVersion}`);
-  console.log(`${DIM('MCTS')}       ${status.searchNodeCount} node${status.searchNodeCount === 1 ? '' : 's'}`);
-  console.log(`${DIM('Tools')}      ${counts.builtInTools} built-in, ${counts.craftedTools} crafted, ${counts.executorCount} executor${counts.executorCount === 1 ? '' : 's'}`);
+  console.log(`${DIM('MCTS')}       ${plural(status.searchNodeCount, 'node')}`);
+  console.log(`${DIM('Tools')}      ${counts.builtInTools} built-in, ${counts.craftedTools} crafted, ${plural(counts.executorCount, 'executor')}`);
   console.log(`${DIM('Triggers')}   ${counts.triggerCount}`);
   console.log(`${DIM('Jobs')}       ${counts.runningJobs} running, ${counts.jobCount} recent`);
   console.log('');

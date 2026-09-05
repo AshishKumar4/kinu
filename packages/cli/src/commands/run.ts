@@ -12,6 +12,7 @@ import { ensureLocalDaemonRunning } from './daemon';
 import { resolvePromptAttachments } from '../attachments';
 import { watchHeadlessConsents, watchTerminalConsents } from '../consent-watch';
 import { ERR, formatFailure, printFailure, printToolCall, printToolResult } from '../display';
+import { normalizeWebhookAuthMode } from '../options';
 import { guideFailure } from '../provider-guidance';
 import {
   executeLocalExecutor,
@@ -413,7 +414,7 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
       if (!label) throw new Error('label required');
       const input: CloudWebhookTriggerInput = {
         label,
-        auth_mode: webhookAuthMode(stringField(cmd, 'authMode') ?? stringField(cmd, 'auth_mode')),
+        auth_mode: normalizeWebhookAuthMode(stringField(cmd, 'authMode') ?? stringField(cmd, 'auth_mode')),
       };
       const secret = stringField(cmd, 'secret');
       const contentType = stringField(cmd, 'contentType');
@@ -504,12 +505,6 @@ function numberField(cmd: JsonObject, key: string): number | undefined {
   const parsed = Number(string.output);
   if (Number.isFinite(parsed)) return parsed;
   return undefined;
-}
-
-function webhookAuthMode(value: string | undefined): 'hmac' | 'bearer' | 'mtls' {
-  const raw = (value ?? 'hmac').toLowerCase();
-  if (raw === 'hmac' || raw === 'bearer' || raw === 'mtls') return raw;
-  throw new Error('authMode must be hmac, bearer, or mtls');
 }
 
 /** Plain streaming renderer for one-shot runs (pipe-friendly: raw deltas). */

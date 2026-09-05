@@ -41,6 +41,7 @@ import {
   weakLabel,
   type CalibrationReport, type CorpusEvalReport, type EnsembleReport, type EnsembleRunResult,
   type LabelIngestResult, type LabelingItem, type OutcomeLabel, type TurnOutcome,
+  projectJsonValue,
 } from '@kinu.run/core';
 import type { JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -48,7 +49,8 @@ import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import { defaultTranscriptRoot, mineTranscripts, renderMineSkips, type MineResult } from '../cc-transcript';
 import { requireAuthConfig } from '../config';
 import { callAgentRpc } from '../cloud-api';
-import { ACCENT, DIM, OK, WARN } from '../display';
+import { ACCENT, DIM, OK, plural, printJson, WARN } from '../display';
+import { parsePositiveInt } from '../options';
 import {
   getLocalCalibration, getLocalEnsemble, recordLocalOutcomeLabels, runLocalCorpusEval,
   runLocalOutcomeEnsemble, sampleLocalLabeling,
@@ -166,7 +168,7 @@ export async function labelCommand(
 // ── export ───────────────────────────────────────────────────────
 
 async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {
-  const size = parsePositiveInt(opts.size, DEFAULT_LABEL_BUDGET, 'size');
+  const size = opts.size === undefined ? DEFAULT_LABEL_BUDGET : parsePositiveInt(opts.size, 'size');
   const items = target.mode === 'cloud'
     ? await cloudRpc(target, 'sampleOutcomeLabeling', v.array(LabelingItemSchema), [size])
     : sampleLocalLabeling(target.localName, size);
@@ -181,10 +183,10 @@ async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
   writeFileSync(path, renderLabelingFile(items), 'utf8');
 
   if (opts.json) {
-    console.log(JSON.stringify({ path, turns: items.length }, null, 2));
+    printJson({ path, turns: items.length });
     return;
   }
-  console.log(`${OK('drew')} ${items.length} turn${items.length === 1 ? '' : 's'} → ${ACCENT(path)}` +
+  console.log(`${OK('drew')} ${plural(items.length, 'turn')} → ${ACCENT(path)}` +
     DIM(`  (~${Math.round(items.length * 0.35)}–${Math.round(items.length * 0.5)} minutes)`));
   console.log('');
   console.log('  1. Open it and put one letter after each `verdict:`');
@@ -209,7 +211,7 @@ async function ingestLabels(target: AgentTarget, file: string | undefined, opts:
   // is fixed in one pass.
   if (parsed.errors.length > 0) {
     throw new Error(
-      `${parsed.errors.length} problem${parsed.errors.length === 1 ? '' : 's'} in ${path}. Nothing was stored:\n` +
+      `${plural(parsed.errors.length, 'problem')} in ${path}. Nothing was stored:\n` +
       parsed.errors.map((problem) => `  ${problem}`).join('\n'),
     );
   }
@@ -224,16 +226,16 @@ async function ingestLabels(target: AgentTarget, file: string | undefined, opts:
     : await recordLocalOutcomeLabels(target.localName, { labeler, labels: parsed.labels });
 
   if (opts.json) {
-    console.log(JSON.stringify({ ...result, skipped: parsed.skipped, labeler }, null, 2));
+    printJson({ ...result, skipped: parsed.skipped, labeler });
     return;
   }
-  console.log(`${OK('stored')} ${result.stored} verdict${result.stored === 1 ? '' : 's'} as ${labeler}` +
+  console.log(`${OK('stored')} ${plural(result.stored, 'verdict')} as ${labeler}` +
     (parsed.skipped > 0 ? DIM(`  (${parsed.skipped} left blank)`) : ''));
   if (result.stored > 0) {
     console.log(`  You disagreed with the classifier on ${result.disagreements} of ${result.stored}.`);
   }
   if (result.unknown.length > 0) {
-    console.log(`${WARN('skipped')} ${result.unknown.length} turn${result.unknown.length === 1 ? '' : 's'} ` +
+    console.log(`${WARN('skipped')} ${plural(result.unknown.length, 'turn')} ` +
       `no longer in the ledger: ${result.unknown.slice(0, 3).join(', ')}${result.unknown.length > 3 ? '…' : ''}`);
   }
   console.log('');
@@ -259,7 +261,7 @@ async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<voi
     : await runLocalOutcomeEnsemble(target.localName, specs.length > 0 ? specs : null);
 
   if (opts.json) {
-    console.log(JSON.stringify({ run: result, report: await fetchEnsemble(target) }, null, 2));
+    printJson(projectJsonValue({ value: { run: result, report: await fetchEnsemble(target) } }));
     return;
   }
   if (result.run === null) {
@@ -267,7 +269,7 @@ async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<voi
     return;
   }
   for (const judge of result.run.judged) {
-    console.log(`${OK('judged')} ${judge.model} — ${judge.stored} verdict${judge.stored === 1 ? '' : 's'}` +
+    console.log(`${OK('judged')} ${judge.model} — ${plural(judge.stored, 'verdict')}` +
       (judge.failed > 0 ? WARN(`, ${judge.failed} unanswered`) : ''));
   }
   if (result.run.alreadyJudged > 0) {
@@ -320,7 +322,7 @@ async function mineCorpus(opts: LabelOpts): Promise<void> {
   const { mined, labels } = mineAndLabel(opts);
   const report = miningOnly(mined, labels);
   if (opts.json) {
-    console.log(JSON.stringify({ ...report, provenance: mined.skips, versions: mined.versions }, null, 2));
+    printJson(projectJsonValue({ value: { ...report, provenance: mined.skips, versions: mined.versions } }));
     return;
   }
 
@@ -352,7 +354,7 @@ async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> 
       `"${target.requestedName}" is a cloud agent. Score the corpus with a local one.`,
     );
   }
-  const limit = parsePositiveInt(opts.limit, DEFAULT_SCORE_LIMIT, 'limit');
+  const limit = opts.limit === undefined ? DEFAULT_SCORE_LIMIT : parsePositiveInt(opts.limit, 'limit');
   const specs = (opts.models ?? '').split(',').map((s) => s.trim()).filter((s) => s !== '');
 
   const { mined, labels } = mineAndLabel(opts);
@@ -369,7 +371,7 @@ async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> 
     return;
   }
   if (!opts.json) {
-    console.log(DIM(`Scoring ${scored.size} labeled turn${scored.size === 1 ? '' : 's'}: one classifier`));
+    console.log(DIM(`Scoring ${plural(scored.size, 'labeled turn')}: one classifier`));
     console.log(DIM('call, plus one call per judge. Every rater sees only the turn, never a rule.'));
     console.log('');
   }
@@ -378,7 +380,7 @@ async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> 
     turns: mined.turns, labels: budgeted, specs: specs.length > 0 ? specs : null,
   });
   if (opts.json) {
-    console.log(JSON.stringify({ ...report, provenance: mined.skips, versions: mined.versions }, null, 2));
+    printJson(projectJsonValue({ value: { ...report, provenance: mined.skips, versions: mined.versions } }));
     return;
   }
   const path = corpusReportPath(opts);
@@ -396,7 +398,7 @@ async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> 
 async function reportLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {
   const [calibration, ensemble] = await Promise.all([fetchReport(target), fetchEnsemble(target)]);
   if (opts.json) {
-    console.log(JSON.stringify({ calibration, ensemble }, null, 2));
+    printJson(projectJsonValue({ value: { calibration, ensemble } }));
     return;
   }
   console.log(renderCalibrationReport(calibration));
@@ -426,11 +428,4 @@ function cloudRpc<T>(
 ): Promise<T> {
   const auth = requireAuthConfig();
   return callAgentRpc(auth.origin, auth.token, target.cloudName, method, schema, args);
-}
-
-function parsePositiveInt(value: string | undefined, fallback: number, label: string): number {
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
-  return parsed;
 }
