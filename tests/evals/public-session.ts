@@ -98,7 +98,7 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, initRunEventTables,
   parseJsonValue,
-  type JsonValue, type LLMProviderConfig, type RunEvent, type WorkspaceSpend,
+  type GadgetSummary, type JsonValue, type LLMProviderConfig, type RunEvent, type WorkspaceSpend,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
@@ -633,15 +633,17 @@ const ToolDescriptionsSchema = v.object({ crafted: v.array(CraftedToolSchema) })
 /** One tool the model built for itself, as the Tools pane lists it. */
 export type PublicCraftedTool = v.InferOutput<typeof CraftedToolSchema>;
 
-/** One agent-written tab, as `listGadgets` draws it. Narrowed to what a case
- *  asserts: the slug the strip draws and the halves behind it. */
-const GadgetSummarySchema = v.object({
+/** One agent-written tab, as `listGadgets` draws it, parsed to the server's
+ *  own `GadgetSummary` so a shape this guessed at cannot drift again: the
+ *  first deployed run of the gadget row failed on `subtitle: null` against an
+ *  optional string here, with the gadget built and listed. */
+const GadgetSummarySchema: v.GenericSchema<unknown, GadgetSummary> = v.object({
   slug: v.string(),
   title: v.string(),
-  subtitle: v.optional(v.string()),
-  hasServer: v.optional(v.boolean()),
-  hasClient: v.optional(v.boolean()),
-  bindings: v.optional(v.array(v.string())),
+  subtitle: v.nullable(v.string()),
+  hasServer: v.boolean(),
+  hasClient: v.boolean(),
+  bindings: v.array(v.string()),
 });
 const GadgetListingSchema = v.object({ gadgets: v.array(GadgetSummarySchema) });
 
