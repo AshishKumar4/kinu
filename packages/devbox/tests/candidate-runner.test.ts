@@ -34,7 +34,7 @@ import type {
 } from '../bench/candidate-runner';
 import { BeneathRoot } from '../src/native-openat2';
 import { openMerklePack } from '../src/candidates/merkle-pack';
-import type { MerklePackReader } from '../src/candidates/merkle-pack';
+import type { MerklePackReader, PackRun } from '../src/candidates/merkle-pack';
 import { CandidateRestoreBoundSchema, CandidateRestoreWorkSchema } from '../src/candidates/restore-receipt';
 import { readBarrier } from './support/read-barrier';
 import type { ReadBarrier } from './support/read-barrier';
@@ -1215,6 +1215,12 @@ describe('a merkle restore walks the tree in parallel', () => {
       const start = Number(intent.byteOffset);
       const end = start + Number(intent.byteLength);
       const bytes = Bun.file(join(this.store, intent.exactKey)).slice(start, end);
+      return new Uint8Array(await bytes.arrayBuffer());
+    }
+
+    async readRun(run: PackRun): Promise<Uint8Array> {
+      await this.barrier.hold();
+      const bytes = Bun.file(join(this.store, run.key)).slice(run.offset, run.offset + run.length);
       return new Uint8Array(await bytes.arrayBuffer());
     }
   }

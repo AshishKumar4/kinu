@@ -11,7 +11,7 @@ import * as v from 'valibot';
 import type { AuditedCapture } from '../src/capture/model';
 import { build as buildBounded, isHoleExtent, open as openBounded } from '../src/candidates/bounded-layers';
 import { buildMerklePack, openMerklePack, parentFromPublishedParent } from '../src/candidates/merkle-pack';
-import type { MerklePackView } from '../src/candidates/merkle-pack';
+import type { MerklePackView, PackRun } from '../src/candidates/merkle-pack';
 import { JournalDaemonClient, readJournalDelta } from '../src/capture/journal/client';
 import type { JournalBase, JournalDelta, JournalFence } from '../src/capture/journal/client';
 import { issueVerifiedJournalCapture, manifestSha256 } from '../src/capture/model';
@@ -164,6 +164,15 @@ class FusePayloadStore implements CandidatePayloadStore {
     const end = start + Number(intent.byteLength);
     return new Uint8Array(await Bun.file(objectPath(this.store, intent.exactKey)).slice(start, end).arrayBuffer());
   }
+
+  /** One contiguous read of a pack through the mount: a run of chunks costs
+   *  the store one range request, and the reader holds each chunk inside it
+   *  to its own digest. */
+  async readRun(run: PackRun): Promise<Uint8Array> {
+    return new Uint8Array(
+      await Bun.file(objectPath(this.store, run.key)).slice(run.offset, run.offset + run.length).arrayBuffer(),
+    );
+  }
 }
 
 /** Which side of a restore a store read serves. The restore sets it at each phase. */
@@ -224,6 +233,12 @@ class CountedRestoreStore {
 
   async readRange(intent: RangeReadIntent): Promise<Uint8Array> {
     const bytes = await this.inner.readRange(intent);
+    this.counter.note(bytes.byteLength, this.cls);
+    return bytes;
+  }
+
+  async readRun(run: PackRun): Promise<Uint8Array> {
+    const bytes = await this.inner.readRun(run);
     this.counter.note(bytes.byteLength, this.cls);
     return bytes;
   }

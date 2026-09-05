@@ -38,6 +38,7 @@ import type {
   MerklePackBuild,
   MerklePackReader,
   MerklePackRoot,
+  PackRun,
   MerklePackView,
   PublishedMerkleParent,
 } from '../src/candidates/merkle-pack';
@@ -197,6 +198,19 @@ class MemStore implements MerklePackReader {
     this.rangeReads += 1;
     this.fetchedBytes += length;
     const slice = bytes.slice(offset, offset + length);
+    if (this.corruptRanges) slice[slice.byteLength - 1] ^= 0xff;
+    return slice;
+  }
+
+  async readRun(run: PackRun): Promise<Uint8Array> {
+    const bytes = this.objects.get(run.key);
+    if (bytes === undefined) throw new Error(`missing object: ${run.key}`);
+    if (run.offset < 0 || run.offset + run.length > bytes.byteLength) {
+      throw new Error(`run out of bounds: ${run.key}`);
+    }
+    this.rangeReads += 1;
+    this.fetchedBytes += run.length;
+    const slice = bytes.slice(run.offset, run.offset + run.length);
     if (this.corruptRanges) slice[slice.byteLength - 1] ^= 0xff;
     return slice;
   }
@@ -581,10 +595,11 @@ describe('merkle-pack/v1', () => {
     const out = await view.readRange('big.bin', 8 * MIB, 100 * MIB);
 
     expect(out.byteLength).toBe(100 * MIB);
-    // One intent per DISTINCT extent: the hole dedupes to one fetch, the dense
-    // run costs one fetch per ~4 KiB chunk, and repeats are free.
-    expect(store.rangeReads).toBeLessThan(2048);
-    expect(store.intents.length).toBe(store.rangeReads);
+    // ONE READ PER CONTIGUOUS RUN: the hole's one zero chunk and the dense
+    // run's ~1024 chunks, laid out in file order, cost a read per pack they
+    // span rather than one per chunk, and repeats are free. The per-chunk
+    // shape this replaces cost 1,025 reads for the same window.
+    expect(store.rangeReads).toBeLessThan(16);
     for (const intent of store.intents) {
       expect(intent.method).toBe('GET');
       expect(intent.boxId).toBe(RANGE_IDENTITY.boxId);
@@ -670,9 +685,9 @@ describe('merkle-pack/v1', () => {
     expect(await view.stat('data.bin')).not.toBeNull();
 
     store.corruptRanges = true;
-    // The warmed view's chunk fetch fails at the shared intent layer: the
-    // returned bytes no longer match the digest the intent authenticated.
-    await expect(view.readRange('data.bin', 0, 1024)).rejects.toThrow(/expected/);
+    // The warmed view's chunk read fails at the chunk's own digest: a run is
+    // authenticated per chunk, and the bytes no longer match it.
+    await expect(view.readRange('data.bin', 0, 1024)).rejects.toThrow(/failed verification/);
     // A COLD open under the same rot refuses at its first authenticated fetch
     // (the index object) — the open promise itself rejects.
     await expect(openMerklePack(build.root, store, RANGE_IDENTITY)).rejects.toThrow(/range read of/);
@@ -1046,7 +1061,7 @@ describe('merkle-pack/v1 attach', () => {
   async function measureAttachWalk(
     store: MemStore,
     root: MerklePackRoot,
-  ): Promise<{ intents: number; fetchedBytes: number; indexBytes: number; namedPacks: number }> {
+  ): Promise<{ intents: number; reads: number; fetchedBytes: number; indexBytes: number; namedPacks: number }> {
     store.intents.length = 0;
     store.rangeReads = 0;
     store.fetchedBytes = 0;
@@ -1067,6 +1082,7 @@ describe('merkle-pack/v1 attach', () => {
     const indexRef = view.referencedObjects().find((ref) => ref.key.startsWith('v1/merkle-pack/index/'));
     return {
       intents: store.intents.length,
+      reads: store.rangeReads,
       fetchedBytes: store.fetchedBytes,
       indexBytes: indexRef === undefined ? 0 : Number(indexRef.byteLength),
       namedPacks: [...view.referencedKeys()].filter((key) => key.startsWith('v1/merkle-pack/pack/')).length,
@@ -1076,7 +1092,7 @@ describe('merkle-pack/v1 attach', () => {
   test('opening the head through an 8-generation history stays bounded by the served tree', async () => {
     const store = new MemStore();
     let parent: PublishedMerkleParent | null = null;
-    const measured: { intents: number; fetchedBytes: number; indexBytes: number; namedPacks: number }[] = [];
+    const measured: { intents: number; reads: number; fetchedBytes: number; indexBytes: number; namedPacks: number }[] = [];
     let headRoot: MerklePackRoot | null = null;
 
     // Every generation rewrites the same eight 24 KiB files under one
@@ -1275,7 +1291,7 @@ describe('merkle-pack/v1 attach', () => {
       }
     }
   });
-  test('attach fetch granularity is one intent per packed chunk, not per restore slice', async () => {
+  test('attach fetch granularity is one read per restore slice, not per packed chunk', async () => {
     const MIB = 1024 * 1024;
     // 96 MiB in eight dense 12 MiB files: the LARGEST dense tree the codec
     // publishes at all. A 400 MiB workspace — the scale the deployed r2fs arm
@@ -1290,18 +1306,18 @@ describe('merkle-pack/v1 attach', () => {
 
     const measured = await measureAttachWalk(store, build.root);
 
-    // One intent per packed CDC chunk (target 4 KiB, max 16 KiB), NOT one per
-    // 512 KiB restore slice: ~24k chunk round-trips, ~85 slice round-trips.
-    // The chunk count is what bounds a wake, so granularity is pinned here.
-    expect(measured.intents).toBeGreaterThan(12_000);
-    expect(measured.intents).toBeLessThan(24_000);
-    // Bytes move at chunk granularity: byte-proportional, chunk-sized intents.
+    // ONE READ PER 512 KiB RESTORE SLICE plus one per node and the index, NOT
+    // one per packed CDC chunk: this tree is ~24k chunks at the 4 KiB target
+    // and 192 slices. The chunk shape this replaces measured 11,000-24,000
+    // reads here; the deployed wake of run 20260905075659 paid one round
+    // trip per read and overran its 300 s attach budget on a 75 MB tree.
+    expect(measured.reads).toBeGreaterThanOrEqual(192);
+    expect(measured.reads).toBeLessThan(320);
+    // Bytes still move at chunk granularity: only the chunks a slice covers.
     expect(measured.fetchedBytes).toBeGreaterThan(88 * MIB);
     expect(measured.fetchedBytes).toBeLessThan(112 * MIB);
-    // Average intent size: chunk-scaled (4-16 KiB), never slice-scaled
-    // (512 KiB) — the restore never coalesces chunks into slices.
-    expect(measured.fetchedBytes / measured.intents).toBeGreaterThan(4 * 1024);
-    expect(measured.fetchedBytes / measured.intents).toBeLessThan(17 * 1024);
+    // Average read size: slice-scaled, never chunk-scaled.
+    expect(measured.fetchedBytes / measured.reads).toBeGreaterThan(256 * 1024);
     // A DECLARED BUDGET, not a guessed wait: every assertion above is a COUNT
     // over deterministic bytes, so this number can only ever end a run that
     // stopped making progress. It exists because the work is real — 96 MiB of
@@ -1329,26 +1345,43 @@ describe('merkle-pack/v1 attach', () => {
       await this.barrier.hold();
       return await super.readRange(intent);
     }
+
+    override async readRun(run: PackRun): Promise<Uint8Array> {
+      await this.barrier.hold();
+      return await super.readRun(run);
+    }
   }
 
-  test('one slice fetches its distinct extents together, not one round trip at a time', async () => {
+  test('one slice of a dense file is one run, and the runs of one read fetch together', async () => {
     // THE DOMINANT TERM of the deployed overrun. A restore reads each file in
     // 512 KiB slices, and a slice of a file chunked at the default 4 KiB
-    // target is 128 authenticated reads — which the reader awaited strictly
-    // one after another, so a 30 MiB tree paid thousands of round trips of
-    // pure store latency and the wake never finished inside its attach budget.
+    // target is 128 chunks — which the reader fetched one authenticated
+    // intent each, so a 75 MB tree paid ~18k round trips of store latency and
+    // the wake never finished inside its attach budget. The builder lays a
+    // file's chunks out contiguously, so the slice is one run.
     const store = new BarrierStore(4);
     const bytes = prng(64 * 1024, 91);
     const build = await buildMerklePack(audited([file('slice.bin', dense(bytes))]));
     await store.restore(build);
     const view = await openMerklePack(build.root, store, RANGE_IDENTITY);
 
+    // The walk to the node is warmed first, so the count below is the data.
+    await view.stat('slice.bin');
+    store.rangeReads = 0;
     const out = await view.readRange('slice.bin', 0, bytes.byteLength);
-
-    // Same bytes, still one authenticated intent per distinct extent — the
-    // parallelism is in the waiting, not in what is fetched or verified.
     expect(Buffer.from(out)).toEqual(Buffer.from(bytes));
-    expect(store.barrier.widest).toBeGreaterThanOrEqual(4);
+    expect(store.rangeReads).toBe(1);
+
+    // A read whose chunks live in several packs fetches its runs together,
+    // up to the reader's width: the parallelism is in the waiting, and each
+    // chunk is still held to its own digest.
+    const spread = new BarrierStore(4);
+    const wide = prng(256 * 1024, 92);
+    const spreadBuild = await buildMerklePack(audited([file('spread.bin', dense(wide))]), { maxPackBytes: 64 * 1024 });
+    await spread.restore(spreadBuild);
+    const spreadView = await openMerklePack(spreadBuild.root, spread, RANGE_IDENTITY);
+    expect(Buffer.from(await spreadView.readRange('spread.bin', 0, wide.byteLength))).toEqual(Buffer.from(wide));
+    expect(spread.barrier.widest).toBeGreaterThanOrEqual(4);
   });
 
   test('two walks that need the same node in flight share one fetch', async () => {

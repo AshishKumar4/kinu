@@ -5,7 +5,7 @@ import type { Capture, NodeEntry } from '../src/capture/model';
 import { publishedParentOf, readStagedCandidateObjectForTest, MemoryCandidateObjectSink } from '../src/candidates/publication';
 import type { CandidatePayloadStore, CandidatePublicationControl } from '../src/candidates/publication';
 import { buildMerklePack, openMerklePack, parentFromPublishedParent } from '../src/candidates/merkle-pack';
-import type { MerklePackBuild, MerklePackReader, MerklePackView } from '../src/candidates/merkle-pack';
+import type { MerklePackBuild, MerklePackReader, MerklePackView, PackRun } from '../src/candidates/merkle-pack';
 import { finalizeCandidatePayload, stageCandidatePayload, StaleParentRefused } from '../src/candidates/publication';
 import type {
   ImmutableObjectRef,
@@ -134,6 +134,15 @@ class MemStore implements MerklePackReader {
       throw new Error(`range out of bounds: ${intent.exactKey}`);
     }
     return bytes.slice(offset, offset + length);
+  }
+
+  async readRun(run: PackRun): Promise<Uint8Array> {
+    const bytes = this.objects.get(run.key);
+    if (bytes === undefined) throw new Error(`missing object: ${run.key}`);
+    if (run.offset < 0 || run.offset + run.length > bytes.byteLength) {
+      throw new Error(`run out of bounds: ${run.key}`);
+    }
+    return bytes.slice(run.offset, run.offset + run.length);
   }
 
   async restore(build: MerklePackBuild): Promise<void> {

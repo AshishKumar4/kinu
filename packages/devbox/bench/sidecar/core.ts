@@ -52,7 +52,8 @@ import {
 } from '../../src/candidates/merkle-pack/ledger';
 import type { RetiredPack } from '../../src/candidates/merkle-pack/ledger';
 import { openMerkleV2 } from '../../src/candidates/merkle-pack/view-v2';
-import type { KnownPack, MerkleV2Reader, MerkleV2View } from '../../src/candidates/merkle-pack/view-v2';
+import type { KnownPack, MerkleV2View } from '../../src/candidates/merkle-pack/view-v2';
+import type { MerklePackReader } from '../../src/candidates/merkle-pack/read';
 import { MERKLE_PACK_V2_FORMAT } from '../../src/candidates/merkle-pack/wire';
 import {
   ReceiptMismatch,
@@ -104,7 +105,7 @@ export interface SidecarDaemon {
  * one delete GC needs. Deletion is a transport capability rather than part of
  * the publication boundary, because nothing that publishes may remove bytes.
  */
-export interface SidecarPayloadStore extends CandidatePayloadStore, MerkleV2Reader {
+export interface SidecarPayloadStore extends CandidatePayloadStore, MerklePackReader {
   deleteObject(key: string): Promise<void>;
 }
 

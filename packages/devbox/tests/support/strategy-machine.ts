@@ -104,6 +104,7 @@ import { candidateRunControlV2 } from './sidecar-fixture';
 import { MemoryCandidateObjectSink, stageCandidatePayload } from '../../src/candidates/publication';
 import { envelopeBytes, parseEnvelopeBytes, recoverPublishedParent, envelopeV2Bytes } from '../../src/candidates/publication';
 import { buildMerklePack, openMerklePack, parentFromPublishedParent } from '../../src/candidates/merkle-pack';
+import type { PackRun } from '../../src/candidates/merkle-pack';
 import { parseEnvelopeV2Bytes } from './sidecar-fixture';
 import { parsePackLedger } from '../../src/candidates/merkle-pack/ledger';
 import { contentSize, issueVerifiedJournalCapture, manifestSha256 } from '../../src/capture/model';
@@ -2723,6 +2724,12 @@ class MountedPayloadStore implements CandidatePayloadStore {
     const offset = Number(intent.byteOffset);
     return bytes.slice(offset, offset + Number(intent.byteLength));
   }
+
+  async readRun(run: PackRun): Promise<Uint8Array> {
+    const bytes = this.durable.get(`${this.payloadPrefix}/${run.key}`);
+    if (bytes === null) throw new Error(`missing candidate object: ${run.key}`);
+    return bytes.slice(run.offset, run.offset + run.length);
+  }
 }
 
 function candidateArm(format: CandidateContainerFormat): ConformanceArm {
@@ -3633,6 +3640,11 @@ function merklePackV2Arm(): ConformanceArm {
             if (bytes === null) throw new Error(`missing candidate object: ${intent.exactKey}`);
             const offset = Number(intent.byteOffset);
             return bytes.slice(offset, offset + Number(intent.byteLength));
+          },
+          readRun: async (run: PackRun) => {
+            const bytes = durable.get(`${paths.payloadPrefix}/${run.key}`);
+            if (bytes === null) throw new Error(`missing candidate object: ${run.key}`);
+            return bytes.slice(run.offset, run.offset + run.length);
           },
           deleteObject: async (key: string) => {
             durable.delete(`${paths.payloadPrefix}/${key}`);

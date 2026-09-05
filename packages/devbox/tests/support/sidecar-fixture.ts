@@ -41,7 +41,8 @@ import { DEFAULT_MAX_PACK_BYTES_V2 } from '../../src/candidates/merkle-pack/buil
 import { envelopeV2Bytes, envelopeV2IdOf } from '../../src/candidates/publication';
 import * as v from 'valibot';
 import { RootEnvelopeV2Schema, CandidateRunControlV2Schema } from '../../src/durability/contracts';
-import type { MerkleV2View, PackRun } from '../../src/candidates/merkle-pack/view-v2';
+import type { MerkleV2View } from '../../src/candidates/merkle-pack/view-v2';
+import type { PackRun } from '../../src/candidates/merkle-pack/read';
 import type { CandidateEnvelopeStoreV2, CandidateControlStore } from '../../src/candidates/control';
 import type {
   CandidateRunControlV2,

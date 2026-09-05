@@ -32,7 +32,7 @@ import type {
   RangeReadIntent,
   UploadIntent,
 } from '../src/durability/contracts';
-import type { PackRun } from '../src/candidates/merkle-pack/view-v2';
+import type { PackRun } from '../src/candidates/merkle-pack/read';
 
 import { SidecarCore } from './sidecar/core';
 import type { SidecarPayloadStore } from './sidecar/core';

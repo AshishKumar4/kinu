@@ -2373,6 +2373,27 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // The final commit is the one a wake reads back, so it is the last place a
     // replaced container may go unnoticed: see `#healReplacedContainer`.
     await this.#healReplacedContainer();
+    // NOTHING ATTACHED, NOTHING TO COMMIT. A restoration this box classified
+    // as failed admitted no caller (`ensureReady` refuses on `unattached`) and
+    // restarted no process, so the container holds no work of this box's to
+    // lose, and a final checkpoint would run against no work directory. The
+    // deployed merkle-pack release of run 20260905075659 hung there: the
+    // attach the budget abandoned was still restoring inside the container,
+    // the stop's checkpoint waited on that container, and the driver's
+    // 120 s release deadline passed with the stop still pending. The stop is
+    // the one cancellation abandoned work has, so it goes straight to it.
+    const held = this.#restoration;
+    if (held.phase === 'unattached') {
+      this.#invalidateGeneration();
+      await this.stop('SIGTERM');
+      await this.#awaitContainerStopped();
+      return {
+        kind: 'skipped',
+        reason: `nothing is attached to commit: ${held.reason}`,
+        bytes: undefined,
+        movedBytes: undefined,
+      };
+    }
     const outcome = await this.#checkpoint('quiesce');
     if (outcome.kind === 'failed') {
       await this.#record('checkpoint', `final checkpoint failed: ${outcome.reason ?? 'unknown'}`);

@@ -26,10 +26,53 @@ import {
 } from './wire';
 import type { MerklePackRoot } from './wire';
 
-/** The transport seam. `readRange` receives a fully validated intent; an
- *  adapter maps it straight onto the signed payload path. */
+/** One contiguous range of one pack, whose records the caller authenticates:
+ *  several file-adjacent chunks fetched as one read, each then held to its
+ *  own digest. */
+export interface PackRun {
+  readonly key: string;
+  readonly offset: number;
+  readonly length: number;
+}
+
+/**
+ * The transport seam. `readRange` receives a fully validated intent and an
+ * adapter maps it straight onto the signed payload path. `readRun` serves a
+ * run of file-adjacent chunks in one range read; the view holds every chunk
+ * inside it to that chunk's own digest, so the run itself carries none.
+ *
+ * WHY THE SECOND METHOD EXISTS. A file chunked at the 4 KiB target is a
+ * chunk per 4 KiB of data, and one intent per chunk against a FUSE-mounted
+ * store is one round trip per chunk: the deployed merkle-pack wake of run
+ * 20260905075659 restored a 75,265,384 B tree that way and overran its 300 s
+ * attach budget. The builder lays a file's fresh chunks out contiguously, so
+ * a 512 KiB restore slice of a dense file is one run.
+ */
 export interface MerklePackReader {
   readRange(intent: RangeReadIntent): Promise<Uint8Array>;
+  readRun(run: PackRun): Promise<Uint8Array>;
+}
+
+/**
+ * The runs a set of packed extents coalesces into: sorted by pack and offset,
+ * offset-contiguous neighbours merged, an extent already inside the run it
+ * follows dropped. Pure, so the v1 and v2 readers share the one rule.
+ */
+export function coalescePackRuns(
+  extents: readonly { readonly key: string; readonly offset: number; readonly length: number }[],
+): PackRun[] {
+  const sorted = [...extents].sort((a, b) => (a.key === b.key ? a.offset - b.offset : a.key < b.key ? -1 : 1));
+  const runs: PackRun[] = [];
+  for (const extent of sorted) {
+    const last = runs[runs.length - 1];
+    if (last !== undefined && last.key === extent.key && last.offset + last.length === extent.offset) {
+      runs[runs.length - 1] = { key: last.key, offset: last.offset, length: last.length + extent.length };
+      continue;
+    }
+    if (last !== undefined && last.key === extent.key && extent.offset < last.offset + last.length) continue;
+    runs.push({ key: extent.key, offset: extent.offset, length: extent.length });
+  }
+  return runs;
 }
 
 /**
@@ -128,6 +171,19 @@ async function fetchExtent(
     expiresAt: identity.expiresAt,
   });
   return readCandidateRange(intent, reader);
+}
+
+/** One run through the transport, held to its length: a short or long read
+ *  is a transport fault rather than a chunk to verify. */
+async function readPackRun(reader: MerklePackReader, run: PackRun): Promise<Uint8Array> {
+  const bytes = await reader.readRun(run);
+  if (bytes.byteLength !== run.length) {
+    throw new MerklePackError(
+      'invalid-range',
+      `run read of ${run.key} returned ${bytes.byteLength} bytes, expected ${run.length}`,
+    );
+  }
+  return bytes;
 }
 
 /**
@@ -485,18 +541,26 @@ export async function openMerklePack(
         if (fileOff >= end) break;
       }
 
-      // EVERY DISTINCT EXTENT AT ONCE, up to the gate's width. Serialized,
-      // this loop was the dominant term of a wake: a 512 KiB slice of a file
-      // chunked at the default 4 KiB target is 128 round trips against a
-      // FUSE-mounted store, one strictly after another, and a 30 MiB tree is
-      // thousands of them — which is how a restore overran a 300 s attach
-      // budget. The buffers held are the same ones the assembly loop below
-      // already needed, so nothing here costs memory the serial version did
-      // not spend.
-      const buffers = new Map<string, Uint8Array>();
-      await Promise.all([...extents].map(async ([key, loc]) => {
-        buffers.set(key, await fetch(loc));
+      // ONE READ PER CONTIGUOUS RUN, every run at once up to the gate's width.
+      // The builder places a file's fresh chunks in file order, so the distinct
+      // extents of a slice coalesce into a read per pack the slice crosses; a
+      // slice chunked at the 4 KiB target is 128 chunks and, read one intent
+      // each, 128 round trips against a FUSE-mounted store. Each chunk is held
+      // to its own digest below, which is the same expectation the per-chunk
+      // intent carried; the run itself is authenticated by nothing else, and
+      // bytes outside the chunks the slice asked for are never used.
+      const runs = coalescePackRuns([...extents.values()]);
+      const fetched = new Map<PackRun, Uint8Array>();
+      await Promise.all(runs.map(async (run) => {
+        fetched.set(run, await gate(async () => await readPackRun(reader, run)));
       }));
+      const buffers = new Map<string, Uint8Array>();
+      for (const [run, bytes] of fetched) {
+        for (const [key, loc] of extents) {
+          if (loc.key !== run.key || loc.offset < run.offset || loc.offset + loc.length > run.offset + run.length) continue;
+          buffers.set(key, bytes.subarray(loc.offset - run.offset, loc.offset - run.offset + loc.length));
+        }
+      }
 
       for (const item of items) {
         const buffer = buffers.get(extentKeyOf(item.loc))!;

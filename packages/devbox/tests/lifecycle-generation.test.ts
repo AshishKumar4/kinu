@@ -620,6 +620,28 @@ describe('a failed restored service is never exposed and never reported ready', 
     await expect(box.exec('ls')).rejects.toThrow('no attached work directory');
     await expect(box.exec('ls')).rejects.toThrow('permanent → refuse');
   });
+
+  test('a stop on a box whose attach was refused stops the container with nothing to commit', async () => {
+    // The deployed merkle-pack release of run 20260905075659: the attach was
+    // abandoned at its budget and classified terminal, and the stop's final
+    // checkpoint then waited on the container the abandoned restore was still
+    // running in, past the driver's 120 s release deadline. A box that
+    // admitted no caller holds no work to commit, so the stop skips straight
+    // to the container.
+    const harnessed = harness(TestBox);
+    const { box, container } = harnessed;
+    failAttempt(harnessed, 'MISSING_CREDENTIALS');
+    await expect(box.devboxStartup()).rejects.toThrow('MISSING_CREDENTIALS');
+    const stopsBefore = container.stops;
+
+    const outcome = await box.quiesce();
+
+    expect(outcome.kind).toBe('skipped');
+    expect(outcome.reason).toContain('nothing is attached to commit');
+    expect(outcome.reason).toContain('permanent → refuse');
+    expect(container.stops).toBe(stopsBefore + 1);
+    expect(container.running.running).toBe(false);
+  });
 });
 
 // ── the recovery ladder ─────────────────────────────────────────────────────

@@ -25,11 +25,12 @@ export type {
   PublishedMerkleParent,
 } from './build';
 
-export { openMerklePack } from './read';
+export { coalescePackRuns, openMerklePack } from './read';
 export type {
   MerkleFileExtent,
   MerklePackReader,
   MerklePackView,
+  PackRun,
   RangeIdentity,
   StatInfo,
 } from './read';

@@ -24,17 +24,11 @@ import type { HydrateWork, ObjectRangeRef } from '../../durability/contracts';
 import { candidateRangeRequest, readCandidateRange } from '../publication';
 
 import { MerklePackError } from './errors';
-import type { MerkleFileExtent, MerklePackReader, RangeIdentity, StatInfo } from './read';
+import { coalescePackRuns } from './read';
+import type { MerkleFileExtent, MerklePackReader, PackRun, RangeIdentity, StatInfo } from './read';
 import { fileBoundaries } from './delta';
 import { SELF_PACK, decodeNodeV2, hashNodeV2Bytes } from './wire';
 import type { ExtentV2, NodeV2, RecordRefV2 } from './wire';
-
-/** One coalesced range over a pack, whose records the caller authenticates. */
-export interface PackRun {
-  readonly key: string;
-  readonly offset: number;
-  readonly length: number;
-}
 
 /** One pack whose whole body a caller already knows the length and digest of —
  *  the ledger's row for it. A view opened with these may fetch a pack once,
@@ -53,15 +47,6 @@ export interface OpenMerkleV2Options {
    * anonymous pack keeps the one-range-at-a-time behavior a lazy miss wants.
    */
   readonly wholePacks?: ReadonlyMap<string, KnownPack>;
-}
-
-/**
- * The v2 transport seam. `readRun` is the coalescing entry point: an adapter
- * that has it serves a run of file-adjacent chunks in one range read, and one
- * that does not falls back to one authenticated read per chunk.
- */
-export interface MerkleV2Reader extends MerklePackReader {
-  readRun?(run: PackRun): Promise<Uint8Array>;
 }
 
 export type FileNodeV2 = Extract<NodeV2, { readonly kind: 'file' }>;
@@ -128,23 +113,10 @@ function resolveRecord(node: NodeV2, home: string): NodeV2 {
 }
 
 
-/**
- * laid out offset-contiguous inside their pack, so a whole run of them is one
- * range rather than one range each.
- */
+/** The runs a file's extents coalesce into: the shared rule, over v2's
+ *  extents, which name their pack as `pack`. */
 function coalesce(extents: readonly ExtentV2[]): PackRun[] {
-  const sorted = [...extents].sort((a, b) => (a.pack === b.pack ? a.offset - b.offset : a.pack < b.pack ? -1 : 1));
-  const runs: PackRun[] = [];
-  for (const extent of sorted) {
-    const last = runs[runs.length - 1];
-    if (last !== undefined && last.key === extent.pack && last.offset + last.length === extent.offset) {
-      runs[runs.length - 1] = { key: last.key, offset: last.offset, length: last.length + extent.length };
-      continue;
-    }
-    if (last !== undefined && last.key === extent.pack && extent.offset < last.offset + last.length) continue;
-    runs.push({ key: extent.pack, offset: extent.offset, length: extent.length });
-  }
-  return runs;
+  return coalescePackRuns(extents.map((extent) => ({ key: extent.pack, offset: extent.offset, length: extent.length })));
 }
 
 /**
@@ -165,7 +137,7 @@ function evict<K>(cache: Map<K, Promise<unknown>>, key: K): (failure: Error) => 
  */
 export async function openMerkleV2(
   root: ObjectRangeRef,
-  reader: MerkleV2Reader,
+  reader: MerklePackReader,
   identity: RangeIdentity,
   options: OpenMerkleV2Options = {},
 ): Promise<MerkleV2View> {
@@ -257,7 +229,7 @@ export async function openMerkleV2(
     rangeGets += 1;
     bytesFetched += run.length;
     bytesRequested += run.length;
-    const bytes = await reader.readRun!(run);
+    const bytes = await reader.readRun(run);
     if (bytes.byteLength !== run.length) {
       throw new MerklePackError(
         'invalid-range',
@@ -464,7 +436,7 @@ export async function openMerkleV2(
       }
 
       const chunks = new Map<string, Uint8Array>();
-      if (reader.readRun !== undefined && wanted.length > 1) {
+      if (wanted.length > 1) {
         for (const run of coalesce(wanted.map((item) => item.extent))) {
           const bytes = await fetchRun(run);
           for (const item of wanted) {
