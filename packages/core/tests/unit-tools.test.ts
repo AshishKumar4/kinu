@@ -648,14 +648,14 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const restore = setDiagnosticsSink(log);
     let injected: string[] = [];
     try {
-      buildBuiltinTools({
+      buildActorTools({
         rt,
         craftedToolExecute: nodeCraftedExecute,
-        createExecuteTool: (opts) => {
-          injected = Object.keys(opts.craftedTools());
-          return nodeExecFactory(opts);
+        executeTools: (surface) => {
+          injected = Object.keys(surface.craftedTools());
+          return nodeExecBuilder(surface);
         },
-        codemodeLoader: { __test: true },
+        effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' },
       });
     } finally {
       restore();
