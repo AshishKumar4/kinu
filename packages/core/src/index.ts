@@ -102,7 +102,6 @@ export {
   applyWorkspaceTitle,
   deriveWorkspaceTitle,
   fallbackWorkspaceIdentity,
-  isPlaceholderWorkspaceTitle,
   mintSubordinateName,
   parseWorkspaceTitle,
   planWorkspaceTitle,

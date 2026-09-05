@@ -1,5 +1,5 @@
 {
-  "measured": "0798a449b: 898 test files, 817 runnable suites, 11974 tests, 34 runners, 62 non-public product members",
+  "measured": "7600fba03: 909 test files, 827 runnable suites, 11984 tests, 34 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -388,22 +388,6 @@
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-ingress-forgery.test.ts :: (file scope) :: harness bridge to a non-public member",
       "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-legacy-workspace-title.test.ts :: is titled by nothing on activation — the init gate reaches no model :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-legacy-workspace-title.test.ts :: is titled by the mount call, from SOUL.md, under the fast source :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-legacy-workspace-title.test.ts :: never holds the mount payload behind the naming call :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-legacy-workspace-title.test.ts :: pays for one check per activation, however many times it is opened :: harness bridge to a non-public member",
-      "count": 2
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: (file scope) :: harness bridge to a non-public member",
