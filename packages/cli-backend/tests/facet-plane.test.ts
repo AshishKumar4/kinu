@@ -10,12 +10,12 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { LLMProviderConfig } from '@kinu.run/core';
 import { isVfsError } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
-import { createCLIRuntime, shareLocalWorkspacePlane, type CLIRuntime } from '../src/runtime';
+import { cleanupFacetCwdScratch, createCLIRuntime, shareLocalWorkspacePlane, type CLIRuntime } from '../src/runtime';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -89,5 +89,29 @@ describe('a facet on a directory-bound plane', () => {
     expect((await exec(child, 'echo shared > shared.txt')).exitCode).toBe(0);
     expect(await parent.storage.vfs.readFile('shared.txt', { encoding: 'utf8' })).toBe('shared\n');
     expect((await exec(parent, 'echo "$HOME"')).stdout).toBe(process.env.HOME ?? '');
+  });
+
+  test('a hostile facet name never reaches the state directory', () => {
+    const root = scratchDir('facet-plane-hostile');
+    const project = join(root, 'project');
+    mkdirSync(project, { recursive: true });
+    expect(() => agentRuntime(root, 'escape', { cwd: project, facet: '../escape' })).toThrow('not a usable agent name');
+    expect(() => agentRuntime(root, 'slash', { cwd: project, facet: 'a/b' })).toThrow('not a usable agent name');
+    expect(existsSync(join(project, '.kinu'))).toBe(false);
+  });
+
+  test('the scratch copies no workspace bytes, and cleanup removes that facet alone', async () => {
+    const root = scratchDir('facet-plane-cleanup');
+    const project = join(root, 'project');
+    mkdirSync(project, { recursive: true });
+    const one = agentRuntime(root, 'one', { cwd: project, facet: 'sub-one' });
+    agentRuntime(root, 'two', { cwd: project, facet: 'sub-two' });
+    expect((await exec(one, 'echo keep > keep.txt')).exitCode).toBe(0);
+
+    const facets = join(project, '.kinu', 'facets');
+    expect(readdirSync(join(facets, 'sub-one'))).toEqual(['tmp']);
+    cleanupFacetCwdScratch(project, 'sub-one');
+    expect(readdirSync(facets)).toEqual(['sub-two']);
+    expect(existsSync(join(project, 'keep.txt'))).toBe(true);
   });
 });

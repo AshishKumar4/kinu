@@ -709,23 +709,22 @@ export async function shareLocalWorkspacePlane(
  * directory under a fixed parent and a name holding `/` or `..` must not
  * reach the join.
  */
-export interface FacetCwdScratch {
-  readonly home: string;
-  readonly tmp: string;
+function facetScratchRoot(cwd: string, facet: string): string {
+  agentHome(facet);
+  return join(cwd, '.kinu', 'facets', facet);
 }
 
-export function facetCwdScratch(cwd: string, agentName: string): FacetCwdScratch {
-  agentHome(agentName);
-  const home = join(cwd, '.kinu', 'facets', agentName);
+/** The process environment a directory-bound facet's commands run in. */
+function facetShellEnv(cwd: string, facet: string): NodeJS.ProcessEnv {
+  const home = facetScratchRoot(cwd, facet);
   const tmp = join(home, 'tmp');
   mkdirSync(tmp, { recursive: true });
-  return { home, tmp };
+  return { ...process.env, HOME: home, TMPDIR: tmp };
 }
 
 /** Remove one facet's scratch root, and only that root. */
-export function cleanupFacetCwdScratch(cwd: string, agentName: string): void {
-  agentHome(agentName);
-  rmSync(join(cwd, '.kinu', 'facets', agentName), { recursive: true, force: true });
+export function cleanupFacetCwdScratch(cwd: string, facet: string): void {
+  rmSync(facetScratchRoot(cwd, facet), { recursive: true, force: true });
 }
 
 /**
@@ -902,12 +901,6 @@ const shellOptionsSchema = v.object({
   signal: v.optional(v.instance(AbortSignal)),
 });
 const abortContextSchema = v.object({ signal: v.optional(v.instance(AbortSignal)) });
-
-/** The process environment a directory-bound facet's commands run in. */
-function facetShellEnv(cwd: string, facet: string): NodeJS.ProcessEnv {
-  const scratch = facetCwdScratch(cwd, facet);
-  return { ...process.env, HOME: scratch.home, TMPDIR: scratch.tmp };
-}
 
 export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.env): Shell {
   return {
