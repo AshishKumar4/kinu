@@ -34,7 +34,7 @@ function fakeJobRunner(policy: BackgroundPolicy, onThreshold: (kind: string, pro
  *  spawn (readSpawnStarted) right after "validating" input, then the
  *  exploration itself runs long. Mirrors agents-tool.ts's own call to
  *  readSpawnStarted(toolOptions)?.() before strat.explore(). */
-function fakeForkTool(exploreMs: number): ToolSet[string] {
+function fakeForkTool(exploreMs: number, onExplored?: () => void): ToolSet[string] {
   return tool({
     description: 'agents',
     inputSchema: jsonSchema<ForkInput>({
@@ -44,6 +44,7 @@ function fakeForkTool(exploreMs: number): ToolSet[string] {
     execute: async (_input, options) => {
       readSpawnStarted(options)?.();
       await delay(exploreMs);
+      onExplored?.();
       return { strategy: 'merge', text: 'merged fork answer' };
     },
   });
@@ -73,26 +74,29 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
   });
 
   test('on the interactive surface, a fork detaches the instant it spawns — not after the 30s threshold', async () => {
-    const crossings: Array<{ kind: string; at: number }> = [];
-    const start = performance.now();
+    const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
+    let explored = false;
+    const exploringAtDetach: boolean[] = [];
     const jobRunner = fakeJobRunner(BACKGROUND_POLICY.interactive, (kind, promise) => {
-      crossings.push({ kind, at: performance.now() - start });
+      crossings.push(kind);
+      exploringAtDetach.push(!explored);
       detached.push(promise);
       return { detached: true, jobId: 'job-fork' };
     });
     expect(jobRunner.policy.wakesAfterTurn).toBe(true);
 
-    const raw: ToolSet = { agents: fakeForkTool(150) };
+    const raw: ToolSet = { agents: fakeForkTool(150, () => { explored = true; }) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<ForkInput>(wrapped, 'agents')({ action: 'fork', task: 't' });
-    const elapsedMs = performance.now() - start;
 
-    expect(crossings).toHaveLength(1);
-    expect(crossings[0]?.kind).toBe('agents');
-    // Detached on spawn-confirm — nowhere near the 30_000ms interactive
-    // threshold, and well before the 150ms exploration itself finishes.
-    expect(elapsedMs).toBeLessThan(100);
+    expect(crossings).toEqual(['agents']);
+    // Detached on spawn-confirm: the exploration was still running when the
+    // runner took the work. The timed path would have waited out the 30 s
+    // interactive threshold, long after the 150 ms exploration settled. An
+    // ordering, not a wall-clock bound: scheduler latency under load cannot
+    // move a timer callback ahead of the microtasks the announce resolves.
+    expect(exploringAtDetach).toEqual([true]);
     expect(out).toMatchObject({ background: true, jobId: 'job-fork', kind: 'agents' });
     await Promise.all(detached);
   });

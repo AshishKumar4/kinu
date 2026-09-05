@@ -285,28 +285,33 @@ describe('withBackgroundThreshold', () => {
 
 describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, never on a timer', () => {
   test('a fork whose spawn is confirmed detaches immediately, well under the 30s interactive threshold — the exploration itself takes far longer and never blocks the caller', async () => {
-    const started = performance.now();
     const detached: Array<Promise<unknown>> = [];
+    let explored = false;
+    let exploringAtDetach: boolean | undefined;
     const out = await withSpawnDetach('agents', async (spawnStarted) => {
       // The spawn is validated fast; the actual exploration is what's slow.
-      // Structured so the announce fires promptly, well inside a real 30s
-      // interactive threshold, and the exploration itself runs long after.
       spawnStarted();
       await delay(80);
+      explored = true;
       return 'merged fork answer';
     }, {
-      onThreshold: (_kind, p) => { detached.push(p); return { detached: true, jobId: 'job-fork-1' }; },
+      onThreshold: (_kind, p) => {
+        exploringAtDetach = !explored;
+        detached.push(p);
+        return { detached: true, jobId: 'job-fork-1' };
+      },
     });
-    const elapsedMs = performance.now() - started;
 
     expect(isBackgroundHandle(out)).toBe(true);
     if (isBackgroundHandle(out)) {
       expect(out.jobId).toBe('job-fork-1');
       expect(out.kind).toBe('agents');
-      // The old behaviour rode the fixed 30s interactive threshold; the fix
-      // detaches the instant the spawn confirms — no dead-air wait in chat.
-      expect(elapsedMs).toBeLessThan(1000);
     }
+    // The detach came from the spawn announce while the exploration was still
+    // running; the old behaviour rode the 30 s interactive threshold, long after
+    // it had settled. An ordering, not a wall-clock bound, so scheduler latency
+    // under load cannot fail it.
+    expect(exploringAtDetach).toBe(true);
     // The detached promise is the SAME live exploration and still resolves.
     await expect(detached[0]).resolves.toBe('merged fork answer');
   });
