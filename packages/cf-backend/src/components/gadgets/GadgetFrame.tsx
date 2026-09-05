@@ -60,7 +60,7 @@ export function GadgetFrame({ slug, rpc, reloadKey = 0 }: {
     const clientUnreachable = <Thrown,>(thrown: Thrown): void => {
       if (live) setRefusal(renderThrownChain({ cause: thrown }));
     };
-    void rpc<GadgetCallResult>("getGadgetClient", [slug]).then((result) => {
+    void rpc<GadgetCallResult>("getGadgetClient", [slug]).then(async (result) => {
       if (!live) return;
       if (!result.ok) {
         setRefusal(`${result.reason}: ${result.error}`);
@@ -71,8 +71,9 @@ export function GadgetFrame({ slug, rpc, reloadKey = 0 }: {
         setRefusal(`The "${slug}" gadget answered a client that is not JavaScript and CSS.`);
         return;
       }
-      setDocument(gadgetDocument(parsed.output));
-    }, clientUnreachable);
+      const built = await gadgetDocument(parsed.output);
+      if (live) setDocument(built);
+    }).catch(clientUnreachable);
     return () => { live = false; };
   }, [slug, rpc, reloadKey]);
 

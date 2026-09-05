@@ -20,9 +20,18 @@
 // Vite documents, and this repository's `import/default` rule rejects it: the
 // linter resolves the specifier without its `?raw` suffix and finds no default
 // export on the package. A dynamic import is not resolved that way, and the
-// `?raw` module still answers the bundle text as its default.
-const capnwebRaw = await import("capnweb?raw");
-const CAPNWEB_BUNDLE: string = capnwebRaw.default;
+// `?raw` module still answers the bundle text as its default. It is awaited
+// inside the builder, never at the top level: a top-level await here made
+// every module above it evaluate asynchronously, so the SPA and the gallery
+// mounted after the document's `load` event instead of during script
+// evaluation, on every page whether or not a gadget was open.
+let capnwebPrefix: Promise<string> | null = null;
+
+/** The injected prefix, built once per page from the Cap'n Web bundle. */
+function injectedCodePrefix(): Promise<string> {
+  capnwebPrefix ??= import("capnweb?raw").then(({ default: bundle }) => injectedPrefixFor(bundle));
+  return capnwebPrefix;
+}
 
 /** The iframe sandbox token: scripts run, popups may escape, nothing else. */
 export const GADGET_IFRAME_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox";
@@ -36,16 +45,15 @@ export const GADGET_IFRAME_SANDBOX = "allow-scripts allow-popups allow-popups-to
 const GADGET_DOCUMENT_CSP =
   "default-src 'none'; frame-src 'none'; script-src data: 'unsafe-inline'; style-src data: 'unsafe-inline'; img-src data:; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none';";
 
-// btoa() below requires this to stay ASCII; capnweb's build enforces ASCII-only dist bundles.
-const CAPNWEB_BUNDLE_ANNOTATED = `//# sourceURL=jsrpc.js\n${CAPNWEB_BUNDLE}`;
-
 // The client cannot import Cap'n Web from anywhere — its document may load
 // from data: URLs only — so the library rides in as a base64 data: import,
 // and the client module itself rides as a URL-encoded data: script. One
 // module, two nestings: the inner import is base64 (no double-escaping) and
-// the outer script URL-encodes the whole text.
-const INJECTED_CODE_PREFIX = encodeURIComponent(String.raw`//# sourceURL=client.js
-import { RpcTarget, RpcStub, newMessagePortRpcSession } from "data:text/javascript;charset=utf-8;base64,${btoa(CAPNWEB_BUNDLE_ANNOTATED)}";
+// the outer script URL-encodes the whole text. btoa() requires the bundle to
+// stay ASCII; capnweb's build enforces ASCII-only dist bundles.
+function injectedPrefixFor(capnwebBundle: string): string {
+  return encodeURIComponent(String.raw`//# sourceURL=client.js
+import { RpcTarget, RpcStub, newMessagePortRpcSession } from "data:text/javascript;charset=utf-8;base64,${btoa(`//# sourceURL=jsrpc.js\n${capnwebBundle}`)}";
 
 let gadget;  // RPC stub to the gadget's server side, through the parent frame.
 {
@@ -114,11 +122,13 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 `);
+}
 
 /** Build the srcdoc for a gadget client. The style element carries the
  *  gadget's own CSS, if it published any; a `</` sequence in it is escaped so
  *  agent-authored text can never close the element early. */
-export function gadgetDocument({ js, css }: { js: string; css: string | null }): string {
+export async function gadgetDocument({ js, css }: { js: string; css: string | null }): Promise<string> {
+  const prefix = await injectedCodePrefix();
   const style = css === null ? "" : `\n  <style>${css.replace(/<\//g, "<\\/")}</style>`;
   return `<!DOCTYPE html>
 <html>
@@ -127,7 +137,7 @@ export function gadgetDocument({ js, css }: { js: string; css: string | null }):
   <meta http-equiv="Content-Security-Policy" content="${GADGET_DOCUMENT_CSP}">
 </head>
 <body>${style}
-    <script type="module" src="data:text/javascript;charset=utf-8,${INJECTED_CODE_PREFIX}${encodeURIComponent(js)}"></script>
+    <script type="module" src="data:text/javascript;charset=utf-8,${prefix}${encodeURIComponent(js)}"></script>
 </body>
 </html>`;
 }
