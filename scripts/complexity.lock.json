@@ -1,6 +1,6 @@
 {
   "measuredAt": "2026-09-05",
-  "files": 2022,
+  "files": 2021,
   "functions": 52476,
   "ceiling": 125,
   "line": 39,
@@ -114,16 +114,16 @@
       "complexity": 50
     },
     {
-      "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
-      "complexity": 48
-    },
-    {
       "key": "scripts/literature-citations.ts#auditProse",
       "complexity": 48
     },
     {
       "key": "scripts/silent-drop.ts#auditFile>walk",
       "complexity": 48
+    },
+    {
+      "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
+      "complexity": 47
     },
     {
       "key": "lean/check-traceability.mjs#tsScan",
@@ -182,10 +182,6 @@
       "complexity": 41
     },
     {
-      "key": "packages/cf-backend/src/actor-agent.ts#ActorAgent.beforeTurn",
-      "complexity": 40
-    },
-    {
       "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
       "complexity": 40
     },
@@ -204,6 +200,10 @@
     {
       "key": "scripts/wired.ts#measureFields>walk#3",
       "complexity": 40
+    },
+    {
+      "key": "packages/cf-backend/src/actor-agent.ts#ActorAgent.beforeTurn",
+      "complexity": 39
     },
     {
       "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
