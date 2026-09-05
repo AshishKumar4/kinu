@@ -65,6 +65,14 @@ function setup(opts = {}) {
   return { root, work, ctx, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
+// A sub-millisecond red of the two fixture-first tests below identifies the
+// box's tmpdir. Each test's first syscall is mkdtempSync, and a refusal there
+// fails the test before any product code runs: two 0.1-0.3 ms rows appeared
+// once under a 711-file parallel run at 391b4d9f4 while the identical
+// syscalls one test later passed. persist is synchronous and atomic, its temp
+// file never survives a call, and files cannot pollute each other. Bun runs
+// each file in a fresh context with fresh builtins (bun 1.4.0). Check
+// `df /tmp` first when these rows go red that fast.
 describe('daemon token rotation', () => {
   test('the next ticket exchange uses the atomically persisted token', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-token-'));
@@ -102,6 +110,7 @@ describe('daemon token rotation', () => {
         .toThrow('persist rotated device token');
       expect(cfg.token).toBe('T0');
       expect(fs.existsSync(configPath)).toBe(false);
+      expect(fs.readdirSync(root)).toEqual([]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
