@@ -1,7 +1,6 @@
 /**
  * Evolved prompt sections: propose, trial, promote — the `scaffold/modify.ts` +
- * `scaffold/shadow.ts` discipline, applied to the nine addressable sections.
- *
+ * `scaffold/shadow.ts` discipline, applied to the eleven addressable sections.
  * Nothing here renders anything. `buildSystemPromptSync` reads
  * {@link activePromptSectionOverrides} once per activation, exactly as it reads
  * the soul, and a section with no promoted row renders its built-in template.
@@ -49,11 +48,12 @@ import { PROMPT_SECTIONS, type PromptSectionOverrides } from './section-template
 /**
  * The most bytes an evolved section may occupy.
  *
- * Twice the largest section Kinu ships (`state/delegation`, 2,419 bytes), so a
- * rewrite has room to restructure a section rather than only edit it, and a
- * runaway is refused before anything pays to score it. The nine together are
- * 10,841 bytes today; nine at this ceiling would be 43,200, which is the number
- * that makes the ceiling a real bound rather than a formality.
+ * About twice the largest section Kinu ships (`executors/section`, 2,341
+ * bytes, measured 2026-09-05), so a rewrite has room to restructure a section
+ * rather than only edit it, and a runaway is refused before anything pays to
+ * score it. The eleven together are 8,505 bytes on the same date; eleven at
+ * this ceiling would be 52,800, which is the number that makes the ceiling a
+ * real bound rather than a formality.
  */
 export const PROMPT_SECTION_MAX_BYTES = 4800;
 

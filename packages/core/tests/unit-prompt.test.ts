@@ -72,7 +72,7 @@ describe('buildSystemPromptSync', () => {
       registeredExecutors: [],
     });
     expect(prompt).toMatch(/## Delegation/);
-    expect(prompt).toMatch(/Helper agents are one tool — `agents`/);
+    expect(prompt).toMatch(/Helper agents are one tool: `agents`/);
     expect(prompt).toMatch(/Its schema says what each action does/);
     expect(prompt).toMatch(/`swarm` runs parallel nodes over this workspace/);
     expect(prompt).toMatch(/`ask` with `role` runs one temporary agent for one question/);
@@ -483,8 +483,8 @@ describe('buildSystemPromptSync', () => {
     // pinning the duplicate: 942 chars of it across the eight builtins. Both
     // directions are asserted, so neither the example going missing nor the
     // summary coming back is silent.
-    expect(kimi).toContain(`- **run** — \`${BUILTIN_TOOL_SPECS.run.example}\``);
-    expect(kimi).toContain(`- **memory** — \`${BUILTIN_TOOL_SPECS.memory.example}\``);
+    expect(kimi).toContain(`- **run**: \`${BUILTIN_TOOL_SPECS.run.example}\``);
+    expect(kimi).toContain(`- **memory**: \`${BUILTIN_TOOL_SPECS.memory.example}\``);
     for (const name of BUILTIN_TOOLS) {
       expect(kimi).not.toContain(BUILTIN_TOOL_SPECS[name].summary);
     }
@@ -714,7 +714,7 @@ describe('buildSystemPromptSync', () => {
     // destination — the isolate sentence routes clones, fetches, installs and
     // builds to `sandbox.*` on every hosted surface, even one with no sandbox
     // row listed. Only the sandbox ROW still gates on selectability.
-    expect(prompt).toContain('builds run in `sandbox.*`');
+    expect(prompt).toContain('package installs and builds in `sandbox.*`');
     expect(prompt).not.toMatch(/Showing a running app/);
   });
 
@@ -736,7 +736,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('runs inside a Worker isolate');
     expect(prompt).toContain('~128 MB');
     expect(prompt).toContain('large clones and builds');
-    expect(prompt).toContain('the moment it outgrows the workspace');
+    expect(prompt).toContain('The moment a job outgrows the workspace');
   });
 
   test('the isolate ceiling is claimed only where it holds — never on cli-local', () => {
@@ -767,12 +767,12 @@ describe('buildSystemPromptSync', () => {
       ],
     });
 
-    expect(prompt).toContain('currently OFFLINE');
+    expect(prompt).toContain('currently offline');
     // The row names the machine its owner named. "laptop" is the namespace.
     expect(prompt).toContain('ashish@studio');
     // Calling an offline device is how the owner gets ASKED for it — the hub
     // raises a connect request on that call — so the row no longer forbids it.
-    expect(prompt).toContain('asks them to bring it back');
+    expect(prompt).toContain('asks the user to bring it back');
     expect(prompt).toContain('kinu connect');
     // Offline ≠ selectable: no laptop.* namespace advertised for calls.
     expect(prompt).not.toContain('laptop.***');
@@ -804,11 +804,11 @@ describe('buildSystemPromptSync', () => {
       // What the line DOES teach: grants are per machine, the first call asks
       // once, and a fleet of several needs the machine named on every call.
       expect(prompt).toContain('Grants are per machine');
-      expect(prompt).toContain('expected, not an error');
+    expect(prompt).toContain('the runtime asks the user once');
       expect(prompt).toContain('device: "<name>"');
-      expect(prompt).toContain('a call that names none is refused');
+      expect(prompt).toContain('The runtime refuses a call that names none');
       // The live-state framing replaces "assume absent forever".
-      expect(prompt).toContain('live state at the start of THIS turn');
+      expect(prompt).toContain('live state at the start of this turn');
     }
   });
 
@@ -1019,10 +1019,10 @@ describe('buildSystemPromptSync', () => {
       .toThrow(/does not support tool calling/);
   });
 
-  test('adds model-specific guidance for Kimi K2.6', () => {
+  test('adds model-specific guidance for Kimi', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, { model: { id: '@cf/moonshotai/kimi-k2.6' } });
-    expect(prompt).toContain('Kimi K2.6');
+    expect(prompt).toContain('Kimi models work best');
     expect(prompt).toContain('tool/result context');
   });
 
@@ -1042,7 +1042,7 @@ describe('buildSystemPromptSync', () => {
     expect(plan).toContain('submit_plan');
     expect(plan).toContain('Do not change files, system state, releases, or deployments');
     expect(plan).toContain('Do not expose ports or produce preview or output links');
-    expect(plan).toContain('Do not begin implementation until the plan is approved');
+    expect(plan).toContain('Until the plan is approved, do not begin implementation');
 
     const delegatedPlan = buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: false });
     expect(delegatedPlan).toContain('report concrete findings to the parent Plan turn');
@@ -1140,7 +1140,7 @@ describe('buildSystemPromptSync', () => {
         },
       });
       expect(prompt).toContain('Do not change files, system state, releases, or deployments');
-      expect(prompt).toContain('Do not begin implementation until the plan is approved');
+      expect(prompt).toContain('Until the plan is approved, do not begin implementation');
       expect(prompt).toContain('Do not expose ports or produce preview or output links');
       for (const line of planOnly.split('\n')) expect(prompt).toContain(line);
     }
@@ -1169,8 +1169,8 @@ describe('buildSystemPromptSync', () => {
     // Gating is structural — no hedging about backend support.
     expect(prompt).not.toContain('when the backend supports them');
     // The model must not wrap up early because of token-budget fears.
-    expect(prompt).toContain('Your context window is automatically compacted as it approaches its limit');
-    expect(prompt).toContain('so work each task through to completion');
+    expect(prompt).toContain('The runtime automatically compacts your context window as it approaches its limit');
+    expect(prompt).toContain('Work each task through to completion');
   });
 
   test('per-section char budgets stay pinned (additions must be deliberate)', () => {
@@ -1391,7 +1391,7 @@ describe('buildSystemPromptSync', () => {
     for (const id of ['@cf/moonshotai/kimi-k2.6', 'anthropic/claude-sonnet-4.5']) {
       const prompt = buildSystemPromptSync(rt, { model: { id } });
       expect(prompt).toMatch(/## Delegation/);
-      expect(prompt).toMatch(/Helper agents are one tool — `agents`/);
+      expect(prompt).toMatch(/Helper agents are one tool: `agents`/);
       expect(prompt).toMatch(/`swarm` runs parallel nodes over this workspace/);
       expect(prompt).toMatch(/`hire` creates a persistent subordinate in this workspace/);
     }

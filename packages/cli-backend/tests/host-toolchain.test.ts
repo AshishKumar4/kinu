@@ -1,7 +1,7 @@
 // The `laptop` row for the machine the CLI is running on.
 //
 // Asserted through the surface that makes the row matter — the agent's own
-// execution block (`— runs: …`), which is where the model decides to send work —
+// execution block (`, runs: …`), which is where the model decides to send work —
 // and by moving PATH, because the point of this module is that the row FOLLOWS
 // the machine instead of describing a machine like it. `git` and `npm` used to
 // be claimed unconditionally.
@@ -10,10 +10,10 @@ import { renderDynamicContextBlock } from '@kinu.run/core';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from '../src/host-toolchain';
 
 const STRUCTURAL_ONLY =
-  '- laptop: connected — files at /pc — runs: native_binary, shell, fs_shared, net_outbound, process_spawn';
+  '- laptop: connected, files at /pc, runs: native_binary, shell, fs_shared, net_outbound, process_spawn';
 /** What no PATH lookup settles. Declared rather than omitted: an omission reads
  *  to the model exactly like a measured absence. */
-const NOT_MEASURED = ' — not measured here: docker, gpu';
+const NOT_MEASURED = ', not measured here: docker, gpu';
 
 /** The row exactly as the model receives it, through the real renderer and the
  *  same two sets `cli-backend/src/runtime.ts` registers. */
@@ -33,7 +33,7 @@ function runsLine(): string {
 
 /** The part of the row that CLAIMS something. */
 function claims(): string {
-  return runsLine().split(' — not measured here: ')[0] ?? '';
+  return runsLine().split(', not measured here: ')[0] ?? '';
 }
 
 function withPath<T>(PATH: string, fn: () => T): T {

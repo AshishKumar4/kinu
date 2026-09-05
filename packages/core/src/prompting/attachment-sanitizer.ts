@@ -208,8 +208,8 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
   policy.budget?.recordSpill({
     producer: 'pasted_text', omitted: text.length - head.length, referenced: true,
   });
-  return `[Pasted text (${bytes.length} bytes) saved to ${path} — read or slice it with your file tools ` +
-    `(oversize: hand ${path} to a temporary agent as \`context_ref\` on an agents ask). The first ${head.length} chars follow.]\n\n${head}`;
+  return `[Pasted text (${bytes.length} bytes) saved to ${path} (read or slice it with your file tools; ` +
+    `oversize: hand ${path} to a temporary agent as \`context_ref\` on an agents ask). The first ${head.length} chars follow.]\n\n${head}`;
 }
 
 /** True when a natively-acceptable document is large enough that carrying it
@@ -285,7 +285,7 @@ async function storeAndReference(
   const name = filename ?? basename;
   return {
     type: 'text',
-    text: `[Attachment ${name} (${mediaType}, ${bytes.length} bytes) saved to ${path} — read it with your file tools]`,
+    text: `[Attachment ${name} (${mediaType}, ${bytes.length} bytes) saved to ${path} (read it with your file tools)]`,
   };
 }
 
@@ -343,7 +343,7 @@ function remoteReference(
   const name = filename ?? url;
   return {
     type: 'text',
-    text: `[Attachment ${name} (${mediaType}) at ${url} — fetch it with your web tools]`,
+    text: `[Attachment ${name} (${mediaType}) at ${url} (fetch it with your web tools)]`,
   };
 }
 

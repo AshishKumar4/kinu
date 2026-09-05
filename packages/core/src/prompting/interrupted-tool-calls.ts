@@ -38,8 +38,8 @@ import type { ModelMessage, ToolModelMessage, ToolResultPart } from 'ai';
  * confidently repeating a side effect that already happened.
  */
 export const INTERRUPTED_TOOL_RESULT =
-  'The turn was interrupted before this tool call returned. Whether it ran is unknown — '
-  + 'check the current state before issuing it again.';
+  'The turn was interrupted before this tool call returned. Whether it ran is unknown. '
+  + 'Check the current state before issuing it again.';
 
 /**
  * Give every unpaired tool call a terminal result.

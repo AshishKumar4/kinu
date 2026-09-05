@@ -90,7 +90,7 @@ describe('pruneStepToolOutputs', () => {
       expect(text.length).toBeLessThan(2_200);
       expect(text.startsWith('output-')).toBe(true);
       expect(text).toContain('…[truncated: full output was');
-      expect(text).toContain('— re-run the tool if needed]');
+      expect(text).toContain('; re-run the tool if needed]');
       // The marker reports the ORIGINAL serialized size.
       expect(text).toContain(`${outputText(resultPart(messages[idx])).length} chars`);
     }

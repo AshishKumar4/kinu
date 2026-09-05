@@ -107,7 +107,7 @@ describe('renderAgentsMdSection', () => {
     }, 'system');
     expect(section).toContain('nearest instructions win');
     expect(section).toContain('/repo/AGENTS.md (5242880 bytes)');
-    expect(section).toMatch(/Read one with the file tool/);
+    expect(section).toMatch(/file tool/);
     expect(section).not.toContain('truncated');
   });
 

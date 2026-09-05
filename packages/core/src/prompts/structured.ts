@@ -25,11 +25,11 @@ export function stripMarkdownFences(raw: string): string {
 }
 
 export function jsonObjectOnlyInstruction(): string {
-  return 'Return ONLY a single minified JSON object. Do not include markdown fences or prose.';
+  return 'Return a single minified JSON object, with no markdown fences or prose.';
 }
 
 export function jsonArrayOnlyInstruction(): string {
-  return 'Return ONLY a single minified JSON array. Do not include markdown fences or prose.';
+  return 'Return a single minified JSON array, with no markdown fences or prose.';
 }
 
 export function extractJsonObject(text: string): JsonObject {

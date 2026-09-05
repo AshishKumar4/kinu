@@ -196,7 +196,7 @@ describe('renderDynamicContextBlock', () => {
         { source: 'MCP server "github"', reason: 'not connected within 5s of this turn starting — its tools are absent' },
       ],
     })!;
-    expect(text).toContain('Configured but NOT available this turn');
+    expect(text).toContain('Configured but not available this turn');
     expect(text).toContain('MCP server "github"');
     expect(text).toContain('not connected within 5s');
   });
@@ -228,7 +228,7 @@ describe('renderDynamicContextBlock', () => {
       ],
     })!;
     expect(text).toContain('- workspace: active (cpus=1 mem=2G)');
-    expect(text).toEndWith('- laptop: connected — files at /pc\n</dynamic_context>');
+    expect(text).toEndWith('- laptop: connected, files at /pc\n</dynamic_context>');
   });
 
   test('a half-declared cgroup reports only the half it measured', () => {
@@ -252,7 +252,7 @@ describe('renderDynamicContextBlock', () => {
     const text = renderDynamicContextBlock({
       executors: [{ ...workspace, capabilities: ['shell', 'javascript', 'fs_shared'] }],
     })!;
-    expect(text).toContain('- workspace: active — runs: javascript, shell, fs_shared');
+    expect(text).toContain('- workspace: active, runs: javascript, shell, fs_shared');
   });
 
   test('the capability list renders in the canonical order, not the declared one', () => {
@@ -412,7 +412,7 @@ describe('renderDynamicContextBlock', () => {
         },
       }],
     })!;
-    expect(text).toContain('Sandbox off for this device');
+    expect(text).toContain('sandbox off for this device');
     expect(text).toContain('full access to the machine');
     expect(text).not.toContain('sandboxed full bash');
   });
@@ -434,7 +434,7 @@ describe('renderDynamicContextBlock', () => {
 
   test('an executor with no sandbox block adds nothing to its row', () => {
     expect(renderDynamicContextBlock({ executors: [connectedLaptop] })!)
-      .toEndWith('- laptop: connected — files at /pc\n</dynamic_context>');
+      .toEndWith('- laptop: connected, files at /pc\n</dynamic_context>');
   });
 });
 
@@ -452,8 +452,8 @@ describe('the dynamic block carries every genuinely-live plane', () => {
     })!;
     expect(isDynamicBlock(text)).toBe(true);
     expect(text).toContain('- job-1 (think_heads): explore option 1');
-    expect(text).toContain('- ana (subordinate) — working: survey the prior art');
-    expect(text).toContain('- run-7 (swarm node) — 2 of 3 nodes running');
+    expect(text).toContain('- ana (subordinate), working: survey the prior art');
+    expect(text).toContain('- run-7 (swarm node), 2 of 3 nodes running');
     expect(text).toContain('- device consent: laptop: git push origin main');
   });
 
@@ -616,8 +616,8 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
     const block = renderDynamicContextBlock(ctx)!;
     expect(block).toContain('## Proven by execution');
     expect(block).toContain('bun test');
-    // The header states the ceiling: evidence, not a verdict on correctness.
-    expect(block).toContain('not a verdict');
+    // The header states the ceiling: environment evidence, not a verdict on correctness.
+    expect(block).toContain('environment evidence');
     expect('recoveries' in agentDynamicContext(sources)).toBe(false);
   });
 

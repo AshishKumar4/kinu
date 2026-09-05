@@ -292,11 +292,11 @@ export interface TurnLocalContext {
 }
 
 export const DYNAMIC_CONTEXT_HEADER =
-  'Live system state, maintained by the Kinu runtime — not conversation, and not written by the user. '
+  'Live system state from the Kinu runtime. It is not conversation, and the user did not write it. '
   + 'A later dynamic_context block supersedes every earlier one.';
 
 export const TURN_CONTEXT_HEADER =
-  '[Turn context — live state maintained by the Kinu runtime, not written by the user.]';
+  '[Turn context: live state maintained by the Kinu runtime, not written by the user.]';
 
 /** Live availability label for one executor. Volatile by nature (flips on
  *  device connect/disconnect and sandbox activation), so it renders in the
@@ -346,7 +346,7 @@ function executorLimitsSuffix(exec: PromptExecutorInfo): string {
 function executorCapabilitySuffix(exec: PromptExecutorInfo): string {
   const declared = new Set(exec.capabilities ?? []);
   const ordered = EXECUTOR_CAPABILITIES.filter((capability) => declared.has(capability));
-  return ordered.length > 0 ? ` — runs: ${ordered.join(', ')}` : '';
+  return ordered.length > 0 ? `, runs: ${ordered.join(', ')}` : '';
 }
 /**
  * The mount point this executor's files are served at inside the agent's own
@@ -360,11 +360,11 @@ function executorMountSuffix(exec: PromptExecutorInfo): string {
 	// mount, and the record shape keeps that lookup total.
 	const byName: Record<string, string | undefined> = EXECUTOR_MOUNTS;
 	const mount = byName[exec.name];
-	return mount ? ` — files at ${mount}` : '';
+	return mount ? `, files at ${mount}` : '';
 }
 
 /** The row's marker and the legend's subject are the same words by
- *  construction — a legend that stops naming what it explains explains
+ *  construction: a legend that stops naming what it explains explains
  *  nothing. */
 const NOT_MEASURED_LABEL = 'not measured here';
 
@@ -380,7 +380,7 @@ const NOT_MEASURED_LABEL = 'not measured here';
 function executorUnmeasuredSuffix(exec: PromptExecutorInfo): string {
   const unmeasured = new Set(exec.unmeasuredCapabilities ?? []);
   const ordered = EXECUTOR_CAPABILITIES.filter((capability) => unmeasured.has(capability));
-  return ordered.length > 0 ? ` — ${NOT_MEASURED_LABEL}: ${ordered.join(', ')}` : '';
+  return ordered.length > 0 ? `, ${NOT_MEASURED_LABEL}: ${ordered.join(', ')}` : '';
 }
 
 /** Bytes as the unit a memory cap is usually written in. One decimal at most,
@@ -420,15 +420,15 @@ function executorSandboxSuffix(exec: PromptExecutorInfo): string {
   switch (effectiveDeviceMode(sandbox)) {
     case 'sandboxed': {
       const writable = sandbox.roots.length > 0 ? `, writable: ${sandbox.roots.join(', ')}` : '';
-      return ` — sandboxed full bash, GPU: ${describeGpuNodes(sandbox.gpu)}`
+      return `, sandboxed full bash, GPU: ${describeGpuNodes(sandbox.gpu)}`
         + `, agent home ${sandbox.agentHome ?? 'not reported'}${writable}`
         + '. No sudo, apt, dnf or brew: install into the agent home (uv, python -m venv, npm -g, bun, cargo, micromamba)';
     }
     case 'raw':
-      return ' — Sandbox off for this device: commands run as the owner, with full access to the machine';
+      return ', sandbox off for this device: commands run as the owner, with full access to the machine';
     case 'files_only':
-      return ` — device cannot sandbox: ${sandboxCause(sandbox)}`
-        + ' — files only, no shell. Reading and writing files still works';
+      return `, device cannot sandbox: ${sandboxCause(sandbox)}`
+        + ', files only, no shell. Reading and writing files still works';
   }
 }
 
@@ -446,20 +446,20 @@ function executorSandboxSuffix(exec: PromptExecutorInfo): string {
 function renderDeviceLine(device: DeviceFleetEntry, fleet: readonly DeviceFleetEntry[]): string {
   const platform = device.os ? ` (${device.os})` : '';
   if (!device.connected) {
-    return `- ${device.name}${platform}: registered, OFFLINE — the user can reconnect it with \`kinu connect\``;
+    return `- ${device.name}${platform}: registered, offline. The user can reconnect it with \`kinu connect\``;
   }
   const live = connectedDevices(fleet);
   const mount = live.length > 1 ? `/pc/${deviceMountSegment(device, fleet)}` : '/pc';
-  const parts = [`- ${device.name}${platform}: connected — files at ${mount}`];
+  const parts = [`- ${device.name}${platform}: connected, files at ${mount}`];
   if (device.granted === true) parts.push('this workspace holds its grant');
   else if (device.granted === false) parts.push('no grant yet for this workspace: the first call asks once');
-  if (device.sandbox !== undefined) parts.push(executorSandboxSuffix({ name: 'laptop', sandbox: device.sandbox }).replace(/^ — /, ''));
+  if (device.sandbox !== undefined) parts.push(executorSandboxSuffix({ name: 'laptop', sandbox: device.sandbox }).replace(/^, /, ''));
   // The hub re-asks a machine whose answer aged out, so what arrives here is
   // fresh or null by the hub's clock — no clock is consulted in a render.
   const present = device.toolchain?.present ?? [];
   const runs = EXECUTOR_CAPABILITIES.filter((capability) => present.includes(capability));
   if (runs.length > 0) parts.push(`runs: ${runs.join(', ')}`);
-  return parts.join(' — ');
+  return parts.join(', ');
 }
 
 /** Per-list caps. The block rides every request of every step, so each roster
@@ -528,7 +528,7 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   if (memoryTail) sections.push(`## Memory (newest MEMORY.md lessons and reflections)\n${memoryTail}`);
 
   sections.push(rosterSection(
-    '## Proven by execution (the runtime watched each of these calls keep failing until a CHANGED call ran clean — evidence about this environment, not a verdict on correctness)',
+    '## Proven by execution (environment evidence: calls that kept failing until a changed call ran clean)',
     { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, MAX_RECOVERIES,
     (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
   ));
@@ -539,11 +539,11 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
       `- ${exec.name}: ${executorAvailabilityLabel(exec)}${executorMountSuffix(exec)}${executorLimitsSuffix(exec)}`
       + `${executorCapabilitySuffix(exec)}${executorUnmeasuredSuffix(exec)}${executorSandboxSuffix(exec)}`);
     // The legend rides along only when a row actually carries an unknown, so
-    // the common case pays nothing for it — and where it does appear, the model
+    // the common case pays nothing for it, and where it does appear, the model
     // needs telling that this is ignorance rather than a denial.
     const legend = rows.some((row) => row.includes(NOT_MEASURED_LABEL))
-      ? [`("${NOT_MEASURED_LABEL}" is what nobody asked that environment — it may well work, `
-        + 'so try it rather than ruling it out.)']
+      ? [`("${NOT_MEASURED_LABEL}" means nobody asked that environment. It may well work, `
+        + 'so try it before ruling it out.)']
       : [];
     sections.push([
       '## Execution status',
@@ -560,7 +560,7 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
     // one live machine needs no name; several do, and the ask says so in the
     // same words the refusal uses.
     const doctrine = live.length > 1
-      ? 'Several machines are connected: name the machine each `laptop` call and `run { runtime: "laptop" }` is for, with `device: "<name>"`. A call that names none is refused.'
+      ? 'Several machines are connected: name the machine each `laptop` call and `run { runtime: "laptop" }` is for, with `device: "<name>"`. The runtime refuses a call that names none.'
       : 'One machine is connected: `laptop` calls reach it with no `device` needed.';
     sections.push([
       '## Your user\'s machines (the `laptop` runtime)',
@@ -570,7 +570,7 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   }
 
   sections.push(rosterSection(
-    '## Your task list — what is still open (you keep this with the `tasks` tool)',
+    '## Your task list: what is still open (you keep this with the `tasks` tool)',
     ctx.tasks ?? EMPTY_ROSTER, MAX_TASK_ROWS,
     (task) => `${task.parentId ? '  - ' : '- '}${task.id} [${task.status}] ${clip(task.title)}`,
   ));
@@ -584,7 +584,7 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   sections.push(rosterSection(
     '## Delegates working for you',
     ctx.delegates ?? EMPTY_ROSTER, MAX_DELEGATES,
-    (d) => `- ${d.name} (${d.kind}) — ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}`,
+    (d) => `- ${d.name} (${d.kind}), ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}`,
   ));
 
   sections.push(rosterSection(
@@ -594,7 +594,7 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   ));
 
   sections.push(rosterSection(
-    '## Configured but NOT available this turn — plan without these, and say so if asked',
+    '## Configured but not available this turn (plan without these, and say so if asked)',
     { items: ctx.missingCapabilities ?? [], total: (ctx.missingCapabilities ?? []).length }, MAX_MISSING_CAPABILITIES,
     (m) => `- ${clip(m.source, 60)}: ${clip(m.reason)}`,
   ));

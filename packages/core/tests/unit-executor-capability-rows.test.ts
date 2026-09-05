@@ -2,7 +2,7 @@
 // makes it matter.
 //
 // The declared set is not documentation. It is rendered into the agent's own
-// execution block (`prompting/volatile-context.ts` — `— runs: …`), so it is
+// execution block (`, runs: …`), so it is
 // where the model decides to send work: a capability declared but absent routes
 // work to a machine that cannot do it, and one present but undeclared means the
 // work never goes there at all. So every test below asserts the SENTENCE THE
@@ -29,7 +29,7 @@ function routerRows(provider: ExecutorProvider) {
   return router.listExecutors();
 }
 
-/** The `— runs: …` line for one real provider, through that projection and the
+/** The `, runs: …` line for one real provider, through that projection and the
  *  real renderer. */
 function runsLine(provider: ExecutorProvider): string {
   const block = renderDynamicContextBlock({ executors: routerRows(provider) });
@@ -104,14 +104,14 @@ describe('tunneled laptop capability row', () => {
     // The device is the user's own hardware behind a consent grant they made.
     // Nothing has asked it what it holds, so none of these may be CLAIMED — an
     // over-claim sends work there and it fails on their machine.
-    const [runs, notMeasured] = line.split(' — not measured here: ');
+    const [runs, notMeasured] = line.split(', not measured here: ');
     for (const unprobed of ['javascript', 'typescript', 'python', 'npm', 'git', 'docker', 'gpu']) {
       expect(runs).not.toContain(unprobed);
     }
     // And none may be reported ABSENT either. The row that replaced this one
     // simply omitted them, which reads to the model exactly like a denial: it
     // would never try python on a machine that may well have python.
-    expect(runs).toBe('- laptop: connected — files at /pc — runs: native_binary, shell, fs_owned, net_outbound, process_spawn');
+    expect(runs).toBe('- laptop: connected, files at /pc, runs: native_binary, shell, fs_owned, net_outbound, process_spawn');
     expect(notMeasured).toBe('javascript, typescript, python, npm, git, docker, gpu');
   });
 
@@ -123,8 +123,8 @@ describe('tunneled laptop capability row', () => {
     const line = runsLine(createDeviceTunnelExecutor(probedDevice(['node', 'python3'])));
 
     expect(line).toBe(
-      '- laptop: connected — files at /pc — runs: javascript, python, native_binary, shell, fs_owned, net_outbound, process_spawn'
-      + ' — not measured here: docker, gpu',
+      '- laptop: connected, files at /pc, runs: javascript, python, native_binary, shell, fs_owned, net_outbound, process_spawn'
+      + ', not measured here: docker, gpu',
     );
   });
 
@@ -145,7 +145,7 @@ describe('tunneled laptop capability row', () => {
       executors: routerRows(createDeviceTunnelExecutor(connectedDevice)),
     });
 
-    expect(block).toContain('it may well work, so try it rather than ruling it out');
+    expect(block).toContain('It may well work, so try it before ruling it out');
   });
 
   test('declares no capability its own tool surface cannot exercise', () => {

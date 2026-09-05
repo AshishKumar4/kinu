@@ -278,8 +278,8 @@ describe('what the model is told', () => {
 
     expect(block).toContain("## Your user's machines (the `laptop` runtime)");
     expect(block).toContain('Several machines are connected: name the machine');
-    expect(block).toContain('- ashish@mac (darwin): connected — files at /pc/ashish@mac — this workspace holds its grant');
-    expect(block).toContain('- mrwhite@rig (linux): connected — files at /pc/mrwhite@rig — no grant yet for this workspace');
+    expect(block).toContain('- ashish@mac (darwin): connected, files at /pc/ashish@mac, this workspace holds its grant');
+    expect(block).toContain('- mrwhite@rig (linux): connected, files at /pc/mrwhite@rig, no grant yet for this workspace');
     // Each machine's own sandbox and toolchain, not the other's.
     expect(block).toContain('GPU: nvidia0');
     expect(block).toContain('agent home /home/mrwhite/.kinu/agents/workspace-a/home');
@@ -315,8 +315,8 @@ describe('what the model is told', () => {
     await fleet.rig.close();
     const after = await snapshot();
     expect(after).not.toBe(first);
-    expect(after).toContain('- mrwhite@rig (linux): registered, OFFLINE');
-    expect(after).toContain('- ashish@mac (darwin): connected — files at /pc —');
+    expect(after).toContain('- mrwhite@rig (linux): registered, offline');
+    expect(after).toContain('- ashish@mac (darwin): connected, files at /pc,');
     expect(after).toContain('One machine is connected');
     expect(await snapshot()).toBe(after);
     await fleet.end();
