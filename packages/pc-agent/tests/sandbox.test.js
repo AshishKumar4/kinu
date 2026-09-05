@@ -230,6 +230,46 @@ describe('the device sandbox, as the kernel enforces it', () => {
     }
   });
 
+  test('a shim in ~/.local/bin answers sandboxed, because that is the PATH the plan builds', () => {
+    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+    // The first-run tier tells its machines apart with a `hostname` shim, and
+    // the shim has to sit where a sandboxed command looks: the plan rebuilds
+    // PATH from `LINUX_PATH_HEAD` (`~/.local/bin` first) and drops the
+    // daemon's own PATH, so a shim in `~/bin` never runs and `hostname`
+    // answers the real host (measured 2026-09-05). This pins the directory
+    // the tier may use, in the layout the tier runs: a scratch HOME the
+    // machine consented, like each first-run daemon's own.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-shim-home-'));
+    const agentHome = path.join(home, '.kinu', 'agents', 'ws', 'home');
+    const agentTmp = path.join(home, '.kinu', 'agents', 'ws', 'tmp');
+    for (const dir of [agentHome, agentTmp]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const shimDir = path.join(home, '.local', 'bin');
+    fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(shimDir, 'hostname'),
+      '#!/usr/bin/env bash\nprintf \'%s\\n\' kinu-first-run-alpha\n', { mode: 0o700 });
+    try {
+      const plan = sandbox.plan({
+        tier: 'sandboxed', home, agentHome, agentTmp,
+        deviceHome: path.join(home, '.kinu'), roots: [home],
+        cwd: agentHome, command: 'hostname', source: {},
+      });
+      let pathValue = null;
+      for (let i = 0; i < plan.argv.length - 2; i++) {
+        if (plan.argv[i] === '--setenv' && plan.argv[i + 1] === 'PATH') pathValue = plan.argv[i + 2];
+      }
+      expect(pathValue).not.toBeNull();
+      const entries = String(pathValue).split(':');
+      expect(entries[0]).toBe(path.join(home, '.local', 'bin'));
+      expect(entries).not.toContain(path.join(home, 'bin'));
+      const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
+      expect(run.status).toBe(0);
+      expect(String(run.stdout).trim()).toBe('kinu-first-run-alpha');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+
   test('the daemon\'s own probe passes with HOME under /tmp, as the first-run tier runs it', () => {
     if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
     // A CHILD process, not an in-process `process.env.HOME` swap: Bun's

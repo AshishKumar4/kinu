@@ -26,10 +26,13 @@
  *             <alpha>. The reply carries ALPHA's answer, alpha's exec log holds
  *             the call, and BETA'S EXEC LOG IS EMPTY. The last clause is the
  *             defect: a run that answered from beta, or from both, is red.
- *   unnamed   ask for `hostname` with no machine named. With two live machines
- *             the executor must refuse and ASK — naming both machines — rather
- *             than picking one. A silent pick is the original bug wearing a
- *             different hat, and it is red here even though it "works".
+  *   unnamed   ask for `hostname` with no machine named, FIRST, before any
+  *             answer sits in context — a recalled answer never reaches the
+  *             executor, which is what this half probes. With two live
+  *             machines the executor must refuse and ASK — naming both
+  *             machines — rather than picking one. A silent pick is the
+  *             original bug wearing a different hat, and it is red here even
+  *             though it "works".
  */
 import { afterAll, describe, test } from 'vitest';
 
@@ -95,6 +98,28 @@ describe(SUITE, () => {
               + 'anything');
           }
 
+          // ── unnamed, FIRST ──────────────────────────────────────────
+          // Before any answer sits in context: a recalled `hostname` never
+          // reaches the executor, which is what this half probes — and trying
+          // each machine in turn bypasses it the same way (measured
+          // 2026-09-05: seven recalls, then a fan-out that ran beta and left
+          // alpha behind a consent prompt). The trailing sentence closes the
+          // fan-out hatch; the executor's own refusal names both machines, so
+          // a model that asks on its own cannot reach both names any other way.
+          const unnamed = await session.prompt(
+            'Run hostname on my laptop and reply with exactly what it printed. '
+            + 'Do not run it on more than one machine: if my words do not settle which one, '
+            + 'ask me which one.',
+          );
+          const unnamedReply = await lastAnswer(session, unnamed.text);
+          // The ask the executor is required to raise, by its own words
+          // (`deviceFleetAsk`): both machines named, so the person or the model
+          // can choose. Matched on the two NAMES rather than on the sentence:
+          // the wording is the product's to change, the naming is the contract.
+          const bothOffered = unnamedReply.includes(ALPHA) && unnamedReply.includes(BETA);
+          const alphaLogAfterUnnamed = alpha.execLog();
+          const betaLogAfterUnnamed = beta.execLog();
+
           // ── named ───────────────────────────────────────────────────
           // Plain words. The prompt names the MACHINE and the COMMAND, and
           // nothing about how the tool takes a device: writing `device:` here
@@ -107,18 +132,22 @@ describe(SUITE, () => {
           const alphaLog = alpha.execLog();
           const betaLog = beta.execLog();
 
-          // ── unnamed ─────────────────────────────────────────────────
-          const unnamed = await session.prompt(
-            'Now run hostname on my laptop and reply with exactly what it printed.',
-          );
-          const unnamedReply = await lastAnswer(session, unnamed.text);
-          // The ask the executor is required to raise, by its own words
-          // (`deviceFleetAsk`): both machines named, so the person or the model
-          // can choose. Matched on the two NAMES rather than on the sentence:
-          // the wording is the product's to change, the naming is the contract.
-          const bothOffered = unnamedReply.includes(ALPHA) && unnamedReply.includes(BETA);
-
           return [
+            {
+              what: 'unnamed-call-asks',
+              reached: bothOffered,
+              detail: bothOffered
+                ? 'the unnamed call was refused with both machines named'
+                : 'an unnamed call did NOT ask which machine — with two live machines the '
+                  + `executor picked one silently, or said nothing about either: `
+                  + JSON.stringify(unnamedReply.slice(0, 240)),
+            },
+            {
+              what: 'unnamed-call-ran-nothing-new',
+              reached: alphaLogAfterUnnamed.length === 0 && betaLogAfterUnnamed.length === 0,
+              detail: `after the unnamed ask: ${ALPHA} ${String(alphaLogAfterUnnamed.length)} call(s), `
+                + `${BETA} ${String(betaLogAfterUnnamed.length)} call(s)`,
+            },
             {
               what: 'named-machine-answered',
               reached: namedReply.includes(ALPHA) && !namedReply.includes(BETA),
@@ -138,21 +167,6 @@ describe(SUITE, () => {
                 ? `${BETA} ran nothing, which is what naming the other machine has to mean`
                 : `${BETA} RAN THE COMMAND TOO — a call named for ${ALPHA} reached both machines: `
                   + JSON.stringify(betaLog),
-            },
-            {
-              what: 'unnamed-call-asks',
-              reached: bothOffered,
-              detail: bothOffered
-                ? 'the unnamed call was refused with both machines named'
-                : 'an unnamed call did NOT ask which machine — with two live machines the '
-                  + `executor picked one silently, or said nothing about either: `
-                  + JSON.stringify(unnamedReply.slice(0, 240)),
-            },
-            {
-              what: 'unnamed-call-ran-nothing-new',
-              reached: alpha.execLog().length === 1 && beta.execLog().length === 0,
-              detail: `after the unnamed ask: ${ALPHA} ${String(alpha.execLog().length)} call(s), `
-                + `${BETA} ${String(beta.execLog().length)} call(s)`,
             },
           ] satisfies FirstRunSubgoal[];
         },

@@ -97,7 +97,12 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
     () => registerCloudDevice(account.origin, account.cliToken, name),
   );
 
-  const binDir = join(home, 'bin');
+  // `~/.local/bin`, not `~/bin`: a sandboxed command's PATH is rebuilt by the
+  // daemon's plan (`LINUX_PATH_HEAD` in `packages/pc-agent/src/sandbox.js`),
+  // and `~/.local/bin` is its first entry; `~/bin` is on no tier's PATH but
+  // this fixture's own. Measured 2026-09-05 with the pc-agent harness: a shim
+  // in `~/bin` never runs sandboxed and `hostname` answers the real host.
+  const binDir = join(home, '.local', 'bin');
   const execLogPath = join(home, 'exec.log');
   mkdirSync(binDir, { recursive: true, mode: 0o700 });
   mkdirSync(join(home, 'agents'), { recursive: true, mode: 0o700 });
