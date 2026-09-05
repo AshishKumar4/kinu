@@ -42,6 +42,15 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
     expect(out.logs).toEqual(['42']);
   });
 
+  // The shared description tells the model the Node builtins and `require`
+  // are the machine's own, and its example is `require('fs/promises')`. Red on
+  // 2026-09-05: a `new Function` body sees no module scope and Bun has no
+  // `require` global, so the example answered a bare ReferenceError.
+  test('require resolves the Node builtins inside the sandbox', async () => {
+    const out = await makeTool()({ code: 'const path = require("node:path");\nreturn path.join("a", "b");' });
+    expect(out).toEqual({ result: 'a/b' });
+  });
+
   test('a throw still surfaces the console output produced before it', async () => {
     const out = await makeTool()({ code: 'console.log("before");\nthrow new Error("boom");' });
     expect(out.error).toContain('boom');

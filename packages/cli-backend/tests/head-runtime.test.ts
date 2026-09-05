@@ -640,6 +640,50 @@ describe('a head reports the files IT changed, with concurrent siblings on the s
   });
 });
 
+describe("a head's execute_tools holds the namespaces the shared description promises", () => {
+  // The description every backend renders promises `state.set`/`state.get` to
+  // every program. Red on 2026-09-05: the CLI head bound web and llm only, so a
+  // fork program calling `state.set` answered a bare ReferenceError while the
+  // same program on a hosted head ran.
+  test('state.set and state.get work inside a local head, over its own scratch', async () => {
+    const journal = makeJournal();
+    let step = 0;
+    const model = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'fake-state',
+      doGenerate: async () => {
+        step += 1;
+        const content = step === 1
+          ? [{
+            type: 'tool-call' as const, toolCallId: 'state-1', toolName: 'execute_tools',
+            input: JSON.stringify({
+              code: '// Keep a marker between programs\nawait state.set("marker", "kept");\nreturn await state.get("marker");',
+            }),
+          }]
+          : [{ type: 'text' as const, text: 'done' }];
+        return {
+          content,
+          finishReason: step === 1 ? 'tool-calls' as const : 'stop' as const,
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          response: { id: 'r', modelId: 'fake-state', timestamp: new Date(0) },
+          warnings: [],
+        };
+      },
+    });
+    const runtime = createCLIHeadRuntime(headDeps(model, { journal: () => journal }));
+    const input = aHeadInput({ id: 'stateful', task: 'stateful' });
+    journal.insertSpawn(input);
+    await (await runtime.spawnHead(input)).run();
+
+    const outputs = journal.readSteps('stateful')
+      .flatMap((s) => s.toolCalls)
+      .filter((c) => c.name === 'execute_tools')
+      .map((c) => JSON.stringify(c.output ?? ''));
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]).toContain('kept');
+    expect(outputs[0]).not.toContain('ReferenceError');
+  });
+});
+
 describe('createCLIHeadRuntime — the mission ledger', () => {
   // A local head runs in the same process as the ledger, so its port is the
   // governor itself. The invariant is the same on both backends: labels or

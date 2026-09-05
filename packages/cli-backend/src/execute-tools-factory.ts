@@ -35,6 +35,7 @@ import {
   renderExecuteToolsDescription, renderToolsDeclaration,
 } from '@kinu.run/core';
 import { tool, jsonSchema } from 'ai';
+import { createRequire } from 'node:module';
 import { addImplicitReturn } from './executor';
 import * as v from 'valibot';
 
@@ -43,11 +44,15 @@ export interface NodeExecuteToolFactoryDeps {
 }
 
 /** The sandbox parameters this factory always binds, in order: the workspace
- *  namespace, the tool record under its one callable name, and the capturing
- *  console. A provider may not take any of them. */
+ *  namespace, the tool record under its one callable name, the capturing
+ *  console, and the machine's own `require`. A provider may not take any of
+ *  them. `require` is bound explicitly because a `new Function` body sees no
+ *  module scope and Bun defines no `require` global, while the shared
+ *  description promises it (SANDBOX_FACTS.local in core's registry). */
 const FIXED_NAMESPACES: readonly string[] = [
-  'workspace', CRAFTED_TOOL_NAMESPACE, 'console',
+  'workspace', CRAFTED_TOOL_NAMESPACE, 'console', 'require',
 ];
+const machineRequire = createRequire(import.meta.url);
 const abortOptionsSchema = v.object({ abortSignal: v.optional(v.instance(AbortSignal)) });
 
 type CodemodeExecute = CodemodeProvider['tools'][string]['execute'];
@@ -149,7 +154,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           const extraNamespaces = Object.keys(providerBindings).filter(n => !FIXED_NAMESPACES.includes(n));
           const argNames = [...FIXED_NAMESPACES, ...extraNamespaces];
           const argValues: object[] = [
-            workspace, toolBindings, sandboxConsole,
+            workspace, toolBindings, sandboxConsole, machineRequire,
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 

@@ -21,6 +21,7 @@ import {
   type HeadMergeModelBinder, type ResolvedTurnProfile,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
   HeadCapture, runHeadInference, buildHeadToolSet, HeadController, HeadJournal, initHeadsTables,
+  createStateCodemodeProvider,
   headMergeLLM,
   localMissionScope,
 } from '@kinu.run/core';
@@ -193,11 +194,16 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
       writeObserver: capture.files,
     });
     // execute_tools over the head's OWN router providers (private `workspace.*`
-    // + the parent's real `laptop.*`) plus the web/llm codemode namespaces. A
-    // function of the finished head surface, the shape buildHeadToolSet
+    // + the parent's real `laptop.*`) plus the web/llm codemode namespaces and
+    // `state.*` over the head's own scratch, the table initActorTables created:
+    // the shared description promises `state.set`/`state.get` to every
+    // program, and the hosted head binds the same provider over its facet's
+    // SQL. A function of the finished head surface, the shape buildHeadToolSet
     // resolves after its own filtering, so `tools.<name>` declares and binds
     // exactly the tools this head holds.
-    const sandbox = createNodeExecuteToolFactory({ extraProviders: deps.codemodeExtras() });
+    const sandbox = createNodeExecuteToolFactory({
+      extraProviders: [...deps.codemodeExtras(), createStateCodemodeProvider(rt.storage.sql)],
+    });
     const executeTool = (finished: ToolSet) => sandbox({
       native: finished,
       // A head's CraftStore is a throwaway in-memory fork: no crafted tools.
