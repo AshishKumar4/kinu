@@ -3644,7 +3644,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
           journalProcess: processes.some(
             (process) => process.command.includes(CANDIDATE_JOURNAL_BINARY) && isProcessLive(process.status),
           ),
-          journalSocket: socket.exitCode === 0,
+          // THE WORDS, NOT THE EXIT: the probe ends in `|| echo no`, so the
+          // exit is 0 with the socket absent too, and an exit-code read calls
+          // a lost socket healthy for ever. The store probe above has no echo
+          // and means its exit; this one speaks on stdout.
+          journalSocket: socket.stdout.trim() === 'yes',
           journalMounted: journalMount?.fstype.includes('fuse') === true,
         };
       },

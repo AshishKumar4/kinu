@@ -126,6 +126,12 @@ function quotedWords(command: string): string[] {
   }
   return words;
 }
+/** The single-quoted path segments of a composed shell command, in order. The
+ *  chain's builders quote every path with `shellPath`, so the segments name
+ *  the mount points, sources and targets without re-parsing shell syntax. */
+function quotedSegments(command: string): string[] {
+  return [...command.matchAll(/'([^']+)'/g)].map((match) => match[1] ?? '');
+}
 
 export interface StartRecord {
   readonly command: string;
@@ -472,6 +478,12 @@ export class FakeSandbox {
    *  daemon that starts and never serves, which is the only reason the
    *  readiness probe exists. */
   journalMounts = true;
+  /** Does the journal daemon's control socket answer? False is the socket lost
+   *  while its daemon still runs and its mount still stands: the process table
+   *  and `/proc/mounts` both read healthy, and only the socket probe can see
+   *  it. A fresh daemon brings a fresh socket, so a daemon start sets this
+   *  back. True unless a test says otherwise, so no existing flow changes. */
+  journalSocketUp = true;
   /**
    * THE CANDIDATE RUNNER, as the container runs it. The box starts `bun
    * <runner> --action … --result <path>` as a supervised process, waits for
@@ -491,6 +503,39 @@ export class FakeSandbox {
    *  the same bytes to the runner's journal model; unset, the file write is
    *  still kept in {@link files}. */
   fileWritten: ((path: string, content: string) => Promise<void> | void) | undefined;
+  /**
+   * Overlay mounts this container serves, by work directory. Recorded when the
+   * box's own `fuse-overlayfs` command runs and reported back through
+   * `cat /proc/mounts`, which is what `isOverlayMounted` reads. A stop clears
+   * them: FUSE dies with the container while the disk survives, so a wake
+   * re-mounts what the record names.
+   */
+  readonly overlayMounts = new Set<string>();
+  /**
+   * Squashfs layer mount points this container serves. Recorded when the box's
+   * own `squashfuse` command runs, read back the same way, cleared by a stop
+   * for the same reason as the overlay above.
+   */
+  readonly layerMounts = new Set<string>();
+  /**
+   * The chain store this container publishes through, set by snapshot-chain
+   * tests: the bucket objects the box's `objectFacts` reads and the root
+   * `chainStoreRoot` derives, so a `dd` through the store mount lands where
+   * the next attach looks. Unset, no chain command reaches the store.
+   */
+  chainStore: { readonly objects: Map<string, Uint8Array>; readonly root: string } | undefined;
+  /**
+   * Staged archives by container path: what the box's own `mksquashfs`
+   * command measured, which the later `dd` of that same path publishes. Kept
+   * across a stop the way the staged file on the disk is.
+   */
+  readonly stagedArchives = new Map<string, Uint8Array>();
+  /**
+   * The retained change counter `checkChanges` answers with. Bumped by every
+   * SDK file write, which is what the real watcher observes; a version a
+   * caller holds still matches until such a write.
+   */
+  changeVersion = 0;
 
   /** Is a journal daemon process live? The fake's process table IS the
    *  container's, so this is the same fact the daemon's own supervisor reads
@@ -623,6 +668,16 @@ export class FakeSandbox {
         ...(this.journalRunning() && this.journalMounts
           ? ['kinu-journal /workspace fuse.kinu-journal rw,nosuid,nodev,relatime 0 0']
           : []),
+        // The overlay and layer mounts the box's own fuse commands established,
+        // present exactly until a stop takes the FUSE daemons down. `findMount`
+        // reads the mount point field and `isOverlayMounted` the fstype, so the
+        // fstype carries the mechanism the way the container reports it.
+        ...[...this.overlayMounts].map(
+          (path) => `fuse-overlayfs ${path} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
+        ),
+        ...[...this.layerMounts].map(
+          (path) => `squashfuse ${path} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`,
+        ),
       ];
       return { stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 };
     }
@@ -638,6 +693,14 @@ export class FakeSandbox {
       // the one `mountBucket` created beside its mount.
       return { stdout: 'yes', stderr: '', exitCode: 0 };
     }
+    // THE JOURNAL SOCKET PROBE, answered the way the container answers it:
+    // the words on stdout, with the exit code the `|| echo no` guarantees.
+    // Readers must take the WORDS: the exit is 0 either way, so an exit-code
+    // read cannot see a lost socket.
+    if (command.startsWith('test -S ')) {
+      const serving = this.journalRunning() && this.journalMounts && this.journalSocketUp;
+      return { stdout: serving ? 'yes\n' : 'no\n', stderr: '', exitCode: 0 };
+    }
     // THE RUNNER RESULT'S RETIREMENT: `rm -f '<reply>'` after one attempt and
     // `rm -rf '<dir>'` when the candidate is discarded. Answered against the
     // file table the runner writes into, so a reply the box retired cannot be
@@ -647,6 +710,18 @@ export class FakeSandbox {
       const target = removed[1] ?? '';
       for (const path of this.files.keys()) {
         if (path === target || path.startsWith(`${target}/`)) this.files.delete(path);
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    // A `rm -rf` of several directories at once, which is how the chain's
+    // `resetDirs` empties the upper and the stage: every quoted path loses its
+    // subtree, the way the removal really deletes. `rm -rf` of nothing absent
+    // is still success.
+    if (command.startsWith('rm -rf ')) {
+      for (const target of quotedSegments(command)) {
+        for (const path of this.files.keys()) {
+          if (path === target || path.startsWith(`${target}/`)) this.files.delete(path);
+        }
       }
       return { stdout: '', stderr: '', exitCode: 0 };
     }
@@ -731,6 +806,79 @@ export class FakeSandbox {
         stderr: '',
         exitCode: 0,
       };
+    }
+    // THE SNAPSHOT-CHAIN COMMANDS, answered the way the container answers
+    // them: a FUSE mount is a mount `/proc/mounts` reports, an archive build
+    // reports `<exit> <bytes>` for the bytes it staged, and a publish through
+    // the store mount lands those bytes under the object key the box's
+    // `objectFacts` reads back. Matched on the binary each command runs, the
+    // one part of the template the strategy's own builders own.
+    if (command.includes('/usr/bin/fuse-overlayfs')) {
+      const quoted = quotedSegments(command);
+      const target = quoted.at(-1);
+      if (target !== undefined) this.overlayMounts.add(target);
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    if (command.includes('/usr/bin/squashfuse')) {
+      const quoted = quotedSegments(command);
+      const mountPoint = quoted.at(-1);
+      if (mountPoint !== undefined) this.layerMounts.add(mountPoint);
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    if (command.includes('/usr/bin/mksquashfs')) {
+      const tail = command.slice(command.indexOf('/usr/bin/mksquashfs'));
+      const quoted = quotedSegments(tail);
+      const sourceDir = quoted[0];
+      const archivePath = quoted[1];
+      if (sourceDir === undefined || archivePath === undefined) {
+        throw new Error(`the archiver command names no source and target: ${command}`);
+      }
+      const bytes = this.synthesizeArchive(sourceDir);
+      this.stagedArchives.set(archivePath, bytes);
+      return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
+    }
+    if (command.includes('conv=fsync')) {
+      const archivePath = /if='([^']+)'/.exec(command)?.[1];
+      const mountedPath = /of='([^']+)'/.exec(command)?.[1];
+      const store = this.chainStore;
+      if (archivePath === undefined || mountedPath === undefined || store === undefined) {
+        throw new Error(`the publish command names no archive, target or store: ${command}`);
+      }
+      const bytes = this.stagedArchives.get(archivePath);
+      if (bytes === undefined) throw new Error(`the publish reads an archive nothing staged: ${archivePath}`);
+      // The store mount exposes the chain root: the shipped `mountedLayerPath`
+      // joins the fixed `/backups` mount and the key relative to that root, so
+      // the same join here cannot drift from it without failing loudly below.
+      const relative = mountedPath.startsWith('/backups/')
+        ? mountedPath.slice('/backups/'.length)
+        : undefined;
+      if (relative === undefined) throw new Error(`the publish target is outside the store mount: ${mountedPath}`);
+      store.objects.set(`${store.root}/${relative}`, bytes.slice());
+      return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
+    }
+    // THE UPPER FINGERPRINT: a hash of what the changed set holds, so an
+    // unchanged upper skips the commit the way the container's own walk
+    // decides. Content-hashed rather than metadata-hashed: this stand-in
+    // keeps no inodes or times, and a fingerprint that moved without a byte
+    // changing would commit where the box skips.
+    if (command.startsWith('bash -o pipefail -c ') && command.includes('/var/tmp/devbox/upper')) {
+      // The shipped caller fingerprints exactly one directory, the overlay
+      // upper, and nests its quoting inside another quoted command, so the
+      // path is matched rather than parsed out of the quoting.
+      return { stdout: sha256Hex(this.synthesizeArchive('/var/tmp/devbox/upper')), stderr: '', exitCode: 0 };
+    }
+    if (command.includes('then seen=1; break; fi')) {
+      // The layer-visibility probe: `ready` exactly when the store holds the
+      // object, which is what a re-list through the mount would find.
+      const seen = /test -e '([^']+)'/.exec(command)?.[1];
+      const store = this.chainStore;
+      const relative = seen?.startsWith('/backups/') === true ? seen.slice('/backups/'.length) : undefined;
+      const held = relative !== undefined && store?.objects.has(`${store.root}/${relative}`) === true;
+      if (held) return { stdout: 'ready', stderr: '', exitCode: 0 };
+      const holds = store === undefined
+        ? ''
+        : [...store.objects.keys()].filter((key) => key.startsWith(`${store.root}/`)).join(' ');
+      return { stdout: `missing ${holds}`.trimEnd(), stderr: '', exitCode: 0 };
     }
     return { stdout: '', stderr: '', exitCode: 0 };
   }
@@ -818,6 +966,9 @@ export class FakeSandbox {
       id, pid: 1_000 + this.processes.size, status: 'running', command,
     };
     this.processes.set(id, row);
+    // A fresh journal daemon brings a fresh control socket, the way the mount
+    // line and the readiness probe already treat a fresh daemon as serving.
+    if (command.includes('kinu-journal-daemon')) this.journalSocketUp = true;
     if (fault !== undefined) throw fault.error;
     const argv = quotedWords(command);
     const action = runnerOption(argv, 'action');
@@ -851,11 +1002,97 @@ export class FakeSandbox {
   /** One file write through the SDK boundary. The tests drive text because
    *  the candidate journal model's byte semantics live in its own suite; this
    *  stand-in keeps the bytes at the path and tells an installed candidate
-   *  runner that a workload mutation occurred. */
+   *  runner that a workload mutation occurred. A write under the work
+   *  directory also lands in the overlay upper, which is where an overlayfs
+   *  write really goes and what the chain's delta archiver walks. */
   async writeFile(path: string, content: string): Promise<{ success: true; path: string; timestamp: string }> {
     this.files.set(path, content);
+    this.changeVersion += 1;
+    if (path.startsWith('/workspace/')) {
+      this.files.set(`/var/tmp/devbox/upper/${path.slice('/workspace/'.length)}`, content);
+    }
     await this.fileWritten?.(path, content);
     return { success: true, path, timestamp: new Date().toISOString() };
+  }
+
+  /**
+   * The retained change state the SDK keeps per watched directory: the
+   * version a caller holds still matches until a write moves it. A first call
+   * with no version establishes the baseline the way the SDK does.
+   */
+  async checkChanges(
+    _path: string,
+    options?: { readonly since?: string },
+  ): Promise<{ success: true; status: 'unchanged' | 'changed'; version: string; timestamp: string }> {
+    const version = `v${String(this.changeVersion)}`;
+    const status = options?.since === undefined || options.since === version ? 'unchanged' : 'changed';
+    return { success: true, status, version, timestamp: new Date().toISOString() };
+  }
+
+  /** The files this container holds under one directory, as the SDK lists
+   *  them. The chain's emptiness gates read only the count. */
+  async listFiles(
+    path: string,
+    _options?: { readonly recursive?: boolean },
+  ): Promise<{
+    readonly success: true;
+    readonly path: string;
+    readonly files: readonly {
+      readonly name: string;
+      readonly absolutePath: string;
+      readonly relativePath: string;
+      readonly type: 'file';
+      readonly size: number;
+      readonly modifiedAt: string;
+      readonly mode: string;
+      readonly permissions: { readonly readable: true; readonly writable: true; readonly executable: false };
+    }[];
+    readonly count: number;
+    readonly timestamp: string;
+  }> {
+    const prefix = path.endsWith('/') ? path : `${path}/`;
+    const now = new Date().toISOString();
+    const files = [...this.files.entries()]
+      .filter(([entry]) => entry.startsWith(prefix))
+      .map(([absolutePath, content]) => ({
+        name: absolutePath.slice(prefix.length).split('/').at(-1) ?? absolutePath,
+        absolutePath,
+        relativePath: absolutePath.slice(prefix.length),
+        type: 'file' as const,
+        size: content.length,
+        modifiedAt: now,
+        mode: '644',
+        permissions: { readable: true as const, writable: true as const, executable: false as const },
+      }));
+    return { success: true, path, files, count: files.length, timestamp: now };
+  }
+
+  /**
+   * The bytes an archive of one container directory would hold: every file
+   * under it, sorted by path, each as its path, length and content. A
+   * stand-in for squashfs bytes, deterministic in the content, so two builds
+   * over unchanged files measure identically and any workload write changes
+   * the measure. The workload files match none of `CHAIN_EXCLUDES`, so the
+   * exclusion pass the real archiver applies is inert here.
+   */
+  synthesizeArchive(sourceDir: string): Uint8Array {
+    const prefix = sourceDir.endsWith('/') ? sourceDir : `${sourceDir}/`;
+    const entries = [...this.files.entries()]
+      .filter(([entry]) => entry.startsWith(prefix))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+    const encoded = new TextEncoder();
+    const parts: Uint8Array[] = [];
+    for (const [entry, content] of entries) {
+      parts.push(encoded.encode(`${entry} ${String(content.length)} `), encoded.encode(content));
+    }
+    const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
+    const out = new Uint8Array(total);
+    let at = 0;
+    for (const part of parts) {
+      out.set(part, at);
+      at += part.byteLength;
+    }
+    return out;
   }
 
   /**
@@ -1006,6 +1243,13 @@ export class FakeSandbox {
     this.stops += 1;
     this.running.running = false;
     this.processes.clear();
+    // The FUSE daemons go with the processes: the overlay and the layer
+    // mounts they served are gone on the next start, while the disk — files,
+    // directories, the boot marker, the staged archives — survives. The
+    // SDK-registry store mounts stay listed the way the patched SDK leaves
+    // them, for the next attach to adopt or replace.
+    this.overlayMounts.clear();
+    this.layerMounts.clear();
     return Promise.resolve();
   }
 
