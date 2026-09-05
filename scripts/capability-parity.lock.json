@@ -92,7 +92,6 @@
   "movable packages/cf-backend/src/lib/preview-exposures.ts",
   "movable packages/cf-backend/src/lib/preview-origin.ts",
   "movable packages/cf-backend/src/lib/preview-ports.ts",
-  "movable packages/cf-backend/src/lib/preview-request.ts",
   "movable packages/cf-backend/src/lib/protocol.ts",
   "movable packages/cf-backend/src/lib/public-pages.ts",
   "movable packages/cf-backend/src/lib/public-shell.ts",

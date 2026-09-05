@@ -21,7 +21,9 @@ import {
   previewHostSuffix,
 } from '../src/lib/preview-origin';
 import { appDocumentCsp, publicHtmlHeaders, withAppSecurityHeaders } from '../src/lib/security-headers';
-import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, crossSiteRejection } from '../src/auth/session';
+import {
+  CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, crossSiteRejection,
+} from '../src/auth/session';
 import {
   handleNimbusPreviewHostRequest,
   nimbusPreviewConfigured,
@@ -340,10 +342,10 @@ describe('serving the preview host', () => {
         cookie: [
           `${SESSION_COOKIE_NAME}=owner`,
           'guest_session=guest',
-          '__Host-kinu_d1_bookmark=bookmark',
+          `${CLI_APPROVAL_CSRF_COOKIE_NAME}=csrf`,
           `${OAUTH_STATE_COOKIE_NAME}=handoff`,
         ].join('; '),
-        authorization: `Bearer pdt_${'a'.repeat(32)}`,
+        authorization: `Bearer ptc_${OWNER}_${'a'.repeat(44)}`,
         'proxy-authorization': 'Basic c2VjcmV0',
         'x-kinu-user-id': OWNER,
         'x-kinu-auth-scope': 'owner',
@@ -569,10 +571,10 @@ describe('serving a Nimbus preview host', () => {
         cookie: [
           `${SESSION_COOKIE_NAME}=owner`,
           'guest_session=guest',
-          '__Host-kinu_d1_bookmark=bookmark',
+          `${CLI_APPROVAL_CSRF_COOKIE_NAME}=csrf`,
           `${OAUTH_STATE_COOKIE_NAME}=handoff`,
         ].join('; '),
-        authorization: ['Bearer pta_', '0123456789abcdef0123456789abcdef_secret'].join(''),
+        authorization: `Bearer pta_${OWNER}_${'b'.repeat(44)}`,
         'proxy-authorization': 'Basic c2VjcmV0',
         'x-kinu-user-id': OWNER,
         'x-guest-header': 'kept',
@@ -626,7 +628,7 @@ describe('serving a Nimbus preview host', () => {
     expect(routed.headers.get('authorization')).toBe('Bearer guest-token');
   });
 
-  test('strips Kinu device bearer auth before forwarding to a guest app', async () => {
+  test('strips a CLI session bearer before forwarding to a guest app', async () => {
     let forwarded: Request | null = null;
     const env = testEnv({
       ...ENV,
@@ -642,8 +644,11 @@ describe('serving a Nimbus preview host', () => {
         },
       },
     });
+    // The other token kind the CLI authenticator routes; the POST case above
+    // carries the scoped `pta_` kind. A device token is not a bearer format
+    // and has no case here: the daemon presents it in a request body.
     const response = await handleNimbusPreviewHostRequest(new Request(`${NIMBUS_URL}private`, {
-      headers: { authorization: `Bearer pdt_${'a'.repeat(32)}` },
+      headers: { authorization: `Bearer ptc_${OWNER}_${'c'.repeat(44)}` },
     }), env);
     if (!response || !forwarded) throw new Error('Nimbus request was not forwarded');
     expect(response.status).toBe(204);

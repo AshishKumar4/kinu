@@ -27,6 +27,27 @@ export const SESSION_COOKIE_NAME = '__Host-kinu_session';
  *  victim's browser is signed in as the attacker. */
 export const OAUTH_STATE_COOKIE_NAME = '__Host-kinu_oauth_state';
 
+/** The cookie the CLI approval page sets so its POST can only come from the
+ *  page a signed-in browser was shown (`cli/routes.ts`). Path-scoped to that
+ *  page and short-lived; still a cookie this app writes. */
+export const CLI_APPROVAL_CSRF_COOKIE_NAME = 'kinu_cli_auth_csrf';
+
+/**
+ * Every cookie this app sets, and the one place that says so.
+ *
+ * The preview edge strips exactly this set before a request crosses into
+ * agent-controlled guest code (`lib/preview-request.ts`), and it strips it by
+ * importing this set rather than by keeping a copy. So a cookie is registered
+ * here when its name is declared, above, and not in a second list somewhere
+ * else: the copy that used to live beside the sanitizer had drifted in both
+ * directions, stripping a name no setter wrote and missing one a setter did.
+ */
+export const KINU_COOKIE_NAMES: readonly string[] = [
+  SESSION_COOKIE_NAME,
+  OAUTH_STATE_COOKIE_NAME,
+  CLI_APPROVAL_CSRF_COOKIE_NAME,
+];
+
 export interface AuthIdentity {
   /** Stable Kinu user id. */
   userId: string;

@@ -1,6 +1,8 @@
 import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, USER_AI_PROXY_PATH, timingSafeEqual, type JsonValue } from '@kinu.run/core';
 import type { AuthIdentity } from '../auth/session';
-import { AuthError, authenticateRequest, isFreshAuthTime } from '../auth/session';
+import {
+  AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime,
+} from '../auth/session';
 import { publicHtmlHeaders } from '../lib/security-headers';
 import { approvalDocument, installDocument } from '../lib/public-pages';
 import {
@@ -499,7 +501,7 @@ async function approveFromBrowser(request: Request, env: Env): Promise<Response>
   }
   const code = String(form.get('userCode') ?? '');
   const csrf = String(form.get('csrf') ?? '');
-  const cookieCsrf = readCookie(request, 'kinu_cli_auth_csrf');
+  const cookieCsrf = readCookie(request, CLI_APPROVAL_CSRF_COOKIE_NAME);
   if (!csrf || !cookieCsrf || !timingSafeEqual(csrf, cookieCsrf)) {
     return html('Kinu CLI Auth', '<p>Invalid or expired approval session. Refresh the approval page and try again.</p>', 403);
   }
@@ -908,11 +910,11 @@ function toError<Thrown>(thrown: Thrown): Error {
 }
 
 function csrfCookie(value: string): string {
-  return `kinu_cli_auth_csrf=${value}; Path=/cli/auth; Max-Age=600; HttpOnly; Secure; SameSite=Strict`;
+  return `${CLI_APPROVAL_CSRF_COOKIE_NAME}=${value}; Path=/cli/auth; Max-Age=600; HttpOnly; Secure; SameSite=Strict`;
 }
 
 function clearCsrfCookie(): string {
-  return 'kinu_cli_auth_csrf=; Path=/cli/auth; Max-Age=0; HttpOnly; Secure; SameSite=Strict';
+  return `${CLI_APPROVAL_CSRF_COOKIE_NAME}=; Path=/cli/auth; Max-Age=0; HttpOnly; Secure; SameSite=Strict`;
 }
 
 function readCookie(request: Request, name: string): string | null {

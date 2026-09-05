@@ -130,10 +130,10 @@ reconstruction and are restored before routing.
 The preview edge:
 
 - routes preview hosts before the application and auth router;
-- strips every cookie the Kinu app sets (`__Host-kinu_session`,
-  `__Host-kinu_oauth_state`, `__Host-kinu_d1_bookmark`),
-  `pta_`/`ptc_`/`pdt_` bearer tokens, proxy credentials, and every
-  `x-kinu-*` header before guest code receives the request
+- strips every cookie the Kinu app sets, read from the registry in
+  `auth/session.ts` (`KINU_COOKIE_NAMES`), every bearer the CLI authenticator
+  would route (`parseCliBearer` in `cli/auth-store.ts`), proxy credentials,
+  and every `x-kinu-*` header before guest code receives the request
   (`lib/preview-request.ts`);
 - preserves guest-owned cookies and any other HTTP Authorization value;
 - forwards HTTP bodies with the Worker stream contract;

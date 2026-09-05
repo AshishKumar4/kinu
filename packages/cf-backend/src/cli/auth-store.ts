@@ -117,10 +117,15 @@ export type CliTokenAuth =
   | { ok: true; identity: CliTokenIdentity }
   | { ok: false; error: string };
 
-export function readBearer(request: Request): string | null {
-  const header = request.headers.get('authorization') ?? '';
-  const match = /^Bearer\s+(.+)$/i.exec(header);
+/** The token a request presents as a bearer, or null when it presents none.
+ *  `readBearer` is the same read from a Request. */
+export function bearerOf(authorization: string | null): string | null {
+  const match = /^Bearer\s+(.+)$/i.exec(authorization ?? '');
   return match?.[1]?.trim() || null;
+}
+
+export function readBearer(request: Request): string | null {
+  return bearerOf(request.headers.get('authorization'));
 }
 
 /** Parse the userId embedded in a `ptc_…` CLI token. The format's single
@@ -130,6 +135,25 @@ export function readBearer(request: Request): string | null {
 export function parseCliTokenUserId(token: string): string | null {
   const match = /^ptc_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(token);
   return match?.[1] ?? null;
+}
+
+/**
+ * What a bearer means to this deployment: which UserDO it routes to, and as
+ * which kind of token. Null for anything that is not a token this
+ * authenticator mints, whatever it starts with.
+ *
+ * One parse, two readers. `authenticateCliToken` routes on it; the preview
+ * edge strips an Authorization header from guest-bound requests exactly when
+ * this answers non-null, so the set of bearers that carry authority here and
+ * the set the edge withholds from guest code are the same set by construction
+ * rather than by a prefix list kept in step by hand.
+ */
+export function parseCliBearer(token: string): { userId: string; kind: 'session' | 'access' } | null {
+  const sessionUserId = parseCliTokenUserId(token);
+  if (sessionUserId) return { userId: sessionUserId, kind: 'session' };
+  const accessUserId = parseAccessTokenUserId(token);
+  if (accessUserId) return { userId: accessUserId, kind: 'access' };
+  return null;
 }
 
 /** Authenticate a CLI bearer token from the Authorization header — either an
@@ -143,12 +167,10 @@ export async function authenticateCliToken(
 ): Promise<CliTokenAuth> {
   const token = readBearer(request);
   if (!token) return { ok: false, error: 'Missing Authorization: Bearer <token>' };
-  const sessionUserId = parseCliTokenUserId(token);
-  const accessUserId = sessionUserId ? null : parseAccessTokenUserId(token);
-  const userId = sessionUserId ?? accessUserId;
-  if (!userId) return { ok: false, error: 'Malformed CLI token' };
-  const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-  const verified = sessionUserId
+  const bearer = parseCliBearer(token);
+  if (!bearer) return { ok: false, error: 'Malformed CLI token' };
+  const userDO = env.UserDO.get(env.UserDO.idFromName(bearer.userId));
+  const verified = bearer.kind === 'session'
     ? await userDO.verifyCliToken(await ownerCaller(env), token)
     : await userDO.verifyAccessToken(await ownerCaller(env), token);
   if (!verified.ok || !verified.user || !verified.tokenHash) {
@@ -161,8 +183,8 @@ export async function authenticateCliToken(
       email: verified.user.email,
       displayName: verified.user.displayName,
       tokenHash: verified.tokenHash,
-      kind: sessionUserId ? 'session' : 'access',
-      scopes: sessionUserId ? 'all' : verified.scopes ?? [],
+      kind: bearer.kind,
+      scopes: bearer.kind === 'session' ? 'all' : verified.scopes ?? [],
       userDO,
     },
   };
