@@ -451,10 +451,7 @@ async function teardown(d: Deployment | undefined, token: string): Promise<void>
   if (failures.length > 0) throw new Error(`teardown incomplete: ${failures.join('; ')}`);
 }
 
-/** The deployed Worker answers as soon as its route is live; the first call is
- *  the one that must happen anyway, so it doubles as the readiness poll. */
-/**
- * Stop the container and prove it actually went down before anything believes
+/** Stop the container and prove it actually went down before anything believes
  * a post-restart verdict.
  *
  * The reason this exists, corroborated twice: a wake that merely SUCCEEDS says
@@ -500,6 +497,8 @@ async function wake(origin: string, token: string, command = "true"): Promise<Pr
   throw last;
 }
 
+/** The deployed Worker answers as soon as its route is live; the first call is
+ *  the one that must happen anyway, so it doubles as the readiness poll. */
 async function awaitOrigin(origin: string, token: string): Promise<void> {
   const deadline = Date.now() + 180_000;
   for (;;) {
@@ -723,10 +722,9 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     evidence.P6 = { intactAfterFinalStop: true };
     console.log("P6 final SIGTERM cycle ok");
 
-    // P4 — supervision across a stop+wake. It is deliberately LAST: the SDK's
-    // P2 already proved a
-    // real restart with an ephemeral marker; this phase proves the distinct
-    // durable fact, that a recorded process comes back under its same id.
+    // P4 — supervision across a stop+wake. It is deliberately LAST: P2 already
+    // proved a real restart with an ephemeral marker; this phase proves the
+    // distinct durable fact, that a recorded process comes back under its same id.
     const proc = await callParsed(origin, token, "/startProcess", {
       command: 'node -e "setInterval(() => {}, 1000)"', cwd: "/workspace",
     }, ProcessStartResponseSchema);

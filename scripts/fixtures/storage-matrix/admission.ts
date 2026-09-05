@@ -13,6 +13,7 @@
  */
 
 import type { RestoreWork } from '@kinu.run/devbox/durability/contracts';
+import type { LayoutId } from '../r2-bench/layouts';
 import type { RunArtifact } from '../r2-bench/report';
 import type { CleanupGateId, CleanupReport } from './cleanup';
 import {
@@ -21,6 +22,7 @@ import {
   R2_CLASS_FREE_OPERATIONS as R2_CLASS_FREE_OPS,
   R2_OPERATION_NAMES as R2_OP_VOCABULARY,
 } from '../../../packages/devbox/bench/r2-operations';
+import { STORAGE_GATES } from './manifest';
 import {
   scoreCells, stageCells, type CellId, type ConfirmatoryPlan, type MeasuredCell,
   type ScoredCell, type StageId,
@@ -236,21 +238,12 @@ export interface AdmissionVerdict {
   readonly gates: readonly GateResult[];
 }
 
-const GATE_PURPOSES = {
-  G0: 'Provenance.',
-  G1: 'Mount truth.',
-  G2: 'Filesystem semantics.',
-  G3: 'Publication safety.',
-  G4: 'Security.',
-  G5: 'Restore complexity.',
-  G6: 'Complete cells.',
-  G7: 'Reconciled accounting.',
-  G8: 'Complete cleanup.',
-  G9: 'Statistical validity.',
-} as const satisfies Record<GateId, string>;
-
+/** Gate purposes come from the frozen manifest rows, not a restated table:
+ *  the manifest is the one vocabulary both the stages and this verdict speak. */
 function gate(id: GateId, reasons: readonly string[]): GateResult {
-  return { gate: id, purpose: GATE_PURPOSES[id]!, ok: reasons.length === 0, reasons };
+  const row = STORAGE_GATES.find((candidate) => candidate.id === id);
+  if (row === undefined) throw new Error(`frozen manifest names no purpose for gate ${id}`);
+  return { gate: id, purpose: row.purpose, ok: reasons.length === 0, reasons };
 }
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -604,7 +597,9 @@ export interface R2RecordExtras {
   readonly restore: readonly RestoreEvidence[];
 }
 
-const NATIVE_CONTROL = 'native';
+/** The control layout's id, typed as the fixture's own union: renaming the
+ *  control there fails the compile here instead of silently ranking it. */
+const NATIVE_CONTROL: LayoutId = 'native';
 
 function armFromLayout(layout: RunArtifact['layouts'][number]): ArmEvidence {
   const failed = layout.mountError !== null

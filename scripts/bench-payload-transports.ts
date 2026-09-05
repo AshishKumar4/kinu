@@ -98,6 +98,7 @@ function putSecret(name: string, value: string, configPath: string): void {
 
 const FixtureConfigSchema = v.looseObject({
   containers: v.optional(v.array(v.looseObject({ image: v.string() }))),
+  r2_buckets: v.optional(v.array(v.looseObject({ binding: v.string(), bucket_name: v.string() }))),
 });
 
 /** The image tag this instrument pins, read from its own wrangler config. */
@@ -387,13 +388,13 @@ function measuredEvidence(result: HarnessResult, operationId: string): MeasuredE
 
 function availability(keysPresent: boolean): Availability[] {
   const absent = 'R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY were not supplied; this direct credential arm is unavailable and never falls back.';
+  // The arm list comes from PAYLOAD_ARMS, so a new arm defaults to credentialed
+  // rather than silently joining the keyless set.
+  const KEYLESS_ARMS = { 'do-base64': true, 'loopback-entrypoint': true } satisfies Partial<Record<PayloadArmId, true>>;
   if (!keysPresent) {
-    return [
-      { arm: 'do-base64', available: true },
-      { arm: 'loopback-entrypoint', available: true },
-      { arm: 'presigned-r2', available: false, reason: absent },
-      { arm: 'temp-s3-creds', available: false, reason: absent },
-    ];
+    return PAYLOAD_ARMS.map((arm) => arm in KEYLESS_ARMS
+      ? { arm, available: true }
+      : { arm, available: false, reason: absent });
   }
   return PAYLOAD_ARMS.map((arm) => ({ arm, available: true }));
 }
@@ -418,12 +419,20 @@ function planText(identity: RunIdentity, opts: Options): string {
   ].join('\n');
 }
 
+/** The R2 binding this instrument deploys, read from its own wrangler config
+ *  rather than restated: the generated config and the loopback URL must name
+ *  the same binding the fixture declares. */
+function fixtureBucketBinding(): string {
+  const binding = fixtureConfig().r2_buckets?.[0]?.binding;
+  if (binding === undefined) throw new Error('payload-transport fixture declares no R2 bucket binding');
+  return binding;
+}
 function configFor(identity: RunIdentity): string {
   return JSON.stringify({
     ...fixtureConfig(),
     main: join(FIXTURE_DIR, 'worker.ts'),
     name: identity.workerName,
-    r2_buckets: [{ binding: 'BACKUP_BUCKET', bucket_name: identity.bucketName }],
+    r2_buckets: [{ binding: fixtureBucketBinding(), bucket_name: identity.bucketName }],
   }, null, 2);
 }
 
@@ -696,6 +705,8 @@ async function main(): Promise<number> {
           return judge(base, file, key, measured, 'owner-do');
         }
         if (arm === 'loopback-entrypoint') {
+          // The binding literal matches the fixture's mountBucket call; both are
+          // pinned by payload-transport.test.ts, which fails when either moves.
           const url = `http://r2.internal/BACKUP_BUCKET/${key}`;
           const result = singleResult(
             await runOperation(liveOrigin, token, operationId, 'transfer', {

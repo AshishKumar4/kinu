@@ -879,7 +879,6 @@ export function mutationRefusalObserved(report: Stage3Report): boolean {
   }
 }
 
-
 export function classifyWritableMmapControls(
   controls: readonly WritableMmapControl[] | undefined,
 ): ProbeVerdict {
@@ -1020,7 +1019,7 @@ export interface FuseProbeArtifact {
   readonly writableImage?: string;
   readonly writableMmap: ProbeVerdict;
   readonly stage3?: Stage3Report;
-  /** The four real negative binary invocations and their paired C reports. */
+  /** The real negative binary invocations and their paired C reports. */
   readonly writableControls: readonly WritableMmapControl[];
   readonly stage1?: Stage1Report;
   readonly stage2?: Stage2Report;

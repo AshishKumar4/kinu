@@ -10,7 +10,7 @@
  */
 
 import { PAYLOAD_ARMS, PAYLOAD_SIZES_MIB, type PayloadArmId, type PayloadSizeMiB } from './arms';
-import { summarize, throughputMiBs } from '../r2-bench/stats';
+import { UNSTABLE_CV, summarize, throughputMiBs } from '../r2-bench/stats';
 import type { Cell, Verdict } from './schema';
 
 /**
@@ -123,7 +123,7 @@ export function rankTier(cells: readonly Cell[], sizeMiB: PayloadSizeMiB): Verdi
     const getWalls = own.filter((cell) => cell.op === 'get' && cell.wallMs !== null)
       .map((cell) => cell.wallMs!);
     // Dispersion on EITHER direction disqualifies the arm at this tier.
-    if (summarize(putWalls).cv > 0.25 || summarize(getWalls).cv > 0.25) {
+    if (summarize(putWalls).cv > UNSTABLE_CV || summarize(getWalls).cv > UNSTABLE_CV) {
       exclusions.push({ arm, reason: EXCLUSION_REASON['unstable']! });
       continue;
     }

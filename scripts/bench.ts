@@ -246,12 +246,12 @@ function unknownVariant(spec: string): never {
  *   changes when the sealed split says so.
  *
  * Cost per full run, at n tasks × r repeats × p panel members:
- *   n·r·(p+1) agent trajectories per arm, both arms → 2·n·r·(p+1). The 12-task
- *   dev split at r=1, p=3 is 96 trajectories plus 2·n·r merges and the grounded
- *   judge calls the heads path makes per fork. Budget it as ~100–150 full
- *   agentic attempts per arm pair, and note the mixed arm pays whatever its
- *   most expensive vendor charges. This is why the run needs the owner's
- *   approval and why this script ships unrun.
+ *   n·r·(p+1) agent trajectories per arm, both arms → 2·n·r·(p+1). The dev
+ *   split (87 tasks, counted 2026-09-05) at r=1, p=3 is 696 trajectories plus
+ *   2·n·r merges and the grounded judge calls the heads path makes per fork.
+ *   Budget it as ~700 full agentic attempts per arm pair, and note the mixed
+ *   arm pays whatever its most expensive vendor charges. This is why the run
+ *   needs the owner's approval and why this script ships unrun.
  */
 export function panelArm(spec: string, analyst: LLMProviderConfig): PanelSolverOptions | null {
   const mixed = spec === 'panel:mixed';
@@ -920,8 +920,8 @@ Variants:
   null              no-op control (must fail everything)
   oracle            reverses the defect (must pass everything)
   noisy:<rate>      synthetic solver with a known success rate, seeded
-  pi:vanilla        official Pi coding agent, native read/bash/edit/write (V0)
-  pi:retry          Pi V0 plus one machine-verifier feedback retry (V1)
+  pi:vanilla        official Pi coding agent, native read/bash/edit/write
+  pi:retry          Pi plus one machine-verifier feedback retry
   agent             Kinu from a fresh v0 workspace per task
   agent-evolving    Kinu with evolution live, state carried across the sequence
   panel:self        fork panel whose members all use the analyst model
@@ -943,8 +943,8 @@ Options:
   --id <a,b>           validate: re-prove exactly these task ids, either split.
                        What a re-anchored defect patch needs — a patch that
                        APPLIES again is not yet a patch that still BREAKS the
-                       checks. One task is two attempts, measured at 93s for a
-                       core-suite task; the whole corpus is ~160 of the same. An
+                       checks. One task is two attempts, each a full core-suite run;
+                       the whole corpus is ~160 of the same. An
                        id naming no task refuses rather than reporting ok over an
                        empty set. The summary says NARROWED so it cannot be
                        quoted as a verdict on the corpus.

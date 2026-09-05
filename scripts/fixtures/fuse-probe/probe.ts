@@ -882,6 +882,10 @@ function randomRanges(count: number, length: number): Array<{ offset: number; le
   return ranges;
 }
 
+/** Symlink-swap race iterations: the racer argv, the observation loop bound
+ *  and the reported count must agree, so all three read this. */
+const RACE_SWAPS = 1_500;
+
 function runOpenat2(): Openat2Report {
   const root = mkdtempSync(join(tmpdir(), 'fuse-probe-openat2-'));
   const sub = join(root, 'sub');
@@ -924,12 +928,12 @@ function runOpenat2(): Openat2Report {
   catch (error) { if (!(error instanceof Error && isFsAbsent(error))) throw error; }
   unlinkSync(sub); renameSync(parked, sub);
 
-  const racer = spawn(process.execPath, [SELF_PATH, 'race', root, outside, '1500'], { stdio: 'ignore' });
+  const racer = spawn(process.execPath, [SELF_PATH, 'race', root, outside, String(RACE_SWAPS)], { stdio: 'ignore' });
   const outcomes: Record<string, number> = {};
   let escapesObserved = 0;
   let controlPlainEscapes = 0;
   let resolutions = 0;
-  for (let iteration = 0; iteration < 1_500; iteration++) {
+  for (let iteration = 0; iteration < RACE_SWAPS; iteration++) {
     const result = checked('sub/marker.txt'); resolutions++;
     if (result.ok) {
       outcomes.ok = (outcomes.ok ?? 0) + 1;
@@ -951,7 +955,7 @@ function runOpenat2(): Openat2Report {
     symlinkAncestorNoSymlinks: { blocked: !noSymlink.ok, errnoName: noSymlink.errnoName },
     symlinkAncestorBeneathOnly: { blocked: !beneathOnly.ok, errnoName: beneathOnly.errnoName },
     deterministicSequence: { plainEscaped, openat2Blocked: !noSymlink.ok },
-    race: { swaps: 1500, resolutions, escapesObserved, controlPlainEscapes, outcomes },
+    race: { swaps: RACE_SWAPS, resolutions, escapesObserved, controlPlainEscapes, outcomes },
   };
 }
 
@@ -1009,7 +1013,11 @@ function stage1(): Stage1Report {
     }
 
     const workingSamples: number[] = []; const nativeSamples: number[] = [];
-    for (let iteration = 0; iteration < 20; iteration++) for (let index = 0; index < 32; index++) {
+    // The report's files/iterations ARE these loop bounds, read from the same
+    // consts so a retuned working set cannot report its old geometry.
+    const workingFiles = 32;
+    const workingIterations = 20;
+    for (let iteration = 0; iteration < workingIterations; iteration++) for (let index = 0; index < workingFiles; index++) {
       const name = `file-${String(index).padStart(5, '0')}`;
       workingSamples.push(timed(() => { statSync(join(base.mountpoint, 'wide', name)); readFileSync(join(base.mountpoint, 'wide', name)); }).ms);
       nativeSamples.push(timed(() => { statSync(join(native, 'wide', name)); readFileSync(join(native, 'wide', name)); }).ms);
@@ -1058,7 +1066,7 @@ function stage1(): Stage1Report {
     return {
       stage: 'stage1', attemptId, startedAt, finishedAt: new Date().toISOString(), census: censusResult, openat2: openat2Result,
       mountAttempts, mounted: true, mountpoint: base.mountpoint, bootstrapSamples, coldRootChallengeMs, firstStatRead,
-      workingSet: { files: 32, iterations: 20, fuse: { ...summarizeLatencies(workingSamples)! }, native: { ...summarizeLatencies(nativeSamples)! } },
+      workingSet: { files: workingFiles, iterations: workingIterations, fuse: { ...summarizeLatencies(workingSamples)! }, native: { ...summarizeLatencies(nativeSamples)! } },
       fullWalk: { fuseFiles: fuseWalk.value, fuseMs: fuseWalk.ms, nativeFiles: nativeWalk.value, nativeMs: nativeWalk.ms },
       rangeReads, cache: { reps: hits.length, missP50Ms: summarizeLatencies(miss)!.p50Ms, hitP50Ms: summarizeLatencies(hits)!.p50Ms },
       integrity: { poisonChunk: 3, refused, servedWrongBytes, errnoName: poisonErrno, digestRefusal: { refused: digestRefused, errnoName: digestErrno } },

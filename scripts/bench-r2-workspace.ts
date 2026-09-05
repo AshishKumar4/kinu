@@ -364,10 +364,15 @@ function resolveConfig(bucket: string): FixtureConfig {
   const source = parsed.output;
   const declared = source.r2_buckets?.[0]?.bucket_name;
   if (declared === bucket) return { path: committed, generated: false };
-
+  // The binding is the fixture's own declaration, not a second spelling of it:
+  // the generated override replaces only the bucket name.
+  const binding = source.r2_buckets?.[0]?.binding;
+  if (binding === undefined) {
+    throw new Error(`${committed} declares no R2 bucket binding this driver can reuse`);
+  }
   const generated = join(FIXTURE_DIR, 'wrangler.run.json');
   writeFileSync(generated, `${JSON.stringify(
-    { ...source, r2_buckets: [{ binding: 'BACKUP_BUCKET', bucket_name: bucket }] },
+    { ...source, r2_buckets: [{ binding, bucket_name: bucket }] },
     null,
     2,
   )}\n`);
@@ -1289,6 +1294,22 @@ const PackageDependenciesSchema = v.looseObject({
   dependencies: v.optional(v.record(v.string(), v.string())),
 });
 
+/** Only the container image this driver reads out of the fixture manifest. */
+const FixtureContainerSchema = v.looseObject({
+  containers: v.optional(v.array(v.looseObject({ image: v.string() }))),
+});
+
+/** The image the fixture deploys, read from its own manifest. The generated
+ *  bucket override preserves containers, so this is the deployed image on
+ *  every path; undeclared reads as unknown rather than as a restated guess. */
+function fixtureImage(): string {
+  const manifest = join(FIXTURE_DIR, 'wrangler.jsonc');
+  const text = readFileSync(manifest, 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  const parsed = v.safeParse(FixtureContainerSchema, JSON.parse(text));
+  if (!parsed.success) return 'unknown';
+  return parsed.output.containers?.[0]?.image ?? 'unknown';
+}
+
 function collectVersions(): RunVersions {
   const manifest = join(REPO_ROOT, 'packages/cf-backend/package.json');
   const parsed = v.safeParse(PackageDependenciesSchema, JSON.parse(readFileSync(manifest, 'utf8')));
@@ -1310,7 +1331,7 @@ function collectVersions(): RunVersions {
     commit,
     '@cloudflare/sandbox': packageJson.dependencies?.['@cloudflare/sandbox'] ?? 'unknown',
     '@cloudflare/containers': packageJson.dependencies?.['@cloudflare/containers'] ?? 'unknown',
-    image: 'docker.io/cloudflare/sandbox:0.12.8',
+    image: fixtureImage(),
   };
 }
 

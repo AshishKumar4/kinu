@@ -73,7 +73,7 @@ export interface AgentSolverOptions {
    *  no lessons, bootstrap scaffold. 'shared' carries one workspace across the
    *  whole arm, which is what accumulates evolution state. */
   state: 'fresh' | 'shared';
-  /** Enable the three-timescale evolution machinery during the attempt. */
+  /** Enable the four-timescale evolution machinery during the attempt. */
   autoEvolve: boolean;
   llm: LLMProviderConfig;
   repoRoot: string;

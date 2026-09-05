@@ -49,7 +49,7 @@ export const PHASES = [
   ['P3', 'FUSE bring-up', 'custom raw /dev/fuse server, direct and uid=65534 helper mount routes'],
   ['P4', 'semantics', 'range digest refusal, cache, links, executable mode, wide/deep lookup and overlay composition'],
   ['P5', 'performance', 'cold root, first stat/read, fixed working set, full walk and native lower control'],
-  ['P6', 'writable mmap barrier', 'pinned C/libfuse 7.39 direct-I/O MAP_SHARED stores, ordered WRITE/FSYNC/SYNCFS fence, daemon kill/restart/remount'],
+  ['P6', 'writable mmap barrier', 'pinned C/libfuse probe at FUSE protocol 7.39, direct-I/O MAP_SHARED stores, ordered WRITE/FSYNC/SYNCFS fence, daemon kill/restart/remount'],
   ['P7', 'restart and cleanup', 'stop+wake, remount, forced unmount, residue/process scan and idempotent replay'],
 ] as const;
 

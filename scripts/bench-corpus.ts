@@ -3,8 +3,8 @@
 // answers whether the corpus still APPLIES, which is the one property nothing
 // about the files themselves can tell you.
 //
-// Check suites are named presets rather than per-task copies of the same two
-// commands: the corpus is data about DEFECTS, not a place to restate how this
+// Check suites are named presets rather than per-task copies of the same commands:
+// the corpus is data about DEFECTS, not a place to restate how this
 // repo is verified.
 import { readFileSync, existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -26,7 +26,7 @@ const BENCH_SUITE_NAMES = ['core', 'lean'] as const;
 type BenchSuiteName = (typeof BENCH_SUITE_NAMES)[number];
 
 /** The verifiable outcomes this repo already supplies. `core` is the whole core
- *  suite plus its typecheck — running the FULL suite (1.6s) rather than just the
+ *  suite plus its typecheck — running the FULL suite rather than just the
  *  target test is deliberate: it scores collateral damage for free. */
 export const BENCH_SUITES: Readonly<Record<BenchSuiteName, BenchSuite>> = Object.freeze({
   core: {
@@ -142,8 +142,8 @@ export interface StalePatch {
  *
  * A defect patch is data ABOUT source that keeps moving, so an ordinary refactor
  * elsewhere silently invalidates a task and its `prepare` throws at attempt time
- * — long after anyone would connect it to the refactor. 16 patches have been
- * re-anchored or re-authored this way, each as a follow-up commit after the
+ * — long after anyone would connect it to the refactor. Seeded patches have
+ * needed re-anchoring more than once, each time as a follow-up commit after the
  * breaking change had already landed.
  *
  * BOTH ENUMERATIONS, because neither alone governs the corpus: `tasks.jsonl` names

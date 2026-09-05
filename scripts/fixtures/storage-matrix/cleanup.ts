@@ -14,6 +14,7 @@
  * number.
  */
 
+import { STORAGE_CLEANUP_GATES } from './manifest';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import * as v from 'valibot';
@@ -346,19 +347,14 @@ export interface CleanupReport {
   readonly multipartResidue: number;
   readonly checks: readonly CleanupCheck[];
 }
-const PURPOSES = {
-  C1: 'Worker absent.',
-  C2: 'Container resources absent.',
-  C3: 'Bucket and multipart state empty.',
-  C4: 'Box durable state empty.',
-  C5: 'Local credentials and processes absent.',
-  C6: 'Operation counters reconciled.',
-  C7: 'Cleanup replay is idempotent.',
-} as const satisfies Record<CleanupGateId, string>;
-
+/** Cleanup gate purposes come from the frozen manifest rows, not a restated table. */
 const check = (
   gate: CleanupGateId, ok: boolean, detail: string,
-): CleanupCheck => ({ gate, purpose: PURPOSES[gate]!, ok, detail });
+): CleanupCheck => {
+  const row = STORAGE_CLEANUP_GATES.find((candidate) => candidate.id === gate);
+  if (row === undefined) throw new Error(`frozen manifest names no purpose for cleanup gate ${gate}`);
+  return { gate, purpose: row.purpose, ok, detail };
+};
 
 /**
  * Run C1–C7 against a post-teardown world. C7 re-runs the replay with a probe

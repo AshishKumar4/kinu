@@ -25,12 +25,13 @@
 import { createHash, createHmac } from 'node:crypto';
 import { statSync } from 'node:fs';
 
-/** Identical generator to the one documented in arms.ts/payload.ts. */
+/** Byte-identical twin of r2-bench/stats.ts `mulberry32`: this file ships alone
+ *  into the container, so it cannot import it. */
 export function mulberry32(seed: number): () => number {
-  let state = seed >>> 0;
+  let a = seed >>> 0;
   return () => {
-    state = (state + 0x6d2b79f5) | 0;
-    let t = state;
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;

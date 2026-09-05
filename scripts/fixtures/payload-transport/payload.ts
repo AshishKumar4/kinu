@@ -31,7 +31,7 @@ export function runIdentity(now = new Date(), randomHex = randomSuffix()): RunId
   };
 }
 
-/** Six hex characters — enough entropy that two live runs never share a name. */
+/** Six hex characters disambiguating runs that share a timestamp stem. */
 function randomSuffix(): string {
   return crypto.randomUUID().replaceAll('-', '').slice(0, 6);
 }

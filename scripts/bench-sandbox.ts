@@ -30,10 +30,10 @@ const SANDBOX_EXCLUDES = [
   '.git', 'node_modules', '.claude', ARTIFACT_DIRNAME, join('tests', 'bench'),
 ] as const;
 
-/** Nested checkouts, excluded wherever they appear. Each carries its OWN
- *  node_modules, and copying those turns a ~500MB sandbox into a multi-gigabyte
- *  one — which is how this suite exhausted tmpfs and failed as ENOSPC rather
- *  than as a real result. Note this cannot be a blanket `node_modules` rule:
+/** Nested checkouts, excluded at the repo root. Each carries its OWN
+ *  node_modules, and copying those balloons the sandbox copy, which is how
+ *  this suite exhausted tmpfs and failed as ENOSPC rather than as a real
+ *  result. Note this cannot be a blanket `node_modules` rule:
  *  packages/<pkg>/node_modules holds the relative workspace links that let a
  *  solver's cross-package edits be seen, so those must be copied. */
 const SANDBOX_EXCLUDED_NAMES = new Set(['.git']);

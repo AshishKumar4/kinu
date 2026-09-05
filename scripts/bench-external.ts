@@ -308,6 +308,17 @@ export interface Admissibility {
   conditions: AdmissibilityCondition[];
 }
 
+/** Billable-spend ratio B/A, null when either arm holds an unmetered trial or
+ *  the baseline billed nothing: a ratio against a floor is not a ratio, and
+ *  summing unmeasured trials as zero made the candidate arm look cheaper than
+ *  the arm it was being equalized against. One spelling, so admissibility and
+ *  the printed report cannot drift. */
+export function billableSpendRatio(a: ExternalArm, b: ExternalArm): number | null {
+  const spendA = armSpend(a);
+  const spendB = armSpend(b);
+  if (spendA.billableTokens === null || spendB.billableTokens === null || spendA.billableTokens === 0) return null;
+  return spendB.billableTokens / spendA.billableTokens;
+}
 /**
  * Whether this pair of arms can carry a claim at all — asked BEFORE any effect
  * is reported, and answered from what the trials observed rather than from what
@@ -318,9 +329,8 @@ export interface Admissibility {
  * because the pipeline only ever saw a pass rate. The rule this encodes is that
  * a check must measure the set it governs, must be able to fail loudly, must not
  * publish a number when it fails, and must sit upstream of everything that
- * publishes — which is why the caller consults this before printing an effect
+ * publishes, which is why the caller consults this before printing an effect
  * and not alongside it.
- *
  * `candidateEvolves` is the arm state the caller is claiming to compare. A pair
  * where neither arm was supposed to evolve is a legitimate replication and is
  * held to the mirror-image bar.
@@ -331,13 +341,7 @@ export function admissibility(
   const spendA = armSpend(a);
   const spendB = armSpend(b);
   const candidateEvolves = spendB.evolveFlags.length === 1 && spendB.evolveFlags[0] === true;
-  // Null when either arm holds an unmetered trial: a ratio against a floor is
-  // not a ratio, and summing unmeasured trials as zero made the candidate arm
-  // look cheaper than the arm it was being equalized against.
-  const ratio = spendA.billableTokens === null || spendB.billableTokens === null
-    || spendA.billableTokens === 0
-    ? null
-    : spendB.billableTokens / spendA.billableTokens;
+  const ratio = billableSpendRatio(a, b);
   const mismatched = paired.filter((p) => p.sameChecksum === false).map((p) => p.taskId);
   const gradedB = spendB.executionGradedTurns;
 
@@ -477,10 +481,7 @@ function cmdCompare(args: Map<string, string>): number {
   const spendB = armSpend(b);
   // A ratio against a floor is not a ratio: one unmetered trial in either arm and
   // the equal-spend claim is unmeasurable rather than favourable.
-  const spendRatio = spendA.billableTokens === null || spendB.billableTokens === null
-    || spendA.billableTokens === 0
-    ? null
-    : spendB.billableTokens / spendA.billableTokens;
+  const spendRatio = billableSpendRatio(a, b);
   const noRatioBecause = spendA.billableTokens === null || spendB.billableTokens === null
     ? 'unmeasurable — an arm holds trials that reported no token counts'
     : 'n/a — arm A billed no tokens';

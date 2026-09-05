@@ -119,8 +119,8 @@ export interface RunValidationOptions {
   devTasks: readonly BenchTask[];
   sealed: SealedSplit;
   /** Validate only these ids, across both splits. Absent means the whole corpus.
-   *  What makes re-proving one re-anchored patch a 2-second act rather than a
-   *  ~160-suite-run one, which is the difference between doing it and hoping. */
+   *  What makes re-proving one re-anchored patch a single-task run rather than
+   *  a whole-corpus one, which is the difference between doing it and hoping. */
   only?: readonly string[];
   runAttempt: (task: BenchTask, repeat: number) => Promise<WellFormedAttempt>;
   log?: (line: string) => void;

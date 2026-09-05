@@ -1,8 +1,8 @@
 /**
  * BENCHMARK FIXTURE — not product surface, not deployed by `bun run deploy`,
- * reachable only by `scripts/sandbox-durability-probe.ts` running
- * `wrangler dev --remote` (or `wrangler deploy`) against the wrangler config
- * beside this file.
+ * reachable only by `scripts/sandbox-durability-probe.ts`, which deploys an
+ * ephemeral Worker from the wrangler config beside this file (`wrangler dev
+ * --remote` cannot host a real container).
  *
  * It exports the PRODUCT `KinuSandbox` class plus the SDK's `ContainerProxy`
  * (outbound interception — and therefore the R2-binding chain mounts — does
@@ -120,10 +120,9 @@ export default {
         case "/listProcesses":
           return json(await sandbox.listSupervised());
         case "/notePortExposed": {
-          // The Devbox method was `notePortExposed`, recorded AFTER an
-          // exposure and minting its own token. It is `portToken` now: the
-          // durable token must exist BEFORE the exposure that uses it, which
-          // is what makes a preview URL survive a recycle byte for byte.
+          // The route is named for the exposure, not the token: it mints the
+          // durable token BEFORE the exposure that uses it, because a preview
+          // URL survives a recycle byte for byte only when its token exists first.
           const { urlToken } = await sandbox.portToken(
             command.port ?? 0, command.name,
           );
