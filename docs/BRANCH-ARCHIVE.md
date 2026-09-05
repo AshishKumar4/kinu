@@ -11,7 +11,7 @@ blobs. A nonzero count is the last home. Delete branches. Keep tags.
 
 ## Tag inventory
 
-There are 143 lightweight tags under `refs/tags/archive/`. The first forty are
+There are 203 lightweight tags under `refs/tags/archive/`. The first forty are
 inventoried below: nine predate the 2026-08-21 prune wave, which added thirty-one.
 Those measurements use `main` at `29f654bd` and `c143c4b6`, respectively.
 
@@ -187,6 +187,64 @@ to delete while its count is nonzero. After any tag deletion, re-measure.
 | `archive/vfs-mounts` | `feat/vfs-mounts` | 1 |
 
 The full 102-row manifest with head SHAs sits at `~/Kinu-backups/worktree-residue/prune-manifest-20260828.json`.
+### The 2026-09-05 prune wave
+
+The lanes of the 2026-09-03 to 2026-09-05 quality program landed on `main`
+by cherry-pick. 143 worktrees were removed and 151 branches deleted. A branch
+counted as merged when every commit it carried was on `main` by cherry-pick
+trailer or by patch id. Those branches have no tag, because their content is
+on `main`. The 38 branches below carried commits `main` lacks. Each was tagged,
+and the tag was verified at the tip before the branch went. Twelve worktrees
+held uncommitted residue of child lanes whose parents landed a later form of
+the work. Each diff is at `~/kinu-wip/<worktree>-2026-09-05.patch`, with its
+untracked files beside it.
+
+Counts use `main` at `443f1653c`, measured 2026-09-05. Sole copy counts the
+blobs no other ref reaches, the archive tags of this wave included.
+
+| Branch (deleted) | Tag | Commit | Commits | Blobs `main` lacks | Sole copy |
+|---|---|---|---|---|---|
+| `bench/final-devbox-matrix` | `archive/final-devbox-matrix` | `90eaf054d` | 1 | 41 | 2 |
+| `devbox-unit` | `archive/devbox-unit` | `fa808c013` | 27 | 110 | 7 |
+| `feat/devbox-e2e` | `archive/devbox-e2e` | `f9a7dfd42` | 2 | 15 | 0 |
+| `feat/device-fleet` | `archive/device-fleet` | `b6537801d` | 3 | 21 | 1 |
+| `feat/presigned-bytepath` | `archive/presigned-bytepath` | `eecec7233` | 12 | 60 | 0 |
+| `feat/restore-in-gate` | `archive/restore-in-gate` | `6a94477ff` | 13 | 64 | 0 |
+| `feat/static-analysis` | `archive/static-analysis` | `1383352af` | 3 | 21 | 5 |
+| `fix/auth-session-security` | `archive/auth-session-security` | `5ca694428` | 1 | 16 | 4 |
+| `fix/bench-decision-model` | `archive/bench-decision-model` | `79e63f120` | 13 | 62 | 0 |
+| `fix/bounded-layers-attach` | `archive/bounded-layers-attach` | `1b2e59078` | 13 | 66 | 8 |
+| `fix/control-plane-access` | `archive/control-plane-access` | `12692a105` | 1 | 19 | 8 |
+| `fix/devbox-lifecycle` | `archive/devbox-lifecycle` | `0206b936f` | 11 | 53 | 0 |
+| `fix/gate-coverage-integrity` | `archive/gate-coverage-integrity` | `84c23e040` | 1 | 29 | 6 |
+| `fix/gate-stall` | `archive/gate-stall` | `dea9fb7b6` | 1 | 8 | 1 |
+| `fix/guard-residue` | `archive/guard-residue` | `67e4ee33d` | 1 | 2 | 2 |
+| `fix/hardening-close` | `archive/hardening-close` | `37c739186` | 4 | 10 | 3 |
+| `fix/install-path-onboarding` | `archive/install-path-onboarding` | `1c049380a` | 1 | 10 | 10 |
+| `fix/job-retry-no-giveup` | `archive/job-retry-no-giveup` | `fa8e4821d` | 3 | 22 | 1 |
+| `fix/lifecycle-open` | `archive/lifecycle-open` | `3f8c0f99f` | 2 | 5 | 0 |
+| `fix/merkle-pack-cold` | `archive/merkle-pack-cold` | `d9ea44c82` | 13 | 58 | 0 |
+| `fix/orchestrator-replay-lifecycle` | `archive/orchestrator-replay-lifecycle` | `d923d1bbf` | 1 | 12 | 7 |
+| `fix/overlay-cas-scan` | `archive/overlay-cas-scan` | `07adfd8e2` | 12 | 58 | 0 |
+| `fix/product-contract-regressions` | `archive/product-contract-regressions` | `f984a294e` | 1 | 33 | 4 |
+| `fix/r2fs-holder` | `archive/r2fs-holder` | `d46cd0f4e` | 14 | 65 | 1 |
+| `fix/staging-infra-bootstrap` | `archive/staging-infra-bootstrap` | `962d6afb5` | 1 | 4 | 4 |
+| `fix/user-authority-races` | `archive/user-authority-races` | `cd9163d95` | 1 | 23 | 7 |
+| `fix/workspace-durability` | `archive/workspace-durability` | `f948af038` | 1 | 17 | 3 |
+| `gate/hammer-tier` | `archive/hammer-tier` | `e937f7fdb` | 2 | 53 | 4 |
+| `handoff/restoration-visibility` | `archive/restoration-visibility` | `4fa37694f` | 13 | 59 | 0 |
+| `probe/mp-wake-with-journal-fix` | `archive/mp-wake-with-journal-fix` | `5f98e109a` | 14 | 63 | 2 |
+| `refactor/backend-policy-drift` | `archive/backend-policy-drift` | `b77177948` | 2 | 38 | 12 |
+| `refactor/one-do-nimbus` | `archive/one-do-nimbus` | `7350eaacb` | 1 | 36 | 24 |
+| `refactor/simplify-core` | `archive/simplify-core` | `06ea1c374` | 3 | 42 | 5 |
+| `refactor/simplify-ui` | `archive/simplify-ui` | `350c7b945` | 7 | 35 | 35 |
+| `refactor/straighten-delegation` | `archive/straighten-delegation` | `328970edb` | 7 | 10 | 2 |
+| `refactor/straighten-exec` | `archive/straighten-exec` | `1899b97ec` | 6 | 9 | 1 |
+| `review/wake-machinery` | `archive/wake-machinery` | `11f297486` | 2 | 10 | 0 |
+| `scratch/sc-byteplane-live` | `archive/sc-byteplane-live` | `02e4e122e` | 14 | 72 | 1 |
+
+The manifest with every deleted branch sits at `~/kinu-wip/prune-manifest-2026-09-05.json`.
+
 ## Reproduce the test
 
 `git filter-repo --mailmap` rewrote 2,242 commits. Measured 2026-08-21, none
