@@ -9,7 +9,7 @@
  *      a. If `useMerge` AND iteration is on the merge cadence AND we have a
  *         complementary pair → propose via Merge.
  *         Else → propose via reflective Mutate (parent + minibatch rollout).
- *      b. Run constraints (size cap, regex, custom check, optional test runner).
+ *      b. Run constraints (size cap, regex, custom check).
  *         If rejected, log and skip — DO NOT consume eval-set scoring budget.
  *      c. Score the candidate on the full eval set; aggregate.
  *      d. Add to pool.
@@ -123,8 +123,7 @@ export async function runGepa<I = unknown, E = unknown>(
 
   // Emit a rejection, bump the consecutive-rejection counter, and report
   // whether GEPA should give up (K consecutive rejections). Every rejection
-  // path goes through this so the give-up logic is uniform — previously the
-  // testRunner paths silently skipped the give-up check.
+  // path goes through this so the give-up logic is uniform.
   let consecutiveRejections = 0;
   async function recordRejection(iter: number, reason: string): Promise<boolean> {
     await emitIteration(config.onIteration, {
@@ -175,20 +174,6 @@ export async function runGepa<I = unknown, E = unknown>(
       if (await recordRejection(iter, `constraint: ${constraintError}`)) { stopReason = 'no_improvement_possible'; break; }
       continue;
     }
-    if (config.constraints?.testRunner) {
-      let testPassed: boolean;
-      try {
-        testPassed = await config.constraints.testRunner(proposal.source);
-      } catch (err) {
-        if (await recordRejection(iter, `test_runner_threw: ${renderThrownChain({ cause: err })}`)) { stopReason = 'no_improvement_possible'; break; }
-        continue;
-      }
-      if (!testPassed) {
-        if (await recordRejection(iter, 'test_runner_rejected')) { stopReason = 'no_improvement_possible'; break; }
-        continue;
-      }
-    }
-
     // Score on the full eval set.
     const cand = await scoreCandidate({
       source: proposal.source,

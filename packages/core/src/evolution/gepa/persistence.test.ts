@@ -99,7 +99,7 @@ describe('persistGepaCandidate + loadGepaCandidates', () => {
   test('orders by iteration then created_at', () => {
     const { sql } = setup();
     const runId = startGepaRun(sql, {
-      target: 'arbitrary',
+      target: 'scaffold',
       budget: { maxIterations: 5, maxMetricCalls: 50, minibatchSize: 1 },
     });
     const seed = mkCandidate('seed', 'src-0', { i1: 0.5 });
@@ -148,7 +148,7 @@ describe('runGepa with makePersistingHook end-to-end', () => {
       { id: 'i1', input: 'a' }, { id: 'i2', input: 'b' },
     ];
     const runId = startGepaRun(sql, {
-      target: 'arbitrary',
+      target: 'scaffold',
       budget: { maxIterations: 2, maxMetricCalls: 50, minibatchSize: 1 },
     });
 

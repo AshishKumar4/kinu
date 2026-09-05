@@ -5,8 +5,9 @@
  * produces a real pending version. Flow:
  *
  *   1. Read current scaffold (or use caller-supplied seed).
- *   2. Run GEPA with scaffold-aware constraints (REQUIRED_SIGNATURE +
- *      FORBIDDEN_PATTERNS, mirrored from scaffold/modify.ts).
+ *   2. Run GEPA with scaffold-aware constraints (SCAFFOLD_REQUIRED_SIGNATURE +
+ *      SCAFFOLD_FORBIDDEN_PATTERNS from scaffold/safety-patterns.ts, the same
+ *      patterns modifyScaffold gates on).
  *   3. If `winner.source !== seed AND winner.aggregateScore > seed.aggregateScore`,
  *      hand off to `modifyScaffold` — the winner enters `scaffold_versions`
  *      with status='pending' and the existing shadow eval + promotion
@@ -53,12 +54,6 @@ export interface RunScaffoldGepaOpts<I = unknown, E = unknown> {
    * Must be ≥ scaffold.minRationaleLength (50 chars) per modifyScaffold gate 1.
    */
   rationale?: string;
-  /**
-   * Skip the handoff to `modifyScaffold` and just return the GEPA result.
-   * Useful when the caller wants to inspect the result before persisting.
-   * Default false.
-   */
-  dryRun?: boolean;
 }
 
 export interface RunScaffoldGepaResult {
@@ -75,7 +70,6 @@ export interface RunScaffoldGepaResult {
   pendingVersion: number | null;
   /** Why we didn't propose (when applicable). */
   skipReason?:
-    | 'dry_run'
     | 'winner_equals_seed'
     | 'modify_gate_rejected';
   /** If modifyScaffold rejected, the gate + error. */
@@ -108,10 +102,6 @@ export async function runScaffoldGepa<I = unknown, E = unknown>(
   const winnerScore = scoreInterval([...winner.scores.values()]);
   const seedScore = scoreInterval([...(gepa.history[0]?.scores.values() ?? [])]);
   const scores = { winnerScore, seedScore };
-
-  if (opts.dryRun) {
-    return { gepa, ...scores, proposed: false, pendingVersion: null, skipReason: 'dry_run' };
-  }
 
   // `bestAggregate` breaks ties by `createdAt` (older wins) and the seed is
   // always the oldest, so any candidate strictly tied or below the seed's

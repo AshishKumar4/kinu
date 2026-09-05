@@ -4,8 +4,8 @@
  * Schema:
  *   gepa_runs
  *     run_id            TEXT PK
- *     target            TEXT ('scaffold' | 'prompt_section' | 'crafted_tool' | 'arbitrary')
- *     target_ref        TEXT (e.g. tool name; nullable)
+ *     target            TEXT ('scaffold' | 'prompt_section')
+ *     target_ref        TEXT (the section id; null for the scaffold)
  *     started_at        INTEGER
  *     ended_at          INTEGER (null while in flight)
  *     status            TEXT ('running' | 'completed' | 'aborted')
@@ -88,7 +88,7 @@ export function initGepaTables(execRaw: RawSqlExec): void {
 export function startGepaRun(
   sql: SqlExecutor,
   opts: {
-    target: 'scaffold' | 'prompt_section' | 'crafted_tool' | 'arbitrary';
+    target: 'scaffold' | 'prompt_section';
     targetRef?: string | null;
     budget?: Partial<GepaBudget>;
   },
@@ -258,9 +258,9 @@ export function loadGepaCandidates(
 export function makePersistingHook(args: {
   sql: SqlExecutor;
   runId: string;
-  /** Set of candidate ids already persisted in this hook lifetime so we
-   *  don't double-insert. The seed is persisted via persistGepaCandidate
-   *  separately before the loop starts; pre-populate that id here. */
+  /** Candidate ids this hook has already written, so an iteration that
+   *  reports the whole pool inserts each row once. Starts empty: the seed
+   *  arrives in the first iteration's pool like every other candidate. */
   persisted: Set<string>;
 }): (state: GepaIterationState) => Promise<void> {
   return async (state) => {

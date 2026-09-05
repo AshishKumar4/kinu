@@ -15,7 +15,7 @@
 
 export * from './types';
 export { computeParetoFront, sampleParentByWeight, bestAggregate, parentSelectionWeights } from './pareto';
-export { rolloutMinibatch, renderReflectionPrompt, stripMarkdownFences, proposeMutation } from './mutate';
+export { rolloutMinibatch, renderReflectionPrompt, proposeMutation } from './mutate';
 export { runGepa } from './engine';
 export {
   findComplementaryPair, renderMergePrompt, proposeMerge,

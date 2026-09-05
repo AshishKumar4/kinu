@@ -14,7 +14,6 @@ import { describe, test, expect } from 'bun:test';
 import {
   runGepa, computeParetoFront, sampleParentByWeight, bestAggregate,
   parentSelectionWeights, rolloutMinibatch, renderReflectionPrompt,
-  stripMarkdownFences,
   type EvalInstance, type GepaBudget, type GepaCandidate, type MetricOutcome,
 } from './index';
 import { DELEGATION_RUBRIC } from '../delegation-features';
@@ -145,17 +144,6 @@ describe('bestAggregate', () => {
 });
 
 // ── reflection helpers ───────────────────────────────────────────
-
-describe('stripMarkdownFences', () => {
-  test('strips ``` fences when present', () => {
-    expect(stripMarkdownFences('```ts\nconst x = 1\n```')).toBe('const x = 1');
-    expect(stripMarkdownFences('```\nfoo\n```')).toBe('foo');
-  });
-
-  test('leaves un-fenced content alone', () => {
-    expect(stripMarkdownFences('plain text')).toBe('plain text');
-  });
-});
 
 describe('rolloutMinibatch', () => {
   test('scores every instance and totals metric calls', async () => {
@@ -296,24 +284,6 @@ describe('runGepa', () => {
     expect(result.stopReason).toBe('iterations_exhausted');
     // Scoring calls = seed-eval (1) + mutation rollouts (3 × 1).
     expect(scoringCalls).toBe(1 + 3 * 1);
-  });
-
-  test('rejects candidates failing testRunner', async () => {
-    const evalSet = [mkInstance('i1', 'a')];
-    const metric = async (): Promise<MetricOutcome> => ({ score: 0.5, feedback: '' });
-    const reflectionLm = async () => 'bad-source';
-    const testRunner = async (): Promise<boolean> => false;
-    const result = await runGepa({
-      seed: 'seed',
-      evalSet,
-      metric,
-      reflectionLm,
-      budget: { maxIterations: 2, maxMetricCalls: 100, minibatchSize: 1 },
-      constraints: { testRunner },
-      random: seededRng(1),
-    });
-    expect(result.history.length).toBe(1);
-    expect(result.winner.source).toBe('seed');
   });
 
   test('stops on metric_budget_exhausted', async () => {
@@ -679,23 +649,6 @@ describe('runGepa — constraint checks', () => {
     expect(accepted).toBe(false);
     expect(reasons[0]).toContain('forbidden pattern');
     expect((await runWith({ forbiddenPatterns: [/eval\(/] }, 'safe source')).accepted).toBe(true);
-  });
-
-  test('a testRunner that THROWS rejects the candidate instead of killing the run', async () => {
-    // The test runner shells out to a real build/test command; a crash there
-    // is an ordinary event and must cost one candidate, not the whole run.
-    const log = rejectionLog();
-    const result = await runGepa({
-      seed: 'seed', evalSet, metric,
-      reflectionLm: async () => 'candidate',
-      budget: { maxIterations: 1, maxMetricCalls: 100, minibatchSize: 1 },
-      constraints: { testRunner: async () => { throw new Error('tsc not found'); } },
-      onIteration: log.onIteration,
-      random: seededRng(1),
-    });
-    expect(result.history.length).toBe(1);
-    expect(result.winner.source).toBe('seed');
-    expect(log.reasons[0]).toBe('test_runner_threw: tsc not found');
   });
 
   test('customCheck rejects with its own message', async () => {

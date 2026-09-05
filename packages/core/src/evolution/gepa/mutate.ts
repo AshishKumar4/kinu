@@ -14,8 +14,6 @@ import { stripMarkdownFences } from '../../prompts/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../../prompts/evidence-window';
 import { DELEGATION_RUBRIC } from '../delegation-features';
 
-export { stripMarkdownFences } from '../../prompts/structured';
-
 export interface MutationContext<I = unknown, E = unknown> {
   parent: GepaCandidate;
   /** The minibatch the parent will be rolled out on. */

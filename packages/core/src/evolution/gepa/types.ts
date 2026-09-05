@@ -81,13 +81,6 @@ export interface GepaConstraints {
   forbiddenPatterns?: RegExp[];
   /** Custom synchronous check — return null on accept, error string on reject. */
   customCheck?: (source: string) => string | null;
-  /**
-   * Optional async test runner — last gate. Receives the candidate source;
-   * returns true to accept, false to reject. Runs ONLY after the cheaper
-   * checks pass. Use it to spawn the candidate in a sandbox and run a unit
-   * test suite (Hermes pattern).
-   */
-  testRunner?: (source: string) => Promise<boolean>;
 }
 
 /** Budget and pacing knobs for runGepa. */

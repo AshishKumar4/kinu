@@ -131,30 +131,6 @@ describe('runScaffoldGepa', () => {
     expect(result.skipReason).toBe('winner_equals_seed');
   });
 
-  test('dryRun: returns the GEPA result without persisting', async () => {
-    const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    await rt.identity.scaffold.write(VALID_SEED);
-    const metric = async (source: string): Promise<MetricOutcome> =>
-      source.includes('improved') ? { score: 0.9, feedback: '' } : { score: 0.5, feedback: '' };
-    const reflectionLm = async () => VALID_IMPROVED;
-    const result = await runScaffoldGepa({
-      rt,
-      evalSet: [{ id: 'i1', input: 'x' }],
-      metric,
-      reflectionLm,
-      budget: { maxIterations: 1, maxMetricCalls: 20, minibatchSize: 1 },
-      random: seededRng(1),
-      dryRun: true,
-    });
-    expect(result.proposed).toBe(false);
-    expect(result.skipReason).toBe('dry_run');
-    expect(result.gepa.winner.source).toContain('improved');
-    // No pending row should exist.
-    const pendingRows = rt.storage.sql`SELECT version FROM scaffold_versions WHERE status='pending'`;
-    expect(Array.from(pendingRows).length).toBe(0);
-  });
-
   test('rejects GEPA candidates that fail scaffold structural gates EARLY', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
