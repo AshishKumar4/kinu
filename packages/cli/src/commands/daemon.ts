@@ -1,4 +1,4 @@
-import { closeSync, openSync, readFileSync, unlinkSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { Database } from 'bun:sqlite';
@@ -52,7 +52,7 @@ export async function daemonCommand(action: string | undefined, agent?: string):
     return;
   }
   if (sub === 'restart') {
-    const stopped = await stopDaemon();
+    const stopped = await stopDaemonForRestart();
     const pid = startDaemon();
     if (pid === null) throw new Error(`Local scheduler daemon failed to start. See ${LOG_PATH}`);
     console.log(stopped !== null
@@ -159,10 +159,30 @@ function startDaemon(opts: { quiet?: boolean } = {}): number | null {
  * Stop the daemon and wait for the process to actually be gone — the pidfile
  * is the daemon's own, and it unlinks it on exit, so starting a replacement
  * before the old one dies lets the corpse delete the new daemon's pidfile.
+ * Waits for the reap because the "stopped pid X" report names the process.
  *
  * Returns the pid that was stopped, or null when nothing was running.
  */
 async function stopDaemon(): Promise<number | null> {
+  return stopDaemonUntil(isReaped);
+}
+
+/**
+ * Stop the daemon ahead of a replacement. The replacement only needs the old
+ * daemon past its own pidfile unlink, which lands before the reap. Waiting
+ * for the reap instead reads the reaper's schedule under fixed caps: a
+ * dead-but-unreaped daemon outlasted the 5 s grace and the 2 s force under
+ * parallel load, so restart threw "did not exit" at 7.3 s for a daemon that
+ * was already dead. The pidfile is the daemon's own durable signal; a
+ * pidfile that outlives grace still escalates to SIGKILL exactly as `stop`
+ * does.
+ */
+async function stopDaemonForRestart(): Promise<number | null> {
+  return stopDaemonUntil(isReleased);
+}
+
+/** Shared escalation: SIGTERM, grace, SIGKILL, force, then admit defeat. */
+async function stopDaemonUntil(released: (pid: number) => boolean): Promise<number | null> {
   const pid = readLivePid(); // clears a stale pidfile on its way out
   if (pid === null) return null;
 
@@ -170,9 +190,9 @@ async function stopDaemon(): Promise<number | null> {
   // tolerable outcome; EPERM means it is alive and not ours, and claiming we
   // stopped it would be a lie.
   tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
-  if (!await waitForExit(pid, STOP_GRACE_MS)) {
+  if (!await waitUntilRelease(pid, released, STOP_GRACE_MS)) {
     tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
-    if (!await waitForExit(pid, STOP_FORCE_MS)) {
+    if (!await waitUntilRelease(pid, released, STOP_FORCE_MS)) {
       throw new Error(`Local scheduler daemon (pid ${pid}) did not exit.`);
     }
   }
@@ -181,11 +201,28 @@ async function stopDaemon(): Promise<number | null> {
   return pid;
 }
 
-async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
+/** The kernel reaped the process: `kill` names no such pid. */
+function isReaped(pid: number): boolean {
+  return tolerate(() => process.kill(pid, 0), 'esrch') === undefined;
+}
+
+/**
+ * The old daemon is past the point where it can unlink the pidfile: the file
+ * is already gone, or the pid is dead and nothing remains that could. Either
+ * precedes the reap, so a starved reaper cannot fail it.
+ */
+function isReleased(pid: number): boolean {
+  return !existsSync(PID_PATH) || isReaped(pid);
+}
+
+async function waitUntilRelease(
+  pid: number,
+  released: (pid: number) => boolean,
+  timeoutMs: number,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const gone = tolerate(() => process.kill(pid, 0), 'esrch') === undefined;
-    if (gone) return true;
+    if (released(pid)) return true;
     if (Date.now() >= deadline) return false;
     await sleep(50);
   }

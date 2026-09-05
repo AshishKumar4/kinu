@@ -89,9 +89,11 @@ describe('kinu daemon restart', () => {
     const after = readPid(home);
     expect(after).not.toBeNull();
     expect(after).not.toBe(before);
-    // The command returned only once the old daemon was actually gone, so its
-    // exit could not delete the replacement's pidfile.
-    expect(isAlive(before!)).toBe(false);
+    // The command returned only once the old daemon had released the pidfile,
+    // so its exit cannot delete the replacement's row: the file still names
+    // the replacement. `kill(pid, 0)` cannot say this — a dead-but-unreaped
+    // daemon reads alive, and that timing is the reaper's, not the product's.
+    expect(readPid(home)).toBe(after);
     expect(isAlive(after!)).toBe(true);
     expect(runDaemon(home, 'status').stdout).toContain(`running pid ${after}`);
   });
