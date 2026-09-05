@@ -1,5 +1,5 @@
 {
-  "measured": "91b1aa4f4: 891 test files, 811 runnable suites, 11792 tests, 34 runners, 62 non-public product members",
+  "measured": "c1ff64f12: 893 test files, 812 runnable suites, 11953 tests, 34 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -14,15 +14,7 @@
       "count": 1
     },
     {
-      "key": "mirror :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: (file scope) :: mirrored constant",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/cf-backend/tests/unit-email-ingress.test.ts :: a message over the byte ceiling is dropped without resolving an agent :: declared mirror",
+      "key": "mirror :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: (file scope) :: declared mirror",
       "count": 1
     },
     {
@@ -30,20 +22,8 @@
       "count": 1
     },
     {
-      "key": "mirror :: packages/cf-backend/tests/unit-fiber-lane-carriers.test.ts :: (file scope) :: declared mirror",
-      "count": 2
-    },
-    {
-      "key": "mirror :: packages/cf-backend/tests/unit-fiber-lane-carriers.test.ts :: (file scope) :: mirrored constant",
-      "count": 1
-    },
-    {
       "key": "mirror :: packages/cf-backend/tests/unit-last-event-id.test.ts :: (file scope) :: declared mirror",
       "count": 1
-    },
-    {
-      "key": "mirror :: packages/cf-backend/tests/unit-public-shell.test.ts :: (file scope) :: mirrored constant",
-      "count": 2
     },
     {
       "key": "mirror :: packages/cf-backend/tests/unit-rpc-gate.test.ts :: (file scope) :: declared mirror",
@@ -52,14 +32,6 @@
     {
       "key": "mirror :: packages/cf-backend/tests/unit-rpc-gate.test.ts :: the HTTP dispatcher consumes THIS table — no second scope policy anywhere :: declared mirror",
       "count": 2
-    },
-    {
-      "key": "mirror :: packages/cf-backend/tests/unit-session-recovery.test.ts :: (file scope) :: mirrored constant",
-      "count": 2
-    },
-    {
-      "key": "mirror :: packages/cf-backend/tests/unit-transport-security.test.ts :: (file scope) :: mirrored constant",
-      "count": 1
     },
     {
       "key": "mirror :: packages/cf-backend/tests/workerd/worker.ts :: (file scope) :: declared mirror",
@@ -75,14 +47,6 @@
     },
     {
       "key": "mirror :: packages/cli/tests/cloud-agent-client.test.ts :: send transmits only the new user message and streams the reply :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/cli/tests/composer-layout.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/cli/tests/composer-wrap.test.tsx :: (file scope) :: declared mirror",
       "count": 1
     },
     {
@@ -107,10 +71,6 @@
     },
     {
       "key": "mirror :: packages/core/tests/integration-fork-pipeline.test.ts :: repeating a completed delivery converges on exactly one copied history :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/core/tests/unit-agent-session-files.test.ts :: (file scope) :: mirrored constant",
       "count": 1
     },
     {
@@ -142,10 +102,6 @@
       "count": 2
     },
     {
-      "key": "mirror :: packages/core/tests/unit-terminal-transition-conformance.test.ts :: (file scope) :: mirrored constant",
-      "count": 1
-    },
-    {
       "key": "mirror :: packages/core/tests/unit-turn-authorship.test.ts :: the projection reads text and provenance out of one stored row :: declared mirror",
       "count": 1
     },
@@ -158,24 +114,12 @@
       "count": 1
     },
     {
-      "key": "mirror :: packages/devbox/tests/decisions.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/devbox/tests/decisions.test.ts :: (file scope) :: mirrored constant",
-      "count": 1
-    },
-    {
       "key": "mirror :: packages/devbox/tests/lifecycle-generation.test.ts :: a caller does not JOIN a superseded attempt, it starts the new generation's :: declared mirror",
       "count": 1
     },
     {
       "key": "mirror :: scripts/bench.test.ts :: (file scope) :: declared mirror",
       "count": 2
-    },
-    {
-      "key": "mirror :: scripts/client-error-ux.test.ts :: (file scope) :: mirrored constant",
-      "count": 1
     },
     {
       "key": "mirror :: scripts/test-census.test.ts :: (file scope) :: declared mirror",
@@ -224,6 +168,10 @@
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a subordinate activation restores the wake of a deferred job whose row was lost :: harness bridge to a non-public member",
       "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: an activation restores a wake row that went missing :: harness bridge to a non-public member",
+      "count": 1
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: an unfinished pass re-arms in the FUTURE, at a pace that grows per lap :: harness bridge to a non-public member",
@@ -514,10 +462,6 @@
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-output-limit-continuation.test.ts :: a turn that absorbed the continuation mid-step owes no second one :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
       "key": "private_reach :: packages/cf-backend/tests/unit-output-limit-continuation.test.ts :: a turn that finished on its own owes no continuation :: harness bridge to a non-public member",
       "count": 1
     },
@@ -572,38 +516,6 @@
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-user-authority-races.test.ts :: (file scope) :: harness bridge to a non-public member",
       "count": 2
-    },
-    {
-      "key": "private_reach :: packages/core/tests/unit-background-tools.test.ts :: BACKGROUNDABLE_TOOLS declares the completion axis: agents=spawn, run/execute_tools=result :: bracket reach to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/core/tests/unit-exec-detach-ceiling.test.ts :: (file scope) :: bracket reach to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/core/tests/unit-exec-detach-ceiling.test.ts :: the shell and the code lane both ride the window, on every surface :: bracket reach to a non-public member",
-      "count": 2
-    },
-    {
-      "key": "private_reach :: packages/core/tests/unit-exec-detach-ceiling.test.ts :: the training run detaches, settles, and enqueues the wake carrying its result :: bracket reach to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-alarm-chain-contract.test.ts :: (file scope) :: memberBody() over source text",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-alarm-chain-contract.test.ts :: arming rounds up, ignores already-due rows, and does so in ONE place :: expect(<source text>).toContain",
-      "count": 4
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-alarm-chain-contract.test.ts :: the stale sweep runs before the SDK reads due rows, spares recurring rows, and exempts the Kinu wake :: expect(<source text>).toContain",
-      "count": 2
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-alarm-chain-contract.test.ts :: the stale sweep runs before the SDK reads due rows, spares recurring rows, and exempts the Kinu wake :: memberBody() over source text",
-      "count": 1
     },
     {
       "key": "source_text :: packages/cf-backend/tests/unit-chat-error-surface.test.ts :: catches the on-connect terminal-error replay frame in the raw onMessage handler :: between() over source text",
@@ -707,26 +619,6 @@
     },
     {
       "key": "source_text :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: the descriptor read is not where establishment lives :: memberBody() over source text",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-my-gateway.test.ts :: (file scope) :: reads a source file",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-my-gateway.test.ts :: login-time discovery auto-selects a sole gateway :: expect(<source text>).toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-my-gateway.test.ts :: login-time discovery auto-selects a sole gateway :: expect(<source text>).toMatch",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-my-gateway.test.ts :: the derived cloudflare.ai-gateway view rides the stored cloudflare.oauth credential :: expect(<source text>).toContain",
-      "count": 3
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-my-gateway.test.ts :: the derived cloudflare.ai-gateway view rides the stored cloudflare.oauth credential :: expect(<source text>).toMatch",
       "count": 1
     },
     {
@@ -1018,10 +910,6 @@
       "count": 1
     },
     {
-      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: every startup step admits `already-attached`, and every exclusion states a reason :: reads a source file",
-      "count": 1
-    },
-    {
       "key": "source_text :: scripts/bench-devbox-decision.test.ts :: no minute-scale route is posted as a blocking request any more :: expect(<source text>).toContain",
       "count": 1
     },
@@ -1043,10 +931,6 @@
     },
     {
       "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the arm checks every expectation the record produced, in both directions :: reads a source file",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the completed cell accepts an unchanged-generation warm attach :: reads a source file",
       "count": 1
     },
     {
@@ -1111,7 +995,7 @@
     },
     {
       "key": "source_text :: scripts/capture-probe.test.ts :: the deployed probe measures exactly the closed capability set :: expect(<source text>).toContain",
-      "count": 2
+      "count": 1
     },
     {
       "key": "source_text :: scripts/ladder.test.ts :: the installer writes a RELATIVE hooks path :: reads a source file",
@@ -1130,72 +1014,8 @@
       "count": 1
     },
     {
-      "key": "source_text :: scripts/payload-transport.test.ts :: a fixture that cannot report its version censors the run :: expect(<source text>).toContain",
-      "count": 2
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: a pre-deploy failure proves absence from account deletion, not live RPCs :: expect(<source text>).not.toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: a pre-deploy failure proves absence from account deletion, not live RPCs :: expect(<source text>).toContain",
-      "count": 2
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: an explicit bucket is used exactly, without generated-name or discovery fallback :: expect(<source text>).not.toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: an explicit bucket is used exactly, without generated-name or discovery fallback :: expect(<source text>).toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: artifacts carry grant fingerprints, never grant material :: expect(<source text>).toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: container application absence is polled from the account listing :: expect(<source text>).toContain",
-      "count": 3
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: deploy argv carries non-secret vars only; secrets go through stdin :: expect(<source text>).not.toMatch",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: deploy argv carries non-secret vars only; secrets go through stdin :: expect(<source text>).toContain",
-      "count": 3
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: onStart stays bounded and prepare owns image, harness, and mount proof :: expect(<source text>).toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: quiescence is proven by consecutive probes, never by a sleep :: expect(<source text>).toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: quiescence is proven by consecutive probes, never by a sleep :: expect(<source text>).toMatch",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: records warm-up evidence separately from statistic samples and ranking :: expect(<source text>).toContain",
-      "count": 2
-    },
-    {
       "key": "source_text :: scripts/payload-transport.test.ts :: the driver imports no AWS client, generates no bytes, hashes nothing :: expect(<source text>).not.toContain",
       "count": 5
-    },
-    {
-      "key": "source_text :: scripts/payload-transport.test.ts :: the driver imports no AWS client, generates no bytes, hashes nothing :: expect(<source text>).toContain",
-      "count": 2
-    },
-    {
-      "key": "source_text :: scripts/platform-catalog.test.ts :: the exempt file would otherwise be the largest violator, so the matcher still bites there :: expect(<source text>).toBeGreaterThan",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/platform-catalog.test.ts :: the exempt file would otherwise be the largest violator, so the matcher still bites there :: reads a source file",
-      "count": 1
     },
     {
       "key": "source_text :: scripts/secret-scan.test.ts :: the current scanner source has no detector-shaped literal of its own :: expect(<source text>).toEqual",
@@ -1206,19 +1026,7 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-analytics-plane.test.ts :: every shipped schema fits inside the platform limits, through the guard itself :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-analytics-plane.test.ts :: nothing in the query builders reads an environment or a binding :: weak-only test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-analytics-plane.test.ts :: the digest is stable, distinguishing, and empty for an absent identifier :: expected side computed by the code under test",
-      "count": 2
-    },
-    {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-auth-security.test.ts :: a multi-account token records every account and selects the first :: expected side computed by the code under test",
       "count": 1
     },
     {
@@ -1226,27 +1034,7 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-egress-vault.test.ts :: a secret sealed for one binding cannot be opened as another :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-fork-runs-revalidation.test.ts :: the answer is sorted and deduplicated, so it can be a memo key :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-head-delta.test.ts :: step ids are per step, so the trace is stable while it grows :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-live-refresh.test.ts :: an initial failure and a refresh failure are different claims about the same reason :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-swarm-tree-model.test.ts :: radius grows with visits and stays inside its bracket :: expected side computed by the code under test",
-      "count": 2
-    },
-    {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-swarm-tree-model.test.ts :: visits beyond the maximum cannot blow the scale out :: expected side computed by the code under test",
       "count": 1
     },
     {
@@ -1254,35 +1042,7 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-work-journal.test.ts :: keys are stable across re-reads, so a poll does not re-key and re-animate the feed :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/cf-backend/tests/workerd/instruction-digest.test.ts :: one changed byte changes the digest, so a rewrite demotes here too :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/cf-backend/tests/workerd/instruction-digest.test.ts :: the digest is stable across calls, so an approval keeps matching :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/cli-backend/tests/agents-md.test.ts :: editing an approved file changes what the resolver is asked about :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/cli-backend/tests/opencode-provider.test.ts :: createModel throws on invalid model id (no slash) :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/src/skills/skills.test.ts :: accepts kebab-case :: weak-only test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/core/src/skills/skills.test.ts :: render order is name order, so the same active set is byte-identical however it was activated :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/integration-mcts.test.ts :: cost guard does NOT refuse a search the catalog prices at nothing :: weak-only test",
       "count": 1
     },
     {
@@ -1354,23 +1114,11 @@
       "count": 2
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-bench-stats.test.ts :: rejects out-of-range probabilities :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-cache-breakpoints.test.ts :: empty tool set is a no-op :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-cache-breakpoints.test.ts :: retention 'short' is the default and is byte-identical to no opinion :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/core/tests/unit-calibration.test.ts :: is deterministic, and an empty ledger draws nothing :: expected side computed by the code under test",
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-consolidation.test.ts :: skips tools with fewer than 2 uses :: weak-only test",
+      "key": "tautology_suspect :: packages/core/tests/unit-clamp-tool-result.test.ts :: decodeJsonValue rejects non-finite numbers :: weak-only test",
       "count": 1
     },
     {
@@ -1379,14 +1127,6 @@
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-diversity.test.ts :: the first six branches read exactly as they always did :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-ema.test.ts :: missing crafted_tools table is a fault, not an empty toolbox :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-eval.test.ts :: throws on schema-invalid case :: weak-only test",
       "count": 1
     },
     {
@@ -1414,67 +1154,7 @@
       "count": 2
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-trust.test.ts :: forbidden combo throws :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-trust.test.ts :: is commutative :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-exploration-records.test.ts :: a different INSTRUMENT is a different objective, so nothing is pooled across it :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/core/tests/unit-exploration-records.test.ts :: identical is 0, disjoint is 1, and it is symmetric :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-fork.test.ts :: 15. assistant_messages copy is skipped when the source has no such table :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-generate-json.test.ts :: throws on schema mismatch so the caller can fall back :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-instruction-skill-policy.test.ts :: changing only allowed-tools after review demotes the skill :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-instruction-trust.test.ts :: binds the exact bytes — one character apart is a different digest :: expected side computed by the code under test",
-      "count": 2
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-instruction-trust.test.ts :: whitespace is content — an invisible edit still demotes :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-judge-model.test.ts :: resellers report the vendor they resell, not their own id :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-judge-model.test.ts :: two routes to the same build are the same family :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-mcts-progress.test.ts :: a call with no sink runs identically — the option is optional :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-mission-budget-seams.test.ts :: a mission with room left runs the pipeline unchanged :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-mission-budget.test.ts :: cacheWrite1h is a subset of cacheWrite and is never charged twice :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-pathology.test.ts :: it is a pure function — same rows, same clusters, input untouched :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-ppi.test.ts :: is reproducible from its seed and reports nothing without labels :: expected side computed by the code under test",
       "count": 1
     },
     {
@@ -1494,7 +1174,7 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-release.test.ts :: a github binding refuses %s :: weak-only test",
+      "key": "tautology_suspect :: packages/core/tests/unit-read-model-limits.test.ts :: an inverted range throws instead of silently answering the max :: weak-only test",
       "count": 1
     },
     {
@@ -1518,14 +1198,6 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-tools.test.ts :: each tool carries description + inputSchema :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-turn-lifecycle.test.ts :: a recorder failure never throws into the turn :: weak-only test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/core/tests/unit-turn-outcomes.test.ts :: an execution verdict never reaches a user verdict's poles :: expected side computed by the code under test",
       "count": 2
     },
@@ -1535,7 +1207,7 @@
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-volatile-context.test.ts :: is deterministic and byte-sensitive :: expected side computed by the code under test",
-      "count": 2
+      "count": 1
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-volatile-context.test.ts :: nothing in the block is clock-derived: the same state fingerprints identically :: expected side computed by the code under test",
@@ -1547,26 +1219,6 @@
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-volatile-context.test.ts :: without overflow, activation order still renders byte-identically :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/devbox/tests/capture-capabilities.test.ts :: the report schema is strict about shape and closed about ids :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/devbox/tests/capture-model.test.ts :: hashes sparse content by logical runs without allocating its apparent size :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/devbox/tests/durability-contract.test.ts :: operation phase rejects redundant and impossible state :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/devbox/tests/durability-contract.test.ts :: wire counters and digests refuse unsafe representations :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/devbox/tests/journal-daemon-native-openat2.test.ts :: creates all ancestry fd-relatively and never follows a swapped symlink :: weak-only test",
       "count": 1
     },
     {
@@ -1586,14 +1238,6 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/test-utils/tests/agent-evals.test.ts :: a trigger outside the producer picklist THROWS rather than vanishing :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/test-utils/tests/eval-identity.test.ts :: two calls do not collide, so a suite can run twice :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: scripts/bench-r2-workspace.test.ts :: the plan is a pure function of the run id :: expected side computed by the code under test",
       "count": 2
     },
@@ -1602,39 +1246,7 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: scripts/bench.test.ts :: refuses an unknown suite :: weak-only test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: scripts/bench.test.ts :: regenerating a task at a different size changes the manifest :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: scripts/capture-probe.test.ts :: garbage probe output is rejected loudly, not parsed hopefully :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: scripts/chat-and-files-ux.test.ts :: it measures something — every addressed row is on the page :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: scripts/gates.test.ts :: a lock that is not a list of strings is rejected, not ignored :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: scripts/infra.test.ts :: the confirmation names the worker and the environment :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: scripts/payload-transport.test.ts :: validates embedded shared UploadIntent contracts rather than a copied shape :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: scripts/release-config.test.ts :: a job that holds a secret is bound to a GitHub environment :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: scripts/silent-drop.test.ts :: the ratchet key survives an edit above the site :: expected side computed by the code under test",
       "count": 1
     },
     {
