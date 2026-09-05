@@ -46,13 +46,11 @@
  */
 
 import { jsonSchema, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
-import { HEAD_BUILTIN_TOOLS, keepBuiltins } from '../heads/types';
+import { HEAD_BUILTIN_TOOLS } from '../heads/types';
 import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../heads/head-inference';
 import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
 import type { HeadInferenceDeps } from '../heads/head-inference';
-import * as v from 'valibot';
-import { buildBuiltinTools, isExecutableToolEntry } from '../tools/builtins';
-import type { BuiltinToolDeps } from '../tools/builtins';
+import { buildToolSurface, installSurfaceExecuteTool, type ToolSurfaceDeps } from '../tools/builtins';
 import { AgentWakeQueue } from '../jobs/wake-queue';
 import { BackgroundJobRunner } from '../jobs/runner';
 import type { BackgroundJobRunnerDeps } from '../jobs/runner';
@@ -494,52 +492,43 @@ function buildNodeToolSet(input: {
   readonly mode: WorkMode;
 }): ToolSet {
   const { deps, scratch } = input;
-  const builtinDeps: BuiltinToolDeps = {
-    rt: deps.rt,
-    logger: deps.logger,
-    report: {
-      report: async ({ status, content }): Promise<JsonValue> => {
-        // THE INSTRUMENT RUNS HERE, BEFORE THE REPORT LANDS. The candidate is read out
-        // of the content through {@link candidateOf} — the same function the engine
-        // reads it with at the barrier, so the text the gate measures and the text the
-        // search measures cannot be two different things.
-        const errors = await deps.gradeReport?.(
-          candidateOf(content.trim(), deps.rt.executor.languages),
-        );
-        if (errors !== undefined && errors !== null) {
-          // NOT WRITTEN TO `scratch.reported`, which is the whole of "blocks": the
-          // loop's terminal condition is a report having landed, so a refused one
-          // leaves the node running with the instrument's own words as its next
-          // instruction. Returned rather than thrown — a tool's refusal is its return
-          // value, the same shape the proposal tool answers an arbiter's denial with.
-          return { accepted: false, errors };
-        }
-        scratch.reported = { status, content };
-        return { received: true };
+  // The confined builtin surface — the one assembly every kind shares, narrowed
+  // to the node's admitted set. The report tool rides the same builtin build as
+  // the rest, and a function-form `executeTool` resolves next, over the finished
+  // admitted surface — before the proposal tool, which the sandbox therefore
+  // never declares.
+  const surfaceDeps: ToolSurfaceDeps = {
+    builtin: {
+      rt: deps.rt,
+      logger: deps.logger,
+      report: {
+        report: async ({ status, content }): Promise<JsonValue> => {
+          // THE INSTRUMENT RUNS HERE, BEFORE THE REPORT LANDS. The candidate is read out
+          // of the content through {@link candidateOf} — the same function the engine
+          // reads it with at the barrier, so the text the gate measures and the text the
+          // search measures cannot be two different things.
+          const errors = await deps.gradeReport?.(
+            candidateOf(content.trim(), deps.rt.executor.languages),
+          );
+          if (errors !== undefined && errors !== null) {
+            // NOT WRITTEN TO `scratch.reported`, which is the whole of "blocks": the
+            // loop's terminal condition is a report having landed, so a refused one
+            // leaves the node running with the instrument's own words as its next
+            // instruction. Returned rather than thrown — a tool's refusal is its return
+            // value, the same shape the proposal tool answers an arbiter's denial with.
+            return { accepted: false, errors };
+          }
+          scratch.reported = { status, content };
+          return { received: true };
+        },
       },
+      webSearch: deps.webSearch,
     },
+    admitted: NODE_BUILTIN_TOOLS,
+    executeTool: deps.executeTool,
   };
-  // Assigned rather than spread conditionally: an absent dep must be an ABSENT KEY, and
-  // a key written as `undefined` is a different fact from a key nobody set — which is the
-  // distinction `buildBuiltinTools` reads to decide whether a tool exists at all.
-  // `executeTool` arrives in TWO forms and they resolve at different times. A finished
-  // Tool assigns directly, as before. But on the hosted path it arrives as a FUNCTION
-  // `(finished) => factory.toolFor(finished)` over the actor's factory, and
-  // `preBuiltExecuteTool` only accepts a finished Tool — handing the function in raw
-  // failed the entry check and every hosted node got the NOT CONFIGURED stub. The
-  // function form resolves below against the finished surface instead, the same shape
-  // `buildHeadToolSet` already uses for the identical handoff.
-  if (deps.executeTool !== undefined) {
-    const direct = { value: deps.executeTool };
-    if (isExecutableToolEntry(direct)) builtinDeps.preBuiltExecuteTool = deps.executeTool;
-  }
-  if (deps.webSearch !== undefined) builtinDeps.webSearch = deps.webSearch;
-  const surface: ToolSet = keepBuiltins(buildBuiltinTools(builtinDeps), NODE_BUILTIN_TOOLS);
-  const buildFromSurface = v.safeParse(v.function(), deps.executeTool);
-  if (buildFromSurface.success && 'execute_tools' in surface) {
-    const entry = { value: buildFromSurface.output(surface) };
-    if (isExecutableToolEntry(entry)) surface.execute_tools = entry.value;
-  }
+  const surface: ToolSet = buildToolSurface(surfaceDeps);
+  installSurfaceExecuteTool(surface, surfaceDeps);
   if (input.arbitrate) {
     Object.assign(surface, buildProposeTool(input.arbitrate, scratch));
   }

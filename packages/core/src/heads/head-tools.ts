@@ -33,10 +33,9 @@
  */
 
 import { jsonSchema, tool, type ToolSet } from 'ai';
-import * as v from 'valibot';
-import { buildBuiltinTools, isExecutableToolEntry } from '../tools/builtins';
+import { buildToolSurface, installSurfaceExecuteTool, type ToolSurfaceDeps } from '../tools/builtins';
 import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
-import { budgetExhausted, HEAD_BUILTIN_TOOLS, keepBuiltins } from './types';
+import { budgetExhausted, HEAD_BUILTIN_TOOLS } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
@@ -79,13 +78,17 @@ export interface HeadToolDeps {
 export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
   const { input, capture } = deps;
 
-  const builtin = buildBuiltinTools({
-    rt: deps.rt,
-    preBuiltExecuteTool: deps.executeTool,
-    webSearch: deps.webSearch,
-  });
-  const kept = keepBuiltins(builtin, HEAD_BUILTIN_TOOLS);
-
+  // The confined builtin surface — the one assembly every kind shares, narrowed
+  // to the head's admitted set. A finished `execute_tools` entry installs in
+  // phase 1; a function of the finished surface waits until after the
+  // `allowedTools` filter below, so `tools.*` declares exactly the tools the
+  // head holds.
+  const surfaceDeps: ToolSurfaceDeps = {
+    builtin: { rt: deps.rt, webSearch: deps.webSearch },
+    admitted: HEAD_BUILTIN_TOOLS,
+    executeTool: deps.executeTool,
+  };
+  const kept = buildToolSurface(surfaceDeps);
   const all: ToolSet = {
     // The builtin tools know nothing about heads, so their calls are recorded
     // into the capture here rather than by each tool.
@@ -170,10 +173,6 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
   const surface = input.allowedTools === undefined
     ? all
     : Object.fromEntries(Object.entries(all).filter(([name]) => new Set(input.allowedTools).has(name)));
-  const buildFromSurface = v.safeParse(v.function(), deps.executeTool);
-  if (buildFromSurface.success && 'execute_tools' in surface) {
-    const entry = { value: buildFromSurface.output(surface) };
-    if (isExecutableToolEntry(entry)) surface.execute_tools = entry.value;
-  }
+  installSurfaceExecuteTool(surface, surfaceDeps);
   return surface;
 }

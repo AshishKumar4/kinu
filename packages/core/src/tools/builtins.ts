@@ -97,6 +97,9 @@ import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '.
 import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review';
 import type { JsonValue } from '../utils/json';
 import { diagnostics, KinuError, renderThrownChain, toKinuError, type Logger } from '../obs/index';
+// The admitted-set filter beside the sets it narrows (heads/types.ts). That
+// module holds no runtime import, so this edge cannot close a ring.
+import { keepBuiltins } from '../heads/types';
 
 type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
 type ExecutableToolEntry = NonNullable<ToolSet[string]>;
@@ -905,4 +908,62 @@ export function installExecuteTools(
     built,
     deps.contextBudget ? { ...clamp, budget: deps.contextBudget } : clamp,
   );
+}
+
+/**
+ * One builtin-surface assembly for every agent kind — orchestrator, subordinate,
+ * head and swarm node — with the kind differences as data rather than parallel
+ * build flows.
+ *
+ * Phase 1 of the surface every kind shares: build the builtins, narrow them to
+ * the admitted set, and carry a finished `execute_tools` entry straight in.
+ * Phase 2 — the sandbox OVER the finished surface — stays with the caller,
+ * because it differs by kind: an actor finishes with `installExecuteTools`
+ * (after `agents` is registered, so codemode `tools.*` declares it too), a
+ * confined surface with {@link installSurfaceExecuteTool} (a head after its
+ * `allowedTools` filter, a node before its proposal tool — each order
+ * preserved exactly, which is what keeps `tools.*` exact).
+ */
+export interface ToolSurfaceDeps {
+  /** Deps for `buildBuiltinTools`. A confined caller leaves
+   *  `preBuiltExecuteTool` unset and passes `executeTool` once instead: a
+   *  finished entry installs here, a function waits for phase 2. */
+  builtin: BuiltinToolDeps;
+  /** Narrow the builtins to these names (`HEAD_BUILTIN_TOOLS`,
+   *  `NODE_BUILTIN_TOOLS`). Absent keeps the whole surface — the actor kinds,
+   *  whose confinement is per-action gating inside `agents`, not absence. */
+  admitted?: readonly string[];
+  /** A confined surface's `execute_tools` in either form it arrives in: a
+   *  finished entry installs in phase 1 (the same entry check
+   *  `buildBuiltinTools` applies to `preBuiltExecuteTool`); a function of the
+   *  finished surface waits for {@link installSurfaceExecuteTool}. Actors omit
+   *  it — their sandbox builds over the finished surface instead. */
+  executeTool?: unknown;
+}
+
+export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
+  const builtin: BuiltinToolDeps = { ...deps.builtin };
+  if (builtin.preBuiltExecuteTool === undefined && deps.executeTool !== undefined) {
+    const direct = { value: deps.executeTool };
+    if (isExecutableToolEntry(direct)) builtin.preBuiltExecuteTool = deps.executeTool;
+  }
+  const built = buildBuiltinTools(builtin);
+  return deps.admitted === undefined ? built : keepBuiltins(built, deps.admitted);
+}
+
+/**
+ * Phase 2 for a confined surface: resolve a function-form `executeTool` over
+ * the FINISHED surface, so codemode `tools.*` declares exactly the tools
+ * present — the same "sandbox last" rule `installExecuteTools` keeps for
+ * actors. A finished entry (or anything else) is not a function and is left
+ * alone: it already installed in phase 1. Runs where the caller finished its
+ * surface — after a head's `allowedTools` filter, before a node's proposal
+ * tool — which the callers keep, not this function.
+ */
+export function installSurfaceExecuteTool(surface: ToolSet, deps: ToolSurfaceDeps): void {
+  const buildFromSurface = v.safeParse(v.function(), deps.executeTool);
+  if (buildFromSurface.success && 'execute_tools' in surface) {
+    const entry = { value: buildFromSurface.output(surface) };
+    if (isExecutableToolEntry(entry)) surface.execute_tools = entry.value;
+  }
 }

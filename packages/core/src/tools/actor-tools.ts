@@ -22,7 +22,7 @@
  */
 
 import type { ToolSet } from 'ai';
-import { buildBuiltinTools, installExecuteTools, type BuiltinToolDeps, type ExecuteToolsBuilder } from './builtins';
+import { buildToolSurface, installExecuteTools, type BuiltinToolDeps, type ExecuteToolsBuilder } from './builtins';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 
@@ -55,7 +55,7 @@ export interface ActorToolsetDeps extends BuiltinToolDeps {
  * actor with only `team` sees hire/ask/send and no swarm.
  */
 export function buildActorTools(deps: ActorToolsetDeps): ToolSet {
-  const tools = buildBuiltinTools(deps);
+  const tools = buildToolSurface({ builtin: deps });
   if (deps.agents && (deps.agents.fork || deps.agents.team || deps.agents.peers)) {
     tools.agents = createAgentsTool(deps.agents);
   }
