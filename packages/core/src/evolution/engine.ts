@@ -31,7 +31,7 @@
  *   re-executes, for a curve no decision reads. It runs on demand instead.
  */
 
-import type { ShadowTrialQueueOutcome } from './types';
+import type { ShadowTrialPlan, ShadowTrialQueueOutcome } from './types';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 
@@ -954,17 +954,19 @@ export class EvolutionEngine {
   /**
    * The turn-bound half: record a completed turn as evidence the promotion
    * gate may draw on. ONE row and no inference — the candidate rollout it pays
-   * for runs on the cadence lane below.
+   * for runs on the cadence lane below. `plan` is the sampling decision the
+   * caller made when the turn ended (`shadowTrialPlan`), so a replay records
+   * the same trial the first attempt decided on.
    */
   queueShadowTrial(
-    turn: CompletedTurn, context: readonly ModelMessage[], opts?: { readonly id?: string; readonly pendingVersion?: number },
+    turn: CompletedTurn, context: readonly ModelMessage[], plan: ShadowTrialPlan,
   ): ShadowTrialQueueOutcome {
     if (!this.config.enabled) return 'not_sampled';
     return this.config.shadowTrialQueue?.({
       task: turn.userMessage,
       currentOutput: turn.assistantResponse,
       context,
-    }, opts) ?? 'not_sampled';
+    }, plan) ?? 'not_sampled';
   }
 
   /**

@@ -43,7 +43,9 @@ import {
   decidePromotion, dropQueuedShadowTrial, getPendingScaffold, listQueuedShadowTrials,
   purgeQueuedShadowTrials, queueShadowTrial, readScaffoldVersion,
 } from '../scaffold/shadow';
-import type { ShadowTrialDrain, ShadowTrialQueueOutcome, ShadowTrialTurn } from './types';
+import type {
+  ShadowTrialDrain, ShadowTrialPlan, ShadowTrialQueueOutcome, ShadowTrialTurn,
+} from './types';
 import {
   DEFAULT_AUTO_JUDGE_CONFIG, runAutoShadowEval,
 } from '../scaffold/auto-judge';
@@ -210,37 +212,32 @@ export async function runScaffoldOnce(
 }
 
 /**
- * The turn-bound half of the shadow loop — and ALL of it that a turn pays for:
- * sample this turn, and if it is in the sample, write ONE row recording the
- * task, what the live turn answered, and the conversation it answered in.
+ * The turn-bound half of the shadow loop, in two calls.
  *
- * The trial itself — a whole candidate turn plus two judge calls, minutes of
- * wall clock — is NOT run here. It used to be, on the turn's own lane, which
+ * {@link shadowTrialPlan} DECIDES: which candidate this turn is sampled
+ * against, or null for a turn that is not sampled. {@link queueTurnShadowTrial}
+ * RECORDS a decided plan as one row carrying the task, what the live turn
+ * answered, and the conversation it answered in. The split exists because both
+ * halves of the decision move: the rate is a coin flip, and the pending
+ * candidate is promoted and replaced. A caller that owes the queueing makes the
+ * decision once, when the turn ends, and writes it into its durable record; a
+ * replay records the same plan instead of deciding again. Deciding twice would
+ * perform a different obligation than the one owed: a turn the first attempt
+ * declined gets enqueued, and a sampled one gets scored against a candidate
+ * that was not under trial when it ran.
+ *
+ * The trial itself, a whole candidate turn plus two judge calls, minutes of
+ * wall clock, is NOT run here. It used to be, on the turn's own lane, which
  * meant the promotion gate resolved candidates against the user's clock: a
  * `kinu exec` process waited up to its settle bound for a rollout, and a
  * Durable Object ran a full extra inference beside the next request. What runs
  * the queue is the cadence lane ({@link runQueuedShadowTrials}), and until it
- * does the gate simply has less evidence — which `decidePromotion` already has
- * an honest answer for ('continue'), and which `getShadowStatus` reports as
- * queued rather than as trials.
+ * does the gate has less evidence, which `decidePromotion` already answers with
+ * 'continue' and `getShadowStatus` reports as queued rather than as trials.
  *
- * Synchronous and total: a lost trial must never fail the turn that produced
- * it, so every failure is absorbed and named in the return value.
- *
- * Whether this runs at all is not decided here: both halves of the loop are
+ * Whether any of this runs is not decided here: both halves of the loop are
  * reached through the EvolutionEngine, which holds the one auto-evolution gate
  * (`queueShadowTrial` / `runDueShadowTrials`).
- */
-/**
- * WHICH candidate this turn is sampled against, or null for a turn that is not
- * sampled — the whole decision half of {@link queueTurnShadowTrial}, split out so
- * a caller that owes the queueing can make it ONCE and record it.
- *
- * Both halves move: the rate is a coin flip, and the pending candidate is
- * promoted and replaced. Re-asking on a replay therefore performs a DIFFERENT
- * obligation than the one that was owed — a turn the first attempt declined gets
- * enqueued, and a sampled one gets scored against a candidate that was not under
- * trial when it ran. The version travels with the answer for that second reason.
  */
 export function shadowTrialPlan(control: ScaffoldControl, turnKey: string): number | null {
   // An empty key is every unkeyed turn's key. Hashing it answers the same way for
@@ -277,30 +274,19 @@ function sampleFraction(turnKey: string): number {
   return hash / 0x1_0000_0000;
 }
 
+/**
+ * Record one decided plan as a queued trial. Synchronous and total: a lost
+ * trial must never fail the turn that produced it, so every failure is absorbed
+ * and named in the return value.
+ */
 export function queueTurnShadowTrial(
   control: ScaffoldControl,
   turn: ShadowTrialTurn,
-  /** The stable row identity for a caller that owes this queueing — see
-   *  `queueShadowTrial` — and the RECORDED plan a replaying caller made the first
-   *  time. Without the plan this call decides afresh, which is right for a live
-   *  caller and wrong for one replaying a recorded obligation. */
-  opts?: { readonly id?: string; readonly pendingVersion?: number },
+  plan: ShadowTrialPlan,
 ): ShadowTrialQueueOutcome {
   try {
-    // A RECORDED plan skips the policy entirely — that decision was made and
-    // written when the turn ended, and re-deciding here is what a replay must not
-    // do. Without one this is a live caller, and it decides now.
-    let pendingVersion = opts?.pendingVersion;
-    if (pendingVersion === undefined) {
-      const sampleRate = control.config.getShadowSampleRate();
-      if (sampleRate <= 0) return 'not_sampled';
-      const pending = getPendingScaffold(control.sql);
-      if (!pending) return 'no_pending';
-      if (Math.random() >= sampleRate) return 'not_sampled';
-      pendingVersion = pending.version;
-    }
     const trial = {
-      pendingVersion,
+      pendingVersion: plan.pendingVersion,
       // Passed WHOLE. runAutoShadowEval owns the evidence budget and applies it
       // once, to the judge and the trial row together; a clamp here both
       // duplicates the policy and lies about it — windowing an already windowed
@@ -315,7 +301,7 @@ export function queueTurnShadowTrial(
     };
     return queueShadowTrial(
       control.sql,
-      opts?.id === undefined ? trial : { ...trial, id: opts.id },
+      plan.id === undefined ? trial : { ...trial, id: plan.id },
     );
   } catch (err) {
     diagnostics.failure(

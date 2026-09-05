@@ -99,12 +99,22 @@ export interface ShadowTrialDrain {
   readonly applied: 'promote' | 'rollback' | null;
 }
 
-/** What a completed turn offers the promotion gate. */
 /** What a completed turn offered the promotion gate. Every value except
  *  `'queued'` is a turn that contributed nothing — named, so a caller reporting
  *  the gate's state never has to guess which, and so a durable effect that OWED
- *  the queueing can tell a refusal from a failure. */
-export type ShadowTrialQueueOutcome = 'queued' | 'not_sampled' | 'no_pending' | 'queue_full' | 'failed';
+ *  the queueing can tell a refusal from a failure. `not_sampled` is the
+ *  auto-evolution gate's answer; the sampling itself is decided before the
+ *  queue is asked (evolution/control.ts `shadowTrialPlan`). */
+export type ShadowTrialQueueOutcome = 'queued' | 'not_sampled' | 'queue_full' | 'failed';
+
+/** A sampling decision, made once when the turn ended and carried into the
+ *  queue: the candidate the turn is scored against, and the stable row
+ *  identity a caller that OWES the queueing supplies so a replay writes the
+ *  same trial rather than a second one. */
+export interface ShadowTrialPlan {
+  readonly pendingVersion: number;
+  readonly id?: string;
+}
 
 export interface ShadowTrialTurn {
   readonly task: string;
@@ -146,11 +156,7 @@ export interface EvolutionConfig {
   /** Record a completed turn as evidence the promotion gate may draw on — one
    *  row, no inference (evolution/control.ts `queueTurnShadowTrial`). Absent =
    *  this host queues none. */
-  /** `opts.id` is the stable row identity a caller that OWES this queueing
-   *  supplies, so a replay writes the same trial rather than a second one. */
-  shadowTrialQueue?: (
-    turn: ShadowTrialTurn, opts?: { readonly id?: string; readonly pendingVersion?: number },
-  ) => ShadowTrialQueueOutcome;
+  shadowTrialQueue?: (turn: ShadowTrialTurn, plan: ShadowTrialPlan) => ShadowTrialQueueOutcome;
   /** Run the shadow trials a turn queued for the pending scaffold — the
    *  promotion gate's evidence, gathered on the cadence lane instead of on the
    *  user's turn (evolution/control.ts `runQueuedShadowTrials`). Absent = this

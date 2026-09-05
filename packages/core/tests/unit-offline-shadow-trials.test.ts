@@ -20,7 +20,7 @@ import {
   applyScaffoldDecision, decidePromotion, getPendingScaffold, getShadowStatus,
   dropQueuedShadowTrial, initScaffoldTables, initShadowTables, listQueuedShadowTrials,
   queueShadowTrial, queueTurnShadowTrial,
-  runQueuedShadowTrials,
+  runQueuedShadowTrials, shadowTrialPlan,
   type CompletedTurn, type JudgeOutput, type ScaffoldControl,
   type ScaffoldReplayContext,
 } from '../src/index';
@@ -60,6 +60,10 @@ function evalExecutor(): Executor {
     },
   };
 }
+
+/** The decision every sampled turn in these suites carries: version 1 is the
+ *  candidate `setup` leaves pending. */
+const PLAN = { pendingVersion: 1 } as const;
 
 const PENDING_SOURCE = 'async function* run(rt, task) { yield { type: "chunk", data: "pending: " + task }; }';
 
@@ -149,7 +153,7 @@ describe('the interactive path runs no trial', () => {
 
     const outcome = queueTurnShadowTrial(control, {
       task: TASK, currentOutput: LIVE_ANSWER, context: CONTEXT,
-    });
+    }, PLAN);
 
     expect(outcome).toBe('queued');
     // The candidate was never built, never run, never judged.
@@ -163,19 +167,28 @@ describe('the interactive path runs no trial', () => {
     expect(queued[0].context).toEqual(CONTEXT);
   });
 
-  test('nothing is queued when the turn is not sampled, or when nothing is pending', async () => {
+  test('the plan decides sampling once: rate 0 and no pending both answer null, and a key answers the same way twice', async () => {
     const rt = await setup();
     const unsampled = countedControl(rt, { sampleRate: 0 });
-    expect(queueTurnShadowTrial(unsampled.control, {
-      task: TASK, currentOutput: LIVE_ANSWER, context: CONTEXT,
-    })).toBe('not_sampled');
+    expect(shadowTrialPlan(unsampled.control, 'turn-1')).toBeNull();
     expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(0);
+
+    const sampled = countedControl(rt, { sampleRate: 1 });
+    expect(shadowTrialPlan(sampled.control, 'turn-1')).toBe(1);
+    // An unkeyed turn has no durable identity to record a trial under.
+    expect(shadowTrialPlan(sampled.control, '')).toBeNull();
+    // Reproducible: a replaying caller re-derives the plan it recorded.
+    const half = countedControl(rt, { sampleRate: 0.5 });
+    const keys = Array.from({ length: 64 }, (_, i) => `turn-${String(i)}`);
+    const first = keys.map((key) => shadowTrialPlan(half.control, key));
+    expect(keys.map((key) => shadowTrialPlan(half.control, key))).toEqual(first);
+    const sampledCount = first.filter((plan) => plan !== null).length;
+    expect(sampledCount).toBeGreaterThan(0);
+    expect(sampledCount).toBeLessThan(keys.length);
 
     void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = 1`;
     const resolved = countedControl(rt);
-    expect(queueTurnShadowTrial(resolved.control, {
-      task: TASK, currentOutput: LIVE_ANSWER, context: CONTEXT,
-    })).toBe('no_pending');
+    expect(shadowTrialPlan(resolved.control, 'turn-1')).toBeNull();
     expect(resolved.counts.surface).toBe(0);
   });
 
@@ -183,9 +196,9 @@ describe('the interactive path runs no trial', () => {
     const rt = await setup();
     const { control } = countedControl(rt);
     for (let i = 0; i < MAX_QUEUED_SHADOW_TRIALS; i++) {
-      expect(queueTurnShadowTrial(control, { task: `t${i}`, currentOutput: 'a', context: [] })).toBe('queued');
+      expect(queueTurnShadowTrial(control, { task: `t${i}`, currentOutput: 'a', context: [] }, PLAN)).toBe('queued');
     }
-    expect(queueTurnShadowTrial(control, { task: 'one more', currentOutput: 'a', context: [] }))
+    expect(queueTurnShadowTrial(control, { task: 'one more', currentOutput: 'a', context: [] }, PLAN))
       .toBe('queue_full');
     expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(MAX_QUEUED_SHADOW_TRIALS);
   });
@@ -203,7 +216,7 @@ describe('a queued trial is not evidence', () => {
         VALUES (${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
     }
     for (let i = 0; i < 6; i++) {
-      queueTurnShadowTrial(control, { task: `t${i}`, currentOutput: LIVE_ANSWER, context: [] });
+      queueTurnShadowTrial(control, { task: `t${i}`, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
     }
 
     const pending = getPendingScaffold(rt.storage.sql)!;
@@ -227,7 +240,7 @@ describe('the offline drain is what executes trials', () => {
   test('draining runs the queued trial, records it, and clears the row', async () => {
     const rt = await setup();
     const { control, counts, contexts } = countedControl(rt);
-    queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: CONTEXT });
+    queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: CONTEXT }, PLAN);
 
     const drain = await runQueuedShadowTrials(control);
 
@@ -256,7 +269,7 @@ describe('the offline drain is what executes trials', () => {
       judge: contentJudge(`pending: ${TASK}`, 'pending'),
     };
     for (let i = 0; i < 3; i++) {
-      queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] });
+      queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
     }
 
     const drain = await runQueuedShadowTrials(control);
@@ -273,7 +286,7 @@ describe('the offline drain is what executes trials', () => {
   test('trials for a version that is no longer pending are discarded, not run', async () => {
     const rt = await setup();
     const { control, counts } = countedControl(rt);
-    queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] });
+    queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
     // The operator resolved it by hand while the trial sat in the queue.
     void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = 1`;
 
@@ -291,7 +304,7 @@ describe('the offline drain is what executes trials', () => {
       ...counted.control,
       judge: async () => { throw new Error('judge down'); },
     };
-    queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] });
+    queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
 
     const drain = await runQueuedShadowTrials(control);
 
@@ -322,7 +335,7 @@ describe('auto-evolution off runs no trial and leaves no trial to run', () => {
     const { control, counts } = countedControl(rt);
     const engine = hostEngine(rt, control, false);
 
-    engine.queueShadowTrial(completedTurn(), CONTEXT);
+    engine.queueShadowTrial(completedTurn(), CONTEXT, PLAN);
     // No evolution state: nothing recorded for a later evolution-enabled host
     // to evolve on this run's behalf. Asserted before the drain as well as
     // after it, or a drain that ran would hide a turn that queued.
@@ -343,7 +356,7 @@ describe('auto-evolution off runs no trial and leaves no trial to run', () => {
     const rt = await setup();
     const { control, counts } = countedControl(rt);
     // The row an interactive session or the daemon left in this workspace.
-    hostEngine(rt, control, true).queueShadowTrial(completedTurn(), CONTEXT);
+    hostEngine(rt, control, true).queueShadowTrial(completedTurn(), CONTEXT, PLAN);
 
     await hostEngine(rt, control, false).runDueShadowTrials();
 
@@ -361,7 +374,7 @@ describe('auto-evolution off runs no trial and leaves no trial to run', () => {
     const { control, counts } = countedControl(rt);
     const engine = hostEngine(rt, control, true);
 
-    engine.queueShadowTrial(completedTurn(), CONTEXT);
+    engine.queueShadowTrial(completedTurn(), CONTEXT, PLAN);
     expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(1);
 
     await engine.runDueShadowTrials();
@@ -385,7 +398,7 @@ describe('the stored replay context is bounded', () => {
       { role: 'user', content: `newest ${filler}` },
     ];
 
-    queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: huge });
+    queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: huge }, PLAN);
 
     const stored = listQueuedShadowTrials(rt.storage.sql, 1)[0].context;
     expect(stored.length).toBeLessThan(huge.length);

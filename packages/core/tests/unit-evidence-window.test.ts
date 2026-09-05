@@ -153,7 +153,7 @@ describe('the readers can see the end of a long turn', () => {
     // The turn stores the live output WHOLE; the drain windows it once.
     expect(queueTurnShadowTrial(control, {
       task: 'short task', currentOutput, context: [{ role: 'user', content: 'short task' }],
-    })).toBe('queued');
+    }, { pendingVersion: 1 })).toBe('queued');
     await runQueuedShadowTrials(control);
 
     expect(prompts.length).toBeGreaterThan(0);

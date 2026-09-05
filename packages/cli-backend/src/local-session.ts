@@ -3677,11 +3677,11 @@ export class LocalAgentSession implements BackendHost {
             v.parse(CompletedTurnSchema, turn), v.parse(ModelMessagesSchema, trialContext),
             trialOptions,
           );
-          // A REFUSAL is not a deferral. `not_sampled` and `no_pending` mean
-          // there is nothing to queue and never will be for this turn, so the
-          // obligation is discharged; only a full queue or a failed insert is
-          // worth coming back for, and both clear on their own. The same
-          // mapping the Durable Object makes, because it is the same question.
+          // A REFUSAL is not a deferral. `not_sampled` means there is nothing
+          // to queue and never will be for this turn, so the obligation is
+          // discharged; only a full queue or a failed insert is worth coming
+          // back for, and both clear on their own. The same mapping the Durable
+          // Object makes, because it is the same question.
           if (queued === 'queue_full' || queued === 'failed') {
             return { status: 'owed', detail: `the shadow trial for this turn is ${queued}` };
           }

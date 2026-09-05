@@ -125,7 +125,7 @@ export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
   type CompletedTurn, type CompletedSession, type ToolCallRecord,
-  type ShadowTrialDrain, type ShadowTrialQueueOutcome, type ShadowTrialTurn,
+  type ShadowTrialDrain, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialTurn,
 } from './evolution/types';
 export {
   delegationFeatures, renderDelegationFeatures, executionPathSignals,
