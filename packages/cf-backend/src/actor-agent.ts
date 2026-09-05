@@ -4877,7 +4877,6 @@ export abstract class ActorAgent extends Think<Env> {
   /** Think asks for a model before beforeTurn. The prior resolved profile is
    * a warm hint; beforeTurn always overrides this turn with its fresh profile. */
   getModel(): LanguageModel {
-    this.logActivity("getmodel");
     const spec = this._turnProfile?.tier.model ?? this.getStoredModelId();
     return this.ownedModelServices.resolveModel(spec);
   }
@@ -5107,7 +5106,6 @@ export abstract class ActorAgent extends Think<Env> {
     // inside a shadow-eval / scaffold / GEPA evaluation never detaches a job or
     // injects an unsolicited "job completed" turn into the user's chat.
     this._turnT0 = performance.now();
-    this.logActivity("gettools_start");
     return this.wrapToolsForBackground(this.getRawTools());
   }
 

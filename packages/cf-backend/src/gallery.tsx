@@ -4276,14 +4276,17 @@ const ACTIVITY_MISSIONS: WorkspaceSpend["missions"] = [
 ];
 
 /** One turn's worth of real `logActivity` names, oldest first — the order
- *  `readActivityLog` returns. Covers the three shapes the row has to render: a
- *  detail that overflows its column, no detail at all, and `elapsedMs: 0`, which
- *  `logActivity` writes when the row was cut outside a turn and which must read
- *  as an em dash rather than a 0 ms measurement. */
+ *  `readActivityLog` returns. Covers the shapes the row has to render: a
+ *  detail that overflows its column, and `elapsedMs: 0`, which `logActivity`
+ *  writes when the row was cut outside a turn and which must read as an em dash
+ *  rather than a 0 ms measurement. */
 const ACTIVITY_LOG: ActivitySnapshot["log"] = [
-  { event: "getmodel", detail: null, elapsedMs: 0, createdAt: NOW - 96e3 },
+  { event: "steer_queued", detail: "look at the tests too", elapsedMs: 0, createdAt: NOW - 96e3 },
   { event: "beforeturn", detail: "streamText() called next", elapsedMs: 4, createdAt: NOW - 95e3 },
-  { event: "gettools_start", detail: null, elapsedMs: 11, createdAt: NOW - 95e3 },
+  {
+    event: "gettools_rebuilding", detail: "build:execute_tools,run,file,agents,memory,tasks,web:3:1757011200000:0 → build:execute_tools,run,file,agents,memory,tasks,web:4:1757011260000:0",
+    elapsedMs: 11, createdAt: NOW - 95e3,
+  },
   {
     event: "gettools_end", detail: "rebuilt — 24 tools", elapsedMs: 287,
     createdAt: NOW - 94e3,
