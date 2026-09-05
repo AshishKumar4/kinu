@@ -3099,7 +3099,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       const draft = await stageCandidatePayload(plan, identity, store);
       return JSON.stringify({
         ok: true,
-        movedBytes: [...draft.dependencyReceipts, draft.rootReceipt, draft.closureReceipt]
+        movedBytes: [...draft.dependencyReceipts, draft.rootReceipt]
           .reduce((bytes, receipt) => bytes + Number(receipt.byteLength), 0),
         heldBytes: draft.closure.reduce((bytes, ref) => bytes + Number(ref.byteLength), 0),
         draft,

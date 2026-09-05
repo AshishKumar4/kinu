@@ -183,7 +183,7 @@ export class PublishingRunner {
       kind: operation.kind,
       expiresAt: String(Date.now() + 60_000),
     }, this.#payloads());
-    const moved = [draft.rootReceipt, draft.closureReceipt, ...draft.dependencyReceipts]
+    const moved = [draft.rootReceipt, ...draft.dependencyReceipts]
       .reduce((sum, receipt) => sum + Number(receipt.byteLength), 0);
     return { ok: true, movedBytes: moved, heldBytes: moved, draft };
   }

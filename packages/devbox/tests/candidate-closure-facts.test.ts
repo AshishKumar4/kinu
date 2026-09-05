@@ -7,8 +7,8 @@ import type { RootEnvelopeV1 } from '../src/durability/contracts';
 
 // ── the closure proof resolves the envelope's mount-relative keys ───────────
 //
-// The runner writes `obj/<sha>` and `closure/<sha>` beneath the store mounted
-// at the payload prefix, and the envelope names them that way. Run
+// The runner writes `obj/<sha>` beneath the store mounted at the payload
+// prefix, and the envelope names the keys that way. Run
 // 20260905075659 failed bounded-layers' lifecycle proof on "146 objects
 // absent, 146 outside this arm's payload prefix" while every object was in
 // the bucket: the facts asked the store for the bare keys. The row carries
@@ -51,20 +51,17 @@ describe('candidate closure facts', () => {
       },
       rootObject: { key: `obj/${sha}`, byteLength: '4', sha256: sha },
       closure: [{ key: `obj/${'b'.repeat(64)}`, byteLength: '2', sha256: 'b'.repeat(64) }],
-      closureObject: { key: `closure/${'c'.repeat(64)}`, byteLength: '3', sha256: 'c'.repeat(64) },
     };
     const facts = await candidateStoreFacts(stubStore({
       [`${BOX}/candidate-control/bounded-layers/envelopes/${envelopeIdOf(envelope)}.json`]: envelopeBytes(envelope),
       [`${BOX}/candidate/bounded-layers/obj/${sha}`]: new Uint8Array(4),
       [`${BOX}/candidate/bounded-layers/obj/${'b'.repeat(64)}`]: new Uint8Array(2),
-      [`${BOX}/candidate/bounded-layers/closure/${'c'.repeat(64)}`]: new Uint8Array(3),
     }), 'bounded-layers', BOX);
 
     expect(facts.head?.closureCount).toBe(1);
     expect(facts.payloadPrefix).toBe(`${BOX}/candidate/bounded-layers/`);
     expect(facts.closure).toEqual([
       { key: `${BOX}/candidate/bounded-layers/obj/${sha}`, declaredBytes: '4', storedBytes: 4 },
-      { key: `${BOX}/candidate/bounded-layers/closure/${'c'.repeat(64)}`, declaredBytes: '3', storedBytes: 3 },
       { key: `${BOX}/candidate/bounded-layers/obj/${'b'.repeat(64)}`, declaredBytes: '2', storedBytes: 2 },
     ]);
     for (const row of facts.closure) expect(row.key.startsWith(facts.payloadPrefix)).toBe(true);

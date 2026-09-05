@@ -58,16 +58,28 @@ export interface SealedExtent {
   readonly sha256: string;
 }
 
+/** One byte range writes touched since the parent generation. */
+export interface DirtyRange {
+  readonly offset: number;
+  readonly length: number;
+}
+
 /**
  * A sealed file has no payload in the capture manifest. Its extents are stable
  * local handles, so the codecs can stream verified ranges without copying a
  * workspace through the Durable Object or allocating its full size.
+ *
+ * `dirty` is present when the fence staged WINDOWS around the writes rather
+ * than the whole file: the extents then hold those windows and nothing else,
+ * a gap between them is the parent's bytes, and a builder re-chunks only what
+ * `dirty` names. Absent, the extents enumerate every data run the file has.
  */
 export interface SealedContent {
   readonly kind: 'sealed';
   readonly size: number;
   readonly sourceId: string;
   readonly extents: readonly SealedExtent[];
+  readonly dirty?: readonly DirtyRange[];
 }
 
 export type FileContent =
@@ -96,6 +108,16 @@ export function contentExtents(content: FileContent): readonly SealedExtent[] {
   return content.extents.map((extent) => Object.freeze({ ...extent }));
 }
 
+function sameRanges(
+  a: readonly { readonly offset: number; readonly length: number }[],
+  b: readonly { readonly offset: number; readonly length: number }[],
+): boolean {
+  return a.length === b.length && a.every((range, index) => {
+    const other = b[index];
+    return other !== undefined && range.offset === other.offset && range.length === other.length;
+  });
+}
+
 export function contentEquals(a: FileContent, b: FileContent): boolean {
   if (a.kind === 'sealed' || b.kind === 'sealed') {
     return a.kind === 'sealed' && b.kind === 'sealed'
@@ -105,7 +127,9 @@ export function contentEquals(a: FileContent, b: FileContent): boolean {
       && a.extents.every((extent, index) => {
         const other = b.extents[index];
         return other !== undefined && extent.offset === other.offset && extent.length === other.length && extent.sha256 === other.sha256;
-      });
+      })
+      && (a.dirty === undefined) === (b.dirty === undefined)
+      && sameRanges(a.dirty ?? [], b.dirty ?? []);
   }
   return contentSize(a) === contentSize(b) && logicalContentSha256(a) === logicalContentSha256(b);
 }
@@ -178,6 +202,7 @@ interface ManifestRow {
   size?: number;
   sourceId?: string;
   extents?: readonly SealedExtent[];
+  dirty?: readonly DirtyRange[];
 }
 
 export type StateSnapshot = ReadonlyMap<UpperPath, NodeEntry>;
@@ -714,6 +739,10 @@ function logicalContentSha256(content: FileContent): string {
   hash.update(`logical-content/v1\n${contentSize(content)}\n`);
   if (content.kind === 'sealed') {
     for (const extent of content.extents) hash.update(`${extent.offset}:${extent.length}:${extent.sha256}\n`);
+    if (content.dirty !== undefined) {
+      hash.update('dirty\n');
+      for (const range of content.dirty) hash.update(`${range.offset}:${range.length}\n`);
+    }
     return hash.digest('hex');
   }
   for (const segment of logicalSegments(content)) {
@@ -751,6 +780,7 @@ export function canonicalManifestBytes(capture: Capture): Uint8Array {
         if (e.content.kind === 'sealed') {
           row.sourceId = e.content.sourceId;
           row.extents = e.content.extents;
+          if (e.content.dirty !== undefined) row.dirty = e.content.dirty;
         }
       }
       return row;
@@ -1031,6 +1061,32 @@ export function removalsAgainstParent(
   return removed;
 }
 
+/** Sealed extents ascend inside the file at the stage's split; dirty ranges
+ *  ascend inside the file too. Both rules hold for a whole-tree capture and
+ *  a partial one alike. */
+function requireSealedContent(content: SealedContent, path: UpperPath): void {
+  if (!Number.isSafeInteger(content.size) || content.size < 0 || content.sourceId.length === 0) {
+    throw new Error(`sealed content for '${path}' is invalid`);
+  }
+  let end = 0;
+  for (const extent of content.extents) {
+    if (!Number.isSafeInteger(extent.offset) || !Number.isSafeInteger(extent.length)
+      || extent.offset < end || extent.length <= 0 || extent.length > MAX_SEALED_EXTENT_BYTES
+      || extent.offset + extent.length > content.size || !/^[a-f0-9]{64}$/.test(extent.sha256)) {
+      throw new Error(`sealed extent for '${path}' is invalid`);
+    }
+    end = extent.offset + extent.length;
+  }
+  let dirtyEnd = 0;
+  for (const range of content.dirty ?? []) {
+    if (!Number.isSafeInteger(range.offset) || !Number.isSafeInteger(range.length)
+      || range.offset < dirtyEnd || range.length <= 0 || range.offset + range.length > content.size) {
+      throw new Error(`dirty range for '${path}' is invalid`);
+    }
+    dirtyEnd = range.offset + range.length;
+  }
+}
+
 /** The relaxed tree rule a v2 delta capture must satisfy: canonical paths, no
  *  duplicates, real identity on every entry, and every NAMED path's ancestors
  *  present as directories. Paths the capture does not name are the parent's
@@ -1060,6 +1116,7 @@ function requirePartialCaptureTree(entries: readonly NodeEntry[]): void {
     if (entry.kind === 'symlink' && entry.target === undefined) {
       throw new Error(`symlink entry '${path}' carries no target`);
     }
+    if (entry.content?.kind === 'sealed') requireSealedContent(entry.content, path);
     byPath.set(path, entry);
   }
   for (const [path] of byPath) {
@@ -1094,23 +1151,28 @@ function snapshotEntry(entry: NodeEntry): NodeEntry {
   const metadata = snapshotMetadata(entry.metadata);
   const base = metadata ? { ...entry, metadata } : { ...entry };
   if (entry.kind !== 'file' || !entry.content) return Object.freeze(base);
-  const content: FileContent =
-    entry.content.kind === 'dense'
-      ? Object.freeze({ kind: 'dense' as const, bytes: entry.content.bytes.slice() })
-      : entry.content.kind === 'sealed'
-        ? Object.freeze({
-            kind: 'sealed' as const,
-            size: entry.content.size,
-            sourceId: entry.content.sourceId,
-            extents: Object.freeze(entry.content.extents.map((extent) => Object.freeze({ ...extent }))),
-          })
-        : Object.freeze({
-            kind: 'sparse' as const,
-            size: entry.content.size,
-            runs: Object.freeze(
-              entry.content.runs.map((run) => Object.freeze({ offset: run.offset, bytes: run.bytes.slice() })),
-            ),
-          });
+  let content: FileContent;
+  if (entry.content.kind === 'dense') {
+    content = Object.freeze({ kind: 'dense' as const, bytes: entry.content.bytes.slice() });
+  } else if (entry.content.kind === 'sealed') {
+    const sealed: SealedContent = {
+      kind: 'sealed',
+      size: entry.content.size,
+      sourceId: entry.content.sourceId,
+      extents: Object.freeze(entry.content.extents.map((extent) => Object.freeze({ ...extent }))),
+    };
+    content = entry.content.dirty === undefined
+      ? Object.freeze(sealed)
+      : Object.freeze({ ...sealed, dirty: Object.freeze(entry.content.dirty.map((range) => Object.freeze({ ...range }))) });
+  } else {
+    content = Object.freeze({
+      kind: 'sparse' as const,
+      size: entry.content.size,
+      runs: Object.freeze(
+        entry.content.runs.map((run) => Object.freeze({ offset: run.offset, bytes: run.bytes.slice() })),
+      ),
+    });
+  }
   return Object.freeze({ ...base, content });
 }
 
@@ -1158,20 +1220,7 @@ export function requireCompleteCaptureTree(entries: readonly NodeEntry[]): void 
     if (entry.kind !== 'symlink' && entry.target !== undefined) {
       throw new Error(`${entry.kind} entry '${path}' carries an invented symlink target`);
     }
-    if (entry.content?.kind === 'sealed') {
-      if (!Number.isSafeInteger(entry.content.size) || entry.content.size < 0 || entry.content.sourceId.length === 0) {
-        throw new Error(`sealed content for '${path}' is invalid`);
-      }
-      let end = 0;
-      for (const extent of entry.content.extents) {
-        if (!Number.isSafeInteger(extent.offset) || !Number.isSafeInteger(extent.length)
-          || extent.offset < end || extent.length <= 0 || extent.length > MAX_SEALED_EXTENT_BYTES
-          || extent.offset + extent.length > entry.content.size || !/^[a-f0-9]{64}$/.test(extent.sha256)) {
-          throw new Error(`sealed extent for '${path}' is invalid`);
-        }
-        end = extent.offset + extent.length;
-      }
-    }
+    if (entry.content?.kind === 'sealed') requireSealedContent(entry.content, path);
     byPath.set(path, entry);
   }
   for (const [path] of byPath) {

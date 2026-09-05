@@ -79,10 +79,15 @@ export const RootEnvelopeV1Schema = v.strictObject({
   parentRootId: v.nullable(Sha256Schema),
   cut: CapturedCutSchema,
   rootObject: ImmutableObjectRefSchema,
-  /** Canonical sorted payload closure, duplicated here for metadata-only restore verification. */
+  /**
+   * Canonical sorted refs this publication proved present: the objects it
+   * wrote and the reused ones its format names beside them. Bounded-layers
+   * names its root and the layers the root reaches; a chunk an older
+   * generation wrote was proved when that generation published and stays
+   * named by a layer, so a publish costs one HEAD per object it added, never
+   * one per object the tree holds.
+   */
   closure: v.array(ImmutableObjectRefSchema),
-  /** Canonical sorted payload closure, written directly beside candidate objects. */
-  closureObject: ImmutableObjectRefSchema,
 });
 export type RootEnvelopeV1 = v.InferOutput<typeof RootEnvelopeV1Schema>;
 

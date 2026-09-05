@@ -101,7 +101,6 @@ function capturedCutFixture(cut = '42'): CapturedCut {
 }
 function seedEnvelopeFor(cut: string, rootText: string): RootEnvelopeV1 {
   const rootObject = ref('v1/boxes/b/roots/root-0', enc.encode(rootText));
-  const closureBytes = canonicalClosure([rootObject]);
   return v.parse(RootEnvelopeV1Schema, {
     version: 1,
     format: 'bounded-layers/v1',
@@ -112,15 +111,13 @@ function seedEnvelopeFor(cut: string, rootText: string): RootEnvelopeV1 {
     cut: capturedCutFixture(cut),
     rootObject,
     closure: [rootObject],
-    closureObject: ref('closure/seed', closureBytes),
   });
 }
 
-function canonicalClosure(refs: readonly ImmutableObjectRef[]): Uint8Array {
-  const sorted = [...refs]
+function canonicalClosure(refs: readonly ImmutableObjectRef[]): readonly ImmutableObjectRef[] {
+  return [...refs]
     .map((item) => ({ key: item.key, byteLength: item.byteLength, sha256: item.sha256 }))
     .sort((a, b) => a.key.localeCompare(b.key));
-  return enc.encode(`${JSON.stringify(sorted)}\n`);
 }
 
 function receiptFor(input: PublishIdentityInput, item: ImmutableObjectRef): ObjectReceipt {
@@ -310,12 +307,9 @@ describe('candidate payload staging and finalization', () => {
       'v1/boxes/b/objects/delta-0',
       'v1/boxes/b/objects/index',
       'v1/boxes/b/roots/root-1',
-      plan.closureObject.ref.key,
     ]);
     const expectedClosure = [...plan.dependencies.map((item) => item.ref), plan.root.ref, reused];
-    expect(dec.decode(boundary.payloads.get(plan.closureObject.ref.key))).toBe(
-      dec.decode(canonicalClosure(expectedClosure)),
-    );
+    expect([...draft.closure]).toEqual([...canonicalClosure(expectedClosure)]);
 
     const published = await finalizeCandidatePayload(draft, identity, boundary);
     expect(published.resultRootId).toBe(envelopeIdOf(published.envelope));
@@ -412,10 +406,10 @@ describe('candidate payload staging and finalization', () => {
     expect(boundary.records).toEqual([]);
   });
 
-  test('rejects a missing closure manifest before it creates a sealed operation', async () => {
+  test('rejects a missing closure member before it creates a sealed operation', async () => {
     const boundary = new InMemoryPublicationBoundary();
     const draft = await stageCandidatePayload(await makePlan(new MemoryCandidateObjectSink(), null), identity, boundary);
-    boundary.payloads.delete(draft.closureObject.key);
+    boundary.payloads.delete(draft.dependencyReceipts[0]!.key);
 
     await expect(finalizeCandidatePayload(draft, identity, boundary)).rejects.toThrow('missing candidate object');
     expect(boundary.failures.get(identity.operationId)).toBe('closure-unavailable');
@@ -784,16 +778,12 @@ describe('candidate durable control', () => {
     expect(harness.store.record.head).toEqual(rival);
   });
 
-  test('refuses root, dependency, and closure deletion before CAS', async () => {
-    for (const deleted of ['root', 'dependency', 'closure'] as const) {
+  test('refuses root and dependency deletion before CAS', async () => {
+    for (const deleted of ['root', 'dependency'] as const) {
       const harness = new ControlHarness();
       const control = await harness.begin();
       const draft = await harness.stage(control);
-      const key = deleted === 'root'
-        ? draft.root.key
-        : deleted === 'dependency'
-          ? draft.dependencyReceipts[0]!.key
-          : draft.closureObject.key;
+      const key = deleted === 'root' ? draft.root.key : draft.dependencyReceipts[0]!.key;
       harness.payloads.payloads.delete(key);
 
       await expect(harness.finalize(draft)).rejects.toThrow('missing candidate object');
@@ -828,17 +818,17 @@ describe('candidate durable control', () => {
     // WHAT A WAKE MAY PAY FOR. A wake opens the root right after it restores,
     // and that open fetches the root through its digest-bearing intent, so a
     // re-check here would spend a remote operation and prove nothing new.
-    // Finalization verifies every declared closure object before the head
+    // Finalization verifies every declared closure member before the head
     // commits, and recovery re-verifies a sealed envelope before it reaches
     // the head. `bounded-layers.test.ts` refuses a missing root, layer, and
     // chunk by name at open and read time.
-    for (const deleted of ['root', 'closure'] as const) {
+    for (const deleted of ['root', 'member'] as const) {
       const harness = new ControlHarness();
       const root = await harness.publish();
       const envelope = v.parse(RootEnvelopeV1Schema, JSON.parse(dec.decode(harness.envelopes.objects.get(root)!)));
-      harness.payloads.payloads.delete(
-        deleted === 'root' ? envelope.rootObject.key : envelope.closureObject.key,
-      );
+      const member = envelope.closure.find((item) => item.key !== envelope.rootObject.key);
+      if (member === undefined) throw new Error('the published closure names only its root');
+      harness.payloads.payloads.delete(deleted === 'root' ? envelope.rootObject.key : member.key);
 
       const control = await candidateRunControl(harness.store, harness.envelopes);
       expect(control.head?.pointer.rootEnvelopeId).toBe(root);

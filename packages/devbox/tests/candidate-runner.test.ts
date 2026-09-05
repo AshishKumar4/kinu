@@ -188,8 +188,11 @@ const FENCE_SEAL_WORK = {
   bytesStaged: 0, bytesChunked: 0, chunksHashed: 0, nodesRewritten: 0, wholeFiles: 0,
 } as const;
 
-/** One delta manifest row for a staged file: its ranges name the staged bytes
- *  with the fence's own digests — the exact shape journal-delta.c writes. */
+/** One delta manifest row for a file staged whole: its one range names the
+ *  staged bytes with the fence's own digest, and `whole` is true because the
+ *  window starts at 0 and reaches the size — the exact shape
+ *  `journal_stage_plan` in journal-delta.c writes for a file it holds no
+ *  boundaries for. */
 /** Distinct inodes per row: the capture model reads a shared `ino` as one
  *  hardlinked inode, which two unrelated files are not. */
 let deltaIno = 2;
@@ -206,7 +209,7 @@ function deltaFile(path: string, bytes: Uint8Array) {
     mtimeNs: '2',
     ctimeNs: '3',
     xattrs: {},
-    whole: false,
+    whole: true,
     dirty: [{ offset: 0, length: bytes.byteLength }],
     ranges: [{ offset: 0, length: bytes.byteLength, sha256: sha256Hex(bytes) }],
   };
@@ -1603,7 +1606,8 @@ describe('a restore counts the work it did', () => {
         if (format === 'bounded-layers') {
           expect(work.serialRemoteOps).toBe(work.totalRemoteOps);
           expect(bound.layersConsulted).toBeGreaterThanOrEqual(1);
-          expect(bound.openReads).toBe((bound.layersConsulted ?? 0) + 1);
+          // The root is the newest layer, so one read per layer consulted.
+          expect(bound.openReads).toBe(bound.layersConsulted ?? 0);
           if (bound.layersConsulted === null) throw new Error('a bounded restore left layersConsulted null');
           expect(work.replayUnits).toBe(bound.layersConsulted);
         } else {

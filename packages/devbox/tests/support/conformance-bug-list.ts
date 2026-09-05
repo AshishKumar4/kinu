@@ -77,4 +77,22 @@ export const KNOWN_RED: readonly KnownRed[] = [
     since: '2026-09-02',
     reason: "nothing evicted clean bytes to make room",
   },
+  {
+    arm: 'overlay-cas',
+    cell: '6.21',
+    since: '2026-09-05',
+    reason: "64 KiB backup bytesPut 2934023 at 10,000 files against 411000 at 1,000: the commit rewrites the tree manifest, so a fixed change puts bytes that grow with the tree",
+  },
+  {
+    arm: 'bounded-layers',
+    cell: '6.21',
+    since: '2026-09-05',
+    reason: "64 KiB backup bytesPut 3339214 at 10,000 files against 393602 at 1,000 (6840475 against 744860 before the spine closure): the conformance arm still captures and chunks the whole tree at every checkpoint (wholeTreeSeal); restore ops hold at 4 and 4. The codec's dirty-window overlay and spine closure are in; the arm's fence-driven partial capture and boundary hand-back are not",
+  },
+  {
+    arm: 'merkle-pack',
+    cell: '6.21',
+    since: '2026-09-05',
+    reason: "64 KiB backup bytesPut 5139 at 10,000 files against 4505 at 1,000 (12.3% over the 10% bar, byte-identical across reruns): the v2 pack ledger is O(#packs) by design (contracts.ts PackLedgerSchema) and 40 MiB is two 32 MiB packs where 4 MiB is one; restore ops hold at 3 and 3",
+  },
 ];

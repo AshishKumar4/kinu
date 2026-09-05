@@ -34,6 +34,8 @@ import { parseDeltaManifest } from '../../candidates/merkle-pack/delta';
 import type { BoundaryHandback, DeltaDirtyFile, DeltaManifestV2, DeltaStagedRange } from '../../candidates/merkle-pack/delta';
 import { SealWorkSchema } from '../../durability/contracts';
 import type { SealWork } from '../../durability/contracts';
+import { issueVerifiedJournalCapture, manifestSha256 } from '../model';
+import type { AuditedCapture, Capture, NodeEntry, PosixMetadata, SealedContent } from '../model';
 
 const NonEmptyString = v.pipe(v.string(), v.minLength(1));
 const SafeNumber = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
@@ -248,3 +250,83 @@ export async function readJournalDelta(fence: JournalFence): Promise<JournalDelt
   };
 }
 
+
+/**
+ * One v2 delta manifest as the PARTIAL sealed capture both v1 codecs merge.
+ *
+ * The entries are the delta's own rows — every touched path plus its
+ * ancestors, which is exactly the consistent partial tree the capture model's
+ * partial rule demands — with file content read from the delta's stage, where
+ * every read is held to the digest the fence recorded for exactly those bytes.
+ * A row the fence staged as windows (`whole` false) carries its `dirty`
+ * ranges, so a builder re-chunks only those and takes the rest from the
+ * parent; a row staged whole carries none and its extents are the file. The
+ * removals are the WAL's own structural deletions (unlink/rmdir, and the old
+ * name of a rename), which is what the daemon's `removed` semantics state.
+ *
+ * A delta with no base is a FIRST fence (no published head to build against):
+ * its rows are the whole tree as the daemon sees it, so it publishes as a
+ * whole-tree capture — `partial: false`, which also carries no `removed`,
+ * because there is no parent state to remove from.
+ */
+export function captureFromJournalDelta(
+  delta: JournalDelta,
+  identity: { captureId: string; epoch: string; baseRevision: string; stableStageHandle: string },
+): AuditedCapture {
+  const manifest = delta.manifest;
+  const partial = manifest.base !== null;
+  const entries: NodeEntry[] = [];
+  for (const row of manifest.entries) {
+    const metadata: PosixMetadata = {
+      uid: row.uid,
+      gid: row.gid,
+      atimeNs: row.atimeNs,
+      mtimeNs: row.mtimeNs,
+      ctimeNs: row.ctimeNs,
+      xattrs: { ...row.xattrs },
+    };
+    if (row.kind === 'symlink') {
+      if (row.target === undefined) throw new Error(`delta row ${row.path} is a symlink with no target`);
+      entries.push({ path: row.path, kind: 'symlink', mode: row.mode, ino: Number(row.ino), metadata, target: row.target });
+      continue;
+    }
+    if (row.kind === 'dir') {
+      entries.push({ path: row.path, kind: 'dir', mode: row.mode, ino: Number(row.ino), metadata });
+      continue;
+    }
+    const extents = row.ranges.map((range) => ({ offset: range.offset, length: range.length, sha256: range.sha256 }));
+    const sealed: SealedContent = partial && !row.whole
+      ? { kind: 'sealed', size: row.size, sourceId: row.path, extents, dirty: row.dirty.map((range) => ({ offset: range.offset, length: range.length })) }
+      : { kind: 'sealed', size: row.size, sourceId: row.path, extents };
+    entries.push({ path: row.path, kind: 'file', mode: row.mode, ino: Number(row.ino), metadata, content: sealed });
+  }
+  // THE REMOVALS the WAL recorded: unlink, rmdir, and a rename's old name. A
+  // failed op (`result < 0`) removed nothing, and non-structural ops touch
+  // only what their own rows state.
+  const removed: string[] = [];
+  if (partial) {
+    for (const op of manifest.metadataOps) {
+      if (op.result < 0) continue;
+      if (op.op === 'unlink' || op.op === 'rmdir') removed.push(op.path);
+      if (op.op === 'rename') removed.push(op.path);
+    }
+  }
+  const capture: Capture = {
+    mechanism: 'mutation-journal',
+    cut: manifest.cut,
+    generation: manifest.generation,
+    entries,
+  };
+  return issueVerifiedJournalCapture({
+    cut: manifest.cut,
+    generation: manifest.generation,
+    entries,
+    identity,
+    manifestSha256: manifestSha256(capture),
+    sealedReader: {
+      read: async (sourceId, offset, length) => await delta.stage.read(sourceId, offset, length),
+    },
+    partial,
+    removed: partial ? removed : [],
+  });
+}

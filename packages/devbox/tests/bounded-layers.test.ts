@@ -8,7 +8,6 @@
 // counts what it serves, so "bounded" and "reused" are measured, not asserted
 // rhetorically.
 import { describe, expect, test } from 'bun:test';
-import * as v from 'valibot';
 
 import { decodeJson } from '../src/cas/types';
 import { CHUNK_SIZE, sha256Hex } from '../src/cas/hash';
@@ -31,10 +30,6 @@ import type {
   SparseRun,
   StateSnapshot,
 } from '../src/capture/model';
-import {
-  ImmutableObjectRefSchema,
-  RangeReadIntentSchema,
-} from '../src/durability/contracts';
 import type {
   HeadPointerV1,
   ImmutableObjectRef,
@@ -292,7 +287,7 @@ class MemStore {
 
 /** Bytes the split publisher uploads for one fully staged plan. */
 function planMovedBytes(plan: CandidatePublicationPlan): number {
-  return [...plan.dependencies, plan.root, plan.closureObject]
+  return [...plan.dependencies, plan.root]
     .reduce((total, object) => total + Number(object.ref.byteLength), 0);
 }
 
@@ -331,17 +326,6 @@ async function finalizePlan(
   return finalizeCandidatePayload(await stageCandidatePayload(plan, input, store), input, store);
 }
 
-async function layerTag(store: MemStore, view: BoundedLayers, index: number): Promise<string> {
-  const bytes = await store.reader.readRange({
-    ...(v.parse(RangeReadIntentSchema, {
-      operationId: 'probe', attemptId: 'probe', boxId: 'box', epoch: '1',
-      exactKey: view.layers[index].key, method: 'GET',
-      byteOffset: '0', byteLength: view.layers[index].byteLength,
-      sha256: view.layers[index].sha256, expiresAt: '9',
-    })),
-  });
-  return decodeJson(LayerDocSchema, view.layers[index].key, bytes).t;
-}
 
 // ── lifecycle ────────────────────────────────────────────────────────────────
 
@@ -352,7 +336,7 @@ describe('bounded layers', () => {
     const capture0 = audited(snap(dirE('d'), fileE('d/a.txt', 'alpha'), fileE('d/empty', ''), symE('link', 'd/a.txt')), 0);
     const r0 = await build(capture0)
     const v0 = await publishAndOpen(r0, store, publisher);
-    expect(await layerTag(store, r0.view, 0)).toBe('base');
+    expect(r0.view.own.t).toBe('base');
     expect(r0.plan.expectedParentRootId).toBeNull();
     expect(v0.cut).toBe(capture0.cut);
     expect(v0.stat('d/a.txt')).toMatchObject({ kind: 'file', mode: 0o644, size: 5 });
@@ -465,7 +449,8 @@ describe('bounded layers', () => {
   test('an empty first capture is an empty base, not an error', async () => {
     const store = new MemStore();
     const r0 = await build(audited(new Map(), 0))
-    expect(r0.view.layers).toHaveLength(1);
+    expect(r0.view.own.t).toBe('base');
+    expect(r0.view.depth).toBe(1);
     await store.commit(r0.plan);
     const view = await store.openHead();
     expect(view.stat('anything')).toBeNull();
@@ -480,8 +465,8 @@ describe('bounded layers', () => {
     const r0 = await build(audited(snap(fileE('a', content, { ino }), fileE('b', content, { ino })), 0))
     const view = await publishAndOpen(r0, store, publisher);
 
-    // One chunk object serves both paths: base layer, root, ONE payload.
-    expect(store.map.size).toBe(3);
+    // One chunk object serves both paths: the base root and ONE payload.
+    expect(store.map.size).toBe(2);
     expect(store.map.has(objectKey(sha256Hex(content)))).toBe(true);
     expect(view.stat('a')!.ino).toBe(view.stat('b')!.ino);
     expect(await view.readRange('a', 0, content.length)).toEqual(content);
@@ -571,9 +556,7 @@ describe('bounded layers', () => {
   test('a 1 TiB hole uses one exact extent, not one chunk document per hole', async () => {
     const size = 1024 ** 4;
     const built = await build(audited(snap(sparseE('terabyte-hole', size, [])), 0));
-    const layerObject = built.plan.dependencies.find((object) => object.ref.key === built.view.layers[0]?.key);
-    expect(layerObject).toBeDefined();
-    const layerBytes = await readStagedCandidateObjectForTest(layerObject!);
+    const layerBytes = await readStagedCandidateObjectForTest(built.plan.root);
     const layer = decodeJson(LayerDocSchema, 'terabyte base', layerBytes);
     const entry = layer.entries[0];
     if (entry === undefined || entry.kind !== 'file') throw new Error('missing terabyte file entry');
@@ -617,9 +600,7 @@ describe('bounded layers', () => {
     const built = await build(capture);
     expect(reads).toBe(0);
 
-    const layerObject = built.plan.dependencies.find((object) => object.ref.key === built.view.layers[0]?.key);
-    expect(layerObject).toBeDefined();
-    const layerBytes = await readStagedCandidateObjectForTest(layerObject!);
+    const layerBytes = await readStagedCandidateObjectForTest(built.plan.root);
     const layer = decodeJson(LayerDocSchema, 'sealed terabyte base', layerBytes);
     const file = layer.entries.find((candidate) => candidate.path === 'sealed/hole.bin');
     if (file === undefined || file.kind !== 'file') throw new Error('missing sealed hole entry');
@@ -675,8 +656,9 @@ describe('bounded layers', () => {
     const sparseRoot = await build(audited(snap(sparseE('z.bin', CHUNK_SIZE, [], { ino: 5 })), 0))
     const denseRoot = await build(audited(snap(fileE('z.bin', zeros, { ino: 5 })), 0))
     expect(sparseRoot.view.rootId).toBe(denseRoot.view.rootId);
-    // Neither representation stages a payload for the all-zero chunk.
-    expect(denseRoot.plan.dependencies).toHaveLength(1); // base doc only
+    // Neither representation stages a payload for the all-zero chunk: the
+    // base root is the only object.
+    expect(denseRoot.plan.dependencies).toHaveLength(0);
 
     // Regression: a hole hash in the parent never suppresses a real payload —
     // and after canonicalization there is no dense-zero payload to suppress.
@@ -711,19 +693,196 @@ describe('bounded layers', () => {
     for (const key of [firstHashes[0], firstHashes[2]].map(objectKey)) {
       expect(writtenKeys).not.toContain(key);
     }
-    // One new chunk payload plus one delta document; the root travels separately.
-    expect(writtenKeys).toHaveLength(2);
+    // One new chunk payload; the delta travels in the root.
+    expect(writtenKeys).toHaveLength(1);
     expect(planMovedBytes(r1.plan)).toBeLessThan(CHUNK_SIZE + 8192);
 
     // An UNCHANGED tick costs the root object alone and reuses the layers.
     const r2 = await build(audited(snap(fileE('data.bin', edited, { ino })), 2), afterEdit);
     expect(r2.plan.dependencies).toHaveLength(0);
-    expect(planMovedBytes(r2.plan)).toBe(Number(r2.plan.root.ref.byteLength) + Number(r2.plan.closureObject.ref.byteLength));
+    expect(planMovedBytes(r2.plan)).toBe(Number(r2.plan.root.ref.byteLength));
     expect(r2.view.layers).toEqual(r1.view.layers);
 
     expect(await afterEdit.readRange('data.bin', CHUNK_SIZE + 16, 13)).toEqual(enc.encode('edited middle'));
     expect(await afterEdit.readRange('data.bin', 0, 4)).toEqual(new Uint8Array([1, 1, 1, 1]));
     expect(await afterEdit.readRange('data.bin', 2 * CHUNK_SIZE, 4)).toEqual(new Uint8Array([3, 3, 3, 3]));
+  });
+
+  // ── the dirty-window overlay ─────────────────────────────────────────────
+  //
+  // Cells 6.14 and 6.15 measured the fixed 512 KiB grid: a 64 KiB write
+  // re-chunked its whole 64 MiB file, and 64 random pages of a 64 MiB
+  // database put 26,798,013 bytes against a 4,194,304-byte bound
+  // (2026-09-05). A file the fence stages as windows now re-chunks only the
+  // 16 KiB cells the writes touched; the rest of each cell keeps its parent's
+  // object by range.
+
+  /** One window-staged capture and the lengths its stage was asked for. */
+  interface WindowedCapture {
+    readonly capture: AuditedCapture;
+    readonly reads: number[];
+  }
+
+  /** A partial sealed capture of one file whose stage holds `windows` of
+   *  `bytes`, with `dirty` the ranges writes touched. */
+  function windowedCapture(
+    path: string,
+    ino: number,
+    bytes: Uint8Array,
+    windows: readonly { offset: number; length: number }[],
+    dirty: readonly { offset: number; length: number }[],
+    cut: number,
+    size = bytes.byteLength,
+  ): WindowedCapture {
+    const reads: number[] = [];
+    const extents = windows.flatMap((window) => {
+      const pieces: { offset: number; length: number; sha256: string }[] = [];
+      for (let at = window.offset; at < window.offset + window.length; at += MAX_SEALED_EXTENT_BYTES) {
+        const length = Math.min(MAX_SEALED_EXTENT_BYTES, window.offset + window.length - at);
+        pieces.push({ offset: at, length, sha256: sha256Hex(bytes.subarray(at, at + length)) });
+      }
+      return pieces;
+    });
+    const entries = withJournalMetadata([
+      { path, kind: 'file', mode: 0o644, ino, content: { kind: 'sealed', size, sourceId: path, extents, dirty } },
+    ]);
+    const capture = { mechanism: 'mutation-journal' as const, cut, generation: 0, entries };
+    return {
+      reads,
+      capture: issueVerifiedJournalCapture({
+        ...capture,
+        identity: { captureId: `window-${cut}`, epoch: '7', baseRevision: String(cut), stableStageHandle: `window-stage-${cut}` },
+        manifestSha256: manifestSha256(capture),
+        sealedReader: {
+          read: async (_sourceId, offset, length) => {
+            reads.push(length);
+            return bytes.slice(offset, offset + length);
+          },
+        },
+        partial: true,
+        removed: [],
+      }),
+    };
+  }
+
+  test('a page write into a large file puts one dirty cell and keeps the rest of its chunk by range', async () => {
+    const store = new MemStore();
+    const publisher = new HarnessPublicationStore();
+    const ino = nextIno++;
+    const original = new Uint8Array(4 * CHUNK_SIZE);
+    for (let at = 0; at < original.byteLength; at += 1) original[at] = (at % 251) + 1;
+    const parent = await publishAndOpen(
+      await build(verifiedJournalCapture([{ ...fileE('db.bin', original, { ino }) }], 0)),
+      store,
+      publisher,
+    );
+    const edited = original.slice();
+    const page = 2 * CHUNK_SIZE + 5 * 4096;
+    edited.fill(0xee, page, page + 4096);
+    // The daemon stages the cell before the write and four dirty cells after
+    // it; the builder re-chunks only the 16 KiB cell the page sits in.
+    const { capture, reads } = windowedCapture(
+      'db.bin', ino, edited,
+      [{ offset: 2 * CHUNK_SIZE, length: 5 * 4096 + 4096 + 4 * 16 * 1024 }],
+      [{ offset: page, length: 4096 }],
+      1,
+    );
+    const built = await build(capture, parent);
+    expect(built.plan.dependencies.map((object) => Number(object.ref.byteLength))).toEqual([16 * 1024]);
+    expect(built.stats.bytesChunked).toBe(16 * 1024);
+    expect(built.stats.wholeFiles).toBe(0);
+    expect(Math.max(...reads)).toBeLessThanOrEqual(MAX_SEALED_EXTENT_BYTES);
+    const entry = built.view.entryAt('db.bin');
+    if (entry?.kind !== 'file') throw new Error('db.bin is not a file');
+    const cell = parent.entryAt('db.bin');
+    if (cell?.kind !== 'file' || cell.chunks.length !== 4) throw new Error('the parent holds four chunks');
+    const third = cell.chunks[2]!;
+    if (isHoleExtent(third)) throw new Error('the third chunk is stored');
+    expect(entry.chunks).toEqual([
+      cell.chunks[0], cell.chunks[1],
+      { hash: third.hash, size: 16 * 1024, offset: 0, length: CHUNK_SIZE },
+      { hash: sha256Hex(edited.subarray(2 * CHUNK_SIZE + 16 * 1024, 2 * CHUNK_SIZE + 32 * 1024)), size: 16 * 1024 },
+      { hash: third.hash, size: CHUNK_SIZE - 32 * 1024, offset: 32 * 1024, length: CHUNK_SIZE },
+      cell.chunks[3],
+    ]);
+    expect(built.handback.files).toEqual([
+      { ino: String(ino), path: 'db.bin', size: 4 * CHUNK_SIZE, boundaries: [0, CHUNK_SIZE, 2 * CHUNK_SIZE, 3 * CHUNK_SIZE] },
+    ]);
+
+    // The published root serves the edited bytes across every seam, and a
+    // read inside a range part fetches its object once, not once per part.
+    const view = await publishAndOpen(built, store, publisher);
+    expect(await view.readRange('db.bin', 0, edited.byteLength)).toEqual(edited);
+    store.resetCounters();
+    const fetchedBefore = view.work().bytesFetched;
+    await view.readRange('db.bin', 2 * CHUNK_SIZE, CHUNK_SIZE);
+    expect(store.gets).toBe(2);
+    expect(view.work().bytesFetched - fetchedBefore).toBe(CHUNK_SIZE + 16 * 1024);
+
+    // A whole-file re-chunk next generation reproduces the grid objects: the
+    // range parts fold back into whole ones and only the changed cell is new.
+    const rewritten = await build(verifiedJournalCapture([{ ...fileE('db.bin', edited, { ino }) }], 2), view);
+    const after = rewritten.view.entryAt('db.bin');
+    if (after?.kind !== 'file') throw new Error('db.bin is not a file');
+    expect(after.chunks.map((part) => isHoleExtent(part) ? 'hole' : part.offset ?? 'whole')).toEqual(['whole', 'whole', 'whole', 'whole']);
+    expect(rewritten.plan.dependencies.map((object) => Number(object.ref.byteLength))).toEqual([CHUNK_SIZE]);
+  });
+
+  test('a truncate with no writes cuts the parent\'s parts; a size grown by truncate is a hole', async () => {
+    const store = new MemStore();
+    const publisher = new HarnessPublicationStore();
+    const ino = nextIno++;
+    const original = new Uint8Array(CHUNK_SIZE + 4096).fill(7);
+    const parent = await publishAndOpen(
+      await build(verifiedJournalCapture([{ ...fileE('t.bin', original, { ino }) }], 0)),
+      store,
+      publisher,
+    );
+    const shorter = await build(windowedCapture('t.bin', ino, original, [], [], 1, 100).capture, parent);
+    expect(shorter.plan.dependencies).toHaveLength(0);
+    const cut = await publishAndOpen(shorter, store, publisher);
+    expect(cut.stat('t.bin')?.size).toBe(100);
+    expect(await cut.readRange('t.bin', 0, 200)).toEqual(original.subarray(0, 100));
+    const grown = await build(windowedCapture('t.bin', ino, original, [], [], 2, CHUNK_SIZE + 4096 + 8192).capture, cut);
+    const view = await publishAndOpen(grown, store, publisher);
+    expect(view.extents('t.bin')).toEqual([
+      { kind: 'data', offset: 0, length: 100 },
+      { kind: 'hole', offset: 100, length: CHUNK_SIZE + 4096 + 8192 - 100 },
+    ]);
+  });
+
+  test('a renamed file staged as windows finds its parent entry by inode', async () => {
+    const store = new MemStore();
+    const publisher = new HarnessPublicationStore();
+    const ino = nextIno++;
+    const original = new Uint8Array(2 * CHUNK_SIZE).fill(3);
+    const parent = await publishAndOpen(
+      await build(verifiedJournalCapture([{ ...fileE('old.bin', original, { ino }) }], 0)),
+      store,
+      publisher,
+    );
+    const edited = original.slice();
+    edited.fill(9, 0, 4096);
+    const windowed = windowedCapture('new.bin', ino, edited, [{ offset: 0, length: 4096 + 64 * 1024 }], [{ offset: 0, length: 4096 }], 1);
+    const moved = issueVerifiedJournalCapture({
+      cut: 1,
+      generation: 0,
+      entries: windowed.capture.entries,
+      identity: { captureId: 'window-move', epoch: '7', baseRevision: '1', stableStageHandle: 'window-move-stage' },
+      manifestSha256: windowed.capture.capturedCut.manifestSha256,
+      sealedReader: { read: async (_sourceId, offset, length) => edited.slice(offset, offset + length) },
+      partial: true,
+      removed: ['old.bin'],
+    });
+    const built = await build(moved, parent);
+    expect(built.plan.dependencies.map((object) => Number(object.ref.byteLength))).toEqual([16 * 1024]);
+    const view = await publishAndOpen(built, store, publisher);
+    expect(view.stat('old.bin')).toBeNull();
+    expect(await view.readRange('new.bin', 0, edited.byteLength)).toEqual(edited);
+
+    // Windows for a file no published entry holds cannot be merged with anything.
+    const orphan = windowedCapture('orphan.bin', nextIno++, edited, [{ offset: 0, length: 4096 }], [{ offset: 0, length: 4096 }], 2);
+    await expect(build(orphan.capture, view)).rejects.toThrow(/no published parent entry/);
   });
   test('emitted buffers are copies: mutating the capture afterwards changes nothing', async () => {
     const store = new MemStore();
@@ -776,32 +935,32 @@ describe('bounded layers', () => {
         generation,
       );
       const built = await build(capture, parent)
-      expect(built.view.layers.length).toBeLessThanOrEqual(MAX_LAYER_DEPTH);
+      expect(built.view.depth).toBeLessThanOrEqual(MAX_LAYER_DEPTH);
       expect(built.view.cut).toBe(capture.cut);
       roots.push(built.plan.root.ref);
       const serving = await publishAndOpen(built, store, publisher);
 
-      if (parent !== undefined && parent.layers.length === MAX_LAYER_DEPTH) {
+      if (parent !== undefined && parent.depth === MAX_LAYER_DEPTH) {
         // This was the ninth checkpoint: everything collapsed onto ONE base.
         compactingBuilds++;
-        expect(built.view.layers).toHaveLength(1);
-        expect(await layerTag(store, built.view, 0)).toBe('base');
+        expect(built.view.depth).toBe(1);
+        expect(built.view.own.t).toBe('base');
         expect(preCompaction).toBeDefined();
         expect(resolvedText(serving)).toBe(preCompaction!);
         expect(new TextDecoder().decode(await serving.readRange('log.txt', 0, 64)))
           .toBe(`generation ${generation}`);
       }
-      if (built.view.layers.length === MAX_LAYER_DEPTH) {
+      if (built.view.depth === MAX_LAYER_DEPTH) {
         preCompaction = resolvedText(serving);
       }
       parent = serving;
     }
 
     expect(compactingBuilds).toBe(1);
-    expect(parent!.layers.length).toBeLessThanOrEqual(MAX_LAYER_DEPTH);
+    expect(parent!.depth).toBeLessThanOrEqual(MAX_LAYER_DEPTH);
     // Every historical root still opens by immutable ref: retirement is GC-only.
     for (const ref of roots) {
-      expect((await open(ref, store.reader, IDENTITY)).layers.length).toBeLessThanOrEqual(MAX_LAYER_DEPTH);
+      expect((await open(ref, store.reader, IDENTITY)).depth).toBeLessThanOrEqual(MAX_LAYER_DEPTH);
     }
   });
 
@@ -836,9 +995,11 @@ describe('bounded layers', () => {
     payload[0] ^= 0xff;
     await expect(view.readRange('f.bin', 0, content.length)).rejects.toThrow(/sha256 mismatch|could not be read/);
 
-    // A corrupted layer document refuses at open time.
+    // A corrupted older layer document refuses at open time.
     const layerStore = new MemStore();
-    const rl = await build(audited(snap(fileE('g.bin', content)), 0))
+    const layerPublisher = new HarnessPublicationStore();
+    const rl0 = await build(audited(snap(fileE('g.bin', content)), 0));
+    const rl = await build(audited(snap(fileE('g.bin', enc.encode('tamper me more'))), 1), await publishAndOpen(rl0, layerStore, layerPublisher));
     await layerStore.commit(rl.plan);
     const layerDoc = layerStore.map.get(rl.view.layers[0].key)!;
     layerDoc[0] ^= 0xff;
@@ -857,13 +1018,11 @@ describe('bounded layers', () => {
     const good = enc.encode('geometry');
     const store = new MemStore();
 
-    /** Wind a hand-made single-base root into the store, bypassing build. */
+    /** Wind a hand-made base root into the store, bypassing build. */
     const plantCorrupt = (entry: Canon): Uint8Array => {
-      const layerBytes = encodeCanonical({ v: 1, t: 'base', entries: [entry], tombs: [] });
-      const layerHash = sha256Hex(layerBytes);
-      const layerRef = { key: objectKey(layerHash), byteLength: String(layerBytes.byteLength), sha256: layerHash };
-      const rootBytes = encodeCanonical({ v: 1, fmt: 'bounded-layers/v1', cut: 0, layers: [layerRef] });
-      store.map.set(layerRef.key, layerBytes);
+      const rootBytes = encodeCanonical({
+        v: 1, fmt: 'bounded-layers/v1', cut: 0, t: 'base', entries: [entry], tombs: [], layers: [],
+      });
       store.map.set(objectKey(sha256Hex(rootBytes)), rootBytes);
       return rootBytes;
     };
@@ -894,26 +1053,34 @@ describe('bounded layers', () => {
 
   test('open refuses a hash-valid root whose oldest layer is not the sole base', async () => {
     const store = new MemStore();
-    const deltaBytes = encodeCanonical({ v: 1, t: 'delta', entries: [], tombs: [] });
-    const deltaHash = sha256Hex(deltaBytes);
-    const deltaRef = { key: objectKey(deltaHash), byteLength: String(deltaBytes.byteLength), sha256: deltaHash };
-    store.map.set(deltaRef.key, deltaBytes);
-    const forgedRoot = encodeCanonical({ v: 1, fmt: 'bounded-layers/v1', cut: 0, layers: [deltaRef] });
-    await expect(open(forgedRoot, store.reader, IDENTITY)).rejects.toThrow(/must be the base/);
-    const baseBytes = encodeCanonical({ v: 1, t: 'base', entries: [], tombs: [] });
-    const baseHash = sha256Hex(baseBytes);
-    const baseRef = { key: objectKey(baseHash), byteLength: String(baseBytes.byteLength), sha256: baseHash };
-    const newerBaseBytes = encodeCanonical({ v: 1, t: 'base', entries: [], tombs: ['removed'] });
-    const newerBaseHash = sha256Hex(newerBaseBytes);
-    const newerBaseRef = {
-      key: objectKey(newerBaseHash), byteLength: String(newerBaseBytes.byteLength), sha256: newerBaseHash,
+    const wind = (doc: Canon) => {
+      const bytes = encodeCanonical(doc);
+      const hash = sha256Hex(bytes);
+      const ref = { key: objectKey(hash), byteLength: String(bytes.byteLength), sha256: hash };
+      store.map.set(ref.key, bytes);
+      return ref;
     };
-    store.map.set(baseRef.key, baseBytes);
-    store.map.set(newerBaseRef.key, newerBaseBytes);
+    const baseRef = wind({ v: 1, fmt: 'bounded-layers/v1', cut: 0, t: 'base', entries: [], tombs: [], layers: [] });
+    const deltaRef = wind({ v: 1, fmt: 'bounded-layers/v1', cut: 1, t: 'delta', entries: [], tombs: [], layers: [baseRef] });
+    // A delta as the oldest layer: nothing beneath it holds the tree.
+    const forgedRoot = encodeCanonical({
+      v: 1, fmt: 'bounded-layers/v1', cut: 2, t: 'delta', entries: [], tombs: [], layers: [deltaRef],
+    });
+    await expect(open(forgedRoot, store.reader, IDENTITY)).rejects.toThrow(/must be the base/);
+    // Two bases in one chain: the newer one is not a delta over the older.
+    const newerBaseRef = wind({ v: 1, fmt: 'bounded-layers/v1', cut: 1, t: 'base', entries: [], tombs: ['removed'], layers: [] });
     const twoBases = encodeCanonical({
-      v: 1, fmt: 'bounded-layers/v1', cut: 0, layers: [newerBaseRef, baseRef],
+      v: 1, fmt: 'bounded-layers/v1', cut: 2, t: 'delta', entries: [], tombs: [], layers: [newerBaseRef, baseRef],
     });
     await expect(open(twoBases, store.reader, IDENTITY)).rejects.toThrow(/must be the delta/);
+    // A root that calls itself a base while naming older layers, or a delta
+    // naming none, is no shape the wire has.
+    await expect(open(encodeCanonical({
+      v: 1, fmt: 'bounded-layers/v1', cut: 2, t: 'base', entries: [], tombs: [], layers: [baseRef],
+    }), store.reader, IDENTITY)).rejects.toThrow(/does not match its schema/);
+    await expect(open(encodeCanonical({
+      v: 1, fmt: 'bounded-layers/v1', cut: 2, t: 'delta', entries: [], tombs: [], layers: [],
+    }), store.reader, IDENTITY)).rejects.toThrow(/does not match its schema/);
   });
 
   test('sparse run order normalizes deterministically and overlapping writes match logical expansion', async () => {
@@ -947,8 +1114,8 @@ describe('bounded layers', () => {
 
     const closure = v0.gcClosure();
     const keys = closure.map((r) => r.key);
-    // Root + one base layer + the one materialized chunk; both holes absent.
-    expect(keys).toHaveLength(3);
+    // The base root + the one materialized chunk; both holes absent.
+    expect(keys).toHaveLength(2);
     for (const ref of closure) {
       expect(ref.key).toBe(objectKey(ref.sha256));
       expect(store.map.has(ref.key)).toBe(true);
@@ -1047,9 +1214,9 @@ describe('bounded layers', () => {
       counts.push(sink.stages);
       parent = await publishAndOpen(built, store, publisher);
     }
-    // One content chunk + one layer document + one root + one closure, on
-    // every commit — never one object per accumulated layer.
-    expect(counts[0]).toBe(4);
+    // One content chunk + one root (which is the layer), on every commit —
+    // never one object per accumulated layer.
+    expect(counts[0]).toBe(2);
     for (const count of counts) expect(count).toBe(counts[0]);
   });
 
@@ -1101,7 +1268,7 @@ describe('bounded layers', () => {
 
     for (const [pointIndex, stagedCount] of points.entries()) {
       const attempt = await build(capture1, base);
-      const staged = [...attempt.plan.dependencies, attempt.plan.root, attempt.plan.closureObject];
+      const staged = [...attempt.plan.dependencies, attempt.plan.root];
       const headBeforeAttempt = publisher.head === null ? null : publisher.head.pointer.rootEnvelopeId;
       for (const object of staged.slice(0, stagedCount)) {
         store.map.set(object.ref.key, await readStagedCandidateObjectForTest(object));
@@ -1127,7 +1294,9 @@ describe('bounded layers', () => {
 
   test('an index naming an object the store does not hold refuses, naming the absent object', async () => {
     const store = new MemStore();
-    const built = await build(audited(snap(fileE('f.bin', 'payload')), 0));
+    const publisher = new HarnessPublicationStore();
+    const first = await build(audited(snap(fileE('f.bin', 'payload')), 0));
+    const built = await build(audited(snap(fileE('f.bin', 'payload two')), 1), await publishAndOpen(first, store, publisher));
     await store.commit(built.plan);
 
     // A missing layer document: the wake refuses and names the absent object
@@ -1169,12 +1338,13 @@ describe('bounded layers', () => {
       parent = full;
     }
     if (full === undefined) throw new Error('chain did not build');
-    expect(full.layers).toHaveLength(MAX_LAYER_DEPTH);
+    expect(full.depth).toBe(MAX_LAYER_DEPTH);
 
-    // Opening the full stack crosses the wire exactly root + layers times.
+    // Opening the full stack crosses the wire exactly once per layer, the
+    // root included.
     store.resetCounters();
     const opened = await store.openHead();
-    expect(store.gets).toBe(MAX_LAYER_DEPTH + 1);
+    expect(store.gets).toBe(MAX_LAYER_DEPTH);
     // Resolution itself is served from the merged map: zero further reads.
     store.resetCounters();
     expect(opened.stat('log.txt')).not.toBeNull();
@@ -1185,9 +1355,9 @@ describe('bounded layers', () => {
     const extraDelta = full.layers[1];
     if (extraDelta === undefined) throw new Error('expected a delta layer to reuse');
     const forgedLayers = [extraDelta, ...full.layers];
-    expect(forgedLayers).toHaveLength(MAX_LAYER_DEPTH + 1);
+    expect(forgedLayers).toHaveLength(MAX_LAYER_DEPTH);
     const forgedBytes = encodeCanonical({
-      v: 1, fmt: 'bounded-layers/v1', cut: full.cut, layers: forgedLayers,
+      v: 1, fmt: 'bounded-layers/v1', cut: full.cut, t: 'delta', entries: [], tombs: [], layers: forgedLayers,
     });
     store.map.set(objectKey(sha256Hex(forgedBytes)), forgedBytes);
     const forgedRef = {
@@ -1219,9 +1389,7 @@ describe('bounded layers', () => {
     expect(built.plan.format).toBe('bounded-layers/v1');
     expect(built.plan.capturedCut.cut).toBe(String(cut));
 
-    const closureBytes = await readStagedCandidateObjectForTest(built.plan.closureObject);
-    const closure = v.parse(v.array(ImmutableObjectRefSchema), JSON.parse(new TextDecoder().decode(closureBytes)));
-    const closureKeys = new Set(closure.map((ref) => ref.key));
+    const closureKeys = new Set(built.plan.closure.map((ref) => ref.key));
     for (const key of [built.plan.root.ref.key, ...built.plan.dependencies.map((object) => object.ref.key)]) {
       expect(closureKeys.has(key)).toBe(true);
     }
@@ -1230,7 +1398,7 @@ describe('bounded layers', () => {
     const result = await finalizePlan(built.plan, publicationStore, 'op-pub');
     expect(result.envelope.parentRootId).toBeNull();
     expect(result.envelope.cut.cut).toBe(String(cut));
-    expect(result.envelope.closureObject).toEqual(built.plan.closureObject.ref);
+    expect([...result.envelope.closure]).toEqual([...built.plan.closure]);
 
     const store = new MemStore();
     await store.stage(built.plan);

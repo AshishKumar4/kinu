@@ -70,7 +70,6 @@ type VerifyObject = (ref: ImmutableObjectRef) => Promise<void>;
  *  objects it has just written, and what a recovery re-checks before it lets a
  *  sealed operation reach the head. */
 async function verifyEnvelopeClosure(envelope: RootEnvelopeV1, verifyObject: VerifyObject): Promise<void> {
-  await verifyObject(envelope.closureObject);
   for (const ref of envelope.closure) await verifyObject(ref);
 }
 
@@ -652,7 +651,6 @@ function envelopesV1Bridge(envelopes: CandidateEnvelopeStoreV2): CandidateEnvelo
           sha256: envelope.rootObject.sha256,
         },
         closure: [],
-        closureObject: envelope.ledger,
       };
     },
   };

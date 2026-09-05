@@ -91,8 +91,9 @@ export interface CandidateStoreFacts {
   /** Envelope keys sharing the greatest generation when more than one does. A
    *  forked head has no single authority to restore from. */
   readonly forkedHeads: readonly string[];
-  /** Every object the head envelope names: its root, its closure manifest, and
-   *  the closure itself. Empty when there is no single head. */
+  /** Every object the head envelope names: its root and its closure — the
+   *  objects the head's publish added, and the reused ones its format names
+   *  beside them. Empty when there is no single head. */
   readonly closure: readonly CandidateClosureRow[];
   /** Keys listed under the envelope prefix that could not be read as a root
    *  envelope, with the reason each one failed. */
@@ -204,20 +205,16 @@ export async function candidateStoreFacts(
   const headEntry = newest.length === 1 ? newest[0] : undefined;
 
   // THE ENVELOPE'S KEYS ARE MOUNT-RELATIVE. The runner writes `obj/<sha>`
-  // and `closure/<sha>` beneath the store mounted at the payload prefix, and
-  // the product's own verification joins the two (`verifyObject` in
-  // `src/devbox.ts`). Asked bare, every key read absent and outside the
-  // prefix: run 20260905075659 failed bounded-layers' closure proof on 146
-  // objects that were all there. The row carries the joined key, so the
-  // driver's prefix check reads the address the store was asked for.
+  // beneath the store mounted at the payload prefix, and the product's own
+  // verification joins the two (`verifyObject` in `src/devbox.ts`). Asked
+  // bare, every key read absent and outside the prefix: run 20260905075659
+  // failed bounded-layers' closure proof on 146 objects that were all there.
+  // The row carries the joined key, so the driver's prefix check reads the
+  // address the store was asked for.
   const closure: CandidateClosureRow[] = [];
   if (headEntry !== undefined) {
     const seen = new Set<string>();
-    for (const ref of [
-      headEntry.envelope.rootObject,
-      headEntry.envelope.closureObject,
-      ...headEntry.envelope.closure,
-    ]) {
+    for (const ref of [headEntry.envelope.rootObject, ...headEntry.envelope.closure]) {
       if (seen.has(ref.key)) continue;
       seen.add(ref.key);
       const key = `${paths.payloadPrefix}/${ref.key}`;

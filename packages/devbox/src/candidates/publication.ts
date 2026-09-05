@@ -178,8 +178,8 @@ interface PublicationPlanState {
   readonly generation: string;
   readonly dependencies: readonly StagedCandidateObject[];
   readonly root: StagedCandidateObject;
-  readonly closureObject: StagedCandidateObject;
-  /** Canonically sorted refs stored inside closureObject. */
+  /** Canonically sorted refs this publication proves present: its fresh
+   *  objects and the reused ones the format names. The envelope carries it. */
   readonly closure: readonly ImmutableObjectRef[];
   readonly movedBytes: number;
 }
@@ -213,8 +213,8 @@ export class CandidatePublicationPlan {
     return publicationPlanState(this).root;
   }
 
-  get closureObject(): StagedCandidateObject {
-    return publicationPlanState(this).closureObject;
+  get closure(): readonly ImmutableObjectRef[] {
+    return publicationPlanState(this).closure;
   }
 
   static async create(input: {
@@ -258,15 +258,12 @@ export class CandidatePublicationPlan {
       closureByKey.set(ref.key, ref);
     }
     const closure = Object.freeze([...closureByKey.values()].map(snapshotObjectRef).sort((a, b) => a.key.localeCompare(b.key)));
-    const closureBytes = new TextEncoder().encode(`${JSON.stringify(closure)}\n`);
-    const closureObject = await input.sink.stage(`closure/${sha256Hex(closureBytes)}`, closureBytes);
-    const fresh = [...dependencies, root, closureObject];
+    const fresh = [...dependencies, root];
     return new CandidatePublicationPlan(input.format, input.expectedParentRootId, Object.freeze({
       capturedCut: Object.freeze({ ...capture.capturedCut }),
       generation: String(capture.generation),
       dependencies: Object.freeze(dependencies),
       root,
-      closureObject,
       closure,
       movedBytes: fresh.reduce((sum, object) => sum + Number(stagedCandidateObjectState(object).ref.byteLength), 0),
     }));
@@ -382,8 +379,6 @@ export const CandidatePublicationDraftSchema = v.strictObject({
   root: ImmutableObjectRefSchema,
   rootReceipt: ObjectReceiptSchema,
   closure: v.array(ImmutableObjectRefSchema),
-  closureObject: ImmutableObjectRefSchema,
-  closureReceipt: ObjectReceiptSchema,
   dependencyReceipts: v.array(ObjectReceiptSchema),
 });
 export type CandidatePublicationDraft = v.InferOutput<typeof CandidatePublicationDraftSchema>;
@@ -423,9 +418,6 @@ export function requirePublishedCandidate(candidate: PublishedCandidate): Publis
   }
   if (!candidate.receipts.some((receipt) => refsMatch(receipt, candidate.envelope.rootObject))) {
     throw new Error('published candidate receipts omit its root object');
-  }
-  if (!candidate.receipts.some((receipt) => refsMatch(receipt, candidate.envelope.closureObject))) {
-    throw new Error('published candidate receipts omit its closure object');
   }
   return candidate;
 }
@@ -679,8 +671,8 @@ export async function runUploadPool<Item, Result>(
 /**
  * Move immutable payloads directly from the container to R2, then return only
  * receipts and refs. Dependencies move side by side; the root moves only after
- * every one of them has a verified receipt, and the closure after the root, so
- * a crash at any point leaves nothing that names an absent object.
+ * every one of them has a verified receipt, so a crash at any point leaves
+ * nothing that names an absent object.
  */
 export async function stageCandidatePayload(
   plan: CandidatePublicationPlan,
@@ -710,7 +702,6 @@ export async function stageCandidatePayload(
   };
   const dependencyReceipts = await runUploadPool(state.dependencies, UPLOAD_WIDTH, upload);
   const rootReceipt = await upload(state.root);
-  const closureReceipt = await upload(state.closureObject);
   return v.parse(CandidatePublicationDraftSchema, {
     operationId: input.operationId,
     attemptId: input.attemptId,
@@ -721,8 +712,6 @@ export async function stageCandidatePayload(
     root: stagedCandidateObjectState(state.root).ref,
     rootReceipt,
     closure: state.closure,
-    closureObject: stagedCandidateObjectState(state.closureObject).ref,
-    closureReceipt,
     dependencyReceipts,
   });
 }
@@ -753,7 +742,7 @@ function validateDraft(
     throw new Error('candidate draft does not belong to the begun operation');
   }
   const keys = new Set<string>();
-  for (const receipt of [...draft.dependencyReceipts, draft.rootReceipt, draft.closureReceipt]) {
+  for (const receipt of [...draft.dependencyReceipts, draft.rootReceipt]) {
     if (keys.has(receipt.key)) throw new ReceiptMismatch(`candidate draft repeats receipt ${receipt.key}`);
     keys.add(receipt.key);
     if (receipt.operationId !== input.operationId || receipt.attemptId !== input.attemptId) {
@@ -761,9 +750,6 @@ function validateDraft(
     }
   }
   if (!refsMatch(draft.root, draft.rootReceipt)) throw new ReceiptMismatch('candidate draft root receipt mismatches root');
-  if (!refsMatch(draft.closureObject, draft.closureReceipt)) {
-    throw new ReceiptMismatch('candidate draft closure receipt mismatches closure object');
-  }
   verifyClosure(draft);
   return draft;
 }
@@ -806,7 +792,6 @@ export async function finalizeCandidatePayload(
     throw error;
   }
   try {
-    await control.verifyObject(draft.closureObject);
     for (const ref of draft.closure) await control.verifyObject(ref);
   } catch (error) {
     await markFailed('closure-unavailable');
@@ -822,7 +807,6 @@ export async function finalizeCandidatePayload(
     cut: draft.capturedCut,
     rootObject: draft.root,
     closure: draft.closure,
-    closureObject: draft.closureObject,
   });
   const resultRootId = envelopeIdOf(envelope);
   /** Phase-independent coordinates every recorded transition repeats. */
@@ -861,14 +845,13 @@ export async function finalizeCandidatePayload(
       cut: Object.freeze({ ...envelope.cut }),
       rootObject: Object.freeze({ ...envelope.rootObject }),
       closure: envelope.closure.map((ref) => ({ ...ref })),
-      closureObject: Object.freeze({ ...envelope.closureObject }),
     }),
     resultRootId,
     receipts: Object.freeze(
-      [...draft.dependencyReceipts, draft.rootReceipt, draft.closureReceipt]
+      [...draft.dependencyReceipts, draft.rootReceipt]
         .map((receipt) => Object.freeze({ ...receipt })),
     ),
-    movedBytes: [...draft.dependencyReceipts, draft.rootReceipt, draft.closureReceipt]
+    movedBytes: [...draft.dependencyReceipts, draft.rootReceipt]
       .reduce((bytes, receipt) => bytes + Number(receipt.byteLength), 0),
   });
   publishedCandidates.add(published);

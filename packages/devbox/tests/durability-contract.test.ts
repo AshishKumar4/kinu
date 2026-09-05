@@ -50,7 +50,6 @@ import { MemoryCasStore, WatchedCasStore, treeHeavyStore } from './support/cas-c
 
 const SHA = 'a'.repeat(64);
 const object = { key: 'v1/boxes/box/attempts/op/try/data-a', byteLength: '12', sha256: SHA };
-const closureObject = { key: 'v1/boxes/box/attempts/op/try/closure-a', byteLength: '12', sha256: SHA };
 const capturedCut = {
   captureId: 'capture-1',
   epoch: '7',
@@ -69,7 +68,6 @@ const envelope: RootEnvelopeV1 = {
   cut: capturedCut,
   rootObject: object,
   closure: [object],
-  closureObject,
 };
 
 describe('durability v1 wire contracts', () => {
@@ -113,7 +111,6 @@ describe('durability v1 wire contracts', () => {
       cut: '42',
       rootObject: object,
       closure: [object],
-      closureObject,
     })).toThrow('Invalid type: Expected Object but received "42"');
     expect(() => v.parse(RootEnvelopeV1Schema, {
       version: 1,
@@ -125,7 +122,6 @@ describe('durability v1 wire contracts', () => {
       cut: { ...capturedCut, captureId: '' },
       rootObject: object,
       closure: [object],
-      closureObject,
     })).toThrow('Expected a canonical non-negative decimal string');
     // The empty capture id the envelope above also carries is refused on its
     // own field, so the refusal above is known to cover both defects.
@@ -139,7 +135,6 @@ describe('durability v1 wire contracts', () => {
       cut: { ...capturedCut, captureId: '' },
       rootObject: object,
       closure: [object],
-      closureObject,
     })).toThrow('Invalid length: Expected >=1 but received 0');
   });
 
@@ -472,12 +467,6 @@ describe('durability v2 wire contracts', () => {
       // SAFETY: the input is the test's own fixture plus a field the schema
       // refuses, parsed immediately by that schema below; nothing else reads it.
       refusals({ ...envelopeV2, closure: [pack] } as EnvelopeInput & { closure: unknown }),
-    ).toContain('closure');
-    expect(
-      // SAFETY: envelopeV2 is the schema's own parsed fixture, and the only
-      // added member is closureObject, which RootEnvelopeV2Schema has no field
-      // for. The parser below is the reader, so the shape never escapes.
-      refusals({ ...envelopeV2, closureObject } as EnvelopeInput & { closureObject: unknown }),
     ).toContain('closure');
   });
 

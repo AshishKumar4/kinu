@@ -260,12 +260,6 @@ function draftForSync(operation: {
       key: 'obj/root', byteLength: '1', sha256: sha, etag: 'security-etag', verified: true,
     },
     closure: [],
-    closureObject: ref('obj/closure'),
-    closureReceipt: {
-      operationId: overrides?.operationId ?? operation.operationId,
-      attemptId: overrides?.attemptId ?? operation.attemptId,
-      key: 'obj/closure', byteLength: '1', sha256: sha, etag: 'security-etag', verified: true,
-    },
     dependencyReceipts: [],
   });
 }
@@ -416,7 +410,6 @@ async function f10Candidate(input: {
     },
     rootObject: { key: 'obj/root', byteLength: '1', sha256: sha },
     closure: [],
-    closureObject: { key: 'obj/closure', byteLength: '1', sha256: sha },
   };
   const id = envelopeIdOf(envelope);
   const bytes = envelopeBytes(envelope);

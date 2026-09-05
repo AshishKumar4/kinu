@@ -3,11 +3,12 @@
  * publication boundary.
  *
  * One immutable base plus newest-first DELTA layers, capped at eight total.
- * A delta stores only what changed since the parent root: changed entries,
- * tombstones, and content-chunk refs — never inline bytes. Resolving a path
- * walks the layers once, newest first, and stops at the first hit; a
- * tombstone stops it too. The FIRST checkpoint — and the ninth, which would
- * exceed the bound — streams the resolved entries into ONE base object.
+ * A generation's root IS its newest layer: one object carries the cut, the
+ * entries this generation changed, its tombstones, and the refs of the older
+ * layers, oldest last. A base carries the whole resolved tree and names no
+ * older layer. Resolving a path merges the layers oldest to newest, so a
+ * newer entry or tombstone wins. The FIRST checkpoint — and the ninth, which
+ * would exceed the bound — streams the resolved entries into ONE base root.
  * Nothing tracks per-path retirement — the merged map IS the state, and
  * superseded objects simply stop being referenced (GC-only; published
  * objects are immutable and never rewritten or deleted here).
@@ -17,21 +18,26 @@
  * and never trusts an unaudited scan. Output is a
  * `CandidatePublicationPlan`: staged immutable objects, the identified
  * expected parent (the head envelope id this publication supersedes), and
- * the derived GC closure — ready for `publishCandidate`. A crash anywhere
- * before the head CAS leaves the old root fully serving.
+ * the closure the plan verifies — ready for `publishCandidate`. A crash
+ * anywhere before the head CAS leaves the old root fully serving.
  *
  * Content is content-addressed in chunks of at most `CHUNK_SIZE` (shared
  * with the CAS journal), cut on the CHUNK_SIZE grid so an unchanged aligned
- * block keeps its digest across generations. Every all-zero span is one
- * hole extent, exact to the byte: holes cost no stored bytes and a restore
- * puts them back where they were. Sparse runs retain their order, including
+ * block keeps its digest across generations. A file the fence staged as
+ * WINDOWS around its writes is re-chunked only on the `DIRTY_CELL_BYTES`
+ * cells the writes touched; every other byte keeps its parent's object,
+ * addressed as a RANGE of it, so the bytes a generation puts scale with what
+ * it wrote and not with the file. Every all-zero span is one hole extent,
+ * exact to the byte: holes cost no stored bytes and a restore puts them back
+ * where they were. Sparse runs retain their order, including
  * last-write-wins overlaps.
  *
  * Every byte this module reads crosses a validated, digest-bearing
  * `RangeReadIntent` through the shared `readCandidateRange` seam: a wrong
  * body never reaches a caller. Opened roots re-verify each layer document's
  * internal geometry — declared size equals the chunk span, no stored chunk
- * exceeds CHUNK_SIZE — before any path resolves.
+ * exceeds CHUNK_SIZE, a range lies inside its object — before any path
+ * resolves.
  */
 
 import * as v from 'valibot';
@@ -45,6 +51,7 @@ import {
 } from '../capture/model';
 import type {
   AuditedCapture,
+  DirtyRange,
   FileContent,
   NodeEntry,
   NodeKind,
@@ -53,10 +60,11 @@ import type {
   UpperPath,
 } from '../capture/model';
 import { ImmutableObjectRefSchema, RangeReadIntentSchema } from '../durability/contracts';
-import type { HydrateWork, ImmutableObjectRef, RangeReadIntent } from '../durability/contracts';
+import type { HydrateWork, ImmutableObjectRef, RangeReadIntent, SealWork } from '../durability/contracts';
 import type { FileExtent } from './lazy-restore';
 import { paintedSegments } from './merkle-pack/chunk';
 import type { LogicalLayout } from './merkle-pack/chunk';
+import type { BoundaryRow } from './merkle-pack/delta';
 import {
   MemoryCandidateObjectSink,
   planCandidatePublication,
@@ -71,9 +79,16 @@ import type {
 } from './publication';
 export const BOUNDED_LAYERS_FORMAT = 'bounded-layers/v1';
 
-/** Maximum layers a root may name, base included. The checkpoint that would
+/** Maximum layers a root may name, itself included. The checkpoint that would
  *  exceed this compacts instead. Eight consulted layers bound one resolution. */
 export const MAX_LAYER_DEPTH = 8;
+
+/**
+ * The grid a window-staged file is re-chunked on: one object per cell the
+ * writes touched. A 4 KiB page write puts one 16 KiB object; the 512 KiB
+ * cell around it keeps its parent's object by range.
+ */
+export const DIRTY_CELL_BYTES = 16 * 1024;
 
 /** Every object lives under one content-addressed prefix: `obj/<sha256>`. */
 export function objectKey(hash: string): string {
@@ -91,6 +106,7 @@ const PathSchema = v.pipe(
   v.check(isCanonicalJournalPath, 'Expected a canonical relative POSIX path'),
 );
 const SizeSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
+const PositiveSizeSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
 
 const NanosecondsSchema = v.pipe(v.string(), v.regex(/^(?:0|[1-9]\d*)$/));
 const XattrValueSchema = v.pipe(
@@ -107,18 +123,36 @@ const PosixMetadataDocSchema = v.strictObject({
 });
 type PosixMetadataDoc = v.InferOutput<typeof PosixMetadataDocSchema>;
 
-/** One stored content chunk: at most CHUNK_SIZE bytes behind one object. */
-const ChunkDocSchema = v.strictObject({
-  hash: HashSchema,
-  size: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-});
+/**
+ * One stored content part: `size` logical bytes behind one object of at most
+ * CHUNK_SIZE bytes. A WHOLE part is the object itself. A RANGE part carries
+ * `offset` and the object's `length`: its bytes start `offset` into an object
+ * an earlier generation wrote, which is how a dirty-cell re-chunk keeps the
+ * untouched bytes of a cell without putting them again.
+ */
+const ChunkDocSchema = v.pipe(
+  v.strictObject({
+    hash: HashSchema,
+    size: PositiveSizeSchema,
+    offset: v.optional(SizeSchema),
+    length: v.optional(PositiveSizeSchema),
+  }),
+  v.check(
+    (part) => (part.offset === undefined) === (part.length === undefined),
+    'A range part carries both its offset and its object length',
+  ),
+  v.check(
+    (part) => part.offset === undefined || part.length === undefined || part.offset + part.size <= part.length,
+    'A range part lies inside its object',
+  ),
+);
 export type ChunkDoc = v.InferOutput<typeof ChunkDocSchema>;
 
 /** One all-zero span, exact to the byte, with no object behind it. A huge
  * untouched file therefore stores one extent, whatever its size. */
 const HoleExtentDocSchema = v.strictObject({
   hole: v.literal(true),
-  size: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+  size: PositiveSizeSchema,
 });
 export type HoleExtentDoc = v.InferOutput<typeof HoleExtentDocSchema>;
 export type ChunkPartDoc = ChunkDoc | HoleExtentDoc;
@@ -153,23 +187,29 @@ const EntryDocSchema = v.variant('kind', [
 ]);
 export type EntryDoc = v.InferOutput<typeof EntryDocSchema>;
 
-/** One layer: a base holds the whole resolved tree; a delta holds its change. */
-export const LayerDocSchema = v.strictObject({
-  v: v.literal(1),
-  t: v.picklist(['base', 'delta']),
-  entries: v.array(EntryDocSchema),
-  tombs: v.array(PathSchema),
-});
-
-/** The root manifest: ordered layer refs, newest FIRST, last is the base, and
- *  the exact audited cut it captured. The publishing envelope carries the
- *  full CapturedCut; this manifest pins its number. */
-const RootDocSchema = v.strictObject({
-  v: v.literal(1),
-  fmt: v.literal(BOUNDED_LAYERS_FORMAT),
-  cut: SizeSchema,
-  layers: v.array(ImmutableObjectRefSchema),
-});
+/**
+ * One layer, which is one generation's root: the exact audited cut it
+ * captured (the publishing envelope carries the full CapturedCut; this pins
+ * its number), what it changed, and the older layers beneath it, newest
+ * first, the base last. A base holds the whole resolved tree and names no
+ * older layer; a delta names at least its base.
+ */
+export const LayerDocSchema = v.pipe(
+  v.strictObject({
+    v: v.literal(1),
+    fmt: v.literal(BOUNDED_LAYERS_FORMAT),
+    cut: SizeSchema,
+    t: v.picklist(['base', 'delta']),
+    entries: v.array(EntryDocSchema),
+    tombs: v.array(PathSchema),
+    layers: v.array(ImmutableObjectRefSchema),
+  }),
+  v.check(
+    (layer) => (layer.t === 'base') === (layer.layers.length === 0),
+    'A base names no older layer; a delta names its base',
+  ),
+);
+export type LayerDoc = v.InferOutput<typeof LayerDocSchema>;
 
 // ── canonical serialization ──────────────────────────────────────────────────
 
@@ -201,6 +241,12 @@ export function encodeCanonical(value: Canon): Uint8Array {
   return utf8.encode(canonicalJson(value));
 }
 
+/** A layer doc as the canonical encoder takes it: parsed by its own schema,
+ *  so an optional member left `undefined` is absent rather than encoded. */
+function layerCanon(doc: LayerDoc): Canon {
+  return JSON.parse(JSON.stringify(v.parse(LayerDocSchema, doc)));
+}
+
 // ── chunking ─────────────────────────────────────────────────────────────────
 
 interface Chunking {
@@ -208,14 +254,27 @@ interface Chunking {
   readonly size: number;
 }
 
+/** What one build counted, in the contract's own row. */
+interface BuildTally {
+  bytesChunked: number;
+  chunksHashed: number;
+  wholeFiles: number;
+}
+
 interface ObjectStaging {
   readonly sink: CandidateObjectSink;
   readonly dependencies: StagedCandidateObject[];
   readonly known: Set<string>;
+  readonly tally: BuildTally;
 }
 
 export function isHoleExtent(part: ChunkPartDoc): part is HoleExtentDoc {
   return 'hole' in part;
+}
+
+/** The immutable object one stored part reads from. */
+function partObject(part: ChunkDoc): ImmutableObjectRef {
+  return { key: objectKey(part.hash), byteLength: String(part.length ?? part.size), sha256: part.hash };
 }
 
 /** Append `size` zero bytes, merged into the hole before them if there is one. */
@@ -233,9 +292,11 @@ async function appendChunk(
   bytes: Uint8Array,
   staging: ObjectStaging,
 ): Promise<void> {
+  staging.tally.bytesChunked += bytes.byteLength;
   for (const byte of bytes) {
     if (byte !== 0) {
       const hash = sha256Hex(bytes);
+      staging.tally.chunksHashed += 1;
       if (!staging.known.has(hash)) {
         const staged = await staging.sink.stage(objectKey(hash), bytes);
         if (
@@ -313,7 +374,115 @@ async function chunkContent(
     at = segment.end;
   }
   await chunkData(layout.size);
+  staging.tally.wholeFiles += 1;
   return { chunks, size: layout.size };
+}
+
+/** The logical bytes `[from, to)` of a parent's part list, each part cut to
+ *  the span: a stored part becomes a range of its object, a hole a shorter
+ *  hole. Bytes past the parent's end read as a hole, which is what a size
+ *  grown by truncate holds. */
+function cutParts(parent: readonly ChunkPartDoc[], from: number, to: number): ChunkPartDoc[] {
+  const out: ChunkPartDoc[] = [];
+  let at = 0;
+  for (const part of parent) {
+    const start = Math.max(from, at);
+    const end = Math.min(to, at + part.size);
+    if (start < end) {
+      if (isHoleExtent(part)) {
+        appendHole(out, end - start);
+      } else {
+        out.push({
+          hash: part.hash,
+          size: end - start,
+          offset: (part.offset ?? 0) + (start - at),
+          length: part.length ?? part.size,
+        });
+      }
+    }
+    at += part.size;
+    if (at >= to) break;
+  }
+  if (at < to) appendHole(out, to - Math.max(at, from));
+  return out;
+}
+
+/** Join what the overlay left in pieces: neighbouring holes into one, and
+ *  neighbouring ranges of one object that meet end to start back into one
+ *  range — or the whole object, when the range is all of it. */
+function normalizeParts(parts: readonly ChunkPartDoc[]): ChunkPartDoc[] {
+  const out: ChunkPartDoc[] = [];
+  for (const part of parts) {
+    const previous = out.at(-1);
+    if (isHoleExtent(part)) {
+      appendHole(out, part.size);
+      continue;
+    }
+    const offset = part.offset ?? 0;
+    const length = part.length ?? part.size;
+    if (
+      previous !== undefined && !isHoleExtent(previous) && previous.hash === part.hash
+      && (previous.length ?? previous.size) === length
+      && (previous.offset ?? 0) + previous.size === offset
+    ) {
+      previous.offset = previous.offset ?? 0;
+      previous.length = length;
+      previous.size += part.size;
+    } else {
+      out.push({ ...part });
+    }
+    const joined = out.at(-1)!;
+    if (!isHoleExtent(joined) && joined.offset === 0 && joined.size === joined.length) {
+      out[out.length - 1] = { hash: joined.hash, size: joined.size };
+    }
+  }
+  return out;
+}
+
+/** The cells writes touched, as merged windows on the dirty grid, clamped to
+ *  the file. */
+function dirtyWindows(dirty: readonly DirtyRange[], size: number): { readonly from: number; readonly to: number }[] {
+  const windows: { from: number; to: number }[] = [];
+  for (const range of dirty) {
+    if (range.length === 0 || range.offset >= size) continue;
+    const from = Math.floor(range.offset / DIRTY_CELL_BYTES) * DIRTY_CELL_BYTES;
+    const to = Math.min(size, Math.ceil(Math.min(size, range.offset + range.length) / DIRTY_CELL_BYTES) * DIRTY_CELL_BYTES);
+    const last = windows.at(-1);
+    if (last !== undefined && from <= last.to) last.to = Math.max(last.to, to);
+    else windows.push({ from, to });
+  }
+  return windows;
+}
+
+/**
+ * Re-chunk a window-staged file over its parent's parts: the cells the
+ * writes touched are read from the stage and chunked on the CHUNK_SIZE grid
+ * inside each window; every other byte keeps the parent's object as a range
+ * of it. A size the writes did not reach is a hole, which is what a
+ * truncate-extend holds; a shorter size cuts the parent's parts.
+ */
+async function overlayContent(
+  capture: AuditedCapture,
+  entry: NodeEntry,
+  content: SealedContent,
+  dirty: readonly DirtyRange[],
+  parent: readonly ChunkPartDoc[],
+  staging: ObjectStaging,
+): Promise<Chunking> {
+  const parts: ChunkPartDoc[] = [];
+  let at = 0;
+  for (const window of dirtyWindows(dirty, content.size)) {
+    parts.push(...cutParts(parent, at, window.from));
+    let cursor = window.from;
+    while (cursor < window.to) {
+      const take = Math.min(window.to, (Math.floor(cursor / CHUNK_SIZE) + 1) * CHUNK_SIZE) - cursor;
+      await appendChunk(parts, await readCaptureRange(capture, entry, cursor, take), staging);
+      cursor += take;
+    }
+    at = window.to;
+  }
+  parts.push(...cutParts(parent, at, content.size));
+  return { chunks: normalizeParts(parts), size: content.size };
 }
 
 function copyMetadata(metadata: PosixMetadata | undefined): PosixMetadataDoc | undefined {
@@ -360,7 +529,8 @@ function sameChunks(a: readonly ChunkPartDoc[], b: readonly ChunkPartDoc[]): boo
     const other = b[index];
     if (other === undefined || part.size !== other.size) return false;
     if (isHoleExtent(part)) return isHoleExtent(other);
-    return !isHoleExtent(other) && part.hash === other.hash;
+    return !isHoleExtent(other) && part.hash === other.hash
+      && (part.offset ?? 0) === (other.offset ?? 0) && (part.length ?? part.size) === (other.length ?? other.size);
   });
 }
 
@@ -387,10 +557,28 @@ function copyEntry(doc: EntryDoc): EntryDoc {
 /** What one checkpoint contributes to the shared publication boundary. */
 export interface BuiltLayers {
   /** The publication plan: staged objects, identified expected parent, the
-   *  audited CapturedCut, and the derived GC closure. */
+   *  audited CapturedCut, and the closure the plan verifies. */
   readonly plan: CandidatePublicationPlan;
   /** The freshly built view, ready to pass back as `parent`. */
   readonly view: BoundedLayers;
+  /** What the build counted: bytes and chunks the chunker consumed, entries
+   *  this generation's layer serializes, files chunked whole. Staged bytes
+   *  are the fence's, so the row leaves them at zero. */
+  readonly stats: SealWork;
+  /** The boundary rows a publish hands the daemon once its head has landed:
+   *  every file this generation rewrote on the chunk grid, and every path it
+   *  removed, so the next fence stages windows instead of whole files. */
+  readonly handback: {
+    readonly files: readonly BoundaryRow[];
+    readonly removed: readonly string[];
+  };
+}
+
+/** The chunk grid, as the daemon takes it: every cell start below the size. */
+function gridBoundaries(size: number): number[] {
+  const boundaries: number[] = [];
+  for (let at = 0; at < size; at += CHUNK_SIZE) boundaries.push(at);
+  return boundaries;
 }
 
 /**
@@ -400,6 +588,10 @@ export interface BuiltLayers {
  * parent's: the root commits the EXACT position the capture proved. The plan
  * (the opaque `PublishedParent` token); an unpublished or seed parent plans
  * a first root.
+ *
+ * A partial capture merges against the parent: a file the fence staged as
+ * windows is overlaid on the parent's entry — found by path, or by inode
+ * when a rename moved it — and only its dirty cells are chunked.
  *
  * Pure: nothing is uploaded. The caller hands `plan` to `publishCandidate`,
  * which is why a crash-before-publish is expressible as "stopped looping".
@@ -426,10 +618,25 @@ export async function build(
     sink,
     dependencies,
     known: new Set(parent?.chunkHashes ?? []),
+    tally: { bytesChunked: 0, chunksHashed: 0, wholeFiles: 0 },
   };
   const changed = new Map<UpperPath, EntryDoc>();
   const tombstones = new Set<UpperPath>();
   const snapshot = new Map(audited.entries.map((entry) => [entry.path, entry]));
+  type FileDoc = Extract<EntryDoc, { kind: 'file' }>;
+  let parentFilesByIno: Map<number, FileDoc> | null = null;
+  const parentFileFor = (path: UpperPath, ino: number): FileDoc | undefined => {
+    const byPath = parent?.entryAt(path);
+    if (byPath?.kind === 'file') return byPath;
+    if (parent === undefined) return undefined;
+    if (parentFilesByIno === null) {
+      parentFilesByIno = new Map();
+      for (const doc of parent.merged().values()) {
+        if (doc.kind === 'file') parentFilesByIno.set(doc.ino, doc);
+      }
+    }
+    return parentFilesByIno.get(ino);
+  };
 
   for (const [path, node] of snapshot) {
     if (!isCanonicalJournalPath(path)) throw new Error(`refusing hostile path: ${JSON.stringify(path)}`);
@@ -437,7 +644,17 @@ export async function build(
     let chunking: Chunking | undefined;
     if (node.kind === 'file') {
       if (node.content === undefined) throw new Error(`file ${path} carries no content`);
-      chunking = await chunkContent(audited, node, node.content, staging);
+      const dirty = node.content.kind === 'sealed' ? node.content.dirty : undefined;
+      if (dirty === undefined) {
+        chunking = await chunkContent(audited, node, node.content, staging);
+      } else {
+        const parentDoc = parentFileFor(path, node.ino);
+        if (parentDoc === undefined) {
+          throw new Error(`file ${path} was staged as windows but no published parent entry holds its other bytes`);
+        }
+        if (node.content.kind !== 'sealed') throw new Error(`file ${path} carries dirty ranges without sealed content`);
+        chunking = await overlayContent(audited, node, node.content, dirty, parentDoc.chunks, staging);
+      }
     } else if (node.content !== undefined) {
       throw new Error(`non-file ${path} carries file content`);
     }
@@ -459,47 +676,36 @@ export async function build(
   for (const path of tombstones) resolved.delete(path);
 
   const byPath = (a: EntryDoc, b: EntryDoc) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-  let layers: readonly ImmutableObjectRef[];
-  if (parent === undefined || parent.layers.length >= MAX_LAYER_DEPTH) {
-    const bytes = encodeCanonical({ v: 1, t: 'base', entries: [...resolved.values()].sort(byPath), tombs: [] });
-    const staged = await sink.stage(objectKey(sha256Hex(bytes)), bytes);
-    dependencies.push(staged);
-    layers = [staged.ref];
+  let own: LayerDoc;
+  if (parent === undefined || parent.depth >= MAX_LAYER_DEPTH) {
+    own = {
+      v: 1, fmt: BOUNDED_LAYERS_FORMAT, cut, t: 'base',
+      entries: [...resolved.values()].sort(byPath), tombs: [], layers: [],
+    };
   } else if (changed.size > 0 || tombstones.size > 0) {
-    const bytes = encodeCanonical({
-      v: 1,
-      t: 'delta',
+    own = {
+      v: 1, fmt: BOUNDED_LAYERS_FORMAT, cut, t: 'delta',
       entries: [...changed.values()].sort(byPath),
       tombs: [...tombstones].sort(),
-    });
-    const staged = await sink.stage(objectKey(sha256Hex(bytes)), bytes);
-    dependencies.push(staged);
-    layers = [staged.ref, ...parent.layers];
+      layers: [parent.rootRef, ...parent.layers],
+    };
   } else {
-    layers = parent.layers;
+    // NOTHING CHANGED: restate the parent's own layer under the new cut, so
+    // the chain does not grow for an empty generation. Above a base the
+    // restatement is an empty delta naming it.
+    own = parent.own.t === 'delta'
+      ? { ...parent.own, cut, entries: parent.own.entries.map(copyEntry), tombs: [...parent.own.tombs], layers: [...parent.layers] }
+      : { v: 1, fmt: BOUNDED_LAYERS_FORMAT, cut, t: 'delta', entries: [], tombs: [], layers: [parent.rootRef] };
   }
-
-  const rootBytes = encodeCanonical({ v: 1, fmt: BOUNDED_LAYERS_FORMAT, cut, layers: [...layers] });
+  const rootBytes = encodeCanonical(layerCanon(own));
   // Root is staged only after every dependency has sealed in the sink.
   const root = await sink.stage(objectKey(sha256Hex(rootBytes)), rootBytes);
 
-  // Derive the exact closure this child root reaches. Fresh refs are already
-  // staged; authenticated parent refs are passed as `reused` so the shared
-  // plan stages its closure object without receiving any caller closure.
-  const reachableByKey = new Map<string, ImmutableObjectRef>();
-  reachableByKey.set(root.ref.key, root.ref);
-  for (const ref of layers) reachableByKey.set(ref.key, ref);
-  for (const doc of resolved.values()) {
-    if (doc.kind !== 'file') continue;
-    for (const part of doc.chunks) {
-      if (isHoleExtent(part)) continue;
-      reachableByKey.set(objectKey(part.hash), {
-        key: objectKey(part.hash), byteLength: String(part.size), sha256: part.hash,
-      });
-    }
-  }
-  const freshKeys = new Set([...dependencies.map((object) => object.ref.key), root.ref.key]);
-  const reused = [...reachableByKey.values()].filter((ref) => !freshKeys.has(ref.key));
+  // THE CLOSURE THIS PUBLICATION PROVES: its root, every layer the root
+  // names, and the chunks it wrote. A chunk an older generation wrote was
+  // proved when that generation published, is named by a layer this root
+  // still names, and nothing deletes it; listing it again per generation is
+  // what made the closure O(tree).
   const plan = await planCandidatePublication({
     format: BOUNDED_LAYERS_FORMAT,
     expectedParentRootId: parent === undefined ? null : publishedParentInfo(parent.parentToken!).envelopeId,
@@ -507,7 +713,7 @@ export async function build(
     sink,
     dependencies,
     root,
-    reused,
+    reused: own.layers,
   });
 
   const chunkHashes = new Set<string>();
@@ -521,24 +727,40 @@ export async function build(
     root.ref.sha256,
     root.ref,
     cut,
-    layers,
+    own,
     resolved,
     chunkHashes,
     undefined,
     undefined,
     null,
   );
-  return { plan, view };
+  const files: BoundaryRow[] = [];
+  for (const doc of changed.values()) {
+    if (doc.kind !== 'file') continue;
+    files.push({ ino: String(doc.ino), path: doc.path, size: doc.size, boundaries: gridBoundaries(doc.size) });
+  }
+  return {
+    plan,
+    view,
+    stats: {
+      bytesStaged: 0,
+      bytesChunked: staging.tally.bytesChunked,
+      chunksHashed: staging.tally.chunksHashed,
+      nodesRewritten: own.entries.length,
+      wholeFiles: staging.tally.wholeFiles,
+    },
+    handback: { files, removed: [...tombstones].sort() },
+  };
 }
 
 // ── the reader seam ──────────────────────────────────────────────────────────
 
 /**
  * Realize one granted GET. Layers, roots and content chunks are all
- * addressed objects, so a range read needs no byte-offset arithmetic HERE:
- * it issues exactly one whole-object intent per intersecting chunk. The
- * production adapter validates the intent, fills its own grant identity, and
- * answers with bytes the shared seam then holds to the intent's digest.
+ * immutable objects with declared byte lengths; fetch exactly what an
+ * `ImmutableObjectRef` names. Callers construct fully-typed
+ * `RangeReadIntent`s, and the shared `readCandidateRange` seam holds the
+ * returned bytes to the intent's declared digest.
  */
 export interface ObjectReader {
   readRange(intent: RangeReadIntent): Promise<Uint8Array>;
@@ -593,14 +815,21 @@ export interface StatView {
   readonly size?: number;
   readonly target?: string;
 }
-/** A stored chunk above CHUNK_SIZE would make one bounded range read fetch an
- *  object of any size the layer chose to declare; a span that disagrees with
- *  the declared size would read short or past the end. Both refuse here. */
+/** A stored object above CHUNK_SIZE would make one bounded range read fetch
+ *  an object of any size the layer chose to declare; a span that disagrees
+ *  with the declared size would read short or past the end; a range outside
+ *  its object would read bytes that are not there. All three refuse here. */
 function validateFileEntry(doc: Extract<EntryDoc, { kind: 'file' }>, where: string): void {
   let logicalBytes = 0;
   for (const part of doc.chunks) {
-    if (!isHoleExtent(part) && part.size > CHUNK_SIZE) {
-      throw new Error(`${where}: ${doc.path} chunk ${part.hash} is ${part.size} bytes, above the ${CHUNK_SIZE}-byte bound`);
+    if (!isHoleExtent(part)) {
+      const length = part.length ?? part.size;
+      if (length > CHUNK_SIZE) {
+        throw new Error(`${where}: ${doc.path} chunk ${part.hash} is ${length} bytes, above the ${CHUNK_SIZE}-byte bound`);
+      }
+      if ((part.offset ?? 0) + part.size > length) {
+        throw new Error(`${where}: ${doc.path} range of ${part.hash} reaches past its ${length}-byte object`);
+      }
     }
     logicalBytes += part.size;
   }
@@ -623,13 +852,24 @@ export class BoundedLayers {
     readonly rootId: string,
     readonly rootRef: ImmutableObjectRef,
     readonly cut: number,
-    readonly layers: readonly ImmutableObjectRef[],
+    /** This generation's own layer: the root document as published. */
+    readonly own: LayerDoc,
     private readonly resolved: ReadonlyMap<UpperPath, EntryDoc>,
     private readonly chunks: ReadonlySet<string>,
     private readonly reader: ObjectReader | undefined,
     private readonly identity: ReadIdentity | undefined,
     private readonly publishedParent: PublishedParent | null,
   ) {}
+
+  /** The older layers this root names, newest first, the base last. */
+  get layers(): readonly ImmutableObjectRef[] {
+    return this.own.layers;
+  }
+
+  /** How many layers a resolution consults: this root plus the older ones. */
+  get depth(): number {
+    return 1 + this.own.layers.length;
+  }
 
   /**
    * What page-in has cost this serving instance, in the contract's own row.
@@ -707,7 +947,7 @@ export class BoundedLayers {
       throw new Error('published parent head does not select its envelope');
     }
     return new BoundedLayers(
-      this.rootId, this.rootRef, this.cut, this.layers,
+      this.rootId, this.rootRef, this.cut, this.own,
       this.resolved, this.chunks, this.reader, this.identity, parent,
     );
   }
@@ -739,14 +979,12 @@ export class BoundedLayers {
   gcClosure(): readonly ImmutableObjectRef[] {
     const refs = new Map<string, ImmutableObjectRef>();
     refs.set(this.rootRef.key, this.rootRef);
-    for (const ref of this.layers) refs.set(ref.key, ref);
+    for (const ref of this.own.layers) refs.set(ref.key, ref);
     for (const doc of this.resolved.values()) {
       if (doc.kind !== 'file') continue;
       for (const part of doc.chunks) {
         if (isHoleExtent(part) || refs.has(objectKey(part.hash))) continue;
-        refs.set(objectKey(part.hash), {
-          key: objectKey(part.hash), byteLength: String(part.size), sha256: part.hash,
-        });
+        refs.set(objectKey(part.hash), partObject(part));
       }
     }
     return [...refs.values()];
@@ -788,9 +1026,12 @@ export class BoundedLayers {
 
   /**
    * Logical bytes `[offset, offset + length)` of one file. Each intersecting
-   * chunk is fetched through its OWN digest-bearing intent via the shared
-   * `readCandidateRange` seam; holes fill as zeros without any fetch.
-   * Past-EOF spans truncate like pread.
+   * part fetches its OWN object through a digest-bearing intent via the
+   * shared `readCandidateRange` seam and takes its range of it; holes fill as
+   * zeros without any fetch. The last two objects fetched are kept for the
+   * parts that follow, because a dirty-cell overlay leaves the two remaining
+   * ranges of one object around the cell it rewrote. Past-EOF spans truncate
+   * like pread.
    */
   async readRange(path: UpperPath, offset: number, length: number): Promise<Uint8Array> {
     if (this.reader === undefined || this.identity === undefined) {
@@ -810,19 +1051,24 @@ export class BoundedLayers {
     if (out.byteLength === 0) return out;
     this.#hydrate.bytesRequested += out.byteLength;
 
+    const held: { readonly hash: string; readonly bytes: Uint8Array }[] = [];
     let partStart = 0;
     for (const part of doc.chunks) {
       const partEnd = partStart + part.size;
       const from = Math.max(start, partStart);
       const to = Math.min(end, partEnd);
       if (from < to && !isHoleExtent(part)) {
-        const ref: ImmutableObjectRef = {
-          key: objectKey(part.hash), byteLength: String(part.size), sha256: part.hash,
-        };
-        this.#hydrate.rangeGets += 1;
-        this.#hydrate.bytesFetched += part.size;
-        const bytes = await fetchObject(this.reader, this.identity, ref, `content chunk of ${path}`);
-        out.set(bytes.subarray(from - partStart, to - partStart), from - start);
+        let object = held.find((entry) => entry.hash === part.hash);
+        if (object === undefined) {
+          const ref = partObject(part);
+          this.#hydrate.rangeGets += 1;
+          this.#hydrate.bytesFetched += Number(ref.byteLength);
+          object = { hash: part.hash, bytes: await fetchObject(this.reader, this.identity, ref, `content chunk of ${path}`) };
+          if (held.length === 2) held.shift();
+          held.push(object);
+        }
+        const within = (part.offset ?? 0) + (from - partStart);
+        out.set(object.bytes.subarray(within, within + (to - from)), from - start);
       }
       if (partEnd >= end) break;
       partStart = partEnd;
@@ -864,16 +1110,23 @@ export async function open(
       throw new Error(`root ${rootId} could not be read: ${message}`, { cause });
     }
   }
-  const rootDoc = decodeJson(RootDocSchema, `root ${rootId}`, rootBytes);
-  if (rootDoc.layers.length < 1) throw new Error(`root ${rootId} names no layers`);
-  if (rootDoc.layers.length > MAX_LAYER_DEPTH) {
-    throw new Error(`root ${rootId} names ${rootDoc.layers.length} layers, above the bound of ${MAX_LAYER_DEPTH}`);
+  const rootDoc = decodeJson(LayerDocSchema, `root ${rootId}`, rootBytes);
+  if (rootDoc.layers.length + 1 > MAX_LAYER_DEPTH) {
+    throw new Error(`root ${rootId} names ${rootDoc.layers.length + 1} layers, above the bound of ${MAX_LAYER_DEPTH}`);
   }
 
   // Layers are ordered newest-first, so merge OLDEST to newest: a newer
-  // entry — or tombstone — overwrites what an older layer resolved.
+  // entry — or tombstone — overwrites what an older layer resolved. The root
+  // is the newest and merges last.
   const resolved = new Map<UpperPath, EntryDoc>();
   const chunks = new Set<string>();
+  const merge = (layer: LayerDoc, what: string): void => {
+    for (const doc of layer.entries) {
+      if (doc.kind === 'file') validateFileEntry(doc, what);
+      resolved.set(doc.path, doc);
+    }
+    for (const path of layer.tombs) resolved.delete(path);
+  };
   for (const [index, ref] of [...rootDoc.layers].reverse().entries()) {
     const what = `layer ${rootDoc.layers.length - 1 - index}`;
     let bytes: Uint8Array;
@@ -888,12 +1141,9 @@ export async function open(
     if (layer.t !== expectedTag) {
       throw new Error(`${what} must be the ${expectedTag}; root layer ordering is forged`);
     }
-    for (const doc of layer.entries) {
-      if (doc.kind === 'file') validateFileEntry(doc, what);
-      resolved.set(doc.path, doc);
-    }
-    for (const path of layer.tombs) resolved.delete(path);
+    merge(layer, what);
   }
+  merge(rootDoc, `root ${rootId}`);
   for (const doc of resolved.values()) {
     if (doc.kind !== 'file') continue;
     for (const part of doc.chunks) {
@@ -904,6 +1154,6 @@ export async function open(
   return new BoundedLayers(
     rootId,
     { key: objectKey(rootId), byteLength: String(rootBytes.byteLength), sha256: rootId },
-    rootDoc.cut, rootDoc.layers, resolved, chunks, reader, identity, null,
+    rootDoc.cut, rootDoc, resolved, chunks, reader, identity, null,
   );
 }

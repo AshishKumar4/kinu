@@ -12,10 +12,8 @@ import type { AuditedCapture } from '../src/capture/model';
 import { build as buildBounded, isHoleExtent, open as openBounded } from '../src/candidates/bounded-layers';
 import { buildMerklePack, openMerklePack, parentFromPublishedParent } from '../src/candidates/merkle-pack';
 import type { MerklePackView, PackRun } from '../src/candidates/merkle-pack';
-import { JournalDaemonClient, readJournalDelta } from '../src/capture/journal/client';
-import type { JournalBase, JournalDelta, JournalFence } from '../src/capture/journal/client';
-import { issueVerifiedJournalCapture, manifestSha256 } from '../src/capture/model';
-import type { Capture, NodeEntry } from '../src/capture/model';
+import { JournalDaemonClient, captureFromJournalDelta, readJournalDelta } from '../src/capture/journal/client';
+import type { JournalBase, JournalFence } from '../src/capture/journal/client';
 import type { PosixMetadata } from '../src/capture/model';
 import { FileCandidateObjectSink, envelopeBytes, recoverPublishedParent, requireEnvelopeAt, stageCandidatePayload } from '../src/candidates/publication';
 import type { CandidateRestoreBound, CandidateRestoreWork } from '../src/candidates/restore-receipt';
@@ -26,10 +24,11 @@ import type {
   PublishIdentityInput,
   PublishedParent,
 } from '../src/candidates/publication';
-import { CandidateRunControlV1Schema, ImmutableObjectRefSchema } from '../src/durability/contracts';
+import { CandidateRunControlV1Schema } from '../src/durability/contracts';
 import type {
   CandidateRunControlV1,
   CandidateRunHeadV1,
+  ImmutableObjectRef,
   ObjectReceipt,
   PayloadGrant,
   RangeReadIntent,
@@ -395,7 +394,7 @@ async function restoreBounded(
   const counter = new RestoreReadCounter();
   const counted = new CountedRestoreStore(store, counter);
   const view = await openBounded(head.envelope.rootObject, counted, restoreIdentity(options, head));
-  const layersConsulted = view.layers.length;
+  const layersConsulted = view.depth;
   const openReads = counter.snapshot().ops;
   counted.cls = 'payload';
   const root = new BeneathRoot(options.workspace);
@@ -714,28 +713,18 @@ async function restoreMerkle(
   }
 }
 
-async function checkpointResult(
+/** The checkpoint's reply: what moved, and what the published head holds.
+ *  `held` is the reachable set the format knows in memory — every object the
+ *  root reaches through its layers — so no store read is spent to state it. */
+function checkpointResult(
   draft: CandidatePublicationDraft,
-  store: FusePayloadStore,
-): Promise<CandidateCheckpointPublishedResult> {
-  const closureBytes = await store.readRange({
-    operationId: draft.operationId,
-    attemptId: draft.attemptId,
-    boxId: 'closure-accounting',
-    epoch: draft.capturedCut.epoch,
-    exactKey: draft.closureObject.key,
-    method: 'GET',
-    byteOffset: '0',
-    byteLength: draft.closureObject.byteLength,
-    sha256: draft.closureObject.sha256,
-    expiresAt: String(Date.now() + 60_000),
-  });
-  const closure = v.parse(v.array(ImmutableObjectRefSchema), JSON.parse(new TextDecoder().decode(closureBytes)));
+  held: readonly ImmutableObjectRef[],
+): CandidateCheckpointPublishedResult {
   return {
     ok: true,
-    movedBytes: [...draft.dependencyReceipts, draft.rootReceipt, draft.closureReceipt]
+    movedBytes: [...draft.dependencyReceipts, draft.rootReceipt]
       .reduce((bytes, receipt) => bytes + Number(receipt.byteLength), 0),
-    heldBytes: closure.reduce((bytes, ref) => bytes + Number(ref.byteLength), 0),
+    heldBytes: held.reduce((bytes, ref) => bytes + Number(ref.byteLength), 0),
     draft,
   };
 }
@@ -787,7 +776,8 @@ export async function publishCapturedCandidate(
           await recoverParent(head, payload, input),
         );
       const built = await buildBounded(capture, parent, sink);
-      return await checkpointResult(await stageCandidatePayload(built.plan, input, payload), payload);
+      const draft = await stageCandidatePayload(built.plan, input, payload);
+      return checkpointResult(draft, built.view.gcClosure());
     }
     let parent = null;
     if (head !== null) {
@@ -809,7 +799,9 @@ export async function publishCapturedCandidate(
       );
     }
     const built = await buildMerklePack(capture, { parent, sink });
-    return await checkpointResult(await stageCandidatePayload(built.plan, input, payload), payload);
+    // A v1 Merkle closure still names every object the root reaches.
+    const draft = await stageCandidatePayload(built.plan, input, payload);
+    return checkpointResult(draft, draft.closure);
   } finally {
     await rm(stage, { recursive: true, force: true });
   }
@@ -882,7 +874,7 @@ async function checkpointCandidate(options: CandidateRunOptions): Promise<Candid
   // `parseDeltaManifest`, where manifests are parsed.
   const delta = await readJournalDelta(fence);
   try {
-    const capture = await captureFromDelta(delta, {
+    const capture = captureFromJournalDelta(delta, {
       captureId: grant.operationId,
       epoch: grant.epoch,
       baseRevision: grant.baseRevision,
@@ -892,85 +884,6 @@ async function checkpointCandidate(options: CandidateRunOptions): Promise<Candid
   } finally {
     delta.close();
   }
-}
-
-/**
- * One v2 delta manifest as the PARTIAL sealed capture both codecs merge.
- *
- * The entries are the delta's own rows — every touched path plus its
- * ancestors, which is exactly the consistent partial tree the capture model's
- * partial rule demands — with file content read from the delta's stage, where
- * every read is held to the digest the fence recorded for exactly those bytes.
- * The removals are the WAL's own structural deletions (unlink/rmdir, and the
- * old name of a rename), which is what the daemon's `removed` semantics state.
- *
- * A delta with no base is a FIRST fence (no published head to build against):
- * its rows are the whole tree as the daemon sees it, so it publishes as a
- * whole-tree capture — `partial: false`, which also carries no `removed`,
- * because there is no parent state to remove from.
- */
-async function captureFromDelta(
-  delta: JournalDelta,
-  identity: { captureId: string; epoch: string; baseRevision: string; stableStageHandle: string },
-) {
-  const manifest = delta.manifest;
-  const partial = manifest.base !== null;
-  const entries: NodeEntry[] = [];
-  for (const row of manifest.entries) {
-    const metadata: PosixMetadata = {
-      uid: row.uid,
-      gid: row.gid,
-      atimeNs: row.atimeNs,
-      mtimeNs: row.mtimeNs,
-      ctimeNs: row.ctimeNs,
-      xattrs: { ...row.xattrs },
-    };
-    if (row.kind === 'symlink') {
-      if (row.target === undefined) throw new Error(`delta row ${row.path} is a symlink with no target`);
-      entries.push({ path: row.path, kind: 'symlink', mode: row.mode, ino: Number(row.ino), metadata, target: row.target });
-      continue;
-    }
-    if (row.kind === 'dir') {
-      entries.push({ path: row.path, kind: 'dir', mode: row.mode, ino: Number(row.ino), metadata });
-      continue;
-    }
-    const sealed = {
-      kind: 'sealed' as const,
-      size: row.size,
-      sourceId: row.path,
-      extents: row.ranges.map((range) => ({ offset: range.offset, length: range.length, sha256: range.sha256 })),
-    };
-    entries.push({ path: row.path, kind: 'file', mode: row.mode, ino: Number(row.ino), metadata, content: sealed });
-  }
-  // THE REMOVALS the WAL recorded: unlink, rmdir, and a rename's old name. A
-  // failed op (`result < 0`) removed nothing, and non-structural ops touch
-  // only what their own rows state.
-  const removed: string[] = [];
-  if (partial) {
-    for (const op of manifest.metadataOps) {
-      if (op.result < 0) continue;
-      if (op.op === 'unlink' || op.op === 'rmdir') removed.push(op.path);
-      if (op.op === 'rename') removed.push(op.path);
-    }
-  }
-  const capture: Capture = {
-    mechanism: 'mutation-journal',
-    cut: manifest.cut,
-    generation: manifest.generation,
-    entries,
-  };
-  return issueVerifiedJournalCapture({
-    cut: manifest.cut,
-    generation: manifest.generation,
-    entries,
-    identity,
-    manifestSha256: manifestSha256(capture),
-    sealedReader: {
-      read: async (sourceId, offset, length) => await delta.stage.read(sourceId, offset, length),
-    },
-    partial,
-    removed: partial ? removed : [],
-  });
 }
 
 async function seedCandidateJournal(options: CandidateRunOptions): Promise<CandidateSeedResult> {

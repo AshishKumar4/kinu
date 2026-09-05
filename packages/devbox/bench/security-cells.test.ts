@@ -208,7 +208,6 @@ describe('F10 hostile metadata discrimination', () => {
       },
       rootObject: { key: 'obj/root', byteLength: '1', sha256: sha },
       closure: [],
-      closureObject: { key: 'obj/closure', byteLength: '1', sha256: sha },
     };
     const id = envelopeIdOf(envelope);
     const canonical = envelopeBytes(envelope);
