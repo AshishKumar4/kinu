@@ -16,11 +16,11 @@
  * uses it to leave fullscreen gadget mode, which this surface does not have.
  */
 
-// The bundle arrives through a dynamic import, not a static default one:
-// `capnweb` publishes no default export, so a static default import names an
-// export that is not there, while `?raw` is what gives the text its default.
-// The specifier stays the package root — the exports map names no deeper
-// subpath — so the bundled bytes are the same either way.
+// The reference writes `import CAPNWEB_BUNDLE from "capnweb?raw"`, the form
+// Vite documents, and this repository's `import/default` rule rejects it: the
+// linter resolves the specifier without its `?raw` suffix and finds no default
+// export on the package. A dynamic import is not resolved that way, and the
+// `?raw` module still answers the bundle text as its default.
 const capnwebRaw = await import("capnweb?raw");
 const CAPNWEB_BUNDLE: string = capnwebRaw.default;
 

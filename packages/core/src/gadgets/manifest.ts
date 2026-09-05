@@ -40,23 +40,24 @@ export const GADGET_CLIENT_STYLE_FILE = 'client.css';
 /** The class `server.js` exports and the host instantiates as the facet. */
 export const GADGET_SERVER_CLASS = 'Gadget';
 
-/** Bounds. Each is a denial-of-service answer: the host reads these files
- *  into an isolate and a document, and a manifest names what it mints. */
+/** Bounds, in UTF-16 code units as `String.length` counts them. Each is a
+ *  denial-of-service answer: the host reads these files into an isolate and a
+ *  document, and a manifest names what it mints. */
 export const GADGET_LIMITS = {
   slugChars: 40,
   titleChars: 60,
   subtitleChars: 120,
   bindings: 8,
   bindingNameChars: 32,
-  serverBytes: 512 * 1024,
-  clientBytes: 1024 * 1024,
-  manifestBytes: 8 * 1024,
+  serverChars: 512 * 1024,
+  clientChars: 1024 * 1024,
+  manifestChars: 8 * 1024,
 } as const;
 
 /** The directory name is the slug: lowercase, digits and hyphens, starting
  *  with a letter or digit. Fixed here because the slug travels into a facet
  *  name, a loader id and a surface kind, none of which may carry a path. */
-const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const SLUG_RE = new RegExp(`^[a-z0-9][a-z0-9-]{0,${GADGET_LIMITS.slugChars - 1}}$`);
 
 export function isGadgetSlug(value: string): boolean {
   return SLUG_RE.test(value);
@@ -64,7 +65,7 @@ export function isGadgetSlug(value: string): boolean {
 
 /** A binding name is what `env.<NAME>` spells in `server.js`. Upper snake
  *  case, the convention every Workers binding already follows. */
-const BINDING_NAME_RE = /^[A-Z][A-Z0-9_]{0,31}$/;
+const BINDING_NAME_RE = new RegExp(`^[A-Z][A-Z0-9_]{0,${GADGET_LIMITS.bindingNameChars - 1}}$`);
 
 /** A workspace-relative directory: no leading slash, no `.`/`..` segment, no
  *  empty segment. The file plane resolves it under the workspace root. */
@@ -127,7 +128,7 @@ const GadgetManifestSchema = v.strictObject({
   subtitle: v.optional(asciiTitle(GADGET_LIMITS.subtitleChars)),
   bindings: v.optional(v.pipe(
     v.record(
-      v.pipe(v.string(), v.regex(BINDING_NAME_RE, 'a binding name is UPPER_SNAKE_CASE, at most 32 characters')),
+      v.pipe(v.string(), v.regex(BINDING_NAME_RE, `a binding name is UPPER_SNAKE_CASE, at most ${GADGET_LIMITS.bindingNameChars} characters`)),
       GadgetBindingSchema,
     ),
     v.check(

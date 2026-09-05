@@ -100,7 +100,7 @@ describe('the gadget server boundary under workerd', () => {
     expect(valueOf(await subject.gadgetCall('probe', 'readFile', ['note.txt']))).toBe('probe data\n');
     expect(valueOf(await subject.gadgetCall('probe', 'writeFile', ['from-gadget.txt', 'written by gadget']))).toEqual({
       path: 'gadgets/probe/data/from-gadget.txt',
-      bytes: 17,
+      chars: 17,
     });
     expect(valueOf(await subject.gadgetCall('probe', 'readFile', ['from-gadget.txt']))).toBe('written by gadget');
   });

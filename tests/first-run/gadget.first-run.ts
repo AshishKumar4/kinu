@@ -29,11 +29,11 @@
  *              with no client calling it is exactly the half-success this case
  *              exists to refuse.
  *
- * RED, DELIBERATELY, AS THIS TIER'S OWN RULE APPLIED TO ITSELF. This case is
- * written against the deployed product BEFORE any run proves it, so it is red
- * on the mechanism the owner would hit rather than green on the mechanism its
- * author imagined. It goes green when the tier runs it, and never because
- * this file was adjusted.
+ * NOT PROVED RED AGAINST A DEPLOYED SHA. The build before the gadget commit
+ * has no `listGadgets` RPC, so this row fails there on the missing surface
+ * and says nothing about the defect it names. The first tier run after a
+ * deploy is the measurement, and the row goes green only from that run,
+ * never because this file was adjusted.
  */
 import { afterAll, describe, test } from 'vitest';
 

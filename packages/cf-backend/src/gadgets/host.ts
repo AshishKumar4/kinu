@@ -210,14 +210,14 @@ export class GadgetHost {
         return { ok: true, value: raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw };
       }
       case 'write': {
-        if (request.text.length > GADGET_LIMITS.clientBytes) {
+        if (request.text.length > GADGET_LIMITS.clientChars) {
           return { ok: false, ...refusalOf(new KinuError('bad_input',
-            `a gadget write is at most ${GADGET_LIMITS.clientBytes} characters`)) };
+            `a gadget write is at most ${GADGET_LIMITS.clientChars} characters`)) };
         }
         const parent = resolved.path.slice(0, resolved.path.lastIndexOf('/'));
         if (parent) await ensureDir(vfs, parent);
         await vfs.writeFile(resolved.path, request.text);
-        return { ok: true, value: { path: resolved.path, bytes: request.text.length } };
+        return { ok: true, value: { path: resolved.path, chars: request.text.length } };
       }
       case 'list': {
         const names = await tolerateAsync(() => vfs.readdir(resolved.path), 'enoent');
@@ -259,14 +259,11 @@ export class GadgetHost {
     }
     const spent: ApprovalSpend | undefined = decision.spent;
     try {
-      const value = await this.deps.mcp.call(binding.server, request.tool, args.output);
+      return { ok: true, value: await this.deps.mcp.call(binding.server, request.tool, args.output) };
+    } finally {
       // The call reached the connection: the grant is consumed whatever the
-      // tool answered, which is the safe reading `gateExec` takes too.
+      // tool answered, which is the reading `gateExec` takes too.
       if (spent) this.deps.approval.deferrals?.settle(spent, 'spent');
-      return { ok: true, value };
-    } catch (cause) {
-      if (spent) this.deps.approval.deferrals?.settle(spent, 'spent');
-      throw cause;
     }
   }
 

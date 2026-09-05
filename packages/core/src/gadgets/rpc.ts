@@ -10,6 +10,7 @@ import * as v from 'valibot';
 import type { JsonValue } from '../utils/json';
 import type { Refusal } from '../obs/index';
 import type { GadgetRecord } from './files';
+import { gadgetBindings } from './manifest';
 
 /**
  * Method names the runtime reserves on a Durable Object class. Calling one
@@ -65,6 +66,6 @@ export function gadgetSummary(record: GadgetRecord): GadgetSummary {
     subtitle: record.manifest.subtitle ?? null,
     hasServer: record.hasServer,
     hasClient: record.hasClient,
-    bindings: Object.keys(record.manifest.bindings ?? {}),
+    bindings: gadgetBindings(record.manifest).map(([name]) => name),
   };
 }

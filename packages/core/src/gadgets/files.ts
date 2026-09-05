@@ -82,9 +82,9 @@ export async function readGadget(vfs: VFS, slug: string): Promise<GadgetReadResu
     return { ok: false, ...refusalOf(new KinuError('missing',
       `No gadget named "${slug}": ${gadgetPath(slug, GADGET_MANIFEST_FILE)} does not exist.`)) };
   }
-  if (manifestText.length > GADGET_LIMITS.manifestBytes) {
+  if (manifestText.length > GADGET_LIMITS.manifestChars) {
     return { ok: false, ...refusalOf(new KinuError('bad_input',
-      `${gadgetPath(slug, GADGET_MANIFEST_FILE)} is ${manifestText.length} bytes; the limit is ${GADGET_LIMITS.manifestBytes}.`)) };
+      `${gadgetPath(slug, GADGET_MANIFEST_FILE)} is ${manifestText.length} characters; the limit is ${GADGET_LIMITS.manifestChars}.`)) };
   }
   let parsed: GadgetManifestResult;
   try {
@@ -136,9 +136,9 @@ export async function readGadgetClient(vfs: VFS, slug: string): Promise<GadgetRe
     return { ok: false, ...refusalOf(new KinuError('missing',
       `Gadget "${slug}" has no ${GADGET_CLIENT_FILE} yet.`)) };
   }
-  if (js.length > GADGET_LIMITS.clientBytes) {
+  if (js.length > GADGET_LIMITS.clientChars) {
     return { ok: false, ...refusalOf(new KinuError('bad_input',
-      `${gadgetPath(slug, GADGET_CLIENT_FILE)} is ${js.length} bytes; the limit is ${GADGET_LIMITS.clientBytes}.`)) };
+      `${gadgetPath(slug, GADGET_CLIENT_FILE)} is ${js.length} characters; the limit is ${GADGET_LIMITS.clientChars}.`)) };
   }
   const css = await readTextIfPresent(vfs, gadgetPath(slug, GADGET_CLIENT_STYLE_FILE));
   return { ok: true, js, css };
@@ -154,9 +154,9 @@ export async function readGadgetServer(vfs: VFS, slug: string): Promise<GadgetRe
     return { ok: false, ...refusalOf(new KinuError('missing',
       `Gadget "${slug}" has no ${GADGET_SERVER_FILE}, so it has no server to call.`)) };
   }
-  if (js.length > GADGET_LIMITS.serverBytes) {
+  if (js.length > GADGET_LIMITS.serverChars) {
     return { ok: false, ...refusalOf(new KinuError('bad_input',
-      `${gadgetPath(slug, GADGET_SERVER_FILE)} is ${js.length} bytes; the limit is ${GADGET_LIMITS.serverBytes}.`)) };
+      `${gadgetPath(slug, GADGET_SERVER_FILE)} is ${js.length} characters; the limit is ${GADGET_LIMITS.serverChars}.`)) };
   }
   // `sha256Hex` is the repository's one digest: the bytes the isolate loads,
   // so two gadgets with the same source share a digest and one edited source

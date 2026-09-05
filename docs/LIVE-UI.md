@@ -308,5 +308,8 @@ host-owned.
   gadget's `view()` are vocabulary only.
 - Console forwarding from the server (the reference uses a tail Worker) is
   not wired; server errors reach the caller as the refusal text.
-- The first-run row is written and not proved red against a deployed build in
-  this lane.
+- The first-run row `tests/first-run/gadget.first-run.ts` is written and not
+  proved red against a deployed sha: the build before the gadget commit has
+  no `listGadgets` RPC, so the row fails there on the missing surface, not on
+  the defect it names. The first `gate:first-run` run after a deploy is the
+  measurement.
