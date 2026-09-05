@@ -459,6 +459,19 @@ describe('the sandbox state the machine reported', () => {
       .toEqual(['This machine cannot sandbox.', sandboxReasonFix(null), NO_COMMANDS_LINE]);
   });
 
+  test('a probe that failed in the daemon\'s own words prints those words before the fix', () => {
+    // The fix for `probe_failed` tells the owner to act on what the daemon
+    // named, so the line the daemon sent is printed where the owner reads it.
+    const detail = "sandbox probe failed: bwrap: Can't chdir to /tmp/kinu-first-run-probe-6B5G: No such file or directory";
+    expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: 'probe_failed', detail, gpu: [] }))
+      .toEqual([
+        'This machine cannot sandbox.',
+        `The daemon said: ${detail}`,
+        sandboxReasonFix('probe_failed'),
+        NO_COMMANDS_LINE,
+      ]);
+  });
+
   test('sandbox on names what the agent sees and the GPU nodes found', () => {
     expect(describeDeviceSandbox({
       tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: ['/dev/nvidia0', '/dev/nvidiactl'],

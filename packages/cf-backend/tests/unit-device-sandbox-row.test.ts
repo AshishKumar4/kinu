@@ -130,6 +130,18 @@ describe('a machine that cannot sandbox is never quietly run unconfined', () => 
     const html = renderRow({ tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] });
     expect(html).toContain(CANNOT_COPY);
     expect(visibleFix(html, sandboxReasonFix(null))).toBe(true);
+    expect(html).not.toContain('The daemon said');
+  });
+
+  test('a probe that failed in the daemon\'s own words shows those words before the fix', () => {
+    // `probe_failed` carries no fixed sentence: the fix tells the owner to
+    // act on what the daemon named, so the row has to show what that was.
+    const detail = "sandbox probe failed: bwrap: Can't chdir to /tmp/kinu-first-run-probe-6B5G: No such file or directory";
+    const html = renderRow({ tier: 'sandboxed', capability: 'files_only', reason: 'probe_failed', detail, gpu: [] });
+    expect(html).toContain(CANNOT_COPY);
+    expect(html).toContain(`The daemon said: <code class="font-mono">${detail}</code>.`);
+    expect(visibleFix(html, sandboxReasonFix('probe_failed'))).toBe(true);
+    expect(html.indexOf('The daemon said')).toBeLessThan(html.indexOf('Fix what the daemon named'));
   });
 
   test('switch off on such a machine: the OFF copy, and the badge and fix stay — they are facts about the machine', () => {

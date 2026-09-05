@@ -633,6 +633,10 @@ export function DeviceRow({
       </div>
       <p className="mt-1 p-meta p-text-3" data-sandbox-mode={mode}>
         {SANDBOX_MODE_COPY[mode]}
+        {/* The daemon's own line first, when it sent one. For a probe that
+            failed in words nobody classified, that line is what the fix
+            sentence tells the owner to act on. */}
+        {cannotSandbox && sandbox.detail !== null && <> The daemon said: <code className="font-mono">{sandbox.detail}</code>.</>}
         {cannotSandbox && <> {withCodeSpans(sandboxReasonFix(sandbox.reason))}</>}
       </p>
       <div className="mt-1 flex flex-wrap items-center gap-1.5 p-meta p-text-3">

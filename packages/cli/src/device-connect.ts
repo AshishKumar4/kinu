@@ -240,11 +240,13 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
 /**
  * What the machine reported about its own sandbox, in the words the owner
  * needs. One line while the sandbox is on or off. Three lines when the machine
- * cannot sandbox: the state, the fix, and what stays blocked meanwhile. The
- * reason code the daemon reported (`no_bwrap`, `no_userns`) is deliberately
- * NOT printed: it names our own implementation, and the fix sentence is the
- * half the owner can act on. The fix lives in `@kinu.run/core`, so every
- * surface prints the same one.
+ * cannot sandbox: the state, the fix, and what stays blocked meanwhile. A
+ * fourth line, the daemon's own, when it sent one, because for a probe that
+ * failed in words nobody classified that line is what the fix tells the owner
+ * to act on. The reason code the daemon reported (`no_bwrap`, `no_userns`) is
+ * deliberately NOT printed: it names our own implementation, and the fix
+ * sentence is the half the owner can act on. The fix lives in
+ * `@kinu.run/core`, so every surface prints the same one.
  */
 export function describeDeviceSandbox(sandbox: CloudDeviceSandbox): string[] {
   switch (effectiveDeviceMode(sandbox)) {
@@ -258,6 +260,7 @@ export function describeDeviceSandbox(sandbox: CloudDeviceSandbox): string[] {
     case 'files_only':
       return [
         'This machine cannot sandbox.',
+        ...(sandbox.detail === null ? [] : [`The daemon said: ${sandbox.detail}`]),
         sandboxReasonFix(sandbox.reason),
         'Nothing runs here until you fix that, or turn Sandbox off for this device.',
       ];
