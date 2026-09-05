@@ -18,10 +18,18 @@ afterAll(release);
 // This is a boundary shim, not behavior: the platform semantics of both
 // modules are exercised where they are real, in `tests/workerd` under vitest
 // (see bunfig.toml's runner-boundary note); bun-side tests only need the SDK
-// module graph to link. The worker classes are bare link stubs — nothing under
-// bun reads a state handle off them, and `EmailMessage` alone keeps its
-// constructor arguments so an assertion can read an email a test composed;
-// nothing here fakes delivery: sending under bun is refused by the class itself.
+// module graph to link. `WorkerEntrypoint` and `DurableObject` keep the one
+// thing the platform classes do in their constructor — store `ctx` and `env`
+// — because code under test reads them: `SupervisorRPC extends
+// WorkerEntrypoint` reads `this.ctx.props` on every hosted `git clone`, and
+// a bare stub made that clone fail in whichever process loaded the stub
+// first. `EmailMessage` keeps its constructor arguments so an assertion can
+// read an email a test composed; nothing here fakes delivery: sending under
+// bun is refused by the class itself.
+//
+// ONE stub per specifier. A suite that needs to replace a member spreads this
+// module and overrides that member; a second bare `class {}` beside this one
+// is how the facets suite and the actor harness came to disagree.
 
 Bun.plugin({
   name: 'workerd-builtins-for-bun-test',
@@ -40,8 +48,12 @@ Bun.plugin({
     }));
     build.module('cloudflare:workers', () => ({
       exports: {
-        DurableObject: class DurableObject {},
-        WorkerEntrypoint: class WorkerEntrypoint {},
+        DurableObject: class DurableObject<Ctx, Env> {
+          constructor(readonly ctx: Ctx, readonly env: Env) {}
+        },
+        WorkerEntrypoint: class WorkerEntrypoint<Ctx, Env> {
+          constructor(readonly ctx: Ctx, readonly env: Env) {}
+        },
         WorkflowEntrypoint: class WorkflowEntrypoint {},
         WorkflowEvent: class WorkflowEvent {},
         RpcTarget: class RpcTarget {},

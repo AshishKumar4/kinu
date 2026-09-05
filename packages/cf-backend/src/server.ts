@@ -138,7 +138,13 @@ export { ControlPlaneDO } from "./control-plane/control-plane-do";
 //     bindings.
 //   SupervisorRPC carries the composed supervisor entrypoint. Every hosted
 //     workspace's facets reach their host through it, including the git-network
-//     facet, so `git clone` refuses without it.
+//     facet, so `git clone` refuses without it. It comes from the module that
+//     declares it, never from `@nimbus-sh/sdk/worker`: that path evaluates
+//     `@nimbus-sh/worker`'s root, whose module scope calls `composeFabric` for
+//     the hosted product (no `hostNamespace`, so `NIMBUS_SESSION`). The holder
+//     is first-write-wins per isolate, so the root's write beat this Worker's
+//     `HOST_FABRIC_COMPOSITION` (workspace-host.ts) and every facet dispatch
+//     asked for a namespace this Worker does not bind.
 //
 // NOT EXPORTED, because no live path reads them. Kinu holds Nimbus as a
 // library in the orchestrator that owns each workspace (workspace-host.ts) and
@@ -153,7 +159,7 @@ export { ControlPlaneDO } from "./control-plane/control-plane-do";
 // facet manager Kinu leaves null. The HMR binding resolves in cirrus-real.js.
 // A missing export is an absent property, so removing one breaks only a path
 // that reads it.
-export { SupervisorRPC } from "@nimbus-sh/sdk/worker";
+export { SupervisorRPC } from "../../../node_modules/@nimbus-sh/worker/dist/session/supervisor-rpc.js";
 
 /** The SPA and every other static asset, under the app's document policy. */
 async function serveApp(request: Request, env: Env): Promise<Response> {

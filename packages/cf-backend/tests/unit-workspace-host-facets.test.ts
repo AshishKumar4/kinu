@@ -4,18 +4,24 @@
  *
  * Driven through the production `createHostedWorkspace` — not a shim of it —
  * over a fake Durable Object ctx carrying `.exports` (the REAL `SupervisorRPC`
- * class through the `cloudflare:workers` stub) plus a fake `env.LOADER` that
- * materialises the assembled facet module. The clone's network half is
+ * class over the preload's `cloudflare:workers` stub) plus a fake `env.LOADER`
+ * that materialises the assembled facet module. The clone's network half is
  * stubbed (the `git-bundle.js` the facet imports), so the suite is hermetic;
  * everything else is real: the workspace, the SqliteVFS the clone writes
  * into, the shell `git` command, the clone driver (`execGitNetwork`), the
  * assembled facet module invoked through `fetch` exactly as `LOADER.load()`
  * hands it back, the supervisor entrypoint, and the W7 write waves.
  *
- * ORDER MATTERS in this file. The fabric's `ctx.exports` holder is
- * first-write-wins per isolate, so the refusal test runs FIRST, before any
- * workspace adopts an exports bag. Move it after and the red direction cannot
- * fire — the suite would stay green while proving nothing.
+ * ORDER MATTERS in this file, twice. `@nimbus-sh/platform` holds the fabric
+ * composition and the adopted `ctx.exports` in two first-write-wins singletons
+ * with no reset. So the Worker entry (`../src/server`) is loaded before any
+ * workspace, as production evaluates it: its re-export of `SupervisorRPC` once
+ * reached `@nimbus-sh/worker`'s root, whose module scope composes the HOSTED
+ * product's fabric — no `hostNamespace`, so `NIMBUS_SESSION` — and that write
+ * beat the host's own `HOST_FABRIC_COMPOSITION`; every clone then asked for a
+ * namespace this Worker does not bind. Alone, this suite was green over that
+ * defect. And the refusal test runs FIRST, before any workspace adopts an
+ * exports bag; move it after and the red direction cannot fire.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -24,40 +30,21 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as v from 'valibot';
-import { plugin } from 'bun';
 import { scratchDir } from '@kinu.run/test-utils';
 import { createHostedWorkspace, type HostedWorkspace } from '../src/workspace-host';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { CRED_SESSION_USER, type SqlRow, type SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
+import { SupervisorRPC } from '../../../node_modules/@nimbus-sh/worker/dist/session/supervisor-rpc.js';
+import { mockAgentsSdk } from './helpers/agents-sdk';
 
-// The supervisor entrypoint is a real WorkerEntrypoint. bun resolves no
-// `cloudflare:workers`, so the harness serves the two-field base class the
-// entrypoint actually uses, and the class is imported dynamically below,
-// after this is in place.
-plugin({
-  name: 'cloudflare-workers-virtual',
-  setup(build) {
-    build.module('cloudflare:workers', () => ({
-      loader: 'object',
-      exports: {
-        WorkerEntrypoint: class WorkerEntrypoint<Env> {
-          ctx: ExecutionContext;
-          env: Env;
-          constructor(ctx: ExecutionContext, env: Env) {
-            this.ctx = ctx;
-            this.env = env;
-          }
-        },
-      },
-    }));
-  },
-});
-
-const supervisorModule = await import('../../../node_modules/@nimbus-sh/worker/dist/session/supervisor-rpc.js');
+// The entry's module graph reaches `agents`, which the harness stands in for;
+// the load is dynamic so the stand-in is registered first.
+mockAgentsSdk();
+await import('../src/server');
 
 type SupervisorProps = { doId: string; pid: number; writerId?: string; mutationOwner?: string };
-type SupervisorBinding = InstanceType<typeof supervisorModule.SupervisorRPC>;
+type SupervisorBinding = InstanceType<typeof SupervisorRPC>;
 
 /** The bag workerd hangs on a Durable Object's `ctx`, reduced to the one entry
  *  the fabric reads: the composed supervisor entrypoint, which mints one
@@ -82,7 +69,7 @@ interface ActorBindings {
 /** What the fabric hands a facet as its env: the supervisor binding it minted,
  *  beside whatever else the assembled boot carries. */
 const FacetEnvSchema = v.looseObject({
-  SUPERVISOR: v.optional(v.instance(supervisorModule.SupervisorRPC)),
+  SUPERVISOR: v.optional(v.instance(SupervisorRPC)),
 });
 
 interface DispatchedOp {
@@ -212,7 +199,7 @@ function hostActor(): Actor {
   const exports: ActorExports = {
     SupervisorRPC: ({ props }: { props: SupervisorProps }) => {
       supervisorBindings.push(props);
-      return new supervisorModule.SupervisorRPC({
+      return new SupervisorRPC({
         props,
         waitUntil: () => { throw new Error('unexpected supervisor background work'); },
         passThroughOnException: () => { throw new Error('unexpected supervisor pass-through'); },

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import { Nimbus, type NimbusExecOptions } from '@nimbus-sh/sdk';
@@ -274,16 +274,6 @@ describe('hosted workspace preview capabilities', () => {
   });
 
   test('the actual worker route supports Cirrus HMR and generic guest upgrades', async () => {
-    const workersModule = await import('cloudflare:workers');
-    class WorkerEntrypoint {}
-    class DurableObject {}
-    class RpcTarget {}
-    // Process-wide: retain every preload export a sibling's graph can bind,
-    // then replace only the three base classes this route fixture constructs.
-    await mock.module('cloudflare:workers', () => ({
-      ...workersModule, WorkerEntrypoint, DurableObject, RpcTarget,
-    }));
-
     const serverSocket = { serializeAttachment() {} };
     const clientSocket = {};
     class FakeWebSocketPair {

@@ -1,3 +1,4 @@
+import * as workersModule from 'cloudflare:workers';
 import { mock } from 'bun:test';
 import * as v from 'valibot';
 import type { AgentContext, FiberRecoveryContext } from 'agents';
@@ -671,6 +672,10 @@ export function mockAgentsSdk(): void {
   // ES named import that the mock does not provide is a SyntaxError at module
   // load, not an undefined at use — which is why omitting one takes out every
   // suite whose graph reaches the SDK rather than just the code that calls it.
+  // So the preload's boundary stub (`scripts/test-preload.ts`) is spread whole
+  // and only `tracing` is replaced: a second hand-written class list here once
+  // carried a bare `WorkerEntrypoint` that dropped `ctx`, and `SupervisorRPC`
+  // read `this.ctx.props` off it in whichever process loaded this mock first.
   // `enterSpan(name, fn)` is what the SDK invokes, and it hands `fn` a span it
   // stamps attributes on. The stub runs the body and accepts the attributes, so
   // the traced path is the one under test — the SDK also has a no-tracer
@@ -684,23 +689,7 @@ export function mockAgentsSdk(): void {
   // async body SETTLES, exactly as workerd holds it, so the recorded `parent` is
   // the one the runtime would nest under.
   registerSynchronousMock('cloudflare:workers', () => ({
-    RpcTarget: class {},
-    WorkerEntrypoint: class {},
-    WorkflowEntrypoint: class {},
-    WorkflowEvent: class {},
-    DurableObject: class {},
-    exports: {},
-    // Reading platform env under bun is a test reaching for state that does
-    // not exist here; failing by name beats an undefined that reads as
-    // "unbound". Platform bindings are exercised in tests/workerd under
-    // vitest.
-    env: new Proxy({}, {
-      get(_target, property) {
-        throw new Error(
-          `cloudflare:workers env.${String(property)} does not exist under bun test`,
-        );
-      },
-    }),
+    ...workersModule,
     tracing: {
       enterSpan: <T>(name: string, fn: (span: NativeSpanStub) => T): T => {
         const index = nativeSpans.length;

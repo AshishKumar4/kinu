@@ -18,29 +18,14 @@
 //     `execute_tools` program spends its life AWAITING host tool calls, so that
 //     deadline killed the caller of long work — after the 30s detach had already
 //     told the model the work was "still running, not cancelled".
-import { describe, test, expect, mock } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import type { KinuSandbox } from "../src/kinu-sandbox";
 import { NO_TIMER_DEADLINE_MS } from "@kinu.run/core";
 import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
-
-// codemode reaches `cloudflare:workers` at load, so that specifier must be
-// stubbed before its module is evaluated — hence the dynamic imports. The
-// exec-lane adapter needs no stub at all, which is the point of it living
-// outside `runtime.ts`.
-//
-// `mock.module` is process-wide. Spread the preload's complete boundary stub
-// before replacing what this test needs; a hand list omitted `tracing`, and a
-// co-run with unit-preview-origin then failed at load with `Export named
-// 'tracing' not found`.
-const workersModule = await import("cloudflare:workers");
-await mock.module("cloudflare:workers", () => ({
-  ...workersModule,
-  RpcTarget: class {},
-  WorkerEntrypoint: class {},
-  DurableObject: class {},
-}));
-
-const { KinuSandboxExecutor } = await import("../src/codemode-sandbox");
+// codemode reaches `cloudflare:workers` at load; the preload's boundary stub
+// serves it. The exec-lane adapter needs no stub at all, which is the point
+// of it living outside `runtime.ts`.
+import { KinuSandboxExecutor } from "../src/codemode-sandbox";
 
 interface ProcessDouble {
   id: string;

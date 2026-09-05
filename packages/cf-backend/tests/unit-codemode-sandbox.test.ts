@@ -5,7 +5,7 @@
 // It is evaluated here for real — written to a file and imported — so these
 // tests run the same JavaScript the sandbox runs, against a fake `workspace`
 // namespace in place of the host dispatcher.
-import { describe, test, expect, mock } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
@@ -13,19 +13,9 @@ import type { CraftedTool, CraftStore, JsonValue } from "@kinu.run/core";
 import { craftFailureMarker, initCraftQualityColumns } from "@kinu.run/core";
 import { createTestSql, scratchDir } from "@kinu.run/test-utils";
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from "../src/codemode-node-shim";
-
-// @cloudflare/codemode (the DWE import) needs the workerd-only module. Spread
-// the preload's real boundary stub: `mock.module` is process-wide, so listing
-// only this test's imports drops an export a sibling binds and makes its
-// result depend on file load order.
-const workersModule = await import("cloudflare:workers");
-await mock.module("cloudflare:workers", () => ({
-  ...workersModule,
-  RpcTarget: class {},
-  WorkerEntrypoint: class {},
-  DurableObject: class {},
-}));
-const { selectInjectableCraftedTools, renderToolsPrelude } = await import("../src/codemode-sandbox");
+// @cloudflare/codemode (the DWE import) needs the workerd-only module, which
+// the preload's boundary stub serves.
+import { selectInjectableCraftedTools, renderToolsPrelude } from "../src/codemode-sandbox";
 
 const shimDir = scratchDir("shim");
 const shimPath = join(shimDir, KINU_NODE_MODULE_NAME);

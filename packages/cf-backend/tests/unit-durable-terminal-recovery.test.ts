@@ -34,17 +34,16 @@ import {
   type FiberRowStore,
 } from '../src/fiber-recovery';
 
-// The actor harness replaces `agents`; load the installed artifact separately
-// after supplying only the Workers builtins its module declaration needs.
-await Promise.all([
-  mock.module('cloudflare:email', () => ({ EmailMessage: class {} })),
-  mock.module('cloudflare:workers', () => ({ RpcTarget: class {}, exports: {} })),
-  mock.module('partyserver', () => ({
-    Server: class {},
-    getServerByName: () => undefined,
-    routePartykitRequest: () => undefined,
-  })),
-]);
+// The actor harness replaces `agents`; load the installed artifact separately.
+// Its Workers builtins come from the preload's boundary stub; `partyserver` is
+// the one module declaration it still needs supplied. A narrow
+// `cloudflare:workers` mock here once dropped `WorkerEntrypoint` and `tracing`
+// for every suite sharing the process.
+await mock.module('partyserver', () => ({
+  Server: class {},
+  getServerByName: () => undefined,
+  routePartykitRequest: () => undefined,
+}));
 const installedAgentModule = [
   '../../../node_modules/agents/dist/index.js',
   'fiber-recovery-sql-probe',
