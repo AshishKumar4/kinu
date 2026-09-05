@@ -5506,6 +5506,28 @@ export abstract class ActorAgent extends Think<Env> {
   // preventing Think's workspace tools from being sent in the request payload.
   // BUILTIN_TOOLS is sourced from @kinu.run/core/tools/registry (single truth).
 
+  /** Tags this turn for device-side file checkpoints and restores its own
+   *  pending steers. The user message id is what the web turn card holds,
+   *  so restore-by-turn resolves directly. A reset loses UserSteerDrain
+   *  RAM, never the acknowledged rows: this turn restores only its OWN
+   *  steers, and rows from a finished turn stay with terminal leftover
+   *  routing, never spliced into a later conversation. */
+  private restoreTurnCheckpoint(): void {
+    let lastUserId: string | undefined;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const candidate = this.messages[i];
+      if (candidate.role !== 'user') continue;
+      lastUserId = candidate.id;
+      break;
+    }
+    this._turnCheckpoint = { turnId: lastUserId ?? this._currentRunId, sessionId: 'default' };
+    void this.sql`INSERT INTO active_durable_turn (id, turn_id) VALUES (1, ${this._turnCheckpoint.turnId})
+      ON CONFLICT(id) DO UPDATE SET turn_id = excluded.turn_id`;
+    const pending = this.sql<{ id: string; text: string }>`
+      SELECT id, text FROM pending_steers WHERE turn_id = ${this._turnCheckpoint.turnId} ORDER BY seq ASC`;
+    if (pending.length > 0) this.userSteer.restorePending(pending);
+  }
+
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     // The scaffold and the soul are both files this turn is about to read, and
     // this is the first place with a promise to await them on.
@@ -5572,26 +5594,7 @@ export abstract class ActorAgent extends Think<Env> {
     // with two hundred tool calls writes four hundred rows). Opening it here
     // makes the cap bound the thing that can exceed it.
     openAnalyticsWindow(this.env);
-    // Tag this turn for device-side file checkpoints: the user message id is
-    // what the web turn card holds, so restore-by-turn resolves directly.
-    {
-      let lastUserId: string | undefined;
-      for (let i = this.messages.length - 1; i >= 0; i--) {
-        const candidate = this.messages[i];
-        if (candidate.role !== 'user') continue;
-        lastUserId = candidate.id;
-        break;
-      }
-      this._turnCheckpoint = { turnId: lastUserId ?? this._currentRunId, sessionId: 'default' };
-      void this.sql`INSERT INTO active_durable_turn (id, turn_id) VALUES (1, ${this._turnCheckpoint.turnId})
-        ON CONFLICT(id) DO UPDATE SET turn_id = excluded.turn_id`;
-      // A reset loses UserSteerDrain RAM, never the acknowledged rows. This turn
-      // may restore only its OWN steers; rows from a finished turn are handled by
-      // terminal leftover routing, never spliced into a later conversation.
-      const pending = this.sql<{ id: string; text: string }>`
-        SELECT id, text FROM pending_steers WHERE turn_id = ${this._turnCheckpoint.turnId} ORDER BY seq ASC`;
-      if (pending.length > 0) this.userSteer.restorePending(pending);
-    }
+    this.restoreTurnCheckpoint();
     openTurnRun(this.eventRecorder, this._currentRunId, {
       agentId: this.name,
       causedBy: 'chat',
