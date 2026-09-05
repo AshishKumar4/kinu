@@ -122,6 +122,7 @@ import { CLIENT_ERROR_ENDPOINT } from "@/client-error/contract";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { APP_ROUTES } from "@/app-routes";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
+import type { SubordinateSnapshot } from "@/hooks/use-kinu";
 import { primePageDeployedBuildSha } from "@/hooks/session-recovery";
 import { MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript } from "@kinu.run/core";
@@ -942,11 +943,12 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return rpcResult({
       name: latest?.name ?? "agent-0",
       displayName: latest?.displayName ?? "",
-      roleId: "general",
+      role: "general",
       mission: "",
       model: null,
       activePlan: galleryAgentPlan,
-    }).json<T>();
+      pendingSteers: [],
+    } satisfies SubordinateSnapshot).json<T>();
   }
   if (method === "getActivePlanReview") return rpcResult(galleryAgentPlan).json<T>();
   if (method === "savePlanReviewAnnotations") {

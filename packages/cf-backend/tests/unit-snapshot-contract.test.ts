@@ -36,6 +36,7 @@ import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
 
 const CLIENT = 'packages/cf-backend/src/hooks/use-kinu.ts';
 const SERVER = 'packages/cf-backend/src/orchestrator.ts';
+const FACET_SERVER = 'packages/cf-backend/src/subordinate-agent.ts';
 const GALLERY = 'packages/cf-backend/src/gallery.tsx';
 
 /** Property names of a named interface, as its own source declares them. */
@@ -157,6 +158,17 @@ describe('the workspace snapshot contract', () => {
   test('every field the client declares is returned by the server', () => {
     const declared = interfaceFields(CLIENT, 'WorkspaceSnapshot');
     const returned = returnedKeys(SERVER, 'getWorkspaceSnapshot');
+
+    expect(declared.filter((field) => !returned.includes(field))).toEqual([]);
+  });
+
+  test('every field the facet client declares is returned by the facet server', () => {
+    // The same contract one facet down, and it broke the same way: the gallery
+    // stub answered `roleId` and no `pendingSteers` while the client read `role`
+    // and `pendingSteers`, masked until a throw upstream of the reads was cut.
+    // The stub side is a `satisfies SubordinateSnapshot` in gallery.tsx.
+    const declared = interfaceFields(CLIENT, 'SubordinateSnapshot');
+    const returned = returnedKeys(FACET_SERVER, 'getSubordinateSnapshot');
 
     expect(declared.filter((field) => !returned.includes(field))).toEqual([]);
   });

@@ -140,6 +140,24 @@ export interface AgentStatus {
  *  stay off: they are 95% of the bytes on every workspace open, the
  *  Exploration surface reads its own canvas page, and nothing reads the
  *  timeline at all. See the server RPC's note for the measurements. */
+/** The one round trip a facet tab makes when it opens. Held to the server's
+ *  return literal and to the gallery stub by `unit-snapshot-contract`, for the
+ *  reason `WorkspaceSnapshot` is: a field this declares and the server or the
+ *  stub omits reads `undefined`, and the composer dies on the first `.some`. */
+export interface SubordinateSnapshot {
+  name: string;
+  displayName: string;
+  role: RoleId;
+  mission: string;
+  model: string | null;
+  activePlan: unknown;
+  /** The facet's own acknowledged-and-not-landed steers, from its durable
+   *  rows. Read here for the same reason the root reads them off its
+   *  snapshot: no live broadcast repeats a queue for a tab that was gone
+   *  when the steer was taken. */
+  pendingSteers: InlineSteer[];
+}
+
 export interface WorkspaceSnapshot {
   status: AgentStatus;
   tools: ToolDescResult;
@@ -1530,19 +1548,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   }
 
   async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
-    const snapshot = await rpc<{
-      name: string;
-      displayName: string;
-      role: RoleId;
-      mission: string;
-      model: string | null;
-      activePlan: unknown;
-      /** The facet's own acknowledged-and-not-landed steers, from its durable
-       *  rows. Read here for the same reason the root reads them off its
-       *  snapshot: no live broadcast repeats a queue for a tab that was gone
-       *  when the steer was taken. */
-      pendingSteers: InlineSteer[];
-    }>("getSubordinateSnapshot", []);
+    const snapshot = await rpc<SubordinateSnapshot>("getSubordinateSnapshot", []);
     if (!isCurrent()) return;
     setAgentStatus({
       name: snapshot.name,

@@ -4,10 +4,17 @@ import { join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import * as v from "valibot";
 import { afterEach, describe, expect, test } from "bun:test";
+import { initWorkspaceSchema, type LLMProviderConfig } from "@kinu.run/core";
+import { createWorkspace } from "@kinu.run/core/identity";
+import { makeWorkspaceSchemaSql } from "@kinu.run/cli-backend";
 
 const tempDirs: string[] = [];
 
 /** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
+const DUMMY_LLM: LLMProviderConfig = {
+  name: "fake", baseURL: "http://localhost:0", headers: {}, model: "fake-model",
+};
+
 function newProjectDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "kinu-test-project-"));
   tempDirs.push(dir);
@@ -54,79 +61,47 @@ async function runCliServed(home: string, args: string[], extraEnv: Record<strin
   return { stdout, stderr, exitCode };
 }
 
-function createLocalAgent(home: string, name: string): void {
+/** A workspace the way `kinu create` makes one — the production schema, not a
+ *  copy of it. A hand-written DDL here was green only while production
+ *  reconciled the columns it lacked on open; now a shipped DDL is its genesis. */
+async function createLocalAgent(home: string, name: string): Promise<void> {
   const dir = join(home, name);
   mkdirSync(dir, { recursive: true });
   const db = new Database(join(dir, "agent.db"));
-  db.exec(`
-    CREATE TABLE workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, mission TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
-    CREATE TABLE search_nodes (
-      id TEXT PRIMARY KEY,
-      parent_id TEXT,
-      root_id TEXT,
-      task TEXT NOT NULL,
-      action TEXT NOT NULL DEFAULT '',
-      observation TEXT NOT NULL DEFAULT '',
-      code_used TEXT,
-      visits INTEGER NOT NULL DEFAULT 0,
-      value REAL NOT NULL DEFAULT 0,
-      depth INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'open',
-      msg_id TEXT,
-      branch_agent_key TEXT,
-      created_at INTEGER NOT NULL
-    );
-    CREATE TABLE agent_log (
-      id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL,
-      turn_id TEXT,
-      step_idx INTEGER,
-      parent_id TEXT,
-      trace_id TEXT NOT NULL,
-      ingress TEXT,
-      variant TEXT,
-      trust TEXT,
-      priority TEXT,
-      payload_visibility TEXT,
-      payload TEXT NOT NULL DEFAULT 'null',
-      received_at INTEGER NOT NULL,
-      schema_version INTEGER NOT NULL DEFAULT 1,
-      dedupe_key TEXT
-    );
-  `);
-  db.run("INSERT INTO workspace_identity (id, name, mission, created_at) VALUES (?, ?, ?, ?)",
-    ["agent-1", name, "Test purpose", 1]);
-  // `kinu memory` reassembles the document from MemoryStore's index of it,
-  // which is a table this read-only path can open (see local-inspection.ts).
-  db.exec(`CREATE TABLE memory_chunks (
-    id TEXT PRIMARY KEY, path TEXT NOT NULL, start_line INTEGER, end_line INTEGER,
-    hash TEXT, text TEXT NOT NULL, updated_at INTEGER
-  )`);
-  db.run("INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    ["c1", "memory/MEMORY.md", 0, 2, "h", "# Memory\n\nhello local memory\n", 2]);
-  db.run("INSERT INTO search_nodes (id, parent_id, task, action, observation, visits, value, depth, status, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)", [
-    "root",
-    "solve",
-    "inspect local mcts",
-    "observed",
-    1,
-    0.7,
-    0,
-    "terminal",
-    3,
-  ]);
-  db.run("INSERT INTO agent_log (id, kind, trace_id, ingress, variant, trust, priority, payload_visibility, payload, received_at, schema_version) VALUES (?, 'event', ?, ?, ?, ?, ?, ?, ?, ?, 1)", [
-    "event-1",
-    "trace-1",
-    "chat_ws",
-    "chat",
-    "owner",
-    "normal",
-    "full",
-    JSON.stringify({ text: "hello" }),
-    4,
-  ]);
-  db.close();
+  try {
+    await createWorkspace(db, { name, purpose: "Test purpose", llm: DUMMY_LLM });
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    // `kinu memory` reassembles the document from MemoryStore's index of it,
+    // which is a table this read-only path can open (see local-inspection.ts).
+    db.run("INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ["c1", "memory/MEMORY.md", 0, 2, "h", "# Memory\n\nhello local memory\n", 2]);
+    db.run("INSERT INTO search_nodes (id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+      "root",
+      "root",
+      "solve",
+      "inspect local mcts",
+      "observed",
+      1,
+      0.7,
+      0,
+      "terminal",
+      3,
+    ]);
+    db.run("INSERT INTO agent_log (id, kind, trace_id, ingress, variant, trust, priority, payload_visibility, payload, received_at, schema_version) VALUES (?, 'event', ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+      "event-1",
+      "trace-1",
+      "chat_ws",
+      "chat",
+      "owner",
+      "normal",
+      "full",
+      JSON.stringify({ text: "hello" }),
+      4,
+      1,
+    ]);
+  } finally {
+    db.close();
+  }
 }
 
 test("a genuinely unreadable workspace names its cause instead of hiding it", () => {
@@ -165,10 +140,10 @@ test("a genuinely unreadable workspace names its cause instead of hiding it", ()
 const CLI_SPAWN_TIMEOUT_MS = 30_000;
 
 describe("CLI inspection commands", () => {
-  test("inspect local durable state without model credentials", () => {
+  test("inspect local durable state without model credentials", async () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-inspect-"));
     tempDirs.push(home);
-    createLocalAgent(home, "localtest");
+    await createLocalAgent(home, "localtest");
 
     const memory = runCli(home, ["memory", "localtest"]);
     expect(memory.exitCode).toBe(0);
@@ -191,10 +166,10 @@ describe("CLI inspection commands", () => {
     expect(executors.stdout.toString()).toContain("laptop");
   }, CLI_SPAWN_TIMEOUT_MS);
 
-  test("kinu model normalizes specs through the provider resolver", () => {
+  test("kinu model normalizes specs through the provider resolver", async () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-model-"));
     tempDirs.push(home);
-    createLocalAgent(home, "localtest");
+    await createLocalAgent(home, "localtest");
     const llmEnv = { KINU_BASE_URL: "http://localhost:1/v1", KINU_AUTH: "Bearer x" };
 
     // Bare model ids get the configured fallback provider, exactly like
@@ -218,10 +193,10 @@ describe("CLI inspection commands", () => {
     expect(globalModel).toBeUndefined();
   }, CLI_SPAWN_TIMEOUT_MS);
 
-  test("kinu effort updates the active profile authority and appears in status", () => {
+  test("kinu effort updates the active profile authority and appears in status", async () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-effort-"));
     tempDirs.push(home);
-    createLocalAgent(home, "localtest");
+    await createLocalAgent(home, "localtest");
 
     const initial = runCli(home, ["effort", "localtest"]);
     expect(initial.exitCode, initial.stderr.toString()).toBe(0);
@@ -255,10 +230,10 @@ describe("CLI inspection commands", () => {
     expect(invalid.stderr.toString()).toContain("low, medium, or high");
   }, CLI_SPAWN_TIMEOUT_MS);
 
-  test("kinu model validates known, uncatalogued, and unknown-provider specs", () => {
+  test("kinu model validates known, uncatalogued, and unknown-provider specs", async () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-model-validation-"));
     tempDirs.push(home);
-    createLocalAgent(home, "localtest");
+    await createLocalAgent(home, "localtest");
     const knownSpec = "workers-ai/@cf/moonshotai/kimi-k2.6";
     const llmEnv = {
       KINU_BASE_URL: "http://localhost:1/v1",
@@ -288,10 +263,10 @@ describe("CLI inspection commands", () => {
 
   // `jobs` and `triggers` branch on opts.json in their command bodies but were
   // never given the flag, so commander rejected the documented invocation.
-  test("jobs and triggers accept --json like every sibling inspector", () => {
+  test("jobs and triggers accept --json like every sibling inspector", async () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-json-"));
     tempDirs.push(home);
-    createLocalAgent(home, "localtest");
+    await createLocalAgent(home, "localtest");
 
     for (const args of [["jobs", "localtest"], ["triggers", "localtest", "list"]]) {
       const run = runCli(home, [...args, "--json"]);
@@ -303,10 +278,10 @@ describe("CLI inspection commands", () => {
   // The local one-shot registration wrote its fire time into the spec
   // (`atMs`) where core keeps it in next_fire_at only. Both halves are
   // pinned: the stored row and the printed line.
-  test("a one-shot local trigger stores its fire time in next_fire_at, not the spec", () => {
+  test("a one-shot local trigger stores its fire time in next_fire_at, not the spec", async () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-timer-"));
     tempDirs.push(home);
-    createLocalAgent(home, "localtest");
+    await createLocalAgent(home, "localtest");
 
     const at = "2030-01-02T03:04:05Z";
     const run = runCli(home, ["triggers", "localtest", "at", at]);
@@ -368,7 +343,7 @@ describe("kinu events rendering", () => {
   test("a cloud workspace prints the rows a local one prints, character for character", async () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-events-"));
     tempDirs.push(home);
-    createLocalAgent(home, "localtest");
+    await createLocalAgent(home, "localtest");
 
     const local = await runCliServed(home, ["events", "localtest"]);
     const cloud = await eventsAgainstCloud(home, [CLOUD_ROW]);
