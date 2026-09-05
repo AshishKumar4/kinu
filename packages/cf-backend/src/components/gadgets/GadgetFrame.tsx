@@ -9,7 +9,10 @@
  * and re-reads the client.
  *
  * When the gadget has no client the server answers a refusal, and the frame
- * shows its `reason: error` text rather than an empty box.
+ * shows its `reason: error` text rather than an empty box. The client's own
+ * console lines and uncaught errors, forwarded by the document's prefix,
+ * show under the frame: a typo in `client.js` is otherwise a blank box with
+ * no reason anywhere the owner can read.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -19,31 +22,38 @@ import type { GadgetCallResult } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import type { Rpc } from "@/lib/protocol";
 import { GADGET_IFRAME_SANDBOX, gadgetDocument } from "./gadget-document";
-import { attachGadgetBridge, type GadgetConsoleMessage } from "./gadget-bridge";
+import { attachGadgetBridge, type GadgetConsoleLevel, type GadgetConsoleMessage } from "./gadget-bridge";
 
 const GadgetClientSchema = v.object({ js: v.string(), css: v.nullable(v.string()) });
 
-export function GadgetFrame({ slug, rpc, reloadKey = 0, onConsole }: {
+/** How many console lines the frame keeps, oldest dropped first. */
+const CONSOLE_LINES = 100;
+
+export function GadgetFrame({ slug, rpc, reloadKey = 0 }: {
   slug: string;
   rpc: Rpc;
   /** Bumped when the gadget's files change — remounts the iframe. */
   reloadKey?: number;
-  onConsole?: (message: GadgetConsoleMessage) => void;
 }) {
   const [document, setDocument] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [lines, setLines] = useState<GadgetConsoleMessage[]>([]);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
-    return attachGadgetBridge({ iframe, slug, rpc, onConsole });
-  }, [slug, rpc, onConsole, reloadKey]);
+    return attachGadgetBridge({
+      iframe, slug, rpc,
+      onConsole: (line) => setLines((prev) => [...prev.slice(1 - CONSOLE_LINES), line]),
+    });
+  }, [slug, rpc, reloadKey]);
 
   useEffect(() => {
     let live = true;
     setDocument(null);
     setRefusal(null);
+    setLines([]);
     // Named, not inline: the rejection callback stays a generic `Thrown` the
     // unknown-parameter rule accepts, passed by reference the way
     // FeedbackModal's capture handlers are.
@@ -87,6 +97,23 @@ export function GadgetFrame({ slug, rpc, reloadKey = 0, onConsole }: {
         sandbox={GADGET_IFRAME_SANDBOX}
         className={document === null ? "hidden" : "block h-[480px] w-full rounded-lg border p-border"}
       />
+      {lines.length > 0 && (
+        <ol data-gadget-console className="mt-2 max-h-40 overflow-y-auto rounded-lg border p-border p-surface m-0 list-none p-0 font-mono text-[10.5px]">
+          {lines.map((line, index) => (
+            <li key={index} data-level={line.level} className={`px-2 py-0.5 border-b p-border last:border-0 whitespace-pre-wrap break-words ${CONSOLE_TONE[line.level]}`}>
+              <span className="p-text-3">{line.level}</span> {line.message.join(" ")}
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }
+
+const CONSOLE_TONE = {
+  debug: "p-text-3",
+  info: "p-text-2",
+  log: "p-text-2",
+  warn: "p-warning",
+  error: "p-danger",
+} satisfies Record<GadgetConsoleLevel, string>;

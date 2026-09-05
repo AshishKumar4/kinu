@@ -3377,8 +3377,10 @@ const BRAIN_STATUS = {
 // GadgetFrame — not a mock of it — over a fake rpc. The fixture probes its
 // own containment and reports into its document: whether a network fetch
 // escaped the sandbox, whether the host document was reachable, and what the
-// one allowed call back out answered. Plain JS text, exactly as a gadget
-// publishes it: no imports, no syntax a data: URL module could not carry.
+// one allowed call back out answered. It then writes one console line, the
+// one thing besides RPC that may cross out, so the gate can read it in the
+// host document. Plain JS text, exactly as a gadget publishes it: no
+// imports, no syntax a data: URL module could not carry.
 const GADGET_SLUG = "sandbox-probe";
 
 const GADGET_CLIENT_JS = [
@@ -3403,6 +3405,7 @@ const GADGET_CLIENT_JS = [
   "el.setAttribute('data-rpc', probe.rpc);",
   "el.textContent = 'fetch=' + probe.fetch + ' parent=' + probe.parent + ' rpc=' + probe.rpc;",
   "document.body.append(el);",
+  "console.error('probe: console reaches the host');",
 ].join("\n");
 
 const gadgetRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {

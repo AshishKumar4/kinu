@@ -232,8 +232,12 @@ with `sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"`.
 accepts a handshake only from the frame's own `contentWindow` with origin
 `"null"`, opens `newMessagePortRpcSession(port, forwardingTarget)`, and
 forwards every method call as `rpc("gadgetCall", [slug, method, args])` over
-the SPA's existing authenticated WebSocket. A second surface that wants a
-gadget reuses `GadgetFrame`, or the bridge alone.
+the SPA's existing authenticated WebSocket. The prefix also forwards the
+client's console lines and uncaught errors as `console` messages, and the
+frame shows the last 100 under the iframe, so a broken `client.js` names its
+error where the owner looks. `scripts/gadget-sandbox-ux.test.ts` reads one
+such line from the host document. A second surface that wants a gadget
+reuses `GadgetFrame`, or the bridge alone.
 
 Why not the preview rail for the client. The reference does not serve the
 client from a hostname, and Kinu should not either: staging sets

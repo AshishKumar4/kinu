@@ -47,7 +47,8 @@ export function attachGadgetBridge({ iframe, slug, rpc, onConsole }: {
   iframe: HTMLIFrameElement;
   slug: string;
   rpc: Rpc;
-  onConsole?: (message: GadgetConsoleMessage) => void;
+  /** Where the client's console lines and uncaught errors go. */
+  onConsole: (message: GadgetConsoleMessage) => void;
 }): () => void {
   let port: MessagePort | null = null;
 
@@ -91,7 +92,7 @@ export function attachGadgetBridge({ iframe, slug, rpc, onConsole }: {
       newMessagePortRpcSession(port, forwardingTarget);
       return;
     }
-    onConsole?.({ level: inbound.level, message: inbound.message });
+    onConsole({ level: inbound.level, message: inbound.message });
   };
 
   window.addEventListener("message", onMessage);

@@ -6,16 +6,18 @@
  * document, and the one allowed call back out over the bridge. What the gate
  * asserts is the whole posture, and none of it is visible to a
  * source-reading instrument: the iframe's exact sandbox token, the
- * document's exact content policy, and the three probe outcomes the fixture
- * wrote into its own document.
+ * document's exact content policy, the three probe outcomes the fixture
+ * wrote into its own document, and the one console line the fixture wrote,
+ * read where the owner reads it: in the host document under the frame.
  *
  * The probe renders inside the sandboxed document at the opaque origin, so
- * the page's own context cannot read it — the gate reads it through the
- * frame's context, the one path the same-origin policy allows.
+ * the page's own context cannot read it; the gate reads it through the
+ * frame's own context. The console line is read from the page, because
+ * that is the hop under test.
  */
 
 import { beforeAll, describe, expect, test } from 'bun:test';
-import type { Browser, Page } from 'puppeteer';
+import { TimeoutError, type Browser, type Page } from 'puppeteer';
 
 import { withGallery } from './gallery-harness';
 
@@ -42,6 +44,22 @@ interface Observed {
   readonly fetch: string | null;
   readonly parent: string | null;
   readonly rpc: string | null;
+  /** The console rows the host document shows for the frame, in order. */
+  readonly console: readonly string[];
+}
+
+/** The frame's console rows in the host document. The line crosses a
+ *  postMessage and a React render after the probe element lands, so the page
+ *  is watched for the row; none within five seconds is a finding, and any
+ *  other failure of the watch propagates. */
+async function consoleRows(page: Page): Promise<string[]> {
+  try {
+    await page.waitForSelector('[data-gadget-console] li', { timeout: 5_000 });
+  } catch (error) {
+    if (error instanceof TimeoutError) return [];
+    throw error;
+  }
+  return page.$$eval('[data-gadget-console] li', (rows) => rows.map((row) => row.textContent ?? ''));
 }
 
 async function observe(browser: Browser, origin: string): Promise<Observed> {
@@ -62,7 +80,7 @@ async function observe(browser: Browser, origin: string): Promise<Observed> {
       'meta[http-equiv="Content-Security-Policy"]',
       (el) => el.getAttribute('content'),
     );
-    return { sandbox, csp, ...probe };
+    return { sandbox, csp, ...probe, console: await consoleRows(page) };
   } finally {
     await page.close();
   }
@@ -92,5 +110,9 @@ describe('the gadget sandbox', () => {
 
   test('the one allowed call answers through the bridge', () => {
     expect(observed.rpc).toBe('echo:ping');
+  });
+
+  test('a console line the client writes reaches the host document', () => {
+    expect(observed.console).toEqual(['error probe: console reaches the host']);
   });
 });
