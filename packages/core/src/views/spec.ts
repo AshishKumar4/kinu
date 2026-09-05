@@ -104,11 +104,35 @@ const KvBlock = v.strictObject({
   rows: v.pipe(v.array(ColumnSchema), v.minLength(1), v.maxLength(VIEW_LIMITS.kvRows)),
 });
 
+/** True when markdown would draw something clickable or load a remote target.
+ *  The renderer draws inline and reference links as a[href], images as img,
+ *  and angle-bracket and bare URLs as links, so the spec refuses all of them
+ *  here rather than in the UI. */
+function hasMarkdownLinkOrImage(value: string): boolean {
+  if (/!?\[[^\]]*\]\([^)]*\)/.test(value)) return true;
+  if (/!?\[[^\]]+\]\[[^\]]*\]/.test(value)) return true;
+  if (/^\s{0,3}\[[^\]]+\]:/m.test(value)) return true;
+  if (/<[A-Za-z][A-Za-z0-9+.-]*:[^<>\s]*>/.test(value)) return true;
+  if (/https?:\/\//i.test(value)) return true;
+  if (/\bwww\./i.test(value)) return true;
+  return false;
+}
+
 const MarkdownBlock = v.strictObject({
   type: v.literal('markdown'),
   /** Rendered through the app's existing `MarkdownContent`: remark-gfm only,
-   *  no rehype-raw, so embedded HTML is escaped rather than parsed. */
-  text: v.pipe(v.string(), v.minLength(1), v.maxLength(VIEW_LIMITS.markdownChars)),
+   *  no rehype-raw, so embedded HTML is escaped rather than parsed. Links,
+   *  images, autolinks, and reference definitions are refused below, so the
+   *  text carries no URL and draws nothing clickable. */
+  text: v.pipe(
+    v.string(),
+    v.minLength(1),
+    v.maxLength(VIEW_LIMITS.markdownChars),
+    v.check(
+      (value) => !hasMarkdownLinkOrImage(value),
+      'markdown links, images, autolinks, and reference definitions are not allowed',
+    ),
+  ),
 });
 
 /** Leaves are everything that draws data. Sections group leaves and nothing
@@ -132,6 +156,9 @@ export const ViewSpecSchema = v.strictObject({
     v.string(),
     v.minLength(1),
     v.maxLength(VIEW_LIMITS.titleChars),
+    // Host tab names are ASCII. A non-ASCII letter can look like an ASCII one
+    // while the reserved fold drops it, so the fold only sees ASCII titles.
+    v.regex(/^[\x20-\x7e]*$/, 'a title uses printable ASCII characters only'),
     v.check(
       (value) => !RESERVED_VIEW_TITLES.includes(normalizeViewTitle(value)),
       'that title belongs to a surface the host owns',

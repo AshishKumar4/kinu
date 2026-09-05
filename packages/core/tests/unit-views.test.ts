@@ -287,3 +287,38 @@ describe('view store', () => {
     expect((await createView(s, '!!!', validSpec())).ok).toBe(false);
   });
 });
+
+describe('view spec — homoglyph titles', () => {
+  test('refuses a reserved title spelled with a Cyrillic lookalike', () => {
+    // The second `а` below is Cyrillic U+0430. It renders the same as the
+    // Latin `a` in `Releases`, and the reserved fold would drop it, so the
+    // title is refused before the fold runs.
+    const out = parseViewSpec(validSpec({ title: 'Releаses' }));
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.error).toContain('printable ASCII');
+  });
+});
+
+describe('view spec — markdown links', () => {
+  test('refuses markdown that would draw a link or load a remote target', () => {
+    const texts = [
+      '[x](https://example.com)',
+      '![](https://example.com/x.png)',
+      '[x](javascript:alert(1))',
+      '<https://example.com>',
+      '[ref]: https://example.com\n\nsee [ref]',
+    ];
+    for (const text of texts) {
+      const out = parseViewSpec(validSpec({ blocks: [{ type: 'markdown', text }] }));
+      expect(out.ok).toBe(false);
+      if (out.ok) continue;
+      expect(out.error).toContain('markdown links');
+    }
+  });
+
+  test('keeps plain markdown without links', () => {
+    const out = parseViewSpec(validSpec({ blocks: [{ type: 'markdown', text: '# Health\n\n- ok' }] }));
+    expect(out.ok).toBe(true);
+  });
+});

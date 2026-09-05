@@ -90,7 +90,9 @@ export const RESERVED_VIEW_TITLES: readonly string[] = [
   'login',
 ];
 
-/** Fold a title to the form `RESERVED_VIEW_TITLES` is keyed by. */
+/** Fold a title to the form `RESERVED_VIEW_TITLES` is keyed by. The fold keeps
+ *  ASCII letters and digits only; spec.ts refuses non-ASCII titles before it
+ *  folds, because a Cyrillic `а` would vanish here and pass the reserved check. */
 export function normalizeViewTitle(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
