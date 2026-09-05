@@ -203,3 +203,76 @@ describe('hosted Nimbus workspace provider', () => {
     ]);
   });
 });
+
+describe('a workspace whose host cannot compile node programs', () => {
+  const CODEGEN_STDERR = '[probe-8789.js] Code generation from strings disallowed for this context';
+
+  function blockedProvider(box: NimbusSandboxHandle) {
+    const { rt } = createTestRuntime();
+    return createNimbusWorkspaceExecutor({
+      box,
+      inline: {
+        vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box),
+        memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+      },
+    });
+  }
+
+  test('exec answers the container, not the compiler', async () => {
+    // The hosted runtime forbids `new Function`, so the workspace `node` shim
+    // dies as a raw V8 error. The model branches on `reason`, so the tool
+    // answers the classified refusal naming the container a served port needs.
+    const box = fakeBox();
+    box.exec = async (command) => ({
+      command, success: false, stdout: '', stderr: CODEGEN_STDERR, exitCode: 1,
+    });
+    const refusal = JSON.parse(String(await blockedProvider(box).tools.exec.execute('node -e \'console.log(1)\'')));
+    expect(refusal.reason).toBe('unsupported');
+    expect(refusal.error).toContain('sandbox');
+  });
+
+  test('a dead server reads the same way in its logs', async () => {
+    // `startProcess` reports the pid while the process is still compiling; the
+    // failure lands in `logs`. A log that carries the compiler's complaint is
+    // the same fact as the exec above and gets the same classification.
+    const box = fakeBox();
+    box.processes = {
+      kill: async (pid) => ({ ok: true, pid }),
+      logs: async (pid) => ({ pid, text: CODEGEN_STDERR }),
+    };
+    const refusal = JSON.parse(String(await blockedProvider(box).tools.logs.execute(41)));
+    expect(refusal.reason).toBe('unsupported');
+    expect(refusal.error).toContain('sandbox');
+  });
+
+  test('exposing a port nothing listens on names the container', async () => {
+    // No node program starts on this host, so no workspace port will ever
+    // listen. The exposure answers where a server CAN run instead of the
+    // transport's `io`.
+    const box = fakeBox();
+    box.ports = {
+      expose: async () => { throw new Error('No process is listening on workspace port 8789'); },
+      unexpose: async () => ({ ok: true }),
+      list: async () => [],
+    };
+    const provider = blockedProvider(box);
+    const toolRefusal = JSON.parse(String(await provider.tools.exposePort.execute(8789)));
+    expect(toolRefusal.reason).toBe('unsupported');
+    expect(toolRefusal.error).toContain('sandbox');
+    const direct = await provider.exposePort!(8789);
+    expect(direct).toEqual({ supported: false, reason: expect.stringContaining('sandbox') });
+  });
+
+  test('an exposure failure that is not an empty port still travels as io', async () => {
+    // Only the no-listener shape is reclassified; anything else keeps the
+    // seam's own answer for an unrecognised transport failure.
+    const box = fakeBox();
+    box.ports = {
+      expose: async () => { throw new Error('preview signing secret is not set'); },
+      unexpose: async () => ({ ok: true }),
+      list: async () => [],
+    };
+    const refusal = JSON.parse(String(await blockedProvider(box).tools.exposePort.execute(8789)));
+    expect(refusal.reason).toBe('io');
+  });
+});

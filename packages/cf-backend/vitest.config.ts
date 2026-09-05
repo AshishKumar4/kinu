@@ -128,6 +128,7 @@ export default defineConfig({
           STREAM_LIFECYCLE: { className: 'StreamLifecycleDO', useSQLite: true },
           SEND_ADMISSION_PROBE: { className: 'SendAdmissionProbeDO', useSQLite: true },
           FILES_EIO_PROBE: { className: 'FilesEioProbeDO', useSQLite: true },
+          PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
         },
       },

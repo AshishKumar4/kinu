@@ -194,6 +194,15 @@ export async function provisionWorkspaceRuntimes(deps: {
   // register — nothing is fetched until a subcommand runs.
   registry.register('npm', kit.createNpmCommand(registry, shellExecute, workspace.kernel));
   registry.register('npx', kit.createNpxCommand(registry, shellExecute));
+  // The loopback commands over THIS workspace's kernel. `createDefaultRegistry`
+  // loads `node` against a process-global port map and `curl` against no
+  // kernel at all, so a server one started was invisible to the other — and a
+  // loopback `curl` with nothing listening fell through to the platform
+  // `fetch`, which answers a Cloudflare `error code: 1003` page. Wired here,
+  // a listening port answers its bytes and an empty one refuses as a refused
+  // connection; neither ever reaches the edge. Lazy, like every other command
+  // registration here: nothing loads until the command is first invoked.
+  wireWorkspaceLoopback(workspace);
 
   for (const runtimePackage of runtimes) {
     const install = provisionOnce({ kit, kernelFs, home, registry, runnerFor, runtimePackage });
@@ -208,6 +217,134 @@ export async function provisionWorkspaceRuntimes(deps: {
       }));
     }
   }
+}
+
+/**
+ * The loopback commands over this workspace's own kernel.
+ *
+ * `createDefaultRegistry` registers `node` bound to a process-global port map
+ * and `curl` bound to no kernel at all. On a library-held workspace that
+ * means a server `node` started registered nowhere `curl` looked, and a
+ * loopback `curl` with nothing listening skipped the virtual check entirely
+ * and fell through to the platform `fetch` — which on Cloudflare answers
+ * `error code: 1003`. Re-registered here against `workspace.kernel`, a
+ * listening port answers its bytes and an empty one refuses as a refused
+ * connection; neither ever reaches the edge.
+ *
+ * `node` gets one more arm: the shim compiles every program with
+ * `new Function`, which workerd forbids at request time, so on such a host
+ * every `node` program dies as a raw V8 error. The guard answers that case
+ * with where a server CAN run — the `sandbox` container from the capability
+ * table — instead of the compiler's complaint alone. The check runs at first
+ * invocation, never at import: module top level is workerd's one codegen
+ * exception, so probing there would report the opposite of what the first
+ * program meets.
+ */
+export function wireWorkspaceLoopback(workspace: NimbusWorkspace): void {
+  const registry = workspace.registry;
+  const kernel = workspace.kernel;
+  // Dynamic imports, not static ones: the default registry keeps these
+  // commands lazy so a workspace that never runs `node` never parses the
+  // shim, and re-registering them here must keep that property — a static
+  // import would put the shim into every consumer's graph at module eval,
+  // the Worker's cold start included.
+  registry.registerLazy('node', async () => {
+    const node = await import('@nimbus-sh/core/substrate/lifo/commands/system/node.js');
+    return { default: workspaceNodeCommand(node.createNodeCommand(kernel)) };
+  });
+  registry.registerLazy('curl', async () => {
+    const curl = await import('@nimbus-sh/core/substrate/lifo/commands/net/curl.js');
+    return { default: curl.createCurlCommand(kernel) };
+  });
+  registry.registerLazy('wget', async () => {
+    const wget = await import('@nimbus-sh/core/substrate/lifo/commands/net/wget.js');
+    return { default: workspaceWgetCommand(wget.default) };
+  });
+}
+
+/** What the `node` guard answers when the host cannot compile a program. */
+const WORKSPACE_NODE_UNAVAILABLE =
+  'cannot run JavaScript in this workspace: the host forbids runtime code compilation';
+
+const WORKSPACE_NODE_SANDBOX_HINT =
+  `node: ${WORKSPACE_NODE_UNAVAILABLE} ("Code generation from strings disallowed"). `
+  + `Use the 'sandbox' executor for any server you want to preview.`;
+
+/**
+ * Whether this host compiles a program from a string at request time.
+ * workerd forbids it outright; Bun and Node allow it. Called at first command
+ * invocation, never at import: module top level is workerd's one codegen
+ * exception, so probing there would report the opposite of what the first
+ * program meets.
+ */
+function hostBlocksCodegen(): boolean {
+  try {
+    new Function('return 1')();
+    return false;
+  } catch (error) {
+    // Any Error from a one-line probe means the host cannot compile: the
+    // probe itself is valid, so nothing about it can throw.
+    return error instanceof Error;
+  }
+}
+
+/**
+ * `node` over this workspace's kernel, refusing with the container's name
+ * where the host cannot compile. Version, help and usage never compile, so
+ * they always reach the real command; everything else probes codegen once, at
+ * first invocation, and a host that blocks it refuses every program after
+ * with the same reason.
+ */
+function workspaceNodeCommand(real: Command): Command {
+  let blocked: boolean | null = null;
+  return async (ctx) => {
+    const args = ctx.args;
+    if (
+      args.length === 0 || args[0] === '-v' || args[0] === '--version'
+      || args[0] === '-h' || args[0] === '--help'
+    ) {
+      return real(ctx);
+    }
+    blocked ??= hostBlocksCodegen();
+    if (!blocked) return real(ctx);
+    ctx.stderr.write(`${WORKSPACE_NODE_SANDBOX_HINT}\n`);
+    return 127;
+  };
+}
+
+/**
+ * `wget` with loopback kept virtual. `wget` never had a kernel — every
+ * loopback request fell through to the platform `fetch` — so the guard
+ * refuses those before delegating, with the connection refusal a fetch of a
+ * port nothing listens on owes. Anything else reaches the real command.
+ */
+function workspaceWgetCommand(real: Command): Command {
+  return async (ctx) => {
+    const candidate = ctx.args.find((arg) => !arg.startsWith('-'));
+    if (candidate !== undefined) {
+      let host: string | null = null;
+      let port = '';
+      try {
+        const url = new URL(
+          candidate.startsWith('http://') || candidate.startsWith('https://') ? candidate : `https://${candidate}`,
+        );
+        host = url.hostname;
+        port = url.port || (url.protocol === 'http:' ? '80' : '443');
+      } catch (error) {
+        // Not a URL at all: leave host null so the request reaches the real
+        // command, whose own usage error names what was wrong with it.
+        void error;
+        host = null;
+      }
+      if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '[::1]') {
+        ctx.stderr.write(
+          `wget: unable to connect to ${host} port ${port} (connection refused: no server is listening on that port in this workspace)\n`,
+        );
+        return 1;
+      }
+    }
+    return real(ctx);
+  };
 }
 
 /**

@@ -38,6 +38,10 @@ export { TerminalEffectProbeDO } from './terminal-effect-probe';
 // The Files-tab EIO probe — the same charter exception: the real workspace
 // file plane under the runtime whose CSP is the defect.
 export { FilesEioProbeDO } from './files-eio-probe';
+// The workspace port-preview probe — the same charter exception: the real
+// library workspace under the runtime whose CSP blocks its `node` shim and
+// whose edge answers loopback `fetch` with a 1003 page.
+export { PreviewPortProbeDO } from './preview-port-probe';
 // The production sandbox egress entrypoint, exported here exactly as
 // `src/server.ts` exports it, so `codemode-sandbox.test.ts` can prove the
 // `exports` loopback resolves it under the compatibility date we deploy.

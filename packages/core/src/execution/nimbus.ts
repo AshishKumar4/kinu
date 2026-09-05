@@ -237,6 +237,83 @@ function handleLacks(surface: string): string {
   return refusalText(new KinuError('unsupported', `Nimbus SDK handle does not expose ${surface}`));
 }
 
+/**
+ * The workspace `node` shim compiles every program with `new Function`, which
+ * the hosted runtime forbids at request time — and the loopback guard in
+ * `vfs/workspace-runtimes.ts` refuses those programs naming the container.
+ * Either text in a result means no node program started here, so the tools
+ * answer with the reason rather than the compiler's complaint: the model
+ * branches on `reason`, and `unsupported` says a retry cannot change that.
+ *
+ * The guard's own marker classifies whatever command carried it — only the
+ * guard writes that line, and only when refusing a program. The raw V8 mark
+ * classifies only a result whose command invoked `node`: the same string as
+ * file bytes (a log being read, an error being quoted) is data, not a death.
+ */
+const CODEGEN_BLOCKED_MARK = 'Code generation from strings disallowed';
+const WORKSPACE_NODE_UNAVAILABLE_MARK = 'cannot run JavaScript in this workspace';
+
+const WORKSPACE_NODE_REFUSAL =
+  `workspace node cannot run programs on this host: the runtime forbids code compilation from strings, so no node server starts here. `
+  + `Use the 'sandbox' executor for any server you want to preview.`;
+
+/** Whether `command` reaches the workspace `node` shim. */
+function invokesWorkspaceNode(command: string): boolean {
+  return /(^|[;&|(\s])node(\s|$)/m.test(command);
+}
+
+function refuseWorkspaceNode(): string {
+  return refusalText(new KinuError('unsupported', WORKSPACE_NODE_REFUSAL));
+}
+
+/** A rendered exec result, or the container's name when no node program ran. */
+function normalizeWorkspaceExec(command: string, rendered: string): string {
+  if (rendered.includes(WORKSPACE_NODE_UNAVAILABLE_MARK)) return refuseWorkspaceNode();
+  if (invokesWorkspaceNode(command) && rendered.includes(CODEGEN_BLOCKED_MARK)) {
+    return refuseWorkspaceNode();
+  }
+  return rendered;
+}
+
+/**
+ * A rendered result with no command to judge it by — `runCode` runs the code
+ * itself, `logs` reads a process's own output. Either mark classifies: both
+ * are written only when a program failed to compile.
+ */
+function normalizeWorkspaceResult(rendered: string): string {
+  return rendered.includes(CODEGEN_BLOCKED_MARK) || rendered.includes(WORKSPACE_NODE_UNAVAILABLE_MARK)
+    ? refuseWorkspaceNode()
+    : rendered;
+}
+
+/** A thrown failure, classified the same way before it becomes `io`. */
+function workspaceExecFailure(input: { doing: string; cause: unknown; command?: string }): KinuError {
+  const text = renderThrownChain({ cause: input.cause });
+  if (text.includes(WORKSPACE_NODE_UNAVAILABLE_MARK)) {
+    return new KinuError('unsupported', WORKSPACE_NODE_REFUSAL);
+  }
+  if (
+    (input.command === undefined || invokesWorkspaceNode(input.command))
+    && text.includes(CODEGEN_BLOCKED_MARK)
+  ) {
+    return new KinuError('unsupported', WORKSPACE_NODE_REFUSAL);
+  }
+  return nimbusFailure({ doing: input.doing, cause: input.cause });
+}
+const NO_LISTENER_MARK = 'No process is listening';
+
+function workspaceNoListenerReason(port: number): string {
+  return `workspace port ${port} has no server listening: node programs cannot start on this host, so nothing here will answer it. `
+    + `Use the 'sandbox' executor for any server you want to preview.`;
+}
+
+function workspacePortFailure(input: { port: number; cause: unknown }): KinuError {
+  if (renderThrownChain({ cause: input.cause }).includes(NO_LISTENER_MARK)) {
+    return new KinuError('unsupported', workspaceNoListenerReason(input.port));
+  }
+  return nimbusFailure({ doing: `nimbus exposePort ${input.port}`, cause: input.cause });
+}
+
 /** Every failure out of the session's RPC. `io` is the seam's own answer for an
  *  unrecognised one — this is a transport to a Durable Object — while an abort, a
  *  timeout or the memory wall keeps the more precise code the classifier pinned. */
@@ -377,14 +454,14 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         try {
           // Nimbus exec exposes no kill for an in-flight command — abort
           // stops the wait; the command may still finish in the sandbox.
-          return normalizeExec(await raceAbort(
+          return normalizeWorkspaceExec(command, normalizeExec(await raceAbort(
             () => touch(() => box.exec(command)),
             signal,
             'nimbus exec aborted — the command may still finish in the sandbox',
-          ));
+          )));
         } catch (err) {
           if (isAbortError(err)) throw err;
-          return refusalText(nimbusFailure({ doing: `nimbus exec \`${command}\``, cause: err }));
+          return refusalText(workspaceExecFailure({ doing: `nimbus exec \`${command}\``, cause: err, command }));
         }
       },
     },
@@ -399,9 +476,9 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         }
         const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
         try {
-          return normalizeExec(await touch(() => box.runCode!(code, options)));
+          return normalizeWorkspaceResult(normalizeExec(await touch(() => box.runCode!(code, options))));
         } catch (err) {
-          return refusalText(nimbusFailure({ doing: 'nimbus runCode', cause: err }));
+          return refusalText(workspaceExecFailure({ doing: 'nimbus runCode', cause: err }));
         }
       },
     },
@@ -544,7 +621,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         try {
           return formatStartResult(await touch(() => box.startProcess!(command, options)), namespace);
         } catch (err) {
-          return refusalText(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
+          return refusalText(workspaceExecFailure({ doing: `nimbus startProcess \`${command}\``, cause: err, command }));
         }
       },
     },
@@ -590,9 +667,9 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
           ? { lines: input.lines, bytes: input.bytes }
           : undefined;
         try {
-          return stringifyResult({ value: await touch(() => readLogs(pid, options)) });
+          return normalizeWorkspaceResult(stringifyResult({ value: await touch(() => readLogs(pid, options)) }));
         } catch (err) {
-          return refusalText(nimbusFailure({ doing: `nimbus logs ${pid}`, cause: err }));
+          return refusalText(workspaceExecFailure({ doing: `nimbus logs ${pid}`, cause: err }));
         }
       },
     },
@@ -613,7 +690,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
           const result = await touch(() => expose(port));
           return result.url ?? ports.url?.(port) ?? stringifyResult({ value: result });
         } catch (err) {
-          return refusalText(nimbusFailure({ doing: `nimbus exposePort ${port}`, cause: err }));
+          return refusalText(workspacePortFailure({ port, cause: err }));
         }
       },
     },
@@ -754,17 +831,24 @@ ${SESSION_CONTROL_TYPES}
       const ports = box?.ports;
       if (!ports?.expose) return { supported: false, reason: 'Nimbus port exposure is not available' };
       const expose = ports.expose.bind(ports);
-      const result = await touch(() => expose(port));
-      const url = result.url || ports.url?.(port);
-      if (!url) {
-        return { supported: false, reason: `nimbus exposePort ${port}: exposed but no preview URL is available` };
+      try {
+        const result = await touch(() => expose(port));
+        const url = result.url || ports.url?.(port);
+        if (!url) {
+          return { supported: false, reason: `nimbus exposePort ${port}: exposed but no preview URL is available` };
+        }
+        return {
+          supported: true,
+          port,
+          url,
+          verified_listening: result.listening ?? false,
+        };
+      } catch (err) {
+        if (renderThrownChain({ cause: err }).includes(NO_LISTENER_MARK)) {
+          return { supported: false, reason: workspaceNoListenerReason(port) };
+        }
+        throw err;
       }
-      return {
-        supported: true,
-        port,
-        url,
-        verified_listening: result.listening ?? false,
-      };
     },
     async unexposePort(port: number) {
       const ports = box?.ports;
@@ -819,6 +903,24 @@ export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts)
   function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<string>;
 ${SESSION_CONTROL_TYPES}`;
 
+  // The model drives `workspace.exec`, which is the inline executor's shell
+  // tool over this same box — not the session namespaced one above. A node
+  // program that died as a compiler complaint must reach the model classified
+  // here too, or the workspace's own front door stays raw while its side door
+  // refuses properly.
+  const workspaceTools = { ...inline.tools, ...sessionTools };
+  const innerExec = workspaceTools.exec;
+  workspaceTools.exec = {
+    ...innerExec,
+    execute: async (...args: unknown[]) => {
+      const command = parseInput(StringSchema, { value: args[0] });
+      const rendered = await innerExec.execute(...args);
+      const text = parseInput(StringSchema, { value: rendered });
+      if (command === undefined || text === undefined) return rendered;
+      return normalizeWorkspaceExec(command, text);
+    },
+  };
+
   return {
     ...inline,
     files: inline.files,
@@ -830,7 +932,7 @@ ${SESSION_CONTROL_TYPES}`;
     getStatus: session.getStatus,
     connect: session.connect,
     disconnect: session.disconnect,
-    tools: { ...inline.tools, ...sessionTools },
+    tools: workspaceTools,
     types: (inline.types ?? '').replace(/\n}\s*$/, `${sessionTypes}\n}`),
     // Straight through, no assertion: `createNimbusExecutor` answers for its
     // ports by type, so all three are declared present. Nothing to bind either —

@@ -1029,6 +1029,7 @@ export type {
 export {
   writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles,
 } from './vfs/workspace-planes';
+export { wireWorkspaceLoopback } from './vfs/workspace-runtimes';
 export {
   makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
   type VfsError, type VfsErrorCode,

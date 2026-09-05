@@ -17,6 +17,7 @@ import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { SendAdmissionProbeDO } from './send-admission-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { FilesEioProbeDO } from './files-eio-probe';
+import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 
 declare global {
@@ -42,6 +43,7 @@ declare global {
       SEND_ADMISSION_PROBE: DurableObjectNamespace<SendAdmissionProbeDO>;
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
+      PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }
