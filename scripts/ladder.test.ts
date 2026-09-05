@@ -23,8 +23,9 @@ import { resolve } from 'node:path';
 import { git } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
-  CI_EXEMPT, EVAL_TIER_SCRIPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
-  deployGates, evalTierArms, gatesFor, packageScripts, runnableArgv, trackedTestFiles,
+  BUDGET_TOLERANCE, CI_EXEMPT, EVAL_TIER_SCRIPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
+  declaredTierCost, deployGates, evalTierArms, gatesFor, judgeBudgets, packageScripts, readBudget,
+  runnableArgv, trackedTestFiles, type LadderBudget,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isPythonSuite,
@@ -96,10 +97,10 @@ const AFTER_CI_SUITES = {
  * were measured and both fail. One process (`bun test packages/`) is 4,839
  * tests across 412 files in 126.22s but 10 fail and 2 error, because bun keeps
  * one module mock per specifier for a whole run and the suites were written
- * Eight sequential processes cost ~170s declared. The push tier already MEASURES
- * 111-126s against a 180s ceiling, so adding 170s of declared work to it is not
- * a near miss — it is more than doubling a hook that exists to stay fast enough
- * that nobody is tempted by `--no-verify`.
+ * Eight sequential processes cost ~170s declared. The push tier already declares
+ * 379.71s and walls ~360s summed across per-gate runs, so adding 170s of declared
+ * work to it is not a near miss — it is nearly half as much again on a hook whose whole
+ * purpose is that nobody is tempted by `--no-verify`.
  */
 const ROOT_TEST_OMISSIONS = {
   'packages/devbox': 'bun test packages/devbox/',
@@ -581,38 +582,118 @@ describe('every test file is claimed by some runner', () => {
 });
 
 describe('cost, so a tier that stops being run is a decision and not a drift', () => {
-  test('the commit tier stays inside its budget', () => {
-    // A hook slow enough to tempt `--no-verify` is a design failure, and
-    // "never --no-verify" is a standing rule, so the budget is part of the
-    // contract rather than an aspiration. 12s is affordable only because
-    // TypeScript 7 took the 8-project typecheck from 64.9s to 6.9s.
-    const cost = gatesFor('commit', deploy).reduce((sum, gate) => sum + gate.seconds, 0);
-    expect(cost).toBeLessThan(15);
+  // The two assertions that stood here — commit under 15s, push under a 126.4s wall
+  // reading — were fictions by 2026-09-05: OpsProse re-measured the ladder and found
+  // the declared seconds stale 2–6x, so neither bound could fail, and with true figures
+  // both fail (commit 51.84s then, 53.24s now; push 158.21s then, 379.71s now, once the
+  // self-test rows were re-measured too). The ruling was a measured ratchet rather than
+  // a raised bound: each tier's declared cost is pinned per gate in
+  // `scripts/ladder.lock.json`, and a tier that grows past 20% fails naming the step
+  // that grew most. `--lock` re-pins, and refuses without a `--reason` that lands in
+  // the lock.
+  test('the declared tier costs match the locked ratchet within tolerance', () => {
+    // The fraction itself is pinned: moving 20% silently is raising the bound to pass.
+    expect(BUDGET_TOLERANCE).toBe(0.2);
+    const budget = readBudget();
+    // A lock with no reason is a number that moved without a decision.
+    expect(budget.reason.length).toBeGreaterThan(40);
+    const declared = {
+      commit: declaredTierCost('commit', deploy),
+      push: declaredTierCost('push', deploy),
+    };
+    for (const tier of ['commit', 'push'] as const) {
+      // The pin is per gate, so the lock cannot drift from the table it governs:
+      // every locked step equals the LADDER declaration for that run, and the tier
+      // figure is their sum to the cent.
+      expect(Object.keys(budget.tiers[tier].steps).length).toBeGreaterThan(0);
+      expect(declared[tier].steps).toEqual(budget.tiers[tier].steps);
+      expect(Math.abs(budget.tiers[tier].seconds - declared[tier].total)).toBeLessThan(0.01);
+    }
+    expect(judgeBudgets(declared, budget)).toEqual([]);
   });
 
-  // MEASURED PUSH WALL CLOCK, seconds, one reading per push on 2026-08-19:
-  // 111.7 113.4 114.7 116.9 118.1 119.3 120.3 121.0 122.3 123.1 126.4.
-  // Re-measure by reading the figure `bun scripts/ladder.ts --tier=push` prints.
-  const MEASURED_PUSH_SECONDS = 126.4;
+  test('a tier that grows past tolerance fails naming the step that grew most', () => {
+    // RED direction, against a fixture lock: with `b` moved 20 → 28 the commit total
+    // moves 30 → 38 (+26.7%), past the 20% tolerance, and the breach names `b` with
+    // both figures. Exactly at tolerance is not "more than": 36 against 30 passes.
+    // A NEW gate (`d`, locked at nothing) counts its whole declaration as growth.
+    const locked: LadderBudget = {
+      reason: 'fixture',
+      tiers: {
+        commit: { seconds: 30, measuredAt: '2026-09-05', machine: 'fixture', steps: { a: 10, b: 20 } },
+        push: { seconds: 150, measuredAt: '2026-09-05', machine: 'fixture', steps: { c: 150 } },
+      },
+    };
+    expect(judgeBudgets(
+      {
+        commit: { total: 38, steps: { a: 10, b: 28 } },
+        push: { total: 150, steps: { c: 150 } },
+      },
+      locked,
+    )).toEqual([
+      { tier: 'commit', locked: 30, declared: 38, step: 'b', stepWas: 20, stepNow: 28 },
+    ]);
+    expect(judgeBudgets(
+      {
+        commit: { total: 36, steps: { a: 10, b: 26 } },
+        push: { total: 150, steps: { c: 150 } },
+      },
+      locked,
+    )).toEqual([]);
+    expect(judgeBudgets(
+      {
+        commit: { total: 30, steps: { a: 10, b: 20 } },
+        push: { total: 195, steps: { c: 150, d: 45 } },
+      },
+      locked,
+    )).toEqual([
+      { tier: 'push', locked: 150, declared: 195, step: 'd', stepWas: 0, stepNow: 45 },
+    ]);
+  });
 
-  test('the declared sum is honest about each gate, and the tier is measured', () => {
-    // TWO QUANTITIES, and conflating them is how this budget passed while the
-    // hook took twice its allowance. `gatesFor` is cumulative, so a push runs the
-    // commit gates too: 37 entries declaring 110.5s in total. The tier MEASURES
-    // 111-126s. The gap is not a stale declaration — `gate:dead-code` declares
-    // 5.5s and walls 6.0s — it is 37 process spawns the sum does not model, plus
-    // `bun run` resolving a script before each one.
-    //
-    // So the declared sum is asserted as a FLOOR on honesty (no entry may claim
-    // zero, which the test below covers) and the BUDGET is asserted against the
-    // measurement. A budget compared to a sum of parts is a budget that cannot
-    // see the thing it is protecting against, which is a hook slow enough to
-    // tempt `--no-verify` — and never `--no-verify` is a standing rule, so this
-    // budget is part of the contract rather than an aspiration.
-    const declared = gatesFor('push', deploy).reduce((sum, gate) => sum + gate.seconds, 0);
-    expect(declared).toBeGreaterThan(0);
-    expect(declared).toBeLessThan(MEASURED_PUSH_SECONDS);
-    expect(MEASURED_PUSH_SECONDS).toBeLessThan(180);
+  test('a tier that shrinks passes', () => {
+    // The ratchet points one way: a faster tier is the mechanism working, and the
+    // lock is re-pinned opportunistically rather than demanded. A removed gate reads
+    // as shrinkage to zero, not as a stale lock entry.
+    const locked: LadderBudget = {
+      reason: 'fixture',
+      tiers: {
+        commit: { seconds: 30, measuredAt: '2026-09-05', machine: 'fixture', steps: { a: 10, b: 20 } },
+        push: { seconds: 150, measuredAt: '2026-09-05', machine: 'fixture', steps: { c: 150 } },
+      },
+    };
+    expect(judgeBudgets(
+      {
+        commit: { total: 15, steps: { a: 10, b: 5 } },
+        push: { total: 150, steps: { c: 150 } },
+      },
+      locked,
+    )).toEqual([]);
+    expect(judgeBudgets(
+      {
+        commit: { total: 10, steps: { a: 10 } },
+        push: { total: 150, steps: { c: 150 } },
+      },
+      locked,
+    )).toEqual([]);
+  });
+
+  test('a lock that pins nothing cannot pass', () => {
+    // Fail-CLOSED direction: an empty corpus must die rather than report a cheap tree.
+    const locked: LadderBudget = {
+      reason: 'fixture',
+      tiers: {
+        commit: { seconds: 0, measuredAt: '2026-09-05', machine: 'fixture', steps: {} },
+        push: { seconds: 150, measuredAt: '2026-09-05', machine: 'fixture', steps: { c: 150 } },
+      },
+    };
+    expect(() => judgeBudgets(
+      {
+        commit: { total: 0, steps: {} },
+        push: { total: 150, steps: { c: 150 } },
+      },
+      locked,
+    )).toThrow('measured nothing');
   });
 
   // OVER THE DEPLOY TIER'S REAL MEMBERSHIP, not over LADDER. `gatesFor('deploy')`
@@ -620,8 +701,8 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
   // long as this filtered LADDER, a gate could join the deploy path and cost
   // nothing on the tier's own cost line. Two did: `bun run verify:lean`, and the
   // bench command whose LADDER entry stopped at the `scripts/bench*` glob while
-  // deploy.sh also passed the core bench units. The tier now declares 685.0s and
-  // runs 57 gates, all described.
+  // deploy.sh also passed the core bench units. The tier now declares 1219.73s and
+  // runs 66 gates, all described.
   //
   // Synthesis stays: an undeclared deploy gate must still RUN. This is what makes
   // it also fail, by name, until somebody measures it.

@@ -514,6 +514,7 @@ run_required_gate "Nested container resolution" bun test scripts/nested-containe
 run_required_gate "Swarm-tree geometry" bun test scripts/swarm-tree-geometry.test.ts
 run_required_gate "Chat infinite scroll" bun test scripts/chat-scroll.test.ts
 run_required_gate "Gate ladder wiring" bun test scripts/ladder.test.ts
+run_required_gate "Tier-budget ratchet" bun run gate:ladder-budget
 run_required_gate "Dead code" bun run gate:dead-code
 run_required_gate "Built but unwired" bun run gate:wired
 # The test corpus's own quality ratchet: a NEW coupled test, by the five axes

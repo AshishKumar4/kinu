@@ -70,6 +70,7 @@
     "gate:literature-citations": "bun scripts/literature-citations.ts",
     "gate:commit-message": "bun scripts/commit-hygiene.ts",
     "gate:agents-fields": "bun scripts/agents-fields.ts",
+    "gate:ladder-budget": "bun scripts/ladder.ts --check-budget",
     "gate:infra": "bun scripts/infra-verify.ts",
     "gate:devbox-e2e": "bun scripts/devbox-e2e.ts",
     "infra:provision": "bun scripts/infra-provision.ts",
