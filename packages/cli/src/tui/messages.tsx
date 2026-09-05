@@ -25,34 +25,26 @@ export interface DisplayMessage {
 }
 
 /**
- * The user turn as the web draws it (`MessageView.tsx` `USER_BUBBLE_CLASS`):
- * a bubble set to the right at most 80% wide, the user fill under the user
- * edge, ink text, and the steer mark under it rather than a speaker label.
+ * The user turn as the landing preview draws it: the YOU gutter in the accent
+ * register with the turn beside it, set to the left at full width. The web
+ * keeps its own right bubble. The steer mark sits under the turn.
  */
 function UserMessage({ content, attachments, steered, branched }: { content: string; attachments?: string[]; steered?: boolean; branched?: boolean }) {
   const { colors } = useTuiTheme();
   return (
-    <box flexDirection="column" alignItems="flex-end" style={{ width: '100%', paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
-      <box
-        flexDirection="column"
-        style={{
-          maxWidth: '80%',
-          border: true,
-          borderStyle: 'rounded',
-          borderColor: colors.border.user,
-          backgroundColor: colors.background.user,
-          paddingLeft: 1,
-          paddingRight: 1,
-        }}
-      >
+    <box flexDirection="row" style={{ width: '100%', paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
+      <box style={{ width: 5, flexShrink: 0 }}>
+        <text><span fg={colors.intent.accent}>{TUI_MARKS.userGutter}</span></text>
+      </box>
+      <box flexDirection="column" style={{ flexGrow: 1 }}>
         <text><span fg={colors.text.strong}>{content}</span></text>
         {attachments?.map((label, index) => (
           <text key={label || index}><span fg={colors.text.muted}>+ {label}</span></text>
         ))}
+        {(steered || branched) && (
+          <text><span fg={colors.text.muted}>{steered ? '↪ steered mid-turn' : '⎇ branched'}</span></text>
+        )}
       </box>
-      {(steered || branched) && (
-        <text><span fg={colors.text.muted}>{steered ? '↪ steered mid-turn' : '⎇ branched'}</span></text>
-      )}
     </box>
   );
 }

@@ -100,7 +100,7 @@ describe('TUI theme', () => {
     expect(() => createThemeRegistry([invisible])).toThrow(/text\.strong\/background\.user contrast/);
   });
 
-  test('under Kinu light a user turn sits on the user fill and the assistant turn does not', async () => {
+  test('under Kinu light the user turn carries the accent gutter on the canvas and the assistant turn avoids the user fill', async () => {
     const light = BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-light')!;
     const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 16, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
@@ -131,11 +131,13 @@ describe('TUI theme', () => {
         const [red, green, blue] = color.toInts();
         return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
       };
+      const gutter = spans.find((span) => span.text.includes('YOU'))!;
       const user = spans.find((span) => span.text.includes('USERTURN'))!;
       const assistant = spans.find((span) => span.text.includes('ASSISTANTTURN'))!;
       const tool = spans.find((span) => span.text.includes('exec'))!;
-      expect(hex(user.bg)).toBe(light.colors.background.user);
+      expect(hex(gutter.fg)).toBe(light.colors.intent.accent);
       expect(hex(user.fg)).toBe(light.colors.text.strong);
+      expect(hex(user.bg)).not.toBe(light.colors.background.user);
       expect(hex(assistant.bg)).not.toBe(light.colors.background.user);
       expect(hex(assistant.fg)).toBe(light.colors.text.strong);
       // The tool card is the dark well, even under the light theme.

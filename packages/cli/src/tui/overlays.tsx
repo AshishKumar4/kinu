@@ -911,10 +911,10 @@ function ThemeChoiceRow({ choice, width, highlighted, current }: {
 }
 
 /**
- * One transcript in the theme under the cursor: status strip, a user bubble,
- * a line of prose, a tool card on the well, the composer. A transparent theme
- * is shown on the web canvas of its appearance, the ground it was designed
- * for, and says so.
+ * One transcript in the theme under the cursor: status strip, a guttered user
+ * turn, a line of prose, a tool card on the well, the composer. A transparent
+ * theme is shown on the web canvas of its appearance, the ground it was
+ * designed for, and says so.
  */
 function ThemePreview({ theme, width }: { readonly theme: TuiThemeDefinition; readonly width: number }) {
   const { colors } = theme;
@@ -931,10 +931,11 @@ function ThemePreview({ theme, width }: { readonly theme: TuiThemeDefinition; re
         </text>
         <text><span fg={colors.intent.success}>{TUI_MARKS.connected}</span></text>
       </box>
-      <box flexDirection="column" alignItems="flex-end" style={{ marginTop: 1 }}>
-        <box style={{ maxWidth: '80%', border: true, borderStyle: 'rounded', borderColor: colors.border.user, backgroundColor: colors.background.user, paddingLeft: 1, paddingRight: 1 }}>
-          <text><span fg={colors.text.strong}>{clipText('Run the checkout suite.', Math.max(4, inner - 6))}</span></text>
+      <box flexDirection="row" style={{ marginTop: 1 }}>
+        <box style={{ width: 5, flexShrink: 0 }}>
+          <text><span fg={colors.intent.accent}>{TUI_MARKS.userGutter}</span></text>
         </box>
+        <text><span fg={colors.text.strong}>{clipText('Run the checkout suite.', Math.max(4, inner - 7))}</span></text>
       </box>
       <text><span fg={colors.text.primary}>{clipText('Two tests fail: shipping is taxed twice.', inner)}</span></text>
       <box flexDirection="column" style={{ marginTop: 1, border: true, borderStyle: 'rounded', borderColor: colors.well.border, backgroundColor: colors.well.fill, paddingLeft: 1, paddingRight: 1 }}>

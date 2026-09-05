@@ -11,7 +11,7 @@ import { BUILTIN_TUI_THEMES, TuiThemeProvider } from '../src/tui/theme';
 const TEST_TUI_BACKGROUND = BUILTIN_TUI_THEMES[0]!.colors.background.overlay;
 
 describe('TUI transcript rendering', () => {
-  test('the user turn is a bubble with no speaker label; assistant markdown stays unprefixed', async () => {
+  test('the user turn carries the YOU gutter, left-aligned; assistant markdown stays unprefixed', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
     try {
@@ -26,12 +26,16 @@ describe('TUI transcript rendering', () => {
         </box>,
       );
       const frame = await renderSettled(renderOnce, captureCharFrame, ['Review this module', 'Plan', 'Inspect']);
-      // The web chat marks the speaker by the bubble alone; no gutter label.
-      expect(frame).not.toContain('YOU');
+      // The TUI marks the speaker the way the landing preview does: a YOU
+      // gutter on a left turn, never a right bubble and never an agent label.
+      expect(frame).toContain('YOU');
       expect(frame).toContain('Review this module');
+      const row = frame.split('\n')[lineContaining(frame, 'Review this module')]!;
+      expect(row.indexOf('YOU')).toBeLessThan(row.indexOf('Review this module'));
+      expect(row.search(/\S/)).toBeLessThanOrEqual(8);
       expect(frame).not.toContain('KINU');
-      // The bubble's rounded edge sits on the user row.
-      expect(frame).toContain('╭');
+      // No bubble edge anywhere on this transcript: the user row is plain.
+      expect(frame).not.toContain('╭');
       expect(frame).toContain('Plan');
       expect(frame).toContain('Inspect');
       expect(frame).not.toContain('**Inspect**');
