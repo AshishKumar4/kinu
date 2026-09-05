@@ -46,7 +46,7 @@ export type GadgetReadResult<T> =
   | ({ ok: true } & T)
   | ({ ok: false } & Refusal);
 
-export function gadgetPath(slug: string, file: string): string {
+function gadgetPath(slug: string, file: string): string {
   return `${GADGET_DIR}/${slug}/${file}`;
 }
 

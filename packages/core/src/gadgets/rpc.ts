@@ -17,22 +17,18 @@ import type { GadgetRecord } from './files';
  * API: `fetch` is the HTTP entry, `alarm` the timer, the `webSocket*` trio
  * the hibernation hooks, and `constructor` is not a method at all.
  */
-export const GADGET_HOST_METHODS = [
+const GadgetHostMethodSchema = v.picklist([
   'constructor', 'fetch', 'alarm', 'connect', 'webSocketMessage', 'webSocketClose', 'webSocketError',
-] as const;
+]);
 
 const METHOD_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
-
-/** The platform method names a gadget may not reach, as the schema the
- *  bridge checks membership against. */
-const GadgetHostMethodSchema = v.picklist(GADGET_HOST_METHODS);
 
 /** An identifier the bridge will forward. Names starting with `_` are the
  *  gadget's own private convention and stay unreachable, the same line
  *  Cap'n Web draws for `#`-prefixed members. */
- export function isGadgetMethodName(name: string): boolean {
+export function isGadgetMethodName(name: string): boolean {
   return METHOD_RE.test(name) && !v.is(GadgetHostMethodSchema, name);
- }
+}
 
 /** What a forwarded call answers: the method's JSON value, or a refusal with
  *  its class first so every hop and the model branch on `reason`. */

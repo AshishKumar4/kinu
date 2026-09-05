@@ -245,17 +245,14 @@ export type * from './types/mcts';
 export type * from './types/craft';
 export type * from './types/evaluation';
 
-// Views — agent-authored dashboards the host renders from JSON. Ungated, like
-// crafted tools: the containment is the vocabulary, not an approval.
+// Gadgets — agent-written apps: a server the host runs as a facet with only
+// its declared bindings, a client in a sandboxed iframe. See docs/LIVE-UI.md.
 export {
   GADGET_DIR, GADGET_MANIFEST_FILE, GADGET_SERVER_FILE, GADGET_CLIENT_FILE, GADGET_CLIENT_STYLE_FILE,
-  GADGET_SERVER_CLASS, GADGET_LIMITS, GADGET_DATA_SOURCES, GADGET_HOST_METHODS, GADGETS_CHANGED_EVENT,
-  GADGET_MCP_ACTION_RULE, RESERVED_GADGET_TITLES,
-  GadgetManifestSchema, GadgetBindingSchema,
-  parseGadgetManifest, gadgetBindings, gadgetFilesRoot, isGadgetSlug, isGadgetBindingName,
-  isGadgetDataSource, normalizeGadgetTitle,
-  gadgetPath, listGadgets, readGadget, readGadgetClient, readGadgetServer,
-  isGadgetMethodName, gadgetSummary, gadgetExecutor,
+  GADGET_SERVER_CLASS, GADGET_LIMITS, GADGET_DATA_SOURCES, GADGETS_CHANGED_EVENT,
+  parseGadgetManifest, gadgetBindings, gadgetFilesRoot, isGadgetSlug, isGadgetDataSource,
+  listGadgets, readGadget, readGadgetClient, readGadgetServer,
+  isGadgetMethodName, gadgetSummary,
   resolveGadgetFilePath, resolveGadgetDataSource, reviewGadgetMcpCall,
   type GadgetManifest, type GadgetManifestResult, type GadgetBinding, type GadgetBindingKind,
   type GadgetFilesBinding, type GadgetMcpBinding, type GadgetDataSource,

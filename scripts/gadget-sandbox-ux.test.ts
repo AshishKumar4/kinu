@@ -17,14 +17,16 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Browser, Page } from 'puppeteer';
 
-// The sandbox constants live beside the document builder, whose `capnweb?raw`
-// import this project typechecks through gadget-sandbox-ux.d.ts beside this file.
 import { withGallery } from './gallery-harness';
 
-import {
-  GADGET_DOCUMENT_CSP,
-  GADGET_IFRAME_SANDBOX,
-} from '../packages/cf-backend/src/components/gadgets/gadget-document';
+// Both spelled out here rather than imported from gadget-document.ts: a gate
+// that compares the mounted attribute to the constant it was mounted from
+// passes whatever either says. These two strings are the posture §1.1 of
+// docs/LIVE-UI.md quotes from the reference, and a change to either is a
+// change to the trust boundary that has to be made here as well.
+const SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';
+const CSP = "default-src 'none'; frame-src 'none'; script-src data: 'unsafe-inline'; style-src data: 'unsafe-inline'; "
+  + "img-src data:; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none';";
 
 async function openFrame(browser: Browser, origin: string): Promise<Page> {
   const page = await browser.newPage();
@@ -73,11 +75,11 @@ beforeAll(async () => {
 
 describe('the gadget sandbox', () => {
   test('the iframe carries exactly the sandbox token', () => {
-    expect(observed.sandbox).toBe(GADGET_IFRAME_SANDBOX);
+    expect(observed.sandbox).toBe(SANDBOX);
   });
 
   test('the document carries exactly the content policy', () => {
-    expect(observed.csp).toBe(GADGET_DOCUMENT_CSP);
+    expect(observed.csp).toBe(CSP);
   });
 
   test('a fetch cannot leave the client', () => {

@@ -23,7 +23,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { GADGET_DATA_SOURCES, RESERVED_GADGET_TITLES, normalizeGadgetTitle } from '@kinu.run/core';
+import { GADGET_DATA_SOURCES, parseGadgetManifest } from '@kinu.run/core';
 import { AGENT_RPC_ACCESS, requiredRpcAccess } from '../src/cli/rpc-gate';
 
 const SRC = join(import.meta.dir, '..', 'src');
@@ -104,6 +104,19 @@ describe('gadget data sources', () => {
 });
 
 describe('reserved gadget titles', () => {
+  /** Why the parser refuses a manifest wearing `title`, or null when it
+   *  accepts it. The reason is asserted, so a title refused for some other
+   *  cause (length, encoding) cannot pass as reserved. */
+  const refusal = (title: string): string | null => {
+    const out = parseGadgetManifest({ v: 1, title });
+    return out.ok ? null : out.error;
+  };
+
+  test('the parser refuses a reserved title and accepts an ordinary one', () => {
+    expect(refusal('Deploy health')).toBeNull();
+    expect(refusal('Releases')).toContain('host owns');
+  });
+
   test('cover every host work surface, so no agent tab can wear one of their names', () => {
     const source = read('components/surfaces/WorkSurface.tsx');
     const tuple = /(?:export )?const SURFACES = \[([^\]]+)\]/.exec(source);
@@ -120,7 +133,7 @@ describe('reserved gadget titles', () => {
     if (!activityName) throw new Error('WorkSurface.tsx must declare ACTIVITY_SURFACE');
 
     for (const name of [...surfaces, activityName]) {
-      expect(RESERVED_GADGET_TITLES).toContain(normalizeGadgetTitle(name));
+      expect(refusal(name)).toContain('host owns');
     }
   });
 
@@ -134,7 +147,7 @@ describe('reserved gadget titles', () => {
       'Brain', 'Reasoning', 'Self', 'Tasks', 'Jobs', 'Changelog', 'Evolution Changelog',
     ];
     for (const name of retired) {
-      expect(RESERVED_GADGET_TITLES).toContain(normalizeGadgetTitle(name));
+      expect(refusal(name)).toContain('host owns');
     }
   });
 });

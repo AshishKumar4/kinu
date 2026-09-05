@@ -11,9 +11,9 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  GADGET_DATA_SOURCES, GADGET_LIMITS, GADGET_MCP_ACTION_RULE, RESERVED_GADGET_TITLES,
-  gadgetExecutor, gadgetFilesRoot, gadgetSummary, isGadgetMethodName, listGadgets,
-  normalizeGadgetTitle, parseGadgetManifest, readGadget, readGadgetClient, readGadgetServer,
+  GADGET_DATA_SOURCES, GADGET_LIMITS,
+  gadgetFilesRoot, gadgetSummary, isGadgetMethodName, listGadgets,
+  parseGadgetManifest, readGadget, readGadgetClient, readGadgetServer,
   resolveGadgetDataSource, resolveGadgetFilePath, reviewGadgetMcpCall,
 } from '../src/gadgets/index';
 import { sha256Hex } from '../src/safety/argument-digest';
@@ -118,7 +118,7 @@ describe('gadget manifest — what a gadget may declare', () => {
   });
 
   test('refuses the host surfaces as titles, whatever the case or spacing', () => {
-    for (const title of ['Releases', 'releases', 'R E L E A S E S', 'Approvals', 'Consent', 'Activity', 'Settings']) {
+    for (const title of ['Releases', 'releases', 'R E L E A S E S', 'R e-l_e.a s e S', 'Approvals', 'Consent', 'Activity', 'Settings']) {
       const out = parseGadgetManifest(manifest({ title }));
       expect(out.ok).toBe(false);
       if (out.ok) return;
@@ -129,10 +129,6 @@ describe('gadget manifest — what a gadget may declare', () => {
 
   test('refuses a non-ASCII title, because the reserved fold would drop it', () => {
     expect(parseGadgetManifest(manifest({ title: 'Rеleases' })).ok).toBe(false);
-    expect(normalizeGadgetTitle('R e-l_e.a s e S')).toBe('releases');
-    for (const retired of ['tasks', 'jobs', 'changelog', 'self']) {
-      expect(RESERVED_GADGET_TITLES).toContain(retired);
-    }
   });
 
   test('bounds what the host mints and draws', () => {
@@ -269,11 +265,13 @@ describe('gadget bindings — the pure half of each kind', () => {
     expect(write.ok).toBe(true);
     if (!write.ok) return;
     expect(write.review.review.decision).toBe('gate');
-    expect(write.review.review.hits.map((h) => h.rule)).toEqual([GADGET_MCP_ACTION_RULE]);
+    // The rule and the executor are what a standing grant is stored under
+    // (docs/LIVE-UI.md §2.1), so the literals are the contract: a renamed
+    // rule would orphan every grant an owner has given.
+    expect(write.review.review.hits.map((h) => h.rule)).toEqual(['gadget_mcp_action']);
     expect(write.review.subject).toEqual({
       command: 'mcp github/create_issue {"title":"x"}',
-      executor: gadgetExecutor('issues'),
+      executor: 'gadget:issues',
     });
-    expect(gadgetExecutor('issues')).not.toBe('workspace');
   });
 });

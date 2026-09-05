@@ -30,14 +30,9 @@ import { isGadgetDataSource, type GadgetDataSource } from './sources';
 import type { GadgetMcpBinding } from './manifest';
 
 /** The rule a side-effecting MCP call trips. One rule, so an owner's
- *  `always` grant scopes to "this gadget may act on this connection". */
-export const GADGET_MCP_ACTION_RULE = 'gadget_mcp_action';
-
-/** The executor a gadget's calls are judged on. Prefixed so a grant given
- *  to a gadget never answers for the agent's own shell, or the reverse. */
-export function gadgetExecutor(slug: string): string {
-  return `gadget:${slug}`;
-}
+ *  `always` grant scopes to "this gadget may act on this connection". The
+ *  grant is stored under this string, so a rename orphans every grant given. */
+const GADGET_MCP_ACTION_RULE = 'gadget_mcp_action';
 
 /**
  * A path a `files` binding may touch: `requested` joined under `root`, with
@@ -115,9 +110,11 @@ export function reviewGadgetMcpCall(input: {
     return { ok: false, ...refusalOf(new KinuError('missing',
       `connection ${binding.server} offers no tool named "${tool}"`)) };
   }
+  // The executor is prefixed so a grant given to a gadget never answers for
+  // the agent's own shell, or the reverse. Stored with the grant, like the rule.
   const subject = {
     command: `mcp ${binding.server}/${tool} ${JSON.stringify(args)}`,
-    executor: gadgetExecutor(slug),
+    executor: `gadget:${slug}`,
   };
   const review: ApprovalResult = described.readOnly
     ? { decision: 'allow', hits: [] }

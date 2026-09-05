@@ -66,10 +66,6 @@ export function isGadgetSlug(value: string): boolean {
  *  case, the convention every Workers binding already follows. */
 const BINDING_NAME_RE = /^[A-Z][A-Z0-9_]{0,31}$/;
 
-export function isGadgetBindingName(value: string): boolean {
-  return BINDING_NAME_RE.test(value);
-}
-
 /** A workspace-relative directory: no leading slash, no `.`/`..` segment, no
  *  empty segment. The file plane resolves it under the workspace root. */
 const RELATIVE_DIR_RE = /^(?!\.{1,2}(\/|$))[^/\0]+(\/(?!\.{1,2}(\/|$))[^/\0]+)*$/;
@@ -101,7 +97,7 @@ const McpBinding = v.strictObject({
   tools: v.optional(v.pipe(v.array(McpToolName), v.maxLength(64))),
 });
 
-export const GadgetBindingSchema = v.variant('kind', [FilesBinding, WorkspaceBinding, McpBinding]);
+const GadgetBindingSchema = v.variant('kind', [FilesBinding, WorkspaceBinding, McpBinding]);
 
 export type GadgetBinding = v.InferOutput<typeof GadgetBindingSchema>;
 export type GadgetBindingKind = GadgetBinding['kind'];
@@ -119,7 +115,7 @@ const asciiTitle = (max: number) => v.pipe(
   v.regex(/^[\x20-\x7E]+$/, 'must be printable ASCII'),
 );
 
-export const GadgetManifestSchema = v.strictObject({
+const GadgetManifestSchema = v.strictObject({
   v: v.literal(1),
   title: v.pipe(
     asciiTitle(GADGET_LIMITS.titleChars),
@@ -187,11 +183,12 @@ export function gadgetFilesRoot(slug: string, binding: GadgetFilesBinding): stri
  * `jobs`, `changelog` and `self` are all retired host names kept here forever
  * for that reason.
  *
- * `cf-backend/tests/unit-gadget-sources.test.ts` asserts this covers every
- * member of the UI's `SURFACES` tuple — so a new host surface cannot quietly
- * become impersonable — and that every retired name is still here.
+ * `cf-backend/tests/unit-gadget-sources.test.ts` asserts a manifest titled
+ * after any member of the UI's `SURFACES` tuple is refused — so a new host
+ * surface cannot quietly become impersonable — and that every retired name
+ * still is.
  */
-export const RESERVED_GADGET_TITLES: readonly string[] = [
+const RESERVED_GADGET_TITLES: readonly string[] = [
   // Live host surfaces.
   'output',
   'work',
@@ -223,6 +220,6 @@ export const RESERVED_GADGET_TITLES: readonly string[] = [
 /** Fold a title to the form `RESERVED_GADGET_TITLES` is keyed by. The fold
  *  keeps ASCII letters and digits only; the schema refuses non-ASCII titles
  *  before it folds. */
-export function normalizeGadgetTitle(title: string): string {
+function normalizeGadgetTitle(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]/g, '');
 }

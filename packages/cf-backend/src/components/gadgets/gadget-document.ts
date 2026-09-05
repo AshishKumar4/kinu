@@ -30,8 +30,10 @@ export const GADGET_IFRAME_SANDBOX = "allow-scripts allow-popups allow-popups-to
 /** The srcdoc document's Content-Security-Policy. The client reaches the
  *  network, the host document, and everything else through nothing at all:
  *  `connect-src 'none'` refuses fetch and WebSocket alike, and the sandbox
- *  above keeps the document at the opaque `null` origin. */
-export const GADGET_DOCUMENT_CSP =
+ *  above keeps the document at the opaque `null` origin.
+ *  `scripts/gadget-sandbox-ux.test.ts` asserts the mounted document carries
+ *  this policy verbatim. */
+const GADGET_DOCUMENT_CSP =
   "default-src 'none'; frame-src 'none'; script-src data: 'unsafe-inline'; style-src data: 'unsafe-inline'; img-src data:; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none';";
 
 // btoa() below requires this to stay ASCII; capnweb's build enforces ASCII-only dist bundles.
