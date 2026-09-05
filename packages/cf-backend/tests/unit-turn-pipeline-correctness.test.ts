@@ -134,8 +134,7 @@ describe('turn-pipeline correctness wiring', () => {
       warmConnections: [], failWarm: null, titles: [],
       failDescriptors: new KinuError('denied', 'the caller holds no capability'),
     });
-    await expect(denied.agent.beforeTurn(turn))
-      .rejects.toThrow('building the user MCP tool adapters for this turn');
+    await expect(denied.agent.beforeTurn(turn)).rejects.toMatchObject({ code: 'denied' });
   });
 
   test('client RPC policy runs before SDK dispatch and defaults to allow', () => {

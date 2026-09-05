@@ -122,6 +122,25 @@ describe('source_text', () => {
     `)).toEqual([]);
   });
 
+  test('SILENT: a method name that a source slice elsewhere also binds', () => {
+    // `beforeTurn` is a source-slice variable in one test and a METHOD NAME in
+    // another; the member property is a name, not a read of that binding.
+    expect(found('source_text', `
+      import { readFileSync } from 'node:fs';
+      import { memberBody } from '@kinu.run/test-utils';
+      import { Orchestrator } from '@kinu.run/probe/budget';
+      test('the slice pins the wiring', () => {
+        const source = readFileSync('../src/budget.ts', 'utf8');
+        const beforeTurn = memberBody(source, 'async beforeTurn(');
+        expect(beforeTurn).toContain('x');
+      });
+      test('the turn rejects a denied caller', async () => {
+        const agent = new Orchestrator();
+        await expect(agent.beforeTurn({})).rejects.toMatchObject({ code: 'denied' });
+      });
+    `).filter((what) => what.startsWith('expect('))).toEqual(['expect(<source text>).toContain']);
+  });
+
   test('SILENT: a workspace file read inside the system under test', () => {
     // `vfs.readFile('src/main.ts')` reads a file in the workspace under test,
     // not this repository's source.

@@ -589,7 +589,13 @@ function sourceText(
     let overSource: string | undefined;
     walk(actual, (inner) => {
       if (overSource !== undefined) return;
-      const name = inner.raw.type === 'Identifier' ? inner.raw.name : undefined;
+      // A non-computed member property is a NAME, never a variable reference:
+      // `agent.beforeTurn(turn)` reads no `beforeTurn` binding even when the
+      // file slices a source value under that name for another test.
+      const parent = inner.parent?.raw;
+      const isPropertyName = parent?.type === 'MemberExpression' && !parent.computed
+        && parent.property.start === inner.start && parent.property.end === inner.end;
+      const name = inner.raw.type === 'Identifier' && !isPropertyName ? inner.raw.name : undefined;
       if (name !== undefined && facts.sourceValues.has(name)) { overSource = name; return; }
       const called = calleeName(inner);
       if (called !== undefined && (SOURCE_HELPERS.has(called) || facts.sourceReaders.has(called))) {
