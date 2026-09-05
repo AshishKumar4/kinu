@@ -1554,7 +1554,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         listBackgroundJobs: async () => [],
         ...agentSelfRest,
       })],
-    })({ craftedTools: () => ({}), providers: [], loader: {} });
+    })({ native: {}, craftedTools: () => ({}), providers: [] });
 
     const result = await toolExecute<{ code: string }, unknown>(executeTool)({
       code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
@@ -1578,7 +1578,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         ...agentSelfRest,
         armCompactNow: () => { arms++; },
       })],
-    })({ craftedTools: () => ({}), providers: [], loader: {} });
+    })({ native: {}, craftedTools: () => ({}), providers: [] });
 
     const result = await toolExecute<{ code: string }, unknown>(executeTool)({
       code: 'return await agent.compactNow();',
@@ -4021,7 +4021,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
   function sandboxWith(deps: AgentsToolDeps) {
     const tool = createNodeExecuteToolFactory({
       extraProviders: [createAgentsCodemodeProvider(() => deps)],
-    })({ craftedTools: () => ({}), providers: [], loader: {} });
+    })({ native: {}, craftedTools: () => ({}), providers: [] });
     return (code: string, options?: ToolExecutionOptions) =>
       toolExecute<{ code: string }, JsonValue>(tool)({ code }, options);
   }

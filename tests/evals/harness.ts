@@ -174,7 +174,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const tools = buildActorTools({
     rt,
     craftedToolExecute: createNodeCraftedExecute(),
-    createExecuteTool: createNodeExecuteToolFactory({
+    executeTools: createNodeExecuteToolFactory({
       extraProviders: [
         createAgentsCodemodeProvider(() => agents),
         createWebCodemodeProvider(webSearch),
@@ -182,7 +182,6 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
         createTasksCodemodeProvider(taskList, config),
       ],
     }),
-    codemodeLoader: { __cli: true },
     agents,
     effectClaims: { sql, turnId: () => WORKSPACE_RUN_ID },
     facts,

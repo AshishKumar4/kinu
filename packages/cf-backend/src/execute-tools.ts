@@ -21,15 +21,15 @@
 
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
-import { jsonSchema, tool, type Tool, type ToolSet } from 'ai';
+import { type Tool, type ToolSet } from 'ai';
 import type { AgentsToolDeps, DeviceRequestChannel, SqlExecutor } from "@kinu.run/core";
 import {
   createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider,
-  renderExecuteToolsDescription, renderToolsDeclaration, CRAFTED_TOOL_NAMESPACE,
+  renderExecuteToolsDescription, renderToolsDeclaration, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE,
   type WebSearchProvider, type CodemodeProvider,
 } from "@kinu.run/core";
 import {
-  KinuSandboxExecutor, nativeToolFunctions, renderToolsPrelude, selectInjectableCraftedTools,
+  KinuSandboxExecutor, renderToolsPrelude, selectInjectableCraftedTools,
 } from "./codemode-sandbox";
 import type { CFRuntime } from "./runtime";
 
@@ -86,33 +86,6 @@ function withDeviceOwnership(args: unknown[], channel: DeviceRequestChannel | un
   return [args[0], merged, ...args.slice(2)];
 }
 
-/** The native surface the sandbox exposes: everything but the sandbox itself. */
-function sandboxNativeTools(all: ToolSet): ToolSet {
-  const out: ToolSet = {};
-  for (const [name, tool] of Object.entries(all)) {
-    if (name === 'execute_tools') continue;
-    out[name] = tool;
-  }
-  return out;
-}
-
-/**
- * The entry `buildActorTools` is handed for `execute_tools` while the native
- * set is still being built. It is replaced by {@link ExecuteToolsFactory.toolFor}
- * the moment that set exists; nothing calls it.
- */
-export const SANDBOX_TOOL_PLACEHOLDER: Tool = tool({
-  description: 'execute_tools (not yet built for this turn)',
-  inputSchema: jsonSchema<{ code: string }>({
-    type: 'object',
-    properties: { code: { type: 'string' } },
-    required: ['code'],
-  }),
-  execute: async (): Promise<string> => {
-    throw new Error('execute_tools was handed out before the turn tool surface finished building');
-  },
-});
-
 /** What `createExecuteToolsFactory` hands back: one `execute_tools` tool per
  *  finished native tool set. */
 export interface ExecuteToolsFactory {
@@ -156,12 +129,12 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
   });
 
   return {
-    toolFor(finished) {
-      const native = sandboxNativeTools(finished);
+    toolFor(native) {
       const crafted = selectInjectableCraftedTools(rt.craftStore, sql);
       // The `tools` namespace: native tools dispatched to the host, crafted
       // tools defined in the prelude. The declaration is rendered from the set
-      // as it is NOW; the callable half is re-read on every call below.
+      // as it is NOW; the callable half is re-read on every call below. Core's
+      // two contract functions skip the sandbox's own entry.
       const toolsProvider: CodemodeProvider = {
         name: CRAFTED_TOOL_NAMESPACE,
         tools: nativeToolFunctions(native),

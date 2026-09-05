@@ -1,18 +1,20 @@
 /**
- * Node-side createExecuteTool factory — the CLI's answer to the CF backend's
- * codemode-backed `execute_tools`. Passed as deps.createExecuteTool to
- * buildBuiltinTools, it gives the CLI a working `execute_tools` without a
- * workerd loader.
+ * Node-side `execute_tools` builder — the CLI's answer to the CF backend's
+ * codemode-backed tool. Handed to `buildActorTools` as `executeTools`, it
+ * gives the CLI a working `execute_tools` without a workerd loader.
  *
  * The returned tool's execute compiles the LLM's code via `new Function()`
  * and runs it in-process with the execution router's provider namespaces
  * (`workspace.*` from the always-registered inline executor, plus any
- * extras) and the crafted-tool executes bound under the ONE callable form core
- * declares (tools/sandbox-contract.ts): `tools.<name>`.
+ * extras) and the ONE callable namespace core declares
+ * (tools/sandbox-contract.ts): `tools.<name>` for every native tool of the
+ * finished surface and for every crafted tool. The declaration the model
+ * reads lists both, rendered from the same surface.
  *
- * The crafted set is resolved per execute (opts.craftedTools()), so a
+ * The crafted set is resolved per execute (surface.craftedTools()), so a
  * tool crafted mid-turn is callable on the next call rather than at the next
- * model change.
+ * toolset rebuild; its declaration catches up at the next turn, when the
+ * session rebuilds its surface.
  *
  * Node/Bun only — V8 codegen is permitted there. This module is NEVER
  * imported by the CF backend, keeping `new Function` outside the
@@ -21,15 +23,16 @@
 
 import type {
   CodemodeProvider,
-  CreateExecuteToolFactory,
   CraftedToolSet,
+  ExecuteToolsBuilder,
   ExecutorProvider,
   JsonValue,
 } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
-  decodeJsonValue, explainNativeToolReferenceError, renderExecuteToolsDescription,
+  decodeJsonValue, explainNativeToolReferenceError, nativeToolFunctions,
+  renderExecuteToolsDescription, renderToolsDeclaration,
 } from '@kinu.run/core';
 import { tool, jsonSchema } from 'ai';
 import { addImplicitReturn } from './executor';
@@ -40,8 +43,8 @@ export interface NodeExecuteToolFactoryDeps {
 }
 
 /** The sandbox parameters this factory always binds, in order: the workspace
- *  namespace, the crafted-tool record under its one callable name, and the
- *  capturing console. A provider may not take any of them. */
+ *  namespace, the tool record under its one callable name, and the capturing
+ *  console. A provider may not take any of them. */
 const FIXED_NAMESPACES: readonly string[] = [
   'workspace', CRAFTED_TOOL_NAMESPACE, 'console',
 ];
@@ -59,20 +62,27 @@ interface ExecuteFailure {
   logs?: string[];
 }
 /**
- * Build a createExecuteTool-compatible factory. Pass as deps.createExecuteTool
- * to buildBuiltinTools; pass a sentinel truthy value as deps.codemodeLoader
- * so the factory branch is entered (the loader itself is not used here).
+ * Build the CLI's `execute_tools` builder. Pass as `executeTools` to
+ * `buildActorTools`, or call it with a finished confined surface (heads).
  */
-export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = {}): CreateExecuteToolFactory {
-  return (opts) => {
+export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = {}): ExecuteToolsBuilder {
+  return (surface) => {
     const providers: CodemodeProvider[] = [
-      ...opts.providers.map(adaptExecutorProvider),
+      ...surface.providers.map(adaptExecutorProvider),
       ...(deps.extraProviders ?? []),
     ];
+    // Native tools dispatch to the finished surface; the crafted set is read
+    // per call below, and a crafted name shadows a native one the way the CF
+    // prelude's own definitions do.
+    const nativeBindings = nativeToolFunctions(surface.native);
+    const toolsDeclaration = renderToolsDeclaration(
+      surface.native,
+      Object.entries(surface.craftedTools()).map(([name, entry]) => ({ name, description: entry.description })),
+    );
 
     return tool({
       // The one description, composed in core (registry.
-      // renderExecuteToolsDescription) so this factory really is the CF
+      // renderExecuteToolsDescription) so this builder really is the CF
       // codemode tool on a different runtime rather than a different tool. The
       // namespace declarations are the point: each provider carries its own
       // `types`, and this path used to collect them in adaptExecutorProvider
@@ -80,7 +90,10 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
       // `tasks.*`, `agents.*`, `web.*` or `llm.*` while being handed all of
       // them as callables.
       description: renderExecuteToolsDescription(
-        providers.map((provider) => provider.types).filter((types) => !!types).join('\n\n'),
+        [
+          toolsDeclaration,
+          ...providers.map((provider) => provider.types).filter((types) => !!types),
+        ].join('\n\n'),
         'local',
       ),
       inputSchema: jsonSchema<{ code: string }>({
@@ -89,7 +102,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         required: ['code'],
       }),
       execute: async (args, options) => {
-        // `console` is shadowed by a capturing stand-in: this factory runs the
+        // `console` is shadowed by a capturing stand-in: this builder runs the
         // model's code in-process, so a real console.* would write straight to
         // the CLI's stdout — which, under `kinu exec --json`, IS the event
         // stream. Capture the output and return it as `logs` (the CF codemode
@@ -105,11 +118,14 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         try {
           const signal = readAbortSignal({ options });
           const context = signal ? { signal } : undefined;
+          const toolBindings: Record<string, CodemodeExecute | CraftedExecute> = {};
+          for (const [name, entry] of Object.entries(nativeBindings)) {
+            toolBindings[name] = (...toolArgs: unknown[]) => containRejection(() => entry.execute(...toolArgs), pendingCalls);
+          }
           // Resolved here, not at construction: the CraftStore is read for
           // THIS call, so a tool the model crafted a step ago is callable now.
-          const craftedBindings: Record<string, CraftedExecute> = {};
-          for (const [name, entry] of Object.entries(opts.craftedTools())) {
-            craftedBindings[name] = (arg) => containRejection(() => entry.execute(arg), pendingCalls);
+          for (const [name, entry] of Object.entries(surface.craftedTools())) {
+            toolBindings[name] = (arg: JsonValue) => containRejection(() => entry.execute(arg), pendingCalls);
           }
           const providerBindings: Record<string, Record<string, CodemodeExecute>> = {};
           for (const p of providers) {
@@ -133,7 +149,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           const extraNamespaces = Object.keys(providerBindings).filter(n => !FIXED_NAMESPACES.includes(n));
           const argNames = [...FIXED_NAMESPACES, ...extraNamespaces];
           const argValues: object[] = [
-            workspace, craftedBindings, sandboxConsole,
+            workspace, toolBindings, sandboxConsole,
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 
@@ -245,4 +261,3 @@ function readAbortSignal(input: { options: unknown }): AbortSignal | undefined {
   const parsed = v.safeParse(abortOptionsSchema, input.options);
   return parsed.success ? parsed.output.abortSignal : undefined;
 }
-

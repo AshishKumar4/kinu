@@ -41,7 +41,7 @@ import {
   projectJsonValue,
   type CodemodeProvider,
   type CraftedToolExecute,
-  type CreateExecuteToolFactory,
+  type ExecuteToolsBuilder,
   type JsonValue,
   type MemoryToolInput,
   type ReleaseApproval,
@@ -83,7 +83,7 @@ const nodeCraftedExecute: CraftedToolExecute = (t) => {
   };
 };
 
-const nodeExecFactory: CreateExecuteToolFactory = (opts) => {
+const nodeExecBuilder: ExecuteToolsBuilder = (surface) => {
   return tool({
     description: 'test exec_tools',
     inputSchema: jsonSchema<{ code: string }>({
@@ -91,11 +91,11 @@ const nodeExecFactory: CreateExecuteToolFactory = (opts) => {
     }),
     execute: async (a: { code: string }) => {
       try {
-        // Resolved per execute, exactly as the cli-backend factory does, and
+        // Resolved per execute, exactly as the cli-backend builder does, and
         // bound under the ONE namespace core declares. A double that also bound
         // `codemode` would keep passing after the alias was removed.
         const crafted: Record<string, (arg: JsonValue) => Promise<JsonValue | undefined>> = {};
-        for (const [name, entry] of Object.entries(opts.craftedTools())) {
+        for (const [name, entry] of Object.entries(surface.craftedTools())) {
           crafted[name] = entry.execute;
         }
         const fn = new Function('workspace', 'tools', 'return (async () => { ' + a.code + ' })()');
@@ -111,16 +111,19 @@ const nodeExecFactory: CreateExecuteToolFactory = (opts) => {
   });
 };
 
+/** The builtin surface with a working sandbox: an actor's, minus delegation.
+ *  The claim table is created by `initWorkspaceSchema`, which this runtime
+ *  runs, so the effect-claim wrap is the one both backends give it. */
 function tools(
   rt: AgentRuntime,
   escalations: TurnEscalationLedger = new TurnEscalationLedger(),
 ) {
-  return buildBuiltinTools({
+  return buildActorTools({
     rt,
     escalations,
     craftedToolExecute: nodeCraftedExecute,
-    createExecuteTool: nodeExecFactory,
-    codemodeLoader: { __test: true },
+    executeTools: nodeExecBuilder,
+    effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' },
   });
 }
 
@@ -207,8 +210,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const t = buildActorTools({
       rt,
       craftedToolExecute: nodeCraftedExecute,
-      createExecuteTool: nodeExecFactory,
-      codemodeLoader: { __test: true },
+      executeTools: nodeExecBuilder,
       facts: stubFacts,
       webSearch: stubWebSearch,
       agents: { mode: 'build', team: stubTeam, peers: stubPeers },
@@ -283,7 +285,6 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     };
     const t = buildBuiltinTools({
       rt, craftedToolExecute: nodeCraftedExecute,
-      createExecuteTool: nodeExecFactory, codemodeLoader: { __test: true },
       facts,
     });
     const memory = { execute: toolExecute<MemoryToolInput, JsonValue>(t.memory) };
@@ -310,7 +311,6 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { rt } = createTestRuntime();
     const t = buildBuiltinTools({
       rt, craftedToolExecute: nodeCraftedExecute,
-      createExecuteTool: nodeExecFactory, codemodeLoader: { __test: true },
       facts: { upsert: () => 'created' as const, recall: () => null, forget: () => {}, recentTopK: () => [], all: () => [] },
     });
     expect(t.memory.description).toBe(BUILTIN_TOOL_DESCRIPTIONS.memory);

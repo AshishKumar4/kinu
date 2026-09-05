@@ -251,7 +251,7 @@ and no alias: a name that is not in `tools` is not a tool.
 | Backend | How `tools.<name>` becomes callable |
 |---|---|
 | Cloudflare | one `CodemodeProvider` named `tools` (`packages/cf-backend/src/execute-tools.ts`): native tools are host-dispatched functions, crafted tools are defined by its `prelude`, and `renderToolsDeclaration(native, crafted)` is the declaration the model reads |
-| CLI | the crafted bindings are passed as the `tools` parameter of the evaluated function (`packages/cli-backend/src/execute-tools-factory.ts`), beside `workspace` and `console` |
+| CLI | the `tools` parameter of the evaluated function (`packages/cli-backend/src/execute-tools-factory.ts`), beside `workspace` and `console`: native tools through the same `nativeToolFunctions` Cloudflare uses, crafted tools from the per-call set, and the same `renderToolsDeclaration(native, crafted)` block. `buildActorTools` builds the sandbox last, over the finished surface, so the block lists every tool the actor holds |
 
 Both re-read the crafted set per call, so a tool saved a program ago is callable
 now. A native tool referenced as a bare identifier is explained rather than

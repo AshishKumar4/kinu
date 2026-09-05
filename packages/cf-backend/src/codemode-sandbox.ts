@@ -26,11 +26,10 @@
  */
 
 import { DynamicWorkerExecutor } from '@cloudflare/codemode';
-import type { ToolSet } from 'ai';
 import {
   filterByEffectiveScore, explainNativeToolReferenceError, parsesAsExpression,
-  NO_TIMER_DEADLINE_MS, nanoid, nativeToolInput, decodeJsonValue,
-  type CraftStore, type SqlExecutor, type CodemodeProvider,
+  NO_TIMER_DEADLINE_MS,
+  type CraftStore, type SqlExecutor,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from './codemode-node-shim';
@@ -103,29 +102,6 @@ export function renderToolsPrelude(crafted: readonly InjectableCraftedTool[], id
     ...definitions,
     '    });',
   ].join('\n');
-}
-
-/**
- * The `tools` provider's host functions: every native tool, called with the
- * one input object the native call takes. The tool's answer crosses the
- * boundary as JSON, which `decodeJsonValue` establishes.
- */
-export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
-  const out: Record<string, CodemodeProvider['tools'][string]> = {};
-  for (const [name, tool] of Object.entries(tools)) {
-    const execute = tool.execute;
-    if (execute === undefined) continue;
-    out[name] = {
-      description: tool.description ?? name,
-      execute: async (...args: unknown[]) => {
-        const input = nativeToolInput(name, args);
-        if ('error' in input && Object.keys(input).length === 1) return input;
-        const result = await execute(input, { toolCallId: `codemode-${nanoid()}`, messages: [] });
-        return result === undefined ? undefined : decodeJsonValue({ value: result });
-      },
-    };
-  }
-  return out;
 }
 
 /**

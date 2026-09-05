@@ -21,7 +21,7 @@ import {
   defaultSpecFor, DEFAULT_WORKERS_AI_MODEL_SPEC, workersAiSpec,
   DEFAULT_ROLE_ID, REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
   craftedToolDescription, toCraftedToolSource, type CraftedTool,
-  CRAFTED_TOOL_NAMESPACE, renderToolsDeclaration, nativeToolInput, jsonSchemaToTs,
+  CRAFTED_TOOL_NAMESPACE, renderToolsDeclaration, nativeToolFunctions, jsonSchemaToTs,
   attributeCraftedFailure, craftFailureMarker,
   initCompletedTurnTable, createCompletedTurnStore,
   initEventsHubTables, EventLog,
@@ -574,11 +574,23 @@ describe('the sandbox contract — one namespace for every tool', () => {
     expect(rendered).toContain('summarize(...args: unknown[]): Promise<unknown>;');
   });
 
-  test('a native tool takes exactly one JSON object through the sandbox', () => {
-    expect(nativeToolInput('file', [{ action: 'read', path: 'a' }])).toEqual({ action: 'read', path: 'a' });
-    expect(nativeToolInput('file', [])).toEqual({});
-    const refused = nativeToolInput('file', ['a']);
-    expect('error' in refused && refused.error).toContain('tools.file(input): input must be one JSON object');
+  test('a native tool takes exactly one JSON object through the sandbox', async () => {
+    const seen: unknown[] = [];
+    const bound = nativeToolFunctions({
+      file: tool({
+        description: 'The file plane.',
+        inputSchema: jsonSchema<{ action: string; path?: string }>({ type: 'object' }),
+        execute: async (input) => { seen.push(input); return { ok: true }; },
+      }),
+    });
+    const file = bound.file;
+    if (!file) throw new Error('file was not bound');
+    expect(await file.execute({ action: 'read', path: 'a' })).toEqual({ ok: true });
+    expect(await file.execute()).toEqual({ ok: true });
+    expect(seen).toEqual([{ action: 'read', path: 'a' }, {}]);
+    const refused = await file.execute('a');
+    expect(refused).toEqual({ error: expect.stringContaining('tools.file(input): input must be one JSON object') });
+    expect(seen).toHaveLength(2);
   });
 
   test('a schema this renderer cannot read renders as unknown, never throws', () => {

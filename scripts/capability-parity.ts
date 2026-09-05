@@ -236,7 +236,7 @@ export function behaviourTypes(sources: ReadonlyMap<string, string>): ReadonlySe
         continue;
       }
       // A `type X = (…) => …` alias is a collaborator too — that is how
-      // `CraftedToolExecute` and `CreateExecuteToolFactory` are declared.
+      // `CraftedToolExecute` and `ExecuteToolsBuilder` are declared.
       if (raw.type === 'TSTypeAliasDeclaration'
         && declaration.children.some((child) => child.raw.type === 'TSFunctionType')) {
         names.add(name);

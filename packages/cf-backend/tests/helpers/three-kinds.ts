@@ -408,9 +408,10 @@ export interface NodeFixtureOptions {
   readonly context?: NodeAgentInput['context'];
   readonly messages?: readonly ModelMessage[];
   readonly host?: NodeAgentDeps['host'];
-  /** A ready-made `execute_tools` entry, through the same dep the CF backend uses
-   *  (`BuiltinToolDeps.preBuiltExecuteTool`). Supplied where an assertion needs a
-   *  tool whose output it knows, rather than whatever a shell-less runtime returns. */
+  /** A ready-made `execute_tools` entry, through the same dep a confined surface
+   *  takes on every backend (`BuiltinToolDeps.preBuiltExecuteTool`). Supplied where
+   *  an assertion needs a tool whose output it knows, rather than whatever a
+   *  shell-less runtime returns. */
   readonly executeTool?: NodeAgentDeps['executeTool'];
   /** Detach policy override, so an arm about backgrounding finishes in under a second
    *  instead of waiting out the shipped 30 s threshold. The RELATIONSHIP is what is
@@ -774,10 +775,10 @@ function modelMessage(message: ModelMessage): RequestMessage {
 /**
  * A ready-made `execute_tools` entry that answers with `output`.
  *
- * Not a stub standing in for the tool surface: `preBuiltExecuteTool` is the dep the
- * CF backend itself supplies, because its codemode tool needs a construction shape
- * the core factory does not express. So a fixture handing one in is doing exactly
- * what a backend does, and the loop below it is unchanged.
+ * Not a stub standing in for the tool surface: `preBuiltExecuteTool` is the dep a
+ * confined surface (a head, a swarm node) takes on every backend, so a fixture
+ * handing one in is doing exactly what a backend does, and the loop below it is
+ * unchanged.
  */
 export function fixedExecuteTool(output: string): ToolSet[string] {
   return tool({

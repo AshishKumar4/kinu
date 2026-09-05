@@ -13,7 +13,7 @@
 // allowedTools maps onto real tools) + record_evidence/record_decision +
 // split_subheads (recursive nested HeadController, depth-budgeted).
 
-import { type LanguageModel } from 'ai';
+import type { LanguageModel, ToolSet } from 'ai';
 import {
   type HeadRuntime, type HeadGrounding, type SpawnedHead, type HeadInput, type HeadReport,
   type WebSearchProvider, type CodemodeProvider,
@@ -193,12 +193,16 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
       writeObserver: capture.files,
     });
     // execute_tools over the head's OWN router providers (private `workspace.*`
-    // + the parent's real `laptop.*`) plus the web/llm codemode namespaces.
-    const executeTool = createNodeExecuteToolFactory({ extraProviders: deps.codemodeExtras() })({
+    // + the parent's real `laptop.*`) plus the web/llm codemode namespaces. A
+    // function of the finished head surface, the shape buildHeadToolSet
+    // resolves after its own filtering, so `tools.<name>` declares and binds
+    // exactly the tools this head holds.
+    const sandbox = createNodeExecuteToolFactory({ extraProviders: deps.codemodeExtras() });
+    const executeTool = (finished: ToolSet) => sandbox({
+      native: finished,
       // A head's CraftStore is a throwaway in-memory fork: no crafted tools.
       craftedTools: () => ({}),
       providers: rt.executionRouter?.getProviders() ?? [],
-      loader: { __cli: true },
     });
     const tools = buildHeadToolSet({
       input,

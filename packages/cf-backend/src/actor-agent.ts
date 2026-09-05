@@ -264,7 +264,7 @@ import {
   CompletedTurnSchema, AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
-import { createExecuteToolsFactory, SANDBOX_TOOL_PLACEHOLDER, type ExecuteToolsFactory } from "./execute-tools";
+import { createExecuteToolsFactory, type ExecuteToolsFactory } from "./execute-tools";
 import { codemodeEgress } from "./codemode-egress";
 import { createHeadRuntime } from "./head-runtime";
 import { spawnNodeFacet } from "./facet-spawn";
@@ -5142,7 +5142,10 @@ export abstract class ActorAgent extends Think<Env> {
             ? () => this._turnCheckpoint?.turnId ?? WORKSPACE_RUN_ID
             : () => claimScope,
         },
-        preBuiltExecuteTool: SANDBOX_TOOL_PLACEHOLDER,
+        // The sandbox declares the FINISHED native surface, so core builds it
+        // last, over the set that holds every other tool, and wraps it with
+        // the clamp and the effect claim the registry declares for it.
+        executeTools: ({ native }) => this.getExecuteToolsFactory(mode, profileKey).toolFor(native),
         // The turn's cumulative bulk budget lives on the accumulator, so the
         // cached toolset holds a stable reference across turns and the reset
         // rides the turn's own accounting.
@@ -5176,10 +5179,6 @@ export abstract class ActorAgent extends Think<Env> {
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
       if (mode === 'plan' && actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
       const tools = buildActorTools(builtinDeps);
-      // The sandbox's declaration lists the FINISHED native surface, so the
-      // tool is built from the set that now holds every other tool. The
-      // placeholder above only satisfies the builder's shape check.
-      tools.execute_tools = this.getExecuteToolsFactory(mode, profileKey).toolFor(tools);
 
       // Anthropic prompt-caching: one breakpoint on the last tool caches the
       // whole stable tool surface (tools precede system+messages in Anthropic's

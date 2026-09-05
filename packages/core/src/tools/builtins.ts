@@ -9,8 +9,11 @@
  * because every native tool is a standing choice the model weighs on EVERY
  * turn it is not the answer to, and selection accuracy degrades with choice
  * count. Tools emitted (in registration order):
- *   1. execute_tools  — requires a createExecuteTool factory (CF: codemode;
- *                       CLI: Node in-process sandbox from cli-backend).
+ *   1. execute_tools  — the codemode sandbox. An actor builds it LAST, over
+ *                       the finished surface, because the sandbox declares
+ *                       every other tool as `tools.<name>` (see
+ *                       `installExecuteTools` and tools/actor-tools.ts).
+ *                       A confined surface hands in `preBuiltExecuteTool`.
  *                       Absent → returns a 'NOT CONFIGURED' error. Core
  *                       itself does NO codegen.
  *   2. run            — shell via executionRouter; `runtime` param explicitly
@@ -55,15 +58,16 @@
  * namespace (tools/release-codemode.ts) — occasional and high-blast-radius
  * enough that it does not earn a standing top-level choice.
  *
- * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
- * execute_tools) are injected through BuiltinToolDeps so the factory stays
- * portable; the agents spawn substrate rides ActorToolDeps for the reason above.
+ * Platform specifics (craftedToolExecute, the execute_tools builder) are
+ * injected through BuiltinToolDeps so the factory stays portable; the agents
+ * spawn substrate rides ActorToolDeps for the reason above.
  */
 
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
+import type { ExecutorProviderSurface } from '../execution/types';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
   memoryActionsFor, TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS, unknownActionError, type WebToolAction,
@@ -102,36 +106,32 @@ export type CraftedToolSet =
   Record<string, { description: string; execute: (arg: JsonValue) => Promise<JsonValue | undefined> }>;
 
 /**
- * Narrow local shape of the CLI's codemode tool factory
- * (@kinu.run/cli-backend/execute-tools-factory). Duck-typed so core has no peer
- * dep on a codemode implementation.
+ * What a backend needs to build `execute_tools` for a FINISHED tool surface.
+ * The sandbox declares every native tool as `tools.<name>(input)`, so it can
+ * only be built once every other tool exists — which is why an actor's
+ * builder runs in `buildActorTools`, after `agents` is registered, and not
+ * inside `buildBuiltinTools`.
  */
-export type CreateExecuteToolFactory = (opts: {
+export interface ExecuteToolsSurface {
+  /** The finished surface. The sandbox never binds or declares its own entry
+   *  (`renderToolsDeclaration`, `nativeToolFunctions` skip `execute_tools`). */
+  readonly native: ToolSet;
   /** Resolved PER EXECUTE, not once per toolset: a tool the agent crafts
    *  mid-turn has to be callable on the very next `execute_tools` call, which
    *  is what the tool's own description promises and what the in-episode loop
    *  is for. Cheap to call — compiled bodies are memoised by name and code. */
-  craftedTools: () => CraftedToolSet;
-  providers: ReturnType<NonNullable<AgentRuntime['executionRouter']>['getProviders']>;
-  loader: object | undefined;
-}) => ToolSet[string];
+  readonly craftedTools: () => CraftedToolSet;
+  /** The live executor namespaces (`workspace`, `sandbox`, `laptop`, …). */
+  readonly providers: ExecutorProviderSurface[];
+}
+
+/** Builds the `execute_tools` entry for one finished surface. The CLI's is
+ *  `createNodeExecuteToolFactory` (@kinu.run/cli-backend); core has no
+ *  codegen of its own. */
+export type ExecuteToolsBuilder = (surface: ExecuteToolsSurface) => ToolSet[string];
 
 export interface BuiltinToolDeps {
   rt: AgentRuntime;
-  /**
-   * Optional loader identifier forwarded into the createExecuteTool factory —
-   * an opaque sentinel that keeps the factory branch active. Core does not
-   * inspect it. Unused on CF, which supplies `preBuiltExecuteTool` instead.
-   */
-  codemodeLoader?: object;
-  /**
-   * Optional factory that BUILDS the execute_tools tool from the crafted-tool
-   * set and the runtime's execution providers. The CLI wires it; CF hands a
-   * ready-made tool through `preBuiltExecuteTool` instead, because its codemode
-   * tool needs a construction shape this factory does not express. Called only
-   * when codemodeLoader is set.
-   */
-  createExecuteTool?: CreateExecuteToolFactory;
   /** Filter cutoff override (default: DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection). */
   minEffectiveScore?: number;
   /**
@@ -147,13 +147,13 @@ export interface BuiltinToolDeps {
    */
   craftedToolExecute?: CraftedToolExecute;
   /**
-   * When supplied, used as-is for `execute_tools`. Both `codemodeLoader`
-   * and `createExecuteTool` are ignored. The CF adapter uses this to install a
-   * pre-constructed codemode tool whose one `tools` provider carries the native
-   * tools as host-dispatched functions and defines every injectable crafted
-   * tool in its sandbox prelude, so `tools.<name>(args)` is the spelling for
-   * both. Core doesn't care how the tool is constructed — it only needs the
-   * final ToolSet entry.
+   * A ready `execute_tools` entry for a CONFINED surface (a head, a swarm
+   * node): those are built from this factory directly and finish their surface
+   * themselves. A finished Tool is used as-is; heads/head-tools.ts and
+   * strategy/node-agent.ts also accept a function of the finished surface,
+   * resolved after their own filtering. An actor sets `executeTools` on
+   * `buildActorTools` instead, which keeps the clamp and the effect claim on
+   * the built entry.
    */
   preBuiltExecuteTool?: unknown;
   /**
@@ -363,7 +363,6 @@ const RUN_SHELL_ABSENT = 'run.shell_absent';
 const RUN_ESCALATION_REFUSED = 'run.escalation_refused';
 const RUN_ESCALATION_FAILED = 'run.escalation_failed';
 const CRAFT_TOOL_SKIPPED = 'craft.tool_skipped';
-const EXECUTE_TOOLS_UNBUILDABLE = 'tool.execute_tools_unbuildable';
 
 export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const { rt } = deps;
@@ -394,71 +393,35 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const tools: ToolSet = {};
 
   // ── 1. execute_tools ─────────────────────────────────────────────────────
-  // single code path. Crafted tools always dispatch through
-  // deps.craftedToolExecute (CF → LOADER Worker, CLI → Node eval).
-  // Host-side codegen is gone; crafted tools dispatch through the configured
-  // runtime executor instead of compiling inside this module.
-  // Memoised per toolset: the crafted set is re-read on every execute, and
-  // compiling a stored body is a real cost on both adapters (a child Worker on
-  // cf, `new Function` on the CLI). Keyed by code as well as name, so a tool
-  // the agent rewrites mid-turn recompiles rather than running its old body.
-  const craftedToolExecute = deps.craftedToolExecute
-    ? memoizeCraftedExecute(deps.craftedToolExecute)
-    : undefined;
-  const craftedTools = (): CraftedToolSet => craftedToolExecute
-    ? buildCraftedToolSetFromExecute(
-        rt,
-        craftedToolExecute,
-        deps.minEffectiveScore ?? DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection,
-        deps.toolSurfacing,
-      )
-    : {};
-
+  // Registered FIRST so the sandbox heads the model's list, and filled here
+  // only for a confined surface (`preBuiltExecuteTool`). An actor's sandbox
+  // is built over the finished surface by `installExecuteTools`, which
+  // reassigns this key in place, so the position holds.
   const prebuilt = { value: deps.preBuiltExecuteTool };
-  if (isExecutableToolEntry(prebuilt)) {
-    tools.execute_tools = prebuilt.value;
-  } else if (deps.createExecuteTool) {
-    try {
-      const providers = router?.getProviders() ?? [];
-      tools.execute_tools = deps.createExecuteTool({
-        craftedTools,
-        providers,
-        loader: deps.codemodeLoader,
-      });
-    } catch (err) {
-      logger.failure(
-        EXECUTE_TOOLS_UNBUILDABLE,
-        toKinuError({ doing: 'build the execute_tools dispatcher', cause: err, otherwise: 'unavailable' }),
-      );
-    }
-  }
-
   // no core-level fallback. Callers MUST supply the tool one way or the other
-  // (CF: preBuiltExecuteTool, built from @cloudflare/codemode in
-  // cf-backend/execute-tools.ts; CLI: a Node adapter from
-  // @kinu.run/cli-backend/execute-tools-factory). If neither is wired,
-  // execute_tools returns a sharp error — a silent in-process compile
-  // would break in any V8 isolate.
-  if (!tools.execute_tools) {
-    tools.execute_tools = tool({
-      description:
-        BUILTIN_TOOL_DESCRIPTIONS.execute_tools +
-        ' (NOT CONFIGURED — missing createExecuteTool factory on this runtime)',
-      inputSchema: jsonSchema<{ code: string }>({
-        type: 'object',
-        properties: { code: { type: 'string', description: 'JavaScript code to execute' } },
-        required: ['code'],
-      }),
-      execute: async () => ({
-        result: undefined,
-        error:
-          'execute_tools is not configured on this runtime. The backend must supply ' +
-          'deps.preBuiltExecuteTool or deps.createExecuteTool to buildBuiltinTools ' +
-          '(CF: cf-backend/createExecuteToolsFactory; CLI: ' +
-          '@kinu.run/cli-backend/createNodeExecuteToolFactory).',
-      }),
-    });
-  }
+  // (a confined surface: preBuiltExecuteTool; an actor: `executeTools` on
+  // buildActorTools, built from @cloudflare/codemode in cf-backend/
+  // execute-tools.ts or from @kinu.run/cli-backend/execute-tools-factory). If
+  // neither is wired, execute_tools returns a sharp error — a silent
+  // in-process compile would break in any V8 isolate.
+  tools.execute_tools = isExecutableToolEntry(prebuilt) ? prebuilt.value : tool({
+    description:
+      BUILTIN_TOOL_DESCRIPTIONS.execute_tools +
+      ' (NOT CONFIGURED — no execute_tools builder on this runtime)',
+    inputSchema: jsonSchema<{ code: string }>({
+      type: 'object',
+      properties: { code: { type: 'string', description: 'JavaScript code to execute' } },
+      required: ['code'],
+    }),
+    execute: async () => ({
+      result: undefined,
+      error:
+        'execute_tools is not configured on this runtime. The backend must supply ' +
+        'deps.preBuiltExecuteTool to buildBuiltinTools or deps.executeTools to ' +
+        'buildActorTools (CF: cf-backend/createExecuteToolsFactory; CLI: ' +
+        '@kinu.run/cli-backend/createNodeExecuteToolFactory).',
+    }),
+  });
 
   // Restorable result budget: oversize execute_tools results are offloaded to
   // the workspace VFS and clamped to head+tail (see clamp.ts). The `run` tool
@@ -907,4 +870,39 @@ export function isExecutableToolEntry(
     inputSchema: v.unknown(),
     execute: v.function(),
   }), input.value);
+}
+
+/**
+ * Build `execute_tools` over a FINISHED surface and put it in place.
+ *
+ * The sandbox declares every other tool as `tools.<name>(input)`, so the
+ * builder runs after the last tool is registered. `buildActorTools` calls this
+ * once `agents` is in, before the effect-claim wrap, so the built entry keeps
+ * both the result clamp and the claim the registry declares for it. The
+ * crafted set is resolved per execute and memoised per (name, code): a stored
+ * body compiles once, and again only when the agent rewrites it.
+ */
+export function installExecuteTools(
+  surface: ToolSet,
+  build: ExecuteToolsBuilder,
+  deps: BuiltinToolDeps,
+): void {
+  const { rt } = deps;
+  const craftedToolExecute = deps.craftedToolExecute
+    ? memoizeCraftedExecute(deps.craftedToolExecute)
+    : undefined;
+  const craftedTools = (): CraftedToolSet => craftedToolExecute
+    ? buildCraftedToolSetFromExecute(
+        rt,
+        craftedToolExecute,
+        deps.minEffectiveScore ?? DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection,
+        deps.toolSurfacing,
+      )
+    : {};
+  const built = build({ native: surface, craftedTools, providers: rt.executionRouter?.getProviders() ?? [] });
+  const clamp = { vfs: rt.storage.vfs, producer: 'execute_tools' as const };
+  surface.execute_tools = withClampedToolResult(
+    built,
+    deps.contextBudget ? { ...clamp, budget: deps.contextBudget } : clamp,
+  );
 }

@@ -511,7 +511,7 @@ export {
 export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema,
-  renderToolsDeclaration, nativeToolInput,
+  renderToolsDeclaration, nativeToolFunctions,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
@@ -592,7 +592,7 @@ export {
 export {
   buildBuiltinTools,
   type BuiltinToolDeps,
-  type CraftedToolSet, type CreateExecuteToolFactory,
+  type CraftedToolSet, type ExecuteToolsBuilder, type ExecuteToolsSurface,
   type ReportToolDeps,
 } from './tools/builtins';
 // An actor's surface is buildBuiltinTools plus `agents` — the one tool whose

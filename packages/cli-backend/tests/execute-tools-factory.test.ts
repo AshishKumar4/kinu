@@ -6,6 +6,7 @@
 // multi-line — one statement per line — as the model actually writes it, which
 // is what the shared addImplicitReturn is built for.
 import { describe, expect, test } from 'bun:test';
+import { jsonSchema, tool } from 'ai';
 import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu.run/core';
 import { toolExecute } from '@kinu.run/test-utils';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
@@ -20,7 +21,7 @@ type ExecuteTool = (args: { code: string }) => Promise<ExecuteToolResult>;
 
 function makeTool(): ExecuteTool {
   const factory = createNodeExecuteToolFactory();
-  return toolExecute(factory({ craftedTools: () => ({}), providers: [], loader: {} }));
+  return toolExecute(factory({ native: {}, craftedTools: () => ({}), providers: [] }));
 }
 
 describe('createNodeExecuteToolFactory — console capture + implicit return', () => {
@@ -93,7 +94,7 @@ function makeToolWithFailingProvider(error: Error) {
     extraProviders: [provider],
   });
   const tool = toolExecute<{ code: string }, ExecuteToolResult>(
-    factory({ craftedTools: () => ({}), providers: [], loader: {} }),
+    factory({ native: {}, craftedTools: () => ({}), providers: [] }),
   );
   return { tool, calls };
 }
@@ -136,7 +137,7 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
 
   test('the tool description tells the model what workspace.* actually is', async () => {
     const factory = createNodeExecuteToolFactory();
-    const built = factory({ craftedTools: () => ({}), providers: [], loader: {} });
+    const built = factory({ native: {}, craftedTools: () => ({}), providers: [] });
     expect(built.description).toContain('canonical durable workspace');
     expect(built.description).toContain('`run` with runtime "workspace"');
   });
@@ -157,13 +158,13 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
       }],
     });
     const built = factory({
+      native: {},
       craftedTools: () => ({}),
       providers: [{
         name: 'workspace',
         types: 'export declare const workspace: {\n  readdir(path: string): Promise<string[]>;\n};\n',
         tools: { readdir: { description: 'list a directory', execute: async () => [] } },
       }],
-      loader: {},
     });
     expect(built.description).toContain('export declare const memory: {');
     expect(built.description).toContain('save(content: string)');
@@ -179,11 +180,11 @@ describe('createNodeExecuteToolFactory — crafted tools, on the episode clock',
    *  when the model crafts a tool mid-turn. */
   function makeToolOverStore(store: Map<string, CraftedToolSet[string]['execute']>): ExecuteTool {
     const built = createNodeExecuteToolFactory()({
+      native: {},
       craftedTools: () => Object.fromEntries(
         [...store].map(([name, execute]) => [name, { description: name, execute }]),
       ),
       providers: [],
-      loader: {},
     });
     return toolExecute(built);
   }
@@ -218,12 +219,75 @@ describe('createNodeExecuteToolFactory — crafted tools, on the episode clock',
         tools: { hijack: { description: 'x', execute: async () => 'provider' } },
     };
     const built = createNodeExecuteToolFactory({ extraProviders: [provider] })({
+      native: {},
       craftedTools: () => ({ real: { description: 'r', execute: async () => 'crafted' } }),
       providers: [],
-      loader: {},
     });
     const execute = toolExecute<{ code: string }, ExecuteToolResult>(built);
     const out = await execute({ code: 'return await tools.real();' });
     expect(out.result).toBe('crafted');
+  });
+});
+
+describe('createNodeExecuteToolFactory — native tools under tools.<name>', () => {
+  /** A finished surface the way buildActorTools hands it in: the sandbox's own
+   *  entry beside the native tools it declares. */
+  function surfaceWith(run: (input: { command: string }) => Promise<string>) {
+    return {
+      execute_tools: tool({
+        description: 'the sandbox itself',
+        inputSchema: jsonSchema<{ code: string }>({ type: 'object' }),
+        execute: async () => 'never',
+      }),
+      run: tool({
+        description: 'Run a shell command over the canonical durable workspace.',
+        inputSchema: jsonSchema<{ command: string }>({
+          type: 'object', properties: { command: { type: 'string' } }, required: ['command'],
+        }),
+        execute: async (input) => run(input),
+      }),
+    };
+  }
+
+  test('a native tool is callable as tools.<name>(input) with the native input object', async () => {
+    // The defect this locks, reproduced 2026-09-05: the shared docstring said
+    // every native tool is `tools.<name>(input)` and the CLI bound none of
+    // them, so `tools.run(...)` answered `tools.run is not a function`.
+    const seen: string[] = [];
+    const built = createNodeExecuteToolFactory()({
+      native: surfaceWith(async ({ command }) => { seen.push(command); return `ran ${command}`; }),
+      craftedTools: () => ({}),
+      providers: [],
+    });
+    const out = await toolExecute<{ code: string }, ExecuteToolResult>(built)({
+      code: 'return await tools.run({ command: "ls" });',
+    });
+    expect(out.error).toBeUndefined();
+    expect(out.result).toBe('ran ls');
+    expect(seen).toEqual(['ls']);
+  });
+
+  test('the declaration lists the native tools and the crafted tools, and never the sandbox itself', () => {
+    const built = createNodeExecuteToolFactory()({
+      native: surfaceWith(async () => ''),
+      craftedTools: () => ({ double: { description: 'Doubles a number', execute: async () => 2 } }),
+      providers: [],
+    });
+    expect(built.description).toContain('export declare const tools: {');
+    expect(built.description).toContain('run(input: { command: string }): Promise<unknown>;');
+    expect(built.description).toContain('double(...args: unknown[]): Promise<unknown>;');
+    expect(built.description).not.toContain('execute_tools(input');
+  });
+
+  test('the sandbox does not bind its own entry', async () => {
+    const built = createNodeExecuteToolFactory()({
+      native: surfaceWith(async () => ''),
+      craftedTools: () => ({}),
+      providers: [],
+    });
+    const out = await toolExecute<{ code: string }, ExecuteToolResult>(built)({
+      code: 'return typeof tools.execute_tools;',
+    });
+    expect(out.result).toBe('undefined');
   });
 });

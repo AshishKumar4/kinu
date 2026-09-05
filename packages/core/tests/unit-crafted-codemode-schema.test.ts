@@ -1,11 +1,11 @@
 /**
- * Phase D evidence: buildBuiltinTools hands crafted tools to the injected
- * createExecuteTool factory under the shape that produces the `tools.<name>()`
+ * Phase D evidence: buildActorTools hands crafted tools to the injected
+ * execute_tools builder under the shape that produces the `tools.<name>()`
  * namespace — the LLM-visible contract.
  *
  * We do NOT import the real @cloudflare/codemode here (it's a cf-backend peer
  * dep, not a core dep). Instead we capture the `craftedTools` resolver passed
- * to the createExecuteTool factory, call it as the sandbox would, and assert:
+ * to the builder, call it as the sandbox would, and assert:
  *
  *   1. The resolved map has an entry keyed by each crafted tool's name.
  *      codemode's createCodeTool turns this into `declare const tools: {
@@ -15,8 +15,8 @@
  *   2. Each entry's execute is the function produced by our Phase C executor
  *      factory. Calling it fans out to the injected craftedToolExecute.
  *
- *   3. Low-score tools are filtered BEFORE reaching the createExecuteTool
- *      factory — they can't appear in the namespace at all.
+ *   3. Low-score tools are filtered BEFORE reaching the builder — they can't
+ *      appear in the namespace at all.
  *
  * Phase G's live-server test provides the true end-to-end proof that the LLM
  * actually sees `tools.double` in the request body. This test exercises the
@@ -28,46 +28,50 @@ import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
 import {
-  buildBuiltinTools,
+  buildActorTools,
+  type ActorToolsetDeps,
   type CraftedToolExecute,
-  type CreateExecuteToolFactory,
+  type ExecuteToolsBuilder,
+  type ExecuteToolsSurface,
 } from '../src/index';
 
-type ExecuteToolOptions = Parameters<CreateExecuteToolFactory>[0];
-
 interface CapturedExecuteTool {
-  factory: CreateExecuteToolFactory;
-  options: () => ExecuteToolOptions;
+  builder: ExecuteToolsBuilder;
+  surface: () => ExecuteToolsSurface;
 }
 
 /**
- * Capture what the CF adapter would have passed to createExecuteTool.
+ * Capture the surface a backend's builder is handed.
  *
  * A box rather than a `let`: TypeScript cannot see an assignment made inside a
  * callback, so a `let x: T | null = null` reads back as `null` and every use
  * needs a cast to undo the narrowing.
  */
 function captureExecuteTool(): CapturedExecuteTool {
-  const seen: ExecuteToolOptions[] = [];
+  const seen: ExecuteToolsSurface[] = [];
   return {
-    factory: (opts) => {
-      seen.push(opts);
+    builder: (surface) => {
+      seen.push(surface);
       return tool({
         description: 'mock',
         inputSchema: jsonSchema({ type: 'object' }),
         execute: async () => null,
       });
     },
-    options: () => {
+    surface: () => {
       const first = seen[0];
-      if (!first) throw new Error('createExecuteTool was never called');
+      if (!first) throw new Error('the execute_tools builder was never called');
       return first;
     },
   };
 }
 
-describe('Phase D — crafted tools reach createExecuteTool under tools.*', () => {
-  test('crafted tool appears in the tools map passed to createExecuteTool', () => {
+function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'craftedToolExecute' | 'executeTools'>) {
+  return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' }, ...deps });
+}
+
+describe('Phase D — crafted tools reach the execute_tools builder under tools.*', () => {
+  test('crafted tool appears in the tools map passed to the builder', () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
       name: 'double',
@@ -84,22 +88,17 @@ describe('Phase D — crafted tools reach createExecuteTool under tools.*', () =
     };
 
     const capture = captureExecuteTool();
-    buildBuiltinTools({
-      rt,
-      codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
-      craftedToolExecute: factory,
-      createExecuteTool: capture.factory,
-    });
+    actorTools(rt, { craftedToolExecute: factory, executeTools: capture.builder });
 
-    const captured = capture.options();
+    const captured = capture.surface();
     // Nothing is resolved until the sandbox asks: the crafted set is read per
     // execute so a tool crafted mid-turn is callable on the next call.
     expect(factoryCallCount).toBe(0);
 
     const resolved = captured.craftedTools();
     expect(Object.keys(resolved)).toContain('double');
-    // The loader is forwarded unchanged
-    expect(captured.loader).toBeDefined();
+    // The builder sees the finished native surface it declares as `tools.*`.
+    expect(Object.keys(captured.native)).toEqual(expect.arrayContaining(['run', 'file', 'memory', 'tasks']));
 
     // Entry shape — description and execute
     const doubleEntry = resolved.double;
@@ -114,16 +113,14 @@ describe('Phase D — crafted tools reach createExecuteTool under tools.*', () =
   test('a tool crafted after the toolset was built is callable on the next resolve', async () => {
     const { rt } = createTestRuntime();
     const capture = captureExecuteTool();
-    buildBuiltinTools({
-      rt,
-      codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
+    actorTools(rt, {
       craftedToolExecute: (source) => async (arg) => {
         if (source.name !== 'quadruple') throw new Error(`unexpected tool ${source.name}`);
         return v.parse(v.number(), arg) * 4;
       },
-      createExecuteTool: capture.factory,
+      executeTools: capture.builder,
     });
-    const resolve = capture.options().craftedTools;
+    const resolve = capture.surface().craftedTools;
     expect(Object.keys(resolve())).toEqual([]);
 
     // The in-episode move: the agent crafts a tool mid-turn.
@@ -155,19 +152,14 @@ describe('Phase D — crafted tools reach createExecuteTool under tools.*', () =
     };
 
     const capture = captureExecuteTool();
-    buildBuiltinTools({
-      rt,
-      codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
-      craftedToolExecute: factory,
-      createExecuteTool: capture.factory,
-    });
+    actorTools(rt, { craftedToolExecute: factory, executeTools: capture.builder });
 
-    const tripleExec = capture.options().craftedTools().triple!.execute;
+    const tripleExec = capture.surface().craftedTools().triple!.execute;
     expect(await tripleExec(7)).toBe(21);
     expect(execCalls).toBe(1);
   });
 
-  test('low-score tool is filtered BEFORE reaching createExecuteTool', () => {
+  test('low-score tool is filtered BEFORE reaching the builder', () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
       name: 'forgotten',
@@ -184,14 +176,9 @@ describe('Phase D — crafted tools reach createExecuteTool under tools.*', () =
       return async () => null;
     };
     const capture = captureExecuteTool();
-    buildBuiltinTools({
-      rt,
-      codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
-      craftedToolExecute: factory,
-      createExecuteTool: capture.factory,
-    });
+    actorTools(rt, { craftedToolExecute: factory, executeTools: capture.builder });
 
-    const names = Object.keys(capture.options().craftedTools());
+    const names = Object.keys(capture.surface().craftedTools());
     expect(factoryCalls).toBe(0);
     expect(names).not.toContain('forgotten');
   });

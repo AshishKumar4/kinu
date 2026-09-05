@@ -5020,15 +5020,21 @@ export class LocalAgentSession implements BackendHost {
       fileLedger: this.orch.acc.files,
       escalations: this.orch.acc.escalations,
       craftedToolExecute: createNodeCraftedExecute(),
-      createExecuteTool: createNodeExecuteToolFactory({
+      executeTools: (surface) => {
         // Narrowed by the SAME set the native surface is narrowed by, so a role
-        // cannot lose a tool natively and keep it through the sandbox. An
-        // unresolved profile narrows nothing, which is the resolver's own rule
-        // for a role that declares no tool list.
-        extraProviders: narrowToolSurface(this.turnProfile?.allowedTools)
-          .narrowProviders(this.codemodeProviders(mode)),
-      }),
-      codemodeLoader: { __cli: true },
+        // cannot lose a tool natively and keep it through the sandbox — as a
+        // `tools.<name>` binding or as a namespace. An unresolved profile
+        // narrows nothing, which is the resolver's own rule for a role that
+        // declares no tool list.
+        const narrowing = narrowToolSurface(this.turnProfile?.allowedTools);
+        const native: ToolSet = {};
+        for (const [name, entry] of Object.entries(surface.native)) {
+          if (narrowing.allowsTool(name)) native[name] = entry;
+        }
+        return createNodeExecuteToolFactory({
+          extraProviders: narrowing.narrowProviders(this.codemodeProviders(mode)),
+        })({ ...surface, native });
+      },
       agents: this.agentsToolDeps(mode),
       roleAuthority: () => this.turnProfileInputs?.envelope ?? null,
       facts: this.factsStore,

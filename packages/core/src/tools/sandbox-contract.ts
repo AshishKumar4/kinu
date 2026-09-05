@@ -27,7 +27,8 @@
 
 import * as v from 'valibot';
 import type { ToolSet } from 'ai';
-import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { JsonObjectSchema, JsonValueSchema, decodeJsonValue, type JsonValue } from '../utils/json';
+import { nanoid } from '../utils/nanoid';
 
 /** A provider's host-side result before the executor validates the VM boundary
  *  as JSON. Domain objects are allowed here; functions and symbols are not. */
@@ -57,6 +58,11 @@ export interface CodemodeProvider {
 /** The ONE namespace every tool is callable in — native builtins and crafted
  *  tools alike — on every backend. */
 export const CRAFTED_TOOL_NAMESPACE = 'tools';
+
+/** The sandbox's own entry. A program cannot call `execute_tools` from inside
+ *  itself, so the declaration and the bindings below both skip it: callers
+ *  hand in the whole finished surface. */
+const SANDBOX_TOOL = 'execute_tools';
 
 /** What a crafted tool with no stored description is labelled. One spelling,
  *  so the advertised set reads the same however it was assembled. */
@@ -145,9 +151,10 @@ export interface CraftedDeclaration {
 }
 
 /**
- * The `tools` declaration block the model reads: every native tool with its
- * input type, then every crafted tool. Native names come first because they
- * are stable across turns; the crafted set changes as the agent saves tools.
+ * The `tools` declaration block the model reads: every native tool of the
+ * finished surface with its input type, then every crafted tool. Native names
+ * come first because they are stable across turns; the crafted set changes as
+ * the agent saves tools.
  */
 export function renderToolsDeclaration(
   native: ToolSet,
@@ -155,6 +162,7 @@ export function renderToolsDeclaration(
 ): string {
   const lines: string[] = [];
   for (const [name, tool] of Object.entries(native)) {
+    if (name === SANDBOX_TOOL) continue;
     const input = jsonSchemaToTs(nativeToolInputSchema(tool));
     const summary = firstSentence(tool.description ?? name);
     lines.push(`  /** ${summary.replace(/\*\//g, '* /')} Same input as the native \`${name}\` tool. */`);
@@ -167,15 +175,32 @@ export function renderToolsDeclaration(
   return `export declare const ${CRAFTED_TOOL_NAMESPACE}: {\n${lines.join('\n')}\n};\n`;
 }
 
-/** The input a native tool call takes through the sandbox: one JSON object,
- *  exactly what the native call takes. Anything else is refused by name. */
-export function nativeToolInput(name: string, args: readonly unknown[]): JsonObject | { error: string } {
-  const input = args[0] === undefined ? {} : args[0];
-  const parsed = v.safeParse(JsonObjectSchema, input);
-  if (!parsed.success) {
-    return { error: `tools.${name}(input): input must be one JSON object, the same shape the native \`${name}\` tool takes` };
+/**
+ * The `tools` namespace's host functions: every native tool of a finished
+ * surface, called with the one input object the native call takes. Anything
+ * else answers a refusal that names the call. The tool's answer crosses the
+ * sandbox boundary as JSON, which `decodeJsonValue` establishes. Both sandboxes
+ * bind this; a program's `tools.run(input)` reaches the same `run` the model
+ * calls natively.
+ */
+export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
+  const out: Record<string, CodemodeProvider['tools'][string]> = {};
+  for (const [name, tool] of Object.entries(tools)) {
+    const execute = tool.execute;
+    if (name === SANDBOX_TOOL || execute === undefined) continue;
+    out[name] = {
+      description: tool.description ?? name,
+      execute: async (...args: unknown[]) => {
+        const input = v.safeParse(JsonObjectSchema, args[0] === undefined ? {} : args[0]);
+        if (!input.success) {
+          return { error: `tools.${name}(input): input must be one JSON object, the same shape the native \`${name}\` tool takes` };
+        }
+        const result = await execute(input.output, { toolCallId: `codemode-${nanoid()}`, messages: [] });
+        return result === undefined ? undefined : decodeJsonValue({ value: result });
+      },
+    };
   }
-  return parsed.output;
+  return out;
 }
 
 export type { JsonValue };

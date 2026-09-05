@@ -17,6 +17,7 @@ import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
 import {
+  buildActorTools,
   buildBuiltinTools,
   createDefaultWebSearchProvider,
   createWebCodemodeProvider,
@@ -30,7 +31,7 @@ import {
   projectJsonValue,
   type CraftedToolExecute,
   type CodemodeProvider,
-  type CreateExecuteToolFactory,
+  type ExecuteToolsBuilder,
   type JsonValue,
   type WebSearchProvider,
 } from '../src/index';
@@ -39,13 +40,13 @@ const unusedCraftedExecute: CraftedToolExecute = () => async () => {
   throw new Error('This web-tool suite does not install crafted tools');
 };
 
-/** execute_tools factory that wires every injected provider namespace into the
- *  sandbox by name (mirrors the cli-backend factory) so codemode `web.*` works. */
-function createNodeExecFactory(codemodeProviders: CodemodeProvider[] = []): CreateExecuteToolFactory {
-  return (opts) => {
-    const codemode = opts.craftedTools();
+/** execute_tools builder that wires every injected provider namespace into the
+ *  sandbox by name (mirrors the cli-backend builder) so codemode `web.*` works. */
+function createNodeExecBuilder(codemodeProviders: CodemodeProvider[] = []): ExecuteToolsBuilder {
+  return (surface) => {
+    const codemode = surface.craftedTools();
     const nsBindings: Record<string, Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>> = {};
-    for (const provider of opts.providers) {
+    for (const provider of surface.providers) {
       const namespace: Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>> = {};
       for (const [toolName, entry] of Object.entries(provider.tools)) {
         namespace[toolName] = async (...args) => await entry.execute(...args);
@@ -84,8 +85,6 @@ function createNodeExecFactory(codemodeProviders: CodemodeProvider[] = []): Crea
     });
   };
 }
-
-const nodeExecFactory = createNodeExecFactory();
 
 interface StubResponse {
   ok?: boolean;
@@ -457,11 +456,11 @@ type WebArgs = { action: 'search' | 'fetch'; query?: string; url?: string; limit
 
 function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?: WebSearchProvider) {
   const provider = webSearch ?? createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: DDG_HTML })).fetch });
-  return buildBuiltinTools({
+  return buildActorTools({
     rt,
     craftedToolExecute: unusedCraftedExecute,
-    createExecuteTool: createNodeExecFactory([createWebCodemodeProvider(provider)]),
-    codemodeLoader: { __test: true },
+    executeTools: createNodeExecBuilder([createWebCodemodeProvider(provider)]),
+    effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' },
     webSearch: provider,
   });
 }
@@ -469,10 +468,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
 describe('web builtin', () => {
   test('gated on the webSearch dep', () => {
     const { rt } = createTestRuntime();
-    const without = buildBuiltinTools({
-      rt, craftedToolExecute: unusedCraftedExecute,
-      createExecuteTool: nodeExecFactory, codemodeLoader: {},
-    });
+    const without = buildBuiltinTools({ rt, craftedToolExecute: unusedCraftedExecute });
     expect(Object.keys(without)).not.toContain('web');
 
     const withWeb = buildWithWeb(rt);

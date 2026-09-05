@@ -56,7 +56,7 @@ The DECLARATION is not symmetric yet. Cloudflare renders `renderToolsDeclaration
 
 `ActorAgent.getExecuteToolsTool()` (`cf-backend/src/actor-agent.ts`) is the entry every actor shares, memoized per work mode and tool profile. It calls `createExecuteToolsTool` (`cf-backend/src/execute-tools.ts`), which owns the `createCodeTool` assembly and builds the one `tools` provider: native tools as host-dispatched functions, and a prelude defining every injectable crafted tool.
 
-`core/src/tools/crafted-executor.ts` is the platform contract both adapters satisfy: `CraftedToolSource`, `CraftedToolExecuteFn`, the `CraftedToolExecute` factory type, plus `toCraftedToolSource`, which drops null and comment-only bodies so no executor has to special-case them. Core's `buildCraftedToolSetFromExecute` (`core/src/tools/builtins.ts`) serves the CLI's `createExecuteTool` factory; Cloudflare bypasses it through `preBuiltExecuteTool`.
+`core/src/tools/crafted-executor.ts` is the platform contract both adapters satisfy: `CraftedToolSource`, `CraftedToolExecuteFn`, the `CraftedToolExecute` factory type, plus `toCraftedToolSource`, which drops null and comment-only bodies so no executor has to special-case them. Core's `buildCraftedToolSetFromExecute` (`core/src/tools/builtins.ts`) resolves the crafted set for the CLI's `execute_tools` builder (`installExecuteTools`, called by `buildActorTools` over the finished surface); Cloudflare reads the store itself through `preBuiltExecuteTool`.
 
 ## 7. Open questions
 
