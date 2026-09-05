@@ -74,6 +74,32 @@ async function codexTokenEndpointError(res: Response): Promise<CodexOAuthTokenEr
     `Codex token refresh failed: ${res.status} ${sanitizeErrorBody(body)}`,
   );
 }
+const DevicePollErrorSchema = v.object({
+  error: v.optional(v.string()),
+  error_description: v.optional(v.string()),
+});
+
+/** Read a rejected device-code poll into its answer. An explicit terminal
+ *  code in the body wins over the bare status; otherwise the endpoint's own
+ *  statuses decide: pending arrives as 403, an expired code as 404. Anything
+ *  else is a failure the caller cannot wait out, and it throws as before. */
+async function devicePollRejection(res: Response): Promise<DeviceCodePoll> {
+  const body = await res.text();
+  const rejection = v.safeParse(
+    DevicePollErrorSchema,
+    tolerate<unknown>(() => JSON.parse(body), 'malformed-input'),
+  );
+  const code = rejection.success ? rejection.output.error : undefined;
+  const reason = rejection.success ? rejection.output.error_description : undefined;
+  if (code === 'access_denied') {
+    return { status: 'denied', message: reason ?? 'Codex login denied. Run kinu setup again.' };
+  }
+  if (code === 'expired_token' || res.status === 404) {
+    return { status: 'expired', message: reason ?? 'Codex login expired. Run kinu setup again.' };
+  }
+  if (res.status === 403) return { status: 'pending' };
+  throw new Error(`Codex poll failed: ${res.status} ${sanitizeErrorBody(body)}`);
+}
 
 export interface DeviceCodeStart {
   userCode: string;
@@ -89,9 +115,19 @@ export interface DeviceCodeTokens {
   idToken?: string;
 }
 
+/** One answer from the device-code poll. `pending` means the code is still
+ *  live and nobody has approved it; the caller asks again. Every other
+ *  status ends the wait: `expired` and `denied` carry the provider's own
+ *  reason, and `granted` carries the exchanged tokens. */
+export type DeviceCodePoll =
+  | { status: 'pending' }
+  | { status: 'expired'; message: string }
+  | { status: 'denied'; message: string }
+  | { status: 'granted'; tokens: DeviceCodeTokens };
+
 export interface CodexOAuthClient {
   startDeviceFlow(): Promise<DeviceCodeStart>;
-  pollDeviceFlow(deviceAuthId: string, userCode: string): Promise<DeviceCodeTokens | null>;
+  pollDeviceFlow(deviceAuthId: string, userCode: string): Promise<DeviceCodePoll>;
   refresh(refreshToken: string): Promise<{ accessToken: string; refreshToken: string; expiresAt?: number }>;
 }
 
@@ -118,16 +154,13 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
       };
     },
 
-    async pollDeviceFlow(deviceAuthId, userCode): Promise<DeviceCodeTokens | null> {
+    async pollDeviceFlow(deviceAuthId, userCode): Promise<DeviceCodePoll> {
       const pollRes = await fetchFn(DEVICE_POLL_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
       });
-      if (pollRes.status === 403 || pollRes.status === 404) return null;
-      if (!pollRes.ok) {
-        throw new Error(`Codex poll failed: ${pollRes.status} ${sanitizeErrorBody(await pollRes.text())}`);
-      }
+      if (!pollRes.ok) return devicePollRejection(pollRes);
       const poll = v.safeParse(DevicePollResponseSchema, await pollRes.json());
       if (!poll.success) {
         throw new Error('Codex poll response missing authorization_code/code_verifier');
@@ -151,10 +184,13 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
         throw new Error('Codex token exchange missing access_token/refresh_token');
       }
       return {
-        accessToken: tokens.output.access_token,
-        refreshToken: tokens.output.refresh_token,
-        idToken: tokens.output.id_token,
-        expiresAt: tokens.output.expires_in ? Date.now() + tokens.output.expires_in * 1000 : undefined,
+        status: 'granted',
+        tokens: {
+          accessToken: tokens.output.access_token,
+          refreshToken: tokens.output.refresh_token,
+          idToken: tokens.output.id_token,
+          expiresAt: tokens.output.expires_in ? Date.now() + tokens.output.expires_in * 1000 : undefined,
+        },
       };
     },
 

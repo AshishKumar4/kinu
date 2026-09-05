@@ -12,7 +12,7 @@ import { bumpProviderRevision, loadConfigFile, resolveCloudSession, setDefaultMo
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { ask, askSecret, canPrompt, confirm } from '../prompt';
 import { authCommand, openBrowser } from './auth';
-import { pause } from '../wait';
+import { waitForAnswer } from '../wait';
 
 /**
  * Where a provider secret is written.
@@ -492,7 +492,7 @@ export async function connectClaude(): Promise<void> {
   console.log(DIM('Cloud workspaces cannot use the subscription. Connect an Anthropic API key for those.'));
 }
 
-async function runCodexDeviceFlow() {
+async function runCodexDeviceFlow(opts: { readonly signal?: AbortSignal } = {}) {
   const client = createCodexOAuthClient();
   const flow = await client.startDeviceFlow();
   console.log('');
@@ -501,23 +501,33 @@ async function runCodexDeviceFlow() {
   console.log('');
   openBrowser(flow.portalURL);
 
-  const deadline = Date.now() + 15 * 60 * 1000;
-  while (Date.now() < deadline) {
-    await pause(Math.max(3, flow.pollIntervalSec) * 1000);
-    const tokens = await client.pollDeviceFlow(flow.deviceAuthId, flow.userCode);
-    if (!tokens) {
-      process.stdout.write('.');
-      continue;
-    }
-    console.log('');
-    const credential = tokensToCredential(tokens);
-    const accountId = decodeCodexAccountId(credential.accessToken);
-    return {
-      ...credential,
-      metadata: accountId ? { accountId } : credential.metadata,
-    };
-  }
-  throw new Error('Codex login expired. Run kinu setup again.');
+  // No clock on this wait. The device code's lifetime belongs to the
+  // provider: its expiry arrives as the provider's own expired answer and
+  // ends the wait below, as denial does. A Date.now() bound here would end
+  // the wait on an invented number while the approval may still be on its
+  // way. The start response names no expires_in to honor; if it ever does,
+  // stopping after it reports the provider's own decision, and that is the
+  // only bound this loop may keep.
+  const wait = {
+    intervalMs: Math.max(3, flow.pollIntervalSec) * 1000,
+    onWaiting: () => process.stdout.write('.'),
+  };
+  const probe = async () => {
+    const poll = await client.pollDeviceFlow(flow.deviceAuthId, flow.userCode);
+    return poll.status === 'pending' ? undefined : poll;
+  };
+  const outcome = opts.signal
+    ? await waitForAnswer(probe, { ...wait, signal: opts.signal })
+    : await waitForAnswer(probe, wait);
+  if (outcome === undefined) throw new Error('Codex login cancelled.');
+  if (outcome.status === 'expired' || outcome.status === 'denied') throw new Error(outcome.message);
+  console.log('');
+  const credential = tokensToCredential(outcome.tokens);
+  const accountId = decodeCodexAccountId(credential.accessToken);
+  return {
+    ...credential,
+    metadata: accountId ? { accountId } : credential.metadata,
+  };
 }
 
 function stripProviderPrefix(model: string, provider: string): string {

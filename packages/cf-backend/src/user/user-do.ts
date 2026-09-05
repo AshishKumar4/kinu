@@ -4041,10 +4041,11 @@ export class UserDO extends Agent<Env> {
 
     const client = createCodexOAuthClient();
     try {
-      const tokens = await client.pollDeviceFlow(row.device_auth_id, row.user_code);
-      if (!tokens) return { connected: false }; // still pending
-      const accountId = decodeCodexAccountId(tokens.accessToken);
-      const cred = tokensToCredential(tokens, accountId ? { accountId } : undefined);
+      const poll = await client.pollDeviceFlow(row.device_auth_id, row.user_code);
+      if (poll.status === 'pending') return { connected: false }; // still pending
+      if (poll.status === 'expired' || poll.status === 'denied') return { connected: false, error: poll.message };
+      const accountId = decodeCodexAccountId(poll.tokens.accessToken);
+      const cred = tokensToCredential(poll.tokens, accountId ? { accountId } : undefined);
       const sealed = await this.sealCredential(CODEX_CRED_KEY, cred);
       if (!this.commitCodexDeviceFlow({ generation, revision, kind: cred.kind, sealed })) {
         diagnostics.event('credential.codex_device_flow_superseded', { outcome: 'denied' });
