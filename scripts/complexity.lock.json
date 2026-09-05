@@ -1,9 +1,9 @@
 {
   "measuredAt": "2026-09-05",
-  "files": 2021,
-  "functions": 52476,
+  "files": 2032,
+  "functions": 53068,
   "ceiling": 125,
-  "line": 39,
+  "line": 38,
   "inventory": [
     {
       "key": "packages/cli/src/slash-commands.ts#executeSlashCommand",
@@ -11,7 +11,7 @@
     },
     {
       "key": "packages/cf-backend/src/user/routes.ts#handleUserRequest",
-      "complexity": 123
+      "complexity": 122
     },
     {
       "key": "packages/cf-backend/src/cli/routes.ts#handleCliRequest",
@@ -27,7 +27,7 @@
     },
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
-      "complexity": 89
+      "complexity": 87
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mount",
@@ -51,7 +51,7 @@
     },
     {
       "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
-      "complexity": 65
+      "complexity": 64
     },
     {
       "key": "packages/devbox/src/candidates/merkle-pack/build.ts#buildMerklePack",
@@ -70,15 +70,7 @@
       "complexity": 59
     },
     {
-      "key": "packages/cli/src/commands/setup.ts#setupCommand",
-      "complexity": 55
-    },
-    {
       "key": "packages/core/src/strategy/swarm-scoring.ts#scoreExpansion",
-      "complexity": 55
-    },
-    {
-      "key": "packages/core/src/tools/release-tool.ts#runReleaseAction",
       "complexity": 55
     },
     {
@@ -112,6 +104,10 @@
     {
       "key": "scripts/bench-devbox-strategies.ts#controlWitnessChecks>map",
       "complexity": 50
+    },
+    {
+      "key": "packages/cli/src/commands/setup.ts#setupCommand",
+      "complexity": 48
     },
     {
       "key": "scripts/literature-citations.ts#auditProse",
@@ -190,6 +186,10 @@
       "complexity": 40
     },
     {
+      "key": "packages/core/src/tools/release-tool.ts#runReleaseAction",
+      "complexity": 40
+    },
+    {
       "key": "packages/devbox/src/capture/model.ts#requireCompleteCaptureTree",
       "complexity": 40
     },
@@ -200,10 +200,6 @@
     {
       "key": "scripts/wired.ts#measureFields>walk#3",
       "complexity": 40
-    },
-    {
-      "key": "packages/cf-backend/src/actor-agent.ts#ActorAgent.beforeTurn",
-      "complexity": 39
     },
     {
       "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
@@ -220,6 +216,22 @@
     {
       "key": "scripts/bench-devbox-strategies.ts#readChainCutCell",
       "complexity": 39
+    },
+    {
+      "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
+      "complexity": 38
+    },
+    {
+      "key": "packages/core/src/strategy/swarm-resume.ts#harvestSwarm",
+      "complexity": 38
+    },
+    {
+      "key": "packages/devbox/src/cas/overlay-runner.ts#scanUpper",
+      "complexity": 38
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#runDecisive",
+      "complexity": 38
     }
   ]
 }
