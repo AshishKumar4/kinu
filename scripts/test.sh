@@ -15,7 +15,8 @@ FLAGS=()
 PATTERNS=()
 for arg in "$@"; do
   case "$arg" in
-    --coverage|--bail|--watch|--verbose|--rerun-each|-h|--help) FLAGS+=("$arg") ;;
+    -h|--help) sed -n '2,8p' "$REPO_ROOT/scripts/test.sh"; exit 0 ;;
+    --coverage|--bail|--watch|--verbose|--rerun-each) FLAGS+=("$arg") ;;
     --*) FLAGS+=("$arg") ;;
     *)  PATTERNS+=("$arg") ;;
   esac

@@ -11,7 +11,7 @@
  * nobody had written yet in either direction.
  *
  * WHAT IT COMPARES. `git rev-parse --short HEAD` against `build.sha` from
- * `GET <origin>/api/health`, which is the same pair `scripts/deploy.sh:527`
+ * `GET <origin>/api/health`, which is the same pair `scripts/deploy.sh` Step 4
  * asserts after a deploy. The stamp is read out of the DEPLOYED ASSET BUNDLE, so
  * an absent stamp also means the CLI download assets never published — a partial
  * deploy, not merely an unknown version.

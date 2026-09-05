@@ -691,7 +691,7 @@ async function main(): Promise<void> {
     await waitFor("recovered: degraded banner cleared", 90_000, 1_000, async () =>
       !hasDegradedBanner(await probe(page)));
     const recovered = await probe(page);
-    if (recovered.marker !== 1) fail("recovery", "page reloaded mid-drill (marker lost) — recovery must be seamless");
+    if (recovered.marker !== 1) fail("recovery", "page reloaded mid-drill (marker lost) — recovery must keep the page in place");
     await page.screenshot({ path: join(ARTIFACTS, "4-recovered.png") });
     log("stage 4 complete: session caught up without a reload");
 

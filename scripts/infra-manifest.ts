@@ -397,14 +397,6 @@ export const UNCAPTURED: readonly Uncaptured[] = [
     check: 'npx wrangler containers list --json',
   },
   {
-    what: 'An R2 lifecycle rule on the `backups/` prefix of each backup bucket. The '
-      + 'wrangler.jsonc comment asks for one; the Sandbox SDK enforces snapshot TTL at restore '
-      + 'time only and never deletes anything, so without the rule a bucket grows without bound.',
-    evidence: 'lifecycle rules are not expressible in wrangler.jsonc — they are a per-bucket '
-      + 'setting reached through `wrangler r2 bucket lifecycle`.',
-    check: 'npx wrangler r2 bucket lifecycle list kinu-backups',
-  },
-  {
     what: 'A 90-day R2 lifecycle rule on the `feedback/` prefix of both feedback buckets. '
       + 'The screenshot object is exact user feedback and the DO retains only its pointer.',
     evidence: 'lifecycle rules are not expressible in wrangler.jsonc. Production and staging '

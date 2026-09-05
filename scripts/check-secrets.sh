@@ -63,7 +63,6 @@ if [ -n "$MATCHES" ]; then
   echo "$MATCHES" | head -20
   echo ""
   echo -e "${YELLOW}If these are false positives, add to .secretscanignore${NC}"
-  echo -e "${YELLOW}Or bypass with: git commit --no-verify${NC}"
   exit 1
 fi
 

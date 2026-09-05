@@ -7,7 +7,7 @@
  * while keeping test state isolated from the user's real ~/.kinu.
  */
 
-import { existsSync, statSync, rmSync, mkdirSync } from "fs";
+import { existsSync, statSync, rmSync, mkdtempSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -23,13 +23,12 @@ process.env.KINU_BASE_URL = process.env.KINU_BASE_URL ?? "http://localhost:5173/
 process.env.KINU_AUTH = process.env.KINU_AUTH ?? "Bearer test";
 process.env.KINU_MODEL = process.env.KINU_MODEL ?? "@cf/deepseek-ai/deepseek-v4-pro-0813";
 
-const TEST_ROOT = join(tmpdir(), `kinu-cli-e2e-home-${Date.now()}`);
+const TEST_ROOT = mkdtempSync(join(tmpdir(), "kinu-cli-e2e-home-"));
 process.env.KINU_HOME = TEST_ROOT;
 const AGENT_HOME = TEST_ROOT;
 const AGENT_NAME = `e2e-cli-${Date.now()}`;
 const IMPORT_NAME = `e2e-import-${Date.now()}`;
-const EXPORT_DIR = join(tmpdir(), `kinu-cli-e2e-${Date.now()}`);
-mkdirSync(EXPORT_DIR, { recursive: true });
+const EXPORT_DIR = mkdtempSync(join(tmpdir(), "kinu-cli-e2e-"));
 
 let passCount = 0;
 let failCount = 0;

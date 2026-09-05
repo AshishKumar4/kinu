@@ -106,7 +106,10 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run check',
     tier: 'commit',
-    seconds: 6.8,
+    // Measured 2026-09-05 on the 24-thread box (load 2.3, worktree
+    // /home/mrwhite0racle/Kinu-wt-ops-prose): 37 s wall (test:anti-slop 22.07,
+    // oxlint 3.98, 17 tsc projects 11.3). Replaces the 6.8 s figure from 2026-08-17.
+    seconds: 37,
     catches: `type errors and the ${String(ANTI_SLOP_RULE_COUNT)} anti-slop rules across all 11 `
       + 'projects. The largest defect class by volume and the only total one — every file, every line.',
     blind: 'everything about behaviour. A well-typed call to the wrong function passes.',
@@ -114,7 +117,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:do-init',
     tier: 'commit',
-    seconds: 0.1,
+    // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.71 s. Replaces 0.1 s.
+    seconds: 0.71,
     catches: 'off-object I/O inside a Durable Object `onStart`, which put a pure SELECT '
       + 'at 25s and, past 31s, RESET the object. That invariant held at the method and '
       + 'was defeated at the object.',
@@ -132,7 +136,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:reachability',
     tier: 'commit',
-    seconds: 1,
+    // Measured 2026-09-05 on the 24-thread box (load 2.3): 2.27 s. Replaces 1 s.
+    seconds: 2.27,
     catches: 'an @callable RPC no caller reaches — the "correct, wired, dead" class this '
       + 'codebase has shipped at least ten times.',
     blind: 'a reachable RPC whose result nobody reads.',
@@ -140,7 +145,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:platform',
     tier: 'commit',
-    seconds: 0.07,
+    // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.22 s. Replaces 0.07 s.
+    seconds: 0.22,
     catches: 'a platform number stated in prose with no catalog id behind it, and a '
       + 'catalog entry with no evidence label or provenance.',
     blind: 'whether the catalogued number is still true.',
@@ -148,7 +154,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:egress-interception',
     tier: 'commit',
-    seconds: 0.1,
+    // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.73 s. Replaces 0.1 s.
+    seconds: 0.73,
     catches: 'a container class that lost `enableInternet = false` or '
       + '`interceptHttps = true`, a Worker entry that stopped exporting '
       + 'ContainerProxy, or a catch-all egress handler nobody binds — each one an '
@@ -178,7 +185,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:set-equality',
     tier: 'commit',
-    seconds: 0.2,
+    // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.63 s. Replaces 0.2 s.
+    seconds: 0.63,
     catches: 'a gate that measures a narrower set than the one it governs — the defect that '
       + 'appeared fifteen times across six subsystems on 2026-08-17, four of them committed BY '
       + 'the change written to close the previous one. Every gate program\'s corpus must come '
@@ -198,7 +206,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:literature-citations',
     tier: 'commit',
-    seconds: 1,
+    // Measured 2026-09-05 on the 24-thread box (load 2.3): 5.86 s. Replaces 1 s.
+    seconds: 5.86,
     catches: 'a QUALIFIER lost crossing the one boundary nothing else checks — prose to a paper '
       + 'nobody in this process can open. `lean-citations` closed TypeScript -> Lean and caught '
       + 'three stale citations immediately; docs -> literature was the boundary still open, and '
@@ -274,7 +283,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:install-scripts',
     tier: 'commit',
-    seconds: 0.2,
+    // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.05 s. Replaces 0.2 s.
+    seconds: 0.05,
     catches: 'a third-party dependency lifecycle script executing on every `bun install` without '
       + 'a recorded reason. Nine installed dependencies declare `preinstall`/`install`/'
       + '`postinstall`; bun blocks five; FOUR EXECUTE — esbuild, workerd, puppeteer, sharp — and '
@@ -430,11 +440,12 @@ export const LADDER: readonly Gate[] = [
     // between a commit and the push that follows it.
     //
     // NOT COMMIT, and the arithmetic decides it rather than taste. The commit
-    // tier declares 14.99s against a budget of 15 asserted in
-    // `ladder.test.ts`, so its headroom is 0.01s and no row of any cost fits
-    // there. The original intent for this gate was the commit tier on the
-    // precedent of `bun scripts/schema-drift.ts` at 0.5s; that precedent does
-    // not carry, because schema-drift walls half a second and this walls
+    // tier's declared sum stands above the 15 s budget `ladder.test.ts`
+    // asserts (re-measured 2026-09-05 on the 24-thread box, load 2.3; the
+    // per-row figures above carry the date), so no row of any cost fits there.
+    // The original intent for this gate was the commit tier on the precedent
+    // of `bun scripts/schema-drift.ts` at 0.23s; that precedent does not
+    // carry, because schema-drift walls a quarter of a second and this walls
     // several.
     //
     // MEASURED, AND CALIBRATED, because this box is not the box the rest of
@@ -539,7 +550,8 @@ export const LADDER: readonly Gate[] = [
     // the files carrying a statement it reads. Both counts are printed, so the
     // corpus cannot shrink behind the number. The commit tier is where this
     // belongs: the defect is written in the same hunk as the DDL.
-    seconds: 0.5,
+    // Re-measured 2026-09-05 on the 24-thread box (load 2.3): 0.23 s.
+    seconds: 0.23,
     catches: 'a column added to a shipped table with no reconciliation onto storage that '
       + 'predates it. The shape `code_language` shipped in, and the shape that answered '
       + 'GET /api/cli/devices with 500 in production on 2026-09-01 — `unstopped_at` on a '
@@ -629,18 +641,24 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether the gates it enumerates pass.',
   },
   {
-    run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/workspace-name-ux.test.ts',
+    run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts',
     tier: 'push',
-    seconds: 1,
+    // 1.0 s declared 2026-08-24; the gallery-harness case adds 0.13 s, measured 2026-09-05.
+    seconds: 1.2,
     catches: 'a secret scanner that stopped matching, an exact historical adjudication that '
       + 'widened into a path or test exemption, or an enumeration that stopped treating '
       + 'tracked-ness as authoritative. The red fixture puts a credential only on a non-current '
       + 'local branch, proves it fails unadjudicated and passes only for its exact '
       + '(blob OID, path, detector, count) tuple; the live fixture remains gitignored and '
       + 'gone from disk, which is how a re-added transcript with live tokens rode a green scan '
-      + 'on 2026-08-18.',
+      + 'on 2026-08-18. Also two environment facts statfs cannot see: the preflight reports a '
+      + 'temp write refused under a per-user quota as a finding that names the errno, and the '
+      + 'gallery harness removes a build left by a killed process at the next build while a '
+      + 'live owner\'s build stays (61 leaked builds exhausted the tmpfs quota on 2026-09-05).',
     blind: 'credential shapes nobody wrote a case for, and a history object the scanner '
-      + 'intentionally counts but cannot decode because it contains NUL or exceeds its size cap.',
+      + 'intentionally counts but cannot decode because it contains NUL or exceeds its size cap. '
+      + 'The remaining headroom under a per-user quota: the probe writes 1 MiB, so only an '
+      + 'exhausted quota is red.',
   },
   {
     run: 'bun test scripts/gate-set-equality.test.ts',
@@ -765,7 +783,8 @@ export const LADDER: readonly Gate[] = [
     // exceeded half the time. At `commit` that puts the tier's sum at 15.00s against a
     // ceiling of `< 15`: it satisfies `toBeLessThan` only by 1.8e-15, which is binary
     // floating point rather than headroom, so the commit tier is full and this belongs at
-    // push, where the sum is 66.90s against 90.
+    // push, where the sum is 66.90s against 90. (Arithmetic at 2026-08-19; re-measured
+    // 2026-09-05 the commit tier declares 51.84s, so the placement stands with more margin.)
     run: 'bun run test:mutation',
     tier: 'push',
     seconds: 0.21,
@@ -1204,17 +1223,16 @@ export const LADDER: readonly Gate[] = [
     tier: 'commit',
     seconds: 1.2,
     catches: 'the two shapes of backend divergence. A core contract whose optional '
-      + 'capability is wired on one backend only (25 today, including '
-      + 'ShellApprovalPolicy.requestApproval, absent on cf), and a module that would '
-      + 'compile in a shared package sitting inside one adapter, so the other backend '
-      + 'has no contract to under-wire and simply does without — 62 today, 4,632 lines. '
-      + 'The clearest is components/tool-call-summary.ts: 453 lines of tool-call '
-      + 'vocabulary against which the CLI joins raw argument values and clips at 70 '
-      + 'characters. Its allowlist of importable libraries is DERIVED from what the '
+      + 'capability is wired on one backend only (30 locked on 2026-09-05, '
+      + 'ShellApprovalPolicy.requestApproval absent on cf among them), and a module that '
+      + 'would compile in a shared package sitting inside one adapter, so the other backend '
+      + 'has no contract to under-wire and simply does without (99 locked on 2026-09-05; '
+      + 'the lock is `scripts/capability-parity.lock.json`, and its count is the current '
+      + 'figure). Its allowlist of importable libraries is DERIVED from what the '
       + 'shared packages already import, so it widens when core takes a dependency and '
       + 'never needs editing.',
     blind: 'a platform GLOBAL reached with no import — measured at zero occurrences over '
-      + 'the 62 reported modules, and caught in one second by `tsc -p packages/core` the '
+      + 'the reported modules, and caught in one second by `tsc -p packages/core` the '
       + 'moment anyone acts on the finding.',
   },
   {
@@ -1274,7 +1292,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:scratch-ownership',
     tier: 'commit',
-    seconds: 1.3,
+    // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.42 s. Replaces 1.3 s.
+    seconds: 0.42,
     catches: 'a suite that mints a temp directory and never removes it, at the mint site. '
       + 'Measured 2026-08-17: 10,124 of our own entries in the temp directory, from 2,434 '
       + 'earlier the same evening, and 5,489 of them were one eager `mkdirSync` that ran '

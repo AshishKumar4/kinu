@@ -12,13 +12,11 @@
  *    -> My Profile -> API Tokens -> Create Token.
  *
  * `--worker` is the SERVICE name the account files events under, not the
- * project's name: `kinu` for the live deployment and `kinu-staging` for
- * staging, exactly as `packages/cf-backend/wrangler.jsonc` declares them. A
+ * project's name. It defaults to the top-level `name` in
+ * `packages/cf-backend/wrangler.jsonc` (`kinu-staging` names staging), and the
+ * account id is read from the same file rather than restated here. A
  * service the account holds no events for is indistinguishable from a name
  * asked wrongly, so the census is worth re-reading before concluding a window
- * is empty: measured over 48h on 2026-08-21 the live deployment carried
- * 288,797 events and staging 186, under whichever script names were deployed
- * at the time.
  *
  * Grouping and percentiles, for anyone extending this: the operator set is
  * `count`, `avg`, `min`, `max`, `sum`, `stddev`, `uniq`, `median`, `p25`,
@@ -31,10 +29,18 @@
  *   bun scripts/prod-logs.ts live [--worker kinu] [--seconds 120] [--grep swarm]
  *   bun scripts/prod-logs.ts query [--worker kinu] [--since 6h] [--grep head.]
  */
+import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
+import { parseJsonc } from './jsonc';
 
-const ACCOUNT = 'f44999d1ddda7012e9a87729eba250f1';
+/** The account this queries and the default worker, read off the manifest this
+ *  inspects rather than restated beside it: a second spelling of the id is how
+ *  a query runs against one account while the deploy targets another. */
+const WRANGLER_CONFIG = new URL('../packages/cf-backend/wrangler.jsonc', import.meta.url).pathname;
+const WranglerRef = v.object({ account_id: v.string(), name: v.string() });
+const WRANGLER = parseJsonc(readFileSync(WRANGLER_CONFIG, 'utf8'), WranglerRef, 'wrangler.jsonc');
+const ACCOUNT = WRANGLER.account_id;
 
 interface Args {
   readonly mode: 'live' | 'query';
@@ -59,7 +65,7 @@ function parseArgs(argv: readonly string[]): Args {
   const sinceMs = Number(sinceMatch[1]) * (sinceMatch[2] === 'h' ? 3_600_000 : 60_000);
   return {
     mode,
-    worker: opt('worker') ?? 'kinu',
+    worker: opt('worker') ?? WRANGLER.name,
     seconds: Number(opt('seconds') ?? '120'),
     since: sinceMs,
     grep: opt('grep'),

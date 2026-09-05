@@ -88,7 +88,10 @@ for nested in "$MAIN"/packages/*/node_modules; do
 done
 
 cd "$TREE"
-bun test packages/*/tests/workspace-resolution.test.ts >/dev/null
+# Quiet on success, loud on failure: the suite names the fix command, and a
+# plain redirect hid exactly that line.
+resolution_out="$(bun test packages/*/tests/workspace-resolution.test.ts 2>&1)" \
+  || { printf '%s\n' "$resolution_out"; exit 1; }
 
 # The commit and push tiers are hooks, and a hook nobody installs is a hook that
 # does not exist — `core.hooksPath` defaults to the untracked, sample-only

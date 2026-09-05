@@ -3,11 +3,10 @@
  * and the deployed Worker is actually bound to it.
  *
  * WHY IT IS EXHAUSTIVE RATHER THAN FAIL-FAST. "Provisioning failed" is not an
- * answer anybody can act on. This says "the manifest declares 31 resources, 30
- * exist, here is the one that does not" — because the operator's next move
- * depends on WHICH one, and because a fail-fast check run against a fresh
- * account reports the first missing thing thirty times in a row while thirty
- * other things are also missing.
+ * answer anybody can act on. This names every missing resource, because the
+ * operator's next move depends on WHICH one is missing, and because a fail-fast
+ * check run against a fresh account reports the first missing thing over and
+ * over while other things are also missing.
  *
  * THE FOUR VERDICTS, and why there are four rather than two:
  *
