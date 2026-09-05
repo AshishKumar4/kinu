@@ -49,8 +49,8 @@ import {
 } from '../scaffold/auto-judge';
 import { buildOutcomeEvalSplit } from './eval-split';
 import {
-  describeSplitDegeneracy, CRITIC_PROSE,
-  type OutcomeEvalExpectation,
+  describeSplitDegeneracy, renderOutcomeCriterion, FRESH_RESPONSE_RULE,
+  type OutcomeEvalExpectation, type OutcomeScoringRule,
 } from './outcomes';
 import { runScaffoldGepa } from './gepa/scaffold-bridge';
 import {
@@ -570,6 +570,23 @@ const GepaScoreSchema = v.object({
   feedback: v.pipe(v.string(), v.minLength(1)),
 });
 
+/**
+ * One judge call for every GEPA metric, with the one answer an unavailable
+ * judge gets: a neutral 0.5. A 0 would read as "this candidate is bad" on
+ * evidence nobody gathered.
+ */
+async function judgeScore(control: ScaffoldControl, prompt: string): Promise<MetricOutcome> {
+  try {
+    const scored = await control.judge({
+      schema: GepaScoreSchema,
+      prompt: `${prompt}\n\nJSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
+    });
+    return { score: scored.score, feedback: scored.feedback };
+  } catch (err) {
+    return { score: 0.5, feedback: `judge unavailable: ${renderThrownChain({ cause: err })}` };
+  }
+}
+
 export interface GepaOptimizationResult {
   ok: boolean;
   error?: string;
@@ -648,30 +665,13 @@ export async function runScaffoldGepaOptimization(
       const message = renderThrownChain({ cause: err });
       return { score: 0, feedback: `scaffold execution failed: ${message}` };
     }
-    const exp = instance.expected;
-    const critic = CRITIC_PROSE[exp?.critic ?? 'user'];
-    const criterion = exp && exp.outcome === 'accepted'
-      ? `The reference response below was ACCEPTED by the user. Score 1.0 when the new response ` +
-        `is at least as good, 0.0 when it regresses.\n\nReference response:\n${evidenceWindow(exp.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`
-      : `The agent's previous response to this task FAILED — ${critic.verdict}. Score 1.0 when ` +
-        `the new response already addresses the correction, 0.0 when it repeats the failure.\n\n` +
-        `Previous (failed) response:\n${evidenceWindow(exp?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n` +
-        `${critic.complaint}:\n${evidenceWindow(exp?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
-    try {
-      const obj = await control.judge({
-        schema: GepaScoreSchema,
-        prompt:
-          `Score this agent response on a 0..1 scale and give one sentence of specific, ` +
-          `actionable feedback on how the agent's behaviour could improve.\n\n` +
-          `Task:\n${instance.input}\n\nNew response:\n${evidenceWindow(output, EVIDENCE_BUDGETS.replayFreshResponse)}\n\n` +
-          `${criterion}\n\n` +
-          `JSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
-      });
-      return { score: obj.score, feedback: obj.feedback };
-    } catch (err) {
-      const message = renderThrownChain({ cause: err });
-      return { score: 0.5, feedback: `judge unavailable: ${message}` };
-    }
+    return judgeScore(
+      control,
+      `Score this agent response on a 0..1 scale and give one sentence of specific, ` +
+        `actionable feedback on how the agent's behaviour could improve.\n\n` +
+        `Task:\n${instance.input}\n\nNew response:\n${evidenceWindow(output, EVIDENCE_BUDGETS.replayFreshResponse)}\n\n` +
+        renderOutcomeCriterion(instance.expected, FRESH_RESPONSE_RULE),
+    );
   };
 
   // 3. Reflection LM — rewrites the artifact from the failure feedback.
@@ -728,61 +728,44 @@ export async function runScaffoldGepaOptimization(
 
 // ── GEPA offline prompt-section optimisation ────────────────────────────────
 
+const SECTION_WORDING_RULE: OutcomeScoringRule = {
+  accepted: 'Score 1.0 when the candidate wording would still have produced a response at least '
+    + 'this good, 0.0 when it would have pushed the agent off it.',
+  failed: 'Score 1.0 when the candidate wording would have prevented that failure, 0.0 when it '
+    + 'would have changed nothing.',
+};
+
 /**
  * Score one candidate SECTION against one outcome-labeled turn.
  *
  * No rollout, and the omission is the point. A scaffold is code, so the only
  * way to know what it does is to run it; a prompt section is guidance the model
- * reads, and the question a labeled turn answers about it is counterfactual —
- * would this wording have prevented the correction the user actually wrote, or
- * kept the answer they actually accepted? Re-running a whole turn per instance
- * would cost the eval budget many times over to answer the same question with a
- * sampled loop in the way.
+ * reads, and the question a labeled turn answers about it is counterfactual:
+ * would this wording have prevented the correction the user wrote, or kept the
+ * answer they accepted? Re-running a whole turn per instance would cost the
+ * eval budget many times over to answer the same question with a sampled loop
+ * in the way.
  *
- * That makes the score weaker evidence than a scaffold rollout, which is
- * exactly why nothing here promotes: a winner lands PENDING and earns its way
- * live through held-out trials and the same calibrated rule
- * (`prompting/section-store.ts`).
+ * That makes the score weaker evidence than a scaffold rollout, which is why
+ * nothing here promotes: a winner lands PENDING and earns its way live through
+ * held-out trials and the same calibrated rule (`prompting/section-store.ts`).
  */
 function renderSectionScorePrompt(
   sectionId: string,
   candidate: string,
   instance: EvalInstance<string, OutcomeEvalExpectation>,
 ): string {
-  const expected = instance.expected;
-  const critic = CRITIC_PROSE[expected?.critic ?? 'user'];
-  const criterion = expected && expected.outcome === 'accepted'
-    ? `The agent's response below was ACCEPTED by the user. Score 1.0 when the candidate wording `
-      + `would still have produced a response at least this good, 0.0 when it would have pushed the `
-      + `agent off it.\n\nAccepted response:\n${evidenceWindow(expected.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`
-    : `The agent's response below FAILED — ${critic.verdict}. Score 1.0 when the candidate `
-      + `wording would have prevented that failure, 0.0 when it would have changed nothing.\n\n`
-      + `Failed response:\n${evidenceWindow(expected?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n`
-      + `${critic.complaint}:\n${evidenceWindow(expected?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
   return `Score a candidate revision of one section of an agent's system prompt on a 0..1 scale, `
     + `and give one sentence of specific feedback naming what in the WORDING is responsible.\n\n`
     + `Section: ${sectionId}\n\nCandidate wording:\n${evidenceWindow(candidate, EVIDENCE_BUDGETS.gepaParentSource)}\n\n`
     + `The agent was asked:\n${evidenceWindow(instance.input, EVIDENCE_BUDGETS.replayTask)}\n\n`
-    + `${criterion}\n\n`
-    + `JSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`;
+    + renderOutcomeCriterion(instance.expected, SECTION_WORDING_RULE);
 }
 
 function sectionMetric(control: ScaffoldControl, sectionId: string) {
-  return async (
+  return (
     candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
-  ): Promise<MetricOutcome> => {
-    try {
-      const scored = await control.judge({
-        schema: GepaScoreSchema,
-        prompt: renderSectionScorePrompt(sectionId, candidate, instance),
-      });
-      return { score: scored.score, feedback: scored.feedback };
-    } catch (err) {
-      // Same neutral score the scaffold metric uses for an unavailable judge: a
-      // 0 would read as "this candidate is bad" on evidence nobody gathered.
-      return { score: 0.5, feedback: `judge unavailable: ${renderThrownChain({ cause: err })}` };
-    }
-  };
+  ): Promise<MetricOutcome> => judgeScore(control, renderSectionScorePrompt(sectionId, candidate, instance));
 }
 
 export interface PromptSectionOptimizationResult {

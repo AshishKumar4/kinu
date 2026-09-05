@@ -40,7 +40,7 @@ describe('runReplayEval', () => {
     const judge = createMockLLM({
       // The accepted instance judges against the reference; the corrected one
       // against the user's correction. Distinct scores prove both paths ran.
-      'known-good reference': '{"score": 1.0, "note": "as good"}',
+      'Accepted response': '{"score": 1.0, "note": "as good"}',
       "User's correction": '{"score": 0.5, "note": "partially addressed"}',
     });
 
@@ -142,7 +142,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
   test('the lifetime cycle does NOT run it — the same ledger is not re-executed twice', async () => {
     const { rt } = createTestRuntime({
       llmResponses: {
-        'known-good reference': '{"score": 0.8, "note": "ok"}',
+        'Accepted response': '{"score": 0.8, "note": "ok"}',
         "User's correction": '{"score": 0.8, "note": "ok"}',
       },
     });
@@ -164,7 +164,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
   test('called explicitly, it runs through the backend runner and emits the loss', async () => {
     const { rt } = createTestRuntime({
       llmResponses: {
-        'known-good reference': '{"score": 0.8, "note": "ok"}',
+        'Accepted response': '{"score": 0.8, "note": "ok"}',
         "User's correction": '{"score": 0.8, "note": "ok"}',
       },
     });

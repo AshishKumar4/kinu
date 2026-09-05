@@ -787,12 +787,13 @@ export type OutcomeEvalInstance = EvalInstance<string, OutcomeEvalExpectation>;
 /**
  * How a scoring prompt names a negative instance's complaint.
  *
- * One table, both metrics. The scaffold metric scores a fresh rollout and the
- * section metric scores a counterfactual about wording, so they differ in what
- * they ask — they do not differ in who said the turn went wrong, and two copies
- * of that sentence is one copy that eventually says something else.
+ * One table for every scorer. The scaffold metric scores a fresh rollout, the
+ * replay judge scores a fresh response, and the section metric scores a
+ * counterfactual about wording. They differ in what they ask and not in who
+ * said the turn went wrong, and two copies of that sentence is one copy that
+ * eventually says something else.
  *
- * The `user` wording is the sentence both prompts already carried, to the byte:
+ * The `user` wording is the sentence the prompts already carried, to the byte:
  * a ledger-drawn instance scores exactly as it did before advisor notes existed.
  */
 export const CRITIC_PROSE = {
@@ -804,6 +805,43 @@ export const CRITIC_PROSE = {
 } as const satisfies Readonly<
   Record<OutcomeEvalExpectation['critic'], { verdict: string; complaint: string }>
 >;
+
+/**
+ * The 1.0 / 0.0 sentence a scorer states for each kind of recorded outcome.
+ *
+ * Each scorer names its own subject here (a fresh response, a candidate
+ * wording). Everything else in the criterion, the critic's framing and the
+ * windowed evidence, comes from {@link renderOutcomeCriterion}, so three prompts
+ * cannot drift on what the record holds.
+ */
+export interface OutcomeScoringRule {
+  readonly accepted: string;
+  readonly failed: string;
+}
+
+/** The rule for a scorer that compares a FRESH response with the recorded
+ *  one: the scaffold metric's rollout and the replay judge's re-run. */
+export const FRESH_RESPONSE_RULE: OutcomeScoringRule = {
+  accepted: 'Score 1.0 when the new response is at least as good, 0.0 when it regresses.',
+  failed: 'Score 1.0 when the new response already addresses the correction, 0.0 when it '
+    + 'repeats the failure.',
+};
+
+/** The criterion block of a scoring prompt: what the record says about the
+ *  turn, who said it, and the windowed evidence behind it. */
+export function renderOutcomeCriterion(
+  expected: OutcomeEvalExpectation | undefined,
+  rule: OutcomeScoringRule,
+): string {
+  if (expected && expected.outcome === 'accepted') {
+    return `The agent's response below was ACCEPTED by the user. ${rule.accepted}\n\n`
+      + `Accepted response:\n${evidenceWindow(expected.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`;
+  }
+  const critic = CRITIC_PROSE[expected?.critic ?? 'user'];
+  return `The agent's response below FAILED — ${critic.verdict}. ${rule.failed}\n\n`
+    + `Failed response:\n${evidenceWindow(expected?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n`
+    + `${critic.complaint}:\n${evidenceWindow(expected?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
+}
 
 /** Why a split cannot support an out-of-sample winner selection. */
 export type OutcomeSplitDegeneracy =

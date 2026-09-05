@@ -22,6 +22,9 @@ import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives';
 import {
   isNegativeOutcome,
   listTurnOutcomes,
+  renderOutcomeCriterion,
+  FRESH_RESPONSE_RULE,
+  NEGATIVE_TURN_OUTCOMES,
   TURN_OUTCOMES,
   type TurnOutcomeRow,
 } from './outcomes';
@@ -113,25 +116,19 @@ const ReplayInstanceResultSchema: v.GenericSchema<ReplayInstanceResult> = v.obje
 
 
 function buildReplayJudgePrompt(row: TurnOutcomeRow, fresh: string): string {
-  const head =
+  return (
     `You are scoring a NEW response to a task the agent has answered before.\n\n` +
     `Task:\n${evidenceWindow(row.userMessage, EVIDENCE_BUDGETS.replayTask)}\n\n` +
-    `New response:\n${evidenceWindow(fresh, EVIDENCE_BUDGETS.replayFreshResponse)}\n\n`;
-  const tail =
-    `\nJSON shape: {"score": <number 0..1>, "note": "<one sentence>"}\n` +
-    jsonObjectOnlyInstruction();
-  if (row.outcome === 'accepted') {
-    return head +
-      `The ORIGINAL response below was ACCEPTED by the user — it is a known-good reference. ` +
-      `Score 1.0 when the new response is clearly at least as good, 0.0 when it is a regression.\n\n` +
-      `Reference (accepted) response:\n${evidenceWindow(row.assistantResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}\n` + tail;
-  }
-  return head +
-    `The ORIGINAL response below FAILED — the user followed up with a correction. ` +
-    `Score 1.0 when the new response already addresses what the user had to correct, ` +
-    `0.0 when it repeats the original failure.\n\n` +
-    `Original (failed) response:\n${evidenceWindow(row.assistantResponse, EVIDENCE_BUDGETS.replayFailedResponse)}\n\n` +
-    `User's correction:\n${evidenceWindow(row.followup ?? '(no follow-up text recorded)', EVIDENCE_BUDGETS.replayCorrection)}\n` + tail;
+    `New response:\n${evidenceWindow(fresh, EVIDENCE_BUDGETS.replayFreshResponse)}\n\n` +
+    renderOutcomeCriterion({
+      outcome: row.outcome,
+      recordedResponse: row.assistantResponse,
+      followup: row.followup,
+      critic: 'user',
+    }, FRESH_RESPONSE_RULE) +
+    `\n\nJSON shape: {"score": <number 0..1>, "note": "<one sentence>"}\n` +
+    jsonObjectOnlyInstruction()
+  );
 }
 
 async function judgeReplay(judge: LLM, row: TurnOutcomeRow, fresh: string): Promise<{ score: number; note: string }> {
@@ -155,7 +152,7 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
   const size = Math.max(1, Math.floor(opts.sampleSize ?? DEFAULT_REPLAY_SAMPLE_SIZE));
   // Balanced sample, newest first: regressions guard (accepted) + the
   // failures the system should have learned from (corrected/frustrated).
-  const negatives = listTurnOutcomes(opts.sql, { limit: Math.ceil(size / 2), outcomes: ['corrected', 'frustrated'] });
+  const negatives = listTurnOutcomes(opts.sql, { limit: Math.ceil(size / 2), outcomes: NEGATIVE_TURN_OUTCOMES });
   const accepted = listTurnOutcomes(opts.sql, { limit: size - negatives.length, outcomes: ['accepted'] });
   const sample = [...negatives, ...accepted];
   if (sample.length === 0) return null;
