@@ -761,7 +761,7 @@ export class OrchestratorAgent extends ActorAgent {
 
 
   // Steer-as-Branch redirects launched against the in-flight turn — each runs
-  // as one budgeted head (ExplorationAgent Facet) and settles into Alternate
+  // as one budgeted head (a facet in head mode) and settles into Alternate
   // Takes when the turn completes (onChatResponse).
   protected _pendingBranches: PendingBranch[] = [];
 
@@ -1333,7 +1333,7 @@ export class OrchestratorAgent extends ActorAgent {
     return ROOT_DELEGATION_BUDGET;
   }
 
-  protected subordinateFacet(): SubAgentClass<SubordinateAgent> {
+  facetClass(): SubAgentClass<SubordinateAgent> {
     return SubordinateAgent;
   }
 
@@ -2524,7 +2524,7 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       const { reclaimed } = await reconcileExplorationFacets(
         {
-          list: () => this.listSubAgents(this.explorationFacet()),
+          list: () => this.listSubAgents(this.facetClass()),
           delete: async (id) => deleteExplorationFacet(this, id),
         },
         (id) => this.explorationFacetLedgerStatus(id),

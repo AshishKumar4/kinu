@@ -3,7 +3,7 @@
  * and back again to reclaimed storage.
  *
  * Kinu's parallel workers (MCTS branches and heads) all run as the same
- * Cloudflare Facet: `subAgent(host.explorationFacet(), id)` resolves-or-creates a
+ * Cloudflare Facet: `subAgent(host.facetClass(), key)` resolves-or-creates a
  * co-located child DO, then a short bootstrap sequence seeds the identity it
  * needs. Every bootstrap RPC persists into the FACET's own SQLite, so a facet
  * that hibernates between spawn and run recovers on cold activation — which is
@@ -36,31 +36,44 @@
  *
  * ── Containment ──────────────────────────────────────────────────────────
  *
- * ExplorationAgent is a bare `Agent`, deliberately not an ActorAgent, so a head
- * can never acquire the think/team/peers surface and open an unbounded spawn
- * tree (unit-exploration-containment.test.ts). Routing every spawn of it
- * through this module keeps that one class the only thing a head can start —
- * a head forks its parent's RESOURCES (@kinu.run/core head-tools), never its
- * authority to create actors.
+ * One facet class hosts every mode, so containment rides the seed rather than
+ * the base: a facet builds only the surface its seed admits (the subordinate
+ * turn loop, the head/node tool surface, or no tools at all for an MCTS
+ * branch), and its RPC seal narrows to that family's surface at the same
+ * moment (unit-exploration-containment.test.ts drives the real seeds).
+ * Routing every exploration spawn through this module keeps that one class
+ * the only thing a head can start — a head forks its parent's RESOURCES
+ * (@kinu.run/core head-tools), never its authority to create actors.
  *
- * Subordinates are not spawned here on purpose: SubordinateAgent drags in the
- * orchestrator/runtime graph, which imports this module back — their facet
- * plumbing stays behind the SubordinateRuntime seam on the orchestrator.
+ * ── Address scope ────────────────────────────────────────────────────────
+ *
+ * Subordinate facets keep their bare roster slug as their facet key, so the
+ * roster, the public subordinate URLs and every subordinate callsite read
+ * unchanged. Exploration facets (heads, nodes, branches) take an `exp:`-keyed
+ * address instead, so the two families can never share a key even though one
+ * class hosts both: a subordinate slug cannot carry the marker (core refuses
+ * anything outside `[a-z0-9-]`), and a generated id never arrives unmarked
+ * because every spawn below encodes it. Journals and handles keep the plain
+ * domain id; only the facet key is marked.
+ *
+ * Subordinates are not spawned here on purpose: their facet plumbing stays
+ * behind the SubordinateRuntime seam on the actor, beside the roster that
+ * owns their names.
  */
 
 import type { Agent, SubAgentClass, SubAgentStub } from "agents";
 import type { BranchHandle, HeadId, HeadInput, NodeLoopResult, NodeRunSpec, SpawnedHead } from "@kinu.run/core";
-import type { ExplorationAgent } from "./exploration";
+import type { SubordinateAgent } from "./subordinate-agent";
 import type { HostedFacetHomes } from "./node-home";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 /** The facet substrate a spawner rides. Both the workspace DO and a head
  *  splitting further expose it, so both can spawn — and both must reclaim. */
 export interface FacetHost extends Pick<Agent<Env>, "subAgent" | "abortSubAgent" | "deleteSubAgent"> {
-  /** The class an exploration facet of this host is created as. Type-only above,
-   *  so this module carries no runtime import of the facet it spawns — the same
-   *  rule ActorAgent.subordinateFacet() follows for SubordinateAgent. */
-  explorationFacet(): SubAgentClass<ExplorationAgent>;
+  /** The one class every facet of this host runs as. Type-only above, so this
+   *  module carries no runtime import of the class it spawns; the VALUE comes
+   *  from the host, as `ActorAgent.facetClass()` states. */
+  facetClass(): SubAgentClass<SubordinateAgent>;
   /** Where a facet of this host gets and gives back its home: the workspace
    *  owner's registry, reached directly or over one hop. A head provisions
    *  its own when it runs; its spawner releases it when the run settles. */
@@ -70,7 +83,7 @@ export interface FacetHost extends Pick<Agent<Env>, "subAgent" | "abortSubAgent"
 
 /** The stub `subAgent` hands back, named once so the bootstrap seam can take a
  *  mode's own init RPC as an argument. */
-type ExplorationStub = SubAgentStub<ExplorationAgent>;
+type ExplorationStub = SubAgentStub<SubordinateAgent>;
 
 /** What an exploration facet must know before it runs. Both values are
  *  persisted by the facet itself, so a cold activation recovers them. */
@@ -94,6 +107,47 @@ export interface ExplorationFacetIdentity {
   readonly sharedParent?: string | null;
 }
 
+/**
+ * The marker that makes an exploration facet key unambiguous beside a
+ * subordinate's bare roster slug. A slug outside `[a-z0-9-]` is refused at
+ * hire time, so no subordinate key can ever carry this marker — the family
+ * reads off the key alone, with no registry lookup.
+ */
+const EXPLORATION_FACET_KEY_PREFIX = 'exp:';
+
+/**
+ * The facet key for an exploration worker id (head, node, branch). Handles
+ * keep the plain domain id; only the key handed to `subAgent` is marked.
+ * `encodeURIComponent` keeps generated ids byte-identical while failing no
+ * future alphabet: the split below is on the FIRST marker, so a marked id
+ * that somehow contains one still round-trips.
+ */
+function explorationFacetKey(id: string): string {
+  return `${EXPLORATION_FACET_KEY_PREFIX}${encodeURIComponent(id)}`;
+}
+
+/** Which family a facet key addresses, and the domain id beneath the marker. */
+interface ParsedFacetKey {
+  readonly family: 'exploration' | 'subordinate';
+  readonly id: string;
+}
+function parseFacetKey(key: string): ParsedFacetKey {
+  if (key.startsWith(EXPLORATION_FACET_KEY_PREFIX)) {
+    return { family: 'exploration', id: decodeURIComponent(key.slice(EXPLORATION_FACET_KEY_PREFIX.length)) };
+  }
+  return { family: 'subordinate', id: key };
+}
+
+/**
+ * True for an exploration worker's key. Exported for the two callers that
+ * list a mixed registry: the capability fan-out (exploration facets only)
+ * and the settled-facet sweep (subordinates are rostered actors, never its
+ * to judge).
+ */
+export function isExplorationFacetKey(key: string): boolean {
+  return key.startsWith(EXPLORATION_FACET_KEY_PREFIX);
+}
+
 
 /**
  * MID-FLIGHT eviction: stop the instance, KEEP its storage.
@@ -108,7 +162,7 @@ export interface ExplorationFacetIdentity {
  * RPC to carry it: a node's loop has none, so eviction is the whole of its abort.
  */
 export function abortExplorationFacet(host: FacetHost, id: string, reason?: string): void {
-  host.abortSubAgent(host.explorationFacet(), id, reason);
+  host.abortSubAgent(host.facetClass(), explorationFacetKey(id), reason);
 }
 
 /**
@@ -126,7 +180,7 @@ export function abortExplorationFacet(host: FacetHost, id: string, reason?: stri
  * so a raced abort and settle both landing here is safe.
  */
 export async function deleteExplorationFacet(host: FacetHost, id: string): Promise<void> {
-  await host.deleteSubAgent(host.explorationFacet(), id);
+  await host.deleteSubAgent(host.facetClass(), explorationFacetKey(id));
 }
 
 /** Where a facet stands in the ledgers that own its lifecycle. Derived by the
@@ -159,9 +213,17 @@ export async function reconcileExplorationFacets(
   let retained = 0;
   const live = hasLiveExploration();
   for (const facet of registry.list()) {
-    const status = ledgerStatus(facet.name);
+    // One class hosts both families now, so the registry lists subordinates
+    // beside exploration workers. A subordinate is a rostered, durable actor;
+    // its storage is never this sweep's to judge, so it is retained unread.
+    if (!isExplorationFacetKey(facet.name)) {
+      retained += 1;
+      continue;
+    }
+    const id = parseFacetKey(facet.name).id;
+    const status = ledgerStatus(id);
     if (status === 'terminal' || (status === 'unknown' && !live)) {
-      await registry.delete(facet.name);
+      await registry.delete(id);
       reclaimed += 1;
     } else {
       retained += 1;
@@ -212,7 +274,7 @@ async function bootstrapFacet(
   identity: ExplorationFacetIdentity,
   init?: (stub: ExplorationStub) => Promise<FacetInitAck>,
 ): Promise<ExplorationStub> {
-  const stub = await host.subAgent(host.explorationFacet(), id);
+  const stub = await host.subAgent(host.facetClass(), explorationFacetKey(id));
   try {
     if (identity.ownerUserId) await stub.setOwner(identity.ownerUserId, identity.capabilityToken);
     if (identity.sharedParent) await stub.setSharedParent(identity.sharedParent);

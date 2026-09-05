@@ -13,12 +13,16 @@ import {
 } from '../src/facet-spawn';
 import { orchestratorHarness } from './helpers/actor-harness';
 
+/** The SDK registry as the sweep reads it: exploration workers under the
+ *  `exp:`-marked key every spawn hands `subAgent`, and — since one class hosts
+ *  both families — subordinates under their bare roster slug beside them. The
+ *  sweep hands `delete` the domain id, as the orchestrator's does. */
 function host(
   facets: string[],
   deleted: string[] = [],
 ): ExplorationFacetRegistry & { deleted: string[] } {
   return {
-    list: () => facets.map((name) => ({ name })),
+    list: () => facets.map((name) => ({ name: `exp:${name}` })),
     delete: async (id) => { deleted.push(id); },
     deleted,
   };
@@ -60,6 +64,21 @@ describe('reconcileExplorationFacets', () => {
     // `unknown` is retained because the live rollout forbids guessing.
     expect(out).toEqual({ reclaimed: 1, retained: 2 });
     expect(h.deleted).toEqual(['dead']);
+  });
+
+  test('a subordinate in the same registry is never the sweep\'s to reclaim', async () => {
+    // A hired subordinate is a rostered, durable actor under its bare slug. The
+    // ledger it would be judged by has no row for it, and the workspace is idle
+    // — the exact conditions under which an unmarked exploration facet would be
+    // reclaimed — so the marker, and nothing else, is what keeps it.
+    const deleted: string[] = [];
+    const registry: ExplorationFacetRegistry = {
+      list: () => [{ name: 'researcher' }, { name: 'exp:branch-done' }],
+      delete: async (id) => { deleted.push(id); },
+    };
+    const out = await reconcileExplorationFacets(registry, () => 'unknown' as const, () => false);
+    expect(out).toEqual({ reclaimed: 1, retained: 1 });
+    expect(deleted).toEqual(['branch-done']);
   });
 });
 
@@ -103,17 +122,19 @@ describe('the exploration-facet sweep over the head journal', () => {
     await harness.agent.harnessSpawnBranchHead('branch-stale', 'never reported', null);
     harness.agent.harnessMarkHeadsInterrupted();
     await harness.agent.harnessSpawnBranchHead('branch-live', 'still running', null);
+    // The registry holds the `exp:`-marked keys the spawn wrote; the journal is
+    // read under the id beneath the marker, as the sweep reads it.
     const world = () => harness.agent.harnessExplorationFacets().sort().map((facet) => ({
       facet,
-      journal: harness.agent.harnessBranchHeadStatus(facet.replace(/-head$/, '')) ?? 'no-row',
+      journal: harness.agent.harnessBranchHeadStatus(facet.replace(/^exp:/, '').replace(/-head$/, '')) ?? 'no-row',
     }));
     expect(world()).toEqual([
-      { facet: 'branch-cut-head', journal: 'aborted' },
-      { facet: 'branch-done-head', journal: 'completed' },
-      { facet: 'branch-live-head', journal: 'running' },
-      { facet: 'branch-spent-head', journal: 'budget_exceeded' },
-      { facet: 'branch-stale-head', journal: 'interrupted' },
-      { facet: 'branch-threw-head', journal: 'errored' },
+      { facet: 'exp:branch-cut-head', journal: 'aborted' },
+      { facet: 'exp:branch-done-head', journal: 'completed' },
+      { facet: 'exp:branch-live-head', journal: 'running' },
+      { facet: 'exp:branch-spent-head', journal: 'budget_exceeded' },
+      { facet: 'exp:branch-stale-head', journal: 'interrupted' },
+      { facet: 'exp:branch-threw-head', journal: 'errored' },
     ]);
     await harness.agent.harnessReclaimSettledExplorationFacets();
 
@@ -123,8 +144,8 @@ describe('the exploration-facet sweep over the head journal', () => {
     // Asserted WITH each facet's journal status: a mismatch then prints the
     // sweep's whole decision world, not just the names.
     expect(world()).toEqual([
-      { facet: 'branch-live-head', journal: 'running' },
-      { facet: 'branch-stale-head', journal: 'interrupted' },
+      { facet: 'exp:branch-live-head', journal: 'running' },
+      { facet: 'exp:branch-stale-head', journal: 'interrupted' },
     ]);
   });
 });

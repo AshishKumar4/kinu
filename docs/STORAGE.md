@@ -6,11 +6,14 @@ workspace files and execution state. The `OrchestratorAgent` Durable Object
 SQLite owns relational actor state. Each subsystem owns its tables and creates
 them idempotently. No shadow VFS or sync path runs between the two.
 
-Three other Durable Object classes hold isolated databases of their own.
-`SubordinateAgent` gets the full workspace schema plus a one-row
-`subordinate_identity`. `ExplorationAgent` gets `traces` from its own `onStart`
-and a one-row `facet_identity`. MCTS branches and heads depend on those two
-tables for isolation. `UserDO` holds the per-user `user_*` and
+Two other Durable Object classes hold isolated databases of their own.
+`SubordinateAgent` gets the full workspace schema plus the one-row seeds its
+modes read: `subordinate_identity` for a hire, `facet_identity` (owner,
+capability token, parent workspace) and `facet_activation` (the head or node
+work spec) for an exploration worker. `SubordinateAgent.onStart` creates
+`traces` and `facet_model_operation_outbox` on every activation. Every mode's
+rows live in that facet's own database, which is what isolates one MCTS branch
+or head from its siblings. `UserDO` holds the per-user `user_*` and
 `device_*` tables and the owner `experience_library`. Those tables belong to the
 user, not to any workspace.
 

@@ -16,7 +16,7 @@ import { deriveUserId } from '../src/auth/store';
  * workspace name. Before the fix, an attacker who registered a victim's userId
  * as a workspace name could reach GET /agents/user-d-o/<victimId> — the victim's
  * UserDO @callable surface (getAuthHeaders / mintCliToken → full account
- * takeover), plus ExplorationAgent / KinuSandbox / Nimbus*.
+ * takeover), plus worker-only facet namespaces / KinuSandbox / Nimbus*.
  *
  * Two lines of defense are asserted:
  *   1. the `/agents/*` transport is pinned to the orchestrator namespace

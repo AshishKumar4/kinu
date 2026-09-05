@@ -448,7 +448,7 @@ export const CORPUS: readonly Case[] = [
       requiredAxes: { unit: ['trajectory'] },
       rationale:
         "unit:'trajectory' with score:'verify' is the one combination the design says is "
-        + 'BLOCKED — heads share one workspace (exploration.ts:264) and are only asked to '
+        + 'BLOCKED — heads share one workspace (`facetRuntime` in subordinate-agent.ts) and are only asked to '
         + 'isolate themselves, so no node can be graded on what it changed. A model has no '
         + 'way to know that from the surface, so this case does not test the model; it tests '
         + 'whether the SURFACE discloses its own blocked region. Finding the right value and '

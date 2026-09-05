@@ -74,17 +74,17 @@ const WRANGLER_CONFIGS = ['packages/cf-backend/wrangler.jsonc'] as const;
  *  conditioned on. If none of them uses the factory, traces being off is not a
  *  defect and the gate says so rather than inventing one.
  *
- *  `actor-agent.ts` and `exploration.ts` are the PRODUCTION call sites. Until
- *  `actor-agent.ts` was listed here this gate's config assertion was vacuous by
- *  its own design: the factory was used only by itself and by this gate's
- *  fixture, so `instrumentedCount` counted two files that ship no span and
- *  `observability.traces` could have been absent from every environment without
- *  a finding. That is the shape the whole gate warns about. Correct, wired,
- *  dead. Reproduced one level up, in the gate. */
+ *  `actor-agent.ts` is the PRODUCTION call site: its `tracing` getter is the
+ *  one seam every actor and every facet mode shares. Until it was listed here
+ *  this gate's config assertion was vacuous by its own design: the factory was
+ *  used only by itself and by this gate's fixture, so `instrumentedCount`
+ *  counted two files that ship no span and `observability.traces` could have
+ *  been absent from every environment without a finding. That is the shape the
+ *  whole gate warns about. Correct, wired, dead. Reproduced one level up, in
+ *  the gate. */
 const TRACER_SOURCES = [
   'packages/cf-backend/src/obs/cf-tracer.ts',
   'packages/cf-backend/src/actor-agent.ts',
-  'packages/cf-backend/src/exploration.ts',
   'packages/cf-backend/tests/fixtures/tracing-gate-worker.ts',
 ] as const;
 

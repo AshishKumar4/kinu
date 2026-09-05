@@ -75,7 +75,7 @@ export class MyAgent extends ActorAgent {
   protected get engine(): EvolutionEngine { /* your evolution engine */ }
   protected notifyOwner(subject: string, body: string): void { /* … */ }
   protected delegationBudget(): DelegationBudget { /* depth and spend below you */ }
-  protected subordinateFacet(): SubAgentClass<SubordinateAgent> { /* what you hire */ }
+  facetClass(): SubAgentClass<SubordinateAgent> { /* the class every facet runs as */ }
   protected ownMission(): string { /* the mission text titling names you after */ }
   protected persistAutoTitle(displayName: string): Promise<boolean> { /* where a title lands */ }
   protected promptIdentity(): Promise<PromptIdentity> { /* the identity the prompt renders */ }
@@ -115,9 +115,13 @@ turn or `submitPlan` on an owner turn.
 per-actor model/provider state by composition: `providerRegistry()`,
 `resolveModel(spec)`, `getWebSearchProvider()`, `invalidate()`. `ActorAgent`
 constructs it with `ownerRequired: true`
-(`cf-backend/src/actor-agent.ts:1409`). `ExplorationAgent` is not an
-`ActorAgent`. It constructs its own with `ownerRequired: false`
-(`cf-backend/src/exploration.ts:203`).
+(`cf-backend/src/actor-agent.ts:1409`). `SubordinateAgent` builds a second
+instance for its exploration modes with `ownerRequired: false`
+(`facetModelServices` in `cf-backend/src/subordinate-agent.ts`). The seed
+decides containment. The constructor seals the boot RPC surface. Each seed
+narrows the instance to its family surface. A head cannot resolve a
+subordinate seed across a stub. A subordinate cannot resolve a head seed
+across a stub.
 
 ## Adding a new ModelProvider
 

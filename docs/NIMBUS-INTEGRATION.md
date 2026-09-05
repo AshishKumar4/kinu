@@ -104,7 +104,7 @@ exported environment state. `ActorRuntimeIdentity.shellId`
 process, and run-code call. The key reads `agent:<name>` for the orchestrator
 (`cf-backend/src/actor-agent.ts:700`), `subordinate:<name>` for a durable
 subordinate (`cf-backend/src/subordinate-agent.ts:220`), and `<scope>:<name>`
-for an exploration facet (`cf-backend/src/exploration.ts:443`). The published
+for an exploration facet (`facetRuntime` in `cf-backend/src/subordinate-agent.ts`). The published
 SDK accepts that key on every exec option (`NimbusExecOptions.shellId`) and
 keeps each keyed shell's state separately. The filesystem and the process
 registry stay shared.

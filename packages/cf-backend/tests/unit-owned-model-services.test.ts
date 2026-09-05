@@ -62,18 +62,18 @@ const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe('OwnedModelServices', () => {
-  test('ActorAgent and ExplorationAgent wire their distinct settled policies', () => {
+  test('ActorAgent and its exploration modes wire their distinct settled policies', () => {
     const source = (file: string) => readFileSync(join(import.meta.dir, '..', 'src', file), 'utf8');
     const actor = source('actor-agent.ts');
-    const exploration = source('exploration.ts');
+    const facet = source('subordinate-agent.ts');
 
     expect(actor).toContain("appTitle: 'Kinu',\n    ownerRequired: true,");
-    expect(exploration).toContain("appTitle: 'Kinu (exploration)',\n    ownerRequired: false,");
+    expect(facet).toContain("appTitle: 'Kinu (exploration)',\n    ownerRequired: false,");
     expect(actor).toContain('return this.ownedModelServices.providerRegistry();');
     expect(actor).toContain('return this.ownedModelServices.getWebSearchProvider();');
     expect(actor).toContain('this.ownedModelServices.invalidate();');
-    expect(exploration).not.toContain('createAgentProviderRegistry');
-    expect(exploration).not.toMatch(/\n  getModel\(/);
+    expect(facet).not.toContain('createAgentProviderRegistry');
+    expect(facet).not.toMatch(/\n  getModel\(/);
   });
 
   test('required owners fail with ActorAgent\'s established error', () => {

@@ -6,12 +6,18 @@
 // trees, and `split_subheads` (depth-budgeted) must stay the only spawn route.
 //
 // These assertions run against buildHeadToolSet's real output rather than the
-// text of exploration.ts, so they keep holding when the surface is refactored
+// text of subordinate-agent.ts, so they keep holding when the surface is refactored
 // and they catch a tool that appears through a dependency instead of a literal.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTestRuntime, createTestSql, memberBody, toolExecute } from '@kinu.run/test-utils';
+import {
+  hiredSubordinateHarness,
+  orchestratorHarness,
+  subordinateHarness,
+  facetHarness,
+} from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import {
   HeadCapture,
@@ -210,17 +216,17 @@ describe('head tool surface — containment', () => {
 });
 
 describe('MCTS branch mode stays isolated', () => {
-  // ExplorationAgent is dual-purpose: explore() is an MCTS scoring branch,
+  // One class hosts every mode: explore() is an MCTS scoring branch,
   // runAsHead() is a research head. Only the head forks the parent's resources;
   // a branch is a bare generateText with no ToolSet and no runtime, which is why
   // StorageIsolation holds for branches by DO identity alone.
   //
   // The two assertions below read source because what they check is not
   // runtime-observable: which statements sit inside the MCTS-mode block, and
-  // that the forked runtime is constructed in exactly one place. The CLASS TREE
-  // is NOT asserted from source — see 'head containment is structural' below,
-  // which imports the real constructors and reads the real prototype chain.
-  const source = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
+  // that the forked runtime is constructed in exactly one place. The SEED
+  // surface is asserted on real instances below — see 'facet containment is
+  // seed-built' — which drives the production seeds through the harness.
+  const source = readFileSync(join(import.meta.dir, '..', 'src', 'subordinate-agent.ts'), 'utf8');
 
   test('MCTS-mode callables acquire neither a runtime nor a ToolSet', () => {
     const mctsMode = source.slice(
@@ -229,7 +235,7 @@ describe('MCTS branch mode stays isolated', () => {
     );
     expect(mctsMode).toContain('async explore(');
     expect(mctsMode).toContain('async generateReflection(');
-    expect(mctsMode).not.toContain('this.headRuntime');
+    expect(mctsMode).not.toContain('this.headFacetRuntime');
     expect(mctsMode).not.toContain('tools:');
   });
 
@@ -272,38 +278,31 @@ describe('MCTS branch mode stays isolated', () => {
 });
 
 /**
- * Head containment, asserted on the REAL class tree rather than on the text of
- * a class declaration.
+ * Facet containment, asserted on REAL instances driven through the production
+ * seeds rather than on the text of a class declaration.
  *
- * This replaces a pair of substring assertions that pinned the literal strings
- * 'export class ExplorationAgent extends Agent<Env>' and
- * NOT 'class ExplorationAgent extends ActorAgent'. Those were satisfied by how
- * the declaration was spelled, so they were blind to a head acquiring the actor
- * surface through a renamed base, a re-export, an intermediate class, or a
- * mixin — and they simultaneously forbade ANY refactor of the declaration,
- * which is why the base-class work they were guarding never landed.
+ * This replaces the prototype-chain assertions that pinned
+ * `ExplorationAgent extends Agent`. One class hosts every mode now, so the
+ * boundary moved from the base into the seed: the constructor seals the boot
+ * union, and the seed that decides the family narrows the instance to that
+ * family's surface. What follows is strictly stronger than the inheritance
+ * check it replaces. The old test passed for any base that merely lacked the
+ * members; these drive the real seeds and read the real seal — the mechanism
+ * workerd itself enforces — so a mode that admitted one foreign name fails.
  *
- * What follows is strictly stronger on both counts. `extends` sets the static
- * prototype chain, so `isPrototypeOf` on the constructors is the actual
- * inheritance relation and it cannot be spelled around. And rather than naming
- * a base class to avoid, the second test enumerates the members that CONSTITUTE
- * the actor surface and asserts a head cannot reach any of them — the invariant
- * the old assertions were approximating.
- *
- * Runnable here because `mockAgentsSdk()` replaces the `agents` module, whose
- * dist reaches `cloudflare:*` modules that exist only inside workerd. bun keeps
- * one mock per specifier and the first registration wins, so it runs before the
- * dynamic imports. The mock never participates in the assertions that matter:
- * those compare real Kinu classes to each other.
+ * `Object.hasOwn` is the assertion because that is what the seal writes: a
+ * shadowed own property is unresolvable from a stub while in-process calls
+ * keep working, which is exactly workerd's rule (`rpcReachableNames` states
+ * it on the test's own side in unit-rpc-surface.test.ts).
  */
-describe('head containment is structural', () => {
+describe('facet containment is seed-built', () => {
   mockAgentsSdk();
 
   /**
    * The members that constitute the actor surface. `think`, `team` and `peers`
    * open unbounded spawn trees; inherited-context readers and the head runtime
    * expose branching machinery; the journal RPCs are the root's control plane.
-   * A head must reach none of them.
+   * A head must reach none of them across a stub.
    */
   const ACTOR_ONLY_MEMBERS = [
     'getAgentsToolDeps',
@@ -315,18 +314,29 @@ describe('head containment is structural', () => {
     'getModel',
   ] as const;
 
-  async function classes() {
-    const { ActorAgent } = await import('../src/actor-agent');
-    const { ExplorationAgent } = await import('../src/exploration');
-    const { SubordinateAgent } = await import('../src/subordinate-agent');
-    return { ActorAgent, ExplorationAgent, SubordinateAgent };
-  }
+  /** Subordinate seeds no head stub may resolve. */
+  const SUBORDINATE_SEEDS = [
+    'setSubordinateIdentity',
+    'enqueueSubordinateTask',
+    'getSubordinateSnapshot',
+    'setSubordinateNaming',
+  ] as const;
+
+  /** Exploration seeds no subordinate stub may resolve. */
+  const EXPLORATION_SEEDS = [
+    'initHead',
+    'initNode',
+    'runAsHead',
+    'runAsNode',
+    'explore',
+    'generateReflection',
+  ] as const;
 
   test('the enumerated members really are the actor surface (control)', async () => {
     // Without this control a typo in ACTOR_ONLY_MEMBERS makes every negative
     // assertion below pass vacuously, and an emptied array disarms the gate
     // silently — so the list must be non-empty AND every entry must resolve.
-    const { ActorAgent } = await classes();
+    const { ActorAgent } = await import('../src/actor-agent');
     expect(ACTOR_ONLY_MEMBERS.length).toBeGreaterThan(0);
     const actorOwnMembers = Object.getOwnPropertyNames(ActorAgent.prototype);
     for (const member of ACTOR_ONLY_MEMBERS) {
@@ -334,27 +344,71 @@ describe('head containment is structural', () => {
     }
   });
 
-  test('a head cannot reach any actor-surface member', async () => {
-    const { ExplorationAgent } = await classes();
-    for (const member of ACTOR_ONLY_MEMBERS) {
-      // `in` walks the ENTIRE prototype chain, so this rules out reaching the
-      // member through any base, not merely on the class's own prototype.
-      expect(member in ExplorationAgent.prototype).toBe(false);
+  test('a fresh facet admits both families until its seed decides', async () => {
+    const { agent } = await facetHarness();
+    expect(agent.observeFacetKind()).toBe('branch');
+    for (const seed of [...SUBORDINATE_SEEDS, ...EXPLORATION_SEEDS]) {
+      expect(Object.hasOwn(agent, seed)).toBe(false);
     }
   });
 
-  test('ExplorationAgent does not inherit from ActorAgent; SubordinateAgent does', async () => {
-    const { ActorAgent, ExplorationAgent, SubordinateAgent } = await classes();
-    // THE invariant. A head is not an actor, however the declaration is spelled.
-    expect(ActorAgent.isPrototypeOf(ExplorationAgent)).toBe(false);
-    // The positive half, so the assertion above cannot pass because
-    // isPrototypeOf silently stopped working.
-    expect(ActorAgent.isPrototypeOf(SubordinateAgent)).toBe(true);
+  test('a head seed narrows the stub surface to the exploration family', async () => {
+    const { agent } = await facetHarness();
+    await agent.initHead(headInput());
+    expect(agent.observeFacetKind()).toBe('head');
+    // The head's own entries stay resolvable.
+    for (const seed of EXPLORATION_SEEDS) {
+      expect(Object.hasOwn(agent, seed)).toBe(false);
+    }
+    // Every subordinate seed is shadowed: unresolvable from a stub.
+    for (const seed of SUBORDINATE_SEEDS) {
+      expect(Object.hasOwn(agent, seed)).toBe(true);
+    }
   });
 
-  test('a head descends directly from the bare Agent base', async () => {
-    const { ExplorationAgent } = await classes();
-    expect(Object.getPrototypeOf(ExplorationAgent).name).toBe('Agent');
+  test('a node seed narrows the stub surface to the exploration family', async () => {
+    const { agent } = await facetHarness();
+    await agent.initNode({
+      headInput: headInput({ id: 'node-1' }),
+      base: 'you are one node of a search',
+      messages: [{ role: 'user', content: 'probe the parser' }],
+      isolation: 'shared-origin-plane',
+      home: '/workspace',
+      canPropose: false,
+    });
+    expect(agent.observeFacetKind()).toBe('node');
+    for (const seed of SUBORDINATE_SEEDS) {
+      expect(Object.hasOwn(agent, seed)).toBe(true);
+    }
+  });
+
+  test('a subordinate seed narrows the stub surface to the subordinate family', async () => {
+    const parent = orchestratorHarness();
+    const hired = await hiredSubordinateHarness(parent, {
+      name: 'facet-child',
+      displayName: 'Facet Child',
+      nameOrigin: 'user',
+      role: 'specialist',
+      mission: 'hold the sealed line',
+    });
+    expect(hired.agent.observeFacetKind()).toBe('subordinate');
+    for (const seed of EXPLORATION_SEEDS) {
+      expect(Object.hasOwn(hired.agent, seed)).toBe(true);
+    }
+    for (const seed of SUBORDINATE_SEEDS) {
+      expect(Object.hasOwn(hired.agent, seed)).toBe(false);
+    }
+  });
+
+  test('a subordinate row wins the kind over a later head init', async () => {
+    // The hire seed is the facet's family. A head init arriving afterwards
+    // still narrows the stub (the seal runs), but the durable discriminant
+    // keeps reading the hire — one facet, one family, however confused
+    // its caller.
+    const { agent } = subordinateHarness();
+    expect(agent.observeFacetKind()).toBe('subordinate');
+    await agent.initHead(headInput());
+    expect(agent.observeFacetKind()).toBe('subordinate');
   });
 });
 
@@ -411,7 +465,7 @@ describe('the mission ledger crosses the facet boundary', () => {
   // an RPC to the actor that holds the ledger. That RPC cannot be exercised in
   // this runner, so the wiring is asserted at the source, like the branch
   // isolation above.
-  const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
+  const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'subordinate-agent.ts'), 'utf8');
   const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
   const surface = readFileSync(join(import.meta.dir, '..', 'src', 'rpc-surface.ts'), 'utf8');
 

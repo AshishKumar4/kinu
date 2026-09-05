@@ -56,7 +56,7 @@ const GOOD_MERGE =
 /** The spawn substrate, fail-loud: mergeLLM must never reach it, so any touch
  *  is a wiring regression this suite wants named, not absorbed. */
 const neverHost: FacetHost = {
-  explorationFacet() { throw new Error('mergeLLM reached the spawn substrate'); },
+  facetClass() { throw new Error('mergeLLM reached the spawn substrate'); },
   facetHomes() { throw new Error('mergeLLM reached the spawn substrate'); },
   subAgent() { throw new Error('mergeLLM reached the spawn substrate'); },
   abortSubAgent() { throw new Error('mergeLLM reached the spawn substrate'); },

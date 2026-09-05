@@ -13,7 +13,7 @@
  *               so its trace is readable mid-flight.
  *   `rollout`  — an MCTS branch. One toolless proposal call, scored against its
  *               siblings; `search_nodes.observation` IS its entire output. It has
- *               no step trace and never will — see ExplorationAgent.stepSink,
+ *               no step trace and never will — see SubordinateAgent.stepSink,
  *               which returns null for exactly this case.
  *
  * Reads only through what already owns each store: {@link HeadJournal} for the

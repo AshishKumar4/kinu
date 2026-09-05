@@ -9,7 +9,7 @@
  * This module owns the single-head run (over the SAME HeadRuntime seam the
  * agents fork uses, journaled like any head run) and the
  * settle step. Both backends drive it: LocalAgentSession.branch() in-process,
- * OrchestratorAgent.branchTurn() over ExplorationAgent Facets.
+ * OrchestratorAgent.branchTurn() over SubordinateAgent facets in head mode.
  */
 
 import type { SqlExecutor } from './types/primitives';

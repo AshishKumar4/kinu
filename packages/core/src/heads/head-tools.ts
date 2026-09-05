@@ -1,7 +1,7 @@
 /**
  * A head's tool surface — the single, backend-agnostic declaration of what a
  * fork of the parent workspace may do. Both backends build heads from this one
- * function: the cf ExplorationAgent Facet and the CLI in-process head runtime.
+ * function: the cf SubordinateAgent facet in head mode and the CLI in-process head runtime.
  *
  * A head IS a fork: it reaches the parent's real execution surface through the
  * same `run`, `execute_tools`, and `web` vocabulary. Hosted heads share the

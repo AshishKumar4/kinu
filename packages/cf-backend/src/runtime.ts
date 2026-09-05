@@ -86,10 +86,10 @@ import { nimbusPreviewConfigured } from "./nimbus-route";
 
 /**
  * The agent surface these runtime builders need — the bare agents-SDK `Agent`
- * members, nothing from Think. Narrow on purpose: `ExplorationAgent` extends
- * `Agent<Env>` (never `ActorAgent`, so a head can't acquire the think/team/peers
- * surface) and still has to be able to build a runtime, so requiring `Think`
- * here would have made the fork impossible.
+ * members, nothing from Think. Narrow on purpose: `SubordinateAgent` extends
+ * `ActorAgent`, and the seed decides which surface a facet answers, so these
+ * builders stay reachable from a facet in head mode or node mode without
+ * requiring `Think` here.
  *
  * `env`/`ctx` are `protected` on the DurableObject base (not reachable by these
  * free functions), but the runtime is conceptually an extension of the agent and
@@ -114,9 +114,11 @@ export interface CFRuntimeAccess {
    */
   workspaceBox(shellId: string): NimbusSandboxHandle;
   /** The turn's ledger + budget, when this actor has one — ActorAgent
-   *  (orchestrator, subordinate) does; ExplorationAgent (a head/fork) does
-   *  not, so the `workspace` provider's editFile/readFile/writeFile fall
-   *  back to a private ledger there. Optional, not narrowed further than
+   *  (orchestrator, subordinate) does; a `SubordinateAgent` facet in head
+   *  mode or node mode runs with no budget ledger of its own, so the
+   *  `workspace` provider's editFile/readFile/writeFile fall back to a
+   *  private ledger there. Its mission port still reaches the parent over RPC.
+   *  Optional, not narrowed further than
    *  TurnAccumulator's own two turn-scoped fields, so this stays the same
    *  "bare surface" the type's own docstring commits to. */
   readonly acc?: () => Pick<TurnAccumulator, 'files' | 'context'>;

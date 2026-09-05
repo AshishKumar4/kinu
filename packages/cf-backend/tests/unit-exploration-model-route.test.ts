@@ -28,8 +28,6 @@
 
 import { describe, expect, test } from 'bun:test';
 import { APICallError } from 'ai';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import type { AgentContext } from 'agents';
 import {
   BUILTIN_PROFILE_CATALOG,
   profileCatalogDigest,
@@ -37,8 +35,6 @@ import {
   type ModelCallReport,
   type ModelOperationEvent,
   type ResolvedTurnProfile,
-  type SqlExecRow,
-  type SqlValue,
 } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { platformGatewayEnv, stubAiBinding } from './helpers/platform-gateway';
@@ -50,7 +46,8 @@ mockAgentsSdk();
 // `agents` and `cloudflare:*` stubs BEFORE this module graph loads, and a static
 // import is hoisted above the call. Same reason and same shape as
 // unit-head-fork.test.ts.
-const { ExplorationAgent } = await import('../src/exploration');
+const { SubordinateAgent } = await import('../src/subordinate-agent');
+const { facetHarness } = await import('./helpers/actor-harness');
 
 /** The gateway serves these; a tier pinned outside the set would be refused by
  *  the resolver before routing could be observed at all. The spec carries the
@@ -61,10 +58,6 @@ const TIER_MODEL_ID = 'workers-ai/@cf/openai/gpt-oss-20b';
 const TIER_MODEL = `ai-gateway/${TIER_MODEL_ID}`;
 const OTHER_MODEL = 'ai-gateway/workers-ai/@cf/openai/gpt-oss-120b';
 const BRANCH_ANSWER = 'Parse the grammar with a Pratt parser.';
-
-function nativeBindings(values: SqlValue[]): SQLQueryBindings[] {
-  return values.map((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value);
-}
 
 /**
  * A profile whose `default` tier is NOT the account's first listed model, so
@@ -122,8 +115,7 @@ interface BranchHarness {
   profileCalls: () => number;
 }
 
-function makeBranch(respond: (text: string) => Response = completion): BranchHarness {
-  const db = new Database(':memory:');
+async function makeBranch(respond: (text: string) => Response = completion): Promise<BranchHarness> {
   const operations: ModelOperationEvent[] = [];
   const modelCalls: ModelCallReport[] = [];
   let profileCalls = 0;
@@ -140,59 +132,38 @@ function makeBranch(respond: (text: string) => Response = completion): BranchHar
       modelCalls.push(report);
     },
   };
-  const ctx = {
-    id: { toString: () => 'branch-id' },
-    storage: {
-      sql: {
-        exec: (query: string, ...values: SqlValue[]) => {
-          const statement = db.prepare<SqlExecRow, SQLQueryBindings[]>(query);
-          const bound = nativeBindings(values);
-          const rows = /^\s*(SELECT|WITH|PRAGMA)/i.test(query)
-            ? statement.all(...bound)
-            : (statement.run(...bound), []);
-          return { toArray: () => rows, [Symbol.iterator]: () => rows[Symbol.iterator]() };
-        },
-      },
-      transactionSync: <T>(callback: () => T): T => db.transaction(callback)(),
-    },
-  };
   const bindings = {
     LOADER: {},
-    NIMBUS_SESSION: { idFromName: (name: string) => name, get: () => ({}) },
     Sandbox: {},
     ...platformGatewayEnv(ai),
     OrchestratorAgent: { idFromName: (name: string) => name, get: () => parentStub },
     UserDO: { idFromName: (name: string) => name, get: () => ({}) },
   };
-  const partialContext: Partial<AgentContext> = {};
-  Object.assign(partialContext, ctx);
-  // SAFETY: MCTS mode reaches only the constructed identity, SQL and
-  // transaction members; each is implemented above.
-  const agentContext = partialContext as AgentContext;
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, bindings);
-  // SAFETY: every binding a branch reaches is constructed above — the gateway
+  // SAFETY: every binding branch work reaches is constructed above — the gateway
   // provider (AI_GATEWAY_URL + AI), the parent OrchestratorAgent namespace, the
-  // UserDO namespace and LOADER. MCTS mode has no runtime and no sandbox, so it
-  // touches nothing else on Env.
+  // UserDO namespace and LOADER. Branch work has no runtime and no sandbox, so
+  // it touches nothing else on Env.
   const testEnv = partialEnv as Env;
-  const concrete = new ExplorationAgent(agentContext, testEnv);
-  concrete.onStart();
-  Object.defineProperty(concrete, 'name', { value: 'branch-1', configurable: true });
+  // The facet as `spawnBranchFacet` produces it: the production class under the
+  // `exp:`-marked key, activated the way the SDK activates it before the first
+  // `@callable` is dispatched.
+  const { agent: concrete } = await facetHarness({ name: 'exp:branch-1', env: testEnv });
 
   const facetRuntimeMember = Object.getOwnPropertyDescriptor(
-    ExplorationAgent.prototype,
+    SubordinateAgent.prototype,
     'facetRuntime',
   )?.value;
   if (!v.is(v.function(), facetRuntimeMember)) {
-    throw new Error('ExplorationAgent facetRuntime seam is missing');
+    throw new Error('SubordinateAgent facetRuntime seam is missing');
   }
 
   return {
     explore: () => concrete.explore([{ role: 'user', content: 'ship a parser' }], [], ['javascript'], 'plan', []),
     reflect: () => concrete.generateReflection('ship a parser', 'the fixture corpus still fails'),
     nodeRuntimeLanes: () => {
-      const rt: unknown = facetRuntimeMember.call(concrete, 'node', {});
+      const rt: unknown = facetRuntimeMember.call(concrete, 'node', 'node-1', {});
       const lanes = v.parse(v.object({
         llm: v.object({ complete: v.function() }),
         judgeModel: v.optional(v.unknown()),
@@ -220,7 +191,7 @@ function makeBranch(respond: (text: string) => Response = completion): BranchHar
 
 describe('an MCTS branch runs the turn\'s tier, not the account default', () => {
   test('explore resolves its model through the profile the parent turn resolved', async () => {
-    const branch = makeBranch();
+    const branch = await makeBranch();
     await branch.setSharedParent('kinu-main');
 
     const result = await branch.explore();
@@ -232,7 +203,7 @@ describe('an MCTS branch runs the turn\'s tier, not the account default', () => 
   });
 
   test('the reflection pass takes the same route', async () => {
-    const branch = makeBranch();
+    const branch = await makeBranch();
     await branch.setSharedParent('kinu-main');
 
     await branch.explore();
@@ -248,7 +219,7 @@ describe('an MCTS branch runs the turn\'s tier, not the account default', () => 
   });
 
   test('a branch with no parent refuses rather than silently using the default', async () => {
-    const branch = makeBranch();
+    const branch = await makeBranch();
 
     await expect(branch.explore()).rejects.toThrow('This facet was spawned without a parent workspace, so it cannot reach the profile that decides its model; setSharedParent must run before it does any model work.');
     // Nothing was billed for a call that never chose a model.
@@ -259,7 +230,7 @@ describe('an MCTS branch runs the turn\'s tier, not the account default', () => 
 
 describe('who records a branch\'s model call', () => {
   test('the operation frame is written here and the cost report is not', async () => {
-    const branch = makeBranch();
+    const branch = await makeBranch();
     await branch.setSharedParent('kinu-main');
 
     const result = await branch.explore();
@@ -279,7 +250,7 @@ describe('who records a branch\'s model call', () => {
   test('a provider failure closes the frame as failed and still reports no cost', async () => {
     // 400, not 500: a 5xx is a transient the provider layer retries with
     // backoff, which would measure the retry policy rather than this frame.
-    const branch = makeBranch(() => new Response('malformed request', { status: 400 }));
+    const branch = await makeBranch(() => new Response('malformed request', { status: 400 }));
     await branch.setSharedParent('kinu-main');
     await expect(branch.explore()).rejects.toThrow(APICallError);
 
@@ -293,7 +264,7 @@ describe('who records a branch\'s model call', () => {
 
 describe('a facet runtime carries the profile its lanes need', () => {
   test('judge, fast, advisor and reflection lanes all exist', async () => {
-    const branch = makeBranch();
+    const branch = await makeBranch();
     await branch.setSharedParent('kinu-main');
 
     const lanes = branch.nodeRuntimeLanes();

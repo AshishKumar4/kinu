@@ -269,7 +269,7 @@ export interface NodeAgentDeps {
    * difference: the body is the same function either way, so a host is a
    * TRANSPORT and never a second runtime. Present hands the node to a host that
    * gives it its own storage and its own shell state — on the Cloudflare backend
-   * an `ExplorationAgent` facet, the same host a fork's head already runs in.
+   * a `SubordinateAgent` facet in node mode, the same class a fork's head already runs in.
    *
    * What a host does NOT buy is parallelism. `do.facet.cpu_shared` is the
    * governing fact: facets of one object share a single execution thread, so
@@ -626,8 +626,8 @@ export function nodeSystemPrompt(input: {
 /**
  * THE NODE LOOP. One body, wherever a node runs.
  *
- * Exported because a host calls it too: on the Cloudflare backend an
- * `ExplorationAgent` facet receives a {@link NodeRunSpec} over RPC, rebuilds the
+ * Exported because a host calls it too: on the Cloudflare backend a
+ * `SubordinateAgent` facet in node mode receives a {@link NodeRunSpec} over RPC, rebuilds the
  * live seams against its own runtime, and calls exactly this function. So a
  * hosted node and an in-process node are not two implementations that must be
  * kept in step — they are one function reached by two transports, which is the
@@ -825,7 +825,7 @@ export async function runNodeAgent(
   if (deps.mission) Object.assign(headInput, { missionLabels: deps.mission.labels });
   // THE ROUTED SPEC A HOSTED NODE RESOLVES ITSELF. Same rule as the labels above:
   // a facet takes data, so the slot's assignment crosses as the caller's own spec
-  // on the field `ExplorationAgent.runAsNode` already resolves
+  // on the field `SubordinateAgent.runAsNode` already resolves
   // (`facetModelSpec('swarm', headInput.model)`) — one vocabulary, resolved by
   // each transport through its own registry. Assigned rather than declared above
   // so an unrouted run carries no key at all.

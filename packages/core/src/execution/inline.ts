@@ -93,7 +93,7 @@ export interface InlineExecutorDeps {
    * any tool here actually runs, a turn has always already begun.
    *
    * Returns `undefined`, not omitted, for an actor that has no turn-scoped
-   * ledger at all (ExplorationAgent — a head or a swarm node): the caller can supply
+   * ledger at all (SubordinateAgent in head mode or node mode): the caller can supply
    * the thunk unconditionally without itself touching whatever lazily-built
    * state decides the answer, which is what keeps this safe to wire from
    * inside another lazy getter's own construction. Undefined (from the

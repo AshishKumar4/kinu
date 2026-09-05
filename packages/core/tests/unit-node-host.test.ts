@@ -3,8 +3,8 @@
  * not fork the loop.
  *
  * The consolidation's whole claim is that `runNodeLoop` is the body wherever a
- * node runs: in the search's own isolate today, and inside an `ExplorationAgent`
- * facet when a backend supplies a host. A claim like that decays the moment the
+ * node runs: in the search's own isolate today, and inside a `SubordinateAgent`
+ * facet in node mode when a backend supplies a host. A claim like that decays the moment the
  * two paths can drift, so it is asserted rather than described — the SAME node is
  * run both ways here and the two reports are compared field by field.
  *
@@ -244,7 +244,7 @@ describe('one runtime, two transports', () => {
   test('a routed slot crosses to the host as the caller\'s own spec', async () => {
     // The hosted half of `SwarmInput.models`: a facet cannot take a live model
     // over RPC, so the assignment travels as the spec string on the one field
-    // `ExplorationAgent.runAsNode` already resolves. An unrouted node carries
+    // `SubordinateAgent.runAsNode` already resolves. An unrouted node carries
     // no key at all — the facet then keeps its route default.
     const specs: (string | undefined)[] = [];
     const routed = fixture({
@@ -358,7 +358,7 @@ describe('one runtime, two transports', () => {
   test('a hosted node carries its mission labels, so the far side can find the ledger', async () => {
     // THE UNDER-CHARGE THIS CLOSES. `NodeLoopDeps.mission` is a live port and a spec is
     // data, so the port cannot cross. The far side rebuilds one from the LABELS —
-    // `exploration.ts` reads `HeadInput.missionLabels` and opens an RPC back to the
+    // `subordinate-agent.ts` reads `HeadInput.missionLabels` and opens an RPC back to the
     // actor holding the ledger — and a spec that carried no labels would make the same
     // search free on the backend that hosts its nodes and charged on the one that does
     // not.

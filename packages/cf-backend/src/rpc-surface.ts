@@ -55,7 +55,6 @@
 
 import { AGENT_RPC_ACCESS } from './cli/rpc-gate';
 import type { ActorAgent } from './actor-agent';
-import type { ExplorationAgent } from './exploration';
 import type { OrchestratorAgent } from './orchestrator';
 import type { SubordinateAgent } from './subordinate-agent';
 import type { UserDO } from './user/user-do';
@@ -87,10 +86,10 @@ const PLATFORM_RPC_SURFACE: readonly string[] = [
 
 /**
  * The agents-SDK facet protocol: the `_cf_`-prefixed methods the SDK invokes on
- * a stub rather than on `this`. Sub-agents (`SubordinateAgent`,
- * `ExplorationAgent`) are facets of their parent DO, and every hop between a
- * facet and its root crosses a real RPC boundary (`_rootAlarmOwner()` resolves
- * the root through `getServerByName`), so sealing these would break sub-agents,
+ * a stub rather than on `this`. Facets (`SubordinateAgent` in every mode) live
+ * on their parent DO, and every hop between a facet and its root crosses a
+ * real RPC boundary (`_rootAlarmOwner()` resolves the root through
+ * `getServerByName`), so sealing these would break sub-agents,
  * facet schedules, and sub-agent WebSocket bridging. Only the agent family
  * needs them; `UserDO` neither is a facet nor spawns one.
  *
@@ -500,6 +499,12 @@ export const SUBORDINATE_RPC_SURFACE: readonly string[] = [
  * reach back into the workspace goes the other way — a head holds an
  * orchestrator stub and mounts its file plane over ACTOR_AGENT_RPC_SURFACE — so
  * nothing else here needs to be reachable.
+ *
+ * One class hosts both families now, so these names are members of
+ * SubordinateAgent beside the subordinate family's. The constructor seals the
+ * boot surface below; the mode's own seed narrows the instance to exactly one
+ * family's surface, which is what keeps a head from reaching subordinate
+ * seeds (and the reverse) across a stub.
  */
 const EXPLORATION_METHODS = [
   'abortHead',
@@ -511,10 +516,24 @@ const EXPLORATION_METHODS = [
   'runAsNode',
   'setOwner',
   'setSharedParent',
-] as const satisfies readonly (keyof ExplorationAgent)[];
+] as const satisfies readonly (keyof SubordinateAgent)[];
 
 export const EXPLORATION_RPC_SURFACE: readonly string[] = [
   ...PLATFORM_RPC_SURFACE,
   ...AGENTS_FACET_RPC_SURFACE,
+  ...EXPLORATION_METHODS,
+];
+
+/**
+ * What a fresh facet seals to in its constructor, before any seed tells it
+ * which family it is. The union of both families: the seal only ever narrows
+ * (a seed shadows more names, never fewer), so the boot surface must admit
+ * every seed. Each seed narrows to its own family's surface above.
+ */
+export const SUBORDINATE_AGENT_BOOT_SURFACE: readonly string[] = [
+  ...PLATFORM_RPC_SURFACE,
+  ...AGENTS_FACET_RPC_SURFACE,
+  ...ACTOR_AGENT_RPC_SURFACE,
+  ...SUBORDINATE_METHODS,
   ...EXPLORATION_METHODS,
 ];

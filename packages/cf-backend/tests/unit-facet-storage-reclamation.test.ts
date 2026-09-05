@@ -25,7 +25,7 @@ import type { FacetHost } from '../src/facet-spawn';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
-const { ExplorationAgent } = await import('../src/exploration');
+const { SubordinateAgent } = await import('../src/subordinate-agent');
 const { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet, spawnHeadFacet } =
   await import('../src/facet-spawn');
 
@@ -66,8 +66,8 @@ const identity = { ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedP
 /** The class this host creates facets as. Nothing below asserts on it — the
  *  count is keyed by facet id — but `FacetHost` requires the host to supply the
  *  class, because the spawner imports it type-only. A subclass because that is
- *  exactly what `SubAgentClass<ExplorationAgent>` admits — no cast needed. */
-class FakeExplorationFacet extends ExplorationAgent {}
+ *  exactly what `SubAgentClass<SubordinateAgent>` admits — no cast needed. */
+class FakeExplorationFacet extends SubordinateAgent {}
 
 /**
  * A facet host that MODELS STORAGE rather than just recording calls.
@@ -84,21 +84,30 @@ function storageModelingHost(options: { runAsHeadRejects?: boolean } = {}) {
   let everCreated = 0;
   const liveHomes = new Set<string>();
 
-  const stubFor = (id: string) => ({
-    setOwner: async () => ({ ok: true }),
-    setSharedParent: async () => ({ ok: true }),
-    initHead: async () => ({ ok: true }),
-    abortHead: async () => ({ ok: true }),
-    // A running head provisions its own home on the owner before its loop;
-    // the crash arm models a head that got that far and then died.
-    runAsHead: async () => {
-      liveHomes.add(`head-${id}`);
-      if (options.runAsHeadRejects) throw new Error(`${id} crashed`);
-      return headReportFor(id);
-    },
-    explore: async () => ({ text: `${id} approach` }),
-    generateReflection: async () => ({ text: `${id} post-mortem` }),
-  });
+  /** One facet's stub, keyed by the registry key `subAgent` was handed. The
+   *  head id is the one `initHead` seeds, as the production facet reads it —
+   *  a facet knows its key and its work spec, and reports under the latter. */
+  const stubFor = (key: string) => {
+    let headId = key;
+    return {
+      setOwner: async () => ({ ok: true }),
+      setSharedParent: async () => ({ ok: true }),
+      initHead: async (input: HeadInput) => {
+        headId = input.id;
+        return { ok: true, id: input.id };
+      },
+      abortHead: async () => ({ ok: true }),
+      // A running head provisions its own home on the owner before its loop;
+      // the crash arm models a head that got that far and then died.
+      runAsHead: async () => {
+        liveHomes.add(`head-${headId}`);
+        if (options.runAsHeadRejects) throw new Error(`${headId} crashed`);
+        return headReportFor(headId);
+      },
+      explore: async () => ({ text: `${key} approach` }),
+      generateReflection: async () => ({ text: `${key} post-mortem` }),
+    };
+  };
 
   const host = {
     subAgent: async (_cls: { name: string }, id: string) => {
@@ -117,7 +126,7 @@ function storageModelingHost(options: { runAsHeadRejects?: boolean } = {}) {
     deleteSubAgent: async (_cls: { name: string }, id: string) => {
       liveFacets.delete(id);
     },
-    explorationFacet: () => FakeExplorationFacet,
+    facetClass: () => FakeExplorationFacet,
     // A head's home is reclaimed with its storage: a facet whose storage went
     // and whose home stayed would be a second leak the quota never shows.
     facetHomes: () => ({
@@ -131,8 +140,8 @@ function storageModelingHost(options: { runAsHeadRejects?: boolean } = {}) {
     }),
   };
 
-  // SAFETY: this locally constructed host implements all four members FacetHost
-  // owns — the three SDK verbs plus `explorationFacet` — and every stub method
+  // SAFETY: this locally constructed host implements every member FacetHost
+  // owns — the three SDK verbs, `facetClass` and `facetHomes` — and every stub method
   // spawnBranchFacet/spawnHeadFacet invokes.
   return {
     host: host as FacetHost,
@@ -246,7 +255,10 @@ describe('C3 — exploration facet storage is reclaimed', () => {
     // reclaimed storage, the zeros elsewhere in this file would be vacuous.
     expect(facets.everCreated()).toBe(3);
     expect(facets.liveCount()).toBe(3);
-    expect(facets.liveIds()).toEqual(branchIds);
+    // Registry keys carry the exploration marker; the sweep takes domain ids
+    // and the spawner marks them, so an unmarked key here would be a leak past
+    // the marker.
+    expect(facets.liveIds()).toEqual(branchIds.map((id) => `exp:${id}`));
 
     // And the terminal verb still collects them afterwards — an evicted facet
     // is reclaimable, it was simply never being reclaimed.

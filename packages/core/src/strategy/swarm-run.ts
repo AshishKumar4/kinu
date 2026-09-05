@@ -257,8 +257,8 @@ export interface SwarmRunDeps {
    * Where a TOOL-USING node's loop runs.
    *
    * Present hands each answer node to a host that gives it its own
-   * storage and its own shell state — on the Cloudflare backend an
-   * `ExplorationAgent` facet, the same host a fork's head already runs in. Absent
+   * storage and its own shell state — on the Cloudflare backend a
+   * `SubordinateAgent` facet in node mode, the same class a fork's head already runs in. Absent
    * runs the loop in this isolate, which is the honest answer for a backend with
    * no facets rather than a refusal: the body is the same function either way, so
    * an absent host costs a node nothing but its storage boundary.

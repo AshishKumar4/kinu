@@ -318,6 +318,10 @@
     "id",
     "event_json"
   ],
+  "facet_model_operation_outbox@packages/cf-backend/src/subordinate-agent.ts": [
+    "id",
+    "event_json"
+  ],
   "fibers@packages/cli-backend/src/fiber.ts": [
     "id",
     "name",
@@ -837,6 +841,11 @@
     "result_json"
   ],
   "traces@packages/cf-backend/src/exploration.ts": [
+    "id",
+    "step",
+    "text"
+  ],
+  "traces@packages/cf-backend/src/subordinate-agent.ts": [
     "id",
     "step",
     "text"

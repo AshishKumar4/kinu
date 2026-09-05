@@ -6,7 +6,7 @@
  * explains. They travel over the same root RPC the merge's cost report uses
  * (`reportFacetModelOperation`), for the reason that twin exists.
  *
- * ITS OWN MODULE, for the reason `control-plane/stub.ts` is: `exploration.ts`
+ * ITS OWN MODULE, for the reason `control-plane/stub.ts` is: `subordinate-agent.ts`
  * imports `cloudflare:workers` through its tracer, so a caller that only wanted
  * to know what this does with a rejection would drag a Durable Object's whole
  * graph in to find out — and could not, under the runner the rest of these

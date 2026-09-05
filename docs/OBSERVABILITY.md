@@ -40,7 +40,7 @@ screenshot bytes.
 
 The 250-write budget is per invocation. Windows open at Worker `fetch` and
 `scheduled`, actor turn start, and `UserDO`, `MonitorDO`, `ControlPlaneDO` and
-`ExplorationAgent` RPC entries. A constructor runs once per activation. A
+`SubordinateAgent` RPC entries. A constructor runs once per activation. A
 window opened there gives a hot Durable Object one lifetime budget.
 
 The Metrics tab needs `ANALYTICS_SQL_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
@@ -59,9 +59,9 @@ I re-grepped `this.tracing.invocation` on 2026-08-24: still six, same sites.
 | `cf-backend/src/orchestrator.ts` | `alarm` | `alarm.tick` | `OrchestratorAgent._kinuTimerTick` |
 | `cf-backend/src/orchestrator.ts` | `rpc` | `rpc.head.record_step` | `OrchestratorAgent.recordHeadStep` |
 | `cf-backend/src/actor-agent.ts` | `rpc` | `rpc.swarm.arbitrate` | `ActorAgent.nodeArbitrate` |
-| `cf-backend/src/exploration.ts` | `rpc` | `rpc.mcts.branch` | `ExplorationAgent.explore` |
-| `cf-backend/src/exploration.ts` | `rpc` | `rpc.head.run` | `ExplorationAgent.runAsHead` |
-| `cf-backend/src/exploration.ts` | `rpc` | `rpc.swarm.node` | `ExplorationAgent.runAsNode` |
+| `cf-backend/src/subordinate-agent.ts` | `rpc` | `rpc.mcts.branch` | `SubordinateAgent.explore` |
+| `cf-backend/src/subordinate-agent.ts` | `rpc` | `rpc.head.run` | `SubordinateAgent.runAsHead` |
+| `cf-backend/src/subordinate-agent.ts` | `rpc` | `rpc.swarm.node` | `SubordinateAgent.runAsNode` |
 
 `InvocationKind` declares `fetch`, `alarm`, `rpc`, `websocket`
 (`obs/agent-tracing.ts`). Only `alarm` and `rpc` run. The class distinguishes an
@@ -84,7 +84,7 @@ uncontended `alarm` from client-holding `fetch`. Methods outlast line numbers.
 - `rpc.swarm.arbitrate`. Waiting and never asking otherwise look alike.
 - `rpc.head.record_step`. A slow journal write looks like a quiet facet.
 
-`ExplorationAgent` hosts heads, nodes and MCTS branches through the
+`SubordinateAgent` hosts heads, nodes and MCTS branches through the
 orchestrator `tracing` getter and
 `AgentConfigStore.countIsolateGeneration` (`core/src/config/store.ts:211`).
 One kind alone cannot explain the other two.

@@ -20,7 +20,7 @@
  * finished.
  *
  * WHY THE HOST SEAM AND NOT A SCRIPTED MODEL. `NodeLoopHost` is the production seam a
- * Cloudflare `ExplorationAgent` facet runs a node through, so a host that returns the
+ * Cloudflare `SubordinateAgent` facet in node mode runs a node through, so a host that returns the
  * reports this suite needs exercises the engine's real consumption path while making the
  * node's outcome an input rather than something coaxed out of a mock's step budget. The
  * instrument is real and the model is asserted never to be called at all.
@@ -180,7 +180,7 @@ async function run(input: {
   const logger = createRecordingLogger();
   const budgets: (number | undefined)[] = [];
   /** The step cap each node was GRANTED, read off the spec a host receives — the same
-   *  field an `ExplorationAgent` facet reads across an RPC. */
+   *  field a `SubordinateAgent` facet in node mode reads across an RPC. */
   const steps: number[] = [];
   const deps: SwarmRunDeps = {
     rt,

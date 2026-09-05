@@ -39,17 +39,15 @@ mockAgentsSdk();
 const { ActorAgent } = await import('../src/actor-agent');
 const { OrchestratorAgent } = await import('../src/orchestrator');
 const { SubordinateAgent } = await import('../src/subordinate-agent');
-const { ExplorationAgent } = await import('../src/exploration');
 const { Think } = await import('@cloudflare/think');
 const { EXPLORATION_RPC_SURFACE } = await import('../src/rpc-surface');
 const entry = await import('../src/server');
 
-/** The three classes `ctx.exports` must resolve for a facet to spawn: the
+/** The two classes `ctx.exports` must resolve for a facet to spawn: the
  *  name the lookup uses, the class itself, and the worker entry's binding
- *  under that exact name. */
+ *  under that exact name. One class hosts every facet mode. */
 const FACET_CLASSES = [
   ['OrchestratorAgent', OrchestratorAgent, entry.OrchestratorAgent],
-  ['ExplorationAgent', ExplorationAgent, entry.ExplorationAgent],
   ['SubordinateAgent', SubordinateAgent, entry.SubordinateAgent],
 ] as const;
 
@@ -79,8 +77,7 @@ describe('actor substrate — facet feasibility contract', () => {
     for (const [, Cls] of FACET_CLASSES) {
       expect(Cls.length).toBe(2);
     }
-    // ExplorationAgent is a plain Agent; the two subordinate-tree roots are the
-    // ones that inherit the substrate, and ActorAgent is a Think directly —
+    // Both roots inherit the substrate, and ActorAgent is a Think directly —
     // which is what makes a Think-based chat agent runnable as a facet at all.
     expect(Object.getPrototypeOf(ActorAgent)).toBe(Think);
     for (const Cls of [OrchestratorAgent, SubordinateAgent]) {
@@ -90,9 +87,11 @@ describe('actor substrate — facet feasibility contract', () => {
     expect(subordinateHarness().agent).toBeInstanceOf(SubordinateAgent);
   });
 
-  test('ExplorationAgent stays a bare facet with the parent-bootstrap RPC', () => {
-    expect(Object.getPrototypeOf(ExplorationAgent).name).toBe('Agent');
-    expect(ExplorationAgent.prototype.setSharedParent).toBeDefined();
+  test('one facet class hosts exploration modes beside subordinates', () => {
+    expect(Object.getPrototypeOf(SubordinateAgent).name).toBe('ActorAgent');
+    expect(SubordinateAgent.prototype.setSharedParent).toBeDefined();
+    expect(SubordinateAgent.prototype.initHead).toBeDefined();
+    expect(SubordinateAgent.prototype.setSubordinateIdentity).toBeDefined();
     expect(EXPLORATION_RPC_SURFACE).toContain('setSharedParent');
   });
 
@@ -110,7 +109,7 @@ describe('actor substrate — facet feasibility contract', () => {
   test('the parent facet gate admits only active, registered subordinate facets', async () => {
     // The gate is ActorAgent's, because a subordinate is now on both sides of
     // the relationship: it hires facets of its own, so it needs the same gate its
-    // parent has. The class it admits comes from `subordinateFacet()` rather than
+    // parent has. The class it admits comes from `facetClass()` rather than
     // a named import, which is how the base class avoids importing its subclass.
     for (const Cls of [OrchestratorAgent, SubordinateAgent]) {
       expect(Object.getOwnPropertyDescriptor(Cls.prototype, 'onBeforeSubAgent')).toBeUndefined();
@@ -145,9 +144,14 @@ describe('actor substrate — facet feasibility contract', () => {
     // question the gate asks.
     await agent.subAgent(OrchestratorAgent, 'aria');
     expect(agent.hasSubAgent(OrchestratorAgent.name, 'aria')).toBe(true);
-    for (const className of ['OrchestratorAgent', 'ExplorationAgent', 'Agent']) {
+    for (const className of ['OrchestratorAgent', 'Agent']) {
       expect(await reach(className, 'aria')).toMatchObject({ status: 404 });
     }
+    // An exploration worker shares the facet class now, but it is never
+    // rostered: registered under its marked key, it still reads as a
+    // stranger to the subordinate gate.
+    await agent.subAgent(SubordinateAgent, 'exp:head-1');
+    expect(await reach('SubordinateAgent', 'exp:head-1')).toMatchObject({ status: 404 });
 
     // Registered as a facet but never rostered, and rostered but never
     // registered: each half alone must be refused.

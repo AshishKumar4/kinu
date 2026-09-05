@@ -22,6 +22,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   EXPLORATION_RPC_SURFACE,
   ORCHESTRATOR_RPC_SURFACE,
+  SUBORDINATE_AGENT_BOOT_SURFACE,
   SUBORDINATE_RPC_SURFACE,
   USER_DO_RPC_SURFACE,
   sealRpcSurface,
@@ -222,8 +223,8 @@ describe('the UserDO RPC surface cannot drift from the class', () => {
 });
 
 // ── The agent family ────────────────────────────────────────────────────────
-// `OrchestratorAgent`, `SubordinateAgent` and `ExplorationAgent` cannot be
-// constructed under bun — their base chain reaches `cloudflare:*` through
+// `OrchestratorAgent` and `SubordinateAgent` cannot be constructed under bun —
+// their base chain reaches `cloudflare:*` through
 // `@cloudflare/think` and `@cloudflare/sandbox`. Their surfaces are plain data
 // though, and the class sources are readable, so the same two questions get
 // answered: does every class seal itself, and does its surface hold only what
@@ -239,8 +240,7 @@ const AGENTS_FACET_RPC_SURFACE = surfaceLiteral('AGENTS_FACET_RPC_SURFACE');
 const SEALED_CLASSES = [
   { file: 'user/user-do.ts', klass: 'UserDO', constant: 'USER_DO_RPC_SURFACE', surface: USER_DO_RPC_SURFACE },
   { file: 'orchestrator.ts', klass: 'OrchestratorAgent', constant: 'ORCHESTRATOR_RPC_SURFACE', surface: ORCHESTRATOR_RPC_SURFACE },
-  { file: 'subordinate-agent.ts', klass: 'SubordinateAgent', constant: 'SUBORDINATE_RPC_SURFACE', surface: SUBORDINATE_RPC_SURFACE },
-  { file: 'exploration.ts', klass: 'ExplorationAgent', constant: 'EXPLORATION_RPC_SURFACE', surface: EXPLORATION_RPC_SURFACE },
+  { file: 'subordinate-agent.ts', klass: 'SubordinateAgent', constant: 'SUBORDINATE_AGENT_BOOT_SURFACE', surface: SUBORDINATE_AGENT_BOOT_SURFACE },
 ] as const;
 
 /** The inherited members that make an unsealed Durable Object a liability: the
@@ -363,7 +363,8 @@ describe('the agent surfaces cannot drift from their classes', () => {
   test.each([
     ['OrchestratorAgent', 'orchestrator.ts', ORCHESTRATOR_RPC_SURFACE] as const,
     ['SubordinateAgent', 'subordinate-agent.ts', SUBORDINATE_RPC_SURFACE] as const,
-    ['ExplorationAgent', 'exploration.ts', EXPLORATION_RPC_SURFACE] as const,
+    ['SubordinateAgent (exploration modes)', 'subordinate-agent.ts', EXPLORATION_RPC_SURFACE] as const,
+    ['SubordinateAgent (boot)', 'subordinate-agent.ts', SUBORDINATE_AGENT_BOOT_SURFACE] as const,
   ])('%s names only members it or ActorAgent declares', (_name, file, surface) => {
     const declared = new Set([...declaredClassMembers(source(file)), ...actorMembers].map((m) => m.name));
     const stale = surface
@@ -375,7 +376,8 @@ describe('the agent surfaces cannot drift from their classes', () => {
   test.each([
     ['OrchestratorAgent', 'orchestrator.ts', ORCHESTRATOR_RPC_SURFACE] as const,
     ['SubordinateAgent', 'subordinate-agent.ts', SUBORDINATE_RPC_SURFACE] as const,
-    ['ExplorationAgent', 'exploration.ts', EXPLORATION_RPC_SURFACE] as const,
+    ['SubordinateAgent (exploration modes)', 'subordinate-agent.ts', EXPLORATION_RPC_SURFACE] as const,
+    ['SubordinateAgent (boot)', 'subordinate-agent.ts', SUBORDINATE_AGENT_BOOT_SURFACE] as const,
   ])('%s exposes no internal of its own or of ActorAgent', (_name, file, surface) => {
     const internal = [...declaredClassMembers(source(file)), ...actorMembers]
       .filter(isInternalMember)
@@ -434,14 +436,14 @@ describe('a facet reaches its root only through the sealed surface', () => {
   /**
    * Every file that can hold a cross-DO call on the root stub.
    *
-   * `exploration.ts` acquires the stub, and one acquisition HANDS IT AWAY: the
-   * `modelOperations` field passes a thunk to `forwardFacetModelOperations`,
-   * which is where that stub's only call actually happens. So a scan confined to
-   * the acquiring file cannot see it — precisely the hole this describe block
-   * exists to close — and the receiving file is in the corpus for the same
-   * reason `stepSink`'s parameter is pinned below.
-   */
-  const REACHING_FILES = ['exploration.ts', 'obs/facet-operations.ts'] as const;
+  * `subordinate-agent.ts` acquires the stub, and one acquisition HANDS IT AWAY: the
+  * `facetModelOperations` field passes a thunk to `forwardFacetModelOperations`,
+  * which is where that stub's only call actually happens. So a scan confined to
+  * the acquiring file cannot see it — precisely the hole this describe block
+  * exists to close — and the receiving file is in the corpus for the same
+  * reason `stepSink`'s parameter is pinned below.
+  */
+  const REACHING_FILES = ['subordinate-agent.ts', 'obs/facet-operations.ts'] as const;
 
   /** `const parent = this.getSharedParentStub()` is the only way a head obtains
    *  its root's stub, so every `parent.x(` in these files is a cross-DO call. */
@@ -461,7 +463,7 @@ describe('a facet reaches its root only through the sealed surface', () => {
    * derived list has that a hand-written one does not.
    */
   test('every acquisition of the root stub binds it to the name the scan reads', () => {
-    const source_ = source('exploration.ts');
+    const source_ = source('subordinate-agent.ts');
     const bindings = [...source_.matchAll(/this\.getSharedParentStub\(\)/g)];
     const named = [...source_.matchAll(/const (\w+) = this\.getSharedParentStub\(\)/g)]
       .map(([, name]) => name!);

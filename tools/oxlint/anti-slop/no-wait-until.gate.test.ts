@@ -144,8 +144,8 @@ for (const { rule } of cases) {
  * Object is here — not a list in this file, which would stop covering a class the moment one was
  * added. It is not the whole set though: a FACET is a Durable Object surface with its own
  * `ctx.storage` and the same eviction semantics, and it carries no binding at all, so
- * `SubordinateAgent` and `ExplorationAgent` were outside this count while being exactly the classes
- * a head's background work runs in. They are read from the `subAgent`/`abortSubAgent`/
+ * `SubordinateAgent` sat outside this count while being exactly the class
+ * a head's background work runs in. It is read from the `subAgent`/`abortSubAgent`/
  * `deleteSubAgent` call sites, which is where the deployment actually names them.
  *
  * Of those classes, the ones declared in our own sources are the corpus this rule can act on, and
@@ -192,10 +192,10 @@ function durableObjectCorpus(): {
   // TWO forms, because a facet class reaches that API two ways and this gate must not be keyed on
   // the syntax of one of them. `subAgent(Cls, id)` names it at the call site. `SubAgentClass<Cls>`
   // names it in the hook a concrete root supplies the value through — the shape
-  // `ActorAgent.subordinateFacet()` and `FacetHost.explorationFacet()` use, which exists precisely
+  // `ActorAgent.facetClass()` and `FacetHost.facetClass()` use, which exists precisely
   // so a low-level module carries no runtime import of the class it spawns. Matching only the call
   // site made this corpus collapse to zero the moment `facet-spawn.ts` stopped naming
-  // `ExplorationAgent` directly, which is an empty-corpus pass, not a fix.
+  // `SubordinateAgent` directly, which is an empty-corpus pass, not a fix.
   const facets = [
     ...new Set(
       sources.flatMap((text) => [

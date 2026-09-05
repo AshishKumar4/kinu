@@ -417,7 +417,7 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
   test('a decision resolved inline is clean — there is nothing to await', () => {
     // The warn-and-release shape a non-actor DO legitimately has. It reaches no
     // lane, so requiring the roster here would be a rule about style.
-    const inline = `export class ExplorationAgent extends Agent {
+    const inline = `export class MonitorDO extends Agent {
       override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
         return Promise.resolve({ status: 'error', error: 'no lane owns ' + ctx.name });
       }
@@ -625,7 +625,6 @@ describe('DO init-gate purity, against the real tree', () => {
     expect(inspected.map((i) => `${i.owner}.${i.member}:${i.hook}`).sort()).toEqual([
       'ActorAgent.onFiberRecovered:recovery',
       'Devbox.onStart:container-start',
-      'ExplorationAgent.onStart:per-request',
       'OrchestratorAgent.onStart:per-request',
       'SubordinateAgent.onStart:per-request',
     ]);

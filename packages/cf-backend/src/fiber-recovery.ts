@@ -2,7 +2,7 @@
  * The durable lanes' RECOVERY half — what happens to one when the platform
  * interrupted it.
  *
- * An ActorAgent runs four kinds of work through `runFiber`, so each writes a
+ * An ActorAgent runs its work through `runFiber`, so each lane writes a
  * `cf_agents_runs` row with its stashed identity before it runs and each is
  * handed back to {@link classifyRecoveredFiber} on the next activation:
  *
@@ -10,6 +10,7 @@
  *   • a search               (`mcts`, minted by core's SEARCH_FIBER_NAME)
  *   • the evolution lane     (`evolution:settle`, started by settleEvolutionInBackground)
  *   • the advisor lane       (`advisor:review`, started by reviewTurnInBackground)
+ *   • a facet's outbox drain (`model-operation-forward`, started by an exploration mode)
  *
  * That activation needs NO client and NO request: with nothing connected, the
  * persisted keepAlive alarm fires on its own and the SDK's housekeeping runs the
@@ -277,6 +278,11 @@ export const TERMINAL_LANE_FIBER = 'terminal:effects';
  *  makes the replay collide with a delivery that already landed. */
 const FORK_NOTICE_LANE_FIBER = 'fork:notice';
 
+/** A facet's model-operation outbox drain, the one lane an exploration mode of
+ *  the facet class runs. Its checkpoint is the outbox row itself, so its
+ *  recovery re-drives nothing — see {@link recoverModelOperationLane}. */
+export const MODEL_OPERATION_LANE_FIBER = 'model-operation-forward';
+
 /** The transports one actor supplies to its lanes' recovery. Every member is
  *  something an activation re-resolves for itself — a stub call, a fresh model
  *  route, its own storage — which is exactly why they are parameters and the
@@ -357,6 +363,7 @@ export function classifyRecoveredFiber(
     if (ctx.name === ADVISOR_LANE_FIBER) return redriveAdvisorLane(transports, ctx);
     if (ctx.name === SEARCH_FIBER_NAME) return recordInterruptedSearch(transports, ctx);
     if (ctx.name === MCP_WARM_LANE_FIBER) return recoverMcpWarmLane();
+    if (ctx.name === MODEL_OPERATION_LANE_FIBER) return recoverModelOperationLane();
     if (ctx.name === TERMINAL_LANE_FIBER) return armTerminalLaneRecovery(transports, ctx);
     if (ctx.name === FORK_NOTICE_LANE_FIBER) return redriveForkNoticeLane(transports, ctx);
     return unrecognisedLane(ctx);
@@ -612,6 +619,20 @@ export type RecoveredNotice = v.InferOutput<typeof RecoveredSignalSchema>;
  */
 function recoverMcpWarmLane(): FiberRecoveryResult {
   return { status: 'completed', snapshot: { lane: MCP_WARM_LANE_FIBER, reentered: false } };
+}
+
+/**
+ * A facet's model-operation drain, which has its own durable carrier already.
+ *
+ * Every operation frame the drain forwards sits in `facet_model_operation_outbox`
+ * until the root acknowledges it, and the facet's activation restarts the drain
+ * whenever a row is pending (`SubordinateAgent.ensureFacetTables`). The fiber
+ * row therefore carries nothing the outbox does not, and a re-drive here would
+ * race the one the activation starts. Classified, like the MCP warm lane, so an
+ * interrupted drain files no unrecognised-lane failure.
+ */
+function recoverModelOperationLane(): FiberRecoveryResult {
+  return { status: 'completed', snapshot: { lane: MODEL_OPERATION_LANE_FIBER, redrive: 'outbox' } };
 }
 
 /**

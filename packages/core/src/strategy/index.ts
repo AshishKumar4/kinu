@@ -13,7 +13,7 @@ export * from './exec-ratio';
 export * from './verifier-registry';
 export * from './swarm-run';
 // The node runtime and the layout its home comes from. Exported because a BACKEND
-// calls `runNodeLoop` directly: an `ExplorationAgent` facet is a transport for the
+// calls `runNodeLoop` directly: a `SubordinateAgent` facet in node mode is a transport for the
 // same body the search runs in-isolate, so the host needs the loop, its spec and
 // its result types by name.
 export * from './node-host';

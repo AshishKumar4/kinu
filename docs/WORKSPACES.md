@@ -103,7 +103,7 @@ actors that work inside it.
     Hosted nodes run over the canonical workspace with actor-private shell
     state and scaffold. `facetRuntime` gives each one a `node:<name>` shell id
     and a scaffold at `.kinu/nodes/<name>/scaffold/agent.js` over the
-    PARENT's file plane (`cf-backend/src/exploration.ts:418-444`). MCTS rollouts
+    PARENT's file plane (`facetRuntime` in `cf-backend/src/subordinate-agent.ts`). MCTS rollouts
     use the same facet class in a separate toolless mode and acquire no runtime.
 
     Facet isolation is one contract with one applier. `agentHomeLayout` is
@@ -230,10 +230,10 @@ actors that work inside it.
 
 ## What deliberately keeps the agent noun
 
-Actor-sense names stay. The `OrchestratorAgent`, `SubordinateAgent` and
-`ExplorationAgent` DO classes all still exist and are exported from
+Actor-sense names stay. The `OrchestratorAgent` and `SubordinateAgent`
+DO classes still exist and are exported from
 `cf-backend/src/server.ts:86-91`, though only `OrchestratorAgent` has a
-namespace binding: the other two are facet classes, reached through it rather
+namespace binding: the other is a facet class, reached through it rather
 than by name (`cf-backend/wrangler.jsonc:106-113`).
 
 The other actor-sense names that stay: the wire paths

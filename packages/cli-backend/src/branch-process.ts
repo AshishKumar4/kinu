@@ -2,7 +2,7 @@
  * Branch isolation via child processes for Linux CLI.
  * Each MCTS branch gets its own SQLite file — structural isolation.
  *
- * On CF: subAgent(ExplorationAgent, id) uses Facets (co-located DOs)
+ * On CF: subAgent to a SubordinateAgent facet in branch mode uses Facets (co-located DOs)
  * On Linux: child_process.fork(branch-worker.ts) with its own SQLite DB
  */
 

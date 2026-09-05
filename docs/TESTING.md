@@ -697,7 +697,7 @@ test('budget and branches decide how much tree gets written', async () => {
 ## What Bun cannot load
 
 `@cloudflare/agents` imports `cloudflare:email`, which only Workers resolves.
-`ActorAgent`, its subclasses, `ExplorationAgent`, and the auth/routes dispatcher
+`ActorAgent`, its subclasses, and the auth/routes dispatcher
 therefore cannot load in `bun test`.
 - `bun run test:workerd` runs the 23 `packages/cf-backend/tests/workerd/`
   files in vitest/workerd. They import `cloudflare:workers` and

@@ -648,7 +648,7 @@ requirements:
       - Kinu.Exploration.Isolation.dropping_the_frame_condition_breaks_isolation
       - Kinu.Exploration.Isolation.agent_node_step_is_representable
     tsRefs:
-      - packages/cf-backend/src/exploration.ts#ExplorationAgent
+      - packages/cf-backend/src/subordinate-agent.ts#SubordinateAgent
       - packages/core/src/strategy/swarm.ts#SWARM_UNITS
     remainingEvidence:
       - This requirement deliberately proves NO agent-node isolation property; unit:'trajectory' is blocked on per-node workspace isolation which does not exist

@@ -37,19 +37,18 @@ mockAgentsSdk();
 // before these modules evaluate, and a static import would hoist above it.
 const { OrchestratorAgent } = await import('../src/orchestrator');
 const { SubordinateAgent } = await import('../src/subordinate-agent');
-const { ExplorationAgent } = await import('../src/exploration');
 
 /** Every Kinu class whose `onStart` runs inside `blockConcurrencyWhile`,
  *  with the shape its gate is ALLOWED to have. The orchestrator is async by
  *  the owner's 2026-08-31 ruling — bounded once-per-start work stays in the
  *  gate, concretely the workspace boot — and `gate:do-init` holds every await
- *  in it to the pinned admitted list. The others stay synchronous.
- *  UserDO declares no override, MonitorDO is a plain DurableObject with no
- *  partyserver gate, and KinuSandbox/NimbusSession are third-party bases. */
+ *  in it to the pinned admitted list. The facet class stays synchronous in
+ *  every mode: its activation is DDL plus a detached fiber, whatever seed it
+ *  later takes. UserDO declares no override, MonitorDO is a plain DurableObject
+ *  with no partyserver gate, and KinuSandbox is a third-party base. */
 const GATED_CLASSES = [
   ['OrchestratorAgent', OrchestratorAgent, 'AsyncFunction'],
   ['SubordinateAgent', SubordinateAgent, 'Function'],
-  ['ExplorationAgent', ExplorationAgent, 'Function'],
 ] as const;
 
 describe('no Durable Object awaits anything unadmitted inside its init gate', () => {

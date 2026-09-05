@@ -245,6 +245,24 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // for the same reason: `initWorkspaceSchema` creates it, and a swarm forked down
     // into a local session re-enters the same rows.
     swarm_node_records: EVERYWHERE,
+    // The two tables the hosted facet class carries for its exploration modes,
+    // created at every activation of that class (`SubordinateAgent.onStart`) so
+    // a branch's first write is not what brings them into being. `traces` is
+    // the branch rollout's own step record, read back by its reflection;
+    // `facet_model_operation_outbox` holds the operation frames a facet forwards
+    // to its root until the root acknowledges them. The orchestrator is where
+    // those frames LAND, and a local branch runs in its own worker process with
+    // its own database (cli-backend/src/branch-worker.ts).
+    traces: {
+      'cf-orchestrator': { absent: 'a root never rolls a branch out in its own storage; every rollout runs in a facet' },
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local branch keeps its trace in its own worker process\'s database (branch-worker.ts)' },
+    },
+    facet_model_operation_outbox: {
+      'cf-orchestrator': { absent: 'the root is where a facet\'s forwarded operation frames land; it buffers none of its own' },
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local branch reports its operation frames in-process, with no isolate boundary to buffer across' },
+    },
 
     // ── events hub ──
     // `outbox_peer` is not in this group: the shared outbox creates its table

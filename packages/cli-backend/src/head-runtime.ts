@@ -1,5 +1,5 @@
 // createCLIHeadRuntime — the local HeadRuntime backing the `agents` tool's fork
-// action. The cf backend runs heads as ExplorationAgent Facets; locally each
+// action. The cf backend runs heads as SubordinateAgent facets in head mode; locally each
 // head runs IN-PROCESS over a FORK of the parent runtime (buildCLIHeadRuntime):
 // the parent's real host executor (`run laptop` / codemode `laptop.*`), the
 // parent's canonical workspace through `parent.*`, and a PRIVATE durable

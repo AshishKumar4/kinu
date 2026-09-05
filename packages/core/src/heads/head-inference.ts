@@ -1,7 +1,7 @@
 // The backend-agnostic run of an agent that reports rather than chats — the
 // divergent-reasoning-thread fork that produces a HeadReport, and the swarm node
 // that produces one too. Every backend drives this: the cf-backend's Facet head
-// (ExplorationAgent.runAsHead), the CLI's in-process head-worker, and both
+// (SubordinateAgent.runAsHead), the CLI's in-process head-worker, and both
 // transports of a swarm node (strategy/node-agent.ts).
 //
 // IT OWNS NO LOOP OF ITS OWN. The turn body is `runChat` (../chat.ts) — the one

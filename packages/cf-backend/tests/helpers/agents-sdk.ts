@@ -1,7 +1,7 @@
 import * as workersModule from 'cloudflare:workers';
 import { mock } from 'bun:test';
 import * as v from 'valibot';
-import type { AgentContext, FiberRecoveryContext } from 'agents';
+import type { AgentContext, Connection, ConnectionContext, FiberRecoveryContext, WSMessage } from 'agents';
 import { parseJsonValue, type JsonObject, type JsonValue, type SqlValue } from '@kinu.run/core';
 import type { McpCredentialTransport } from '../../src/user/mcp';
 
@@ -229,6 +229,25 @@ export function mockAgentsSdk(): void {
           owner_path TEXT,
           owner_path_key TEXT
         )`);
+      }
+
+      /**
+       * The connection handlers the vendor base declares as no-ops
+       * (`partyserver/dist/index.js:894-916`, `Server.onConnect` through
+       * `Server.onRequest`). Think's own `onStart` binds all four in
+       * `_setupProtocolHandlers` (`@cloudflare/think/dist/think.js:6099`) before
+       * it reaches the subclass's `onStart`, so a stand-in without them cannot
+       * bring a Think subclass up at all. `agent.onStart()` rejected on
+       * `this.onConnect.bind`, and a suite that called it on a facet read the
+       * unhandled rejection as an activation. No socket reaches these under bun,
+       * so the bodies are the vendor's own. They do nothing, and a request gets
+       * the vendor's 404.
+       */
+      onConnect(_connection: Connection, _ctx: ConnectionContext): void {}
+      onMessage(_connection: Connection, _message: WSMessage): void {}
+      onClose(_connection: Connection, _code: number, _reason: string, _wasClean: boolean): void {}
+      onRequest(_request: Request): Response {
+        return new Response('Not implemented', { status: 404 });
       }
 
       /** The SDK's DO heartbeat. Production uses it for work that outlives the

@@ -10,7 +10,7 @@ import type { FacetHost } from '../src/facet-spawn';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
-const { ExplorationAgent } = await import('../src/exploration');
+const { SubordinateAgent } = await import('../src/subordinate-agent');
 const { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet, spawnHeadFacet } =
   await import('../src/facet-spawn');
 
@@ -48,11 +48,11 @@ function headInput(): HeadInput {
 }
 
 /** The class the fake host hands the spawner, and a DISTINCT identity from
- *  `ExplorationAgent` on purpose: the spawner must create whatever class its
+ *  `SubordinateAgent` on purpose: the spawner must create whatever class its
  *  host supplies, and a class the spawner cannot name is what proves the
  *  argument is forwarded rather than hardcoded. A subclass because that is
- *  exactly what `SubAgentClass<ExplorationAgent>` admits — no cast needed. */
-class FakeExplorationFacet extends ExplorationAgent {}
+ *  exactly what `SubAgentClass<SubordinateAgent>` admits — no cast needed. */
+class FakeExplorationFacet extends SubordinateAgent {}
 
 /** A facet host whose stub records every RPC, in order. `failing` names the one
  *  bootstrap RPC that should reject, to exercise the discard path.
@@ -106,7 +106,7 @@ function makeHost(
       calls.push({ method: 'deleteSubAgent', args: [cls, name] });
       if (options.deleteSubAgentThrows) throw new Error('facet storage is unreachable');
     },
-    explorationFacet: () => FakeExplorationFacet,
+    facetClass: () => FakeExplorationFacet,
     facetHomes: () => ({
       provision: async (kind: string, id: string) => {
         calls.push({ method: 'provisionFacetHome', args: [kind, id] });
@@ -119,7 +119,7 @@ function makeHost(
     listSubAgents: () => [],
   };
   // SAFETY: this locally constructed host implements every member FacetHost
-  // owns — the four SDK verbs plus `explorationFacet` — and every returned
+  // owns — the four SDK verbs plus `facetClass` and `facetHomes` — and every returned
   // exploration stub method is present and records its exact argument list
   // before returning the owner-shaped result above.
   return { host: host as FacetHost, calls };
@@ -139,11 +139,10 @@ describe('exploration-facet spawn seam', () => {
     });
 
     expect(methods(calls)).toEqual(['subAgent', 'setOwner', 'setSharedParent', 'initHead']);
-    // The class comes from the HOST, keyed by the head's own id — the spawner has
-    // none of its own to hardcode. That every real host supplies the bare
-    // ExplorationAgent, never a class carrying the actor tool surface, is what
-    // bounds the spawn tree (unit-exploration-containment.test.ts).
-    expect(calls[0]?.args).toEqual([FakeExplorationFacet, 'head-1']);
+    // The class comes from the HOST, keyed by the worker's exploration address —
+    // the spawner has none of its own to hardcode, and the `exp:` marker keeps
+    // the key disjoint from subordinate roster slugs sharing the one class.
+    expect(calls[0]?.args).toEqual([FakeExplorationFacet, 'exp:head-1']);
     // The spawner's workspace capability token rides down with the owner, so
     // the head reaches the user's credentials AS the parent workspace and is
     // attenuated with it — no per-head identity to taint separately.
@@ -169,10 +168,10 @@ describe('exploration-facet spawn seam', () => {
     // must only evict the instance. Collapsing either into the other is a leak
     // one way and data loss the other.
     expect(methods(calls)).toEqual(['runAsHead', 'deleteSubAgent', 'releaseFacetHome', 'abortHead', 'abortSubAgent']);
-    expect(calls[1]?.args).toEqual([FakeExplorationFacet, 'head-1']);
+    expect(calls[1]?.args).toEqual([FakeExplorationFacet, 'exp:head-1']);
     expect(calls[2]?.args).toEqual(['head', 'head-1']);
     expect(calls[3]?.args).toEqual(['wall-clock timeout']);
-    expect(calls[4]?.args).toEqual([FakeExplorationFacet, 'head-1']);
+    expect(calls[4]?.args).toEqual([FakeExplorationFacet, 'exp:head-1']);
   });
 
   test('run() reclaims the facet even when runAsHead rejects, and the original error propagates', async () => {
@@ -187,7 +186,7 @@ describe('exploration-facet spawn seam', () => {
     await expect(head.run()).rejects.toThrow('the head crashed mid-run');
 
     expect(methods(calls)).toEqual(['runAsHead', 'deleteSubAgent', 'releaseFacetHome']);
-    expect(calls[1]?.args).toEqual([FakeExplorationFacet, 'head-1']);
+    expect(calls[1]?.args).toEqual([FakeExplorationFacet, 'exp:head-1']);
     expect(calls[2]?.args).toEqual(['head', 'head-1']);
   });
 
@@ -232,7 +231,7 @@ describe('exploration-facet spawn seam', () => {
     expect(methods(calls)).toEqual([
       'subAgent', 'setOwner', 'setSharedParent', 'initHead', 'deleteSubAgent',
     ]);
-    expect(calls.at(-1)?.args).toEqual([FakeExplorationFacet, 'head-1']);
+    expect(calls.at(-1)?.args).toEqual([FakeExplorationFacet, 'exp:head-1']);
   });
 
   test('a branch seeds only its owner and exposes the MCTS rollout calls', async () => {
@@ -243,7 +242,7 @@ describe('exploration-facet spawn seam', () => {
     });
 
     expect(methods(calls)).toEqual(['subAgent', 'setOwner']);
-    expect(calls[0]?.args).toEqual([FakeExplorationFacet, 'branch-7']);
+    expect(calls[0]?.args).toEqual([FakeExplorationFacet, 'exp:branch-7']);
     expect(calls[1]?.args).toEqual(['user-1', 'pwc_parent']);
 
     expect(await branch.explore([{ role: 'user', content: 'hi' }], [], ['javascript'], 'plan')).toEqual({
@@ -294,7 +293,7 @@ describe('exploration-facet spawn seam', () => {
     await deleteExplorationFacet(host, 'branch-7');
 
     expect(methods(calls)).toEqual(['deleteSubAgent']);
-    expect(calls[0]?.args).toEqual([FakeExplorationFacet, 'branch-7']);
+    expect(calls[0]?.args).toEqual([FakeExplorationFacet, 'exp:branch-7']);
   });
 
   test('a bootstrap failure whose cleanup also fails names the leak and keeps the original cause', async () => {

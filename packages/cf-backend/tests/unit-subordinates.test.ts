@@ -129,11 +129,11 @@ describe('subordinate wiring', () => {
   test('no rlm provider, model spec or prompt flag survives in the cf composition', () => {
     const actor = source('actor-agent.ts');
     const execTools = source('execute-tools.ts');
-    const exploration = source('exploration.ts');
+    const exploration = source('subordinate-agent.ts');
     for (const [name, text] of [
       ['actor-agent.ts', actor],
       ['execute-tools.ts', execTools],
-      ['exploration.ts', exploration],
+      ['subordinate-agent.ts', exploration],
     ] as const) {
       expect({ name, hit: /createRLMProvider|rlmAvailable|rlm\.query/u.test(text) })
         .toEqual({ name, hit: false });

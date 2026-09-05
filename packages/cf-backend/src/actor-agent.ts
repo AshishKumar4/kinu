@@ -22,10 +22,9 @@ import {
   type WSMessage,
   type FiberRecoveryContext, type FiberRecoveryResult,
 } from "agents";
-import { ExplorationAgent } from './exploration';
 // Type-only, so it is erased and the base class carries no runtime import of
-// its own subclass. The VALUE comes from `subordinateFacet()`, which each
-// concrete root supplies.
+// its own subclass. The VALUE comes from `facetClass()`, which each
+// concrete actor supplies.
 import type { SubordinateAgent } from './subordinate-agent';
 import type {
   SubordinateActivityEvent,
@@ -45,6 +44,7 @@ import {
   type CliSocketBearer,
 } from "./cli/rpc-gate";
 import { retryTransientDO } from "./lib/do-rpc";
+import { isExplorationFacetKey } from "./facet-spawn";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
 import {
@@ -682,7 +682,7 @@ export abstract class ActorAgent extends Think<Env> {
     // caller. Recursive by construction: each hire re-enters here for its own
     // hires, so a reissued token reaches the whole tree, not just its first row.
     let missed = 0;
-    const facet = this.subordinateFacet();
+    const facet = this.facetClass();
     for (const entry of this.subordinateRoster.list()) {
       try {
         const stub = await this.subAgent(facet, entry.name);
@@ -700,11 +700,15 @@ export abstract class ActorAgent extends Think<Env> {
     // reaches future spawns for free — but a LONG-RUNNING head or node would
     // otherwise keep presenting the revoked one until it finished. Push it
     // down over the SDK's own facet registry; same secret, no second copy.
+    // Subordinates are skipped: they ride the roster push above, and their
+    // owner identity comes from their hire seed rather than this fan-out. The
+    // key tells the families apart, so no roster read decides it per facet.
     const ownerUserId = this.getOwnerUserId();
     if (ownerUserId !== null) {
-      for (const entry of this.listSubAgents(this.explorationFacet())) {
+      for (const entry of this.listSubAgents(facet)) {
+        if (!isExplorationFacetKey(entry.name)) continue;
         try {
-          const stub = await this.subAgent(this.explorationFacet(), entry.name);
+          const stub = await this.subAgent(facet, entry.name);
           await stub.setOwner(ownerUserId, token);
         } catch (err) {
           missed += 1;
@@ -956,16 +960,12 @@ export abstract class ActorAgent extends Think<Env> {
    *  actor answers from durable storage, so an eviction cannot reset it. */
   protected abstract delegationBudget(): DelegationBudget;
 
-  /** The facet class a hire runs as. Supplied by each concrete root because the
-   *  base class must not import its own subclass — the TYPE is imported (and
-   *  erased), the VALUE comes from here. */
-  protected abstract subordinateFacet(): SubAgentClass<SubordinateAgent>;
-
-  /** Exploration facets (heads, branches, swarm nodes) of this actor. The VALUE
-   *  lives here rather than in facet-spawn.ts so that helper carries no runtime
-   *  import of the class it spawns — that import closed a cycle through
-   *  runtime.ts and head-runtime.ts. */
-  explorationFacet(): SubAgentClass<ExplorationAgent> { return ExplorationAgent; }
+  /** The one class every facet of this actor runs as — a hire, a head, a
+   *  swarm node, an MCTS branch; the seed decides the mode. Supplied by each
+   *  concrete actor because the base class must not import its own subclass —
+   *  the TYPE is imported (and erased), the VALUE comes from here. Public
+   *  because it is the `FacetHost` port facet-spawn.ts reads. */
+  abstract facetClass(): SubAgentClass<SubordinateAgent>;
 
   /** Where this actor's facets get their homes. The owner provisions in its
    *  own isolate; every facet actor reaches the owner over one hop, because
@@ -1022,7 +1022,7 @@ export abstract class ActorAgent extends Think<Env> {
     const entry = this.subordinateRoster.get(name);
     if (entry === null) throw new Error(`Subordinate "${name}" is not in the roster`);
     try {
-      const snapshot = await (await this.subAgent(this.subordinateFacet(), name)).getSubordinateSnapshot();
+      const snapshot = await (await this.subAgent(this.facetClass(), name)).getSubordinateSnapshot();
       const role = snapshot.role;
       return { ...entry, displayName: snapshot.displayName, role };
     } catch (error) {
@@ -1091,7 +1091,7 @@ export abstract class ActorAgent extends Think<Env> {
     request: Request,
     child: { className: string; name: string },
   ): Promise<Request | Response | void> {
-    if (child.className !== this.subordinateFacet().name) {
+    if (child.className !== this.facetClass().name) {
       return new Response('Not found', { status: 404 });
     }
     const rosterEntry = this.subordinateRoster.get(child.name);
@@ -1114,7 +1114,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected subordinateRuntime(): SubordinateRuntime {
     if (this._subordinateRuntime) return this._subordinateRuntime;
-    const facet = this.subordinateFacet();
+    const facet = this.facetClass();
     this._subordinateRuntime = {
       spawn: async (input) => {
         const ownerUserId = this.getOwnerUserId();
@@ -3898,7 +3898,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** The recursive half, split out so the local answer above reads as one list
    *  of sources rather than one list plus a fan-out. */
   private async subtreeHasSandboxBackgroundWork(): Promise<boolean> {
-    const facet = this.subordinateFacet();
+    const facet = this.facetClass();
     for (const entry of this.subordinateRoster.list()) {
       try {
         const stub = await this.subAgent(facet, entry.name);
@@ -5196,7 +5196,7 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Run a tool-using node's loop in an `ExplorationAgent` facet.
+   * Run a tool-using node's loop in a `SubordinateAgent` facet in node mode.
    *
    * Undefined before the agent has an owner, for `getCFHeadRuntime`'s reason: a
    * facet reaches the owner's credentials as its workspace, so without an owner

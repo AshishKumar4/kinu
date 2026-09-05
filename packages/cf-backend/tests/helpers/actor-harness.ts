@@ -105,13 +105,12 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    * wake reconcile, the stale-delivery unbind, exactly as the platform calls
    * them on a cold start.
    *
-   * `agent.onStart()` is NOT that entry point and looks like it is: the vendor
-   * chat base installs its own `onStart` ahead of this class's, and under the SDK
-   * mock that one throws inside `_setupProtocolHandlers` (no sockets here) and is
-   * swallowed as an unhandled rejection. A test that called it therefore
-   * activated NOTHING while reading as an activation — which is how a suite
-   * asserting the stale sweep could watch the row it seeded survive. Named here
-   * because `ensureActorSchema` below already has to reach past the same shadow.
+   * `agent.onStart()` is the vendor chat base's wrapper around this one. It
+   * boots Think's session and transcript first and reaches the actor's
+   * `onStart` after that, the activation the SDK runs before a facet's first
+   * `@callable` (`facetHarness` drives it). This bridge is the actor half
+   * alone, for the suites that assert a sweep or a reconcile and nothing of
+   * Think's, the same reach `ensureActorSchema` takes below.
    */
   activateActor(): Promise<void> { return Promise.resolve(super.onStart()); }
   /** The parent-side roster the facet gate consults. Exposed rather than
@@ -396,7 +395,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   ): Promise<void> {
     const runtime: HeadRuntime = {
       spawnHead: async (input: HeadInput) => {
-        await this.subAgent(this.explorationFacet(), input.id);
+        // The `exp:`-marked key `spawnHeadFacet` registers, pinned as the
+        // literal the spawner's own suite asserts (unit-facet-spawn.test.ts).
+        await this.subAgent(this.facetClass(), `exp:${input.id}`);
         return {
           id: input.id,
           run: async () => {
@@ -460,7 +461,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** The exploration facets this workspace still holds storage for, by name.
    *  Read through the SDK's own registry, which is what the sweep deletes from. */
   harnessExplorationFacets(): string[] {
-    return this.listSubAgents(this.explorationFacet()).map((facet) => facet.name);
+    return this.listSubAgents(this.facetClass()).map((facet) => facet.name);
   }
 
   /** Forget the live handles, leaving only the durable journal — the state a
@@ -715,6 +716,11 @@ export class HarnessSubordinateAgent extends SubordinateAgent {
   harnessJobs(): BackgroundJobStore { return this.jobs; }
 
   observeRawTools(): ToolSet { return this.getRawTools(); }
+  /** Which family this facet was seeded into, for suites asserting the seed-built surface. */
+  observeFacetKind() {
+    return this.facetKind();
+  }
+
   observeRuntime(): AgentRuntime { return this.rt; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
   protected override async profileInputs() {
@@ -939,8 +945,11 @@ function instantiate<T extends object>(
   userPlane?: RecordedUserPlaneCalls,
   world?: HarnessActorWorld,
   parentNamespace?: HarnessParentNamespace,
+  /** A suite's own env, whole, in place of the harness one: the parent
+   *  namespace a facet reaches over RPC, the sandbox binding its runtime reads. */
+  env?: Env,
 ): ActorHarness<T> {
-  const agent = new Actor(makeCtx(db), makeEnv(parent, userPlane, world, parentNamespace));
+  const agent = new Actor(makeCtx(db), env ?? makeEnv(parent, userPlane, world, parentNamespace));
   if (world?.workspace !== undefined) {
     Object.defineProperty(agent, 'name', { value: world.workspace, configurable: true });
   }
@@ -1116,6 +1125,40 @@ export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
       ('role_selection', 'general')`,
   ).run();
   harness.agent.declareScaffoldPresent();
+  return harness;
+}
+
+/** What a suite hands `facetHarness`. */
+export interface FacetHarnessOptions {
+  /** The facet key its spawner handed `subAgent`, which is the SDK `name` the
+   *  facet reads. Defaults to the harness actor's. */
+  readonly name?: string;
+  /** The suite's own env, whole, in place of the harness one: the parent
+   *  namespace a facet reaches over RPC above all. */
+  readonly env?: Env;
+  /** Rows an earlier activation wrote. A second facet over the same database
+   *  is a COLD activation: no instance fields, the same durable rows, which is
+   *  what the platform hands back after an eviction between two RPCs. */
+  readonly db?: Database;
+}
+
+/**
+ * A facet as `subAgent()` hands it to its spawner: the production class, no
+ * seed rows, brought up through the SDK's own `onStart` — Think's boot and
+ * then the actor's, the activation the SDK completes before it dispatches the
+ * facet's first `@callable`. The mode seeds (`initHead`, `initNode`,
+ * `setSubordinateIdentity`) are the production RPCs, so the surface a suite
+ * narrows or builds from here is the production one rather than a double's.
+ */
+export async function facetHarness(options: FacetHarnessOptions = {}): Promise<ActorHarness<HarnessSubordinateAgent>> {
+  const harness = instantiate(
+    HarnessSubordinateAgent, options.db ?? new Database(':memory:'),
+    undefined, undefined, undefined, undefined, options.env,
+  );
+  if (options.name !== undefined) {
+    Object.defineProperty(harness.agent, 'name', { value: options.name, configurable: true });
+  }
+  await harness.agent.onStart();
   return harness;
 }
 

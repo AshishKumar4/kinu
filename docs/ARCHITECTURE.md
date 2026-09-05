@@ -33,8 +33,7 @@ graph TB
     end
 
     Orch["orchestrator<br/>the workspace's default agent"] --> WS
-    Subs["subordinates<br/>SubordinateAgent facets (subordinate-agent.ts)<br/>shared workspace, actor-scoped shell + scaffold"] -.->|assigned-work reports| Orch
-    Heads["swarm nodes · heads · MCTS branches<br/>ExplorationAgent facets (exploration.ts)<br/>shared workspace file plane, private scaffold and shell state"] -.->|findings merge back| Orch
+    Subs["subordinates · heads · swarm nodes · MCTS branches<br/>SubordinateAgent facets (subordinate-agent.ts), the seed decides the mode<br/>shared workspace file plane, actor-scoped shell + scaffold"] -.->|assigned-work reports · findings merge back| Orch
     Peers["peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
 ```
 
@@ -55,7 +54,7 @@ questions Devbox asks the owning workspace, and egress interception.
 
 ## The actor hierarchy
 
-Three DO classes act inside a workspace, and their inheritance is the security
+Two DO classes act inside a workspace, and their shared base is the security
 model:
 
 ```mermaid
@@ -64,16 +63,14 @@ graph TB
     T["Think: @cloudflare/think"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · Think hook bridge"]
     O["OrchestratorAgent<br/>agents: swarm · hire · ask/send/reply · list/dismiss<br/>codemode: release · plan submit"]
-    S["SubordinateAgent<br/>agents: swarm · hire · ask/send · list/dismiss<br/>report on parent-assigned turns"]
-    E["ExplorationAgent<br/>head tools, and the host a swarm node runs in"]
+    S["SubordinateAgent, one facet class, four modes<br/>subordinate: agents swarm · hire · ask/send · list/dismiss, report on parent-assigned turns<br/>head: the head tool surface · node: a swarm node's host · branch: one toolless model call"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
 
     A --> T --> AA
     AA --> O
     AA --> S
-    A --> E
     AA -.->|composition| OMS
-    E -.->|composition| OMS
+    S -.->|composition, exploration modes| OMS
 ```
 
 `ActorAgent` (`cf-backend/src/actor-agent.ts`) owns once what every full-loop
@@ -82,10 +79,11 @@ actor needs: the CF runtime assembly, the `BackendHost`, the shared
 prompt/model/tool caches, and the Think hook bridge. A subclass supplies ten
 abstract members (`getOwnerUserId`, `actorKind`, `ensureSchema`,
 `actorToolDeps`, `engine`, `notifyOwner`, `delegationBudget`,
-`subordinateFacet`, `ownMission`, `persistAutoTitle`) plus three optional hooks
+`facetClass`, `ownMission`, `persistAutoTitle`) plus three optional hooks
 (`workspaceName`, `extraCodemodeProviders`, `isClientRpcMethodDenied`).
 `persistAutoTitle` stores a core-decided workspace name wherever that backend
-keeps state.
+keeps state. `facetClass` answers `SubordinateAgent` on both actors: it is the
+one class every facet of an actor runs as.
 
 Tool gating is structural. No prompt decides it. The `agents` schema
 derives from the capabilities the profile wires (`actorAgentsActions`). Everyone
@@ -97,28 +95,46 @@ can `swarm`. The search substrate is wired unconditionally. `hire`, `ask`,
 an orchestrator-only codemode provider omitted from Plan-mode construction.
 `submit_plan` exists only on an orchestrator Plan turn.
 
-`ExplorationAgent` deliberately stays on the bare `Agent`, with three modes. An
-MCTS rollout gets no tools and no runtime. A branching head gets the hand-built
-head surface (evidence, decisions, `execute_tools`, `run`, `file`, `web`,
-depth-budgeted subheads) over the canonical parent workspace. A swarm node
-arrives as a serialisable `NodeRunSpec` over RPC and `runAsNode` calls the same
-`runNodeLoop` an in-isolate node runs. The facet is a transport. Hosting buys a
-storage boundary and a teardown verb, not a second runtime. Heads and nodes
+`SubordinateAgent` hosts every facet mode, and the seed decides which one an
+instance is (`FacetKind`, read off its durable rows). A hire seed
+(`setSubordinateIdentity`) makes a subordinate, which runs the Think turn loop
+above. An `initHead` seed makes a branching head: the hand-built head surface
+(evidence, decisions, `execute_tools`, `run`, `file`, `web`, depth-budgeted
+subheads) over the canonical parent workspace. An `initNode` seed makes a
+swarm node's host: a serialisable `NodeRunSpec` arrives over RPC and
+`runAsNode` calls the same `runNodeLoop` an in-isolate node runs. No seed at
+all is an MCTS branch: `explore` and `generateReflection` make one bare model
+call each, with no tools and no runtime. The facet is a transport. Hosting buys
+a storage boundary and a teardown verb, not a second runtime. Heads and nodes
 share the workspace files, processes and ports. SQL journal, scaffold path,
-and `shellId` stay private. Neither inherits the full actor surface, so
-recursion is bounded by construction: `split_subheads` decrements `maxDepth` per
-spawn and refuses once the budget is exhausted.
+and `shellId` (`head:<id>`, `node:<id>`) stay private.
 
-All three reach the owner/provider/model/web substrate by composition through
+Containment rides the seed rather than a second base class. The constructor
+seals the boot RPC surface (`SUBORDINATE_AGENT_BOOT_SURFACE`,
+`cf-backend/src/rpc-surface.ts`), and the seed narrows the instance to its
+family's surface, so a head cannot resolve a subordinate seed across a stub
+and a subordinate cannot resolve a head's. A head or node builds only the
+surface its mode admits, never the actor's `think`/`team`/`peers` tools, so
+recursion stays bounded by construction: `split_subheads` decrements
+`maxDepth` per spawn and refuses once the budget is exhausted.
+
+Facet addresses keep the two families apart inside one class
+(`cf-backend/src/facet-spawn.ts`). A subordinate's facet key is its roster
+slug. A head, node or branch is registered under an `exp:`-prefixed key
+(`explorationFacetKey`), which a slug cannot carry, so a hire and a generated
+worker id never collide. Journals and handles keep the plain id.
+
+Both actors reach the owner/provider/model/web substrate by composition through
 `OwnedModelServices` (`cf-backend/src/owned-model-services.ts`): provider
 registry, model spec, Workers-AI affinity key, web-search provider.
-`ActorAgent` constructs it with `ownerRequired: true`.
-`ExplorationAgent` builds its own with `ownerRequired: false`, taking the owner
-from the `facet_owner` row its parent seeds.
+`ActorAgent` constructs it with `ownerRequired: true`. `SubordinateAgent`
+builds a second one for its exploration modes with `ownerRequired: false`,
+taking the owner from the one-row `facet_identity` its parent seeds through
+`setOwner` and `setSharedParent`.
 
 ## Subordinates
 
-`agents({action:'hire', ...})` calls `this.subAgent(subordinateFacet(), name)`
+`agents({action:'hire', ...})` calls `this.subAgent(facetClass(), name)`
 on the hiring actor (`cf-backend/src/actor-agent.ts`) and seeds the facet
 identity immediately. Any actor with a roster hires, so subordinate trees
 recurse down to the depth cap. Identity is single-row and immutable after
@@ -445,7 +461,7 @@ graph TB
         Utils["agent-utils/<br/>MemoryStore (FTS5) · CraftStore (FTS5)<br/>VFS types · path addressing · abort helpers"]
         Compact["compaction/<br/>vendored better-compact ladder + Kinu codec"]
         Devbox["devbox/<br/>@kinu.run/devbox: an ephemeral container<br/>presented as a machine that stays<br/>(snapshot-chain · r2fs · overlay-cas · supervision · ports)"]
-        CF["cf-backend/<br/>ActorAgent → OrchestratorAgent + SubordinateAgent,<br/>ExplorationAgent (Facets), UserDO, React UI"]
+        CF["cf-backend/<br/>ActorAgent → OrchestratorAgent + SubordinateAgent<br/>(one facet class, four modes), UserDO, React UI"]
         CLI["cli/<br/>kinu create/chat/exec/evolve/…"]
         CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
         PC["pc-agent/<br/>reverse-WS device daemon → laptop.*"]
@@ -494,9 +510,9 @@ files and execution to Nimbus, and the turn driver to Think. Local binds them to
 | Schedule | `agent.runFiber()` (durable) + DO `alarm()` | SQLite-backed fiber |
 | Identity | DO id + `SOUL.md` (VFS) | UUID + `~/.kinu/` + `SOUL.md` (VFS) |
 | Turn driver | `OrchestratorAgent` (Think hooks) | `LocalAgentSession` (`runChat`) |
-| Swarm nodes | `ExplorationAgent` Facets (`spawnNodeFacet`) | `LocalAgentSession` node runtime with a credentialed home when the local VFS supports principals |
-| MCTS branches | `ExplorationAgent` Facets (`subAgent`) | `child_process.fork` |
-| Subordinates | `SubordinateAgent` Facets (`subAgent`) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
+| Swarm nodes | `SubordinateAgent` facets in node mode (`spawnNodeFacet`) | `LocalAgentSession` node runtime with a credentialed home when the local VFS supports principals |
+| MCTS branches | `SubordinateAgent` facets in branch mode (`spawnBranchFacet`) | `child_process.fork` |
+| Subordinates | `SubordinateAgent` facets in subordinate mode (`subAgent` + the hire seed) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
 
 The full contract and the three extension points (`ModelProvider`,
 `ActorAgent`, `KinuExtension`) are in

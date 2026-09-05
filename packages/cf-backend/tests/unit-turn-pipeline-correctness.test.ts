@@ -64,7 +64,7 @@ const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'),
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'head-runtime.ts'), 'utf8');
 const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
-const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
+const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'subordinate-agent.ts'), 'utf8');
 const facetSpawn = readFileSync(join(import.meta.dir, '..', 'src', 'facet-spawn.ts'), 'utf8');
 const ownedModelServices = readFileSync(join(import.meta.dir, '..', 'src', 'owned-model-services.ts'), 'utf8');
 const mergePolicy = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'heads', 'merge-policy.ts'), 'utf8');
@@ -176,7 +176,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(rootRuntime).toContain('sharedParent: this.workspaceName()');
     expect(rootRuntime).not.toContain('sharedParent: this.name');
     // A recursive split re-uses the ROOT it was given, never its own facet name.
-    expect(exploration).toContain('sharedParent: this.identity.parentWorkspace()');
+    expect(exploration).toContain('sharedParent: this.facetIdentity.parentWorkspace()');
     // The spawn seam is what turns that into the child facet's persisted parent.
     expect(facetSpawn).toContain('await stub.setSharedParent(identity.sharedParent)');
     // One factory for both, so there is exactly one place the seed can be wrong —

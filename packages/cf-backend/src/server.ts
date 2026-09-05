@@ -84,10 +84,11 @@ import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed
 import { installAnalyticsDiagnostics } from "./analytics/install";
 
 export { OrchestratorAgent } from "./orchestrator";
-// ExplorationAgent is the single Facet class for parallel sub-agent work.
-// MCTS mode: explore() / evaluate() / generateReflection() — short rollouts.
-// Head mode: initHead() / runAsHead() / abortHead() — multi-step branching heads.
-export { ExplorationAgent } from "./exploration";
+// SubordinateAgent is the single Facet class for parallel sub-agent work.
+// Subordinate mode: the Think turn loop over delegated work. MCTS mode:
+// explore() / generateReflection() — short rollouts. Head mode: initHead() /
+// runAsHead() / abortHead() — multi-step branching heads. Node mode:
+// initNode() / runAsNode() — hosted swarm nodes.
 export { SubordinateAgent } from "./subordinate-agent";
 export { KinuSandbox } from "./kinu-sandbox";
 // The loopback Fetcher every `fetch()` inside an `execute_tools` program rides
@@ -121,14 +122,9 @@ export { ControlPlaneDO } from "./control-plane/control-plane-do";
 //   OrchestratorAgent carries the `OrchestratorAgent` durable_objects binding
 //     in wrangler.jsonc, the fabric's `hostNamespace`, and the `/agents/*`
 //     route.
-//   ExplorationAgent carries no binding. It runs as a facet of an
-//     OrchestratorAgent through `ActorAgent.explorationFacet()`
-//     (actor-agent.ts). The SDK resolves that class by name, so this export
-//     lets the resolution succeed. It is named in wrangler.jsonc migrations
-//     `v1`.
-//   SubordinateAgent carries no binding. It runs as a facet through
-//     `OrchestratorAgent.subordinateFacet()` (orchestrator.ts), resolved by
-//     name the same way. It is named in migrations `v1`.
+//   SubordinateAgent carries no binding and sits in no migration tag. It runs
+//     as a facet of an OrchestratorAgent through `ActorAgent.facetClass()`,
+//     resolved by name the same way.
 //   KinuSandbox carries the `KinuSandbox` durable_objects binding (bound as
 //     `Sandbox`) and the `containers` entry of the same class.
 //   CodemodeEgress carries the loopback stub `codemodeEgress()` hands to
@@ -625,7 +621,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // SECURITY (F1): routeAgentRequest (partyserver) maps EVERY DO namespace
     // binding by slug, and its facet router recursively resolves literal
     // /sub/{class}/{name} segments. The closed-path rejection above keeps
-    // UserDO, ExplorationAgent, KinuSandbox and Nimbus* worker-side-only.
+    // UserDO, KinuSandbox and the facet class worker-side-only.
     const denial = await ensureAgentOwnership(env, identity, agentName);
     if (denial) return denial;
     // Now the path's workspace name is evidence: this account has been shown to

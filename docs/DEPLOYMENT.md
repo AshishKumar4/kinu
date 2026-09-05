@@ -367,9 +367,9 @@ Classification is narrow: 429 and 529 always count. A 503 counts only when statu
 | `AGENT_METRICS`, `FEEDBACK_MARKERS`, `CONTROL_PLANE_OPS` | Analytics Engine | Fleet metrics, feedback markers, and admin operations. Staging writes `*_staging` datasets, so its panels cannot answer with production's numbers |
 | `ASSETS` | Static assets | `dist/client` SPA bundle + prebuilt CLI downloads |
 
-Two agent classes bind nowhere: `ExplorationAgent` (MCTS branches and heads) and `SubordinateAgent` exist only as facets of `OrchestratorAgent` via the agents SDK sub-agent mechanism. `ExplorationAgent` still appears in the DO migration list. Class registration and binding are separate things.
+`SubordinateAgent` is the one agent class that binds nowhere. It exists only as a facet of `OrchestratorAgent` and hosts heads, nodes, branches and hires. Class registration and binding are separate things.
 
-`compatibility_date` `2025-12-01`, `nodejs_compat`. Migrations are one tag, identical across environments: `v1` registers `OrchestratorAgent`, `ExplorationAgent`, `KinuSandbox`, `UserDO`, `MonitorDO` and `ControlPlaneDO` as new SQLite classes. That one tag is the genesis of a reset deployment. Before the first deploy of it, delete the old Worker (its Durable Object namespaces go with it) or deploy under a fresh Worker name; wrangler applies every step against whatever tag the old Worker last carried and does not refuse. Wrangler inherits no `env.*` config, so every binding repeats under `env.staging` even where the two agree.
+`compatibility_date` `2025-12-01`, `nodejs_compat`. Migrations are one tag, identical across environments: `v1` registers `OrchestratorAgent`, `KinuSandbox`, `UserDO`, `MonitorDO` and `ControlPlaneDO` as new SQLite classes. That one tag is the genesis of a reset deployment, and the deleted `ExplorationAgent` carries no rename or delete tag in it. Before the first deploy of it, delete the old Worker (its Durable Object namespaces go with it) or deploy under a fresh Worker name; wrangler applies every step against whatever tag the old Worker last carried and does not refuse. Wrangler inherits no `env.*` config, so every binding repeats under `env.staging` even where the two agree.
 
 ## Deploy script
 

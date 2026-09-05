@@ -210,12 +210,12 @@ Each MCTS branch runs isolated:
 
 | Platform | Mechanism | Isolation |
 |----------|-----------|-----------|
-| CF Workers | `agent.subAgent(ExplorationAgent, branchId)`, Facets | Separate DO with own SQLite. Proven in Lean: `MCTS/StorageIsolation.lean`, `transition_preserves_isolation`. |
+| CF Workers | `agent.subAgent(SubordinateAgent, explorationFacetKey(branchId))` through `spawnBranchFacet`, Facets | Separate DO with own SQLite. Proven in Lean: `MCTS/StorageIsolation.lean`, `transition_preserves_isolation`. |
 | CF Workers (fallback) | Inline LLM calls | No storage access at all. Captures only LLM config, never agent reference. |
 | CLI | `child_process.fork('branch-worker.ts')` | Separate OS process with its own SQLite file in a `branches/` directory beside the workspace database (`createBranchSpawner`) |
 
-Both backends score through `evaluation.ts`. MCTS-mode `ExplorationAgent` calls
-are `explore(priorHistory, craftedTools, languages, mode, siblings)` and
+Both backends score through `evaluation.ts`. Branch mode `SubordinateAgent`
+calls are `explore(priorHistory, craftedTools, languages, mode, siblings)` and
 `generateReflection(task, outcome?)`; `setOwner` / `setSharedParent` bootstrap;
 `mcts/diversity.ts` gives each index a framing angle.
 
@@ -233,8 +233,8 @@ observation line.
 ### Why branches are toolless, and where the tool-using ones live
 
 MCTS branches are one model call, no `ToolSet`, no runtime. Paired `heads`
-(`core/src/heads/controller.ts`) runs full loops in the same `ExplorationAgent`,
-head mode, scored through `HeadController.scoreHeads` and `evaluation.ts`.
+(`core/src/heads/controller.ts`) runs full loops in the same class in head mode,
+scored through `HeadController.scoreHeads` and `evaluation.ts`.
 
 | | `mcts` | `heads` |
 |---|---|---|

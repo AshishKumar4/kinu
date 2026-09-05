@@ -45,7 +45,6 @@
 import { describe, expect, test } from 'vitest';
 import { Agent } from 'agents';
 import { ActorAgent } from '../../src/actor-agent';
-import { ExplorationAgent } from '../../src/exploration';
 import { OrchestratorAgent } from '../../src/orchestrator';
 import { SubordinateAgent } from '../../src/subordinate-agent';
 import { UserDO } from '../../src/user/user-do';
@@ -109,15 +108,15 @@ function callableSurface(cls: { readonly prototype: object }): CallableSurface {
  * surface COLLAPSING, which is what a broken decorator transform does.
  *
  * `witness` is one method whose presence is checked by name, so an empty-map
- * regression cannot be hidden by a floor of zero. Both numbers and names were
- * read off a real run of this layer, never guessed: the measured sets were 120,
- * 16, 9 and 18.
+ * regression cannot be hidden by a floor of zero. The numbers were read off a
+ * real run of this layer, never guessed: the measured sets were 120, 16 and
+ * 18, and the merged subordinate set adds the 9 exploration entries for 27 —
+ * the floor holds two below it, and this layer's next real run re-pins it.
  */
 const DECORATED = [
   { name: 'OrchestratorAgent', cls: OrchestratorAgent, floor: 100, witness: 'branchTurn' },
   { name: 'ActorAgent', cls: ActorAgent, floor: 14, witness: 'steerTurn' },
-  { name: 'ExplorationAgent', cls: ExplorationAgent, floor: 8, witness: 'explore' },
-  { name: 'SubordinateAgent', cls: SubordinateAgent, floor: 16, witness: 'getSubordinateSnapshot' },
+  { name: 'SubordinateAgent', cls: SubordinateAgent, floor: 25, witness: 'explore' },
 ] as const;
 
 describe('KINU-065 — the real decorated classes load and keep their callable metadata', () => {

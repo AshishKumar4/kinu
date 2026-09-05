@@ -1135,7 +1135,7 @@ export const PLATFORM_CATALOG = {
       + 'Nimbus file plane and gets an EMPTY private SQLite of 4096 bytes. The clone arithmetic is '
       + 'preventive only. And for the facet leak below, bytes are NOT the binding constraint: see '
       + 'do.facet.count, which is reached roughly an order of magnitude sooner.',
-    knownBreachPath: 'packages/cf-backend/src/facet-spawn.ts:61 calls abortSubAgent, which per the agents 0.20.1 dist only does ctx.facets.abort and explicitly does NOT wipe storage; deleteSubAgent is called for SubordinateAgent and never for ExplorationAgent. So every head and MCTS branch facet leaks its SQLite permanently, at a default 15 fresh-nanoid facets per search (config.ts:89-92). Owned by ActorUnification. THE FIX IS TERMINAL-ONLY: abortSubAgent must REMAIN for mid-flight eviction, because deleteSubAgent wipes storage and a naive substitution turns a slow leak into immediate data loss on live heads',
+    knownBreachPath: 'packages/cf-backend/src/facet-spawn.ts:61 calls abortSubAgent, which per the agents 0.20.1 dist only does ctx.facets.abort and explicitly does NOT wipe storage; deleteSubAgent is called for SubordinateAgent and never for a facet in head mode or branch mode. So every head and MCTS branch facet leaks its SQLite permanently, at a default 15 fresh-nanoid facets per search (config.ts:89-92). Owned by ActorUnification. THE FIX IS TERMINAL-ONLY: abortSubAgent must REMAIN for mid-flight eviction, because deleteSubAgent wipes storage and a naive substitution turns a slow leak into immediate data loss on live heads',
   },
 
   'sqlite.nomem': {
@@ -1718,7 +1718,7 @@ export const PLATFORM_CATALOG = {
       + 'delete lands it should go flat instead of monotonic. It is DISTRIBUTED like the journal — '
       + 'the root holds depth-1 heads and each depth-1 facet holds its own depth-2 — so a '
       + 'root-only count under-reports a recursive split.',
-    knownBreachPath: 'packages/cf-backend/src/facet-spawn.ts:61 calls abortSubAgent, which per the agents 0.20.1 dist only does ctx.facets.abort and explicitly does NOT wipe storage; deleteSubAgent is called for SubordinateAgent and never for ExplorationAgent. So every head and MCTS branch facet leaks its SQLite permanently, at a default 15 fresh-nanoid facets per search (config.ts:89-92). Owned by ActorUnification. THE FIX IS TERMINAL-ONLY: abortSubAgent must REMAIN for mid-flight eviction, because deleteSubAgent wipes storage and a naive substitution turns a slow leak into immediate data loss on live heads',
+    knownBreachPath: 'packages/cf-backend/src/facet-spawn.ts:61 calls abortSubAgent, which per the agents 0.20.1 dist only does ctx.facets.abort and explicitly does NOT wipe storage; deleteSubAgent is called for SubordinateAgent and never for a facet in head mode or branch mode. So every head and MCTS branch facet leaks its SQLite permanently, at a default 15 fresh-nanoid facets per search (config.ts:89-92). Owned by ActorUnification. THE FIX IS TERMINAL-ONLY: abortSubAgent must REMAIN for mid-flight eviction, because deleteSubAgent wipes storage and a naive substitution turns a slow leak into immediate data loss on live heads',
   },
 
   'do.facet.clone_name_unvalidated': {

@@ -18,9 +18,9 @@
  */
 
 import { afterAll, describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import type { AgentContext } from 'agents';
+import type { Database } from 'bun:sqlite';
 import type { WorkspaceBoxOp, WorkspaceBoxResult } from '../src/workspace-box-rpc';
+import type { CFRuntime } from '../src/runtime';
 import {
   BUILTIN_PROFILE_CATALOG,
   CRAFT_NEUTRAL_PRIOR,
@@ -32,8 +32,6 @@ import {
   type HeadInput,
   type HeadReport,
   type ParentRpcWrite,
-  type SqlExecRow,
-  type SqlValue,
 } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { platformGatewayEnv } from './helpers/platform-gateway';
@@ -90,11 +88,10 @@ setSandboxSdk({
 });
 afterAll(() => { setSandboxSdk(null); });
 
-const { ExplorationAgent } = await import('../src/exploration');
-
-function nativeBindings(values: SqlValue[]): SQLQueryBindings[] {
-  return values.map((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value);
-}
+const { SubordinateAgent } = await import('../src/subordinate-agent');
+// After the sandbox double above, for the same reason the class import is: the
+// harness imports the orchestrator, whose runtime graph reaches the sandbox SDK.
+const { facetHarness } = await import('./helpers/actor-harness');
 
 function profileFixture(providerRevision: string): ResolvedTurnProfile {
   return resolveTurnProfile({
@@ -279,7 +276,7 @@ interface Facet {
   facetProfile(): Promise<ResolvedTurnProfile>;
   initHead(input: HeadInput): Promise<{ ok: true; id: HeadId }>;
   runAsHead(): Promise<HeadReport>;
-  headRuntime(capture: HeadCapture): import('../src/runtime').CFRuntime;
+  headRuntime(capture: HeadCapture): CFRuntime;
 }
 
 const HeadRuntimeProbeSchema = v.object({
@@ -294,36 +291,14 @@ const HeadRuntimeProbeSchema = v.object({
  *  instance over storage a first one already wrote. That second form is a COLD
  *  ACTIVATION: no instance fields, the same durable rows, which is exactly what
  *  the platform hands back after an eviction between two RPCs. */
-function makeFacet(
+async function makeFacet(
   parentFiles: Record<string, string> = {},
   existingDb?: Database,
   parentProfiles: Readonly<Record<string, ResolvedTurnProfile>> = {},
 ) {
-  const db = existingDb ?? new Database(':memory:');
   const parent = makeParentWorkspace(parentFiles);
   const nimbus = makeNimbusNamespace(parentFiles);
   const profileCalls: string[] = [];
-  const ctx = {
-    id: { toString: () => 'facet-id' },
-    storage: {
-      sql: {
-        // Iterable as well as `toArray`-able: workerd's SqlStorage.exec returns
-        // a cursor, and code that spreads one is exercising the real contract.
-        exec: (query: string, ...values: SqlValue[]) => {
-          const statement = db.prepare<SqlExecRow, SQLQueryBindings[]>(query);
-          const bound = nativeBindings(values);
-          const rows = /^\s*(SELECT|WITH|PRAGMA)/i.test(query)
-            ? statement.all(...bound)
-            : (statement.run(...bound), []);
-          return { toArray: () => rows, [Symbol.iterator]: () => rows[Symbol.iterator]() };
-        },
-      },
-      // A real one, not a callback passthrough: the durable filesystem's
-      // atomicity rests on this, and a fake would turn every atomic write
-      // into a torn one that still reports success.
-      transactionSync: <T>(callback: () => T): T => db.transaction(callback)(),
-    },
-  };
   const bindings = {
     LOADER: {},
     Sandbox: {},
@@ -346,33 +321,27 @@ function makeFacet(
     },
     UserDO: { idFromName: (name: string) => name, get: () => ({}) },
   };
-  const partialContext: Partial<AgentContext> = {};
-  Object.assign(partialContext, ctx);
-  // SAFETY: ExplorationAgent reaches only the constructed identity, SQL, and
-  // transaction members in this harness; each is implemented above.
-  const agentContext = partialContext as AgentContext;
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, bindings);
   // SAFETY: Head runtime construction reaches only the locally constructed
   // loader, execution namespaces, preview config, and owner namespaces.
   const testEnv = partialEnv as Env;
-  const concrete = new ExplorationAgent(agentContext, testEnv);
-  // The SDK runs `onStart` before it can dispatch a single @callable — the first
-  // `subAgent()` for a name awaits it — and `initFacetSchema` is the whole of
-  // what it runs. The stand-in base class does not, so the harness does: a facet
-  // reached before its own tables exist is a state no spawner can produce.
-  concrete.onStart();
+  // The facet as its spawner's `subAgent()` produces it: the production class
+  // under the `exp:`-marked key `spawnHeadFacet` hands the SDK, activated the
+  // way the SDK activates it before the first `@callable` is dispatched.
+  const { agent: concrete, db } = await facetHarness({
+    name: 'exp:head-1', env: testEnv, db: existingDb,
+  });
   const headRuntimeMember = Object.getOwnPropertyDescriptor(
-    ExplorationAgent.prototype,
-    'headRuntime',
+    SubordinateAgent.prototype,
+    'headFacetRuntime',
   )?.value;
-  if (!v.is(v.function(), headRuntimeMember)) throw new Error('ExplorationAgent headRuntime seam is missing');
+  if (!v.is(v.function(), headRuntimeMember)) throw new Error('SubordinateAgent headFacetRuntime seam is missing');
   const facetProfileMember = Object.getOwnPropertyDescriptor(
-    ExplorationAgent.prototype,
+    SubordinateAgent.prototype,
     'facetProfile',
   )?.value;
-  if (!v.is(v.function(), facetProfileMember)) throw new Error('ExplorationAgent facetProfile seam is missing');
-  Object.defineProperty(concrete, 'name', { value: 'head-1', configurable: true });
+  if (!v.is(v.function(), facetProfileMember)) throw new Error('SubordinateAgent facetProfile seam is missing');
   const facet: Facet = {
     setOwner: concrete.setOwner.bind(concrete),
     setSharedParent: concrete.setSharedParent.bind(concrete),
@@ -385,10 +354,12 @@ function makeFacet(
     initHead: concrete.initHead.bind(concrete),
     runAsHead: concrete.runAsHead.bind(concrete),
     headRuntime: (capture): ReturnType<Facet['headRuntime']> => {
-      const runtime = headRuntimeMember.call(concrete, capture);
+      // The head's own id, as `runAsHead` hands it: the shell and scaffold it
+      // keys are the journal's id, not the facet key.
+      const runtime = headRuntimeMember.call(concrete, 'head-1', capture);
       if (!v.is(HeadRuntimeProbeSchema, runtime)) throw new Error('headRuntime returned an invalid runtime');
       // SAFETY: HeadRuntimeProbeSchema validated the runtime returned by the
-      // private method from the concrete ExplorationAgent instance above.
+      // private method from the concrete SubordinateAgent instance above.
       return runtime as ReturnType<Facet['headRuntime']>;
     },
   };
@@ -407,7 +378,7 @@ function headInput(): HeadInput {
 
 describe('a head forks its parent workspace', () => {
   test("the canonical workspace's files are readable without a parent executor", async () => {
-    const { facet, parent } = makeFacet({ 'repo/README.md': '# cloned project' });
+    const { facet, parent } = await makeFacet({ 'repo/README.md': '# cloned project' });
     await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
 
@@ -421,7 +392,7 @@ describe('a head forks its parent workspace', () => {
   });
 
   test('the canonical workspace directory listing reaches the head', async () => {
-    const { facet } = makeFacet({ 'repo/src/index.ts': 'x', 'repo/package.json': '{}' });
+    const { facet } = await makeFacet({ 'repo/src/index.ts': 'x', 'repo/package.json': '{}' });
     await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
 
@@ -431,7 +402,7 @@ describe('a head forks its parent workspace', () => {
   });
 
   test("searching the workspace is one real shell call, not an RPC file walk", async () => {
-    const { facet, parent, nimbus } = makeFacet({ 'repo/a.ts': 'needle here', 'repo/b.ts': 'nothing' });
+    const { facet, parent, nimbus } = await makeFacet({ 'repo/a.ts': 'needle here', 'repo/b.ts': 'nothing' });
     await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
 
@@ -448,7 +419,7 @@ describe('a head forks its parent workspace', () => {
 
   test('exec planes are keyed to the PARENT workspace, not the head facet', async () => {
     requestedSandboxId = null;
-    const { facet } = makeFacet();
+    const { facet } = await makeFacet();
     await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
 
@@ -461,7 +432,7 @@ describe('a head forks its parent workspace', () => {
 
   test('a head never decides the restore of the container it only rides', async () => {
     restoresPerformed = 0;
-    const { facet, db } = makeFacet();
+    const { facet, db } = await makeFacet();
     await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
 
@@ -486,7 +457,7 @@ describe('a head forks its parent workspace', () => {
   });
 
   test("a head writes the canonical workspace rather than private duplicate bytes", async () => {
-    const { facet, parent, nimbus } = makeFacet();
+    const { facet, parent, nimbus } = await makeFacet();
     await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
     const rt = facet.headRuntime(new HeadCapture());
@@ -498,7 +469,7 @@ describe('a head forks its parent workspace', () => {
   });
 
   test("the head's direct workspace writes are attributed to that head", async () => {
-    const { facet } = makeFacet({ 'repo/parser.ts': 'one\ntwo\n' });
+    const { facet } = await makeFacet({ 'repo/parser.ts': 'one\ntwo\n' });
     await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
     const capture = new HeadCapture();
@@ -523,7 +494,7 @@ describe('a head forks its parent workspace', () => {
    * backends: the CLI head hit exactly this inside a paid delegation run.
    */
   test("the head's own workspace plane scores the tools it crafts", async () => {
-    const { facet } = makeFacet();
+    const { facet } = await makeFacet();
     await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
 
@@ -541,7 +512,7 @@ describe('a head forks its parent workspace', () => {
   test('a reseeded parent never reuses the former root profile', async () => {
     const firstProfile = profileFixture('root-first');
     const secondProfile = profileFixture('root-second');
-    const { facet, profileCalls } = makeFacet({}, undefined, {
+    const { facet, profileCalls } = await makeFacet({}, undefined, {
       'root-first': firstProfile,
       'root-second': secondProfile,
     });
@@ -556,7 +527,7 @@ describe('a head forks its parent workspace', () => {
   test('an MCTS branch — seeded without a parent workspace — cannot fork at all', async () => {
     // spawnBranchFacet seeds setOwner and nothing else (unit-facet-spawn), so a
     // branch reaches this state and can never acquire the head runtime.
-    const { facet } = makeFacet();
+    const { facet } = await makeFacet();
     await facet.setOwner('user-1', 'pwc_parent');
     await facet.initHead(headInput());
 
@@ -572,13 +543,13 @@ describe('a head forks its parent workspace', () => {
     // "called before initHead()". The cost was not one head: `HeadController.run`
     // awaits its heads together, so one such throw rejected the whole split,
     // discarding siblings that had already spent their tokens.
-    const first = makeFacet();
+    const first = await makeFacet();
     await first.facet.setOwner('user-1', 'pwc_parent');
     await first.facet.initHead(headInput());
 
     // THE EVICTION: a second instance over the same durable storage. No instance
     // fields, the same rows — which is exactly what the platform hands back.
-    const cold = makeFacet({}, first.db);
+    const cold = await makeFacet({}, first.db);
 
     // Past the guard is the whole assertion. It still refuses, but for the
     // reason the case above establishes for a head with no shared parent — not
@@ -591,13 +562,13 @@ describe('a head forks its parent workspace', () => {
     // changed is a real condition on this path rather than an impossible one. It
     // has to fail here, naming the mismatch, instead of reaching the run loop
     // with a half-formed work spec.
-    const first = makeFacet();
+    const first = await makeFacet();
     await first.facet.setOwner('user-1', 'pwc_parent');
     await first.facet.initHead(headInput());
     first.db.prepare(`UPDATE facet_activation SET payload = ? WHERE id = 1`)
       .run(JSON.stringify({ kind: 'head', input: { id: 'head-1' } }));
 
-    const cold = makeFacet({}, first.db);
+    const cold = await makeFacet({}, first.db);
     await expect(cold.facet.runAsHead()).rejects.toThrow('does not match the stored work spec');
   });
 });

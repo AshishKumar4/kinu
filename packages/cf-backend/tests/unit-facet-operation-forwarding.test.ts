@@ -1,6 +1,6 @@
 /**
  * The external transfer used by the facet's durable model-operation outbox.
- * Queueing, retry, and deletion belong to ExplorationAgent; this boundary only
+ * Queueing, retry, and deletion belong to the facet; this boundary only
  * acknowledges a complete parent RPC or rejects.
  */
 import { describe, expect, test } from 'bun:test';

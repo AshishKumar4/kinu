@@ -96,7 +96,7 @@ files, POSIX shell, code/runtime execution, processes, and ports. `run`,
 Actors share files and processes but retain a `shellId` across reconstruction:
 `agent:<name>` (`cf-backend/src/actor-agent.ts:700`),
 `subordinate:<name>` (`cf-backend/src/subordinate-agent.ts:220`), or
-`<scope>:<name>` (`cf-backend/src/exploration.ts:443`).
+`<scope>:<name>` (`facetRuntime` in `cf-backend/src/subordinate-agent.ts`).
 `createAgentNimbusHandle` passes it to `exec`, `startProcess`, and `runCode`.
 The CLI implements the same contract locally. It refuses programmatic Plan
 turns because it has no plan-review surface. `enqueueTurn` rejects them

@@ -638,7 +638,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
     settle: resolved.settle,
     // THE HOSTED HALF OF THE ASSIGNMENT: a facet cannot take a live model over
     // RPC, so the slot's own SPEC rides the input and lands on
-    // `HeadInput.model`, where `ExplorationAgent.runAsNode` resolves it through
+    // `HeadInput.model`, where `SubordinateAgent.runAsNode` resolves it through
     // the owner's registry. Undefined on an unrouted run, so the facet keeps
     // resolving its route default exactly as before.
     modelSpec: routed?.spec,

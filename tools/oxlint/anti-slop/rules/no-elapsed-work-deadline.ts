@@ -75,7 +75,6 @@ export const ELAPSED_WORK_SOURCE_ROOTS = {
     "packages/cli-backend/src/agent-host/",
     "packages/cf-backend/src/subordinate-agent.ts",
     "packages/cf-backend/src/facet-spawn.ts",
-    "packages/cf-backend/src/exploration.ts",
   ],
   swarm: [
     "packages/core/src/strategy/",

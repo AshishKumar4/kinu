@@ -173,7 +173,10 @@
   // ONE migration: the genesis of a RESET deployment. Every SQLite-backed
   // Durable Object class this Worker has is declared new here. The earlier
   // `v1`..`v3` history (which also registered and then retired `NimbusSession`)
-  // belonged to a Worker whose storage no longer exists.
+  // belonged to a Worker whose storage no longer exists, and so did the
+  // `ExplorationAgent` class it registered: `SubordinateAgent` hosts every
+  // facet mode now, and a facet class sits in no tag and has no binding
+  // above because it is reached through `subAgent()` rather than by name.
   //
   // What an operator does before deploying this configuration: delete the old
   // Worker (its Durable Object namespaces, and every object in them, go with
@@ -185,14 +188,11 @@
   // Re-using the old last tag (`v3`) would be worse: wrangler would find it,
   // send no migration at all, and the deploy would land on the old storage
   // with a schema that carries no path from it.
-  //
-  // `ExplorationAgent` has no binding above because it is reached as a facet
-  // of OrchestratorAgent rather than by name.
   "migrations": [
     {
       "tag": "v1",
       "new_sqlite_classes": [
-        "OrchestratorAgent", "ExplorationAgent", "KinuSandbox", "UserDO",
+        "OrchestratorAgent", "KinuSandbox", "UserDO",
         "MonitorDO", "ControlPlaneDO"
       ]
     }
@@ -520,7 +520,7 @@
         {
           "tag": "v1",
           "new_sqlite_classes": [
-            "OrchestratorAgent", "ExplorationAgent", "KinuSandbox", "UserDO",
+            "OrchestratorAgent", "KinuSandbox", "UserDO",
             "MonitorDO", "ControlPlaneDO"
           ]
         }
