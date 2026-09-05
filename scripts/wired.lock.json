@@ -113,7 +113,6 @@
   "packages/cf-backend/src/user/workspace-capability.ts#setWorkspaceTier (unreached-export)",
   "packages/cf-backend/src/user/workspace-create.ts#CreateCloudWorkspaceInput.model (unsupplied-field)",
   "packages/cf-backend/src/user/workspace-create.ts#CreateCloudWorkspaceInput.reasoningEffort (unsupplied-field)",
-  "packages/cf-backend/src/workspace-shell-guard.ts#shellGuardRefusal (unreached-export)",
   "packages/cli-backend/src/cgroup-limits.ts#readCgroupLimits (unreached-export)",
   "packages/cli-backend/src/checkpoints.ts#HostCheckpointsOpts.base (unsupplied-field)",
   "packages/cli-backend/src/checkpoints.ts#HostCheckpointsOpts.gitBin (unsupplied-field)",
