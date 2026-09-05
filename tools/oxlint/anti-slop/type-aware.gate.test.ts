@@ -15,6 +15,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as v from "valibot";
+import { lintJson } from "./shared/oxlint-json.ts";
 
 const config = JSON.parse(readFileSync(".oxlintrc.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
@@ -139,29 +140,6 @@ assert.deepEqual(
   "the installed semantic default set must equal the 15 explicitly governed off rules",
 );
 
-const DiagnosticSchema = v.object({
-  code: v.optional(v.string()),
-  filename: v.optional(v.string()),
-  message: v.optional(v.string()),
-});
-const LintReportSchema = v.object({
-  diagnostics: v.array(DiagnosticSchema),
-  number_of_files: v.number(),
-  number_of_rules: v.number(),
-});
-
-function lint(paths: readonly string[], tsconfig?: string) {
-  const args = ["-c", ".oxlintrc.json", "-f", "json"];
-  if (tsconfig !== undefined) args.push("--tsconfig", tsconfig);
-  args.push(...paths);
-  const run = spawnSync("./node_modules/.bin/oxlint", args, {
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  assert.ok(run.stdout.length > 0, `oxlint returned no JSON:\n${run.stderr}`);
-  return v.parse(LintReportSchema, JSON.parse(run.stdout));
-}
-
 const fixtureRoot = mkdtempSync(join(tmpdir(), "return-await-gate-"));
 try {
   const red = join(fixtureRoot, "red");
@@ -220,7 +198,7 @@ export async function plainReturn(): Promise<number> {
 }
 `);
 
-  const redReport = lint([red], join(red, "tsconfig.json"));
+  const redReport = lintJson(["-c", ".oxlintrc.json", "--tsconfig", join(red, "tsconfig.json"), red]);
   const redReturnAwait = redReport.diagnostics.filter((entry) =>
     entry.code === "typescript(return-await)");
   const redFloating = redReport.diagnostics.filter((entry) =>
@@ -232,7 +210,7 @@ export async function plainReturn(): Promise<number> {
   assert.equal(redFloating.length, 2, "both bare and void-discarded promises must turn the gate red");
   assert.equal(redUnknown.length, 2, "both catch and then rejection callbacks must turn the gate red");
 
-  const greenReport = lint([green], join(green, "tsconfig.json"));
+  const greenReport = lintJson(["-c", ".oxlintrc.json", "--tsconfig", join(green, "tsconfig.json"), green]);
   assert.equal(greenReport.number_of_files, 1, "green fixture must lint exactly one file");
   assert.deepEqual(
     greenReport.diagnostics,
@@ -243,15 +221,8 @@ export async function plainReturn(): Promise<number> {
   rmSync(fixtureRoot, { recursive: true, force: true });
 }
 
-const repository = lint(["."]);
-assert.ok(repository.number_of_files > 0, "type-aware rules measured no repository files");
-assert.ok(repository.number_of_rules > 0, "type-aware rules loaded no lint rules");
-assert.deepEqual(
-  repository.diagnostics,
-  [],
-  "the active type-aware and anti-slop policies must be jointly clean over the repository",
-);
-
-console.log(
-  `type-aware: 3 semantic rules proven red-to-green; ${installedDefaults.length - 1} default type-aware correctness rules explicitly off; ${repository.number_of_files} live files clean. Blind spots: return-await governs only error-handling contexts; Promise ownership can still be semantically wrong while syntactically handled; rejection values must still be narrowed before member access.`,
+// The live tree is linted once, in live-tree.gate.test.ts, under this same config; the three
+// semantic rules run there with every other rule, and an empty report is asserted there.
+process.stdout.write(
+  `type-aware: 3 semantic rules proven red-to-green; ${installedDefaults.length - 1} default type-aware correctness rules explicitly off. Blind spots: return-await governs only error-handling contexts; Promise ownership can still be semantically wrong while syntactically handled; rejection values must still be narrowed before member access.\n`,
 );

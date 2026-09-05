@@ -74,7 +74,7 @@ tester.run("anti-slop/require-runtime-import-extension", requireRuntimeImportExt
 			errors: [emitted],
 		},
 		{
-			name: "a re-export is a specifier too — 462 of these were in cf-backend alone",
+			name: "a re-export is a specifier too — 462 of these were in cf-backend alone (counted 2026-08-18)",
 			code: 'export { RecordNode } from "../mcts/record-node.js";',
 			filename: bundled,
 			errors: [emitted],
@@ -92,7 +92,7 @@ tester.run("anti-slop/require-runtime-import-extension", requireRuntimeImportExt
 			errors: [emitted],
 		},
 		{
-			name: "a type-level import(): eleven of these were in the tree",
+			name: "a type-level import(): eleven of these were in the tree (counted 2026-08-18)",
 			code: 'type T = import("../heads/types.js").Head;',
 			filename: bundled,
 			errors: [emitted],
@@ -110,7 +110,7 @@ tester.run("anti-slop/require-runtime-import-extension", requireRuntimeImportExt
 			errors: [emitted],
 		},
 		{
-			name: "the other half of the drift: scripts/ was 82 .ts against 94 .js",
+			name: "the other half of the drift: scripts/ was 82 .ts against 94 .js (measured 2026-08-18)",
 			code: 'import { trackedFiles } from "./sources.ts";',
 			filename: "scripts/dead-code.ts",
 			errors: [superfluous],

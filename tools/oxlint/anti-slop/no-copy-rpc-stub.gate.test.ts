@@ -243,7 +243,8 @@ try {
   }
 
   process.stdout.write(
-    `no-copy-rpc-stub: 1 rule proven red->green through oxlint over ${corpus.producers} stub-producing expressions and ${corpus.copyOperations} copy operations across ${corpus.files} files\n`,
+    `no-copy-rpc-stub: 1 rule proven red->green through oxlint over ${corpus.producers} stub-producing expressions and ${corpus.copyOperations} copy operations across ${corpus.files} files. `
+      + "Blind spot: a stub in argument 0 (writing INTO the stub) is out of scope — see the rule. Destructuring is not flagged: it reads through the `get` trap instead of copying own-enumerables.\n",
   );
 } finally {
   rmSync(fixtures, { recursive: true, force: true });

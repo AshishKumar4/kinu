@@ -62,6 +62,9 @@
       "local": "6c0fe2e4d8bca5cbfcde8dd2fab528a3ff6140de60305ed3cb36bcaacee674e0",
       "reason": "Registers the Kinu-authored rules (see kinuRules) alongside the vendored ones: the five no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, no-copy-rpc-stub, no-untyped-console, require-runtime-import-extension, and the dormant no-elapsed-work-deadline registration. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
     },
+    "live-tree.gate.test.ts": {
+      "kinuOnly": true
+    },
     "no-ambient-git.gate.test.ts": {
       "kinuOnly": true
     },
@@ -253,6 +256,9 @@
     },
     "shared/lexical-type-parameters.ts": {
       "upstream": "1ae0aa3ec245f1dc43c4bbbd8be1e2e4230e5dc389d1ca4e8de8f51b62ceff29"
+    },
+    "shared/oxlint-json.ts": {
+      "kinuOnly": true
     },
     "shared/reflect-method.ts": {
       "upstream": "318f56b17d9063134860fe4c51c2e22cb0a55e7f421a0ff4ccedb5a9e9c2b2d9"

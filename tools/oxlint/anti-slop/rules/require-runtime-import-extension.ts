@@ -13,13 +13,15 @@ import type { ESTree } from "@oxlint/plugins";
  * source, Bun runs the CLI and every suite from source, and the deploy publishes a CLI source
  * archive with a checksum rather than a build. `AGENTS.md` nonetheless mandated ".js extension
  * (ESM convention, even for .ts source files)" and produced 3,325 specifiers naming files that
- * have never existed and never will. They resolved only because a bundler was willing to guess.
+ * have never existed and never will (the migration count, recorded 2026-08-18). They resolved
+ * only because a bundler was willing to guess.
  *
  * A specifier is not decoration; it is the one place a module says what it depends on. When it
  * names `./x.js` and the dependency is `./x.ts`, every reader — human, `grep`, jump-to-definition,
  * and any resolver stricter than the current one — is reading a false statement, and the day the
- * resolver changes the whole tree moves at once. `scripts/` had already drifted to 82 `.ts` against
- * 94 `.js` with nothing to stop it, which is what a convention with no enforcement looks like.
+ * resolver changes the whole tree moves at once. Measured 2026-08-18, `scripts/` had drifted to
+ * 82 `.ts` against 94 `.js` with nothing to stop it, which is what a convention with no
+ * enforcement looks like.
  *
  * TWO REGIMES, BECAUSE THERE ARE GENUINELY TWO RESOLVERS.
  *

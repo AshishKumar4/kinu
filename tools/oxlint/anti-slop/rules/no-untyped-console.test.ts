@@ -13,8 +13,9 @@ const cliBackend = "packages/cli-backend/src/local-session.ts";
 
 tester.run("anti-slop/no-untyped-console", noUntypedConsoleRule, {
   valid: [
-    // ── The boundary. `packages/cli/src` is the product's terminal UI: 479 chalk-styled writes to a
-    // stream a human is reading. Converting them would replace a rendered table with JSON.
+    // ── The boundary. `packages/cli/src` is the product's terminal UI: the 479 chalk-styled
+    // writes the 2026-08-17 census counted, to a stream a human is reading. Converting them would
+    // replace a rendered table with JSON.
     { code: "console.log(OK('done'));", filename: "packages/cli/src/display.ts" },
     { code: "console.error(`${ERR('error')} ${message}`);", filename: "packages/cli/src/chat-loop.ts" },
     { code: "console.log(table);", filename: "packages/cli/src/commands/status.ts" },
@@ -60,8 +61,8 @@ tester.run("anti-slop/no-untyped-console", noUntypedConsoleRule, {
       filename: cliBackend,
       errors: [error],
     },
-    // Every method, not just the four the census happened to find: `debug`, `info`, `trace`, `table`
-    // and `dir` are equally unqueryable.
+    // Every method, not just the ones the census happened to find: `debug`, `info`, `trace`,
+    // `table` and `dir` are equally unqueryable.
     { code: "console.log(x);", filename: core, errors: [error] },
     { code: "console.info(x);", filename: core, errors: [error] },
     { code: "console.debug(x);", filename: core, errors: [error] },

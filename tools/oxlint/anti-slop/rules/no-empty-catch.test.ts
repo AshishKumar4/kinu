@@ -25,7 +25,7 @@ tester.run("anti-slop/no-empty-catch", noEmptyCatchRule, {
     { name: "bare", code: "try { risky(); } catch {}", errors: [error] },
     { name: "bound but unused", code: "try { risky(); } catch (error) {}", errors: [error] },
     {
-      name: "comment-only — the shape 167 sites use, and the part a model emits for free",
+      name: "comment-only — the shape 167 sites used (counted 2026-08-17, before this rule), and the part a model emits for free",
       code: "try { risky(); } catch { /* non-fatal */ }",
       errors: [error],
     },

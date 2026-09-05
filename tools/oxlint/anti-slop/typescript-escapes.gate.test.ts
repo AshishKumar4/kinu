@@ -24,26 +24,12 @@
 // stop failing quietly. The config options are also asserted structurally, so weakening fails twice
 // — once on the declaration and once on the behaviour.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isParseable, trackedFiles } from "../../../scripts/sources.ts";
+import { lintJson, type LintDiagnostic, type LintReport } from "./shared/oxlint-json.ts";
 
 const repoRoot = process.cwd();
-
-/** `oxlint -f json`. `code` is spelled `typescript(no-explicit-any)`, and is ABSENT on a parse
- *  failure, because no rule produced it. */
-type Diagnostic = {
-  readonly code?: string;
-  readonly filename?: string;
-  readonly message?: string;
-};
-type LintReport = {
-  readonly diagnostics: readonly Diagnostic[];
-  readonly number_of_files: number;
-  readonly number_of_rules: number;
-};
 
 /**
  * One fixture file per case. Keyed by file rather than by rule because a rule needs more than one
@@ -162,104 +148,23 @@ assert.deepEqual(
 assert.equal(config.options?.denyWarnings, true);
 assert.equal(config.options?.reportUnusedDisableDirectives, "error");
 
-const lint = (args: readonly string[], expectedFiles: number | null): LintReport => {
-  const run = spawnSync(
-    "./node_modules/.bin/oxlint",
-    ["-c", ".oxlintrc.json", "-f", "json", ...args],
-    { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-  );
-  assert.ok(run.stdout.length > 0, `oxlint produced no JSON for ${args.join(" ")}:\n${run.stderr}`);
-  const report: LintReport = JSON.parse(run.stdout);
-  if (expectedFiles !== null) {
-    assert.equal(
-      report.number_of_files,
-      expectedFiles,
-      `oxlint linted ${report.number_of_files} of ${expectedFiles} fixtures in ${args.join(" ")}; a run that skipped a fixture proves nothing about it`,
-    );
-  }
-  assert.ok(
-    report.number_of_rules > 0,
-    `oxlint ran ${report.number_of_rules} rules; a lint with no rules loaded reports no findings`,
+const lint = (args: readonly string[], expectedFiles: number): LintReport => {
+  const report = lintJson(["-c", ".oxlintrc.json", ...args]);
+  assert.equal(
+    report.number_of_files,
+    expectedFiles,
+    `oxlint linted ${report.number_of_files} of ${expectedFiles} fixtures in ${args.join(" ")}; a run that skipped a fixture proves nothing about it`,
   );
   return report;
 };
 
-/**
- * The live denominator. These two rules key on constructs that appear in ordinary TypeScript, so
- * unlike a rule scoped to Durable Objects they cannot run out of corpus by refactor — but they CAN
- * be starved by scope. An `ignorePatterns` entry, a moved source root, or a config the gated command
- * stops reaching all take the governed file count toward zero, and a rule that inspected nothing
- * reports no findings and passes.
- *
- * The governed set comes from the shared repository enumeration, narrowed only by the configured
- * literal ignore roots. The measured set comes from `oxlint --debug=files`, which is Oxlint's own
- * pre-lint file list. Exact set equality is stronger than a numerical floor: a corpus of one
- * thousand unrelated files can meet a floor while every file this policy is supposed to govern is
- * absent. It also makes an ignore expansion fail by naming the exact missing paths.
- *
- * Exact file equality alone does not prove a file parsed. Oxlint lists a file before attempting to
- * parse it, and an unparsable file otherwise contributes zero rule diagnostics because no rule ran
- * inside it. Likewise, an unused disable directive has no rule name because it is configuration
- * machinery, not a rule finding. Both conditions are codeless diagnostics, both invalidate a clean
- * claim, and both are hard failures below. This happened on 2026-08-27: a backtick inside a SQL
- * comment inside a `sql.exec(\`...\`)` template literal in
- * `packages/cf-backend/src/user/schema.ts` made the escape assertion pass over a file it did not
- * inspect.
- */
-function sourceSet(): readonly string[] {
-  const ignoredRoots = config.ignorePatterns.map((pattern: unknown) => {
-    assert.ok(typeof pattern === "string", "every ignore pattern must be a string");
-    assert.match(
-      pattern,
-      /^[^*?[\]{}]+$/u,
-      `ignore pattern ${JSON.stringify(pattern)} is not a literal root, so this gate cannot derive its governed source set exactly`,
-    );
-    return pattern;
-  });
-  const isIgnored = (file: string): boolean =>
-    ignoredRoots.some((root: string) => file === root || file.startsWith(`${root}/`));
-  return trackedFiles().filter(isParseable).filter((file) => !isIgnored(file)).sort();
-}
-
-function measuredSourceSet(): readonly string[] {
-  const run = spawnSync(
-    "./node_modules/.bin/oxlint",
-    ["-c", ".oxlintrc.json", "--debug=files"],
-    { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-  );
-  assert.equal(run.status, 0, `oxlint could not enumerate its measured files:\n${run.stderr}`);
-  const files = run.stdout.trimEnd().split("\n").filter((file) => file.length > 0).sort();
-  assert.ok(files.length > 0, "oxlint measured no files, so a clean report would prove nothing");
-  assert.deepEqual(
-    [...new Set(files)],
-    files,
-    "oxlint listed a measured file more than once; exact set equality would otherwise hide duplicate work",
-  );
-  return files;
-}
-
-const governed = sourceSet();
-const measured = measuredSourceSet();
-assert.deepEqual(
-  measured,
-  governed,
-  `Oxlint's measured file set differs from the governed source set. Missing: ${governed.filter((file) => !measured.includes(file)).join(", ") || "none"}. Unexpected: ${measured.filter((file) => !governed.includes(file)).join(", ") || "none"}`,
-);
-
-
-const repo = lint([], null);
-assert.equal(
-  repo.number_of_files,
-  measured.length,
-  `oxlint listed ${measured.length} files before linting but reported ${repo.number_of_files} afterward; the clean report may have skipped a measured file`,
-);
-const unnamed = repo.diagnostics.filter((d) => d.code === undefined);
-assert.deepEqual(
-  unnamed.map((d) => `${d.filename ?? "?"} — ${d.message ?? "no message"}`),
-  [],
-  `${unnamed.length} governed diagnostic(s) carry no rule name. Either a file failed to parse, in which case oxlint applied NO rule inside it and this gate's clean result does not cover it, or a disable directive is present, which this ticket forbids outright. Both are hard failures`,
-);
-
+// The live denominator is not measured here. These two rules key on constructs that appear in
+// ordinary TypeScript, so they cannot run out of corpus by refactor, but they CAN be starved by
+// scope: an `ignorePatterns` entry, a moved source root, or a config the gated command stops
+// reaching all take the governed file count toward zero, and a rule that inspected nothing reports
+// no findings and passes. `live-tree.gate.test.ts` holds that line for every rule at once: the
+// measured set equals the governed set by name, every measured file is reported on, and no
+// diagnostic arrives codeless (a parse failure or a disable directive).
 const fixtures = mkdtempSync(join(tmpdir(), "typescript-escapes-gate-"));
 try {
   // System temp dir, NOT the repo root: gates built on scripts/sources.ts enumerate untracked
@@ -274,9 +179,9 @@ try {
   }
 
   const firedIn = (
-    diagnostics: ReadonlyArray<Diagnostic>,
+    diagnostics: ReadonlyArray<LintDiagnostic>,
     entry: (typeof cases)[number],
-  ): ReadonlyArray<Diagnostic> =>
+  ): ReadonlyArray<LintDiagnostic> =>
     diagnostics.filter((d) =>
       d.code === `typescript(${entry.rule})` && (d.filename ?? "").endsWith(`${entry.file}.ts`));
 
@@ -305,19 +210,9 @@ try {
     "the corrected fixtures must lint clean under the full config",
   );
 
-  const escapes = repo.diagnostics.filter((d) =>
-    RULES.some((rule) => d.code === `typescript(${rule})`));
-  assert.deepEqual(
-    escapes.map((d) => `${d.filename ?? "?"}: ${d.code ?? "?"}`),
-    [],
-    `governed source must carry no explicit \`any\` and no TypeScript suppression comment; ${escapes.length} found`,
-  );
-
-  // The claim names what it rests on. A clean result over a corpus that silently skipped a file it
-  // could not parse is worth nothing, so the parse/directive count is stated, not implied.
   process.stdout.write(
     `typescript-escapes: ${RULES.length} built-in rules proven red->green through oxlint over ${cases.length} fixtures; `
-    + `${repo.number_of_files} governed files, all parsed, carry zero explicit any, zero suppression comments and zero disable directives\n`,
+    + 'the live tree is linted once in live-tree.gate.test.ts\n',
   );
 } finally {
   rmSync(fixtures, { recursive: true, force: true });

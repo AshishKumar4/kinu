@@ -1,5 +1,6 @@
 import { defineRule } from "@oxlint/plugins";
 
+import { TEST_DIRECTORY, TEST_SUFFIX } from "./no-ambient-git-in-tests.ts";
 import type { ESTree } from "@oxlint/plugins";
 
 /**
@@ -29,16 +30,10 @@ import type { ESTree } from "@oxlint/plugins";
  * later race. The gate prints all three on its green path.
  */
 
-/** The basename arm: a `.test.` / `.eval.` / `.spec.` segment. */
-export const ELAPSED_TEST_SUFFIX = /\.(test|eval|spec)\.[cm]?[jt]sx?$/;
-
-/** A whole `tests/`, `test/`, or `__tests__/` path component. */
-export const ELAPSED_TEST_DIRECTORY = /(^|\/)(tests?|__tests__)\//;
-
-/** What counts as test code for this rule. */
-export const ELAPSED_TEST_FILE = new RegExp(
-  `${ELAPSED_TEST_DIRECTORY.source}|${ELAPSED_TEST_SUFFIX.source}`,
-);
+/** What counts as test code for this rule. The arms live in `no-ambient-git-in-tests.ts`, which
+ *  names them so a narrower consumer imports them instead of copying them; a third spelling of
+ *  "test file" beside `TEST_FILE` is how the two rules stop agreeing about what a test is. */
+export const ELAPSED_TEST_FILE = new RegExp(`${TEST_DIRECTORY.source}|${TEST_SUFFIX.source}`);
 
 /** Source roots that perform the policy's named kinds of work. */
 export const ELAPSED_WORK_SOURCE_ROOTS = {

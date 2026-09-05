@@ -13,27 +13,20 @@
 // 2. THE CENSUS IS ZERO AND THE DENOMINATOR IS NOT. Oxlint's `ignorePatterns` excludes the plugin
 //    directory, so `bun run lint` never reaches the raw-Node half; a static scan over the whole
 //    tracked tree is what governs it. The counts are asserted non-trivial, because a scan that read
-//    nothing also finds no `.js`.
+//    nothing also finds no `.js`. The bundled/Bun half is the live tree, linted once in
+//    `live-tree.gate.test.ts`.
 // 3. IT FIRES THROUGH THE REAL BINARY, both directions. Seeded fixtures under the real
 //    `.oxlintrc.json`: red for the `.js` convention this repository shipped 3,325 times, red for a
 //    `.ts` specifier under a bundler, and green for the corrected form of each.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 
 import { isParseable, isRawNodeModule, readMatching, trackedFiles } from "../../../scripts/sources.ts";
+import { lintJson, type LintDiagnostic } from "./shared/oxlint-json.ts";
 
 const repoRoot = process.cwd();
-
-/** `oxlint -f json`. `code` is spelled `anti-slop(require-runtime-import-extension)`. */
-type Diagnostic = { readonly code?: string; readonly filename?: string };
-type LintReport = {
-  readonly diagnostics: readonly Diagnostic[];
-  readonly number_of_files: number;
-  readonly number_of_rules: number;
-};
 
 const RULE = "require-runtime-import-extension";
 const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8"));
@@ -165,25 +158,10 @@ assert.ok(
 );
 
 // ---------------------------------------------------------------------------
-// 2 and 3. The live tree, and red -> green, both through the real oxlint binary.
+// 2b and 3. The raw-Node closure, and red -> green, both through the real oxlint binary.
 // ---------------------------------------------------------------------------
 
-function lintJson(args: readonly string[]): LintReport {
-  const run = spawnSync("./node_modules/.bin/oxlint", ["-f", "json", ...args], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  assert.ok(run.stdout.length > 0, `oxlint produced no JSON for \`${args.join(" ")}\`:\n${run.stderr}`);
-  const report: LintReport = JSON.parse(run.stdout);
-  assert.ok(
-    report.number_of_rules > 0,
-    `oxlint ran ${report.number_of_rules} rules; a lint with no rules loaded reports no findings`,
-  );
-  return report;
-}
-
-const firedIn = (diagnostics: readonly Diagnostic[], suffix: string): readonly Diagnostic[] =>
+const firedIn = (diagnostics: readonly LintDiagnostic[], suffix: string): readonly LintDiagnostic[] =>
   diagnostics.filter(
     (d) => d.code === `anti-slop(${RULE})` && (d.filename ?? "").endsWith(suffix),
   );
@@ -209,18 +187,6 @@ const fixtures = mkdtempSync(join(tmpdir(), "kinu-scratch-import-extension-gate-
  *  Oxlint resolution anchored to this repository without writing into it. */
 const rawNodeConfig = join(fixtures, "raw-node.oxlintrc.json");
 try {
-  // --- 2a. The bundled/Bun half: the whole tree, under the real config. -----
-  const tree = lintJson(["-c", ".oxlintrc.json", "."]);
-  assert.ok(
-    tree.number_of_files > 1000,
-    `oxlint linted ${tree.number_of_files} files of this repository; a repo-wide clean bill from a run that saw almost nothing is not evidence`,
-  );
-  assert.deepEqual(
-    firedIn(tree.diagnostics, ".ts").map((d) => d.filename),
-    [],
-    "a relative specifier in the bundled/Bun half still names a file the loading runtime will not resolve",
-  );
-
   // --- 2b. The raw-Node half, which `.oxlintrc.json` deliberately ignores. --
   // Oxlint never lints the plugin directory, so the enforcement there is Node itself: a bad
   // specifier throws ERR_MODULE_NOT_FOUND and `test:anti-slop` dies before reaching this file.
@@ -260,7 +226,7 @@ try {
     writeFileSync(join(red, `${name}.ts`), bad);
     writeFileSync(join(green, `${name}.ts`), good);
   }
-  const seeded = (directory: string): readonly Diagnostic[] => {
+  const seeded = (directory: string): readonly LintDiagnostic[] => {
     const report = lintJson(["-c", ".oxlintrc.json", directory]);
     assert.equal(
       report.number_of_files,
@@ -285,7 +251,7 @@ try {
   }
 
   process.stdout.write(
-    `import-extension: ${cases.length} directions proven red->green through oxlint; clean over ${tree.number_of_files} bundled/Bun files and the ${closure.size}-file raw-Node closure\n`,
+    `import-extension: ${cases.length} directions proven red->green through oxlint; clean over the ${closure.size}-file raw-Node closure; the bundled/Bun half is linted once in live-tree.gate.test.ts\n`,
   );
 } finally {
   rmSync(fixtures, { recursive: true, force: true });

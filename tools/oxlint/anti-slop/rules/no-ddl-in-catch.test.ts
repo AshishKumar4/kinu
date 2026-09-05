@@ -27,7 +27,7 @@ tester.run("anti-slop/no-ddl-in-catch", noDdlInCatchRule, {
   ],
   invalid: [
     {
-      name: "the ALTER-TABLE-by-exception shape, all nine sites",
+      name: "the ALTER-TABLE-by-exception shape, all nine sites (counted 2026-08-17)",
       code: "try { execRaw(`ALTER TABLE replay_evals ADD COLUMN score_lo REAL`); } catch { /* exists */ }",
       errors: [error],
     },

@@ -4,7 +4,8 @@
 // rule is reachable through the command the repo gates on, that it is enabled at error, or that
 // there are any test files for it to look at. This file runs the real `oxlint` binary with the real
 // `.oxlintrc.json` over the historical defect and over its corrected form, asserts red then green,
-// and asserts the live denominator.
+// and derives the live denominator. The live tree itself is linted once, in
+// `live-tree.gate.test.ts`, and a raw git spawn left in a test fails there.
 //
 // The denominator matters unusually much here. The rule is scoped to `*.test.ts` by filename. If the
 // suffix convention changed, or the sources moved, the rule would match nothing, report nothing, and
@@ -18,15 +19,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { isParseable, isTestFile, trackedFiles } from "../../../scripts/sources.ts";
+import { lintJson, type LintDiagnostic } from "./shared/oxlint-json.ts";
 
 const repoRoot = process.cwd();
-
-type Diagnostic = { readonly code?: string; readonly filename?: string };
-type LintReport = {
-  readonly diagnostics: readonly Diagnostic[];
-  readonly number_of_files: number;
-  readonly number_of_rules: number;
-};
 
 /**
  * The pre-rename product name, assembled from parts.
@@ -189,26 +184,6 @@ assert.deepEqual(
   "packages/test-utils/src/git.ts no longer exports the helpers this rule's message tells people to use",
 );
 
-// The remedy must actually be adopted, not merely available: zero raw `git` spawns should remain in
-// any tracked test file. This is the assertion that turns the rule from a promise into a fact.
-// The WHOLE tree, not `packages`. Scoping this to `packages` is the first thing I got wrong: the
-// rule's first run over the full repo found three more live sites the narrow scan had not looked at
-// — two in scripts/bench.test.ts and one in scripts/ladder.test.ts. A gate whose live-tree
-// assertion covers less than the lint it claims to enforce reports zero and means nothing.
-const offenders = spawnSync(
-  "./node_modules/.bin/oxlint",
-  ["-c", ".oxlintrc.json", "-f", "json", "."],
-  { cwd: repoRoot, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
-);
-assert.ok(offenders.stdout.length > 0, `oxlint produced no JSON over packages:\n${offenders.stderr}`);
-const live: LintReport = JSON.parse(offenders.stdout);
-const liveHits = live.diagnostics.filter((d) => d.code === "anti-slop(no-ambient-git-in-tests)");
-assert.equal(
-  liveHits.length,
-  0,
-  `the tree still spawns git from ${liveHits.length} test site(s) with the ambient environment: ${JSON.stringify(liveHits.map((d) => d.filename))}`,
-);
-
 /**
  * THE BOUNDARY, pinned in both directions, because "the rule catches git spawns" is not a testable
  * sentence and the interesting failures are on the edges.
@@ -300,13 +275,7 @@ try {
     mkdirSync(join(absolute, ".."), { recursive: true });
     writeFileSync(absolute, `${code}\n`);
   }
-  const run = spawnSync(
-    "./node_modules/.bin/oxlint",
-    ["-c", ".oxlintrc.json", "-f", "json", boundaryDirectory],
-    { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-  );
-  assert.ok(run.stdout.length > 0, `oxlint produced no JSON for the boundary table:\n${run.stderr}`);
-  const report: LintReport = JSON.parse(run.stdout);
+  const report = lintJson(["-c", ".oxlintrc.json", boundaryDirectory]);
   assert.equal(
     report.number_of_files,
     BOUNDARY.length,
@@ -344,27 +313,17 @@ try {
     writeFileSync(join(goodDirectory, `${rule}.test.ts`), good);
   }
 
-  const lint = (directory: string): LintReport => {
-    const run = spawnSync(
-      "./node_modules/.bin/oxlint",
-      ["-c", ".oxlintrc.json", "-f", "json", directory],
-      { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-    );
-    assert.ok(run.stdout.length > 0, `oxlint produced no JSON for ${directory}:\n${run.stderr}`);
-    const report: LintReport = JSON.parse(run.stdout);
+  const lint = (directory: string) => {
+    const report = lintJson(["-c", ".oxlintrc.json", directory]);
     assert.equal(
       report.number_of_files,
       cases.length,
       `oxlint linted ${report.number_of_files} of ${cases.length} fixtures in ${directory}; a run that skipped a fixture proves nothing about it`,
     );
-    assert.ok(
-      report.number_of_rules > 0,
-      `oxlint ran ${report.number_of_rules} rules; a lint with no rules loaded reports no findings`,
-    );
     return report;
   };
 
-  const firedIn = (diagnostics: ReadonlyArray<Diagnostic>, rule: string): number =>
+  const firedIn = (diagnostics: ReadonlyArray<LintDiagnostic>, rule: string): number =>
     diagnostics.filter(
       (d) => d.code === `anti-slop(${rule})` && (d.filename ?? "").endsWith(`${rule}.test.ts`),
     ).length;
@@ -387,8 +346,8 @@ try {
 
   process.stdout.write(
     `no-ambient-git: ${cases.length} rule proven red->green through oxlint over ${governed} governed test files ` +
-      `(${counted} match TEST_FILE: ${unparsable} unparsable by oxlint, ${ignoredByConfig} inside ignorePatterns), ` +
-      `0 raw git spawns remaining\n`,
+      `(${counted} match TEST_FILE: ${unparsable} unparsable by oxlint, ${ignoredByConfig} inside ignorePatterns); ` +
+      `the live tree is linted once in live-tree.gate.test.ts\n`,
   );
 } finally {
   rmSync(fixtures, { recursive: true, force: true });

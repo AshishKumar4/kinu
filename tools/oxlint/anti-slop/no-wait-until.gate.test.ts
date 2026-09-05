@@ -297,7 +297,8 @@ try {
   }
 
   process.stdout.write(
-    `no-wait-until: ${cases.length} rule proven red->green through oxlint over ${corpus.declaredHere.length} Durable Object classes — ${corpus.bound.length} bound, ${corpus.facets.length} facet — (${corpus.declaredHere.join(", ")}) and ${corpus.stateHandleUses} state-handle uses\n`,
+    `no-wait-until: ${cases.length} rule proven red->green through oxlint over ${corpus.declaredHere.length} Durable Object classes — ${corpus.bound.length} bound, ${corpus.facets.length} facet — (${corpus.declaredHere.join(", ")}) and ${corpus.stateHandleUses} state-handle uses. `
+      + "Blind spot: an aliased receiver (`const c = this.ctx; c.waitUntil(p)`) is outside the matcher — see the rule.\n",
   );
 } finally {
   rmSync(fixtures, { recursive: true, force: true });

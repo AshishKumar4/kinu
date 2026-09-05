@@ -1,6 +1,6 @@
 // Kinu-authored: upstream ships no test for this rule. The invalid cases pin the
 // case-insensitive substring ban; a previous session narrowed it to a lexical-word ban and hid 30
-// real violations, so these cases exist to make that narrowing fail loudly.
+// real violations (recorded 2026-08-17), so these cases exist to make that narrowing fail loudly.
 import { RuleTester } from "oxlint/plugins-dev";
 
 import { noForbiddenTermInSymbolNamesRule } from "./no-shape-in-symbol-names.ts";

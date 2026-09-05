@@ -25,7 +25,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isDiagnosticSource } from "./rules/no-untyped-console.ts";
 import { readSources } from "../../../scripts/sources.ts";
 
@@ -172,7 +173,11 @@ const MAX_NAME_REUSE = 2;
  *  count that proves the exclusion is still load-bearing: if it goes to zero, someone converted the
  *  CLI's output to structured logs and the rule went green over a broken product. */
 function preservedUiCalls(): number {
-	const configPath = join(repoRoot, "tools/oxlint/anti-slop/.console-census.json");
+	// The census config lives in the system temp dir, not beside this gate: gates built on
+	// scripts/sources.ts enumerate untracked worktree files on purpose, so a scratch config
+	// inside the plugin directory is visible mid-run to every one of them (and to drift.test.ts,
+	// which fails on any undeclared file there). oxlint takes an absolute `-c` path.
+	const configPath = join(mkdtempSync(join(tmpdir(), "kinu-no-untyped-console-census-")), "census.oxlintrc.json");
 	writeFileSync(
 		configPath,
 		`${JSON.stringify({ rules: { "no-console": "error" }, ignorePatterns: ["node_modules", "dist"] }, null, 2)}\n`,
@@ -180,14 +185,14 @@ function preservedUiCalls(): number {
 	try {
 		const run = spawnSync(
 			"./node_modules/.bin/oxlint",
-			["-c", relative(repoRoot, configPath), "-f", "json", "packages/cli/src"],
+			["-c", configPath, "-f", "json", "packages/cli/src"],
 			{ cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
 		);
 		assert.ok(run.stdout.length > 0, `oxlint produced no JSON for packages/cli/src:\n${run.stderr}`);
 		const report: LintReport = JSON.parse(run.stdout);
 		return report.diagnostics.length;
 	} finally {
-		rmSync(configPath, { force: true });
+		rmSync(join(configPath, ".."), { recursive: true, force: true });
 	}
 }
 
@@ -237,13 +242,16 @@ assert.ok(
 	`every event name shares one subsystem prefix (${[...prefixes].join(", ")}); the prefix is then decoration rather than a discriminator`,
 );
 
-const fixtures = mkdtempSync(join(repoRoot, ".no-untyped-console-gate-"));
+const fixtures = mkdtempSync(join(tmpdir(), "kinu-no-untyped-console-gate-"));
 try {
-	// The fixtures sit UNDER a governed path, because this rule is path-scoped and a fixture the rule
-	// does not govern proves nothing about it — the first draft of this gate put them at the temp-dir
-	// root and measured 0 findings on a genuine defect. `isDiagnosticSource` matches the segment
-	// anywhere in the path (`includes`, not `startsWith`), which is what makes a temp copy of a source
-	// tree governed and is also what makes it testable at all.
+	// The fixtures carry a governed path SEGMENT (`packages/core/src`), because this rule is
+	// path-scoped and a fixture the rule does not govern proves nothing about it — the first draft
+	// of this gate put them at the temp-dir root and measured 0 findings on a genuine defect.
+	// They sit under the system temp dir rather than the repo root: gates built on
+	// scripts/sources.ts enumerate untracked worktree files on purpose, so repo-root scratch is
+	// visible mid-run to every one of them. `isDiagnosticSource` matches the segment anywhere in
+	// the path (`includes`, not `startsWith`), which is what makes a temp copy of a source tree
+	// governed and is also what makes it testable at all.
 	const governedPath = join("packages", "core", "src");
 	const badDirectory = join(fixtures, "red", governedPath);
 	const goodDirectory = join(fixtures, "green", governedPath);
@@ -257,7 +265,7 @@ try {
 	const lint = (directory: string): LintReport => {
 		const run = spawnSync(
 			"./node_modules/.bin/oxlint",
-			["-c", ".oxlintrc.json", "-f", "json", relative(repoRoot, directory)],
+			["-c", ".oxlintrc.json", "-f", "json", directory],
 			{ cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
 		);
 		assert.ok(run.stdout.length > 0, `oxlint produced no JSON for ${directory}:\n${run.stderr}`);
