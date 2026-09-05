@@ -1,10 +1,9 @@
 // createHubDeviceTransport — the laptop runtime's cached/authoritative status
 // over the user-level device hub. This is what beforeTurn refreshes so the
-// turn's context reflects a device that connected mid-session.
 import { describe, expect, test } from 'bun:test';
 import {
   nextDeviceRequestId, isDeviceNotConnectedError, isWorkspaceUnattachedError,
-  WORKSPACE_HAS_NO_OWNER, type DeviceStatus, type JsonValue,
+  NO_DEVICE_CONNECTED, WORKSPACE_HAS_NO_OWNER, type DeviceStatus, type JsonValue,
 } from '@kinu.run/core';
 import {
   createHubDeviceTransport,
@@ -146,7 +145,7 @@ describe('createHubDeviceTransport', () => {
     ]);
 
     hubUp = false;
-    await expect(transport.rpc('exec', ['echo hi'])).rejects.toThrow();
+    await expect(transport.rpc('exec', ['echo hi'])).rejects.toThrow(NO_DEVICE_CONNECTED);
     expect(transport.status().connected).toBe(false);
     expect(transport.status().registered).toBe(true); // connectivity changed, registration didn't
   });

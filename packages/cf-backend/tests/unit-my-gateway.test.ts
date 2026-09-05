@@ -10,14 +10,15 @@
 // gateway failures (2008 invalid provider / 2021 invalid user credentials).
 import { describe, test, expect, setSystemTime } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createTestUserDO, testOwner } from './helpers/user-do';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import { asFetchFunction, parseJsonObject, type JsonValue } from '@kinu.run/core';
+import { asFetchFunction, parseJsonObject, type JsonValue, type OAuthCredential } from '@kinu.run/core';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
+  CLOUDFLARE_OAUTH_CRED_KEY,
   cloudflareAccountAPIRoot,
+  cloudflareAIGatewayId,
   fetchCloudflareAIGateways,
 } from '../src/lib/cloudflare-oauth';
 
@@ -392,23 +393,84 @@ describe('Cloudflare AI Gateway discovery helpers', () => {
   });
 });
 
-describe('UserDO gateway selection wiring', () => {
-  const userDO = readFileSync(join(import.meta.dir, '..', 'src/user/user-do.ts'), 'utf8');
+describe('UserDO gateway credential derivation', () => {
+  function oauthCredential(): OAuthCredential {
+    return {
+      kind: 'oauth',
+      accessToken: 'cf-access',
+      refreshToken: 'cf-refresh',
+      metadata: {
+        tokenType: 'bearer',
+        accountId: 'aaa111aaa111aaa111aaa111aaa111aa',
+        accountName: 'Personal',
+      },
+    };
+  }
 
-  test('the derived cloudflare.ai-gateway view rides the stored cloudflare.oauth credential', () => {
-    expect(userDO).toContain("key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key");
-    // No selected gateway → null headers → my-gateway honestly unavailable.
-    expect(userDO).toMatch(/if \(key === CLOUDFLARE_AI_GATEWAY_CRED_KEY\) \{\s*\n\s*const gatewayId = this\.selectedAIGatewayId\(\);\s*\n\s*if \(!gatewayId\) return null;/);
-    // Workers AI keeps a gateway header: user selection first, env default second.
-    expect(userDO).toContain("this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.env)");
-    // The derived key can never be stored as a credential.
-    expect(userDO).toContain('is derived from your Cloudflare login');
+  /** The Cloudflare management listing answer, for whatever the UserDO asks. */
+  function stubGatewayListing(gateways: Array<{ id: string; authentication: boolean }>): () => void {
+    const original = globalThis.fetch;
+    globalThis.fetch = asFetchFunction(async () => new Response(JSON.stringify({
+      success: true,
+      result: gateways.map((gateway) => ({ id: gateway.id, authentication: gateway.authentication })),
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    return () => { globalThis.fetch = original; };
+  }
+
+  test('the derived cloudflare.ai-gateway view rides the stored cloudflare.oauth credential', async () => {
+    // Two gateways, so login-time discovery selects nothing and the view below
+    // is exercised through an explicit selection.
+    const restore = stubGatewayListing([
+      { id: 'gw-one', authentication: false },
+      { id: 'gw-two', authentication: false },
+    ]);
+    const harness = createTestUserDO();
+    try {
+      const owner = await testOwner();
+      await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, oauthCredential());
+
+      // No selected gateway → null headers → my-gateway honestly unavailable.
+      expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_AI_GATEWAY_CRED_KEY)).toBeNull();
+
+      await harness.userDO.selectAIGateway(owner, 'gw-one');
+      expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_AI_GATEWAY_CRED_KEY)).toMatchObject({
+        Authorization: 'Bearer cf-access',
+        'cf-aig-gateway-id': 'gw-one',
+      });
+
+      // The derived key can never be stored as a credential.
+      await expect(harness.userDO.setCredential(owner, CLOUDFLARE_AI_GATEWAY_CRED_KEY, oauthCredential()))
+        .rejects.toThrow(/derived from your Cloudflare login/);
+
+      // Workers AI keeps a gateway header: user selection first, env default second.
+      expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_OAUTH_CRED_KEY))
+        .toMatchObject({ 'cf-aig-gateway-id': 'gw-one' });
+      await harness.userDO.selectAIGateway(owner, null);
+      expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_OAUTH_CRED_KEY))
+        .toMatchObject({ 'cf-aig-gateway-id': cloudflareAIGatewayId({}) });
+    } finally {
+      harness.close();
+      restore();
+    }
   });
 
-  test('login-time discovery auto-selects a sole gateway', () => {
-    // setCredential(cloudflare.oauth) triggers discovery…
-    expect(userDO).toContain('if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(await ownerCaller(this.env));');
-    // …and listAIGateways persists the only gateway as the selection.
-    expect(userDO).toMatch(/if \(!selectedId && gateways\.length === 1\) \{\s*\n\s*await this\.selectAIGateway\(await ownerCaller\(this\.env\), gateways\[0\]\.id\);/);
+  test('login-time discovery auto-selects a sole gateway', async () => {
+    const restore = stubGatewayListing([{ id: 'gw-solo', authentication: false }]);
+    const harness = createTestUserDO();
+    try {
+      const owner = await testOwner();
+      // setCredential(cloudflare.oauth) discovers inline, so my-gateway works
+      // without a settings visit; listAIGateways persists the only gateway.
+      await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, oauthCredential());
+      expect(await harness.userDO.listAIGateways(owner)).toMatchObject({
+        connected: true,
+        selectedId: 'gw-solo',
+      });
+      expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_AI_GATEWAY_CRED_KEY))
+        .toMatchObject({ 'cf-aig-gateway-id': 'gw-solo' });
+    } finally {
+      harness.close();
+      restore();
+    }
   });
 });

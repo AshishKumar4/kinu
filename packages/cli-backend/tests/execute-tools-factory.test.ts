@@ -53,7 +53,7 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
 
   test('a throw still surfaces the console output produced before it', async () => {
     const out = await makeTool()({ code: 'console.log("before");\nthrow new Error("boom");' });
-    expect(out.error).toContain('boom');
+    expect(out.error).toBe('boom');
     expect(out.logs).toEqual(['before']);
   });
 

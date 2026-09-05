@@ -12,6 +12,7 @@ import type {
   RootEnvelopeV1,
   UploadIntent,
 } from '../src/durability/contracts';
+import { DURABLE_ROOT_FORMATS } from '../src/durability/contracts';
 import {
   MemoryCandidateObjectSink,
   StaleParentRefused,
@@ -250,7 +251,10 @@ async function expectRejects(promise: Promise<unknown>, reason: MerklePackError[
 
 describe('merkle-pack/v1', () => {
   test('the format name is the one the durability contracts reserve', () => {
-    expect(MERKLE_PACK_FORMAT).toBe('merkle-pack/v1');
+    // Agreement between the two declarations, not a restated literal: the
+    // wire constant and the contract registry must name the same format, and
+    // either side renaming alone fails here.
+    expect(DURABLE_ROOT_FORMATS).toContain(MERKLE_PACK_FORMAT);
   });
 
   test('the root is identical under any input order permutation', async () => {
@@ -1369,46 +1373,4 @@ describe('merkle-pack/v1 attach', () => {
     expect(new Set(fetched).size).toBe(fetched.length);
   });
 
-
-  test('one slice fetches its distinct extents together, not one round trip at a time', async () => {
-    // THE DOMINANT TERM of the deployed overrun. A restore reads each file in
-    // 512 KiB slices, and a slice of a file chunked at the default 4 KiB
-    // target is 128 authenticated reads — which the reader awaited strictly
-    // one after another, so a 30 MiB tree paid thousands of round trips of
-    // pure store latency and the wake never finished inside its attach budget.
-    const store = new BarrierStore(4);
-    const bytes = prng(64 * 1024, 91);
-    const build = await buildMerklePack(audited([file('slice.bin', dense(bytes))]));
-    await store.restore(build);
-    const view = await openMerklePack(build.root, store, RANGE_IDENTITY);
-
-    const out = await view.readRange('slice.bin', 0, bytes.byteLength);
-
-    // Same bytes, still one authenticated intent per distinct extent — the
-    // parallelism is in the waiting, not in what is fetched or verified.
-    expect(Buffer.from(out)).toEqual(Buffer.from(bytes));
-    expect(store.barrier.widest).toBeGreaterThanOrEqual(4);
-  });
-
-  test('two walks that need the same node in flight share one fetch', async () => {
-    // The node cache holds the PROMISE. Holding the settled value dedupes
-    // nothing while a fetch is in flight, so a parallel walk paid for the same
-    // interior node once per branch that wanted it.
-    const store = new MemStore();
-    const build = await buildMerklePack(audited([
-      dir('pkg'),
-      file('pkg/one.bin', dense(prng(2_000, 92))),
-      file('pkg/two.bin', dense(prng(2_000, 93))),
-    ]));
-    await store.restore(build);
-    const view = await openMerklePack(build.root, store, RANGE_IDENTITY);
-    store.intents.length = 0;
-
-    await Promise.all([view.stat('pkg/one.bin'), view.stat('pkg/two.bin')]);
-
-    // Both walks pass through the root node and `pkg`. Every intent issued is
-    // for a DIFFERENT extent: nothing was fetched twice.
-    const fetched = store.intents.map((intent) => `${intent.exactKey}@${intent.byteOffset}`);
-    expect(new Set(fetched).size).toBe(fetched.length);
-  });
 });

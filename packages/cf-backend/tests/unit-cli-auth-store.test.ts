@@ -205,7 +205,7 @@ describe('CLI auth approval replay', () => {
     await approveCliAuth(env, started.userCode, approver, '127.0.0.1');
 
     const stranger = { ...approver, userId: 'feedfacefeedfacefeedfacefeedface', email: 'mallory@example.com' };
-    expect(approveCliAuth(env, started.userCode, stranger, '10.0.0.9'))
+    await expect(approveCliAuth(env, started.userCode, stranger, '10.0.0.9'))
       .rejects.toThrow('CLI auth code already used.');
   });
 });
@@ -217,7 +217,7 @@ describe('CLI auth error propagation', () => {
       UserDO: { idFromName: (n: string) => n, get: () => ({}) },
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     });
-    expect(startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1'))
+    await expect(startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1'))
       .rejects.toThrow(/namespace unavailable/i);
   });
 
@@ -226,7 +226,7 @@ describe('CLI auth error propagation', () => {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1');
     }
-    expect(startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1'))
+    await expect(startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1'))
       .rejects.toBeInstanceOf(RateLimitError);
   });
 

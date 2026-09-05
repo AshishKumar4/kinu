@@ -54,8 +54,10 @@ function readLocal(expression: string): JsonValue {
 
 describe('local run-event readers', () => {
   test('listLocalRuns reports the recorded run', () => {
+    // lastTs is the latest event's timestamp: the seed writes rows 0-2, so a
+    // reader that answered the first row's stamp would fail here.
     expect(readLocal(`m.listLocalRuns('jarvis')`)).toEqual([
-      { runId: 'run-1', lastTs: expect.any(String), eventCount: 3 },
+      { runId: 'run-1', lastTs: new Date(1_700_000_000_000 + 2 * 1000).toISOString(), eventCount: 3 },
     ]);
   });
 

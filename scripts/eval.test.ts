@@ -5,7 +5,7 @@ import { parseArgs, partitionRunnable, runBenchmark } from './eval';
 import {
   livenessVerdict, parseSpend, renderLiveness, renderSpend, totalSpend, type SpendLine,
 } from './eval-spend';
-import { parseCorpus } from '../packages/core/src/index';
+import { DEFAULT_QUALITY_THRESHOLD, parseCorpus } from '../packages/core/src/index';
 import type { EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn } from '../packages/core/src/index';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -33,7 +33,9 @@ describe('parseArgs', () => {
   test('defaults to the seed corpus + committed threshold', () => {
     const opts = parseArgs([]);
     expect(opts.corpus).toContain('tests/eval/corpus/seed.jsonl');
-    expect(opts.threshold).toBeGreaterThan(0);
+    // The core's committed floor, not any positive number: a default that
+    // drifted would still gate, just at a quality nobody agreed to.
+    expect(opts.threshold).toBe(DEFAULT_QUALITY_THRESHOLD);
     expect(opts.help).toBe(false);
   });
 

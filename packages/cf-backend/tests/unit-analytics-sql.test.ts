@@ -148,8 +148,8 @@ describe('a batch fill that rejects', () => {
 
     // Same key, same TTL window: a cached rejection would be handed straight
     // back without the fill running a second time.
-    await expect(runAnalyticsBatch(env, ONE, 1_000)).rejects.toThrow();
-    await expect(runAnalyticsBatch(env, ONE, 1_001)).rejects.toThrow();
+    await expect(runAnalyticsBatch(env, ONE, 1_000)).rejects.toThrow('filling a control-plane analytics batch');
+    await expect(runAnalyticsBatch(env, ONE, 1_001)).rejects.toThrow('filling a control-plane analytics batch');
 
     expect(reads()).toBe(2);
   });

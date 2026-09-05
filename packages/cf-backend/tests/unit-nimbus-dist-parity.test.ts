@@ -68,9 +68,6 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
 
   const keys = [...sql.exec("SELECT path FROM inodes WHERE path LIKE 'tmp%'")]
     .map((row) => String(row.path)).sort();
-  console.log('dist inode keys:', keys);
-  console.log('dist A reads:', vfs.as(A).readFileString('/tmp/note.txt'));
-  console.log('dist B reads:', vfs.as(B).readFileString('/tmp/note.txt'));
 
   expect(keys).toContain('tmp/agent-a/note.txt');
   expect(keys).toContain('tmp/agent-b/note.txt');
@@ -84,7 +81,6 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
   const seen = vfs.as(A).list(null, 500).entries
     .map((e: { path: string }) => e.path)
     .filter((p: string) => p.startsWith('tmp'));
-  console.log('dist A list:', seen);
   expect(seen).toContain('tmp/note.txt');
   expect(seen.some((p: string) => p.includes('agent-b'))).toBe(false);
 
@@ -101,7 +97,7 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
   expect(() => vfs.as(A).chmod('home/agent-a/s.sh', 0o777)).toThrow(/use u\+x/);
   expect(root.stat('home/agent-a/s.sh').mode & 0o777).toBe(0o700);
 
-  // unconfined is untouched
+  // unconfined is untouched: root moves the mode and nothing refuses it
   expect(() => root.chmod('home/agent-a/s.sh', 0o755)).not.toThrow();
-  database.close();
+  expect(root.stat('home/agent-a/s.sh').mode & 0o777).toBe(0o755);
 });

@@ -151,7 +151,7 @@ describe('HeadFileChanges — the review a parent gets', () => {
       ...memVfs(),
       async writeFile(_path: string, _data: string | Uint8Array) { throw makeVfsError('EROFS', 'read-only', 'x.ts'); },
     }, changes);
-    await expect(refusing.writeFile('x.ts', 'nope')).rejects.toThrow();
+    await expect(refusing.writeFile('x.ts', 'nope')).rejects.toThrow('EROFS: read-only');
     expect(changes.snapshot()).toEqual([]);
   });
 

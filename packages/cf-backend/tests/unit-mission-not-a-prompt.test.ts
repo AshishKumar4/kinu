@@ -48,7 +48,7 @@ describe("the creation box is a mission, not a first prompt", () => {
     expect(ui).toContain("MISSION_PLACEHOLDER");
     expect(ui).toContain("MISSION_HELP");
     expect(ui).not.toContain("first turn");
-    expect(() => source("src/components/CreateWorkspaceModal.tsx")).toThrow();
+    expect(() => source("src/components/CreateWorkspaceModal.tsx")).toThrow("ENOENT");
   });
 
   test("a workspace before its first turn shows the mission as a brief", () => {

@@ -504,23 +504,26 @@ describe('routeInboundEmail — the Worker seam', () => {
 
   test('a message over the byte ceiling is dropped without resolving an agent', async () => {
     let resolves = 0;
+    // Sized clearly over any ceiling the route sets. The ceiling itself is
+    // read from the refusal the route hands back, never restated here.
     const result = await routeInboundEmail(
-      // 2 MiB is the route's raw ceiling; a mirrored literal that drifts
-      // from the contract fails this test, which is the point.
-      mockMessage({ rawSize: 2 * 1024 * 1024 + 1 }),
+      mockMessage({ rawSize: 10 * 1024 * 1024 }),
       DOMAIN,
       async () => { resolves++; return target(); },
     );
-    expect(result.outcome).toBe('dropped');
-    expect(result.reason).toContain('inbound limit');
+    expect(result).toEqual({
+      outcome: 'dropped',
+      agent: 'scout-a1b2c3',
+      reason: expect.stringContaining('message over the 2 MiB inbound limit'),
+    });
     expect(resolves).toBe(0);
   });
 
   test('a message that LIES about its size is refused by the count of arriving bytes', async () => {
     // `rawSize` is the edge's claim and the pre-filter; the gate is the count,
     // so a stream that keeps arriving past the limit is cut off there rather
-    // than assembled.
-    const oversize = 'x'.repeat(2 * 1024 * 1024 + 1024);
+    // than assembled. Sized clearly over, for the same reason as above.
+    const oversize = 'x'.repeat(3 * 1024 * 1024);
     const body = new Response(`Subject: big\r\n\r\n${oversize}`).body;
     if (!body) throw new Error('expected response body stream');
     let parsedFor: string | null = null;
@@ -532,7 +535,7 @@ describe('routeInboundEmail — the Worker seam', () => {
       }),
     );
     expect(result.outcome).toBe('dropped');
-    expect(result.reason).toContain('inbound limit');
+    expect(result.reason).toContain('message over the 2 MiB inbound limit');
     expect(parsedFor).toBeNull();
   });
 });

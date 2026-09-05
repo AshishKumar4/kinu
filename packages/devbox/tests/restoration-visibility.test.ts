@@ -31,11 +31,6 @@ import { describe, expect, test } from 'bun:test';
 import { Devbox, gate, harness } from './support/devbox-harness';
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 
-/** The sentence a box with nothing in flight is entitled to say, and the one a
- *  box mid-restoration may not. Spelled once: it is the shipped string, and a
- *  test that restated it would pass against a reworded lie. */
-const NOTHING_HAS_RUN = 'no restoration has run for this container yet';
-
 class TestBox extends Devbox<unknown> {
   protected override get policy(): DevboxPolicy {
     return { ...DEFAULT_DEVBOX_POLICY, attachBudgetMs: 60_000, portWaitMs: 4, portProbeIntervalMs: 1 };
@@ -59,11 +54,11 @@ describe('a box that is not attached is either visibly working or re-armable', (
 
     const state = await box.devboxState();
 
-    // THE ASSERTION THE DEPLOYED BOX FAILED. Anything may be said here except
-    // that nothing is happening.
+    // THE ASSERTION THE DEPLOYED BOX FAILED. The attempt is on the record as
+    // work in flight, never as work nobody started. Read off the phase rather
+    // than the sentence, so a rewording cannot pass against a reworded lie.
     expect(state.ready).toBe(false);
-    expect(state.unready).not.toBe(NOTHING_HAS_RUN);
-    expect(state.unready ?? '').not.toBe('');
+    expect(state.restoration).toBe('restoring');
 
     stamp.release();
     await restoring;
@@ -76,7 +71,9 @@ describe('a box that is not attached is either visibly working or re-armable', (
     // distinguishable from one that has.
     const { box } = harness(TestBox);
 
-    expect((await box.devboxState()).unready).toBe(NOTHING_HAS_RUN);
+    const state = await box.devboxState();
+    expect(state.restoration).toBe('unstarted');
+    expect(state.ready).toBe(false);
   });
 
   test('an admission the container refused leaves a re-armable row, not silence', async () => {

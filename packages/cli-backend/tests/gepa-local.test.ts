@@ -170,7 +170,7 @@ describe('GEPA runs on the local backend', () => {
     await session.end();
 
     expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/negative|failure|labeled/i);
+    expect(result.error).toContain('no corrected/frustrated turns yet');
     // A refusal costs nothing: no run row, so the lineage stays honest.
     const runs = db.query<{ c: number }, []>(`SELECT COUNT(*) AS c FROM gepa_runs`).get();
     if (!runs) throw new Error('GEPA run count row is missing');

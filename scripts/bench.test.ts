@@ -778,7 +778,10 @@ describe('loadBenchCorpus', () => {
 
   test('refuses an unknown suite', () => {
     const line = JSON.stringify({ id: 'demo', title: 'd', prompt: 'p', suite: 'nope', editable: ['a'] });
-    expect(() => loadBenchCorpus(fixtureRoot(line, { patch: 'x' }))).toThrow();
+    // Names the line and the refused value. The valid-option list between them
+    // is valibot's wording over the live suite set, which a new suite changes.
+    expect(() => loadBenchCorpus(fixtureRoot(line, { patch: 'x' })))
+      .toThrow(/tasks\.jsonl:1:.*received "nope"/);
   });
 
   test('refuses an empty corpus — it proves nothing', () => {
@@ -840,6 +843,17 @@ describe('the long-horizon corpus', () => {
       }],
     };
     expect(manifestHash([changed])).not.toBe(manifestHash([task]));
+  });
+
+  test('the manifest digest is a known answer, not self-consistent output', () => {
+    // A stored approval digest. The sensitivity check above still passes when
+    // the task encoding drops a field everywhere or the hash itself changes,
+    // while every manifest stops matching history. Recompute from taskHash.
+    const pinned: BenchTask = {
+      id: 'demo', title: 'demo', prompt: 'fix it', editable: ['src/a.ts'], guarded: ['tests'],
+      checks: [{ id: 'core-tests', command: ['bun', 'test'] }],
+    };
+    expect(manifestHash([pinned])).toBe('9c132d606537cbef');
   });
 
   function longHorizonFixture(line: JsonValue): string {

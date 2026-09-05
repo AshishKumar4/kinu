@@ -110,16 +110,6 @@ const KNOWN_TWINS: readonly string[] = [
   // + the local auth store. Only the memoisation is common, and memoisation is
   // not a module.
   'getWebSearchProvider',
-  // Both already read the one core EventLog.query; what differs after it is
-  // cf's ten-field allowlist over the row, which drops the log's own plumbing
-  // (schema_version, dedupe_key, reply_channel) before it leaves the
-  // workspace. Both answer a bare list — the shape is NOT part of the
-  // divergence, and was only ever divergent by accident: cf wrapped its rows in
-  // `{ events: [...] }` and `kinu inspect events` silently stopped
-  // formatting them. A core symbol here would be a passthrough, and `.query` is
-  // too generic a name for the delegation check to prove anything with. Not
-  // expected to shrink.
-  'listRecentEvents',
   // One shaper, two sources — the divergence is real: cf digests its durable
   // assistant_messages rows (inheritedContextFromRows), the CLI reads live
   // history (inheritedContextFromHistory). Both are core; SHARED_TRANSPORTS
@@ -165,7 +155,6 @@ const SHARED_TRANSPORTS = {
   owedTerminalEffects: 'declareTerminalRoster',
   // Both resolve the same core naming policy over their own persistence.
   applyAutoTitle: 'applyWorkspaceTitle',
-  acceptWebhookDelivery: 'acceptWebhookDelivery',
   applyScaffoldDecision: 'applyScaffoldDecision',
   // Three lines each over ONE core store (CompactionStateStore). No duplicated
   // logic — only the session key differs, which is what a backend knows and
@@ -173,7 +162,6 @@ const SHARED_TRANSPORTS = {
   armCompactNow: '.armForceCompaction',
   cancelBackgroundJob: 'cancelBackgroundJob',
   cancelTrigger: 'cancelTrigger',
-  createDurableWebhook: 'registerDurableWebhook',
   createTimerTrigger: 'createTimerTrigger',
   // KINU continual refinement: the whole lane — stage machine, claim fencing,
   // owner routing, staged-skill promotion — is core's evolution/refinement*.
@@ -196,7 +184,6 @@ const SHARED_TRANSPORTS = {
   routingProfile: 'resolveRoutingProfile',
   getAlwaysActiveSkills: 'getAlwaysActiveSkills',
   getEvolutionChangelog: 'getEvolutionChangelog',
-  getGepaRuns: 'listGepaRuns',
   getReasoningEffort: 'getReasoningEffort',
   getReplayEvals: 'listReplayEvals',
   getRunEvents: 'getRunEvents',
@@ -230,7 +217,6 @@ const SHARED_TRANSPORTS = {
   listCurriculumTasks: 'listProposedTasks',
   listRuns: 'listRuns',
   listScaffoldVersions: 'listScaffoldVersions',
-  listTriggers: 'listTriggers',
   // `refinementDebt` is the direct call the delegation check can see; the row
   // view beside it (`refinementRequestView`) is passed by reference into map.
   listRefinements: 'refinementDebt',
@@ -243,7 +229,6 @@ const SHARED_TRANSPORTS = {
   // inseparable); what stays per backend is transport — DO messages vs SQLite
   // rows — and each side's own broadcast channel.
   recordLandedSteers: 'describeLandedSteers',
-  previewScaffoldLive: 'previewScaffoldLive',
   proposeCurriculumTasks: 'proposeCurriculumTasks',
   proposeScaffold: 'proposeScaffold',
   requestRefinement: 'requestRefinement',

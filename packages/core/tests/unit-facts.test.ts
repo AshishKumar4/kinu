@@ -70,13 +70,14 @@ describe('agent_facts', () => {
     expect(f?.value).toEqual(value);
   });
 
-  test('recentTopK returns most-recent first', async () => {
-    const { facts } = createTestFactsStore();
+  test('recentTopK returns most-recent first', () => {
+    const { facts, testSql } = createTestFactsStore();
     facts.upsert('a', 1);
-    await new Promise(r => setTimeout(r, 5));
     facts.upsert('b', 2);
-    await new Promise(r => setTimeout(r, 5));
     facts.upsert('c', 3);
+    // Fixed stamps, not sleeps: the order under test is the ORDER BY, and three
+    // upserts in one millisecond would otherwise share a timestamp.
+    void testSql.sql`UPDATE agent_facts SET last_observed_at = CASE key WHEN 'a' THEN 1000 WHEN 'b' THEN 2000 ELSE 3000 END`;
     const top = facts.recentTopK(2);
     expect(top.length).toBe(2);
     expect(top[0].key).toBe('c');

@@ -2,8 +2,16 @@
 import { describe, expect, test } from 'bun:test';
 import { composerVisibleRows } from '@kinu.run/core';
 
-/** Mirrors the private eight-row cap; drift fails these tests, which is the point. */
-const COMPOSER_MAX_ROWS = 8;
+// The cap the module hands out for a draft no screen could show whole.
+function observedCap(): number {
+  let prev = composerVisibleRows(1);
+  for (let n = 2; n < 1000; n++) {
+    const cur = composerVisibleRows(n);
+    if (cur === prev) return prev;
+    prev = cur;
+  }
+  throw new Error('the composer never caps');
+}
 
 describe('composer rows', () => {
   test('an empty draft still owns a row for its placeholder', () => {
@@ -12,14 +20,16 @@ describe('composer rows', () => {
   });
 
   test('a wrapped draft grows row for row up to the cap, then stops', () => {
+    const cap = observedCap();
+    expect(cap).toBeGreaterThan(1);
     // The engine reports visual rows, so growth is per wrapped row and not
     // per typed line: this is the whole difference the composer must honor.
     expect(composerVisibleRows(2)).toBe(2);
-    expect(composerVisibleRows(COMPOSER_MAX_ROWS - 1)).toBe(COMPOSER_MAX_ROWS - 1);
-    expect(composerVisibleRows(COMPOSER_MAX_ROWS)).toBe(COMPOSER_MAX_ROWS);
+    expect(composerVisibleRows(cap - 1)).toBe(cap - 1);
+    expect(composerVisibleRows(cap)).toBe(cap);
     // Past the cap the extra rows are scrolled, never shown and never lost.
-    expect(composerVisibleRows(COMPOSER_MAX_ROWS + 1)).toBe(COMPOSER_MAX_ROWS);
-    expect(composerVisibleRows(400)).toBe(COMPOSER_MAX_ROWS);
+    expect(composerVisibleRows(cap + 1)).toBe(cap);
+    expect(composerVisibleRows(cap + 100)).toBe(cap);
   });
 
   test('the cap is a caller-supplied bound, and never below one row', () => {

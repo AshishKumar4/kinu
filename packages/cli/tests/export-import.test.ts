@@ -212,7 +212,7 @@ describe('kinu export / import', () => {
     const imported = await result(runCli(home, ['import', archive, '--name', 'half']));
     expect(imported.exitCode).toBe(1);
     expect(imported.stderr).toContain('incomplete');
-    expect(() => restoredDb(home, 'half')).toThrow();
+    expect(() => restoredDb(home, 'half')).toThrow('unable to open database file');
   // Measured 3.8 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
   // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
   // on a finite run, stated with its measurement, not a detector.

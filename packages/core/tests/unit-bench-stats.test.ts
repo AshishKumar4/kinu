@@ -16,8 +16,8 @@ describe('normalQuantile', () => {
   });
 
   test('rejects out-of-range probabilities', () => {
-    expect(() => normalQuantile(0)).toThrow();
-    expect(() => normalQuantile(1)).toThrow();
+    expect(() => normalQuantile(0)).toThrow('normalQuantile: p must be in (0,1), got 0');
+    expect(() => normalQuantile(1)).toThrow('normalQuantile: p must be in (0,1), got 1');
   });
 });
 

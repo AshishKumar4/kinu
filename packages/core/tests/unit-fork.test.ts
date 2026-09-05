@@ -435,9 +435,16 @@ describe('forkWorkspaceStorage', () => {
       identity: { id: 'S', name: 'src' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    await expect(forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
+    const result = await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
-    })).resolves.toBeDefined();
+    });
+    // The skip is a no-op: the cut lands whole in `messages`...
+    expect(result.messagesCopied).toBe(1);
+    expect(tgt.sql<{ id: string }>`
+      SELECT id FROM messages WHERE role != 'system'`.map((r) => r.id)).toEqual(['m1']);
+    // ...and no half-present pane store is left behind for a later read to trip on.
+    expect(tgt.sql<{ c: number }>`
+      SELECT COUNT(*) AS c FROM sqlite_master WHERE name = 'assistant_messages'`.map((row) => row.c)).toEqual([0]);
   });
 
   test('16. the fork marker reaches the pane store when the fork carried one', async () => {

@@ -9,8 +9,9 @@ function timeoutError(method = "getWorkspaceSnapshot", ms = 30_000): Error {
   return new Error(`RPC call to ${method} timed out after ${ms}ms`);
 }
 
-const MIN_REDIAL_INTERVAL_MS = 15_000;
-const MAX_REDIAL_INTERVAL_MS = 60_000;
+/** Spacing fixtures the tests own, so nothing here copies the product defaults. */
+const BASE_INTERVAL_MS = 1_000;
+const CAP_INTERVAL_MS = 4_000;
 
 type RpcFailureInput = Error | string | undefined;
 
@@ -125,37 +126,37 @@ describe("the corpse detector", () => {
 
 describe("redial spacing", () => {
   test("a still-dead origin is re-probed at growing intervals, not hammered", () => {
-    const h = harness({ minRedialIntervalMs: MIN_REDIAL_INTERVAL_MS });
+    const h = harness({ minRedialIntervalMs: BASE_INTERVAL_MS, maxRedialIntervalMs: CAP_INTERVAL_MS });
     // First condemnation.
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(1);
     // Immediately after: nine more timeouts inside the minimum spacing → no second dial yet.
     for (let i = 0; i < 9; i += 1) h.failTimeout();
     expect(h.redials()).toBe(1);
-    // Past the doubled interval (15s → 30s), the next condemnation dials again.
-    h.advance(MIN_REDIAL_INTERVAL_MS * 2);
+    // Past the doubled interval, the next condemnation dials again.
+    h.advance(BASE_INTERVAL_MS * 2);
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(2);
-    // Growth caps at 60s even as outages persist.
-    h.advance(MAX_REDIAL_INTERVAL_MS + 1);
+    // Growth caps at the fixture cap even as outages persist.
+    h.advance(CAP_INTERVAL_MS + 1);
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(3);
   });
 
   test("close rejections from a forced redial do not erase its growing spacing", () => {
-    const h = harness({ minRedialIntervalMs: MIN_REDIAL_INTERVAL_MS });
+    const h = harness({ minRedialIntervalMs: BASE_INTERVAL_MS, maxRedialIntervalMs: CAP_INTERVAL_MS });
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(1);
     h.failTimeout(false);
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(1);
-    h.advance(MIN_REDIAL_INTERVAL_MS * 2);
+    h.advance(BASE_INTERVAL_MS * 2);
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(2);
   });
 
   test("one success after a redial restores the base spacing", () => {
-    const h = harness({ minRedialIntervalMs: MIN_REDIAL_INTERVAL_MS });
+    const h = harness({ minRedialIntervalMs: BASE_INTERVAL_MS, maxRedialIntervalMs: CAP_INTERVAL_MS });
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(1);
     h.succeed();

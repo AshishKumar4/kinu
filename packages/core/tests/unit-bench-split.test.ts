@@ -20,6 +20,8 @@ function task(id: string, overrides: Partial<BenchTask> = {}): BenchTask {
 describe('splitOf', () => {
   test('is deterministic and depends on the salt', () => {
     expect(splitOf('alpha')).toBe(splitOf('alpha'));
+    // Pinned unitHash outcome, so a salt or hash change fails here.
+    expect(splitOf('alpha')).toBe('dev');
     const withOtherSalt = Array.from({ length: 40 }, (_, i) => splitOf(`t${i}`, 'other-salt'));
     const withDefault = Array.from({ length: 40 }, (_, i) => splitOf(`t${i}`, SEAL_SALT));
     expect(withOtherSalt).not.toEqual(withDefault);
@@ -180,6 +182,8 @@ describe('manifest hashing', () => {
     const a = [task('x'), task('y')];
     const b = [task('y'), task('x')];
     expect(manifestHash(a)).toBe(manifestHash(b));
+    // Pinned so a dropped task field fails here instead of passing on both sides.
+    expect(manifestHash(a)).toBe('7fe619e4a3c90d9a');
     expect(manifestHash([task('x'), task('y', { prompt: 'different' })])).not.toBe(manifestHash(a));
   });
 

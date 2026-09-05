@@ -39,7 +39,7 @@ describe("MemoryStore.appendToFile", () => {
 		const store = new MemoryStore(fs, sql);
 		store.ensureSchema();
 
-		await expect(store.appendToFile("memory/MEMORY.md", "more")).rejects.toThrow();
+		await expect(store.appendToFile("memory/MEMORY.md", "more")).rejects.toThrow("EIO: the store is unreachable");
 		expect(fs.files.get("memory/MEMORY.md")).toBe("# precious notes");
 	});
 });

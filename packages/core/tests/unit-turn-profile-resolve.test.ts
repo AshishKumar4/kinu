@@ -193,7 +193,10 @@ describe('provider availability', () => {
     // degraded, which would disable the check for every caller that predates it.
     expect(asking(clean)).toThrow(/m-fast/);
     expect(asking({ ...clean, unavailableProviders: [] })).toThrow(/m-fast/);
-    expect(asking(degraded(['m-default']))).not.toThrow();
+    // A degraded listing keeps the configured model: it was never looked up, so nothing disproved it.
+    expect(asking(degraded(['m-default']))().tier).toEqual({
+      id: 'fast', source: 'explicit', model: 'm-fast', reasoningEffort: 'low',
+    });
   });
 
   test('a degraded listing does not refuse a turn over an unrelated tier slot', () => {

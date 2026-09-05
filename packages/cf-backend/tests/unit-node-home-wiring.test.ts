@@ -369,7 +369,9 @@ describe('a node cannot widen its own home nor chown it away', () => {
 
     // The consequence, not just the refusal: a widened home would be a sibling's
     // to overwrite, which is the whole thing the boundary is for.
-    expect(() => f.workspace.vfs.as(credA).chmod(target.home, 0o777)).toThrow();
+    expect(() => f.workspace.vfs.as(credA).chmod(target.home, 0o777)).toThrow(
+      expect.objectContaining({ code: 'EPERM' }),
+    );
     expect(() => f.workspace.vfs.as(credB).writeFile(`${target.home}/leak.txt`, 'leak'))
       .toThrow(expect.objectContaining({ code: 'EACCES' }));
   });

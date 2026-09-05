@@ -29,11 +29,13 @@ function sampleReport(checks: Partial<Record<CaptureCapabilityId, CaptureCheckSt
 
 describe('the capture-probe instrument', () => {
   test('the deployed probe measures exactly the closed capability set', () => {
-    // Drift runs both ways: an id measured but not modeled poisons the report
-    // schema; an id modeled but never measured gates fail-closed forever.
-    for (const id of CAPTURE_CAPABILITIES) {
-      expect(PROBE_SOURCE).toContain(`'${id}'`);
-    }
+    // Both directions, read off the probe's own CHECK_ORDER: an id measured
+    // but not modeled poisons the report schema; an id modeled but never
+    // measured gates fail-closed forever. The probe runs in-container, so its
+    // list is read as text — and an empty extraction reads as [] and fails.
+    const order = /CHECK_ORDER: readonly CaptureCapabilityId\[\] = \[([\s\S]*?)\];/.exec(PROBE_SOURCE)?.[1] ?? '';
+    const measured = [...order.matchAll(/'([^']+)'/g)].map((match) => match[1]).sort();
+    expect(measured).toEqual([...CAPTURE_CAPABILITIES].sort());
     expect(PROBE_SOURCE).toContain('probeVersion: 1');
   });
 
@@ -73,7 +75,7 @@ describe('the capture-probe instrument', () => {
   });
 
   test('garbage probe output is rejected loudly, not parsed hopefully', () => {
-    expect(() => parseReport('not json at all')).toThrow();
-    expect(() => parseReport(JSON.stringify({ probeVersion: 1 }))).toThrow();
+    expect(() => parseReport('not json at all')).toThrow('probe output is not JSON');
+    expect(() => parseReport(JSON.stringify({ probeVersion: 1 }))).toThrow('"platform"');
   });
 });

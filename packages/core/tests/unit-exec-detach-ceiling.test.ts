@@ -119,7 +119,7 @@ function wrapRun(provider: ExecutorProvider, runner: ReturnType<typeof fakeJobRu
     { run: runToolOverSandbox(provider) },
     { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
   );
-  const entry = wrapped['run'];
+  const entry = wrapped.run;
   if (!entry) throw new Error('Expected the run tool to survive wrapping');
   return toolExecute<RunInput, object | string>(entry);
 }
@@ -201,10 +201,10 @@ describe('every long-capable surface is declared backgroundable', () => {
     // `execute_tools` and the shell reached through `run` cannot diverge. Read
     // through the declared contract, which is what the wrapper indexes.
     const declared: Readonly<Record<string, BackgroundableTool>> = BACKGROUNDABLE_TOOLS;
-    expect(declared['run']?.completion).toBe('result');
-    expect(declared['execute_tools']?.completion).toBe('result');
-    expect(declared['run']?.detachable({ command: 'x', runtime: 'sandbox' })).toBe(true);
-    expect(declared['execute_tools']?.detachable({ code: 'await sandbox.exec("x")' })).toBe(true);
+    expect(declared.run?.completion).toBe('result');
+    expect(declared.execute_tools?.completion).toBe('result');
+    expect(declared.run?.detachable({ command: 'x', runtime: 'sandbox' })).toBe(true);
+    expect(declared.execute_tools?.detachable({ code: 'await sandbox.exec("x")' })).toBe(true);
   });
 });
 
@@ -247,7 +247,7 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
       { run: runToolOverSandbox(provider) },
       { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
     );
-    const entry = wrapped['run'];
+    const entry = wrapped.run;
     if (!entry) throw new Error('Expected the run tool to survive wrapping');
     const out = await toolExecute<RunInput, object | string>(entry)({
       command: TRAINING, runtime: 'sandbox',

@@ -73,7 +73,12 @@ describe('runMCTS reports progress while the search runs', () => {
       budget: 1,
       branches: 1,
     });
-    expect(result).toBeDefined();
+    // A sunk call reports convergence with a winner and a banked tree. The
+    // unsunk call must reach that same outcome through the same engine path.
+    expect(result.converged).toBe(true);
+    expect(result.winnerId).not.toBeNull();
+    expect(rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM search_nodes`[0]?.n ?? 0)
+      .toBeGreaterThanOrEqual(2);
   });
 });
 

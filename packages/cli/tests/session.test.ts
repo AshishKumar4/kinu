@@ -140,7 +140,8 @@ describe("CLI transcripts", () => {
 
     const byId = findTranscriptPath("jarvis", "20260101T000000-abc111", { transcriptDir: dir });
     expect(byId).toBe(join(agentDir, "20260101T000000-abc111.jsonl"));
-    expect(findTranscriptPath("jarvis", byId!, { transcriptDir: dir })).toBe(byId);
+    if (byId === null) throw new Error("expected the seeded transcript path");
+    expect(findTranscriptPath("jarvis", byId, { transcriptDir: dir })).toBe(byId);
     expect(findTranscriptPath("jarvis", "missing-id", { transcriptDir: dir })).toBeNull();
     // No prefix matching: a diagnostic lookup either names the artifact or fails.
     expect(findTranscriptPath("jarvis", "20260101", { transcriptDir: dir })).toBeNull();

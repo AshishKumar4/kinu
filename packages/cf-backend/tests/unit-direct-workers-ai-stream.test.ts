@@ -389,9 +389,8 @@ describe('direct Workers AI binding — incremental streaming', () => {
     const { fetch: direct } = directFetch(() => {
       throw new DOMException('The operation was aborted', 'AbortError');
     });
-
     await expect(direct(ENDPOINT, { method: 'POST', body: chatBody({ stream: true }) }))
-      .rejects.toThrow(/aborted/iu);
+      .rejects.toThrow('The operation was aborted');
     expect(logger.emitted.map((line) => line.event)).not.toContain('workers_ai.direct_call_failed');
   });
 });
@@ -603,9 +602,9 @@ describe('direct Workers AI binding — usage and finish frames', () => {
   // dropping it would lose whatever it said while the turn still reported
   // success. Ending the stream is the only honest answer.
   test.each([
-    ['is not JSON at all', 'data: {oops\n\n', /not a JSON object/u],
-    ['is JSON but not an object', 'data: 3\n\n', /not a JSON object/u],
-    ['is an object in neither dialect', 'data: {"response":5}\n\n', /neither an OpenAI chunk nor a native output/u],
+    ['is not JSON at all', 'data: {oops\n\n', `Workers AI ${MODEL} streamed a data frame that is not a JSON object`],
+    ['is JSON but not an object', 'data: 3\n\n', `Workers AI ${MODEL} streamed a data frame that is not a JSON object`],
+    ['is an object in neither dialect', 'data: {"response":5}\n\n', `Workers AI ${MODEL} streamed a frame that is neither an OpenAI chunk nor a native output`],
   ])('a data frame that %s ends the stream loudly', async (_case, frame, expected) => {
     const { fetch: direct } = directFetch(() => eventStreamOf(`${frame}${DONE}`));
 
@@ -645,8 +644,7 @@ describe('direct Workers AI binding — refusals', () => {
     expect(response.headers.get('content-type')).toBe('application/json');
     const message = v.parse(MessageErrorSchema, JSON.parse(await response.text())).error.message;
     expect(message).toContain(MODEL);
-    expect(message).toContain('did not stream');
-    // The refusal states what arrived, and never replays the answer itself — a
+    expect(message).toContain('did not stream over the direct binding');
     // refusal that leaked the completion would be the buffering again by
     // another route.
     expect(message).not.toContain(WITHHELD);

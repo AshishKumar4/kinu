@@ -87,16 +87,21 @@ describe('durability v1 wire contracts', () => {
     expect(() => v.parse(HeadPointerV1Schema, {
       ...pointer,
       lastOperationId: '',
-    })).toThrow();
+    })).toThrow('Invalid length: Expected >=1 but received 0');
     expect(() => v.parse(HeadPointerV1Schema, {
       ...pointer,
       reachable: [object],
-    })).toThrow();
+    })).toThrow('Invalid key: Expected never but received "reachable"');
   });
 
   test('wire counters and digests refuse unsafe representations', () => {
-    expect(() => v.parse(ImmutableObjectRefSchema, { ...object, byteLength: '-1' })).toThrow();
-    expect(() => v.parse(ImmutableObjectRefSchema, { ...object, sha256: 'short' })).toThrow();
+    // A negative byte count is unrepresentable, so it is refused at the
+    // boundary rather than read as a huge unsigned length downstream.
+    expect(() => v.parse(ImmutableObjectRefSchema, { ...object, byteLength: '-1' }))
+      .toThrow('Expected a canonical non-negative decimal string');
+    // A truncated digest cannot authenticate anything, so it never parses.
+    expect(() => v.parse(ImmutableObjectRefSchema, { ...object, sha256: 'short' }))
+      .toThrow('Expected a lowercase SHA-256 digest');
     // A bare decimal is no longer a legal envelope cut.
     expect(() => v.parse(RootEnvelopeV1Schema, {
       version: 1,
@@ -109,7 +114,7 @@ describe('durability v1 wire contracts', () => {
       rootObject: object,
       closure: [object],
       closureObject,
-    })).toThrow();
+    })).toThrow('Invalid type: Expected Object but received "42"');
     expect(() => v.parse(RootEnvelopeV1Schema, {
       version: 1,
       format: 'merkle-pack/v1',
@@ -121,7 +126,21 @@ describe('durability v1 wire contracts', () => {
       rootObject: object,
       closure: [object],
       closureObject,
-    })).toThrow();
+    })).toThrow('Expected a canonical non-negative decimal string');
+    // The empty capture id the envelope above also carries is refused on its
+    // own field, so the refusal above is known to cover both defects.
+    expect(() => v.parse(RootEnvelopeV1Schema, {
+      version: 1,
+      format: 'merkle-pack/v1',
+      boxId: 'box-1',
+      epoch: '7',
+      generation: '9',
+      parentRootId: null,
+      cut: { ...capturedCut, captureId: '' },
+      rootObject: object,
+      closure: [object],
+      closureObject,
+    })).toThrow('Invalid length: Expected >=1 but received 0');
   });
 
   test('an upload receipt proves the exact attempted object', () => {
@@ -142,7 +161,7 @@ describe('durability v1 wire contracts', () => {
       sha256: SHA,
       etag: 'etag',
       verified: false,
-    })).toThrow();
+    })).toThrow('Invalid type: Expected true but received false');
   });
 
   test('restore work reports every hidden readiness dimension', () => {
@@ -184,7 +203,8 @@ describe('durability v1 wire contracts', () => {
       expiresAt: intent.expiresAt,
       opaque: 'provider-owned-capability',
     }).opaque).toBe('provider-owned-capability');
-    expect(() => v.parse(UploadIntentSchema, { ...intent, method: 'GET' })).toThrow();
+    expect(() => v.parse(UploadIntentSchema, { ...intent, method: 'GET' }))
+      .toThrow('Invalid type: Expected "PUT" but received "GET"');
   });
 
   test('range reads and captures carry exact re-drive coordinates', () => {
@@ -262,10 +282,12 @@ describe('durability v1 wire contracts', () => {
       rootEnvelopeId: SHA,
       lastOperationId: 'op-1',
       parentRootId: SHA,
-    })).toThrow();
+    })).toThrow('Invalid key: Expected never but received "parentRootId"');
   });
 
   test('operation phase rejects redundant and impossible state', () => {
+    // An intent names no attempt yet, so an attempt id on one is refused
+    // rather than carried into a phase that never reads it.
     expect(() => v.parse(OperationRecordSchema, {
       operationId: 'op-1',
       kind: 'tick',
@@ -275,7 +297,9 @@ describe('durability v1 wire contracts', () => {
       expectedParent: SHA,
       phase: 'intent',
       attemptId: 'unused-attempt',
-    })).toThrow();
+    })).toThrow('Invalid key: Expected never but received "attemptId"');
+    // A sealed operation names its result id, so one that carries an attempt
+    // but no result is refused as a state no writer could have produced.
     expect(() => v.parse(OperationRecordSchema, {
       operationId: 'op-1',
       kind: 'tick',
@@ -285,7 +309,7 @@ describe('durability v1 wire contracts', () => {
       expectedParent: SHA,
       phase: 'sealed',
       attemptId: 'attempt-1',
-    })).toThrow();
+    })).toThrow('Invalid key: Expected "resultRootId" but received undefined');
   });
 
   test('durable operation phases contain no response-only acknowledgement state', () => {
@@ -302,11 +326,12 @@ describe('durability v1 wire contracts', () => {
     };
     expect(v.parse(CandidateControlStateV1Schema, record)).toEqual(record);
     expect(v.parse(CandidateControlStateV1Schema, { version: 1, head: null, operation: null }).head).toBeNull();
-    expect(() => v.parse(CandidateControlStateV1Schema, { ...record, envelope })).toThrow();
+    expect(() => v.parse(CandidateControlStateV1Schema, { ...record, envelope }))
+      .toThrow('Invalid key: Expected never but received "envelope"');
     expect(() => v.parse(CandidateControlStateV1Schema, {
       ...record,
       head: { ...record.head, envelope },
-    })).toThrow();
+    })).toThrow('Invalid key: Expected never but received "envelope"');
   });
 
   test('the container run control pairs one pointer with the exact envelope it names', () => {
@@ -318,9 +343,12 @@ describe('durability v1 wire contracts', () => {
     };
     expect(v.parse(CandidateRunControlV1Schema, control)).toEqual(control);
     // A pointer without its envelope, or an envelope without its pointer, is unrepresentable.
-    expect(() => v.parse(CandidateRunControlV1Schema, { ...control, head: { pointer } })).toThrow();
-    expect(() => v.parse(CandidateRunControlV1Schema, { ...control, head: { envelope } })).toThrow();
-    expect(() => v.parse(CandidateRunControlV1Schema, { ...control, head: pointer })).toThrow();
+    expect(() => v.parse(CandidateRunControlV1Schema, { ...control, head: { pointer } }))
+      .toThrow('Invalid key: Expected "envelope" but received undefined');
+    expect(() => v.parse(CandidateRunControlV1Schema, { ...control, head: { envelope } }))
+      .toThrow('Invalid key: Expected "pointer" but received undefined');
+    expect(() => v.parse(CandidateRunControlV1Schema, { ...control, head: pointer }))
+      .toThrow('Invalid key: Expected "pointer" but received undefined');
   });
 
   test('the reset fault register exactly names every external await', () => {
@@ -456,7 +484,8 @@ describe('durability v2 wire contracts', () => {
   test('a v2 envelope without its ledger is refused', () => {
     const { ledger: omitted, ...withoutLedger } = envelopeV2;
     expect(omitted).toEqual(ledgerObject);
-    expect(() => v.parse(RootEnvelopeV2Schema, withoutLedger)).toThrow();
+    expect(() => v.parse(RootEnvelopeV2Schema, withoutLedger))
+      .toThrow('Invalid key: Expected "ledger" but received undefined');
   });
 
   test('the root is an authenticated range inside a pack this generation added', () => {
@@ -513,7 +542,8 @@ describe('durability v2 wire contracts', () => {
       ...ledger,
       packs: [{ ...ledger.packs[0], sha256: 'D'.repeat(64) }],
     })).toThrow(/SHA-256/u);
-    expect(() => v.parse(PackLedgerSchema, { ...ledger, packs: [] })).toThrow();
+    expect(() => v.parse(PackLedgerSchema, { ...ledger, packs: [] }))
+      .toThrow('Invalid length: Expected >=1 but received 0');
   });
 
   test('each counted-work row accepts safe counts and refuses unsafe counts or extra state', () => {
@@ -525,11 +555,16 @@ describe('durability v2 wire contracts', () => {
       [GcWorkSchema, { deletes: 2, markPages: 3, markBytes: 4096 }],
     ] as const;
     for (const [schema, row] of rows) expect(v.parse(schema, row)).toEqual(row);
-    expect(() => v.parse(SealWorkSchema, { ...rows[0][1], bytesStaged: -1 })).toThrow();
-    expect(() => v.parse(PublishWorkSchema, { ...rows[1][1], objectsPut: 1.5 })).toThrow();
-    expect(() => v.parse(HydrateWorkSchema, { ...rows[2][1], payloadBytes: 1 })).toThrow();
-    expect(() => v.parse(CompactionWorkSchema, { ...rows[3][1], bytesRewritten: Number.MAX_SAFE_INTEGER + 1 })).toThrow();
-    expect(() => v.parse(GcWorkSchema, { ...rows[4][1], closureWalks: 1 })).toThrow();
+    expect(() => v.parse(SealWorkSchema, { ...rows[0][1], bytesStaged: -1 }))
+      .toThrow('Invalid value: Expected >=0 but received -1');
+    expect(() => v.parse(PublishWorkSchema, { ...rows[1][1], objectsPut: 1.5 }))
+      .toThrow('Invalid safe integer: Received 1.5');
+    expect(() => v.parse(HydrateWorkSchema, { ...rows[2][1], payloadBytes: 1 }))
+      .toThrow('Invalid key: Expected never but received "payloadBytes"');
+    expect(() => v.parse(CompactionWorkSchema, { ...rows[3][1], bytesRewritten: Number.MAX_SAFE_INTEGER + 1 }))
+      .toThrow('Invalid safe integer: Received 9007199254740992');
+    expect(() => v.parse(GcWorkSchema, { ...rows[4][1], closureWalks: 1 }))
+      .toThrow('Invalid key: Expected never but received "closureWalks"');
   });
 
   test('sidecar status binds attach state, lag, hydration and every work row', () => {
@@ -542,15 +577,15 @@ describe('durability v2 wire contracts', () => {
     expect(() => v.parse(SidecarStatusV1Schema, {
       ...sidecarStatus,
       attach: { kind: 'attached' },
-    })).toThrow();
+    })).toThrow('Invalid key: Expected "rootEnvelopeId" but received undefined');
     expect(() => v.parse(SidecarStatusV1Schema, {
       ...sidecarStatus,
       attach: { ...sidecarStatus.attach, stale: true },
-    })).toThrow();
+    })).toThrow('Invalid key: Expected never but received "stale"');
     expect(() => v.parse(SidecarStatusV1Schema, {
       ...sidecarStatus,
       work: { ...sidecarStatus.work, seal: { ...sidecarStatus.work.seal, closureObjects: 1 } },
-    })).toThrow();
+    })).toThrow('Invalid key: Expected never but received "closureObjects"');
   });
 
   test('the v2 arm declares exactly the await points it can reach', () => {
@@ -576,7 +611,7 @@ describe('durability v2 wire contracts', () => {
     expect(() => v.parse(AwaitPointDeclarationSchema, {
       format: 'merkle-pack/v2',
       uses: ['not-a-real-point'],
-    })).toThrow();
+    })).toThrow('but received "not-a-real-point"');
   });
 });
 

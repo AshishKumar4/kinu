@@ -206,6 +206,6 @@ describe('TaskListStore', () => {
     expect(tables).toEqual(['agent_tasks']);
     const s = new TaskListStore(makeSql(db));
     expect(s.get('t1')?.status).toBe('done');
-    expect(() => db.exec(`INSERT INTO agent_tasks VALUES('t9',999,NULL,'x','bogus',1,1)`)).toThrow();
+    expect(() => db.exec(`INSERT INTO agent_tasks VALUES('t9',999,NULL,'x','bogus',1,1)`)).toThrow('CHECK constraint failed');
   });
 });

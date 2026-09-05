@@ -3,20 +3,15 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { asFetchFunction } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { testOwner } from './helpers/user-do';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { handleUserRequest } from '../src/user/routes';
 import { createCloudWorkspaceForUser } from '../src/user/workspace-create';
 import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
 import { HarnessOrchestratorAgent, orchestratorHarness } from './helpers/actor-harness';
 import type { UserCaller } from '../src/user/workspace-capability';
 import type { PresentedCaller } from '../src/control-plane/capability';
+import type { AuthIdentity } from '../src/auth/session';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
-const ROOT = join(import.meta.dir, '..');
-
-function source(path: string): string {
-  return readFileSync(join(ROOT, path), 'utf8');
-}
 
 interface TestNamespace<Stub> {
   idFromName(name: string): string;
@@ -704,15 +699,47 @@ describe('cloud agent ownership safety', () => {
     });
   });
 
-  test('delete route and teardown require owner-scoped destroy', () => {
-    const userRoutes = source('src/user/routes.ts');
-    const userDO = source('src/user/user-do.ts');
-    const orchestrator = source('src/orchestrator.ts');
+  test('the delete route destroys only as the signed-in owner, and the agent refuses anyone else', async () => {
+    const OWNER = 'a'.repeat(32);
+    const removed: Array<{ name: string; ownerUserId: string }> = [];
+    const env = testEnv({
+      UserDO: {
+        idFromName: (name: string) => name,
+        get: () => ({
+          async ensureProfile() {},
+          async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
+            removed.push({ name, ownerUserId });
+          },
+        }),
+      },
+      OrchestratorAgent: { idFromName: (name: string) => name, get: () => ({}) },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    });
+    const identity: AuthIdentity = {
+      userId: OWNER, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now(),
+    };
+    const del = (body?: { ownerUserId?: string }): Promise<Response | null> => handleUserRequest(new Request(
+      'https://kinu.example.com/api/user/workspaces/jarvis',
+      {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      },
+    ), env, identity);
 
-    expect(userRoutes).toContain('stub.removeWorkspace(await ownerCaller(env), decodeURIComponent(agentMatch[1]), identity.userId)');
-    expect(userDO).toContain('async removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void>');
-    expect(userDO).toContain('await stub.destroyAgent(ownerUserId)');
-    expect(orchestrator).toContain('async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }>');
-    expect(orchestrator).toContain('Agent owner mismatch; refusing to destroy.');
+    // The session's own id is the destroy authority. A forged body cannot
+    // retarget the destroy at another account.
+    expect((await del())?.status).toBe(200);
+    expect((await del({ ownerUserId: 'f'.repeat(32) }))?.status).toBe(200);
+    expect(removed).toEqual([
+      { name: 'jarvis', ownerUserId: OWNER },
+      { name: 'jarvis', ownerUserId: OWNER },
+    ]);
+
+    // And the workspace's own object refuses a destroy authorized by anyone
+    // else — the check the forwarded id meets on a real agent.
+    const harness = orchestratorHarness();
+    await expect(harness.agent.destroyAgent('b'.repeat(32)))
+      .rejects.toThrow('Agent owner mismatch; refusing to destroy.');
   });
 });

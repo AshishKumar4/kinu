@@ -72,13 +72,12 @@ describe('MCTS integration', () => {
     rt.spawnBranch = async () => malformedBranch();
 
     initTables(rt);
-    const result = await runMCTS(rt, createMockSession(), 'pick a strategy', {
+    await runMCTS(rt, createMockSession(), 'pick a strategy', {
       budget: 1,
       branches: 2,
       onProgress: (e) => { if (e.type === 'branch-failed') failures.push(e.error); },
     });
 
-    expect(result).toBeDefined();
     expect(failures.length).toBeGreaterThan(0);
     expect(failures.some((e) => e.includes('no exploration'))).toBe(true);
   });
@@ -502,13 +501,17 @@ describe('MCTS integration', () => {
     // The defect: a blended rate refused this at any realistic cap. The catalog
     // prices the model at zero, so a $0 ceiling is the honest comparison — and
     // it must pass. `estimatedUSD > maxCostUSD` is 0 > 0, which is false.
-    await expect(
-      runMCTS(rt, createMockSession(), 'free work', {
-        budget: 2, branches: 2, maxCostUSD: 0,
-        judgeSamples: 1, maxEvalLLMCalls: 1,
-        costModel: () => ({ spec: 'free/model', pricing: { input: 0, output: 0 } }),
-      }),
-    ).resolves.toBeDefined();
+    const result = await runMCTS(rt, createMockSession(), 'free work', {
+      budget: 2, branches: 2, maxCostUSD: 0,
+      judgeSamples: 1, maxEvalLLMCalls: 1,
+      costModel: () => ({ spec: 'free/model', pricing: { input: 0, output: 0 } }),
+    });
+
+    // The refusal this guards against threw before any node was written: a
+    // search that ran records its whole tree and names its winner from it.
+    const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes`;
+    expect(nodes.length).toBe(5); // 1 root + 2 iterations × 2 branches
+    expect(nodes.some((node) => node.id === result.winnerId)).toBe(true);
   });
 
   test('BUG-4: all-low-score convergence returns converged=false', async () => {
@@ -658,8 +661,9 @@ describe('MCTS progress reporting', () => {
     });
     // Every event names the search that raised it — that is what lets a
     // consumer answer it with the right tree when two searches are live.
-    expect(events.every((event) => event.rootId === grounding[0]!.rootId)).toBe(true);
-    expect(grounding[0]!.rootId).toBeTruthy();
+    const rootId = grounding[0]?.rootId;
+    if (rootId === undefined || rootId.length === 0) throw new Error('grounding event names no search');
+    expect(events.every((event) => event.rootId === rootId)).toBe(true);
   });
 
   test('a failed exploration is reported with its provider error, and the search continues', async () => {
@@ -678,12 +682,11 @@ describe('MCTS progress reporting', () => {
 
     initTables(rt);
     const events: MCTSProgressEvent[] = [];
-    const result = await runMCTS(rt, createMockSession(), 'plan the work', {
+    await runMCTS(rt, createMockSession(), 'plan the work', {
       budget: 1, branches: 2,
       onProgress: (event) => events.push(event),
     });
 
-    expect(result).toBeDefined();
     const failures = events.flatMap(e => e.type === 'branch-failed' && e.stage === 'explore' ? [e] : []);
     expect(failures.length).toBe(1);
     expect(failures[0]!.iteration).toBe(1);

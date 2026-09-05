@@ -387,7 +387,7 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
     if (reverted.kind !== 'text') throw new Error('expected text outcome');
     expect(reverted.text).toContain(`Reverted ${factIndex}`);
     expect(rt.storage.sql`SELECT * FROM agent_facts`).toHaveLength(0);
-    expect(rt.craftStore.get('csv_summarizer')).toBeTruthy();
+    expect(rt.craftStore.get('csv_summarizer')).toMatchObject({ name: 'csv_summarizer' });
 
     // Out-of-range and bad indices answer with usage, never throw.
     const missing = await executeSlashCommand(client, '/changelog revert 99');
@@ -431,22 +431,25 @@ describe('/takes — Alternate Takes over a real local client', () => {
     await client.send('solve it');
 
     const set = await client.latestTakes();
-    expect(set).not.toBeNull();
-    expect(set!.turnId).toBeTruthy();
-    expect(set!.candidates.map((c) => c.nodeId)).toEqual(['win', 'alt']);
+    if (set === null || set.turnId === null) throw new Error('expected alternate takes bound to the just-run turn');
+    expect(set.turnId.length).toBeGreaterThan(0);
+    expect(set.candidates.map((c) => c.nodeId)).toEqual(['win', 'alt']);
 
     const listing = await executeSlashCommand(client, '/takes');
     if (listing.kind !== 'takes') throw new Error(`expected takes outcome, got ${listing.kind}`);
-    expect(listing.set.id).toBe(set!.id);
+    expect(listing.set.id).toBe(set.id);
 
     // Pick by number through the shared command path (take 2 = the sibling).
     const picked = await executeSlashCommand(client, '/takes 2');
     if (picked.kind !== 'text') throw new Error(`expected text outcome, got ${picked.kind}`);
     expect(picked.text).toContain('Take 2 picked');
     const row = rt.storage.sql<{ outcome: string; source: string; turn_id: string }>`
-      SELECT outcome, source, turn_id FROM turn_outcomes`[0]!;
-    expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', turn_id: set!.turnId });
-    expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0]!.status).toBe('terminal');
+      SELECT outcome, source, turn_id FROM turn_outcomes`[0];
+    if (row === undefined) throw new Error('expected a take_pick outcome row');
+    expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', turn_id: set.turnId });
+    const altNode = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0];
+    if (altNode === undefined) throw new Error('expected the sibling take node');
+    expect(altNode.status).toBe('terminal');
 
     // The pick queued a take_pick continuation turn — let it stream through
     // the same event seam before closing.

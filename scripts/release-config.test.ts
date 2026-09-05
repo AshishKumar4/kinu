@@ -326,11 +326,16 @@ describe('the workflows that publish and measure this product', () => {
   });
 
   test('a job that holds a secret is bound to a GitHub environment', () => {
+    // Each credential-bearing job names its environment below, exactly as its
+    // workflow file spells it. Repository secrets are readable by every workflow
+    // in the repository, including one added by a branch. An environment is the
+    // only boundary GitHub offers that a file in the repository can ask for.
+    const bound = new Map([
+      ['.github/workflows/deploy-staging.yml#deploy', 'staging'],
+      ['.github/workflows/eval.yml#benchmark', 'eval'],
+    ]);
     for (const { label, job } of SECRET_JOBS) {
-      // Repository secrets are readable by every workflow in the repository,
-      // including one added by a branch. An environment is the only boundary
-      // GitHub offers that a file in the repository can ask for.
-      expect(job.environment, `${label} reads a repository-wide secret`).toBeDefined();
+      expect(job.environment, `${label} reads a repository-wide secret`).toBe(bound.get(label));
     }
   });
 

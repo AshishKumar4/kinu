@@ -43,8 +43,9 @@ describe('a fork transfer interrupted by a real eviction', () => {
     expect(rows.refusal).toBeNull();
     expect(rows.staged).toBe(rows.sent);
     // begin, two config frames, the crafted tool, two memory chunks, three pane
-    // rows: the rows genuinely span frames, so the boundary is a real one.
-    expect(rows.sent).toBeGreaterThan(5);
+    // rows, and the three plain rows elided to one frame: the rows genuinely
+    // span frames, so the boundary is a real one.
+    expect(rows.sent).toBe(10);
 
     const staged = await target(name).state();
     expect(staged.paneRows).toBe(3);
@@ -192,7 +193,11 @@ describe('a fork transfer interrupted by a real eviction', () => {
     // — computed by reading the staging back, since no activation saw every range.
     const published = await target(name).state();
     expect(published.files).toEqual(inherited);
-    expect(published.lineage).not.toBeNull();
+    expect(published.lineage).toMatchObject({
+      sourceWorkspaceName: PROBE_SOURCE_NAME,
+      sourceMessageId: PROBE_CUT_MESSAGE_ID,
+      sourceMessageCreatedAt: CUT_MS,
+    });
     expect(published.identity?.mission).toBe(PROBE_SOUL_MISSION);
 
     // Re-delivering the ranges that crossed either side of the eviction changes

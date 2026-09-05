@@ -7,7 +7,6 @@ import {
   platformFactEntries,
   type PlatformFact,
 } from '../packages/core/src/platform-catalog';
-import { readFileSync } from 'node:fs';
 
 import { PROSE_EXEMPT_FILES, auditSchema, auditSources, findProseMentions } from './platform-catalog';
 import { readSources } from './sources';
@@ -250,10 +249,16 @@ describe('against the real tree', () => {
 
   test('the exempt file would otherwise be the largest violator, so the matcher still bites there', () => {
     // Proves the exemption is a path exclusion and not a dead matcher: run the
-    // scanner directly over the catalog's own text and it finds plenty.
-    const catalog = readFileSync('packages/core/src/platform-catalog.ts', 'utf8');
-    expect(findProseMentions('packages/core/src/platform-catalog.ts', catalog).length)
-      .toBeGreaterThan(0);
+    // scanner directly over the catalog's own text and it finds more than any
+    // file the gate actually holds to the rule. The text comes from the suite's
+    // own source map rather than a second read, so the input is the same bytes
+    // the audit above judged.
+    const catalog = sources.get('packages/core/src/platform-catalog.ts');
+    if (catalog === undefined) throw new Error('sources lost packages/core/src/platform-catalog.ts');
+    const exempt = findProseMentions('packages/core/src/platform-catalog.ts', catalog);
+    const held = new Map<string, number>();
+    for (const mention of audit.mentions) held.set(mention.file, (held.get(mention.file) ?? 0) + 1);
+    expect(exempt.length).toBeGreaterThan(Math.max(0, ...held.values()));
   });
 
   test('the catalog is load-bearing: production code imports it', () => {

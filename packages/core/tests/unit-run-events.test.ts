@@ -72,7 +72,7 @@ describe('RunEventRecorder.emit', () => {
     const ts = '2026-09-05T00:00:00.000Z';
     void sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
       VALUES (${runId}, 2, 'error', ${live}, ${ts})`;
-    expect(() => recorder.emit('run-1', { type: 'error', message: 'collide' })).toThrow();
+    expect(() => recorder.emit('run-1', { type: 'error', message: 'collide' })).toThrow(/UNIQUE constraint failed: run_events/);
     const rows = sql<{ payload: string }>`
       SELECT payload FROM run_events WHERE run_id = ${runId} AND event_index = 2`;
     expect(rows.length).toBe(1);

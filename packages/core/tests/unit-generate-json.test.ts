@@ -78,7 +78,8 @@ describe("generateJson", () => {
 
   test("throws on schema mismatch so the caller can fall back", async () => {
     const model = modelReturning('{"a":"not-a-number","b":[]}');
-    await expect(generateJson({ model, schema: Schema, prompt: "go" })).rejects.toThrow();
+    await expect(generateJson({ model, schema: Schema, prompt: "go" }))
+      .rejects.toThrow('Invalid type: Expected number but received "not-a-number"');
   });
 
   test("throws when the model returns no JSON object", async () => {

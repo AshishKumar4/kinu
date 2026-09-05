@@ -48,10 +48,14 @@ describe('TUI theme', () => {
     expect(store.read().theme).toEqual({ mode: 'system', darkThemeId: 'kinu-dark-solid', lightThemeId: 'kinu-light-solid' });
     expect(DEFAULT_TUI_THEME_SELECTION).toEqual(store.read().theme);
     for (const id of ['kinu-dark-solid', 'kinu-light-solid']) {
-      const { background } = BUILTIN_TUI_THEMES.find((theme) => theme.id === id)!.colors;
-      expect(background.canvas, `${id} canvas`).toBeDefined();
-      expect(background.chrome, `${id} chrome`).toBeDefined();
-      expect(background.surface, `${id} surface`).toBeDefined();
+      const theme = BUILTIN_TUI_THEMES.find((candidate) => candidate.id === id);
+      if (theme === undefined) throw new Error(`missing preset ${id}`);
+      // Solid presets paint the canvas, so every ground is a literal opaque
+      // fill — an undefined or transparent one leaves the panel edgeless.
+      const { background } = theme.colors;
+      expect(background.canvas, `${id} canvas`).toMatch(/^#[0-9A-Fa-f]{6}$/);
+      expect(background.chrome, `${id} chrome`).toMatch(/^#[0-9A-Fa-f]{6}$/);
+      expect(background.surface, `${id} surface`).toMatch(/^#[0-9A-Fa-f]{6}$/);
     }
 
     store.write({ ...store.read(), theme: { mode: 'theme', themeId: 'kinu-dusk' } });

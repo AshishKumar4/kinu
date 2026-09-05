@@ -59,7 +59,10 @@ describe('the work journal', () => {
 
   test('keys are stable across re-reads, so a poll does not re-key and re-animate the feed', () => {
     const args = [[job({ id: 'j', settledAt: 1 })], [task('t', 2)], [entry('c', 3)]] as const;
-    expect(buildJournal(...args).map((r) => r.key)).toEqual(buildJournal(...args).map((r) => r.key));
+    // The literal pins the key vocabulary the ordering test establishes. The second read proves a poll re-keys nothing.
+    const first = buildJournal(...args).map((r) => r.key);
+    expect(first).toEqual(['self:c', 'task:t', 'job:j']);
+    expect(buildJournal(...args).map((r) => r.key)).toEqual(first);
   });
 
   test('nothing settled is an empty feed, not a throw', () => {

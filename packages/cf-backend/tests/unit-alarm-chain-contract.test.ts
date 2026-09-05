@@ -6,7 +6,6 @@
 // the shape of the code, not in any value a behaviour test could observe:
 // a subclass that simply *omits* super.alarm() is a well-formed program.
 import { describe, expect, test } from 'bun:test';
-import { memberBody } from '@kinu.run/test-utils';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -93,12 +92,6 @@ describe('DO alarm chain', () => {
 
 describe('the Kinu timer rides the SDK scheduler', () => {
   const orchestrator = readFileSync(join(SRC, 'orchestrator.ts'), 'utf8');
-  const actor = readFileSync(join(SRC, 'actor-agent.ts'), 'utf8');
-  const armWakeRow = memberBody(
-    actor,
-    'protected async armWakeRow(callback: keyof this & string, atMs: number): Promise<void>',
-    'actor-agent.ts',
-  );
 
   test('trigger, peer-outbox and email-outbox wakes all arm the one timer row, awaited', () => {
     // The three seams hand `armTimer` straight to their consumer, which awaits it.
@@ -124,35 +117,21 @@ describe('the Kinu timer rides the SDK scheduler', () => {
     expect(tick).toContain('if (next !== null) await this.armTimer(next)');
   });
 
-  test('arming rounds up, ignores already-due rows, and does so in ONE place', () => {
-    // Rounding down wakes before next_fire_at, so the trigger is not yet due
-    // and the tick re-arms for the same second — a busy-spin. Counting the
-    // currently-firing row as "armed" would make the tick's closing re-arm a
-    // no-op against itself, which stops the chain. Both facts are the shared
-    // primitive's now: this chain and the terminal-retry chain ask one registry
-    // the same question, and a second bespoke collapse beside it is the defect
-    // this guard exists for. Behaviour: unit-alarm-wake-chain.test.ts
-    // ('an armed wake is left alone, however overdue', 'a due row is not
-    // counted as armed', 'two concurrent arms converge on ONE wake row').
-    expect(armWakeRow).toContain('Math.max(Math.ceil(atMs / 1000), nowSec + 1)');
-    expect(armWakeRow).toContain('row.callback === callback && row.time > nowSec');
-    expect(armWakeRow).toContain('Math.min(targetSec, ...armed.map((row) => row.time))');
-    expect(armWakeRow).toContain('await this.schedule(new Date(desired * 1000), callback)');
-    // No second collapse: the orchestrator delegates rather than re-deriving.
+  test('the arm collapses in ONE place, through the shared primitive', () => {
+    // The rounding, the due-row exclusion and the earliest-wins collapse are
+    // pinned behaviourally in unit-alarm-wake-chain.test.ts ('an armed wake is
+    // left alone, however overdue', 'a due row is not counted as armed', 'two
+    // concurrent arms converge on ONE wake row'). What no behaviour test can
+    // see is a second bespoke collapse beside the shared one, so this guard
+    // keeps the orchestrator delegating rather than re-deriving.
     expect(orchestrator).not.toContain('await this.schedule(new Date(');
   });
 
-  test('the stale sweep runs before the SDK reads due rows, spares recurring rows, and exempts the Kinu wake', () => {
-    // `memberBody`, not `indexOf` + slice: anchored on a literal signature, a
-    // slice silently becomes `slice(-1, …)` the day the method's signature
-    // changes, and a wiring test that matches nothing passes.
-    const onStart = memberBody(orchestrator, 'async onStart(): Promise<void>', 'orchestrator.ts');
-    expect(onStart).toContain('this.maintenanceSweeps()');
-    // The wake row is derived state, so an activation is where a workspace whose
-    // only wake was lost gets it back. Behaviour is in
-    // unit-alarm-wake-chain.test.ts; what a source guard adds is that the
-    // activation still CALLS it.
-    expect(onStart).toContain('this.reconcileTimerRow()');
+  test('the stale sweep spares recurring rows and exempts the Kinu wake', () => {
+    // The activation half of this contract runs behaviourally in
+    // unit-alarm-wake-chain.test.ts: the backlog drains across maintenance
+    // wakes through activateActor, and a lost wake row comes back through the
+    // same entry point. What remains here is the sweep's own shape.
     const sweep = orchestrator.slice(
       orchestrator.indexOf('private sweepUnrunnableSchedules('),
       orchestrator.indexOf('protected get engine()'),

@@ -817,7 +817,7 @@ describe('teardown refuses by default and never takes a shared resource', () => 
     expect(confirmationPhrase('kinu', 'production')).toBe('destroy kinu production');
     expect(confirmationPhrase('kinu-staging', 'staging')).toBe('destroy kinu-staging staging');
     expect(confirmationPhrase('kinu', 'production'))
-      .not.toBe(confirmationPhrase('kinu-staging', 'staging'));
+      .not.toBe('destroy kinu-staging staging');
   });
 
   test('the order is worker first, session store last, and only deletable resources', () => {

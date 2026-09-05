@@ -929,7 +929,7 @@ describe('LocalAgentSession — shadow-git checkpoint wiring', () => {
     expect(await session.checkpointStatus()).toEqual({
       available: false, reason: 'checkpoints are not configured for this session',
     });
-    expect(session.restoreFileCheckpoint('/tmp', 'abcdef0')).rejects.toThrow('not configured');
+    await expect(session.restoreFileCheckpoint('/tmp', 'abcdef0')).rejects.toThrow('not configured');
   });
 });
 

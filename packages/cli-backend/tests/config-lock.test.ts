@@ -68,7 +68,9 @@ describe('the config lock is held by a process, not by a path', () => {
     // synchronous helper and had its lock released at the first await.
     const declaredVoid: () => void = async () => { await Promise.resolve(); };
 
-    expect(() => withConfigLock(configPath, declaredVoid)).toThrow(/withConfigLockAsync/u);
+    expect(() => withConfigLock(configPath, declaredVoid)).toThrow(
+      'withConfigLock ran a callback that returned pending work, which the lock does not cover. Use withConfigLockAsync.',
+    );
     // And the refusal is not a wedge: the lock is gone and the next caller runs.
     expect(lockHeld(lockPath)).toBe(false);
     expect(withConfigLock(configPath, () => 'after')).toBe('after');

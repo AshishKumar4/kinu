@@ -12,12 +12,12 @@
 import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { WORKSPACE_CREATED_EVENT } from '@kinu.run/core';
+import { WORKSPACE_CREATED_EVENT, renderSoulMarkdown, summarizeSoul } from '@kinu.run/core';
 import { orchestratorHarness } from './helpers/actor-harness';
 
 const MISSION = 'Audit the OAuth callback flow and report what an attacker could reach.';
-/** What renderSoulMarkdown writes when the dialog carried no mission. */
-const PLACEHOLDER_MISSION = 'Help the user with the work they assign.';
+/** What the dialog leaves behind when it carried no mission: the renderer's own default, read back through the summarizer that derives a mission from soul markdown. The fixture tracks the default across rewordings. */
+const PLACEHOLDER_MISSION = summarizeSoul(renderSoulMarkdown({ name: 'probe' }));
 
 /** The provenance stamp `BackendHost.enqueueTurn` puts on a programmatic turn:
  *  the `kinuEvent` the prompt surface and the chat card both read, and the

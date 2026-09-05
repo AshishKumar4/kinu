@@ -483,8 +483,7 @@ describe('advisor negatives use the canonical pane conversation', () => {
 
     const split = buildOutcomeEvalSplit(ws.sql, 2);
     const instance = [...split.train, ...split.val].find((row) => row.input === 'inspect the deploy');
-    expect(instance).toBeDefined();
-    expect(instance!.expected?.recordedResponse).toBe('I only guessed');
+    expect(instance?.expected?.recordedResponse).toBe('I only guessed');
   });
 });
 

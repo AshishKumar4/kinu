@@ -20,6 +20,9 @@ describe('argumentDigest', () => {
     const d = argumentDigest({ cmd: 'deploy' });
     expect(d).toMatch(/^[0-9a-f]{64}$/);
     expect(d).toBe(sha256Hex(stableStringify({ cmd: 'deploy' })));
+    // Pinned against `printf '{"cmd":"deploy"}' | sha256sum`, so a silent
+    // serialization change fails here instead of passing on both sides.
+    expect(d).toBe('0cf3286509cd632a7cc63866f31b1f36660f23a9ef242f82a8080c7f8a23e2de');
   });
 
   test('a single-byte change in the arguments changes the digest', () => {
@@ -30,9 +33,10 @@ describe('argumentDigest', () => {
 
 describe('deployApprovalDigest', () => {
   const base = { approvalType: 'deploy_production' as const, patch: 'diff X', command: 'bunx wrangler deploy' };
-
   test('stable for identical deploy identity', () => {
     expect(deployApprovalDigest(base)).toBe(deployApprovalDigest({ ...base }));
+    // A stored approval must keep matching, so the digest itself is pinned.
+    expect(deployApprovalDigest(base)).toBe('5fce46126467ba99c1e9ba275c7c9c7f86310cc15a6d3e51ed0ccbe16aea0101');
   });
 
   test('changes when the patch changes (artifact swap)', () => {

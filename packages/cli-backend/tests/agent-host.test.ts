@@ -607,7 +607,7 @@ describe('LocalAgentHost', () => {
     expect(await team.list()).toEqual([]);
     expect(existsSync(childPath)).toBe(true);
     await expect(team.assign({ name: 'researcher', task: 'again', mode: 'build' }))
-      .rejects.toThrow('dismissed');
+      .rejects.toThrow('subordinate "researcher" is dismissed');
 
     await team.create({
       name: 'temporary',
@@ -663,7 +663,7 @@ describe('LocalAgentHost', () => {
       transcript: 'kept',
     });
     const agent = v.parse(v.object({ agent: v.string() }), outcome).agent;
-    expect(agent.startsWith('ask-researcher-')).toBe(true);
+    expect(agent).toStartWith('ask-researcher-');
 
     // It was a REAL actor: its own database exists under this root's children,
     // and a release keeps it — that file IS the transcript the outcome claims.
@@ -884,27 +884,6 @@ describe('LocalAgentHost', () => {
     await reopened.close();
   });
 
-  /** The local relay records BOTH bits, which is what leaves a mere progress
-   *  note owing an answer while a settling report closes the question. Read from
-   *  source because the events are the runtime's to fire, not a test's — the
-   *  BEHAVIOUR either bit governs is driven above. */
-  test('the local relay separates "spoke" from "already answered"', () => {
-    const host = readFileSync(join(import.meta.dir, '..', 'src', 'agent-host', 'host.ts'), 'utf8');
-    // ONE report per ending, and no `error` branch beside the turn-end one: a
-    // failing turn fires both events, and two detached relays off them is how
-    // one question came to have two answers. The session declares the report now
-    // and this port only answers WHICH — so the collapse is structural rather
-    // than a bit the host has to remember to set.
-    expect(host).not.toContain("if (event.type === 'error') {");
-    expect(host).toContain('private parentRelayFor(child: HostEntry): LocalParentRelay {');
-    // Recorded before the send, so a second path on the same turn is suppressed
-    // even while the first is in flight.
-    expect(host).toContain('child.relay.settledRun = true;');
-    // A report-tool note settles only when the SHARED predicate says it does.
-    expect(host).toContain("child.relay.settledRun ||= temporaryRunSettles({ status, origin: 'report_tool' });");
-    // …and the decision gates on the settling bit, never on "spoke".
-    expect(host).toContain('if (state === null || state.settledRun) return null;');
-  });
 
   /**
    * EXACTLY ONE RESULT, AND ONLY ONE.
@@ -936,7 +915,7 @@ describe('LocalAgentHost', () => {
     // which is what makes a second report impossible rather than merely unwanted.
     expect(await team.list()).toEqual([]);
     await expect(team.assign({ name: agent.agent, task: 'again', mode: 'build' }))
-      .rejects.toThrow();
+      .rejects.toThrow(`subordinate "${agent.agent}" is dismissed`);
 
     await host.close();
     const view = new Database(dbPath, { readonly: true });
@@ -1520,7 +1499,7 @@ describe('LocalAgentHost — the driver lease', () => {
       await after.host.acquire('root');
       expect(turns).toBe(1);
       expect(pendingEventCount(dbPath)).toBe(0);
-      expect(userMessages(dbPath).some((text) => text.includes('a build finished'))).toBe(true);
+      expect(userMessages(dbPath).join('\n')).toContain('a build finished');
     } finally {
       unsubscribe();
       await after.host.close();

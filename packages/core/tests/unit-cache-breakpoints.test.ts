@@ -12,6 +12,7 @@ import {
   promptCacheOptions,
   promptCachePlan,
   resolvePromptCacheStrategy,
+  type PromptCacheStrategy,
   ANTHROPIC_MAX_BREAKPOINTS,
   JsonObjectSchema,
   type JsonObject,
@@ -94,9 +95,17 @@ describe('resolvePromptCacheStrategy', () => {
   });
 
   test("retention 'short' is the default and is byte-identical to no opinion", () => {
-    for (const provider of ['anthropic', 'openai', 'openrouter', 'my-gateway', 'workers-ai']) {
-      expect(resolvePromptCacheStrategy(provider, 'anthropic/claude-sonnet-4.6', 'short'))
-        .toEqual(resolvePromptCacheStrategy(provider, 'anthropic/claude-sonnet-4.6'));
+    const rows: readonly { provider: string; model: string; expected: PromptCacheStrategy }[] = [
+      { provider: 'anthropic', model: 'claude-opus-4-7', expected: { kind: 'anthropic' } },
+      { provider: 'openai', model: 'gpt-5.5', expected: { kind: 'openai-cache-key' } },
+      { provider: 'openrouter', model: 'anthropic/claude-sonnet-4.6', expected: { kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true } },
+      { provider: 'my-gateway', model: 'openai/gpt-5.5', expected: { kind: 'openai-compat', bodyNamespace: 'my-gateway', markers: false } },
+      { provider: 'workers-ai', model: '@cf/moonshotai/kimi-k2.6', expected: { kind: 'none' } },
+    ];
+    for (const { provider, model, expected } of rows) {
+      // 'short' states the default explicitly, so it reads the same literal.
+      expect(resolvePromptCacheStrategy(provider, model, 'short')).toEqual(expected);
+      expect(resolvePromptCacheStrategy(provider, model)).toEqual(expected);
     }
   });
 
@@ -322,7 +331,9 @@ describe('markLastToolForAnthropicCache', () => {
 
   test('empty tool set is a no-op', () => {
     const tools: ToolSet = {};
-    expect(() => markLastToolForAnthropicCache(tools)).not.toThrow();
+    markLastToolForAnthropicCache(tools);
+    // No tool means no breakpoint to write: the set stays empty.
+    expect(Object.keys(tools)).toEqual([]);
   });
 
   test('retention drives the tool-surface breakpoint: long extends it, none omits it', () => {

@@ -137,7 +137,9 @@ describe('performUndo', () => {
       });
       const engine = createHostCheckpoints({ agent: 'undo-split', base: join(root, 'shadow') });
       engine.beginTurn({ turnId: 'wide-turn', sessionId: 'default' });
-      for (const dir of dirs) expect(await engine.ensureCheckpoint(dir)).toBeTruthy();
+      // One checkpoint per directory: each take returns the commit it wrote,
+      // so a skipped directory (null) fails here rather than restoring short.
+      for (const dir of dirs) expect(await engine.ensureCheckpoint(dir)).toMatch(/^[0-9a-f]{40}$/);
       for (const dir of dirs) writeFileSync(join(dir, 'f.txt'), 'clobbered');
 
       // The browse can only see 2 of the 3; a turn-keyed read sees all 3.

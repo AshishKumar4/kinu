@@ -304,7 +304,9 @@ describe('capability parity gate', () => {
       'packages/cf-backend/src/a.ts': "export const a = 1;\n",
       'packages/cf-backend/src/b.ts': "import { a } from './a.ts';\nexport const b = a;\n",
     }));
-    expect(edges).toBeGreaterThan(0);
+    // Exactly the one import edge above: zero means the count is not wired up,
+    // and more than one means an edge is counted twice.
+    expect(edges).toBe(1);
   });
 
   test('a tsconfig with comments is read, because tsconfig is JSONC', () => {
@@ -356,7 +358,7 @@ describe('gate ratchet', () => {
   test('a lock that is not a list of strings is rejected, not ignored', () => {
     const path = lockPath([]);
     writeFileSync(path, '{"a":1}');
-    expect(() => reconcile([], path)).toThrow();
+    expect(() => reconcile([], path)).toThrow(/Expected Array but received Object/);
   });
 });
 

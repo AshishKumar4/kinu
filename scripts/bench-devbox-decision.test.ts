@@ -3496,16 +3496,28 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
     expect(await world.residue.listUploads('bench')).toEqual([]);
   });
 
-  test('no verifier probe carries a destructive command', () => {
+  test('no verifier probe carries a destructive command', async () => {
+    // Driven, not read: both observation probes run against a world that
+    // records every mutation, and every wrangler command they issue is shown.
+    const world = plane({ exists: true, objects: ['a'], uploads: [{ key: 'b', uploadId: 'u1' }] });
+    const commands: string[] = [];
+    const probes = cleanupObservationProbes({
+      wrangler: (args) => {
+        commands.push(args.join(' '));
+        return `${WRANGLER_FAILED}: a bucket with this name does not exist`;
+      },
+      residue: world.residue,
+    });
+    // The probes really observed: an assertion over no calls proves nothing.
+    expect(await probes.bucketState('bench')).toEqual({ absent: false, objects: 1, multipartResidue: 1 });
+    expect(await probes.workerAbsent('w')).toBe(true);
+    expect(world.deleted).toEqual([]);
+    expect(world.aborted).toEqual([]);
+    for (const command of commands) expect(command).not.toMatch(/delete|remove|--force/);
+    // And the replay arm drains residue before retrying its delete. That order
+    // lives in the recovery path whose wrangler calls are real subprocesses,
+    // so no fake can drive it and only the source shows it.
     const source = readFileSync(join(import.meta.dirname, 'bench-devbox-strategies.ts'), 'utf8');
-    const probesBody = source.slice(
-      source.indexOf('export function cleanupObservationProbes'),
-      source.indexOf('interface Fixture {'),
-    );
-    expect(probesBody.length).toBeGreaterThan(200);
-    expect(probesBody).not.toContain("'delete'");
-    expect(probesBody).not.toContain('--force');
-    // And the replay arm drains residue before retrying its delete.
     expect(source).toContain('drainBucketResidue(residue, entry.name)');
   });
 });
@@ -3893,21 +3905,15 @@ describe('the driver admits every outcome the product can produce', () => {
     expect(kinds(restated ?? '')).toEqual(kinds(product ?? ''));
   });
 
-  test('every startup step admits `already-attached`, and every exclusion states a reason', () => {
-    const driver = readFileSync(join(import.meta.dir, 'bench-devbox-strategies.ts'), 'utf8');
-    const block = /ATTACH_KINDS_EXCLUDED[\s\S]*?\n\}(?: satisfies[^;]*)?;/.exec(driver)?.[0] ?? '';
-    expect(block).toContain("'cold attach': {}");
-    // `already-attached` is a legitimate answer at EVERY step — a re-kicked
-    // create, a wake on an instance that never lost its mount, and a warm
-    // attach, which is by definition attaching an attached box. No step may
-    // exclude it.
-    expect(block).not.toMatch(/'already-attached':/);
-    // Every kind any step does exclude carries prose saying why. An exclusion
-    // with an empty reason is the silent narrowing this whole test exists for.
-    for (const [, kind, reason] of block.matchAll(/\n    (\w[\w-]*): '([^']*)'/g)) {
-      expect(kind.length).toBeGreaterThan(0);
-      expect(reason.length).toBeGreaterThan(40);
-    }
+  test('every startup step admits `already-attached`, and cold attach excludes nothing', () => {
+    // Through the admission list G6 itself reads, so the poll and the gate
+    // cannot narrow apart. `already-attached` is legitimate at every step: a
+    // re-kicked create, a wake on an instance that never lost its mount, and
+    // a warm attach, which by definition attaches an attached box.
+    expect(admittedAttachKinds('cold attach')).toContain('already-attached');
+    expect(admittedAttachKinds('wake')).toContain('already-attached');
+    expect(admittedAttachKinds('warm attach')).toContain('already-attached');
+    expect(admittedAttachKinds('cold attach')).toContain('empty');
   });
 
   test('the state reply decodes every restoration phase the product can report', () => {
@@ -3930,14 +3936,54 @@ describe('the driver admits every outcome the product can produce', () => {
     for (const phase of new Set(produced)) expect(admitted).toContain(phase);
   });
 
+  /** One admission input the two tests below share: a healthy arm G6 holds, so
+   *  each test states only what it varies. */
+  const meta = {
+    date: '2026-09-04', run: 'kinu-devbox-bench-test', worker: 'w', bucket: 'b',
+    image: SANDBOX_IMAGE, seed: '20260824', 'loop budget ms': '8000',
+    'deciding repetitions': '2',
+  };
+  const identity = {
+    commit: '6823779aa', dirtyDigest: 'clean', workerVersion: 'v',
+    startedAt: '2026-09-04T00:00:00.000Z', finishedAt: '2026-09-04T01:00:00.000Z',
+    image: SANDBOX_IMAGE, imageSha256: SANDBOX_IMAGE_DIGEST,
+    dockerfileSha256: `sha256:${'a'.repeat(64)}`, candidateRunnerSha256: `sha256:${'b'.repeat(64)}`,
+    overlayRunnerSha256: `sha256:${'c'.repeat(64)}`, journalDaemonSha256: `sha256:${'d'.repeat(64)}`,
+  };
+  const cleanup = {
+    attempted: true, kept: false, workerAbsent: true, runtimeAbsent: true,
+    bucketAndMultipartEmpty: true, boxDurableStateEmpty: true,
+    localSecretsProcessesAbsent: true, countersReconciled: true,
+    replayIdempotent: true, multipartResidue: 0, errors: [],
+  };
+  const checkpoints = Array.from({ length: EXPECTED_LADDER_ROWS }, (_, index) => ({
+    changeKiB: 64, kind: index % 2 === 0 ? 'quiesce' as const : 'tick' as const,
+    ms: 10, bytes: 100, outcome: 'committed',
+  }));
+  const healthyArm = (overrides: Partial<ArmResult> = {}): ArmResult => ({
+    strategy: 'snapshot-chain', box: 'box-snapshot-chain', verifyPassed: true, verifyChecks: [],
+    attachColdMs: 1000, attachColdKind: 'attached', attachColdBootId: 'cold',
+    attachWarmMs: 50, attachWarmKind: 'attached', wakeBootId: 'wake', attachWarmBootId: 'wake',
+    checkpoints, stopMs: 100, wakeMs: 2000, wakeKind: 'attached',
+    phases: [], decisiveTicks: [], quiescesBeforeDecisive: 0,
+    generationBeforeLadder: null, generationAfterLadder: null, treeBytes: {},
+    ops: { total: 10 }, teardown: null, witnessChecks: [], notes: [],
+    ...overrides,
+  });
+  const g6 = (arm: ArmResult): string => {
+    const verdict = devboxAdmission({
+      arms: [arm], requested: [arm.strategy], repetitions: 2, meta, identity, token: 't', cleanup,
+    });
+    return verdict.gates.find((row) => row.gate === 'G6')?.reasons.join(' | ') ?? '';
+  };
+
   test('the completed cell accepts an unchanged-generation warm attach', () => {
-    // The clause is about a second attach OBSERVING the unchanged generation,
-    // and `already-attached` is that observation; the boot-id equality beside
-    // it is what proves the generation is the same one.
-    const driver = readFileSync(join(import.meta.dir, 'bench-devbox-strategies.ts'), 'utf8');
-    const cell = /function armCompletedTheCell[\s\S]*?\n\}/.exec(driver)?.[0] ?? '';
-    expect(cell).toContain("arm.attachWarmKind === 'already-attached'");
-    expect(cell).toContain('arm.wakeBootId === arm.attachWarmBootId');
+    // Through G6, the gate that reads this clause: an `already-attached` warm
+    // attach over equal boot ids holds, and a changed generation refuses even
+    // when the kind is already-attached.
+    expect(g6(healthyArm({ attachWarmKind: 'already-attached' }))).toBe('');
+    expect(g6(healthyArm({ attachWarmKind: 'already-attached', attachWarmBootId: 'other' })))
+      .toContain('changed generation');
   });
 
   test('devboxRequirements admits every kind each startup step admits', () => {
@@ -3946,44 +3992,6 @@ describe('the driver admits every outcome the product can produce', () => {
     // kind it legitimately answered is the defect that ended `r2fs` after a
     // completed cold attach, ladder, stop and wake. The boot-id equality stays
     // the generation proof — these arms all carry it.
-    const meta = {
-      date: '2026-09-04', run: 'kinu-devbox-bench-test', worker: 'w', bucket: 'b',
-      image: SANDBOX_IMAGE, seed: '20260824', 'loop budget ms': '8000',
-      'deciding repetitions': '2',
-    };
-    const identity = {
-      commit: '6823779aa', dirtyDigest: 'clean', workerVersion: 'v',
-      startedAt: '2026-09-04T00:00:00.000Z', finishedAt: '2026-09-04T01:00:00.000Z',
-      image: SANDBOX_IMAGE, imageSha256: SANDBOX_IMAGE_DIGEST,
-      dockerfileSha256: `sha256:${'a'.repeat(64)}`, candidateRunnerSha256: `sha256:${'b'.repeat(64)}`,
-      overlayRunnerSha256: `sha256:${'c'.repeat(64)}`, journalDaemonSha256: `sha256:${'d'.repeat(64)}`,
-    };
-    const cleanup = {
-      attempted: true, kept: false, workerAbsent: true, runtimeAbsent: true,
-      bucketAndMultipartEmpty: true, boxDurableStateEmpty: true,
-      localSecretsProcessesAbsent: true, countersReconciled: true,
-      replayIdempotent: true, multipartResidue: 0, errors: [],
-    };
-    const checkpoints = Array.from({ length: EXPECTED_LADDER_ROWS }, (_, index) => ({
-      changeKiB: 64, kind: index % 2 === 0 ? 'quiesce' as const : 'tick' as const,
-      ms: 10, bytes: 100, outcome: 'committed',
-    }));
-    const healthyArm = (overrides: Partial<ArmResult> = {}): ArmResult => ({
-      strategy: 'snapshot-chain', box: 'box-snapshot-chain', verifyPassed: true, verifyChecks: [],
-      attachColdMs: 1000, attachColdKind: 'attached', attachColdBootId: 'cold',
-      attachWarmMs: 50, attachWarmKind: 'attached', wakeBootId: 'wake', attachWarmBootId: 'wake',
-      checkpoints, stopMs: 100, wakeMs: 2000, wakeKind: 'attached',
-      phases: [], decisiveTicks: [], quiescesBeforeDecisive: 0,
-      generationBeforeLadder: null, generationAfterLadder: null, treeBytes: {},
-      ops: { total: 10 }, teardown: null, witnessChecks: [], notes: [],
-      ...overrides,
-    });
-    const g6 = (arm: ArmResult): string => {
-      const verdict = devboxAdmission({
-        arms: [arm], requested: [arm.strategy], repetitions: 2, meta, identity, token: 't', cleanup,
-      });
-      return verdict.gates.find((row) => row.gate === 'G6')?.reasons.join(' | ') ?? '';
-    };
     expect(g6(healthyArm())).toBe('');
     for (const kind of admittedAttachKinds('cold attach')) {
       expect(g6(healthyArm({ attachColdKind: kind }))).toBe('');

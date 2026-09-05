@@ -106,7 +106,7 @@ describe('TurnContextMeter', () => {
     const meter = new TurnContextMeter();
     meter.openTurn({ system: 'soul' });
     meter.measure([user('hi')]);
-    expect(meter.take()).toBeDefined();
+    expect(meter.take()?.measuredChars).toBe(6);
     expect(meter.take()).toBeUndefined();
   });
 

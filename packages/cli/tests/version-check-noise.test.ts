@@ -94,7 +94,6 @@ describe('startup update check noise', () => {
         })
       `);
       const { lines } = parseRun(out);
-      expect(lines.length).toBeGreaterThan(0);
       expect(lines.join('\n')).toContain('Update check failed');
     } finally {
       chmodSync(home, 0o700);

@@ -503,8 +503,10 @@ describe('web builtin', () => {
     expect(out).toContain(`${TOOL_OUTPUT_DIR}/`);
     // The full output is restorable from the VFS.
     const m = /full output saved to (\S+)/.exec(out);
-    expect(m).toBeTruthy();
-    const saved = await rt.storage.vfs.readFile(m?.[1] ?? '', { encoding: 'utf8' });
+    const savedPath = m?.[1];
+    expect(savedPath).toContain(TOOL_OUTPUT_DIR);
+    if (savedPath === undefined) throw new Error(`Expected a saved-output path in: ${out}`);
+    const saved = await rt.storage.vfs.readFile(savedPath, { encoding: 'utf8' });
     expect(String(saved).length).toBeGreaterThan(out.length);
   });
 

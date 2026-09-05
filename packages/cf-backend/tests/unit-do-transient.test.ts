@@ -119,7 +119,7 @@ describe('retryTransientDO', () => {
 
   test('an application error is not retried', async () => {
     const flake = flaky(1, new Error('workspace is owned by a different user'), 'ok');
-    await expect(retryTransientDO('t', flake.call)).rejects.toThrow(/different user/);
+    await expect(retryTransientDO('t', flake.call)).rejects.toThrow('workspace is owned by a different user');
     expect(flake.calls()).toBe(1);
   });
 
@@ -127,13 +127,13 @@ describe('retryTransientDO', () => {
     const flake = flaky(1,
       Object.assign(new Error('Durable Object is overloaded.'), { retryable: true, overloaded: true }),
       'ok');
-    await expect(retryTransientDO('t', flake.call)).rejects.toThrow(/overloaded/);
+    await expect(retryTransientDO('t', flake.call)).rejects.toThrow('Durable Object is overloaded.');
     expect(flake.calls()).toBe(1);
   });
 
   test('a transient that outlives the attempts throws unchanged, so callers report it', async () => {
     const flake = flaky(Infinity, new Error(CONNECTION_LOST), 'ok');
-    await expect(retryTransientDO('t', flake.call)).rejects.toThrow(/Network connection lost/);
+    await expect(retryTransientDO('t', flake.call)).rejects.toThrow(CONNECTION_LOST);
     expect(flake.calls()).toBe(3);
   });
 });

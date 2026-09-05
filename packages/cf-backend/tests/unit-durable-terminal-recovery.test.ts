@@ -29,6 +29,7 @@ import type { FiberRecoveryContext } from 'agents';
 import {
   sweepUnrecoverableFibers,
   FIBER_RECOVERY_MAX_AGE_MS,
+  SWEEP_MAX_ROWS,
   TERMINAL_LANE_FIBER,
   type FiberMetaRow,
   type FiberRowStore,
@@ -585,9 +586,6 @@ function scriptedFibers(
 }
 
 describe('the interrupted-fiber sweep spends the budget before the memory', () => {
-  /** Mirrors the sweep's private 4096-row budget; drift fails these tests,
- *  which is the point. */
-const FIBER_SWEEP_BUDGET = 4096;
 
 const NOW = 1_700_000_000_000;
   const overAge = (ms: number) => NOW - FIBER_RECOVERY_MAX_AGE_MS - ms;
@@ -686,7 +684,7 @@ const NOW = 1_700_000_000_000;
   });
 
   test('the row budget stops the pass and says so, leaving the rest for the next wake', () => {
-    const rows = Array.from({ length: FIBER_SWEEP_BUDGET + 200 }, (_unused, index) => ({
+    const rows = Array.from({ length: SWEEP_MAX_ROWS + 200 }, (_unused, index) => ({
       rowid: index + 1, id: `old-${index}`, created_at: overAge(index + 1),
     }));
     const scene = scriptedFibers(rows);
@@ -696,7 +694,7 @@ const NOW = 1_700_000_000_000;
     // An inherent bound on the work itself — rows scanned — never a stopwatch:
     // the pass stops at the budget and says so rather than keep going.
     expect(result.truncated).toBe(true);
-    expect(result.scanned).toBe(FIBER_SWEEP_BUDGET);
+    expect(result.scanned).toBe(SWEEP_MAX_ROWS);
     expect(result.dropped).toBeGreaterThan(0);
     expect(result.dropped).toBeLessThan(rows.length);
     // What it did not reach is still there for the next activation.
@@ -708,7 +706,7 @@ const NOW = 1_700_000_000_000;
     // and none is needed: rowid order tracks insertion, so an expired row
     // cannot sit BEHIND a fresh one, and the rows a wake drops are exactly the
     // prefix the next wake no longer scans.
-    const rows = Array.from({ length: FIBER_SWEEP_BUDGET + 300 }, (_unused, index) => ({
+    const rows = Array.from({ length: SWEEP_MAX_ROWS + 300 }, (_unused, index) => ({
       rowid: index + 1, id: `old-${index}`, created_at: overAge(index + 1),
     }));
     const scene = scriptedFibers(rows);
@@ -728,10 +726,10 @@ const NOW = 1_700_000_000_000;
     // row above the whole budget. The cutoff sits in the query, so the wall is
     // never scanned and the expired row is page one.
     const rows = [
-      ...Array.from({ length: FIBER_SWEEP_BUDGET + 10 }, (_unused, index) => ({
+      ...Array.from({ length: SWEEP_MAX_ROWS + 10 }, (_unused, index) => ({
         rowid: index + 1, id: `fresh-${index}`, created_at: inBudget(index + 1),
       })),
-      { rowid: FIBER_SWEEP_BUDGET + 11, id: 'expired-behind-the-wall', created_at: overAge(1) },
+      { rowid: SWEEP_MAX_ROWS + 11, id: 'expired-behind-the-wall', created_at: overAge(1) },
     ];
     const scene = scriptedFibers(rows);
 
@@ -739,20 +737,45 @@ const NOW = 1_700_000_000_000;
 
     expect(result).toEqual({ dropped: 1, scanned: 1, truncated: false });
     expect(scene.survivors()).not.toContain('expired-behind-the-wall');
-    expect(scene.survivors()).toHaveLength(FIBER_SWEEP_BUDGET + 10);
+    expect(scene.survivors()).toHaveLength(SWEEP_MAX_ROWS + 10);
   });
 
-  test('the PATCHED framework scan carries the same row budget, never a stopwatch', () => {
+  test('the PATCHED framework scan carries the same row budget, never a stopwatch', async () => {
     // This repo owns patches/agents@0.20.1.patch: its _checkRunFibers rewrite
     // is Kinu code wearing a vendor path, so the init ruling applies to it the
-    // same way. Pinned against the INSTALLED dist so a future repin that
-    // resurrects the wall-clock exit fails here by name.
+    // same way. The budget half runs the INSTALLED scan past the sweep's own
+    // budget: every expired row reports skipped, and the first row past the
+    // budget is the last one the scan names. Sized from the imported sweep
+    // budget because the patch exists to carry that same bound.
+    const scene = installedFiberRecoveryScene();
+    try {
+      const insert = scene.database.prepare(
+        'INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, ?, ?)',
+      );
+      const expiredAt = Date.now() - FIBER_RECOVERY_MAX_AGE_MS - 1;
+      for (let index = 0; index < SWEEP_MAX_ROWS + 10; index++) {
+        insert.run(`old-${index}`, 'old', '{}', expiredAt);
+      }
+
+      await installedCheckRunFibers.call(scene.subject);
+
+      const skippedIds = scene.events
+        .filter(({ name }) => name === 'fiber:recovery:skipped')
+        .map(({ payload }) => payload.fiberId);
+      expect(skippedIds).toHaveLength(SWEEP_MAX_ROWS + 1);
+      expect(skippedIds[SWEEP_MAX_ROWS]).toBe(`old-${SWEEP_MAX_ROWS}`);
+      expect(scene.recovered).toEqual([]);
+    } finally {
+      scene.database.close();
+    }
+
+    // The stopwatch half has no behavioral surface: a fast suite never trips a
+    // wall-clock exit, so its absence is only observable in the installed
+    // artifact. A repin that resurrects it fails here by name.
     const dist = readFileSync(
       join(import.meta.dirname, '../../../node_modules/agents/dist/index.js'), 'utf8',
     );
     expect(dist).not.toContain('scan_deadline_exceeded');
     expect(dist).not.toContain('scanStartedAt');
-    expect(dist).toContain('RUN_SCAN_MAX_ROWS = 4096');
-    expect(dist).toContain('scan_budget_exceeded');
   });
 });

@@ -178,6 +178,13 @@ describe('the slot layout is one declaration', () => {
     // shipped dataset really is inside every limit, AND the guard the refusals
     // below exercise is the guard the declaration runs. A declaration that stopped
     // calling it would leave those refusals passing and nothing protected.
+    // The census first: an empty schema list would run the loop over nothing and
+    // stay green, so the guarded set is pinned here.
+    expect(ANALYTICS_SCHEMAS.map((schema) => schema.dataset).sort()).toEqual([
+      'kinu_agent_metrics',
+      'kinu_control_plane_ops',
+      'kinu_feedback_markers',
+    ]);
     for (const schema of ANALYTICS_SCHEMAS) {
       expect(() => assertWithinPlatformLimits({
         dataset: schema.dataset,
@@ -478,7 +485,11 @@ describe('nothing a person said reaches the dataset', () => {
   });
 
   test('the digest is stable, distinguishing, and empty for an absent identifier', () => {
-    expect(analyticsDigest('alpha')).toBe(analyticsDigest('alpha'));
+    // Known answers, derived independently of the implementation from the
+    // algorithm `privacy.ts` documents: a stored approval digest must keep
+    // matching, so the value itself is pinned here rather than recomputed.
+    expect(analyticsDigest('alpha')).toBe('a33109d75d8b6dab');
+    expect(analyticsDigest('beta')).toBe('f24c3abbaf81e4c7');
     expect(analyticsDigest('alpha')).not.toBe(analyticsDigest('beta'));
     // Absent stays visibly absent rather than becoming one bucket that looks
     // like a real workspace.
@@ -807,7 +818,7 @@ describe('a denial is a row that says denied', () => {
     };
     const env: OwnerCapabilityEnv = {};
     await throughAsyncSink(plane, async () => {
-      await expect(requireTier(sql, env, {}, 'credentials.other')).rejects.toThrow();
+      await expect(requireTier(sql, env, {}, 'credentials.other')).rejects.toThrow(/no valid caller identity/);
     });
     const point = onlyPoint(plane.agent);
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'event')).toBe('capability.denied');
@@ -1135,8 +1146,11 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
 
   test('nothing in the query builders reads an environment or a binding', () => {
     // Purity is the control plane's requirement: it owns the not-configured arm
-    // and must be able to render it with no secret and no binding present.
-    expect(() => controlPlaneMetricsQueries({ sinceHours: 1, datasetSuffix: '' })).not.toThrow();
+    // and must be able to render it with no secret and no binding present. The
+    // rendered panel is the proof: a builder that needed an environment would
+    // throw before returning one.
+    const queries = controlPlaneMetricsQueries({ sinceHours: 1, datasetSuffix: '' });
+    expect(queries.turns).toContain("INTERVAL '1' HOUR");
   });
 });
 

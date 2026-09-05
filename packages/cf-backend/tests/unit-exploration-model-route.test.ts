@@ -27,6 +27,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { APICallError } from 'ai';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import {
@@ -249,7 +250,7 @@ describe('an MCTS branch runs the turn\'s tier, not the account default', () => 
   test('a branch with no parent refuses rather than silently using the default', async () => {
     const branch = makeBranch();
 
-    await expect(branch.explore()).rejects.toThrow(/without a parent workspace/);
+    await expect(branch.explore()).rejects.toThrow('This facet was spawned without a parent workspace, so it cannot reach the profile that decides its model; setSharedParent must run before it does any model work.');
     // Nothing was billed for a call that never chose a model.
     expect(branch.requestedModels()).toEqual([]);
     expect(branch.operations).toEqual([]);
@@ -280,8 +281,7 @@ describe('who records a branch\'s model call', () => {
     // backoff, which would measure the retry policy rather than this frame.
     const branch = makeBranch(() => new Response('malformed request', { status: 400 }));
     await branch.setSharedParent('kinu-main');
-
-    await expect(branch.explore()).rejects.toThrow();
+    await expect(branch.explore()).rejects.toThrow(APICallError);
 
     // A start row with no end is the shape of a branch that hung; a failed end
     // is the shape of one that was answered badly, and they must not look alike.

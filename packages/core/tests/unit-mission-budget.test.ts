@@ -341,9 +341,11 @@ describe('priceCall — the one place tokens are multiplied by a rate', () => {
 
   test('cacheWrite1h is a subset of cacheWrite and is never charged twice', () => {
     // models.dev publishes ONE cache_write rate, so the 1h retention split is
-    // priced by the line that already charged the write it belongs to.
+    // priced by the line that already charged the write it belongs to. An
+    // invented second rate for the tier would charge the same bytes again.
     const withRetention: Usage = { ...ANTHROPIC, cacheWrite1h: 1_000 };
-    expect(priceCall(withRetention, SONNET)).toBe(priceCall(ANTHROPIC, SONNET));
+    expect(priceCall(withRetention, SONNET))
+      .toBeCloseTo((12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000, 12);
   });
 
   test('nothing token-billable reported means UNPRICED, never free', () => {

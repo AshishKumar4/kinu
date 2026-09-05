@@ -322,7 +322,10 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     const result = v.parse(ErrorResultSchema, await exec.tools.editFile.execute('dup.md', [
       { old_text: 'foo', new_text: 'bar' },
     ]));
-    expect(result.error).toBeTruthy();
+    // The refusal names the anchor, its count and the file. That wording lets
+    // the model widen the anchor on retry.
+    expect(result.error).toContain('appears 2 times in dup.md');
+    expect(result.error).toContain('ambiguous');
     expect(await rt.storage.vfs.readFile('dup.md', { encoding: 'utf8' })).toBe('foo\nfoo\n');
   });
 

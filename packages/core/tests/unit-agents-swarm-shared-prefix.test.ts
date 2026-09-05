@@ -153,8 +153,7 @@ describe('compactShared wiring through runSwarmAction', () => {
       fork: forkDeps(rt, capturingModel(prompts), { compactShared }),
     });
 
-    const result = await tool.execute(forkCall(1));
-    expect(result).toBeTruthy();
+    await tool.execute(forkCall(1));
 
     // The barrier fired at the one branch point above the threshold, over that parent's
     // transcript.

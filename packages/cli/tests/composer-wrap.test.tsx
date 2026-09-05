@@ -8,10 +8,11 @@
  * of it and fails these.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-
-/** Mirrors the private eight-row cap; drift fails these tests, which is the point. */
-const COMPOSER_MAX_ROWS = 8;
+import { composerVisibleRows } from '@kinu.run/core';
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
+
+// The cap the engine hands out for a draft no screen could show whole.
+const CAP = composerVisibleRows(10_000);
 
 afterEach(cleanupChats);
 
@@ -67,10 +68,10 @@ describe('the composer over wrapped drafts', () => {
     // Numbered words so which wrapped rows are on screen is an exact read.
     const words = Array.from({ length: 120 }, (_, index) => `w${String(index).padStart(3, '0')}`);
     await screen.mockInput.typeText(words.join(' '));
-    await screen.waitFor('the composer to reach its cap', () => composerDraftRows(screen.frame()).length === COMPOSER_MAX_ROWS);
+    await screen.waitFor('the composer to reach its cap', () => composerDraftRows(screen.frame()).length === CAP);
 
     const rows = composerDraftRows(screen.frame());
-    expect(rows.length).toBe(COMPOSER_MAX_ROWS);
+    expect(rows.length).toBe(CAP);
     // The cursor sits at the end of the draft, so the END of the draft is what
     // the capped window shows — the earlier rows scrolled out of it.
     expect(rows.join(' ')).toContain('w119');
@@ -79,7 +80,7 @@ describe('the composer over wrapped drafts', () => {
     // Typing one more character keeps the cap and keeps the cursor in view.
     await screen.mockInput.typeText(' tail');
     await screen.waitFor('the tail to reach the visible window', () => composerDraftRows(screen.frame()).join(' ').includes('tail'));
-    expect(composerDraftRows(screen.frame()).length).toBe(COMPOSER_MAX_ROWS);
+    expect(composerDraftRows(screen.frame()).length).toBe(CAP);
   });
 
   test('wide glyphs wrap by display columns, not by character count', async () => {
@@ -113,7 +114,7 @@ describe('the composer over wrapped drafts', () => {
     const editor = screen.renderer.currentFocusedEditor;
     if (!editor) throw new Error('the composer never took focus');
     expect(composerDraftRows(screen.frame()).length)
-      .toBe(Math.min(COMPOSER_MAX_ROWS, editor.editorView.getTotalVirtualLineCount()));
+      .toBe(Math.min(CAP, editor.editorView.getTotalVirtualLineCount()));
 
     // Enter sends: the draft leaves the composer whole (the transcript keeps
     // the words; a char-grid capture cannot render the cluster itself) and the

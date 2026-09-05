@@ -23,7 +23,6 @@ import {
   createdWorkspace,
   provisionTestWorkspace,
   testOwner,
-  TEST_CREDENTIAL_ENCRYPTION_KEY,
   type TestUserDO,
 } from './helpers/user-do';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
@@ -835,9 +834,3 @@ describe('creating a workspace whose name is already taken', () => {
   });
 });
 
-/** The harness env every socket test above reads. Declared here so the file
- *  fails loudly if the credential key it is built with ever drifts from the one
- *  the capability derivation uses. */
-test('the suite drives the real owner capability derivation', () => {
-  expect(TEST_CREDENTIAL_ENCRYPTION_KEY).toBe('test-credential-encryption-key-0123456789');
-});

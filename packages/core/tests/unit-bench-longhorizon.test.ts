@@ -17,6 +17,11 @@ const continuation: LongHorizonSpec = { mode: 'continuation', seed: 12, entries:
 describe('the corpus is a pure function of the spec', () => {
   test('the same spec generates byte-identical files', () => {
     expect(generateLongHorizonFiles(digest)).toEqual(generateLongHorizonFiles(digest));
+    // Pinned so a seed or PRNG change fails here instead of passing on both sides.
+    const files = generateLongHorizonFiles(digest);
+    expect(files).toHaveLength(5);
+    expect(files[0]?.path).toBe('bench-corpus/log-0001.md');
+    expect(files[0]?.text.slice(0, 15)).toBe('### entry-00001');
   });
 
   test('a different seed generates a different corpus and different answers', () => {
@@ -184,6 +189,8 @@ describe('the spec round-trips into the check argv', () => {
     for (const spec of [digest, continuation]) {
       expect(decodeLongHorizonSpec(encodeLongHorizonSpec(spec))).toEqual(spec);
     }
+    // Hand-derived array encoding, so a field-order change fails here.
+    expect(encodeLongHorizonSpec(digest)).toBe('["digest",11,120,60,5,1]');
     // Field order in the encoding must not follow object-literal order — the
     // encoded string lands in the check argv, so it lands in the task hash.
     const reordered: LongHorizonSpec = {

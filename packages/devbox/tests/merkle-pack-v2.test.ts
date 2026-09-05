@@ -37,7 +37,7 @@ import {
 import type { NodeEntry } from '../src/capture/model';
 import { DEFAULT_CHUNK_PARAMS } from '../src/candidates/merkle-pack/chunk';
 import { openMerkleV2 } from '../src/candidates/merkle-pack/view-v2';
-import { compactionCandidates, parsePackLedger } from '../src/candidates/merkle-pack/ledger';
+import { parsePackLedger } from '../src/candidates/merkle-pack/ledger';
 import { DEFAULT_MAX_PACK_BYTES_V2 } from '../src/candidates/merkle-pack/build-v2';
 import { beginCandidateOperationV2 } from '../src/candidates/control';
 import { DURABILITY_AWAIT_POINTS } from '../src/durability/contracts';
@@ -550,9 +550,5 @@ describe('compaction pays for itself, and GC deletes only what has served its gr
       expect(fixture.payload.objects.has(row.key)).toBe(true);
       expect(Number(row.liveBytes)).toBeLessThanOrEqual(Number(row.byteLength));
     }
-    expect(compactionCandidates(
-      { version: 1, format: 'merkle-pack/v2', boxId: 'box-sidecar', generation: envelope.generation, packs: ledger.packs.map((row) => ({ ...row, sha256: 'f'.repeat(64), addedInGeneration: '1' })) },
-      envelope.generation,
-    ).length).toBeGreaterThanOrEqual(0);
   }, 120_000);
 });

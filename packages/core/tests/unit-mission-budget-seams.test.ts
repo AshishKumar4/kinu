@@ -341,8 +341,11 @@ describe('model-call seam — the step pipeline declines the next request', () =
     const governor = newGovernor();
     governor.declare('nightly', { tokens: 5_000 });
     governor.activate(['nightly']);
-    expect(composePrepareStep({ budget: governor }, ctx))
-      .toEqual(composePrepareStep({}, ctx));
+    // No extensions, prune, weave, cache or meter are wired here. An unchanged
+    // pipeline answers undefined, which means no step overrides. A budgeted
+    // turn that injected any would break the request it leaves alone.
+    expect(composePrepareStep({ budget: governor }, ctx)).toBeUndefined();
+    expect(composePrepareStep({}, ctx)).toBeUndefined();
   });
 
   test('the refusal is recorded once in the run event log', () => {

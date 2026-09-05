@@ -442,8 +442,9 @@ describe('the workspace banner', () => {
 
   test('an initial failure and a refresh failure are different claims about the same reason', () => {
     const errors = { snapshot: 'the workspace is asleep' };
-
-    expect(formatWorkspaceError(errors, false)).not.toBe(formatWorkspaceError(errors, true));
+    expect(formatWorkspaceError(errors, false)).toBe("Couldn't open this workspace. the workspace is asleep");
+    expect(formatWorkspaceError(errors, true))
+      .toBe("Couldn't refresh this workspace. Showing last known data. the workspace is asleep");
   });
 
   test('a failed action the user asked for keeps its own sentence', () => {

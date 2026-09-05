@@ -183,6 +183,6 @@ describe('swarm-node facet spawn', () => {
 
     // The quota this leaks into overflows as an uncatchable reset, so a settled
     // result is deliberately NOT enough to let the failure pass quietly.
-    await expect(node.run()).rejects.toThrow('storage was not reclaimed');
+    await expect(node.run()).rejects.toThrow('Node facet node-1 settled but its storage was not reclaimed');
   });
 });

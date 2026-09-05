@@ -107,13 +107,15 @@ describe('layer gate — decomposition', () => {
     expect(new Set(owned).size).toBe(owned.length);
   });
 
-  test('SUBJECT_SOURCE names the file that really exports each subject', () => {
+  test('SUBJECT_SOURCE names the file that really exports each subject', async () => {
     for (const [subject, relative] of Object.entries(SUBJECT_SOURCE)) {
       const file = resolve(SRC, relative);
       expect(existsSync(file)).toBe(true);
-      expect(readFileSync(file, 'utf8')).toMatch(
-        new RegExp(`export\\s+(?:async\\s+)?(?:function|class|const)\\s+${subject}\\b`),
-      );
+      // This checks the module graph. A moved subject fails here because the
+      // file no longer carries it. Dynamic import is the only form that works.
+      // The files are data in the map under test, and a static import per
+      // subject would restate that map by hand.
+      expect(Object.hasOwn(await import(file), subject)).toBe(true);
     }
   });
 

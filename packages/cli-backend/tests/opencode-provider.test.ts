@@ -495,7 +495,7 @@ describe('OpenCode provider', () => {
       env: {},
       getAuth: async () => null,
       hasCredential: async () => false,
-    })).toThrow();
+    })).toThrow('Invalid opencode model id: invalid-no-slash');
   });
 
   test('config is cached and not re-fetched within TTL', async () => {

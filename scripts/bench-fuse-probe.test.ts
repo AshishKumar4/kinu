@@ -405,7 +405,9 @@ test('artifact writes are immutable and plan names the openat2 and cleanup proof
   try {
     const output = await persistFuseProbeArtifact(dir, artifact);
     expect(output).toBe(fuseProbeArtifactPath(dir, 'unique'));
-    await expect(persistFuseProbeArtifact(dir, artifact)).rejects.toThrow();
+    // The errno is the contract: link() emits no product message of its own,
+    // and its sentence is libc wording.
+    await expect(persistFuseProbeArtifact(dir, artifact)).rejects.toThrow(/EEXIST/);
     expect(planText()).toContain('FUSE_PROBE_IMAGE=registry/name@sha256:<digest>');
     expect(planText()).toContain('openat2 RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS');
     expect(planText()).toContain('idempotent');
@@ -599,8 +601,8 @@ test('process control preserves the exit-86 report and reports missing processes
 test('process control request schemas are closed and the writable driver uses start/poll rather than exec', async () => {
   const unexpectedStart = JSON.parse('{"operationId":"run","command":"probe","unexpected":true}');
   const incompletePoll = JSON.parse('{"command":"probe"}');
-  expect(() => parseProbeRequest('/start', unexpectedStart)).toThrow();
-  expect(() => parseProbeRequest('/poll', incompletePoll)).toThrow();
+  expect(() => parseProbeRequest('/start', unexpectedStart)).toThrow('"unexpected"');
+  expect(() => parseProbeRequest('/poll', incompletePoll)).toThrow('"operationId"');
   expect(writableProbeOperationId('run-42')).toBe('fuse-run-42-positive');
   expect(writableProbeOperationId('run-42', 'omit-msync')).toBe('fuse-run-42-omit-msync');
 

@@ -178,7 +178,6 @@ describe('branch-worker protocol — no self-rating', () => {
   test('low provider effort is pinned in the branch worker source', () => {
     const source = readFileSync(workerPath, 'utf8');
     const region = /function resolveLowEffortModel\(\) \{[\s\S]*?\n\}/.exec(source)?.[0] ?? '';
-    expect(region.length).toBeGreaterThan(0);
     expect(region).toContain('modelResolver.normalizeSpecSync(readStoredModelSpec())');
     expect(region).toContain("reasoningEffortOptions('low', parseModelSpec(spec).provider)");
   });

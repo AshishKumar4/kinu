@@ -33,9 +33,8 @@ import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 import { withGallery, type Gallery } from './gallery-harness';
-import { CLIENT_ERROR_MAX_REQUEST_BYTES } from '../packages/cf-backend/src/client-error/contract';
+import { CLIENT_ERROR_ENDPOINT, CLIENT_ERROR_MAX_REQUEST_BYTES } from '../packages/cf-backend/src/client-error/contract';
 
-const CLIENT_ERRORS = '/api/client-errors';
 const HEALTH = '/api/health';
 
 /** The build the document loads with, and the one the origin moves to after. */
@@ -136,7 +135,7 @@ async function watchReportSettlement(page: Page): Promise<void> {
       }
       return pending;
     }, { preconnect: real.preconnect });
-  }, CLIENT_ERRORS);
+  }, CLIENT_ERROR_ENDPOINT);
 }
 
 async function serve(
@@ -156,7 +155,7 @@ async function serve(
       });
       return;
     }
-    if (path !== CLIENT_ERRORS) {
+    if (path !== CLIENT_ERROR_ENDPOINT) {
       await request.continue();
       return;
     }

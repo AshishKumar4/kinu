@@ -216,8 +216,8 @@ describe('custom seeded from a preset resolves on the axes the caller states', (
       expect(resolved.from).toBe(from);
       expect(resolved.config.advance).toEqual({ kind: 'uct' });
       // The row supplied every axis the call did not.
-      expect(resolved.config.unit).toBeDefined();
-      expect(resolved.config.expand).toBeDefined();
+      expect(resolved.config.unit).toEqual(SWARM_PRESET_POINTS[from].config.unit);
+      expect(resolved.config.expand).toEqual(SWARM_PRESET_POINTS[from].config.expand);
       // The stated cap wins; the row's other cap is inherited.
       expect(resolved.caps.depth).toEqual({ value: 3, origin: 'call' });
       expect(resolved.caps.branches?.origin).toBe('preset');

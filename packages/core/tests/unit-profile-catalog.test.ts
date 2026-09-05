@@ -134,7 +134,7 @@ describe('envelope validation', () => {
     expect(() => envelopeWith(VALID_CATALOG, { authority: { kind: 'team' } })).toThrow(/authority/);
     expect(() => envelopeWith(VALID_CATALOG, { authority: { kind: 'account' } })).toThrow(/accountId/);
     expect(() => envelopeWith(VALID_CATALOG, { digest: 'nothex' })).toThrow(/digest/);
-    expect(() => envelopeWith(VALID_CATALOG, { digest: `${'ab'.repeat(31)}g` })).toThrow();
+    expect(() => envelopeWith(VALID_CATALOG, { digest: `${'ab'.repeat(31)}g` })).toThrow(/digest/);
   });
 
   test('an envelope carrying an extra top-level field refuses', () => {
@@ -149,6 +149,10 @@ describe('the digest', () => {
       roles: { scout: { preset: 'research', tier: 'fast', instructions: 'Go look.', description: 'Explores.' } },
     };
     expect(profileCatalogDigest(reordered)).toBe(profileCatalogDigest(VALID_CATALOG));
+    // Known answer: SHA-256 over the canonical serialization, reproduced with sha256sum.
+    expect(profileCatalogDigest(VALID_CATALOG)).toBe(
+      '73ac62fb255df8fa1a2f667d5a8cdf76e3b9a90447bb9f9248b79a4495cc1f5e',
+    );
   });
 
   test('moves when content moves', () => {

@@ -89,6 +89,6 @@ describe('filterByEffectiveScore — the one injection policy', () => {
 
   test('missing crafted_tools table is a fault, not an empty toolbox', () => {
     const db = new Database(':memory:');
-    expect(() => filterByEffectiveScore(makeSql(db), tools)).toThrow();
+    expect(() => filterByEffectiveScore(makeSql(db), tools)).toThrow('no such table: crafted_tools');
   });
 });

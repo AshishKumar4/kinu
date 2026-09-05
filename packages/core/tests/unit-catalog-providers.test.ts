@@ -157,7 +157,7 @@ describe('models.dev dynamic catalog source', () => {
 
   test('get is optimistic for well-formed ids, rejects malformed ones, and memoizes', () => {
     const source = createModelsDevCatalogSource();
-    expect(source.get('groq')).toBeDefined();
+    expect(source.get('groq')?.id).toBe('groq');
     expect(source.get('not yet fetched')).toBeUndefined();
     expect(source.get('UPPER')).toBeUndefined();
     expect(source.get('groq')).toBe(source.get('groq')!);

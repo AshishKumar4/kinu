@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 
 import { sha256Hex } from '../src/cas/hash';
+import { DURABLE_ROOT_FORMATS } from '../src/durability/contracts';
 import { MerklePackError } from '../src/candidates/merkle-pack';
 import type { DirEntryV2, ExtentPageRefV2, ExtentV2, NodeV2, RecordRefV2 } from '../src/candidates/merkle-pack/wire';
 import {
@@ -139,7 +140,10 @@ function expectRefused(work: () => void, reason: MerklePackError['reason'], deta
 
 describe('merkle-pack/v2 wire', () => {
   test('the format is the one the durability contracts reserve', () => {
-    expect(MERKLE_PACK_V2_FORMAT).toBe('merkle-pack/v2');
+    // Agreement between the two declarations, not a restated literal: the
+    // wire constant and the contract registry must name the same format, and
+    // either side renaming alone fails here.
+    expect(DURABLE_ROOT_FORMATS).toContain(MERKLE_PACK_V2_FORMAT);
   });
 
   test('every record kind round-trips through its canonical bytes', () => {

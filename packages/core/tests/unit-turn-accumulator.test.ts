@@ -218,7 +218,7 @@ describe('TurnAccumulator', () => {
     const events: Array<{ usage?: Usage; usd?: number }> = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
     a.recordStep({ usage: { input: 100, output: 10 } });
-    expect(events[0]?.usage).toBeDefined();
+    expect(events[0]?.usage).toEqual({ input: 100, output: 10 });
     expect(events[0]?.usd).toBeUndefined();
   });
 

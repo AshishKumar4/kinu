@@ -36,8 +36,10 @@ describe('BeneathRoot', () => {
       const fd = fs.createFile('safe/deep/file', undefined, 0o640);
       closeSync(fd);
       await symlink('/tmp', join(root, 'safe', 'swap'));
-      expect(() => fs.createFile('safe/swap/escape')).toThrow();
-      expect(() => fs.openRead('safe/swap/escape')).toThrow();
+      // The swapped symlink is refused at open, not followed out of the
+      // root: errno 40 names the symlink traversal the flags forbid.
+      expect(() => fs.createFile('safe/swap/escape')).toThrow('openat2 refused safe/swap/escape: errno 40');
+      expect(() => fs.openRead('safe/swap/escape')).toThrow('openat2 refused safe/swap/escape: errno 40');
     } finally {
       fs.close();
     }
@@ -60,8 +62,11 @@ describe('BeneathRoot', () => {
         closeSync(source);
       }
       const existing = fs.createFile('dir/existing');
+      expect(() => fs.rename('dir/source', 'dir/existing', RENAME_NOREPLACE))
+        .toThrow('renameat2 refused dir/source: errno 17');
       closeSync(existing);
-      expect(() => fs.rename('dir/source', 'dir/existing', RENAME_NOREPLACE)).toThrow();
+      expect(() => fs.rename('dir/source', 'dir/existing', RENAME_NOREPLACE))
+        .toThrow('renameat2 refused dir/source: errno 17');
       fs.rename('dir/source', 'dir/renamed');
       expect(new TextDecoder().decode(fs.readRange('dir/renamed', 0, 7))).toBe('payload');
     } finally {
@@ -98,7 +103,7 @@ describe('BeneathRoot', () => {
       expect(fs.listxattr('metadata')).toContain('user.kinu.test');
       expect(fs.getxattr('metadata', 'user.kinu.test')).toEqual(new Uint8Array([7, 8, 9]));
       fs.removexattr('metadata', 'user.kinu.test');
-      expect(() => fs.getxattr('metadata', 'user.kinu.test')).toThrow();
+      expect(() => fs.getxattr('metadata', 'user.kinu.test')).toThrow('fgetxattr refused metadata: errno 61');
     } finally {
       fs.close();
     }
@@ -106,7 +111,7 @@ describe('BeneathRoot', () => {
   test('supports final symlinks but never traverses them and rejects use after close', async () => {
     const { fs } = await rootFixture();
     fs.symlink('target', 'link');
-    expect(() => fs.openRead('link')).toThrow();
+    expect(() => fs.openRead('link')).toThrow('openat2 refused link: errno 40');
     fs.unlink('link');
     fs.close();
     expect(() => fs.openRead('anything')).toThrow('BeneathRoot is closed');

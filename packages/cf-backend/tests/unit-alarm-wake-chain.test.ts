@@ -404,8 +404,11 @@ describe('the workspace keeps exactly one wake row', () => {
     if (!armed) throw new Error('the trigger did not arm a wake row');
     await agent.cancelSchedule(armed.id);
     expect(await agent.listSchedules()).toEqual([]);
-
-    await agent.reconcileWakeRow();
+    // Through the activation entry point, not the reconcile method: the
+    // property is that a cold start notices the loss, and a direct call would
+    // pass while an onStart that stopped reconciling stranded the workspace.
+    await agent.activateActor();
+    await agent.harnessSettleBackgroundTasks();
 
     expect((await agent.listSchedules()).map((row) => row.callback))
       .toEqual([KINU_TIMER_CALLBACK]);

@@ -183,8 +183,7 @@ describe('the container-start hook carries no container work', () => {
       id: { toString: () => TEST_BOX_ID },
       blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => await closure(),
     } as ConstructorParameters<typeof Devbox>[0];
-    const box = new TestBox(state, {});
-    expect(box).toBeInstanceOf(TestBox);
+    new TestBox(state, {});
     // No waiting: this stub runs the gate closure inline inside `new`, and the
     // sweep body is synchronous storage I/O, so the rows are gone before `new`
     // returns. An `await` added inside the sweep must update this test.

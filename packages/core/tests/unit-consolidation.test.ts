@@ -70,6 +70,6 @@ describe('CraftStore consolidation', () => {
     await periodicCraftConsolidation(rt);
 
     // low_use should NOT be retired (only 1 use < 2 minimum)
-    expect(rt.craftStore.get('low_use')).toBeDefined();
+    expect(rt.craftStore.list().map((tool) => tool.name).sort()).toEqual(['fresh', 'low_use']);
   });
 });

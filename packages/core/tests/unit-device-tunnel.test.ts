@@ -290,8 +290,10 @@ describe('DeviceTunnel', () => {
         .toThrow(DEVICE_CANCEL_MISPAIRED);
       // An answer that is not one of the two outcomes at all confirms nothing
       // either — silence and gibberish are the same claim.
-      expect(() => parseDeviceCancelAnswer(requestId, { requestId, cancelled: 'probably' })).toThrow();
-      expect(() => parseDeviceCancelAnswer(requestId, undefined)).toThrow();
+      expect(() => parseDeviceCancelAnswer(requestId, { requestId, cancelled: 'probably' }))
+        .toThrow('Invalid type: Expected ("terminated" | "unknown") but received "probably"');
+      expect(() => parseDeviceCancelAnswer(requestId, undefined))
+        .toThrow('Invalid type: Expected Object but received undefined');
     });
   });
 });

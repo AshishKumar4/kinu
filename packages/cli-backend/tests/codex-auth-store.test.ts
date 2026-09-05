@@ -131,7 +131,7 @@ describe('createFileCodexAuthStore', () => {
     const store = createFileCodexAuthStore(configPath);
     expect(() => store.hasCredential()).toThrow();
     expect(() => store.save({ kind: 'oauth', accessToken: 'a', refreshToken: 'r' })).toThrow();
-    expect(readFileSync(configPath, 'utf-8')).toContain('sk-openai');
+    expect(readFileSync(configPath, 'utf-8')).toBe(intact.slice(0, -12));
   });
 
   test('a config that has never been written reads as empty', () => {

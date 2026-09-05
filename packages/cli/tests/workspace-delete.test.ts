@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import * as v from 'valibot';
 
 const WorkspaceConfigSchema = v.object({
-  agents: v.record(v.string(), v.object({ mode: v.string() })),
+  agents: v.record(v.string(), v.looseObject({ mode: v.string() })),
   aliases: v.record(v.string(), v.string()),
 });
 
@@ -91,8 +91,15 @@ describe('kinu workspace delete', () => {
 
     expect(exitCode).toBe(1);
     expect(stderr).toContain('--yes');
-    const config = v.parse(WorkspaceConfigSchema, JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')));
-    expect(config.agents['web-agent']).toBeDefined();
+    const stored = v.parse(WorkspaceConfigSchema, JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')));
+    // The refusal deleted nothing: the cloud entry stands exactly as seeded.
+    expect(stored.agents['web-agent']).toEqual({
+      name: 'web-agent',
+      mode: 'cloud',
+      cloudName: 'web-agent',
+      createdAt: '2026-07-14T00:00:00.000Z',
+      updatedAt: '2026-07-14T00:00:00.000Z',
+    });
   });
 });
 

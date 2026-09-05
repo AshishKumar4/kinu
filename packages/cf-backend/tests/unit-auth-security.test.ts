@@ -253,7 +253,13 @@ describe('auth and desktop security invariants', () => {
       expect(accountIdFromCloudflareCredential(switched)).toBe('bbb222bbb222bbb222bbb222bbb222bb');
       expect(switched.metadata?.accountName).toBe('Employer');
       expect(switched.accessToken).toBe(credential.accessToken);
-      expect(cloudflareAccountsFromCredential(switched)).toEqual(cloudflareAccountsFromCredential(credential));
+      // Against the literal list the stubbed accounts API returned, not against
+      // a second call of the function under test: the switch must preserve the
+      // discovered accounts, junk row excluded.
+      expect(cloudflareAccountsFromCredential(switched)).toEqual([
+        { id: 'aaa111aaa111aaa111aaa111aaa111aa', name: 'Personal' },
+        { id: 'bbb222bbb222bbb222bbb222bbb222bb', name: 'Employer' },
+      ]);
       expect(cloudflareWorkersAIBaseURL('bbb222bbb222bbb222bbb222bbb222bb'))
         .toBe('https://api.cloudflare.com/client/v4/accounts/bbb222bbb222bbb222bbb222bbb222bb/ai/v1');
 

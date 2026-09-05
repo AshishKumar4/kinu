@@ -208,7 +208,8 @@ describe("files route — PUT", () => {
     const whole = patternBytes(FILE_TRANSFER_MAX_BYTES + 1);
     const response = await route(put(whole), harness);
     expect(response.status).toBe(413);
-    expect(v.parse(ErrorReplySchema, await response.json()).error).toContain("transfer limit");
+    expect(v.parse(ErrorReplySchema, await response.json()).error)
+      .toBe(`file exceeds the ${Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024))} MiB transfer limit`);
     expect(harness.files.has("/home/user/blob.bin")).toBe(false);
     expect(harness.aborted).toEqual(["/home/user/blob.bin"]);
   });
@@ -228,7 +229,8 @@ describe("files route — PUT", () => {
     // nothing: an honest oversized sender costs one header parse.
     const response = await route(request, harness);
     expect(response.status).toBe(413);
-    expect(v.parse(ErrorReplySchema, await response.json()).error).toContain("transfer limit");
+    expect(v.parse(ErrorReplySchema, await response.json()).error)
+      .toBe(`file exceeds the ${Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024))} MiB transfer limit`);
     expect(pulls).toBe(0);
     expect(harness.files.has("/home/user/blob.bin")).toBe(false);
   });
@@ -253,7 +255,7 @@ describe("files route — PUT", () => {
 
     const response = await route(put(body), harness);
     expect(response.status).toBe(413);
-    expect(cancelled).toContain("limit");
+    expect(cancelled).toBe("the request body is over its limit");
     // One chunk past the limit is what the count needs to see; everything after
     // it stays unread.
     expect(pulls).toBe(Math.floor(FILE_TRANSFER_MAX_BYTES / CHUNK) + 1);

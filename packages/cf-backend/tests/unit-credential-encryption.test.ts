@@ -207,7 +207,7 @@ describe('MCP server headers are sealed too', () => {
     const stored = storedHeaders(harness, 'srv1')!;
     expect(JSON.parse(await cipher.open('test-user-do:mcp:srv1', stored)))
       .toEqual({ Authorization: 'Bearer mcp-secret' });
-    await expect(cipher.open('test-user-do:mcp:srv2', stored)).rejects.toThrow();
+    await expect(cipher.open('test-user-do:mcp:srv2', stored)).rejects.toThrow('failed to decrypt');
     harness.close();
   });
 

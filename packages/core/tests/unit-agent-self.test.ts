@@ -78,7 +78,7 @@ describe("createAgentSelfProvider — shape", () => {
     const p = createAgentSelfProvider(fakeHost());
     expect(p.name).toBe("agent");
     expect(p.positionalArgs).toBe(true);
-    expect(p.types).toContain("agent.schedule".replace("agent.", "")); // declares schedule
+    expect(p.types).toContain("schedule"); // declares schedule
     for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "scaffoldVersions", "schedule", "cancelSchedule", "compactNow"]) {
       const descriptor = p.tools[name];
       if (!descriptor) throw new Error(`missing agent.${name}`);

@@ -5,7 +5,7 @@ import {
   meetTrust, meetAll, trustSatisfies,
   deriveEventTrust, derivePriority, deriveDefaultVisibility, deriveFields,
   IngressRejectedError,
-  type IngressDescriptor, type TrustLevel,
+  type IngressDescriptor,
 } from '../src/events/hub/index';
 
 describe('meetTrust', () => {
@@ -16,10 +16,11 @@ describe('meetTrust', () => {
     expect(meetTrust('owner', 'owner')).toBe('owner');
   });
   test('is commutative', () => {
-    const pairs: Array<[TrustLevel, TrustLevel]> = [
-      ['owner', 'external'], ['self', 'authenticated'], ['external', 'self'],
-    ];
-    for (const [a, b] of pairs) expect(meetTrust(a, b)).toBe(meetTrust(b, a));
+    // The reverse order of three pinned pairs: commutativity is three exact
+    // lattice values, not the function agreeing with itself.
+    expect(meetTrust('external', 'owner')).toBe('external');
+    expect(meetTrust('authenticated', 'self')).toBe('authenticated');
+    expect(meetTrust('self', 'external')).toBe('external');
   });
   test('meetAll reduces to min across the chain', () => {
     expect(meetAll(['owner', 'self', 'authenticated'])).toBe('authenticated');
@@ -128,8 +129,10 @@ describe('derivePriority', () => {
     expect(derivePriority('authenticated', 'webhook')).toBe('normal');
   });
   test('forbidden combo throws', () => {
-    expect(() => derivePriority('external', 'chat')).toThrow();
-    expect(() => derivePriority('owner', 'webhook')).toThrow();
+    expect(() => derivePriority('external', 'chat'))
+      .toThrow('Ingress invalid_combination rejected: trust=external + variant=chat is not a permitted combination');
+    expect(() => derivePriority('owner', 'webhook'))
+      .toThrow('Ingress invalid_combination rejected: trust=owner + variant=webhook is not a permitted combination');
   });
 });
 

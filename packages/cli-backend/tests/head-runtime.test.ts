@@ -4,7 +4,7 @@
 // a prompt-aware fake model, assert the head's real tool surface, and prove the
 // runtime-level fork capability (real /parent files + real `run laptop` exec)
 // that the caffe fork lacked — all without a network LLM.
-import { describe, test, expect } from 'bun:test';
+import { afterAll, describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -27,9 +27,15 @@ import { makeSql, makeExecRaw, createCLIRuntime, buildCLIHeadRuntime } from '../
 
 // A local head's scratch is a real store under KINU_HOME (home.ts is the
 // isolation boundary), so point that boundary at a temp dir before anything
-// reads it: a test run must never write into the real home.
+// reads it: a test run must never write into the real home. Restored afterwards
+// so files running later in the same process keep the caller's boundary.
+const priorKinuHome = process.env.KINU_HOME;
 process.env.KINU_HOME = scratchDir('head-runtime-home');
 const HEAD_SCRATCH_DIR = join(process.env.KINU_HOME, 'heads');
+afterAll(() => {
+  if (priorKinuHome === undefined) delete process.env.KINU_HOME;
+  else process.env.KINU_HOME = priorKinuHome;
+});
 
 /** Scratch stores present right now — [] before any head has ever run. */
 function scratchStores(): string[] {
@@ -843,8 +849,7 @@ describe("the merge synthesis' operation lifecycle", () => {
     await runtime.mergeLLM('merging the findings of 2 heads', MergeOutputSchema);
 
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
-    expect(operations[0]!.operationId).toBe(operations[1]!.operationId);
-    expect(operations.every((e) => e.source === 'judge' && e.op === 'generate_json')).toBe(true);
+    expect(operations.map((e) => [e.source, e.op])).toEqual([['judge', 'generate_json'], ['judge', 'generate_json']]);
     expect(operations[1]!.outcome).toBe('ok');
     expect(operations[1]!.usage).toEqual({ input: 8, output: 12 });
     expect(operations[1]!.modelId).toBe('fake-merge');

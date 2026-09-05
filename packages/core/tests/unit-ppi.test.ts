@@ -477,12 +477,16 @@ describe('designWeightedKappa', () => {
     expect(kappa?.hi).toBeGreaterThan(kappa?.value ?? 1);
   });
 
-  test('is reproducible from its seed and reports nothing without labels', () => {
+  test('pins the hand-derived κ = 16/41 and reports nothing without labels', () => {
     const strata = [
       gold('accepted', 800, ['accepted', 'corrected', 'accepted', 'accepted']),
       gold('corrected', 200, ['corrected', 'accepted', 'corrected', 'corrected']),
     ];
-    expect(designWeightedKappa(strata)).toEqual(designWeightedKappa(strata));
+    // Observed agreement is 0.75 against chance agreement 0.59, so κ = 16/41.
+    const kappa = designWeightedKappa(strata);
+    expect(kappa?.value).toBeCloseTo(16 / 41, 10);
+    // The bootstrap runs on the default seed, so the interval is stable too.
+    expect(designWeightedKappa(strata)).toEqual(kappa);
     expect(designWeightedKappa([gold('accepted', 800, [])])).toBeNull();
     expect(designWeightedKappa([])).toBeNull();
   });

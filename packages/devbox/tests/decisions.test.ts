@@ -75,9 +75,6 @@ import {
 } from '../src/snapshot-chain';
 import { isS3fsMounted } from '../src/r2fs';
 
-/** Mirrors lifecycle.ts's private TERM wait; drift fails these tests, which is the point. */
-const HOLDER_TERM_WAIT_MS = 5_000;
-
 const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 /** The generation a record retains as its restore fallback. */
 const FALLBACK_ID = 'a1b2c3d4-0000-4000-8000-0000000000fb';
@@ -850,8 +847,9 @@ describe('an incident is written off only when the host says it LANDED', () => {
 
     const retryIn = await deliverIncidents(store, answer);
 
-    // Pending, counted, and a retry scheduled.
-    expect(retryIn).not.toBeNull();
+    // Pending, counted, and a retry scheduled at the first-attempt delay, in
+    // the seconds the delivery answer speaks rather than the schedule's ms.
+    expect(retryIn).toBe(Math.ceil(incidentRetryDelayMs(1) / 1000));
     const pending = only(rows);
     expect({
       attempts: pending?.attempts,
@@ -876,7 +874,7 @@ describe('an incident is written off only when the host says it LANDED', () => {
     const retryIn = await deliverIncidents(store, () => {
       throw new Error('the host was unreachable');
     });
-    expect(retryIn).not.toBeNull();
+    expect(retryIn).toBe(Math.ceil(incidentRetryDelayMs(1) / 1000));
     expect({ attempts: only(rows)?.attempts, delivered: only(rows)?.deliveredAt })
       .toEqual({ attempts: 1, delivered: undefined });
   });
@@ -1093,8 +1091,9 @@ describe('a composed container command is one a POSIX shell will run', () => {
     // visibility probe did it with `printf ready; exit 0` and cost a wake 1,054
     // terminated sessions. This command answers its empty scan with `else`.
     expect(command).not.toMatch(/(?:^|[\s;&|(])exit(?:\s+\d+)?\s*(?:$|[;&|)])/);
-    // The wait is the constant, not a second opinion of it.
-    expect(command).toContain(`sleep ${String(HOLDER_TERM_WAIT_MS / 1_000)}`);
+    // The wait is the behaviour, not a second opinion of it: five seconds for
+    // a TERM flush before the KILL, read off the command the container runs.
+    expect(command).toContain('sleep 5');
   });
 
   test('a work directory holding a quote is still one shell word', () => {
@@ -1210,7 +1209,7 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
    * Linux only, like the `/proc` walk it exercises. It needs `unshare` and an
    * unprivileged user namespace — a weaker demand than the privileged
    * `/dev/fuse` container the same tier runs next door — and it really waits
-   * out HOLDER_TERM_WAIT_MS.
+   * out the command's five-second TERM wait.
    */
   test.skipIf(process.platform !== 'linux')(
     'a stranger is signalled and unnamed; a cwd holder and the scan\'s own session are named',
@@ -1230,7 +1229,7 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
       const ran = spawnSync('unshare', [
         '-Ur', '--fork', '--pid', '--mount-proc',
         'sh', init, scenario, dir, script, ready.stranger, ready.cwd,
-      ], { encoding: 'utf8', timeout: HOLDER_TERM_WAIT_MS + 15_000 });
+      ], { encoding: 'utf8', timeout: 20_000 });
       const holders = parseWorkdirHolders(ran.stdout.split('ALIVE')[0] ?? '');
       // The scenario's own answers, since every pid in them is namespace-local.
       const reported = (name: string): string =>
@@ -1276,7 +1275,7 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
       rmSync(ready.stranger, { force: true });
       rmSync(ready.cwd, { force: true });
     },
-    HOLDER_TERM_WAIT_MS + 20_000,
+    25_000,
   );
 
   test('the journal readiness probe parses, waits in the container, and never ends the shell', () => {

@@ -121,17 +121,21 @@ describe('the capability decision', () => {
   });
 
   test('the report schema is strict about shape and closed about ids', () => {
+    // An unknown capability id is refused by name, so a probe reporting a
+    // capability nothing reads cannot pass as a measured one.
     expect(() => v.parse(CaptureCapabilityReportSchema, {
       probeVersion: 1,
       platform: 'x',
       kernel: 'k',
       checks: [{ id: 'teleportation', status: 'present', detail: 'nope' }],
-    })).toThrow();
+    })).toThrow('but received "teleportation"');
+    // A report version this code does not speak is refused, not parsed
+    // against a shape its checks may not satisfy.
     expect(() => v.parse(CaptureCapabilityReportSchema, {
       probeVersion: 2,
       platform: 'x',
       kernel: 'k',
       checks: [],
-    })).toThrow();
+    })).toThrow('Expected 1 but received 2');
   });
 });

@@ -184,7 +184,7 @@ describe('kinu acp — initialization', () => {
     expect(result.agentCapabilities?.loadSession).toBe(true);
     expect(result.agentCapabilities?.promptCapabilities?.image).toBe(true);
     // session/close is handled, so it must be advertised.
-    expect(result.agentCapabilities?.sessionCapabilities?.close).toBeDefined();
+    expect(result.agentCapabilities?.sessionCapabilities?.close).toEqual({});
   });
 });
 

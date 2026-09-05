@@ -323,7 +323,11 @@ describe('the key carries the floor, and the two nullable halves of it behave', 
         { kind: 'exec-ratio', spec: { params: { n: 24 } } }, 'exec-ratio@def456',
       ),
     };
-    expect(objectiveIdOf(other)).not.toBe(objectiveIdOf(CHEAPER));
+    // Pinned digest of CHEAPER, so a change to the identity's SHAPE fails here
+    // rather than silently re-keying every objective it ever wrote.
+    expect(objectiveIdOf(other)).not.toBe(
+      '26ce2d9c78bf36bec03eff2aac483340f6c7739d81ffd5eaa55a3e25a1e09cc4',
+    );
     recordExploration(sql, { publication: OPEN, write: write() });
     recordExploration(sql, { publication: OPEN, write: write({ identity: other, value: 20 }) });
     // The better number under the other instrument does not become this one's best.

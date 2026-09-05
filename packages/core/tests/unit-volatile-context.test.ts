@@ -1289,7 +1289,8 @@ describe('the per-step weave (the cache-coherence proof)', () => {
 
 describe('fnv1a64', () => {
   test('is deterministic and byte-sensitive', () => {
-    expect(fnv1a64('abc')).toBe(fnv1a64('abc'));
+    // Known answer from an independent FNV-1a implementation.
+    expect(fnv1a64('abc')).toBe('e71fa2190541574b');
     expect(fnv1a64('abc')).not.toBe(fnv1a64('abd'));
     expect(fnv1a64('')).toHaveLength(16);
   });

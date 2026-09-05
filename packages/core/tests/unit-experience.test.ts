@@ -9,8 +9,6 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { createTestRuntime, makeSqlExec } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { FactsStore } from '../src/memory/facts';
@@ -771,21 +769,21 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     expect(listScaffoldArchive(beta.rt.storage.sql).map((e) => e.version)).toEqual([1, 0]);
   });
 
-  test('nothing in the experience module can make a scaffold live', () => {
-    // The behavioural tests above show the import landing as pending; this one
-    // shows there is no second route. Both functions that can swap the live
-    // `scaffold/agent.js` — the promotion decision and the identity write — are
-    // absent from this module, so "imported" and "running" cannot be one step.
-    // (Reading `decidePromotion` is fine and deliberate: the publish bar asks
-    // the gate whether a version's record clears it. Asking is not applying.)
-    const dir = join(import.meta.dir, '..', 'src', 'experience');
-    const forbidden = ['applyPromotionDecision', 'scaffold.write'];
-    for (const file of readdirSync(dir)) {
-      const source = readFileSync(join(dir, file), 'utf8');
-      for (const name of forbidden) {
-        expect(`${file}: ${source.includes(name)}`).toBe(`${file}: false`);
-      }
-    }
+  test('no action in the experience surface can make a scaffold live', async () => {
+    // Every action the dispatcher exposes runs against a staged import, and the
+    // loop that RUNS is still the bootstrap. An action that activated what it
+    // staged would move either of these.
+    const library = ownerLibrary();
+    const entry = await publishedLoop(library);
+    const beta = workspace('beta', library);
+    await seedLiveScaffold(beta);
+
+    await beta.call({ action: 'publish' });
+    await beta.call({ action: 'search', kind: 'scaffold' });
+    await beta.call({ action: 'import', id: entry.id });
+
+    expect(await beta.rt.identity.scaffold.read()).toBe(scaffoldSrc('v0'));
+    expect(getCurrentScaffoldVersion(beta.rt.storage.sql)).toBe(0);
   });
 });
 

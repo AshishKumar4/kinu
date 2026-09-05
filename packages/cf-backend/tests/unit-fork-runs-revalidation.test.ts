@@ -143,8 +143,7 @@ describe('fork revalidation policy', () => {
       // same set must compare equal, or every journal write is a fresh read.
       const listed = [canvasRow({ id: 'known', status: 'running' })];
       expect(unexplainedForkRoots(listed, ['b', 'a', 'b'])).toEqual(['a', 'b']);
-      expect(unexplainedForkRoots(listed, ['b', 'a']).join('|'))
-        .toBe(unexplainedForkRoots(listed, ['a', 'b']).join('|'));
+      expect(unexplainedForkRoots(listed, ['b', 'a'])).toEqual(['a', 'b']);
     });
 
     test('nothing is unexplained before the list has answered at all', () => {

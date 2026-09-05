@@ -163,7 +163,6 @@ describe('CLI smoke test', () => {
 
     // Verify memory has entries
     const memContent = await rt.memory.read('memory/MEMORY.md');
-    expect(memContent).toBeTruthy();
     expect(memContent).toContain('Successful approach');
   });
 });

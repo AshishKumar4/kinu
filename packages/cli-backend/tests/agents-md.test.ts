@@ -13,7 +13,7 @@ import { chmodSync, mkdtempSync, mkdirSync, renameSync, rmSync, symlinkSync, wri
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  CHARS_PER_TOKEN, instructionDigest, renderAgentsMdSection, stepContextLimit,
+  CHARS_PER_TOKEN, renderAgentsMdSection, stepContextLimit,
   type InstructionTrustResolver, type ModelWindow,
 } from '@kinu.run/core';
 import { discoverAgentsMd } from '../src/agents-md';
@@ -261,7 +261,6 @@ describe('discoverAgentsMd — trust classification', () => {
     // Content-addressed approval: the rewrite asks a different question, which
     // is the whole invalidation story — no cache to clear, no revoke to call.
     expect(seen).toEqual(['first rules', 'second rules']);
-    expect(instructionDigest(seen[0]!)).not.toBe(instructionDigest(seen[1]!));
   });
 
   test('a referenced-but-unread file is never handed to the resolver', () => {

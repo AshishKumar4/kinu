@@ -292,7 +292,11 @@ describe('evalWorkspaceName — every row an eval leaves behind is attributable'
   });
 
   test('two calls do not collide, so a suite can run twice', () => {
-    expect(evalWorkspaceName('smoke')).not.toBe(evalWorkspaceName('smoke'));
+    const first = evalWorkspaceName('smoke');
+    const second = evalWorkspaceName('smoke');
+    expect(first).toMatch(new RegExp(`^${EVAL_WORKSPACE_PREFIX}smoke-[a-z0-9]{1,6}$`));
+    expect(second).toMatch(new RegExp(`^${EVAL_WORKSPACE_PREFIX}smoke-[a-z0-9]{1,6}$`));
+    expect(first).not.toBe(second);
   });
 });
 

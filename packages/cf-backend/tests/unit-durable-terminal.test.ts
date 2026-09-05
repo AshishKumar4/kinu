@@ -304,7 +304,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     harness.agent.harnessArmTerminalFault('takes', 'before');
 
     await expect(harness.agent.onChatResponse(settledResponse('a-head')))
-      .rejects.toThrow(/interrupted before its side effect/u);
+      .rejects.toThrow('terminal effect takes:a-head interrupted before its side effect');
 
     const owed = harness.agent.harnessTerminalEffects('u-head', 'a-head');
     expect(owed.map((row) => row.effect_key)).toEqual([
@@ -350,7 +350,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     Reflect.set(unreadable.message, 'role', 'tool');
 
     await expect(harness.agent.onChatResponse(unreadable))
-      .rejects.toThrow(/interrupted before its side effect/u);
+      .rejects.toThrow('terminal effect turn_record:a-unreadable interrupted before its side effect');
 
     // THE CLAIM EXISTS. Nothing before it awaited, so the answer's effects are
     // recoverable even though reading the answer itself failed.
@@ -362,8 +362,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const turnEnd = rows.find((row) => row.effect_key === 'v1:turn_end_extensions:a-unreadable');
     // A REFUSAL, not an owed row: the stored message never changes, so retrying
     // it would hold the transition open for good.
-    expect(turnEnd?.status).toBe('completed');
-    expect(turnEnd?.outcome).toMatch(/recorded assistant message/u);
+    expect(turnEnd?.outcome).toBe("reading the recorded assistant message this turn's extensions announce");
     // The effect before it ran, and the suffix after the cut is still owed.
     expect(rows.filter((row) => row.status === 'pending').map((row) => row.effect_key)).toEqual([
       'v1:turn_record:a-unreadable', 'v1:event_drain:a-unreadable',
@@ -390,7 +389,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     harness.agent.harnessArmTerminalFault('turn_record', 'after');
 
     await expect(harness.agent.onChatResponse(settledResponse('a-spine')))
-      .rejects.toThrow(/interrupted after its side effect/u);
+      .rejects.toThrow('terminal effect turn_record:a-spine interrupted after its side effect');
     expect(windowedTurns(harness)).toBe(1);
 
     // Past the backoff BEFORE the activation runs its own reconcile: an owed row
@@ -466,7 +465,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     harness.agent.declareTurnCheckpoint('u-takes');
     harness.agent.harnessArmTerminalFault('takes', 'after');
 
-    await expect(harness.agent.onChatResponse(settledResponse('a-takes'))).rejects.toThrow();
+    await expect(harness.agent.onChatResponse(settledResponse('a-takes'))).rejects.toThrow('terminal effect takes:a-takes interrupted after its side effect');
     expect(harness.agent.harnessTerminalEffects('u-takes', 'a-takes')
       .find((row) => row.effect_key === 'v1:takes:a-takes')?.status).toBe('pending');
 
@@ -512,7 +511,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const before = orchestratorHarness();
     before.agent.declareTurnCheckpoint('u-rev-b');
     before.agent.harnessArmTerminalFault('turn_record', 'before');
-    await expect(before.agent.onChatResponse(settledResponse('a-rev-b'))).rejects.toThrow();
+    await expect(before.agent.onChatResponse(settledResponse('a-rev-b'))).rejects.toThrow('terminal effect turn_record:a-rev-b interrupted before its side effect');
     expect(owedReviews(before)).toBe(0);
     const revived = await reactivateOrchestratorHarness(before.db, undefined, {
       clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
@@ -523,7 +522,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const after = orchestratorHarness();
     after.agent.declareTurnCheckpoint('u-rev-a');
     after.agent.harnessArmTerminalFault('turn_record', 'after');
-    await expect(after.agent.onChatResponse(settledResponse('a-rev-a'))).rejects.toThrow();
+    await expect(after.agent.onChatResponse(settledResponse('a-rev-a'))).rejects.toThrow('terminal effect turn_record:a-rev-a interrupted after its side effect');
     expect(owedReviews(after)).toBe(1);
     await reactivateOrchestratorHarness(after.db, undefined, {
       clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
@@ -548,7 +547,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     harness.agent.harnessDeclarePendingBranch('branch-b', 'try the other algorithm');
     harness.agent.harnessArmTerminalFault('takes', 'before');
 
-    await expect(harness.agent.onChatResponse(settledResponse('a-branch'))).rejects.toThrow();
+    await expect(harness.agent.onChatResponse(settledResponse('a-branch'))).rejects.toThrow('terminal effect takes:a-branch interrupted before its side effect');
 
     expect(harness.agent.harnessTerminalEffects('u-branch', 'a-branch')
       .map((row) => row.effect_key)
@@ -571,7 +570,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       harness.agent.declareTurnCheckpoint(`u-sfx-${phase}`);
       harness.agent.harnessArmTerminalFault('turn_record', phase);
 
-      await expect(harness.agent.onChatResponse(settledResponse(`a-sfx-${phase}`))).rejects.toThrow();
+      await expect(harness.agent.onChatResponse(settledResponse(`a-sfx-${phase}`))).rejects.toThrow(`terminal effect turn_record:a-sfx-${phase} interrupted ${phase} its side effect`);
       // Replayed twice: the second pass is the one that would double anything the
       // first left un-tombstoned.
       for (let pass = 0; pass < 2; pass++) {
@@ -801,7 +800,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     await expect(harness.agent.harnessOncePerTick('probe_lane', 'tick-1', async () => {
       runs++;
       await Promise.reject(new Error('the isolate went away mid-rollout'));
-    })).rejects.toThrow();
+    })).rejects.toThrow('the isolate went away mid-rollout');
     expect(runs).toBe(1);
 
     // The replay finds the attempt and converges the tick without repeating it.
@@ -940,7 +939,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const harness = orchestratorHarness();
     harness.agent.declareTurnCheckpoint('u-live-wake');
     harness.agent.harnessArmTerminalFault('turn_record', 'before');
-    await expect(harness.agent.onChatResponse(settledResponse('a-live-wake'))).rejects.toThrow();
+    await expect(harness.agent.onChatResponse(settledResponse('a-live-wake'))).rejects.toThrow('terminal effect turn_record:a-live-wake interrupted before its side effect');
 
     const owedAt = harness.agent.harnessNextRetryAt(new Set());
     expect(owedAt).not.toBeNull();
@@ -1010,7 +1009,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     expect(rows).toHaveLength(1);
     expect(rows[0]?.effect_key).toBe('v9:teleport:a-alien');
     expect(rows[0]?.status).toBe('blocked');
-    expect(rows[0]?.outcome).toContain('teleport');
+    expect(rows[0]?.outcome).toBe('unknown effect "teleport"');
     // BLOCKED still gates: a row this build cannot interpret is a deploy-shape
     // problem a human resolves, so it keeps the transition open and visible
     // rather than converging to a success nobody earned.

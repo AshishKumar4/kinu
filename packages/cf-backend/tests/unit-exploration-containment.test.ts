@@ -205,7 +205,6 @@ describe('head tool surface — containment', () => {
     expect(prompt).toContain('`workspace.*` is the canonical workspace');
     expect(prompt).toContain('workspace.exec');
     expect(prompt).not.toContain('`parent.*`');
-    expect(prompt).toContain('');
     expect(prompt).not.toContain('sandbox_exec');
   });
 });

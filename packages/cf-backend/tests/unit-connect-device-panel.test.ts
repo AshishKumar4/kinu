@@ -28,14 +28,13 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { DEVICE_CONNECT_DISCLOSURE } from '@kinu.run/core';
 import { ConnectDevicePanel, DeviceConnectFlow } from '../src/components/ConnectDevicePanel';
+import { buildCliInstallCommand } from '../src/cli/install-command';
 import type { UserDevice } from '../src/lib/user-api';
 
-/** The one-liner the server composes. Exactly as `buildCliInstallCommand`
- *  writes it, quoting and all: the point of the assertions below is that not
- *  one character of it is the client's. */
-const SERVER_COMMAND =
-  "curl -fsSL 'https://kinu.run/install.sh' | KINU_PARENT_ACTIVATES=1 bash -s -- --no-setup --connect"
-  + ' && export PATH="${KINU_HOME:-$HOME/.kinu}/bin:$PATH"';
+/** The one-liner the server hands over, built by the same builder the devices
+ *  route calls. A copy beside the panel would test the copy, so the verbatim
+ *  assertions below prove not one character of it is the client's. */
+const SERVER_COMMAND = buildCliInstallCommand({ origin: 'https://kinu.run', setup: false, connect: true });
 
 const AT = Date.UTC(2026, 8, 1, 9, 0, 0);
 

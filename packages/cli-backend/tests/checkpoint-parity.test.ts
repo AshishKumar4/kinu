@@ -141,9 +141,11 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
       expect(stores).toHaveLength(2);
       const [a, b] = stores.map((name) => join(root, 'shadow', AGENT, name));
       expect(readFileSync(join(a!, 'info', 'exclude'), 'utf8')).toBe(readFileSync(join(b!, 'info', 'exclude'), 'utf8'));
-      // Marker files differ only by the recorded target dir.
-      expect(readFileSync(join(a!, 'KINU_WORKDIR'), 'utf8').trim()).toMatch(/project(-b)?$/);
-      expect(readFileSync(join(b!, 'KINU_WORKDIR'), 'utf8').trim()).toMatch(/project(-b)?$/);
+      // Marker files differ only by the recorded target dir: each names exactly
+      // the project its store shadows, so a marker aimed at the wrong tree
+      // fails here rather than restoring one project from another's history.
+      const markers = [a, b].map((s) => readFileSync(join(s!, 'KINU_WORKDIR'), 'utf8').trim()).sort();
+      expect(markers).toEqual([work, workB].sort());
     } finally { cleanup(); }
   });
 

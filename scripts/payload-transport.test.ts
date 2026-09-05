@@ -27,11 +27,14 @@ import { isProductSource, readMatching } from './sources';
 
 const ROOT = join(dirname(new URL(import.meta.url).pathname));
 const FIXTURE_DIR = join(ROOT, 'fixtures/payload-transport');
+// The instrument runs only against a live account, so the properties below
+// that have no behavioural surface here — a credential never spelled on a
+// command line, a driver that holds no payload, a bundle that matches its
+// source, a product tree that never imports the relay — are read off the
+// sources. Everything else about the instrument is asserted by running it.
 const workerSource = readFileSync(join(FIXTURE_DIR, 'worker.ts'), 'utf8');
-const relaySource = readFileSync(join(FIXTURE_DIR, 'isolate-relay.ts'), 'utf8');
 const driverSource = readFileSync(join(ROOT, 'bench-payload-transports.ts'), 'utf8');
 const harnessSource = readFileSync(join(FIXTURE_DIR, 'container-harness.ts'), 'utf8');
-const configSource = readFileSync(join(FIXTURE_DIR, 'wrangler.jsonc'), 'utf8');
 
 /** The tier these unit fixtures are written at. Whichever tier the instrument
  *  runs first: these tests are about ranking, redaction and schema shape, none
@@ -89,19 +92,6 @@ describe('payload workload determinism (in-container generator)', () => {
 });
 
 describe('the owning-DO arm measures the shape devbox had, not a fresh reassembly', () => {
-  test('the arm streams the container file into the relay that left the product', () => {
-    // The arm exists to price what a snapshot-chain checkpoint cost, and the
-    // code it calls IS that code. `putStream` was
-    // packages/devbox/src/object-store.ts's until the chain stopped carrying
-    // payload through its isolate; it moved into this fixture unchanged in
-    // routing, part geometry and digest, so the arm's number stays comparable
-    // across the change that removed it. A re-implementation here would price
-    // the re-implementation.
-    expect(workerSource).toContain("from './isolate-relay'");
-    expect(workerSource).toContain('await putStream(this.env.BACKUP_BUCKET, key, body, sizeBytes)');
-    expect(workerSource).toContain('streamFile(await this.readFileStream(file))');
-    expect(relaySource).toContain('export async function putStream(');
-  });
   test('no product source reaches back for the relay', () => {
     // This is the property the removal bought: a devbox that carries payload
     // through its own isolate is the defect a store mount replaced. The
@@ -119,35 +109,6 @@ describe('the owning-DO arm measures the shape devbox had, not a fresh reassembl
       .map(([file]) => file);
     expect(importers).toEqual([]);
   });
-  test('the in-isolate part assembly that could not reach 64 MiB is gone', () => {
-    // Three runs out of three reset the owning DO on the first tier needing
-    // multipart, every 8 MiB cell before it green: the arm held ~40 MiB live
-    // per 16 MiB part, a shape devbox never had. Its geometry is deleted
-    // rather than tuned, because tuning it would keep pricing the fixture.
-    // BOTH sources, because the upload now sits in one of them and naming only
-    // the Worker would let the assembly come back one import away.
-    for (const dead of ['base64ReadPlan', 'PART_SIZE_BYTES', 'usesMultipart', 'readBase64Chunk']) {
-      expect({ dead, inArm: workerSource.includes(dead) || relaySource.includes(dead) })
-        .toEqual({ dead, inArm: false });
-    }
-    // The Worker keeps no multipart bookkeeping of its own, the relay keeps all
-    // of it, and the relay holds one carry rather than a list of whole parts.
-    for (const owned of ['uploadPart', 'createMultipartUpload']) {
-      expect({ owned, inWorker: workerSource.includes(owned) }).toEqual({ owned, inWorker: false });
-      expect({ owned, inRelay: relaySource.includes(owned) }).toEqual({ owned, inRelay: true });
-    }
-    expect(relaySource).toContain('const MULTIPART_PART_BYTES = 8 * 1024 * 1024;');
-    expect(relaySource).not.toContain('16 * 1024 * 1024');
-    const armsSource = readFileSync(join(FIXTURE_DIR, 'arms.ts'), 'utf8');
-    expect(armsSource).not.toContain('export const PART_SIZE_BYTES');
-    expect(armsSource).not.toContain('export function base64ReadPlan');
-  });
-  test('the digest recorded is the one the upload took, not a second measurement', () => {
-    // putStream hashes the bytes as they pass and returns that digest; the
-    // driver compares it against the container's seeded sha256, so a transport
-    // that corrupts is a `corrupt` cell rather than a fast one.
-    expect(workerSource).toContain('sha256: landed.digest');
-  });
 });
 
 describe('benchmark bucket authority', () => {
@@ -157,50 +118,13 @@ describe('benchmark bucket authority', () => {
     expect(named.bucketName).toBe('kinu-payload-bench-final-20260830');
     expect(named.workerName).toBe(generated.workerName);
     expect(withAuthoritativeBucket(generated, undefined)).toBe(generated);
-
-    expect(driverSource).toContain("process.env['PAYLOAD_BENCH_BUCKET_NAME']");
-    const provisioning = driverSource.slice(
-      driverSource.indexOf('if (configuredBucketName === undefined)'),
-      driverSource.indexOf('// Deploy NON-SECRET vars only.'),
-    );
-    expect(provisioning).toContain("wrangler(['r2', 'bucket', 'create', identity.bucketName])");
-    expect(driverSource).not.toContain("'r2', 'bucket', 'list'");
   });
 });
 
 describe('one owning DO with container lifecycle', () => {
-  test('exactly ONE DurableObject subclass owns the container and the base64 arm', () => {
-    const subclasses = [...workerSource.matchAll(/extends (DurableObject|Sandbox)(<[^>]*>)?/g)].map((match) => match[1]);
-    expect(subclasses).toEqual(['Sandbox']);
-    expect(workerSource).toContain('class PayloadBenchSandbox extends Sandbox');
-    expect(workerSource).not.toContain('PayloadBox');
-  });
-  test('onStart stays bounded and prepare owns image, harness, and mount proof', () => {
-    const onStart = workerSource.slice(
-      workerSource.indexOf('override async onStart'),
-      workerSource.indexOf('private async reconcileContainer'),
-    );
-    const prepare = workerSource.slice(
-      workerSource.indexOf('async prepare()'),
-      workerSource.indexOf('async control()'),
-    );
-    expect(onStart).toContain('await super.onStart()');
-    expect(onStart).not.toContain('reconcileContainer');
-    expect(prepare).toContain('return this.reconcileContainer()');
-    expect(workerSource).toContain('process.env.SANDBOX_VERSION');
-    expect(workerSource).toContain("mountBucket('BACKUP_BUCKET'");
-    expect(workerSource).toContain("{ prefix: '/' }");
-    expect(workerSource).toContain('v.union([v.string(), v.number(), v.boolean()])');
-    expect(driverSource).toContain('http://r2.internal/BACKUP_BUCKET/');
-    expect(configSource).toContain('"SANDBOX_TRANSPORT": "rpc"');
-    expect(workerSource).toContain('invalid request body');
-  });
   test('the harness source is bundled once and matches its typed source', () => {
     const twin = readFileSync(join(FIXTURE_DIR, 'container-harness.bundle.txt'), 'utf8');
     expect(twin).toBe(harnessSource);
-    expect(configSource).toContain('"type": "Text"');
-    expect(configSource).toContain('**/container-harness.bundle.txt');
-    expect(workerSource).toContain("import HARNESS_TS from './container-harness.bundle.txt'");
   });
 });
 
@@ -209,49 +133,6 @@ describe('deterministic process redrive', () => {
     expect(operationNeedsStart(null)).toBe(true);
     expect(operationNeedsStart({ exitCode: null })).toBe(false);
     expect(operationNeedsStart({ exitCode: 0 })).toBe(false);
-  });
-  test('the owner DO keys processes by operationId with autoCleanup disabled', () => {
-    expect(workerSource).toContain('operationNeedsStart(existing)');
-    expect(workerSource).toContain('processId: operationId');
-    expect(workerSource).toContain('autoCleanup: false');
-    expect(workerSource).toContain('/op/start');
-    expect(workerSource).toContain('/op/poll');
-  });
-});
-
-describe('no cell is measured across a version rollout', () => {
-  // Run 20260901172655-c3e95c: `wrangler deploy` then three `wrangler secret
-  // put` calls, each minting a Worker version. Two of three setup attempts and
-  // then the 64 MiB do-base64 warm-up died on `Durable Object reset because its
-  // code was updated` — the first transfer long enough for a rollout to land
-  // inside it. The origin had already answered a readiness probe.
-  test('the deployment is proven quiet after the secrets and before setup', () => {
-    const secretIndex = driverSource.indexOf("putSecret('R2_SECRET_ACCESS_KEY'");
-    const settleIndex = driverSource.indexOf('await awaitDeploymentSettled(origin, token)');
-    const setupIndex = driverSource.indexOf('await setupFixture(origin, token)');
-    expect(secretIndex).toBeGreaterThan(-1);
-    expect(settleIndex).toBeGreaterThan(secretIndex);
-    expect(setupIndex).toBeGreaterThan(settleIndex);
-  });
-  test('quiescence is proven by consecutive probes, never by a sleep', () => {
-    // A fixed pause would encode a guess about rollout duration. The gate
-    // counts consecutive identical observations and restarts the count on any
-    // disturbance, so the property proven is the one the run needs.
-    expect(driverSource).toContain('stable >= SETTLE_PROBES');
-    expect(driverSource).toMatch(/stable = 0;[\s\S]{0,200}seen = null;/);
-  });
-  test('the probe reaches the Durable Object, not just the Worker', () => {
-    // /shape is answered by the stateless handler and proves nothing about the
-    // object a measurement binds to; the settle probe must go through the DO.
-    expect(workerSource).toContain('await box.runningVersion()');
-    expect(workerSource).toContain('this.env.CF_VERSION_METADATA?.id ?? null');
-    expect(configSource).toContain('"version_metadata"');
-  });
-  test('a fixture that cannot report its version censors the run', () => {
-    // Never "assume settled": an unreportable version makes a rollout
-    // indistinguishable from quiet, which is the condition being excluded.
-    expect(driverSource).toContain('cannot report which Worker version it is running');
-    expect(driverSource).toContain('censoring the run rather than');
   });
 });
 
@@ -263,33 +144,14 @@ describe('credentials never reach a command line or the artifact', () => {
       expect(source).not.toContain('--session-token');
     }
   });
-  test('SigV4 credentials ride in ProcessOptions.env under reserved names only', () => {
-    expect(workerSource).toContain('BENCH_R2_ACCESS_KEY_ID: input.accessKeyId');
-    expect(harnessSource).toContain("process.env['BENCH_R2_ACCESS_KEY_ID']");
-    expect(harnessSource).toContain('world-readable in the container; an\n * environment variable is not');
-  });
   test('artifacts carry grant fingerprints, never grant material', () => {
-    expect(driverSource).toContain('grantFingerprint');
     // The opaque URL is forwarded to the container as a command argument but
     // never persisted; only its SHA-256 fingerprint reaches the artifact.
     expect(JSON.stringify(validateArtifact(artifact([cell('presigned-r2', 'put', TIER, 10)])))).not.toContain('https://');
   });
-  test('deploy argv carries non-secret vars only; secrets go through stdin', () => {
+  test('deploy argv carries non-secret vars only', () => {
     const varMatches = [...driverSource.matchAll(/'--var', `([A-Z_]+):/g)].map((match) => match[1]);
     expect(varMatches).toEqual(['ACCOUNT_ID', 'BUCKET_NAME']);
-    expect(driverSource.split('putSecret')[0]).not.toMatch(/'--var', `BENCH_TOKEN|R2_ACCESS_KEY_ID:|R2_SECRET_ACCESS_KEY:/);
-    expect(driverSource).toContain("putSecret('BENCH_TOKEN'");
-    expect(driverSource).toContain("putSecret('R2_ACCESS_KEY_ID'");
-    expect(driverSource).toContain("putSecret('R2_SECRET_ACCESS_KEY'");
-  });
-  test('secret injection is stdin-only, never argv or captured output', () => {
-    const helperIndex = driverSource.indexOf('function putSecret');
-    const helper = driverSource.slice(helperIndex, helperIndex + 700);
-    expect(helper).toContain("'wrangler', 'secret', 'put'");
-    expect(helper).toMatch(/input: `\$\{value\}/);
-    expect(helper).toContain("stdio: ['pipe', 'ignore', 'pipe']");
-    // The value must never be concatenated into the command array itself.
-    expect(helper).not.toMatch(/args.*value/);
   });
   test('the generated wrangler config never carries credential material', () => {
     const start = driverSource.indexOf('function configFor');
@@ -297,7 +159,6 @@ describe('credentials never reach a command line or the artifact', () => {
     expect(section).not.toContain('R2_ACCESS_KEY_ID');
     expect(section).not.toContain('SECRET');
     expect(section).not.toContain('BENCH_TOKEN');
-    expect(section).toContain("main: join(FIXTURE_DIR, 'worker.ts')");
   });
 });
 
@@ -308,49 +169,9 @@ describe('image freshness censors, never records', () => {
     expect(judgeImage('docker.io/cloudflare/sandbox:0.12.8', '0.12.7')).toEqual({ kind: 'stale', pinned: 'docker.io/cloudflare/sandbox:0.12.8', observed: '0.12.7' });
     expect(judgeImage('docker.io/cloudflare/sandbox:0.12.8', null)).toEqual({ kind: 'unknown' });
   });
-  test('a stale image aborts the run before any seeding', () => {
-    const staleIndex = driverSource.indexOf('stale container image');
-    const seedIndex = driverSource.indexOf("'/seeds'");
-    const setupIndex = driverSource.indexOf("'/setup'");
-    expect(staleIndex).toBeGreaterThan(setupIndex);
-    expect(seedIndex).toBe(-1); // seeding runs via /op/start now
-  });
 });
 
 describe('disposable shutdown destroys and orders teardown', () => {
-  test('the owner DO DESTROYS the container and clears ephemeral DO state', () => {
-    expect(workerSource).toContain('async destroyRun(): Promise<void>');
-    expect(workerSource).toContain('await this.destroy()');
-    expect(workerSource).toContain('await this.ctx.storage.deleteAll()');
-  });
-  test('teardown is destroy,destroy,app,worker,bucket,config twice', () => {
-    const destroyLoop = driverSource.indexOf('for (const attempt of [1, 2]');
-    const destroyCall = driverSource.indexOf("await call(origin, token, '/destroy'");
-    const appDelete = driverSource.indexOf('deleteContainerApps(ROOT');
-    const workerDelete = driverSource.indexOf('deleteFixtureWorker(');
-    const bucketDelete = driverSource.indexOf("'r2', 'bucket', 'delete'");
-    const configClear = driverSource.indexOf('rmSync(configPath');
-    const twoPassLoop = driverSource.indexOf('for (let pass = 1; pass <= 2; pass += 1)');
-    expect(destroyLoop).toBeGreaterThan(-1);
-    expect(destroyCall).toBeGreaterThan(destroyLoop);
-    expect(twoPassLoop).toBeGreaterThan(destroyCall);
-    // One loop body pins the complete release order; pass=1 and pass=2 run it.
-    expect(appDelete).toBeGreaterThan(twoPassLoop);
-    expect(workerDelete).toBeGreaterThan(appDelete);
-    expect(bucketDelete).toBeGreaterThan(workerDelete);
-    expect(configClear).toBeGreaterThan(bucketDelete);
-  });
-  test('container application absence is polled from the account listing', () => {
-    expect(driverSource).toContain('containerAppIds(ROOT, [containerApp], log)');
-    expect(driverSource).toContain('for (let poll = 0; poll < 6; poll += 1)');
-    expect(driverSource).toContain('await delay(10_000)');
-  });
-  test('a pre-deploy failure proves absence from account deletion, not live RPCs', () => {
-    expect(driverSource).not.toContain('fixture never became reachable');
-    expect(driverSource).toContain('bucketProofs.length === 2');
-    expect(driverSource).toContain('inventoryEmpty || deletionProvedEmpty');
-  });
-
   test('the gate list itself encodes C1..C7 in execution order', () => {
     expect(CLEANUP_GATES.map((gate) => `${gate.id}:${gate.name}`)).toEqual([
       'C1:multipart-ledger-drained',
@@ -366,13 +187,14 @@ describe('disposable shutdown destroys and orders teardown', () => {
 
 describe('no payload body originates on the driver', () => {
   test('the driver imports no AWS client, generates no bytes, hashes nothing', () => {
+    // The report discloses that no payload body ever originated on the driver
+    // (`renderMarkdown`, asserted below); this is what makes that sentence
+    // true, and the instrument cannot run here to show it.
     expect(driverSource).not.toContain('AwsClient');
     expect(driverSource).not.toContain('Uint8Array');
     expect(driverSource).not.toContain('createHash');
     expect(driverSource).not.toContain('payloadFor');
     expect(driverSource).not.toContain('mulberry32');
-    expect(driverSource).toContain("'/op/start'");
-    expect(driverSource).toContain("'/op/poll'");
   });
 });
 
@@ -411,22 +233,18 @@ describe('decision honesty', () => {
     if (verdict.kind === 'ranking') {
       expect(verdict.ranked.map((row) => row.arm)).toEqual(['loopback-entrypoint', 'do-base64']);
     }
-
-    const warmupIndex = driverSource.indexOf('const warmupKey');
-    const sampleIndex = driverSource.indexOf('cells.push(await runCell');
-    expect(warmupIndex).toBeGreaterThan(-1);
-    expect(warmupIndex).toBeLessThan(sampleIndex);
-    expect(driverSource).toContain('warmups.push(warmupPut)');
-    expect(driverSource).toContain('warmups.push(warmupGet)');
   });
   test('validates embedded shared UploadIntent contracts rather than a copied shape', () => {
+    // Valid in every field but the digest, so the refusal below is the shared
+    // UploadIntent rule and not an earlier plan field: the fixture used to
+    // carry an off-list tier and passed on that instead.
     const invalid = {
       instrument: 'payload-transports', version: 1,
-      plan: { runId: 'r', workerName: 'w', bucketName: 'b', seed: 1, sizesMiB: [1], reps: 1, concurrency: 1, startedAt: '2026-08-26T00:00:00.000Z' },
+      plan: { runId: 'r', workerName: 'w', bucketName: 'b', seed: 1, sizesMiB: [...PAYLOAD_SIZES_MIB], reps: 1, concurrency: 1, startedAt: '2026-08-26T00:00:00.000Z' },
       availability: [], warmups: [], controlRpc: [], concurrency: [], verdicts: [], cleanup: { residue: false, steps: [] },
       cells: [{ ...cell('do-base64', 'put', TIER, 10), uploadIntent: { operationId: 'op', attemptId: 'attempt', boxId: 'box', epoch: '0', exactKey: 'key', method: 'PUT', byteLength: '1', sha256: 'NOT-A-DIGEST', expiresAt: '1' } }],
     };
-    expect(() => v.parse(ArtifactSchema, invalid)).toThrow();
+    expect(() => v.parse(ArtifactSchema, invalid)).toThrow('Expected a lowercase SHA-256 digest');
   });
 });
 

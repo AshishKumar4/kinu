@@ -218,7 +218,12 @@ describe('the capture soundness model', () => {
       ...sparseCapture,
       entries: [{ path: 'f', kind: 'file', mode: 0o644, ino: 1, content: { kind: 'dense', bytes: logical } }],
     };
-    expect(manifestSha256(sparseCapture)).toBe(manifestSha256(denseCapture));
+    // The approval digest for these logical bytes. Both representations hash
+    // to it, so a sparse encoder that hashed run metadata instead of logical
+    // bytes fails here rather than agreeing with itself.
+    const logicalDigest = 'c7d78df5288e4453458959896dc1f8a1a69ad0202ace5f021415014ff860477b';
+    expect(manifestSha256(sparseCapture)).toBe(logicalDigest);
+    expect(manifestSha256(denseCapture)).toBe(logicalDigest);
 
     const log = new MutationLog();
     await log.perform({ op: 'write', path: 'hole', content: sparse(2 ** 40, []) });
@@ -228,14 +233,16 @@ describe('the capture soundness model', () => {
       generation: log.generation,
       entries: log.paths().map((path) => log.entryOf(path)!),
     };
-    expect(() =>
-      toCapturedCut(log.entries, capture, {
-        captureId: 'sparse-hole',
-        epoch: '3',
-        baseRevision: '11',
-        stableStageHandle: 'stage-9',
-      }),
-    ).not.toThrow();
+    // A 2**40 hole stages no bytes. The call completes and publishes the
+    // capture it audited, not the allocation the size suggests.
+    const sparseAudited = toCapturedCut(log.entries, capture, {
+      captureId: 'sparse-hole',
+      epoch: '3',
+      baseRevision: '11',
+      stableStageHandle: 'stage-9',
+    });
+    expect(sparseAudited.capturedCut.cut).toBe(String(log.lastSeq));
+    expect(sparseAudited.capturedCut.manifestSha256).toBe(manifestSha256(capture));
   });
 
   test('an AuditedCapture snapshot is immune to later mutation of its source buffers', async () => {
@@ -326,7 +333,8 @@ describe('the capture soundness model', () => {
       generation: log.generation,
       entries: log.paths().map((p) => log.entryOf(p)!),
     };
-    expect(() => toCapturedCut(log.entries, base, identity)).not.toThrow();
+    const published = toCapturedCut(log.entries, base, identity);
+    expect(published.capturedCut.cut).toBe(String(log.lastSeq));
 
     // A missing ancestor is rejected, never synthesized.
     const missingDir: Capture = {

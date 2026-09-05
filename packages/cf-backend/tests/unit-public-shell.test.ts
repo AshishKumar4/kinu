@@ -103,8 +103,6 @@ function shippedBlock(style: string, selector: string) {
   );
 }
 
-const UI_FONT_PATH = '/assets/fonts/schibsted-latin-var.woff2';
-const MONO_FONT_PATH = '/assets/fonts/fragmentmono-latin.woff2';
 
 describe('public shell tokens are the app palette', () => {
   const style = shippedStyle();
@@ -194,13 +192,16 @@ describe('public shell tokens are the app palette', () => {
   });
 
   test.each([
-    [UI_FONT_PATH, 50_000],
-    [MONO_FONT_PATH, 30_000],
-  ])('%s is a real woff2 latin subset inside its byte budget', (path, budget) => {
+    ['Schibsted Grotesk', 50_000],
+    ['Fragment Mono', 30_000],
+  ])('%s is a real woff2 latin subset inside its byte budget', (family, budget) => {
     // 46,752 B Schibsted [wght] latin, 25,224 B Fragment Mono latin. The
     // budgets refuse the full-axes builds and any unsubset swap; the licence
     // must travel with the files because OFL requires it.
-    const file = resolve(import.meta.dir, '../public', '.' + path);
+    const page = publicPage({ title: 't', body: '' });
+    const face = new RegExp(`@font-face\\{font-family:"${family}";src:url\\("([^"]+)"\\)`).exec(page);
+    if (face?.[1] === undefined) throw new Error(`no @font-face for ${family} in the shell`);
+    const file = resolve(import.meta.dir, '../public', `.${face[1]}`);
     const bytes = readFileSync(file);
     expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe('wOF2');
     expect(bytes.byteLength).toBeLessThanOrEqual(budget);

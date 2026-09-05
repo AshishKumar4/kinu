@@ -19,7 +19,9 @@ import {
   FEEDBACK_FIELDS,
   FEEDBACK_MAX_NOTE_CHARS,
   FEEDBACK_MAX_REQUEST_BYTES,
+  FEEDBACK_MAX_ROUTE_CHARS,
   FEEDBACK_MAX_SCREENSHOT_BYTES,
+  FEEDBACK_MAX_USER_AGENT_CHARS,
   type FeedbackRecord,
 } from '../src/feedback/contract';
 
@@ -544,8 +546,8 @@ describe('what the endpoint stores', () => {
     request.headers.set('user-agent', 'u'.repeat(900));
     await routeFeedback(request, ME, rec.deps);
     expect(rec.rows[0]?.note.length).toBe(FEEDBACK_MAX_NOTE_CHARS);
-    expect(rec.rows[0]?.route.length).toBe(512);
-    expect(rec.rows[0]?.userAgent?.length).toBe(512);
+    expect(rec.rows[0]?.route.length).toBe(FEEDBACK_MAX_ROUTE_CHARS);
+    expect(rec.rows[0]?.userAgent?.length).toBe(FEEDBACK_MAX_USER_AGENT_CHARS);
   });
 
   test('an absent workspace field is null rather than an empty string', async () => {

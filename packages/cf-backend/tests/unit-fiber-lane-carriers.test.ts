@@ -12,21 +12,17 @@
  * ITS WORK to that seam.
  */
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
 import {
   ADVISOR_LANE_FIBER, EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
   TERMINAL_LANE_FIBER, classifyRecoveredFiber, type FiberLaneTransports,
 } from '../src/fiber-recovery';
+import { BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME, recoveryBackoffMs } from '@kinu.run/core';
 
-/** Mirrors the module-private lane name and the shared backoff curve; drift
- *  fails these tests, which is the point. The curve moved to core on
- *  2026-09-04 (`@kinu.run/core` → `utils/recovery-backoff`) when the job
- *  runner became its third caller; it stays a MIRROR here rather than an
- *  import, so a change to it has to be made twice on purpose. */
-const FORK_NOTICE_LANE_FIBER = 'fork:notice';
-const noticeBackoffMs = (attempts: number): number =>
-  Math.min(1000 * 2 ** Math.min(attempts, 6), 60_000); // mirrors recoveryBackoffMs
-import { BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME } from '@kinu.run/core';
+/** The carrier half of a classification verdict, read from the module's own
+ *  answer rather than restated beside it. */
+const LaneSnapshotSchema = v.object({ lane: v.string(), redrive: v.string() });
 
 function recordingTransports() {
   const redriven: string[] = [];
@@ -119,19 +115,23 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
     // The checkpoint IS the signal — everything the replay needs crossed into
     // the fiber row before the reconcile returned — and the producer's
     // idempotency key is what makes a replay of a landed delivery collide.
+    // The lane name below is the classifier's address. The carrier it names is
+    // read from the verdict, never restated.
     const scene = recordingTransports();
     const signal = {
       kind: 'fork_interrupted', text: 'the fork was retired',
       idempotencyKey: 'fork-interrupted:root-1',
     };
-    const verdict = classifyRecoveredFiber(scene.transports, fiber(FORK_NOTICE_LANE_FIBER, signal));
+    const verdict = classifyRecoveredFiber(scene.transports, fiber('fork:notice', signal));
     expect(verdict.status).toBe('completed');
-    expect(scene.redriven).toEqual([FORK_NOTICE_LANE_FIBER]);
-
+    if (verdict.status !== 'completed') throw new Error('expected the fork-notice lane to classify completed');
+    const snapshot = v.parse(LaneSnapshotSchema, verdict.snapshot);
+    expect(snapshot.redrive).toBe('signal-delivery');
+    expect(scene.redriven).toEqual([snapshot.lane]);
     // A checkpoint that will not parse has no fact left to announce: terminal,
     // not a poison row that re-enters for a day.
     const garbage = recordingTransports();
-    expect(classifyRecoveredFiber(garbage.transports, fiber(FORK_NOTICE_LANE_FIBER, null)).status)
+    expect(classifyRecoveredFiber(garbage.transports, fiber('fork:notice', null)).status)
       .toBe('error');
     expect(garbage.redriven).toEqual([]);
   });
@@ -149,7 +149,7 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
       redrive: (lane, _checkpoint, body) => { scene.redriven.push(lane); bodies.push(body); },
     };
     const signal = { kind: 'fork_interrupted', text: 'retired', idempotencyKey: 'k' };
-    classifyRecoveredFiber(scene.transports, fiber(FORK_NOTICE_LANE_FIBER, signal));
+    const verdict = classifyRecoveredFiber(scene.transports, fiber('fork:notice', signal));
 
     // Drain the dispatch chain the way the carrier would: run each body as it
     // is dispatched. The first attempt is refused and re-dispatches; the
@@ -158,18 +158,22 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
       const body = bodies.shift();
       if (body) await body();
     }
-    expect(scene.redriven).toEqual([FORK_NOTICE_LANE_FIBER, FORK_NOTICE_LANE_FIBER]);
+    // Both dispatches ride the lane the verdict named — a retry under any
+    // other lane would re-enter the wrong arm after an eviction.
+    if (verdict.status !== 'completed') throw new Error('expected the fork-notice lane to classify completed');
+    const lane = v.parse(LaneSnapshotSchema, verdict.snapshot).lane;
+    expect(scene.redriven).toEqual([lane, lane]);
   });
 
   test('a deterministic enqueue failure is paced by capped backoff, never a row storm', () => {
     // Attempts are UNBOUNDED on purpose — a cap that gives up loses the
-    // notice — so the runaway protection is the PACE: exponential to a 60 s
-    // ceiling, resumed from the checkpoint's own attempt count after an
-    // eviction.
-    expect(noticeBackoffMs(1)).toBe(2000);
-    expect(noticeBackoffMs(6)).toBe(60_000);
-    expect(noticeBackoffMs(50)).toBe(60_000);
-
+    // notice — so the runaway protection is the PACE. The shared curve is
+    // pinned at its definition: the fork-notice sleep, the job runner's resume
+    // deferral and every other paced retry read this one function, so a change
+    // to it is a change to all of them and fails here on purpose.
+    expect(recoveryBackoffMs(1)).toBe(2000);
+    expect(recoveryBackoffMs(6)).toBe(60_000);
+    expect(recoveryBackoffMs(50)).toBe(60_000);
     // And the attempt count rides the checkpoint: a recovered fifth attempt
     // re-dispatches as the fifth — the body sleeps ITS OWN backoff before
     // delivering, so an eviction mid-backoff cannot skip the pacing.
@@ -179,7 +183,7 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
       ...scene.transports,
       redrive: (lane, checkpoint) => { scene.redriven.push(lane); checkpoints.push(checkpoint); },
     };
-    classifyRecoveredFiber(scene.transports, fiber(FORK_NOTICE_LANE_FIBER, {
+    classifyRecoveredFiber(scene.transports, fiber('fork:notice', {
       kind: 'fork_interrupted', text: 'retired', idempotencyKey: 'k', attempts: 5,
     }));
     expect(checkpoints).toMatchObject([{ attempts: 5 }]);

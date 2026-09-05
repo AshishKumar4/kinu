@@ -145,10 +145,11 @@ describe('settled winner', () => {
 
 describe('size scales', () => {
   test('radius grows with visits and stays inside its bracket', () => {
-    expect(nodeRadius(0, 20)).toBeCloseTo(nodeRadius(0, 0), 5);
-    expect(nodeRadius(20, 20)).toBeCloseTo(NODE_R_MAX, 5);
-    expect(nodeRadius(5, 20)).toBeGreaterThan(nodeRadius(1, 20));
-    expect(nodeRadius(5, 20)).toBeLessThan(nodeRadius(20, 20));
+    // Hand-derived from the area scale. A broken formula fails these literals.
+    expect(nodeRadius(0, 20)).toBe(3.5);
+    expect(nodeRadius(20, 20)).toBe(NODE_R_MAX);
+    expect(nodeRadius(1, 20)).toBeCloseTo(5.17705, 5);
+    expect(nodeRadius(5, 20)).toBeCloseTo(7.25, 5);
   });
 
   test('area, not diameter, tracks visits', () => {
@@ -157,15 +158,15 @@ describe('size scales', () => {
     const full = nodeRadius(20, 20) - nodeRadius(0, 20);
     expect(full / quarter).toBeCloseTo(2, 5);
   });
-
   test('an unvisited tree does not divide by zero', () => {
-    expect(nodeRadius(0, 0)).toBeLessThan(nodeRadius(1, 1));
-    expect(linkWidth(0, 0)).toBeGreaterThan(0);
+    expect(nodeRadius(0, 0)).toBe(3.5);
+    expect(nodeRadius(1, 1)).toBe(NODE_R_MAX);
+    expect(linkWidth(0, 0)).toBe(0.7);
   });
 
   test('visits beyond the maximum cannot blow the scale out', () => {
     expect(nodeRadius(999, 20)).toBeCloseTo(NODE_R_MAX, 5);
-    expect(linkWidth(999, 20)).toBeCloseTo(linkWidth(20, 20), 5);
+    expect(linkWidth(999, 20)).toBeCloseTo(4.5, 5);
   });
 
   test('maxVisits reads the busiest node anywhere in the tree', () => {

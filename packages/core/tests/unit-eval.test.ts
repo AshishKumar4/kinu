@@ -37,7 +37,7 @@ describe('eval corpus parsing', () => {
 
   test('throws on schema-invalid case', () => {
     expect(() => parseCorpus('{"task":"missing id"}\n'))
-      .toThrow();
+      .toThrow('Eval corpus line 1: Invalid key: Expected "id" but received undefined');
   });
 });
 

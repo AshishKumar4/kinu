@@ -14,6 +14,7 @@ import {
 } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
 import type { TurnRunRecorder } from '../src/orchestrator/turn-lifecycle';
+import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 
 function recorder(): RunEventRecorder {
   const db = new Database(':memory:');
@@ -179,9 +180,17 @@ describe('openTurnRun / closeTurnRun', () => {
   });
 
   test('a recorder failure never throws into the turn', () => {
-    const broken: TurnRunRecorder = { emit: () => { throw new Error('db locked'); } };
-    expect(() => openTurnRun(broken, 'r', { agentId: 'a', causedBy: 'chat', userMessage: 'm', turnIndex: 0 })).not.toThrow();
-    expect(() => closeTurnRun(broken, 'r', { turnIndex: 0, reason: 'completed' })).not.toThrow();
+    const logger = createRecordingLogger();
+    const restore = setDiagnosticsSink(logger);
+    try {
+      const broken: TurnRunRecorder = { emit: () => { throw new Error('db locked'); } };
+      expect(() => openTurnRun(broken, 'r', { agentId: 'a', causedBy: 'chat', userMessage: 'm', turnIndex: 0 })).not.toThrow();
+      expect(() => closeTurnRun(broken, 'r', { turnIndex: 0, reason: 'completed' })).not.toThrow();
+    } finally {
+      restore();
+    }
+    // The failure reaches diagnostics: a lost history row stays visible.
+    expect(logger.emitted.map((line) => line.event)).toEqual(['turn.start_events_failed', 'turn.end_events_failed']);
   });
 
 describe('turn_end workMode — the durable GEPA-cadence field', () => {

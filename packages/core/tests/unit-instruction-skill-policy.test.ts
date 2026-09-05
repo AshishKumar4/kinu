@@ -68,7 +68,10 @@ describe('skill trust binds raw policy source', () => {
     });
     expect(demoted.active[0]?.trust).toBe('unverified');
     expect(demoted.active[0]?.allowed_tools).toEqual(['run']);
-    expect(instructionDigest(POLICY_CHANGED)).not.toBe(instructionDigest(REVIEWED));
+    // Known answers. Each digest is the platform sha256 over the documented
+    // serialization, worked out without calling the function under test.
+    expect(instructionDigest(REVIEWED)).toBe('e0919db09d4f769f92f0e140d20cc0e81b49e6335e167138d6794c2adf60300e');
+    expect(instructionDigest(POLICY_CHANGED)).toBe('a283e38e69b61ca7d1bf8bd891dd6f4d1cb56e5b13b85ed1d6ec68bfb7d280ad');
   });
 
   test('the raw source, including front matter, is what the resolver receives', async () => {

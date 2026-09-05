@@ -31,6 +31,7 @@ import {
   profileCatalogDigest,
   BUILTIN_PROFILE_CATALOG,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
+  TIER_IDS,
   type CodemodeProvider,
   type JsonValue,
   type ProfileCatalog,
@@ -702,12 +703,14 @@ describe('agents surface — one action-field source', () => {
     }
   });
 
-  test('the swarm member carries `name` — the drift that was measured', () => {
+  test('the swarm member carries `name` — the drift that was measured', async () => {
     const types = createAgentsCodemodeProvider(fullDeps).types ?? '';
     const swarm = types.slice(types.indexOf('swarm(input:'), types.indexOf('hire(input:'));
     expect(swarm).toContain('name?: string;');
     expect(swarm).toContain('role?: string;');
-    expect(swarm).toContain('tier?: "tiny" | "fast" | "default" | "slow" | "deep";');
+    // Derived, like the preset union above: a tier the catalog gains must reach
+    // the sandbox declaration, or scripts cannot name it.
+    expect(swarm).toContain(`tier?: ${TIER_IDS.map((tier) => `"${tier}"`).join(' | ')};`);
   });
 
   test('the native tool schema advertises the same per-action fields it parses', () => {

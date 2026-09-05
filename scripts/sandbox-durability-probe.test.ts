@@ -90,11 +90,13 @@ describe('sandbox durability evidence', () => {
 
     const path = await persistDurabilityArtifact(root, artifact);
 
+    // The product keeps the first write with link(2). Its refusal arrives as
+    // EEXIST, and any other failure would mean the evidence path itself broke.
     await expect(persistDurabilityArtifact(root, {
       ...artifact,
       outcome: 'failed',
       failure: 'a later attempt failed',
-    })).rejects.toThrow();
+    })).rejects.toThrow(/EEXIST/);
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(artifact);
   });
 
@@ -131,6 +133,7 @@ describe('sandbox durability evidence', () => {
   });
 
   test('refuses a run id that could write outside the artifact root', () => {
-    expect(() => durabilityArtifactPath('/tmp/artifacts', '../outside')).toThrow('safe artifact id');
+    expect(() => durabilityArtifactPath('/tmp/artifacts', '../outside'))
+      .toThrow('safe artifact id required, got "../outside"');
   });
 });

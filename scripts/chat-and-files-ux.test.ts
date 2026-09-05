@@ -618,12 +618,6 @@ describe('large tool runs, as the activity timeline draws them', () => {
 });
 
 describe('a turn the harness wrote, as the browser attributes it', () => {
-  test('it measures something — every addressed row is on the page', () => {
-    for (const id of [LEGACY_FORK_ROW, STAMPED_GATE_ROW, TYPED_ROW, DRAIN_ROW]) {
-      expect(observed.chat[id]).toBeDefined();
-    }
-  });
-
   test('the owner\'s own message is still the owner\'s bubble, pushed right', () => {
     // The denominator. Without it, a change that turned EVERY row into an event
     // card would satisfy every assertion below.

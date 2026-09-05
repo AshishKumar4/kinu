@@ -252,12 +252,15 @@ export function readCredential(read: () => string): string | null {
   try { return read(); } catch (error) { log.warn('no'); return null; }
 }
 `;
+    // States the key the lock holds for this site. A format change, a lost sink
+    // tag, or a moved anchor reads differently here.
+    const KEY = 'logged_default/wire a.ts#readCredential';
     const [before] = auditFile('a.ts', body);
     const [after] = auditFile('a.ts', `// a comment nobody read\n${body}`);
-    expect(before).toBeDefined();
-    expect(after).toBeDefined();
-    expect(after!.line).toBe(before!.line + 1);
-    expect(keyOf(after!)).toBe(keyOf(before!));
+    expect(before?.line).toBe(3);
+    expect(after?.line).toBe(4);
+    expect(before === undefined ? 'no site before the edit' : keyOf(before)).toBe(KEY);
+    expect(after === undefined ? 'no site after the edit' : keyOf(after)).toBe(KEY);
   });
 
   test('the live corpus is the one no-swallow measures, and it is not empty', () => {

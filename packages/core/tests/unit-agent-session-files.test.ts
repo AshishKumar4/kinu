@@ -317,9 +317,6 @@ describe('a publication that never happens leaves the previous file', () => {
  * of a race nobody can see.
  */
 describe('a plane with no compare-and-write says so, once, in one voice', () => {
-  const CANNOT_PROTECT =
-    'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.';
-
   test('neither session plane declares a conditional write', () => {
     const rail = session();
     expect(nimbusSessionFiles(rail.box, CRED).writeFileIfRevision).toBeUndefined();
@@ -335,7 +332,7 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
       router, 'workspace', TARGET, new TextEncoder().encode('the replacement'), 3,
     );
 
-    expect(refused).toEqual({ unsupported: true, error: CANNOT_PROTECT });
+    if (!('unsupported' in refused)) throw new Error('expected the unsupported refusal');
     expect(bytesOf(origin.files.get(TARGET))).toBe('the previous file');
   });
 
@@ -355,11 +352,18 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
     const rail = session({ seed: { '/home/user/notes.md': 'editable text' } });
     const router = lookupFor(nimbusSessionFiles(rail.box, CRED));
 
+    // One voice: the reason the viewer hands out is the same string a refused
+    // save states — read off the module on both sides, copied on neither.
+    const refused = await writeExecutorFileOp(
+      router, 'workspace', '/home/user/notes.md', new TextEncoder().encode('an edit'), 7,
+    );
+    if (!('unsupported' in refused)) throw new Error('expected the unsupported refusal');
+
     const viewed = await readExecutorFile(router, 'workspace', '/home/user/notes.md');
 
     expect(viewed.content).toBe('editable text');
     expect(viewed.revision).toBeUndefined();
-    expect(viewed.readOnlyReason).toBe(CANNOT_PROTECT);
+    expect(viewed.readOnlyReason).toBe(refused.error);
   });
 });
 

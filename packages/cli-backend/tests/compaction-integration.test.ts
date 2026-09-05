@@ -214,7 +214,7 @@ describe('default compaction over the real storage plane', () => {
     // The reference message cites the transcript path the plan persisted.
     const snapshot = await state.plans.load(SESSION);
     if (!snapshot) throw new Error('expected a persisted plan snapshot');
-    expect(snapshot.transcriptRelativePath.startsWith('.kinu/compaction/')).toBe(true);
+    expect(snapshot.transcriptRelativePath).toStartWith('.kinu/compaction/');
     expect(plannedJson).toContain(snapshot.transcriptRelativePath);
 
     // Durable persistence is a real row in agent.db, not memory.

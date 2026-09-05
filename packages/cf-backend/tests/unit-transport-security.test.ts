@@ -31,7 +31,6 @@ const PREVIEW_HOST = `3000-workspace-tok.${APP_HOST}`;
  *  the preview suffix. Proves the upgrade and the pin follow what this
  *  deployment declares itself to be, not any host that arrives encrypted. */
 const FOREIGN_HOST = 'unrelated.example.net';
-const HSTS = 'max-age=31536000; includeSubDomains';
 
 function harness(assetResponse: () => Response) {
   const assetRequests: string[] = [];
@@ -106,14 +105,16 @@ describe('HTTPS responses are pinned', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('strict-transport-security')).toBe(HSTS);
+    expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains');
     expect(response.headers.get('strict-transport-security')).not.toContain('preload');
     expect(await response.text()).toBe('console.log(1)');
   });
 
-  test('includeSubDomains reaches preview hosts, because they are subdomains of the app host', () => {
+  test('includeSubDomains reaches preview hosts, because they are subdomains of the app host', async () => {
     expect(PREVIEW_HOST.endsWith(`.${APP_HOST}`)).toBe(true);
-    expect(HSTS).toContain('includeSubDomains');
+    const { env, ctx } = harness(script);
+    const response = await worker.fetch(new Request(`https://${PREVIEW_HOST}/`), env, ctx);
+    expect(response.headers.get('strict-transport-security')).toContain('includeSubDomains');
   });
 
   test('a 101 upgrade is returned untouched', async () => {
@@ -160,8 +161,8 @@ describe('the preview route still runs before app auth', () => {
     // servePreviewRequest returns through containPreviewResponse, so
     // containment is the invariant worth asserting here.
     expect(response.headers.get('content-security-policy')).toStartWith('sandbox ');
+    expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains');
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');
-    expect(response.headers.get('strict-transport-security')).toBe(HSTS);
     // Never the SPA: the preview host must not reach app auth or app assets.
     expect(assetRequests).toEqual([]);
   });

@@ -74,7 +74,7 @@ describe('AgentProviderRegistry composition', () => {
     }
     // The two directions that used to break, stated as themselves: raw parsing
     // throws on the bare id and mis-keys the bare `@cf/…`.
-    expect(() => parseModelSpec('gpt-5.5')).toThrow();
+    expect(() => parseModelSpec('gpt-5.5')).toThrow(/expected "<provider>\/<modelId>"/);
     expect(parseModelSpec('@cf/moonshotai/kimi-k2.6').provider).toBe('@cf');
     expect(reg.registry.get('@cf')).toBeUndefined();
   });
@@ -230,7 +230,7 @@ describe('default provider with a null UserDO stub (inline-branch context)', () 
     expect(await availability(usable)).toBe(true);
     expect(usable.normalizeSpecSync(null)).toStartWith('ai-gateway/');
     expect(await availability(unusable)).toBe(false);
-    expect(() => unusable.normalizeSpecSync(null)).toThrow();
+    expect(() => unusable.normalizeSpecSync(null)).toThrow(/Workers AI binding \(env\.AI\) missing/);
   });
 
   test('throws loudly when no usable provider exists', () => {

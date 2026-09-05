@@ -140,7 +140,7 @@ describe('what the seal makes of each of those turns', () => {
   it('a turn that reached its own end carries no pending work into the seal', async () => {
     const observed = await driveTurn(env.UNBOUNDED_TURN_PROBE, 'unbounded-2');
 
-    expect(observed.lastFinishReason).not.toBe(TOOL_CALLS_PENDING);
+    expect(observed.lastFinishReason).toBe('stop');
     expect(classifyRunEnd({
       completed: true,
       interrupted: false,

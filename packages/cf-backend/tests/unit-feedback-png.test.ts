@@ -43,6 +43,14 @@ function png(...chunks: number[][]): Uint8Array {
   return new Uint8Array([...SIGNATURE, ...chunks.flat()]);
 }
 
+test('the fixture checksum answers the published CRC-32 check value', () => {
+  // Anchors this file's independent implementation to an external answer, so
+  // a matching bug on both sides cannot mask a broken product checksum.
+  // Computed apart from this file: printf '123456789' | python3 -c
+  // 'import binascii,sys; print(binascii.crc32(sys.stdin.buffer.read()))'.
+  expect(crc32(new TextEncoder().encode('123456789'))).toBe(0xCBF43926);
+});
+
 /** IDAT bytes are never decoded by the sanitiser — it rewrites the chunk stream
  *  — so an opaque payload is exactly what the unit under test sees. */
 const PIXELS = chunk('IDAT', [0x78, 0x9c, 0x01, 0x02, 0x03]);

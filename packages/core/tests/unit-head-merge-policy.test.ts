@@ -128,7 +128,7 @@ describe('the head merge resolves one route, one effort, one spend label', () =>
       'not json at all', async () => mergePolicyProfile(),
     );
 
-    await expect(mergeLLM('merging the findings', MergeOutputSchema)).rejects.toThrow();
+    await expect(mergeLLM('merging the findings', MergeOutputSchema)).rejects.toThrow('no JSON object in model output');
 
     // The call COMPLETED and was billed; rejecting its output is the
     // controller's fallback path, not this frame's failure.

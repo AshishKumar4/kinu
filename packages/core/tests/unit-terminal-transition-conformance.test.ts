@@ -507,8 +507,9 @@ function claimState(snap: Snapshot): Record<string, string | null> {
   return Object.fromEntries(snap.claims.map((row) => [row.call, row.result]));
 }
 
-const TERMINAL_CLAIM_CALL = `terminal:response:${TRANSITION.messageId}`;
-const SETTLED = '"settled"';
+const TERMINAL_CLAIM_CALL = `${TERMINAL_TRANSITION_CALL_ID}:${TRANSITION.messageId}`;
+// The stored result is the JSON encoding of the string 'settled'.
+const SETTLED = JSON.stringify('settled');
 
 /** Every declared effect ran exactly once, and wrote exactly one output. */
 const RAN_ONCE: Record<string, number> = Object.fromEntries(SEQUENCE.map((name) => [K(name), 1]));

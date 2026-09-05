@@ -120,7 +120,8 @@ describe('the CHECK widening', () => {
     )`);
     recordLesson(sql, { turnIds: ['t1'], text: 'old lesson', source: 'turn_reflection', status: 'provisional' });
     // On the narrow table the new source is refused by the CHECK itself.
-    expect(() => recordRecoveryFinding(sql, finding())).toThrow();
+    expect(() => recordRecoveryFinding(sql, finding()))
+      .toThrow("CHECK constraint failed: source IN ('turn_reflection','session_reflection')");
 
     initTurnOutcomeTables(makeExecRaw(db), sql);
     expect(recordRecoveryFinding(sql, finding())).toBe(true);
@@ -139,7 +140,7 @@ describe('the CHECK widening', () => {
 
     initTurnOutcomeTables(makeExecRaw(db), sql);
     expect(listLessons(sql).map((r) => r.text)).toContain('stranded');
-    expect(() => db.query('SELECT 1 FROM lessons_legacy').all()).toThrow();
+    expect(() => db.query('SELECT 1 FROM lessons_legacy').all()).toThrow('no such table: lessons_legacy');
   });
 });
 

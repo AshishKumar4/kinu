@@ -58,6 +58,8 @@ describe('clamped run output on the local backend', () => {
     // The host shell cannot: it is a different machine with a different
     // filesystem, which is exactly why the marker names workspace.readFile.
     const onHost = await run({ runtime: 'laptop', command: `grep FINAL-ERROR-LINE ${path}` });
-    expect(onHost).toContain('Error');
+    expect(onHost).toContain('Error (exit 2)');
+    expect(onHost).toContain('No such file or directory');
+    expect(onHost).not.toContain('FINAL-ERROR-LINE');
   });
 });

@@ -33,8 +33,10 @@ function store(scope = OWNER) {
 
 describe('instructionDigest', () => {
   test('binds the exact bytes — one character apart is a different digest', () => {
-    expect(instructionDigest('Use bun.')).toBe(instructionDigest('Use bun.'));
-    expect(instructionDigest('Use bun.')).not.toBe(instructionDigest('Use bun!'));
+    // Known answers. Each digest is the platform sha256 over the documented
+    // serialization, worked out without calling the function under test.
+    expect(instructionDigest('Use bun.')).toBe('18fed13b9d40c9e3e9f9a1e0f99d096f659aa6360c3362a2e5d65a28d2fe2e52');
+    expect(instructionDigest('Use bun!')).toBe('520e9a00614bb46dbfe43280180ca3eb7f2d50b3fc42c5308b3c3c8c6ae431c7');
   });
 
   test('is a full-length SHA-256, not a fast fingerprint', () => {
@@ -44,7 +46,8 @@ describe('instructionDigest', () => {
   });
 
   test('whitespace is content — an invisible edit still demotes', () => {
-    expect(instructionDigest('rule')).not.toBe(instructionDigest('rule '));
+    expect(instructionDigest('rule')).toBe('440cdbbc00cdd3d21ac5594e15591dbe8ac4b702009644815b3a1420db2b9143');
+    expect(instructionDigest('rule ')).toBe('08e33eeb1de3d31afad6493b8fb651f3f76bc1cd0911d136a337143f88e89546');
   });
 });
 

@@ -41,8 +41,9 @@ describe('hybridSearch', () => {
     const out = await hybridSearch('whatever', lexicalFn, vectorStore(semanticCorpus));
     expect(out[0].id).toBe('shared');
     expect([...out[0].sources].sort()).toEqual(['lexical', 'semantic']);
-    expect(out[0].lexicalScore).toBeDefined();
-    expect(out[0].semanticScore).toBeDefined();
+    // The fused hit keeps both sides' own numbers, read off the corpora above.
+    expect(out[0].lexicalScore).toBe(0.5);
+    expect(out[0].semanticScore).toBe(0.7);
   });
 
   test('lexical-only when vector store unavailable', async () => {

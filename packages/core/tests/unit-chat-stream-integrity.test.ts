@@ -119,7 +119,7 @@ describe('dead provider stream fails the turn', () => {
       '[DONE]',
     ]), { headers: SSE_HEADERS }));
     expect(threw).toBeNull();
-    expect(done).toBeDefined();
+    expect(done?.type).toBe('done');
   });
 });
 

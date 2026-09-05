@@ -344,7 +344,8 @@ describe('steeringConversion — every mechanical trigger', () => {
     // signal something is being trained against.
     const store = eventStore();
     emit(store.sql, 'run-a', 'turn_steering', { trigger: 'some_future_trigger', step: 1, converted: false });
-    expect(() => steeringConversion.score(store.sql)).toThrow();
+    expect(() => steeringConversion.score(store.sql))
+      .toThrow(/Invalid type: Expected \("repeated_call" \| "repeated_failure" \| "no_progress"\) but received "some_future_trigger"/);
     store.close();
   });
 

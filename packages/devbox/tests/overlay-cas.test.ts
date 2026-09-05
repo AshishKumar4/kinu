@@ -511,7 +511,11 @@ describe('the stored record is untrusted input', () => {
 
 describe('digest identity', () => {
   test('the same bytes produce the same hash, so a rename can reuse them', () => {
-    expect(sha256Hex(fileBytes('x'))).toBe(digestBytes(fileBytes('x')).hash);
+    // A known answer from `printf 'x' | sha256sum` guards the hash itself.
+    // Comparing two calls into this module lets a broken hash agree with itself.
+    expect(digestBytes(fileBytes('x')).hash).toBe(
+      '2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881',
+    );
     expect(digestBytes(fileBytes('x')).hash).not.toBe(digestBytes(fileBytes('y')).hash);
   });
 });

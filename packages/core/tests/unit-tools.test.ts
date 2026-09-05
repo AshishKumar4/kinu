@@ -229,8 +229,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { rt } = createTestRuntime();
     const t = tools(rt);
     for (const [, entry] of Object.entries(t)) {
-      expect(entry.description).toBeTruthy();
-      expect(entry.inputSchema).toBeTruthy();
+      expect(entry.description).toMatch(/\S/);
+      // Every schema arrives as a JSON Schema object the provider validates arguments against.
+      const schema = v.parse(v.object({ jsonSchema: v.object({ type: v.string() }) }), entry.inputSchema);
+      expect(schema.jsonSchema.type).toBe('object');
     }
   });
 

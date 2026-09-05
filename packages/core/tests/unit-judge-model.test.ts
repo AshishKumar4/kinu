@@ -28,12 +28,13 @@ describe('modelVendorFamily', () => {
     // Codex is OpenAI's own OAuth endpoint — judging GPT with GPT is not a
     // cross-family pair however the two are billed.
     expect(modelVendorFamily('codex/gpt-5.5')).toBe('openai');
-    expect(modelVendorFamily('codex/gpt-5.5')).toBe(modelVendorFamily('openai/gpt-5.5'));
   });
 
   test('two routes to the same build are the same family', () => {
-    expect(modelVendorFamily('workers-ai/@cf/moonshotai/kimi-k2.6'))
-      .toBe(modelVendorFamily('openrouter/moonshotai/kimi-k2.6'));
+    // Each route pinned to the literal family, so a provider-keyed reader
+    // that reports workers-ai for one route and openrouter for the other fails.
+    expect(modelVendorFamily('workers-ai/@cf/moonshotai/kimi-k2.6')).toBe('moonshotai');
+    expect(modelVendorFamily('openrouter/moonshotai/kimi-k2.6')).toBe('moonshotai');
   });
 });
 

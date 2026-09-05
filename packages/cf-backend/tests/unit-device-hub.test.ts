@@ -8,7 +8,7 @@ import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do'
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  DEVICE_TOOLCHAIN_TTL_MS, DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
+  DEVICE_CONNECT_PATH, DEVICE_TOOLCHAIN_TTL_MS, DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
   DEVICE_UNKNOWN_METHOD, TOOLCHAIN_PROBE_BINARIES,
   type JsonValue,
 } from '@kinu.run/core';
@@ -299,13 +299,33 @@ describe('/pc/connect upgrade wiring', () => {
     expect(pcHandler).toContain('.fetch(request)');
   });
 
-  test('the UserDO intercepts /pc/connect and verifies the ticket inside its own fetch', () => {
-    const userDO = read('src/user/user-do.ts');
-    expect(userDO).toContain('DEVICE_CONNECT_PATH,'); // imported from @kinu.run/core — the single wire-path home
-    expect(userDO).toContain('if (url.pathname === DEVICE_CONNECT_PATH) return this.acceptDeviceSocket(request, url)');
-    expect(userDO).toContain('await this.verifyDeviceConnectTicket(await ownerCaller(this.env), ticket)');
-    expect(userDO).toContain('return super.fetch(request)');
-    expect(userDO).not.toContain('attachDeviceSocket');
+  test('the UserDO answers /pc/connect itself and verifies the ticket before upgrading', async () => {
+    const harness = createTestUserDO();
+    const { token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
+    const owner = await testOwner();
+    const connect = (query: string, upgrade: boolean): Promise<Response> => harness.userDO.fetch(new Request(
+      `https://kinu.example.com${DEVICE_CONNECT_PATH}${query}`,
+      upgrade ? { headers: { Upgrade: 'websocket' } } : {},
+    ));
+
+    // The socket path answers itself: no upgrade header is a 426 from the
+    // accept, not a fall-through to the agent protocol.
+    expect((await connect('', false)).status).toBe(426);
+    // No ticket, or a forged one, is a 401 before any socket is accepted.
+    expect((await connect('', true)).status).toBe(401);
+    expect((await connect('?ticket=pct_forged', true)).status).toBe(401);
+    expect(harness.acceptedSockets).toHaveLength(0);
+
+    // A ticket the owner minted for this device upgrades the socket.
+    const issued = await harness.userDO.issueDeviceConnectTicket(owner, token);
+    if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
+    expect((await connect(`?ticket=${issued.ticket}`, true)).status).toBe(101);
+    expect(harness.acceptedSockets).toHaveLength(1);
+
+    // And the WS-over-RPC seam is gone: no such entry point exists to call.
+    expect('attachDeviceSocket' in harness.userDO).toBe(false);
+    await harness.joinFibers();
+    harness.close();
   });
 });
 

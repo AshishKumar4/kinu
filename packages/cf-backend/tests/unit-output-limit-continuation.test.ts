@@ -136,7 +136,7 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
     // A turn is RUNNING, so the real delivery seam buffers the continuation for
     // its next step instead of queueing a turn — and the step boundary is where
     // the model actually takes it in.
-    harness.agent.harnessMarkTurnInFlight();
+    harness.agent.declareTurnInFlight(true);
     const routed = await harness.agent.observeOrch().signals.deliver({
       kind: OUTPUT_CONTINUATION_EVENT, text: OUTPUT_CONTINUATION_TEXT,
     });

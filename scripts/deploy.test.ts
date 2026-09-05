@@ -1178,7 +1178,14 @@ describe("CLI distribution artifacts", () => {
       v.object({ version: v.string(), sha: v.string(), builtAt: v.string() }),
       JSON.parse(readFileSync(join(directory, "kinu-version.json"), "utf8")),
     );
-    expect(stamp.version).toMatch(/^0\.2\.0\+/);
+    // The base version read off the manifest rather than retyped: the literal
+    // this pinned had to be edited on every minor bump, beside the file that
+    // already declares it.
+    const manifest = v.parse(
+      v.object({ version: v.string() }),
+      JSON.parse(readFileSync(join(REPO_ROOT, "packages", "cli", "package.json"), "utf8")),
+    );
+    expect(stamp.version).toBe(`${manifest.version}+${stamp.sha}`);
 
     const version = Bun.spawnSync([process.execPath, "run", join(root, "cli.js"), "--version"], {
       cwd: root, env: freshHome(directory), stdout: "pipe", stderr: "pipe",

@@ -80,7 +80,9 @@ describe('the local driver lease', () => {
       expect(refusal.holder).toEqual({ pid: 201, kind: 'interactive' });
       // `unavailable`, not `denied`: the driver is taken, not forbidden.
       expect(refusal.refused.reason).toBe('unavailable');
-      expect(refusal.refused.error).toContain('201');
+      expect(refusal.refused.error).toBe(
+        'the interactive driver in process 201 is running this conversation; a daemon driver does not interrupt it',
+      );
       // The refusal changed nothing.
       expect(owner.held()).toBe(true);
     } finally {

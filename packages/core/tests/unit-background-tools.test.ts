@@ -68,9 +68,9 @@ function executeTool<Args>(tools: ToolSet, name: string) {
 
 describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are result-shaped', () => {
   test('BACKGROUNDABLE_TOOLS declares the completion axis: agents=spawn, run/execute_tools=result', () => {
-    expect(BACKGROUNDABLE_TOOLS['agents']?.completion).toBe('spawn');
-    expect(BACKGROUNDABLE_TOOLS['run']?.completion).toBe('result');
-    expect(BACKGROUNDABLE_TOOLS['execute_tools']?.completion).toBe('result');
+    expect(BACKGROUNDABLE_TOOLS.agents?.completion).toBe('spawn');
+    expect(BACKGROUNDABLE_TOOLS.run?.completion).toBe('result');
+    expect(BACKGROUNDABLE_TOOLS.execute_tools?.completion).toBe('result');
   });
 
   test('on the interactive surface, a fork detaches the instant it spawns — not after the 30s threshold', async () => {

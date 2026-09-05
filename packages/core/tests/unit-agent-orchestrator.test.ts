@@ -838,7 +838,9 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
     crafted.push('summarize');
     orch.beginTurn(Date.now());
     await runBlock(orch, 'return await tools.summarize(1)');
-    expect(orch.craft.snapshot()).not.toBeNull();
+    expect(orch.craft.snapshot()).toEqual({
+      crafted: [], invoked: ['summarize'], reused: [], returned: 1, raised: 0, dropped: [],
+    });
 
     orch.beginTurn(Date.now());
     expect(orch.craft.snapshot()).toBeNull();
@@ -855,6 +857,10 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
         toolName: 'run', args: { command: `x${i}` }, result: `Error: no ${i}`, success: false,
       });
     }
-    expect(orch.steering.steerFor({ stepNumber: 4, messages: [] })).not.toBeNull();
+    // Three failures on one tool with no success between fires the repeated_failure steer.
+    // It names the tool and the streak that fired it.
+    const steered = orch.steering.steerFor({ stepNumber: 4, messages: [] });
+    expect(steered).toMatchObject({ kind: 'turn_steering' });
+    expect(steered?.text).toContain('`run` has failed 3 times in a row');
   });
 });

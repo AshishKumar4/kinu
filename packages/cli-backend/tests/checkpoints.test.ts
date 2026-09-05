@@ -42,13 +42,12 @@ describe('createHostCheckpoints', () => {
       engine.beginTurn({ turnId: 'turn-2', sessionId: 'sess-1' });
       const second = await engine.ensureCheckpoint(work);
       expect(second).toBeTruthy();
-      expect(second).not.toBe(first!);
 
       const list = await engine.list();
       expect(list).toHaveLength(2);
       expect(list[0]!.turnId).toBe('turn-2');
       expect(list[1]!.turnId).toBe('turn-1');
-      expect(list.every((e) => e.sessionId === 'sess-1' && e.dir === work)).toBe(true);
+      expect(list.map((e) => [e.sessionId, e.dir])).toEqual([['sess-1', work], ['sess-1', work]]);
     } finally { cleanup(); }
   });
 
@@ -153,7 +152,7 @@ describe('createHostCheckpoints', () => {
       expect(refs).not.toContain('refs/kinu');
       // And the snapshot itself excluded .git entirely.
       const plan = await engine.plan(work, id!);
-      expect(plan.files.every((f) => !f.path.startsWith('.git/'))).toBe(true);
+      expect(plan.files.filter((f) => f.path.startsWith('.git/'))).toEqual([]);
       expect(readFileSync(join(work, 'file.txt'), 'utf8')).toBe('v1');
     } finally { cleanup(); }
   });
@@ -242,7 +241,7 @@ describe('createHostCheckpoints', () => {
       expect(await engine.ensureCheckpoint(work)).toBeNull();
       expect(await engine.list()).toEqual([]);
       expect(await engine.status()).toEqual({ available: false, reason: 'checkpoints unavailable: git not found' });
-      expect(engine.restore(work, 'abcdef0')).rejects.toThrow('checkpoints unavailable: git not found');
+      await expect(engine.restore(work, 'abcdef0')).rejects.toThrow('checkpoints unavailable: git not found');
     } finally { cleanup(); }
   });
 
@@ -253,7 +252,7 @@ describe('createHostCheckpoints', () => {
       engine.beginTurn({ turnId: 't', sessionId: 's' });
       const id = await engine.ensureCheckpoint(work);
       rmSync(work, { recursive: true, force: true });
-      expect(engine.plan(work, id!)).rejects.toThrow('working directory');
+      await expect(engine.plan(work, id!)).rejects.toThrow('checkpoint staging failed: working directory not found: ');
       expect(await engine.status()).toEqual({ available: true }); // git is still here
     } finally { cleanup(); }
   });

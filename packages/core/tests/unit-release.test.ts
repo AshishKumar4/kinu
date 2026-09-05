@@ -165,15 +165,15 @@ describe('release authority', () => {
   });
 
   test.each([
-    ['a non-github host', 'https://evil.example/kinu.git'],
-    ['a suffix that only looks like github', 'https://github.com.evil.example/kinu.git'],
-    ['plaintext http', 'http://github.com/o/r.git'],
-    ['credentials in the URL', 'https://user:pass@github.com/o/r.git'],
-  ])('a github binding refuses %s', (_label, repoUrl) => {
+    ['a non-github host', 'https://evil.example/kinu.git', /must be on github\.com/],
+    ['a suffix that only looks like github', 'https://github.com.evil.example/kinu.git', /must be on github\.com/],
+    ['plaintext http', 'http://github.com/o/r.git', /must be https/],
+    ['credentials in the URL', 'https://user:pass@github.com/o/r.git', /must not carry credentials/],
+  ])('a github binding refuses %s', (_label, repoUrl, pattern) => {
     // `apply` installs a github credential as an authorization header before
     // cloning this URL, so the URL is the destination of a secret.
     expect(() => store().upsertSourceBinding({ kind: 'github', label: 'src', repoUrl }))
-      .toThrow();
+      .toThrow(pattern);
   });
 
   test('a github binding accepts the provider it names', () => {

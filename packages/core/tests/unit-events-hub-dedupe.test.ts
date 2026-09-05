@@ -31,7 +31,10 @@ describe('dedupeKeyFor — webhook', () => {
   test('same body within same 5-min bucket → same key', () => {
     const e1 = base();
     const e2 = { ...base(), received_at: 1700000000000 + 60_000 };
-    expect(dedupeKeyFor(e1)).toBe(dedupeKeyFor(e2));
+    // Hand-derived from the key format: webhook:<id>:<sha256 of the canonical
+    // body, 24 hex>:<5-min bucket>. Both land in bucket 5666666.
+    expect(dedupeKeyFor(e1)).toBe('webhook:github-pr:ac46861d15eacef1faadbdba:5666666');
+    expect(dedupeKeyFor(e2)).toBe(dedupeKeyFor(e1));
   });
   test('different bodies → different keys', () => {
     const e1 = base();
