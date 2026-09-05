@@ -276,7 +276,7 @@ function DeploySection(): ReactElement {
   ] as const;
   const values = [
     ['Isolated workspaces', 'Each workspace owns its files and agents. Idle workspaces use no compute.'],
-    [`${String(STORAGE_GB)} GB file plane, each`, `Each paid-plan workspace stores up to ${String(STORAGE_GB)} GB of durable files and shell state (do.storage.bytes).`],
+    [`${String(STORAGE_GB)} GB file plane, each`, `Each paid-plan workspace stores up to ${String(STORAGE_GB)} GB of durable files and shell state.`],
     ['Linux on demand', 'Attach a Linux sandbox through Cloudflare Containers.'],
     ['Your own devices', 'Connect a PC once per workspace. Kinu remembers your choice.'],
   ] as const;
