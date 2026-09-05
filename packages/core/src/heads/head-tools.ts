@@ -33,7 +33,7 @@
  */
 
 import { jsonSchema, tool, type ToolSet } from 'ai';
-import { buildToolSurface, installSurfaceExecuteTool, type ToolSurfaceDeps } from '../tools/builtins';
+import { buildToolSurface } from '../tools/builtins';
 import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
 import { budgetExhausted, HEAD_BUILTIN_TOOLS } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -78,26 +78,9 @@ export interface HeadToolDeps {
 export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
   const { input, capture } = deps;
 
-  // The confined builtin surface — the one assembly every kind shares, narrowed
-  // to the head's admitted set. A finished `execute_tools` entry installs in
-  // phase 1; a function of the finished surface waits until after the
-  // `allowedTools` filter below, so `tools.*` declares exactly the tools the
-  // head holds.
-  const surfaceDeps: ToolSurfaceDeps = {
-    builtin: { rt: deps.rt, webSearch: deps.webSearch },
-    admitted: HEAD_BUILTIN_TOOLS,
-    executeTool: deps.executeTool,
-  };
-  const kept = buildToolSurface(surfaceDeps);
-  const all: ToolSet = {
-    // The builtin tools know nothing about heads, so their calls are recorded
-    // into the capture here rather than by each tool.
-    ...withHeadCaptureRecording(kept, capture),
-    // record_evidence / record_decision — the merge-back mechanism. Already
-    // self-recording, so deliberately outside the wrapper.
-    ...buildHeadAccumulatorTools(capture),
-  };
-
+  // The head's kind tools: the merge-back accumulators (self-recording, so
+  // outside the capture wrap) plus the depth-gated split.
+  const extra: ToolSet = { ...buildHeadAccumulatorTools(capture) };
   // Recursion depth is fixed for a head's whole run — nothing decrements
   // `input.budget.maxDepth` in place — so a head with none left cannot split
   // at any moment of it, and is not offered the tool rather than being handed
@@ -108,7 +91,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
   // told it may split zero levels. The wall clock stays a RUNTIME check inside
   // execute — it can pass mid-run, which build time cannot know.
   if (input.budget.maxDepth > 0) {
-    all.split_subheads = tool({
+    extra.split_subheads = tool({
       description:
         `Spawn 2-4 child heads recursively to explore narrower sub-questions. ` +
         `Children's findings merge into a single narrative. ` +
@@ -169,10 +152,13 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
       },
     });
   }
-
-  const surface = input.allowedTools === undefined
-    ? all
-    : Object.fromEntries(Object.entries(all).filter(([name]) => new Set(input.allowedTools).has(name)));
-  installSurfaceExecuteTool(surface, surfaceDeps);
-  return surface;
+  return buildToolSurface({
+    rt: deps.rt,
+    webSearch: deps.webSearch,
+    admitted: HEAD_BUILTIN_TOOLS,
+    wrapAdmitted: (admitted) => withHeadCaptureRecording(admitted, capture),
+    extra,
+    allowed: input.allowedTools,
+    executeTool: deps.executeTool,
+  });
 }

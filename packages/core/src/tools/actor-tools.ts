@@ -22,7 +22,7 @@
  */
 
 import type { ToolSet } from 'ai';
-import { buildToolSurface, installExecuteTools, type BuiltinToolDeps, type ExecuteToolsBuilder } from './builtins';
+import { buildToolSurface, type BuiltinToolDeps, type ExecuteToolsBuilder } from './builtins';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 
@@ -55,12 +55,11 @@ export interface ActorToolsetDeps extends BuiltinToolDeps {
  * actor with only `team` sees hire/ask/send and no swarm.
  */
 export function buildActorTools(deps: ActorToolsetDeps): ToolSet {
-  const tools = buildToolSurface({ builtin: deps });
+  let extra: ToolSet | undefined;
   if (deps.agents && (deps.agents.fork || deps.agents.team || deps.agents.peers)) {
-    tools.agents = createAgentsTool(deps.agents);
+    extra = { agents: createAgentsTool(deps.agents) };
   }
-  if (deps.executeTools) installExecuteTools(tools, deps.executeTools, deps);
-  return withEffectClaims(tools, deps.effectClaims);
+  return withEffectClaims(buildToolSurface({ ...deps, extra }), deps.effectClaims);
 }
 
 // The delegation deps contracts (and the reserved peer-reply topic) live with

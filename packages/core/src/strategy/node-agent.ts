@@ -50,7 +50,7 @@ import { HEAD_BUILTIN_TOOLS } from '../heads/types';
 import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../heads/head-inference';
 import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
 import type { HeadInferenceDeps } from '../heads/head-inference';
-import { buildToolSurface, installSurfaceExecuteTool, type ToolSurfaceDeps } from '../tools/builtins';
+import { buildToolSurface } from '../tools/builtins';
 import { AgentWakeQueue } from '../jobs/wake-queue';
 import { BackgroundJobRunner } from '../jobs/runner';
 import type { BackgroundJobRunnerDeps } from '../jobs/runner';
@@ -492,58 +492,46 @@ function buildNodeToolSet(input: {
   readonly mode: WorkMode;
 }): ToolSet {
   const { deps, scratch } = input;
-  // The confined builtin surface — the one assembly every kind shares, narrowed
-  // to the node's admitted set. The report tool rides the same builtin build as
-  // the rest, and a function-form `executeTool` resolves next, over the finished
-  // admitted surface — before the proposal tool, which the sandbox therefore
-  // never declares.
-  const surfaceDeps: ToolSurfaceDeps = {
-    builtin: {
-      rt: deps.rt,
-      logger: deps.logger,
-      report: {
-        report: async ({ status, content }): Promise<JsonValue> => {
-          // THE INSTRUMENT RUNS HERE, BEFORE THE REPORT LANDS. The candidate is read out
-          // of the content through {@link candidateOf} — the same function the engine
-          // reads it with at the barrier, so the text the gate measures and the text the
-          // search measures cannot be two different things.
-          const errors = await deps.gradeReport?.(
-            candidateOf(content.trim(), deps.rt.executor.languages),
-          );
-          if (errors !== undefined && errors !== null) {
-            // NOT WRITTEN TO `scratch.reported`, which is the whole of "blocks": the
-            // loop's terminal condition is a report having landed, so a refused one
-            // leaves the node running with the instrument's own words as its next
-            // instruction. Returned rather than thrown — a tool's refusal is its return
-            // value, the same shape the proposal tool answers an arbiter's denial with.
-            return { accepted: false, errors };
-          }
-          scratch.reported = { status, content };
-          return { received: true };
-        },
+  // The proposal merges after the finish, so the sandbox never declares it;
+  // the background wrap runs inside the capture, so the transcript records
+  // the handle the model was told rather than a result it never saw.
+  return buildToolSurface({
+    rt: deps.rt,
+    logger: deps.logger,
+    report: {
+      report: async ({ status, content }): Promise<JsonValue> => {
+        // THE INSTRUMENT RUNS HERE, BEFORE THE REPORT LANDS. The candidate is read out
+        // of the content through {@link candidateOf} — the same function the engine
+        // reads it with at the barrier, so the text the gate measures and the text the
+        // search measures cannot be two different things.
+        const errors = await deps.gradeReport?.(
+          candidateOf(content.trim(), deps.rt.executor.languages),
+        );
+        if (errors !== undefined && errors !== null) {
+          // NOT WRITTEN TO `scratch.reported`, which is the whole of "blocks": the
+          // loop's terminal condition is a report having landed, so a refused one
+          // leaves the node running with the instrument's own words as its next
+          // instruction. Returned rather than thrown — a tool's refusal is its return
+          // value, the same shape the proposal tool answers an arbiter's denial with.
+          return { accepted: false, errors };
+        }
+        scratch.reported = { status, content };
+        return { received: true };
       },
-      webSearch: deps.webSearch,
     },
+    webSearch: deps.webSearch,
     admitted: NODE_BUILTIN_TOOLS,
     executeTool: deps.executeTool,
-  };
-  const surface: ToolSet = buildToolSurface(surfaceDeps);
-  installSurfaceExecuteTool(surface, surfaceDeps);
-  if (input.arbitrate) {
-    Object.assign(surface, buildProposeTool(input.arbitrate, scratch));
-  }
-  // THE BACKGROUND WRAP, inside the capture and not outside it. A call that crosses
-  // the detach threshold returns a handle rather than a result, and the handle is
-  // what the model was TOLD — so the transcript has to record that, not a result
-  // the model never saw. The confined set is named here for the reason
-  // `keepBuiltins` takes a named set: a node has no `agents` tool, so the actor's
-  // third entry cannot apply to it, and naming the set makes that structural.
-  const detachable = wrapToolsForBackground(surface, {
-    jobRunner: input.jobRunner,
-    backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
-    mode: () => input.mode,
+    post: input.arbitrate ? buildProposeTool(input.arbitrate, scratch) : undefined,
+    wrapFinished: (finished) => withHeadCaptureRecording(
+      wrapToolsForBackground(finished, {
+        jobRunner: input.jobRunner,
+        backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
+        mode: () => input.mode,
+      }),
+      input.capture,
+    ),
   });
-  return withHeadCaptureRecording(detachable, input.capture);
 }
 
 /**

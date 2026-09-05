@@ -911,59 +911,58 @@ export function installExecuteTools(
 }
 
 /**
- * One builtin-surface assembly for every agent kind — orchestrator, subordinate,
- * head and swarm node — with the kind differences as data rather than parallel
- * build flows.
- *
- * Phase 1 of the surface every kind shares: build the builtins, narrow them to
- * the admitted set, and carry a finished `execute_tools` entry straight in.
- * Phase 2 — the sandbox OVER the finished surface — stays with the caller,
- * because it differs by kind: an actor finishes with `installExecuteTools`
- * (after `agents` is registered, so codemode `tools.*` declares it too), a
- * confined surface with {@link installSurfaceExecuteTool} (a head after its
- * `allowedTools` filter, a node before its proposal tool — each order
- * preserved exactly, which is what keeps `tools.*` exact).
+ * The one tool assembly for every agent kind: builtins, admitted narrow, kind
+ * tools, allowed narrow, then `execute_tools` over the finished set. Actors
+ * pass no admitted set and finish with their `executeTools` builder (after
+ * `agents` merges, so `tools.*` declares it); confined kinds pass their
+ * admitted set and finish with `executeTool` (a finished entry installs with
+ * the builtins, a function builds over the finished set). A head filters with
+ * `allowed` and records builtins via `wrapAdmitted`; a node appends its
+ * proposal via `post`, after the finish, and wraps via `wrapFinished`.
  */
-export interface ToolSurfaceDeps {
-  /** Deps for `buildBuiltinTools`. A confined caller leaves
-   *  `preBuiltExecuteTool` unset and passes `executeTool` once instead: a
-   *  finished entry installs here, a function waits for phase 2. */
-  builtin: BuiltinToolDeps;
-  /** Narrow the builtins to these names (`HEAD_BUILTIN_TOOLS`,
-   *  `NODE_BUILTIN_TOOLS`). Absent keeps the whole surface — the actor kinds,
-   *  whose confinement is per-action gating inside `agents`, not absence. */
+export interface ToolSurfaceDeps extends BuiltinToolDeps {
+  /** Narrow the builtins to these names. Absent keeps the whole surface. */
   admitted?: readonly string[];
-  /** A confined surface's `execute_tools` in either form it arrives in: a
-   *  finished entry installs in phase 1 (the same entry check
-   *  `buildBuiltinTools` applies to `preBuiltExecuteTool`); a function of the
-   *  finished surface waits for {@link installSurfaceExecuteTool}. Actors omit
-   *  it — their sandbox builds over the finished surface instead. */
+  /** Wrap the admitted builtins before kind tools merge. */
+  wrapAdmitted?: (admitted: ToolSet) => ToolSet;
+  /** Kind tools merged before the allowed narrow and the finish. */
+  extra?: ToolSet;
+  /** Narrow the merged surface. Absent keeps it whole. */
+  allowed?: readonly string[];
+  /** Build `execute_tools` over the finished surface. Wins over `executeTool`. */
+  executeTools?: ExecuteToolsBuilder;
+  /** Confined `execute_tools`: a finished entry installs with the builtins, a
+   *  function builds over the finished surface. Unused with `executeTools`. */
   executeTool?: unknown;
+  /** Kind tools merged after the finish, never declared to the sandbox. */
+  post?: ToolSet;
+  /** Wrap the finished surface. */
+  wrapFinished?: (finished: ToolSet) => ToolSet;
 }
 
 export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
-  const builtin: BuiltinToolDeps = { ...deps.builtin };
+  let builtin: BuiltinToolDeps = deps;
   if (builtin.preBuiltExecuteTool === undefined && deps.executeTool !== undefined) {
     const direct = { value: deps.executeTool };
-    if (isExecutableToolEntry(direct)) builtin.preBuiltExecuteTool = deps.executeTool;
+    if (isExecutableToolEntry(direct)) builtin = { ...deps, preBuiltExecuteTool: deps.executeTool };
   }
   const built = buildBuiltinTools(builtin);
-  return deps.admitted === undefined ? built : keepBuiltins(built, deps.admitted);
-}
-
-/**
- * Phase 2 for a confined surface: resolve a function-form `executeTool` over
- * the FINISHED surface, so codemode `tools.*` declares exactly the tools
- * present — the same "sandbox last" rule `installExecuteTools` keeps for
- * actors. A finished entry (or anything else) is not a function and is left
- * alone: it already installed in phase 1. Runs where the caller finished its
- * surface — after a head's `allowedTools` filter, before a node's proposal
- * tool — which the callers keep, not this function.
- */
-export function installSurfaceExecuteTool(surface: ToolSet, deps: ToolSurfaceDeps): void {
-  const buildFromSurface = v.safeParse(v.function(), deps.executeTool);
-  if (buildFromSurface.success && 'execute_tools' in surface) {
-    const entry = { value: buildFromSurface.output(surface) };
-    if (isExecutableToolEntry(entry)) surface.execute_tools = entry.value;
+  const narrowed = deps.admitted === undefined ? built : keepBuiltins(built, deps.admitted);
+  const recorded = deps.wrapAdmitted === undefined ? narrowed : deps.wrapAdmitted(narrowed);
+  const merged = deps.extra === undefined ? recorded : { ...recorded, ...deps.extra };
+  const allow = deps.allowed === undefined ? undefined : new Set(deps.allowed);
+  const surface = allow === undefined
+    ? merged
+    : Object.fromEntries(Object.entries(merged).filter(([name]) => allow.has(name)));
+  if (deps.executeTools !== undefined) {
+    installExecuteTools(surface, deps.executeTools, deps);
+  } else {
+    const buildFromSurface = v.safeParse(v.function(), deps.executeTool);
+    if (buildFromSurface.success && 'execute_tools' in surface) {
+      const entry = { value: buildFromSurface.output(surface) };
+      if (isExecutableToolEntry(entry)) surface.execute_tools = entry.value;
+    }
   }
+  const finished = deps.post === undefined ? surface : { ...surface, ...deps.post };
+  return deps.wrapFinished === undefined ? finished : deps.wrapFinished(finished);
 }
