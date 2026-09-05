@@ -1,5 +1,5 @@
 {
-  "measured": "c1ff64f12: 893 test files, 812 runnable suites, 11953 tests, 34 runners, 62 non-public product members",
+  "measured": "0798a449b: 898 test files, 817 runnable suites, 11974 tests, 34 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -1118,10 +1118,6 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-clamp-tool-result.test.ts :: decodeJsonValue rejects non-finite numbers :: weak-only test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/core/tests/unit-deferred-turn-review.test.ts :: a deferred review lands the SAME outcome row an inline review would :: expected side computed by the code under test",
       "count": 1
     },
@@ -1171,10 +1167,6 @@
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-prompt.test.ts :: Auto (the build work mode) adds nothing at all, byte for byte :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-read-model-limits.test.ts :: an inverted range throws instead of silently answering the max :: weak-only test",
       "count": 1
     },
     {
