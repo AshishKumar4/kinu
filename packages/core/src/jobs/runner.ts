@@ -632,15 +632,7 @@ export class BackgroundJobRunner {
   > {
     const harvest = this.deps.harvest;
     if (!harvest) return { ok: true, value: null };
-    const raw = this.deps.store.getInput(job.id);
-    let input: JsonValue = null;
-    if (raw !== null) {
-      try { input = parseJsonValue(raw); }
-      catch (error) {
-        if (classify({ cause: error }) !== 'malformed-input') throw error;
-        input = raw;
-      }
-    }
+    const input = this.storedInput(job.id);
     try {
       return { ok: true, value: await harvest(job.kind, input) };
     } catch (err) {
@@ -1031,7 +1023,7 @@ export class BackgroundJobRunner {
       // first interruption waits the curve's first term rather than its second.
       this.deps.store.deferResume(jobId, now + recoveryBackoffMs(claim.attempts - 1));
       this.deps.logActivity?.('bg_job_resume', `${job.kind} → ${jobId} (attempt ${claim.attempts}, epoch ${claim.epoch})`);
-      this.driveResume(job);
+      this.driveResume(job, this.deps.resume);
       return { state: 'redriven', job };
     }
 
@@ -1074,20 +1066,33 @@ export class BackgroundJobRunner {
   /** Re-drive a reclaimed job from its durable checkpoint in a fresh durable
    *  fiber. Reuses the detach settlement body, so this resume is itself
    *  evict-recoverable: a second eviction re-enters recover() and re-drives under
-   *  a newer epoch, and the search's own checkpoint means no budget is redone. */
-  private driveResume(job: BackgroundJob): void {
+   *  a newer epoch, and the search's own checkpoint means no budget is redone.
+   *
+   *  The stored input is read INSIDE the attempt, as its first step, so a read
+   *  the store cannot serve fails this job through the same settlement path as
+   *  a resumer that threw: terminal, announced, and its controller released.
+   *  Read before the attempt, the throw left the sweep with this job's
+   *  controller still registered. Every later look in the activation then
+   *  declined the job as already driving while counting it in flight, and the
+   *  throw itself failed the resume gate, so one unreadable row held every
+   *  fork run and every job behind it on each activation until the row became
+   *  readable. */
+  private driveResume(job: BackgroundJob, resume: JobResumer): void {
     const controller = new AbortController();
     this.controllers.set(job.id, controller);
-    const rawInput = this.deps.store.getInput(job.id);
-    let input: JsonValue = null;
-    if (rawInput !== null) {
-      try { input = parseJsonValue(rawInput); }
-      catch (error) {
-        if (classify({ cause: error }) !== 'malformed-input') throw error;
-        input = rawInput;
-      }
+    this.runToSettlement(job.id, job.kind, () => resume(job.kind, this.storedInput(job.id), job.workMode, controller.signal));
+  }
+
+  /** The input a resumer is handed back: the stored JSON as a value, or the
+   *  stored text itself when it was never JSON. */
+  private storedInput(jobId: string): JsonValue {
+    const raw = this.deps.store.getInput(jobId);
+    if (raw === null) return null;
+    try { return parseJsonValue(raw); }
+    catch (error) {
+      if (classify({ cause: error }) !== 'malformed-input') throw error;
+      return raw;
     }
-    this.runToSettlement(job.id, job.kind, () => this.deps.resume!(job.kind, input, job.workMode, controller.signal));
   }
 
   /** Deliver the settle notification without letting a sink error poison the

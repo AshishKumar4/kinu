@@ -166,6 +166,32 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(left()).toBe(0);
   });
 
+  test('a subordinate activation restores the wake of a deferred job whose row was lost', async () => {
+    // A subordinate drives background jobs through the shared runner, and a
+    // claim arms the next attempt's wake as a schedule row. An eviction between
+    // the claim and that write leaves the instant in the registry with no row
+    // to fire at it. The root re-arms from `owedWorkExists` on activation and
+    // its first tick sweeps the registry. This actor's tick serves a deferred
+    // job only at its own instant, so the activation has to arm that instant.
+    const harness = subordinateHarness();
+    await harness.agent.activateActor();
+    await harness.agent.harnessSettleBackgroundTasks();
+    // Nothing owed: the activation invents no wake.
+    expect(await harness.agent.listSchedules()).toEqual([]);
+
+    const jobs = harness.agent.harnessJobs();
+    const now = Date.now();
+    jobs.create({ id: 'job-waiting', kind: 'agents', workMode: 'build', input: '{}', now });
+    const resumeAt = now + 60_000;
+    jobs.deferResume('job-waiting', resumeAt);
+
+    await harness.agent.activateActor();
+    await harness.agent.harnessSettleBackgroundTasks();
+
+    const wakes = (await harness.agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
+    expect(wakes.map((row) => row.time)).toEqual([Math.ceil(resumeAt / 1000)]);
+  });
+
   test('a failed re-arm leaves the previous wake row in place', async () => {
     // KINU-N003 (first half): `armTimer` cancelled the armed rows and then
     // wrote the replacement. A failure in that window left ZERO wake rows, and

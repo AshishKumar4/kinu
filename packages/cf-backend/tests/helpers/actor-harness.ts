@@ -696,6 +696,10 @@ export class HarnessSubordinateAgent extends SubordinateAgent {
 
   /** The production activation, same bridge the orchestrator harness carries. */
   activateActor(): Promise<void> { return Promise.resolve(super.onStart()); }
+  /** The background-job registry, the same seam the orchestrator harness
+   *  carries: the production store, so a seeded deferred job carries the
+   *  instant a real claim would have written. */
+  harnessJobs(): BackgroundJobStore { return this.jobs; }
 
   observeRawTools(): ToolSet { return this.getRawTools(); }
   observeRuntime(): AgentRuntime { return this.rt; }

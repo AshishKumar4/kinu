@@ -550,6 +550,15 @@ export class SubordinateAgent extends ActorAgent {
       if (this.terminal.nextRetryAt() !== null || this.terminal.hasIncomplete()) {
         await this.scheduleTerminalRetry(Date.now());
       }
+      // The wake a deferred job owes, read the same way the root reads its live
+      // jobs in `owedWorkExists`. The shared runner arms this wake when a claim
+      // defers the next attempt, and an eviction between that write and the
+      // schedule row loses the row. The root's first tick sweeps the registry
+      // and re-arms every waiting instant. This actor's tick has no sweep and
+      // serves a deferred job only once its instant is due, so the activation
+      // arms that instant itself.
+      const resumeAt = this.jobs.nextResumeAt();
+      if (resumeAt !== null) await this.scheduleTerminalRetry(resumeAt);
     });
   }
 

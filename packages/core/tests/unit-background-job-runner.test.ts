@@ -805,6 +805,61 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     await setup({ resume, db: first.db }).runner.recoverDueResumes();
     expect(first.store.get('jd')?.resumeAttempts).toBe(1);
   });
+
+  // The leak the durability review found (2026-09-04). `driveResume` registered
+  // the job's controller and then read its stored input, so a read that threw
+  // left the entry behind. Every later look in that activation declined the job
+  // as already driving while counting it in flight. The throw itself left the
+  // sweep through the resume gate as a gate failure, which protected every fork
+  // run and recovered no job behind the poisoned one, on each activation for as
+  // long as the input stayed unreadable. The read is now the attempt's own first
+  // step, so an unreadable input fails its own job the way a throwing resumer
+  // does, and holds no slot afterwards.
+  test('an unreadable stored input fails its own job; the sweep still answers and the rest recover', async () => {
+    const resumed: JsonValue[] = [];
+    let release: () => void = () => {};
+    const held = new Promise<string>((resolve) => { release = () => resolve('resumed'); });
+    const resume: JobResumer = (_kind, input) => { resumed.push(input); return held; };
+    const task = 'measure the three candidates';
+    const first = setup({ resume });
+    const now = Date.now();
+    first.store.create({ id: 'jp', kind: 'agents', workMode: 'build', input: '{"task":"poisoned"}', now });
+    first.store.create({ id: 'jq', kind: 'agents', workMode: 'build', input: JSON.stringify({ task }), now: now + 1 });
+
+    const next = setup({ resume, db: first.db });
+    const readInput = next.store.getInput.bind(next.store);
+    next.store.getInput = (id) => {
+      if (id === 'jp') throw new Error('disk I/O error');
+      return readInput(id);
+    };
+    const claimed = await jobRedriveResumeGate({
+      recoverOrphans: () => next.runner.recoverOrphans(),
+      inputOf: (jobId) => next.store.getInput(jobId),
+      rootsForTask: (t) => (t === task ? ['root-live'] : []),
+    })(['root-live']);
+
+    // The gate answered, and the job swept AFTER the poisoned one was re-driven
+    // and is still running. The poisoned job holds no slot beside it.
+    expect(claimed).toEqual(['root-live']);
+    expect(resumed).toEqual([{ task }]);
+    expect(next.runner.inFlight).toBe(1);
+
+    release();
+    await next.settled();
+    // The poisoned job is terminal, says why, and woke the agent.
+    expect(next.store.get('jp')?.status).toBe('failed');
+    expect(next.store.get('jp')?.error).toContain('disk I/O error');
+    expect(next.enqueued.some((turn) => turn.text.includes('jp') && turn.metadata?.status === 'failed')).toBe(true);
+    expect(next.runner.inFlight).toBe(0);
+    expect(next.store.runningIds()).toEqual([]);
+
+    // A later activation over the same rows sweeps clean: nothing declined,
+    // nothing counted in flight, and the failed row still readable.
+    const later = setup({ resume, db: first.db });
+    expect(await later.runner.recoverOrphans()).toEqual([]);
+    expect(later.runner.inFlight).toBe(0);
+    expect(later.store.get('jp')?.status).toBe('failed');
+  });
 });
 
 describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring', () => {
