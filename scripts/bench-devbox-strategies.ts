@@ -2592,6 +2592,17 @@ export interface CheckpointReply {
   error?: string;
 }
 
+/** The outcome one checkpoint settled as, kind first and the box's reason
+ *  beside it: `committed`, `skipped (work directory is unchanged)`, `failed
+ *  (A generation cannot retire a pack it adds)`. One spelling for the ladder
+ *  rows, the tree-size rows and the decisive notes, so a reader of any of them
+ *  gets the cause and not only the kind. */
+export function checkpointOutcomeWords(cp: CheckpointReply): string {
+  const kind = cp.outcome?.kind ?? 'unknown';
+  const reason = cp.outcome?.reason;
+  return reason === undefined ? kind : `${kind} (${reason})`;
+}
+
 export interface StopReply { ok?: boolean; ms?: number; error?: string }
 
 // ── the async operation protocol ────────────────────────────────────────────
@@ -3309,11 +3320,13 @@ export async function runDecisive(
     // row would sum its wall time into the decision's numerator — a chain arm
     // erroring every tick summed a negative one — so the failure is a note and
     // the row is absent, which G9 counts as one repetition fewer rather than
-    // as a silent success.
+    // as a silent success. The note carries the box's own reason, as the
+    // ladder rows do: run 20260905193714 recorded forty failed ticks as
+    // `(failed)` and nothing else, so the arm's deciding cell had no cause.
     if (cp.ok !== true || cp.outcome?.kind !== 'committed') {
       notes.push(
         `${spec.id} tick ${segmentName} did not commit `
-        + `(${cp.error ?? cp.outcome?.kind ?? 'no outcome'}); it prices nothing`,
+        + `(${cp.error ?? checkpointOutcomeWords(cp)}); it prices nothing`,
       );
       continue;
     }
@@ -3347,9 +3360,7 @@ export async function runDecisive(
       // Kept for the report's own arithmetic check.
       unitsMoved: moved ?? null,
       unitLabel: arm === 'overlay-cas' ? 'journal entries / CAS bytes' : 'delta bytes',
-      outcome: cp.error !== undefined
-        ? `error: ${cp.error}`
-        : `${cp.outcome?.kind ?? 'unknown'}${cp.outcome?.reason !== undefined ? ` (${cp.outcome.reason})` : ''}`,
+      outcome: cp.error !== undefined ? `error: ${cp.error}` : checkpointOutcomeWords(cp),
     });
   }
   return { ticks, treeBytes, notes };
@@ -5199,7 +5210,7 @@ async function measureComplexityRung(
       treeBytes,
       kind: 'backup-64k',
       ms: backup.ms ?? null,
-      outcome: backup.error !== undefined ? `error: ${backup.error}` : `${backup.outcome?.kind ?? 'unknown'}${backup.outcome?.reason !== undefined ? ` (${backup.outcome.reason})` : ''}`,
+      outcome: backup.error !== undefined ? `error: ${backup.error}` : checkpointOutcomeWords(backup),
     });
   } catch (error) {
     const words = describeThrown({ cause: error }).slice(0, 240);
@@ -5208,10 +5219,15 @@ async function measureComplexityRung(
   }
   if (rung < CHANGE_SIZES_KIB.length - 1) {
     try {
-      await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-      const opsBeforeRestore = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
       const restoreStop = await stopOperation(fixture, box, `complexity restore at ${treeBytes}B`);
       requireConfirmedStop(restoreStop, `complexity restore at ${treeBytes}B: stop failed before wake`);
+      // THE WINDOW OPENS AFTER THE STOP CONFIRMS, as the post-ladder wake's
+      // does. Opened before it, the stop's final checkpoint was priced as the
+      // restore: run 20260905193714 recorded 67 operations for five rung
+      // restores of three arms with different call mixes, and 10 puts on a
+      // chain restore that puts nothing.
+      await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
+      const opsBeforeRestore = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
       const rewoke = await startup('/wake', `complexity restore at ${treeBytes}B`, admittedAttachKinds('wake'));
       const restoreOps = await closeWakeOpsWindow(fixture, box, opsBeforeRestore, notes);
       result.complexity?.push({
@@ -5380,7 +5396,7 @@ async function measureArm(
         kind,
         ms: cp.ms ?? -1,
         bytes: cp.outcome?.bytes ?? -1,
-        outcome: cp.error !== undefined ? `error: ${cp.error}` : `${cp.outcome?.kind ?? 'unknown'}${cp.outcome?.reason !== undefined ? ` (${cp.outcome.reason})` : ''}`,
+        outcome: cp.error !== undefined ? `error: ${cp.error}` : checkpointOutcomeWords(cp),
       });
       if (kib === CHANGE_SIZES_KIB[0] && kind === 'quiesce') {
         verify(
@@ -6257,16 +6273,17 @@ export function renderArmLifecycleRow(arm: ArmResult): string {
 /**
  * The tree-size complexity table: one fixed 64 KiB backup plus one restore
  * per ladder rung. A rung the arm never reached reads NOT MEASURED, with the
- * reason the probe scope or the absent row gives.
+ * reason the probe scope or the absent row gives. Dated from the run's own
+ * meta, never from the day the cell was written.
  */
-function renderComplexitySection(arms: readonly ArmResult[]): string {
+function renderComplexitySection(arms: readonly ArmResult[], date: string): string {
   const out: string[] = [];
   out.push('#### Restore and backup time versus tree size');
   out.push('');
   out.push(
     'One fixed 64 KiB backup plus one stop then wake at each ladder rung’s cumulative tree size. '
     + 'The last rung’s restore is the post-ladder wake itself, so no container work is duplicated. '
-    + 'Measured 2026-09-05.',
+    + `Measured ${date}.`,
   );
   out.push('');
   out.push('| arm | tree bytes | 64 KiB backup (ms) | restore (ms) | restore remote ops | restore payload bytes | outcome |');
@@ -6520,7 +6537,7 @@ export function render(
     }
   }
   out.push('');
-  out.push(renderComplexitySection(arms));
+  out.push(renderComplexitySection(arms, meta.date));
   out.push('');
 
   out.push('#### Workload, per-operation p50 (ms)');

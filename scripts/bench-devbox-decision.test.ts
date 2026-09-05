@@ -862,6 +862,103 @@ describe('an arm that fails mid-measurement', () => {
 });
 
 /**
+ * A fixture whose store tally moves on every stop and every wake, so a window
+ * that opens before a stop confirms prices the stop's own operations. The
+ * first two wakes attach (the two tree-size rung restores); the third refuses,
+ * which ends the arm after its ladder with the rung rows already settled.
+ */
+function rungRestoreFixture(stopOps: number, wakeOps: number) {
+  const asked: string[] = [];
+  let wakes = 0;
+  let total = 5;
+  let boot = 0;
+  const real = globalThis.fetch;
+  const answer = async (
+    input: Parameters<typeof globalThis.fetch>[0],
+    init?: Parameters<typeof globalThis.fetch>[1],
+  ): Promise<Response> => {
+    const url = new URL(String(input));
+    const route = `${init?.method ?? 'GET'} ${url.pathname}`;
+    asked.push(route);
+    if (route === 'POST /wake') {
+      wakes += 1;
+      boot += 1;
+      total += wakeOps;
+      return new Response(JSON.stringify({ ok: true, ms: 12 }));
+    }
+    if (route === 'GET /state') {
+      return new Response(JSON.stringify(wakes > 2
+        ? { ok: true, state: { running: true, restoration: 'unattached', unready: 'the third wake refuses' } }
+        : {
+            ok: true,
+            storePrefix: 'boxes/probe/',
+            state: {
+              running: true,
+              restoration: 'attached',
+              lastAttach: { kind: 'attached', detail: 'the work directory is mounted' },
+              bootId: `boot-${String(boot)}`,
+              chain: { base: { id: 'chain-1' }, delta: { bytes: 4096 }, mode: 'chain', rev: 3 },
+            },
+          }));
+    }
+    if (route === 'POST /stop') {
+      total += stopOps;
+      return new Response(JSON.stringify({ ok: true, token: `token-${String(asked.length)}`, state: 'pending' }), {
+        status: 202,
+      });
+    }
+    if (route === 'POST /checkpoint') {
+      return new Response(JSON.stringify({ ok: true, token: `token-${String(asked.length)}`, state: 'pending' }), {
+        status: 202,
+      });
+    }
+    if (route === 'GET /operation') {
+      return new Response(JSON.stringify({
+        ok: true, state: 'done', ms: 1_234, outcome: { kind: 'committed', bytes: 65_536, movedBytes: 32_768 },
+      }));
+    }
+    if (route === 'POST /exec') {
+      const posted = v.safeParse(PostedBodySchema, JSON.parse(String(init?.body ?? '{}')));
+      const command = posted.success ? posted.output.command ?? '' : '';
+      const marker = /printf %s (devbox-verify-[0-9a-f-]+)/.exec(command)?.[1] ?? '';
+      return new Response(JSON.stringify({ ok: true, exitCode: 0, stdout: marker, stderr: '', ms: 3 }));
+    }
+    if (route === 'GET /ops') {
+      return new Response(JSON.stringify({ calls: { put: total }, classA: total, classB: 0, classFree: 0, total }));
+    }
+    return new Response(JSON.stringify({ ok: true, ms: 1 }));
+  };
+  globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+  return { asked, restore: () => { globalThis.fetch = real; } };
+}
+
+describe('the tree-size restore rows', () => {
+  test('price the wake alone, never the stop that preceded it', async () => {
+    // RED-FIRST. Run 20260905193714 recorded 67 remote operations for five
+    // rung restores of three arms with different call mixes, and 10 puts on a
+    // chain restore that puts nothing: the rung opened its /ops window before
+    // the stop, so the stop's final checkpoint was priced as the restore. The
+    // post-ladder wake opens its window after the stop confirms; the rungs
+    // must do the same.
+    const fixture = rungRestoreFixture(10, 3);
+    let arm: ArmResult;
+    try {
+      arm = await runArm(
+        BENCH_FIXTURE,
+        'snapshot-chain',
+        { ...parseOptions([]), arms: ['snapshot-chain'], runId: 'rung-window-probe' },
+        () => {},
+      );
+    } finally {
+      fixture.restore();
+    }
+    const restores = decodeComplexityRows(arm.complexity).filter((row) => row.kind === 'restore');
+    expect(restores.map((row) => row.treeBytes)).toEqual([65_536, 4_259_840]);
+    expect(restores.map((row) => row.wakeOps?.total)).toEqual([3, 3]);
+  }, 20_000);
+});
+
+/**
  * A verify-only probe arm: one arm's ladder, stop and wake with the evidence
  * reads, then teardown — and nothing else. The fake answers the whole probe
  * path the way `wakeRefusingFixture` answers the failure path, so what the
@@ -2214,6 +2311,13 @@ describe('restore and backup time versus tree size', () => {
     expect(report).toContain('| `snapshot-chain` | 65,536 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
     expect(report).toContain('| `snapshot-chain` | 4,259,840 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
     expect(report).toContain('| `snapshot-chain` | 71,368,704 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
+    // THE SECTION CARRIES THE RUN'S OWN DATE. It carried the literal
+    // 2026-09-05, the day the cell was written, so every later run's table
+    // would have dated its numbers to a day nobody measured them on.
+    const later = render([{ ...arm, complexity: rows }], { ...complexityMeta, date: '2026-09-06' }, { admitted: true, gates: [] });
+    const section = later.slice(later.indexOf('#### Restore and backup time versus tree size'));
+    expect(section).toContain('Measured 2026-09-06.');
+    expect(section).not.toContain('2026-09-05');
   });
 
   test('a rung the arm never reached reads NOT MEASURED with its reason', () => {
@@ -2291,12 +2395,18 @@ describe('operation totals', () => {
     expect(totals.sumWallMs).toBe(100);
   });
 
-  test('a decisive run prices only committed ticks, and says which segments it did not', async () => {
+  test('a decisive run prices only committed ticks, and says which segments it did not, and why', async () => {
     // RED-FIRST for a decision skew: runDecisive pushed a TickRecord per
     // segment even on checkpoint error with wallMs -1, and the aggregates
     // summed it — a chain arm erroring every tick summed a negative numerator.
     // The first two of five segments fail here, the third commits without a
     // measured duration, and the last two commit whole.
+    //
+    // RED-FIRST, second direction: the failed tick's note carried only the
+    // outcome kind. Run 20260905193714 recorded forty `merkle-pack` ticks as
+    // `did not commit (failed)` and the reason the box gave for every one of
+    // them was dropped on the floor, so the arm's deciding cell had no cause.
+    const refusal = 'A generation cannot retire a pack it adds';
     let checkpointArms = 0;
     const real = globalThis.fetch;
     const answer = async (
@@ -2327,7 +2437,9 @@ describe('operation totals', () => {
       }
       if (route === 'GET /operation') {
         if (checkpointArms <= 2) {
-          return new Response(JSON.stringify({ ok: true, state: 'done', ms: 50, outcome: { kind: 'failed' } }));
+          return new Response(JSON.stringify({
+            ok: true, state: 'done', ms: 50, outcome: { kind: 'failed', reason: refusal },
+          }));
         }
         if (checkpointArms === 3) {
           return new Response(JSON.stringify({
@@ -2361,7 +2473,9 @@ describe('operation totals', () => {
     }
     expect(run.ticks).toHaveLength(2);
     expect(run.ticks.every((tick) => tick.wallMs === 50)).toBe(true);
-    expect(run.notes.filter((note) => note.includes('did not commit'))).toHaveLength(2);
+    const uncommitted = run.notes.filter((note) => note.includes('did not commit'));
+    expect(uncommitted).toHaveLength(2);
+    expect(uncommitted.every((note) => note.includes(`failed (${refusal})`))).toBe(true);
     expect(run.notes.filter((note) => note.includes('without a measured duration'))).toHaveLength(1);
     expect(totalsFor(run.ticks, 'npm').sumWallMs).toBe(100);
     expect(run.treeBytes).toBe(100);
