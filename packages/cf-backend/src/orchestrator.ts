@@ -4232,16 +4232,20 @@ export class OrchestratorAgent extends ActorAgent {
     };
   }
 
-  @callable() async executeInExecutor(executorId: string, command: string) {
+  @callable() async executeInExecutor(executorId: string, command: string, device?: string) {
     const provider = this.rt.executionRouter?.getProvider(executorId);
     if (!provider) return { error: `Executor "${executorId}" not found` };
     if (!provider.isAvailable()) return { error: `Executor "${executorId}" is not available` };
 
     const execTool = provider.tools.exec;
     if (!execTool) return { error: `Executor "${executorId}" has no exec tool` };
-
+    // The fleet names its machine per call (docs/EXECUTION-LAYER-SPEC.md
+    // "The user's account is a fleet"): device rides as the tool context
+    // the laptop executor reads (readDeviceSelection), and a call that
+    // carries none keeps today's unnamed answer. Tools that read no context
+    // never see one.
     try {
-      const result = await execTool.execute(command);
+      const result = device === undefined ? await execTool.execute(command) : await execTool.execute(command, { device });
       const stdout = v.is(v.string(), result) ? result : JSON.stringify(result);
       // The ONE failure predicate (core execution/exec-result.ts). What stood here
       // was a third prose matcher listing `exec error:`, `read error:` and friends
