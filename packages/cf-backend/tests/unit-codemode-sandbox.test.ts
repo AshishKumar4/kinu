@@ -47,7 +47,6 @@ function makeCraftStore(tools: Array<{ name: string; code: string; description?:
     delete: unsupported,
     list: () => rows,
     search: () => [],
-    getAll: () => rows,
   };
 }
 

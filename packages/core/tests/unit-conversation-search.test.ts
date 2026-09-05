@@ -178,6 +178,16 @@ describe('ConversationSearchStore.scroll', () => {
     const view = store.scroll(id, 5, 10_000)!;
     expect(view.messages[0]!.content).toBe('y'.repeat(5000));
   });
+
+  test('non-finite max_chars falls back to the default budget', () => {
+    const { sql, store } = setup();
+    const id = insert(sql, 'chat', 'assistant', 'x'.repeat(5000));
+    for (const maxChars of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const view = store.scroll(id, 5, maxChars)!;
+      expect(view.messages[0]!.content).toContain('x'.repeat(700));
+      expect(view.messages[0]!.content).toContain('pass max_chars to read the full message');
+    }
+  });
 });
 
 describe('ConversationSearchStore.browse', () => {

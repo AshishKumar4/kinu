@@ -10,6 +10,7 @@
 
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
+import { isBuiltinToolName } from '../tools/registry';
 import {
   BACKEND_CONFORMANCE,
   CONFORMANCE_PLANES,
@@ -76,8 +77,10 @@ export function compareSurface(
     const declared = declaredEntries(plane, manifest);
 
     for (const [name, statuses] of declared) {
-      const status = statuses[observed.root];
-      if ('wired' in status && !seen.has(name)) {
+      const status: CapabilityStatus | undefined = statuses[observed.root];
+      if (status === undefined) {
+        findings.push({ kind: 'undeclared', plane, root: observed.root, name });
+      } else if ('wired' in status && !seen.has(name)) {
         findings.push({ kind: 'missing', plane, root: observed.root, name });
       }
     }
@@ -187,15 +190,17 @@ export function phantomCallables(text: string, callables: ReadonlySet<string>): 
   const phantoms = new Set<string>();
   for (const m of text.matchAll(/\b([a-z][a-z0-9_]*(?:\.[a-z][a-zA-Z0-9_]*)*)\(/g)) {
     const name = m[1];
-    if (!name) continue;
-    // Single short words before `(` are overwhelmingly prose ("run(", "do(");
-    // an instruction names either a namespaced call or a snake_case function.
-    if (!name.includes('.') && !name.includes('_')) continue;
+    if (name === undefined) continue;
+    // Membership first: a name the caller wires is real whatever its shape,
+    // so a wired single-word tool is never prose. Past that, a single word
+    // is prose ("do(", "call(") — unless it names a real tool, in which case
+    // an instruction meant it and a root that did not wire it must hear so.
     if (callables.has(name)) continue;
+    if (!name.includes('.') && !name.includes('_') && !isBuiltinToolName(name)) continue;
     // A namespaced call resolves if its namespace root is a real callable
     // surface (`workspace.readdir(...)` under a wired `workspace` namespace).
     const root = name.split('.', 1)[0];
-    if (root && name.includes('.') && callables.has(`${root}.*`)) continue;
+    if (root !== undefined && name.includes('.') && callables.has(`${root}.*`)) continue;
     phantoms.add(name);
   }
   return [...phantoms].sort();

@@ -127,6 +127,19 @@ describe('pruneStepToolOutputs', () => {
     expect(pruneStepToolOutputs(pruned, budgetFor(WINDOW))).toBeUndefined();
   });
 
+  test('re-pruning already-truncated outputs keeps identical bytes', () => {
+    const pruned = pruneStepToolOutputs(bigTurn(), budgetFor(WINDOW))!;
+    const first = outputText(resultPart(pruned[2]));
+    expect(first).toContain('…[truncated:');
+    // Grow the turn so the pruner must run again over the truncated parts.
+    const grown = [...pruned, ...toolExchange(6, 40_000), ...toolExchange(7, 40_000), ...toolExchange(8, 40_000)];
+    const repruned = pruneStepToolOutputs(grown, budgetFor(WINDOW))!;
+    // The already-truncated part passes through untouched — the marker still
+    // reports the ORIGINAL serialized size, not the truncated one.
+    expect(outputText(resultPart(repruned[2]))).toBe(first);
+    expect(first).toContain(`${outputText(resultPart(bigTurn()[2])).length} chars`);
+  });
+
   test('error outputs keep error semantics through truncation', () => {
     const messages = bigTurn();
     const message = messages[2];
@@ -191,6 +204,26 @@ describe('composePrepareStep with pruning', () => {
       dynamic: { ledger, snapshot: () => ({}) },
     }, { stepNumber: 3, messages });
 
+    expect(result).toBeDefined();
+    expect(outputText(resultPart(result!.messages[2]))).toContain('…[truncated:');
+  });
+
+  test('a caller-supplied prune reserve adds to the ledger overhead', async () => {
+    // Six 28k-char exchanges sit under the 44k budget on their own but over
+    // it with a 5k caller reserve — so only a pruner told about the reserve
+    // shrinks anything.
+    const messages: ModelMessage[] = [{ role: 'user', content: 'go' }];
+    for (let i = 0; i < 6; i++) messages.push(...toolExchange(i, 28_000));
+    const callerReserve = { ...budgetFor(WINDOW), reservedTokens: 5_000 };
+    const bare = await composePrepareStep({ prune: callerReserve }, { stepNumber: 1, messages });
+    expect(bare).toBeDefined();
+    expect(outputText(resultPart(bare!.messages[2]))).toContain('…[truncated:');
+    // An empty ledger (zero overhead) must preserve the caller reserve, not erase it.
+    const ledger = new DynamicContextLedger();
+    const result = await composePrepareStep({
+      prune: callerReserve,
+      dynamic: { ledger, snapshot: () => ({}) },
+    }, { stepNumber: 1, messages });
     expect(result).toBeDefined();
     expect(outputText(resultPart(result!.messages[2]))).toContain('…[truncated:');
   });

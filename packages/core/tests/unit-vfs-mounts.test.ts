@@ -11,6 +11,7 @@ import { walkRecursive } from '@kinu.run/agent-utils/vfs';
 import { isVfsError } from '../src/vfs/errno';
 import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
 import { deviceFiles, type DeviceTransport } from '../src/execution/device-tunnel-executor';
+import { observeWrites } from '../src/vfs/observe';
 
 /** A map-backed tree with honest directory semantics: readdir returns entry
  *  NAMES, stat distinguishes dirs, so walkRecursive crosses it for real. */
@@ -306,6 +307,22 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 			rename: async (oldPath: string, newPath: string) => { renames.push([oldPath, newPath]); },
 		};
 		const mounted = withMountTable(native, [mountOf('pc', fakeTree({}))]);
+
+		await mounted.rename('/big.bin', '/renamed.bin');
+		expect(renames).toEqual([['/big.bin', '/renamed.bin']]);
+		expect(bytesRead).toBe(0);
+	});
+	test('an observed plane keeps its native rename (no byte-carry fallback)', async () => {
+		const base = fakeTree({ '/big.bin': 'gigabytes, notionally' });
+		const renames: Array<[string, string]> = [];
+		let bytesRead = 0;
+		const native = {
+			...base,
+			readFile: async (path: string, opts?: { encoding?: string }) => { bytesRead += 1; return base.readFile(path, opts); },
+			rename: async (oldPath: string, newPath: string) => { renames.push([oldPath, newPath]); },
+		};
+		const observer = { needsBaseline: () => false, record: () => {} };
+		const mounted = withMountTable(observeWrites(native, observer), [mountOf('pc', fakeTree({}))]);
 
 		await mounted.rename('/big.bin', '/renamed.bin');
 		expect(renames).toEqual([['/big.bin', '/renamed.bin']]);

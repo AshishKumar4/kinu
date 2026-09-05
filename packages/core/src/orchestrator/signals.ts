@@ -248,13 +248,14 @@ const stepBody = (signal: AgentSignal): string => signal.stepText ?? signal.text
 /** The turn metadata a signal carries: its `kinuEvent` provenance, the
  *  reply binding its source rows are bound to, and the producer's own.
  *
- *  The author stamp goes on LAST, after the producer's metadata, so the seam
- *  owns it: a producer says it carries the operator's words by naming the
- *  author, never by overwriting the stamp underneath the seam. */
+ *  The producer's metadata spreads FIRST, so the seam owns the reserved keys:
+ *  a producer naming `kinuEvent` or `drainTurnId` cannot move its turn under
+ *  another provenance or rebind its reply. The author stamp goes on LAST, so
+ *  a producer carrying the operator's words keeps them, and nothing else can
+ *  overwrite the stamp underneath the seam. */
 const turnMetadata = (signal: AgentSignal): JsonObject => {
-  const metadata: JsonObject = { kinuEvent: signal.kind };
+  const metadata: JsonObject = { ...signal.metadata, kinuEvent: signal.kind };
   if (signal.replyTurnId) metadata.drainTurnId = signal.replyTurnId;
-  Object.assign(metadata, signal.metadata);
   return stampTurnAuthor(metadata);
 };
 

@@ -32,7 +32,7 @@ import type {
   TeamToolDeps,
 } from '../tools/agents-tool';
 import { SUBORDINATE_LIFETIMES, type SubordinateLifetime, type TemporaryAgentPort } from './temporary';
-import { renderThrownChain } from '../obs/index';
+import { KinuError, renderThrownChain } from '../obs/index';
 
 export interface SubordinateLiveStatus {
   lastActivity: number | null;
@@ -666,6 +666,21 @@ export function createTeamToolDeps(deps: {
   const changed = () => {
     deps.broadcast({ type: 'subordinates_changed', subordinates: deps.roster.list() });
   };
+  /** The durable verbs' one gate on the roster: a task-lifetime row is owned by
+   *  the asking call that created it — its report resolves the port's waiter on
+   *  `task_event_id` — so a durable assign/message/dismiss that retargeted it
+   *  would orphan that waiter. Refused before anything is tried, classified
+   *  `bad_input`: the name addresses no durable operation. */
+  const requireDurable = (entry: SubordinateRosterEntry): SubordinateRosterEntry => {
+    if (entry.lifetime !== 'durable') {
+      throw new KinuError(
+        'bad_input',
+        `subordinate "${entry.name}" is a temporary agent for one question (lifetime 'task'), `
+          + 'released by the call that asked it — assign, message and dismiss apply to durable subordinates only',
+      );
+    }
+    return entry;
+  };
 
   const provision = async (input: {
     name?: string;
@@ -813,7 +828,7 @@ export function createTeamToolDeps(deps: {
 
     assign: async (input) => {
       const task = requiredText(input.task, 'task');
-      const before = deps.roster.requireActive(input.name);
+      const before = requireDurable(deps.roster.requireActive(input.name));
       deps.roster.assign(input.name, task);
       let handoff: SubordinateHandoff;
       try {
@@ -828,12 +843,13 @@ export function createTeamToolDeps(deps: {
         if (deadlineHint) Object.assign(assignment, { deadlineHint });
         if (inheritedContext) Object.assign(assignment, { inheritedContext });
         handoff = await deps.runtime.assign(input.name, assignment);
+        // Inside the rollback scope, not after it: this write compensates the
+        // transition above, so its own failure must restore `before` too —
+        // otherwise the row stays assigned with nothing its report can cite.
+        deps.roster.recordAssignmentEvent(input.name, handoff.eventId);
       } catch (error) {
         rollback(error, () => deps.roster.restore(before), 'subordinate assignment');
       }
-      // The row names the assignment its report will cite, for every lifetime:
-      // one correlation, written where the roster transition already is.
-      deps.roster.recordAssignmentEvent(input.name, handoff.eventId);
       changed();
       deps.broadcastTask({ subordinate: input.name, content: task, timestamp: deps.now() });
       return { ok: true, name: input.name, ...handoff };
@@ -848,7 +864,7 @@ export function createTeamToolDeps(deps: {
 
     message: async (input) => {
       const content = requiredText(input.content, 'content');
-      const before = deps.roster.requireActive(input.name);
+      const before = requireDurable(deps.roster.requireActive(input.name));
       deps.roster.resumeAfterMessage(input.name);
       let handoff: SubordinateHandoff;
       try {
@@ -861,7 +877,7 @@ export function createTeamToolDeps(deps: {
     },
 
     dismiss: async (input) => {
-      const before = deps.roster.requireExisting(input.name);
+      const before = requireDurable(deps.roster.requireExisting(input.name));
       if (before.createdBy === 'user' && input.requestedBy !== 'user') {
         throw new Error(`subordinate "${input.name}" was created by the owner and only the owner can dismiss it`);
       }

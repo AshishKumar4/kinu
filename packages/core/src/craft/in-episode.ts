@@ -68,6 +68,8 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import { BUILTIN_TOOL_NAMES } from '../tools/registry';
+import { isMcpToolKey } from '../tools/mcp-naming';
 import { DEFAULT_CONFIG } from '../config';
 import { nowMs } from '../utils/date';
 import { filterByEffectiveScore, updateCraftScores } from './ema';
@@ -98,6 +100,15 @@ export const CRAFT_INVOCATION_QUALITY = { returned: 0.7, raised: 0.1 } as const;
  *  injection filter forever (craft/ema.ts), so a tool that never gets a row
  *  can never be retired however badly it behaves. */
 export const CRAFT_NEUTRAL_PRIOR = 0.5;
+
+/** A crafted-tool name that would shadow a native tool or an MCP tool.
+ *  True for every name in BUILTIN_TOOLS (tools/registry.ts) and for the
+ *  `mcp_` prefix (tools/mcp-naming.ts isMcpToolKey). One predicate so the
+ *  admission gate (workspace.createTool) and the injection filter
+ *  (tools/builtins.ts) cannot disagree about what is reserved. */
+export function isReservedCraftToolName(name: string): boolean {
+  return BUILTIN_TOOL_NAMES.has(name) || isMcpToolKey(name);
+}
 
 /** Sandbox namespace a crafted tool is callable through. One name on both
  *  backends: CF defines the tools in the `tools` provider's prelude, and the

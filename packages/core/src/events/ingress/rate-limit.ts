@@ -57,6 +57,12 @@ export function tryConsumeWebhookRateLimit(
   rateLimitPerMin: number,
   now: number,
 ): WebhookRateLimitDecision {
+  // A 0 rate is a closed gate, not a misconfiguration: the trigger means
+  // "block" by it, so the gate answers blocked instead of throwing.
+  if (rateLimitPerMin === 0) {
+    const blockedWindowStart = Math.floor(now / WINDOW_MS) * WINDOW_MS;
+    return { allowed: false, limit: 0, remaining: 0, resetAt: blockedWindowStart + WINDOW_MS };
+  }
   const limit = normalizeWebhookRateLimitPerMin(rateLimitPerMin);
   const windowStart = Math.floor(now / WINDOW_MS) * WINDOW_MS;
   const resetAt = windowStart + WINDOW_MS;

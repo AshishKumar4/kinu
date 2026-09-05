@@ -170,13 +170,15 @@ export function getMctsConfig(config: AgentConfigStore): MctsConfigView {
   };
 }
 
-export function setMctsConfig(config: AgentConfigStore, view: Partial<MctsConfigView>): Partial<MctsConfigView> {
+/** Set any subset of the MCTS knobs. Returns the EFFECTIVE config, so a
+ *  caller sees what a clamped value actually became. */
+export function setMctsConfig(config: AgentConfigStore, view: Partial<MctsConfigView>): MctsConfigView {
   config.setMctsOverrides({
     explorationWeight: view.explorationConstant,
     budget: view.maxIterations,
     branches: view.branchBudget,
   });
-  return view;
+  return getMctsConfig(config);
 }
 
 /** The self-evolution knobs: who judges the agent, whether a proven scaffold

@@ -18,7 +18,7 @@ import { TurnContextBudget } from '../src/context-budget';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
-import { parseJsonValue, type JsonValue } from '../src/utils/json';
+import { decodeJsonValue, parseJsonValue, type JsonValue } from '../src/utils/json';
 
 interface RunInput {
   command: string;
@@ -281,5 +281,14 @@ describe('withClampedToolResults (external/MCP tool surfaces)', () => {
     });
     const wrapped = withClampedToolResults({ native: declarative }, { budget });
     expect(wrapped.native).toBe(declarative);
+  });
+});
+
+describe('the JSON boundary refuses what JSON cannot carry', () => {
+  test('decodeJsonValue rejects non-finite numbers', () => {
+    // A tool result of Infinity would otherwise store as Infinity and
+    // serialize as null — a silent corruption of what the call returned.
+    expect(() => decodeJsonValue({ value: Number.POSITIVE_INFINITY })).toThrow();
+    expect(() => decodeJsonValue({ value: Number.NaN })).toThrow();
   });
 });

@@ -35,12 +35,12 @@ import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { ExtensionHost } from './extension';
 import { mergeProviderOptions } from './strategy/effort';
 import { describeProviderError, toProviderError } from './providers/util';
-import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window';
+import { renderToolResult, synthesizeToolFallback } from './prompts/evidence-window';
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES } from './providers/rate-limit-retry';
-import { diagnostics, renderThrownChain, toKinuError } from './obs/index';
+import { diagnostics, toKinuError } from './obs/index';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -688,14 +688,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   // If still no text, synthesize from tool results
   if (!allText.trim()) {
-    const summaries: string[] = [];
-    for (const step of steps) {
-      for (const tr of step.toolResults) {
-        const output = tr.output;
-        summaries.push(`[${tr.toolName}] ${evidenceWindow(renderToolResult(output), EVIDENCE_BUDGETS.toolFallbackSummary)}`);
-      }
-    }
-    if (summaries.length > 0) allText = summaries.join('\n');
+    const fallback = synthesizeToolFallback(steps);
+    if (fallback) allText = fallback;
   }
 
   await extensions?.emitTurnEnd({ text: allText, responseMessages });
@@ -707,22 +701,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   if (interrupted) throw new Error(INTERRUPTED_TURN);
 }
 
-/** Render a tool result for the observability event stream and the no-text
- *  turn-summary fallback. The model receives the real object through the AI
- *  SDK's message history; this is the trajectory/human-facing rendering, so a
- *  structured result must serialize to its content — never `String({...})`'s
- *  "[object Object]". */
 function parseToolArgs<T>(raw: T): JsonObject {
   const parsed = v.safeParse(JsonObjectSchema, raw);
   return parsed.success ? parsed.output : {};
-}
-
-function renderToolResult<T>(raw: T): string {
-  const text = v.safeParse(v.string(), raw);
-  if (text.success) return text.output;
-  if (raw == null) return '';
-  try { return JSON.stringify(raw) ?? String(raw); }
-  catch (error) {
-    return `unserializable value: ${renderThrownChain({ cause: error })}`;
-  }
 }

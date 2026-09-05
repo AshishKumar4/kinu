@@ -18,7 +18,7 @@
 export function stripBase64Images(text: string): string {
   return text
     .replace(/\(data:image\/[^;]+;base64,[A-Za-z0-9+/=]+\)/g, '(image)')
-    .replace(/data:image\/[^;]+;base64,[A-Za-z0-9+/=\s]+/g, '[image]')
+    .replace(/data:image\/[^;]+;base64,[A-Za-z0-9+/=]{32,}/g, '[image]')
     .replace(/data:[^;,]+;base64,[A-Za-z0-9+/=\s]{200,}/g, '[binary-data]');
 }
 
@@ -26,7 +26,7 @@ const BLOCK_TAGS =
   'address|article|aside|blockquote|details|div|dl|dd|dt|fieldset|figcaption|figure|footer|form|header|hr|main|nav|ol|p|pre|section|table|tr|ul';
 
 /** Decode the small set of HTML entities that survive tag stripping. */
-function decodeEntities(s: string): string {
+export function decodeEntities(s: string): string {
   return s
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -84,7 +84,7 @@ export function htmlToMarkdown(html: string): string {
   return s;
 }
 
-function stripTags(html: string): string {
+export function stripTags(html: string): string {
   return html.replace(/<[^>]+>/g, '');
 }
 

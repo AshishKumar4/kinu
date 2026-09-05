@@ -108,6 +108,33 @@ describe('HeadFileChanges — the review a parent gets', () => {
       { path: 'logo.png', status: 'added', added: 0, removed: 0, binary: true },
     ]);
   });
+  test('a binary before-image stays binary (no utf8 decode of the baseline)', async () => {
+    const bytes = new Map<string, Uint8Array>([['logo.png', new Uint8Array([0x89, 0x50, 0xae, 0xff])]]);
+    const raw: VFS = {
+      readFile: async (path: string, opts?: { encoding?: string }) => {
+        const found = bytes.get(path);
+        if (found === undefined) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+        return opts?.encoding === 'utf8' ? new TextDecoder().decode(found) : found;
+      },
+      writeFile: async (path: string, data: string | Uint8Array) => {
+        bytes.set(path, data instanceof Uint8Array ? data : new TextEncoder().encode(data));
+      },
+      readdir: async () => [...bytes.keys()],
+      stat: async (path: string) => {
+        const found = bytes.get(path);
+        return found === undefined ? null : { size: found.length, mtimeMs: 0, isDir: false };
+      },
+      unlink: async (path: string) => { bytes.delete(path); },
+      mkdir: async () => {},
+      exists: async (path: string) => bytes.has(path),
+    };
+    const changes = new HeadFileChanges();
+    const vfs = observeWrites(raw, changes);
+    await vfs.writeFile('logo.png', 'hello\n');
+    expect(changes.snapshot()).toEqual([
+      { path: 'logo.png', status: 'changed', added: 0, removed: 0, binary: true },
+    ]);
+  });
 
   test("the head's own workspace is not reported — the parent cannot address it", async () => {
     const { local, changes } = watched();
@@ -122,7 +149,7 @@ describe('HeadFileChanges — the review a parent gets', () => {
     const changes = new HeadFileChanges();
     const refusing = observeWrites({
       ...memVfs(),
-      async writeFile() { throw makeVfsError('EROFS', 'read-only', 'x.ts'); },
+      async writeFile(_path: string, _data: string | Uint8Array) { throw makeVfsError('EROFS', 'read-only', 'x.ts'); },
     }, changes);
     await expect(refusing.writeFile('x.ts', 'nope')).rejects.toThrow();
     expect(changes.snapshot()).toEqual([]);

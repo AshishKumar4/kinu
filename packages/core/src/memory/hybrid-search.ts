@@ -77,7 +77,13 @@ export function memorySnippetRehydrator(memory: Pick<Memory, 'read'>): SnippetRe
       content = memory.read(hit.path);
       reads.set(hit.path, content);
     }
-    const text = await content;
+    let text: string | null;
+    try {
+      text = await content;
+    } catch (cause) {
+      if (reads.get(hit.path) === content) reads.delete(hit.path);
+      throw cause;
+    }
     if (text === null) return null;
     // 1-based, inclusive — the line convention memory chunk ids are minted with.
     return text.split('\n').slice(Math.max(0, hit.startLine - 1), hit.endLine).join('\n');
@@ -215,7 +221,18 @@ export async function hybridSearch(
     // A semantic-only hit has no lexical snippet to borrow: read its text back
     // from the chunk's own address, or it arrives blank and unusable.
     let snippet = l?.snippet ?? s?.text ?? '';
-    if (!snippet && s && options.rehydrate) snippet = await options.rehydrate(s) ?? '';
+    if (!snippet && s && options.rehydrate) {
+      try {
+        snippet = await options.rehydrate(s) ?? '';
+      } catch (cause) {
+        diagnostics.failure(
+          'memory.snippet_rehydrate_failed',
+          toKinuError({ doing: 'rehydrate a semantic hit snippet', cause, otherwise: 'io' }),
+          { id: m.id },
+        );
+        snippet = '';
+      }
+    }
     return {
       id: m.id,
       path: l?.path ?? s?.path ?? '',

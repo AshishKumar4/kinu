@@ -271,8 +271,10 @@ export class HeadController {
     const splitRecorded = this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
     if (splitRecorded !== undefined) await splitRecorded;
 
-    // Spawn all children concurrently.
-    const spawnPromises = opts.request.heads.map(async (h, idx) => {
+    // Spawn all children concurrently, each isolated: a spawn that throws
+    // settles only its own head (errored report, journaled below) and never
+    // reaches Promise.all, so a sibling's report is never lost with it.
+    const spawnPromises = opts.request.heads.map(async (h, idx): Promise<SpawnedHead | HeadReport> => {
       /**
        * THE HEAD'S ID IS DERIVED, NEVER MINTED, and that one change is what makes a
        * re-drive reuse this branch instead of adding one.
@@ -311,10 +313,39 @@ export class HeadController {
       // returns, and nothing may push that write behind a microtask.
       const spawnRecorded = this.journal.insertSpawn(input);
       if (spawnRecorded !== undefined) await spawnRecorded;
-      return this.runtime.spawnHead(input);
+      try {
+        return await this.runtime.spawnHead(input);
+      } catch (err) {
+        // Same shape the deadline arm below records: nothing ran, so the usage
+        // is unknown (`{}`), and the reason travels in `errorMessage`. Writing
+        // the report here moves the row out of `running`.
+        const failed: HeadReport = {
+          id,
+          status: 'errored',
+          summary: 'Head failed to spawn before producing a report.',
+          evidence: [],
+          decisions: [],
+          artifactRefs: [],
+          fileChanges: [],
+          childHeadIds: [],
+          toolCalls: [],
+          stepCount: 0,
+          usage: {},
+          wallClockMs: 0,
+          errorMessage: renderThrownChain({ cause: err }),
+        };
+        await this.journal.recordReport(failed);
+        return failed;
+      }
     });
 
-    const handles = await Promise.all(spawnPromises);
+    const settled = await Promise.all(spawnPromises);
+    // Only heads that actually spawned hold a handle. The split event carries
+    // exactly these ids — never a head that failed to spawn.
+    const handles: SpawnedHead[] = [];
+    for (const s of settled) {
+      if ('run' in s) handles.push(s);
+    }
     const startedAt = Date.now();
 
     // Fire 'split' with the REAL head ids the controller just spawned.
@@ -331,7 +362,11 @@ export class HeadController {
     // seconds and must not be charged against the head's own
     // time-to-produce-a-report.
     const reports = await Promise.all(
-      handles.map(async (h): Promise<HeadReport> => {
+      settled.map(async (s): Promise<HeadReport> => {
+        // A head whose spawn failed already banked its errored report above; it
+        // rejoins here in its original slot so the merge still sees every head.
+        if (!('run' in s)) return s;
+        const h = s;
         const remainingMs = parentBudget.maxWallClockMs === undefined
           ? undefined
           : parentBudget.maxWallClockMs - (Date.now() - startedAt);
@@ -377,7 +412,7 @@ export class HeadController {
       opts.inheritedContext,
       parentBudget,
       opts.mode,
-      handles.map((h) => h.id),
+      reports.map((r) => r.id),
       headScores,
     );
     await this.journal.cacheMerge(rootId, mergeResult, strategy);

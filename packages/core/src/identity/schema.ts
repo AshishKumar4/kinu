@@ -250,7 +250,7 @@ export function sqlCheckList(values: readonly string[]): string {
 
 /** Move the pre-rename `agent_identity` row (identical columns) into
  *  workspace_identity. Without it an older local workspace loses its id, name
- *  and creation date, and openWorkspace rejects it as having no identity. */
+ *  and creation date, and the CLI open rejects it as having no identity. */
 function adoptLegacyAgentIdentity(sql: SqlExecutor): void {
   if (!tableExists(sql, 'agent_identity')) return;
 

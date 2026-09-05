@@ -63,13 +63,11 @@ async function observeLayers<S>(
   const observations = new Map<string, string>();
   for (const layer of layers) {
     for (const probe of layer.probes) {
-      let value: LayerObservation;
       try {
-        value = await probe.observe(subjects);
+        observations.set(probe.id, digest(await probe.observe(subjects)));
       } catch (err) {
-        value = { threw: renderThrownChain({ cause: err }) };
+        observations.set(probe.id, digest({ threw: renderThrownChain({ cause: err }) }));
       }
-      observations.set(probe.id, digest(value));
     }
   }
   return observations;

@@ -11,7 +11,7 @@ import {
 } from '../src/profiles/catalog';
 import { resolveTurnProfile } from '../src/profiles/resolve';
 import { SPEND_SOURCES, resolveModelRoute } from '../src/profiles/model-route';
-import { parseRoleSelectionRow } from '../src/config/store';
+import { AGENT_CONFIG_KEYS, parseRoleSelectionRow } from '../src/config/store';
 import { changeActiveRole, roleChangeOutcomeText } from '../src/profiles/role-change';
 import type { RoleChangeOutcome, RoleStateStore } from '../src/profiles/role-change';
 import type { ProfileCatalogEnvelope } from '../src/profiles';
@@ -137,7 +137,7 @@ describe('durable role change', () => {
     const config = memoryConfig();
     const out = changeActiveRole({ envelope: envelope(), config, to: 'auditor', actor: 'user' });
     expect(out).toEqual({ kind: 'applied', from: 'general', to: 'auditor', catalogVersion: 3 });
-    expect(parseRoleSelectionRow(config.get('role_selection'))).toEqual({ kind: 'catalog', roleId: 'auditor' });
+    expect(parseRoleSelectionRow(config.get(AGENT_CONFIG_KEYS.roleSelection))).toEqual({ kind: 'catalog', roleId: 'auditor' });
     expect(config.get('role_changed_by')).toBe('user');
     const nextTurn = resolveTurnProfile(baseInput({ roleId: 'auditor' }));
     expect(nextTurn.role.id).toBe('auditor');
@@ -146,15 +146,15 @@ describe('durable role change', () => {
 
   test('locked refuses agent self-switch but not the owner', () => {
     const config = memoryConfig();
-    config.set('role_change_policy', 'locked');
+    config.set(AGENT_CONFIG_KEYS.roleChangePolicy, 'locked');
     expect(changeActiveRole({ envelope: envelope(), config, to: 'planner', actor: 'agent' }))
       .toEqual({ kind: 'refused', reason: 'locked' });
     expect(changeActiveRole({ envelope: envelope(), config, to: 'planner', actor: 'user' }))
       .toEqual({ kind: 'applied', from: 'general', to: 'planner', catalogVersion: 3 });
   });
-  test('approval stages a widening self-switch and lands a narrowing one', () => {
+  test('approval refuses a widening self-switch and lands a narrowing one', () => {
     const config = memoryConfig();
-    config.set('role_change_policy', 'approval');
+    config.set(AGENT_CONFIG_KEYS.roleChangePolicy, 'approval');
     const restricted = envelope({
       roles: {
         ...BUILTIN_PROFILE_CATALOG.roles,
@@ -172,18 +172,20 @@ describe('durable role change', () => {
     // general (full surface) → scout (narrow): not widening, lands now.
     const narrowed = changeActiveRole({ envelope: restricted, config, to: 'scout', actor: 'agent' });
     expect(narrowed.kind).toBe('applied');
-    // scout → generalist widens: staged for the owner, active unchanged.
+    // scout → generalist widens: refused with the approval named, active
+    // unchanged, and no request row staged for an owner surface that reads one.
     const widened = changeActiveRole({ envelope: restricted, config, to: 'generalist', actor: 'agent' });
-    expect(widened).toEqual({ kind: 'staged', from: 'scout', to: 'generalist' });
-    expect(parseRoleSelectionRow(config.get('role_selection'))).toEqual({ kind: 'catalog', roleId: 'scout' });
+    expect(widened).toEqual({ kind: 'refused', reason: 'approval-required' });
+    expect(parseRoleSelectionRow(config.get(AGENT_CONFIG_KEYS.roleSelection))).toEqual({ kind: 'catalog', roleId: 'scout' });
+    expect(config.get('pending_role_id')).toBeNull();
     // The widening classification itself is proved by the two outcomes above:
-    // the narrowing switch landed and the widening one staged.
+    // the narrowing switch landed and the widening one did not.
   });
   test('unknown roles are refused with nothing stored', () => {
     const config = memoryConfig();
     expect(changeActiveRole({ envelope: envelope(), config, to: 'no-such-role', actor: 'agent' }))
       .toEqual({ kind: 'refused', reason: 'unknown-role' });
-    expect(config.get('role_selection')).toBeNull();
+    expect(config.get(AGENT_CONFIG_KEYS.roleSelection)).toBeNull();
   });
 });
 
@@ -195,14 +197,13 @@ describe('what a caller is told about a role change', () => {
   const say = (outcome: RoleChangeOutcome, requested = 'auditor', current = 'general') =>
     roleChangeOutcomeText(requested, outcome, current);
 
-  test('a STAGED change is not reported as a failure', () => {
-    // The defect this replaces: both backends threw `role "x" was refused:
-    // staged`, which tells the agent to retry something already pending and
-    // makes an approval policy read as a broken one. Staged SUCCEEDED; its
-    // effect is waiting on the owner.
-    const text = say({ kind: 'staged', from: 'general', to: 'auditor' });
-    expect(text).toContain('awaiting owner approval');
-    expect(text).not.toContain('refused');
+  test('an approval widening is refused with the approval named', () => {
+    // The defect this replaces: a widening self-switch answered `staged`,
+    // which promised an owner approval no surface ever delivers. The refusal
+    // names the approval instead, so the agent asks the owner to switch.
+    const text = say({ kind: 'refused', reason: 'approval-required' });
+    expect(text).toContain('approval');
+    expect(text).not.toContain('awaiting owner approval');
     // And it names what runs meanwhile, which is the actionable half.
     expect(text).toContain('"general"');
   });
@@ -216,10 +217,10 @@ describe('what a caller is told about a role change', () => {
   test('every outcome names the role that is live afterwards', () => {
     const outcomes: RoleChangeOutcome[] = [
       { kind: 'applied', from: 'general', to: 'auditor', catalogVersion: 3 },
-      { kind: 'staged', from: 'general', to: 'auditor' },
       { kind: 'refused', reason: 'locked' },
       { kind: 'refused', reason: 'unknown-role' },
       { kind: 'refused', reason: 'invalid-role-id' },
+      { kind: 'refused', reason: 'approval-required' },
     ];
     for (const outcome of outcomes) {
       const text = say(outcome);
@@ -242,7 +243,7 @@ describe('what a caller is told about a role change', () => {
     // `currentRole` is consulted only for the members carrying no `from`, so a
     // stale read passed by a caller cannot make the sentence disagree with what
     // actually happened.
-    const text = say({ kind: 'staged', from: 'scout', to: 'generalist' }, 'generalist', 'stale-value');
+    const text = say({ kind: 'applied', from: 'scout', to: 'generalist', catalogVersion: 3 }, 'generalist', 'stale-value');
     expect(text).toContain('"scout"');
     expect(text).not.toContain('stale-value');
   });

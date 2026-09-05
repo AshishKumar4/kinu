@@ -3,9 +3,10 @@ import {
   paretoFront, paretoObjectiveAxes, validateParetoEvidence,
   type InstancedObjective, type VectorObjective,
 } from '../src/strategy/objective';
-import { seedResumedSearch } from '../src/strategy/swarm-setup';
+import { regionRefusal, seedResumedSearch } from '../src/strategy/swarm-setup';
 import type { SwarmReentry } from '../src/strategy/swarm-resume';
 import type { TreeNode } from '../src/strategy/swarm-tree';
+import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
 
 const INSTANCED: InstancedObjective = {
   kind: 'instanced', metric: 'held-out score', unit: 'fraction', direction: 'maximise',
@@ -88,5 +89,37 @@ describe('Pareto advance evidence', () => {
     });
     expect(seeded.candidates[0]?.pareto).toEqual(evidence);
     expect(nodes.get('child')?.pareto).toEqual(evidence);
+  });
+});
+
+describe('Pareto advance with a publishing carry', () => {
+  test('both entry points refuse elites and artifacts as bad_input before anything spends', () => {
+    // A Pareto frontier lives in node evidence as a vector; the records store only
+    // persists scalars, so a publishing carry under advance:"pareto" could never land.
+    // Both gates refuse the tuple outright — the tool surface through `swarmValidity`
+    // and an in-process caller through `regionRefusal`, which `runSwarm` checks first.
+    for (const carry of [{ kind: 'elites' } as const, { kind: 'artifacts', threshold: 0.8 } as const]) {
+      const call = resolveSwarm({
+        preset: 'custom',
+        label: 'pareto-publishing-carry',
+        task: 'reach the front',
+        objective: VECTOR,
+        config: {
+          unit: { kind: 'thought' },
+          context: 'fork',
+          expand: 'sample',
+          score: { kind: 'verify' },
+          advance: { kind: 'pareto' },
+          carry,
+        },
+        depth: 2,
+        branches: 2,
+      });
+      if ('reason' in call) throw new Error(`the tuple must resolve so validity can refuse it: ${call.error}`);
+      expect(swarmValidity(call)).toMatchObject({ reason: 'bad_input' });
+      expect(swarmValidity(call)?.error).toContain('advance:"pareto"');
+      expect(regionRefusal(call)).toMatchObject({ reason: 'bad_input' });
+      expect(regionRefusal(call)?.error).toContain('advance:"pareto"');
+    }
   });
 });

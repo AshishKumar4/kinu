@@ -46,7 +46,7 @@ import {
   initAgentConfigTable,
   type AgentConfigStore,
 } from '../src/index';
-import { CODE_IS_REFUSAL } from '../src/obs/index';
+import { CODE_IS_REFUSAL, KinuError } from '../src/obs/index';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSql as makeTagged, makeSqlExec, makeExecRaw } from './helpers';
 
@@ -280,6 +280,18 @@ describe('the delegation depth cap', () => {
   // stored depth can only ever make an actor MORE restricted than this code.
   test('a depth past the cap clamps to no room rather than to negative room', () => {
     expect(delegationBudgetAtDepth(9)).toEqual({ depth: 9, maxDepth: 0 });
+  });
+
+  // Deriving past the cap must not go negative: a negative maxDepth still
+  // refuses, but it is a second representation of "no room" beside 0.
+  test('a child derived at the cap clamps rather than going negative', () => {
+    expect(deriveChildDelegationBudget(delegationBudgetAtDepth(4))).toEqual({ depth: 5, maxDepth: 0 });
+  });
+
+  // A stored negative depth must not read as MORE room than the root: without
+  // the bound it inflates past the cap it exists to enforce.
+  test('a stored negative depth reads as the root instead of inflating room', () => {
+    expect(delegationBudgetAtDepth(-2)).toEqual({ depth: 0, maxDepth: DELEGATION_MAX_DEPTH });
   });
 });
 const initialRosterEntry: SubordinateRosterEntry = {
@@ -726,6 +738,54 @@ describe('team action routing', () => {
       expect(h.broadcasts).toHaveLength(broadcastsBefore);
       expect(h.tasks).toHaveLength(operation === 'spawn' ? 0 : 1);
     }
+  });
+
+  test('an event write after admission still rolls the roster back to before', async () => {
+    const h = makeTeamHarness();
+    await h.team.spawn({ mode: 'build', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Initial mission' });
+    const before = h.roster.get('researcher-a1b2c3');
+    const broadcastsBefore = h.broadcasts.length;
+    // The write that names the assignment its report will cite runs after the
+    // rollback scope, so forcing it to throw proves the scope covers it: the
+    // row must read exactly as before, not assigned with nothing to cite.
+    const recordAssignmentEvent = h.roster.recordAssignmentEvent.bind(h.roster);
+    h.roster.recordAssignmentEvent = () => { throw new Error('event write failed'); };
+    try {
+      await expect(h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' }))
+        .rejects.toThrow('event write failed');
+    } finally {
+      h.roster.recordAssignmentEvent = recordAssignmentEvent;
+    }
+    expect(h.roster.get('researcher-a1b2c3')).toEqual(before);
+    expect(h.broadcasts).toHaveLength(broadcastsBefore);
+    expect(h.tasks).toHaveLength(1);
+  });
+
+  test('the durable verbs refuse a task-lifetime row before trying anything', async () => {
+    const h = makeTeamHarness();
+    // A temporary run in flight: its report resolves the port's waiter on this
+    // id, so a durable verb that retargeted the row would orphan that waiter.
+    h.roster.create({
+      name: 'ask-auditor-a1b2c3', createdBy: 'orchestrator', status: 'working',
+      currentTask: 'Is the migration reversible?', createdAt: 1_700_000_000_000,
+      dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1',
+    });
+    const before = h.roster.get('ask-auditor-a1b2c3');
+    const attempts: Array<() => Promise<object>> = [
+      () => h.team.assign({ mode: 'build', name: 'ask-auditor-a1b2c3', task: 'Other work' }),
+      () => h.team.message({ mode: 'build', name: 'ask-auditor-a1b2c3', content: 'More context' }),
+      () => h.team.dismiss({ name: 'ask-auditor-a1b2c3' }),
+    ];
+    for (const attempt of attempts) {
+      const attempted = attempt();
+      await expect(attempted).rejects.toBeInstanceOf(KinuError);
+      // The refusal leads with its class on the wire the tool answers on.
+      await expect(attempted).rejects.toMatchObject({ code: 'bad_input' });
+    }
+    expect(h.roster.get('ask-auditor-a1b2c3')).toEqual(before);
+    expect(h.calls).toEqual([]);
+    expect(h.broadcasts).toEqual([]);
+    expect(h.tasks).toEqual([]);
   });
 
   test('a rejected initial mission deletes the new facet and leaves no roster row', async () => {
@@ -1211,13 +1271,17 @@ describe('the parent ingress, in the order it runs', () => {
     expect(scene.log.pending({ variant: 'subordinate_report' })).toEqual([]);
   });
 
-  test('a report from a subordinate this parent does not have is refused, not admitted', async () => {
+  test('a report from a subordinate this parent does not have is not awaited, not admitted', async () => {
     const scene = parent();
-    await expect(receiveSubordinateEvent(scene.deps, {
+    // An unknown name is a decision the roster has already forgotten, not a
+    // delivery failure: throwing made the child retry a report nobody awaits,
+    // so its terminal sequence never converged.
+    expect(await receiveSubordinateEvent(scene.deps, {
       fromSubordinate: 'ghost', status: 'progress', content: 'hello',
       origin: 'report_tool', sequenceId: 'settle:msg-1', mode: 'build',
-    }, 13)).rejects.toThrow('unknown subordinate "ghost"');
+    }, 13)).toEqual({ id: '', disposition: 'not_awaited' });
     expect(scene.files.size).toBe(0);
+    expect(scene.log.pending({ variant: 'subordinate_report' })).toEqual([]);
   });
 
   // The child's report is replayable durable work: its ledger re-runs the

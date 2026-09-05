@@ -122,11 +122,12 @@ export function stampTurnAuthor(metadata?: JsonObject): JsonObject {
  */
 export function turnAuthor<Metadata>(row: { id?: string; metadata?: Metadata }): TurnAuthor {
   const parsed = v.safeParse(TurnAuthorSchema, row.metadata ?? {});
-  if (!parsed.success) return 'operator';
-  const stamped = parsed.output[TURN_AUTHOR_METADATA_KEY];
-  if (stamped) return stamped;
-  const event = parsed.output.kinuEvent;
-  if (event !== undefined) return Object.hasOwn(LEGACY_OPERATOR_EVENTS, event) ? 'operator' : 'harness';
+  if (parsed.success) {
+    const stamped = parsed.output[TURN_AUTHOR_METADATA_KEY];
+    if (stamped) return stamped;
+    const event = parsed.output.kinuEvent;
+    if (event !== undefined) return Object.hasOwn(LEGACY_OPERATOR_EVENTS, event) ? 'operator' : 'harness';
+  }
   return row.id?.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX) ? 'harness' : 'operator';
 }
 

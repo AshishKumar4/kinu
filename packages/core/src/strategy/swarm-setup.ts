@@ -38,7 +38,7 @@ import {
   preflightVerifier, registeredVerifierKind, resolveVerifier,
   unregisteredKindRefusalFor, type ResolvedVerifier,
 } from './verifier-registry';
-import { measuredHalf, normalisedScore, paretoObjectiveAxes } from './objective';
+import { measuredHalf, normalisedScore, paretoObjectiveAxes, PUBLISHING_CARRIES } from './objective';
 import { argumentDigest } from '../safety/argument-digest';
 
 import type { ModelCallSink } from '../events/model-call';
@@ -120,6 +120,13 @@ export function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
     // Unreachable through `swarmValidity`, which refuses this composition outright.
     // Kept because this function is also the in-process entry point.
     return badInput(`advance:"${config.advance.kind}" cannot select without a score.`);
+  }
+  if (config.advance.kind === 'pareto'
+    && PUBLISHING_CARRIES.some((carry) => carry === config.carry.kind)) {
+    // Unreachable through `swarmValidity`, which refuses this composition outright.
+    // Kept because this function is also the in-process entry point.
+    return badInput('advance:"pareto" keeps its durable frontier in node evidence and cannot '
+      + 'publish a vector through the scalar records store. Use carry:"none" or "reflections".');
   }
   // `advance:'archive'` RUNS — see `admitToArchive` at the settle barrier. The refusal it
   // used to share with `pareto` said both "need a store this run has no writer for", and

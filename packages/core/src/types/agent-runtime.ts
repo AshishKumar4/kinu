@@ -36,7 +36,6 @@ export interface CraftStore {
   delete(name: string): void;
   list(): CraftedTool[];
   search(query: string, limit?: number): CraftedTool[];
-  getAll(): CraftedTool[];
 }
 
 /**

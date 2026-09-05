@@ -52,7 +52,7 @@ function nativeTasks(rt: AgentRuntime): Exec {
 function setup(): Exec {
   const { rt, testSql } = createTestRuntime();
   initAllTables(testSql.execRaw, testSql.sql);
-  initTaskListTable(testSql.execRaw);
+  initTaskListTable(testSql.execRaw, testSql.sql);
   return nativeTasks(rt);
 }
 
@@ -202,7 +202,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
   test('tasks.add/update/list share state with the native tool over the same TaskListStore', async () => {
     const { rt, testSql } = createTestRuntime();
     initAllTables(testSql.execRaw, testSql.sql);
-    initTaskListTable(testSql.execRaw);
+    initTaskListTable(testSql.execRaw, testSql.sql);
     const taskList = new TaskListStore(rt.storage.sql);
     const provider = createTasksCodemodeProvider(taskList, createAgentConfigStore(rt.storage.sql));
 
@@ -227,7 +227,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
   test('tasks.list reads the whole list back with subtasks, closed items included', async () => {
     const { rt, testSql } = createTestRuntime();
     initAllTables(testSql.execRaw, testSql.sql);
-    initTaskListTable(testSql.execRaw);
+    initTaskListTable(testSql.execRaw, testSql.sql);
     const taskList = new TaskListStore(rt.storage.sql);
     const provider = createTasksCodemodeProvider(taskList, createAgentConfigStore(rt.storage.sql));
     await codemodeExecute(provider, 'add')(['Parent task']);
@@ -245,7 +245,7 @@ describe('tasks action=mode — the agent\'s durable role', () => {
   function roleSetup() {
     const { rt, testSql } = createTestRuntime();
     initAllTables(testSql.execRaw, rt.storage.sql);
-    initTaskListTable(testSql.execRaw);
+    initTaskListTable(testSql.execRaw, testSql.sql);
     initAgentConfigTable(testSql.execRaw);
     return { tasks: nativeTasks(rt), rt, config: createAgentConfigStore(rt.storage.sql) };
   }
@@ -279,8 +279,9 @@ describe('tasks action=mode — the agent\'s durable role', () => {
   test('an unknown role is refused and changes nothing', async () => {
     const { tasks } = roleSetup();
     await tasks({ action: 'mode', role: 'auditor' });
-    expect(await tasks({ action: 'mode', role: 'yolo' }))
-      .toMatchObject({ error: expect.stringContaining('unknown role yolo') });
+    const refused = await tasks({ action: 'mode', role: 'yolo' });
+    // The refusal names the role it could not find and the roles it can.
+    expect(refused).toMatchObject({ error: expect.stringMatching(/"yolo"[^]*Known roles: auditor/) });
     expect(await tasks({ action: 'mode' })).toEqual({ role: 'auditor', roleSource: 'catalog' });
   });
 

@@ -20,12 +20,13 @@ export interface ScaffoldSurfaceOpts {
   path: string;
 }
 
+export async function readScaffoldFileText(vfs: VFS, target: string): Promise<string> {
+  const content = await vfs.readFile(target, { encoding: 'utf8' });
+  return content instanceof Uint8Array ? new TextDecoder().decode(content) : content;
+}
+
 export function createScaffoldSurface({ vfs, sql, path }: ScaffoldSurfaceOpts) {
   const versionedPath = (version: number) => `${path}.v${version}`;
-  const readDecoded = async (target: string): Promise<string> => {
-    const content = await vfs.readFile(target, { encoding: 'utf8' });
-    return content instanceof Uint8Array ? new TextDecoder().decode(content) : content;
-  };
   return {
     path,
     exists: async (): Promise<boolean> => {
@@ -36,9 +37,9 @@ export function createScaffoldSurface({ vfs, sql, path }: ScaffoldSurfaceOpts) {
     read: async (): Promise<string> => {
       const current = getCurrentScaffoldVersion(sql);
       if (current !== null && (await vfs.exists(versionedPath(current)))) {
-        return readDecoded(versionedPath(current));
+        return readScaffoldFileText(vfs, versionedPath(current));
       }
-      return readDecoded(path);
+      return readScaffoldFileText(vfs, path);
     },
     write: async (code: string): Promise<void> => {
       const slash = path.lastIndexOf('/');

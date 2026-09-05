@@ -992,6 +992,14 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('**custom_export** (external)');
   });
 
+  test('prompt surface skips malformed external tool entries instead of throwing', () => {
+    const externalTools = JSON.parse(
+      '[{"name":"good_tool","source":"mcp"},{"bogus":true},{"name":"  "},"plain_tool"]',
+    );
+    const surface = compilePromptSurface({ externalTools });
+    expect(surface.externalTools.map((tool) => tool.name)).toEqual(['good_tool', 'plain_tool']);
+  });
+
   test('prompt surface hides unavailable executors from selectable runtimes', () => {
     const surface = compilePromptSurface({
       executors: [

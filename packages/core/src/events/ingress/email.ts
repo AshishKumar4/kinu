@@ -259,7 +259,6 @@ export async function acceptInboundEmail(
   const { id, admitted } = deps.log.publish({
     descriptor: { ingress: 'email_inbound', variant: 'email', payload, sender_class },
     now: msg.now,
-    reply_channel: reply_channel_id ? { id: reply_channel_id, kind: 'email_thread' } : undefined,
   });
 
   if (reply_channel_id) {

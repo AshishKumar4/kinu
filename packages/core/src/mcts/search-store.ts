@@ -206,6 +206,9 @@ export class MctsSearchStore {
    * root is the workspace as found. The column is `NOT NULL` and relaxing it would be
    * a table rebuild, so a rootless run stores the empty string; nothing reads it back
    * except the resume path, which {@link findResumable} scopes to `mcts` rows.
+   *
+   * A repeated root id throws on the primary key instead of replacing: a
+   * replace would reset a live row's progress to zero and strand its tree.
    */
   begin(opts: {
     rootId: string; task: string; engine: SearchEngine; rootMsgId: string | null;
@@ -213,7 +216,7 @@ export class MctsSearchStore {
   }): void {
     void this.sql`DELETE FROM mcts_search_runs
       WHERE status != 'running' AND updated_at < ${opts.now - SETTLED_RETENTION_MS}`;
-    void this.sql`INSERT OR REPLACE INTO mcts_search_runs
+    void this.sql`INSERT INTO mcts_search_runs
       (root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
        judge_samples_realised, created_at, updated_at)
       VALUES (${opts.rootId}, ${opts.task}, ${opts.engine}, ${opts.rootMsgId ?? ''},

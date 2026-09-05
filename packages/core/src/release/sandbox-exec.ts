@@ -25,7 +25,8 @@ export function createSandboxReleaseExec(
       return {
         stdout: res.stdout ?? res.output ?? '',
         stderr: res.stderr ?? '',
-        exitCode: res.exitCode ?? 0,
+        // Absent exit code is failure, not success: the SDK resolves { stdout, exitCode } or { output, exitCode }, never a bare result.
+        exitCode: res.exitCode ?? 1,
       };
     },
     async writeFile(path, content) {

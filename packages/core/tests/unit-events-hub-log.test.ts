@@ -17,6 +17,7 @@ const DEFAULT_PAGE = boundEventQuery().limit;
 const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).limit;
 
 import type { JsonValue } from '../src/utils/json';
+import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { makeSqlExec } from './helpers';
 
 function makeSql(): SqlExec {
@@ -381,5 +382,29 @@ describe('boundEventQuery is the one policy the boundary applies', () => {
       .toBe(UNTRUSTED_CEILING);
     expect(boundEventQuery({ limit: Number.NaN }).limit).toBe(DEFAULT_PAGE);
     expect(boundEventQuery({ limit: 2.7 }).limit).toBe(2);
+  });
+});
+
+describe('EventLog skips corrupt payload rows', () => {
+  test('one unreadable payload is reported with its row id and the rest is returned', () => {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+    const bad = log.publish({ descriptor: chatDescriptor('bad'), now: 1 }).id;
+    const good = log.publish({ descriptor: chatDescriptor('good'), now: 2 }).id;
+    sql.exec(`UPDATE agent_log SET payload = ? WHERE id = ?`, 'not-json{{{', bad);
+    const rec = createRecordingLogger();
+    const restore = setDiagnosticsSink(rec);
+    try {
+      // Either read alone used to throw the whole drain away with it.
+      expect(log.pending().map((event) => event.id)).toEqual([good]);
+      expect(log.query({}).map((event) => event.id)).toEqual([good]);
+    } finally {
+      restore();
+    }
+    expect(rec.emitted.map((line) => [line.event, line.fields])).toEqual([
+      ['event.row_unreadable', { id: bad }],
+      ['event.row_unreadable', { id: bad }],
+    ]);
   });
 });

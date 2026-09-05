@@ -364,10 +364,6 @@ export async function runSwarm(
   });
   if ('reason' in nodeModelsResult) return nodeModelsResult;
   const nodeModels = nodeModelsResult.models;
-  if (paretoAdvance && PUBLISHING_CARRIES.some((carry) => carry === resolved.config.carry.kind)) {
-    return unsupported('advance:"pareto" keeps its durable frontier in node evidence and cannot '
-      + 'publish a vector through the scalar records store. Use carry:"none" or "reflections".');
-  }
   const publishing = paretoAdvance
     ? null
     : PUBLISHING_CARRIES.find(
@@ -581,10 +577,10 @@ export async function runSwarm(
   // omitted by `JSON.stringify`, and the read model reports an absent knob as
   // unrecorded rather than as a default it invented.
   //
-  // A RE-ENTRY TOUCHES THE ROW IT CLAIMED instead of writing one. `begin` is an
-  // INSERT OR REPLACE that resets the status to `running` and the epoch to zero, so
-  // calling it here would throw away the lease this run just took and un-fence the
-  // executor it was taken from. And the row carries no progress for a swarm to write:
+  // A RE-ENTRY TOUCHES THE ROW IT CLAIMED instead of writing one. `begin` is a
+  // plain INSERT that throws on an existing root, so calling it here would fail
+  // on the row this run just claimed. The row carries no progress for a
+  // swarm to write:
   // progress is derived from the tree at read time (*search-store.ts*), so a re-entry
   // refreshes only the heartbeat.
   const ledgerConfig: PersistedSearchKnobs = {

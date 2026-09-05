@@ -123,7 +123,7 @@ function finishPrepareStep(
   // request smaller than the one that gets sent, by the ledger's whole size.
   const pruned = pipeline.prune
     ? pruneStepToolOutputs(base, pipeline.dynamic
-      ? { ...pipeline.prune, reservedTokens: pipeline.dynamic.ledger.overheadTokens }
+      ? { ...pipeline.prune, reservedTokens: (pipeline.prune.reservedTokens ?? 0) + pipeline.dynamic.ledger.overheadTokens }
       : pipeline.prune)
     : undefined;
   const shrunk = pruned ?? base;

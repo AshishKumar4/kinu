@@ -11,10 +11,7 @@
  * decide where a turn lands.
  */
 
-import type { AgentConfigStore } from './store';
-
-/** agent_config row holding the canonical conversation id. */
-const CONVERSATION_ID_CONFIG_KEY = 'conversation.id';
+import { AGENT_CONFIG_KEYS, type AgentConfigStore } from './store';
 
 /**
  * The conversation every workspace starts in.
@@ -28,8 +25,8 @@ const FIRST_CONVERSATION_ID = 'default';
 
 /** Resolve — creating on first use — the agent's canonical conversation id. */
 export function canonicalConversationId(config: AgentConfigStore): string {
-  const stored = config.get(CONVERSATION_ID_CONFIG_KEY);
+  const stored = config.get(AGENT_CONFIG_KEYS.conversationId);
   if (stored) return stored;
-  config.set(CONVERSATION_ID_CONFIG_KEY, FIRST_CONVERSATION_ID);
+  config.set(AGENT_CONFIG_KEYS.conversationId, FIRST_CONVERSATION_ID);
   return FIRST_CONVERSATION_ID;
 }

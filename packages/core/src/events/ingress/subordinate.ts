@@ -111,8 +111,11 @@ export async function receiveSubordinateEvent(
   const held = deps.log.idForDedupeKey(subordinateReportDedupeKey(input.sequenceId));
   if (held !== null) return { id: held, disposition: 'already_held' };
   const subordinate = deps.roster.get(input.fromSubordinate);
+  // An unknown name is a decision the roster has already forgotten, not a
+  // delivery failure. Throwing made the child retry a report nobody awaits,
+  // so its terminal sequence never converged. `not_awaited` settles its row.
   if (!subordinate) {
-    throw new Error(`unknown subordinate "${input.fromSubordinate}"`);
+    return { id: '', disposition: 'not_awaited' };
   }
   // A LIVE WAITER takes the answer, and only a live waiter. `settle` is handed
   // the row's own open-assignment id, so it answers exactly the call that asked

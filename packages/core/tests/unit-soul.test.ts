@@ -15,7 +15,6 @@ import {
 } from '../src/identity/soul';
 import { initAllTables } from '../src/identity/schema';
 import { createWorkspace } from '../src/identity/create';
-import { openWorkspace } from '../src/identity/open';
 import { makeSql, makeExecRaw, createWorkspaceBundle, makeAgentDatabase } from './helpers';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
@@ -92,18 +91,17 @@ describe('the mission a read-only listing reads', () => {
   });
 });
 
-describe('workspace birth and open', () => {
+describe('workspace birth', () => {
   test('createWorkspace seeds a readable soul and a matching mission', async () => {
     const db = new Database(':memory:');
     const agentDb = makeAgentDatabase(db);
-    await createWorkspace(agentDb, {
+    const rt = await createWorkspace(agentDb, {
       name: 'atlas', purpose: 'Help with testing.', llm: TEST_LLM,
     });
 
-    const { info } = await openWorkspace(agentDb, { llm: TEST_LLM });
-    expect(info.name).toBe('atlas');
-    expect(info.purpose).toBe('Help with testing.');
-    expect(info.soul).toContain('Help with testing.');
+    const identity = makeSql(db)<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0];
+    expect(identity?.name).toBe('atlas');
+    expect(await readSoul(rt.storage.vfs)).toContain('Help with testing.');
     expect(readMission(makeSql(db))).toBe('Help with testing.');
   });
 

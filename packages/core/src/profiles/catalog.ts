@@ -37,8 +37,8 @@ export type BuiltinRoleId = (typeof BUILTIN_ROLE_IDS)[number];
  * Declared, not derived from the array's first slot: reordering the builtins
  * would then silently move the default. `satisfies` still makes removing this
  * role from the builtins a compile error, so the constant cannot outlive the
- * role it names. Two adapters carried this sentinel as a bare `'general'` with
- * nothing tying either to this declaration.
+ * role it names. Config-store fallbacks read through this constant. The other
+ * bare spellings sit in other lanes, inside core and out.
  */
 export const DEFAULT_ROLE_ID = 'general' as const satisfies BuiltinRoleId;
 

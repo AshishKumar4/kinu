@@ -63,6 +63,12 @@ describe('partitionCorpus', () => {
   test('duplicate ids are refused — a corpus with two of the same task is not a corpus', () => {
     expect(() => partitionCorpus([task('dup'), task('dup')])).toThrow(/duplicate/);
   });
+
+  test('a sealed fraction outside [0, 1] is refused — NaN would silently keep every task in dev', () => {
+    expect(() => partitionCorpus([task('t1')], { sealedFraction: NaN })).toThrow(/sealedFraction must be in \[0, 1\]/);
+    expect(() => partitionCorpus([task('t1')], { sealedFraction: -0.1 })).toThrow(/sealedFraction must be in \[0, 1\]/);
+    expect(() => partitionCorpus([task('t1')], { sealedFraction: 1.5 })).toThrow(/sealedFraction must be in \[0, 1\]/);
+  });
 });
 
 describe('SealedSplit', () => {

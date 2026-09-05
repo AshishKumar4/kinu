@@ -4,8 +4,7 @@
  * Public surface:
  *
  *   - types:    `SkillHeader`, `DiscoveredSkill`, `ActiveSkill`, `SkillsIndex`, …
- *   - parse:    `parseSkillFile`, `stringifySkillFile`, `validateSkillName`,
- *               `skillNameProblem`
+ *   - parse:    `parseSkillFile`, `stringifySkillFile`, `skillNameProblem`
  *   - discover: `discoverSkills` (headers only — no body is read), `skillPath`,
  *               `readSkillBody`, `compareSkillNames`, `SkillsVfs`,
  *               `BUILTIN_SKILLS`, `BUILTIN_SKILL_HEADERS`
@@ -23,7 +22,7 @@
 
 export * from './types';
 export {
-  parseSkillFile, stringifySkillFile, validateSkillName, skillNameProblem,
+  parseSkillFile, stringifySkillFile, skillNameProblem,
 } from './parse';
 export {
   discoverSkills, readSkillFile, readSkillBody, skillPath, compareSkillNames,

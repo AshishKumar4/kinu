@@ -50,6 +50,7 @@ import {
   type CellSeek, type RecordCellHandle, type RecordObjectiveHandle,
 } from '../strategy/records';
 import type { SqlExecutor } from '../types/primitives';
+import { boundedInt } from '../utils/bounds';
 import { mapPage, seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
 
 /**
@@ -113,6 +114,12 @@ const DEFAULT_CELL_PAGE = 50;
 const DEFAULT_OCCUPANT_PAGE = 50;
 
 /**
+ * The ceiling on one leaderboard page. The run list's own ceiling: every entry
+ * here is RPC-reachable, and a negative limit reads whole tables at `LIMIT -1`.
+ */
+const MAX_RECORD_PAGE = 200;
+
+/**
  * Every comparable set the store holds, most recently written FIRST.
  *
  * Most-recent-first in both traversal and presentation, so a walker appends.
@@ -138,6 +145,7 @@ export function listRecordObjectives(
   cursor: SeekCursor | null = null,
   limit = DEFAULT_OBJECTIVE_PAGE,
 ): Page<RecordObjectiveSummary> {
+  const page = boundedInt(limit, DEFAULT_OBJECTIVE_PAGE, 1, MAX_RECORD_PAGE);
   const after = cursor === null ? null : objectiveAnchorOf(sql, cursor.after);
   const from = after === null ? 0 : 1;
   const at = after?.lastRecordedAt ?? 0;
@@ -164,9 +172,9 @@ export function listRecordObjectives(
                      OR (objective_id = ${objective}
                          AND COALESCE(floor_digest, '') > ${floor}))))
      ORDER BY last_recorded_at DESC, objective_id ASC, COALESCE(floor_digest, '') ASC
-     LIMIT ${limit + 1}`;
+     LIMIT ${page + 1}`;
 
-  return mapPage(seekPage(groups, limit, objectiveCursor), (rows) => rows.map((row) => {
+  return mapPage(seekPage(groups, page, objectiveCursor), (rows) => rows.map((row) => {
     const direction = asDirection(row.direction);
     const handle = { objectiveId: row.objective_id, floorDigest: row.floor_digest };
     return {
@@ -216,6 +224,7 @@ export function listRecordCells(
 ): Page<RecordCellSummary> {
   const direction = directionOf(sql, handle);
   if (direction === null) return { status: 'end', items: [] };
+  const page = boundedInt(limit, DEFAULT_CELL_PAGE, 1, MAX_RECORD_PAGE);
   const after = cursor === null ? null : cellAnchorOf(sql, handle, cursor.after);
   const from = after === null ? 0 : 1;
   const descriptor = after === null ? null : after.descriptor;
@@ -228,9 +237,9 @@ export function listRecordCells(
                 AND (${descriptor} IS NULL OR descriptor > ${descriptor})))
      GROUP BY descriptor
      ORDER BY CASE WHEN descriptor IS NULL THEN 0 ELSE 1 END ASC, descriptor ASC
-     LIMIT ${limit + 1}`;
+     LIMIT ${page + 1}`;
 
-  return mapPage(seekPage(cells, limit, cellCursor), (rows) => rows.map((row) => ({
+  return mapPage(seekPage(cells, page, cellCursor), (rows) => rows.map((row) => ({
     descriptor: row.descriptor,
     occupants: row.occupants,
     elite: recordsInCell(sql, { ...handle, descriptor: row.descriptor }, direction, null, 1)[0] ?? null,
@@ -255,8 +264,9 @@ export function readRecordCell(
 ): Page<ExplorationRecord> {
   const direction = directionOf(sql, handle);
   if (direction === null) return { status: 'end', items: [] };
+  const page = boundedInt(limit, DEFAULT_OCCUPANT_PAGE, 1, MAX_RECORD_PAGE);
   const seek = cursor === null ? null : occupantSeek(sql, handle, cursor.after);
-  return seekPage(recordsInCell(sql, handle, direction, seek, limit + 1), limit,
+  return seekPage(recordsInCell(sql, handle, direction, seek, page + 1), page,
     (record) => record.artifactDigest);
 }
 

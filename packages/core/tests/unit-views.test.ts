@@ -322,3 +322,67 @@ describe('view spec — markdown links', () => {
     expect(out.ok).toBe(true);
   });
 });
+
+// ── concurrent publish, missing-file delete, refusal reasons ──────────────────
+
+describe('view store — concurrent publish', () => {
+  test('two publishers racing one new slug both land, at versions 1 and 2', async () => {
+    const s = store();
+    const settled = await Promise.allSettled([
+      createView(s, 'health', validSpec()),
+      createView(s, 'health', validSpec({ title: 'Deploy health v2' })),
+    ]);
+    for (const outcome of settled) {
+      expect(outcome.status).toBe('fulfilled');
+      if (outcome.status !== 'fulfilled') continue;
+      expect(outcome.value).toMatchObject({ ok: true });
+    }
+    const versions = settled
+      .map((outcome) => (outcome.status === 'fulfilled' && outcome.value.ok ? outcome.value.version : 0))
+      .sort();
+    expect(versions).toEqual([1, 2]);
+    expect(listViewVersions(s.sql, 'health').map((v) => [v.version, v.status]))
+      .toEqual([[2, 'current'], [1, 'historical']]);
+    const live = await readView(s, 'health');
+    expect(live.ok).toBe(true);
+    if (!live.ok) return;
+    expect(live.version).toBe(2);
+    expect(['Deploy health', 'Deploy health v2']).toContain(live.spec.title);
+  });
+});
+
+describe('view store — delete with missing bytes', () => {
+  test('a live file already gone does not fail the retire', async () => {
+    const s = store();
+    await createView(s, 'health', validSpec());
+    await s.vfs.unlink('views/health.json');
+    // The memory fake deletes silently; the production plane raises ENOENT for
+    // a missing path, so say so here to exercise the contract that matters.
+    const strictVfs: VFS = {
+      ...s.vfs,
+      unlink: async (path) => {
+        if (!(await s.vfs.exists(path))) {
+          throw Object.assign(new Error(`ENOENT: no such file, unlink '${path}'`), { code: 'ENOENT' });
+        }
+        await s.vfs.unlink(path);
+      },
+    };
+    const removed = await deleteView({ sql: s.sql, vfs: strictVfs }, 'health');
+    expect(removed).toMatchObject({ ok: true });
+    expect(listViews(s.sql)).toEqual([]);
+    expect(listViewVersions(s.sql, 'health').map((v) => v.status)).toEqual(['deleted']);
+  });
+});
+
+describe('view store — validation refusal reasons', () => {
+  test('slug and spec failures carry bad_input for the bridge to pass on', async () => {
+    const s = store();
+    expect(await createView(s, '!!!', validSpec())).toMatchObject({ ok: false, reason: 'bad_input' });
+    expect(await createView(s, 'health', { v: 1, title: 'x', blocks: [] }))
+      .toMatchObject({ ok: false, reason: 'bad_input' });
+    expect(await createView(s, 'health', '{not json')).toMatchObject({ ok: false, reason: 'bad_input' });
+    expect(await createView(s, 'health', validSpec({
+      blocks: Array.from({ length: 9 }, () => ({ type: 'markdown', text: 'x'.repeat(4000) })),
+    }))).toMatchObject({ ok: false, reason: 'bad_input' });
+  });
+});

@@ -332,6 +332,31 @@ describe('normalizeUsage without a provider report', () => {
   });
 });
 
+describe('normalizeUsage with one mistyped provider field', () => {
+  test('a string neurons leaves the other fields on the provider witness', () => {
+    const u = normalizeUsage({
+      inputTokens: 88,
+      outputTokens: 24,
+      inputTokenDetails: { noCacheTokens: 88, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      outputTokenDetails: { textTokens: 24, reasoningTokens: 0 },
+      totalTokens: 112,
+      raw: {
+        prompt_tokens: 88,
+        completion_tokens: 24,
+        total_tokens: 112,
+        prompt_tokens_details: { cached_tokens: 0 },
+        neurons: '19.2',
+      },
+    });
+    expect(u.input).toBe(88);
+    expect(u.output).toBe(24);
+    expect(u.cacheRead).toBe(0);
+    expect('reasoning' in u).toBe(false);
+    expect('cacheWrite' in u).toBe(false);
+    expect('neurons' in u).toBe(false);
+  });
+});
+
 describe('usageReported', () => {
   test('a single reported zero counts as a report', () => {
     expect(usageReported({ cacheRead: 0 })).toBe(true);

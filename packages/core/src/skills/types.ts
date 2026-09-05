@@ -77,7 +77,7 @@ export interface SkillHeader {
   user_invocable: boolean;
   /** Forward-compat: any unknown front-matter keys preserved verbatim. */
   ext: JsonObject;
-  /** Where this skill came from. Used by the loader for precedence. */
+  /** Where this skill came from. The ambient index reads it to mark workspace files. Admission and gating read bodyRef and trust. */
   source: SkillSource;
 }
 

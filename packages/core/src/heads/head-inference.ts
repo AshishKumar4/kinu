@@ -41,6 +41,7 @@ import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { diagnostics, renderCauseChain, renderThrownChain, toKinuError } from '../obs/index';
+import type { BuiltinToolName } from '../tools/registry';
 
 /**
  * The mutable findings a head accumulates as it runs — evidence/decisions
@@ -193,7 +194,7 @@ const HEAD_PROMPT_TOOL_NAMES = [
 /** Every tool through which a head can reach a filesystem or run a command. If
  *  it holds none of them, the prompt says so instead of implying it can look
  *  things up. */
-const HEAD_WORK_TOOLS = ['execute_tools', 'run', 'file'] as const;
+const HEAD_WORK_TOOLS = ['execute_tools', 'run', 'file'] as const satisfies readonly BuiltinToolName[];
 export type HeadWorkspaceLayout = 'shared-workspace' | 'private-scratch';
 
 function hasHeadTool(tools: ReadonlySet<string>, ...names: readonly string[]): boolean {

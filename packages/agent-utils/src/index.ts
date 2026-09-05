@@ -1,4 +1,5 @@
 export type { SqlValue, SqlExecutor, SqlRow } from "./types";
+export type { CraftedTool } from "./codemode/builder";
 export type { VFS, VFSStat, VFSError } from "./vfs/types";
 export { MemoryStore, initMemoryChunkTables } from "./memory/store";
 export type { MemoryConfig } from "./memory/store";

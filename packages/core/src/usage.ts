@@ -106,8 +106,14 @@ export const UsageSchema = v.object({
 });
 
 /** A count a provider may omit, or send as an explicit null. Both mean "not
- *  reported", which `??` then folds into the next candidate. */
-const ReportedCount = v.optional(v.nullable(v.number()));
+ *  reported", which `??` then folds into the next candidate. A count of the
+ *  wrong type reads as not reported too, so one mistyped key cannot sink the
+ *  parse and hide the counts beside it. */
+const ReportedCount = v.fallback(v.optional(v.nullable(v.number())), undefined);
+/** A detail object a provider may omit, send as null, or send malformed; the
+ *  last reads as absent for the reason ReportedCount does. */
+const details = <const TEntries extends v.ObjectEntries>(entries: TEntries) =>
+  v.fallback(v.optional(v.nullable(v.looseObject(entries))), undefined);
 
 /**
  * The provider's own usage payload — every dialect the repo can reach, in one
@@ -141,26 +147,26 @@ const RawProviderUsageSchema = v.looseObject({
   // Anthropic only.
   cache_read_input_tokens: ReportedCount,
   cache_creation_input_tokens: ReportedCount,
-  cache_creation: v.optional(v.nullable(v.looseObject({
+  cache_creation: details({
     ephemeral_1h_input_tokens: ReportedCount,
-  }))),
+  }),
   // OpenAI Responses API.
-  input_tokens_details: v.optional(v.nullable(v.looseObject({
+  input_tokens_details: details({
     cached_tokens: ReportedCount,
-  }))),
-  output_tokens_details: v.optional(v.nullable(v.looseObject({
+  }),
+  output_tokens_details: details({
     reasoning_tokens: ReportedCount,
-  }))),
+  }),
   // OpenAI-compatible and OpenAI chat-completions.
   prompt_tokens: ReportedCount,
   completion_tokens: ReportedCount,
-  prompt_tokens_details: v.optional(v.nullable(v.looseObject({
+  prompt_tokens_details: details({
     cached_tokens: ReportedCount,
     cache_write_tokens: ReportedCount,
-  }))),
-  completion_tokens_details: v.optional(v.nullable(v.looseObject({
+  }),
+  completion_tokens_details: details({
     reasoning_tokens: ReportedCount,
-  }))),
+  }),
   // Cloudflare Workers AI adds its billing unit to the OpenAI-compatible shape.
   neurons: ReportedCount,
 });

@@ -264,7 +264,7 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // open is exactly the bug.
   initInstructionApprovalsTable(execRaw);
   // The agent's own task list, written by the `tasks` tool.
-  initTaskListTable(execRaw);
+  initTaskListTable(execRaw, sql);
   // Durable tree-search checkpoints: an evicted search resumes here, and both search
   // engines record what they ran with here.
   initMctsSearchTable(execRaw, sql);

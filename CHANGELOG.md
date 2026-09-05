@@ -534,6 +534,19 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- Shell approval patterns cover `rm -rf //`, `--no-preserve-root`, `| /bin/sh`, `| sudo sh`, `| dash`, plain `su`, chown flags, refspec-first `git push --force`, setgid modes, reversed `dd` on NVMe and virtio disks, and `mkfs -t`.
+- A release cannot record a staging or production deploy without a deploy command; a hostile default branch is refused and fetched as an explicit refspec; an exec result without an exit code fails closed.
+- A head that fails to spawn is recorded as errored and its siblings still merge.
+- Durable team verbs refuse a temporary (task-lifetime) agent, an assignment rolls back whole, a failed release keeps both errors, and delegation depth clamps at zero.
+- The workspace file observer keeps binary before-images and forwards native rename, remove, ranged read and conditional write; a missing path throws ENOENT on both removal paths.
+- Experience imports refuse a malformed entry before writing, skip a corrupt row, record the settling turn, and gate on the import checklist; scaffold probation counts vetoes through now.
+- Run events insert instead of replace, every event read clamps its limit, and a filtered read pages until it fills; a corrupt hub row is skipped with a diagnostic; an unknown subordinate report answers not_awaited; a 0 rate blocks; the container trust table lives once.
+- Views claim their ledger row before writing bytes, delete tolerates a missing live file, and validation refusals carry `bad_input`. Plan reviews fit one platform row.
+- Crafted tools cannot take a builtin or `mcp_` name; `record_check` refuses when a release engine is wired; MCTS test selection keeps a prose winner and survives a judge or abort failure; a repeated search root refuses instead of resetting.
+- Skills admit the readable ones when one file fails, parse boolean flags strictly, and match spec-dialect tool patterns by family. Memory search degrades per hit, fact confidence clamps to 0..1, fact keys share one normalizer.
+- Config setters refuse invalid tiers, policies, modes and severities; counters increment in one statement; usage presence parses per field; curriculum proposals validate count and window and cap what they persist; task statuses are CHECK-constrained.
+- Read models clamp every caller limit and fold whole runs; the layergate quarantines a non-serializable observation; extension hooks, structured-JSON fences, prompt-surface entries, prune reservations and Infinity in JSON are handled at their boundaries.
+
 - The advisor answers no note for a reply with no JSON, and delivers a turn with an empty id without a fabricated idempotency key.
 
 - Codex requests opt out of storage on every request shape, including requests that already carry instructions.

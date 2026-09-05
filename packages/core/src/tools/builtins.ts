@@ -79,6 +79,7 @@ import { createFileTool } from './file-tool';
 import { TurnFileLedger } from './file-ledger';
 import { TurnContextBudget } from '../context-budget';
 import { isMcpToolKey } from './mcp-naming';
+import { isReservedCraftToolName } from '../craft/in-episode';
 import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executor';
 import { filterByEffectiveScore } from '../craft/ema';
 import { attributeCraftedFailure } from '../craft/attribution';
@@ -287,6 +288,18 @@ function buildCraftedToolSetFromExecute(
 
   for (const t of list) {
     if (!t.code || t.code.startsWith('//')) continue;
+    if (isReservedCraftToolName(t.name)) {
+      diagnostics.failure(
+        CRAFT_TOOL_SKIPPED,
+        toKinuError({
+          doing: 'compile a crafted tool',
+          cause: new KinuError('bad_input', `Crafted tool "${t.name}" is reserved — it collides with a built-in tool or the mcp_ prefix owned by MCP tools`),
+          otherwise: 'bad_input',
+        }),
+        { tool: t.name },
+      );
+      continue;
+    }
     if (relevantNames && !relevantNames.has(t.name)) continue;
     if (!scorePassing.has(t.name)) continue;
     const description = craftedToolDescription(t.name, t.description);

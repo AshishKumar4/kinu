@@ -209,4 +209,26 @@ describe('runScaffold', () => {
     expect(result.error).toBeUndefined();
     expect(events.some((e) => e.type === 'text_delta')).toBe(true);
   });
+
+  test('a throwing generator scaffold emits exactly one error event', async () => {
+    const events: ScaffoldEvent[] = [];
+    const rt = makeRtWithMockedExecutor(async (code, providers) => {
+      const arr: ResolvedProvider[] = Array.isArray(providers)
+        ? providers
+        : [{ name: 'workspace', fns: providers }];
+      try {
+        const fn = new Function(...arr.map((p) => p.name), `return (async () => {\n${code}\n})();`);
+        await fn(...arr.map((p) => p.fns));
+        return { result: undefined };
+      } catch (err) {
+        return { result: undefined, error: err instanceof Error ? err.message : String(err) };
+      }
+    });
+    const result = await runScaffold({
+      rt, task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
+      scaffoldCodeOverride: `async function* run(rt, task) { throw new Error('boom'); }`,
+    });
+    expect(result.ok).toBe(false);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+  });
 });

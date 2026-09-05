@@ -8,7 +8,6 @@ import type { Command } from 'commander';
 import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall, parseRefusal } from '@kinu.run/core';
 import type { SearchNode, ReasoningEffort, JsonObject } from '@kinu.run/core';
 import { clipText } from './tui/format';
-import type { WorkspaceInfo } from '@kinu.run/core/identity';
 import { guideFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
 
@@ -178,7 +177,19 @@ export function printCreatedCard(name: string, purpose: string, model: string, d
 
 // ── Agent status card ────────────────────────────────────────────
 
-export function printAgentStatus(info: WorkspaceInfo, dbSize: number, extra?: {
+/** The status card reads these fields of a workspace, whichever reader supplied them. */
+export interface AgentStatusInfo {
+  name: string;
+  purpose: string;
+  createdAt: number;
+  scaffoldVersion: number;
+  searchNodeCount: number;
+  taskCount: number;
+  craftedToolCount: number;
+  memorySize: number;
+}
+
+export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: {
   conversationCount?: number;
   model?: string | null;
   reasoningEffort?: ReasoningEffort | null;

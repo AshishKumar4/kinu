@@ -5,7 +5,6 @@
 //   - A/B test "MCTS vs single-shot" on 30 tasks
 //   - Validate a new search policy doesn't regress on existing corpus
 //   - Score a scaffold mutation against a held-out task set
-//   - Track which strategy wins on which task class (drives router policy)
 import * as v from 'valibot';
 import type { JsonObject } from '../utils/json';
 
@@ -84,7 +83,6 @@ export interface EvalSummary {
   ties: number;
   avgScoreA: number;
   avgScoreB: number;
-  byTag: Record<string, { aWins: number; bWins: number; ties: number }>;
 }
 
 export function summarizeEval(results: EvalResult[]): EvalSummary {
@@ -92,7 +90,6 @@ export function summarizeEval(results: EvalResult[]): EvalSummary {
     total: results.length,
     aWins: 0, bWins: 0, ties: 0,
     avgScoreA: 0, avgScoreB: 0,
-    byTag: {},
   };
   for (const r of results) {
     if (r.verdict.winner === 'a') summary.aWins++;

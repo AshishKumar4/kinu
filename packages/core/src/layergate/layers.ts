@@ -17,7 +17,7 @@
 
 import type { ModelMessage } from 'ai';
 import { ExtensionHost } from '../extension';
-import { DynamicContextLedger } from '../prompting/volatile-context';
+import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import { TurnAccumulator } from '../orchestrator/turn-accumulator';
 import { CraftCycle } from '../orchestrator/craft-cycle';
 import type { CraftLedger } from '../craft/in-episode';
@@ -583,9 +583,25 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'step-pipeline/dynamic-block-precedes-the-markers',
         asserts: 'the live-state block is appended before the cache tail rolls, so the newest block carries a breakpoint',
         observe: async (s) => {
+          class FixedBlockLedger extends DynamicContextLedger {
+            private appended: ModelMessage[] = [];
+            override get overheadTokens(): number {
+              return 0;
+            }
+            override get size(): number {
+              return this.appended.length;
+            }
+            override weave(history: ReadonlyArray<ModelMessage>, _state: DynamicContext): ModelMessage[] {
+              this.appended.push({ role: 'user', content: '<dynamic_context>fixed</dynamic_context>' });
+              return [...history, ...this.appended];
+            }
+            override reset(): void {
+              this.appended = [];
+            }
+          }
           let step = 0;
           const dynamic = {
-            ledger: new DynamicContextLedger(),
+            ledger: new FixedBlockLedger(),
             snapshot: () => ({ factsBlock: `a: ${step++}` }),
           };
           const first = await s.composePrepareStep(

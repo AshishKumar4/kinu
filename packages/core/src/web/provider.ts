@@ -23,10 +23,10 @@
 
 import * as v from 'valibot';
 import { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './url-safety';
-import { htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images } from './markdown';
+import { decodeEntities, htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images, stripTags } from './markdown';
 import type { AuthResolver } from '../providers/types';
 import { TOOL_REACH } from '../tools/registry';
-import { tolerate } from '../obs/index';
+import { diagnostics, toKinuError, tolerate } from '../obs/index';
 
 /** Credential key for the optional Tavily search upgrade. */
 export const TAVILY_CRED_KEY = 'tavily';
@@ -116,11 +116,14 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
   // a bare `fetch()` call (undici on the CLI is `this`-insensitive either way).
   const fetchImpl = deps.fetch;
 
-  const withTimeout = async (run: (signal: AbortSignal) => Promise<Response>): Promise<Response> => {
+  const withTimeout = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const onAbort = new Promise<never>((_, reject) => {
+      ctrl.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), { once: true });
+    });
     try {
-      return await run(ctrl.signal);
+      return await Promise.race([run(ctrl.signal), onAbort]);
     } catch (error) {
       if (ctrl.signal.aborted) {
         throw new WebFetchError(`request timed out after ${timeoutMs}ms`, true, { cause: error });
@@ -131,10 +134,18 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     }
   };
 
-  const convert = async (html: string, url: string): Promise<string> =>
-    deps.htmlToMarkdown
-      ? stripBase64Images(await deps.htmlToMarkdown(html, { url }))
-      : localHtmlToMarkdown(html);
+  const convert = async (html: string, url: string): Promise<string> => {
+    if (!deps.htmlToMarkdown) return localHtmlToMarkdown(html);
+    try {
+      return stripBase64Images(await deps.htmlToMarkdown(html, { url }));
+    } catch (error) {
+      diagnostics.failure(
+        'web.convert_failed',
+        toKinuError({ doing: 'convert fetched HTML to markdown', cause: error, otherwise: 'io' }),
+      );
+      return localHtmlToMarkdown(html);
+    }
+  };
 
   async function tavilyKey(): Promise<Record<string, string> | null> {
     if (!deps.getAuth) return null;
@@ -147,8 +158,8 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     limit: number,
     headers: Record<string, string>,
   ): Promise<WebSearchResponse> {
-    const res = await withTimeout((signal) =>
-      fetchImpl('https://api.tavily.com/search', {
+    return withTimeout(async (signal) => {
+      const res = await fetchImpl('https://api.tavily.com/search', {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...headers },
         body: JSON.stringify({
@@ -158,45 +169,50 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
           search_depth: 'basic',
         }),
         signal,
-      }),
-    );
-    if (res.status === 429) throw new WebFetchError('Tavily rate limit (429) — retry shortly', true);
-    if (!res.ok) {
-      const body = await res.text();
-      throw new WebFetchError(`Tavily search failed (${res.status}): ${body.slice(0, 200)}`);
-    }
-    const json = v.parse(TavilyResponseSchema, await res.json());
-    const results: WebSearchResult[] = (json.results ?? [])
-      .filter((r) => r.url && isSafeUrl(r.url))
-      .slice(0, limit)
-      .map((r, i) => ({
-        title: r.title?.trim() || r.url!,
-        url: r.url!,
-        snippet: stripBase64Images((r.content ?? '').trim()).slice(0, 600),
-        date: r.published_date || undefined,
-        position: i + 1,
-      }));
-    return { query, answer: json.answer?.trim() || undefined, results, source: 'tavily' };
+      });
+      if (res.status === 429) throw new WebFetchError('Tavily rate limit (429) — retry shortly', true);
+      if (!res.ok) {
+        const body = await res.text();
+        throw new WebFetchError(`Tavily search failed (${res.status}): ${body.slice(0, 200)}`);
+      }
+      try {
+        const json = v.parse(TavilyResponseSchema, await res.json());
+        const results: WebSearchResult[] = (json.results ?? [])
+          .filter((r) => r.url && isSafeUrl(r.url))
+          .slice(0, limit)
+          .map((r, i) => ({
+            title: r.title?.trim() || r.url!,
+            url: r.url!,
+            snippet: stripBase64Images((r.content ?? '').trim()).slice(0, 600),
+            date: r.published_date || undefined,
+            position: i + 1,
+          }));
+        return { query, answer: json.answer?.trim() || undefined, results, source: 'tavily' };
+      } catch (error) {
+        if (signal.aborted) throw error;
+        throw new WebFetchError('Tavily search returned an unreadable response', false, { cause: error });
+      }
+    });
   }
 
   async function duckDuckGoSearch(query: string, limit: number): Promise<WebSearchResponse> {
-    const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const res = await withTimeout((signal) =>
-      fetchImpl(endpoint, {
+    return withTimeout(async (signal) => {
+      const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      const res = await fetchImpl(endpoint, {
         headers: {
           'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
           accept: 'text/html',
         },
         signal,
-      }),
-    );
-    if (res.status === 429 || res.status === 202) {
-      throw new WebFetchError('DuckDuckGo rate-limited the request — retry shortly, or connect a Tavily key for reliable search', true);
-    }
-    if (!res.ok) throw new WebFetchError(`web search failed (${res.status})`);
-    const html = await res.text();
-    const results = parseDuckDuckGoHtml(html, limit);
-    return { query, results, source: 'duckduckgo' };
+      });
+      if (res.status === 429 || res.status === 202) {
+        throw new WebFetchError('DuckDuckGo rate-limited the request — retry shortly, or connect a Tavily key for reliable search', true);
+      }
+      if (!res.ok) throw new WebFetchError(`web search failed (${res.status})`);
+      const html = await res.text();
+      const results = parseDuckDuckGoHtml(html, limit);
+      return { query, results, source: 'duckduckgo' };
+    });
   }
 
   return {
@@ -223,7 +239,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       // benign public page could bounce the agent's fetch onto a metadata or
       // private address the initial check had refused.
       let finalUrl = parsed.toString();
-      const res = await withTimeout(async (signal) => {
+      const fetched = await withTimeout(async (signal) => {
         let target = finalUrl;
         for (let redirects = 0; ; redirects++) {
           const hop = await fetchImpl(target, {
@@ -243,7 +259,11 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
               : null;
           if (!location) {
             finalUrl = target;
-            return hop;
+            if (hop.status === 429) throw new WebFetchError('fetch rate-limited (429) — retry shortly', true);
+            if (!hop.ok) throw new WebFetchError(`fetch failed (${hop.status}) for ${finalUrl}`);
+            const contentType = hop.headers.get('content-type') ?? '';
+            const { bytes, clipped } = await readCappedBody(hop, MAX_FETCH_BYTES);
+            return { contentType, bytes, clipped };
           }
           if (redirects >= MAX_REDIRECTS) {
             throw new WebFetchError(`too many redirects (over ${MAX_REDIRECTS}) for ${parsed.toString()}`);
@@ -264,11 +284,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
           target = next.toString();
         }
       });
-      if (res.status === 429) throw new WebFetchError('fetch rate-limited (429) — retry shortly', true);
-      if (!res.ok) throw new WebFetchError(`fetch failed (${res.status}) for ${finalUrl}`);
-
-      const contentType = res.headers.get('content-type') ?? '';
-      const { bytes, clipped } = await readCappedBody(res, MAX_FETCH_BYTES);
+      const { contentType, bytes, clipped } = fetched;
       const raw = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
 
       const markdown = looksLikeHtml(raw, contentType)
@@ -400,13 +416,13 @@ export function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResul
 
   const snippets: string[] = [];
   let sm: RegExpExecArray | null;
-  while ((sm = snippetRe.exec(html)) !== null) snippets.push(decodeText(stripTags(sm[1])));
+  while ((sm = snippetRe.exec(html)) !== null) snippets.push(decodeEntities(stripTags(sm[1])));
 
   let m: RegExpExecArray | null;
   let i = 0;
   while ((m = linkRe.exec(html)) !== null && results.length < limit) {
-    const url = unwrapDuckUrl(decodeAttr(m[1]));
-    const title = decodeText(stripTags(m[2])).trim();
+    const url = unwrapDuckUrl(decodeEntities(m[1]));
+    const title = decodeEntities(stripTags(m[2])).trim();
     if (!url || !title || !isSafeUrl(url)) {
       i++;
       continue;
@@ -436,7 +452,7 @@ function unwrapDuckUrl(href: string): string {
 
 function extractTitle(html: string): string {
   const m = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html);
-  return m ? decodeText(stripTags(m[1])).trim().slice(0, 300) : '';
+  return m ? decodeEntities(stripTags(m[1])).trim().slice(0, 300) : '';
 }
 
 /** Title for already-markdown content (Markdown-for-Agents): YAML frontmatter
@@ -446,24 +462,5 @@ function extractMarkdownTitle(md: string): string {
   if (fm) return fm[1].trim().slice(0, 300);
   const h1 = /^#\s+(.+)$/m.exec(md);
   return h1 ? h1[1].trim().slice(0, 300) : '';
-}
-
-function stripTags(s: string): string {
-  return s.replace(/<[^>]+>/g, '');
-}
-
-function decodeAttr(s: string): string {
-  return s.replace(/&amp;/g, '&').replace(/&#x2F;/gi, '/');
-}
-
-function decodeText(s: string): string {
-  return s
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#x27;|&#39;/gi, "'")
-    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)));
 }
 

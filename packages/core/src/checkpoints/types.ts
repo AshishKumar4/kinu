@@ -163,7 +163,7 @@ export function summarizeRestorePlan(files: ReadonlyArray<FileRestoreChange>) {
   for (const f of files) {
     if (f.kind === 'modify') modified += 1;
     else if (f.kind === 'create') created += 1;
-    else deleted += 1;
+    else if (f.kind === 'delete') deleted += 1;
   }
   return { modified, created, deleted };
 }

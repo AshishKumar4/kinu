@@ -33,6 +33,7 @@ import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { CraftStore } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
+import { diagnostics, toKinuError, tolerate } from '../obs/index';
 import { effectiveScore } from '../craft/ema';
 import { DEFAULT_CONFIG } from '../config';
 import { isoDate, nowMs } from '../utils/date';
@@ -178,15 +179,31 @@ function ownMisevolutionFlags(sql: SqlExecutor, from: number, to: number): numbe
   return rows.filter((row) => {
     // `data` is recordMisevolutionVeto's own write, so a payload that will not
     // parse is corruption in our row rather than a foreign format to shrug at —
-    // the same reading scaffold/archive.ts takes of these events.
-    const parsed = v.parse(VetoSurfaceSchema, parseJsonValue(row.data ?? '{}'));
-    return (parsed.surface ?? 'scaffold') !== 'import';
+    // the same reading scaffold/archive.ts takes of these events. It still must
+    // not throw the publish check: one bad row counts as an own-surface flag
+    // (fail closed) and is reported, because a loop that may be evolving unsafe
+    // artifacts is not one to hand another workspace on a read error.
+    const decoded = tolerate(() => parseJsonValue(row.data ?? '{}'), 'malformed-input');
+    const parsed = v.safeParse(VetoSurfaceSchema, decoded);
+    if (!parsed.success) {
+      diagnostics.failure(
+        'experience.publishable_veto_unreadable',
+        toKinuError({
+          doing: 'decode a misevolution veto row',
+          cause: parsed.issues.map((issue) => issue.message).join('; '),
+          otherwise: 'bad_input',
+        }),
+      );
+      return true;
+    }
+    return (parsed.output.surface ?? 'scaffold') !== 'import';
   }).length;
 }
 
 async function scaffoldCandidate(
   src: PublishSources,
   key: string,
+  now = nowMs(),
 ): Promise<PublishableCandidate | PublishRefusal> {
   const version = Number(key);
   if (key.trim() === '' || !Number.isInteger(version) || version < 0) {
@@ -224,7 +241,9 @@ async function scaffoldCandidate(
   // Probation: the graded turns this version SERVED. `turn_outcomes` stamps the
   // live version on every verdict, and a version is only live after promotion,
   // so these rows are exactly "turns since promotion" with no timestamp
-  // bookkeeping of their own.
+  // bookkeeping of their own. The veto window runs from the earliest served
+  // turn through now rather than ending at the Nth turn: a veto drawn after
+  // probation still says what is running here evolves unsafe artifacts.
   const turns = src.sql<{ created_at: number }>`
     SELECT created_at FROM turn_outcomes WHERE scaffold_version = ${version}
     ORDER BY created_at ASC LIMIT ${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}`;
@@ -236,7 +255,7 @@ async function scaffoldCandidate(
         + 'demands as evidence (DEFAULT_SHADOW_CONFIG.minTrials)',
     };
   }
-  const flags = ownMisevolutionFlags(src.sql, turns[0].created_at, turns[turns.length - 1].created_at);
+  const flags = ownMisevolutionFlags(src.sql, turns[0]?.created_at ?? now, now);
   if (flags > 0) {
     return {
       refused: `scaffold v${version} drew ${flags} misevolution veto${flags === 1 ? '' : 'es'} during its `
@@ -276,7 +295,7 @@ export async function findPublishable(
     case 'craft': return craftCandidate(src, key, craftScores(src.sql), now);
     case 'lesson': return lessonCandidate(src, key);
     case 'fact': return factCandidate(src, key);
-    case 'scaffold': return await scaffoldCandidate(src, key);
+    case 'scaffold': return await scaffoldCandidate(src, key, now);
   }
 }
 
@@ -307,7 +326,7 @@ export async function listPublishable(
   // there is exactly one of it. Listed first because it can never be crowded
   // out of a limit by a workspace with many crafts.
   const live = getCurrentScaffoldVersion(src.sql);
-  const scaffold = live === null ? null : await scaffoldCandidate(src, String(live));
+  const scaffold = live === null ? null : await scaffoldCandidate(src, String(live), now);
   const scaffolds = scaffold !== null && !isRefusal(scaffold) ? [scaffold] : [];
 
   return [...scaffolds, ...crafts, ...lessons, ...facts].slice(0, limit);

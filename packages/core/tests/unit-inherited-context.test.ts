@@ -60,3 +60,26 @@ describe('formatInheritedContext', () => {
     expect(formatInheritedContext(history, 2)).toBe('assistant: b\nuser: c');
   });
 });
+
+describe('formatInheritedContext total character budget', () => {
+  test('a long window is bounded and names what it dropped', () => {
+    const history = Array.from({ length: DEFAULT_INHERITED_MESSAGES }, (_, i) => ({
+      role: 'user',
+      content: `message-${i}-` + 'word '.repeat(2000).trim(),
+    }));
+    const unbounded = history.map((m) => `user: ${m.content}`).join('\n').length;
+    const out = formatInheritedContext(history);
+    expect(out.length).toBeLessThan(unbounded);
+    expect(out).toContain('omitted');
+  });
+
+  test('an explicit character budget is honored', () => {
+    const history = [
+      { role: 'user', content: 'a'.repeat(500) },
+      { role: 'assistant', content: 'b'.repeat(500) },
+    ];
+    const out = formatInheritedContext(history, 12, 100);
+    expect(out.length).toBeLessThan(1100);
+    expect(out).toContain('omitted');
+  });
+});

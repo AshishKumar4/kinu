@@ -153,3 +153,23 @@ describe('LLM judge adapter', () => {
     expect(verdict.scoreA).toBe(0.8);
   });
 });
+
+describe('eval corpus validation', () => {
+  test('rejects empty id', () => {
+    expect(() => parseCorpus('{"id":"","task":"q"}\n')).toThrow(/line 1/);
+  });
+
+  test('rejects empty task', () => {
+    expect(() => parseCorpus('{"id":"a","task":""}\n')).toThrow(/line 1/);
+  });
+
+  test('rejects duplicate id naming the line', () => {
+    expect(() => parseCorpus('{"id":"dup","task":"one"}\n{"id":"dup","task":"two"}\n'))
+      .toThrow(/line 2.*dup/);
+  });
+
+  test('rejects unknown keys instead of dropping them', () => {
+    expect(() => parseCorpus('{"id":"a","task":"q","typo_field":"oops"}\n'))
+      .toThrow(/line 1/);
+  });
+});

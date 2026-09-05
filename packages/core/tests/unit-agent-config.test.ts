@@ -2,8 +2,9 @@ import { describe, test, expect } from 'bun:test';
 import {
   createAgentConfigStore, initAgentConfigTable, AGENT_CONFIG_KEYS,
   DEFAULT_AUTO_GEPA_EVERY_N_TURNS, DEFAULT_GEPA_EVAL_BUDGET,
-  setReasoningEffort,
+  canonicalConversationId, setReasoningEffort,
 } from '../src/index';
+import { parseRoleSelectionRow } from '../src/config/store';
 import { createTestSql } from '@kinu.run/test-utils';
 
 function setup() {
@@ -137,6 +138,25 @@ describe('AgentConfigStore — typed accessors', () => {
     // Garbage in DB → strict fallback.
     c.set(AGENT_CONFIG_KEYS.shellApprovalMode, 'bogus');
     expect(c.getShellApprovalMode()).toBe('strict');
+  });
+
+  test('role policy, shell mode and severity setters refuse what their getters would hide', () => {
+    const c = setup();
+    // Decoded, not written: runtime garbage arrives past the type boundary
+    // (deserialized input, untyped callers), so the fixture does too.
+    const bogus = JSON.parse('"bogus"');
+    c.setRoleChangePolicy('approval');
+    expect(() => c.setRoleChangePolicy(bogus)).toThrow(/Invalid role change policy/);
+    expect(c.getRoleChangePolicy()).toBe('approval');
+    expect(c.get(AGENT_CONFIG_KEYS.roleChangePolicy)).toBe('approval');
+
+    c.setShellApprovalMode('allow_all');
+    expect(() => c.setShellApprovalMode(bogus)).toThrow(/Invalid shell approval mode/);
+    expect(c.getShellApprovalMode()).toBe('allow_all');
+
+    c.setAdvisorMinSeverity('blocker');
+    expect(() => c.setAdvisorMinSeverity(bogus)).toThrow(/Invalid advisor severity/);
+    expect(c.getAdvisorMinSeverity()).toBe('blocker');
   });
 
   test('shellApprovalGrants: empty by default, dedupes, revokes, survives garbage', () => {
@@ -379,6 +399,7 @@ describe('AgentConfigStore — every key has a write path', () => {
       branches: 3, judgeSamples: 2, maxEvalLLMCalls: 5,
     }),
     (c) => c.setEmailNotificationsEnabled(false),
+    (c) => { canonicalConversationId(c); },
   ];
 
   /** Internal plumbing written through the generic `set` from outside the
@@ -406,6 +427,16 @@ describe('AgentConfigStore — every key has a write path', () => {
     const written = new Set([...Object.keys(c.all()), ...GENERIC_WRITE_PATH]);
     expect(Object.values(AGENT_CONFIG_KEYS).filter((k) => !written.has(k)))
       .toEqual([AGENT_CONFIG_KEYS.model]);
+  });
+});
+
+describe('the canonical conversation id lives under its registered key', () => {
+  test('first open adopts default through AGENT_CONFIG_KEYS, later opens read it back', () => {
+    expect(Object.values(AGENT_CONFIG_KEYS)).toContain('conversation.id');
+    const c = setup();
+    expect(canonicalConversationId(c)).toBe('default');
+    expect(c.get(AGENT_CONFIG_KEYS.conversationId)).toBe('default');
+    expect(canonicalConversationId(c)).toBe('default');
   });
 });
 
@@ -448,6 +479,15 @@ describe('the hired assignment a child reads at its turn boundary', () => {
     expect(c.getAssignedTier()).toBeNull();
   });
 
+  test('setAssignedTier refuses a tier no build knows instead of storing a hidden row', () => {
+    const c = setup();
+    c.setAssignedTier('deep');
+    const tier = JSON.parse('"gargantuan"');
+    expect(() => c.setAssignedTier(tier)).toThrow(/Invalid assigned tier/);
+    expect(c.getAssignedTier()).toBe('deep');
+    expect(c.get(AGENT_CONFIG_KEYS.assignedTier)).toBe('deep');
+  });
+
   test('a malformed role_selection row reads as general and is left alone', () => {
     // The row is schema-parsed on every read: garbage reads as the default, and
     // the read does NOT overwrite it — a reader is not a repair pass.
@@ -455,6 +495,23 @@ describe('the hired assignment a child reads at its turn boundary', () => {
     c.set(AGENT_CONFIG_KEYS.roleSelection, 'not json');
     expect(c.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'general' });
     expect(c.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('not json');
+  });
+
+  test('a well-formed row with an unknown role id fails parse instead of passing as general', () => {
+    // The schema used to coerce an unknown role id to `general` and report
+    // success, blessing the row. Null keeps the read on its fallback path,
+    // while a shape-valid custom id still parses as itself.
+    expect(parseRoleSelectionRow(JSON.stringify({ kind: 'catalog', roleId: 'Not A Role!!' }))).toBeNull();
+    expect(parseRoleSelectionRow(JSON.stringify({ kind: 'catalog', roleId: 'field-researcher' })))
+      .toEqual({ kind: 'catalog', roleId: 'field-researcher' });
+  });
+
+  test('an unknown role id still reads as general and the read leaves the row alone', () => {
+    const c = setup();
+    const raw = JSON.stringify({ kind: 'catalog', roleId: 'Not A Role!!' });
+    c.set(AGENT_CONFIG_KEYS.roleSelection, raw);
+    expect(c.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'general' });
+    expect(c.get(AGENT_CONFIG_KEYS.roleSelection)).toBe(raw);
   });
 
   test('a read never mints a role row; only an explicit selection persists one', () => {

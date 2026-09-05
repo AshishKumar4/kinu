@@ -16,15 +16,19 @@ import type { LLM } from '../types/primitives';
 import type { TurnOutcome } from '../evolution/outcomes';
 import { extractJsonArray, jsonArrayOnlyInstruction } from '../prompts/structured';
 import { parseJsonValue } from '../utils/json';
+import { nanoid } from '../utils/nanoid';
 
-const ProposedTaskStatusSchema = v.picklist([
+/** The one list of proposed-task statuses — the table default, the picklist
+ *  below and the `agent.*` tools' status picklist all derive from it. */
+export const PROPOSED_TASK_STATUSES = [
   'pending',
   'accepted',
   'rejected',
   'completed',
-]);
+] as const;
 
-type ProposedTaskStatus = v.InferOutput<typeof ProposedTaskStatusSchema>;
+const ProposedTaskStatusSchema = v.picklist(PROPOSED_TASK_STATUSES);
+export type ProposedTaskStatus = (typeof PROPOSED_TASK_STATUSES)[number];
 
 export interface ProposedTask {
   id: string;
@@ -105,11 +109,14 @@ function collectContext(rt: AgentRuntime, takeOutcomes = 20): CurriculumContext 
   // list: the curriculum has been proposing from crafted skills alone since it
   // shipped, and its prompt said "(no recent turns)" in a way nothing could
   // tell apart from a genuinely fresh workspace.
+  // Abandoned turns carry no verdict (evolution/outcomes.ts scores them neutral),
+  // so they stay out of the prompt: listing one as a failure teaches the judge
+  // that a dropped topic was a task done badly.
   const recent = rt.storage.sql<{ user_message: string; outcome: TurnOutcome }>`
     SELECT user_message, outcome FROM turn_outcomes
+      WHERE outcome != 'abandoned'
       ORDER BY created_at DESC LIMIT ${takeOutcomes}`
     .map((row) => ({ task: row.user_message, succeeded: row.outcome === 'accepted' }));
-
   return { skills, recent };
 }
 
@@ -151,6 +158,13 @@ Propose ${count} candidate tasks. Each should:
 export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<ProposedTask[]> {
   const window = opts.learnabilityWindow ?? [0.3, 0.7];
   const count = opts.count ?? 5;
+  if (!Number.isInteger(count) || count < 1) {
+    throw new Error(`proposeNextTasks: count must be an integer >= 1 (got ${count})`);
+  }
+  const [lo, hi] = window;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo < 0 || hi > 1 || lo > hi) {
+    throw new Error(`proposeNextTasks: learnabilityWindow must be [lo, hi] with 0 <= lo <= hi <= 1 (got [${lo}, ${hi}])`);
+  }
   const ctx = collectContext(opts.rt);
   const prompt = buildPrompt(ctx, count, window);
 
@@ -160,12 +174,20 @@ export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<Pr
     throw new Error(`Curriculum response schema invalid: ${result.issues.map(i => i.message).join('; ')}`);
   }
 
-  const [lo, hi] = window;
   const filtered = result.output.filter(p => p.predictedSuccess >= lo && p.predictedSuccess <= hi);
+  if (result.output.length > 0 && filtered.length === 0) {
+    let nearest = 0;
+    let nearestDistance = Infinity;
+    for (const p of result.output) {
+      const distance = p.predictedSuccess < lo ? lo - p.predictedSuccess : p.predictedSuccess - hi;
+      if (distance < nearestDistance) { nearestDistance = distance; nearest = p.predictedSuccess; }
+    }
+    throw new Error(`proposeNextTasks: no proposal survived the learnability window [${lo}, ${hi}] (judge returned ${result.output.length}); nearest predictedSuccess was ${nearest}`);
+  }
 
   const now = Date.now();
-  const proposals: ProposedTask[] = filtered.map((p, i) => ({
-    id: `prop-${now}-${i}`,
+  const proposals: ProposedTask[] = filtered.slice(0, count).map((p) => ({
+    id: `prop-${nanoid()}`,
     task: p.task,
     rationale: p.rationale,
     predictedSuccess: p.predictedSuccess,
@@ -193,10 +215,10 @@ export function listProposedTasks(rt: AgentRuntime, status?: ProposedTask['statu
   const rows = status
     ? rt.storage.sql<Row>`
         SELECT id, task, rationale, predicted_success, targets_skills, proposed_at, status
-          FROM proposed_tasks WHERE status = ${status} ORDER BY proposed_at DESC`
+          FROM proposed_tasks WHERE status = ${status} ORDER BY proposed_at DESC, id DESC LIMIT 50`
     : rt.storage.sql<Row>`
         SELECT id, task, rationale, predicted_success, targets_skills, proposed_at, status
-          FROM proposed_tasks ORDER BY proposed_at DESC LIMIT 50`;
+          FROM proposed_tasks ORDER BY proposed_at DESC, id DESC LIMIT 50`;
   // These are our OWN rows: a status outside the picklist, or skills JSON that
   // will not parse, is corruption in the workspace database — not a row to
   // drop quietly, which is what made a truncated write look like a short list.
@@ -214,5 +236,9 @@ export function listProposedTasks(rt: AgentRuntime, status?: ProposedTask['statu
 export function updateProposedTaskStatus(
   rt: AgentRuntime, id: string, status: ProposedTask['status'],
 ): void {
+  const existing = rt.storage.sql<{ id: string }>`SELECT id FROM proposed_tasks WHERE id = ${id} LIMIT 1`;
+  if (existing.length === 0) {
+    throw new Error(`updateProposedTaskStatus: unknown proposed task id "${id}"`);
+  }
   void rt.storage.sql`UPDATE proposed_tasks SET status = ${status} WHERE id = ${id}`;
 }

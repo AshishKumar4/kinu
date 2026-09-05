@@ -15,7 +15,7 @@ export function isJsonObject(value: JsonValue): value is JsonObject {
 
 export const JsonValueSchema: v.GenericSchema<JsonValue> = v.lazy(() => v.union([
   v.string(),
-  v.number(),
+  v.pipe(v.number(), v.finite()),
   v.boolean(),
   v.null(),
   v.array(JsonValueSchema),

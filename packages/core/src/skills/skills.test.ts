@@ -30,15 +30,16 @@ import { describe, expect, test } from 'bun:test';
 import { stepContextLimit } from '../prompting/step-prune';
 import { estimateTokens } from '../llm';
 import {
-  parseSkillFile, stringifySkillFile, validateSkillName,
+  parseSkillFile, stringifySkillFile,
   discoverSkills, BUILTIN_SKILLS, BUILTIN_SKILL_HEADERS,
   resolveActiveSkills, extractExplicitInvocations,
   admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, unionAllowedTools, toolAllowedBySkills,
-  SkillError, SKILLS_DIR,
+  SKILLS_DIR,
   type SkillsVfs, type ActiveSkill, type DiscoveredSkill,
 } from './index';
 import type { InstructionTrustResolver } from '../safety/instruction-trust';
+import { createRecordingLogger, setDiagnosticsSink } from '../obs/index';
 
 // ── In-memory SkillsVfs fixture ──────────────────────────────────
 
@@ -294,6 +295,24 @@ body
     if (r.ok) expect(r.skill.user_invocable).toBe(false);
   });
 
+  test('only a real boolean opts in or out: a quoted "false" is a string, not a flag', () => {
+    const quoted = parseSkillFile(`---
+name: quoted
+description: x
+keywords: [foo]
+auto_activate: "false"
+disable-model-invocation: "false"
+user-invocable: "false"
+---
+body
+`);
+    expect(quoted.ok).toBe(true);
+    if (!quoted.ok) return;
+    expect(quoted.skill.auto_activate).toBe(false);
+    expect(quoted.skill.disable_model_invocation).toBe(false);
+    expect(quoted.skill.user_invocable).toBe(true);
+  });
+
   test('defaults user_invocable to true', () => {
     const r = parseSkillFile(`---
 name: normal
@@ -390,23 +409,6 @@ body
     expect(reparsed.skill.ext.tilde).toBe('~');
     expect(reparsed.skill.ext.nested).toEqual({ inner: 'false' });
     expect(reparsed.skill.ext.tags).toEqual(['123', 'false', 'hello']);
-  });
-});
-
-describe('validateSkillName', () => {
-  test('accepts kebab-case', () => {
-    expect(() => validateSkillName('audit-implementation')).not.toThrow();
-    expect(() => validateSkillName('a')).not.toThrow();
-    expect(() => validateSkillName('foo-bar-baz123')).not.toThrow();
-  });
-
-  test('rejects everything else', () => {
-    expect(() => validateSkillName('FooBar')).toThrow(SkillError);
-    expect(() => validateSkillName('foo_bar')).toThrow(SkillError);
-    expect(() => validateSkillName('-foo')).toThrow(SkillError);
-    expect(() => validateSkillName('foo-')).toThrow(SkillError);
-    expect(() => validateSkillName('foo bar')).toThrow(SkillError);
-    expect(() => validateSkillName('')).toThrow(SkillError);
   });
 });
 
@@ -591,6 +593,12 @@ describe('renderActiveSkillsSection + tool gating', () => {
     expect(toolAllowedBySkills('workspace.readFile', ['workspace.*'])).toBe(true);
     expect(toolAllowedBySkills('workspace.readFile', ['workspace'])).toBe(true);
     expect(toolAllowedBySkills('sandbox.exec', ['workspace.*'])).toBe(false);
+  });
+
+  test('toolAllowedBySkills: a spec-dialect `Bash(git:*)` pattern restricts its own family', () => {
+    expect(toolAllowedBySkills('Bash', ['Bash(git:*)'])).toBe(true);
+    expect(toolAllowedBySkills('Read', ['Bash(git:*)', 'Read'])).toBe(true);
+    expect(toolAllowedBySkills('memory', ['Bash(git:*)', 'Read'])).toBe(false);
   });
 
   test('a deferred body renders its header, its cost and a pointer — never half a workflow', () => {
@@ -1008,5 +1016,41 @@ describe('skills admission', () => {
     expect(index.omitted).toBe(3);
     expect(set.active.every(s => s.body === null)).toBe(true);
     expect(vfs.calls.readFile).toEqual([]);
+  });
+
+  test('a skill whose stat or read throws defers itself instead of failing the turn', async () => {
+    const log = createRecordingLogger();
+    const restore = setDiagnosticsSink(log);
+    try {
+      const vfs: SkillsVfs = {
+        async exists() { return true; },
+        async readFile(p) {
+          if (p === `${SKILLS_DIR}/bad-read.md`) throw new Error('boom-read');
+          return skillFile(p.includes('good') ? 'good' : 'bad-stat', 'hello body');
+        },
+        async writeFile() {},
+        async stat(p) {
+          if (p === `${SKILLS_DIR}/bad-stat.md`) throw new Error('boom-stat');
+          return { size: 60, mtimeMs: 0, isDir: false };
+        },
+        async readdir() { return []; },
+      };
+      const activated = ['bad-stat', 'bad-read', 'good'].map((name) => ({
+        skill: fakeSkill(name),
+        reason: { kind: 'explicit', matched_token: name } as const,
+      }));
+      const set = await admitActiveSkills({ vfs, activated, admissionTokens: ROOMY_TOKENS, trust: APPROVED });
+      const byName = new Map(set.active.map((s) => [s.name, s]));
+      expect(set.active.length).toBe(3);
+      expect(byName.get('bad-stat')?.body).toBeNull();
+      expect(byName.get('bad-stat')?.trust).toBe('unverified');
+      expect(byName.get('bad-read')?.body).toBeNull();
+      expect(byName.get('bad-read')?.trust).toBe('unverified');
+      expect(byName.get('good')?.body).toContain('hello body');
+      expect(set.reasons.map((r) => r.name).sort()).toEqual(['bad-read', 'bad-stat', 'good']);
+      expect(log.emitted.filter((l) => l.event === 'skills.admission_failed').length).toBe(2);
+    } finally {
+      restore();
+    }
   });
 });

@@ -755,10 +755,14 @@ ${SESSION_CONTROL_TYPES}
       if (!ports?.expose) return { supported: false, reason: 'Nimbus port exposure is not available' };
       const expose = ports.expose.bind(ports);
       const result = await touch(() => expose(port));
+      const url = result.url || ports.url?.(port);
+      if (!url) {
+        return { supported: false, reason: `nimbus exposePort ${port}: exposed but no preview URL is available` };
+      }
       return {
         supported: true,
         port,
-        url: result.url ?? ports.url?.(port) ?? '',
+        url,
         verified_listening: result.listening ?? false,
       };
     },

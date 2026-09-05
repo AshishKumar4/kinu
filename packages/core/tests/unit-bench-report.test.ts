@@ -168,6 +168,32 @@ describe('buildBenchReport', () => {
     expect(report.dev.cases[0]).toMatchObject({ modelCallsA: null, modelCallsB: 0 });
     expect(renderBenchSummary(report)).toContain('model calls/task A=unreported  B=0.0');
   });
+
+  test('a duplicated repeat is refused naming the key — two rows for one slot would average one attempt twice', () => {
+    const config = { ...CONFIG, repeats: 2 };
+    expect(() => buildBenchReport({
+      runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
+      devAttempts: [
+        attempt('t1', 'baseline', true, { repeat: 0 }),
+        attempt('t1', 'baseline', false, { repeat: 0 }),
+        attempt('t1', 'candidate', true, { repeat: 0 }),
+        attempt('t1', 'candidate', true, { repeat: 1 }),
+      ],
+    })).toThrow(/baseline:t1:0/);
+  });
+
+  test('an out-of-range repeat is refused — a repeat outside 0..k-1 belongs to no pairing', () => {
+    const config = { ...CONFIG, repeats: 2 };
+    expect(() => buildBenchReport({
+      runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
+      devAttempts: [
+        attempt('t1', 'baseline', true, { repeat: 0 }),
+        attempt('t1', 'baseline', true, { repeat: 7 }),
+        attempt('t1', 'candidate', true, { repeat: 0 }),
+        attempt('t1', 'candidate', true, { repeat: 1 }),
+      ],
+    })).toThrow(/out-of-range repeat 7/);
+  });
 });
 
 describe('decideBenchOutcome — rejection by default', () => {

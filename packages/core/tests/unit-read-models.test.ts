@@ -130,6 +130,22 @@ describe('run reads', () => {
     expect(summary?.usage).toEqual({ input: 15, output: 5, cacheRead: 2 });
   });
 
+  test('a run longer than one read window still folds whole', () => {
+    const events = eventLog();
+
+    events.emit('big', { type: 'run_start', agentId: 'a1', caused_by: 'chat' });
+    for (let i = 0; i < 1100; i++) {
+      events.emit('big', { type: 'turn_end', turnIndex: i, usage: { input: 1 } });
+    }
+    events.emit('big', { type: 'run_end', reason: 'completed' });
+
+    // THE RED DIRECTION: folding one window counted 999 of the 1100 turns and
+    // never reached the `run_end`, so usage read short and status read null.
+    const [summary] = getRunSummaries(events).items;
+    expect(summary?.usage).toEqual({ input: 1100 });
+    expect(summary).toMatchObject({ status: 'completed', eventCount: 1102 });
+  });
+
   test('a run whose turns reported nothing is not a run that cost nothing', () => {
     const events = eventLog();
     events.emit('silent', { type: 'run_start', agentId: 'a1', caused_by: 'chat' });

@@ -362,7 +362,6 @@ export function createMemoryCraftStore(db: Database): CraftStore {
         .slice(0, limit)
         .map(toTool);
     },
-    getAll() { return rows('SELECT * FROM crafted_tools').map(toTool); },
   };
 }
 

@@ -190,7 +190,7 @@ const PACKAGE_PUBLISH = new RegExp(
 const RULES: Rule[] = [
   // ── DENY: obviously destructive or filesystem-corrupting ─────────
   {
-    pattern: /\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+\/\s*(?:$|\s)/,
+    pattern: /\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*(?:\s+(?:--[^\s]+|-[a-zA-Z]+))*\s+\/+(?=\s|$|[;&|])/,
     decision: 'deny',
     name: 'rm-rf-root',
     why: 'Deletes the entire root filesystem.',
@@ -204,28 +204,28 @@ const RULES: Rule[] = [
     harm: 'local',
   },
   {
-    pattern: /\bdd\s+if=\/dev\/(zero|urandom)\s+of=\/dev\/sd[a-z]/i,
+    pattern: /\bdd\b(?=[^;|&\n]*if=\/dev\/(?:zero|urandom)\b)(?=[^;|&\n]*of=\/dev\/(?:sd[a-z]|nvme[^\s;|&]*))/i,
     decision: 'deny',
     name: 'dd-overwrite-disk',
     why: 'Overwrites raw block devices.',
     harm: 'local',
   },
   {
-    pattern: /\bmkfs\.[a-z0-9]+\s+\/dev\/sd[a-z]/i,
+    pattern: /\bmkfs(?:\.[a-z0-9]+)?\b[^;|&]*\/dev\/sd[a-z]/i,
     decision: 'deny',
     name: 'mkfs-physical-disk',
     why: 'Reformats a real disk device.',
     harm: 'local',
   },
   {
-    pattern: /\b(curl|wget)\s+[^|]*\|\s*sh\b/i,
+    pattern: /\b(curl|wget)\s+[^|]*\|\s*(?:sudo\s+)?(?:\S*\/)?(?:sh|dash)\b/i,
     decision: 'deny',
     name: 'pipe-to-shell',
     why: 'Downloads remote script and pipes directly to shell.',
     harm: 'reaches_out',
   },
   {
-    pattern: /\b(curl|wget)\s+[^|]*\|\s*bash\b/i,
+    pattern: /\b(curl|wget)\s+[^|]*\|\s*(?:sudo\s+)?(?:\S*\/)?bash\b/i,
     decision: 'deny',
     name: 'pipe-to-bash',
     why: 'Downloads remote script and pipes directly to bash.',
@@ -245,7 +245,7 @@ const RULES: Rule[] = [
     binaries: ['sudo'],
   },
   {
-    pattern: /\bsu\s+-/,
+    pattern: /\bsu(?:\s+-|\s+\S|\s*$)/,
     decision: 'gate',
     name: 'su',
     why: 'User switching.',
@@ -253,7 +253,7 @@ const RULES: Rule[] = [
     binaries: ['su'],
   },
   {
-    pattern: /\bchmod\s+(?:[ugoa]*\+s|\+s|4\d\d\d?|7\d\d\d?)/,
+    pattern: /\bchmod\s+(?:[ugoa]*\+s|\+s|4\d\d\d?|7\d\d\d?|2\d{3}|3\d{3}|5\d{3}|6\d{3})/,
     decision: 'gate',
     name: 'chmod-setuid',
     why: 'Sets setuid/setgid bits.',
@@ -261,7 +261,7 @@ const RULES: Rule[] = [
     binaries: ['chmod'],
   },
   {
-    pattern: /\b(chown|chgrp)\s+(-R\s+)?(root|0)\b/i,
+    pattern: /\b(chown|chgrp)\s+(?:-[^\s]+\s+)*(root|0)\b/i,
     decision: 'gate',
     name: 'chown-root',
     why: 'Reassigns ownership to root.',
@@ -293,7 +293,7 @@ const RULES: Rule[] = [
     binaries: ['docker'],
   },
   {
-    pattern: /\bgit\s+push\s+(?:-f|--force)/,
+    pattern: /\bgit\s+push\b[^;|&]*?(?:\s--force\b|\s-f\b)/,
     decision: 'gate',
     name: 'git-force-push',
     why: 'Force-push rewrites history on a remote nobody here owns.',

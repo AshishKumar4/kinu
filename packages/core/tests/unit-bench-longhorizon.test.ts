@@ -198,6 +198,11 @@ describe('the spec round-trips into the check argv', () => {
     expect(() => decodeLongHorizonSpec('["nope",1,1,1,1,1]')).toThrow(/unknown long-horizon mode/);
   });
 
+  test('a null seed is refused — coercing it to 0 would silently swap the corpus', () => {
+    expect(() => decodeLongHorizonSpec('["digest",null,10,0,2,1]')).toThrow(/seed must be a finite integer/);
+    expect(() => decodeLongHorizonSpec('["digest","11",120,60,5,1]')).toThrow(/seed must be a finite integer/);
+  });
+
   test('specs that cannot produce a task are rejected at the source', () => {
     expect(() => assertLongHorizonSpec({ ...digest, markers: 0 })).toThrow(/markers must be an integer/);
     expect(() => assertLongHorizonSpec({ ...digest, markers: 999 })).toThrow(/plants 999 markers/);

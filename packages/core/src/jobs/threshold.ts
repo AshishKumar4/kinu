@@ -139,7 +139,12 @@ export function isBackgroundOutcomeText(result: string): boolean {
   const text = result.trimStart();
   if (!text.startsWith('{')) return false;
   const parsed: unknown = tolerate(() => JSON.parse(text), 'malformed-input');
-  return v.safeParse(v.object({ background: v.boolean(), kind: v.string() }), parsed).success;
+  const base = v.safeParse(v.object({ background: v.boolean(), kind: v.string() }), parsed);
+  if (!base.success) return false;
+  if (base.output.background) {
+    return v.safeParse(v.object({ jobId: v.string() }), parsed).success;
+  }
+  return true;
 }
 
 /** What `onThreshold` decided: the job it minted, or a classified refusal to

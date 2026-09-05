@@ -208,6 +208,9 @@ export interface PartitionOptions {
 export function partitionCorpus(tasks: readonly BenchTask[], opts: PartitionOptions = {}): BenchCorpus {
   const salt = opts.salt ?? SEAL_SALT;
   const sealedFraction = opts.sealedFraction ?? DEFAULT_SEALED_FRACTION;
+  if (!Number.isFinite(sealedFraction) || sealedFraction < 0 || sealedFraction > 1) {
+    throw new Error(`sealedFraction must be in [0, 1], got ${sealedFraction}`);
+  }
   const ids = new Set<string>();
   for (const t of tasks) {
     if (ids.has(t.id)) throw new Error(`duplicate bench task id: ${t.id}`);

@@ -28,7 +28,7 @@
 import { KinuError, refusalOf } from '../obs/error';
 import { argumentDigest } from '../safety/argument-digest';
 import { isJsonObject, type JsonValue } from '../utils/json';
-import { VERIFIER_KIND_DOC, VERIFIER_KINDS, floorMargin } from './objective';
+import { PUBLISHING_CARRIES, VERIFIER_KIND_DOC, VERIFIER_KINDS, floorMargin } from './objective';
 import { DEFAULT_CONFIG } from '../config';
 import type {
   CarrySuppression, Floor, MeasuredValue, Objective, ObjectiveDirection, ParetoEvidence,
@@ -1501,6 +1501,10 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
         + 'instances (GEPA\'s front), or kind:"vector" for ≥2 metrics each keeping its own unit and '
         + 'direction (a score dict).');
     }
+  }
+  if (advance === 'pareto' && PUBLISHING_CARRIES.some((carry) => carry === config.carry.kind)) {
+    return badInput('advance:"pareto" keeps its durable frontier in node evidence and cannot '
+      + 'publish a vector through the scalar records store. Use carry:"none" or "reflections".');
   }
   if (config.score.kind === 'verify' && !objective) {
     // ONLY `custom` REACHES THIS NOW. A named preset handed no `objective` resolves to

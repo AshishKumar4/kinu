@@ -533,7 +533,24 @@ export function createTemporaryAgentPort(deps: {
         handoff = await deps.runtime.assign(name, assignment);
         deps.roster.recordAssignmentEvent(name, handoff.eventId);
       } catch (error) {
-        await release();
+        try {
+          await release();
+        } catch (releaseError) {
+          // Both survive, the way `rollbackSpawn` keeps both in an
+          // AggregateError: reporting only the release failure would lose the
+          // assignment failure that caused it, and reporting only the
+          // assignment failure would lose the row that may still be listed.
+          const combined = new AggregateError(
+            [error, releaseError],
+            'temporary agent assignment failed and its release also failed',
+            { cause: error },
+          );
+          return failure(
+            classifyErrorCode({ cause: combined }) ?? classifyErrorCode({ cause: error }) ?? 'unavailable',
+            `the temporary agent was created but could not be given the work: ${renderThrownChain({ cause: error })}`
+              + `\n\nIts release also failed, so the row may still be listed: ${renderThrownChain({ cause: releaseError })}`,
+          );
+        }
         return failure(
           classifyErrorCode({ cause: error }) ?? 'unavailable',
           `the temporary agent was created but could not be given the work: ${renderThrownChain({ cause: error })}`,

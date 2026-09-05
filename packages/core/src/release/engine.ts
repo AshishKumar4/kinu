@@ -295,10 +295,12 @@ export class ReleaseEngine {
         }
       } else {
         // The pristine base below is origin/<branch> — fetch its CURRENT tip
-        // so a re-apply never builds on a stale clone.
+        // so a re-apply never builds on a stale clone. The explicit refspec
+        // keeps a hostile branch value from parsing as a fetch flag:
+        // `refs/heads/<branch>` never starts with a dash.
         const fetched = await this.run(
           exec,
-          `${netGit} fetch origin ${shellQuote(branch)}`,
+          `${netGit} fetch origin ${shellQuote(`refs/heads/${branch}`)}`,
           { cwd: workdir, timeout: CLONE_TIMEOUT_MS },
         );
         if (fetched.exitCode !== 0) return `git fetch failed (exit ${fetched.exitCode}):\n${cap(combinedOutput(fetched))}`;
@@ -551,6 +553,17 @@ export class ReleaseEngine {
 
     const workdir = this.workdirFor(changeId);
     const command = opts.command?.trim() || deployTargetAsCommand(binding?.deployTarget ?? null);
+    // Preview promotion is local-only: staging/production deploys run a real
+    // deploy command, so without one there is nothing to record — fail before
+    // the digest check and before any status transition.
+    if (!command && environment !== 'local') {
+      return {
+        ok: false,
+        error:
+          'no deploy command available (pass deployment.command or set the binding deployTarget to a command ' +
+          `like "bunx wrangler deploy") — deploy to ${environment} requires a deploy command; preview promotion is local-only`,
+      };
+    }
 
     // Digest-bound approval (SPEC §7.3): the owner approved deploying THIS
     // patch via THIS declared command. Recompute the digest of what is about

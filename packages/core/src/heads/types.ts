@@ -29,6 +29,7 @@ import type { HeadFileChange } from './file-changes';
 import type { EvaluationGrounding } from '../types/evaluation';
 import type { Usage } from '../usage';
 import type { ToolSet } from 'ai';
+import type { BuiltinToolName } from '../tools/registry';
 
 /** What a head did to the shared filesystem — see heads/file-changes.ts. */
 export type { HeadFileChange };
@@ -456,7 +457,7 @@ import type { WorkMode } from '../prompting/surface';
  *  live research. Hosted `file` reaches the canonical workspace; local `file`
  *  reaches private scratch while `parent.*` reaches canonical files. `memory`
  *  and `skills` are withheld because they would address head-private stores. */
-export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'file', 'web'] as const;
+export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'file', 'web'] as const satisfies readonly BuiltinToolName[];
 
 /**
  * The builtin surface narrowed to an explicit allow-list.

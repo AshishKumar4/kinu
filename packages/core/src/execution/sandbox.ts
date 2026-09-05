@@ -948,12 +948,13 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
     },
 
     async stat(path) {
-      if (path === '/') return { size: 0, mtimeMs: 0, isDir: true };
-      const name = path.slice(path.lastIndexOf('/') + 1);
+      const clean = path.length > 1 ? path.replace(/\/+$/, '') : path;
+      if (clean === '/' || clean === '') return { size: 0, mtimeMs: 0, isDir: true };
+      const name = clean.slice(clean.lastIndexOf('/') + 1);
       // Same listing `readdir` above runs uncaught: null is reserved for "the
       // parent has no such entry", so a parent that cannot be listed propagates
       // rather than being reported as a file that simply is not there.
-      const files = (await handle.listFiles(vfsDirname(path), { recursive: false })).files ?? [];
+      const files = (await handle.listFiles(vfsDirname(clean), { recursive: false })).files ?? [];
       const entry = files.find((f) => nameOf(f) === name);
       if (!entry) return null;
       return { size: entry.size ?? 0, mtimeMs: 0, isDir: isDir(entry) };

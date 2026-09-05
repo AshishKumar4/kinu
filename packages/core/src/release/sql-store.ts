@@ -338,6 +338,12 @@ export class ReleaseStore {
     const id = input.id && /^psb-[A-Za-z0-9_-]{6,64}$/.test(input.id) ? input.id : this.makeId('psb', 10);
     const repoUrl = cleanOptional(input.repoUrl);
     const defaultBranch = cleanOptional(input.defaultBranch) ?? 'main';
+    // A branch value that starts with a dash parses as a git flag wherever it
+    // reaches a positional argument (notably `fetch origin <branch>`), so the
+    // ref is validated here, the last point before the value is durable.
+    if (defaultBranch.startsWith('-') || /\s/.test(defaultBranch) || defaultBranch.includes('..')) {
+      throw new Error(`invalid defaultBranch ${JSON.stringify(defaultBranch)}: must not start with '-', contain whitespace, or contain '..'`);
+    }
     const localDeviceId = cleanOptional(input.localDeviceId);
     const localRoot = cleanOptional(input.localRoot);
     const deployTarget = cleanOptional(input.deployTarget);

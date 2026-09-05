@@ -815,7 +815,6 @@ function adaptCraftStore(impl: AgentUtilsCraftStore): CoreCraftStore {
     delete(name) { impl.delete(name); },
     list() { return impl.list().map(adaptCraftedTool); },
     search(query, limit) { return impl.search(query, limit).map(adaptCraftedTool); },
-    getAll() { return impl.getAll().map(adaptCraftedTool); },
   };
 }
 

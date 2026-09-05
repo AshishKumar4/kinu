@@ -26,6 +26,7 @@ import {
 import {
   discoverSkills, readSkillFile, type DiscoverOpts, type SkillsVfs,
 } from '../skills/discover';
+import { boundedInt } from '../utils/bounds';
 import { seekPage, type Page, type PageRequest } from './page';
 import type { AgentsMdSources } from '../prompting/agents-md';
 import { tolerateAsync } from '../obs/index';
@@ -152,6 +153,12 @@ export function previewInstruction(content: string, maxChars = DEFAULT_PREVIEW_C
  *  per-read default. */
 const DEFAULT_INSTRUCTION_PAGE = 25;
 
+/**
+ * The ceiling on one approval page. The run list's own ceiling: this listing is
+ * RPC-reachable, and a negative limit answers with a page it cannot anchor.
+ */
+const MAX_INSTRUCTION_PAGE = 200;
+
 /** The listing's stable identity: kind then path, so a page boundary lands in
  *  the same place on every read and a cursor keeps meaning something. */
 function instructionAnchor(row: InstructionSourceRow): string {
@@ -187,7 +194,7 @@ export function listInstructionApprovals(input: {
     return meta.reason === undefined ? row : { ...row, reason: meta.reason };
   });
 
-  const limit = input.limit ?? DEFAULT_INSTRUCTION_PAGE;
+  const limit = boundedInt(input.limit, DEFAULT_INSTRUCTION_PAGE, 1, MAX_INSTRUCTION_PAGE);
   const after = input.cursor?.after;
   const from = after === undefined
     ? ordered

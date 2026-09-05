@@ -15,7 +15,7 @@ import * as v from 'valibot';
 import { ensureDir } from '../utils/vfs-helpers';
 import { VIEW_LIMITS, parseViewSpec, type ViewSpec } from './spec';
 import { parseJsonValue, type JsonValue } from '../utils/json';
-import { renderThrownChain } from '../obs/index';
+import { renderThrownChain, tolerateAsync } from '../obs/index';
 
 export interface ViewStoreDeps {
   vfs: VFS;
@@ -44,7 +44,7 @@ const ViewStatusSchema = v.picklist(['current', 'historical', 'deleted']);
 
 export type CreateViewResult =
   | { ok: true; slug: string; version: number; action: 'created' | 'updated' }
-  | { ok: false; error: string };
+  | { ok: false; error: string; reason: 'bad_input' };
 
 export type ReadViewResult =
   | { ok: true; slug: string; version: number; spec: ViewSpec }
@@ -103,7 +103,7 @@ export async function createView<Name, Spec>(
   rawSpec: Spec,
 ): Promise<CreateViewResult> {
   const slug = viewSlug(String(name ?? ''));
-  if (!slug) return { ok: false, error: 'A view name must contain at least one letter or digit.' };
+  if (!slug) return { ok: false, reason: 'bad_input', error: 'A view name must contain at least one letter or digit.' };
 
   // A JSON string is what a model reaches for half the time; accept it rather
   // than failing on a distinction that carries no meaning.
@@ -113,42 +113,46 @@ export async function createView<Name, Spec>(
     try {
       parsed = parseViewSpec(parseJsonValue(encodedSpec.output));
     } catch (error) {
-      return { ok: false, error: `The spec was a string but not valid JSON: ${renderThrownChain({ cause: error })}` };
+      return { ok: false, reason: 'bad_input', error: `The spec was a string but not valid JSON: ${renderThrownChain({ cause: error })}` };
     }
   } else {
     parsed = parseViewSpec(rawSpec);
   }
-  if (!parsed.ok) return { ok: false, error: parsed.error };
+  if (!parsed.ok) return { ok: false, reason: 'bad_input', error: parsed.error };
 
   const serialized = JSON.stringify(parsed.spec);
   if (serialized.length > VIEW_LIMITS.specBytes) {
     return {
       ok: false,
+      reason: 'bad_input',
       error: `The spec is ${serialized.length} bytes; the limit is ${VIEW_LIMITS.specBytes}.`,
     };
   }
 
   const { sql, vfs } = deps;
+  const spec = parsed.spec;
+  const writtenAt = Date.now();
+
+  // Ledger first, and in one synchronous stretch: the read of the tip, the
+  // demotion of the current row and the insert of the new one run with no
+  // await between them, so two publishers racing one slug cannot read the
+  // same tip. Writing the bytes first is what let a lost insert leave live
+  // bytes with no ledger row.
   const prior = sql<{ version: number }>`
     SELECT MAX(version) AS version FROM agent_views WHERE slug = ${slug}
   `;
-  const priorVersion = prior[0]?.version ?? 0;
-  const version = priorVersion + 1;
-  const writtenAt = Date.now();
+  const version = (prior[0]?.version ?? 0) + 1;
+  void sql`UPDATE agent_views SET status = 'historical' WHERE slug = ${slug} AND status = 'current'`;
+  void sql`
+    INSERT INTO agent_views (slug, version, title, subtitle, written_at, status)
+    VALUES (${slug}, ${version}, ${spec.title}, ${spec.subtitle ?? null}, ${writtenAt}, 'current')
+  `;
 
-  // Bytes first: a ledger row pointing at a file that failed to write would
-  // make the tab list disagree with what is renderable.
   await ensureDir(vfs, VIEW_DIR);
   await vfs.writeFile(versionPath(slug, version), serialized);
   await vfs.writeFile(livePath(slug), serialized);
 
-  void sql`UPDATE agent_views SET status = 'historical' WHERE slug = ${slug} AND status = 'current'`;
-  void sql`
-    INSERT INTO agent_views (slug, version, title, subtitle, written_at, status)
-    VALUES (${slug}, ${version}, ${parsed.spec.title}, ${parsed.spec.subtitle ?? null}, ${writtenAt}, 'current')
-  `;
-
-  return { ok: true, slug, version, action: priorVersion === 0 ? 'created' : 'updated' };
+  return { ok: true, slug, version, action: version === 1 ? 'created' : 'updated' };
 }
 
 /** The views the UI should show tabs for, oldest first so the strip is stable
@@ -220,8 +224,10 @@ export async function deleteView(
 
   // Bytes first: a file plane that cannot remove the live view must not leave a
   // ledger claiming the view was retired, and a retire that "succeeded" while
-  // the renderer's file is still there was the whole bug.
-  await deps.vfs.unlink(livePath(slug));
+  // the renderer's file is still there was the whole bug. A live file already
+  // gone is the one unlink failure that is not a failure: the ledger is what
+  // decides what is live, so the retire still lands.
+  await tolerateAsync(() => deps.vfs.unlink(livePath(slug)), 'enoent');
   void deps.sql`UPDATE agent_views SET status = 'deleted' WHERE slug = ${slug} AND status = 'current'`;
   return { ok: true };
 }

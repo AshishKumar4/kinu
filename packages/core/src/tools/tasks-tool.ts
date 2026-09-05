@@ -22,10 +22,11 @@ import {
 } from './registry';
 import {
   BUILTIN_ROLE_DEFINITIONS,
+  DEFAULT_ROLE_ID,
   isValidRoleId,
   type ProfileCatalogEnvelope,
 } from '../profiles/catalog';
-import { changeActiveRole } from '../profiles/role-change';
+import { changeActiveRole, roleChangeOutcomeText } from '../profiles/role-change';
 
 const TaskStatusSchema = v.picklist(TASK_STATUSES);
 const TasksActionSchema = v.picklist(TASKS_TOOL_ACTIONS);
@@ -79,10 +80,6 @@ interface TasksListed {
 
 interface RoleSet {
   role: string;
-  /** Set when the switch staged for owner approval instead of landing now. */
-  staged?: true;
-  /** Why the switch did not land immediately. */
-  note?: string;
 }
 
 export type TasksToolResult = TasksError | TasksAdded | TaskUpdated | TasksListed | RoleSet;
@@ -167,7 +164,7 @@ export function createTasksDispatcher(
         // No argument = read the current one.
         if (args.role === undefined) {
           const selection = config.getRoleSelection();
-          return { role: selection.kind === 'catalog' ? selection.roleId : 'general', roleSource: selection.kind };
+          return { role: selection.kind === 'catalog' ? selection.roleId : DEFAULT_ROLE_ID, roleSource: selection.kind };
         }
         const envelope = roleAuthority?.();
         if (!isValidRoleId(args.role)) {
@@ -178,19 +175,14 @@ export function createTasksDispatcher(
         }
         const outcome = changeActiveRole({ envelope, config, to: args.role, actor: 'agent' });
         if (outcome.kind === 'refused') {
+          const current = config.getRoleSelection();
+          const live = current.kind === 'catalog' ? current.roleId : DEFAULT_ROLE_ID;
+          const text = roleChangeOutcomeText(args.role, outcome, live);
+          if (outcome.reason !== 'unknown-role') return { error: text };
           const known = Object.keys({ ...BUILTIN_ROLE_DEFINITIONS, ...envelope.catalog.roles }).sort();
-          return { error: outcome.reason === 'unknown-role'
-            ? `unknown role ${args.role} — known roles: ${known.join(', ')}`
-            : outcome.reason === 'locked'
-              ? 'the owner has locked role changes for this agent; ask them to switch the role'
-              : `invalid role id ${args.role}` };
+          return { error: `${text} Known roles: ${known.join(', ')}.` };
         }
-        const result: RoleSet = { role: args.role };
-        if (outcome.kind === 'staged') {
-          result.staged = true;
-          return { ...result, note: 'staged for owner approval; the active role is unchanged until they approve it' };
-        }
-        return result;
+        return { role: args.role };
       }
     }
   };

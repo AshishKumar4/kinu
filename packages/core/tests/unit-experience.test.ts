@@ -43,6 +43,8 @@ import {
   type PublishableCandidate,
   type SqlExec,
 } from '../src/index';
+import { stageImport } from '../src/experience/imports';
+import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -619,6 +621,48 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     );
   });
 
+  test('a veto after the probation turns still keeps the loop at home', async () => {
+    const alpha = workspace('alpha', ownerLibrary());
+    await seedLiveScaffold(alpha);
+    const version = await promoteScaffold(alpha, scaffoldSrc('v1'));
+    const first = 1_700_000_000_000;
+    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials, first);
+    // The veto lands after the last probation turn but before the publish
+    // check. The window runs from the first served turn through now, so it
+    // still counts.
+    const vetoAt = first + DEFAULT_SHADOW_CONFIG.minTrials + 5000;
+    void alpha.rt.storage.sql`INSERT INTO evolution_events (type, message, data, created_at)
+      VALUES ('misevolution_veto', 'Misevolution veto (test)', ${JSON.stringify({ surface: 'scaffold' })}, ${vetoAt})`;
+    const refused = await findPublishable(publishSources(alpha), 'scaffold', String(version), vetoAt + 1000);
+    expect('refused' in refused && refused.refused).toBe(
+      `scaffold v1 drew 1 misevolution veto during its ${DEFAULT_SHADOW_CONFIG.minTrials}-turn `
+      + 'probation here — a loop that evolves unsafe artifacts is not one to hand another workspace',
+    );
+  });
+
+  test('an unreadable veto row fails closed instead of throwing', async () => {
+    const alpha = workspace('alpha', ownerLibrary());
+    await seedLiveScaffold(alpha);
+    const version = await promoteScaffold(alpha, scaffoldSrc('v1'));
+    const first = 1_700_000_000_000;
+    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials, first);
+    void alpha.rt.storage.sql`INSERT INTO evolution_events (type, message, data, created_at)
+      VALUES ('misevolution_veto', 'Misevolution veto (test)', ${'not-json'}, ${first + 1})`;
+    const log = createRecordingLogger();
+    const restore = setDiagnosticsSink(log);
+    try {
+      const refused = await findPublishable(publishSources(alpha), 'scaffold', String(version));
+      expect('refused' in refused && refused.refused).toBe(
+        `scaffold v1 drew 1 misevolution veto during its ${DEFAULT_SHADOW_CONFIG.minTrials}-turn `
+        + 'probation here — a loop that evolves unsafe artifacts is not one to hand another workspace',
+      );
+      expect(log.emitted.map((line) => line.event)).toContain('experience.publishable_veto_unreadable');
+      await expect(listPublishable(publishSources(alpha))).resolves.toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
   test('the qualifying loop reaches a sibling workspace with its evidence', async () => {
     const library = ownerLibrary();
     const alpha = workspace('alpha', library);
@@ -906,4 +950,95 @@ describe('the dispatcher answers honestly at its edges', () => {
       .toBe('import requires the library entry id');
     expect(await importedRows(beta)).toEqual([]);
   });
+});
+
+// ── corrupt rows are skipped, never fatal ───────────────────────────────────
+
+describe('a corrupt row is skipped, never staged or fatal', () => {
+  test('a payload whose kind differs from the entry kind is refused with no row written', async () => {
+    const library = ownerLibrary();
+    const entry = library.publish({
+      kind: 'craft', key: 'fetch_changelog', title: 'fetch a project changelog', evidence: 'effective score 0.90 after 4 real uses',
+      payload: { kind: 'craft', name: 'fetch_changelog', description: 'fetch a project changelog', params: { url: 'string' }, code: 'async (args) => args.url', score: 0.9 },
+    }, 'alpha');
+    const beta = workspace('beta', library);
+    // kind and payload are independent fields, so a mismatched entry is
+    // type-legal to build and must be refused at runtime: staging it would
+    // write a row every list skips while the duplicate guard still sees it.
+    const mismatched: ExperienceEntry = { ...entry, kind: 'lesson' };
+
+    const first = stageImport(beta.rt, mismatched);
+    expect(first.ok).toBe(false);
+    if (first.ok) throw new Error('a kind-mismatched payload was staged');
+    expect(first.reason).toContain('does not parse');
+    expect(await importedRows(beta)).toEqual([]);
+
+    const second = stageImport(beta.rt, mismatched);
+    expect(second.ok).toBe(false);
+    if (second.ok) throw new Error('a kind-mismatched payload was staged');
+    expect(second.reason).toContain('does not parse');
+    expect(beta.db.query<{ c: number }, []>(`SELECT count(*) AS c FROM imported_experience`).get()?.c).toBe(0);
+  });
+
+  test('one corrupt turn_ids value skips its row with a diagnostic while good rows return', () => {
+    const beta = workspace('beta', ownerLibrary());
+    const goodPayload = JSON.stringify({ kind: 'lesson', text: 'Read the error before rerunning.' });
+    void beta.rt.storage.sql`INSERT INTO imported_experience
+      (id, library_id, kind, key, title, payload_json, evidence, source_workspace,
+       status, turn_ids, imported_at, corroborated_at)
+      VALUES ('imp-good', 'exp-good', 'lesson', 'k1', 't1', ${goodPayload}, 'e', 'alpha', 'provisional', '[]', 1, NULL)`;
+    void beta.rt.storage.sql`INSERT INTO imported_experience
+      (id, library_id, kind, key, title, payload_json, evidence, source_workspace,
+       status, turn_ids, imported_at, corroborated_at)
+      VALUES ('imp-bad-json', 'exp-bad-json', 'lesson', 'k2', 't2', ${goodPayload}, 'e', 'alpha', 'provisional', 'not-json{{{', 2, NULL)`;
+    void beta.rt.storage.sql`INSERT INTO imported_experience
+      (id, library_id, kind, key, title, payload_json, evidence, source_workspace,
+       status, turn_ids, imported_at, corroborated_at)
+      VALUES ('imp-bad-shape', 'exp-bad-shape', 'lesson', 'k3', 't3', ${goodPayload}, 'e', 'alpha', 'provisional', '[123]', 3, NULL)`;
+
+    const log = createRecordingLogger();
+    const restore = setDiagnosticsSink(log);
+    try {
+      expect(listImportedExperience(beta.rt.storage.sql).map((row) => row.id)).toEqual(['imp-good']);
+      expect(log.emitted.map((line) => line.event)).toContain('experience.import_row_unreadable');
+    } finally {
+      restore();
+    }
+  });
+
+  test('a non-JSON stored payload is skipped like a shape mismatch', () => {
+    const db = new Database(':memory:');
+    const exec = sqlExec(db);
+    initExperienceLibraryTables(exec);
+    const library = createExperienceLibrary(exec);
+    library.publish({
+      kind: 'fact', key: 'ok', title: 'ok', evidence: 'e',
+      payload: { kind: 'fact', key: 'ok', value: 1, confidence: 1 },
+    }, 'alpha');
+    db.prepare(`INSERT INTO experience_library
+      (id, kind, source_workspace, key, title, payload_json, evidence, search_text, published_at)
+      VALUES ('exp-nonjson', 'lesson', 'alpha', 'bad', 'bad', 'not-json{{{', 'e', 'bad', 1)`).run();
+
+    expect(library.search().map((e) => e.key)).toEqual(['ok']);
+    expect(library.get('exp-nonjson')).toBeNull();
+  });
+
+  test('a promoted lesson carries the settling turn id', async () => {
+    const library = ownerLibrary();
+    const beta = workspace('beta', library);
+    const entry = library.publish({
+      kind: 'lesson', key: 'lsn-1', title: 'Read the error before rerunning.',
+      evidence: 'turn reflection corroborated 2026-08-01',
+      payload: { kind: 'lesson', text: 'Read the error before rerunning.' },
+    }, 'alpha');
+
+    expect(v.parse(ImportSchema, await beta.call({ action: 'import', id: entry.id })).status).toBe('provisional');
+    await gradeTurn(beta, 'turn-1', 'positive');
+
+    const adopted = listLessons(beta.rt.storage.sql, { status: 'corroborated' })
+      .find((lesson) => lesson.text.includes('Read the error before rerunning.'));
+    if (!adopted) throw new Error('the imported lesson was not adopted');
+    expect(adopted.turnIds).toContain('turn-1');
+  });
+
 });

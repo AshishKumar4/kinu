@@ -200,9 +200,12 @@ export function toolAllowedBySkills(
 }
 
 /** Glob-suffix match: `workspace.*` matches `workspace.readFile`; exact
- *  otherwise. */
+ *  otherwise. A spec-dialect pattern carries its filter in parens
+ *  (`Bash(git:*)`), so its head names the family it restricts. */
 function matchesToolPattern(toolName: string, pattern: string): boolean {
   if (pattern === toolName) return true;
+  const paren = pattern.indexOf('(');
+  if (paren > 0 && toolName === pattern.slice(0, paren)) return true;
   if (pattern.endsWith('.*')) {
     const prefix = pattern.slice(0, -1); // keep the trailing dot
     return toolName.startsWith(prefix);

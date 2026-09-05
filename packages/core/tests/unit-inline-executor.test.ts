@@ -19,6 +19,7 @@ import { TurnFileLedger } from '../src/tools/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import { toolExecute } from '@kinu.run/test-utils';
 import type { JsonValue } from '../src/utils/json';
+import type { CraftedTool } from '../src/types/craft';
 
 const ToolSummarySchema = v.object({
   name: v.string(),
@@ -68,6 +69,22 @@ describe('workspace provider (InlineExecutor)', () => {
     const exec = buildExec(rt);
     const result = await exec.tools.listTools.execute();
     expect(v.parse(v.array(ToolSummarySchema), result)).toEqual([]);
+  });
+
+  test('listTools reads a tool with no quality row as the neutral prior', async () => {
+    const { rt } = createTestRuntime();
+    const ghost: CraftedTool = {
+      name: 'ghost', description: 'no row yet', params: null,
+      code: 'async () => 1', scope: 'local', createdAt: 0, updatedAt: 0,
+    };
+    const exec = createInlineExecutor({
+      vfs: rt.storage.vfs, memory: rt.memory, craftStore: { ...rt.craftStore, list: () => [ghost] },
+      shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+      sql: rt.storage.sql,
+    });
+    expect(v.parse(v.array(ToolSummarySchema), await exec.tools.listTools.execute())).toEqual([
+      { name: 'ghost', description: 'no row yet', qualityScore: CRAFT_NEUTRAL_PRIOR },
+    ]);
   });
 
   test('createTool preserves camelCase — does not lowercase', async () => {
@@ -161,6 +178,16 @@ describe('workspace provider (InlineExecutor)', () => {
 
     const noCode = v.parse(ToolOkSchema, await exec.tools.createTool.execute('name', 'desc', ''));
     expect(noCode.ok).toBe(false);
+  });
+
+  test('createTool refuses a name that shadows a builtin or MCP tool', async () => {
+    const { rt } = createTestRuntime();
+    const exec = buildExec(rt);
+    for (const name of ['run', 'mcp_github_get']) {
+      const result = await exec.tools.createTool.execute(name, 'shadow', 'async () => 1');
+      expect(result).toMatchObject({ ok: false, reason: 'bad_input', error: expect.stringContaining(name) });
+      expect(rt.craftStore.get(name)).toBeUndefined();
+    }
   });
 
   // v2.1(E): invokeCrafted removed. Same-turn `tools.<name>()` access is

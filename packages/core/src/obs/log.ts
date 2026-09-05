@@ -392,14 +392,14 @@ export function createRecordingLogger(): RecordingLogger {
   return {
     emitted,
     event(name: LogEventName, fields?: LogFields): void {
-      emitted.push({ event: name, code: null, cause: null, fields: fields ?? {} });
+      emitted.push({ event: name, code: null, cause: null, fields: fields ? { ...fields } : {} });
     },
     failure(name: LogEventName, error: KinuError, fields?: LogFields): void {
       emitted.push({
         event: name,
         code: error.code,
         cause: renderCauseChain(error),
-        fields: fields ?? {},
+        fields: fields ? { ...fields } : {},
       });
     },
   };

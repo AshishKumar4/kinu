@@ -16,6 +16,7 @@
  */
 
 import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from '@kinu.run/agent-utils/memory';
+import * as v from 'valibot';
 import { CHAT_SESSION_ID, hasPaneStore, paneStampMs } from '../identity/conversation-store';
 import { boundedInt } from '../utils/bounds';
 import type { SqlExecutor } from '../types/primitives';
@@ -30,6 +31,12 @@ import { uiMessageText } from '../utils/ui-message';
  *  ask for more is a keyhole, not recall. */
 const MAX_MESSAGE_CHARS = 700;
 const SNIPPET_TOKENS = 24;
+
+/** Caller max_chars at the scroll boundary. Finite integers of 50 or more
+ *  pass through untouched, so large read-backs keep working. Anything else
+ *  means unstated and takes the default, the same way sibling bounds treat
+ *  non-finite input. */
+const MaxCharsSchema = v.optional(v.pipe(v.number(), v.finite(), v.integer(), v.minValue(50)));
 
 export interface ConversationSearchHit {
   conversationId: string;
@@ -215,7 +222,10 @@ export class ConversationSearchStore {
           SELECT COUNT(*) AS c FROM messages
           WHERE session_id = ${row.session_id} AND rowid > ${row.rid}`)[0]!.c;
 
-    const perMessage = maxChars !== undefined ? Math.max(50, Math.trunc(maxChars)) : MAX_MESSAGE_CHARS;
+    const parsedMaxChars = v.safeParse(MaxCharsSchema, maxChars);
+    const perMessage = parsedMaxChars.success && parsedMaxChars.output !== undefined
+      ? parsedMaxChars.output
+      : MAX_MESSAGE_CHARS;
     // Pane rows carry the serialized UI message; its text parts are what a
     // recall surface quotes. Plain rows already hold plain text.
     const toMessage = (m: FetchedRow): ConversationScrollMessage => ({

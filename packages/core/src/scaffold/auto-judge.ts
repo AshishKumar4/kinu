@@ -25,7 +25,7 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structu
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import * as v from 'valibot';
 import {
-  type PendingScaffold, type ShadowConfig, type JudgeFn, type ShadowTrialVerdict,
+  type PendingScaffold, type ShadowConfig, type ShadowTrialVerdict,
   DEFAULT_SHADOW_CONFIG, getPendingScaffold, getCurrentScaffoldVersion,
   recordShadowEvaluation, scoredShadowTrial, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow';
@@ -392,4 +392,4 @@ function buildJudgePrompt(opts: JudgeTrialOpts, pendingIsA: boolean): string {
 }
 
 // Re-export for convenience.
-export type { PendingScaffold, ShadowConfig, JudgeFn, ShadowTrialVerdict };
+export type { PendingScaffold, ShadowConfig, ShadowTrialVerdict };

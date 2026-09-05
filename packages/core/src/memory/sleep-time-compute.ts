@@ -19,6 +19,7 @@
 import * as v from 'valibot';
 import type { LLM } from '../types/primitives';
 import type { FactsStore } from './facts';
+import { normalizeFactKey } from './facts';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
@@ -84,15 +85,11 @@ export const SleepTimeUpdateSchema: v.GenericSchema<SleepTimeUpdate> = v.object(
   upserts: v.array(v.object({
     key: v.pipe(v.string(), v.minLength(1)),
     value: JsonValueSchema,
-    confidence: v.number(),
+    confidence: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
     rationale: v.string(),
   })),
   decay: v.array(v.pipe(v.string(), v.minLength(1))),
 });
-
-function normalizeFactKey(key: string): string {
-  return key.trim().toLowerCase().replace(/\s+/g, '_');
-}
 
 export async function runSleepTimeCompute(
   judge: LLM,

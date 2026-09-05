@@ -32,6 +32,7 @@
  */
 
 import { estimateTokens } from '../llm';
+import { diagnostics, toKinuError } from '../obs/index';
 import {
   readSkillFile, compareSkillNames,
   type SkillsDiscovery, type SkillsVfs,
@@ -192,21 +193,34 @@ export async function admitActiveSkills(opts: {
   const active: ActiveSkill[] = [];
   const reasons: Array<{ name: string; reason: ActivationReason }> = [];
   for (const { skill, reason } of opts.activated) {
-    // Stat before a file read when the plane can answer it, so a replacement
-    // that grew beyond this turn's remaining allocation stays a pointer. Where
-    // the plane cannot stat, discovery's own `chars` is the declared size —
-    // admission never materializes a body whose declared cost cannot fit.
-    if (skill.bodyRef.kind === 'file') {
-      const stat = opts.vfs.stat ? await opts.vfs.stat(skill.bodyRef.path) : null;
-      const declared = stat === null ? skill.bodyRef.chars : stat.size;
-      if (estimateTokens(declared) > remaining) {
-        active.push({ ...skill, body: null, trust: 'unverified' });
-        reasons.push({ name: skill.name, reason });
-        continue;
+    // A body that cannot be read defers its own skill. The turn keeps the
+    // other bodies and records the failure.
+    let source: string;
+    try {
+      // Stat before a file read when the plane can answer it, so a replacement
+      // that grew beyond this turn's remaining allocation stays a pointer. Where
+      // the plane cannot stat, discovery's own `chars` is the declared size —
+      // admission never materializes a body whose declared cost cannot fit.
+      if (skill.bodyRef.kind === 'file') {
+        const stat = opts.vfs.stat ? await opts.vfs.stat(skill.bodyRef.path) : null;
+        const declared = stat === null ? skill.bodyRef.chars : stat.size;
+        if (estimateTokens(declared) > remaining) {
+          active.push({ ...skill, body: null, trust: 'unverified' });
+          reasons.push({ name: skill.name, reason });
+          continue;
+        }
       }
+      source = await readSkillFile(opts.vfs, skill.bodyRef);
+    } catch (err) {
+      diagnostics.failure(
+        'skills.admission_failed',
+        toKinuError({ doing: 'admit a skill body', cause: err, otherwise: 'io' }),
+        { skill: skill.name },
+      );
+      active.push({ ...skill, body: null, trust: 'unverified' });
+      reasons.push({ name: skill.name, reason });
+      continue;
     }
-
-    const source = await readSkillFile(opts.vfs, skill.bodyRef);
     if (skill.bodyRef.kind === 'builtin') {
       const cost = estimateTokens(source.length);
       if (cost > remaining) {

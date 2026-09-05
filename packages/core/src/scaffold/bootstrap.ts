@@ -11,9 +11,9 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { VFS } from '../types/primitives';
 import { initScaffoldTables } from './schemas';
 import { getCurrentScaffoldVersion } from './shadow';
+import { readScaffoldFileText } from './surface';
 import { nowMs } from '../utils/date';
 
 export const INITIAL_SCAFFOLD_SOURCE = `\
@@ -43,11 +43,6 @@ function insertV0Row(rt: AgentRuntime): void {
   `;
 }
 
-async function readFileText(vfs: VFS, target: string): Promise<string> {
-  const content = await vfs.readFile(target, { encoding: 'utf8' });
-  return content instanceof Uint8Array ? new TextDecoder().decode(content) : content;
-}
-
 export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
   initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   const sql = rt.storage.sql;
@@ -71,7 +66,7 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
   const seededVersion = current ?? 0;
   if (!(await vfs.exists(versionedPath(seededVersion)))) {
     if (!liveExists) return; // no source anywhere — surfaces at execution read
-    await vfs.writeFile(versionedPath(seededVersion), await readFileText(vfs, path));
+    await vfs.writeFile(versionedPath(seededVersion), await readScaffoldFileText(vfs, path));
   }
   if (current === null) {
     insertV0Row(rt);
@@ -81,8 +76,8 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
   // Activation refresh: converge the live view onto the current pointer.
   const activeVersion = current;
   if (activeVersion === null || !(await vfs.exists(versionedPath(activeVersion)))) return;
-  const canonical = await readFileText(vfs, versionedPath(activeVersion));
-  if (!liveExists || (await readFileText(vfs, path)) !== canonical) {
+  const canonical = await readScaffoldFileText(vfs, versionedPath(activeVersion));
+  if (!liveExists || (await readScaffoldFileText(vfs, path)) !== canonical) {
     await rt.identity.scaffold.write(canonical);
   }
 }

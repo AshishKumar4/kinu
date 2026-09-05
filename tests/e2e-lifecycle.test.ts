@@ -44,7 +44,7 @@ import {
   JsonObjectSchema,
   projectJsonValue,
 } from '../packages/core/src/index';
-import { openWorkspace } from '../packages/core/src/identity/index';
+import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import type { CLIRuntime } from '../packages/cli-backend/src/runtime';
 import { buildEvalAgentSurface } from './evals/harness';
 import { provisionLocalTarget, type LocalAgentEvalTarget } from './evals/target-local';
@@ -434,7 +434,7 @@ describe('E2E Lifecycle', () => {
     db.close();
     const db2 = new Database(DB_PATH);
     const msgsAfter = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM messages').get()?.c ?? 0;
-    const reopened = await openWorkspace(db2, { llm: LLM_CONFIG });
+    const reopened = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG });
     const soul = reopened.info.soul;
     db2.close();
     expect(msgsAfter).toBe(msgsBefore);

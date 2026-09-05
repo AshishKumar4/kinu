@@ -24,6 +24,7 @@ import {
   isSafeUrl,
   UnsafeUrlError,
   WebFetchError,
+  stripBase64Images,
   TOOL_OUTPUT_DIR,
   decodeJsonValue,
   projectJsonValue,
@@ -184,6 +185,23 @@ describe('web provider — search', () => {
     expect(calls[0].url).toContain('tavily.com');
     expect(new Headers(calls[0]!.init?.headers).get('authorization')).toContain('tvly-test');
   });
+  test('an unreadable Tavily response maps to a non-retriable WebFetchError with cause', async () => {
+    const bodies = ['not-json-at-all', JSON.stringify({ results: [{ url: 123 }] })];
+    for (const body of bodies) {
+      const { fetch } = stubFetch((url) => {
+        if (url.includes('tavily.com')) return { body, headers: { 'content-type': 'application/json' } };
+        return { body: DDG_HTML };
+      });
+      const provider = createDefaultWebSearchProvider({
+        fetch,
+        getAuth: async (key) => (key === 'tavily' ? { headers: { authorization: 'Bearer tvly-test' } } : null),
+      });
+      const attempt = provider.search('query');
+      await expect(attempt).rejects.toMatchObject({ name: 'WebFetchError', retriable: false });
+      await expect(attempt).rejects.toThrow(/unreadable.*Tavily|Tavily.*unreadable/i);
+      await expect(attempt).rejects.toMatchObject({ cause: expect.anything() });
+    }
+  });
 
   test('DuckDuckGo rate-limit maps to a retriable error', async () => {
     const { fetch } = stubFetch(() => ({ status: 429, body: '' }));
@@ -240,6 +258,18 @@ describe('web provider — fetch', () => {
     const res = await provider.fetch('https://example.com');
     expect(res.markdown).toContain('converted');
     expect(res.markdown).not.toContain('base64,AAAA');
+  });
+
+  test('a throwing htmlToMarkdown override falls back to the local converter', async () => {
+    const html = '<html><head><title>Hello</title></head><body><h1>Heading</h1><p>Para</p></body></html>';
+    const { fetch } = stubFetch(() => ({ body: html, headers: { 'content-type': 'text/html' } }));
+    const provider = createDefaultWebSearchProvider({
+      fetch,
+      htmlToMarkdown: async () => { throw new Error('cf AI.toMarkdown blew up'); },
+    });
+    const res = await provider.fetch('https://example.com/page');
+    expect(res.markdown).toContain('# Heading');
+    expect(res.markdown).toContain('Para');
   });
 
   test('http error maps to a WebFetchError', async () => {
@@ -316,6 +346,40 @@ describe('web provider — fetch', () => {
     const res = await provider.fetch('https://example.com/big');
     expect(res.markdown).toContain('[fetch truncated: kept the first');
     expect(pulls).toBeLessThan(totalChunks);
+  });
+
+  test('a trickling body past the timeout rejects as timed out', async () => {
+    // Real timers: the behavior under test IS the wall clock (a body that
+    // trickles past timeoutMs must reject), so fake timers cannot drive it.
+    const makeStream = () => new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        controller.enqueue(new TextEncoder().encode('hello '));
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, 300);
+        await promise;
+        controller.enqueue(new TextEncoder().encode('world'));
+        controller.close();
+      },
+    });
+    const slowFetch = Object.assign(
+      async () => new Response(makeStream(), { headers: { 'content-type': 'text/plain' } }),
+      { preconnect: fetch.preconnect },
+    ) satisfies typeof fetch;
+    const provider = createDefaultWebSearchProvider({ fetch: slowFetch, timeoutMs: 40 });
+    await expect(provider.fetch('https://example.com/slow')).rejects.toMatchObject({
+      name: 'WebFetchError',
+      retriable: true,
+    });
+    await expect(provider.fetch('https://example.com/slow')).rejects.toThrow(/timed out after 40ms/);
+  });
+
+  test('a short bare data URI keeps its trailing prose', () => {
+    const short = 'data:image/png;base64,AAAA trailing prose after short uri stays visible';
+    expect(stripBase64Images(short)).toContain('trailing prose after short uri stays visible');
+    const long = `data:image/png;base64,${'A'.repeat(100)} tail prose stays`;
+    const stripped = stripBase64Images(long);
+    expect(stripped).toContain('[image]');
+    expect(stripped).toContain('tail prose stays');
   });
 
 });

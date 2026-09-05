@@ -183,11 +183,19 @@ function foldRepeats(attempts: readonly AttemptOutcome[]) {
 export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
   const { config } = input;
   const byTask = new Map<string, { a: AttemptOutcome[]; b: AttemptOutcome[] }>();
+  const seen = new Set<string>();
   for (const attempt of input.devAttempts) {
     const entry = byTask.get(attempt.taskId) ?? { a: [], b: [] };
     if (attempt.variantId === config.variantA) entry.a.push(attempt);
     else if (attempt.variantId === config.variantB) entry.b.push(attempt);
     else throw new Error(`attempt for unknown variant "${attempt.variantId}" on task ${attempt.taskId}`);
+    if (!Number.isInteger(attempt.repeat) || attempt.repeat < 0 || attempt.repeat >= config.repeats) {
+      throw new Error(`out-of-range repeat ${attempt.repeat} for ${attempt.taskId} (variant ${attempt.variantId}) — expected 0..${config.repeats - 1}`);
+    }
+    const key = `${attempt.variantId}:${attempt.taskId}:${attempt.repeat}`;
+    const slotKey = `${attempt.slot}:${attempt.taskId}:${attempt.repeat}`;
+    if (seen.has(key)) throw new Error(`duplicate repeat attempt ${key} (slot ${slotKey})`);
+    seen.add(key);
     byTask.set(attempt.taskId, entry);
   }
 

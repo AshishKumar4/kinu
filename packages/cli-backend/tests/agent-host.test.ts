@@ -967,24 +967,24 @@ describe('LocalAgentHost', () => {
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
     const team = await host.team('root');
-    // Birth a task-lifetime child and hand it work WITHOUT parking a waiter,
-    // which is exactly the state an evicted asking activation leaves.
+    // Hand a child work, then mark its row task-lifetime with no waiter parked,
+    // which is exactly the state an evicted asking activation leaves. The
+    // durable verbs refuse a task row, so the row flips after the handoff.
     await team.spawn({
       name: 'ask-researcher-late',
       role: { kind: 'catalog', roleId: 'researcher' },
       mission: 'Find the root cause.',
       mode: 'build',
     });
-    const roster = new Database(dbPath);
-    roster.run("UPDATE workspace_subordinates SET lifetime='task' WHERE name='ask-researcher-late'");
-    roster.close();
-
     const reported = Promise.withResolvers<void>();
     host.subscribe((_agent, event) => {
       if (event.type === 'broadcast' && event.event.type === 'subordinate_event'
         && event.event.status === 'completed') reported.resolve();
     });
     await team.assign({ name: 'ask-researcher-late', task: 'Report it.', mode: 'build' });
+    const roster = new Database(dbPath);
+    roster.run("UPDATE workspace_subordinates SET lifetime='task' WHERE name='ask-researcher-late'");
+    roster.close();
     await reported.promise;
     await host.close();
 

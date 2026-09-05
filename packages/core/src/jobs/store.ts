@@ -340,7 +340,7 @@ export class BackgroundJobStore {
    *  `limit` bounds the returned page; `total` is the TRUE running count, so a
    *  renderer can state its elision honestly even when the page was cut. */
   listRunning(limit = 20): ActiveRoster<BackgroundJob> {
-    const items = this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at, resume_after
+    const items = this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at, resume_after, retried_by
       FROM background_jobs WHERE status='running' ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
     return { items, total: this.countRunning() };
   }

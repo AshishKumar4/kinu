@@ -95,4 +95,22 @@ describe('agent_facts', () => {
   test('renderFactsBlock empty input returns empty string', () => {
     expect(renderFactsBlock([])).toBe('');
   });
+
+  test('confidence outside 0..1 clamps at upsert', () => {
+    const { facts } = createTestFactsStore();
+    facts.upsert('over', 'v', { confidence: 5 });
+    expect(facts.recall('over')?.confidence).toBe(1);
+    facts.upsert('under', 'v', { confidence: -3 });
+    expect(facts.recall('under')?.confidence).toBe(0);
+  });
+
+  test('variant key spellings share one row across upsert, recall and forget', () => {
+    const { facts } = createTestFactsStore();
+    facts.upsert('  Sandbox.NPM   Version  ', 'npm v10');
+    expect(facts.recall('sandbox.npm_version')?.value).toBe('npm v10');
+    expect(facts.recall('SANDBOX.npm VERSION')?.value).toBe('npm v10');
+    expect(facts.all().length).toBe(1);
+    facts.forget('SANDBOX.npm   VERSION');
+    expect(facts.recall('sandbox.npm_version')).toBeNull();
+  });
 });

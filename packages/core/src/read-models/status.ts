@@ -14,6 +14,7 @@ import { conversationCount, conversationPageRows, type ConversationPageRow } fro
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
 import { readSoul, summarizeSoul } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
+import { CRAFT_NEUTRAL_PRIOR } from '../craft/in-episode';
 import type { CraftStore } from '../types/agent-runtime';
 import type { VFS, SqlExecutor } from '../types/primitives';
 import type { CraftedTool } from '../types/craft';
@@ -185,7 +186,7 @@ export function getToolList(sql: SqlExecutor, craftStore: CraftStore) {
       SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
     return {
       name: t.name, description: t.description, scope: t.scope,
-      qualityScore: scoreRow[0]?.score ?? 0.5,
+      qualityScore: scoreRow[0]?.score ?? CRAFT_NEUTRAL_PRIOR,
       usageCount: scoreRow[0]?.uses ?? 0,
     };
   });

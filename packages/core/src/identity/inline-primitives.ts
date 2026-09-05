@@ -1,6 +1,6 @@
 /**
  * Inline primitive implementations over a raw bun:sqlite-style database,
- * shared by createWorkspace and openWorkspace. The production backends replace
+ * backing createWorkspace. The production backends replace
  * Memory/Executor/Schedule with richer adapters (FTS5 MemoryStore, sandboxed
  * executors); the filesystem is already the production one, so nothing about
  * how bytes are stored differs between this path and a deployed agent: both call
@@ -157,7 +157,6 @@ export function createInlineCraftStore(db: AgentDatabase): CraftStore {
       const all = db.prepare<CraftedTool>('SELECT * FROM crafted_tools').all();
       return all.filter(t => words.some(w => t.description.toLowerCase().includes(w))).slice(0, limit);
     },
-    getAll() { return db.prepare<CraftedTool>('SELECT * FROM crafted_tools').all(); },
   };
 }
 

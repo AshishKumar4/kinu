@@ -255,3 +255,82 @@ describe('Convergence', () => {
     expect(rows[0]).toMatchObject({ task: 'ship the feature', outcome: 'success', score: 0.8 });
   });
 });
+
+/**
+ * The discriminating suite measures runnable code. A winner with none in the
+ * group's language cannot lose to it, and a judge failure keeps the argmax
+ * instead of failing the search the suite was meant to settle.
+ */
+describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
+  test('a prose winner with two code rivals inside epsilon stays the winner', async () => {
+    const { rt } = createTestRuntime({
+      llmResponses: { 'verification harness': '```js\ncheck();\n```' },
+    });
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    const session = createMockSession();
+    rt.executor = {
+      languages: ['javascript'],
+      async execute(code: string) {
+        return String(code).includes('FAIL_MARKER')
+          ? { result: undefined, error: 'discriminating test failed' }
+          : { result: true };
+      },
+    };
+
+    // Prose argmax winner (no code), two code rivals inside takesEpsilon.
+    // The passing rival never ran against the winner — promoting it would be
+    // a win on a suite the winner never saw.
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES ('r', 'prose', 'test', 0.85, 6, 1, 'open', 'prose plan', ${null}, ${null})`;
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES ('r', 'rival-fail', 'test', 0.84, 5, 1, 'open', 'code plan A', 'const x = FAIL_MARKER;', 'javascript')`;
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES ('r', 'rival-pass', 'test', 0.83, 5, 1, 'open', 'code plan B', 'const ok = 1;', 'javascript')`;
+
+    const result = await converge(rt, session, 'r');
+    expect(result.converged).toBe(true);
+    expect(result.winnerId).toBe('prose');
+    const statuses = rt.storage.sql<{ id: string; status: string }>`
+        SELECT id, status FROM search_nodes ORDER BY id`;
+    expect(statuses).toEqual([
+      { id: 'prose', status: 'terminal' },
+      { id: 'rival-fail', status: 'pruned' },
+      { id: 'rival-pass', status: 'pruned' },
+    ]);
+  });
+
+  test('a throwing judge records the fallback and keeps the argmax winner', async () => {
+    const { rt } = createTestRuntime();
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    const session = createMockSession();
+    rt.judgeModel = {
+      async complete(_prompt: string): Promise<string> {
+        throw new Error('provider down');
+      },
+      async *stream(): AsyncIterable<string> {
+        yield 'unreachable';
+      },
+    };
+
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES ('r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const a = 1;', 'javascript')`;
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES ('r', 'rival', 'test', 0.80, 5, 1, 'open', 'plan B', 'const b = 2;', 'javascript')`;
+
+    // `diagnostics` has no injection seam this far inside core, so the
+    // recorded fallback is read where it lands (console.error).
+    const original = console.error;
+    const lines: string[] = [];
+    console.error = (...args: unknown[]) => { lines.push(String(args[0])); };
+    try {
+      const result = await converge(rt, session, 'r');
+      expect(result.converged).toBe(true);
+      expect(result.winnerId).toBe('argmax');
+    } finally {
+      console.error = original;
+    }
+    expect(lines.some((line) => line.includes('mcts.test_selection_failed'))).toBe(true);
+  });
+});

@@ -14,6 +14,7 @@ import type { AgentConfigStore } from '../config/store';
 import {
   buildChangelog, countUnseenChangelog, listUnseenChangelog, type ChangelogEntry,
 } from '../evolution/changelog';
+import { boundedInt } from '../utils/bounds';
 import type { EvolutionEngine } from '../evolution/engine';
 import { proposeNextTasks, type ProposedTask } from '../curriculum/proposer';
 import {
@@ -31,16 +32,26 @@ export interface EvolutionChangelogView {
   seenAt: number;
 }
 
+/** Entries in one changelog digest. Fifty is what the bare read already took. */
+const DEFAULT_CHANGELOG_LIMIT = 50;
+
+/**
+ * The ceiling on one changelog digest. The run list's own ceiling: this digest
+ * is RPC-reachable, and a negative limit reaches its slices unclosed.
+ */
+const MAX_CHANGELOG_LIMIT = 200;
+
 /** The "what I changed about myself" digest, assembled on demand from the
  *  durable ledgers — no second event system. */
 export function getEvolutionChangelog(
   config: AgentConfigStore,
   sql: SqlExecutor,
-  limit = 50,
+  limit = DEFAULT_CHANGELOG_LIMIT,
 ): EvolutionChangelogView {
   const seenAt = config.getChangelogSeenAt();
+  const page = boundedInt(limit, DEFAULT_CHANGELOG_LIMIT, 1, MAX_CHANGELOG_LIMIT);
   return {
-    entries: buildChangelog(sql, { limit }),
+    entries: buildChangelog(sql, { limit: page }),
     unseenCount: countUnseenChangelog(sql, seenAt),
     seenAt,
   };

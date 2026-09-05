@@ -61,6 +61,23 @@ describe('RunEventRecorder.emit', () => {
     expect(rows[0].type).toBe('run_start');
     expect(rows[1].type).toBe('error');
   });
+  test('a colliding index raises instead of replacing a live row', () => {
+    const { recorder, sql } = setup();
+    recorder.emit('run-1', { type: 'error', message: 'first' });
+    recorder.emit('run-1', { type: 'error', message: 'second' });
+    // A second writer claims the recorder's cached next index out from under
+    // it. The colliding write must raise, and the live row must survive it.
+    const runId = 'run-1';
+    const live = '{"type":"error","eventIndex":2,"runId":"run-1","timestamp":"2026-09-05T00:00:00.000Z","message":"live"}';
+    const ts = '2026-09-05T00:00:00.000Z';
+    void sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
+      VALUES (${runId}, 2, 'error', ${live}, ${ts})`;
+    expect(() => recorder.emit('run-1', { type: 'error', message: 'collide' })).toThrow();
+    const rows = sql<{ payload: string }>`
+      SELECT payload FROM run_events WHERE run_id = ${runId} AND event_index = 2`;
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.payload).toBe(live);
+  });
 });
 
 describe('RunEventRecorder.read', () => {
@@ -211,6 +228,35 @@ describe('RunEventRecorder.read', () => {
     expect(onlyText.length).toBe(2);
     expect(onlyText.every((e) => e.type === 'error')).toBe(true);
   });
+  test('sparse matches past the first fetch window still fill the limit', () => {
+    // One match, a long run of another type, then five more matches. A read
+    // that fetches one window and slices returns only the first match.
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'error', message: 'match-0' });
+    for (let i = 0; i < 100; i++) {
+      recorder.emit('run-1', { type: 'turn_start', turnIndex: i });
+    }
+    for (let i = 1; i <= 5; i++) {
+      recorder.emit('run-1', { type: 'error', message: `match-${i}` });
+    }
+    const out = recorder.read('run-1', { types: ['error'], limit: 5 });
+    expect(out.length).toBe(5);
+    expect(out.every((e) => e.type === 'error')).toBe(true);
+    expect(out.map((e) => e.eventIndex)).toEqual([0, 101, 102, 103, 104]);
+  });
+
+  test('a filtered read past the last match ends at the run end', () => {
+    // The same sparse shape with fewer matches than the limit. The read walks
+    // to the run end and stops with what it found.
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'error', message: 'match-0' });
+    for (let i = 0; i < 30; i++) {
+      recorder.emit('run-1', { type: 'turn_start', turnIndex: i });
+    }
+    recorder.emit('run-1', { type: 'error', message: 'match-1' });
+    const out = recorder.read('run-1', { types: ['error'], limit: 10 });
+    expect(out.map((e) => e.eventIndex)).toEqual([0, 31]);
+  });
 });
 
 describe('RunEventRecorder.readSince', () => {
@@ -228,6 +274,33 @@ describe('RunEventRecorder.readSince', () => {
     const { recorder } = setup();
     recorder.emit('run-1', { type: 'run_end' });
     expect(recorder.readSince('run-1', 100).length).toBe(0);
+  });
+  test('a negative limit reads one row, never the whole tail', () => {
+    // `LIMIT -1` in SQLite means no limit, so one negative value turns a tail
+    // read into a full read.
+    const { recorder } = setup();
+    for (let i = 0; i < 40; i++) {
+      recorder.emit('run-1', { type: 'error', message: `t${i}` });
+    }
+    expect(recorder.readSince('run-1', -1, -1).length).toBe(1);
+    expect(recorder.readSince('run-1', 0, -9999).length).toBe(1);
+  });
+
+  test('a non-finite limit means unstated and takes the default', () => {
+    const { recorder } = setup();
+    for (let i = 0; i < 600; i++) {
+      recorder.emit('run-1', { type: 'error', message: `t${i}` });
+    }
+    expect(recorder.readSince('run-1', -1, Number.NaN).length).toBe(500);
+    expect(recorder.readSince('run-1', -1, Number.POSITIVE_INFINITY).length).toBe(500);
+  });
+
+  test('a fractional limit truncates instead of failing the query', () => {
+    const { recorder } = setup();
+    for (let i = 0; i < 40; i++) {
+      recorder.emit('run-1', { type: 'error', message: `t${i}` });
+    }
+    expect(recorder.readSince('run-1', -1, 2.7).length).toBe(2);
   });
 });
 
@@ -255,6 +328,31 @@ describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
     const runs = recorder.listRunsBefore(null, 10);
     expect(runs.map((r) => r.runId)).toEqual(['run-B', 'run-A']);
     expect(runs.map((r) => r.eventCount)).toEqual([1, 2]);
+  });
+  test('a negative count reads one run, never the whole log', () => {
+    // `LIMIT -1` in SQLite means no limit, so one negative value turns a page
+    // read into a full read.
+    const { recorder } = setup();
+    for (let i = 0; i < 5; i++) {
+      recorder.emit(`run-${i}`, { type: 'run_start', agentId: 'a' });
+    }
+    expect(recorder.listRunsBefore(null, -1).length).toBe(1);
+  });
+
+  test('a non-finite count means unstated and takes the default', () => {
+    const { recorder } = setup();
+    for (let i = 0; i < 250; i++) {
+      recorder.emit(`run-${i}`, { type: 'run_start', agentId: 'a' });
+    }
+    expect(recorder.listRunsBefore(null, Number.NaN).length).toBe(RUN_EVENT_LIMIT_DEFAULT);
+  });
+
+  test('a fractional count truncates instead of failing the query', () => {
+    const { recorder } = setup();
+    for (let i = 0; i < 5; i++) {
+      recorder.emit(`run-${i}`, { type: 'run_start', agentId: 'a' });
+    }
+    expect(recorder.listRunsBefore(null, 2.7).length).toBe(2);
   });
 
   test('runs whose latest events share a timestamp still have a decidable window', () => {
@@ -376,6 +474,31 @@ describe('RunEventRecorder.readRecentByType', () => {
     const steps = recorder.readRecentByType('step_finish', 3);
     expect(steps).toHaveLength(3);
     expect(steps.map((e) => (e.type === 'step_finish' ? e.stepIndex : -1))).toEqual([7, 8, 9]);
+  });
+  test('a negative limit reads one row, never the whole log', () => {
+    // `LIMIT -1` in SQLite means no limit, so one negative value turns a
+    // sample read into a full read.
+    const { recorder } = setup();
+    for (let i = 0; i < 40; i++) {
+      recorder.emit('run-1', { type: 'step_finish', stepIndex: i });
+    }
+    expect(recorder.readRecentByType('step_finish', -1).length).toBe(1);
+  });
+
+  test('a non-finite limit means unstated and takes the default', () => {
+    const { recorder } = setup();
+    for (let i = 0; i < 250; i++) {
+      recorder.emit('run-1', { type: 'step_finish', stepIndex: i });
+    }
+    expect(recorder.readRecentByType('step_finish', Number.NaN).length).toBe(200);
+  });
+
+  test('a fractional limit truncates instead of failing the query', () => {
+    const { recorder } = setup();
+    for (let i = 0; i < 40; i++) {
+      recorder.emit('run-1', { type: 'step_finish', stepIndex: i });
+    }
+    expect(recorder.readRecentByType('step_finish', 2.7).length).toBe(2);
   });
 
   test('a type nothing was recorded under reads empty, not stale', () => {

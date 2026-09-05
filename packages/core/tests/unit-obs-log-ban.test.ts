@@ -184,6 +184,23 @@ describe('the logger records what a code path claimed', () => {
       { event: 'capability.read', code: null, cause: null, fields: { rows: 3 } },
     ]);
   });
+  test('a recorded line keeps its own copy of the fields', () => {
+    // The fields object belongs to the caller: mutating it after the call
+    // must not rewrite the history the logger already captured.
+    const log = createRecordingLogger();
+    const eventFields = { rows: 3 };
+    log.event('capability.read', eventFields);
+    eventFields.rows = 99;
+    const failureFields = { table: 'workspace_capability' };
+    log.failure(
+      'capability.read_failed',
+      toKinuError({ doing: 'reading', cause: new Error('gone'), otherwise: 'io' }),
+      failureFields,
+    );
+    failureFields.table = 'other';
+    expect(log.emitted[0]?.fields).toEqual({ rows: 3 });
+    expect(log.emitted[1]?.fields).toEqual({ table: 'workspace_capability' });
+  });
 
   test('a failure carries the class and the whole cause chain', () => {
     // What makes the log line answer the question the string returns could not:

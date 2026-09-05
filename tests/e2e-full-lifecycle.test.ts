@@ -3,7 +3,7 @@
  * calling.
  *
  * Covers: agent creation, tool building, multi-turn chat with tool use,
- * close/reopen via openWorkspace, identity/SOUL.md/scaffold persistence.
+ * close/reopen via openWorkspaceCLI, identity/SOUL.md/scaffold persistence.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
@@ -27,7 +27,7 @@ import {
   type CompletedTurn,
   type ToolCallRecord,
 } from '../packages/core/src/index';
-import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index';
+import { createWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import {
   makeSql, makeWorkspaceSchemaSql, type CLIRuntime,
@@ -309,13 +309,13 @@ describe('E2E Full Lifecycle', () => {
     console.log(`  Stored via memory.${String(wrote?.args.action)} in ${String(where)}`);
   }, 120_000);
 
-  // ── Step 6: Close and reopen with openWorkspace ──────────────────
+  // ── Step 6: Close and reopen with openWorkspaceCLI ──────────────────
 
   liveTest('6. close and reopen agent — verify persistence', async () => {
     db.close();
 
     const db2 = new Database(DB_PATH);
-    const { rt: rt2, info } = await openWorkspace(db2, { llm: LLM_CONFIG });
+    const { rt: rt2, info } = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG, hostRoot: null });
     // Handed over BEFORE the assertions below, not after them. `db` is already
     // closed, so a failing assertion used to leave every later step holding a
     // dead handle: step 7 reported `bun:sqlite` prepare errors that had nothing

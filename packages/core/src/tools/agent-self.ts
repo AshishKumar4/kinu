@@ -28,7 +28,7 @@ import { readMissionLimits, type MissionGovernor } from '../mission-budget';
 import { nextCronFire } from '../events/hub/cron';
 import { BACKGROUND_POLICY } from '../jobs/index';
 import type { BackgroundJob } from '../jobs/store';
-import type { ProposedTask } from '../curriculum/proposer';
+import { PROPOSED_TASK_STATUSES, type ProposedTask } from '../curriculum/proposer';
 import type { ModifyResult } from '../scaffold/modify';
 import type { ScaffoldVersionView } from '../evolution/control';
 import type { ReplayEvalSummary } from '../evolution/replay';
@@ -39,7 +39,7 @@ import { TOOL_REACH } from './registry';
 import { decodeJsonValue, JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
 
-type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
+type CurriculumStatus = (typeof PROPOSED_TASK_STATUSES)[number];
 
 /** The narrow slice of the agent the `agent.*` tools call through to — all
  *  existing methods on both backends, so there's no duplicated logic. */
@@ -69,11 +69,13 @@ export interface AgentSelfHost {
   armCompactNow(): void;
 }
 
+const CURRICULUM_STATUS_UNION = PROPOSED_TASK_STATUSES.map((s) => `'${s}'`).join(' | ');
+
 const TYPES = `export declare const agent: {
   /** Propose N self-curriculum tasks (Voyager-style); returns the proposals. */
   proposeCurriculum(count?: number): Promise<unknown>;
   /** List your proposed curriculum tasks, optionally filtered by status. */
-  listCurriculum(status?: 'pending' | 'accepted' | 'rejected' | 'completed'): Promise<unknown>;
+  listCurriculum(status?: ${CURRICULUM_STATUS_UNION}): Promise<unknown>;
   /** Accept a proposed task by id (it becomes runnable). */
   acceptCurriculumTask(id: string): Promise<unknown>;
   /** Propose a new version of your own scaffold (the agentic loop). Routed
@@ -182,7 +184,7 @@ function formatJobRead(job: BackgroundJob | null): BackgroundJob | RunningJobRea
 
 const OptionalNumberSchema = v.optional(v.number());
 const OptionalCurriculumStatusSchema = v.optional(
-  v.picklist(['pending', 'accepted', 'rejected', 'completed']),
+  v.picklist(PROPOSED_TASK_STATUSES),
 );
 const NonEmptyStringSchema = v.pipe(v.string(), v.minLength(1));
 const OptionalBaseVersionSchema = v.optional(

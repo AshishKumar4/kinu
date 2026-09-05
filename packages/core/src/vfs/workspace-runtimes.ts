@@ -114,22 +114,27 @@ interface RuntimeToolkit {
 let toolkitOnce: Promise<RuntimeToolkit> | null = null;
 const runtimeToolkit = (): Promise<RuntimeToolkit> => {
   toolkitOnce ??= (async () => {
-    const [bash, cpython, installed, pkg, npm] = await Promise.all([
-      import('@nimbus-sh/core/runtime/bash-runner.js'),
-      import('@nimbus-sh/core/runtime/cpython-runner.js'),
-      import('@nimbus-sh/core/runtime/installed-runtimes.js'),
-      import('@nimbus-sh/core/runtime/runtime-package.js'),
-      import('@nimbus-sh/core/substrate/lifo/commands/system/npm.js'),
-    ]);
-    return {
-      makeBashRunnerFactory: bash.makeBashRunnerFactory,
-      makeCPythonRunnerFactory: cpython.makeCPythonRunnerFactory,
-      rehydrateInstalledRuntimesView: installed.rehydrateInstalledRuntimesView,
-      runtimeEntrypoints: installed.runtimeEntrypoints,
-      seedRuntimePackage: pkg.seedRuntimePackage,
-      createNpmCommand: npm.createNpmCommand,
-      createNpxCommand: npm.createNpxCommand,
-    };
+    try {
+      const [bash, cpython, installed, pkg, npm] = await Promise.all([
+        import('@nimbus-sh/core/runtime/bash-runner.js'),
+        import('@nimbus-sh/core/runtime/cpython-runner.js'),
+        import('@nimbus-sh/core/runtime/installed-runtimes.js'),
+        import('@nimbus-sh/core/runtime/runtime-package.js'),
+        import('@nimbus-sh/core/substrate/lifo/commands/system/npm.js'),
+      ]);
+      return {
+        makeBashRunnerFactory: bash.makeBashRunnerFactory,
+        makeCPythonRunnerFactory: cpython.makeCPythonRunnerFactory,
+        rehydrateInstalledRuntimesView: installed.rehydrateInstalledRuntimesView,
+        runtimeEntrypoints: installed.runtimeEntrypoints,
+        seedRuntimePackage: pkg.seedRuntimePackage,
+        createNpmCommand: npm.createNpmCommand,
+        createNpxCommand: npm.createNpxCommand,
+      };
+    } catch (error) {
+      toolkitOnce = null;
+      throw error;
+    }
   })();
   return toolkitOnce;
 };

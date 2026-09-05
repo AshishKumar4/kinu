@@ -28,6 +28,7 @@
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import { DEFAULT_CONFIG } from '../config';
+import { diagnostics, toKinuError } from '../obs/index';
 
 export async function pruneLowValueBranches(
   rt: AgentRuntime,
@@ -49,10 +50,18 @@ export async function pruneLowValueBranches(
     `;
 
     if (node.branch_agent_key) {
-      // Abort the branch agent (platform-specific, via injected callback). A
-      // branch that survives its abort keeps burning budget under a node UCT
-      // will never select again, so a failed abort is the search's problem.
-      await rt.abortBranch(node.branch_agent_key, 'pruned');
+      // Abort the branch agent (platform-specific, via injected callback).
+      // One abort failure must not end the sweep: the node is already
+      // pruned, so record the failure and move on to the next node.
+      try {
+        await rt.abortBranch(node.branch_agent_key, 'pruned');
+      } catch (cause) {
+        diagnostics.failure(
+          'mcts.prune_abort_failed',
+          toKinuError({ doing: 'abort a pruned branch agent', cause, otherwise: 'unavailable' }),
+          { nodeId: node.id },
+        );
+      }
     }
   }
 }

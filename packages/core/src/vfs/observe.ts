@@ -66,11 +66,11 @@ export interface WriteObserver {
  * Reports only AFTER the plane accepted the mutation, so a failed write is
  * never reported as a change.
  */
-export function observeWrites(vfs: VFS, observer: WriteObserver): VFS {
+export function observeWrites<T extends VFS>(vfs: T, observer: WriteObserver): T {
   const baselineFor = async (path: string): Promise<{ before?: string | Uint8Array | null } | null> => {
     if (!observer.needsBaseline(path)) return {};
     try {
-      return { before: (await vfs.readFile(path, { encoding: 'utf8' })) ?? null };
+      return { before: (await vfs.readFile(path)) ?? null };
     } catch (err) {
       if (isVfsError(err) && err.code === 'ENOENT') return { before: null };
       return null;
@@ -83,24 +83,34 @@ export function observeWrites(vfs: VFS, observer: WriteObserver): VFS {
   ): void => {
     if (baseline) observer.record({ path, ...baseline, after });
   };
-
-  return {
+  const conditional = vfs.writeFileIfRevision;
+  const wrapped: T = {
+    ...vfs,
     readFile: (path, opts) => vfs.readFile(path, opts),
     readdir: (path) => vfs.readdir(path),
     stat: (path) => vfs.stat(path),
     mkdir: (path, opts) => vfs.mkdir(path, opts),
     exists: (path) => vfs.exists(path),
-
     async writeFile(path, data) {
       const baseline = await baselineFor(path);
       await vfs.writeFile(path, data);
       report(path, baseline, data);
     },
-
     async unlink(path) {
       const baseline = await baselineFor(path);
       await vfs.unlink(path);
       report(path, baseline, null);
     },
   };
+  if (conditional) {
+    Object.assign(wrapped, {
+      writeFileIfRevision: async (path: string, data: Uint8Array, expectedRevision: number) => {
+        const baseline = await baselineFor(path);
+        const result = await conditional(path, data, expectedRevision);
+        if (result.ok) report(path, baseline, data);
+        return result;
+      },
+    });
+  }
+  return wrapped;
 }

@@ -833,7 +833,7 @@ export {
 export {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, STEER_BRANCH_RUN_ID_PREFIX,
   newBranchId, isSteerBranchRunId, branchHeadId,
-  startBranchHead, settleBranchIntoTakes, settlePendingBranch, settlePendingBranches,
+  startBranchHead, settleBranchIntoTakes, settlePendingBranch,
   branchOutcomeFromJournal,
   type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle,
   type BranchSettleOutcome, type BranchOutcome, type PendingBranch,
@@ -931,7 +931,6 @@ export {
   type ShadowVerdictTrial,
   type ShadowConfig,
   type ScaffoldStatus,
-  type JudgeFn,
   type ShadowTrialVerdict,
 } from './scaffold/shadow';
 // auto-judge shadow evaluation — ONE queued trial, executed: runs the pending
@@ -1508,7 +1507,7 @@ export {
 // No LLM-facing tool and no codemode namespace — read/create/edit/delete are
 // ordinary workspace.readFile/writeFile/readdir/exec calls over the same VFS.
 export {
-  parseSkillFile, stringifySkillFile, validateSkillName, skillNameProblem,
+  parseSkillFile, stringifySkillFile, skillNameProblem,
   discoverSkills, readSkillFile, readSkillBody, skillPath, compareSkillNames, skillBodyChars,
   BUILTIN_SKILLS, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES,
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,

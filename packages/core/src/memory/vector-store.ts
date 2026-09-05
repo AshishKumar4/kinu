@@ -168,11 +168,10 @@ export function createCloudflareVectorStore(opts: {
 }): VectorStore {
   const { index, embedder, namespace } = opts;
 
-  // A cooldown, not a latch. `available` gates writes as well as reads, so a
-  // permanent latch turned one transient error into semantic memory being off
-  // for the whole process lifetime — content indexed in that window was lost,
-  // not merely unsearchable. The cooldown re-arms on its own, and is long
-  // enough that a hard-down backend is not re-probed once per operation.
+  // A cooldown, not a latch. Writes always attempt the backend and throw on
+  // failure, so a failed write never reads as indexed. Reads degrade to an
+  // empty list. `available` tells the search arm to skip the backend while
+  // the cooldown holds; the next use after it re-probes the backend.
   let unavailableUntil = 0;
   const trip = (op: string, input: { error: unknown }): void => {
     diagnostics.failure(

@@ -15,13 +15,15 @@
  *
  * Plus any external environments registered on the parent (sandbox.*, laptop.*).
  *
- * Scaffold contract (v1):
+ * Scaffold contract (v1) — enforced by safety-patterns.ts:
  *
- *   async function run({ rt, task, host, tools }) {
- *     // rt.llm.stream({ system, messages, tools })
- *     //   → for await each chunk: host.emit({ type: 'text_delta', text: chunk })
- *     // host.callTool(name, args) → invokes a parent tool, returns result
- *     // host.emit({ type: 'done', result }) → signals completion
+ *   async function* run(rt, task) {
+ *     // Both params carry the task string (the live rt object cannot cross
+ *     // the sandbox boundary). Reach the host ONLY through host.*:
+ *     // host.emit({ type: 'text_delta', text }), host.llmStream(...),
+ *     // host.callTool(name, args), host.defaultInference(), host.history(...).
+ *     // Yield scaffold events; the driver forwards them to host.emit and
+ *     // emits 'done' when the generator returns.
  *   }
  *
  * If the scaffold throws, or finishes without emitting a 'done' event, the
@@ -519,7 +521,6 @@ try {
     await host.emit({ type: 'done', result: __result });
   }
 } catch (e) {
-  await host.emit({ type: 'error', message: (e && e.message) ? e.message : String(e) });
   throw e;
 }
 return __result;

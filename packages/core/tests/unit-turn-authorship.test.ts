@@ -154,6 +154,14 @@ describe('rows written before the stamp existed', () => {
     })).toBe('operator');
   });
 
+  test('an unparseable metadata row still answers from its id prefix', () => {
+    // A corrupt metadata cell carries no stamp and no event name, so the id
+    // prefix decides: the ambiguous shape resolves to the harness rather than
+    // putting the harness's words in the owner's mouth.
+    expect(turnAuthor({ id: `${PROGRAMMATIC_MESSAGE_ID_PREFIX}x`, metadata: 123 })).toBe('harness');
+    expect(turnAuthor({ id: 'ZGkXEnDwCrv7VFTn', metadata: 123 })).toBe('operator');
+  });
+
   test('the transcript read model reaches the same answer as the chat pane', () => {
     // getChatHistoryPage reported the fork_interrupted rows above as `user`,
     // because it read only the id prefix and those rows predate it. The rule is

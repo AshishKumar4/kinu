@@ -14,6 +14,7 @@
  */
 
 import * as v from 'valibot';
+import { tolerate } from '../obs/index';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 
 /** The kinds of experience a workspace can transfer. Order is the canonical
@@ -142,10 +143,12 @@ const ExperiencePayloadSchema: v.GenericSchema<ExperiencePayload> = v.variant('k
 
 /** Parse a stored payload back into its union. Returns null for anything that
  *  does not match the kind's shape — a malformed row is skipped, never coerced
- *  into a half-populated craft. Text that is not JSON at all is storage
- *  corruption rather than a row shape, and propagates. */
+ *  into a half-populated craft. Text that is not JSON at all is the same
+ *  outcome through the same path: a malformed-input the row skips like a
+ *  shape mismatch. */
 export function parseExperiencePayload(json: string): ExperiencePayload | null {
-  const rawPayload: unknown = JSON.parse(json);
+  const rawPayload: unknown = tolerate(() => JSON.parse(json), 'malformed-input');
+  if (rawPayload === undefined) return null;
   const decoded = v.safeParse(ExperiencePayloadSchema, rawPayload);
   return decoded.success ? decoded.output : null;
 }

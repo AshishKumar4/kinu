@@ -83,7 +83,7 @@ describe('Sleep-time compute', () => {
 
     expect(summary.upserted).toBe(1);
     expect(facts.recall('sandbox.npm_version')?.value).toBe('npm v10');
-    expect(facts.recall('  Sandbox.NPM   Version  ')).toBeNull();
+    expect(facts.recall('  Sandbox.NPM   Version  ')?.value).toBe('npm v10');
   });
 
   test('same-value re-observation is not counted as an upsert or refreshed', () => {
@@ -116,5 +116,18 @@ describe('Sleep-time compute', () => {
     expect(summary.upserted).toBe(1);
     expect(facts.recall('sandbox.npm_version')?.value).toBe('npm v10');
     expect(facts.recall('sandbox.npm_version')?.lastObservedAt).toBeGreaterThan(1000);
+  });
+
+  test('rejects an update with out-of-range confidence before any write', async () => {
+    const { facts } = createTestFactsStore();
+    const judge = createScriptedLLM([
+      '{"upserts":[{"key":"ok.1","value":"fine","confidence":99,"rationale":""}],"decay":[]}',
+    ]);
+    const update = await runSleepTimeCompute(judge, {
+      task: 't', output: 'o', toolCalls: [], currentFacts: [],
+    });
+
+    expect(update).toBeNull();
+    expect(facts.recall('ok.1')).toBeNull();
   });
 });

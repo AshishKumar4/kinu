@@ -24,6 +24,7 @@ import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
 import { formatExecResult, refusalText } from './exec-result';
 import { KinuError, refusalOf, toKinuError } from '../obs/index';
+import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
 import { createView, deleteView, viewSlug } from '../views/store';
@@ -293,7 +294,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         return crafted.map(t => ({
           name: t.name,
           description: t.description,
-          qualityScore: scoreByName.get(t.name) ?? 0.7,
+          qualityScore: scoreByName.get(t.name) ?? CRAFT_NEUTRAL_PRIOR,
         }));
       },
     },
@@ -319,6 +320,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             'Tool name must contain at least one identifier character.')) };
         }
         if (/^[0-9]/.test(toolName)) toolName = '_' + toolName;
+        if (isReservedCraftToolName(toolName)) {
+          return { ok: false, ...refusalOf(new KinuError('bad_input',
+            `Tool name "${toolName}" is reserved — it collides with a built-in tool or the mcp_ prefix owned by MCP tools. Pick a different name.`)) };
+        }
         // Admission BEFORE any write: the source is normalized to one expression
         // and proven to parse, so a `const name = …` body can no longer be stored
         // verbatim and turn every later program in the workspace into a
@@ -498,8 +503,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | ({ ok: false } & Refusal)>;
   /** Publish a dashboard tab in the workspace UI, upserting by name. The host
    *  draws it: no code, no HTML, no links, no images, nothing clickable.
-   *  \`reason\` is present when this tool refused; the view store's own
-   *  validation failures still answer with prose only. */
+   *  Every refusal carries \`reason\`; a spec or name the store rejects is
+   *  \`bad_input\`. */
   function createView(name: string, spec: ViewSpec): Promise<{ ok: boolean; slug?: string; version?: number; error?: string; reason?: Refusal['reason'] }>;
   function deleteView(name: string): Promise<{ ok: boolean; error?: string; reason?: Refusal['reason'] }>;
   type ViewSpec = { v: 1; title: string; subtitle?: string; refreshMs?: number; blocks: ViewBlock[] };

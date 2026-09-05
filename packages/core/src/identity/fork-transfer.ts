@@ -298,11 +298,11 @@ async function* configRows(sql: SqlExecutor): AsyncGenerator<ForkConfigRow> {
     const row = sql<ForkConfigRow & { rowid: number }>`
       SELECT rowid, key, value FROM agent_config
       WHERE rowid > ${rowid}
-        AND key NOT IN (${SHELL_APPROVAL_AUTHORITY_KEYS[0]!}, ${SHELL_APPROVAL_AUTHORITY_KEYS[1]!})
       ORDER BY rowid ASC LIMIT 1
     `[0];
     if (row === undefined) return;
     rowid = row.rowid;
+    if (SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)) continue;
     yield { key: row.key, value: row.value };
   }
 }
@@ -376,10 +376,8 @@ export async function* forkTransferFrames(
   for await (const path of forkFilePaths(source.vfs)) filePaths.push(path);
 
   const counts: ForkSectionCounts = {
-    agentConfig: source.sql<{ count: number }>`
-      SELECT COUNT(*) AS count FROM agent_config
-      WHERE key NOT IN (${SHELL_APPROVAL_AUTHORITY_KEYS[0]!}, ${SHELL_APPROVAL_AUTHORITY_KEYS[1]!})
-    `[0]?.count ?? 0,
+    agentConfig: source.sql<{ key: string }>`SELECT key FROM agent_config`
+      .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)).length,
     craftedTools: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`[0]?.count ?? 0,
     memoryChunks: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`[0]?.count ?? 0,
     assistantMessages: ancestry.authority === 'pane' ? ancestry.ids.length : 0,
@@ -389,7 +387,10 @@ export async function* forkTransferFrames(
   const identity = source.sql<{ id: string; name: string }>`
     SELECT id, name FROM workspace_identity LIMIT 1
   `[0];
-  const lastId = ancestry.ids[ancestry.ids.length - 1]!;
+  const lastId = ancestry.ids[ancestry.ids.length - 1];
+  if (lastId === undefined) {
+    throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
+  }
   let createdAtMs: number;
   if (ancestry.authority === 'pane') {
     const row = paneRowById(source.sql, lastId);

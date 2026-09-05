@@ -4,7 +4,7 @@ import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
 import { normalizeUsage } from '../usage';
 import { parseJsonArray, parseJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 
-const JSON_FENCE = /```(?:json)?\s*([\s\S]*?)```/i;
+const JSON_FENCE = /```json\s*([\s\S]*?)```/i;
 
 export interface MarkdownFencedBlock {
   readonly tag: string | null;
@@ -14,8 +14,8 @@ export interface MarkdownFencedBlock {
 /** Parse Markdown fences without assigning any execution semantics to the tag. */
 export function markdownFencedBlocks(text: string): MarkdownFencedBlock[] {
   return [...text.matchAll(/```([^\n`]*)\n([\s\S]*?)```/g)].map((match) => ({
-    tag: match[1]!.trim().split(/\s+/)[0]?.toLowerCase() || null,
-    code: match[2]!.trim(),
+    tag: (match[1] ?? '').trim().split(/\s+/)[0]?.toLowerCase() || null,
+    code: (match[2] ?? '').trim(),
   }));
 }
 
@@ -42,7 +42,8 @@ export function extractJsonArray(text: string): JsonValue[] {
 
 function extractBalancedJson(text: string, open: '{' | '[', close: '}' | ']'): string {
   const fenced = text.match(JSON_FENCE);
-  const src = fenced ? fenced[1] : text;
+  const inner = fenced?.[1] ?? '';
+  const src = inner.includes(open) ? inner : text;
   const start = src.indexOf(open);
   if (start === -1) throw new SyntaxError(`no JSON ${open === '{' ? 'object' : 'array'} in model output`);
 

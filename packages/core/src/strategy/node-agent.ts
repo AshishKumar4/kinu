@@ -84,6 +84,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { WebSearchProvider } from '../web/index';
 import type { WorkMode } from '../prompting/surface';
 import type { ModelCallSink } from '../events/model-call';
+import type { BuiltinToolName } from '../tools/registry';
 
 /**
  * A node's builtin surface: a head's four, plus the report through which it
@@ -98,7 +99,7 @@ import type { ModelCallSink } from '../events/model-call';
  * builtin surface — so a builtin added upstream tomorrow is a failing test rather
  * than a tool that silently appears on nodes or silently does not.
  */
-export const NODE_BUILTIN_TOOLS = [...HEAD_BUILTIN_TOOLS, 'report'] as const;
+export const NODE_BUILTIN_TOOLS = [...HEAD_BUILTIN_TOOLS, 'report'] as const satisfies readonly BuiltinToolName[];
 
 /**
  * THE BUILTINS A NODE IS NOT GIVEN, AND WHY EACH ONE.

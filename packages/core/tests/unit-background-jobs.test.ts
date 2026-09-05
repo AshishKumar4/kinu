@@ -6,6 +6,7 @@ import {
   BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, withSpawnDetach,
   isBackgroundHandle, serializeJobResult, BACKGROUND_POLICY, readSpawnStarted, SPAWN_STARTED_OPTION,
 } from '../src/jobs/index';
+import { isBackgroundOutcomeText } from '../src/jobs/threshold';
 import { makeSql, makeExecRaw } from './helpers';
 
 function newStore() {
@@ -280,6 +281,18 @@ describe('withBackgroundThreshold', () => {
       onThreshold: () => { throw new Error('should not detach'); },
     });
     expect(out).toBe('inline');
+  });
+});
+
+describe('isBackgroundOutcomeText — a handle names its job', () => {
+  test('background:true without a jobId is not a background outcome; the historical refusal still is', () => {
+    expect(isBackgroundOutcomeText('{"background":true,"kind":"execute_tools"}')).toBe(false);
+    expect(isBackgroundOutcomeText(
+      '{"background":true,"jobId":"j1","kind":"execute_tools","message":"still running"}',
+    )).toBe(true);
+    expect(isBackgroundOutcomeText(
+      '{"background":false,"kind":"execute_tools","message":"stayed foreground"}',
+    )).toBe(true);
   });
 });
 

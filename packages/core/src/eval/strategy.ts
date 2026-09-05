@@ -22,10 +22,6 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { LanguageModel } from 'ai';
 import type { WorkMode } from '../prompting/surface';
 
-export interface StrategyBudget {
-  /** Generation cap for one arm's answer, in output tokens. */
-}
-
 export interface StrategyContext {
   task: string;
   /** Trusted parent work mode. An arm must preserve Plan's mutation bar. */
@@ -33,7 +29,6 @@ export interface StrategyContext {
   rt: AgentRuntime;
   /** Resolved language model for this arm. */
   model: LanguageModel;
-  budget?: StrategyBudget;
   /** Conversation context an arm may want to see. */
   history?: ReadonlyArray<{ role: 'user' | 'assistant' | 'system' | 'tool'; content: string }>;
   signal?: AbortSignal;

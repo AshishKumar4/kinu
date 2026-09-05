@@ -24,13 +24,15 @@
  * one call that greps, instead of a walk that reads every file across the wire.
  */
 
+import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import type { VFS } from '../types/primitives';
 import { makeVfsError, type VfsErrorCode } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
-import { formatExecResult } from './exec-result';
+import { formatExecResult, refusalText } from './exec-result';
+import { KinuError } from '../obs/index';
 
 type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
 
@@ -95,6 +97,15 @@ function detail(error: ParentRpcError): string {
 function value<T>(result: ParentRpcResult<T>): T {
   if (result.ok) return result.value;
   throw makeVfsError(result.error.code, detail(result.error), result.error.path);
+}
+const StringSchema = v.string();
+
+function parseInput<TSchema extends v.GenericSchema>(
+  schema: TSchema,
+  input: { value: unknown },
+): v.InferOutput<TSchema> | undefined {
+  const result = v.safeParse(schema, input.value);
+  return result.success ? result.output : undefined;
 }
 
 /**
@@ -175,32 +186,52 @@ export function createParentExecutor(deps: {
     tools: {
       readFile: {
         description: "Read a file from the parent workspace you were forked from, in the parent's own paths.",
-        execute: async <Path>(path: Path) => {
-          const content = await vfs.readFile(String(path), { encoding: 'utf8' });
+        execute: async (...args: unknown[]) => {
+          const path = parseInput(StringSchema, { value: args[0] });
+          if (path === undefined) {
+            return refusalText(new KinuError('bad_input', 'parent readFile: path must be a string'));
+          }
+          const content = await vfs.readFile(path, { encoding: 'utf8' });
           return content instanceof Uint8Array ? new TextDecoder().decode(content) : content;
         },
       },
       writeFile: {
         description: 'Write a file in the parent workspace. Your changes are attributed to you in the merge.',
-        execute: async <Path, Content>(path: Path, content: Content) => {
-          const text = String(content);
-          await vfs.writeFile(String(path), text);
+        execute: async (...args: unknown[]) => {
+          const path = parseInput(StringSchema, { value: args[0] });
+          if (path === undefined) {
+            return refusalText(new KinuError('bad_input', 'parent writeFile: path must be a string'));
+          }
+          const text = String(args[1]);
+          await vfs.writeFile(path, text);
           return `Written ${text.length} bytes to ${path}`;
         },
       },
       readdir: {
         description: 'List a directory of the parent workspace.',
-        execute: async <Path>(path: Path) => vfs.readdir(String(path ?? '.')),
+        execute: async (...args: unknown[]) => {
+          const path = args[0] === undefined ? '.' : parseInput(StringSchema, { value: args[0] });
+          if (path === undefined) {
+            return refusalText(new KinuError('bad_input', 'parent readdir: path must be a string'));
+          }
+          return vfs.readdir(path);
+        },
       },
       exists: {
         description: 'Check whether a path exists in the parent workspace.',
-        execute: async <Path>(path: Path) => vfs.exists(String(path)),
+        execute: async (...args: unknown[]) => {
+          const path = parseInput(StringSchema, { value: args[0] });
+          if (path === undefined) {
+            return refusalText(new KinuError('bad_input', 'parent exists: path must be a string'));
+          }
+          return vfs.exists(path);
+        },
       },
       exec: {
         description:
           "Run one command in the parent workspace's real shell — the full coreutils set, pipes, "
           + 'redirects and loops. The fast way to search it (grep -rn, find).',
-        execute: async <Command, Context>(command: Command, context?: Context) => {
+        execute: async (...args: unknown[]) => {
           // The comment this replaces claimed an aborted caller stops waiting.
           // It did not: the signal was parsed and dropped, so `parent.exec` was
           // the one executor whose exec could never end as `cancelled` — the
@@ -212,9 +243,13 @@ export function createParentExecutor(deps: {
           // refused RPC is already an errno-carrying `VfsError`. Both classify at
           // the seam that catches them, and re-wrapping either here would blur the
           // code it arrived with.
-          const signal = readExecSignal({ context });
+          const command = parseInput(StringSchema, { value: args[0] });
+          if (command === undefined) {
+            return refusalText(new KinuError('bad_input', 'parent exec: command must be a string'));
+          }
+          const signal = readExecSignal({ context: args[1] });
           return formatExecResult(value(await raceAbort(
-            () => deps.handle.exec(String(command)),
+            () => deps.handle.exec(command),
             signal,
             'parent exec aborted — the command may still finish in the parent workspace',
           )));

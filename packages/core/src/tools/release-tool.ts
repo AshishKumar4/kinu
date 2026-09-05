@@ -59,8 +59,8 @@ export interface ReleaseToolDeps {
   /** Execution engine beneath the ledger (apply/run_checks/preview/deploy/
    *  rollback grounded in real sandbox execution). When wired, the tool
    *  refuses manual transitions into engine-owned states and refuses
-   *  record_deployment — those results are EARNED via the engine actions.
-   *  Absent on backends without an execution substrate. */
+   *  record_check / record_deployment — those results are EARNED via the
+   *  engine actions. Absent on backends without an execution substrate. */
   engine?: Pick<ReleaseEngine, 'apply' | 'runChecks' | 'preview' | 'deploy' | 'rollback'>;
 }
 
@@ -159,6 +159,13 @@ export async function runReleaseAction(
         return await releases.transition(args.changeId, args.status);
       case 'record_check':
         if (!args.changeId || !args.check?.name || !args.check.status) return { error: 'record_check requires changeId, check.name, and check.status' };
+        if (releases.engine) {
+          return {
+            error:
+              'checks are recorded from REAL check results — use action=run_checks; ' +
+              'the pass/fail comes from the actual command output',
+          };
+        }
         return await releases.recordCheck(args.changeId, {
           name: args.check.name,
           status: args.check.status,

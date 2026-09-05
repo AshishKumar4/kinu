@@ -9,7 +9,7 @@
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import * as v from 'valibot';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
-import { isTierId, isValidRoleId, type RoleId, type TierId } from '../profiles/catalog';
+import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../profiles/catalog';
 import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
 } from '../prompting/cache-breakpoints';
@@ -40,7 +40,7 @@ export function encodeRoleSelection(selection: RoleSelection): string {
 const RoleSelectionSchema = v.union([
   v.object({
     kind: v.literal('catalog'),
-    roleId: v.pipe(v.string(), v.transform((roleId) => (isValidRoleId(roleId) ? roleId : 'general'))),
+    roleId: v.pipe(v.string(), v.check(isValidRoleId, 'invalid role id')),
   }),
   v.object({ kind: v.literal('legacy'), text: v.string() }),
 ]);
@@ -58,6 +58,10 @@ export function parseRoleSelectionRow(value: string | null): RoleSelection | nul
   }
   const parsed = v.safeParse(RoleSelectionSchema, raw);
   return parsed.success ? parsed.output : null;
+}
+/** Read a stored role-change policy. Unset or unknown reads as `allow`. */
+export function parseRoleChangePolicy(value: string | null): 'allow' | 'approval' | 'locked' {
+  return value === 'approval' || value === 'locked' ? value : 'allow';
 }
 
 /** Known config keys. Adding one here forces a typed getter/setter — that
@@ -135,6 +139,9 @@ export const AGENT_CONFIG_KEYS = {
    *  cannot see a reconstruction that reuses the isolate, which is how a Kinu
    *  fork most commonly dies (`ctx.facets.abort()`). */
   isolateGen: 'isolate_gen',
+  /** Canonical conversation id for this workspace's agent
+   *  (config/conversation.ts). Absent on first open, adopted as `default`. */
+  conversationId: 'conversation.id',
 } as const;
 
 /**
@@ -342,19 +349,25 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
    */
   const readRoleSelection = (): RoleSelection =>
     parseRoleSelectionRow(get(AGENT_CONFIG_KEYS.roleSelection))
-      ?? { kind: 'catalog', roleId: 'general' };
-  /** Read-modify-write of a monotone counter, returning the new value. Shared by
-   *  the two lifetime counters here — closed turn windows, and isolate
+      ?? { kind: 'catalog', roleId: DEFAULT_ROLE_ID };
+  /** One-statement bump of a monotone counter, returning the new value. Shared
+   *  by the two lifetime counters here — closed turn windows, and isolate
    *  generations — because they differ only in their key and a byte-identical
-   *  second copy is what `gate:duplication` exists to reject. An absent, empty or
-   *  unparseable row reads as 0, so a first bump answers 1: the caller uses the
-   *  RETURN value, and `null` would make it decide what an unwritten counter means.
+   *  second copy is what `gate:duplication` exists to reject. A single
+   *  `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`, so two stores over one
+   *  database cannot read the same value and mint it twice. An absent, empty
+   *  or unparseable row counts as 0, so a first bump answers 1: the caller
+   *  uses the RETURN value, and `null` would make it decide what an unwritten
+   *  counter means.
    */
   const increment = (key: string): number => {
-    const previous = Math.floor(Number(get(key)));
-    const next = (Number.isFinite(previous) && previous > 0 ? previous : 0) + 1;
-    set(key, String(next));
-    return next;
+    const rows = sql<{ value: string }>`
+      INSERT INTO agent_config (key, value) VALUES (${key}, ${'1'})
+      ON CONFLICT(key) DO UPDATE SET value = CASE
+        WHEN CAST(agent_config.value AS REAL) > 0 THEN CAST(CAST(agent_config.value AS REAL) AS INTEGER) + 1
+        ELSE 1 END
+      RETURNING value`;
+    return Number(rows[0]?.value ?? 1);
   };
   /** Reads in the parsed domain, so an unparseable token is not just ignored
    *  on read but dropped on the next write — the row never accretes rubbish a
@@ -426,18 +439,28 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
         void sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.assignedTier}`;
         return;
       }
+      if (!isTierId(tier)) throw new Error(`Invalid assigned tier: ${String(tier)}`);
       set(AGENT_CONFIG_KEYS.assignedTier, tier);
     },
     getRoleChangePolicy(): 'allow' | 'approval' | 'locked' {
-      const v = get(AGENT_CONFIG_KEYS.roleChangePolicy);
-      return v === 'approval' || v === 'locked' ? v : 'allow';
+      return parseRoleChangePolicy(get(AGENT_CONFIG_KEYS.roleChangePolicy));
     },
-    setRoleChangePolicy(policy) { set(AGENT_CONFIG_KEYS.roleChangePolicy, policy); },
+    setRoleChangePolicy(policy) {
+      if (policy !== 'allow' && policy !== 'approval' && policy !== 'locked') {
+        throw new Error(`Invalid role change policy: ${String(policy)}`);
+      }
+      set(AGENT_CONFIG_KEYS.roleChangePolicy, policy);
+    },
     getShellApprovalMode(): ShellApprovalMode {
       const v = get(AGENT_CONFIG_KEYS.shellApprovalMode);
       return v === 'allow_all' || v === 'deny_all' ? v : 'strict';
     },
-    setShellApprovalMode(mode) { set(AGENT_CONFIG_KEYS.shellApprovalMode, mode); },
+    setShellApprovalMode(mode) {
+      if (mode !== 'strict' && mode !== 'allow_all' && mode !== 'deny_all') {
+        throw new Error(`Invalid shell approval mode: ${String(mode)}`);
+      }
+      set(AGENT_CONFIG_KEYS.shellApprovalMode, mode);
+    },
     getShellApprovalGrants: storedGrants,
     grantShellApproval(grants) { writeGrants([...storedGrants(), ...grants]); },
     revokeShellApproval(grants) {
@@ -478,7 +501,10 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       const stored = get(AGENT_CONFIG_KEYS.advisorMinSeverity);
       return isAdvisorSeverity(stored) ? stored : DEFAULT_ADVISOR_MIN_SEVERITY;
     },
-    setAdvisorMinSeverity(severity) { set(AGENT_CONFIG_KEYS.advisorMinSeverity, severity); },
+    setAdvisorMinSeverity(severity) {
+      if (!isAdvisorSeverity(severity)) throw new Error(`Invalid advisor severity: ${String(severity)}`);
+      set(AGENT_CONFIG_KEYS.advisorMinSeverity, severity);
+    },
     getAlwaysActiveSkills() {
       const v = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
       if (!v) return [];

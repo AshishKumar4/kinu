@@ -27,7 +27,10 @@
  * Clamped at both ends: the exponent saturates before the doubling could
  * overflow, and the result is capped at the ceiling, so a caller that keeps
  * counting can keep calling without special-casing a number it never chose.
+ * A negative or fractional count truncates toward zero and floors at the
+ * first term, and a non-finite count waits the ceiling.
  */
 export function recoveryBackoffMs(attempts: number): number {
-  return Math.min(1000 * 2 ** Math.min(attempts, 6), 60_000);
+  if (!Number.isFinite(attempts)) return 60_000;
+  return Math.min(1000 * 2 ** Math.min(Math.max(0, Math.trunc(attempts)), 6), 60_000);
 }

@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
-  proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
+  proposeNextTasks, listProposedTasks, updateProposedTaskStatus, PROPOSED_TASK_STATUSES,
 } from '../src/curriculum/proposer';
 import { createScriptedLLM, createJSONLLM } from '@kinu.run/test-utils';
 import { createTestRuntime, makeSqlExec } from './helpers';
@@ -65,5 +65,97 @@ describe('Voyager curriculum proposer', () => {
     const proposals = await proposeNextTasks({ rt, judge, learnabilityWindow: [0.1, 0.3] });
     expect(proposals.length).toBe(1);
     expect(proposals[0].task).toBe('a');
+  });
+
+  test('caps persisted proposals at count', async () => {
+    const { rt } = setup();
+    const tasks = Array.from({ length: 8 }, (_, i) => ({ task: `t${i}`, rationale: 'r', predictedSuccess: 0.5, targetsSkills: [] }));
+    const proposals = await proposeNextTasks({ rt, judge: createJSONLLM(tasks), count: 5 });
+    expect(proposals.length).toBe(5);
+    expect(listProposedTasks(rt).length).toBe(5);
+  });
+
+  test('rejects a bad count or window before calling the judge', async () => {
+    for (const count of [0, -2, 2.5]) {
+      const { rt } = setup();
+      const judge = createScriptedLLM(['[]']);
+      await expect(proposeNextTasks({ rt, judge, count })).rejects.toThrow(/count/);
+      expect(judge.callCount).toBe(0);
+    }
+    const windows: Array<[number, number]> = [[0.7, 0.3], [-0.1, 0.5], [0.3, 1.5], [Number.NaN, 0.5]];
+    for (const learnabilityWindow of windows) {
+      const { rt } = setup();
+      const judge = createScriptedLLM(['[]']);
+      await expect(proposeNextTasks({ rt, judge, learnabilityWindow })).rejects.toThrow(/learnabilityWindow/);
+      expect(judge.callCount).toBe(0);
+    }
+  });
+
+  test('throws naming the window and nearest score when nothing survives the filter', async () => {
+    const { rt } = setup();
+    const judge = createJSONLLM([{ task: 'far', rationale: 'r', predictedSuccess: 0.05, targetsSkills: [] }]);
+    const pending = proposeNextTasks({ rt, judge });
+    await expect(pending).rejects.toThrow(/0\.3, 0\.7/);
+    await expect(pending).rejects.toThrow(/0\.05/);
+  });
+
+  test('leaves abandoned turns out of the prompt context', async () => {
+    const { rt } = setup();
+    void rt.storage.sql`INSERT INTO turn_outcomes (id, outcome, confidence, source, user_message, assistant_response, created_at)
+        VALUES ('o-abandoned', 'abandoned', 0.5, 'classifier', 'abandoned-marker-task', 'resp', 3)`;
+    void rt.storage.sql`INSERT INTO turn_outcomes (id, outcome, confidence, source, user_message, assistant_response, created_at)
+        VALUES ('o-accepted', 'accepted', 0.9, 'classifier', 'accepted-marker-task', 'resp', 4)`;
+    const judge = createScriptedLLM(['[]']);
+    await proposeNextTasks({ rt, judge });
+    const promptText = judge.prompts.join('\n');
+    expect(promptText).toContain('accepted-marker-task');
+    expect(promptText).not.toContain('abandoned-marker-task');
+  });
+
+  test('mints unique ids for calls inside the same millisecond', async () => {
+    const { rt } = setup();
+    const realNow = Date.now;
+    Date.now = () => 1_700_000_000_000;
+    try {
+      const first = await proposeNextTasks({ rt, judge: createJSONLLM([{ task: 'a', rationale: 'r', predictedSuccess: 0.5, targetsSkills: [] }]) });
+      const second = await proposeNextTasks({ rt, judge: createJSONLLM([{ task: 'b', rationale: 'r', predictedSuccess: 0.5, targetsSkills: [] }]) });
+      expect(first[0]?.id).toBeDefined();
+      expect(second[0]?.id).toBeDefined();
+      expect(first[0]?.id).not.toBe(second[0]?.id);
+      expect(listProposedTasks(rt).length).toBe(2);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  test('updateProposedTaskStatus throws on an unknown id', () => {
+    const { rt } = setup();
+    expect(() => updateProposedTaskStatus(rt, 'no-such-id', 'accepted')).toThrow(/unknown proposed task/);
+  });
+
+  test('status-filtered list is capped at 50, newest first', () => {
+    const { rt } = setup();
+    for (let i = 1; i <= 55; i++) {
+      void rt.storage.sql`INSERT INTO proposed_tasks (id, task, rationale, predicted_success, targets_skills, proposed_at, status)
+          VALUES (${`seed-${i}`}, ${`task ${i}`}, 'r', 0.5, '[]', ${i}, 'pending')`;
+    }
+    const listed = listProposedTasks(rt, 'pending');
+    expect(listed.length).toBe(50);
+    expect(listed[0]?.proposedAt).toBe(55);
+  });
+
+  test('equal timestamps order by id', () => {
+    const { rt } = setup();
+    for (const id of ['tie-a', 'tie-b']) {
+      void rt.storage.sql`INSERT INTO proposed_tasks (id, task, rationale, predicted_success, targets_skills, proposed_at, status)
+          VALUES (${id}, ${id}, 'r', 0.5, '[]', 10, 'pending')`;
+    }
+    void rt.storage.sql`INSERT INTO proposed_tasks (id, task, rationale, predicted_success, targets_skills, proposed_at, status)
+        VALUES ('older', 'older', 'r', 0.5, '[]', 9, 'pending')`;
+    expect(listProposedTasks(rt).map((p) => p.id)).toEqual(['tie-b', 'tie-a', 'older']);
+  });
+
+  test('publishes the one status list', () => {
+    expect(PROPOSED_TASK_STATUSES).toEqual(['pending', 'accepted', 'rejected', 'completed']);
   });
 });

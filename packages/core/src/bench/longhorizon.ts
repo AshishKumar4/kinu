@@ -33,6 +33,9 @@
 import { fnv1a64 } from '../prompting/volatile-context';
 import { parseJsonValue } from '../utils/json';
 import { unitHash } from './stats';
+import * as v from 'valibot';
+
+const FiniteInteger = v.pipe(v.number(), v.finite(), v.integer());
 
 /** Sandbox-relative root the corpus is materialized under. */
 export const LONGHORIZON_CORPUS_DIR = 'bench-corpus';
@@ -456,10 +459,14 @@ export function decodeLongHorizonSpec(encoded: string): LongHorizonSpec {
   }
   const [mode, seed, entries, filler, markers, parts] = raw;
   if (mode !== 'digest' && mode !== 'continuation') throw new Error(`unknown long-horizon mode: ${String(mode)}`);
+  if (!v.is(FiniteInteger, seed)) throw new Error(`long-horizon spec.seed must be a finite integer, got ${JSON.stringify(seed)}`);
+  if (!v.is(FiniteInteger, entries)) throw new Error(`long-horizon spec.entries must be a finite integer, got ${JSON.stringify(entries)}`);
+  if (!v.is(FiniteInteger, filler)) throw new Error(`long-horizon spec.filler must be a finite integer, got ${JSON.stringify(filler)}`);
+  if (!v.is(FiniteInteger, markers)) throw new Error(`long-horizon spec.markers must be a finite integer, got ${JSON.stringify(markers)}`);
+  if (!v.is(FiniteInteger, parts)) throw new Error(`long-horizon spec.parts must be a finite integer, got ${JSON.stringify(parts)}`);
   const spec: LongHorizonSpec = {
     mode,
-    seed: Number(seed), entries: Number(entries), filler: Number(filler),
-    markers: Number(markers), parts: Number(parts),
+    seed, entries, filler, markers, parts,
   };
   assertLongHorizonSpec(spec);
   return spec;

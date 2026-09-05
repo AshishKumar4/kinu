@@ -453,3 +453,27 @@ describe('a resume prices its remaining budget, not its initial one', () => {
     expect(store.get(rootId)).toMatchObject({ status: 'converged', budget: 0 });
   });
 });
+
+/**
+ * A `begin` names a fresh search run. Repeating a live root id is a caller
+ * fault, not a reset: replacing the row would wipe the checkpointed progress
+ * to zero while the tree it checkpointed keeps growing underneath.
+ */
+describe('a repeated begin on a live root throws instead of resetting it', () => {
+  test('root id reuse refuses and the checkpointed progress survives', () => {
+    const { rt, db } = createTestRuntime();
+    initTables(rt);
+    const store = new MctsSearchStore(makeSql(db));
+    store.begin({
+      rootId: 'r1', task: TASK, engine: 'mcts', rootMsgId: 'm1',
+      config: { budget: 10, branches: 2 }, budget: 10, now: 1_000,
+    });
+    store.checkpoint('r1', 0, 5, 5, 2_000);
+
+    expect(() => store.begin({
+      rootId: 'r1', task: TASK, engine: 'mcts', rootMsgId: 'm1',
+      config: { budget: 10, branches: 2 }, budget: 10, now: 3_000,
+    })).toThrow();
+    expect(store.get('r1')).toMatchObject({ status: 'running', iteration: 5, budget: 5, epoch: 0 });
+  });
+});

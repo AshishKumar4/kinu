@@ -70,25 +70,33 @@ function safeParse(json: string): JsonValue {
   }
 }
 
+/** One key space for the world model. Trims, lowercases, and folds runs of
+ *  whitespace to one underscore, so variant spellings share one row. */
+export function normalizeFactKey(key: string): string {
+  return key.trim().toLowerCase().replace(/\s+/g, '_');
+}
+
 export function createFactsStore(sql: SqlExecutor): FactsStore {
   return {
     upsert(key, value, opts = {}) {
-      const conf = opts.confidence ?? 1;
+      const canonical = normalizeFactKey(key);
+      const raw = opts.confidence ?? 1;
+      const conf = Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 1;
       const src = opts.source ?? null;
       const valueJson = JSON.stringify(value);
       const existing = sql<{ value_json: string; last_observed_at: number }>`
-        SELECT value_json, last_observed_at FROM agent_facts WHERE key = ${key} LIMIT 1`[0];
+        SELECT value_json, last_observed_at FROM agent_facts WHERE key = ${canonical} LIMIT 1`[0];
       if (existing?.value_json === valueJson) {
         void sql`UPDATE agent_facts SET
               confidence = ${conf},
               source = COALESCE(${src}, source)
-            WHERE key = ${key}`;
+            WHERE key = ${canonical}`;
         return 'unchanged';
       }
       const now = Math.max(Date.now(), (existing?.last_observed_at ?? -1) + 1);
       void sql`
         INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
-        VALUES (${key}, ${valueJson}, ${conf}, ${src}, ${now})
+        VALUES (${canonical}, ${valueJson}, ${conf}, ${src}, ${now})
         ON CONFLICT(key) DO UPDATE SET
           value_json       = excluded.value_json,
           confidence       = excluded.confidence,
@@ -97,12 +105,14 @@ export function createFactsStore(sql: SqlExecutor): FactsStore {
       return existing ? 'changed' : 'created';
     },
     recall(key) {
+      const canonical = normalizeFactKey(key);
       const rows = sql<FactRow>`SELECT key, value_json, confidence, source, last_observed_at
-                                  FROM agent_facts WHERE key = ${key} LIMIT 1`;
+                                  FROM agent_facts WHERE key = ${canonical} LIMIT 1`;
       return rows[0] ? rowToFact(rows[0]) : null;
     },
     forget(key) {
-      void sql`DELETE FROM agent_facts WHERE key = ${key}`;
+      const canonical = normalizeFactKey(key);
+      void sql`DELETE FROM agent_facts WHERE key = ${canonical}`;
     },
     recentTopK(k) {
       const rows = sql<FactRow>`SELECT key, value_json, confidence, source, last_observed_at

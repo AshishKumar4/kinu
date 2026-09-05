@@ -11,9 +11,9 @@ import { JsonObjectSchema } from '../utils/json';
 // field missing from this schema is not a loud error — it silently vanishes
 // between the JSONL and the case. Every field EvalCase carries must therefore
 // appear here.
-const CaseSchema = v.object({
-  id: v.string(),
-  task: v.string(),
+const CaseSchema = v.strictObject({
+  id: v.pipe(v.string(), v.minLength(1)),
+  task: v.pipe(v.string(), v.minLength(1)),
   rubric: v.optional(v.string()),
   reference: v.optional(v.string()),
   tags: v.optional(v.array(v.string())),
@@ -24,6 +24,7 @@ const CaseSchema = v.object({
 export function parseCorpus(jsonl: string): EvalCase[] {
   const lines = jsonl.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
   const out: EvalCase[] = [];
+  const seen = new Set<string>();
   for (let i = 0; i < lines.length; i++) {
     let parsed: unknown;
     try { parsed = JSON.parse(lines[i]); }
@@ -34,6 +35,10 @@ export function parseCorpus(jsonl: string): EvalCase[] {
     if (!result.success) {
       throw new Error(`Eval corpus line ${i + 1}: ${result.issues.map(x => x.message).join('; ')}`);
     }
+    if (seen.has(result.output.id)) {
+      throw new Error(`Eval corpus line ${i + 1}: duplicate id "${result.output.id}"`);
+    }
+    seen.add(result.output.id);
     out.push(result.output);
   }
   return out;

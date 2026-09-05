@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import {
+  MAX_PLAN_ANNOTATIONS_BYTES,
   MAX_PLAN_CONTENT_BYTES,
+  PLATFORM_CATALOG,
   PlanReviewStore,
   applyPlanEdits,
   formatPlanWithLineNumbers,
@@ -44,7 +46,12 @@ describe('plan edit contract', () => {
     ])).toMatch(/overlap/);
     expect(() => applyPlanEdits([], [{ start: 1, content: '   ' }])).toThrow(/empty/);
     expect(() => applyPlanEdits([], [{ start: 1, content: 'x'.repeat(MAX_PLAN_CONTENT_BYTES + 1) }]))
-      .toThrow(/5 MiB/);
+      .toThrow(/1.5 MiB/);
+  });
+
+  test('content and annotation caps fit one platform row', () => {
+    expect(MAX_PLAN_CONTENT_BYTES + MAX_PLAN_ANNOTATIONS_BYTES)
+      .toBeLessThanOrEqual(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
   });
 
   test('formats stable one-indexed line references for revision feedback', () => {
@@ -117,6 +124,15 @@ describe('durable plan review lifecycle', () => {
       error: expect.stringContaining('type'),
     });
     expect(store.getActive('default')?.annotations).toEqual([]);
+  });
+
+  test('refuses a plan larger than the stored row instead of throwing at the write', () => {
+    const { store } = setup();
+    const submitted = store.submit('default', [{ start: 1, content: 'x'.repeat(3 * 1024 * 1024) }]);
+    expect(submitted.ok).toBe(false);
+    if (submitted.ok) throw new Error('expected the oversized plan to be refused');
+    expect(submitted.error).toMatch(/row size|maximum size/);
+    expect(store.getActive('default')).toBeNull();
   });
 
   test('requires a decision before another revision and rejects stale input', () => {

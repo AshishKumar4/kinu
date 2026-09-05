@@ -29,9 +29,9 @@
  * with `self`, and its priority table has cells for `process_done` and
  * `file_changed` only at `self` and `owner`. So a container driven by a head
  * that had consumed external input CANNOT publish — and that is a deliberate
- * property of the trust lattice, not an accident. This adapter checks it
- * up front and refuses with a reason, rather than letting the hub throw
- * `IngressRejectedError` out through an HTTP proxy handler.
+ * property of the trust lattice, not an accident. This adapter maps the hub's
+ * `IngressRejectedError` to a 403 refusal with a reason, rather than letting
+ * it throw out through an HTTP proxy handler.
  *
  * ── Delivery guarantees, stated exactly ──────────────────────────
  *   `process_done`  — effectively once. The hub's dedupe key is
@@ -65,7 +65,7 @@
 
 import * as v from 'valibot';
 import type { EventLog } from '../hub/log';
-import type { IngressDescriptor, TrustLevel } from '../hub/types';
+import { IngressRejectedError, type IngressDescriptor, type TrustLevel } from '../hub/types';
 import { spillEventContent } from '../hub/content-spill';
 import { EVENT_BRIEF_MAX_CHARS } from '../hub/visibility';
 import type { VFS } from '../../types/primitives';
@@ -126,16 +126,6 @@ export type ContainerEventResult =
   | { readonly status: 'admitted'; readonly event_id: string; readonly admitted: boolean }
   | { readonly status: 'rejected'; readonly http_status: number; readonly reason: string };
 
-/**
- * The trust levels whose events the hub's priority table actually admits for
- * the two container variants. Stated as data here so the refusal names the
- * real constraint instead of surfacing as a thrown `invalid_combination` from
- * two layers down.
- */
-const PUBLISHABLE_TRUST = {
-  self: true, owner: true, authenticated: false, external: false,
-} satisfies Record<TrustLevel, boolean>;
-
 /** Gate + publish one container report. Runs inside the agent's storage.
  *
  *  `body` is arbitrary JSON because the container wrote it — this function IS
@@ -153,25 +143,26 @@ export async function acceptContainerEvent(
       reason: `malformed container event: ${parsed.issues.map((i) => i.message).join('; ')}`,
     };
   }
-  if (!PUBLISHABLE_TRUST[deps.launchingHeadTrust]) {
-    return {
-      status: 'rejected',
-      http_status: 403,
-      reason: `a container driven at ${deps.launchingHeadTrust} trust cannot publish events — `
-        + 'its reports would launder externally-influenced input into the agent\'s own rail',
-    };
-  }
 
   const envelope = parsed.output;
   const descriptor = envelope.kind === 'process_done'
     ? await processDoneDescriptor(deps, envelope)
     : fileChangedDescriptor(deps, envelope);
 
-  const { id, admitted } = deps.log.publish({ descriptor, now });
-  // Only a newly admitted event wakes anything: a duplicate is already bound
-  // or in flight, and waking for it would re-run a turn for work already seen.
-  if (admitted) deps.onAdmitted();
-  return { status: 'admitted', event_id: id, admitted };
+  // The hub's priority table is the one authority on which trust publishes
+  // which variant: its `IngressRejectedError` becomes the 403 refusal.
+  try {
+    const { id, admitted } = deps.log.publish({ descriptor, now });
+    // Only a newly admitted event wakes anything: a duplicate is already bound
+    // or in flight, and waking for it would re-run a turn for work already seen.
+    if (admitted) deps.onAdmitted();
+    return { status: 'admitted', event_id: id, admitted };
+  } catch (err) {
+    if (err instanceof IngressRejectedError) {
+      return { status: 'rejected', http_status: 403, reason: err.message };
+    }
+    throw err;
+  }
 }
 
 /** Oversize output is spilled to the agent's own file plane, and the brief

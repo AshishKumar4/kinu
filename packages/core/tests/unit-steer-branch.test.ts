@@ -16,7 +16,7 @@ import type { HeadRuntime, SpawnedHead } from '../src/heads/controller';
 import type { HeadInput, HeadReport } from '../src/heads/types';
 import {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, startBranchHead, settleBranchIntoTakes,
-  settlePendingBranches, branchHeadId, branchOutcomeFromJournal,
+  settlePendingBranch, branchHeadId, branchOutcomeFromJournal,
   type BranchStatusEvent, type PendingBranch,
 } from '../src/steer-branch';
 
@@ -342,40 +342,63 @@ describe('recordBranchTakeSet — the settlement key', () => {
   });
 });
 
-describe('settlePendingBranches — the drain both backends run at turn end', () => {
-  /** A pending branch whose head resolves with the given answer. */
-  function pending(id: string, answer: string) {
-    const { runtime } = fakeRuntime(async (input) => completedReport(input.id, answer));
-    return { runtime, id, task: `try ${id}` };
-  }
-
-  test('settles every pending branch and empties the list', async () => {
+describe('settlePendingBranch — the keyed settle both backends run at turn end', () => {
+  /** One pending branch whose head resolves with the given answer. */
+  async function pendingBranch(answer: string, task = 'try the other way') {
     const { sql } = setup();
     const journal = new HeadJournal(sql);
-    const events: BranchStatusEvent[] = [];
-    const branches: PendingBranch[] = [];
-    for (const spec of [pending('one', 'first alternative'), pending('two', 'second alternative')]) {
-      const handle = await startBranchHead(spec.runtime, journal, {
-        task: spec.task,
-        inheritedContext: [{ id: 'c1', role: 'user', content: 'original ask', createdAt: 1 }],
-      });
-      branches.push({ id: handle.id, task: spec.task, handle: Promise.resolve(handle) });
-    }
+    const { runtime } = fakeRuntime(async (input) => completedReport(input.id, answer));
+    const handle = await startBranchHead(runtime, journal, {
+      task,
+      inheritedContext: [{ id: 'c1', role: 'user', content: 'original ask', createdAt: 1 }],
+    });
+    const entry: PendingBranch = { id: handle.id, task, handle: Promise.resolve(handle) };
+    return { sql, entry };
+  }
 
-    await settlePendingBranches(
+  test('settles one branch with its settlement key and broadcasts the take set', async () => {
+    const { sql, entry } = await pendingBranch('branch answer');
+    const events: BranchStatusEvent[] = [];
+    await settlePendingBranch(
       { sql, sessionId: 'default', broadcast: (e) => { events.push(e); } },
-      branches,
+      entry,
       'turn-1',
       'the live answer',
+      `branch:${entry.id}`,
     );
-    expect(branches).toEqual([]);
-    expect(events.filter((e) => e.status === 'settled')).toHaveLength(2);
+    const settled = events.filter((e) => e.status === 'settled');
+    expect(settled).toHaveLength(1);
+    if (settled[0]?.status !== 'settled') throw new Error('expected a settled event');
+    expect(settled[0].takeSetId).toBe(latestAlternateTakeSet(sql)!.id);
+    expect(listAlternateTakeSets(sql)).toHaveLength(1);
   });
 
-  test('an empty list is a no-op', async () => {
-    const { sql } = setup();
+  test('a replayed settlement key returns the same set and writes no second one', async () => {
+    const { sql, entry } = await pendingBranch('branch answer');
     const events: BranchStatusEvent[] = [];
-    await settlePendingBranches({ sql, sessionId: 'default', broadcast: (e) => { events.push(e); } }, [], 'turn-1', 'x');
-    expect(events).toEqual([]);
+    const deps = { sql, sessionId: 'default', broadcast: (e: BranchStatusEvent) => { events.push(e); } };
+    await settlePendingBranch(deps, entry, 'turn-1', 'the live answer', `branch:${entry.id}`);
+    await settlePendingBranch(deps, entry, 'turn-1', 'the live answer', `branch:${entry.id}`);
+    expect(listAlternateTakeSets(sql)).toHaveLength(1);
+    const settled = events.filter((e) => e.status === 'settled');
+    expect(settled).toHaveLength(2);
+    if (settled[0]?.status !== 'settled' || settled[1]?.status !== 'settled') {
+      throw new Error('expected settled events');
+    }
+    expect(settled[1].takeSetId).toBe(settled[0].takeSetId);
+  });
+
+  test('a dead live turn aborts the branch and broadcasts an error', async () => {
+    const { sql, entry } = await pendingBranch('branch answer');
+    const events: BranchStatusEvent[] = [];
+    await settlePendingBranch(
+      { sql, sessionId: 'default', broadcast: (e) => { events.push(e); } },
+      entry,
+      null,
+      '',
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.status).toBe('error');
+    expect(latestAlternateTakeSet(sql)).toBeNull();
   });
 });

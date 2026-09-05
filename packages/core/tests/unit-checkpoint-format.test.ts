@@ -46,6 +46,12 @@ describe('checkpointSubject', () => {
     expect(subject).not.toContain('\n');
     expect(subject).not.toContain('|');
   });
+  test('carriage returns are stripped — a subject stays one line on CRLF input', () => {
+    // A lone CR splits a subject the same way LF does on the daemon side.
+    const subject = checkpointSubject({ turnId: 'a\rb', sessionId: 's1' }, 'edit\r\nfile');
+    expect(subject).not.toContain('\r');
+    expect(subject).toBe('turn=a b session=s1 edit  file');
+  });
 
   test('a whitespace-only or empty reason collapses to the placeholder', () => {
     expect(checkpointSubject(meta, '')).toBe('turn=t1 session=s1 -');

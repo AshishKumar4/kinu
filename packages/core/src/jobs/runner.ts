@@ -17,7 +17,6 @@ import type { EventLog } from '../events/hub/log';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
 import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
-import type { ActiveRoster } from '../prompting/volatile-context';
 import { nanoid } from '../utils/nanoid';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import type { WorkMode } from '../prompting/surface';
@@ -214,20 +213,6 @@ export interface BackgroundJobRunnerDeps {
   scheduleResume?: (atMs: number) => Promise<void> | void;
 }
 
-/** The classified reason a detach cannot be admitted. The live call stays
- * foreground-owned, so this explains why it kept waiting rather than inviting
- * another copy of work already in flight. */
-function refusalMessage(kind: string, running: ActiveRoster<BackgroundJob>): string {
-  const roster = running.items.map((j) => `${j.id} (${j.kind})`).join(', ');
-  return (
-    `The "${kind}" call needed to move to the background, but this workspace already has ` +
-    `${running.total} background job(s) running — the maximum — so it will stay in the ` +
-    `foreground until it settles. It was not cancelled. Already in flight: ${roster}. ` +
-    `Those jobs still wake the agent as each one settles, and agent.jobResult('<id>') reads a ` +
-    `settled one. Do not launch another copy: it will not make the running work finish sooner.`
-  );
-}
-
 /** A short, human-readable description of what a backgrounded call is
  *  actually doing — read straight off the tool input, duck-typed rather than
  *  importing each tool's own input type (this module stays generic over
@@ -393,7 +378,7 @@ export class BackgroundJobRunner {
     const running = this.liveDetachedCount();
     if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
       this.deps.logActivity?.('bg_job_refused', `${kind} — ${running} jobs already running`);
-      return { detached: false, reason: refusalMessage(kind, this.deps.store.listRunning(MAX_CONCURRENT_DETACHED_JOBS)) };
+      return { detached: false, reason: 'too many jobs already running' };
     }
     const jobId = this.create(kind, input, mode, controller);
     this.deps.logActivity?.('bg_job_started', `${kind} → ${jobId}`);

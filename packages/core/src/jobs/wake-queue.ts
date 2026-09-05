@@ -40,8 +40,8 @@ export class AgentWakeQueue implements SignalDeliverer {
     waiting?.();
     // 'queued', never 'mid-turn': this seam hands work to the NEXT turn, because
     // an agent driven by a step loop has no channel into the request already in
-    // flight. Nothing downstream branches on it — the runner reads the outcome
-    // only to decide whether to compensate, and a queued signal never is.
+    // flight. The runner ignores the outcome. Compensation travels on the
+    // signal callback. A queued signal never calls it.
     return 'queued';
   }
 

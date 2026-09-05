@@ -55,9 +55,11 @@ export const ROOT_DELEGATION_BUDGET: DelegationBudget = {
 
 /** An actor's budget from the one thing its identity row stores. Clamped at 0
  *  rather than going negative, so a row written by an older cap can only ever
- *  be MORE restrictive than the code reading it. */
+ *  be MORE restrictive than the code reading it — and a stored negative depth
+ *  reads as the root instead of inflating room past the cap. */
 export function delegationBudgetAtDepth(depth: number): DelegationBudget {
-  return { depth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - depth) };
+  const safeDepth = Math.max(0, depth);
+  return { depth: safeDepth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - safeDepth) };
 }
 
 /**
@@ -66,7 +68,7 @@ export function delegationBudgetAtDepth(depth: number): DelegationBudget {
  * one without the other.
  */
 export function deriveChildDelegationBudget(parent: DelegationBudget): DelegationBudget {
-  return { depth: parent.depth + 1, maxDepth: parent.maxDepth - 1 };
+  return { depth: parent.depth + 1, maxDepth: Math.max(0, parent.maxDepth - 1) };
 }
 
 /** Whether this actor may still hire. */

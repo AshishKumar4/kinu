@@ -34,6 +34,7 @@
 import * as v from 'valibot';
 import { seekPage, mapPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
 import type { SqlExecutor } from '../types/primitives';
+import { tableExists } from './schema';
 import { uiMessageRow, uiMessageText } from '../utils/ui-message';
 
 /**
@@ -93,9 +94,7 @@ export interface ChatPaneRow {
  *     table happens to exist".
  */
 export function hasPaneStore(sql: SqlExecutor): boolean {
-  return sql<{ name: string }>`
-    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'assistant_messages'
-  `.length > 0;
+  return tableExists(sql, 'assistant_messages');
 }
 
 /** Cheap fork-cut preflight. It reads only the authority table primary key, so
@@ -318,10 +317,10 @@ export function chatPaneAncestry(sql: SqlExecutor, messageId: string): ChatPaneR
 /** How many messages the workspace's default chat holds, per its own authority. */
 export function conversationCount(sql: SqlExecutor): number {
   if (hasPaneStore(sql)) {
-    return sql<{ c: number }>`SELECT COUNT(*) AS c FROM assistant_messages`[0]!.c;
+    return sql<{ c: number }>`SELECT COUNT(*) AS c FROM assistant_messages`[0]?.c ?? 0;
   }
   return sql<{ c: number }>`
-    SELECT COUNT(*) AS c FROM messages WHERE session_id = ${CHAT_SESSION_ID}`[0]!.c;
+    SELECT COUNT(*) AS c FROM messages WHERE session_id = ${CHAT_SESSION_ID}`[0]?.c ?? 0;
 }
 
 interface StoredTranscriptRow {

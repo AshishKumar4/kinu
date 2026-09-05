@@ -207,6 +207,22 @@ describe('layer gate — coverage honesty', () => {
     expect(undefinedRoot).not.toEqual(undefinedString);
   });
 
+  test('a non-serializable observation is quarantined, not a crashed run', async () => {
+    const circular = { self: {} };
+    circular.self = circular;
+    const quarantine = [{
+      id: 'quarantine', owns: 'test quarantine', subjects: [],
+      probes: [
+        { id: 'quarantine/circular', asserts: 'circular observation is quarantined', observe: () => circular },
+        { id: 'quarantine/bigint', asserts: 'bigint observation is quarantined', observe: () => ({ value: 1n }) },
+      ],
+    }];
+    const observations = await observePipeline({}, quarantine);
+    expect(observations.size).toBe(2);
+    const report = await runLayerGate({ subjects: {}, baseline: {}, layers: quarantine });
+    expect(report.layers.map((score) => score.conformance)).toEqual([0]);
+  });
+
   test('an unmeasured layer reports null, never 100%', async () => {
     const report = await runLayerGate({ subjects, baseline: LOCKED_BASELINE });
     const unmeasured = report.layers.filter((score) => score.probes === 0);

@@ -241,9 +241,9 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     swarm_node_records: EVERYWHERE,
 
     // ── events hub ──
-    // `outbox_peer` is deliberately not here: the shared outbox creates its
-    // own table on first use, so no root's boot schema produces it and there
-    // is nothing for a root to wire or refuse.
+    // `outbox_peer` is not in this group: the shared outbox creates its table
+    // lazily on first use, so its per-root wiring decision is recorded with
+    // the outbound intent logs below.
     agent_log: EVERYWHERE,
     reply_channels: EVERYWHERE,
     triggers: EVERYWHERE,

@@ -4,11 +4,12 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS } from '../src/tasks/store';
+import type { SqlValue } from '../src/types/primitives';
 import { makeSql, makeExecRaw } from './helpers';
 
 function newStore(): TaskListStore {
   const db = new Database(':memory:');
-  initTaskListTable(makeExecRaw(db));
+  initTaskListTable(makeExecRaw(db), makeSql(db));
   return new TaskListStore(makeSql(db));
 }
 
@@ -138,5 +139,73 @@ describe('TaskListStore', () => {
     expect(s.list(2).map((t) => t.id)).toEqual(['t1', 't2']);
     expect(s.list(2)[1]!.subtasks).toEqual([]);
     expect(s.count()).toBe(3);
+  });
+  // A workspace whose table predates the status CHECK can hold a value the
+  // vocabulary never minted. Reading it back must refuse naming the value —
+  // coercing it to open answers open under get() while the open-filtered
+  // reads skip the same row.
+  test('a stored status outside the vocabulary is refused naming the value', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE agent_tasks (
+      id TEXT PRIMARY KEY,
+      seq INTEGER NOT NULL,
+      parent_id TEXT,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`);
+    db.exec(`INSERT INTO agent_tasks VALUES('t9',999,NULL,'x','bogus',1,1)`);
+    const s = new TaskListStore(makeSql(db));
+    expect(() => s.get('t9')).toThrow('bogus');
+  });
+  // Pinned on the PLAN rather than on a stopwatch: the statement is captured
+  // from the store itself (no second copy of the SQL to drift), and answering
+  // one parent's open subtasks through the status index is the regression
+  // this guards — it fails with "USING INDEX idx_agent_tasks_status".
+  test('countOpenSubtasks seeks the parent index', () => {
+    const db = new Database(':memory:');
+    initTaskListTable(makeExecRaw(db), makeSql(db));
+    const inner = makeSql(db);
+    let statement = '';
+    const capturing: typeof inner = <T,>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+      statement = strings.join('?');
+      return inner<T>(strings, ...values);
+    };
+    const s = new TaskListStore(capturing);
+    s.add(['parent'], null, 1);
+    s.add(['a', 'b'], 't1', 2);
+    statement = '';
+    expect(s.countOpenSubtasks('t1')).toBe(2);
+    const plan = db.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN ${statement}`).all('t1');
+    const details = plan.map((row) => row.detail).join('\n');
+    expect(details).toContain('idx_agent_tasks_parent');
+    expect(details).not.toMatch(/\bSCAN\b/);
+  });
+
+  // A table created before the status CHECK was constrained widens in place:
+  // its rows survive, writes outside the vocabulary are refused from then
+  // on, and no `_legacy` table is left behind.
+  test('a table predating the status CHECK is widened in place', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE agent_tasks (
+      id TEXT PRIMARY KEY,
+      seq INTEGER NOT NULL,
+      parent_id TEXT,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`);
+    db.exec(`INSERT INTO agent_tasks VALUES('t1',1,NULL,'kept','done',1,2)`);
+    initTaskListTable(makeExecRaw(db), makeSql(db));
+    const ddl = makeSql(db)<{ sql: string }>`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_tasks'`[0]?.sql;
+    expect(ddl).toContain(`CHECK (status IN ('open','active','done','dropped'))`);
+    const tables = makeSql(db)<{ name: string }>`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'agent_tasks%'`
+      .map((row) => row.name);
+    expect(tables).toEqual(['agent_tasks']);
+    const s = new TaskListStore(makeSql(db));
+    expect(s.get('t1')?.status).toBe('done');
+    expect(() => db.exec(`INSERT INTO agent_tasks VALUES('t9',999,NULL,'x','bogus',1,1)`)).toThrow();
   });
 });

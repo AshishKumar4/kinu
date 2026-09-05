@@ -49,7 +49,6 @@ function emptyCraftStore(): CraftStore {
     get: () => undefined,
     delete: () => {},
     search: () => [],
-    getAll: () => [],
   };
 }
 

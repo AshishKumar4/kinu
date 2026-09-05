@@ -49,7 +49,8 @@ import { provisionWorkspaceRuntimes } from './workspace-runtimes';
 import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
+import { isVfsError, makeVfsError } from './errno';
 
 export { workspaceToolchainCapabilities } from './workspace-runtimes';
 export type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
@@ -74,7 +75,9 @@ const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.
 /** ENOENT is how Nimbus reports a missing path; the core VFS contract stats it
  *  as `null` and answers `exists` with `false`. */
 function isEnoent({ error }: { error: unknown }): boolean {
-  return renderThrownChain({ cause: error }).includes('ENOENT');
+  if (isVfsError(error)) return error.code === 'ENOENT';
+  if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return true;
+  return false;
 }
 
 function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefined {
@@ -136,7 +139,7 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
       const handle = await fs();
       const remove = async (target: string): Promise<void> => {
         const st = await self.stat(target);
-        if (!st) return;
+        if (!st) throw makeVfsError('ENOENT', 'no such file or directory', target);
         if (st.isDir) {
           for (const name of await self.readdir(target)) await remove(`${target}/${name}`);
         }

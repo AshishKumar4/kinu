@@ -4,7 +4,7 @@ import { generateText } from 'ai';
 import {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
-  changeActiveRole, createAgentConfigStore,
+  changeActiveRole, roleChangeOutcomeText, createAgentConfigStore,
   DEFAULT_ROLE_ID,
   fallbackWorkspaceIdentity,
   initWorkspaceSchema,
@@ -255,7 +255,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
         actor: 'user',
       });
       if (changed.kind !== 'applied') {
-        throw new Error(`role "${input.role}" was refused: ${changed.kind === 'refused' ? changed.reason : changed.kind}`);
+        throw new Error(roleChangeOutcomeText(input.role, changed, DEFAULT_ROLE_ID));
       }
     }
     // Everything this database holds has to be IN it before the rename that

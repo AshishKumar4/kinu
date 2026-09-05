@@ -321,8 +321,10 @@ export class RunEventRecorder {
     return next;
   }
 
+  // Plain INSERT: an index collision raises instead of replacing a live row.
+  // `allocateIndex` never reuses an index, so a collision is a second writer.
   private persist(ev: RunEvent): void {
-    void this.sql`INSERT OR REPLACE INTO run_events (run_id, event_index, type, payload, ts)
+    void this.sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
       VALUES (${ev.runId}, ${ev.eventIndex}, ${ev.type}, ${JSON.stringify(ev)}, ${ev.timestamp})`;
   }
 
@@ -343,19 +345,40 @@ export class RunEventRecorder {
     const since = boundedInt(opts.since, 0, 0, Number.MAX_SAFE_INTEGER);
     const types = opts.types && opts.types.length > 0 ? new Set<string>(opts.types) : null;
 
-    // Tagged-template SQL can't safely build dynamic IN-clauses across all
-    // SqlExecutor implementations (parameter binding is positional). Fetch
-    // a window and filter client-side — events are small, and the window is
-    // whatever `limit` states, capped at 2000 when a filter widens it.
-    const fetchLimit = types ? Math.min(limit * 4, 2000) : limit;
-    const rows = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events
-      WHERE run_id = ${runId} AND event_index >= ${since}
-      ORDER BY event_index ASC
-      LIMIT ${fetchLimit}`;
-    const events = rows.map((r) => parseStoredRunEvent(r.payload));
-    if (!types) return events;
-    return events.filter((e) => types.has(e.type)).slice(0, limit);
+    if (!types) {
+      const rows = this.sql<{ payload: string }>`
+        SELECT payload FROM run_events
+        WHERE run_id = ${runId} AND event_index >= ${since}
+        ORDER BY event_index ASC
+        LIMIT ${limit}`;
+      return rows.map((r) => parseStoredRunEvent(r.payload));
+    }
+    // Tagged-template SQL cannot safely build dynamic IN-clauses across all
+    // SqlExecutor implementations (parameter binding is positional), so the
+    // filter runs client-side. A filtered read pages forward on `event_index`
+    // until `limit` matching rows are filled or the run is exhausted — one
+    // window and a slice loses sparse matches past that window. Each page
+    // holds whatever `limit` states, capped at 2000 rows.
+    const matched: RunEvent[] = [];
+    let cursor = since;
+    const fetchLimit = Math.min(limit * 4, 2000);
+    while (matched.length < limit) {
+      const rows = this.sql<{ payload: string; event_index: number }>`
+        SELECT payload, event_index FROM run_events
+        WHERE run_id = ${runId} AND event_index >= ${cursor}
+        ORDER BY event_index ASC
+        LIMIT ${fetchLimit}`;
+      const last = rows[rows.length - 1];
+      if (last === undefined) break;
+      for (const row of rows) {
+        if (matched.length >= limit) break;
+        const event = parseStoredRunEvent(row.payload);
+        if (types.has(event.type)) matched.push(event);
+      }
+      if (rows.length < fetchLimit) break;
+      cursor = last.event_index + 1;
+    }
+    return matched;
   }
 
   /**
@@ -493,11 +516,13 @@ export class RunEventRecorder {
 
   /** Replay all events strictly after `afterIndex` — for SSE Last-Event-ID resume. */
   readSince(runId: string, afterIndex: number, limit = 500): RunEvent[] {
+    // Same invariant as `read`: only a finite positive integer reaches SQL.
+    const capped = boundedInt(limit, 500, 1, Number.MAX_SAFE_INTEGER);
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
       WHERE run_id = ${runId} AND event_index > ${afterIndex}
       ORDER BY event_index ASC
-      LIMIT ${limit}`;
+      LIMIT ${capped}`;
     return rows.map((r) => parseStoredRunEvent(r.payload));
   }
 
@@ -542,11 +567,13 @@ export class RunEventRecorder {
    * in the same millisecond.
    */
   readRecentByType(type: RunEventType, limit = 200): RunEvent[] {
+    // Same invariant as `read`: only a finite positive integer reaches SQL.
+    const capped = boundedInt(limit, 200, 1, Number.MAX_SAFE_INTEGER);
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
       WHERE type = ${type}
       ORDER BY ts DESC, rowid DESC
-      LIMIT ${limit}`;
+      LIMIT ${capped}`;
     return rows.map((r) => parseStoredRunEvent(r.payload)).reverse();
   }
 
@@ -692,6 +719,8 @@ export class RunEventRecorder {
    * history, which is why `unit-run-events.test.ts` pins both halves together.
    */
   listRunsBefore(before: number | null, count: number): RunListEntry[] {
+    // Same invariant as `read`: only a finite positive integer reaches SQL.
+    const capped = boundedInt(count, RUN_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER);
     return this.sql<RunListEntry>`
       SELECT run_id AS runId, MAX(ts) AS lastTs, COUNT(*) AS eventCount
       FROM run_events
@@ -699,7 +728,7 @@ export class RunEventRecorder {
       GROUP BY run_id
       HAVING ${before} IS NULL OR MAX(rowid) < ${before}
       ORDER BY MAX(rowid) DESC
-      LIMIT ${count}`;
+      LIMIT ${capped}`;
   }
 
   /** Where a run sits in the log's write order, or null when the log no longer

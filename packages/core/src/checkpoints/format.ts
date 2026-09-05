@@ -9,12 +9,13 @@
  * with parentless commits whose subject encodes the turn:
  * `turn=<id|-> session=<id|-> <reason>`.
  *
- * The cli-backend engine (createHostCheckpoints) imports this module; the
  * pc-agent daemon is deliberately dependency-free single-file JS and PINS the
- * same values as literals — cross-engine compatibility is enforced by the
+ * same values as literals — cross-engine compatibility is pinned by the
  * parity test (cli-backend/tests/checkpoint-parity.test.ts), which round-trips
- * one store through both engines. Change anything here and that test breaks
- * until the daemon mirror is updated.
+ * one happy-path store through both engines. That is one store, not the edge
+ * cases: subjects carrying a newline or a pipe, an absent turn, a ref outside
+ * the naming scheme — those live in core/tests/unit-checkpoint-format.test.ts.
+ * Change anything here and both tests break until the daemon mirror is updated.
  */
 
 import type { CheckpointTurnMeta } from './types';
@@ -37,7 +38,7 @@ export const CHECKPOINT_EXCLUDES = [
 /** Commit subject for a snapshot: `turn=<id|-> session=<id|-> <reason>`.
  *  Null meta marks out-of-turn snapshots (pre-restore). */
 export function checkpointSubject(meta: CheckpointTurnMeta | null, reason: string): string {
-  const clean = (s: string) => s.replace(/[\n|]/g, ' ').trim() || '-';
+  const clean = (s: string) => s.replace(/[\r\n|]/g, ' ').trim() || '-';
   return `turn=${clean(meta?.turnId ?? '-')} session=${clean(meta?.sessionId ?? '-')} ${clean(reason)}`;
 }
 
@@ -48,10 +49,16 @@ export function parseCheckpointSubject(
 ) {
   const m = /^turn=(\S+) session=(\S+) (.*)$/.exec(subject);
   if (!m) return { turnId: null, sessionId: null, reason: subject };
+  const turn = m[1];
+  const session = m[2];
+  const reason = m[3];
+  if (turn === undefined || session === undefined || reason === undefined) {
+    return { turnId: null, sessionId: null, reason: subject };
+  }
   return {
-    turnId: m[1] === '-' ? null : m[1]!,
-    sessionId: m[2] === '-' ? null : m[2]!,
-    reason: m[3]!,
+    turnId: turn === '-' ? null : turn,
+    sessionId: session === '-' ? null : session,
+    reason,
   };
 }
 
@@ -100,7 +107,8 @@ export function diagnoseStaging(stderr: string): StagingDiagnosis {
   const unreadable = new Set<string>();
   for (const line of lines) {
     const denied = UNREADABLE_DIR.exec(line) ?? UNREADABLE_FILE.exec(line);
-    if (denied) unreadable.add(denied[1]!);
+    const path = denied?.[1];
+    if (path !== undefined) unreadable.add(path);
   }
   return {
     unreadable: [...unreadable].sort(),
@@ -117,7 +125,10 @@ function isDenial(line: string, unreadable: ReadonlySet<string>): boolean {
   // some file was denied. Neither is tolerated without the denial it follows —
   // `unable to index file` also covers failures that are not permission ones.
   const unindexed = UNINDEXED_FILE.exec(line);
-  if (unindexed) return unreadable.has(unindexed[1]!);
+  if (unindexed) {
+    const path = unindexed[1];
+    return path !== undefined && unreadable.has(path);
+  }
   return ADD_FAILED.test(line) && unreadable.size > 0;
 }
 
@@ -143,5 +154,6 @@ export function checkpointReason(reason: string, unreadable: readonly string[]):
 /** Snapshot time from a `refs/kinu/<ms13>-<seq36>` ref name. */
 export function checkpointRefTimestampMs(ref: string): number {
   const m = /(\d{13})-[0-9a-z]+$/.exec(ref);
-  return m ? Number(m[1]) : 0;
+  const stamp = m?.[1];
+  return stamp === undefined ? 0 : Number(stamp);
 }

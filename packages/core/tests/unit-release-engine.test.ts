@@ -260,7 +260,7 @@ describe('engine.apply', () => {
 
     const cmds = s.sandbox.commands;
     expect(cmds.some((c) => c.includes('clone'))).toBe(false);
-    const fetchIdx = cmds.findIndex((c) => c.includes("fetch origin 'main'"));
+    const fetchIdx = cmds.findIndex((c) => c.includes("fetch origin 'refs/heads/main'"));
     const checkoutIdx = cmds.findIndex((c) => c.includes('checkout -B'));
     expect(fetchIdx).toBeGreaterThanOrEqual(0);
     expect(checkoutIdx).toBeGreaterThan(fetchIdx);
@@ -281,6 +281,21 @@ describe('engine.apply', () => {
       expect(result.error).toContain("credential named 'github'");
     }
     expect(s.store.detail(s.changeId).checks[0]?.status).toBe('failed');
+  });
+  test('github fetch names the explicit refspec so a branch value never parses as a flag', async () => {
+    const s = setup({
+      binding: { kind: 'github', repoUrl: 'https://github.com/acme/site', defaultBranch: 'main' },
+      gitHubAuth: async () => 'Basic dGVzdA==',
+    });
+    s.sandbox
+      .on(/test -e .*\.git/, { stdout: 'yes' })
+      .on(/rev-parse HEAD~1/, { stdout: 'ba5eba5eba5e0000000000000000000000000000' })
+      .on(/rev-parse HEAD/, { stdout: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' });
+
+    expect((await s.engine.apply(s.changeId)).ok).toBe(true);
+    const fetch = s.sandbox.commands.find((c) => c.includes('fetch origin'));
+    expect(fetch).toBeDefined();
+    expect(fetch).toContain("fetch origin 'refs/heads/main'");
   });
 
   test('without an execution substrate every action returns the honest not-configured error', async () => {
@@ -517,6 +532,21 @@ describe('engine.deploy', () => {
     }
     expect(s.store.getChange(s.changeId)?.status).toBe('awaiting_approval');
   });
+  test.each([
+    ['staging', 'deploy_staging'],
+    ['production', 'deploy_production'],
+  ] as const)('%s with a preview but no deploy command refuses: nothing runs, status unchanged', async (environment, approvalType) => {
+    const s = setup();
+    await applyAndPass(s);
+    expect((await s.engine.preview(s.changeId, { port: 8080 })).ok).toBe(true);
+    await approve(s, approvalType);
+
+    const result = await s.engine.deploy(s.changeId, { environment });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('deploy command');
+    expect(s.store.getChange(s.changeId)?.status).toBe('awaiting_approval');
+    expect(s.store.detail(s.changeId).deployments).toEqual([]);
+  });
 });
 
 // ── Rollback ───────────────────────────────────────────────────────────────
@@ -743,6 +773,15 @@ describe('createSandboxReleaseExec', () => {
       ...sandboxHandleLifecycle,
     };
   }
+  test('an exec result without an exit code reads as failure, never success', async () => {
+    const exec = createSandboxReleaseExec(
+      makeHandle(async () => ({ output: 'some output' })),
+      {},
+    );
+    const res = await exec.exec('bun run build');
+    expect(res.stdout).toBe('some output');
+    expect(res.exitCode).toBe(1);
+  });
 
   test('passes raw exit codes and cwd/timeout through; normalizes legacy output field', async () => {
     const calls: Array<{ command: string; opts?: { cwd?: string; timeout?: number } }> = [];

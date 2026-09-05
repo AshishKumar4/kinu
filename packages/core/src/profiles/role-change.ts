@@ -5,8 +5,8 @@
 // already resolved. Policy is the owner's, per agent:
 //
 //   allow     any switch lands immediately
-//   approval  a capability-INCREASING switch stages for owner approval; a
-//             pure narrowing lands immediately
+//   approval  a capability-INCREASING agent self-switch is refused and names
+//             the owner approval it needs; a pure narrowing lands immediately
 //   locked    the agent cannot switch at all — only the owner can
 //
 // Every applied move records provenance (actor, previous id, catalog version),
@@ -16,7 +16,7 @@ import {
   type ProfileCatalogEnvelope, type RoleDefinition, type RoleId,
 } from './catalog';
 import {
-  encodeRoleSelection, parseRoleSelectionRow,
+  AGENT_CONFIG_KEYS, encodeRoleSelection, parseRoleChangePolicy, parseRoleSelectionRow,
 } from '../config/store';
 
 export type RoleChangeActor = 'user' | 'agent';
@@ -24,11 +24,10 @@ export type RoleChangePolicy = 'allow' | 'approval' | 'locked';
 
 /** Why a change could not be made. Named because two places speak it: the
  *  outcome union below and the message table over it. */
-export type RoleChangeRefusal = 'locked' | 'unknown-role' | 'invalid-role-id';
+export type RoleChangeRefusal = 'locked' | 'unknown-role' | 'invalid-role-id' | 'approval-required';
 
 export type RoleChangeOutcome =
   | { readonly kind: 'applied'; readonly from: RoleId; readonly to: RoleId; readonly catalogVersion: number }
-  | { readonly kind: 'staged'; readonly from: RoleId; readonly to: RoleId }
   | { readonly kind: 'refused'; readonly reason: RoleChangeRefusal };
 
 /**
@@ -39,13 +38,10 @@ export type RoleChangeOutcome =
  * them: written twice, a new member earns a wrong sentence in two places
  * instead of a compile error in one.
  *
- * `staged` IS NOT A REFUSAL, and that distinction is why this exists. A staged
- * change SUCCEEDED — it is recorded and waiting on the owner — so wording it as
- * a failure tells the agent to retry something already pending and makes an
- * approval policy look like a broken one. "Refused" is for `locked` and for a
- * role the catalog cannot carry: the two where nothing is pending and retrying
- * changes nothing.
- *
+ * An approval-policy widening is a REFUSAL, not a queue ticket: no owner
+ * surface reads a staged request, so calling one "staged" promises an
+ * approval that never arrives. "Refused" covers `locked`, the roles the
+ * catalog cannot carry, and the widenings the owner must make instead.
  * Every message says which role is live afterwards, because that is the thing
  * the caller has to act on. `currentRole` is consulted ONLY by `refused`, the
  * one member carrying no `from` of its own, so the sentence can never disagree
@@ -61,10 +57,6 @@ export function roleChangeOutcomeText(
     case 'applied':
       return `role is now ${JSON.stringify(outcome.to)}, was ${JSON.stringify(outcome.from)}. `
         + 'It applies from the next turn; this one keeps the profile it already resolved.';
-    case 'staged':
-      return `role ${JSON.stringify(outcome.to)} is awaiting owner approval, because it widens `
-        + `what this agent can reach. Nothing is lost and there is nothing to retry: this turn `
-        + `and the next continue under ${JSON.stringify(outcome.from)}.`;
     case 'refused': {
       const live = JSON.stringify(currentRole);
       const because = {
@@ -75,6 +67,8 @@ export function roleChangeOutcomeText(
           + 'catalog carries.',
         'invalid-role-id': `${asked} is not a well-formed role id, so it names no role. `
           + `${live} stays active.`,
+        'approval-required': `role ${asked} widens what this agent can reach, so the switch needs owner approval. `
+          + `${live} stays active.`,
       } satisfies Record<RoleChangeRefusal, string>;
       return because[outcome.reason];
     }
@@ -82,16 +76,12 @@ export function roleChangeOutcomeText(
 }
 
 /** The slice of AgentConfigStore a role change reads and writes. Generic
- *  get/set keeps this module free of a store import cycle; the typed
- *  accessors live beside the keys they own. */
+ *  get/set keeps callers free of the store type; the keys and the policy
+ *  reading live in config/store beside the accessors that own them. */
 export interface RoleStateStore {
   get(key: string): string | null;
   set(key: string, value: string): void;
 }
-
-const ROLE_POLICY_KEY = 'role_change_policy';
-const ROLE_SELECTION_KEY = 'role_selection';
-const PENDING_ROLE_KEY = 'pending_role_id';
 
 /** Whether `to` can reach any tool `from` could not. An absent allowedTools
  *  list IS the full surface: restricted to full widens, full to anything does
@@ -108,11 +98,6 @@ function roleOf(envelope: ProfileCatalogEnvelope, id: RoleId): RoleDefinition | 
   return roles[id] ?? null;
 }
 
-function readPolicy(config: RoleStateStore): RoleChangePolicy {
-  const stored = config.get(ROLE_POLICY_KEY);
-  return stored === 'approval' || stored === 'locked' ? stored : 'allow';
-}
-
 function applyRole(
   config: RoleStateStore,
   envelope: ProfileCatalogEnvelope,
@@ -120,11 +105,7 @@ function applyRole(
   to: RoleId,
   actor: RoleChangeActor,
 ): void {
-  config.set(ROLE_SELECTION_KEY, encodeRoleSelection({ kind: 'catalog', roleId: to }));
-  // An applied change supersedes any request waiting on the owner: the owner
-  // setting a role IS the answer to one, and a pending id nothing can clear
-  // would outlive the request forever.
-  config.set(PENDING_ROLE_KEY, '');
+  config.set(AGENT_CONFIG_KEYS.roleSelection, encodeRoleSelection({ kind: 'catalog', roleId: to }));
   config.set('role_changed_from', from);
   config.set('role_changed_by', actor);
   config.set('role_changed_at', String(Date.now()));
@@ -141,7 +122,7 @@ export function changeActiveRole(input: {
   actor: RoleChangeActor;
 }): RoleChangeOutcome {
   const envelope = validateProfileCatalogEnvelope(input.envelope);
-  const current = parseRoleSelectionRow(input.config.get(ROLE_SELECTION_KEY));
+  const current = parseRoleSelectionRow(input.config.get(AGENT_CONFIG_KEYS.roleSelection));
   // A legacy selection has no catalog id to change FROM; the change targets
   // the catalog arm, so the default is the honest `from`.
   const from = current?.kind === 'catalog' ? current.roleId : DEFAULT_ROLE_ID;
@@ -149,7 +130,7 @@ export function changeActiveRole(input: {
   const target = roleOf(envelope, input.to);
   if (!target) return { kind: 'refused', reason: 'unknown-role' };
 
-  const policy = readPolicy(input.config);
+  const policy = parseRoleChangePolicy(input.config.get(AGENT_CONFIG_KEYS.roleChangePolicy));
   if (policy === 'locked' && input.actor === 'agent') {
     return { kind: 'refused', reason: 'locked' };
   }
@@ -160,8 +141,9 @@ export function changeActiveRole(input: {
     && fromDef !== null
     && roleWidensCapabilities(fromDef, target)
   ) {
-    input.config.set(PENDING_ROLE_KEY, input.to);
-    return { kind: 'staged', from, to: input.to };
+    // No staging row: no owner surface reads one, so a stored request would
+    // wait forever. Refuse and name the approval the switch needs.
+    return { kind: 'refused', reason: 'approval-required' };
   }
 
   applyRole(input.config, envelope, from, input.to, input.actor);

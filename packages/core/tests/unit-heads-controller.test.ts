@@ -470,6 +470,46 @@ describe('HeadController.run', () => {
     // report could overwrite the live rows already written.
     expect(journal.readSteps(run!.heads[0]!.id)).toHaveLength(0);
   });
+
+  test('a head whose spawn throws still yields a MergeResult carrying its errored report and the survivor', async () => {
+    const { sql, journal } = newJournal();
+    const runtime: HeadRuntime = {
+      async spawnHead(input: HeadInput): Promise<SpawnedHead> {
+        if (input.task === 'angle A') throw new Error('spawn blew up');
+        return {
+          id: input.id,
+          async run() { return fakeReport(input.id, { summary: 'B finding' }); },
+          async abort() {},
+        };
+      },
+      mergeLLM: async () => fakeMergeOutput('Merged with one survivor.'),
+    };
+    const splitIds: string[] = [];
+    const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
+      parentHeadId: null,
+      rootId: 'root-spawn-fail',
+      inheritedContext: baseContext,
+      request: baseRequest,
+      onPhase: (e) => { if (e.kind === 'split') splitIds.push(...e.headIds); },
+    });
+
+    // The run resolves: one head's spawn failure is not the split's failure.
+    expect(result.mergedNarrative).toBe('Merged with one survivor.');
+    expect(result.costSummary.headCount).toBe(2);
+    expect(result.costSummary.headsWithFindings).toBe(1);
+    // Only the survivor banked evidence; the failed head carries none.
+    expect(result.evidenceAggregate).toHaveLength(1);
+    // The split event names the head that actually spawned — never the failed one.
+    expect(splitIds).toHaveLength(1);
+
+    const rows = sql<{ id: string; status: string; error_message: string | null }>`
+      SELECT id, status, error_message FROM head_journal`;
+    expect(rows).toHaveLength(2);
+    // No row is left running: the failed head's row settled errored with its reason.
+    expect(rows.find((r) => r.status === 'errored')?.error_message).toContain('spawn blew up');
+    expect(rows.find((r) => r.status === 'completed')?.id).toBe(splitIds[0]);
+  });
 });
 
 /**

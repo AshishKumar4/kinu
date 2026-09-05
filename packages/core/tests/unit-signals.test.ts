@@ -115,6 +115,20 @@ describe('SignalDelivery — one delivery time: the next step', () => {
       signalId: idle.cards[0]!.id,
     });
   });
+  test('a producer cannot move its turn under another provenance or rebind its reply', async () => {
+    // The chat renders the card from kinuEvent and the backend routes the
+    // reply from drainTurnId, so either one landing from producer metadata
+    // mislabels the turn or steals another signal's reply.
+    const idle = setup({ turnInFlight: false });
+    expect(await idle.signals.deliver({
+      kind: 'background_job', text: 'job done', replyTurnId: 'real-turn',
+      metadata: { kinuEvent: 'event_drain', drainTurnId: 'other-turn', jobId: 'bgjob-1' },
+    })).toBe('queued');
+    expect(idle.queued[0]!.metadata).toEqual({
+      kinuEvent: 'background_job', drainTurnId: 'real-turn', kinuAuthor: 'harness',
+      jobId: 'bgjob-1', signalId: idle.cards[0]!.id,
+    });
+  });
 
   test('a mode-bound signal only splices into a live turn with the same mode', async () => {
     const same = setup({ turnInFlight: true, activeMode: 'plan' });

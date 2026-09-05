@@ -37,7 +37,7 @@
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { sqlCheckList } from '../identity/schema';
-import { checkMisevolution, recordMisevolutionVeto } from '../scaffold/misevolution';
+import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
 import { modifyScaffold } from '../scaffold/modify';
 import { getPendingScaffold } from '../scaffold/shadow';
 import { upsertCraftedTool } from '../craft/conflict';
@@ -46,6 +46,7 @@ import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombston
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import * as v from 'valibot';
+import { diagnostics, toKinuError, tolerate } from '../obs/index';
 import { recordLesson } from '../evolution/outcomes';
 import {
   EXPERIENCE_KINDS,
@@ -127,8 +128,21 @@ interface RawImportRow {
 function toImportRow(r: RawImportRow): ImportedExperienceRow | null {
   const payload = parseExperiencePayload(r.payload_json);
   if (!payload || payload.kind !== r.kind) return null;
-  const rawTurnIds: unknown = JSON.parse(r.turn_ids);
-  const turnIds = v.parse(v.array(v.string()), rawTurnIds);
+  const rawTurnIds: unknown = tolerate(() => JSON.parse(r.turn_ids), 'malformed-input');
+  const parsedTurnIds = v.safeParse(v.array(v.string()), rawTurnIds);
+  if (!parsedTurnIds.success) {
+    diagnostics.failure(
+      'experience.import_row_unreadable',
+      toKinuError({
+        doing: 'decode an imported experience row',
+        cause: rawTurnIds === undefined ? new Error('the stored turn ids are not JSON') : parsedTurnIds.issues.map((issue) => issue.message).join('; '),
+        otherwise: 'bad_input',
+      }),
+      { rowId: r.id },
+    );
+    return null;
+  }
+  const turnIds = parsedTurnIds.output;
   return {
     id: r.id, libraryId: r.library_id, kind: r.kind, key: r.key, title: r.title,
     payload, evidence: r.evidence, sourceWorkspace: r.source_workspace,
@@ -161,7 +175,14 @@ export function stageImport(
   entry: ExperienceEntry,
   now = nowMs(),
 ): ImportOutcome {
-  const verdict = checkMisevolution(misevolutionSourceOf(entry.payload));
+  const staged = parseExperiencePayload(JSON.stringify(entry.payload));
+  if (!staged || staged.kind !== entry.kind) {
+    return {
+      ok: false,
+      reason: `payload for ${entry.kind} "${entry.key}" does not parse as ${entry.kind} experience — refusing a row lists would skip`,
+    };
+  }
+  const verdict = checkMisevolutionForSurface(misevolutionSourceOf(entry.payload), 'import');
   if (!verdict.ok) {
     recordMisevolutionVeto(rt.storage.sql, {
       surface: 'import',
@@ -257,7 +278,7 @@ export async function settleImportsForTurn(
     // twice adopts one artifact. The marker only stops a resumed review from
     // appending a second settlement for an import already dispositioned.
     if (effectAlreadyDone(rt.storage.sql, IMPORT_SETTLED_SCOPE, row.id)) continue;
-    if (verdict === 'accepted' && await promoteImport(rt, row)) {
+    if (verdict === 'accepted' && await promoteImport(rt, row, turnId)) {
       void rt.storage.sql`UPDATE imported_experience
           SET status = 'corroborated', corroborated_at = ${now} WHERE id = ${row.id}`;
       recordEffectDone(rt.storage.sql, IMPORT_SETTLED_SCOPE, row.id);
@@ -297,7 +318,7 @@ function importedScaffoldMarker(importId: string): string {
   return `[import:${importId}]`;
 }
 
-async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow): Promise<boolean> {
+async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnId: string): Promise<boolean> {
   const from = `imported from workspace "${row.sourceWorkspace}" (${row.evidence})`;
   switch (row.payload.kind) {
     case 'craft': {
@@ -316,7 +337,7 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow): Prom
       // memory search and re-publication all read it through one path. A
       // MEMORY.md copy would be a second home for text the ledger owns.
       recordLesson(rt.storage.sql, {
-        turnIds: [],
+        turnIds: [turnId],
         text: `${row.payload.text}\n(${from})`,
         source: 'import',
         status: 'corroborated',

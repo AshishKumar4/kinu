@@ -39,6 +39,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import { boundedInt } from '../utils/bounds';
 import { seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
 import { STEER_BRANCH_RUN_ID_PREFIX } from '../steer-branch';
 
@@ -82,6 +83,12 @@ export interface ForkRunSummary {
 const DEFAULT_FORK_PAGE = 20;
 
 /**
+ * The ceiling on one fork-list page. The run list's own ceiling: both are
+ * RPC-reachable newest-first pages over runs, so one number bounds both.
+ */
+const MAX_FORK_PAGE = 200;
+
+/**
  * A page of exploration runs, newest first.
  *
  * Newest-first in BOTH traversal and presentation, so a walker appends.
@@ -103,9 +110,13 @@ export function listForkRuns(
   cursor: SeekCursor | null = null,
   limit = DEFAULT_FORK_PAGE,
 ): Page<ForkRunSummary> {
+  // Closed here: a negative limit reaches SQL as `LIMIT 0` and `seekPage` as a
+  // negative page, and an unparseable one fails the query. Same ceiling as the
+  // run list.
+  const page = boundedInt(limit, DEFAULT_FORK_PAGE, 1, MAX_FORK_PAGE);
   const after = cursor === null ? null : parseForkAnchor(cursor.after);
-  const over = limit + 1;
-  return seekPage(readRuns(sql, null, queryPositions(sql, over, null, after)), limit, forkAnchor);
+  const over = page + 1;
+  return seekPage(readRuns(sql, null, queryPositions(sql, over, null, after)), page, forkAnchor);
 }
 
 /** One exact run, including runs older than the current page. */

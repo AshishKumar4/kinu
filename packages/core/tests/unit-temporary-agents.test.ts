@@ -103,6 +103,8 @@ function makeRosterStore(): SubordinateRosterStore {
 function makeScene(options: {
   /** Refuse one child operation, to observe a run that cannot start. */
   fail?: keyof SubordinateRuntime;
+  /** Fail the release too, to observe a run whose cleanup also throws. */
+  failRelease?: boolean;
   delegation?: { depth: number };
   /** Leave the temporary port UNWIRED — the actor with no child substrate. */
   withoutTemporary?: boolean;
@@ -133,8 +135,11 @@ function makeScene(options: {
       return { lastActivity: null, recentSteps: [] };
     },
     async message() { return HANDOFF; },
+    async dismiss(name, keepHistory) {
+      calls.push(`dismiss:${name}:${keepHistory}`);
+      if (options.failRelease) throw new Error('the release failed');
+    },
     async rename() { /* not reached by this rung */ },
-    async dismiss(name, keepHistory) { calls.push(`dismiss:${name}:${keepHistory}`); },
   };
   const portInput: Parameters<typeof createTemporaryAgentPort>[0] = {
     roster,
@@ -475,6 +480,24 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     }));
     expect(failed.answer).toContain('could not be given the work');
     expect(scene.roster.list()).toEqual([]);
+    expect(scene.calls).toEqual([
+      `spawn:${TEMP_NAME}`,
+      `assign:${TEMP_NAME}`,
+      `dismiss:${TEMP_NAME}:true`,
+    ]);
+  });
+
+  test('a run whose release also fails keeps BOTH errors in the answer', async () => {
+    const scene = makeScene({ fail: 'assign', failRelease: true });
+    const failed = v.parse(FailedOutcome, await scene.call({
+      action: 'ask', role: 'auditor', message: 'Audit the ledger.',
+    }));
+    expect(failed.status).toBe('failed');
+    // The assignment failure that caused the release, not the release failure
+    // that a throwing cleanup would have replaced it with.
+    expect(failed.answer).toContain('could not be given the work');
+    expect(failed.answer).toContain('admission refused');
+    expect(failed.answer).toContain('the release failed');
     expect(scene.calls).toEqual([
       `spawn:${TEMP_NAME}`,
       `assign:${TEMP_NAME}`,

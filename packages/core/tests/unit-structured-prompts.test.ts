@@ -12,6 +12,10 @@ describe('structured prompt helpers', () => {
     });
   });
 
+  test('a non-JSON fence does not hide a valid object that follows it', () => {
+    expect(extractJsonObject('```text\nhello\n```\n{"a":1}')).toEqual({ a: 1 });
+  });
+
   test('extracts fenced JSON arrays', () => {
     expect(extractJsonArray('```json\n[{"task":"a"},{"task":"b"}]\n```')).toEqual([
       { task: 'a' },

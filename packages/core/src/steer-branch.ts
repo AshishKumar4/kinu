@@ -19,7 +19,7 @@ import { raceWithTimeout, type HeadRuntime } from './heads/controller';
 import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
 import { nanoid } from './utils/nanoid';
-import { diagnostics, renderThrownChain, toKinuError } from './obs/index';
+import { renderThrownChain } from './obs/index';
 
 /** A branch is one head answering one redirect: depth 1, so it answers rather
  *  than splitting further. Like any head it runs until it is done — the settle
@@ -214,42 +214,6 @@ export async function settlePendingBranch(
   } else {
     fail(outcome.reason);
   }
-}
-
-/**
- * Settle every branch launched during the just-finished turn, draining the
- * pending list as it goes.
- *
- * Starts every branch concurrently while draining the list synchronously; the
- * caller owns the returned drain, so no slow head holds up the turn queue. One
- * function rather than a loop at each call site means a branch cannot be settled
- * a second time against the NEXT turn's answer.
- */
-export async function settlePendingBranches(
-  deps: {
-    sql: SqlExecutor;
-    sessionId: string;
-    broadcast: (event: BranchStatusEvent) => void;
-  },
-  pending: PendingBranch[],
-  turnId: string | null,
-  liveText: string,
-): Promise<void> {
-  await Promise.all(pending.splice(0).map(async (entry) => {
-    try {
-      await settlePendingBranch(deps, entry, turnId, liveText);
-    } catch (cause) {
-      diagnostics.failure(
-        'branch.settlement_failed',
-        toKinuError({
-          doing: 'settle a branch against the finished turn',
-          cause,
-          otherwise: 'unavailable',
-        }),
-        { branchId: entry.id, task: entry.task },
-      );
-    }
-  }));
 }
 
 /**

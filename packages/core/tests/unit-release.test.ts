@@ -181,6 +181,14 @@ describe('release authority', () => {
     expect(s.upsertSourceBinding({ kind: 'github', label: 'src', repoUrl: 'https://github.com/o/r.git' }).repoUrl)
       .toBe('https://github.com/o/r.git');
   });
+  test.each([
+    ['a leading dash', '-evil'],
+    ['embedded whitespace', 'my branch'],
+    ['a parent traversal', 'foo..bar'],
+  ])('a source binding refuses a defaultBranch with %s', (_label, defaultBranch) => {
+    expect(() => store().upsertSourceBinding({ kind: 'github', label: 'src', repoUrl: 'https://github.com/o/r.git', defaultBranch }))
+      .toThrow(/defaultBranch/);
+  });
 
   test.each([
     ['a dotenv file', '--- a/.env\n+++ b/.env\n+API_KEY=1\n'],

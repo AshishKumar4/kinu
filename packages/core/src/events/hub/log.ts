@@ -33,7 +33,7 @@ import * as v from 'valibot';
 import {
   SUBORDINATE_REPORT_STATUSES,
   type AgentLogRow, type EventId, type EventVariant, type IngressDescriptor,
-  type Priority, type KinuEvent, type ReplyChannelRef, type RevisitCondition,
+  type Priority, type KinuEvent, type RevisitCondition,
   type TraceId, type TurnId,
 } from './types';
 import { dedupeKeyForDescriptor } from './dedupe';
@@ -49,6 +49,7 @@ import {
   parseJsonValue,
 } from '../../utils/json';
 import { boundedInt, boundPageQuery } from '../../utils/bounds';
+import { diagnostics, toKinuError } from '../../obs/index';
 
 const EVENT_SCHEMA_VERSION = 1;
 
@@ -314,7 +315,6 @@ export class EventLog {
     descriptor: IngressDescriptor;
     now: number;
     caused_by?: EventId;
-    reply_channel?: ReplyChannelRef;
     hmac_secret_for_visibility?: string;
   }): PublishResult {
     const { descriptor: d, now, caused_by, hmac_secret_for_visibility } = opts;
@@ -437,7 +437,12 @@ export class EventLog {
 
     const rows = this.sql.exec(sql, ...bindings).toArray()
       .map((row) => v.parse(EventRowSchema, row));
-    let events = rows.map(rowToEvent);
+    // One corrupt payload must not wedge the drain: the row is reported with
+    // its id and skipped, and the rest is returned.
+    let events = rows.flatMap((row) => {
+      const event = tryRowToEvent(row);
+      return event === null ? [] : [event];
+    });
 
     // Resolve deferred events: those whose revisit condition is now satisfied.
     // Deferred state is encoded by `step_idx = -1` (marker) + a JSON
@@ -685,11 +690,15 @@ export class EventLog {
     if (filter.turn_id)  { sql += ' AND turn_id = ?';  bindings.push(filter.turn_id); }
     if (filter.variant)  { sql += ' AND variant = ?';  bindings.push(filter.variant); }
     if (filter.since)    { sql += ' AND received_at >= ?'; bindings.push(filter.since); }
-    sql += ' ORDER BY received_at DESC';
+    sql += ' ORDER BY received_at DESC, id DESC';
     sql += ' LIMIT ?'; bindings.push(limit);
     const rows = this.sql.exec(sql, ...bindings).toArray()
       .map((row) => v.parse(EventRowSchema, row));
-    return rows.map(rowToEvent);
+    // Same corrupt-row rule as `pending`: report with the row id, skip it.
+    return rows.flatMap((row) => {
+      const event = tryRowToEvent(row);
+      return event === null ? [] : [event];
+    });
   }
 
   /** Single-event read by id. */
@@ -801,6 +810,23 @@ function preserveDelegatedMode(
   const envelope = v.safeParse(JsonObjectSchema, stored);
   if (!envelope.success) return stored;
   return { ...envelope.output, kinu_mode: descriptor.payload.kinu_mode };
+}
+
+/** Decode one event row, or null when its payload will not parse. A corrupt
+ *  row is this log's own write gone bad, so it is reported with the row id
+ *  and skipped rather than thrown: one bad row must not wedge the drain
+ *  behind it. */
+function tryRowToEvent(row: v.InferOutput<typeof EventRowSchema>): KinuEvent | null {
+  try {
+    return rowToEvent(row);
+  } catch (err) {
+    diagnostics.failure(
+      'event.row_unreadable',
+      toKinuError({ doing: 'decode an event row', cause: err, otherwise: 'bad_input' }),
+      { id: row.id },
+    );
+    return null;
+  }
 }
 
 function rowToEvent(row: v.InferOutput<typeof EventRowSchema>): KinuEvent {

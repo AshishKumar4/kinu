@@ -3,20 +3,14 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { nanoid } from '../utils/nanoid';
 import { JsonArraySchema, isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
+import { PLATFORM_CATALOG } from '../platform-catalog';
 
-/**
- * CONFLICTS WITH `do.sqlite.row_bytes` AND IS LEFT UNCHANGED HERE DELIBERATELY.
- *
- * `content` is a TEXT column of `plan_reviews` and `annotations_json` is another
- * column of the SAME row, so their sum meets the platform's per-row ceiling,
- * which the catalog records as 2 MB. These two admit 6 MiB between them, so a
- * plan of 2-5 MiB passes `applyPlanEdits`' own check below and then throws raw
- * at the storage layer on INSERT. Reconciling them is a behavioural change that
- * belongs to whoever owns plan review; this comment exists so the next reader
- * finds the conflict already located rather than in production.
- */
-export const MAX_PLAN_CONTENT_BYTES = 5 * 1024 * 1024;
-export const MAX_PLAN_ANNOTATIONS_BYTES = 1024 * 1024;
+// One plan_reviews row holds content plus annotations_json. The platform
+// caps that row at do.sqlite.row_bytes. Both caps below fit inside it
+// together, so a stored row stays under the platform ceiling.
+export const MAX_PLAN_CONTENT_BYTES = 1536 * 1024;
+export const MAX_PLAN_ANNOTATIONS_BYTES = 256 * 1024;
+const MAX_PLAN_REVIEW_ROW_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
 
 export interface PlanEdit {
   readonly start: number;
@@ -303,7 +297,7 @@ export function applyPlanEdits(existingLines: readonly string[], edits: readonly
   const content = lines.join('\n');
   if (!content.trim()) throw new Error('plan content is empty after applying edits');
   if (byteLength(content) > MAX_PLAN_CONTENT_BYTES) {
-    throw new Error('plan content exceeds the maximum size of 5 MiB');
+    throw new Error('plan content exceeds the maximum size of 1.5 MiB');
   }
   return lines;
 }
@@ -360,6 +354,10 @@ export class PlanReviewStore {
       return { ok: false, error: renderThrownChain({ cause: error }), plan: current };
     }
 
+    if (byteLength(content) + byteLength('[]') > MAX_PLAN_REVIEW_ROW_BYTES) {
+      return { ok: false, error: `plan content exceeds the stored row size of ${MAX_PLAN_REVIEW_ROW_BYTES} bytes`, plan: current };
+    }
+
     const id = revising?.id ?? this.newId();
     const revision = revising ? revising.revision + 1 : 1;
     const now = this.now();
@@ -393,11 +391,16 @@ export class PlanReviewStore {
       return { ok: false, error: `annotations must be JSON-serializable: ${renderThrownChain({ cause: error })}`, plan: current };
     }
     if (byteLength(encoded) > MAX_PLAN_ANNOTATIONS_BYTES) {
-      return { ok: false, error: 'annotations exceed the maximum size of 1 MiB', plan: current };
+      return { ok: false, error: 'annotations exceed the maximum size of 256 KiB', plan: current };
     }
     const admission = admitPlanReviewAnnotations(annotations);
     if (!admission.ok) return { ok: false, error: admission.error, plan: current };
     encoded = JSON.stringify(admission.annotations);
+
+    if (byteLength(current.content) + byteLength(encoded) > MAX_PLAN_REVIEW_ROW_BYTES) {
+      return { ok: false, error: `plan content and annotations exceed the stored row size of ${MAX_PLAN_REVIEW_ROW_BYTES} bytes`, plan: current };
+    }
+
     const now = this.now();
     void this.sql`UPDATE plan_reviews SET annotations_json=${encoded}, updated_at=${now}
       WHERE id=${id} AND revision=${revision} AND status='pending'`;

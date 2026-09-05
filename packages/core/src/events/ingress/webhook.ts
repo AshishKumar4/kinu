@@ -308,7 +308,7 @@ export async function acceptWebhookDelivery(
   // reply-channel.ts's own table, and the override here was a second copy of that
   // same 30_000 — two names for one policy, which is how one of them gets edited
   // alone.
-  const reply_channel_id = deps.replies.open({
+  deps.replies.open({
     event_id: 'pending',
     kind: 'http_pending',
     holder_addr: `delivery:${delivery_id}`,
@@ -339,7 +339,6 @@ export async function acceptWebhookDelivery(
       webhook_id: opts.trigger_id,
     },
     now: opts.now,
-    reply_channel: reply_channel_id ? { id: reply_channel_id, kind: 'http_pending' } : undefined,
   });
   // What the claim above now stands for, so a replay is answered with the event
   // rather than with a bare acknowledgement.

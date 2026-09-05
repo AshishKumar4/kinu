@@ -14,7 +14,7 @@ import {
 } from './safety-patterns';
 import { checkMisevolution, recordMisevolutionVeto } from './misevolution';
 import { parsePathologyTag } from '../evolution/pathology';
-import { readScaffoldVersion } from './shadow';
+import { getCurrentScaffoldVersion, readScaffoldVersion } from './shadow';
 
 /** Outcome of one scaffold proposal through the 4-gate pipeline. */
 export interface ModifyResult {
@@ -90,12 +90,10 @@ export async function modifyScaffold(
   // can point at a higher-numbered rolled_back/historical row after a rollback
   // cycle. Number the new pending above any existing row so its PK never
   // collides with a stale row.
-  const currentRows = rt.storage.sql<{ version: number }>`
-    SELECT version FROM scaffold_versions WHERE status = 'current' ORDER BY version DESC LIMIT 1`;
-  const currentVersion = currentRows[0]?.version ?? await rt.identity.scaffold.version();
+  const currentVersion = getCurrentScaffoldVersion(rt.storage.sql) ?? 0;
   const maxRows = rt.storage.sql<{ v: number }>`
     SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions`;
-  const newVersion = (maxRows[0]?.v ?? currentVersion) + 1;
+  const newVersion = (maxRows[0]?.v ?? 0) + 1;
 
   // Lineage: a proposal may branch from ANY archived version (DGM stepping
   // stones), not only the current. The base must be a real archive row.

@@ -77,3 +77,42 @@ describe('pruneLowValueBranches — population + config-honoring gate', () => {
     expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'failed'`[0]!.status).toBe('failed');
   });
 });
+
+describe('pruneLowValueBranches — one abort failure never ends the sweep', () => {
+  test('a throwing abortBranch is recorded per node and the rest still prune', async () => {
+    const { sql, rt, aborted } = setup();
+    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, branch_agent_key)
+        VALUES ('r', 'first', 't', 0.1, 3, 'open', 'agent-first')`;
+    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, branch_agent_key)
+        VALUES ('r', 'second', 't', 0.1, 3, 'open', 'agent-second')`;
+    const failing: AgentRuntime = {
+      ...rt,
+      abortBranch: async (key: string, reason?: string) => {
+        if (key === 'agent-first') throw new Error('platform abort blew up');
+        aborted.push({ key, reason });
+      },
+    };
+
+    // The recorded failure lands on console.error — the only sink this far
+    // inside core — so it is read where it lands.
+    const original = console.error;
+    const lines: string[] = [];
+    console.error = (...args: unknown[]) => { lines.push(String(args[0])); };
+    try {
+      await pruneLowValueBranches(failing, 'r', 0.25, 2);
+    } finally {
+      console.error = original;
+    }
+
+    // The sweep continued past the throw: both nodes pruned, the survivor
+    // aborted, the failure named rather than propagated.
+    const rows = sql<{ id: string; status: string }>`
+      SELECT id, status FROM search_nodes ORDER BY id`;
+    expect(rows).toEqual([
+      { id: 'first', status: 'pruned' },
+      { id: 'second', status: 'pruned' },
+    ]);
+    expect(aborted).toEqual([{ key: 'agent-second', reason: 'pruned' }]);
+    expect(lines.some((line) => line.includes('mcts.prune_abort_failed'))).toBe(true);
+  });
+});

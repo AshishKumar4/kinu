@@ -1,10 +1,8 @@
 /**
- * Open an existing workspace for CLI — uses the proper cli-backend runtime
- * (FTS5 memory, sandboxed executor, real MCTS branches) instead of the
- * degraded inline implementations in core/identity/open.ts.
+ * Open an existing workspace for the CLI with the cli-backend runtime: FTS5
+ * memory, the sandboxed executor and real MCTS branches.
  *
- * Provides the same WorkspaceInfo structure as core's openWorkspace for
- * display compatibility with CLI commands.
+ * Returns the WorkspaceInfo structure the CLI commands display.
  */
 
 import type { LLMProviderConfig } from '@kinu.run/core';
@@ -51,10 +49,7 @@ export interface CLIOpenConfig {
 }
 
 /**
- * Open an existing workspace using the full CLI backend runtime.
- *
- * Unlike core's openWorkspace (which uses degraded inline VFS/Memory/Executor),
- * this uses:
+ * Open an existing workspace using the full CLI backend runtime. It uses:
  * - the workspace plane `config.cwd` names, or the Nimbus filesystem with none
  * - MemoryStore with FTS5 (BM25 ranking, markdown chunking)
  * - Sandboxed executor (Bun subprocess with timeout)

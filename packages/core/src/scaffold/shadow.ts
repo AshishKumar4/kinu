@@ -87,14 +87,6 @@ export interface ShadowTrialVerdict {
   pendingScore: number;
 }
 
-export interface JudgeFn {
-  (opts: {
-    task: string;
-    currentOutput: string;
-    pendingOutput: string;
-  }): Promise<ShadowTrialVerdict>;
-}
-
 export interface ShadowConfig {
   /** Required trials before promotion decision. Default 5. */
   minTrials: number;

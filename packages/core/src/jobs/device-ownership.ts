@@ -75,12 +75,4 @@ export class DeviceRequestOwnership implements DeviceRequestChannel {
     this.#issued = [];
     return issued;
   }
-
-  /** Give the claim back after a transfer the job could not complete: the job is
-   *  about to be failed, and a holder still naming it would insert later
-   *  requests under a dead owner. The drained set is not restored — the
-   *  invocation is being aborted, so nothing reads it again. */
-  release(): void {
-    this.#owningJobId = null;
-  }
 }

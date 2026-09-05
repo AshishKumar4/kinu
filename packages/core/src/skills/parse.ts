@@ -24,7 +24,6 @@ import {
   MarkdownFrontmatterError,
 } from '../utils/markdown-frontmatter';
 import type { ParsedSkill, SkillParseResult, SkillSource } from './types';
-import { SkillError } from './types';
 import * as v from 'valibot';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
@@ -91,18 +90,20 @@ export function parseSkillFile(
   // frontmatter (the LLM cannot trigger this skill via description match or
   // keyword fire). Explicit user invocation still works (subject to
   // user_invocable).
+  // Only a real boolean opts in or out. A quoted "false" is a non-empty
+  // string, so Boolean() reads it as true.
   const disable_model_invocation =
-    Boolean(fm['disable-model-invocation'] ?? fm.disable_model_invocation ?? false);
+    (fm['disable-model-invocation'] ?? fm.disable_model_invocation ?? false) === true;
   // `user-invocable: false` blocks `/skill-name` from the user's message.
   // Default true (matches Anthropic spec).
   const user_invocable =
-    fm['user-invocable'] !== undefined ? Boolean(fm['user-invocable'])
-    : fm.user_invocable !== undefined  ? Boolean(fm.user_invocable)
+    fm['user-invocable'] !== undefined ? fm['user-invocable'] !== false
+    : fm.user_invocable !== undefined  ? fm.user_invocable !== false
     : true;
   // auto_activate is the Kinu-only keyword-fire flag. We force it false
   // when the author asked us not to model-invoke — the two contradict
   // otherwise.
-  const auto_activate_raw = Boolean(fm.auto_activate ?? fm.autoActivate ?? false);
+  const auto_activate_raw = (fm.auto_activate ?? fm.autoActivate ?? false) === true;
   const auto_activate = disable_model_invocation ? false : auto_activate_raw;
 
   const known = new Set([
@@ -141,10 +142,10 @@ export function stringifySkillFile(skill: ParsedSkill): string {
 
 /** Why `name` is not a legal skill name, or null when it is.
  *
- *  The one authority for the Anthropic-spec name rules: the parser, the
- *  pre-write validation, and discovery — which reads a name off a filename stem
- *  before it will spend anything on that file — all ask this, so a name cannot
- *  be legal to one of the three and illegal to another. */
+ *  The one authority for the Anthropic-spec name rules: the parser and
+ *  discovery — which reads a name off a filename stem before it will spend
+ *  anything on that file — both ask this, so a name cannot be legal to one
+ *  and illegal to the other. */
 export function skillNameProblem(name: string): string | null {
   if (name.length === 0) return 'must be a non-empty string';
   if (name.length > NAME_MAX_LEN) return `exceeds ${NAME_MAX_LEN} characters (${name.length})`;
@@ -158,13 +159,6 @@ export function skillNameProblem(name: string): string | null {
     }
   }
   return null;
-}
-
-/** Validation used before a skill file is written (`workspace.writeFile` under
- *  /workspace/skills/). Throws whatever `skillNameProblem` found. */
-export function validateSkillName(name: string): void {
-  const problem = skillNameProblem(name);
-  if (problem) throw new SkillError('invalid_name', `name ${problem}`);
 }
 
 // ── helpers ──────────────────────────────────────────────────────

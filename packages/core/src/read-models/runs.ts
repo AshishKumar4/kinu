@@ -124,18 +124,29 @@ function summarize(events: RunEventRecorder, run: RunListEntry): RunSummary {
   let startedAt = Date.parse(run.lastTs) || Date.now();
   // Straight to the log, not through the boundary read: this window is the one
   // the sums below are correct over, and it is wider than a stranger's ceiling.
-  for (const e of events.read(run.runId, { limit: 1000 })) {
-    if (e.type === 'run_start') {
-      causedBy = e.caused_by ?? 'chat';
-      userMessage = e.userMessage ?? null;
-      startedAt = Date.parse(e.timestamp) || startedAt;
-    } else if (e.type === 'turn_end') {
-      const turn = e.usage ?? {};
-      if (usageReported(turn)) usage = addUsage(usage, turn);
-      else turnsWithoutUsage++;
-    } else if (e.type === 'run_end') {
-      status = e.reason ?? null;
+  // Paged by `since` until a short page, so a run longer than one window still
+  // folds whole instead of dropping its tail (and the `run_end` in it).
+  const window = 1000;
+  let since = 0;
+  for (;;) {
+    const batch = events.read(run.runId, { since, limit: window });
+    for (const e of batch) {
+      if (e.type === 'run_start') {
+        causedBy = e.caused_by ?? 'chat';
+        userMessage = e.userMessage ?? null;
+        startedAt = Date.parse(e.timestamp) || startedAt;
+      } else if (e.type === 'turn_end') {
+        const turn = e.usage ?? {};
+        if (usageReported(turn)) usage = addUsage(usage, turn);
+        else turnsWithoutUsage++;
+      } else if (e.type === 'run_end') {
+        status = e.reason ?? null;
+      }
     }
+    if (batch.length < window) break;
+    const last = batch[batch.length - 1];
+    if (last === undefined) break;
+    since = last.eventIndex + 1;
   }
   return { runId: run.runId, startedAt, causedBy, userMessage, status, usage, turnsWithoutUsage, eventCount: run.eventCount };
 }

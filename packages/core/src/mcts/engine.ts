@@ -219,7 +219,7 @@ export async function runMCTS(
         const priorHistory = selected.msg_id
           ? session.getHistory(selected.msg_id)
           : [{ role: 'user', content: task }];
-        const craftedTools = rt.craftStore.getAll();
+        const craftedTools = rt.craftStore.list();
 
         // EXPLORE — parallel LLM calls (allSettled: one branch failure doesn't kill the rest).
         // Each branch is handed its siblings' distinct angles so the N proposals

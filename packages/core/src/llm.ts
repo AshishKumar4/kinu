@@ -9,8 +9,8 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { generateText, streamText } from 'ai';
-import type { LanguageModel, StepResult, ToolSet } from 'ai';
-import * as v from 'valibot';
+import type { LanguageModel } from 'ai';
+import { synthesizeToolFallback } from './prompts/evidence-window';
 import type { LLM } from './types/primitives';
 import { beginModelOperation, type ModelCallSpend } from './events/model-call';
 import { normalizeUsage } from './usage';
@@ -32,11 +32,11 @@ export interface LLMProviderConfig {
   /**
    * Where the calls this LLM makes are reported, and as whose spend.
    *
-   * Both halves in one field because the source is the CALLER's to state: this
-   * factory builds the chat model on one line and a cross-family judge on the
-   * next (`identity/open.ts:102`, `:105`), so no literal belongs here, and two
-   * independent optional fields would let a caller wire the sink without the
-   * label and lose the attribution silently.
+   * Both halves in one field because the source is the CALLER's to state: one
+   * caller builds the chat model and another builds a cross-family judge from
+   * the same factory, so no literal belongs here, and two independent optional
+   * fields would let a caller wire the sink without the label and lose the
+   * attribution silently.
    *
    * Absent means this LLM's spend is attributed to nothing, which the coverage
    * fraction states rather than hides.
@@ -264,7 +264,13 @@ export function meterLLM(llm: LLM): MeteredLLM {
  * 2. Gather text fragments from all steps
  * 3. If still empty, synthesize a summary from tool call results
  */
-export function collectStepText(result: { text: string; steps: StepResult<ToolSet>[] }): string {
+export function collectStepText(result: {
+  text: string;
+  steps: ReadonlyArray<{
+    text: string;
+    toolResults: ReadonlyArray<{ toolName: string; output: unknown }>;
+  }>;
+}): string {
   if (result.text) return result.text;
 
   const textParts: string[] = [];
@@ -274,18 +280,8 @@ export function collectStepText(result: { text: string; steps: StepResult<ToolSe
   if (textParts.length > 0) return textParts.join('\n\n');
 
   // No text in any step — synthesize from tool results
-  const toolSummaries: string[] = [];
-  for (const step of result.steps) {
-    for (const tr of step.toolResults) {
-      const output = tr.output;
-      const parsedText = v.safeParse(v.string(), output);
-      const text = parsedText.success ? parsedText.output : JSON.stringify(output ?? '');
-      toolSummaries.push(`[${tr.toolName}] ${text.slice(0, 500)}`);
-    }
-  }
-  return toolSummaries.length > 0
-    ? toolSummaries.join('\n')
-    : '(no response)';
+  const fallback = synthesizeToolFallback(result.steps);
+  return fallback ? fallback : '(no response)';
 }
 
 /**

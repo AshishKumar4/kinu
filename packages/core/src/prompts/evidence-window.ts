@@ -35,6 +35,9 @@
  * rule is byte-unchanged until it has been.
  */
 
+import * as v from 'valibot';
+import { renderThrownChain } from '../obs/index';
+
 /** Even split: the framing is at the start, the outcome at the end, and a
  *  judge is scoring the outcome. */
 const HEAD_FRACTION = 0.5;
@@ -161,3 +164,35 @@ export const EVIDENCE_BUDGETS = {
   refinerAssistantResponse: 8_000,
   refinerFollowup: 4_000,
 } as const;
+
+/** A tool result as prose: a string passes through, an absent value is empty,
+ *  anything else serializes to its JSON content. The model receives the real
+ *  object through the message history; this rendering is for the trajectory,
+ *  the trace and the fallback summary, so a structured result must show its
+ *  content and never `String({...})`'s "[object Object]". */
+export function renderToolResult<T>(raw: T): string {
+  const text = v.safeParse(v.string(), raw);
+  if (text.success) return text.output;
+  if (raw == null) return '';
+  try { return JSON.stringify(raw) ?? String(raw); }
+  catch (error) {
+    return `unserializable value: ${renderThrownChain({ cause: error })}`;
+  }
+}
+
+/**
+ * The turn text when a turn ends on tool calls with no prose. The streaming
+ * chat path and the generateText collector both call it, so a tool-only turn
+ * reads the same either way.
+ */
+export function synthesizeToolFallback<T>(
+  steps: ReadonlyArray<{ readonly toolResults: ReadonlyArray<{ readonly toolName: string; readonly output: T }> }>,
+): string {
+  const lines: string[] = [];
+  for (const step of steps) {
+    for (const result of step.toolResults) {
+      lines.push(`[${result.toolName}] ${evidenceWindow(renderToolResult(result.output), EVIDENCE_BUDGETS.toolFallbackSummary)}`);
+    }
+  }
+  return lines.join('\n');
+}

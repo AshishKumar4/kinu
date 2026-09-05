@@ -1,5 +1,5 @@
 /**
- * Six abstract primitive interfaces — the portability layer.
+ * Seven abstract primitive interfaces — the portability layer.
  * Everything in the agent core is written against these.
  * Backends (CF Workers / Linux CLI) satisfy them.
  *
@@ -7,6 +7,7 @@
  */
 
 import type { SqlExecutor, SqlValue } from '@kinu.run/agent-utils';
+import type { MemorySearchResult } from '@kinu.run/agent-utils/memory';
 import type { ToolSet as AiToolSet } from 'ai';
 import type { JsonObject, JsonValue } from '../utils/json';
 
@@ -97,13 +98,11 @@ export interface Storage {
   execRaw: RawSqlExec;
 }
 
-export interface MemorySearchResult {
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  score: number;
-}
+/**
+ * Re-exported from `@kinu.run/agent-utils/memory`: one definition serves the
+ * store and the portability layer alike.
+ */
+export type { MemorySearchResult } from '@kinu.run/agent-utils/memory';
 
 /** 2. MEMORY — FTS5-indexed markdown files in VFS */
 export interface Memory {

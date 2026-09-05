@@ -244,7 +244,14 @@ export function uniqueBuiltinTools(tools: readonly BuiltinToolName[] | undefined
 
 function normalizeExternalTool(tool: PromptExternalToolInfo | string): PromptExternalToolInfo | null {
   const toolName = v.safeParse(v.string(), tool);
-  const raw = toolName.success ? { name: toolName.output } : v.parse(ExternalToolSchema, tool);
+  if (toolName.success) {
+    const name = toolName.output.trim();
+    if (!name || BUILTIN_TOOL_NAMES.has(name)) return null;
+    return { name, source: isMcpToolKey(name) ? 'mcp' : 'external' };
+  }
+  const parsed = v.safeParse(ExternalToolSchema, tool);
+  if (!parsed.success) return null;
+  const raw = parsed.output;
   const name = raw.name.trim();
   if (!name || BUILTIN_TOOL_NAMES.has(name)) return null;
   const normalized: PromptExternalToolInfo = {

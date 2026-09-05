@@ -211,10 +211,11 @@ export async function snapshotWorkspaceForFork(
   // so a fork without those rows shows an empty pane despite a populated
   // `messages` table.
   const { chain: messages, pane: assistantMessages } = forkAncestry(source, untilMessageId);
-  if (messages.length === 0) {
+  const lastMessage = messages[messages.length - 1];
+  if (lastMessage === undefined) {
     throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
   }
-  const forkPointMs = messages[messages.length - 1]!.created_at;
+  const forkPointMs = lastMessage.created_at;
 
   const identity = source<{ id: string; name: string }>`
     SELECT id, name FROM workspace_identity LIMIT 1

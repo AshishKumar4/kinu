@@ -356,7 +356,6 @@ function adaptCraftStore(store: AgentUtilsCraftStore): CoreCraftStore {
     delete(name) { store.delete(name); },
     list() { return store.list(); },
     search(query, limit = 10) { return store.search(query, limit); },
-    getAll() { return store.getAll(); },
   };
 }
 

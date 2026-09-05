@@ -319,6 +319,35 @@ describe("executor lifecycle state", () => {
     expect(output).toBe("4\n");
     expect(box.execOptions).toEqual([undefined]);
   });
+
+  test("Nimbus exposePort with no preview URL answers unsupported, not an empty URL", async () => {
+    const box = nimbusBox();
+    box.ports = {
+      expose: async (port: number) => ({ port }),
+      unexpose: async () => {},
+      list: async () => [],
+    };
+    const executor = createNimbusExecutor({ box });
+    const result = await executor.exposePort!(4321);
+    expect(result.supported).toBe(false);
+    if (!result.supported) expect(result.reason).toContain("4321");
+  });
+
+  test("sandbox stat of a directory with a trailing slash still finds it", async () => {
+    const handle = sandboxHandle();
+    const seen: string[] = [];
+    const inner = handle.listFiles.bind(handle);
+    handle.listFiles = async (path: string) => {
+      seen.push(path);
+      await inner(path);
+      if (path === "/") return { files: [{ name: "/mydir", type: "directory" as const, size: 0 }] };
+      return { files: [] };
+    };
+    const executor = createSandboxExecutor(handle, "kinu.example.test");
+    expect(await executor.files!.stat("/mydir")).toMatchObject({ isDir: true });
+    expect(await executor.files!.stat("/mydir/")).toMatchObject({ isDir: true });
+    expect(seen).toContain("/");
+  });
 });
 
 describe("sandbox transient error classification", () => {
