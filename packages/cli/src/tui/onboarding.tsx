@@ -280,7 +280,7 @@ export function GuidedOnboarding(props: {
         {activeStep === 'tiers' && (
           <>
             <text><strong fg={colors.text.strong}>Choose the default model</strong></text>
-            <text><span fg={colors.text.muted}>Tiny, fast, slow, and deep use default until you remap them.</span></text>
+            <text><span fg={colors.text.muted}>Tiny, fast, slow, and deep use default until you change them.</span></text>
             <ReadinessRow label={readiness.defaultModel ?? 'Default model'} ready={readiness.defaultModel !== undefined} />
           </>
         )}

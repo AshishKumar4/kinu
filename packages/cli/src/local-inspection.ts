@@ -814,7 +814,7 @@ export async function markLocalBackgroundJobsCancelled(name: string): Promise<st
 
 function withLocalDb<T>(name: string, fn: (db: SqliteDb) => T): T {
   const dbPath = agentDbPath(name);
-  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found. Create it with: kinu create ${name}`);
+  if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
   const db = new Database(dbPath, { readonly: true });
   try {
     return fn(db);
@@ -829,7 +829,7 @@ function withLocalDb<T>(name: string, fn: (db: SqliteDb) => T): T {
  *  point would hand the rest of the callback a closed database. */
 async function withLocalWritableDb<T>(name: string, fn: (db: SqliteDb) => T | Promise<T>): Promise<T> {
   const dbPath = agentDbPath(name);
-  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found. Create it with: kinu create ${name}`);
+  if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
   const db = new Database(dbPath);
   try {
     return await fn(db);
@@ -840,7 +840,7 @@ async function withLocalWritableDb<T>(name: string, fn: (db: SqliteDb) => T | Pr
 
 function ensureLocalAgent(name: string): void {
   const dbPath = agentDbPath(name);
-  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found. Create it with: kinu create ${name}`);
+  if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
 }
 
 function all<T>(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): T[] {

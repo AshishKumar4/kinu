@@ -43,7 +43,7 @@ kinu <command> [options]
 | --- | --- |
 | [`kinu run <name> [prompt...]`](#kinu-run-name-prompt) | Run a workspace once, or open chat with no prompt |
 | [`kinu chat [name]`](#kinu-chat-name) | Interactive conversation with a workspace |
-| [`kinu acp <name>`](#kinu-acp-name) | Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim) |
+| [`kinu acp <name>`](#kinu-acp-name) | Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim, Marimo) |
 | [`kinu exec [prompt...]`](#kinu-exec-prompt) | Run one workspace task headlessly and exit (CI-friendly; executor passthrough lives under `executors`) |
 | [`kinu executors <name> [executor] [command...]`](#kinu-executors-name-executor-command) | List executors, or run a command in one |
 | [`kinu transcripts [agent]`](#kinu-transcripts-agent) | List recorded terminal transcripts (diagnostics; never conversations) |
@@ -55,7 +55,7 @@ kinu <command> [options]
 | --- | --- |
 | [`kinu model <name> [spec]`](#kinu-model-name-spec) | Show or change a workspace model |
 | [`kinu effort <name> [level]`](#kinu-effort-name-level) | Show or change workspace reasoning effort (low, medium, high) |
-| [`kinu tools <name>`](#kinu-tools-name) | List a workspace tool surface |
+| [`kinu tools <name>`](#kinu-tools-name) | List the tools a workspace can use |
 | [`kinu triggers <name> [action] [value]`](#kinu-triggers-name-action-value) | List, schedule, cancel, or create workspace triggers |
 | [`kinu webhook <name> <label>`](#kinu-webhook-name-label) | Create a durable webhook trigger for a cloud workspace |
 
@@ -73,7 +73,7 @@ kinu <command> [options]
 | [`kinu mcts <name> [nodeId]`](#kinu-mcts-name-nodeid) | Inspect MCTS search history |
 | [`kinu heads <name>`](#kinu-heads-name) | Inspect parallel reasoning branch runs |
 | [`kinu debug <name>`](#kinu-debug-name) | Fetch everything about a workspace into one bundle: identity, messages, runs and their events, heads, MCTS searches, background jobs, evolution state, memory and facts |
-| [`kinu gepa <name> [runId]`](#kinu-gepa-name-runid) | Inspect GEPA optimization runs, or run a pass with --run |
+| [`kinu gepa <name> [runId]`](#kinu-gepa-name-runid) | Inspect GEPA optimisation runs, or run a pass with --run |
 | [`kinu alignment <name>`](#kinu-alignment-name) | K_align: correction rate per 100 graded turns, by scaffold version, with 95% intervals |
 | [`kinu label [action] [name] [file]`](#kinu-label-action-name-file) | Hand-label turn outcomes (export \| ingest \| ensemble \| report) to measure and correct the classifier; mine \| score for the free behavioural corpus |
 | [`kinu release <name>`](#kinu-release-name) | Inspect the governed release lane: sources, changes, checks, approvals, deployments |
@@ -82,9 +82,9 @@ kinu <command> [options]
 
 | Command | What it does |
 | --- | --- |
-| [`kinu connect`](#kinu-connect) | Link this computer as the desktop execution daemon (the link renews while the daemon connects; re-run after 180 idle days) |
+| [`kinu connect`](#kinu-connect) | Link this computer as the desktop execution daemon |
 | [`kinu desktop [action]`](#kinu-desktop-action) | Connect or inspect the local desktop execution daemon |
-| [`kinu daemon [action] [workspace]`](#kinu-daemon-action-workspace) | Manage the local scheduler daemon: start, stop, restart, status, logs, tick |
+| [`kinu daemon [action] [workspace]`](#kinu-daemon-action-workspace) | Manage the local scheduler daemon: start, stop, restart, status, logs, run, tick |
 | [`kinu doctor`](#kinu-doctor) | Inspect local Kinu CLI installation state |
 | [`kinu update [target]`](#kinu-update-target) | Update the installed Kinu command |
 | [`kinu uninstall`](#kinu-uninstall) | Remove the installed Kinu command |
@@ -98,7 +98,7 @@ Connect your account; optionally configure local-only model credentials.
 | Option | What it does |
 | --- | --- |
 | `--origin <url>` | Kinu app origin |
-| `--provider <name>` | Provider: codex, openai, openrouter, anthropic, openai-compatible, skip |
+| `--provider <name>` | Provider: workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, skip |
 | `--model <id>` | Default model for the selected provider |
 | `--local-model` | Configure credentials for local-only agents |
 | `--local` | Keep the provider key on this machine instead of your Kinu account |
@@ -165,11 +165,11 @@ Create a new workspace.
 
 | Option | What it does |
 | --- | --- |
-| `--purpose <text>` | Mission: what this workspace is for (seeds SOUL.md) |
+| `--purpose <text>` | Say what this workspace is for. It seeds SOUL.md |
 | `--mode <mode>` | Workspace mode: cloud or local |
 | `--alias <name>` | Create an executable alias command |
 | `--origin <url>` | Kinu app origin for first-use sign-in |
-| `--join` | Add an agent to the workspace already here, inheriting its mission (no name or purpose needed) |
+| `--join` | Add an agent to the workspace in this directory. It inherits the mission, so it needs no name or purpose |
 | `--no-alias-shim` | Do not create an alias shim |
 | `--model <id>` | Model ID (env: KINU_MODEL) |
 | `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
@@ -253,7 +253,7 @@ Interactive conversation with a workspace.
 
 ### kinu acp <name>
 
-Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim).
+Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim, Marimo).
 
 | Option | What it does |
 | --- | --- |
@@ -320,7 +320,7 @@ Show or change workspace reasoning effort (low, medium, high).
 
 ### kinu tools <name>
 
-List a workspace tool surface.
+List the tools a workspace can use.
 
 | Option | What it does |
 | --- | --- |
@@ -454,7 +454,7 @@ Fetch everything about a workspace into one bundle: identity, messages, runs and
 
 ### kinu gepa <name> [runId]
 
-Inspect GEPA optimization runs, or run a pass with --run.
+Inspect GEPA optimisation runs, or run a pass with --run.
 
 | Option | What it does |
 | --- | --- |
@@ -499,7 +499,7 @@ Inspect the governed release lane: sources, changes, checks, approvals, deployme
 
 ### kinu connect
 
-Link this computer as the desktop execution daemon (the link renews while the daemon connects; re-run after 180 idle days).
+Link this computer as the desktop execution daemon.
 
 | Option | What it does |
 | --- | --- |
@@ -515,7 +515,7 @@ Connect or inspect the local desktop execution daemon.
 
 ### kinu daemon [action] [workspace]
 
-Manage the local scheduler daemon: start, stop, restart, status, logs, tick.
+Manage the local scheduler daemon: start, stop, restart, status, logs, run, tick.
 
 ### kinu doctor
 

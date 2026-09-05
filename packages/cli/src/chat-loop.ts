@@ -391,7 +391,7 @@ async function promptDeviceConnect(rl: readline.Interface, opts: { allowDismiss:
     }
     if (opts.allowDismiss && answer === 'd') {
       dismissDeviceConnectPrompt();
-      console.log(DIM(`  Won't ask again. Connect anytime with /connect or: kinu connect`));
+      console.log(DIM(`  Won't ask again. Reconnect anytime with /connect or kinu connect`));
       return;
     }
     console.log(DIM(opts.allowDismiss ? '  Please answer c, s, n, or d.' : '  Please answer c, s, or n.'));

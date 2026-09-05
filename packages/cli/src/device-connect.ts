@@ -212,7 +212,7 @@ export async function deviceStatusLine(): Promise<string> {
       return `Connected: ${named.join(', ')}`;
     }
     if (devices.length > 0) return `${devices.length} registered device${devices.length === 1 ? '' : 's'}, none connected.`;
-    return 'No devices on your account yet.';
+    return 'No PC is connected to your account yet.';
   } catch (err) {
     return `Device status unavailable: ${renderThrownChain({ cause: err })}`;
   }
@@ -252,11 +252,11 @@ export function describeDeviceSandbox(sandbox: CloudDeviceSandbox): string[] {
   switch (effectiveDeviceMode(sandbox)) {
     case 'sandboxed':
       return [
-        'Sandbox on: agent home plus the folders you picked, your files invisible.'
+        'Sandbox on. The agent sees its home plus the folders you picked. Your other files stay invisible.'
         + ` GPU: ${describeGpuNodes(sandbox.gpu)}.`,
       ];
     case 'raw':
-      return ['Sandbox OFF for this device: commands run as you, with full access.'];
+      return ['Sandbox is OFF for this device. Commands run as you, with full access.'];
     case 'files_only':
       return [
         'This machine cannot sandbox.',

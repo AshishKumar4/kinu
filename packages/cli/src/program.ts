@@ -75,7 +75,7 @@ export function buildProgram(): Command {
     .helpGroup(ACCOUNT)
     .description('Connect your account; optionally configure local-only model credentials')
     .option('--origin <url>', 'Kinu app origin')
-    .option('--provider <name>', 'Provider: codex, openai, openrouter, anthropic, openai-compatible, skip')
+    .option('--provider <name>', 'Provider: workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, skip')
     .option('--model <id>', 'Default model for the selected provider')
     .option('--local-model', 'Configure credentials for local-only agents')
     .option('--local', 'Keep the provider key on this machine instead of your Kinu account')
@@ -138,11 +138,11 @@ export function buildProgram(): Command {
       .command('create [name]')
       .helpGroup(WORKSPACES)
       .description('Create a new workspace')
-      .option('--purpose <text>', 'Mission: what this workspace is for (seeds SOUL.md)')
+      .option('--purpose <text>', 'Say what this workspace is for. It seeds SOUL.md')
       .option('--mode <mode>', 'Workspace mode: cloud or local')
       .option('--alias <name>', 'Create an executable alias command')
       .option('--origin <url>', 'Kinu app origin for first-use sign-in')
-      .option('--join', 'Add an agent to the workspace already here, inheriting its mission (no name or purpose needed)')
+      .option('--join', 'Add an agent to the workspace in this directory. It inherits the mission, so it needs no name or purpose')
       .option('--no-alias-shim', 'Do not create an alias shim'),
   ).action(wrapAction(createCommand));
 
@@ -226,7 +226,7 @@ export function buildProgram(): Command {
     program
       .command('acp <name>')
       .helpGroup(RUNNING)
-      .description('Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim)')
+      .description('Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim, Marimo)')
       .option('--no-auto-evolve', 'Run without turn/session auto-evolution (local workspaces)')
       .option('--transcript-dir <dir>', 'Override transcript storage directory'),
   ).action(wrapAction(acpCommand));
@@ -285,7 +285,7 @@ export function buildProgram(): Command {
     program
       .command('tools <name>')
       .helpGroup(CONFIGURE)
-      .description('List a workspace tool surface'),
+      .description('List the tools a workspace can use'),
   ).action(wrapAction(toolsCommand));
 
   llmOpts(
@@ -400,7 +400,7 @@ export function buildProgram(): Command {
   program
     .command('gepa <name> [runId]')
     .helpGroup(INSPECT)
-    .description('Inspect GEPA optimization runs, or run a pass with --run')
+    .description('Inspect GEPA optimisation runs, or run a pass with --run')
     .option('--run', 'Run one optimisation pass over the scaffold')
     .option('--iterations <n>', 'Reflection iterations (--run)')
     .option('--eval-size <n>', 'Labeled turns to draw the split from (--run)')
@@ -444,7 +444,7 @@ export function buildProgram(): Command {
   program
     .command('connect')
     .helpGroup(THIS_COMPUTER)
-    .description('Link this computer as the desktop execution daemon (the link renews while the daemon connects; re-run after 180 idle days)')
+    .description('Link this computer as the desktop execution daemon')
     .option('--label <name>', 'Name for this device (default: user@hostname); skips the name prompt')
     .action(wrapAction((opts: { label?: string }) => desktopCommand('connect', opts)));
 
@@ -458,7 +458,7 @@ export function buildProgram(): Command {
   program
     .command('daemon [action] [workspace]')
     .helpGroup(THIS_COMPUTER)
-    .description('Manage the local scheduler daemon: start, stop, restart, status, logs, tick')
+    .description('Manage the local scheduler daemon: start, stop, restart, status, logs, run, tick')
     .action(wrapAction(daemonCommand));
 
   program

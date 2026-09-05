@@ -218,7 +218,7 @@ export async function loadActiveProfile(): Promise<ProfileCatalogEnvelope> {
     const existing = loadLocalProfileAuthority();
     if (existing) return existing;
     const model = resolveLLMConfig()?.model;
-    if (!model) throw new Error('choose a default model before creating the local profile catalog');
+    if (!model) throw new Error('Set a default model first with /model <spec>.');
     return writeLocalProfile({
       roles: BUILTIN_PROFILE_CATALOG.roles,
       tiers: { default: { model } },
@@ -289,7 +289,7 @@ export async function updateDefaultTier(
   if ('conflict' in result) {
     throw new Error(
       `the account profile changed while this edit was open `
-      + `(current version ${result.currentVersion}, digest ${result.currentDigest}); reload and apply the edit again`,
+      + `(current version ${result.currentVersion}, digest ${result.currentDigest}); run the same command again`,
     );
   }
   cacheAccountProfile(current.authority.accountId, result.envelope);

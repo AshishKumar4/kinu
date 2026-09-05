@@ -476,7 +476,7 @@ describe('the sandbox state the machine reported', () => {
     expect(describeDeviceSandbox({
       tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: ['/dev/nvidia0', '/dev/nvidiactl'],
     })).toEqual([
-      'Sandbox on: agent home plus the folders you picked, your files invisible.'
+      'Sandbox on. The agent sees its home plus the folders you picked. Your other files stay invisible.'
       + ' GPU: nvidia0, nvidiactl.',
     ]);
     expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] })[0])
@@ -486,7 +486,7 @@ describe('the sandbox state the machine reported', () => {
   test('sandbox off says the agent runs with full access, whatever the machine proved', () => {
     for (const capability of DEVICE_SANDBOX_CAPABILITIES) {
       expect(describeDeviceSandbox({ tier: 'raw', capability, reason: null, detail: null, gpu: [] }))
-        .toEqual(['Sandbox OFF for this device: commands run as you, with full access.']);
+        .toEqual(['Sandbox is OFF for this device. Commands run as you, with full access.']);
     }
   });
 
@@ -1049,7 +1049,7 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     await connect.send('y');
     await connect.waitFor('Connected this machine as');
     // The machine's own report reaches the terminal.
-    await connect.waitFor('Sandbox on: agent home plus the folders you picked');
+    await connect.waitFor('Sandbox on. The agent sees its home plus the folders you picked');
     await connect.proc.exited;
     await connect.drained;
 

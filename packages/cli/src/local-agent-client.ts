@@ -90,7 +90,7 @@ export interface LocalAgentClientOptions {
 export async function openLocalAgentClient(name: string, opts: LocalAgentClientOptions = {}): Promise<LocalAgentClient> {
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
-    throw new Error(`Agent "${name}" not found. Create it with: kinu create ${name}`);
+    throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
   }
   const { llmConfig, resolver } = createConfiguredLocalModelResolver({ ...opts, agentName: name });
   const providerCredentials = resolveProviderCredentials();

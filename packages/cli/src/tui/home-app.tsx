@@ -408,7 +408,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
             {setupRequired
               ? 'Connect Kinu once, then this screen can create and open workspaces directly.'
               : agents.length === 0
-              ? "Describe what the workspace is for. It becomes the workspace's SOUL.md and its name; nothing runs until you send the first message."
+              ? "Describe what the workspace is for. It seeds SOUL.md and names the workspace. Nothing runs until you send the first message."
               : 'Select a workspace, or write a mission to create a new one.'}
           </span>
         </text>
@@ -522,7 +522,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
             >
               <text>
                 <span fg={focusArea === 'model' ? colors.intent.accentStrong : colors.intent.accentStrong}>Model: </span>
-                <span fg={colors.text.primary}>{clipText(defaultModel || 'provider default', Math.max(8, panelWidth - 30))}</span>
+                <span fg={colors.text.primary}>{clipText(defaultModel || '(default)', Math.max(8, panelWidth - 30))}</span>
                 <span fg={colors.text.muted}>  {focusArea === 'model' ? `${keybindings.hint('home.activate')} browse` : `${keybindings.hint('home.focus-next')} to focus`}</span>
               </text>
             </box>
@@ -671,7 +671,7 @@ function createDefaultOnboarding(
       const location = preferences.read().onboardingLocation;
       if ((location === 'cloud' || location === 'both') && isCloudAuthConfigured()) return;
       if (isLocalModelConfigured()) return;
-      throw new Error('No local provider is connected. Use cloud sign-in, or run `kinu provider connect codex`.');
+      throw new Error('No local provider is connected. Sign in with kinu auth, or run kinu provider connect codex.');
     },
     async configureTiers() {
       await loadActiveProfile();

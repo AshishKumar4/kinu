@@ -21,7 +21,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/help', description: 'Show command help' },
   { name: '/status', description: 'Show agent state and stats' },
   { name: '/tools', description: 'List available tools' },
-  { name: '/model', description: 'Open the account default-tier model picker or set it', usage: '/model [spec]' },
+  { name: '/model', description: 'Show or set the default model', usage: '/model [spec]' },
   { name: '/effort', description: 'Show or set default-tier reasoning effort', usage: '/effort [low|medium|high]' },
   { name: '/role', description: 'Show or select this agent role', usage: '/role [id]' },
   { name: '/rename', description: 'Rename this agent; a name you choose is never auto-replaced', usage: '/rename <name>', requires: 'rename' },
@@ -30,7 +30,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/models', description: 'List configured model providers', requires: 'localControls' },
   { name: '/memory', description: 'Show memory' },
   { name: '/changelog', description: 'Review self-changes; revert by index', usage: '/changelog [revert <n>]' },
-  { name: '/refine', description: 'Review recent corrected turns and propose the smallest fixes; read and decide what one staged', usage: '/refine [now|show <n> <edit>|approve <n> <edit> <digest>|reject <n> <edit> <digest>]' },
+  { name: '/refine', description: 'Review corrected turns and rule on each staged fix', usage: '/refine [now|show <n> <edit>|approve <n> <edit> <digest>|reject <n> <edit> <digest>]' },
   { name: '/takes', description: 'Compare the last alternate takes; pick by number', usage: '/takes [n]' },
   { name: '/tree', description: 'Show MCTS search tree' },
   { name: '/jobs', description: 'List background jobs' },
@@ -38,7 +38,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/stop', description: 'Stop the active turn' },
   { name: '/queue', description: 'Queue a message to send after the current turn', usage: '/queue <text>' },
   { name: '/branch', description: 'Run a redirect as a parallel branch of the running turn', usage: '/branch <text>' },
-  { name: '/fork', description: 'Walk back: fork the conversation before an earlier message', usage: '/fork [number]' },
+  { name: '/fork', description: 'Fork the conversation before an earlier message to walk back', usage: '/fork [number]' },
   { name: '/undo', description: 'Restore files to before a turn (n = turns back), then offer walk-back', usage: '/undo [n]', requires: 'checkpoints' },
   { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls' },
   { name: '/instructions', description: 'Approve which AGENTS.md and skill files the agent follows', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls' },
@@ -253,7 +253,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     case '/takes': {
       const set = await client.latestTakes();
       if (!set || set.candidates.length < 2) {
-        return { kind: 'text', text: 'No alternate takes yet. They appear when an agents.swarm search with a depth converges on near-tied approaches, or when a /branch redirect settles.' };
+        return { kind: 'text', text: 'No alternate takes yet. They appear after a swarm search with near-tied approaches, or after a /branch redirect settles.' };
       }
       if (!arg) return { kind: 'takes', set };
       const n = Number.parseInt(arg, 10);
@@ -445,7 +445,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     case '/tree': {
       const nodes = await client.searchNodes();
       if (nodes.length === 0) {
-        return { kind: 'text', text: 'No MCTS nodes yet. Run /evolve, or ask something that needs a search.' };
+        return { kind: 'text', text: 'No MCTS nodes yet. Ask something that needs a search, or run kinu evolve <name> from a shell.' };
       }
       return { kind: 'text', text: `MCTS Tree (${nodes.length} nodes):\n${renderSearchTree(nodes)}` };
     }
@@ -573,7 +573,7 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
   if (turns.length === 0) {
     return {
       text: 'No file checkpoints yet. Kinu takes one each turn, before the agent first changes '
-        + 'a file on YOUR machine.',
+        + 'a file on this machine.',
       restored: false,
     };
   }
