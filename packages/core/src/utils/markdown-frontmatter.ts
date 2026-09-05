@@ -243,8 +243,9 @@ function renderEntry(key: string, value: JsonValue, indent: number): string[] {
 }
 
 function quoteIfNeeded(s: string): string {
-  if (s === '' || /[:#"'\\[\]{},]/.test(s) || /^[-?\s]/.test(s) || /\s$/.test(s) || s.includes('\n')) {
-    return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
-  }
-  return s;
+  const structural = s === '' || /[:#"'\\[\]{},]/.test(s) || /^[-?\s]/.test(s) || /\s$/.test(s) || s.includes('\n');
+  // A bare scalar that the parser reads back unchanged needs no quotes; one it
+  // would retype (true, 123, null, ~, 1.5) or reshape does.
+  if (!structural && parseScalar(s) === s) return s;
+  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
 }

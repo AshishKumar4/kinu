@@ -358,6 +358,39 @@ Body content with **markdown**.
     expect(reparsed.skill.auto_activate).toBe(original.skill.auto_activate);
     expect(reparsed.skill.body.trim()).toBe(original.skill.body.trim());
   });
+
+  test('keeps type-looking strings as strings through stringify → parse', () => {
+    const base = parseSkillFile(`---
+name: x
+description: x
+---
+body
+`);
+    expect(base.ok).toBe(true);
+    if (!base.ok) return;
+    const skill = {
+      ...base.skill,
+      ext: {
+        flag: 'true',
+        count: '123',
+        ratio: '1.5',
+        missing: 'null',
+        tilde: '~',
+        nested: { inner: 'false' },
+        tags: ['123', 'false', 'hello'],
+      },
+    };
+    const reparsed = parseSkillFile(stringifySkillFile(skill));
+    expect(reparsed.ok).toBe(true);
+    if (!reparsed.ok) return;
+    expect(reparsed.skill.ext.flag).toBe('true');
+    expect(reparsed.skill.ext.count).toBe('123');
+    expect(reparsed.skill.ext.ratio).toBe('1.5');
+    expect(reparsed.skill.ext.missing).toBe('null');
+    expect(reparsed.skill.ext.tilde).toBe('~');
+    expect(reparsed.skill.ext.nested).toEqual({ inner: 'false' });
+    expect(reparsed.skill.ext.tags).toEqual(['123', 'false', 'hello']);
+  });
 });
 
 describe('validateSkillName', () => {
