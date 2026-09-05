@@ -37,7 +37,7 @@
  * docs/OBSERVABILITY.md § "Why not neverthrow".
  */
 
-import { errnoCode } from './expected-failure';
+import { classify, errnoCode } from './expected-failure';
 
 /**
  * Why an operation did not do what it was asked.
@@ -323,7 +323,7 @@ const CODE_BY_ERRNO = new Map<string, ErrorCode>([
   ['ENOMEM', 'oom'],
   ['ENOTSUP', 'unsupported'],
   ['ECONNREFUSED', 'unavailable'],
-  ['ECONNRESET', 'unavailable'],
+  ['ECONNRESET', 'io'],
   ['EHOSTUNREACH', 'unavailable'],
   ['ENOENT', 'missing'],
   ['ESRCH', 'missing'],
@@ -371,9 +371,9 @@ const OOM_SIGNATURES: readonly RegExp[] = [
 export function classifyErrorCode(input: { cause: unknown }): ErrorCode | null {
   const caught = input.cause;
   if (caught instanceof KinuError) return caught.code;
-  // A SyntaxError is `classify`'s `malformed-input`, and at this layer malformed
+  // `classify` owns the malformed-input signatures, and at this layer malformed
   // input is what it says: the value handed in does not parse.
-  if (caught instanceof SyntaxError) return 'bad_input';
+  if (classify({ cause: caught }) === 'malformed-input') return 'bad_input';
   if (!(caught instanceof Error)) return null;
 
   const byName = CODE_BY_ERROR_NAME.get(caught.name);

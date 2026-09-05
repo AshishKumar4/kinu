@@ -534,6 +534,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- A reset connection classifies as `io`, so a one-shot approval is not refunded for work that may have run. An unparseable URL classifies as `bad_input`.
+
 - Event redaction masks camelCase secret fields such as `authToken` and `clientSecret`.
 
 - Event redaction masks camelCase secret fields such as `authToken` and `clientSecret`.

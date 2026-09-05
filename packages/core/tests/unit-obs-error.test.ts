@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import {
   classifyErrorCode,
   CODE_IS_REFUSAL,
+  CODE_WORK_DID_NOT_START,
   ERROR_CODES,
   KinuError,
   refusalOf,
@@ -104,6 +105,23 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
       const error = Object.assign(new Error(`failed: ${code}`), { code });
       expect(classifyErrorCode({ cause: error })).toBe(expected);
     }
+  });
+
+  test('a reset connection is `io`: the frame may already have arrived', () => {
+    // Synthesised like the table above: a real reset needs a peer that hung up.
+    // A reset can land after the peer ran the work, so it must not read as
+    // `unavailable` and refund a one-shot grant.
+    const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    const code = classifyErrorCode({ cause: reset });
+    expect(code).toBe('io');
+    if (code !== null) expect(CODE_WORK_DID_NOT_START[code]).toBe(false);
+  });
+
+  test('a malformed URL is `bad_input`, like malformed JSON', () => {
+    // Provoked: `classify` owns this signature, and this layer used to miss it
+    // while catching the JSON half.
+    const badUrl = raisedBy(() => { new URL('notaurl'); });
+    expect(classifyErrorCode({ cause: badUrl })).toBe('bad_input');
   });
 
   test('nothing pinned recognises it, and saying so is the point', () => {
