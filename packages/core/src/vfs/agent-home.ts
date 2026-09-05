@@ -196,6 +196,16 @@ export function agentCred(identity: AgentIdentity): VfsCred {
 
 const IDENTITY_TABLE = 'kinu_agent_identity';
 
+function ensureIdentityTable(sql: SqlDatabase): void {
+  sql.exec(
+    `CREATE TABLE IF NOT EXISTS ${IDENTITY_TABLE} (
+       agent_name TEXT PRIMARY KEY,
+       uid        INTEGER NOT NULL UNIQUE,
+       gid        INTEGER NOT NULL
+     )`,
+  );
+}
+
 /**
  * This agent's uid, allocated once and durable thereafter.
  *
@@ -212,13 +222,7 @@ const IDENTITY_TABLE = 'kinu_agent_identity';
 export function agentIdentity(sql: SqlDatabase, agentName: string): AgentIdentity {
   if (agentName === MAIN_AGENT) return { uid: SESSION_UID, gid: SESSION_UID };
   assertAgentName(agentName);
-  sql.exec(
-    `CREATE TABLE IF NOT EXISTS ${IDENTITY_TABLE} (
-       agent_name TEXT PRIMARY KEY,
-       uid        INTEGER NOT NULL UNIQUE,
-       gid        INTEGER NOT NULL
-     )`,
-  );
+  ensureIdentityTable(sql);
   // `WHERE true` is required, not decorative: with an INSERT..SELECT upsert
   // SQLite cannot tell `ON CONFLICT` from a join's `ON` clause without a WHERE
   // closing the SELECT, and refuses to parse the statement at all.
@@ -231,15 +235,23 @@ export function agentIdentity(sql: SqlDatabase, agentName: string): AgentIdentit
     agentName,
     AGENT_UID_FLOOR - 1,
   );
+  const identity = allocatedAgentIdentity(sql, agentName);
+  if (!identity) throw new Error(`agent identity for '${agentName}' did not persist`);
+  return identity;
+}
+
+/** This agent's identity when one was allocated, and null before that. A
+ *  release reads and never allocates: a name that never had a home has nothing
+ *  to give back. */
+function allocatedAgentIdentity(sql: SqlDatabase, agentName: string): AgentIdentity | null {
   const [row] = [...sql.exec(`SELECT uid, gid FROM ${IDENTITY_TABLE} WHERE agent_name = ?`, agentName)];
-  if (!row) throw new Error(`agent identity for '${agentName}' did not persist`);
-  return { uid: Number(row.uid), gid: Number(row.gid) };
+  return row ? { uid: Number(row.uid), gid: Number(row.gid) } : null;
 }
 
 /**
- * The narrow root-credentialled surface provisioning needs.
+ * The narrow root-credentialled surface a home's lifecycle needs.
  *
- * Four synchronous methods, structurally satisfied by
+ * Five synchronous methods, structurally satisfied by
  * `SqliteVFS.as(CRED_KERNEL)`. Named here rather than importing
  * `CredentialedVfs` so this module asks for what it uses instead of a
  * sixty-method dependency, and so a host can hand it a narrower view.
@@ -248,6 +260,8 @@ export interface HomeRootVfs {
   mkdir(path: string, options?: { recursive?: boolean; mode?: number }): void;
   chown(path: string, uid: number | null, gid: number | null): void;
   chmod(path: string, mode: number): void;
+  exists(path: string): boolean;
+  removeRecursive(path: string): number;
 }
 
 /** Registers a confined principal against its physical storage root. */
@@ -258,15 +272,10 @@ export interface TmpConfiner {
 
 /**
  * The directories an agent's layout is made of, and the ownership each must end
- * up with.
- *
- * DATA, because two backends apply it by different means: a uid-0 filesystem
- * view in this isolate, and a uid-0 shell on a remote Nimbus session that has
- * no such view. Both read this table, so there is one answer to who owns a home
- * and at what mode — a second spelling on the hosted side is how the two
- * backends start disagreeing about the same directory.
+ * up with. One table, read by the one applier below, so there is one answer to
+ * who owns a home and at what mode.
  */
-export interface AgentDir {
+interface AgentDir {
   readonly path: string;
   readonly uid: number;
   readonly gid: number;
@@ -274,7 +283,7 @@ export interface AgentDir {
 }
 
 /** An agent's home and its private tmp, in the order they must be created. */
-export function agentHomeLayout(agentName: string, identity: AgentIdentity): readonly AgentDir[] {
+function agentHomeLayout(agentName: string, identity: AgentIdentity): readonly AgentDir[] {
   return [
     { path: agentHome(agentName), uid: identity.uid, gid: identity.gid, mode: AGENT_HOME_MODE },
     { path: agentTmpRoot(agentName), uid: identity.uid, gid: identity.gid, mode: AGENT_TMP_MODE },
@@ -317,4 +326,59 @@ export function confineAgentTmp(
   const tmpRoot = agentTmpRoot(agentName);
   confiner.confinePrincipal(identity.uid, agentTmpStorageRoot(agentName));
   return tmpRoot;
+}
+
+/**
+ * Reclaim this agent's bytes, and only its bytes.
+ *
+ * Its uid row is NOT dropped: the allocation is durable so an agent that comes
+ * back after a reset finds the identity it already had, and nothing else in
+ * the tree is keyed by it. The `/tmp` rewrite IS dropped: a released principal
+ * with a live rewrite would resolve `/tmp` onto a root that no longer exists.
+ * Idempotent, so the release of a home that was never provisioned removes
+ * nothing and allocates nothing.
+ */
+export function releaseAgentHome(
+  root: HomeRootVfs,
+  confiner: TmpConfiner,
+  sql: SqlDatabase,
+  agentName: string,
+): void {
+  // The workspace agent's home IS the workspace root; releasing it is never a
+  // release.
+  if (agentName === MAIN_AGENT) throw new Error('the workspace agent has no home to release');
+  for (const path of [agentHome(agentName), agentTmpRoot(agentName)]) {
+    if (root.exists(path)) root.removeRecursive(path);
+  }
+  const identity = allocatedAgentIdentity(sql, agentName);
+  if (identity) confiner.releasePrincipal(identity.uid);
+}
+
+/**
+ * Re-register every live `/tmp` rewrite on a registry that has just been
+ * created.
+ *
+ * The layout is rows and inodes; the registry is isolate memory. A filesystem
+ * that opens after an eviction therefore carries every home and no rewrite,
+ * and a confined principal writing `/tmp/x` into it is refused by the shared
+ * scratch — measured, "Permission denied" from the shell and `EACCES` from the
+ * file plane — until something registers it again. This is that something,
+ * run once per open. An agent whose tmp directory exists was provisioned and
+ * never released, so its uid gets its rewrite back; a released one has no
+ * directory and gets nothing. Returns how many were restored.
+ */
+export function restoreAgentTmpConfinements(
+  sql: SqlDatabase,
+  root: Pick<HomeRootVfs, 'exists'>,
+  confiner: TmpConfiner,
+): number {
+  ensureIdentityTable(sql);
+  let restored = 0;
+  for (const row of sql.exec(`SELECT agent_name, uid FROM ${IDENTITY_TABLE}`)) {
+    const agentName = String(row.agent_name);
+    if (!root.exists(agentTmpRoot(agentName))) continue;
+    confiner.confinePrincipal(Number(row.uid), agentTmpStorageRoot(agentName));
+    restored += 1;
+  }
+  return restored;
 }

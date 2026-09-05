@@ -82,13 +82,17 @@ class FakeExplorationFacet extends ExplorationAgent {}
 function storageModelingHost(options: { runAsHeadRejects?: boolean } = {}) {
   const liveFacets = new Map<string, { evicted: boolean }>();
   let everCreated = 0;
+  const liveHomes = new Set<string>();
 
   const stubFor = (id: string) => ({
     setOwner: async () => ({ ok: true }),
     setSharedParent: async () => ({ ok: true }),
     initHead: async () => ({ ok: true }),
     abortHead: async () => ({ ok: true }),
+    // A running head provisions its own home on the owner before its loop;
+    // the crash arm models a head that got that far and then died.
     runAsHead: async () => {
+      liveHomes.add(`head-${id}`);
       if (options.runAsHeadRejects) throw new Error(`${id} crashed`);
       return headReportFor(id);
     },
@@ -114,6 +118,17 @@ function storageModelingHost(options: { runAsHeadRejects?: boolean } = {}) {
       liveFacets.delete(id);
     },
     explorationFacet: () => FakeExplorationFacet,
+    // A head's home is reclaimed with its storage: a facet whose storage went
+    // and whose home stayed would be a second leak the quota never shows.
+    facetHomes: () => ({
+      provision: async (kind: string, id: string) => {
+        liveHomes.add(`${kind}-${id}`);
+        return { home: `/home/${kind}-${id}`, tmp: `/tmp/${kind}-${id}`, cred: { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 } };
+      },
+      release: async (kind: string, id: string) => {
+        liveHomes.delete(`${kind}-${id}`);
+      },
+    }),
   };
 
   // SAFETY: this locally constructed host implements all four members FacetHost
@@ -124,6 +139,7 @@ function storageModelingHost(options: { runAsHeadRejects?: boolean } = {}) {
     liveCount: () => liveFacets.size,
     everCreated: () => everCreated,
     liveIds: () => [...liveFacets.keys()].sort(),
+    liveHomes: () => [...liveHomes].sort(),
   };
 }
 
@@ -153,6 +169,9 @@ describe('C3 — exploration facet storage is reclaimed', () => {
     expect(facets.everCreated()).toBe(4);
     expect(facets.liveIds()).toEqual([]);
     expect(facets.liveCount()).toBe(0);
+    // The homes went with the databases: a settled head's tree is as much a
+    // leak as its SQLite, and neither survives the report.
+    expect(facets.liveHomes()).toEqual([]);
   });
 
   test('an MCTS iteration returns every branch facet it spawned', async () => {
@@ -247,5 +266,6 @@ describe('C3 — exploration facet storage is reclaimed', () => {
     // success path runs — the `finally` is the whole guarantee.
     expect(facets.everCreated()).toBe(1);
     expect(facets.liveCount()).toBe(0);
+    expect(facets.liveHomes()).toEqual([]);
   });
 });

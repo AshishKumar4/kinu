@@ -67,6 +67,9 @@ const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
  *  of reaching through `ReturnType<typeof orchestratorHarness>`. */
 export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
+  /** The child substrate — how a subordinate is born and retired here — for
+   *  suites that drive a lifecycle verb without a roster row in front of it. */
+  observeSubordinateRuntime() { return this.subordinateRuntime(); }
   /** The backend-agnostic per-turn logic, for suites asserting what the
    *  steering + opportunity ledger saw. */
   observeOrch(): AgentOrchestrator { return this.orch; }

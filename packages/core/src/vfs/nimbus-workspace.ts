@@ -44,7 +44,7 @@ import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import type { HomeRootVfs, TmpConfiner } from './agent-home';
+import { restoreAgentTmpConfinements, type HomeRootVfs, type TmpConfiner } from './agent-home';
 import { provisionWorkspaceRuntimes } from './workspace-runtimes';
 import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
@@ -420,6 +420,11 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           };
           if (opts.runtimeFacets !== undefined) provisioning.facets = opts.runtimeFacets;
           await provisionWorkspaceRuntimes(provisioning);
+          // The `/tmp` rewrites are isolate memory over a durable layout, so a
+          // fresh filesystem re-derives them from the homes it finds. Without
+          // this every facet provisioned before an eviction comes back with a
+          // home and no private `/tmp`.
+          restoreAgentTmpConfinements(opts.sql, workspace.vfs.as(CRED_KERNEL), workspace.vfs);
           return workspace;
         } catch (cause) {
           // Clear the cache BEFORE rethrowing: this bundle lives for the whole

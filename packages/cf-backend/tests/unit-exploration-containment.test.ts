@@ -254,8 +254,8 @@ describe('MCTS branch mode stays isolated', () => {
     const runAsHead = memberBody(source, '  async runAsHead(');
     // Reached through the shared-parent stub, like the mission ledger's port —
     // never through this facet's own storage, which is not where the journal is.
-    expect(runAsHead).toContain('this.getSharedParentStub()');
-    expect(runAsHead).toContain('options.reportStep = this.stepSink(parent, input.id)');
+    expect(runAsHead).toContain("this.requireSharedParent('runAsHead')");
+    expect(runAsHead).toContain('reportStep: this.stepSink(parent, input.id)');
   });
 
   /** A hosted node's rows ARE head-journal rows, so the same sink carries them —

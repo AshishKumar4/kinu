@@ -365,7 +365,6 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'missionDebit',
   'missionGuard',
   'nodeArbitrate',
-  'resolveHostedNodeHome',
   'onCredentialsChanged',
   'readWorkspaceFile',
   'receiveSubordinateEvent',
@@ -444,6 +443,11 @@ const ORCHESTRATOR_METHODS = [
   // signature, and re-checks the capability handle inside the object.
   'routeWorkspacePreview',
   'workspaceBoxOp',
+  // A facet's home, on the same byte plane and for the same reason: the
+  // answer carries the credential the session runs the facet's commands as,
+  // and the registry it is provisioned in exists only on this object.
+  'provisionFacetHome',
+  'releaseFacetHome',
   // The one method the supervisor entrypoint calls on the object that owns a
   // workspace: a facet's filesystem calls arrive here through the composed
   // `OrchestratorAgent` namespace. Listed (not sealed away) but never

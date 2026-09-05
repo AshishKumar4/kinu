@@ -41,7 +41,8 @@ import {
 import type { AgentKind } from './analytics/record';
 import type { OrchestratorAgent } from './orchestrator';
 import { createWorkspaceBoxClient, workspaceBoxOwner } from './workspace-box-rpc';
-import type { NimbusSandboxHandle } from '@kinu.run/core';
+import type { HostedFacetHomes, HostedNodeHome } from './node-home';
+import { agentCred, agentHome, agentTmpRoot, subordinateAgentName, type NimbusSandboxHandle } from '@kinu.run/core';
 import {
   SubordinateIdentityStore,
   admitSubordinateTask,
@@ -239,6 +240,40 @@ export class SubordinateAgent extends ActorAgent {
     });
   }
 
+  /**
+   * The workspace itself — the ROOT orchestrator, whatever this facet's depth.
+   * Distinct from {@link parentActor}: a nested subordinate's parent is the
+   * subordinate that hired it, and the things only the root holds (the byte
+   * plane, the home registry, the title) are reached here.
+   */
+  private async workspaceOwner(): Promise<DurableObjectStub<OrchestratorAgent>> {
+    return await getAgentByName<Env, OrchestratorAgent>(this.env[WORKSPACE_ACTOR_CLASS], this.workspaceName());
+  }
+
+  /** Homes for this actor's own facets — its nested hires and its searches'
+   *  nodes and heads — provisioned by the owner, because the registry is the
+   *  owner's. */
+  facetHomes(): HostedFacetHomes {
+    return {
+      provision: async (kind, id) => (await this.workspaceOwner()).provisionFacetHome(kind, id),
+      release: async (kind, id) => (await this.workspaceOwner()).releaseFacetHome(kind, id),
+    };
+  }
+
+  /**
+   * The home this subordinate runs as, derived from its seeded identity: the
+   * paths are the name's and the credential is the uid the owner allocated
+   * at seeding. Undefined for a subordinate seeded before homes existed, which
+   * then keeps running as the session user rather than as a uid nobody
+   * allocated.
+   */
+  protected override facetHome(): HostedNodeHome | undefined {
+    const identity = this.identity.read();
+    if (!identity?.cred) return undefined;
+    const agentName = subordinateAgentName(identity.name);
+    return { home: agentHome(agentName), tmp: agentTmpRoot(agentName), cred: agentCred(identity.cred) };
+  }
+
   /** What this subordinate is FOR. Its own mission, which for an agent the
    *  owner added without saying anything is the workspace's, inherited at
    *  creation. Also what its own further hires inherit. */
@@ -278,10 +313,7 @@ export class SubordinateAgent extends ActorAgent {
   private async workspaceTitle(): Promise<string | null> {
     if (this._workspaceTitle !== undefined) return this._workspaceTitle;
     try {
-      const workspace = await getAgentByName<Env, OrchestratorAgent>(
-        this.env[WORKSPACE_ACTOR_CLASS], this.workspaceName(),
-      );
-      this._workspaceTitle = await workspace.workspaceTitle();
+      this._workspaceTitle = await (await this.workspaceOwner()).workspaceTitle();
     } catch (cause) {
       diagnostics.failure('subordinate.workspace_title_unreadable', toKinuError({
         doing: "reading the workspace title for a subagent's prompt",
@@ -435,9 +467,18 @@ export class SubordinateAgent extends ActorAgent {
       || existing.depth !== bootstrap.depth)) {
       throw new Error('subordinate identity is immutable');
     }
-    // Every field here comes from the PARENT's answer, `depth` included. The
-    // input carries no depth to ignore, and the parent refuses at the cap, so a
-    // subordinate cannot be seeded past it however it was asked for.
+    // The home before the row: the uid the owner allocates is part of who this
+    // facet is, and every runtime built from the row runs as it. Provisioned
+    // on the WORKSPACE, not the parent — a nested hire's parent is a
+    // subordinate, and the registry is the workspace's. Idempotent, so a
+    // parent retrying the seed after an interrupted RPC gets the same uid.
+    const workspace = await getAgentByName<Env, OrchestratorAgent>(
+      this.env[WORKSPACE_ACTOR_CLASS], bootstrap.parentWorkspace,
+    );
+    const home = await workspace.provisionFacetHome('subordinate', input.name);
+    // Every other field here comes from the PARENT's answer, `depth` included.
+    // The input carries no depth to ignore, and the parent refuses at the cap,
+    // so a subordinate cannot be seeded past it however it was asked for.
     this.identity.seed({
       name: input.name,
       mission: input.mission,
@@ -445,6 +486,7 @@ export class SubordinateAgent extends ActorAgent {
       ownerUserId: bootstrap.ownerUserId,
       depth: bootstrap.depth,
       lifetime: input.lifetime,
+      cred: { uid: home.cred.uid, gid: home.cred.gid },
     });
     // Both rows together: the shown title and WHOSE it is. Seeding the title
     // alone left `name_origin` unset, which the title policy reads as "never

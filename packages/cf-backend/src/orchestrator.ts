@@ -19,11 +19,15 @@ import {
   type ExperienceEntry, type ExperienceKind, type PublishableCandidate,
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
-  type NimbusSandboxHandle,
+  facetHomeProvisioner, facetHomeReleaser,
+  type NimbusSandboxHandle, type NodeHomeHost,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { applyWorkspaceBoxOp, type WorkspaceBoxOp, type WorkspaceBoxResult } from "./workspace-box-rpc";
+import {
+  hostedFacetAgentName, type HostedFacetHomes, type HostedFacetKind, type HostedNodeHome,
+} from "./node-home";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "./events/webhook-route";
@@ -507,6 +511,50 @@ export class OrchestratorAgent extends ActorAgent {
    */
   async workspaceBoxOp(shellId: string, op: WorkspaceBoxOp): Promise<WorkspaceBoxResult> {
     return await applyWorkspaceBoxOp(this.workspaceBox(shellId), op);
+  }
+
+  /**
+   * The three things a facet home is made of — the uid-0 view, the principal
+   * registry and the uid table — all this object's own, so a home is applied
+   * here exactly as the local backend applies one. A promise rather than a
+   * value, so the workspace boots on the first provision and never at
+   * activation.
+   */
+  private facetHomeHost(): Promise<NodeHomeHost> {
+    return this.hostedWorkspace().bundle.privileged()
+      .then((privileged) => ({ ...privileged, sql: this.ctx.storage.sql }));
+  }
+
+  facetHomes(): HostedFacetHomes {
+    return {
+      provision: (kind, id) => this.provisionFacetHome(kind, id),
+      release: (kind, id) => this.releaseFacetHome(kind, id),
+    };
+  }
+
+  /**
+   * A facet's home on this workspace, provisioned where the registry lives.
+   *
+   * Deliberately NOT `@callable`: the answer carries a credential the session
+   * runs commands as. The caller is a facet of this workspace — a subordinate,
+   * a head, a swarm node — or an actor spawning one, and `sealRpcSurface`
+   * keeps it off the public transport. The kind and the id arrive, never a
+   * directory: the name is derived here, so a facet cannot ask for the
+   * workspace agent's home or another kind's.
+   */
+  async provisionFacetHome(kind: HostedFacetKind, id: string): Promise<HostedNodeHome> {
+    const provisioned = await facetHomeProvisioner(this.facetHomeHost())(hostedFacetAgentName(kind, id));
+    if (provisioned.isolation !== 'private-home') {
+      throw new Error(`${kind} ${id} was provisioned without a credential; a hosted facet cannot run on the shared plane`);
+    }
+    return { home: provisioned.home, tmp: provisioned.tmp, cred: provisioned.cred };
+  }
+
+  /** The terminal half of {@link provisionFacetHome}: the bytes and the `/tmp`
+   *  rewrite go, the uid row stays. Same caller set, same reason it is not
+   *  `@callable`. */
+  async releaseFacetHome(kind: HostedFacetKind, id: string): Promise<void> {
+    await facetHomeReleaser(this.facetHomeHost())(hostedFacetAgentName(kind, id));
   }
 
   /**

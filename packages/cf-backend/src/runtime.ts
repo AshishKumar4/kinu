@@ -332,10 +332,10 @@ export interface CFRuntimeHooks {
   /** Resolve a profile for durable work that starts without a chat turn. */
   resolveProfile?: () => Promise<ResolvedTurnProfile>;
   /**
-   * A node facet's own identity: the ONE shared Nimbus session, addressed as
-   * this node on both planes.
+   * A facet's own identity: the ONE shared Nimbus session, addressed as this
+   * facet on both planes.
    *
-   * Present, commands run as the node's uid from its home and its file plane
+   * Present, commands run as the facet's uid from its home and its file plane
    * acts as the same uid; absent, this runtime is the ORIGIN's. Never a second
    * filesystem either way — the session, the bytes and the mount table are the
    * same, and only the credential differs.
@@ -364,15 +364,22 @@ export function createCFRuntime(
   const executionBox = hooks.workspaceExecution
     ? withHostedNodeExecution(workspaceBox, hooks.workspaceExecution)
     : workspaceBox;
-  // BOTH PLANES OR NEITHER. A node home is uid/gid/mode on real inodes, so a
-  // runtime whose commands were the node's while its file tools stayed the
-  // session user could not write its own home — measured `EACCES` — and could
-  // write a sibling's. One credential, both surfaces.
+  // The workspace's OWN state — the scaffold views under `.kinu`, the memory
+  // files under `memory/` — belongs to the session user, whose tree it is,
+  // whichever actor's runtime this is. A facet acting as its uid could not
+  // create an entry under the origin's `.kinu` at all.
+  const originVfs = nimbusSessionFiles(workspaceBox);
+  // BOTH OF THE ACTOR'S PLANES OR NEITHER. A home is uid/gid/mode on real
+  // inodes, so a runtime whose commands were the facet's while its file tools
+  // stayed the session user could not write its own home — measured `EACCES`
+  // — and could write a sibling's. One credential, both surfaces.
   //
   // This is the unmounted workspace tree retained by memory and agent-state
   // services. Snapshot walks start at a relative workspace root, which the
   // mount table never augments, so foreign bytes stay out of both boundaries.
-  const baseWorkspaceVfs = nimbusSessionFiles(workspaceBox, hooks.workspaceExecution?.cred);
+  const baseWorkspaceVfs = hooks.workspaceExecution
+    ? nimbusSessionFiles(workspaceBox, hooks.workspaceExecution.cred)
+    : originVfs;
   const observedWorkspaceVfs = hooks.workspaceObserver
     ? observeWrites(baseWorkspaceVfs, hooks.workspaceObserver)
     : baseWorkspaceVfs;
@@ -380,7 +387,7 @@ export function createCFRuntime(
   // MemoryStore from agent-utils — FTS5-indexed search over the workspace
   // filesystem itself, so `memory/MEMORY.md` is the same file the agent reads
   // with the `file` tool and greps in the shell.
-  const memoryStore = new MemoryStore(baseWorkspaceVfs, sql);
+  const memoryStore = new MemoryStore(originVfs, sql);
   memoryStore.ensureSchema();
 
   // Vectorize-backed semantic memory, scoped to this workspace's namespace.
@@ -445,7 +452,9 @@ export function createCFRuntime(
     },
   };
   const schedule = createRealSchedule(agent);
-  const identity = createIdentity(agent, access.ctx, observedWorkspaceVfs, sql, actor.scaffoldPath);
+  // The scaffold is workspace state: written by the session user, read by
+  // whichever actor this runtime belongs to.
+  const identity = createIdentity(agent, access.ctx, originVfs, sql, actor.scaffoldPath);
 
   // Execution router — manages workspace plus the separate sandbox and laptop.
   // Live shell-approval policy every gated exec boundary consults (`run`'s
@@ -731,7 +740,7 @@ export function createCFRuntime(
 
   const runtime: CFRuntime = {
     storage: { vfs: agentFileVfs, sql, execRaw },
-    agentStateVfs: baseWorkspaceVfs,
+    agentStateVfs: originVfs,
     startupWork,
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() { return profileLane('judge'); },

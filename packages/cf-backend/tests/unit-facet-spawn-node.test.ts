@@ -113,6 +113,15 @@ function makeHost(options: { deleteSubAgentThrows?: boolean; runAsNodeRejects?: 
       if (options.deleteSubAgentThrows) throw new Error('facet storage is unreachable');
     },
     explorationFacet: () => FakeExplorationFacet,
+    facetHomes: () => ({
+      provision: async (kind: string, id: string) => {
+        calls.push({ method: 'provisionFacetHome', args: [kind, id] });
+        return { home: `/home/${kind}-${id}`, tmp: `/tmp/${kind}-${id}`, cred: { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 } };
+      },
+      release: async (kind: string, id: string) => {
+        calls.push({ method: 'releaseFacetHome', args: [kind, id] });
+      },
+    }),
     listSubAgents: () => [],
   };
   // SAFETY: this locally constructed host implements every member FacetHost

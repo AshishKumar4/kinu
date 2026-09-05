@@ -107,6 +107,15 @@ function makeHost(
       if (options.deleteSubAgentThrows) throw new Error('facet storage is unreachable');
     },
     explorationFacet: () => FakeExplorationFacet,
+    facetHomes: () => ({
+      provision: async (kind: string, id: string) => {
+        calls.push({ method: 'provisionFacetHome', args: [kind, id] });
+        return { home: `/home/${kind}-${id}`, tmp: `/tmp/${kind}-${id}`, cred: { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 } };
+      },
+      release: async (kind: string, id: string) => {
+        calls.push({ method: 'releaseFacetHome', args: [kind, id] });
+      },
+    }),
     listSubAgents: () => [],
   };
   // SAFETY: this locally constructed host implements every member FacetHost
@@ -155,13 +164,15 @@ describe('exploration-facet spawn seam', () => {
     expect(await head.run()).toEqual(headReport);
     await head.abort('wall-clock timeout');
 
-    // run() is the TERMINAL point, so it wipes the facet's storage; abort() is
-    // mid-flight and must only evict the instance. Collapsing either into the
-    // other is a leak one way and data loss the other.
-    expect(methods(calls)).toEqual(['runAsHead', 'deleteSubAgent', 'abortHead', 'abortSubAgent']);
+    // run() is the TERMINAL point, so it wipes the facet's storage and gives
+    // back the home the head provisioned for itself; abort() is mid-flight and
+    // must only evict the instance. Collapsing either into the other is a leak
+    // one way and data loss the other.
+    expect(methods(calls)).toEqual(['runAsHead', 'deleteSubAgent', 'releaseFacetHome', 'abortHead', 'abortSubAgent']);
     expect(calls[1]?.args).toEqual([FakeExplorationFacet, 'head-1']);
-    expect(calls[2]?.args).toEqual(['wall-clock timeout']);
-    expect(calls[3]?.args).toEqual([FakeExplorationFacet, 'head-1']);
+    expect(calls[2]?.args).toEqual(['head', 'head-1']);
+    expect(calls[3]?.args).toEqual(['wall-clock timeout']);
+    expect(calls[4]?.args).toEqual([FakeExplorationFacet, 'head-1']);
   });
 
   test('run() reclaims the facet even when runAsHead rejects, and the original error propagates', async () => {
@@ -175,8 +186,9 @@ describe('exploration-facet spawn seam', () => {
     // that hands it back, and it must not mask why the head died.
     await expect(head.run()).rejects.toThrow('the head crashed mid-run');
 
-    expect(methods(calls)).toEqual(['runAsHead', 'deleteSubAgent']);
+    expect(methods(calls)).toEqual(['runAsHead', 'deleteSubAgent', 'releaseFacetHome']);
     expect(calls[1]?.args).toEqual([FakeExplorationFacet, 'head-1']);
+    expect(calls[2]?.args).toEqual(['head', 'head-1']);
   });
 
   test('abort() on a live head never deletes — releasing there would wipe a head still writing', async () => {

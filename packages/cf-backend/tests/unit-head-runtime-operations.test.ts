@@ -57,6 +57,7 @@ const GOOD_MERGE =
  *  is a wiring regression this suite wants named, not absorbed. */
 const neverHost: FacetHost = {
   explorationFacet() { throw new Error('mergeLLM reached the spawn substrate'); },
+  facetHomes() { throw new Error('mergeLLM reached the spawn substrate'); },
   subAgent() { throw new Error('mergeLLM reached the spawn substrate'); },
   abortSubAgent() { throw new Error('mergeLLM reached the spawn substrate'); },
   deleteSubAgent() { throw new Error('mergeLLM reached the spawn substrate'); },

@@ -1,16 +1,16 @@
 /**
  * The hosted /tmp rewrite, applied where the workspace lives.
  *
- * A hosted node provisions its home through the session's own coreutils, but
- * its `/tmp` stayed shared: `confinePrincipal` is a `SqliteVFS` method with
- * no RPC, and nothing owner-side called it. The provisioner runs ON the
- * owning object, which holds that `SqliteVFS` directly — so it confines there,
- * and a command hardcoding `/tmp/x` resolves per-credential on every plane
- * the session serves, with no mount copy and no second filesystem.
+ * A facet's `/tmp` is private only if `confinePrincipal` ran on the owner's
+ * own `SqliteVFS`: the method has no RPC, so the provisioner runs ON the
+ * owning object, through the same three host members the local backend hands
+ * core's one provisioner. A command hardcoding `/tmp/x` then resolves
+ * per-credential on every plane the session serves, with no mount copy and
+ * no second filesystem.
  *
  * Proved against the real substrate: the same `NimbusWorkspace` and
- * `rpcExec` a facet reaches, with the owner's own `SqliteVFS` as the
- * confiner — exactly what the owning Durable Object hands over.
+ * `rpcExec` a facet reaches, with the owner's own members as the host —
+ * exactly what the owning Durable Object hands over.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -19,14 +19,16 @@ import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
-import type { NimbusSandboxHandle, NodeIdentity } from '@kinu.run/core';
-import { nimbusSessionFiles } from '@kinu.run/core';
+import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity } from '@kinu.run/core';
+import {
+  agentHomeNodeProvisioner, facetHomeProvisioner, facetHomeReleaser, nimbusSessionFiles, restoreAgentTmpConfinements,
+} from '@kinu.run/core';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   ensureProgrammaticReady,
   rpcExec,
   type ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
-import { cleanupNimbusNodeHome, createNimbusNodeHomeProvisioner } from '../src/node-home';
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
 /** The session user every unnamed exec already runs as. */
@@ -49,6 +51,9 @@ interface OwnerFixture {
   readonly sql: SqlDatabase;
   readonly box: NimbusSandboxHandle;
   readonly databases: Database[];
+  /** The owner's three members, as `WorkspaceBundle.privileged()` plus its sql
+   *  hand them to core's provisioner. */
+  readonly homeHost: NodeHomeHost;
 }
 
 async function openOwner(): Promise<OwnerFixture> {
@@ -123,7 +128,10 @@ async function openOwner(): Promise<OwnerFixture> {
       delete: async () => { throw new Error('the owner box execs; it never falls back to the session user'); },
     },
   };
-  return { workspace, host, sql, box, databases: [database] };
+  return {
+    workspace, host, sql, box, databases: [database],
+    homeHost: { root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs, sql },
+  };
 }
 
 /** The session addressed as one node, for the credentialed file plane. */
@@ -165,7 +173,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
   test('the shell resolves /tmp per credential once the owner confines it', async () => {
     const f = await openOwner();
     try {
-      const provision = createNimbusNodeHomeProvisioner(f.sql, f.box, f.workspace.vfs);
+      const provision = agentHomeNodeProvisioner(f.homeHost);
       const a = credOf(await provision(node('aX9')));
       const b = credOf(await provision(node('bK2')));
 
@@ -183,7 +191,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
   test('the credentialed file plane resolves /tmp per credential too', async () => {
     const f = await openOwner();
     try {
-      const provision = createNimbusNodeHomeProvisioner(f.sql, f.box, f.workspace.vfs);
+      const provision = agentHomeNodeProvisioner(f.homeHost);
       const a = credOf(await provision(node('aX9')));
       const b = credOf(await provision(node('bK2')));
       const asA = nimbusSessionFiles(sessionBoxFor(f.host, a), a);
@@ -206,10 +214,10 @@ describe('a hosted node hardcoding /tmp stays private', () => {
   test('cleanup drops the confinement with the bytes', async () => {
     const f = await openOwner();
     try {
-      const provision = createNimbusNodeHomeProvisioner(f.sql, f.box, f.workspace.vfs);
+      const provision = agentHomeNodeProvisioner(f.homeHost);
       const a = credOf(await provision(node('aX9')));
       expect(await rpcExec(f.host, 'echo a > /tmp/gone', { cred: a })).toMatchObject({ exitCode: 0 });
-      await cleanupNimbusNodeHome(f.box, 'aX9', { sql: f.sql, confiner: f.workspace.vfs });
+      await facetHomeReleaser(f.homeHost)('node-aX9');
       expect(f.workspace.vfs.as(ROOT).exists('tmp/node-aX9')).toBe(false);
       // The mapping is gone with the bytes: the same credential no longer
       // reaches a private root, and the shared scratch refuses it — dropped
@@ -218,6 +226,64 @@ describe('a hosted node hardcoding /tmp stays private', () => {
       expect(refused.exitCode).not.toBe(0);
       expect(refused.stderr.toLowerCase()).toContain('permission denied');
       expect(f.workspace.vfs.as(ROOT).exists('tmp/z')).toBe(false);
+    } finally {
+      for (const database of f.databases) database.close();
+    }
+  });
+});
+
+describe('every facet kind is one home namespace on the owner', () => {
+  test('a subordinate and a head provision, write privately, and release to nothing', async () => {
+    const f = await openOwner();
+    try {
+      const provision = facetHomeProvisioner(f.homeHost);
+      const release = facetHomeReleaser(f.homeHost);
+      const sub = credOf(await provision('sub-worker-1'));
+      const head = credOf(await provision('head-h1'));
+      const root = f.workspace.vfs.as(ROOT);
+      expect(root.isDirectory('/home/sub-worker-1')).toBe(true);
+      expect(root.isDirectory('/home/head-h1')).toBe(true);
+
+      expect(await rpcExec(f.host, 'echo s > /tmp/x && echo s > "$HOME/own"', { cred: sub, env: { HOME: '/home/sub-worker-1' } })).toMatchObject({ exitCode: 0 });
+      // The head's `/tmp/x` is a different file, and the subordinate's home is
+      // readable but not writable to it.
+      expect((await rpcExec(f.host, 'cat /tmp/x', { cred: head })).exitCode).not.toBe(0);
+      expect((await rpcExec(f.host, 'echo h > /home/sub-worker-1/theirs', { cred: head })).exitCode).not.toBe(0);
+      expect(root.readFileString('/home/sub-worker-1/own')).toBe('s\n');
+
+      await release('sub-worker-1');
+      expect(root.exists('/home/sub-worker-1')).toBe(false);
+      expect(root.exists('tmp/sub-worker-1')).toBe(false);
+      // Released means released: the head's home and rewrite are untouched.
+      expect(await rpcExec(f.host, 'echo h > /tmp/y', { cred: head })).toMatchObject({ exitCode: 0 });
+      expect(root.readFileString('tmp/head-h1/y')).toBe('h\n');
+      // The uid row outlives the bytes, so a facet that comes back is itself.
+      expect(credOf(await provision('sub-worker-1')).uid).toBe(sub.uid);
+    } finally {
+      for (const database of f.databases) database.close();
+    }
+  });
+
+  test('a filesystem reopened over the same rows keeps every live rewrite', async () => {
+    const f = await openOwner();
+    try {
+      const sub = credOf(await facetHomeProvisioner(f.homeHost)('sub-worker-1'));
+      expect(await rpcExec(f.host, 'echo s > /tmp/x', { cred: sub })).toMatchObject({ exitCode: 0 });
+      // The registry is isolate memory: a second filesystem over the same
+      // database starts with none of it.
+      const reopened = await NimbusWorkspace.create({
+        sql: f.sql,
+        transactions: { storage: { transactionSync: <T,>(fn: () => T): T => fn() } },
+        generation: 2,
+      });
+      const before = reopened.vfs.as(sub);
+      expect(() => before.writeFile('/tmp/again', 'x')).toThrow(expect.objectContaining({ code: 'EACCES' }));
+      // Restored from the durable layout, the same credential resolves the
+      // same private root again.
+      restoreAgentTmpConfinements(f.sql, reopened.vfs.as(CRED_KERNEL), reopened.vfs);
+      before.writeFile('/tmp/again', 'x');
+      expect(reopened.vfs.as(ROOT).readFileString('tmp/sub-worker-1/again')).toBe('x');
+      expect(reopened.vfs.as(ROOT).readFileString('tmp/sub-worker-1/x')).toBe('s\n');
     } finally {
       for (const database of f.databases) database.close();
     }

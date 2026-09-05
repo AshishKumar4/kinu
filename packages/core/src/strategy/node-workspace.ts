@@ -55,6 +55,7 @@ import {
   agentIdentity,
   confineAgentTmp,
   provisionAgentHome,
+  releaseAgentHome,
   type HomeRootVfs,
   type TmpConfiner,
 } from '../vfs/agent-home';
@@ -174,6 +175,21 @@ export function facetHomeProvisioner(
     // hardcodes `/tmp/x` is a command this isolate can still keep private.
     const tmp = confineAgentTmp(confiner, agentName, identity);
     return { home, tmp, cred: agentCred(identity), isolation: 'private-home' };
+  };
+}
+
+/**
+ * The real releaser, over the same three members: the home and the tmp gone,
+ * the `/tmp` rewrite dropped, the uid row kept. One function for every facet
+ * kind for the provisioner's reason, and the caller names the agent the same
+ * way it did at provision.
+ */
+export function facetHomeReleaser(
+  host: NodeHomeHost | Promise<NodeHomeHost>,
+): (agentName: string) => Promise<void> {
+  return async (agentName) => {
+    const { root, confiner, sql } = await host;
+    releaseAgentHome(root, confiner, sql, agentName);
   };
 }
 

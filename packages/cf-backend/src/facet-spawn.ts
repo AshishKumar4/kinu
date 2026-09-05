@@ -51,6 +51,7 @@
 import type { Agent, SubAgentClass, SubAgentStub } from "agents";
 import type { BranchHandle, HeadId, HeadInput, NodeLoopResult, NodeRunSpec, SpawnedHead } from "@kinu.run/core";
 import type { ExplorationAgent } from "./exploration";
+import type { HostedFacetHomes } from "./node-home";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 /** The facet substrate a spawner rides. Both the workspace DO and a head
@@ -60,6 +61,10 @@ export interface FacetHost extends Pick<Agent<Env>, "subAgent" | "abortSubAgent"
    *  so this module carries no runtime import of the facet it spawns — the same
    *  rule ActorAgent.subordinateFacet() follows for SubordinateAgent. */
   explorationFacet(): SubAgentClass<ExplorationAgent>;
+  /** Where a facet of this host gets and gives back its home: the workspace
+   *  owner's registry, reached directly or over one hop. A head provisions
+   *  its own when it runs; its spawner releases it when the run settles. */
+  facetHomes(): HostedFacetHomes;
 }
 
 
@@ -219,27 +224,31 @@ async function bootstrapFacet(
 }
 
 /**
- * Run a single-shot worker to completion, then reclaim its storage — the whole of
- * a head's and a node's `run()` around the one RPC that differs between them.
+ * Run a single-shot worker to completion, then reclaim what it held — the
+ * whole of a head's and a node's `run()` around the one RPC that differs
+ * between them.
  *
- * The split is what earns one home: the run is awaited to a VALUE first, so a
- * reclamation failure and a run failure can never mask one another, and the wipe
- * is attempted either way because a settled worker nothing will read again is a
- * pure leak. A failed wipe is not swallowed even at the cost of a settled report,
- * for the reason this module's header gives. `kind` only names the worker in that
- * message.
+ * `reclaim` is the terminal release for that worker kind: a head's storage
+ * AND the home it provisioned for itself, a node's storage alone, because a
+ * node's home was provisioned by the search before the spawn and the search
+ * releases it. The split is what earns one home: the run is awaited to a
+ * VALUE first, so a reclamation failure and a run failure can never mask one
+ * another, and the reclaim is attempted either way because a settled worker
+ * nothing will read again is a pure leak. A failed reclaim is not swallowed
+ * even at the cost of a settled report, for the reason this module's header
+ * gives. `kind` only names the worker in that message.
  */
 async function runOnceAndReclaim<Result>(
-  host: FacetHost,
   id: string,
   kind: 'Head' | 'Node',
   run: () => Promise<Result>,
+  reclaim: () => Promise<void>,
 ): Promise<Result> {
   let reclaiming = false;
   try {
     const result = await run();
     reclaiming = true;
-    await deleteExplorationFacet(host, id);
+    await reclaim();
     return result;
   } catch (cause) {
     if (reclaiming) {
@@ -249,12 +258,12 @@ async function runOnceAndReclaim<Result>(
         { cause },
       );
     }
-    // The run failed, so the wipe below is a best-effort reclaim rather than
+    // The run failed, so the reclaim below is a best-effort one rather than
     // the terminal release. When it fails too both facts travel: the run's own
     // error stays the cause (as the bootstrap twin keeps it) and the message
     // names the stranded storage beside it.
     try {
-      await deleteExplorationFacet(host, id);
+      await reclaim();
     } catch (cleanupError) {
       throw new Error(
         `${kind} facet ${id} failed and its storage was not reclaimed `
@@ -298,7 +307,8 @@ export async function spawnBranchFacet(
  *  the root orchestrator rather than on this facet. Nothing reads the facet
  *  afterwards, so nothing is lost by wiping it — and `HeadController` has no
  *  success-path cleanup call at all, so a head that is not released here is
- *  never released. */
+ *  never released. The home goes with the storage: the head provisions it
+ *  for itself when it runs, and after the report nothing reads it either. */
 export async function spawnHeadFacet(
   host: FacetHost,
   input: HeadInput,
@@ -307,7 +317,10 @@ export async function spawnHeadFacet(
   const stub = await bootstrapFacet(host, input.id, identity, (facet) => facet.initHead(input));
   return {
     id: input.id,
-    run: () => runOnceAndReclaim(host, input.id, 'Head', () => stub.runAsHead()),
+    run: () => runOnceAndReclaim(input.id, 'Head', () => stub.runAsHead(), async () => {
+      await deleteExplorationFacet(host, input.id);
+      await host.facetHomes().release('head', input.id);
+    }),
     /** Cut a head short — a caller-requested deadline blew. Deliberately an
      *  ABORT and not a release: `run()` is still in flight and owns the
      *  terminal release, and evicting the instance is what makes its pending
@@ -357,7 +370,7 @@ export async function spawnNodeFacet(
   const stub = await bootstrapFacet(host, id, identity, (facet) => facet.initNode(spec));
   return {
     id,
-    run: () => runOnceAndReclaim(host, id, 'Node', () => stub.runAsNode()),
+    run: () => runOnceAndReclaim(id, 'Node', () => stub.runAsNode(), () => deleteExplorationFacet(host, id)),
     /** Cut a node short. An ABORT and not a release, for the reason a head's is:
      *  `run()` is still in flight and owns the terminal release, and evicting the
      *  instance is what makes its pending `runAsNode` RPC reject so that release

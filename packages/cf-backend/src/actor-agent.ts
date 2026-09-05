@@ -236,9 +236,9 @@ import {
 } from "@kinu.run/core";
 import {
   bindAgentSql, createCFRuntime,
-  type CFRuntime, type HostedNodeHome,
+  type CFRuntime, type CFRuntimeHooks, type HostedNodeHome,
 } from "./runtime";
-import { cleanupNimbusNodeHome, createNimbusNodeHomeProvisioner } from "./node-home";
+import type { HostedFacetHomes } from "./node-home";
 import {
   // The durable lanes' recovery roster — synchronous classification, six arms,
   // terminal-result discipline — and this backend's three cf-minted lane names.
@@ -581,16 +581,6 @@ interface WorkspaceTitleInputs {
  * place the words now are, never work the caller still owes.
  */
 export type SteerTurnLanding = 'mid-turn' | 'queued';
-
-
-/**
- * The durable shell a node home is provisioned and reclaimed through.
- *
- * A shell of its own, not the actor's: provisioning runs `mkdir`/`chown`/`chmod`
- * as uid 0 from `/`, and doing that in the actor's own shell would move the
- * agent's working directory out from under its next command.
- */
-const NODE_HOME_SHELL_ID = 'hosted-node-home';
 
 /** The failure classes under which a turn runs on builtins alone because the
  *  owner's MCP catalog could not be reached or finished: a hop that failed, timed
@@ -977,6 +967,18 @@ export abstract class ActorAgent extends Think<Env> {
    *  runtime.ts and head-runtime.ts. */
   explorationFacet(): SubAgentClass<ExplorationAgent> { return ExplorationAgent; }
 
+  /** Where this actor's facets get their homes. The owner provisions in its
+   *  own isolate; every facet actor reaches the owner over one hop, because
+   *  the uid table, the uid-0 view and the principal registry are the
+   *  owner's and `confinePrincipal` has no RPC. */
+  abstract facetHomes(): HostedFacetHomes;
+
+  /** The home THIS actor runs as, when it is a facet with one. The workspace
+   *  agent answers none: it is the session user, and the tree is its own. A
+   *  facet actor answers from durable storage, so its runtime is rebuilt as
+   *  itself after every eviction rather than as the origin. */
+  protected facetHome(): HostedNodeHome | undefined { return undefined; }
+
   /**
    * The roster half of the actor profile — wired only while this actor has room
    * below it.
@@ -1172,8 +1174,12 @@ export abstract class ActorAgent extends Think<Env> {
       rename: async (name, displayName, nameOrigin) => {
         await (await this.subAgent(facet, name)).setSubordinateNaming(displayName, nameOrigin);
       },
+      // A wipe takes the home with the storage; an archive keeps both, because
+      // an archived subordinate's rows stay readable and so does its tree.
       dismiss: async (name, keepHistory) => {
-        if (!keepHistory) await this.deleteSubAgent(facet, name);
+        if (keepHistory) return;
+        await this.deleteSubAgent(facet, name);
+        await this.facetHomes().release('subordinate', name);
       },
     };
     return this._subordinateRuntime;
@@ -4380,6 +4386,17 @@ export abstract class ActorAgent extends Think<Env> {
 
   protected get rt(): CFRuntime {
     if (!this._rt) {
+      const hooks: CFRuntimeHooks = {
+        deferrals: () => this.deferralChannel(),
+        reportModelCall: (report) => this.reportModelCall(report),
+        turnProfile: () => this._turnProfile,
+        resolveProfile: () => this.routingProfile(),
+      };
+      // Assigned rather than spread: a runtime with no home must leave the
+      // key ABSENT, because the factory reads presence to decide whose
+      // credential both planes carry.
+      const home = this.facetHome();
+      if (home !== undefined) hooks.workspaceExecution = home;
       // No onToolRegistered hook: the execute_tools sandbox reads
       // craftStore.list() fresh on every call, so mid-turn saves propagate
       // without any registry plumbing (see docs/CRAFT-ARCHITECTURE.md §3).
@@ -4398,12 +4415,7 @@ export abstract class ActorAgent extends Think<Env> {
         shellId: this.shellId(),
         scaffoldPath: this.scaffoldPath(),
         capabilityToken: () => this.workspaceCapabilityToken(),
-      }, {
-        deferrals: () => this.deferralChannel(),
-        reportModelCall: (report) => this.reportModelCall(report),
-        turnProfile: () => this._turnProfile,
-        resolveProfile: () => this.routingProfile(),
-      });
+      }, hooks);
       this.configureRuntime(runtime);
       this._rt = runtime;
     }
@@ -5232,51 +5244,21 @@ export abstract class ActorAgent extends Think<Env> {
         return await node.run();
       } finally {
         try {
-          await this.cleanupNodeHome(spec.headInput.id);
+          await this.facetHomes().release('node', spec.headInput.id);
         } finally {
           release?.();
         }
       }
     };
   }
-  /** The parent-owned home provisioner. Its durable mapping survives a reset;
-   * active work does not, because activity belongs to the live search/facet.
-   *
-   * The uid allocation is a row in the SAME database as the filesystem the home
-   * is created in — `resolveHostedNodeHome` is only ever reached on the object
-   * that owns the workspace — so two nodes cannot be handed one uid. */
-  private _hostedNodeHomeProvisioner: NodeWorkspaceProvisioner | undefined;
 
+  /** The search's node home provisioner: the owner's registry, through the
+   *  same port every facet kind uses. Undefined before the agent has an owner,
+   *  for `getCFNodeHost`'s reason, and then the search reports the shared
+   *  plane rather than inventing a home. */
   protected hostedNodeHomeProvisioner(): NodeWorkspaceProvisioner | undefined {
     if (!this.getOwnerUserId()) return undefined;
-    this._hostedNodeHomeProvisioner ??= createNimbusNodeHomeProvisioner(
-      this.ctx.storage.sql,
-      this.workspaceBox(NODE_HOME_SHELL_ID),
-    );
-    return this._hostedNodeHomeProvisioner;
-  }
-
-  /** The facet-facing half: provision, then hand back the three things a facet
-   *  rebuilds its runtime from. The shared-plane variant is REFUSED rather than
-   *  unwrapped — a facet given a home with no credential would run as the origin
-   *  under a private path, which is the one outcome worse than no home. */
-  async resolveHostedNodeHome(
-    nodeId: string,
-    rootId: string,
-    depth: number,
-  ): Promise<HostedNodeHome> {
-    const provision = this.hostedNodeHomeProvisioner();
-    if (!provision) throw new Error('Hosted node home requires a claimed workspace owner');
-    const workspace = await provision({ nodeId, rootId, depth });
-    if (workspace.isolation !== 'private-home') {
-      throw new Error(`Node ${nodeId} was provisioned without a credential; a hosted node cannot run on the shared plane`);
-    }
-    return { home: workspace.home, tmp: workspace.tmp, cred: workspace.cred };
-  }
-
-  private async cleanupNodeHome(nodeId: string): Promise<void> {
-    if (!this.getOwnerUserId()) return;
-    await cleanupNimbusNodeHome(this.workspaceBox(NODE_HOME_SHELL_ID), nodeId);
+    return async (node) => ({ ...await this.facetHomes().provision('node', node.nodeId), isolation: 'private-home' });
   }
 
   /**

@@ -22,6 +22,7 @@ import {
   type DelegationBudget,
 } from './depth';
 import { reconcileColumns } from '../identity/columns';
+import type { AgentIdentity } from '../vfs/agent-home';
 import { SubordinateRosterStore } from './roster';
 import type { WorkMode } from '../prompting/surface';
 import type { AgentConfigStore, RoleSelection } from '../config/store';
@@ -101,6 +102,16 @@ export interface SubordinateIdentity {
    * an eviction as well as on the first turn.
    */
   lifetime: SubordinateLifetime;
+  /**
+   * The identity this subordinate's commands and file tools run as, when its
+   * workspace allocated one: the uid the workspace's registry handed out for
+   * `sub-<name>` at seeding. Immutable lineage like the rest, because a home is
+   * uid/gid/mode on real inodes and a facet that came back as a different uid
+   * could not write the home it already owns. Absent where the workspace is
+   * reached in-process and re-provisions at open, and for a subordinate seeded
+   * before homes existed.
+   */
+  cred?: AgentIdentity;
 }
 
 interface IdentityRow {
@@ -110,6 +121,8 @@ interface IdentityRow {
   owner_user_id: string;
   depth: number;
   lifetime: SubordinateLifetime;
+  uid: number | null;
+  gid: number | null;
 }
 
 const IdentityRowSchema = v.object({
@@ -119,6 +132,8 @@ const IdentityRowSchema = v.object({
   owner_user_id: v.string(),
   depth: v.number(),
   lifetime: v.picklist(SUBORDINATE_LIFETIMES),
+  uid: v.nullable(v.number()),
+  gid: v.nullable(v.number()),
 });
 
 function parseIdentityRow<Input>(row: Input): IdentityRow | null {
@@ -127,7 +142,7 @@ function parseIdentityRow<Input>(row: Input): IdentityRow | null {
 }
 
 function mapIdentityRow(row: IdentityRow): SubordinateIdentity {
-  return {
+  const identity: SubordinateIdentity = {
     name: row.name,
     mission: row.mission,
     parentWorkspace: row.parent_workspace,
@@ -135,6 +150,10 @@ function mapIdentityRow(row: IdentityRow): SubordinateIdentity {
     depth: row.depth,
     lifetime: row.lifetime,
   };
+  // Assigned rather than spread: a row with no credential leaves the key
+  // ABSENT, because a reader decides whose identity to run as by presence.
+  if (row.uid !== null && row.gid !== null) identity.cred = { uid: row.uid, gid: row.gid };
+  return identity;
 }
 
 function identitiesEqual(stored: SubordinateIdentity, attempted: SubordinateIdentity): boolean {
@@ -144,6 +163,7 @@ function identitiesEqual(stored: SubordinateIdentity, attempted: SubordinateIden
   ) return false;
   if (stored.name !== attempted.name || stored.mission !== attempted.mission) return false;
   if (stored.lifetime !== attempted.lifetime) return false;
+  if (stored.cred?.uid !== attempted.cred?.uid || stored.cred?.gid !== attempted.cred?.gid) return false;
   return stored.depth === attempted.depth;
 }
 
@@ -173,9 +193,13 @@ export class SubordinateIdentityStore {
     // Every subordinate that existed before the temporary rung was DURABLE, so
     // that default is the row's true lifetime rather than a compatibility guess
     // — the same argument the depth default carries above.
+    // A subordinate that existed before homes did has no credential, which is
+    // the row's true state: nothing allocated one, and it runs as the origin.
     reconcileColumns(this.tagged, (ddl) => { this.sql.exec(ddl); }, 'subordinate_identity', {
       depth: 'INTEGER NOT NULL DEFAULT 1',
       lifetime: "TEXT NOT NULL DEFAULT 'durable'",
+      uid: 'INTEGER',
+      gid: 'INTEGER',
     });
   }
 
@@ -187,20 +211,22 @@ export class SubordinateIdentityStore {
     }
     this.sql.exec(
       `INSERT INTO subordinate_identity
-         (id, name, mission, parent_workspace, owner_user_id, depth, lifetime)
-       VALUES (1, ?, ?, ?, ?, ?, ?)`,
+         (id, name, mission, parent_workspace, owner_user_id, depth, lifetime, uid, gid)
+       VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)`,
       identity.name,
       identity.mission,
       identity.parentWorkspace,
       identity.ownerUserId,
       identity.depth,
       identity.lifetime,
+      identity.cred?.uid ?? null,
+      identity.cred?.gid ?? null,
     );
   }
 
   read(): SubordinateIdentity | null {
     const rows = this.sql.exec(
-      `SELECT name, mission, parent_workspace, owner_user_id, depth, lifetime
+      `SELECT name, mission, parent_workspace, owner_user_id, depth, lifetime, uid, gid
        FROM subordinate_identity WHERE id = 1`,
     ).toArray();
     if (rows.length === 0) return null;

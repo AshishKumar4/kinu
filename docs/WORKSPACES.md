@@ -106,16 +106,21 @@ actors that work inside it.
     PARENT's file plane (`cf-backend/src/exploration.ts:418-444`). MCTS rollouts
     use the same facet class in a separate toolless mode and acquire no runtime.
 
-    Facet isolation is one contract with two appliers. `agentHomeLayout` is
+    Facet isolation is one contract with one applier. `agentHomeLayout` is
     the one table that says a facet owns its home at `0o755` and its tmp at
     `0o700` (`core/src/vfs/agent-home.ts`). The kind rides in the name:
-    `/home/node-<id>`, `/home/sub-<slug>`, `/home/head-<id>`. A LOCAL
-    runtime whose plane is its in-SQLite tree provisions any of them through
-    `facetHomeProvisioner` and the three host-owned members from
-    `WorkspaceBundle.privileged()`. The HOSTED backend applies the same
-    layout through the Nimbus session's own coreutils, run as uid 0
-    (`cf-backend/src/node-home.ts` `provisionNimbusAgentHome`). Nodes are
-    wired on both backends through `AgentsForkDeps.provisionNodeHome`.
+    `/home/node-<id>`, `/home/sub-<slug>`, `/home/head-<id>`. Both backends
+    provision any of them through `facetHomeProvisioner` over the three
+    host-owned members from `WorkspaceBundle.privileged()`: the local runtime
+    in its own process, the hosted workspace on the orchestrator that owns it
+    (`OrchestratorAgent.provisionFacetHome`), which every facet reaches over
+    one hop because the principal registry has no RPC. A subordinate is
+    provisioned at seeding and released on a wipe; a head provisions itself
+    when it runs and its spawner releases it at settle; a node is provisioned
+    by its search through `AgentsForkDeps.provisionNodeHome` and released by
+    the same search. The `/tmp` rewrites are re-derived from the homes on
+    disk every time the filesystem opens (`restoreAgentTmpConfinements`), so
+    an eviction never leaves a facet with a home and a shared `/tmp`.
 
     Both then credential BOTH planes, because a node reaches the tree with
     commands and with file tools. A file plane pinned to the session user

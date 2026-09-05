@@ -99,6 +99,7 @@ import {
   bindAgentSql, createCFRuntime,
   type CFRuntime, type CFRuntimeHooks, type HostedNodeHome,
 } from "./runtime";
+import type { HostedFacetHomes } from "./node-home";
 import { createWorkspaceBoxClient, workspaceBoxOwner } from "./workspace-box-rpc";
 import { createExecuteToolsFactory } from "./execute-tools";
 import { codemodeEgress } from "./codemode-egress";
@@ -178,6 +179,15 @@ export class ExplorationAgent extends Agent<Env> {
    *  `FacetHost` — facet-spawn.ts imports this class type-only, so the VALUE has
    *  to come from the host, and here that is a plain self reference. */
   explorationFacet(): SubAgentClass<ExplorationAgent> { return ExplorationAgent; }
+
+  /** Homes for the heads a recursive split spawns: the ROOT workspace's
+   *  registry, over the stub every head already holds to it. */
+  facetHomes(): HostedFacetHomes {
+    return {
+      provision: async (kind, id) => this.requireSharedParent('split_subheads').provisionFacetHome(kind, id),
+      release: async (kind, id) => this.requireSharedParent('split_subheads').releaseFacetHome(kind, id),
+    };
+  }
 
   // ── Head-mode state (MCTS mode is stateless beyond the traces table) ──
   private headInput: HeadInput | null = null;
@@ -449,8 +459,8 @@ export class ExplorationAgent extends Agent<Env> {
   /** A head's runtime: the shared plane above wrapped with this run's observer
    *  before tools are built, so writes are attributable without another executor
    *  or VFS. */
-  private headRuntime(capture: HeadCapture): CFRuntime {
-    return this.facetRuntime('head', { workspaceObserver: capture.files });
+  private headRuntime(capture: HeadCapture, home: HostedNodeHome): CFRuntime {
+    return this.facetRuntime('head', { workspaceObserver: capture.files }, home);
   }
 
   /** ExplorationAgents inherit ownership from the orchestrator that spawned
@@ -488,6 +498,16 @@ export class ExplorationAgent extends Agent<Env> {
     const name = this.identity.parentWorkspace();
     if (!name) return null;
     return this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
+  }
+
+  /** The root workspace a tooled mode cannot run without. `doing` names the
+   *  call so the refusal says which RPC needed the parent it never got. */
+  private requireSharedParent(doing: string): DurableObjectStub<OrchestratorAgent> {
+    const parent = this.getSharedParentStub();
+    if (!parent) {
+      throw new Error(`This facet was spawned without a parent workspace; setSharedParent must run before ${doing}.`);
+    }
+    return parent;
   }
 
   /** Activation init, synchronous by contract — see `OrchestratorAgent.onStart`
@@ -678,23 +698,24 @@ export class ExplorationAgent extends Agent<Env> {
       // supplies its model + the forked tool surface. Abort is driven by
       // abortHead() flipping this.headAborted.
       const modelSpec = await this.facetModelSpec('head', input.model);
+      const parent = this.requireSharedParent('runAsHead');
+      // Its home first, from the owner: the runtime below is built as that
+      // uid on both planes, the way a node's is, so the head's writes land in
+      // `/home/head-<id>` and never in a sibling's or the origin's tree.
+      const home = await invocation.span('head.home', () => parent.provisionFacetHome('head', input.id));
       const headOptions = invocation.span('head.deps', (): Parameters<typeof runHeadInference>[1] => {
         const mission = this.missionScope(input);
         const options: Parameters<typeof runHeadInference>[1] = {
           model: this.ownedModelServices.resolveModel(modelSpec),
-          tools: this.buildHeadTools(input, capture),
+          tools: this.buildHeadTools(input, capture, home),
           capture,
-          workspaceLayout: 'shared-workspace',
+          workspaceLayout: 'private-scratch',
           isAborted: () => this.headAborted,
           abortReason: () => this.headAbortReason,
+          reportStep: this.stepSink(parent, input.id),
+          reportDelta: this.deltaSink(parent, input.id),
         };
         if (mission) options.mission = mission;
-        // Null only when this facet has no parent, which is an MCTS branch.
-        const parent = this.getSharedParentStub();
-        if (parent) {
-          options.reportStep = this.stepSink(parent, input.id);
-          options.reportDelta = this.deltaSink(parent, input.id);
-        }
         return options;
       });
       return await invocation.span('head.inference', async (span) => {
@@ -737,14 +758,11 @@ export class ExplorationAgent extends Agent<Env> {
     return await this.tracing.invocation('rpc', 'swarm.node', async (invocation, root) => {
       root.setAttribute('kinu.node_id', spec.headInput.id);
       const modelSpec = await this.facetModelSpec('swarm', spec.headInput.model);
-      const parent = this.getSharedParentStub();
-      if (!parent) {
-        throw new Error('This node was spawned without a parent search; setSharedParent must run before runAsNode.');
-      }
+      const parent = this.requireSharedParent('runAsNode');
       const nodeId = spec.headInput.id;
       const workspaceExecution = await invocation.span(
         'swarm.node.home',
-        () => parent.resolveHostedNodeHome(nodeId, spec.headInput.rootId, spec.headInput.depth),
+        () => parent.provisionFacetHome('node', nodeId),
       );
       if (workspaceExecution.home !== spec.home) {
         throw new Error(`Node ${nodeId} home differs from the provisioned node spec`);
@@ -867,8 +885,8 @@ export class ExplorationAgent extends Agent<Env> {
 
   // ── Head-mode tool builders ─────────────────────────────────────
 
-  private buildHeadTools(input: HeadInput, capture: HeadCapture) {
-    const rt = this.headRuntime(capture);
+  private buildHeadTools(input: HeadInput, capture: HeadCapture, home: HostedNodeHome) {
+    const rt = this.headRuntime(capture, home);
     const webSearch = this.ownedModelServices.getWebSearchProvider();
     return buildHeadToolSet({
       input,

@@ -471,8 +471,9 @@ A host-provisioned facet owns its home in one global view, mode `0o755`, and its
 tmp, mode `0o700`. Both are owned by the facet's own uid. The kind rides in the
 name: `/home/node-<id>`, `/home/sub-<slug>`, `/home/head-<id>`, so one namespace
 holds every facet kind. `agentHomeLayout` is the one table that says so, and
-each backend applies it: the local backend through its uid-0 `SqliteVFS` view,
-the hosted backend through the session's own coreutils run as uid 0.
+one provisioner applies it on both backends through the uid-0 `SqliteVFS` view:
+the hosted backend runs it on the object that owns the workspace, which every
+facet asks for its home over one hop.
 
 Both backends report `private-home`. Both credential both planes, and both are
 required. A node reaches the tree with commands and with file tools. A file plane

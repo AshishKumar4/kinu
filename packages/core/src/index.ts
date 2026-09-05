@@ -1017,10 +1017,11 @@ export {
   workspacePath, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 export {
-  agentHome, agentTmpRoot, agentCred, agentIdentity, agentHomeLayout,
-  provisionAgentHome, confineAgentTmp, subordinateAgentName, headAgentName,
+  agentHome, agentTmpRoot, agentCred, agentIdentity,
+  provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements,
+  subordinateAgentName, headAgentName,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
-  type AgentDir, type AgentIdentity, type HomeRootVfs, type TmpConfiner,
+  type AgentIdentity, type HomeRootVfs, type TmpConfiner,
 } from './vfs/agent-home';
 export type {
   WorkspaceAgent, WorkspaceAgentPlane, WorkspaceBundle, WorkspaceOptions,

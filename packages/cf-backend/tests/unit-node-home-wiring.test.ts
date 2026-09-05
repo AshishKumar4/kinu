@@ -44,10 +44,7 @@ import {
   rpcExec,
   type ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
-import {
-  cleanupNimbusNodeHome, createNimbusNodeHomeProvisioner, withHostedNodeExecution,
-  type HostedNodeHome,
-} from '../src/node-home';
+import { withHostedNodeExecution, type HostedNodeHome } from '../src/node-home';
 
 const databases: Database[] = [];
 
@@ -443,54 +440,7 @@ const HOSTED_NODE: HostedNodeHome = {
   cred: { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 },
 };
 
-describe('hosted node home seam', () => {
-  test('applies the ONE layout, restores immutable identity after reset, and reclaims only bytes', async () => {
-    const database = new Database(':memory:');
-    databases.push(database);
-    const nimbus = new RootExecNimbus();
-    const first = createNimbusNodeHomeProvisioner(hostedSql(database), nimbusBox(nimbus));
-    const initial = await first({ nodeId: 'node-A', rootId: 'root-1', depth: 2 });
-    const afterReset = createNimbusNodeHomeProvisioner(hostedSql(database), nimbusBox(nimbus));
-    const recovered = await afterReset({ nodeId: 'node-A', rootId: 'root-1', depth: 2 });
-
-    expect(recovered).toEqual(initial);
-    expect(initial).toMatchObject({
-      home: '/home/node-node-A', tmp: '/tmp/node-node-A', isolation: 'private-home',
-    });
-    if (initial.isolation !== 'private-home') throw new Error('the hosted seam must provision a credential');
-    expect(initial.cred.uid).toBeGreaterThanOrEqual(AGENT_UID_FLOOR);
-    // The layout is core's table, applied as uid 0 and in ONE command: a home
-    // created but not owned is a home its node cannot write.
-    const applied = nimbus.calls[0];
-    expect(applied?.options.cred?.uid).toBe(0);
-    expect(applied?.command).toBe(
-      `mkdir -p -- '/home/node-node-A' && chown ${initial.cred.uid}:${initial.cred.gid} '/home/node-node-A'`
-      + " && chmod 755 '/home/node-node-A'"
-      + ` && mkdir -p -- '/tmp/node-node-A' && chown ${initial.cred.uid}:${initial.cred.gid} '/tmp/node-node-A'`
-      + " && chmod 700 '/tmp/node-node-A'",
-    );
-
-    await cleanupNimbusNodeHome(nimbusBox(nimbus), 'node-A');
-    // Both directories, because the scratch is no longer inside the home.
-    expect(nimbus.calls.at(-1)?.command).toBe("rm -rf -- '/home/node-node-A' '/tmp/node-node-A'");
-    expect(database.prepare('SELECT agent_name, uid, gid FROM kinu_agent_identity').all())
-      .toHaveLength(1);
-  });
-
-  test('rejects a hostile node id before it reaches the session shell', async () => {
-    const database = new Database(':memory:');
-    databases.push(database);
-    const nimbus = new RootExecNimbus();
-
-    await expect(createNimbusNodeHomeProvisioner(hostedSql(database), nimbusBox(nimbus))({
-      nodeId: "node'; rm -rf /", rootId: 'root-1', depth: 2,
-    })).rejects.toThrow('not a usable agent name');
-
-    expect(nimbus.calls).toEqual([]);
-    expect(database.prepare("SELECT name FROM sqlite_master WHERE name = 'kinu_agent_identity'").all())
-      .toEqual([]);
-  });
-
+describe('hosted node execution', () => {
   test('binds the node credential, its home and its own scratch to every command', async () => {
     const nimbus = new RootExecNimbus();
     const base: NimbusSandboxHandle = {
