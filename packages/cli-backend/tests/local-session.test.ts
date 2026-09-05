@@ -560,7 +560,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(referenced).toBeDefined();
     const referencedJson = JSON.stringify(referenced!.content);
     expect(referencedJson).toContain('resume.pdf');
-    const path = /saved to (\S+) — read/.exec(referencedJson)?.[1];
+    const path = /saved to (\S+)/.exec(referencedJson)?.[1];
     expect(path).toStartWith('attachments/');
 
     // …and the exact payload bytes are readable back through the agent's VFS.
