@@ -534,6 +534,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- A judge failure rejects the eval run instead of scoring a tie at the quality floor.
+
 - `setMctsOverrides` validates every knob before it writes any, and refuses an integer knob that floors to zero.
 
 - Take-set claims count only the rows they move, so a replayed claim reports zero. Switching a pick moves the terminal marker in one statement. A resumed search prices its remaining budget, not its initial one.

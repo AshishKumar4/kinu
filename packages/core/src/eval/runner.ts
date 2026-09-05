@@ -19,14 +19,9 @@ export async function runEvalPair(opts: RunEvalPairOpts): Promise<EvalResult[]> 
   for (const c of opts.cases) {
     const runA = await runOne(opts.strategyA, c, opts.buildContext);
     const runB = await runOne(opts.strategyB, c, opts.buildContext);
-    let verdict;
-    try {
-      verdict = await opts.judge(c, runA, runB);
-    } catch (err) {
-      const message = renderThrownChain({ cause: err });
-      verdict = { winner: 'tie' as const, scoreA: 0.5, scoreB: 0.5,
-                  rationale: `judge error: ${message}` };
-    }
+    // A judge failure is a failed measurement, not a tie. It propagates so the
+    // caller cannot build a report or pass a gate on scores nobody produced.
+    const verdict = await opts.judge(c, runA, runB);
     out.push({
       caseId: c.id,
       strategyA: opts.strategyA.id,

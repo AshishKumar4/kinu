@@ -125,6 +125,18 @@ describe('eval runner', () => {
     expect(results[0].runA.error).toContain('boom');
     expect(results[0].verdict.winner).toBe('b');
   });
+
+  test('a judge failure rejects instead of scoring a tie', async () => {
+    const a = strat('alpha', 'alpha-answer');
+    const b = strat('beta', 'beta-answer');
+    await expect(runEvalPair({
+      cases: [{ id: 'x', task: 't' }],
+      strategyA: a,
+      strategyB: b,
+      buildContext: (evalCase) => strategyContext(evalCase.task),
+      judge: async () => { throw new Error('judge-provider-down'); },
+    })).rejects.toThrow('judge-provider-down');
+  });
 });
 
 describe('LLM judge adapter', () => {
