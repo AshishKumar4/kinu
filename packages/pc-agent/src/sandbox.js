@@ -463,11 +463,18 @@ function buildLinuxArgv(view, options) {
   // exists inside the read-only root and resolves to the masked path.
   for (const dir of dedupeExisting(view.maskDirs)) argv.push('--tmpfs', dir);
   for (const file of dedupeExisting(LINUX_MASK_FILES)) argv.push('--ro-bind', '/dev/null', file);
+  // The agent tmp lands on `/tmp` BEFORE the agent home lands on the real
+  // home path, because a home under /tmp is a home: bound the other way
+  // round, the `/tmp` bind shadowed it and every command started with
+  // `bwrap: Can't chdir to /tmp/<home>: No such file or directory` — the
+  // first-run tier's daemons, each given a scratch HOME under the runner's
+  // tmpdir, measured 2026-09-04. A home anywhere else never touches `/tmp`
+  // and reads the same either way.
+  argv.push('--bind', view.agentTmp, '/tmp');
   // The agent home lands ON the real home path, so `~` inside the sandbox is
   // the agent's own directory and every tool's default (~/.local, ~/.cache,
   // ~/.cargo, ~/.npm) lands there with no environment tricks.
   argv.push('--bind', view.agentHome, view.home);
-  argv.push('--bind', view.agentTmp, '/tmp');
   // Shortest first here: a root nested inside another must be mounted after
   // its parent, or the parent's bind hides it.
   for (const root of [...view.roots].reverse()) argv.push('--bind', root, root);

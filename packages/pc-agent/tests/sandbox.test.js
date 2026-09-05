@@ -33,10 +33,10 @@ function runSandboxed(command, options = {}) {
   }
   const plan = sandbox.plan({
     tier: options.tier ?? 'sandboxed',
-    home: os.homedir(),
+    home: options.home ?? os.homedir(),
     agentHome,
     agentTmp,
-    deviceHome: path.join(os.homedir(), '.kinu'),
+    deviceHome: path.join(options.home ?? os.homedir(), '.kinu'),
     roots: options.roots === undefined ? [consented] : options.roots,
     cwd: options.cwd ?? agentHome,
     command,
@@ -203,6 +203,51 @@ describe('the device sandbox, as the kernel enforces it', () => {
     expect(view.resolvePath('/home/dev/anything', 'write')).toBe('/home/dev/anything');
     expect(() => view.resolvePath('/home/dev/.kinu/device.json', 'read'))
       .toThrow('inside Kinu\'s own directory');
+  });
+
+  test('a home under /tmp is the agent home inside, exactly as a home under /home is', () => {
+    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+    // The first-run tier gives each daemon a HOME of its own under the
+    // runner's tmpdir, and the daemon's probe answered it with `probe_failed:
+    // sandbox probe failed: bwrap: Can't chdir to /tmp/kinu-first-run-…: No
+    // such file or directory` (measured 2026-09-04). The agent-tmp bind over
+    // `/tmp` came AFTER the agent-home bind and shadowed it, so the home
+    // existed on the machine and not in the namespace. Order is the policy,
+    // and this is the order the policy needs.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-tmp-home-'));
+    const run = runSandboxed('pwd; touch "$HOME/marker"; echo reached', { home });
+    try {
+      expect(run.stderr).toBe('');
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain(`${home}\nreached`);
+      // `~/marker` is the AGENT's marker: the home path inside the namespace
+      // is the agent home, and the real directory under /tmp is untouched.
+      expect(fs.existsSync(path.join(run.agentHome, 'marker'))).toBe(true);
+      expect(fs.existsSync(path.join(home, 'marker'))).toBe(false);
+    } finally {
+      run.cleanup();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('the daemon\'s own probe passes with HOME under /tmp, as the first-run tier runs it', () => {
+    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+    // A CHILD process, not an in-process `process.env.HOME` swap: Bun's
+    // `os.homedir()` reads HOME once at start, so a swap here would probe the
+    // real home and pass on any tree. The tier spawns the daemon with a
+    // scratch HOME in its environment, and so does this.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-tmp-home-'));
+    try {
+      const script = 'const s = require(process.argv[1]); '
+        + 'process.stdout.write(JSON.stringify(s.probe({ deviceHome: process.env.KINU_HOME })))';
+      const run = spawnSync(process.execPath, ['-e', script, require.resolve('../src/sandbox.js')], {
+        env: { ...process.env, HOME: home, KINU_HOME: home }, encoding: 'utf8',
+      });
+      expect(run.stderr).toBe('');
+      expect(JSON.parse(run.stdout)).toEqual({ status: sandbox.SANDBOX_STATUS.OK, detail: null });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
