@@ -260,6 +260,19 @@ describe('AgentConfigStore — MCTS overrides', () => {
     expect(() => c.setMctsOverrides({ explorationWeight: Number.NaN })).toThrow(/invalid MCTS setting/);
   });
 
+  test('a rejected multi-knob write leaves prior knobs untouched', () => {
+    const c = setup();
+    c.setMctsOverrides({ explorationWeight: 2 });
+    expect(() => c.setMctsOverrides({ explorationWeight: 1.2, budget: -1 })).toThrow(/invalid MCTS setting/);
+    expect(c.getMctsOverrides()).toEqual({ explorationWeight: 2 });
+  });
+
+  test('rejects an integer knob that floors to zero without storing it', () => {
+    const c = setup();
+    expect(() => c.setMctsOverrides({ budget: 0.5 })).toThrow(/invalid MCTS setting/);
+    expect(c.getMctsOverrides()).toEqual({});
+  });
+
   test('garbage stored values are ignored on read', () => {
     const c = setup();
     c.set(AGENT_CONFIG_KEYS.mctsBudget, 'lots');

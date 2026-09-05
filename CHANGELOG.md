@@ -534,6 +534,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- `setMctsOverrides` validates every knob before it writes any, and refuses an integer knob that floors to zero.
+
 - Take-set claims count only the rows they move, so a replayed claim reports zero. Switching a pick moves the terminal marker in one statement. A resumed search prices its remaining budget, not its initial one.
 
 - `nimbus.readFile` on a missing path refuses with reason `missing` instead of answering an empty string. `sandbox.exists` answers a refusal instead of throwing when the transport fails.

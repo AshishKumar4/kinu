@@ -551,17 +551,23 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       return out;
     },
     setMctsOverrides(overrides) {
-      const write = (key: string, value: number | undefined, integer: boolean) => {
+      // Every requested knob is validated before any row is written, so a
+      // rejected call leaves the prior overrides untouched.
+      const pending: Array<{ key: string; value: string }> = [];
+      const check = (key: string, value: number | undefined, integer: boolean) => {
         if (value === undefined) return;
         if (!Number.isFinite(value) || value <= 0) throw new Error(`invalid MCTS setting for ${key}: ${value}`);
-        set(key, String(integer ? Math.floor(value) : value));
+        const stored = integer ? Math.floor(value) : value;
+        if (stored <= 0) throw new Error(`invalid MCTS setting for ${key}: ${value}`);
+        pending.push({ key, value: String(stored) });
       };
-      write(AGENT_CONFIG_KEYS.mctsExplorationWeight, overrides.explorationWeight, false);
-      write(AGENT_CONFIG_KEYS.mctsBudget, overrides.budget, true);
-      write(AGENT_CONFIG_KEYS.mctsMaxDepth, overrides.maxDepth, true);
-      write(AGENT_CONFIG_KEYS.mctsBranches, overrides.branches, true);
-      write(AGENT_CONFIG_KEYS.mctsJudgeSamples, overrides.judgeSamples, true);
-      write(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls, overrides.maxEvalLLMCalls, true);
+      check(AGENT_CONFIG_KEYS.mctsExplorationWeight, overrides.explorationWeight, false);
+      check(AGENT_CONFIG_KEYS.mctsBudget, overrides.budget, true);
+      check(AGENT_CONFIG_KEYS.mctsMaxDepth, overrides.maxDepth, true);
+      check(AGENT_CONFIG_KEYS.mctsBranches, overrides.branches, true);
+      check(AGENT_CONFIG_KEYS.mctsJudgeSamples, overrides.judgeSamples, true);
+      check(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls, overrides.maxEvalLLMCalls, true);
+      for (const { key, value } of pending) set(key, value);
     },
     getEmailNotificationsEnabled() {
       return get(AGENT_CONFIG_KEYS.emailNotifications) !== 'false';
