@@ -20,7 +20,8 @@ import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@op
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
 import {
-  DEFAULT_ROLE_ID, TIER_IDS, TUI_COMPOSER_PLACEHOLDER, composerVisibleRows, effectiveRoleCatalog,
+  DEFAULT_ROLE_ID, TIER_IDS, TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER,
+  composerVisibleRows, effectiveRoleCatalog,
   type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type TierId,
 } from '@kinu.run/core';
 import {
@@ -1457,7 +1458,7 @@ function ChatScene({
   const composerPlaceholder = !ready
     ? 'Connecting…'
     : isProcessing
-      ? 'Type to steer the running turn'
+      ? TUI_COMPOSER_STEERING_PLACEHOLDER
       : TUI_COMPOSER_PLACEHOLDER;
   useEffect(() => {
     if (inputFocused) inputRef.current?.focus();

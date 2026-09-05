@@ -41,6 +41,10 @@ export const TUI_MARKS = {
 
 /** The resting composer placeholder. */
 export const TUI_COMPOSER_PLACEHOLDER = 'Send a message…';
+/** The composer placeholder while a turn runs. It names what typing does then.
+ *  The first-run pty case waits on its arrival as the product's own word that
+ *  a submitted draft went out. */
+export const TUI_COMPOSER_STEERING_PLACEHOLDER = 'Type to steer the running turn';
 
 /** One mark per evolution self-change kind, shared by the changelog overlay,
  *  the console event stream, and the landing page's workspace journal. */

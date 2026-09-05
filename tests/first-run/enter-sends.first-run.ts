@@ -31,7 +31,7 @@ import { afterAll, describe, test } from 'vitest';
 import { resolve } from 'node:path';
 
 import { workerSession, type EvalObservation } from '@kinu.run/test-utils';
-import { TUI_COMPOSER_PLACEHOLDER } from '../../packages/core/src/index';
+import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER } from '../../packages/core/src/index';
 import { runTuiInPty } from '../../packages/cli/tests/helpers/pty-screen';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
@@ -44,9 +44,10 @@ const CASE = 'enter-sends' as const;
 /** The product path this case drives, as a file a pty child can execute. */
 const ENTRY = resolve(import.meta.dirname, 'fixtures/pty-cloud-chat.ts');
 
-/** What the composer must be showing before a key means anything. The TUI paints
- *  the workspace name once the client is connected and the hub is read, so this
- *  is the product's own "ready", not a sleep. In the DRIVER's unit: seconds. */
+/** The bound on each screen signal the run waits for — the connect card, the
+ *  composer's own placeholder, the draft echo, the running-turn placeholder.
+ *  Every wait is on text the product paints, never a sleep; this is only how
+ *  long the deployment gets to paint it. In the DRIVER's unit: seconds. */
 const READY_SECONDS = 60;
 
 /** How long the deployed turn is given to become a durable user row. A turn is
@@ -93,53 +94,62 @@ describe(SUITE, () => {
 
         const subgoals: FirstRunSubgoal[] = [];
         for (const spelling of SPELLINGS) {
-          // The keystrokes a person makes: the words, a beat, then Enter. The
-          // beat is the composer's own — a draft is not sendable before it is
-          // rendered — and the wait before it is the TUI proving it connected.
+          const draft = `${spelling.marker} reply with only OK`;
+          // The keystrokes a person makes, each after the screen fact a person
+          // would wait for. The driver reads the SCREEN — the cell grid the
+          // terminal shows — so a word the renderer painted by rewriting only
+          // its changed cells still counts as shown.
           const run = runTuiInPty(ENTRY, {
             env,
             steps: [
-              // The driver's timeout is SECONDS (a `time.time()` deadline), not
-              // milliseconds — spelled in its own unit here so the two cannot
-              // be confused again. The READY wait is on text the connected TUI
-              // reliably paints even before any turn exists; the fixture prints
-              // its own marker first thing.
               // THE FIRST THING A FIRST RUN MEETS is the connect offer: the TUI
-              // raises "link this computer?" over the composer and every
-              // keystroke goes to the card until it is answered. Measured on
-              // staging 2026-09-03 twice — first the draft and both Enter
-              // spellings landed in the card and no turn ran, then a blind `n`
-              // sent before the renderer existed was lost and the card was
-              // still up when the composer wait expired. So the card is WAITED
-              // FOR by its own words, answered with its own key
-              // (`device.not-now`, tui/actions.tsx:109), and only then is the
-              // composer typed into — which is exactly the order a person does
-              // it in.
+              // raises "link this computer?" as a card over the transcript and
+              // every keystroke goes to the card until it is answered. The card
+              // is WAITED FOR by its own words and answered with its own key
+              // (`device.not-now`, tui/actions.tsx:109).
               { wait: 'not now', timeout: READY_SECONDS },
               { send: 'n' },
+              // THE CARD DOES NOT COVER THE COMPOSER. The composer placeholder
+              // is on screen under the card from the moment the client
+              // connects, so it proves nothing about who gets the next key.
+              // The card LEAVING the screen is the render that gives the
+              // composer its focus back. A key typed before that render has
+              // no taker: the card has let go and the composer has not yet
+              // taken hold. Measured 2026-09-05 on the local fixture
+              // (`connect-card-pty.test.ts`), three runs each: a draft typed
+              // straight after the card's key was lost whole, and a draft
+              // typed after the card left was echoed and sent.
+              { gone: 'not now', timeout: READY_SECONDS },
               { wait: TUI_COMPOSER_PLACEHOLDER, timeout: READY_SECONDS },
-              { send: `${spelling.marker} reply with only OK` },
-              { sleep: 2 },
+              // The draft, then the composer's echo of it: the keys reached
+              // the composer, and a draft is not sendable before it is drawn.
+              { send: draft },
+              { wait: draft, timeout: READY_SECONDS },
               { send: spelling.bytes },
-              { sleep: 6 },
+              // The composer's running-turn placeholder is painted by the same
+              // render that follows the client's `turn-start`, which the cloud
+              // client emits in the same tick it writes the request to the
+              // socket. Once it is on screen the deployment has the frame.
+              { wait: TUI_COMPOSER_STEERING_PLACEHOLDER, timeout: READY_SECONDS },
             ],
           });
-          const connected = run.waits.every((wait) => wait.found);
+          const unmet = run.waits.find((wait) => !wait.met);
           // THE DEPLOYMENT'S OWN RECORD, not the screen. A composer that painted
           // the text and sent nothing is exactly the defect, and the screen
           // cannot tell those apart.
           const landed = await turnLanded(session, spelling.marker);
+          const screen = `Screen as the run left it: ${JSON.stringify(run.screen)}`;
           subgoals.push({
             what: spelling.what,
-            reached: connected && landed,
-            detail: !connected
-              ? `the TUI never showed ${session.workspace} on a real pty, so no key was pressed `
-                + `in a connected composer: ${JSON.stringify(run.screen.slice(-240))}`
+            reached: unmet === undefined && landed,
+            detail: unmet !== undefined
+              ? `the screen never ${unmet.until === 'gone' ? 'cleared' : 'showed'} ${JSON.stringify(unmet.text)} `
+                + `within ${String(READY_SECONDS)}s on a real pty, so the run stopped there`
+                + `${landed ? ' (the deployment holds the turn regardless)' : ' and no draft was sent'}. ${screen}`
               : landed
                 ? `${spelling.marker} is a user row in the deployed transcript`
                 : `Enter did NOT send: ${spelling.marker} was typed into the composer and the `
-                  + 'deployment recorded no user turn carrying it. Last frame: '
-                  + JSON.stringify(run.screen.slice(-240)),
+                  + `deployment recorded no user turn carrying it. ${screen}`,
           });
         }
         return subgoals;
