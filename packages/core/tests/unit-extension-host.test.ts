@@ -19,6 +19,7 @@ import {
   type ChatEvent,
   type Usage,
 } from '../src/index';
+import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 
 /** A v2 language-model stub that requests the `ping` tool on step 1, then
  *  answers with text on step 2. Captures the tool names it was handed so a test
@@ -354,6 +355,40 @@ describe('ExtensionHost', () => {
       .register({ name: 'second', onTurnStart: () => { order.push('second'); } });
     await host.emitTurnStart({ system: 's', history: [] });
     expect(order).toEqual(['first', 'second']);
+  });
+  test('a throwing emit hook never breaks the turn: it resolves and records the failure', async () => {
+    const log = createRecordingLogger();
+    const restore = setDiagnosticsSink(log);
+    try {
+      const order: string[] = [];
+      const host = new ExtensionHost()
+        .register({
+          name: 'thrower',
+          onTurnStart: () => { throw new Error('start exploded'); },
+          onToolCall: async () => { throw new Error('call exploded'); },
+          onToolResult: async () => { throw new Error('result exploded'); },
+          onTurnEnd: async () => { throw new Error('end exploded'); },
+        })
+        .register({ name: 'witness', onTurnStart: () => { order.push('witness-start'); } })
+        .register({ name: 'witness', onToolCall: () => { order.push('witness-call'); } })
+        .register({ name: 'witness', onToolResult: () => { order.push('witness-result'); } })
+        .register({ name: 'witness', onTurnEnd: () => { order.push('witness-end'); } });
+      await host.emitTurnStart({ system: 's', history: [] });
+      await host.emitToolCall({ toolName: 'ping', args: {} });
+      await host.emitToolResult({ toolName: 'ping', args: {}, result: 'pong', success: true });
+      await host.emitTurnEnd({ text: 'done', responseMessages: [] });
+      // The loop continued past the thrower: every later extension still ran.
+      expect(order).toEqual(['witness-start', 'witness-call', 'witness-result', 'witness-end']);
+      const failures = log.emitted.filter((row) => row.event === 'extension.hook_failed');
+      expect(failures.map((row) => row.fields)).toEqual([
+        { extension: 'thrower', hook: 'onTurnStart' },
+        { extension: 'thrower', hook: 'onToolCall' },
+        { extension: 'thrower', hook: 'onToolResult' },
+        { extension: 'thrower', hook: 'onTurnEnd' },
+      ]);
+    } finally {
+      restore();
+    }
   });
 
   test('runTransformContext is awaited, chained, and fail-open', async () => {

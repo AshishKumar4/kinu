@@ -3,10 +3,16 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { createTestSql } from '@kinu.run/test-utils';
+import { jsonSchema, tool } from 'ai';
 import { createTestRuntime } from './helpers';
 import { modifyScaffold } from '../src/scaffold/modify';
 import { rollbackScaffold } from '../src/scaffold/rollback';
 import { initScaffoldTables } from '../src/scaffold/schemas';
+import {
+  createScaffoldCallTool, initToolEffectClaimTable, withEffectClaims,
+  type EffectClaimDeps,
+} from '../src/index';
 
 describe('Scaffold modification (4-gate)', () => {
   test('rejects rationale shorter than 50 chars', async () => {
@@ -151,5 +157,45 @@ describe('Scaffold rollback', () => {
     const result = await rollbackScaffold(rt, 999);
     expect(result.ok).toBe(false);
     expect(result.error).toContain('999');
+  });
+});
+
+describe('scaffold host callTool ids', () => {
+  test('scope-less calls under a frozen clock each run their effect', async () => {
+    // The scope-less id was `scaffold-${Date.now()}`: two calls inside one
+    // millisecond shared one id, and the tool-effect claim replayed the
+    // first call's stored result for the second instead of running it.
+    // Driven through the real claim wrapper over real SQL, because the
+    // claim IS the row.
+    const { sql, execRaw } = createTestSql();
+    initToolEffectClaimTable(execRaw);
+    const deps: EffectClaimDeps = { sql, turnId: () => 'turn-1' };
+    const calls: string[] = [];
+    const entry = tool({
+      description: 'send the invoice',
+      inputSchema: jsonSchema<{ to: string }>({
+        type: 'object', properties: { to: { type: 'string' } }, required: ['to'],
+      }),
+      execute: async (input: { to: string }) => {
+        calls.push(input.to);
+        return { sent: input.to, attempt: calls.length };
+      },
+    });
+    const claimed = () => withEffectClaims({ run: entry }, deps);
+    const firstHost = createScaffoldCallTool(claimed);
+    const secondHost = createScaffoldCallTool(claimed);
+    const realNow = Date.now;
+    Date.now = () => 1_700_000_000_000;
+    try {
+      const first = await firstHost('run', { to: 'ops@example.test' });
+      const second = await firstHost('run', { to: 'ops@example.test' });
+      const third = await secondHost('run', { to: 'ops@example.test' });
+      expect(calls).toEqual(['ops@example.test', 'ops@example.test', 'ops@example.test']);
+      expect(first).toEqual({ sent: 'ops@example.test', attempt: 1 });
+      expect(second).toEqual({ sent: 'ops@example.test', attempt: 2 });
+      expect(third).toEqual({ sent: 'ops@example.test', attempt: 3 });
+    } finally {
+      Date.now = realNow;
+    }
   });
 });

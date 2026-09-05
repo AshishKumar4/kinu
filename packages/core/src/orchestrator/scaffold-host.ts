@@ -26,6 +26,7 @@ import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
 import { normalizeUsage } from '../usage';
 import { decodeJsonValue } from '../utils/json';
 import { boundedInt } from '../utils/bounds';
+import { nanoid } from '../utils/nanoid';
 import { renderThrownChain } from '../obs/index';
 import type {
   ScaffoldHistoryEntry,
@@ -223,13 +224,20 @@ export function createScaffoldCallTool(
   callScope?: string,
 ): NonNullable<ScaffoldRunOptions['callTool']> {
   let seq = 0;
+  // Scope-less rollouts have no durable identity to re-drive them, so their
+  // ids only need to be unique — never reused. A wall-clock id was neither:
+  // two calls inside one millisecond shared it, and the tool-effect claim
+  // then replayed the first call's stored result for the second. The counter
+  // keeps two calls on one wrapper apart; the nonce keeps two wrappers
+  // apart. Scoped ids stay `<scope>#<seq>` so a re-drive still dedupes.
+  const nonce = nanoid();
   return async (name, args) => {
     const t = tools()[name];
     if (!t?.execute) return { error: `tool not found: ${name}` };
     try {
       const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
         messages: [],
-        toolCallId: callScope === undefined ? `scaffold-${Date.now()}` : `${callScope}#${seq++}`,
+        toolCallId: callScope === undefined ? `scaffold-${nonce}#${seq++}` : `${callScope}#${seq++}`,
       };
       const input = await safeValidateTypes({ value: args, schema: t.inputSchema });
       if (!input.success) return { error: input.error.message };

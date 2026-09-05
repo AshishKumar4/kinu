@@ -201,6 +201,26 @@ export class ExtensionHost {
     return rewritten ? current : undefined;
   }
 
+  /** Run one extension hook fail-open — a plugin must never break a turn. A
+   *  throwing hook is recorded (which extension, which hook) and skipped, and
+   *  the caller sees `undefined` as if the hook had stayed silent. */
+  private async guardHook<T>(
+    hook: string,
+    extension: string,
+    run: () => T | Promise<T>,
+  ): Promise<T | undefined> {
+    try {
+      return await run();
+    } catch (err) {
+      diagnostics.failure(
+        'extension.hook_failed',
+        toKinuError({ doing: `run an extension ${hook} hook`, cause: err, otherwise: 'io' }),
+        { extension, hook },
+      );
+      return undefined;
+    }
+  }
+
   /** Run every transformContext hook in registration order, chaining outputs
    *  (extension N sees extension N-1's rewritten history). Awaited, and
    *  fail-open per extension — a plugin must never break a turn. Returns the
@@ -211,36 +231,45 @@ export class ExtensionHost {
     let out: ModelMessage[] | undefined;
     for (const ext of this.extensions) {
       if (!ext.transformContext) continue;
-      try {
-        const next = await ext.transformContext({ ...ctx, messages: current });
-        if (next) {
-          out = next;
-          current = next;
-        }
-      } catch (err) {
-        diagnostics.failure(
-          'extension.transform_context_failed',
-          toKinuError({ doing: 'run an extension transformContext hook', cause: err, otherwise: 'io' }),
-          { extension: ext.name },
-        );
+      const next = await this.guardHook(
+        'transformContext',
+        ext.name,
+        () => ext.transformContext?.({ ...ctx, messages: current }),
+      );
+      if (next) {
+        out = next;
+        current = next;
       }
     }
     return out;
   }
 
   async emitTurnStart(ctx: TurnStartContext): Promise<void> {
-    for (const ext of this.extensions) await ext.onTurnStart?.(ctx);
+    for (const ext of this.extensions) {
+      if (!ext.onTurnStart) continue;
+      await this.guardHook('onTurnStart', ext.name, () => ext.onTurnStart?.(ctx));
+    }
   }
 
   async emitToolCall(ctx: ToolCallContext): Promise<void> {
-    for (const ext of this.extensions) await ext.onToolCall?.(ctx);
+    for (const ext of this.extensions) {
+      if (!ext.onToolCall) continue;
+      await this.guardHook('onToolCall', ext.name, () => ext.onToolCall?.(ctx));
+    }
   }
 
   async emitToolResult(ctx: ToolResultContext): Promise<void> {
-    for (const ext of this.extensions) await ext.onToolResult?.(ctx);
+    for (const ext of this.extensions) {
+      if (!ext.onToolResult) continue;
+      await this.guardHook('onToolResult', ext.name, () => ext.onToolResult?.(ctx));
+    }
   }
 
   async emitTurnEnd(ctx: TurnEndContext): Promise<void> {
-    for (const ext of this.extensions) await ext.onTurnEnd?.(ctx);
+    for (const ext of this.extensions) {
+      if (!ext.onTurnEnd) continue;
+      await this.guardHook('onTurnEnd', ext.name, () => ext.onTurnEnd?.(ctx));
+    }
   }
+
 }
