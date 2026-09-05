@@ -1,12 +1,12 @@
 diff --git a/packages/core/src/evolution/control.ts b/packages/core/src/evolution/control.ts
 --- a/packages/core/src/evolution/control.ts
 +++ b/packages/core/src/evolution/control.ts
-@@ -295,7 +295,7 @@ export function queueTurnShadowTrial(
-       if (sampleRate <= 0) return 'not_sampled';
-       const pending = getPendingScaffold(control.sql);
-       if (!pending) return 'no_pending';
--      if (Math.random() >= sampleRate) return 'not_sampled';
-+      if (Math.random() <= sampleRate) return 'not_sampled';
-       pendingVersion = pending.version;
-     }
-     const trial = {
+@@ -248,7 +248,7 @@ export function shadowTrialPlan(control: ScaffoldControl, turnKey: string): numb
+   const sampleRate = control.config.getShadowSampleRate();
+   if (sampleRate <= 0) return null;
+   const pending = getPendingScaffold(control.sql);
+   if (!pending) return null;
+-  if (sampleFraction(turnKey) >= sampleRate) return null;
++  if (sampleFraction(turnKey) <= sampleRate) return null;
+   return pending.version;
+ }
