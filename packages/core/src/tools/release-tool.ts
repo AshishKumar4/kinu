@@ -112,6 +112,51 @@ export type ReleaseActionResult =
   | Awaited<ReturnType<ReleaseEngine['rollback']>>
   | { error: string };
 
+/** Everything the engine-driven phase reads: the deps holding the engine
+ *  and the action input. Only reached for engine actions; any other action
+ *  answers an error rather than falling off the switch. */
+interface ReleaseEngineContext {
+  readonly releases: ReleaseToolDeps;
+  readonly args: ReleaseActionInput;
+}
+
+/** Engine-driven actions — apply, run_checks, preview, deploy, rollback —
+ *  grounded in real execution. Refuses without an engine, and requires the
+ *  change the engine acts on. */
+async function runReleaseEngineAction(ctx: ReleaseEngineContext): Promise<ReleaseActionResult> {
+  const engine = ctx.releases.engine;
+  if (!engine) {
+    return { error: `action=${ctx.args.action} needs the execution engine, which this backend does not provide — the ledger actions (update/transition/record_check) remain available` };
+  }
+  if (!ctx.args.changeId) return { error: `${ctx.args.action} requires changeId` };
+  switch (ctx.args.action) {
+    case 'apply':
+      return await engine.apply(ctx.args.changeId);
+    case 'run_checks':
+      if (!ctx.args.checks?.length) return { error: 'run_checks requires checks: [{ name, command }]' };
+      return await engine.runChecks(
+        ctx.args.changeId,
+        ctx.args.checks.map((c) => ({ name: c.name ?? '', command: c.command ?? '' })),
+      );
+    case 'preview':
+      if (ctx.args.port == null) return { error: 'preview requires port (the port your server listens on)' };
+      return await engine.preview(ctx.args.changeId, {
+        port: ctx.args.port,
+        startCommand: ctx.args.startCommand || undefined,
+      });
+    case 'deploy':
+      if (!ctx.args.deployment?.environment) return { error: 'deploy requires deployment.environment (local | staging | production)' };
+      return await engine.deploy(ctx.args.changeId, {
+        environment: ctx.args.deployment.environment,
+        command: ctx.args.deployment.command || undefined,
+      });
+    case 'rollback':
+      return await engine.rollback(ctx.args.changeId, ctx.args.deployment?.command ? { command: ctx.args.deployment.command } : undefined);
+    default:
+      return { error: `unknown engine action: ${ctx.args.action}` };
+  }
+}
+
 /** Dispatch one release action. Never throws — every failure comes back as
  *  `{ error }` so a codemode caller sees a value, not an exception. */
 export async function runReleaseAction(
@@ -204,35 +249,7 @@ export async function runReleaseAction(
       case 'preview':
       case 'deploy':
       case 'rollback': {
-        const engine = releases.engine;
-        if (!engine) {
-          return { error: `action=${args.action} needs the execution engine, which this backend does not provide — the ledger actions (update/transition/record_check) remain available` };
-        }
-        if (!args.changeId) return { error: `${args.action} requires changeId` };
-        switch (args.action) {
-          case 'apply':
-            return await engine.apply(args.changeId);
-          case 'run_checks':
-            if (!args.checks?.length) return { error: 'run_checks requires checks: [{ name, command }]' };
-            return await engine.runChecks(
-              args.changeId,
-              args.checks.map((c) => ({ name: c.name ?? '', command: c.command ?? '' })),
-            );
-          case 'preview':
-            if (args.port == null) return { error: 'preview requires port (the port your server listens on)' };
-            return await engine.preview(args.changeId, {
-              port: args.port,
-              startCommand: args.startCommand || undefined,
-            });
-          case 'deploy':
-            if (!args.deployment?.environment) return { error: 'deploy requires deployment.environment (local | staging | production)' };
-            return await engine.deploy(args.changeId, {
-              environment: args.deployment.environment,
-              command: args.deployment.command || undefined,
-            });
-          case 'rollback':
-            return await engine.rollback(args.changeId, args.deployment?.command ? { command: args.deployment.command } : undefined);
-        }
+        return await runReleaseEngineAction({ releases, args });
       }
     }
   } catch (err) {
