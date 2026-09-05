@@ -20,7 +20,7 @@ import {
   type HeadSplitRequest, type HeadSplitResult,
   type HeadMergeModelBinder, type ResolvedTurnProfile,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
-  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, type HeadJournal,
+  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, type HeadJournal, headAgentName,
   createStateCodemodeProvider,
   headMergeLLM,
   localMissionScope,
@@ -29,7 +29,7 @@ import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildCLIHeadRuntime, type CLIRuntime } from './runtime';
+import { buildCLIHeadRuntime, cleanupFacetCwdScratch, type CLIRuntime } from './runtime';
 import { createNodeExecuteToolFactory } from './execute-tools-factory';
 import { kinuHome } from './home';
 
@@ -185,12 +185,13 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
 async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: AbortFlag): Promise<HeadReport> {
   const scratch = openHeadScratch(input.id);
   const db = scratch.db;
+  const agentName = headAgentName(input.id);
   try {
     const capture = new HeadCapture();
     const rt = buildCLIHeadRuntime(db, {
       parentRuntime: deps.parentRuntime,
       agentId: input.id,
-      agentName: `head-${input.id.slice(0, 8)}`,
+      agentName,
       writeObserver: capture.files,
     });
     // execute_tools over the head's OWN router providers (private `workspace.*`
@@ -233,6 +234,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
     return await runHeadInference(input, inferenceOptions);
   } finally {
     scratch.dispose();
+    if (deps.parentRuntime.cwd) cleanupFacetCwdScratch(deps.parentRuntime.cwd, agentName);
   }
 }
 

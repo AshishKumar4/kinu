@@ -128,7 +128,7 @@ describe('peers over one directory', () => {
   test('a subordinate writes into the shared directory and keeps its own stores', async () => {
     const { state, project } = roots('cwd-plane-subordinate');
     const parent = agentRuntime(state, 'parent', project);
-    const child = shareLocalWorkspacePlane(agentRuntime(state, 'child', project), parent);
+    const child = await shareLocalWorkspacePlane(agentRuntime(state, 'child', project), parent, 'sub-child');
 
     await child.storage.vfs.writeFile('from-child.txt', 'child was here');
     expect(readFileSync(join(project, 'from-child.txt'), 'utf8')).toBe('child was here');
@@ -170,8 +170,20 @@ describe('a fork over the bound directory', () => {
     // observer wraps the plane the head actually writes through.
     expect(written.map((event) => event.path)).toEqual(['head-output.md']);
 
-    // One directory, one shell — and its own state stays its own.
-    expect(head.shell).toBe(parent.shell);
+    // One directory, one gated shell — running as this head, with its own
+    // scratch as HOME and TMPDIR under the workspace's state, and its own state
+    // stays its own.
+    const headShell = head.shell;
+    if (!headShell) throw new Error('a head over a bound directory runs the host shell');
+    const env = await headShell.exec('pwd; echo "$HOME"; echo "$TMPDIR"');
+    expect(env.stdout.trim().split('\n')).toEqual([
+      resolve(project),
+      join(resolve(project), '.kinu', 'facets', 'head-h1'),
+      join(resolve(project), '.kinu', 'facets', 'head-h1', 'tmp'),
+    ]);
+    const parentShell = parent.shell;
+    if (!parentShell) throw new Error('a bound workspace runs the host shell');
+    expect((await parentShell.exec('echo "$HOME"')).stdout.trim()).toBe(process.env.HOME ?? '');
     await head.identity.scaffold.write('// head\n');
     expect(await head.identity.scaffold.read()).toBe('// head\n');
     expect(await parent.identity.scaffold.exists()).toBe(false);

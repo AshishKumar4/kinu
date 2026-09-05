@@ -1017,7 +1017,7 @@ export {
 } from './vfs/workspace-path';
 export {
   agentHome, agentTmpRoot, agentCred, agentIdentity, agentHomeLayout,
-  provisionAgentHome, confineAgentTmp,
+  provisionAgentHome, confineAgentTmp, subordinateAgentName, headAgentName,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
   type AgentDir, type AgentIdentity, type HomeRootVfs, type TmpConfiner,
 } from './vfs/agent-home';

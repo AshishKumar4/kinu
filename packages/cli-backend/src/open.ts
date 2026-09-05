@@ -44,6 +44,8 @@ export interface CLIOpenConfig {
   hostRoot?: string | null;
   /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
+  /** The facet this agent is, as an agent name. See CLIRuntimeConfig.facet. */
+  facet?: string;
 }
 
 /**
@@ -81,7 +83,7 @@ export async function openWorkspaceCLI(
   if (!identity) throw new Error('No workspace identity found. Use createWorkspace() to create one.');
 
   // Build the runtime before reading the agent-private SOUL file.
-  const rt = createCLIRuntime(db, {
+  const runtimeConfig: Parameters<typeof createCLIRuntime>[1] = {
     dbPath,
     llm: config.llm,
     providerCredentials: config.providerCredentials,
@@ -91,7 +93,9 @@ export async function openWorkspaceCLI(
     hostRoot: config.hostRoot,
     cwd: config.cwd,
     agentName: identity.name,
-  });
+  };
+  if (config.facet !== undefined) runtimeConfig.facet = config.facet;
+  const rt = createCLIRuntime(db, runtimeConfig);
 
   // SOUL belongs to the agent, not to the shared physical project directory.
   const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs);

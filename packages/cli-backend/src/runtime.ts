@@ -25,7 +25,7 @@ import { spawn } from 'node:child_process';
 import { promises as fs, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve as resolvePath } from 'node:path';
 import {
-  type LLMProviderConfig, buildRuntime, agentHome,
+  type LLMProviderConfig, buildRuntime, agentHome, facetHomeProvisioner,
   observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL,
   createParentExecutor, createParentWorkspaceVfs,
@@ -110,6 +110,13 @@ export interface CLIRuntimeConfig {
   hostRoot?: string | null;
   /** Shadow-git checkpoints kept per working directory (the one retention knob). */
   checkpointKeep?: number;
+  /**
+   * The facet this runtime is, as an agent name (`sub-<slug>`, `head-<id>`), for
+   * a workspace bound to a directory: its commands run with `HOME` and `TMPDIR`
+   * in that facet's own scratch ({@link facetCwdScratch}). Absent is the
+   * workspace's own agent.
+   */
+  facet?: string;
 }
 
 /**
@@ -192,6 +199,13 @@ export interface CLIRuntime extends AgentRuntime {
    * home owned by the node is a home the ORIGIN's plane cannot write.
    */
   nodeRuntime?: (node: NodeWorkspace) => Promise<AgentRuntime>;
+  /**
+   * A directory-bound workspace's shell for one facet: the same gated,
+   * checkpointed host shell, with that facet's own `HOME` and `TMPDIR`. Present
+   * exactly where `cwd` is, because a principal registry does the same job on
+   * the in-SQLite plane through {@link nodeRuntime}.
+   */
+  facetShell?: (facet: string) => Shell;
 }
 
 /** The bun:sqlite surface every local SQL adapter here needs. */
@@ -534,10 +548,17 @@ export function createCLIRuntime(
   // any command may mutate the tree, so it snapshots first. The in-SQLite
   // shell touches no host file and names no host directory, so checkpointing
   // it asked the shadow-git engine to snapshot the database file.
-  const shell: Shell = withApprovalGatedShell(
-    cwd ? withCheckpointedShell(createHostShell(cwd), checkpoints, cwd) : workspace.shell,
+  const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withApprovalGatedShell(
+    withCheckpointedShell(
+      createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(cwd, facet)),
+      checkpoints,
+      cwd,
+    ),
     approvalPolicy,
   );
+  const shell: Shell = facetShell
+    ? facetShell(config.facet)
+    : withApprovalGatedShell(workspace.shell, approvalPolicy);
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
   const agentVfs = withMountTable(
     fileVfs,
@@ -619,7 +640,9 @@ export function createCLIRuntime(
   // every node already shares the origin plane by construction — so the host is
   // withheld rather than faked, and a node states `shared-origin-plane` instead
   // of being handed a home in a filesystem its work cannot reach.
-  if (!cwd) {
+  if (facetShell) {
+    runtime.facetShell = facetShell;
+  } else {
     runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: workspaceSql });
     // And the runtime that home is only real through — see `node-runtime.ts`,
     // which owns the whole of what a second runtime over one workspace means.
@@ -631,32 +654,39 @@ export function createCLIRuntime(
 }
 
 /**
- * Join a subordinate to its parent's workspace plane, keeping its own SQL
+ * Join one facet to its parent's workspace plane, keeping its own SQL
  * identity, conversation, scaffold closure and branch state.
  *
  * A physical directory needs no joining. A child opened with its parent's cwd
- * already addresses the same bytes through its OWN executors, so its memory
- * and craft store stay private — which is the contract — and the one thing
- * genuinely shared per directory is the undo history: two agents editing one
- * tree want one restore point, not two that can each revert the other's work.
+ * already addresses the same bytes through its OWN executors, with `HOME` and
+ * `TMPDIR` in its own scratch, so its memory and craft store stay private —
+ * which is the contract — and the one thing genuinely shared per directory is
+ * the undo history: two agents editing one tree want one restore point, not two
+ * that can each revert the other's work.
  *
  * The in-SQLite plane is per-database, so there a child cannot see its
- * parent's files at all without being moved onto them. That transplant is what
- * this function was written for, and it stays for exactly that case.
+ * parent's files at all without being moved onto them. It is moved onto them
+ * as itself: a home of its own in the one tree, a private `/tmp`, and both
+ * planes credentialed as its uid, the way a swarm node is.
  */
-export function shareLocalWorkspacePlane(
+export async function shareLocalWorkspacePlane(
   actor: CLIRuntime,
   workspace: CLIRuntime,
-): CLIRuntime {
+  facet: string,
+): Promise<CLIRuntime> {
   if (workspace.cwd && actor.cwd === workspace.cwd) {
     return Object.assign(actor, { checkpoints: workspace.checkpoints });
   }
+  if (!workspace.nodeHome || !workspace.nodeRuntime) {
+    throw new Error(`workspace runtime for ${facet} has no principal registry, so it cannot host a facet`);
+  }
+  const plane = await workspace.nodeRuntime(await facetHomeProvisioner(workspace.nodeHome())(facet));
   return Object.assign(actor, {
-    storage: { ...actor.storage, vfs: workspace.storage.vfs },
+    storage: { ...actor.storage, vfs: plane.storage.vfs },
     memory: workspace.memory,
     craftStore: workspace.craftStore,
-    executionRouter: workspace.executionRouter,
-    shell: workspace.shell,
+    executionRouter: plane.executionRouter,
+    shell: plane.shell,
     checkpoints: workspace.checkpoints,
     cwd: workspace.cwd ?? null,
   });
@@ -778,9 +808,12 @@ export function buildCLIHeadRuntime(
   const craftStore = adaptCraftStore(craftStoreImpl);
 
   // One directory, one approval policy, one undo history: a head over a shared
-  // plane runs the parent's own gated and checkpointed shell rather than an
-  // in-SQLite shell that cannot see the files it is reading.
-  const shell = parent.cwd && parent.shell ? parent.shell : withApprovalGatedShell(workspace.shell);
+  // plane runs the parent's own gated and checkpointed shell, with its own
+  // scratch as HOME and TMPDIR, rather than an in-SQLite shell that cannot see
+  // the files it is reading.
+  const shell = parent.cwd && parent.facetShell
+    ? parent.facetShell(opts.agentName)
+    : withApprovalGatedShell(workspace.shell);
   const executionRouter = new DefaultExecutionRouter();
   executionRouter.register(createInlineExecutor({
     vfs, memory, craftStore, shell, sql,
@@ -870,7 +903,13 @@ const shellOptionsSchema = v.object({
 });
 const abortContextSchema = v.object({ signal: v.optional(v.instance(AbortSignal)) });
 
-export function createHostShell(cwd: string): Shell {
+/** The process environment a directory-bound facet's commands run in. */
+function facetShellEnv(cwd: string, facet: string): NodeJS.ProcessEnv {
+  const scratch = facetCwdScratch(cwd, facet);
+  return { ...process.env, HOME: scratch.home, TMPDIR: scratch.tmp };
+}
+
+export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.env): Shell {
   return {
     exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
       return new Promise((resolve) => {
@@ -882,7 +921,7 @@ export function createHostShell(cwd: string): Shell {
         const child = spawn('/bin/sh', ['-lc', command], {
           cwd,
           stdio: ['pipe', 'pipe', 'pipe'],
-          env: process.env,
+          env,
           detached: true,
         });
         let stdout = '';

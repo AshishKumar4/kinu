@@ -58,6 +58,7 @@ import {
   type PeerMessage,
   type ReceiveResult,
   type RoleSelection,
+  subordinateAgentName,
   type SqlExec,
   type SubordinateHandoff,
   type SubordinateLifetime,
@@ -72,6 +73,7 @@ import { createWorkspace } from '@kinu.run/core/identity';
 import { KinuError, diagnostics, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import {
   makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
+  cleanupFacetCwdScratch,
   type CLIRuntime,
 } from '../runtime';
 import { openWorkspaceCLI, type CLIOpenConfig } from '../open';
@@ -659,9 +661,9 @@ export class LocalAgentHost {
     }
     const db = new Database(dbPath);
     try {
-      const openConfig = this.childOpenConfig(parent);
+      const openConfig = this.childOpenConfig(parent, childName);
       const opened = await openWorkspaceCLI(db, dbPath, openConfig);
-      const rt = shareLocalWorkspacePlane(opened.rt, parent.ws.rt);
+      const rt = await shareLocalWorkspacePlane(opened.rt, parent.ws.rt, openConfig.facet);
       const ws: LocalHostedAgent = { rt, openConfig };
       if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;
       if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
@@ -691,14 +693,15 @@ export class LocalAgentHost {
 
   /**
    * The provider/auth wiring a subordinate opens with — its parent's, with the
-   * bound directory forced to the parent's ref.
+   * bound directory forced to the parent's ref and the child named as the facet
+   * it is.
    *
    * Forced rather than inherited verbatim because "a subordinate shares its
    * root's bytes" then holds by construction: whatever the caller put in the
    * root's `openConfig`, a child cannot be opened against a different plane.
    */
-  private childOpenConfig(parent: HostEntry): CLIOpenConfig {
-    return { ...parent.ws.openConfig, cwd: parent.ref.cwd };
+  private childOpenConfig(parent: HostEntry, childName: string): CLIOpenConfig & { facet: string } {
+    return { ...parent.ws.openConfig, cwd: parent.ref.cwd, facet: subordinateAgentName(childName) };
   }
 
   /** One agent's peer endpoint, over the same `outbox_peer`/`reply_channels`
@@ -1144,9 +1147,9 @@ export class LocalAgentHost {
         llm,
       });
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-      const openConfig = this.childOpenConfig(parent);
+      const openConfig = this.childOpenConfig(parent, input.name);
       const opened = await openWorkspaceCLI(db, dbPath, openConfig);
-      const rt = shareLocalWorkspacePlane(opened.rt, parent.ws.rt);
+      const rt = await shareLocalWorkspacePlane(opened.rt, parent.ws.rt, openConfig.facet);
       const config = createAgentConfigStore(rt.storage.sql);
       config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
       config.setRoleSelection(input.role);
@@ -1248,6 +1251,7 @@ export class LocalAgentHost {
       parent.children.delete(name);
       this.entries.delete(child.key);
     }
+    cleanupFacetCwdScratch(parent.ref.cwd, subordinateAgentName(name));
     if (!keepHistory) removeChildState(dbPath);
   }
 
