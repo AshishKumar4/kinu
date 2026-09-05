@@ -52,9 +52,14 @@ export type ConformanceProducer = (typeof CONFORMANCE_PRODUCERS)[number];
 export const CONFORMANCE_ROOTS = ['cf-orchestrator', 'cf-subordinate', 'cli'] as const;
 export type ConformanceRoot = (typeof CONFORMANCE_ROOTS)[number];
 
-/** Wired, or deliberately absent for a stated reason. There is no third
- *  state — "we forgot" is exactly what must not be representable. */
-export type CapabilityStatus = { readonly wired: true } | { readonly absent: string };
+/** Wired, deliberately absent for a stated reason, or built on first use by a
+ *  named creator: held by the root, only not at boot, which is when the
+ *  observer looks. There is no fourth state — "we forgot" is exactly what
+ *  must not be representable. */
+export type CapabilityStatus =
+  | { readonly wired: true }
+  | { readonly absent: string }
+  | { readonly lazy: string };
 
 export const WIRED: CapabilityStatus = { wired: true };
 
@@ -125,7 +130,7 @@ const NIMBUS_BASE = {
   },
   cli: WIRED,
 } satisfies RootStatuses;
-const LAZY_ON_FIRST_USE = (what: string): string => `created lazily on first use by ${what}, not at boot`;
+const LAZY_ON_FIRST_USE = (what: string): CapabilityStatus => ({ lazy: `created on first use by ${what}, not at boot` });
 const NO_LOCAL_INGRESS = 'a local workspace has no inbound HTTP transport, and `kinu triggers <name> webhook` refuses a local target';
 const RELEASE_TABLE = {
   'cf-orchestrator': { absent: "the release board lives in the owner's UserDO on cf, not on the workspace DO" },
@@ -333,12 +338,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // recovery lane during start. A root creates the same tables only when its
     // first durable fiber starts.
     cf_agents_runs: {
-      'cf-orchestrator': { absent: LAZY_ON_FIRST_USE('runFiber') },
+      'cf-orchestrator': LAZY_ON_FIRST_USE('runFiber'),
       'cf-subordinate': WIRED,
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
     },
     cf_agents_fibers: {
-      'cf-orchestrator': { absent: LAZY_ON_FIRST_USE('runFiber') },
+      'cf-orchestrator': LAZY_ON_FIRST_USE('runFiber'),
       'cf-subordinate': WIRED,
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
     },
@@ -350,7 +355,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // of its own only when it first delegates.
     cf_agents_sub_agents: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: LAZY_ON_FIRST_USE('subAgent') },
+      'cf-subordinate': LAZY_ON_FIRST_USE('subAgent'),
       cli: { absent: 'the Agents SDK\'s Durable Object base is what creates this registry, and a '
         + 'local session has no Durable Object; local facets run in-process' },
     },
@@ -468,18 +473,15 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
       cli: { absent: NO_LOCAL_INGRESS },
     },
-    // The plaintext HMAC/bearer secret a registered webhook was created with.
-    // Present on a local session from boot — `local-session.ts` builds the store
-    // in its constructor, although nothing local ever writes it, because this
-    // plane needs one root that holds the table at boot — and only once a
-    // webhook is actually registered on cf, where the orchestrator memoizes it
-    // (`_webhookSecrets ??=`). `identity/archive.ts` deliberately excludes this
-    // table from a workspace archive because it is a live ingress credential,
-    // so a restore does not resurrect one.
+    // The plaintext HMAC/bearer secret a registered webhook was created with,
+    // built once a webhook is actually registered on cf, where the orchestrator
+    // memoizes it (`_webhookSecrets ??=`). `identity/archive.ts` deliberately
+    // excludes this table from a workspace archive because it is a live ingress
+    // credential, so a restore does not resurrect one.
     webhook_secrets: {
-      'cf-orchestrator': { absent: LAZY_ON_FIRST_USE('registerDurableWebhook') },
+      'cf-orchestrator': LAZY_ON_FIRST_USE('registerDurableWebhook'),
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
-      cli: WIRED,
+      cli: { absent: NO_LOCAL_INGRESS },
     },
     vfs_baseline: {
       'cf-orchestrator': WIRED,
@@ -513,7 +515,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     turn_craft_usage: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('craft-usage telemetry') },
-      cli: { absent: LAZY_ON_FIRST_USE('the in-episode craft clock') },
+      cli: LAZY_ON_FIRST_USE('the in-episode craft clock'),
     },
 
     // ── shared FTS5 stores (agent-utils MemoryStore / CraftStore) ──

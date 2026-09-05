@@ -71,6 +71,27 @@ describe('compareSurface can fail (canaries)', () => {
     expect(renderConformanceFindings(report)).toBe('');
     expect(report.unmeasured).toEqual([]);
   });
+
+  test('a capability created on first use is neither missing at boot nor contradicted once built', () => {
+    const manifest: ConformanceManifest = {
+      tool: { ...BACKEND_CONFORMANCE.tool },
+      'agents-action': { ...BACKEND_CONFORMANCE['agents-action'] },
+      'memory-action': { ...BACKEND_CONFORMANCE['memory-action'] },
+      table: {
+        built_on_first_use: {
+          'cf-orchestrator': { lazy: 'created on first use by a registration' },
+          'cf-subordinate': { absent: 'a subordinate never registers one' },
+          cli: { absent: 'a local root never registers one' },
+        },
+      },
+      producer: { ...BACKEND_CONFORMANCE.producer },
+    };
+    const cloud = (table: Set<string>): ObservedSurface => ({ root: 'cf-orchestrator', planes: { table } });
+    const tableFindings = (table: Set<string>) =>
+      compareSurface(cloud(table), manifest).findings.filter((f) => f.plane === 'table');
+    expect(tableFindings(new Set())).toEqual([]);
+    expect(tableFindings(new Set(['built_on_first_use']))).toEqual([]);
+  });
 });
 
 // ── Manifest hygiene ────────────────────────────────────────────────────────
@@ -100,14 +121,29 @@ describe('manifest hygiene', () => {
     expect(Object.keys(BACKEND_CONFORMANCE.producer).sort()).toEqual([...PLANE_UNIVERSE.producer!].sort());
   });
 
+  /** A declaration is dead when no root holds the capability. A root that
+   *  creates it on first use holds it; the observer only looks at boot. */
+  function heldSomewhere(statuses: RootStatuses): boolean {
+    return CONFORMANCE_ROOTS.some((root) => 'wired' in statuses[root] || 'lazy' in statuses[root]);
+  }
+
   test('no capability is declared absent everywhere (dead declaration)', () => {
     for (const plane of CONFORMANCE_PLANES) {
       const statusesByName: Readonly<Record<string, RootStatuses>> = BACKEND_CONFORMANCE[plane];
       for (const [name, statuses] of Object.entries(statusesByName)) {
-        const anyWired = CONFORMANCE_ROOTS.some((root) => 'wired' in statuses[root]);
-        expect({ plane, name, anyWired }).toEqual({ plane, name, anyWired: true });
+        expect({ plane, name, held: heldSomewhere(statuses) }).toEqual({ plane, name, held: true });
       }
     }
+  });
+
+  test('a capability one root creates on first use is held; absent on every root is dead', () => {
+    const nowhere: RootStatuses = {
+      'cf-orchestrator': { absent: 'never built on the cloud root' },
+      'cf-subordinate': { absent: 'never built on a subordinate' },
+      cli: { absent: 'never built on the local root' },
+    };
+    expect(heldSomewhere(nowhere)).toBe(false);
+    expect(heldSomewhere({ ...nowhere, 'cf-orchestrator': { lazy: 'created on first use by a registration' } })).toBe(true);
   });
 });
 

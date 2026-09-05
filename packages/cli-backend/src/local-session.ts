@@ -54,7 +54,6 @@ import {
   TriggerRegistry,
   // Ingress — core owns the gates; this session owns the local clock and the
   // process boundary in front of them.
-  createWebhookSecretStore,
   createTimerTrigger, cancelTrigger, fireDueTriggers,
   EvolutionEngine,
   readMemoryTail,
@@ -146,7 +145,6 @@ import {
   type AlarmScheduler, type BackgroundJob, type RawSqlExec,
   type TimerTrigger, type TimerTriggerOpts,
   type CancelTriggerResult, type TrustLevel,
-  type WebhookSecretStore,
   reasoningEffortOptions,
   BUILTIN_PROFILE_CATALOG, TIER_IDS, effectiveRoleCatalog,
   changeActiveRole, agentsProfileContext, canonicalConversationId,
@@ -603,12 +601,6 @@ export class LocalAgentSession implements BackendHost {
     () => this.currentRunId ?? WORKSPACE_RUN_ID,
   );
   private readonly triggerRegistry: TriggerRegistry;
-  /** Where a workspace's webhook secrets live. A local session registers no
-   *  webhook, so nothing writes this store. It is built at boot because the
-   *  conformance manifest's table plane needs one root that holds the table
-   *  at boot (cf creates it on the first registration), and a cancel wipes
-   *  through it the way core's cancel expects. */
-  private readonly webhookSecrets: WebhookSecretStore;
   private readonly releases: ReleaseStore;
   private _webSearchProvider: WebSearchProvider | null = null;
   private alarmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -927,7 +919,6 @@ export class LocalAgentSession implements BackendHost {
       scheduleAt: async (ts) => { this.scheduleLocalAlarm(ts); },
     };
     this.triggerRegistry = new TriggerRegistry(hubSql, alarmScheduler);
-    this.webhookSecrets = createWebhookSecretStore(hubSql);
 
     // The durable per-run event log (run_events) — the same recorder, table and
     // RunEvent union the cloud backend records, over local SQLite — is written…
@@ -1302,7 +1293,7 @@ export class LocalAgentSession implements BackendHost {
    *  self cancel of an owner-created ingress. The operator's own cancel runs in
    *  another process, through the registry in the CLI's local inspection. */
   cancelTrigger(trigger_id: string, caller: TrustLevel): CancelTriggerResult {
-    const result = cancelTrigger(this.triggerRegistry, trigger_id, Date.now(), caller, this.webhookSecrets);
+    const result = cancelTrigger(this.triggerRegistry, trigger_id, Date.now(), caller);
     this.rearmLocalAlarm();
     return result;
   }
