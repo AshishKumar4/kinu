@@ -14,9 +14,10 @@
  * composed the way the files-eio probe composes it (`NimbusWorkspace.create`
  * with no runtimes, the session credential, `nimbusSessionFiles` over a box
  * whose `files` are the credentialed vfs), and a real `GadgetHost` from
- * `src/gadgets/host.ts` over that plane, with `loader: env.LOADER`,
- * `facets: this.ctx.facets`, and the loopback mint narrowed the way
- * `src/orchestrator.ts` narrows it. The `data` port answers one fixed value
+ * `src/gadgets/host.ts` over that plane, with `loader: env.LOADER` and
+ * `facets: this.ctx.facets`. The host mints each binding from this test
+ * worker's own `exports`, which publishes the production binding classes
+ * exactly as `src/server.ts` does. The `data` port answers one fixed value
  * for `listBackgroundJobs`, the `mcp` port offers one read-only tool and one
  * side-effecting tool with a recording `call`, the approval policy is strict
  * with nobody to ask and no queue, and `broadcast` records.
@@ -26,11 +27,9 @@
  * `gadgetOwner` resolves the workspace name back to this object, and this
  * class exposes `gadgetBindingCall` beside `gadgetCall` for that hop.
  */
-import { DurableObject, exports } from 'cloudflare:workers';
+import { DurableObject } from 'cloudflare:workers';
 import { GadgetHost } from '../../src/gadgets/host';
-import type {
-  GadgetBindingEntrypoint, GadgetBindingProps, GadgetBindingRequest, GadgetLoopbackFactories,
-} from '../../src/gadgets/bindings';
+import type { GadgetBindingRequest } from '../../src/gadgets/bindings';
 import {
   GADGETS_CHANGED_EVENT,
   nimbusSessionFiles,
@@ -131,25 +130,11 @@ export class GadgetFacetProbeDO extends DurableObject<Cloudflare.Env> {
         },
       };
       const plane = nimbusSessionFiles(box);
-      // SAFETY: the test worker re-exports the binding classes the bindings module declares
-      // as WorkerEntrypoint subclasses constructed with `{ props }` (`./worker.ts`);
-      // the platform's loopback form calls each export with exactly that shape and
-      // answers a Fetcher, verified against codemode-egress.ts, which reads
-      // `exports.CodemodeEgress` the same way. Each export is narrowed on its own
-      // line so the assertion stays a single hop: the chained form, and the
-      // record-wide view of `exports`, both make type instantiation excessively deep (TS2589).
-      const loopbacks: GadgetLoopbackFactories = {
-        GadgetFilesBinding: exports.GadgetFilesBinding as GadgetLoopbackFactories['GadgetFilesBinding'],
-        GadgetWorkspaceBinding: exports.GadgetWorkspaceBinding as GadgetLoopbackFactories['GadgetWorkspaceBinding'],
-        GadgetMcpBinding: exports.GadgetMcpBinding as GadgetLoopbackFactories['GadgetMcpBinding'],
-      };
       const host = new GadgetHost({
         workspace: this.ctx.id.name ?? 'probe',
         vfs: () => plane,
         loader: this.env.LOADER,
         facets: this.ctx.facets,
-        mint: (entrypoint: GadgetBindingEntrypoint, props: GadgetBindingProps) =>
-          loopbacks[entrypoint]({ props }),
         broadcast: (event: { type: typeof GADGETS_CHANGED_EVENT; slugs: string[] }) => {
           this.broadcasts.push({ type: event.type, slugs: [...event.slugs] });
         },

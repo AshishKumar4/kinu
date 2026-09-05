@@ -24,9 +24,8 @@ import {
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
-import { exports } from "cloudflare:workers";
 import { GadgetHost } from "./gadgets/host";
-import type { GadgetBindingRequest, GadgetLoopbackFactories } from "./gadgets/bindings";
+import type { GadgetBindingRequest } from "./gadgets/bindings";
 import { applyWorkspaceBoxOp, type WorkspaceBoxOp, type WorkspaceBoxResult } from "./workspace-box-rpc";
 import {
   hostedFacetAgentName, type HostedFacetHomes, type HostedFacetKind, type HostedNodeHome,
@@ -3950,24 +3949,11 @@ export class OrchestratorAgent extends ActorAgent {
   private _gadgets: GadgetHost | undefined;
 
   private get gadgets(): GadgetHost {
-    // SAFETY: server.ts re-exports the binding classes gadgets/bindings.ts declares
-    // as WorkerEntrypoint subclasses constructed with `{ props }`; the platform's
-    // loopback form calls each export with exactly that shape and answers a
-    // Fetcher, verified against codemode-egress.ts, which reads `exports.CodemodeEgress` the same way.
-    // Each export is narrowed on its own line so the assertion stays a single
-    // hop: the chained form, and the record-wide view of `exports`, both make
-    // type instantiation excessively deep (TS2589).
-    const loopbacks: GadgetLoopbackFactories = {
-      GadgetFilesBinding: exports.GadgetFilesBinding as GadgetLoopbackFactories['GadgetFilesBinding'],
-      GadgetWorkspaceBinding: exports.GadgetWorkspaceBinding as GadgetLoopbackFactories['GadgetWorkspaceBinding'],
-      GadgetMcpBinding: exports.GadgetMcpBinding as GadgetLoopbackFactories['GadgetMcpBinding'],
-    };
     this._gadgets ??= new GadgetHost({
       workspace: this.name,
       vfs: () => this.rt.storage.vfs,
       loader: this.env.LOADER,
       facets: this.ctx.facets,
-      mint: (entrypoint, props) => loopbacks[entrypoint]({ props }),
       broadcast: (event) => this.broadcast(JSON.stringify(event)),
       data: (source) => this.gadgetDataSource(source),
       mcp: {

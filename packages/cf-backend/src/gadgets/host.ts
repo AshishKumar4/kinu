@@ -34,22 +34,25 @@
  */
 
 import * as v from 'valibot';
+import { exports } from 'cloudflare:workers';
 import {
   GADGET_DIR, GADGET_SERVER_CLASS, GADGETS_CHANGED_EVENT, GADGET_LIMITS, JsonObjectSchema, JsonValueSchema, WORKSPACE_ROOT,
   decideApproval, ensureDir, gadgetBindings, gadgetFilesRoot, gadgetSummary, isGadgetMethodName, isGadgetSlug,
   listGadgets, readGadget, readGadgetClient, readGadgetServer, resolveGadgetDataSource, resolveGadgetFilePath,
   reviewGadgetMcpCall, sha256Hex,
-  type ApprovalSpend, type GadgetBinding, type GadgetCallResult, type GadgetDataSource, type GadgetManifest,
-  type GadgetMcpTool, type GadgetProblem, type GadgetRecord, type GadgetSummary, type JsonObject, type JsonValue,
-  type ShellApprovalPolicy, type VFS,
+  type ApprovalSpend, type GadgetBinding, type GadgetBindingKind, type GadgetCallResult, type GadgetDataSource,
+  type GadgetManifest, type GadgetMcpTool, type GadgetProblem, type GadgetRecord, type GadgetSummary, type JsonObject,
+  type JsonValue, type ShellApprovalPolicy, type VFS,
 } from '@kinu.run/core';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, tolerateAsync } from '@kinu.run/core/obs';
-import { GADGET_BINDING_ENTRYPOINT, type GadgetBindingEntrypoint, type GadgetBindingProps, type GadgetBindingRequest } from './bindings';
+import type {
+  GadgetBindingProps, GadgetBindingRequest, GadgetFilesBinding, GadgetMcpBinding, GadgetWorkspaceBinding,
+} from './bindings';
 
 /** The runtime a gadget's isolate is pinned to. The same date the Worker
  *  deploys under (wrangler.jsonc `compatibility_date`), so a gadget meets the
  *  platform its host measured. */
-export const GADGET_COMPATIBILITY_DATE = '2025-12-01';
+const GADGET_COMPATIBILITY_DATE = '2025-12-01';
 
 /**
  * The bound one call into a gadget carries. CPU is what a runaway loop costs
@@ -59,15 +62,16 @@ export const GADGET_COMPATIBILITY_DATE = '2025-12-01';
  * enough binding calls to draw a page and few enough that a loop announces
  * itself.
  */
-export const GADGET_LIMITS_PER_CALL = { cpuMs: 2_000, subRequests: 64 } as const;
+const GADGET_LIMITS_PER_CALL = { cpuMs: 2_000, subRequests: 64 } as const;
 
-/** How the host mints a binding stub: the entrypoint class by name, with the
- *  props it will read back as `this.ctx.props`. */
-export type GadgetBindingMinter = (entrypoint: GadgetBindingEntrypoint, props: GadgetBindingProps) => Fetcher;
+/** What `env.<NAME>` is inside the isolate: the loopback stub of the binding
+ *  kind's entrypoint class, so `server.js` reaches that class's methods and
+ *  nothing else. */
+type GadgetBindingStub = Fetcher<GadgetFilesBinding | GadgetWorkspaceBinding | GadgetMcpBinding>;
 
 /** The isolate's `env`: one stub per declared binding, and nothing else. */
-export interface GadgetIsolateEnv {
-  [name: string]: Fetcher;
+interface GadgetIsolateEnv {
+  [name: string]: GadgetBindingStub;
 }
 
 export interface GadgetMcpPort {
@@ -85,7 +89,6 @@ export interface GadgetHostDeps {
   readonly vfs: () => VFS;
   readonly loader: WorkerLoader;
   readonly facets: DurableObjectFacets;
-  readonly mint: GadgetBindingMinter;
   readonly broadcast: (event: { type: typeof GADGETS_CHANGED_EVENT; slugs: string[] }) => void;
   /** One read model by name. The name has already passed `resolveGadgetDataSource`. */
   readonly data: (source: GadgetDataSource) => Promise<JsonValue>;
@@ -334,11 +337,23 @@ export class GadgetHost {
   private mintEnv(slug: string, manifest: GadgetManifest): GadgetIsolateEnv {
     const env: GadgetIsolateEnv = {};
     for (const [name, binding] of gadgetBindings(manifest)) {
-      env[name] = this.deps.mint(GADGET_BINDING_ENTRYPOINT[binding.kind], {
-        workspace: this.deps.workspace, slug, name, kind: binding.kind,
-      });
+      env[name] = mintGadgetBinding(binding.kind, { workspace: this.deps.workspace, slug, name });
     }
     return env;
+  }
+}
+
+/**
+ * The stub for one binding: the loopback form of its kind's entrypoint class,
+ * read by name from this Worker's own exports so the class the isolate reaches
+ * is the one `server.ts` publishes under it, carrying props only this Worker
+ * can write.
+ */
+function mintGadgetBinding(kind: GadgetBindingKind, props: GadgetBindingProps): GadgetBindingStub {
+  switch (kind) {
+    case 'files': return exports.GadgetFilesBinding({ props });
+    case 'workspace': return exports.GadgetWorkspaceBinding({ props });
+    case 'mcp': return exports.GadgetMcpBinding({ props });
   }
 }
 

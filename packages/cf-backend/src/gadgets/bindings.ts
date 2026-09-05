@@ -24,15 +24,14 @@
  */
 
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { workspaceOwner } from '../workspace-box-rpc';
-import type { JsonValue, GadgetBindingKind, GadgetCallResult } from '@kinu.run/core';
+import { workspaceOwner, type WorkspaceOwnerRpc } from '../workspace-box-rpc';
+import type { JsonValue } from '@kinu.run/core';
 
 /** What a minted stub carries. Written by the host, read by `this.ctx.props`. */
 export interface GadgetBindingProps {
   readonly workspace: string;
   readonly slug: string;
   readonly name: string;
-  readonly kind: GadgetBindingKind;
 }
 
 /** One call through a binding, as the workspace object receives it. */
@@ -45,17 +44,9 @@ export type GadgetBindingRequest =
   | { readonly kind: 'mcp'; readonly op: 'tools' }
   | { readonly kind: 'mcp'; readonly op: 'call'; readonly tool: string; readonly args: JsonValue };
 
-/**
- * The two gadget methods on the workspace object, as the narrow view a
- * binding entrypoint or a facet actor holds. Narrowed the way
- * `workspaceBoxOwner` narrows the same namespace, and for the same reason:
- * `DurableObjectStub<OrchestratorAgent>` makes TypeScript walk that class's
- * whole RPC surface, and the narrow view also says what a caller may reach.
- */
-export interface GadgetOwnerRpc {
-  gadgetCall(slug: string, method: string, args: JsonValue[]): Promise<GadgetCallResult>;
-  gadgetBindingCall(slug: string, name: string, request: GadgetBindingRequest): Promise<GadgetCallResult>;
-}
+/** The two gadget methods on the workspace object, as the slice of the owner
+ *  contract a binding entrypoint or a facet actor holds. */
+export type GadgetOwnerRpc = Pick<WorkspaceOwnerRpc, 'gadgetCall' | 'gadgetBindingCall'>;
 
 export function gadgetOwner(env: { OrchestratorAgent: DurableObjectNamespace }, workspaceName: string): GadgetOwnerRpc {
   return workspaceOwner(env, workspaceName);
@@ -68,10 +59,7 @@ interface GadgetBindingEnv {
 /** What every binding kind shares: the props, the owner, and the one hop. */
 abstract class GadgetBindingBase extends WorkerEntrypoint<GadgetBindingEnv, GadgetBindingProps> {
   protected async carry(request: GadgetBindingRequest): Promise<JsonValue> {
-    const { workspace, slug, name, kind } = this.ctx.props;
-    if (request.kind !== kind) {
-      throw new Error(`denied: binding ${name} is a ${kind} binding`);
-    }
+    const { workspace, slug, name } = this.ctx.props;
     const result = await gadgetOwner(this.env, workspace).gadgetBindingCall(slug, name, request);
     if (!result.ok) throw new Error(`${result.reason}: ${result.error}`);
     return result.value;
@@ -116,23 +104,3 @@ export class GadgetMcpBinding extends GadgetBindingBase {
     return this.carry({ kind: 'mcp', op: 'call', tool: String(tool), args });
   }
 }
-
-export type GadgetBindingEntrypoint = 'GadgetFilesBinding' | 'GadgetWorkspaceBinding' | 'GadgetMcpBinding';
-
-/** One loopback stub factory per binding entrypoint, by export name: what
- *  `ctx.exports.<Class>({ props })` answers. The narrow view both mints read
- *  through, so neither walks the whole generic surface of `exports`, which is
- *  what made the record-wide view excessively deep (TS2589). */
-export interface GadgetLoopbackFactories {
-  readonly GadgetFilesBinding: (opts: { props: GadgetBindingProps }) => Fetcher;
-  readonly GadgetWorkspaceBinding: (opts: { props: GadgetBindingProps }) => Fetcher;
-  readonly GadgetMcpBinding: (opts: { props: GadgetBindingProps }) => Fetcher;
-}
-
-/** The entrypoint class a binding kind is minted from, by name in the main
- *  module's exports. One table, so the host and `server.ts` cannot disagree. */
-export const GADGET_BINDING_ENTRYPOINT = {
-  files: 'GadgetFilesBinding',
-  workspace: 'GadgetWorkspaceBinding',
-  mcp: 'GadgetMcpBinding',
-} satisfies Record<GadgetBindingKind, GadgetBindingEntrypoint>;

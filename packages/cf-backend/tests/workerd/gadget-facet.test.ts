@@ -10,7 +10,8 @@
  * contained. The pool is the only tier that can.
  *
  * WHAT THE PROBE DRIVES. A real `GadgetHost` over the real file plane on the
- * probe's own SQLite, with the production mint shape, a strict approval
+ * probe's own SQLite, minting each binding from this test worker's own
+ * `exports` exactly as production mints from the Worker's, a strict approval
  * policy with nobody to ask, and a fixed `listBackgroundJobs` answer. The
  * assertions below are the pairs that discriminate: egress blocked beside a
  * files read that answers, a read inside the root beside a read above it, a
