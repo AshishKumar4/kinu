@@ -1,5 +1,5 @@
 {
-  "measured": "5855df99b: 888 test files, 809 runnable suites, 11774 tests, 34 runners, 62 non-public product members",
+  "measured": "91b1aa4f4: 891 test files, 811 runnable suites, 11792 tests, 34 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -220,6 +220,10 @@
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a subordinate activation arms the same wake, and the inherited tick serves it :: harness bridge to a non-public member",
       "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a subordinate activation restores the wake of a deferred job whose row was lost :: harness bridge to a non-public member",
+      "count": 2
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: an unfinished pass re-arms in the FUTURE, at a pace that grows per lap :: harness bridge to a non-public member",

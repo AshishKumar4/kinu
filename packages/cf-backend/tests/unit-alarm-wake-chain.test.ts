@@ -179,11 +179,14 @@ describe('the workspace keeps exactly one wake row', () => {
     // Nothing owed: the activation invents no wake.
     expect(await harness.agent.listSchedules()).toEqual([]);
 
-    const jobs = harness.agent.harnessJobs();
+    // Seeded the way the runner leaves it after a claim: running, input kept,
+    // the next attempt's instant in `resume_after`, and no schedule row.
     const now = Date.now();
-    jobs.create({ id: 'job-waiting', kind: 'agents', workMode: 'build', input: '{}', now });
     const resumeAt = now + 60_000;
-    jobs.deferResume('job-waiting', resumeAt);
+    harness.db.prepare(
+      `INSERT INTO background_jobs (id, kind, work_mode, status, input_json, resume_after, created_at)
+       VALUES ('job-waiting', 'agents', 'build', 'running', '{}', ?, ?)`,
+    ).run(resumeAt, now);
 
     await harness.agent.activateActor();
     await harness.agent.harnessSettleBackgroundTasks();
