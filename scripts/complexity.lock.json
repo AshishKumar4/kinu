@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-05",
-  "files": 2032,
-  "functions": 53068,
+  "files": 2059,
+  "functions": 53610,
   "ceiling": 125,
   "line": 38,
   "inventory": [
@@ -30,16 +30,16 @@
       "complexity": 87
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#mount",
-      "complexity": 73
-    },
-    {
       "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
       "complexity": 73
     },
     {
       "key": "scripts/bench-devbox-strategies.ts#candidateLifecycleChecks",
       "complexity": 73
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#mount",
+      "complexity": 72
     },
     {
       "key": "scripts/fixtures/fuse-probe/probe.ts#runDaemon",
@@ -94,16 +94,16 @@
       "complexity": 51
     },
     {
-      "key": "packages/devbox/src/candidates/merkle-pack/build-v2.ts#buildMerkleDelta",
-      "complexity": 50
-    },
-    {
       "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
       "complexity": 50
     },
     {
       "key": "scripts/bench-devbox-strategies.ts#controlWitnessChecks>map",
       "complexity": 50
+    },
+    {
+      "key": "packages/devbox/src/candidates/merkle-pack/build-v2.ts#buildMerkleDelta",
+      "complexity": 49
     },
     {
       "key": "packages/cli/src/commands/setup.ts#setupCommand",
@@ -187,10 +187,6 @@
     },
     {
       "key": "packages/core/src/tools/release-tool.ts#runReleaseAction",
-      "complexity": 40
-    },
-    {
-      "key": "packages/devbox/src/capture/model.ts#requireCompleteCaptureTree",
       "complexity": 40
     },
     {

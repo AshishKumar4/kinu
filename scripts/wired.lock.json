@@ -368,7 +368,6 @@
   "packages/core/src/safety/approval-gate.ts#ShellApprovalPolicy.deferrals (unsupplied-field)",
   "packages/core/src/safety/approval-gate.ts#ShellApprovalPolicy.remember (unsupplied-field)",
   "packages/core/src/safety/approval-gate.ts#approvalGrants (unreached-export)",
-  "packages/core/src/safety/approval-gate.ts#decideApproval (unreached-export)",
   "packages/core/src/safety/approval-gate.ts#grantsAreSubset (unreached-export)",
   "packages/core/src/safety/approval-gate.ts#resolveInheritedGrants (unreached-export)",
   "packages/core/src/safety/deferred-approval.ts#DEFERRED_APPROVAL_SIGNAL (unreached-export)",
