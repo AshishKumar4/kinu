@@ -3673,7 +3673,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         }
         return await settleCandidateNoChange({ active, store: control });
       },
-      restoreState: async () => await candidateRunControl(control, envelopes, verifyObject),
+      restoreState: async () => await candidateRunControl(control, envelopes),
       bootId: async () => await this.ctx.storage.get<string>(BOOT_ID_KEY),
       redrive: async (run) => {
         const active = run.operation;

@@ -104,10 +104,7 @@ class Host {
   }
 
   async restoreControl(): Promise<CandidateRunControlV1> {
-    return await candidateRunControl(this.control, this.envelopes, async (ref) => {
-      const facts = await stat(join(this.store, ref.key));
-      if (String(facts.size) !== ref.byteLength) throw new Error(`candidate object metadata mismatches ${ref.key}`);
-    });
+    return await candidateRunControl(this.control, this.envelopes);
   }
 }
 

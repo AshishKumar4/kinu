@@ -622,7 +622,6 @@ describe('candidate durable control', () => {
     const attached = await candidateRunControl(
       published.store,
       envelopes,
-      published.payloads.verifyObject.bind(published.payloads),
     );
     expect(attached.head?.pointer.rootEnvelopeId).toBe(rootEnvelopeId);
   });
@@ -813,22 +812,26 @@ describe('candidate durable control', () => {
 
     harness.envelopes.objects.set(root, enc.encode(`${JSON.stringify(envelope, null, 2)}\n`));
     await expect(candidateRunControl(
-      harness.store, harness.envelopes, harness.payloads.verifyObject.bind(harness.payloads),
+      harness.store, harness.envelopes,
     )).rejects.toThrow('is not canonical');
 
     harness.envelopes.objects.set(root, envelopeBytes({ ...envelope, generation: '999' }));
     await expect(candidateRunControl(
-      harness.store, harness.envelopes, harness.payloads.verifyObject.bind(harness.payloads),
+      harness.store, harness.envelopes,
     )).rejects.toThrow('does not match pointer');
 
     harness.envelopes.objects.delete(root);
     await expect(harness.begin()).rejects.toThrow('candidate envelope is absent');
   });
 
-  test('restore verifies the envelope\'s own objects, and the closure not at all', async () => {
-    // WHAT A WAKE MAY PAY FOR. The root the resolution starts from and the
-    // closure record itself are the two objects no later read would name and
-    // no attach can proceed without, so their absence refuses here.
+  test('a restore reads the envelope, never the payload it names', async () => {
+    // WHAT A WAKE MAY PAY FOR. A wake opens the root right after it restores,
+    // and that open fetches the root through its digest-bearing intent, so a
+    // re-check here would spend a remote operation and prove nothing new.
+    // Finalization verifies every declared closure object before the head
+    // commits, and recovery re-verifies a sealed envelope before it reaches
+    // the head. `bounded-layers.test.ts` refuses a missing root, layer, and
+    // chunk by name at open and read time.
     for (const deleted of ['root', 'closure'] as const) {
       const harness = new ControlHarness();
       const root = await harness.publish();
@@ -837,19 +840,18 @@ describe('candidate durable control', () => {
         deleted === 'root' ? envelope.rootObject.key : envelope.closureObject.key,
       );
 
-      await expect(candidateRunControl(
-        harness.store, harness.envelopes, harness.payloads.verifyObject.bind(harness.payloads),
-      )).rejects.toThrow('missing candidate object');
+      const control = await candidateRunControl(harness.store, harness.envelopes);
+      expect(control.head?.pointer.rootEnvelopeId).toBe(root);
     }
   });
 
-  test('an attach costs two verifications, whatever the closure names', async () => {
-    // THE LANE-4 PROPERTY, MEASURED AT THE PORT. A closure walk is one remote
-    // HEAD per chunk, which is one per file — half of the 200,006-operation
-    // wake cell 6.13 measured on 2026-09-02. A dependency's absence is
-    // therefore NOT an attach-time refusal: the read that needs those bytes
-    // refuses instead, holding them to the digest the record declares
-    // (`bounded-layers.test.ts` asserts exactly that at read time).
+  test('a restore performs no per-object verification, whatever the closure names', async () => {
+    // THE 6.14 PROPERTY, MEASURED AT THE PORT. The envelope read is the whole
+    // restore check: the root proves itself when the open fetches it, and a
+    // dependency's absence refuses at the read that needs those bytes, holding
+    // them to the digest the record declares (`bounded-layers.test.ts` asserts
+    // exactly that at read time). A per-object check added here reappears as a
+    // remote operation on every wake, against the O(1) bound cell 6.14 states.
     const harness = new ControlHarness();
     const root = await harness.publish();
     const envelope = v.parse(RootEnvelopeV1Schema, JSON.parse(dec.decode(harness.envelopes.objects.get(root)!)));
@@ -858,16 +860,18 @@ describe('candidate durable control', () => {
     harness.payloads.payloads.delete(dependency.key);
 
     const verified: string[] = [];
-    const control = await candidateRunControl(harness.store, harness.envelopes, async (ref) => {
+    const inner = harness.payloads.verifyObject.bind(harness.payloads);
+    harness.payloads.verifyObject = async (ref) => {
       verified.push(ref.key);
-      await harness.payloads.verifyObject(ref);
-    });
+      await inner(ref);
+    };
+
+    const control = await candidateRunControl(harness.store, harness.envelopes);
     expect(control.head?.pointer.rootEnvelopeId).toBe(root);
-    expect(verified).toEqual([envelope.rootObject.key, envelope.closureObject.key]);
+    expect(verified).toEqual([]);
     // The absent dependency is IN the closure and was never asked about: that
     // difference is the whole of what a lazy wake stops paying for.
     expect(envelope.closure.map((ref) => ref.key)).toContain(dependency.key);
-    expect(verified).not.toContain(dependency.key);
   });
 });
 

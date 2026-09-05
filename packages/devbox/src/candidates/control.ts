@@ -66,27 +66,6 @@ export interface CandidateEnvelopeStore {
 
 type VerifyObject = (ref: ImmutableObjectRef) => Promise<void>;
 
-/**
- * Verify a published envelope's own objects, and nothing below them.
- *
- * O(1) BECAUSE A WAKE IS NOT A CLOSURE WALK. The closure of a v1 envelope
- * names every chunk the tree holds, so a HEAD per member is one remote
- * operation per file — 100,000 of them at 1e5 files, half of the 200,006-op
- * wake cell 6.13 measured on 2026-09-02. What that walk could catch, a read
- * catches anyway and later: every payload read goes through
- * `readCandidateRange`, which holds the bytes to the digest and the length the
- * record declares, so a lost chunk refuses at the page-in that needs it
- * instead of at an attach that may never read it.
- *
- * The two objects checked here are the ones a wake cannot proceed without and
- * no later read would name: the root the resolution starts from, and the
- * closure record itself.
- */
-async function verifyEnvelopeHead(envelope: RootEnvelopeV1, verifyObject: VerifyObject): Promise<void> {
-  await verifyObject(envelope.rootObject);
-  await verifyObject(envelope.closureObject);
-}
-
 /** Verify every object a publication declares. What a PUBLISH owes, over the
  *  objects it has just written, and what a recovery re-checks before it lets a
  *  sealed operation reach the head. */
@@ -407,19 +386,21 @@ async function runControl(
 }
 
 /**
- * The restore path: the durable pointer, the exact envelope it names, and a
- * check of that envelope's own objects. NOT of its closure — see
- * {@link verifyEnvelopeHead} for why a wake that walked it would scale with
- * the tree instead of with what the generation changed.
+ * A wake reads the durable pointer and the exact envelope it names.
+ * The envelope read binds the bytes to the digest the head carries, so a
+ * relabeled envelope refuses here. The root the wake opens next proves itself
+ * when the open fetches it through its digest-bearing intent. Finalization
+ * verifies every declared closure object before the head commits, and
+ * recovery re-verifies a sealed envelope before it reaches the head, so the
+ * closure the wake never reads proves itself where the head is made. A
+ * wake-time re-check of either object would spend a remote operation without
+ * proving anything the reads do not already prove.
  */
 export async function candidateRunControl(
   store: CandidateControlStore,
   envelopes: CandidateEnvelopeStore,
-  verifyObject: VerifyObject,
 ): Promise<CandidateRunControlV1> {
-  const control = await runControl(await store.read(), envelopes);
-  if (control.head !== null) await verifyEnvelopeHead(control.head.envelope, verifyObject);
-  return control;
+  return await runControl(await store.read(), envelopes);
 }
 
 /**

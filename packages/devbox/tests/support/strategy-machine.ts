@@ -3240,7 +3240,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
           // unreachable through the exported arms (`CONFORMANCE_ARMS` never
           // opens `format: 'merkle-pack'`) and carries no lazy restore.
           if (outcome.kind === 'committed' && format === 'bounded-layers') {
-            const run = await candidateRunControl(controlStore, envelopes, verifyObject);
+            const run = await candidateRunControl(controlStore, envelopes);
             if (run.head !== null) (await this.#ensureLazy(run.head)).notePublished();
           }
           return outcome;
@@ -3298,7 +3298,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
             verifyObject,
           });
         },
-        restoreState: async () => await candidateRunControl(controlStore, envelopes, verifyObject),
+        restoreState: async () => await candidateRunControl(controlStore, envelopes),
         settleNoChange: async (run) => {
           const active = run.operation;
           if (active?.phase !== 'transferring') {
