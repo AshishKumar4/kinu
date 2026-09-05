@@ -26,13 +26,15 @@ import {
   JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
   profileCatalogDigest,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
+  EventLog, TriggerRegistry, listTriggers,
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
   type ModelCallSink, type ProfileCatalogEnvelope, type SqlExecutor, type SqlValue,
+  type EventVariant,
   createAgentSelfProvider,
   InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER,
   SKILLS_DIR, TURN_CONTEXT_HEADER, MergeOutputSchema,
 } from '@kinu.run/core';
-import { createCLIRuntime, makeExecRaw, makeSql, type CLIRuntime } from '../src/runtime';
+import { createCLIRuntime, makeExecRaw, makeSql, makeSqlExec, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
 import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
@@ -207,6 +209,26 @@ function setup(answer = 'hello there', model?: LanguageModel, extra?: Partial<Lo
     ...extra,
   });
   return { db, rt, session, events };
+}
+
+/** The events hub as the CLI's own inspection reads it: the durable tables,
+ *  over a second handle on the workspace database. A session exposes no
+ *  reader of its own log, so this is the one observable a test has. */
+function hub(db: Database) {
+  const sql = makeSqlExec(db);
+  const log = new EventLog(sql);
+  return {
+    pending: () => log.pending({ limit: 50 }),
+    recent: (opts: { variant?: EventVariant; limit?: number }) => log.query(opts),
+    triggers: () => listTriggers(new TriggerRegistry(sql, { scheduleAt: async () => {} })).triggers,
+  };
+}
+
+/** A due timer, the CLI's one external ingress into the log. `fireAt` sits in
+ *  the future so the session's own alarm cannot race the explicit firing. */
+async function fireTimer(session: LocalAgentSession, label: string, fireAt = Date.now() + 60_000) {
+  await session.createTimerTrigger({ atMs: fireAt, label, trust: 'owner' });
+  await session.fireDueTriggers(fireAt);
 }
 
 /** A model that calls execute_tools once with the given code, then answers. */
@@ -1314,36 +1336,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(b.event.type).toBe('job_update');
   });
 
-  test('publishEvent stores a hub event and wakes a programmatic turn', async () => {
-    const { session, events } = setup('handled event');
-    const result = await session.publishEvent({
-      descriptor: {
-        ingress: 'chat_ws',
-        variant: 'chat',
-        payload: { text: 'external wake' },
-        operator_user_id: 'owner-1',
-        session_id: 'local-test',
-      },
-      now: 123,
-    });
-
-    expect(result.admitted).toBe(true);
-    await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic'));
-
-    const recent = session.listRecentEvents({ variant: 'chat', limit: 5 });
-    expect(recent).toHaveLength(1);
-    expect(recent[0]!.id).toBe(result.event_id);
-    expect(recent[0]!.trust).toBe('owner');
-    expect(recent[0]!.priority).toBe('urgent');
-
-    const starts = turnStarts(events);
-    expect(starts[0]!.kind).toBe('programmatic');
-    expect(starts[0]!.text).toContain('[chat]');
-    expect(session.pendingEvents()).toEqual([]);
-  });
-
   test('one-shot timer triggers publish timer events and wake a programmatic turn', async () => {
-    const { session, events } = setup('handled timer');
+    const { db, session, events } = setup('handled timer');
     const fireAt = Date.now() + 60_000;
     const created = await session.createTimerTrigger({
       atMs: fireAt,
@@ -1354,13 +1348,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     expect(created.kind).toBe('timer_oneshot');
     expect(created.nextFireAt).toBe(fireAt);
-    expect(session.listTriggers().triggers[0]!.next_fire_at).toBe(fireAt);
+    expect(hub(db).triggers()[0]!.next_fire_at).toBe(fireAt);
 
     const outcome = await session.fireDueTriggers(fireAt);
     expect(outcome.fired).toBe(1);
     await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic'));
 
-    const recent = session.listRecentEvents({ variant: 'timer', limit: 5 });
+    const recent = hub(db).recent({ variant: 'timer', limit: 5 });
     expect(recent).toHaveLength(1);
     expect(recent[0]!.trust).toBe('owner');
     expect(recent[0]!.payload).toMatchObject({
@@ -1369,8 +1363,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       label: 'follow-up',
       user_payload: { reason: 'test' },
     });
+    expect(turnStarts(events)[0]!.text).toContain('[timer]');
+    expect(hub(db).pending()).toEqual([]);
 
-    const trigger = session.listTriggers().triggers.find((t) => t.id === created.id)!;
+    const trigger = hub(db).triggers().find((t) => t.id === created.id)!;
     expect(trigger.state).toBe('revoked');
     expect(trigger.next_fire_at).toBeNull();
     expect(trigger.last_fire_at).toBe(fireAt);
@@ -1382,7 +1378,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // fireDueTriggers only ARMS the ~250ms debounced drain, and end() sets
     // `ended` which makes the drain timer skip — so the fired trigger's
     // autonomous turn was silently dropped. The daemon now flushes before end.
-    const { session, events } = setup('handled timer');
+    const { db, session, events } = setup('handled timer');
     const fireAt = Date.now() + 60_000;
     await session.createTimerTrigger({ atMs: fireAt, label: 'wake', trust: 'owner' });
 
@@ -1396,7 +1392,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const starts = turnStarts(events);
     expect(starts.some((s) => s.kind === 'programmatic')).toBe(true);
     expect(events.some((e) => e.type === 'turn-end')).toBe(true);
-    expect(session.pendingEvents()).toEqual([]);
+    expect(hub(db).pending()).toEqual([]);
     await session.end();
   });
 
@@ -1415,9 +1411,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   // `evt-…` turn and opens a recovery lease on them, and everything from there
   // to the turn's answer being on disk is in-process — so the lease is the one
   // durable record of "a running turn still owes this delivery an answer".
-  function eventRow(db: Database): { turn_id: string | null; consumed_at: number | null } {
-    const row = db.query<{ turn_id: string | null; consumed_at: number | null }, []>(
-      `SELECT turn_id, consumed_at FROM agent_log WHERE kind = 'event'`,
+  function eventRow(db: Database): { id: string; turn_id: string | null; consumed_at: number | null } {
+    const row = db.query<{ id: string; turn_id: string | null; consumed_at: number | null }, []>(
+      `SELECT id, turn_id, consumed_at FROM agent_log WHERE kind = 'event'`,
     ).get();
     if (!row) throw new Error('no event row');
     return row;
@@ -1425,16 +1421,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('a drain turn that reaches disk closes its delivery lease', async () => {
     const { db, session, events } = setup('handled event');
-    await session.publishEvent({
-      descriptor: {
-        ingress: 'chat_ws',
-        variant: 'chat',
-        payload: { text: 'external wake' },
-        operator_user_id: 'owner-1',
-        session_id: 'local-test',
-      },
-      now: 123,
-    });
+    await fireTimer(session, 'external wake');
     await session.flushPendingDrains();
     await waitFor(() => events.some((e) => e.type === 'turn-end'));
 
@@ -1450,33 +1437,25 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('an event delivery a dead process left leased is reclaimed and re-delivered', async () => {
     const { db, rt, session } = setup('handled event');
-    const published = await session.publishEvent({
-      descriptor: {
-        ingress: 'chat_ws',
-        variant: 'chat',
-        payload: { text: 'external wake' },
-        operator_user_id: 'owner-1',
-        session_id: 'local-test',
-      },
-      now: 1,
-    });
+    await fireTimer(session, 'external wake');
+    const published = eventRow(db).id;
     // End before the debounced drain fires, then bind the row exactly as a
     // drain does and leave the lease OPEN: the state a killed process leaves.
     await session.end();
     db.query(`UPDATE agent_log SET turn_id = 'evt-dead', step_idx = 0, consumed_at = 5 WHERE id = ?`)
-      .run(published.event_id);
+      .run(published);
 
     const events: SessionEvent[] = [];
     const next = new LocalAgentSession({
       rt, db, model: fakeModel('recovered event'), onEvent: (e) => events.push(e), noAutoEvolve: true,
     });
     // Nothing can see it: `pending()` excludes a bound row, so the recovery
-    // drain on its own would find no work and the webhook that was answered
-    // `admitted: true` would simply never have happened.
-    expect(next.pendingEvents()).toEqual([]);
+    // drain on its own would find no work and the event the log admitted
+    // would simply never have happened.
+    expect(hub(db).pending()).toEqual([]);
 
     next.reclaimStrandedEventDeliveries();
-    expect(next.pendingEvents().map((e) => e.id)).toEqual([published.event_id]);
+    expect(hub(db).pending().map((e) => e.id)).toEqual([published]);
     expect(events.some((e) => e.type === 'background' && e.event === 'events_reclaimed')).toBe(true);
 
     await next.flushPendingDrains();
@@ -1490,16 +1469,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('the reclaim leaves an answered delivery alone — one event, one turn', async () => {
     const { db, rt, session, events } = setup('handled event');
-    await session.publishEvent({
-      descriptor: {
-        ingress: 'chat_ws',
-        variant: 'chat',
-        payload: { text: 'external wake' },
-        operator_user_id: 'owner-1',
-        session_id: 'local-test',
-      },
-      now: 1,
-    });
+    await fireTimer(session, 'external wake');
     await session.flushPendingDrains();
     await waitFor(() => events.some((e) => e.type === 'turn-end'));
     await session.end();
@@ -1514,14 +1484,14 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     next.reclaimStrandedEventDeliveries();
     await next.flushPendingDrains();
 
-    expect(next.pendingEvents()).toEqual([]);
+    expect(hub(db).pending()).toEqual([]);
     expect(turnStarts(nextEvents)).toEqual([]);
     expect(eventRow(db).consumed_at).toBeNull();
     await next.end();
   });
 
   test('cron timer triggers reschedule after firing', async () => {
-    const { session, events } = setup('handled cron');
+    const { db, session, events } = setup('handled cron');
     const created = await session.createTimerTrigger({ cron: '*/5 * * * *', label: 'heartbeat' });
     expect(created.kind).toBe('timer_cron');
     expect(created.nextFireAt).toBeGreaterThan(Date.now());
@@ -1530,7 +1500,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(outcome.fired).toBe(1);
     await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic'));
 
-    const trigger = session.listTriggers().triggers.find((t) => t.id === created.id)!;
+    const trigger = hub(db).triggers().find((t) => t.id === created.id)!;
     expect(trigger.state).toBe('active');
     expect(trigger.last_fire_at).toBe(created.nextFireAt);
     expect(trigger.fire_count).toBe(1);
@@ -2724,13 +2694,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
     expect(session.turnInFlight()).toBe(true);
     expect(session.steer('also check X')).toBe(true);
-    await session.publishEvent({
-      descriptor: {
-        ingress: 'chat_ws', variant: 'chat', payload: { text: 'mail from bob' },
-        operator_user_id: 'owner-1', session_id: 'local-test',
-      },
-      now: 123,
-    });
+    await fireTimer(session, 'mail from bob');
     await session.flushPendingDrains();
     release();
     await turn;
@@ -2746,7 +2710,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     // ONE turn: the event no longer waits for a programmatic turn of its own.
     expect(turnStarts(events)).toHaveLength(1);
-    expect(session.pendingEvents()).toEqual([]);
+    expect(hub(db).pending()).toEqual([]);
 
     // The steer persists verbatim; the signal is ephemeral — model-visible at
     // the tip of the live turn and nowhere in durable history.
@@ -2764,13 +2728,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     await session.send('question');
     expect(session.turnInFlight()).toBe(false);
 
-    await session.publishEvent({
-      descriptor: {
-        ingress: 'chat_ws', variant: 'chat', payload: { text: 'arrived after the turn' },
-        operator_user_id: 'owner-1', session_id: 'local-test',
-      },
-      now: 456,
-    });
+    await fireTimer(session, 'arrived after the turn');
     await session.flushPendingDrains();
     await waitFor(() => turnStarts(events).length >= 2);
     expect(turnStarts(events)[1]!.kind).toBe('programmatic');
@@ -3801,16 +3759,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
       },
     });
 
-    await session.publishEvent({
-      descriptor: {
-        ingress: 'chat_ws',
-        variant: 'chat',
-        payload: { text: 'external wake' },
-        operator_user_id: 'owner-1',
-        session_id: 'local-test',
-      },
-      now: 1,
-    });
+    await fireTimer(session, 'external wake');
     await session.flushPendingDrains();
 
     expect(leaseAtTurnEnd.length).toBeGreaterThanOrEqual(1);

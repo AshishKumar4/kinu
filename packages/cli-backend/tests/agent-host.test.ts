@@ -10,9 +10,11 @@ import {
   BackgroundJobStore,
   backgroundJobWakeTrigger,
   createAgentConfigStore,
+  createTimerTrigger,
   initWorkspaceSchema,
   DELEGATION_MAX_DEPTH,
   REPORT_TOOL,
+  TriggerRegistry,
   delegationExhausted,
   SUBORDINATE_REPORT_STATUSES,
   type HostedAgentRef,
@@ -28,7 +30,7 @@ import {
   type LocalAgentHostOptions,
   type LocalHostedAgent,
 } from '../src/agent-host';
-import { makeExecRaw, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
+import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { openWorkspaceCLI } from '../src/open';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -475,16 +477,9 @@ describe('LocalAgentHost', () => {
     const deliveredBeforeDisconnect = delivered.length;
     unsubscribe();
 
-    await host.publishEvent('root', {
-      descriptor: {
-        ingress: 'chat_ws',
-        variant: 'chat',
-        payload: { text: 'continue while the client is gone' },
-        operator_user_id: 'owner-1',
-        session_id: 'default',
-      },
-    });
-    await host.tick('root');
+    const fireAt = Date.now() + 60_000;
+    await scheduleTimer(dbPath, 'continue while the client is gone', fireAt);
+    await host.tick('root', fireAt);
 
     expect(delivered).toHaveLength(deliveredBeforeDisconnect);
     const db = new Database(dbPath);
@@ -1329,6 +1324,19 @@ function userMessages(dbPath: string): string[] {
   }
 }
 
+/** Schedule a timer on the workspace from ANOTHER handle, as `kinu triggers
+ *  <name> at` does from the operator's process. The host's own pass fires it,
+ *  which is the one external ingress a local workspace has. */
+async function scheduleTimer(dbPath: string, label: string, atMs: number): Promise<void> {
+  const db = new Database(dbPath);
+  try {
+    const registry = new TriggerRegistry(makeSqlExec(db), { scheduleAt: async () => {} });
+    await createTimerTrigger(registry, { atMs, label, trust: 'owner' }, Date.now());
+  } finally {
+    db.close();
+  }
+}
+
 /**
  * The driver lease as a REAL host uses it, over a real workspace database.
  *
@@ -1474,7 +1482,7 @@ describe('LocalAgentHost — the driver lease', () => {
   });
 
   test('opening a workspace reclaims and delivers an event a dead process left bound to a turn it never ran', async () => {
-    // KINU-020, end to end: the previous process bound this webhook's row to a
+    // KINU-020, end to end: the previous process bound this event's row to a
     // synthetic drain turn, acknowledged the delivery, and died before running
     // it. The row is invisible to `pending()`, so nothing else can ever find it
     // — opening the workspace under the driver lease is what hands it back.
@@ -1483,22 +1491,12 @@ describe('LocalAgentHost — the driver lease', () => {
     const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
     const before = makeHost(state, streamingModel('handled'), refs, { driverKind: 'daemon' });
     try {
-      const admitted = await before.host.publishEvent('root', {
-        descriptor: {
-          ingress: 'webhook_bearer',
-          variant: 'webhook',
-          payload: {
-            webhook_id: 'hook-1',
-            http_method: 'POST',
-            http_headers: { 'content-type': 'application/json' },
-            body: { text: 'a build finished' },
-            delivery_id: 'delivery-1',
-          },
-          auth_outcome: 'verified',
-          webhook_id: 'hook-1',
-        },
-      });
-      expect(admitted.admitted).toBe(true);
+      const fireAt = Date.now() + 60_000;
+      await scheduleTimer(dbPath, 'a build finished', fireAt);
+      // Fired but not drained: the drain is a debounced timer, and closing the
+      // host before it runs is what a process killed in that window leaves.
+      const session = await before.host.acquire('root');
+      expect((await session.fireDueTriggers(fireAt)).fired).toBe(1);
     } finally {
       await before.host.close();
     }
@@ -1548,22 +1546,9 @@ describe('LocalAgentHost — the driver lease', () => {
     });
     try {
       // Admission is not conversion: the row lands whoever is driving.
-      const admitted = await host.publishEvent('root', {
-        descriptor: {
-          ingress: 'webhook_bearer',
-          variant: 'webhook',
-          payload: {
-            webhook_id: 'hook-1',
-            http_method: 'POST',
-            http_headers: { 'content-type': 'application/json' },
-            body: { text: 'a build finished' },
-            delivery_id: 'delivery-1',
-          },
-          auth_outcome: 'verified',
-          webhook_id: 'hook-1',
-        },
-      });
-      expect(admitted.admitted).toBe(true);
+      const fireAt = Date.now() + 60_000;
+      await scheduleTimer(dbPath, 'a build finished', fireAt);
+      expect((await (await host.acquire('root')).fireDueTriggers(fireAt)).fired).toBe(1);
       expect(pendingEventCount(dbPath)).toBe(1);
 
       await host.tick('root');

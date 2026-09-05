@@ -83,8 +83,6 @@ import {
   LocalAgentSession,
   type LocalAgentSessionOpts,
   type LocalParentRelay,
-  type LocalPublishEventInput,
-  type LocalPublishEventResult,
   type SessionEvent,
 } from '../local-session';
 import type { LocalModelResolver } from '../model-resolver';
@@ -320,19 +318,6 @@ export class LocalAgentHost {
   /** Already-acquired session, or null. */
   peek(name: string): LocalAgentSession | null {
     return this.entries.get(name)?.session ?? null;
-  }
-
-  /**
-   * Admit a durable external event. The call returns on storage admission; the
-   * result of the work arrives later through the normal durable event/session
-   * stream. No elapsed wait is hidden here.
-   */
-  async publishEvent(
-    name: string,
-    input: LocalPublishEventInput,
-  ): Promise<LocalPublishEventResult> {
-    const session = await this.acquire(name);
-    return session.publishEvent(input);
   }
 
   /**

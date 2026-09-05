@@ -125,8 +125,6 @@
   "packages/cli-backend/src/config-lock.ts#decodeLockOwner (unreached-export)",
   "packages/cli-backend/src/config-lock.ts#encodeLockOwner (unreached-export)",
   "packages/cli-backend/src/config-lock.ts#procStartTicks (unreached-export)",
-  "packages/cli-backend/src/local-session.ts#LocalPublishEventInput.caused_by (unsupplied-field)",
-  "packages/cli-backend/src/local-session.ts#LocalPublishEventInput.now (unsupplied-field)",
   "packages/cli-backend/src/model-resolver.ts#LocalModelResolverConfig.fetch (unsupplied-field)",
   "packages/cli-backend/src/model-resolver.ts#LocalModelResolverConfig.opencode (unsupplied-field)",
   "packages/cli-backend/src/model-resolver.ts#LocalProviderCredentials.codexOAuth (unsupplied-field)",

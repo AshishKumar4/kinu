@@ -34,7 +34,7 @@ import type {
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   AgentsForkDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
-  IngressDescriptor, KinuEvent, EventVariant, MissingCapability, DynamicApproval,
+  MissingCapability, DynamicApproval,
   RunEvent, RunEventInput, RunEventQuery, StepLike, SettledSignals,
   ReleaseStore, ReleaseToolDeps, BuiltinToolName,
   FileCheckpoints, FileCheckpointListing, FileRestorePlan, FileRestoreResult,
@@ -49,14 +49,13 @@ import {
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
-  EventLog, ReplyChannelStore,
+  EventLog,
   type RunEventRecorder,
   TriggerRegistry,
   // Ingress — core owns the gates; this session owns the local clock and the
   // process boundary in front of them.
-  acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
-  initWebhookIngressTables,
-  createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers,
+  createWebhookSecretStore,
+  createTimerTrigger, cancelTrigger, fireDueTriggers,
   EvolutionEngine,
   readMemoryTail,
   listProposedTasks, updateProposedTaskStatus,
@@ -119,10 +118,10 @@ import {
   type InstructionTrustResolver,
   // The scaffold evolution control plane — core owns the drivers; this session
   // supplies the local surface they run against.
-  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, listGepaRuns, listScaffoldVersions,
-  previewScaffoldLive, proposeScaffold, runScaffoldGepaOptimization, runScaffoldOnce,
+  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
+  proposeScaffold, runScaffoldGepaOptimization,
   queueTurnShadowTrial, runQueuedShadowTrials,
-  type GepaOptimizationResult, type GepaRunSummary, type ScaffoldControl,
+  type GepaOptimizationResult, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldVersionView,
   type ShadowStatus,
   listReplayEvals, type ReplayEvalSummary,
@@ -144,10 +143,10 @@ import {
   startBranchHead, settlePendingBranch, settleBranchIntoTakes, newBranchId,
   branchHeadId, branchOutcomeFromJournal,
   type PendingBranch, type BranchStatusEvent,
-  type AlarmScheduler, type BackgroundJob, type SqlExec, type RawSqlExec,
-  type TimerTrigger, type TimerTriggerOpts, type TriggerView,
+  type AlarmScheduler, type BackgroundJob, type RawSqlExec,
+  type TimerTrigger, type TimerTriggerOpts,
   type CancelTriggerResult, type TrustLevel,
-  type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
+  type WebhookSecretStore,
   reasoningEffortOptions,
   BUILTIN_PROFILE_CATALOG, TIER_IDS, effectiveRoleCatalog,
   changeActiveRole, agentsProfileContext, canonicalConversationId,
@@ -424,23 +423,6 @@ export type SessionEvent =
 export type ShellApprovalHandler =
   (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
 
-export interface LocalPublishEventInput {
-  descriptor: IngressDescriptor;
-  now?: number;
-  caused_by?: string;
-}
-
-export interface LocalPublishEventResult {
-  event_id: string;
-  admitted: boolean;
-}
-
-export interface LocalDurableWebhook {
-  trigger_id: string;
-  auth_mode: 'hmac' | 'bearer' | 'mtls';
-  secret: string | null;
-}
-
 export interface LocalAgentSessionOpts {
   rt: CLIRuntime;
   /** Raw bun:sqlite handle — backs the EventsHub SqlExec adapter. */
@@ -621,14 +603,12 @@ export class LocalAgentSession implements BackendHost {
     () => this.currentRunId ?? WORKSPACE_RUN_ID,
   );
   private readonly triggerRegistry: TriggerRegistry;
-  /** Durable reply sinks for the events this session admits — the same table
-   *  and TTLs the cloud backend writes, with no dispatcher in front of them:
-   *  a local session has no socket, mail or peer transport to answer over. */
-  private readonly replyChannels: ReplyChannelStore;
-  /** Where this workspace's webhook secrets live. */
+  /** Where a workspace's webhook secrets live. A local session registers no
+   *  webhook, so nothing writes this store. It is built at boot because the
+   *  conformance manifest's table plane needs one root that holds the table
+   *  at boot (cf creates it on the first registration), and a cancel wipes
+   *  through it the way core's cancel expects. */
   private readonly webhookSecrets: WebhookSecretStore;
-  /** The positional-binding handle the hub stores share (bun:sqlite adapter). */
-  private readonly hubSql: SqlExec;
   private readonly releases: ReleaseStore;
   private _webSearchProvider: WebSearchProvider | null = null;
   private alarmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -927,10 +907,11 @@ export class LocalAgentSession implements BackendHost {
       () => this.cachedModel ?? this.defaultModel("a head with no model of its own"),
     ));
 
-    // The EventsHub substrate (reactor source of truth). Local external
-    // ingresses enter through publishEvent(), then drain via AgentOrchestrator.
-    // The release board is the one local-only plane: on cf it lives in
-    // the owner's UserDO (core/conformance/manifest.ts records that).
+    // The EventsHub substrate (reactor source of truth). A local workspace has
+    // two ingresses, a due timer and a settled background job; both publish
+    // into the log and drain via AgentOrchestrator. The release board is the
+    // one local-only plane: on cf it lives in the owner's UserDO
+    // (core/conformance/manifest.ts records that).
     initReleaseTables(hubSql);
     this.releases = createReleaseStore(releaseSqlFromExec(hubSql), {
       validateAgentName: (name) => {
@@ -946,13 +927,7 @@ export class LocalAgentSession implements BackendHost {
       scheduleAt: async (ts) => { this.scheduleLocalAlarm(ts); },
     };
     this.triggerRegistry = new TriggerRegistry(hubSql, alarmScheduler);
-    this.replyChannels = new ReplyChannelStore(hubSql);
-    this.hubSql = hubSql;
     this.webhookSecrets = createWebhookSecretStore(hubSql);
-    // Webhook + inbound-email deliveries count against a per-minute window, and
-    // a verified signature is claimed once against replay (core
-    // events/ingress), which needs both tables at boot.
-    initWebhookIngressTables(hubSql);
 
     // The durable per-run event log (run_events) — the same recorder, table and
     // RunEvent union the cloud backend records, over local SQLite — is written…
@@ -1322,35 +1297,10 @@ export class LocalAgentSession implements BackendHost {
     return this.modelResolver?.listModels() ?? Promise.resolve({ models: [], failures: [] });
   }
 
-  /** Local ingress parity with the DO EventsHub routes: publish through the
-   *  append-only EventLog, then wake the same serialized turn queue (debounced,
-   *  so an event burst drains as ONE programmatic turn). */
-  async publishEvent(input: LocalPublishEventInput): Promise<LocalPublishEventResult> {
-    const { id, admitted } = this.eventLog.publish({
-      descriptor: input.descriptor,
-      now: input.now ?? Date.now(),
-      caused_by: input.caused_by,
-    });
-    this.orch.scheduleDrain();
-    return { event_id: id, admitted };
-  }
-
-  pendingEvents(limit = 50): KinuEvent[] {
-    return this.eventLog.pending({ limit });
-  }
-
-  listRecentEvents(opts: { variant?: EventVariant; since?: number; limit?: number } = {}): KinuEvent[] {
-    return this.eventLog.query(opts);
-  }
-
-  listTriggers(): { triggers: TriggerView[] } {
-    return listTriggers(this.triggerRegistry);
-  }
-
   /** `caller` has no default, for the same reason the cloud backend's does not:
-   *  this one method is the CLI operator's cancel AND the model's
-   *  `agent.cancelSchedule`, and only the first may close an owner-created
-   *  ingress. */
+   *  the model's `agent.cancelSchedule` passes `'self'`, and core refuses a
+   *  self cancel of an owner-created ingress. The operator's own cancel runs in
+   *  another process, through the registry in the CLI's local inspection. */
   cancelTrigger(trigger_id: string, caller: TrustLevel): CancelTriggerResult {
     const result = cancelTrigger(this.triggerRegistry, trigger_id, Date.now(), caller, this.webhookSecrets);
     this.rearmLocalAlarm();
@@ -1372,45 +1322,6 @@ export class LocalAgentSession implements BackendHost {
     return { fired, nextAlarmAt: this.scheduledAlarmAt };
   }
 
-  /**
-   * Register a webhook trigger on this local workspace.
-   *
-   * A local session has no inbound HTTP transport, so it mints no URL: what
-   * this creates is the trigger and its secret, and {@link acceptWebhookDelivery}
-   * is the door a transport in front of it delivers through.
-   */
-  async createDurableWebhook(opts: {
-    label: string;
-    auth_mode: 'hmac' | 'bearer' | 'mtls';
-    secret?: string;
-    accepted_content_type?: string;
-    rate_limit_per_min?: number;
-  }): Promise<LocalDurableWebhook> {
-    const webhook = await registerDurableWebhook(
-      this.triggerRegistry, this.webhookSecrets, opts, Date.now(),
-    );
-    return {
-      trigger_id: webhook.trigger_id,
-      auth_mode: webhook.auth_mode,
-      secret: webhook.secret,
-    };
-  }
-
-  /** Gate one webhook delivery and publish it — the same content-type pin,
-   *  HMAC/bearer/mTLS verification, replay window and rate limit the cloud
-   *  backend applies, because both call the one implementation. */
-  async acceptWebhookDelivery(opts: WebhookDelivery): Promise<WebhookDeliveryResult> {
-    return acceptWebhookDelivery({
-      triggers: this.triggerRegistry,
-      log: this.eventLog,
-      replies: this.replyChannels,
-      vfs: this.rt.storage.vfs,
-      secrets: this.webhookSecrets,
-      sql: this.hubSql,
-      onAdmitted: () => { this.orch.scheduleDrain(); },
-    }, opts);
-  }
-
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
     return jobResult(this.jobs, jobId);
   }
@@ -1421,13 +1332,6 @@ export class LocalAgentSession implements BackendHost {
 
   async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
     return cancelBackgroundJob(this.jobRunner, jobId);
-  }
-
-  /** Run one replay-eval pass now (also runs periodically inside lifetime
-   *  evolution). Returns the persisted loss entry, or null when no
-   *  outcome-labeled turns exist yet. */
-  async runReplayEval(sampleSize?: number): Promise<ReplayEvalSummary | null> {
-    return this.engine.runReplayEval(sampleSize);
   }
 
   /** The persisted replay-eval loss curve, newest first (read-only). */
@@ -1829,7 +1733,7 @@ export class LocalAgentSession implements BackendHost {
    * that point until the turn's answer is on disk lives in ONE process's memory:
    * kill it there and the rows stay bound to a turn nobody will ever run —
    * invisible to `pending()`, so no later drain, wake or restart can see them.
-   * A webhook that was answered with `admitted: true` then simply never happens.
+   * An event the log admitted then simply never happens.
    *
    * There is no clock here and there does not need to be one — see
    * {@link NO_STRANDED_DELIVERY_GRACE} for why the lease this runs under is the
@@ -4349,18 +4253,6 @@ export class LocalAgentSession implements BackendHost {
     return listScaffoldVersions(this.rt.storage.sql, limit);
   }
 
-  /** Run the current scaffold for a one-shot task, capturing what it emits
-   *  instead of injecting it into the conversation. */
-  runScaffoldOnce(task: string, opts?: { useShadowOverride?: boolean }) {
-    return runScaffoldOnce(this.scaffoldControl, task, opts);
-  }
-
-  /** Run an arbitrary archived scaffold version against a task — previewing a
-   *  candidate live before promoting it. */
-  previewScaffoldLive(version: number, task: string) {
-    return previewScaffoldLive(this.scaffoldControl, version, task);
-  }
-
   /**
    * A GEPA optimisation pass over this workspace's scaffold. Reflection-mutated
    * candidates are scored against the turn-outcome ledger's held-out failures;
@@ -4371,11 +4263,6 @@ export class LocalAgentSession implements BackendHost {
     maxIterations?: number; evalSize?: number; maxMetricCalls?: number;
   }): Promise<GepaOptimizationResult> {
     return runScaffoldGepaOptimization(this.scaffoldControl, opts);
-  }
-
-  /** Recent GEPA passes, newest first. */
-  getGepaRuns(limit = 20): GepaRunSummary[] {
-    return listGepaRuns(this.rt.storage.sql, limit);
   }
 
   /** `host.llmStream` — the scaffold's inference bridge (core scaffold-host)

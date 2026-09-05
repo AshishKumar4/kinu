@@ -126,6 +126,7 @@ const NIMBUS_BASE = {
   cli: WIRED,
 } satisfies RootStatuses;
 const LAZY_ON_FIRST_USE = (what: string): string => `created lazily on first use by ${what}, not at boot`;
+const NO_LOCAL_INGRESS = 'a local workspace has no inbound HTTP transport, and `kinu triggers <name> webhook` refuses a local target';
 const RELEASE_TABLE = {
   'cf-orchestrator': { absent: "the release board lives in the owner's UserDO on cf, not on the workspace DO" },
   'cf-subordinate': { absent: SUBORDINATE_SCOPED('the release lane') },
@@ -447,15 +448,15 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: { absent: 'lives in each local subordinate actor-state database, not the root workspace database' },
     },
-    // The webhook gate — auth, replay window, rate limit — is core's, so a
-    // local session provisions the same window table the cloud one does. What
-    // the CLI has no equivalent of is the inbound HTTP transport in front of
-    // it: a local workspace mints no URL, and a delivery reaches it only
-    // through acceptWebhookDelivery.
+    // The webhook gate — auth, replay window, rate limit — is core's, and the
+    // cloud orchestrator provisions its tables at boot. A local workspace has
+    // no inbound HTTP transport in front of it: it mints no URL, `kinu triggers
+    // <name> webhook` refuses a local target, and the session holds no
+    // delivery door, so it provisions neither gate table.
     webhook_rate_windows: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
-      cli: WIRED,
+      cli: { absent: NO_LOCAL_INGRESS },
     },
     // One row per signed delivery already spent, so a captured HMAC request
     // cannot be admitted twice inside its own signature window. Provisioned
@@ -465,15 +466,16 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     webhook_replay_claims: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
-      cli: WIRED,
+      cli: { absent: NO_LOCAL_INGRESS },
     },
     // The plaintext HMAC/bearer secret a registered webhook was created with.
     // Present on a local session from boot — `local-session.ts` builds the store
-    // in its constructor — and only once a webhook is actually registered on cf,
-    // where the orchestrator memoizes it (`_webhookSecrets ??=`). The split is
-    // real rather than cosmetic: `identity/archive.ts` deliberately excludes this
-    // table from a workspace archive because it is a live ingress credential, so
-    // a restore does not resurrect one.
+    // in its constructor, although nothing local ever writes it, because this
+    // plane needs one root that holds the table at boot — and only once a
+    // webhook is actually registered on cf, where the orchestrator memoizes it
+    // (`_webhookSecrets ??=`). `identity/archive.ts` deliberately excludes this
+    // table from a workspace archive because it is a live ingress credential,
+    // so a restore does not resurrect one.
     webhook_secrets: {
       'cf-orchestrator': { absent: LAZY_ON_FIRST_USE('registerDurableWebhook') },
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
