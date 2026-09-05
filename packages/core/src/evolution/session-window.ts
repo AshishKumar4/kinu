@@ -373,10 +373,11 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
       const rows = sql<TurnRow>`
         SELECT id, turn, followup, created_at FROM completed_turns
         WHERE in_window = 1 ORDER BY created_at ASC, rowid ASC`;
-      if (rows.length === 0) return null;
+      const oldest = rows[0];
+      if (oldest === undefined) return null;
       return {
         turns: rows.map(decode).filter((t): t is CompletedTurn => t !== null),
-        startedAt: rows[0]!.created_at,
+        startedAt: oldest.created_at,
         settle() {
           // Retire by claimed id, not by `in_window = 1`: a turn appended while
           // the pass ran belongs to the NEXT window, and an undecodable row

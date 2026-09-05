@@ -1,11 +1,12 @@
 /**
- * EvolutionEngine — manages all 3 timescales of self-evolution.
+ * EvolutionEngine — the four timescales of self-evolution, inside the agent
+ * loop. After every step, turn and session, and periodically at the lifetime
+ * level, the engine reflects, discovers patterns, and evolves.
  *
- * This is NOT a separate "evolve" command — it's baked into the agent loop.
- * After every turn, session, and periodically at the lifetime level,
- * the engine automatically reflects, discovers patterns, and evolves.
+ * Architecture reference: docs/EVOLUTION.md.
  *
- * Architecture reference: docs/EVOLUTION.md — "Three Timescales"
+ * Timescale 0 — In-episode (the step clock): the craft ledger and the
+ *   execution-recovery findings, written synchronously with no model call.
  *
  * Timescale 1 — Turn-level (reviewTurn, Hermes-style forked review):
  *   When user message N+1 arrives IN THE SAME CONVERSATION, turn N is graded
@@ -356,6 +357,13 @@ export class EvolutionEngine {
       : this.config.governor?.govern(this.fastLlm, labels) ?? this.fastLlm;
   }
 
+  /** Run `body` as one durable unit through the backend's transaction seam,
+   *  or inline where the backend supplies none (a synchronous run is already
+   *  atomic inside a Durable Object). */
+  private commit(body: () => void): void {
+    (this.config.transaction ?? ((run: () => void) => { run(); }))(body);
+  }
+
   /** Whether auto-evolution is on for this workspace session. Read by
    *  AgentOrchestrator so a `--no-auto-evolve` run records no evolution state
    *  at all, rather than buffering turns for a later host to evolve. */
@@ -411,10 +419,12 @@ export class EvolutionEngine {
    * The advisor's own row on the audit stream, and the window it dedupes
    * against.
    *
-   * Both live here because `evolution_events` has one writer and this is it.
-   * The advisor could have opened its own table for its dedupe window; the
-   * window it actually needs is "what have I already said to this workspace",
-   * and that is a read of the stream the note lands on either way.
+   * Both live here because `emit` is the one writer of `evolution_events`
+   * that also reaches the engine's listeners; the scaffold proposal, the
+   * misevolution veto and the backends' own rows write the table directly and
+   * reach no listener. The advisor could have opened its own table for its
+   * dedupe window; the window it needs is "what have I already said to this
+   * workspace", and that is a read of the stream the note lands on either way.
    *
    * A note reaches this door for one of three reasons: the owner's floor put it
    * below the conversation, the completion gate held the boundary, or the owner
@@ -618,7 +628,7 @@ export class EvolutionEngine {
     // before the marker made the retry append a second verdict and move the EMA
     // twice; a death after the marker but before the announcement lost the
     // `turn_complete` event for good.
-    (this.config.transaction ?? ((body: () => void) => { body(); }))(() => {
+    this.commit(() => {
       if (outcome && !graded && !preRecorded) {
         recordTurnOutcome(this.rt.storage.sql, {
           turnId: turn.turnId ?? null,
@@ -666,9 +676,7 @@ export class EvolutionEngine {
     // still warrants the reflection below, provisionally — exactly as an
     // errored ungraded turn always did.
     const corroborated = negative && isUserVerdictSource(source);
-    if (corroborated) {
-      await this.corroborateLessons(turn.turnId);
-    }
+    if (corroborated) this.corroborateLessons(turn.turnId);
 
     // Imported experience rides this turn's verdict: accepted adopts it into
     // this workspace's own stores, anything else discards it. Only a user
@@ -851,14 +859,14 @@ export class EvolutionEngine {
       followup: null,
       scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql),
     });
-    if (feedback === 'negative') await this.corroborateLessons(messageId);
+    if (feedback === 'negative') this.corroborateLessons(messageId);
   }
 
   /** An Alternate Takes pick landed (the ledger row is already written by
    *  recordTakePick) — a correction corroborates provisional lessons exactly
    *  like an explicit thumbs-down. */
-  async applyTakePick(turnId: string | null, outcome: 'accepted' | 'corrected'): Promise<void> {
-    if (outcome === 'corrected' && turnId) await this.corroborateLessons(turnId);
+  applyTakePick(turnId: string | null, outcome: 'accepted' | 'corrected'): void {
+    if (outcome === 'corrected' && turnId) this.corroborateLessons(turnId);
   }
 
   /** Explicit thumbs recorded for this turn's message, if any.
@@ -879,7 +887,7 @@ export class EvolutionEngine {
    *  reader (`renderRecentLessons`, `listLessons`, the
    *  experience library) derives from that status — no copy goes to
    *  MEMORY.md, so nothing can hide a lesson its row still holds. */
-  private async corroborateLessons(turnId?: string): Promise<void> {
+  private corroborateLessons(turnId?: string): void {
     if (!turnId) return;
     corroborateLessonsForTurn(this.rt.storage.sql, turnId);
   }
@@ -1317,7 +1325,7 @@ export class EvolutionEngine {
     // Unusable model output is the one thing skipped here. The old catch also
     // absorbed every upsertCraftedTool failure — a compile or storage fault on
     // an accepted pattern read exactly like the model having produced nothing.
-    const json = tolerate(() => extractJsonObject(recorded ?? generalized), 'malformed-input');
+    const json = tolerate(() => extractJsonObject(generalized), 'malformed-input');
     if (json === undefined) return;
     const parsed = v.safeParse(GeneralizedToolSchema, json);
     // Shape only — whether the code is usable is decided by upsertCraftedTool,
@@ -1340,7 +1348,7 @@ export class EvolutionEngine {
     // appended the same discovery twice, and a kill between the marker and the
     // delete orphaned the answer row for good — every later review reads the
     // marker and skips extraction, so nothing ever reaches the delete again.
-    (this.config.transaction ?? ((body: () => void) => { body(); }))(() => {
+    this.commit(() => {
       if (acceptance.accepted) {
         this.emit({
           type: 'craft_discovered',

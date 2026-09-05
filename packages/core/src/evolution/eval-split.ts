@@ -126,13 +126,12 @@ function turnProcessEvidence(sql: SqlExecutor, turnId: string | null): string | 
 
 /** A turn the advisor complained about and the outcome ledger never graded.
  *
- *  This is the closure #246 asked for. `turn_outcomes` grades a turn from the
- *  user's NEXT message, so three whole classes of turn are structurally
- *  ungradable by it: a programmatic wake, a one-shot invocation, and — the case
- *  the owner named — a turn where the agent ground serially through work a
- *  delegation or search capability was sitting right there for. Nothing in the
- *  follow-up says that. The advisor is a second model that read the turn as it
- *  happened and can. */
+ *  `turn_outcomes` grades a turn from the user's NEXT message, so three classes
+ *  of turn are structurally ungradable by it: a programmatic wake, a one-shot
+ *  invocation, and a turn where the agent ground serially through work a
+ *  delegation or search capability was there for. Nothing in the follow-up
+ *  says that. The advisor is a second model that read the turn as it happened
+ *  and can. */
 export interface AdvisorNegativeRow {
   readonly id: string;
   readonly turnId: string;
@@ -290,9 +289,8 @@ function advisorDraw(row: AdvisorNegativeRow): EvalDraw {
  *  the outcome ledger leaves empty, and only about turns the ledger never
  *  graded. So a workspace with real user corrections optimises against those and
  *  a reviewer's opinion never displaces one; a workspace whose turns no user
- *  ever graded — which is every headless run, and the missed-capability case the
- *  owner asked about — now has something to optimise toward instead of an empty
- *  train set and a refusal.
+ *  ever graded, which is every headless run, has something to optimise toward
+ *  instead of an empty train set and a refusal.
  *
  *  No instance is ever in both sets: a winner selected on `val` was never
  *  reflected on during training. When the evidence is too thin to hold anything

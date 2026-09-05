@@ -9,7 +9,8 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
-import { EvolutionEngine, type EvolutionEvent, type CompletedTurn, type CompletedSession } from '../src/evolution/index';
+import { EvolutionEngine } from '../src/evolution/engine';
+import type { EvolutionEvent, CompletedTurn, CompletedSession } from '../src/evolution/types';
 import { DELEGATION_RUBRIC } from '../src/evolution/delegation-features';
 import {
   listTurnOutcomes, listLessons, recordLesson, renderRecentLessons,

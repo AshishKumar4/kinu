@@ -1,5 +1,5 @@
 /**
- * Evolution engine types — the three timescales of self-evolution.
+ * Evolution engine types — the four timescales of self-evolution.
  */
 
 import type { ModelMessage } from 'ai';

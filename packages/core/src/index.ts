@@ -1552,19 +1552,24 @@ export {
 export {
   REFINEMENT_DISPOSITIONS, REFINEMENT_EDIT_KINDS, REFINEMENT_SCOPES,
   REFINEMENT_STAGES, REFINEMENT_TRIGGERS, RefinementProposalSchema,
-  REFINEMENT_DECISIONS,
   createRefinementStore, evolutionDebt, initRefinementTables, refinementRequestView,
   refinementStagingPath,
-  advanceRefinementLane, decideRefinementRoute, showRefinementRoute, refinementDebt, refinementDebtRequest, requestRefinement,
   type EvolutionDebt, type OpenRefinementInput, type RefinementDeps,
   type RefinementDisposition, type RefinementEdit, type RefinementEditKind,
-  type RefinementLaneStep, type RefinementProposal, type RefinementRequest,
+  type RefinementProposal, type RefinementRequest,
   type RefinementRequestView, type RefinementRoute, type RefinementScope,
   type RefinementStage, type RefinementStore, type RefinementTrigger,
+  type SettleRefinementPatch,
+} from './evolution/refinement';
+export {
+  advanceRefinementLane, refinementDebt, refinementDebtRequest, requestRefinement,
+  type RefinementLaneStep, type RequestRefinementInput,
+} from './evolution/refinement-lane';
+export {
+  REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute,
   type RefinementDecision, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult, type StagedSkillView,
-  type RequestRefinementInput, type SettleRefinementPatch,
-} from './evolution/index';
+} from './evolution/refinement-skill';
 export {
   runGepa, runScaffoldGepa, runSectionGepa,
   PROMPT_SECTION_TARGETS, findPromptSectionTarget,

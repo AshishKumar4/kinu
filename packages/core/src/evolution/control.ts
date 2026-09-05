@@ -1013,24 +1013,14 @@ export async function proposeMeasuredPromptSection(
  * Which section the next optimisation pass targets: the one whose last pass is
  * oldest, and a section never passed before any that has.
  *
- * DERIVED from `gepa_runs`, not stored. It used to be a Durable Object field
- * (`orchestrator.ts` `_nextPromptSection`) whose comment reasoned that an
- * eviction "costs one repeated section". Measured, it costs the rotation: the
- * cadence only reaches this decision on the tick where its own in-memory
- * counter hits `autoGepaEveryNTurns`, both counters live in the same
- * activation, so index k is reachable only inside an activation that already
- * served (k+1) x 25 qualifying turns. A probe over the real actor confirmed it —
- * the cursor advanced on ticks 25, 50 and 75 and appears in no durable table,
- * `agent_config` holding one key, the cadence. Against a joint idle-eviction
- * window measured at 2-5 minutes (`platform-catalog.ts`
- * `do.facet.eviction_joint`), the first section received every pass and the
- * other eight needed 225 consecutive turns with no pause.
- *
- * A stored cursor would fix it. Deriving it needs no new state at all: every
- * pass already writes its own `gepa_runs` row under `target_ref`, and a section
- * with no row has plainly never had a turn. The ordering is stable — ties break
- * on the registry's own order, so two never-passed sections resolve the way
- * `PROMPT_SECTIONS` declares them.
+ * DERIVED from `gepa_runs`, never stored. An in-memory cursor is reset by a
+ * Durable Object eviction, and the joint idle-eviction window is measured at
+ * 2-5 minutes (`platform-catalog.ts` `do.facet.eviction_joint`), far shorter
+ * than the 25-turn cadence between passes; a probe over the real actor showed
+ * the first section receiving every pass. Every pass already writes its own
+ * `gepa_runs` row under `target_ref`, so the rotation needs no new state. Ties
+ * break on the registry's own order, so two never-passed sections resolve the
+ * way `PROMPT_SECTIONS` declares them.
  */
 function nextPromptSectionTarget(sql: SqlExecutor): PromptSection<string> | null {
   const lastPass = lastGepaRunPerTarget(sql, 'prompt_section');
