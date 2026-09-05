@@ -19,7 +19,7 @@
  * gates on this shared tree ("Execution context was destroyed").
  */
 
-import { createReadStream, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
@@ -111,9 +111,50 @@ function chromePath(): string | undefined {
  *  removed when the process exits. */
 let galleryDist: Promise<string> | null = null;
 
+/** `kinu-gallery-dist-<pid>-<random>`. The owner's pid is in the name so a
+ *  later run can tell a live sibling's build from a leaked one. */
+const DIST_NAME = /^kinu-gallery-dist-(\d+)-/;
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false;
+    throw error;
+  }
+}
+
+/**
+ * Remove the builds of owners that are gone. The `exit` handler below removes
+ * this process's own build, and it never runs when the process is killed:
+ * a suite past its deadline, a hook past its wall, a worker its parent
+ * reaped. Sixty-one of those builds, 71 MiB each, sat under /tmp on
+ * 2026-09-05 and exhausted the user's tmpfs quota, which turned `bun run
+ * check` red for every checkout on the box. Reclaiming by liveness rather
+ * than by age is what lets the next build clean up after a killed one at
+ * once, and a build whose owner is still running is left alone.
+ */
+export function reclaimLeakedBuilds(): number {
+  let removed = 0;
+  for (const name of readdirSync(tmpdir())) {
+    const owner = DIST_NAME.exec(name)?.[1];
+    if (owner === undefined) continue;
+    const pid = Number(owner);
+    if (pid === process.pid || processAlive(pid)) continue;
+    rmSync(join(tmpdir(), name), { recursive: true, force: true });
+    removed += 1;
+  }
+  return removed;
+}
+
 function builtGalleryDist(): Promise<string> {
   galleryDist ??= (async () => {
-    const outDir = mkdtempSync(join(tmpdir(), 'kinu-gallery-dist-'));
+    const leaked = reclaimLeakedBuilds();
+    if (leaked > 0) {
+      process.stderr.write(`gallery-harness: removed ${String(leaked)} build(s) left by processes that are gone\n`);
+    }
+    const outDir = mkdtempSync(join(tmpdir(), `kinu-gallery-dist-${String(process.pid)}-`));
     process.once('exit', () => rmSync(outDir, { recursive: true, force: true }));
     await build({
       root: CF,

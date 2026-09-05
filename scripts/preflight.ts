@@ -23,11 +23,23 @@
  * looked at. So this runs first in every tier, costs milliseconds, and names
  * the cause instead of letting it surface as an unrelated timeout.
  *
+ * `statfs` is not the whole answer. On 2026-09-05 this gate reported ok with
+ * 6.2 GiB and 906,000 inodes free while `bun run check` died at
+ * `tools/oxlint/anti-slop/type-aware.gate.test.ts:181` with EDQUOT: the temp
+ * filesystem is a tmpfs mounted `usrquota`, the user's quota was exhausted by
+ * 61 leaked gallery builds and two 15 GB trace files, and `statfs` reports the
+ * filesystem's free space, not the user's. So the gate also writes one file
+ * under the temp directory. A refused write is a finding that names the
+ * errno; a write that succeeds proves only that the quota is not exhausted,
+ * which the green line says.
+ *
  * It deliberately does NOT repair anything. A gate that quietly fixes its own
  * precondition teaches nobody and hides a leak that will come back.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync, statfsSync } from 'node:fs';
+import {
+  existsSync, readFileSync, readdirSync, rmSync, statSync, statfsSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { assertMeasured, finding } from './gate-ratchet';
@@ -100,6 +112,30 @@ if (MIN_FREE_BYTES < 2 * BYTES_PER_FULL_RUN) {
   );
 }
 
+/** What the write probe puts on the temp filesystem. One MiB: enough to fail
+ *  under an exhausted quota, cheap enough for a gate that runs on every commit. */
+const PROBE_BYTES = 1024 * 1024;
+
+/** The result of writing {@link PROBE_BYTES} under the temp directory. The two
+ *  codes are the two ways a filesystem refuses space: the user's quota and
+ *  the filesystem itself. Any other failure is a fault and rethrows. */
+export type WriteProbe = { readonly ok: true } | { readonly ok: false; readonly code: 'EDQUOT' | 'ENOSPC' };
+
+function probeWrite(temp: string): WriteProbe {
+  const path = join(temp, `kinu-preflight-probe-${String(process.pid)}`);
+  try {
+    writeFileSync(path, Buffer.alloc(PROBE_BYTES));
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && (error.code === 'EDQUOT' || error.code === 'ENOSPC')) {
+      return { ok: false, code: error.code };
+    }
+    throw error;
+  } finally {
+    rmSync(path, { force: true });
+  }
+}
+
 /**
  * The markers `FileCheckpoints.workdirForPath` treats as a project root. Kept
  * in sync with packages/cli-backend/src/checkpoints.ts by
@@ -157,6 +193,10 @@ export interface Environment {
   readonly temp: string;
   readonly freeInodes: number;
   readonly freeBytes: number;
+  /** Whether this user can write under the temp directory right now. `freeBytes`
+   *  is the filesystem's answer; a per-user quota refuses a write while it
+   *  still shows space. */
+  readonly writeProbe: WriteProbe;
   /** Directories between the temp dir and `/` that carry a project marker.
    *  Nearest first. Harmless while the engine bounds its walk; each one owns
    *  every host write beneath it once that bound is gone. */
@@ -198,6 +238,7 @@ export function observe(): Environment {
     temp,
     freeInodes: fs.ffree,
     freeBytes: fs.bavail * fs.bsize,
+    writeProbe: probeWrite(temp),
     markedAncestors: unboundedWorkdirsAbove(temp, process.env.HOME ?? '/root'),
     workdirWalkBounded: engineBoundsTempWalk(readFileSync(join(repo, ENGINE), 'utf8')),
     scratchOrphans: orphans,
@@ -233,11 +274,26 @@ export function judge(env: Environment): string[] {
   if (env.freeBytes < MIN_FREE_BYTES) {
     problems.push(finding({
       at: env.temp,
-      invariant: `the temp filesystem keeps at least ${String(MIN_FREE_BYTES >> 30)} GiB free`,
-      found: `${String(env.freeBytes >> 20)} MiB free`,
+      invariant: `the temp filesystem keeps at least ${String(MIN_FREE_BYTES / 2 ** 30)} GiB free`,
+      found: `${String(Math.floor(env.freeBytes / 2 ** 20))} MiB free`,
       silently: 'a suite that writes a database or a checkpoint store gets ENOSPC and '
         + 'reports it as whatever assertion happened to be next',
       fix: 'bun scripts/preflight.ts --reclaim',
+    }));
+  }
+
+  if (!env.writeProbe.ok) {
+    problems.push(finding({
+      at: env.temp,
+      invariant: `this user can write ${String(PROBE_BYTES / 2 ** 20)} MiB under the temp directory`,
+      found: `the write failed with ${env.writeProbe.code} while statfs reports `
+        + `${String(Math.floor(env.freeBytes / 2 ** 20))} MiB free: the space is the filesystem's, and the `
+        + 'refusal is this user\'s quota (tmpfs mounted usrquota) or the filesystem itself',
+      silently: 'every mkdtemp and every write in every suite fails with the same errno, '
+        + 'and the first gate that writes reports it as its own failure; this box did that '
+        + 'on 2026-09-05 inside the anti-slop gates while this check reported ok',
+      fix: 'bun scripts/preflight.ts --reclaim   # removes this repository\'s scratch older '
+        + 'than 2h; then remove your own large files under the temp directory, and re-run',
     }));
   }
 
@@ -359,7 +415,9 @@ if (import.meta.main) {
   const problems = judge(env);
   if (problems.length === 0) {
     console.log(`preflight: ok — ${measured}, `
-      + `${String(env.scratchOrphans)} of them our own leaked test scratch, no merge in progress`);
+      + `${String(env.scratchOrphans)} of them our own leaked test scratch, no merge in progress; `
+      + `a ${String(PROBE_BYTES / 2 ** 20)} MiB write succeeded, so a per-user quota is not exhausted `
+      + '(its remaining headroom is unmeasured: statfs reports the filesystem, not the user)');
     process.exit(0);
   }
   console.error(`preflight: ${String(problems.length)} environment fault(s)\n`);

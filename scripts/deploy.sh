@@ -95,7 +95,7 @@ esac
 # pre-deploy check demanding that resource already exist, and no provisioning
 # command can close the gap: wrangler has no verb that creates a Durable Object
 # namespace, a container application or a route. Measured: `ControlPlaneDO` was
-# added to `migrations`, staging's 55 pre-deploy gates passed, and `gate:infra`
+# added to `migrations`, staging's pre-deploy gates (55 at the time) passed, and `gate:infra`
 # then refused the only deploy that could have created the namespace — naming
 # `bun run infra:provision` as the fix, which cannot.
 #
@@ -241,7 +241,7 @@ declare -A GATE_DEADLINES=(
 )
 
 # Run everything enqueued, then clear the queue. Each gate's output goes to its
-# own file and is printed ONLY if it fails: 52 concurrent streams interleaved
+# own file and is printed ONLY if it fails: a wave's concurrent streams interleaved
 # into one terminal is not a log anybody can read, and the output a reader wants
 # is the failing gate's.
 #
@@ -486,7 +486,7 @@ run_required_gate "CLI backend and conformance suite" bun test --parallel=4 pack
 run_required_gate "Full production CLI suite" bun run test:cli
 run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/staging-preflight.test.ts
 run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts
-run_required_gate "Gate self-tests: secrets, corpus, preflight" bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/workspace-name-ux.test.ts
+run_required_gate "Gate self-tests: secrets, corpus, preflight" bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts
 run_required_gate "Secret scan" bun scripts/secret-scan.ts
 run_required_gate "Schema drift" bun scripts/schema-drift.ts
 # Traces are a separate switch from logs and wrangler does not inherit

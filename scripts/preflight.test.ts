@@ -26,6 +26,7 @@ const HEALTHY: Environment = {
   temp: '/tmp',
   freeInodes: 900_000,
   freeBytes: 40 * 1024 ** 3,
+  writeProbe: { ok: true },
   markedAncestors: [],
   workdirWalkBounded: true,
   scratchOrphans: 3,
@@ -81,5 +82,17 @@ describe('a project marker above the temp directory', () => {
     // The denominator: an unbounded engine on a clean machine is not this
     // gate's finding, because nothing resolves anywhere unexpected.
     expect(judge({ ...HEALTHY, workdirWalkBounded: false })).toEqual([]);
+  });
+});
+
+describe('a temp directory this user cannot write to', () => {
+  test('is a finding that names the errno and the free space statfs still reports', () => {
+    // The red direction for the 2026-09-05 incident: statfs showed gigabytes
+    // free while every write under the tmpfs returned EDQUOT. Space that is
+    // reported free and refused is the one condition `freeBytes` cannot see.
+    const problems = judge({ ...HEALTHY, writeProbe: { ok: false, code: 'EDQUOT' } });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('EDQUOT');
+    expect(problems[0]).toContain(`${String((40 * 1024 ** 3) >> 20)} MiB free`);
   });
 });
