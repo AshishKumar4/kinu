@@ -9,7 +9,37 @@ describe('createSandboxedExecutor', () => {
     const result = await createSandboxedExecutor().execute('7 * 6', []);
     expect(result).toEqual({ result: 42 });
   });
+  test('runs module metadata in the subprocess async body', async () => {
+    const executor = createSandboxedExecutor();
+    expect(await executor.execute('return import.meta.main', []))
+      .toEqual({ result: true });
+    expect(await executor.execute('await Promise.resolve();\n({ main: import.meta.main })\n// result', []))
+      .toEqual({ result: { main: true } });
+    expect(await executor.execute('({ main: import.meta.main })\n// result', []))
+      .toEqual({ result: { main: true } });
+  });
 
+  test('invokes codemode callables once, including a trailing comment', async () => {
+    const executor = createSandboxedExecutor();
+    expect(await executor.execute('async () => 42 // result', []))
+      .toEqual({ result: 42 });
+    let calls = 0;
+    expect(await executor.execute('async () => (await probe.seed()) + 41 // result', [
+      { name: 'probe', fns: { seed: async () => ++calls } },
+    ])).toEqual({ result: 42 });
+    expect(calls).toBe(1);
+  });
+
+  test('refuses module metadata in the in-process function context before side effects', async () => {
+    let calls = 0;
+    const result = await createSandboxedExecutor().execute(
+      'await probe.seed(); return import.meta.main',
+      [{ name: 'probe', fns: { seed: async () => ++calls } }],
+    );
+    expect(result.result).toBeUndefined();
+    expect(result.error).toMatch(/import\.meta/);
+    expect(calls).toBe(0);
+  });
   test('declares installed interpreters and runs code in the requested language', async () => {
     const executor = createSandboxedExecutor();
     const installed = Bun.which('python3') !== null;

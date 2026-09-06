@@ -46,12 +46,12 @@ const ProbeAnswerSchema = v.object({
  * runtime on it still starts — which is the whole point: what the executor then
  * resolves is a decision it makes, not a decision the harness made for it.
  */
-async function executeUnderPath(PATH: string): Promise<v.InferOutput<typeof ProbeAnswerSchema>> {
+async function executeUnderPath(PATH: string, code: string): Promise<v.InferOutput<typeof ProbeAnswerSchema>> {
   const dir = scratchDir('executor-lifecycle-path');
   const probe = join(dir, 'probe.mjs');
   writeFileSync(probe, [
     `import { createSandboxedExecutor } from ${JSON.stringify(EXECUTOR_MODULE)};`,
-    `const answer = await createSandboxedExecutor().execute('6 * 7', []);`,
+    `const answer = await createSandboxedExecutor().execute(${JSON.stringify(code)}, []);`,
     `console.log(JSON.stringify(answer));`,
   ].join('\n'));
   const child = Bun.spawn([process.execPath, 'run', probe], {
@@ -154,7 +154,7 @@ describe('the local executor settles on the command, not on its pipes', () => {
 
     // A runtime ON the configured path is the runtime the work runs through:
     // the executor resolved it and spawned what it resolved.
-    expect(await executeUnderPath(`${shim.dir}:${process.env.PATH ?? '/usr/bin:/bin'}`))
+    expect(await executeUnderPath(`${shim.dir}:${process.env.PATH ?? '/usr/bin:/bin'}`, '6 * 7'))
       .toEqual({ result: 42 });
     expect(shim.invocations()).toBe(1);
 
@@ -162,8 +162,16 @@ describe('the local executor settles on the command, not on its pipes', () => {
     // literal name here is what failed as `Executable not found`; resolving it
     // answers null, and the in-process executor — the same one provider-backed
     // execution uses — does the work instead.
-    expect(await executeUnderPath('/usr/bin:/bin')).toEqual({ result: 42 });
+    expect(await executeUnderPath('/usr/bin:/bin', '6 * 7')).toEqual({ result: 42 });
     // Nothing reached the shim on a path that does not contain it.
     expect(shim.invocations()).toBe(1);
   }, 30_000);
+
+  test('without bun, codemode callables run but module metadata is refused', async () => {
+    expect(await executeUnderPath('/usr/bin:/bin', 'async () => (await Promise.resolve(42)) // result'))
+      .toEqual({ result: 42 });
+    const refused = await executeUnderPath('/usr/bin:/bin', 'return import.meta.main');
+    expect(refused.result).toBeUndefined();
+    expect(refused.error).toMatch(/import\.meta/);
+  });
 });
