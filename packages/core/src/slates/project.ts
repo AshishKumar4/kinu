@@ -44,7 +44,3 @@ export function parseSlateProject<Input>(input: Input): SlateProject {
   }
   return project;
 }
-
-export function slateExecutorName(project: SlateProject): 'workspace' | 'sandbox' {
-  return project.slate.runtime === 'worker' ? 'workspace' : 'sandbox';
-}

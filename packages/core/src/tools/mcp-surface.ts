@@ -49,9 +49,7 @@ export interface SerializableToolDescriptor {
    *  orchestrator passes this straight to `tool({ inputSchema: jsonSchema(...) })`. */
   inputSchema?: JsonObject;
   outputSchema?: JsonObject;
-  /** The server's `readOnlyHint` annotation, present exactly when it said so.
-   *  The one annotation a gadget's MCP gatekeeper reads: a read-only tool is
-   *  an observation, anything else is the owner's decision. */
+  /** The server's `readOnlyHint` annotation, present exactly when it said so. */
   readOnly?: true;
 }
 

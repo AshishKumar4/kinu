@@ -150,8 +150,6 @@ export default defineConfig({
           PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', scriptName: 'hosted-preview-probe', useSQLite: true },
           SLATE_PROCESS_PROBE: { className: 'SlateProcessProbeDO', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
-          GADGET_PROCESS_PROBE: { className: 'GadgetProcessProbeDO', useSQLite: true },
-          OrchestratorAgent: { className: 'GadgetProcessProbeDO', useSQLite: true },
         },
       },
     }),

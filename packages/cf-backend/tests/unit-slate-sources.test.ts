@@ -11,11 +11,12 @@ test('every accepted Slate read model requires only workspace.read', () => {
   }
 });
 
-test('Slate RPC declarations reject side effects and privileged host operations', () => {
+test('Slate RPC declarations reject side effects and privileged host operations', async () => {
+  const declare = async (method: string) => parseSlateProject({
+    main: 'server.ts', slate: { bindings: { DATA: { kind: 'rpc', methods: [method] } } },
+  });
   for (const [method, access] of Object.entries(AGENT_RPC_ACCESS)) {
     if (access === 'workspace.read') continue;
-    expect(() => parseSlateProject({
-      main: 'server.ts', slate: { bindings: { DATA: { kind: 'rpc', methods: [method] } } },
-    })).toThrow();
+    await expect(declare(method)).rejects.toMatchObject({ code: 'bad_input' });
   }
 });

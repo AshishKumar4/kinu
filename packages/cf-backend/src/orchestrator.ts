@@ -24,7 +24,6 @@ import {
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
-import { GadgetHost } from "./gadgets/host";
 import { SlateHost } from "./slates/host";
 import { applyWorkspaceBoxOp, type WorkspaceBoxOp, type WorkspaceBoxResult } from "./workspace-box-rpc";
 import {
@@ -68,10 +67,7 @@ import {
   nanoid, type HeadRunView,
   // Canonical memory-note write primitive
   appendMemoryNote,
-  // Gadgets — core owns the manifest, the file layout and the binding route;
-  // this object boots the resident processes (gadgets/host.ts).
-  type GadgetBindingRequest, type GadgetCallResult, type GadgetDataSource,
-  type SlateBindingRequest, type SlateCallResult, type SlateOperation, SLATES_CHANGED_EVENT,
+  type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   type ScaffoldRunResult,
   // The scaffold evolution control plane (core owns the drivers; this actor
@@ -2829,10 +2825,8 @@ export class OrchestratorAgent extends ActorAgent {
   /**
    * Everything asynchronous that is waiting on the owner, in one queue.
    *
-   * Host-owned by design: this is NOT in `GADGET_DATA_SOURCES` and must not be
-   * added. A gadget that could read the needs-you queue could draw a plausible
-   * fake of it — the same argument that keeps `listPendingConsents` off that
-   * list, on the surface an owner reads right before authorising something.
+   * Host-owned: SLATE_READ_MODELS excludes the needs-you queue and consent
+   * decisions, so an authored preview cannot counterfeit the approval surface.
    *
    * An unclaimed workspace has no release hub to ask, so it contributes no
    * approvals and no changes. Anything else that fails is a real failure and
@@ -3916,40 +3910,8 @@ export class OrchestratorAgent extends ActorAgent {
     return await this.rt.memory.read("memory/MEMORY.md") ?? "";
   }
 
-  // ── Gadgets ────────────────────────────────────────────────────
-  // Agent-written apps under `gadgets/<slug>/`. The memoized workspace boot
-  // subscribes to file changes. See docs/LIVE-UI.md.
-
-  private _gadgets: GadgetHost | undefined;
-
-  private get gadgets(): GadgetHost {
-    this._gadgets ??= new GadgetHost({
-      workspace: this.name,
-      vfs: () => this.rt.storage.vfs,
-      ctx: this.ctx,
-      env: { LOADER: this.env.LOADER },
-      broadcast: (event) => this.broadcast(JSON.stringify(event)),
-      providers: () => this.gadgetNamespaces(),
-      data: (source) => this.gadgetDataSource(source),
-      // The same UserDO call the agent's own MCP tools make (actor-agent.ts
-      // `mcpToolsCache`): the connection's allowlist and tier apply there.
-      mcp: {
-        call: async (server, tool, args) => {
-          const { stub, caller } = await this.userHub();
-          const raw = await stub.userMcp_callTool(caller, server, tool, args);
-          return v.parse(JsonValueSchema, JSON.parse(raw));
-        },
-      },
-    });
-    return this._gadgets;
-  }
-
-  /** One read model by name, for a gadget's `rpc` binding. The manifest parser
-   *  holds the name to `GADGET_DATA_SOURCES`; each member is `@callable` and
-   *  classed `workspace.read` (tests/unit-gadget-sources.test.ts holds that). */
-  private async gadgetDataSource(source: GadgetDataSource): Promise<JsonValue> {
-    // No annotation: each thunk keeps its getter's own type, and indexing by
-    // `GadgetDataSource` still fails the build when a source has no thunk.
+  /** The agent's read models, held to workspace.read by unit-slate-sources. */
+  private async slateReadModel(source: SlateReadModel): Promise<JsonValue> {
     const reads = {
       getAlignmentConvergence: () => this.getAlignmentConvergence(),
       getExecutors: () => this.getExecutors(),
@@ -3967,20 +3929,8 @@ export class OrchestratorAgent extends ActorAgent {
     return v.parse(JsonValueSchema, await reads[source]());
   }
 
-
   @callable() async slate(operation: SlateOperation): Promise<SlateCallResult> {
     return this.slates.operation(operation);
-  }
-
-  /** A gadget server's call through one of its bindings, back from its
-   *  process. Reached by the loopback entrypoint in gadgets/bindings.ts over
-   * this object's stub, and by nothing else: deliberately NOT `@callable`,
-   * because a browser socket that could name a binding could reach the
-   * agent's executors and the owner's MCP connections as a gadget.
-   * `sealRpcSurface` keeps it on the stub transport.
-   */
-  async gadgetBindingCall(slug: string, name: string, request: GadgetBindingRequest): Promise<GadgetCallResult> {
-    return this.gadgets.bindingCall(String(slug), String(name), request);
   }
 
   private _slates: SlateHost | undefined;
@@ -3991,8 +3941,8 @@ export class OrchestratorAgent extends ActorAgent {
       session: () => this.hostedWorkspace().bundle.session(),
       registerPort: (pid, port, target) => this.hostedWorkspace().registerPort(pid, port, target),
       unregisterPorts: (pid) => this.hostedWorkspace().unregisterPorts(pid),
-      providers: () => this.gadgetNamespaces(),
-      data: (source) => this.gadgetDataSource(source),
+      providers: () => this.slateNamespaces(),
+      data: (source) => this.slateReadModel(source),
       mcp: async (server, tool, args) => {
         const { stub, caller } = await this.userHub();
         return v.parse(JsonValueSchema, JSON.parse(await stub.userMcp_callTool(caller, server, tool, args)));

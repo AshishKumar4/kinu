@@ -4,6 +4,7 @@ import * as v from "valibot";
 import type { SlateCallResult } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import type { Rpc } from "@/lib/protocol";
+import { PreviewFrame } from '@/components/PreviewFrame';
 
 const SlatePreviewSchema = v.object({ url: v.string(), port: v.number() });
 /**
@@ -53,13 +54,9 @@ export function SlateFrame({ id, rpc, reloadKey = 0 }: {
         <div className="flex justify-center py-16"><Loader /></div>
       )}
       {url !== null && (
-        <iframe
-          key={reloadKey}
-          src={url}
-          title={id}
-          sandbox="allow-scripts"
-          className="block h-[480px] w-full rounded-lg border p-border"
-        />
+        <div key={reloadKey} className="h-[480px] rounded-lg border p-border overflow-hidden">
+          <PreviewFrame url={url} label={id} />
+        </div>
       )}
     </div>
   );

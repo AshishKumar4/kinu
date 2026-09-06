@@ -48,3 +48,19 @@ it('each resident request retains its own app depth across the loopback binding'
     await subject.stop();
   }
 });
+
+it('authored fetch failures preserve their cause chain and leave the process callable', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('authored-cause'));
+  await subject.start([
+    'export default { fetch(request) {',
+    '  if (new URL(request.url).pathname === "/fail") throw new Error("outer", { cause: new Error("inner") });',
+    '  return new Response("alive");',
+    '} };',
+  ].join('\n'));
+  try {
+    const failed = await subject.request('/fail');
+    expect(failed.status).toBe(500);
+    expect(JSON.parse(failed.body)).toEqual({ reason: 'io', error: 'outer: inner' });
+    expect(await subject.request('/')).toEqual({ status: 200, body: 'alive' });
+  } finally { await subject.stop(); }
+});

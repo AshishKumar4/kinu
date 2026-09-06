@@ -39,18 +39,10 @@ export { TerminalEffectProbeDO } from './terminal-effect-probe';
 // file plane under the runtime whose CSP is the defect.
 export { FilesEioProbeDO } from './files-eio-probe';
 export { SlateProcessProbeDO, SlateDepthProbe } from './slate-process-probe';
-// The gadget-process probe — the same charter exception: the real `GadgetHost`
-// over the real file plane, under the runtime whose loader, process lifetime
-// and outbound refusal are the boundary under test.
-export { GadgetProcessProbeDO } from './gadget-process-probe';
 // The production sandbox egress entrypoint, exported here exactly as
 // `src/server.ts` exports it, so `codemode-sandbox.test.ts` can prove the
 // `exports` loopback resolves it under the compatibility date we deploy.
 export { CodemodeEgress } from '../../src/codemode-egress';
-// The production gadget binding entrypoint, exported here exactly as
-// `src/server.ts` exports it, so the probe's loopback mint resolves the
-// same class production mints into a gadget isolate's `env`.
-export { GadgetBinding } from '../../src/gadgets/bindings';
 import * as v from 'valibot';
 
 /**

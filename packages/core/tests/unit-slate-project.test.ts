@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { parseSlateProject, slateExecutorName } from '../src/slates/project';
+import { parseSlateProject } from '../src/slates/project';
 import { routeSlateBindingCall } from '../src/slates/bindings';
 import type { JsonValue } from '../src/utils/json';
 
@@ -7,10 +7,6 @@ test('misspelled Slate requirements fail instead of changing runtime or authorit
   expect(() => parseSlateProject({ name: 'notes', main: './server.ts', slate: { runtme: 'node' } })).toThrow('slate.runtme');
   expect(() => parseSlateProject({ name: 'notes', main: './server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespce: 'workspace' } } } })).toThrow('slate.bindings.FILES.namespce');
   expect(() => parseSlateProject({ name: 'notes', main: './server.ts', slate: { bindings: { PEER: { kind: 'slate', id: 'other' } } } })).toThrow('slate.bindings.PEER.kind');
-  const worker = parseSlateProject({ name: 'notes', main: './server.ts', browser: './ui.tsx', dependencies: { react: '19.1.0' } });
-  expect(slateExecutorName(worker)).toBe('workspace');
-  const project = parseSlateProject({ name: 'notes', scripts: { dev: 'vite', build: 'vite build' }, slate: { runtime: 'node', port: 5173 } });
-  expect(slateExecutorName(project)).toBe('sandbox');
   expect(() => parseSlateProject({ name: 'notes', scripts: { dev: 'vite' }, slate: { runtime: 'node' } })).toThrow('slate.port');
 });
 

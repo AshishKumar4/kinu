@@ -10,9 +10,7 @@ const FALLBACK_SLATES: readonly SlateSummary[] = [{
   title: "Fallback Probe",
   bindings: [],
 }];
-const FALLBACK_PREVIEW_URL = `data:text/html,${encodeURIComponent(
-  '<!doctype html><p data-slate-preview>fallback preview running</p>',
-)}`;
+export const SLATE_GALLERY_URL = 'https://6s5-abcdef0123-aaaaaaaaaaaaaaa-gallery.preview.example.test/';
 const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
 const NO_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
@@ -25,11 +23,11 @@ export function SlateFallbackFrame({ rpc }: { rpc: Rpc }) {
     window.addEventListener("gallery:slate-unpublish", unpublish);
     return () => { window.removeEventListener("gallery:slate-unpublish", unpublish); };
   }, []);
-  const frameRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  const frameRpc: Rpc = async <T,>(method: string, args?: Parameters<Rpc>[1]): Promise<T> => {
     if (method === "previewSlate") {
       return new Response(JSON.stringify({
         ok: true,
-        value: { url: FALLBACK_PREVIEW_URL, port: 0 },
+        value: { url: SLATE_GALLERY_URL, port: 8789 },
       })).json<T>();
     }
     return rpc(method, args);

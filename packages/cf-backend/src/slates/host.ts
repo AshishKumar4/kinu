@@ -11,7 +11,7 @@ import {
 } from '@kinu.run/core';
 import { ERROR_CODES, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
-import type { SlateBindingProps } from './bindings';
+import type { SlateBinding, SlateBindingProps } from './bindings';
 
 const Failure = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
 
@@ -208,7 +208,7 @@ export class SlateHost {
         this.running.delete(id);
         await held.process.stop();
       }
-      const bindings: Record<string, Fetcher> = {};
+      const bindings: Record<string, Fetcher<SlateBinding>> = {};
       for (const name of Object.keys(project.slate.bindings)) {
         const props: SlateBindingProps = { workspace: this.deps.workspace, id, name };
         bindings[name] = exports.SlateBinding({ props });

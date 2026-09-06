@@ -4475,15 +4475,15 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Every namespace a gadget's `namespace` binding may reach: the surfaces the
+   * Every namespace a slate's namespace binding may reach: the surfaces the
    * agent's own `execute_tools` sandbox dispatches to on a build turn, minus the
    * sandbox's two internal ones (`tools`, `state`). The router's providers come
    * gated exactly as codemode receives them (execution/approval.ts), and the
    * projected namespaces are the same factories the sandbox is built from, so a
-   * member runs for a gadget precisely as it runs for the agent. Read per call:
+   * member runs for a slate precisely as it runs for the agent. Read per call:
    * an executor attaches and detaches while this object lives.
    */
-  protected gadgetNamespaces(): CodemodeProvider[] {
+  protected slateNamespaces(): CodemodeProvider[] {
     return [
       ...(this.rt.executionRouter?.getProviders() ?? []),
       createWebCodemodeProvider(this.getWebSearchProvider()),

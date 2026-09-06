@@ -106,7 +106,7 @@ import { WorkspaceBar, InlineRenameTitle } from "@/components/WorkspaceBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/surfaces/WorkSurface";
-import { SlateFallbackFrame } from "@/gallery-slate-fallback";
+import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
@@ -3375,14 +3375,11 @@ const BRAIN_STATUS = {
 /* ── Agent-authored Slate preview ────────────────────────────── */
 
 const GALLERY_SLATE_ID = "sandbox-probe";
-const GALLERY_SLATE_URL = `data:text/html,${encodeURIComponent(
-  "<!doctype html><main><h1>Slate preview</h1><p data-slate-preview>Rendered on the preview URL.</p></main>",
-)}`;
 
 /** Gallery-only previewSlate fixture. It exercises SlateFrame, not a deployed preview origin. */
-const slateRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+const slateRpc: Rpc = async <T,>(method: string, args?: Parameters<Rpc>[1]): Promise<T> => {
   if (method === "previewSlate") {
-    return rpcResult({ ok: true, value: { url: GALLERY_SLATE_URL, port: 0 } }).json<T>();
+    return rpcResult({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789 } }).json<T>();
   }
   return stubRpc<T>(method, args);
 };

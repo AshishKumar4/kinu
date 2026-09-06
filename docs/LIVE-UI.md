@@ -1,331 +1,145 @@
-# Live UI: gadgets
+# Live UI: slates
 
-The agent writes a small app and Kinu runs it. The app's server runs in a
-resident process with no network, no `ctx`, no SQLite, and only the
-bindings the app declares. The app's client runs in a sandboxed iframe with no
-network and one MessagePort to its server. This replaces the JSON dashboard
-vocabulary (`packages/core/src/views/`, deleted) with real code the agent
-writes. This document holds the research, the decision, the trust boundary and
-what stays open.
+A slate is an authored project under `/home/user/slates/<id>/` in the workspace
+file plane. Source and versions are durable. Compilation, resident processes,
+and preview URLs are derived from that source, not a second source of truth.
 
-Every figure here is dated and names its source. Every mechanism claim names a
-file.
+## Authoring
 
-## 1. Research
+Write TypeScript and `package.json` through the ordinary file plane. For a
+Worker project, `main` names a module whose default export implements
+`fetch(request, env)`. The handler serves the UI and any JSON POST routes that
+other slates or the agent call. There is no separate publish tool or host-rendered
+UI vocabulary.
 
-### 1.1 Cloudflare OS gadgets, the reference
+```json
+{
+  "name": "notes",
+  "main": "server.ts",
+  "browser": "client.ts",
+  "slate": {
+    "runtime": "worker",
+    "title": "Notes",
+    "bindings": {
+      "FILES": {
+        "kind": "namespace",
+        "namespace": "workspace",
+        "members": ["readFile"]
+      }
+    }
+  }
+}
+```
 
-Source: [github.com/cloudflare/cloudflare-os](https://github.com/cloudflare/cloudflare-os)
-(Apache-2.0), `README.md`, `docs/sharing.md`, `docs/blueprints.md`,
-`docs/observers.md`, `packages/workshop-backend/src/overseer.ts`,
-`packages/workshop-frontend/src/GadgetUI.tsx`, read 2026-09-05.
+`browser` is optional. When present, EsbuildService compiles it as a browser
+bundle; the resident serves the compiled assets at their output paths, including
+the entry's declared path. The authored server supplies the HTML that loads it.
+Server and browser entry paths must stay inside the project.
 
-A gadget is a private instance of a small app, one per user, with a server
-half and a client half.
+The `slate` field is strict: only `runtime`, `title`, `port`, and `bindings` are
+accepted, and each binding kind rejects undeclared fields. Runtime defaults to
+`worker`; its `main` is required. `node` requires a port from 1 through 65535 and
+`scripts.dev` or `scripts.start`. Node projects belong on the sandbox executor:
+the hosted resident preview path explicitly refuses them. A Worker may declare
+a port or let the host allocate one. The displayed title falls back from
+`slate.title` to package `name` to directory id.
 
-- Server. `overseer.ts` `loadGadgetWorker` builds a dynamic Worker from the
-  gadget's committed `.js` files with `mainModule: "server.js"`,
-  `globalOutbound: null`, and `env: this.getEnvForLoader(...)`, cached by
-  `env.LOADER.get(`${this.ctx.id}.${codeVersion}.${gadgetId}`, ...)`.
-  `getGadgetFacetFetcher` then runs the exported class as a facet of the
-  workspace Durable Object:
-  `this.ctx.facets.get(facetName, () => ({ class: stub.getDurableObjectClass("Gadget"), id: facetName }))`.
-  A code change calls `this.ctx.facets.abort(facetName, ...)`, and the next
-  `get` restarts the facet under the new load. The gadget's `env` is a flat
-  object of loopback stubs, one per introduced binding:
-  `env[name] = this.makeBindingLoopback({type: "gatekeeper", id: edge.target}, caller)`,
-  built with `this.ctx.exports.GatekeeperLoopback({props})`.
-- Gatekeepers. `packages/workshop-shared/src/gatekeeper.ts`: a gatekeeper is a
-  facet the overseer installs, exposed to the overseer and never to the
-  gadget. Every session call is submitted to an approval queue. Reads are
-  authorised before data returns. Side-effecting actions are simulated
-  locally while the owner decides, so the agent never blocks.
-- Client. `GadgetUI.tsx` synthesises the document client-side and mounts it
-  with `srcDoc`. The document carries
-  `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src 'none'; script-src data: 'unsafe-inline'; style-src data: 'unsafe-inline'; img-src data:; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none';">`,
-  the iframe carries
-  `sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"`, and
-  the client module is a `data:` URL that first imports Cap'n Web from a
-  base64 `data:` URL (`import CAPNWEB_BUNDLE from 'capnweb?raw'`). The client
-  creates a `MessageChannel`, posts `"handshake"` with one port to
-  `window.parent`, and the parent accepts it only when
-  `event.source === iframeRef.current?.contentWindow && event.origin === "null"`,
-  then opens `newMessagePortRpcSession(port, forwardingTarget)`. The client
-  has an opaque origin and no network at all. Its only channel is the port it
-  handed over.
-- Tool surface. The server's RPC methods are what the agent calls through
-  Code Mode: `executeCodeMode` loads the agent's program into a second
-  dynamic Worker with `globalOutbound: null` and `env: this.getEnvForAgent(...)`,
-  where each gadget is a loopback stub under its binding name.
-- Storage. Gadget files live in a git object database inside the workspace
-  object (`git-store.ts`). Hot reload is a version counter in the loader id
-  plus `facets.abort`.
-- Stated limits. The README says the iframe is blocked from the internet "to
-  the maximum extent allowed by browsers". The code widens the sandbox with
-  `allow-popups allow-popups-to-escape-sandbox` and neuters programmatic
-  `window.open`, so only a user-activated `_blank` link escapes, stamped
-  `noopener`.
+Schema: `packages/core/src/slates/project.ts`.
 
-### 1.2 Cap'n Web
+## One codemode operation
 
-Source: [github.com/cloudflare/capnweb](https://github.com/cloudflare/capnweb),
-README and `packages/docs`, and npm, read 2026-09-05.
+Use `workspace.slate(operation)` through `execute_tools`. Each operation has a
+strict field set; there are no separate slate tools or codemode aliases.
+`TOOL_REACH.slate` is `{ native: false, codemode: "workspace", replay: "claimed" }`.
+The eight native builtins are unchanged.
 
-- `capnweb@0.12.0`, MIT. The README claims the core bundle compresses "to
-  under 16 kB with no dependencies"; the published `dist/index.js` is
-  100,764 bytes unminified (jsdelivr package listing).
-- Transports: HTTP batch, WebSocket, and `newMessagePortRpcSession(port, localMain?)`.
-  The docs say "Do not use a `Window` object itself as a port for RPC" and
-  that the RPC system "does not authenticate that messages came from the
-  expected sender": the host verifies the port's sender first.
-- `RpcTarget`: prototype members are reachable, instance properties are not,
-  `#`-prefixed members never are. Stubs are Proxies, so a forwarding target
-  can be a Proxy over `new RpcTarget()`, which is what the reference does.
-- Security guide: authenticate in band, rate-limit expensive operations
-  because pipelining is cheap for an attacker, set payload limits,
-  `Object.prototype` members are unreachable by protocol.
-
-### 1.3 Dynamic Workers and Durable Object facets
-
-Source: [developers.cloudflare.com/dynamic-workers](https://developers.cloudflare.com/dynamic-workers/)
-(landing, api-reference, usage/bindings, usage/egress-control, usage/limits,
-usage/durable-object-facets, platform/limits, pricing), read 2026-09-05.
-
-- `env.LOADER.get(id, callback)` caches an isolate by id; "the callback
-  always returns exactly the same content, when called for the same ID".
-  `WorkerCode` carries `compatibilityDate`, `mainModule`, `modules`, `env`,
-  `globalOutbound`, `limits`.
-- `globalOutbound: null`: "Both `fetch()` and `connect()` will throw
-  exceptions." Omitted, the dynamic Worker inherits the parent's network.
-- `env` "may contain: Structured clonable types. Service Bindings, including
-  loopback bindings from ctx.exports." A loopback stub carries `props` only
-  the loader Worker can read. "Stubs have no global identifier and cannot be
-  forged, the only way to obtain one is to receive it."
-- `limits: { cpuMs, subRequests }` throw at the boundary when reached. A load
-  that omits them runs under the plan's limits.
-- Facets: `this.ctx.facets.get(name, () => ({ class, id? }))` creates or
-  resumes a child Durable Object "with its own isolated SQLite database"; "the
-  dynamic code cannot read the supervisor's database". `abort(name, reason)`
-  stops it and keeps storage; `delete(name)` destroys storage. A Durable Object
-  can have "up to ten distinct Dynamic Workers with in-flight requests".
-- Availability: open beta for paid Workers plans since 2026-03-24; billed per
-  unique (id, code) per day, per request, and per CPU millisecond including
-  isolate start-up.
-
-### 1.4 agent-core SPEC (vocabulary)
-
-Source: `/home/mrwhite0racle/agent-core/packages/agent-core/SPEC.md` §4.1,
-§4.7, §6.3, §10.2, read 2026-09-05.
-
-- §4.1 splits a Facet into a `FacetManifest` (data a host can read without
-  running code: identity, `bindings`, isolation, contributions) and a runtime
-  class. The gadget manifest here is that shape: the declared bindings are the
-  reach.
-- §4.7: agent-authored code runs in a `dynamic` domain "with zero ambient
-  authority", and "the explicitly passed Bindings are also the whole of what
-  the isolate's names reach" (`C13-AUTH-ISOLATE-NAMESPACE-CLOSED`).
-- §10.2: a load carries an exact resource bound; a load that omits it "gets
-  the account's entire compute budget" (`C13-CLOUDFLARE-DYNAMIC-COMPUTE-BOUND`).
-  Warm reuse is keyed on the whole load, bindings included
-  (`C13-CLOUDFLARE-DYNAMIC-ISOLATE-IDENTITY`). The no-egress demonstration is
-  "code running in a real isolate ... failing both an unbound global fetch and
-  an unbound connection attempt while a Binding it was explicitly passed
-  answers normally" (`C13-CLOUDFLARE-DYNAMIC-NO-EGRESS`).
-- §6.3: a View is a data-only snapshot with `ActionDescriptor`s, streamed as
-  JSON Patch `ViewDelta`s, never live state. Adopted here as the observation
-  vocabulary (§4 below), not as the rendering path.
-
-### 1.5 The wider landscape
-
-Each row: what the agent writes, where it runs, the trust boundary, the cost.
-Primary sources read 2026-09-05.
-
-| System | Writes | Runs where | Trust boundary | Cost |
-|---|---|---|---|---|
-| OpenAI Apps SDK ([developers.openai.com/plugins](https://developers.openai.com/plugins/build/chatgpt-ui)) | HTML/JS bundle served as an MCP resource | iframe in ChatGPT | "Widgets run inside an isolated iframe with a strict Content Security Policy"; `window.openai` bridge; sandbox tokens not documented | public MCP server, app review |
-| MCP Apps ([modelcontextprotocol/ext-apps](https://github.com/modelcontextprotocol/ext-apps)) | HTML as a `ui://` resource | host iframe, MCP over postMessage | default CSP `default-src 'none'; ... connect-src 'none'`; "The Host and the Sandbox MUST have different origins"; sandbox `allow-scripts, allow-same-origin` | none mandated |
-| Vercel AI SDK generative UI ([ai-sdk.dev](https://ai-sdk.dev/docs/ai-sdk-ui/generative-user-interfaces)) | tool calls, data only | host app | only host-shipped components render | none |
-| A2UI ([google/A2UI](https://github.com/google/A2UI)) | declarative JSON | client renderer over a catalog | "A2UI is a declarative data format, not executable code" | catalog and renderer maintenance |
-| Claude Code artifacts ([code.claude.com/docs/en/artifacts](https://code.claude.com/docs/en/artifacts)) | one HTML file | claude.ai page under a strict CSP | CDN and font allowlist, no backend | hosted |
-| WebContainers ([webcontainers.io](https://webcontainers.io/guides/introduction)) | a Node project | Node in the browser tab | tab containment; needs COOP/COEP and HTTPS | runtime download |
-| v0 ([v0.app/docs/sandbox](https://v0.app/docs/sandbox)) | a full project | Vercel Sandbox VM dev server | per-chat isolation, network policy; preview iframe posture not documented | sandbox compute |
-| Svelte compiler / Vue REPL ([svelte.dev](https://svelte.dev/docs/svelte/svelte-compiler), [vuejs/repl](https://github.com/vuejs/repl)) | component source | in-browser compile, srcdoc preview | pure transform; the Vue REPL's iframe sandbox includes `allow-same-origin` | CDN downloads |
-
-What the table says: the systems that render agent-written UI in a host all
-converge on a sandboxed iframe with a `connect-src 'none'`-class CSP and a
-postMessage bridge (OpenAI, MCP Apps, cloudflare-os). The systems that run
-agent-written servers do it in a per-user sandbox (cloudflare-os, v0). The
-declarative options (A2UI, AI SDK, and Kinu's own deleted vocabulary) are safe
-because they are not code, and that is also their ceiling.
-
-## 2. Decision
-
-Kinu adopts the cloudflare-os model. The server runs on a resident process.
-
-A gadget is a directory `gadgets/<slug>/` in the workspace file plane:
-
-| File | What it is | Who runs it |
+| Operation | Input | Result |
 |---|---|---|
-| `gadget.json` | the manifest: `{ v: 1, title, subtitle?, bindings? }` (`core/src/gadgets/manifest.ts`) | the host reads it, never executes it |
-| `server.js` | `import { RpcTarget } from './capnweb.js'; export class Gadget extends RpcTarget` with `constructor(env) { super(); this.env = env; }` | a resident process the host boots per gadget (`cf-backend/src/gadgets/host.ts`) |
-| `client.js` | an ES module; `gadget` is in scope as a stub of the server | a sandboxed srcdoc iframe (`cf-backend/src/components/gadgets/`) |
-| `client.css` | optional stylesheet | inlined into the document |
+| List | `{op: 'list'}` | Project summaries and per-project problems |
+| Preview | `{op: 'preview', id}` | Live preview URL and port |
+| Call | `{op: 'call', id, method, args?}` | JSON result of `POST /<method>` with a JSON argument array; omitted args mean `[]` |
+| Commit | `{op: 'commit', id}` | Immutable source version |
+| History | `{op: 'history', id}` | Durable slate record and versions |
+| Fork | `{op: 'fork', version}` | New slate with source from that version |
+| Restore | `{op: 'restore', id, version}` | Source restored into the named slate |
 
-There is no publish tool. The agent writes the files with the `file` tool,
-`workspace.*` or the shell, and the workspace object reacts to the write. The
-codemode surface is `workspace.gadgets()` and
-`workspace.gadget(slug, method, ...args)` (`core/src/execution/inline.ts`),
-which is the reference's "the server's RPC surface doubles as the agent's tool
-surface".
+Answers are `{ok: true, value}` or `{ok: false, reason, error}`. History requires
+a durable record, created by source commit or preview synchronization; a directory
+alone is not a history record. Method names start with an ASCII letter, contain
+only letters, digits, or underscores, are at most 64 characters, and exclude
+`constructor`. The authored POST handler must return JSON.
 
-### 2.1 Bindings are the object-capability model
+Contract: `packages/core/src/slates/rpc.ts`; hosted dispatch:
+`packages/cf-backend/src/slates/host.ts`.
 
-The manifest's `bindings` map is the whole of what the server reaches. Each
-entry becomes one loopback stub in the resident process `env`, minted by the
-workspace object with `exports.GadgetBinding({ props })` and the workspace,
-gadget and binding name as props (`cf-backend/src/gadgets/bindings.ts`,
-`host.ts` `mintEnv`). Nothing else is in `env`: no namespace, no `LOADER`, no
-secret. The process-side runner wraps each stub so every plane is spelled the
-same way, `env.<NAME>.<member>(...args)`. A binding call comes back to the
-workspace object (`gadgetBindingCall`, stub transport only) as one request,
-`{ member, args, depth }`. The object re-reads the manifest and routes with
-the one pure decision in `core/src/gadgets/bindings.ts`
-(`routeGadgetBindingCall`), then runs the route as the agent's own call would.
+## Bindings and gates
 
-A binding passes one of the agent's OWN capabilities into the process, gated
-exactly as the agent's own call is and no more. There is no binding-specific
-approval rule, no second allowlist and no second table.
+The server receives introduced capabilities as `env.NAME.member(...args)`.
+Each binding passes one of the workspace's own capabilities, with that
+capability's existing gates. A declaration is not a permission grant, and there
+is no binding-specific approval ladder. The host re-reads `package.json` on
+every binding call, so a held stub cannot retain removed reach.
 
-| Binding kind | What `env.<NAME>.<member>(...args)` reaches | The Kinu seam that runs it, and its gate |
-|---|---|---|
-| `namespace` (`namespace`, `members?`) | one member of a codemode namespace the workspace has: `workspace`, `sandbox`, `laptop`, `parent`, `web`, `memory`, `tasks`, `agents`, ... | the same provider surfaces the agent's `execute_tools` sandbox dispatches to (`ActorAgent.gadgetNamespaces`): the router's executor providers arrive gated by `gateProviderExec` (`core/src/execution/approval.ts`), so a shell command meets the executor's own approval gate and parks on the owner under that executor's name; a namespace the workspace lacks is `unavailable` at call time |
-| `rpc` (`methods`) | one declared read model, with no arguments | the orchestrator's `@callable` read models, each classed `workspace.read` in `cli/rpc-gate.ts`; the manifest parser holds `methods` to `GADGET_DATA_SOURCES` (`core/src/gadgets/sources.ts`), so a method of any other class fails at parse; `tests/unit-gadget-sources.test.ts` holds the list to the gate |
-| `mcp` (`server`, `tools?`) | one tool on one owner-configured connection, with one JSON object | the owner's UserDO (`userMcp_callTool` behind the `mcp.tools` capability tier), the same call the agent's own MCP tools make: the connection's `allowed_tools` answer for the gadget as they answer for the agent |
-| `app` (`id`) | one method on another gadget's server | `GadgetHost.call` on the other gadget, one hop deeper; the hop past `GADGET_LIMITS.appDepth` (8) is refused, which is how a cycle ends |
+| Kind and fields | Reach and gate |
+|---|---|
+| `namespace`: `namespace`, `members?` | A member of an available codemode provider. Optional `members` narrows reach; executor approvals and device consent remain the provider's own gates. An absent namespace refuses as unavailable. |
+| `rpc`: `methods` | Declared, zero-argument workspace read models from `SLATE_READ_MODELS`, not arbitrary host RPC. The parser rejects methods outside that closed list. |
+| `mcp`: `server`, `tools?` | One owner-configured MCP connection, named by connection id rather than display name. Optional `tools` narrows reach; the owner's MCP capability and allowed-tool policy still apply. Calls take one JSON object, or no arguments for `{}`. |
+| `app`: `id` | A JSON POST route on another slate's authored server. The callee uses its own declared bindings. Calls carry depth through the resident request and its AsyncLocalStorage context; a ninth app hop refuses. |
 
-The MCP binding's `server` names the connection id. Renaming the connection
-does not change the binding.
+A queued approval is not a simulated success. Binding failures preserve their
+refusal class. Neither credentials nor the workspace object's storage are
+introduced as bindings. Lasting application state belongs in the workspace file
+plane or another explicitly available capability, not process memory.
 
-The hop count is real, not a registry: `GadgetHost.call` sends it to the
-process on the batch request, the runner keeps it in an `AsyncLocalStorage`
-for the life of that batch (`compatibilityFlags: ['nodejs_als']`), and every
-binding call the server makes carries it back. A refused hop is the server's
-own error, boxed like any other; the processes stay up.
+Routing: `packages/core/src/slates/bindings.ts`; loopback transport:
+`packages/cf-backend/src/slates/bindings.ts`.
 
-One deliberate difference from the reference. Kinu does not simulate an
-outcome while the owner decides: when an executor's gate parks a command, the
-gadget is told the call is queued and NOT run, the honesty rule
-`safety/deferred-approval.ts` already states for the agent's own commands.
+## Resident preview lifecycle
 
-### 2.2 The server half
+`previewSlate` and the codemode preview operation boot the authored Worker
+through the real fabric process API after compilation with EsbuildService.
+The host keys running code by synchronized source digest and reuses a live
+matching process. Changed source or a stopped process requires a new boot.
+File-change events invalidate affected slates and refresh the UI; requests to a
+live preview also refresh its resident on demand.
 
-`server.js` imports `RpcTarget` from `./capnweb.js`. It exports `class Gadget extends RpcTarget`. The constructor keeps `env`: `constructor(env) { super(); this.env = env; }`. Each prototype method is a JSON RPC method. User code receives no `ctx` and no SQLite. The embedder runner hosts `new Gadget(env)` privately. The runner boxes a thrown method into the value `{__gadgetError: message}`, so the host refuses the call as `io` with its message.
+`SlateFrame` delegates the returned URL to the existing `PreviewFrame`. That
+pipeline rejects non-preview URLs and uses the shared `PREVIEW_SANDBOX` policy,
+including `allow-same-origin` on the distinct preview hostname so browser code
+can call its own server. The workspace remains a different origin. There is
+no srcdoc document or MessagePort/browser-to-host RPC bridge.
+Browser code reaches only the HTTP interface the authored server exposes; do
+not assume a host session, storage handle, injected RPC client, or blanket
+network prohibition. Preview URL availability depends on deployment support;
+an unavailable URL is a refusal, not an alternate renderer.
 
-`GadgetHost.call` (`cf-backend/src/gadgets/host.ts`):
+The preview router distinguishes lifecycle states before booting anything:
 
-1. reads `server.js` and the manifest fresh from the file plane;
-2. checks the method name with `isGadgetMethodName` and the args as an array of JSON values;
-3. spawns a resident process with the server bytes and an `env` that holds one loopback stub per declared binding; the process inherits the workspace's outbound network and runs under the platform's own limits;
-4. sends the call as framed Cap'n Web HTTP batch bytes through `resident.handleHttpRequest` over an `RpcSession` transport, and answers the JSON value or a refusal with its class first. The process side serves the bytes with `newHttpBatchRpcResponse`.
+- A current live capability routes to its process, refreshing source on demand.
+- A persisted matching exposure whose listener was lost to isolate recycling
+  returns HTTP 410 with `RECYCLED_WORKSPACE_PREVIEW`. Open a new preview to boot
+  and expose the process again; visiting the stale URL does not restore it.
+- An unknown or mismatched capability returns HTTP 404.
 
-State that must last lives in the workspace file plane, reached through a `workspace` namespace binding (`env.<NAME>.writeFile(path, text)`). The process keeps no SQLite of its own. A write under `gadgets/<slug>/` releases the resident process. The next call boots a new server from the files as they stand then. The file plane's event bus (`session.vfs.events.on`, subscribed in `OrchestratorAgent.onStart`) carries the write, whichever path wrote it.
+Visitor-supplied `x-slate-depth` is stripped before routing, so a preview visitor
+cannot choose the internal app-call depth.
 
-### 2.3 The client half
+Implementation: `packages/cf-backend/src/slates/resident.ts`,
+`packages/cf-backend/src/workspace-host.ts`, and
+`packages/cf-backend/src/components/slates/SlateFrame.tsx`.
 
-`cf-backend/src/components/gadgets/gadget-document.ts` builds the document
-the reference builds: the meta CSP quoted in §1.1, the client module as a
-`data:` URL, Cap'n Web embedded as a base64 `data:` import, the prefix that
-opens the MessageChannel and posts the handshake. `GadgetFrame.tsx` mounts it
-with `sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"`.
-`gadget-bridge.ts` is the one seam between that port and the server: it
-accepts a handshake only from the frame's own `contentWindow` with origin
-`"null"`, opens `newMessagePortRpcSession(port, forwardingTarget)`, and
-forwards every method call as `rpc("gadgetCall", [slug, method, args])` over
-the SPA's existing authenticated WebSocket. The prefix also forwards the
-client's console lines and uncaught errors as `console` messages, and the
-frame shows the last 100 under the iframe, so a broken `client.js` names its
-error where the owner looks. `scripts/gadget-sandbox-ux.test.ts` reads one
-such line from the host document. A second surface that wants a gadget
-reuses `GadgetFrame`, or the bridge alone.
+## Durable source and versions
 
-Why not the preview rail for the client. The reference does not serve the
-client from a hostname, and Kinu should not either: staging sets
-`PREVIEW_HOST_SUFFIX: ""` (`wrangler.jsonc`), so a rail-served client would
-not render there or under `vite dev`; a preview hostname needs
-`allow-same-origin` and a live port capability that dies with the isolate
-(the 410 `RECYCLED_WORKSPACE_PREVIEW` path in `workspace-host.ts`); and
-no-network is stronger than the rail's `connect-src`. The preview rail stays
-what it is: the carrier for agent-started servers on exposed ports.
+The hosted `SlateHost` reuses `WorkspaceSlates` with `SqliteSlateStore`, the
+workspace file adapter, and the content store. Synchronization records current
+source; commit freezes a version; fork materializes a version into a new slate;
+restore replaces source through an outer workspace VFS transaction. These
+operations survive host recreation. They do not checkpoint JavaScript heap
+state, keep a process alive, or make a preview URL durable.
 
-The workspace snapshot includes gadget summaries, so tabs appear on the first
-load. A successful list read removes reload counters for unpublished gadgets.
-If the open gadget disappears, the reader returns to Work.
-
-The memoized workspace boot subscribes to file changes once. A retry after an
-activation failure installs the same subscription. The workspace object broadcasts
-`{ type: 'gadgets_changed', slugs }` on the event that releases the resident process.
-The UI re-lists gadgets and remounts the open frame, which fetches
-`getGadgetClient` again.
-
-## 3. Trust boundary
-
-| Row | The server sees | The client sees | Neither can reach | Enforced by |
-|---|---|---|---|---|
-| Network | nothing: `fetch`/`connect` throw | nothing: `connect-src 'none'`, `default-src 'none'` | the internet, the app origin, the preview hosts | `globalOutbound: null` on the resident spawn (host.ts); the meta CSP (gadget-document.ts) and `frame-src` of the app document (`lib/security-headers.ts`) |
-| Executors and files | the members of each `namespace` binding, on the agent's own executors: the workspace file plane and shell, the container, the device, the projected namespaces | nothing | any namespace the manifest did not name; a member outside a declared `members` list | `routeGadgetBindingCall` over the manifest, re-read per call (host.ts `bindingCall`); each provider's own gate (`gateProviderExec`) and device consent, as for the agent |
-| Workspace data | the `rpc` binding's declared read models | nothing | the needs-you queue, consents, instruction approvals, anything with a free argument | the manifest parser holds `methods` to `GADGET_DATA_SOURCES`; `unit-gadget-sources.test.ts` holds it to `workspace.read` |
-| External services | the `mcp` binding's connection, through the owner's own `allowed_tools` | nothing | any connection the manifest did not name; any tool the owner withheld; any credential | `userMcp_callTool` in UserDO, the agent's own path; the credential never leaves UserDO (`user/mcp.ts`) |
-| Other gadgets | the `app` binding's server, one hop deeper | nothing | a chain past `GADGET_LIMITS.appDepth` hops, so a cycle | the hop count on the batch request and in the runner's `AsyncLocalStorage`; `routeGadgetBindingCall` refuses the hop past the bound |
-| Storage | none: no `ctx`, no SQLite; lasting state lives in the workspace file plane through a `workspace` binding | none (opaque origin: no cookies, no localStorage) | the workspace object's SQLite | the runner passes no `ctx` |
-| Host document and session | nothing | nothing: opaque origin, no `allow-same-origin`, `frame-src 'none'` inside | the owner's session cookie, `/api/*`, the SPA DOM | the sandbox attribute; `__Host-` cookies; the bridge accepts only its own frame's port |
-| Compute | the platform's own Worker limits | the browser tab | nothing beyond them | the Worker Loader |
-| Spoofing host chrome | cannot title itself as a host surface | draws only inside its frame | Approve, consent, credential and settings chrome | `RESERVED_GADGET_TITLES` at parse time; the tab strip marks the group |
-| What crosses out | JSON return values, thrown errors, console lines | JSON calls over one MessagePort, console lines, user-activated `_blank` links | anything else | the bridge's forwarding target; `window.open` neutered in the prefix |
-
-The app keeps its no-HTML-injection-sink property: agent bytes never enter the
-host document. They enter an iframe of opaque origin the host built, and the
-host document's own CSP does not change.
-
-## 4. Observation channel
-
-A gadget may implement `view()` returning a data-only JSON snapshot. The host
-reads it through the same `gadgetCall` path when a reader asks (the agent via
-`workspace.gadget(slug, 'view')`, a future chat card). That is agent-core's
-View shape, adopted as vocabulary: a snapshot with no live state, rendered by
-the host as data and never as platform voice. JSON Patch `ViewDelta` streaming
-and `ActionDescriptor` routing are not built; see §6.
-
-## 5. Retirement of the JSON DSL
-
-Deleted: `packages/core/src/views/{spec,sources,store,index}.ts`,
-`unit-views.test.ts`, the `agent_views` table and its `initViewTables`, the
-`view` changelog kind and `view_revert`, `workspace.createView`/`deleteView`,
-the `listAgentViews`/`getAgentView` RPCs, `AgentViewSurface.tsx`. Production
-is reset, so no stored spec is migrated; a `views/` directory in a workspace is
-an ordinary directory.
-
-What carried over by name: the closed read-model list and its rationale
-(`gadgets/sources.ts`), the reserved-title list (`gadgets/manifest.ts`), the
-fail-closed `strictObject` validation, and the rule that the needs-you queue is
-host-owned.
-
-## 6. Open
-
-- Bundle budget, measured: after `bun run build` and `bunx wrangler deploy --dry-run`
-  in `packages/cf-backend` with `capnweb@0.12.0` in the graph, the Worker
-  bundle is **7,298.99 KiB gzip** (raw upload 27,817.73 KiB) on 2026-09-05,
-  50.77 KiB below the 2026-08-31 reading of 7,349.76 KiB: the deleted views
-  renderer outweighs the embedded Cap'n Web module. Recorded in AGENTS.md §
-  Deploy Discipline.
-- Server-to-client callbacks. Cap'n Web can carry a client callback to the
-  parent and on to the workspace object; whether the resident transport then passes that
-  stub into the process as a function is untested. Clients poll today.
-- `ViewDelta` streaming, `ActionDescriptor` routing and a chat card for a
-  gadget's `view()` are vocabulary only.
-- Console forwarding from the server (the reference uses a tail Worker) is
-  not wired; server errors reach the caller as the refusal text.
-- The first-run row `tests/first-run/gadget.first-run.ts` is written and not
-  proved red against a deployed sha: the build before the gadget commit has
-  no `listGadgets` RPC, so the row fails there on the missing surface, not on
-  the defect it names. The first `gate:first-run` run after a deploy is the
-  measurement.
+Optional WorkspaceSlates effect capabilities are not supplied by the hosted
+source runtime. Operations requiring absent build, process, or deployment
+capabilities explicitly refuse as unsupported rather than invoking provider
+stubs. The working resident preview path above is separate from those optional
+effects. No external deployment or resource provisioning is implied by commit.
