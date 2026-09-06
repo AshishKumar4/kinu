@@ -297,7 +297,7 @@ function JobRows(
         <li key={job.id} className="space-y-1 border-b p-border last:border-b-0 pb-2 last:pb-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono text-[11px] p-text-2">{job.kind}</span>
-            <span className={job.status === 'running' ? 'p-gold text-[11px]'
+            <span className={job.status === 'running' ? 'p-accent text-[11px]'
               : job.status === 'completed' ? 'p-success text-[11px]' : 'p-danger text-[11px]'}>
               {job.status}
             </span>

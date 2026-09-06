@@ -32,6 +32,7 @@ import {
 import type { AgentTaskTree, ChangelogEntry, PendingAction, PendingActionKind } from "@kinu.run/core";
 import type { BackgroundJob, Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { FilledButton } from "@/components/ui/FilledButton";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState, Section, timeAgo } from "./shared";
 import { isClosedTree, isSettled, PlanProgress, TaskTree } from "./work-tasks";
@@ -153,9 +154,9 @@ export function WorkTab({
   return (
     <div className="space-y-6 animate-fade-in">
       {pendingActions.length > 0 && (
-        <div className="rounded-lg border border-[rgba(224,164,88,.32)] bg-[rgba(224,164,88,.06)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent)]">
+        <div className="rounded-lg border border-[rgba(224,164,88,.32)] bg-[rgba(224,164,88,.06)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
           <Section id="work-needs-you" title="Needs you"
-            icon={<WarningCircleIcon size={14} className="p-gold" />}
+            icon={<WarningCircleIcon size={14} className="p-accent" />}
             badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
             <div className="divide-y divide-dashed divide-[var(--c-dash)]">
               {parkedCommands.length > 0 && (
@@ -206,7 +207,7 @@ export function WorkTab({
             {FILTERS.map((chip) => (
               <button key={chip.id} type="button" onClick={() => setFilter(chip.id)}
                 aria-pressed={filter === chip.id}
-                className={`px-2.5 py-0.5 text-[11px] rounded-full transition-colors ${filter === chip.id ? "bg-[rgba(224,164,88,.1)] p-gold font-semibold" : "p-text-3 hover:p-gold"}`}>
+                className={`px-2.5 py-0.5 text-[11px] rounded-full transition-colors ${filter === chip.id ? "bg-[rgba(224,164,88,.1)] p-accent font-semibold" : "p-text-3 hover:p-accent"}`}>
                 {chip.label}
               </button>
             ))}
@@ -429,10 +430,10 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
       {decidedLine && <div className="text-[10px] p-text-3">{decidedLine}</div>}
 
       <div className="flex items-center gap-1.5 flex-wrap">
-        <Button size="sm" variant="primary" disabled={state.busy || chosen.size === 0}
+        <FilledButton disabled={state.busy || chosen.size === 0}
           onClick={() => flow.decide("approved", [...chosen])}>
           Approve {countLabel(chosen.size, actions.length)}
-        </Button>
+        </FilledButton>
         <Button size="sm" variant="secondary" disabled={state.busy || chosen.size === 0}
           onClick={() => flow.decide("always", [...chosen])}
           title="Approve these checks for this environment. Revoke under Settings → Standing approvals.">

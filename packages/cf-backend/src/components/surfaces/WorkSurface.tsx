@@ -176,11 +176,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
             // and the chat header's pulsing pill already says it.
             const badge = s === "Output" ? props.pinnedPorts.length
               : s === "Work" ? props.pendingActions.length : 0;
-            const badgeTone = s === "Work" ? "p-accent-subtle p-gold" : "p-badge-success";
+            const badgeTone = s === "Work" ? "p-accent-subtle p-accent" : "p-badge-success";
             return (
               <button key={s} onClick={() => onSurface(s)} title={s} aria-label={s}
                 aria-current={surface === s ? "true" : undefined}
-                className={`${tabCls} ${surface === s ? "p-tab-active p-gold font-semibold" : ""}`}>
+                className={`${tabCls} ${surface === s ? "p-tab-active p-accent font-semibold" : ""}`}>
                 <span>{SURFACE_LABEL[s]}</span>
                 {badge > 0 && (
                   <span className={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-semibold p-num ${badgeTone}`}>{badge}</span>

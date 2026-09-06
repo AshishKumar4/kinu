@@ -1,16 +1,8 @@
 import { Button } from '@cloudflare/kumo';
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useRef, type ReactElement } from 'react';
 
 import { useCopy } from '@/hooks/use-copy';
 import { LandingActionLink } from './LandingActionLink';
-
-const PHRASES = [
-  'learn from feedback.',
-  'work while you sleep.',
-  'build their own tools.',
-  'run close to your code.',
-  'search, score, and improve.',
-] as const;
 
 interface TreeNode {
   readonly id: number;
@@ -298,45 +290,7 @@ function SearchCanvas(): ReactElement {
   );
 }
 
-function useTypewriter(): string {
-  const [phrase, setPhrase] = useState('');
-  useEffect(() => {
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      setPhrase(PHRASES[0]);
-      return;
-    }
-    let phraseIndex = 0;
-    let length = 0;
-    let typing = true;
-    let timer = 0;
-    const step = () => {
-      const current = PHRASES[phraseIndex];
-      let delay = 50;
-      if (typing && length < current.length) {
-        length += 1;
-        delay = 42 + Math.random() * 46;
-      } else if (typing) {
-        typing = false;
-        delay = 2_600;
-      } else if (length > 0) {
-        length -= 1;
-        delay = 20;
-      } else {
-        typing = true;
-        phraseIndex = (phraseIndex + 1) % PHRASES.length;
-        delay = 420;
-      }
-      setPhrase(current.slice(0, length));
-      timer = window.setTimeout(step, delay);
-    };
-    timer = window.setTimeout(step, 700);
-    return () => window.clearTimeout(timer);
-  }, []);
-  return phrase;
-}
-
 export function LandingHero({ install }: { install: string }): ReactElement {
-  const phrase = useTypewriter();
   const { status, copy } = useCopy();
   return (
     <section id="top" className="relative overflow-hidden">
@@ -351,20 +305,13 @@ export function LandingHero({ install }: { install: string }): ReactElement {
           </div>
           <h1 className="mb-6 text-[clamp(40px,5.2vw,68px)] font-semibold leading-[.99] tracking-[-.04em] text-pretty p-text">
             Agents that{' '}
-            {/* Every phrase renders invisibly in the same grid cell, so the cell
-                is always exactly as tall as the tallest phrase at the current
-                width and font — no reserved-height guess, no overflow mask, and
-                nothing to shave a descender or cut a line at the right edge. */}
-            <span className="grid p-gold">
-              {PHRASES.map((sizer) => <span key={sizer} aria-hidden="true" className="invisible col-start-1 row-start-1">{sizer}</span>)}
-              <span className="col-start-1 row-start-1">{phrase}<span aria-hidden className="ml-[.06em] inline-block h-[.8em] w-[.075em] translate-y-[.1em] bg-[var(--c-accent)] motion-safe:animate-pulse" /></span>
-            </span>
+            <span className="block p-accent">learn from feedback.</span>
           </h1>
           <p className="mb-8 max-w-[520px] text-[17.5px] leading-[1.65] text-pretty p-text-3">
             Give each agent a durable computer. Run it locally or in the cloud. Executable checks choose among competing approaches.
           </p>
           <div className="flex max-w-[540px] items-center justify-between gap-4 rounded-xl border p-border p-recessed px-4 py-3.5">
-            <code className="min-w-0 flex-1 truncate font-mono text-[12.5px] p-text-2"><span className="p-gold">$</span> <span data-install-command>{install}</span></code>
+            <code className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-[12.5px] leading-relaxed p-text-2"><span aria-hidden="true" className="p-accent">$</span> <span data-install-command>{install}</span></code>
             <Button type="button" variant="ghost" size="sm" onClick={() => copy(install)} aria-label="Copy install command">
               {status === 'copied' ? 'Copied' : status === 'failed' ? 'Retry copy' : 'Copy'}
             </Button>

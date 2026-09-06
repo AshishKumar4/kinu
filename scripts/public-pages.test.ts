@@ -62,10 +62,8 @@ interface DemoBeat {
 }
 
 interface Facts {
-  typed?: { early: string; later: string };
   reduced?: { before: string; after: string; pixels: number; animations: number };
   reducedDemo?: { settled: string | null; phase: string | null; tests: string | null; controls: number };
-  canvasPixels?: number;
   treeFlows?: boolean;
   prunedNodes?: number;
   hiddenNodes?: number;
@@ -182,18 +180,6 @@ beforeAll(async () => {
 
     {
       const page = await openLanding(DESKTOP);
-      const early = await page.evaluate(() => document.querySelector('h1')?.textContent ?? '');
-      const later = await page.waitForFunction(
-        (previous: string) => {
-          const current = document.querySelector('h1')?.textContent ?? '';
-          return current !== previous ? current : null;
-        },
-        { polling: 'raf', timeout: 15_000 },
-        early,
-      ).then((handle) => handle.jsonValue());
-      facts.typed = { early, later: String(later) };
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      facts.canvasPixels = await opaqueCanvasPixels(page);
       await page.waitForSelector('canvas[data-settled="true"]', { timeout: 10_000 });
       facts.prunedNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.pruned ?? 0));
       facts.hiddenNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.hidden ?? 0));
@@ -201,13 +187,11 @@ beforeAll(async () => {
         Math.round(graph.getBoundingClientRect().width)
       ));
       const settledTree = await page.$eval('canvas', (canvas) => canvas.toDataURL());
-      const settledPhrase = await page.$eval('h1', (heading) => heading.textContent ?? '');
       await page.waitForFunction(
-        (previous: string) => document.querySelector('h1')?.textContent !== previous,
+        (previous: string) => document.querySelector('canvas')?.toDataURL() !== previous,
         { polling: 100, timeout: 8_000 },
-        settledPhrase,
+        settledTree,
       );
-      await new Promise((resolve) => setTimeout(resolve, 300));
       facts.treeFlows = await page.$eval('canvas', (canvas, first) => (
         canvas.dataset.settled === 'true' && canvas.toDataURL() !== first
       ), settledTree);
@@ -553,12 +537,6 @@ beforeAll(async () => {
 }, 180_000);
 
 describe('the standalone landing runs', () => {
-  test('the claim changes in place and the canvas draws', () => {
-    const typed = required(facts.typed, 'typed claim');
-    expect(typed.early).not.toBe(typed.later);
-    expect(required(facts.canvasPixels, 'canvas pixels')).toBeGreaterThan(20);
-  });
-
   test('the settled graph keeps flowing without restarting its reveal', () => {
     expect(required(facts.treeFlows, 'settled tree motion')).toBeTrue();
   });

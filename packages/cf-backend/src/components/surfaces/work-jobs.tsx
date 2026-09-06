@@ -114,7 +114,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
             <div className="text-[10.5px] leading-[15px] p-warning">{interrupted}</div>
           )}
           {job.retriedBy && (
-            <div className="mt-1 font-mono text-[10px] p-gold">
+            <div className="mt-1 font-mono text-[10px] p-accent">
               Retried as {job.retriedBy.replace(/^bgjob-/, "").slice(0, 8)}
             </div>
           )}

@@ -105,7 +105,7 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
         <span className={live ? "p-shimmer" : ""}>Thinking</span>
         {!expanded && <span className={live ? "p-shimmer-text opacity-80" : "opacity-80"}> · {text.slice(0, 120)}</span>}
         {text.length > 120 && (
-          <span className="ml-1.5 font-medium p-gold">{expanded ? "collapse" : "expand"}</span>
+          <span className="ml-1.5 font-medium p-accent">{expanded ? "collapse" : "expand"}</span>
         )}
       </button>
       {expanded && (
@@ -222,7 +222,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
         data-tool-effect={effect}
         className={`group/tool grid w-full cursor-pointer items-center text-left transition-colors hover:bg-[var(--c-elevated)] ${prominent ? "grid-cols-[34px_minmax(0,1fr)_auto_auto] gap-3 px-3.5 py-3" : "grid-cols-[20px_minmax(0,1fr)_auto_auto] gap-2 px-3 py-2"}`}
       >
-        <span className={`flex items-center justify-center ${prominent ? `size-[34px] rounded-lg border ${isRunning ? "border-[var(--c-accent)] p-accent-subtle p-gold" : failed ? "border-[var(--c-danger)] bg-[var(--c-danger-tint)] p-danger" : "p-border p-recessed p-text-3"}` : "size-5 p-text-4"}`}>
+        <span className={`flex items-center justify-center ${prominent ? `size-[34px] rounded-lg border ${isRunning ? "border-[var(--c-accent)] p-accent-subtle p-accent" : failed ? "border-[var(--c-danger)] bg-[var(--c-danger-tint)] p-danger" : "p-border p-recessed p-text-3"}` : "size-5 p-text-4"}`}>
           {toolIcon(toolName)}
         </span>
         {prominent ? (
@@ -240,7 +240,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
             {runtime && <span className="shrink-0 font-mono text-[9.5px] p-text-4">{runtime}</span>}
           </span>
         )}
-        <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 text-[10px] font-semibold ${isRunning ? "p-accent-subtle p-gold" : failed ? "p-badge-danger" : "p-badge-success"}`}>
+        <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 text-[10px] font-semibold ${isRunning ? "p-accent-subtle p-accent" : failed ? "p-badge-danger" : "p-badge-success"}`}>
           {isRunning
             ? <><span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />Running</>
             : failed
@@ -365,10 +365,10 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
   return (
     <div data-tool-group data-tool-count={parts.length} data-tool-mutations={mutationCount} className="overflow-hidden rounded-xl border p-border bg-[var(--c-recessed)]">
       <div className="flex flex-wrap items-center gap-2 border-b p-border p-sidebar px-3.5 py-2">
-        <LightningIcon size={13} className="p-gold" weight="fill" />
+        <LightningIcon size={13} className="p-accent" weight="fill" />
         <span className="text-[11.5px] font-semibold p-text-2">Agent activity</span>
         <span className="font-mono text-[10px] p-text-4">{parts.length} call{parts.length === 1 ? "" : "s"}</span>
-        {mutationCount > 0 && <span className="rounded-full p-accent-subtle px-2 py-0.5 text-[9.5px] font-semibold p-gold">{mutationCount} change{mutationCount === 1 ? "" : "s"}</span>}
+        {mutationCount > 0 && <span className="rounded-full p-accent-subtle px-2 py-0.5 text-[9.5px] font-semibold p-accent">{mutationCount} change{mutationCount === 1 ? "" : "s"}</span>}
         {failedCount > 0 && <span className="ml-auto p-badge-danger px-2 py-0.5">{failedCount} failed</span>}
       </div>
       <div className="divide-y divide-dashed divide-[var(--c-dash)]">
@@ -380,7 +380,7 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
           onClick={() => setShowAll((current) => !current)}
           aria-expanded={showAll}
           data-tool-group-toggle
-          className="w-full border-t border-dashed border-[var(--c-dash)] px-4 py-2 text-left text-[11px] font-medium p-gold transition-colors hover:p-accent"
+          className="w-full border-t border-dashed border-[var(--c-dash)] px-4 py-2 text-left text-[11px] font-medium p-accent"
         >
           {showAll ? "Collapse activity" : `Show ${hiddenCount} more call${hiddenCount === 1 ? "" : "s"}`}
         </button>
@@ -436,7 +436,7 @@ function BackgroundEventCard({ kind, status, state }: { kind: string; status: st
   return (
     <div className="animate-fade-in">
       <div className="flex w-full items-baseline gap-2.5 rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
-        <span className="shrink-0 text-[11px] font-semibold p-gold">System</span>
+        <span className="shrink-0 text-[11px] font-semibold p-accent">System</span>
         <div className="min-w-0 flex-1 text-[12.5px] leading-[1.6] p-text-2 opacity-80">
           Background <span className="font-mono text-[11px]">{kind}</span> task {meta.verb}
           <span className="ml-1 inline-flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
@@ -488,8 +488,8 @@ function DrainedEventsCard({ text, state }: { text: string; state: CardState }) 
           transcript measure, not a small card floating in its centre. */}
       <div className="w-full rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
         <div className="flex items-baseline gap-2.5 text-[11px]">
-          <LightningIcon size={11} className={`shrink-0 ${state === "pending" ? "p-text-4" : "p-gold"}`} weight="fill" />
-          <span className="shrink-0 font-semibold p-gold">System</span>
+          <LightningIcon size={11} className={`shrink-0 ${state === "pending" ? "p-text-4" : "p-accent"}`} weight="fill" />
+          <span className="shrink-0 font-semibold p-accent">System</span>
           <span className="p-text-3"><ShownCaption state={state} /></span>
           {events.length > 1 && <span className="ml-auto shrink-0 p-text-3 tabular-nums">{events.length} events</span>}
         </div>
@@ -565,8 +565,8 @@ function SystemEventCard({ event, text, state }: {
           className="w-full flex items-baseline gap-2.5 text-left text-[11px]"
           aria-expanded={expanded}
         >
-          <GearSixIcon size={11} className="shrink-0 p-gold" weight="fill" />
-          <span className="shrink-0 font-semibold p-gold">System</span>
+          <GearSixIcon size={11} className="shrink-0 p-accent" weight="fill" />
+          <span className="shrink-0 font-semibold p-accent">System</span>
           <span className="p-text-4">{event.replace(/_/g, " ")}</span>
           <span className="p-text-3"><ShownCaption state={state} /></span>
           <span className="ml-auto shrink-0 p-text-3">

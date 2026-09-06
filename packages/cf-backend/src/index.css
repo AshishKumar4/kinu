@@ -473,9 +473,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 @utility p-text-3 { color: var(--c-text-3); }
 @utility p-text-4 { color: var(--c-text-4); }
 @utility p-accent { color: var(--c-accent-fg); }
-/* The mock's gold as TEXT — labels, active pills, links at rest. `p-accent`
-   is the bright end; this is the gold itself, the mock's --gold. */
-@utility p-gold { color: var(--c-accent); }
 
 @utility p-success { color: var(--c-success); }
 @utility p-warning { color: var(--c-warning); }
