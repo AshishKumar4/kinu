@@ -741,7 +741,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
       { rt, model: first.model, mode: 'build',  logger: log },
       resolved(),
     );
-    // It is never awaited: an evicted activation's `await` never returns either. Held so
+    // It is never awaited: `await` never returns when its activation is evicted. Held so
     // the reference is deliberate rather than a dropped promise.
     expect(frozen).toBeInstanceOf(Promise);
     // Awaited on the RUN'S OWN signal: both level-2 nodes are journalled and stuck, so

@@ -50,7 +50,7 @@ const deploy = deployGates();
  * witness, so it excused the whole directory forever: measured 2026-08-30 the
  * 41 suites here are the disjoint union of 12 named on the `test:anti-slop`
  * command line and 29 the aggregator discovers under `rules/`, and a new
- * top-level `tools/oxlint/anti-slop/foo.test.ts` would have been claimed by the
+ * top-level `tools/oxlint/anti-slop/<name>.test.ts` would have been claimed by the
  * prefix and executed by neither — `gate.test.ts` proves only that every
  * `*.gate.test.ts` is on the command line, which a plain `*.test.ts` is not.
  * So the excuse is now a PREDICATE with a total-coverage assertion behind it,

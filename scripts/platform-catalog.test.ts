@@ -150,7 +150,7 @@ describe('an entry without evidence is the artefact being replaced', () => {
   test('a WELL-FORMED citation to a repo file that does not exist fails', () => {
     // The defect, exactly. Both lost documents were cited in perfect form from
     // live code — an internal research note from a Nimbus production constant,
-    // and `docs/STABILITY-AUDIT.md` from a shipped 25 s heartbeat in this repo.
+    // and the removed stability audit from a shipped 25 s heartbeat in this repo.
     // Form was never the problem. Nothing checked RESOLUTION, in two repos, for
     // months.
     expect(reasons({ evidence: 'proven-by-source', provenance: 'packages/core/src/gone.ts:12' }))

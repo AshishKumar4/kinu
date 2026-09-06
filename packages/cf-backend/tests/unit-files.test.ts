@@ -707,7 +707,7 @@ describe("readExecutorFile bounds the preview before it reads", () => {
     const out = await readExecutorFile(deps, "workspace", "/home/user/huge.log");
     expect(out.truncated).toBe(true);
     expect(out.content?.length).toBe(VIEW_CAP);
-    // The whole point: one bounded request, and `readFile` never runs.
+    // When the plane supports ranged reads, `readFile` never runs.
     expect(asked).toEqual([{ op: "readRange", length: VIEW_CAP }]);
   });
 

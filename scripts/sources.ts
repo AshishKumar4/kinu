@@ -284,7 +284,7 @@ export const ANTI_SLOP_RULES = `${ANTI_SLOP_ROOT}rules/`;
  * claimed every future file under it on the strength of one witness. Measured
  * 2026-08-30, the 41 suites here are the disjoint union of 12 named on the
  * `test:anti-slop` command line and 29 the aggregator discovers — and a new
- * top-level `tools/oxlint/anti-slop/foo.test.ts` would have been claimed by the
+ * top-level `tools/oxlint/anti-slop/<name>.test.ts` would have been claimed by the
  * prefix and executed by neither.
  */
 export const isAntiSlopSuite = (file: string): boolean =>

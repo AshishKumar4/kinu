@@ -690,7 +690,7 @@ function themeContrastFailures(theme: TuiThemeDefinition): string[] {
  * The terminal's appearance when it has not answered the renderer's OSC 11
  * query: `COLORFGBG` (a background index below 8 is dark), else dark. The
  * same tiers, in the same order, as omp's `detectTerminalBackground`
- * (`packages/coding-agent/src/modes/theme/theme.ts`): its tier 1 is the OSC
+ * (`https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/modes/theme/theme.ts`): its tier 1 is the OSC
  * 11 luminance the renderer supplies here, its tier 2 is this env var, and
  * its last answer is dark.
  */
@@ -707,7 +707,7 @@ function appearanceFromEnvironment(
  * The appearance the terminal reports. The renderer queries OSC 10/11 at
  * start and re-queries on a DEC 2031 notification, classifying the answered
  * background by BT.601 brightness above 128 — the mechanism omp implements
- * itself in `packages/tui/src/terminal.ts` (`#startDirectOsc11Query`,
+ * itself in `https://github.com/can1357/oh-my-pi/blob/main/packages/tui/src/terminal.ts` (`#startDirectOsc11Query`,
  * `#handleOsc11Response`). Until an answer arrives, the environment decides.
  */
 function useTerminalAppearance(override?: ThemeAppearance): ThemeAppearance {

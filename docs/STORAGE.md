@@ -269,7 +269,7 @@ Three properties follow:
 (`agent-utils/src/vfs/types.ts`) and nothing else on this axis: no filesystem
 implementation, no shell emulator. The shell is the Nimbus `runtime-bash`.
 Memory indexing reads through the active VFS on either backend. Relational
-`memory_chunks` never becomes a second file authority.
+`memory_chunks` never becomes a second file authority because indexing reads through the active VFS.
 
 One table named `vfs_files` still appears in the tree, in
 `packages/cli/tests/export-import.test.ts`. The test creates it there as a blob

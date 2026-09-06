@@ -143,7 +143,7 @@ export type AdvisorRowData = v.InferOutput<typeof AdvisorRowDataSchema>;
  * oh-my-pi's advisor is the recorded evidence that prose rules do not hold
  * here: one captured session logged 309 `advise` calls covering 92 unique
  * notes, 114 of them the single word "Stop."
- * (`can1357/oh-my-pi`, `packages/coding-agent/src/advisor/emission-guard.ts:9-16`).
+ * (`can1357/oh-my-pi`, `https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/advisor/emission-guard.ts#L9-L16`).
  * So the guard is code, and each rule is one function.
  */
 export type SuppressionRule = 'duplicate' | 'content-free' | 'gate-open' | 'below-floor';
@@ -286,7 +286,7 @@ function renderToolCall(call: ToolCallRecord): string {
  * because a reviewer asked to review will always find something.
  *
  * Half its budget is negative space, ported from oh-my-pi's own watchdog prompt
- * (packages/coding-agent/src/prompts/advisor/system.md). The suppression rules in
+ * (https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/prompts/advisor/system.md). The suppression rules in
  * this file stop a note from being REPEATED; nothing stopped it being about scope,
  * backwards compatibility, or a request for clarification — the three classes a
  * reviewer reaches for when the turn was actually fine. Each severity carries a

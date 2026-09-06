@@ -65,7 +65,7 @@ interface Sent {
   report: Report;
 }
 
-/** How the intercepted endpoint answers. `stalled` never settles at all, which
+/** How the intercepted endpoint answers. When selected, `stalled` never settles, which
  *  is the state a report with no deadline has to be harmless in. */
 type Answer = 'accept' | 'refuse' | 'unreachable' | 'stalled';
 

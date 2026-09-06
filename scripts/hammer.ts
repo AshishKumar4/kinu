@@ -98,8 +98,8 @@ export interface HammerRun {
 export function measuredFiles(output: string): string[] {
   const seen = new Set<string>();
   for (const line of output.split('\n')) {
-    // The per-test lines: `(pass) packages/x/tests/y.test.ts > name [1.00ms]`,
-    // and bun's own file heading: `packages/x/tests/y.test.ts:`.
+    // The per-test lines: `(pass) packages/<package>/tests/<name>.test.ts > name [1.00ms]`,
+    // and bun's own file heading: `packages/<package>/tests/<name>.test.ts:`.
     const reported = /(?:^\((?:pass|fail|skip|todo)\)\s+|^)((?:packages|scripts|tests)\/[\w./-]+\.test\.tsx?)(?::|\s|$)/
       .exec(line.trim());
     if (reported?.[1] !== undefined) seen.add(reported[1]);

@@ -97,7 +97,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
  * These are the citations the gate can actually resolve, and resolving them is
  * the one check that mechanises the defect this whole catalog replaces. Two
  * documents were quoted from live code and neither existed: an internal research
- * note cited from a Nimbus production constant, and `docs/STABILITY-AUDIT.md`
+ * note cited from a Nimbus production constant, and the removed stability audit
  * cited from a shipped 25 s heartbeat in this repo. Both citations were perfectly
  * well FORMED. Form was never the problem — resolution was, and nothing checked
  * it, for months, in two repositories.
@@ -109,9 +109,9 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
  * turns a stale citation red on the next run instead of in six months.
  */
 // The lookbehind is load-bearing: `~/Nimbus/packages/worker/src/constants.ts`
-// contains `packages/worker/src/constants.ts`, and claiming that as ours would
+// contains a repo-local path, and claiming that as ours would
 // make every Nimbus citation red. Only a path at a real token boundary counts.
-const REPO_PATH =
+export const REPO_PATH =
   /(?<![\w/~-])(?:packages|scripts|docs|lean|tools|node_modules|patches)\/[\w./@-]*\.\w+/g;
 
 export interface EntryProblem {
@@ -140,7 +140,7 @@ function unresolvedRepoPaths(text: string): readonly string[] {
   return [...text.matchAll(REPO_PATH)]
     .filter((m) => {
       // `git <sha>:<path>` is followable even when the path is gone — that is
-      // how `docs/STABILITY-AUDIT.md` was recovered and read. A deleted file
+      // how the removed stability audit was recovered and read. A deleted file
       // cited WITH the commit that still holds it is strictly better evidence
       // than a live path, because it can never drift; cited WITHOUT one it is
       // the dangling citation this whole catalog exists to replace. The sha is
