@@ -1,5 +1,11 @@
+# Vendored Nimbus change: feat(fabric) isolate resident code boots with explicit env.
+# Nimbus feat/resident-bindings 77dd793edaa1ca8fb41fabe87e2581265a8fbbfa layered over the
+# committed composition patch below. ResidentCodeSpec gains optional env, globalOutbound,
+# limits and capabilities; an explicit env skips the SUPERVISOR injection. npm publish is
+# not authenticated on this machine, so this patch carries the change until the owner
+# releases it and the patch can drop.
 diff --git a/dist/composition.d.ts b/dist/composition.d.ts
-index 35b98685c2411191f96ffe9e3654462d906eb84d..8b553d56e01f685d3c01295ed7711ec5bb8c823e 100644
+index 35b9868..8b553d5 100644
 --- a/dist/composition.d.ts
 +++ b/dist/composition.d.ts
 @@ -1,87 +1,16 @@
@@ -103,7 +109,7 @@ index 35b98685c2411191f96ffe9e3654462d906eb84d..8b553d56e01f685d3c01295ed7711ec5
  //# sourceMappingURL=composition.d.ts.map
 \ No newline at end of file
 diff --git a/dist/composition.d.ts.map b/dist/composition.d.ts.map
-index bf224d01c1d545e0b0b593f9320fc94762f12c84..3836ecbe1c9ba6ab834f0d4bcb05b7bebb9998db 100644
+index bf224d0..3836ecb 100644
 --- a/dist/composition.d.ts.map
 +++ b/dist/composition.d.ts.map
 @@ -1 +1 @@
@@ -112,7 +118,7 @@ index bf224d01c1d545e0b0b593f9320fc94762f12c84..3836ecbe1c9ba6ab834f0d4bcb05b7be
 +{"version":3,"file":"composition.d.ts","sourceRoot":"","sources":["../src/composition.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;GAYG;AAEH,OAAO,EACL,eAAe,EACf,aAAa,EACb,aAAa,EACb,mBAAmB,EACnB,oBAAoB,EACpB,wBAAwB,GACzB,MAAM,oCAAoC,CAAC;AAE5C,YAAY,EACV,UAAU,EACV,yBAAyB,EACzB,iBAAiB,EACjB,mBAAmB,GACpB,MAAM,oCAAoC,CAAC"}
 \ No newline at end of file
 diff --git a/dist/composition.js b/dist/composition.js
-index d9705cf59345eb3eaed06adc83929800ca543d5e..e661f28dd3c821b28496ee8ecc43ad3b45178d71 100644
+index d9705cf..e661f28 100644
 --- a/dist/composition.js
 +++ b/dist/composition.js
 @@ -1,76 +1,14 @@
@@ -202,8 +208,269 @@ index d9705cf59345eb3eaed06adc83929800ca543d5e..e661f28dd3c821b28496ee8ecc43ad3b
 -    return assembler;
 -}
 +export { adoptCtxExports, composeFabric, getCtxExports, stagedBootAssembler, supervisorEntrypoint, supervisorEntrypointName, } from '@nimbus-sh/platform/composition.js';
+diff --git a/dist/process-fabric.d.ts b/dist/process-fabric.d.ts
+index 4cf8df0..5bcac6c 100644
+--- a/dist/process-fabric.d.ts
++++ b/dist/process-fabric.d.ts
+@@ -107,6 +107,13 @@ export declare const ResidentCodeSpecSchema: z.ZodObject<{
+     }, z.core.$strip>]>>;
+     vfsWasmModules: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
+     vfsTextModules: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
++    env: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
++    globalOutbound: z.ZodOptional<z.ZodNull>;
++    limits: z.ZodOptional<z.ZodObject<{
++        cpuMs: z.ZodOptional<z.ZodNumber>;
++        subRequests: z.ZodOptional<z.ZodNumber>;
++    }, z.core.$strip>>;
++    capabilities: z.ZodOptional<z.ZodUnknown>;
+ }, z.core.$strip>;
+ export type ResidentCodeSpec = z.infer<typeof ResidentCodeSpecSchema>;
+ /**
+@@ -132,6 +139,13 @@ export declare function residentBootSpecSchema<Stage extends z.ZodType>(stageSch
+         }, z.core.$strip>]>>;
+         vfsWasmModules: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
+         vfsTextModules: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
++        env: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
++        globalOutbound: z.ZodOptional<z.ZodNull>;
++        limits: z.ZodOptional<z.ZodObject<{
++            cpuMs: z.ZodOptional<z.ZodNumber>;
++            subRequests: z.ZodOptional<z.ZodNumber>;
++        }, z.core.$strip>>;
++        capabilities: z.ZodOptional<z.ZodUnknown>;
+     }, z.core.$strip>;
+ }, z.core.$strip>], "kind">;
+ export type ResidentBootSpec = {
+@@ -201,6 +215,12 @@ export interface ResidentDiskReader {
+  * path, verifying each generated image against the digest its own path claims.
+  * Runs inside the loader's cache-miss callback, so the bytes exist only for
+  * the duration of the load.
++ *
++ * The spec's isolation posture rides along verbatim: an explicit `env` is
++ * the isolate's whole env (loopback stubs by reference, never cloned or
++ * re-minted), `globalOutbound: null` denies outbound, `limits` bounds the
++ * run, and `capabilities` is retained untouched. Absent fields stay absent
++ * so the worker config can tell "embedder takes the env" from the default.
+  */
+ export declare function residentLoaderConfig(spec: ResidentCodeSpec, disk: ResidentDiskReader): Promise<Record<string, unknown>>;
+ /**
+diff --git a/dist/process-fabric.d.ts.map b/dist/process-fabric.d.ts.map
+index 7a550e2..fefdc56 100644
+--- a/dist/process-fabric.d.ts.map
++++ b/dist/process-fabric.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"process-fabric.d.ts","sourceRoot":"","sources":["../src/process-fabric.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
++{"version":3,"file":"process-fabric.d.ts","sourceRoot":"","sources":["../src/process-fabric.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
+diff --git a/dist/process-fabric.js b/dist/process-fabric.js
+index 971ff9f..153512f 100644
+--- a/dist/process-fabric.js
++++ b/dist/process-fabric.js
+@@ -115,6 +115,36 @@ export const ResidentCodeSpecSchema = z.object({
+      * image store below and the spec names it.
+      */
+     vfsTextModules: z.record(z.string(), z.string()).optional(),
++    /**
++     * The isolate's exact `env`: one entry per binding the embedder minted,
++     * carried by reference so loopback stubs survive untouched. Defined —
++     * even as `{}` — means the embedder takes the whole env and no
++     * SUPERVISOR binding is injected; absent keeps the default (a SUPERVISOR
++     * minted from the composed supervisor entrypoint).
++     */
++    env: z.record(z.string(), z.unknown()).optional(),
++    /**
++     * Outbound network: `null` denies every `fetch()`/`connect()` inside the
++     * isolate; absent inherits the parent's network. Only `null` is
++     * expressible here — a redirecting outbound belongs to the embedder's
++     * staged assembler, not to a serializable code spec.
++     */
++    globalOutbound: z.null().optional(),
++    /**
++     * CPU and subrequest bounds enforced at the isolate boundary. A load that
++     * omits them gets the account's whole compute budget, so callers that
++     * run untrusted programs always set both.
++     */
++    limits: z
++        .object({ cpuMs: z.number().optional(), subRequests: z.number().optional() })
++        .optional(),
++    /**
++     * Opaque WorkerCode passthrough, retained verbatim by
++     * {@link residentLoaderConfig}. No caller sets one today; the field
++     * exists so a future loader capability does not need a spec revision
++     * to travel beside the module map.
++     */
++    capabilities: z.unknown().optional(),
+ });
+ /**
+  * The boot-spec union, with the staged arm's payload validated by the
+@@ -191,6 +221,12 @@ export function facetImagePathDigest(path) {
+  * path, verifying each generated image against the digest its own path claims.
+  * Runs inside the loader's cache-miss callback, so the bytes exist only for
+  * the duration of the load.
++ *
++ * The spec's isolation posture rides along verbatim: an explicit `env` is
++ * the isolate's whole env (loopback stubs by reference, never cloned or
++ * re-minted), `globalOutbound: null` denies outbound, `limits` bounds the
++ * run, and `capabilities` is retained untouched. Absent fields stay absent
++ * so the worker config can tell "embedder takes the env" from the default.
+  */
+ export async function residentLoaderConfig(spec, disk) {
+     const resolved = {};
+@@ -208,6 +244,10 @@ export async function residentLoaderConfig(spec, disk) {
+         compatibilityFlags: spec.compatibilityFlags,
+         mainModule: spec.mainModule,
+         modules: { ...spec.modules, ...resolved },
++        ...(spec.env !== undefined ? { env: spec.env } : {}),
++        ...(spec.globalOutbound !== undefined ? { globalOutbound: spec.globalOutbound } : {}),
++        ...(spec.limits !== undefined ? { limits: spec.limits } : {}),
++        ...(spec.capabilities !== undefined ? { capabilities: spec.capabilities } : {}),
+     };
+ }
+ /**
+diff --git a/dist/vendor/types.d.ts b/dist/vendor/types.d.ts
+index 666b9c9..befc1f4 100644
+--- a/dist/vendor/types.d.ts
++++ b/dist/vendor/types.d.ts
+@@ -31,6 +31,21 @@ export interface WorkerCode {
+     compatibilityDate: string;
+     compatibilityFlags?: string[];
+     allowExperimental?: boolean;
++    /**
++     * CPU and subrequest bounds enforced at the isolate boundary, mirroring
++     * `workerdResourceLimits` in @cloudflare/workers-types. A load that omits
++     * them gets the account's whole compute budget.
++     */
++    limits?: {
++        cpuMs?: number;
++        subRequests?: number;
++    };
++    /**
++     * Opaque loader capability passthrough. No caller sets one today; the
++     * field exists so a future loader capability travels beside the module
++     * map without a type revision at every seam.
++     */
++    capabilities?: unknown;
+     mainModule: string;
+     modules: Record<string, ModuleContent>;
+     env?: Record<string, unknown>;
+diff --git a/dist/vendor/types.d.ts.map b/dist/vendor/types.d.ts.map
+index 3d43f39..cd7774b 100644
+--- a/dist/vendor/types.d.ts.map
++++ b/dist/vendor/types.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"types.d.ts","sourceRoot":"","sources":["../../src/vendor/types.ts"],"names":[],"mappings":"AAIA,MAAM,WAAW,QAAQ;IAAG,EAAE,EAAE,MAAM,CAAA;CAAE;AACxC,MAAM,WAAW,SAAS;IAAG,GAAG,EAAE,MAAM,CAAA;CAAE;AAC1C,MAAM,WAAW,QAAQ;IAAG,EAAE,EAAE,MAAM,CAAA;CAAE;AACxC,MAAM,WAAW,UAAU;IAAG,IAAI,EAAE,MAAM,CAAA;CAAE;AAC5C,MAAM,WAAW,UAAU;IAAG,IAAI,EAAE,WAAW,CAAA;CAAE;AACjD,MAAM,WAAW,UAAU;IAAG,IAAI,EAAE,OAAO,CAAA;CAAE;AAC7C;;;;;GAKG;AACH,MAAM,WAAW,UAAU;IAAG,IAAI,EAAE,WAAW,CAAA;CAAE;AAEjD,qEAAqE;AACrE,MAAM,MAAM,aAAa,GACrB,MAAM,GACN,QAAQ,GACR,SAAS,GACT,QAAQ,GACR,UAAU,GACV,UAAU,GACV,UAAU,GACV,UAAU,CAAC;AAEf,MAAM,WAAW,UAAU;IACzB,iBAAiB,EAAE,MAAM,CAAC;IAC1B,kBAAkB,CAAC,EAAE,MAAM,EAAE,CAAC;IAC9B,iBAAiB,CAAC,EAAE,OAAO,CAAC;IAC5B,UAAU,EAAE,MAAM,CAAC;IACnB,OAAO,EAAE,MAAM,CAAC,MAAM,EAAE,aAAa,CAAC,CAAC;IACvC,GAAG,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,OAAO,CAAC,CAAC;IAE9B;;;;;OAKG;IACH,cAAc,CAAC,EAAE,WAAW,GAAG,IAAI,CAAC;IACpC,KAAK,CAAC,EAAE,WAAW,EAAE,CAAC;CACvB;AAED,MAAM,WAAW,WAAW;IAC1B,KAAK,CAAC,KAAK,EAAE,WAAW,EAAE,IAAI,CAAC,EAAE,WAAW,GAAG,OAAO,CAAC,QAAQ,CAAC,CAAC;CAClE;AAED,MAAM,WAAW,iBAAiB;IAChC,KAAK,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,OAAO,CAAC,CAAC;CACjC;AAED,MAAM,WAAW,UAAU;IACzB,aAAa,IAAI,cAAc,CAAC;IAChC,aAAa,CAAC,IAAI,EAAE,MAAM,EAAE,IAAI,CAAC,EAAE,iBAAiB,GAAG,cAAc,CAAC;CACvE;AAED,MAAM,WAAW,cAAc;IAC7B,KAAK,CAAC,KAAK,EAAE,WAAW,EAAE,IAAI,CAAC,EAAE,WAAW,GAAG,OAAO,CAAC,QAAQ,CAAC,CAAC;IACjE,OAAO,CAAC,GAAG,IAAI,EAAE,OAAO,EAAE,GAAG,OAAO,CAAC,OAAO,CAAC,CAAC;CAC/C;AAED,MAAM,MAAM,eAAe,GAAG,MAAM,OAAO,CAAC,UAAU,CAAC,CAAC;AAExD,MAAM,WAAW,YAAY;IAC3B;;;;OAIG;IACH,GAAG,CAAC,EAAE,EAAE,MAAM,EAAE,eAAe,EAAE,eAAe,GAAG,UAAU,CAAC;CAC/D"}
+\ No newline at end of file
++{"version":3,"file":"types.d.ts","sourceRoot":"","sources":["../../src/vendor/types.ts"],"names":[],"mappings":"AAIA,MAAM,WAAW,QAAQ;IAAG,EAAE,EAAE,MAAM,CAAA;CAAE;AACxC,MAAM,WAAW,SAAS;IAAG,GAAG,EAAE,MAAM,CAAA;CAAE;AAC1C,MAAM,WAAW,QAAQ;IAAG,EAAE,EAAE,MAAM,CAAA;CAAE;AACxC,MAAM,WAAW,UAAU;IAAG,IAAI,EAAE,MAAM,CAAA;CAAE;AAC5C,MAAM,WAAW,UAAU;IAAG,IAAI,EAAE,WAAW,CAAA;CAAE;AACjD,MAAM,WAAW,UAAU;IAAG,IAAI,EAAE,OAAO,CAAA;CAAE;AAC7C;;;;;GAKG;AACH,MAAM,WAAW,UAAU;IAAG,IAAI,EAAE,WAAW,CAAA;CAAE;AAEjD,qEAAqE;AACrE,MAAM,MAAM,aAAa,GACrB,MAAM,GACN,QAAQ,GACR,SAAS,GACT,QAAQ,GACR,UAAU,GACV,UAAU,GACV,UAAU,GACV,UAAU,CAAC;AAEf,MAAM,WAAW,UAAU;IACzB,iBAAiB,EAAE,MAAM,CAAC;IAC1B,kBAAkB,CAAC,EAAE,MAAM,EAAE,CAAC;IAC9B,iBAAiB,CAAC,EAAE,OAAO,CAAC;IAC5B;;;;OAIG;IACH,MAAM,CAAC,EAAE;QACP,KAAK,CAAC,EAAE,MAAM,CAAC;QACf,WAAW,CAAC,EAAE,MAAM,CAAC;KACtB,CAAC;IACF;;;;OAIG;IACH,YAAY,CAAC,EAAE,OAAO,CAAC;IACvB,UAAU,EAAE,MAAM,CAAC;IACnB,OAAO,EAAE,MAAM,CAAC,MAAM,EAAE,aAAa,CAAC,CAAC;IACvC,GAAG,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,OAAO,CAAC,CAAC;IAE9B;;;;;OAKG;IACH,cAAc,CAAC,EAAE,WAAW,GAAG,IAAI,CAAC;IACpC,KAAK,CAAC,EAAE,WAAW,EAAE,CAAC;CACvB;AAED,MAAM,WAAW,WAAW;IAC1B,KAAK,CAAC,KAAK,EAAE,WAAW,EAAE,IAAI,CAAC,EAAE,WAAW,GAAG,OAAO,CAAC,QAAQ,CAAC,CAAC;CAClE;AAED,MAAM,WAAW,iBAAiB;IAChC,KAAK,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,OAAO,CAAC,CAAC;CACjC;AAED,MAAM,WAAW,UAAU;IACzB,aAAa,IAAI,cAAc,CAAC;IAChC,aAAa,CAAC,IAAI,EAAE,MAAM,EAAE,IAAI,CAAC,EAAE,iBAAiB,GAAG,cAAc,CAAC;CACvE;AAED,MAAM,WAAW,cAAc;IAC7B,KAAK,CAAC,KAAK,EAAE,WAAW,EAAE,IAAI,CAAC,EAAE,WAAW,GAAG,OAAO,CAAC,QAAQ,CAAC,CAAC;IACjE,OAAO,CAAC,GAAG,IAAI,EAAE,OAAO,EAAE,GAAG,OAAO,CAAC,OAAO,CAAC,CAAC;CAC/C;AAED,MAAM,MAAM,eAAe,GAAG,MAAM,OAAO,CAAC,UAAU,CAAC,CAAC;AAExD,MAAM,WAAW,YAAY;IAC3B;;;;OAIG;IACH,GAAG,CAAC,EAAE,EAAE,MAAM,EAAE,eAAe,EAAE,eAAe,GAAG,UAAU,CAAC;CAC/D"}
+\ No newline at end of file
+diff --git a/dist/workerd-facet-host.d.ts b/dist/workerd-facet-host.d.ts
+index 1e17d64..804e6aa 100644
+--- a/dist/workerd-facet-host.d.ts
++++ b/dist/workerd-facet-host.d.ts
+@@ -12,7 +12,7 @@
+  * that is not a Durable Object implements `ProcessHost` against the same
+  * `HostedProcess` and never imports this file.
+  */
+-import { type HostedProcess, type OneShotParams, type ProcessHostParams, type ResidentDiskReader, type ResidentSupervisorProps } from './process-fabric.js';
++import { type HostedProcess, type OneShotParams, type ProcessHostParams, type ResidentBootSpec, type ResidentDiskReader, type ResidentSupervisorProps } from './process-fabric.js';
+ /** Structural surface of a NimbusLoadedEntrypoint RPC stub. */
+ export interface LoadedWorkerEntrypointStub {
+     handleHttpRequest?: (request: Request) => Promise<Response>;
+@@ -57,9 +57,14 @@ interface LoadedWorkerStub {
+  * Durable Object class, so a resident process can be re-entered; `load` is
+  * unkeyed and yields a stateless entrypoint, which is all a program that ends
+  * with its call can ever need.
++ *
++ * `get` stays wide on purpose: the platform passes a null id for the unkeyed
++ * call and answers the callback with the code object or a promise of it, so a
++ * narrower declaration would refuse the real binding. The fabric itself always
++ * passes a string id and a promise callback.
+  */
+ interface WorkerLoaderBinding {
+-    get(id: string, code: () => Promise<unknown>): {
++    get(id: string | null, code: () => unknown): {
+         getDurableObjectClass(name: string): unknown;
+     };
+     load(code: unknown): LoadedWorkerStub;
+@@ -164,5 +169,19 @@ export declare class Processes {
+      */
+     run<T>(supervisor: ResidentSupervisorProps, params: OneShotParams, consume: (response: Response) => Promise<T>): Promise<T>;
+ }
++/**
++ * The WorkerCode the loader callback returns for one resident boot: the
++ * module map from {@link residentLoaderConfig} (or the staged assembler),
++ * plus the isolate's env and network posture.
++ *
++ * A `code` boot with an explicit `env` — defined, even as `{}` — is the
++ * embedder's whole statement about the isolate: the env rides through
++ * exactly as minted (loopback stubs by reference) with `globalOutbound`,
++ * `limits` and `capabilities` beside it, and the composed supervisor
++ * entrypoint is not consulted at all, so no SUPERVISOR binding appears.
++ * Without one, the default holds: inherited network plus a SUPERVISOR
++ * minted from the composed entrypoint for the coordinator's identity.
++ */
++export declare function residentWorkerConfig(env: ResidentFacetEnv, disk: () => ResidentDiskReader, supervisor: ResidentSupervisorProps, boot: ResidentBootSpec): Promise<Record<string, unknown>>;
+ export {};
+ //# sourceMappingURL=workerd-facet-host.d.ts.map
+\ No newline at end of file
+diff --git a/dist/workerd-facet-host.d.ts.map b/dist/workerd-facet-host.d.ts.map
+index 9d03962..77bd33a 100644
+--- a/dist/workerd-facet-host.d.ts.map
++++ b/dist/workerd-facet-host.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"workerd-facet-host.d.ts","sourceRoot":"","sources":["../src/workerd-facet-host.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;GAaG;AAmBH,OAAO,EAGL,KAAK,aAAa,EAElB,KAAK,aAAa,EAClB,KAAK,iBAAiB,EAEtB,KAAK,kBAAkB,EACvB,KAAK,uBAAuB,EAC7B,MAAM,qBAAqB,CAAC;AAI7B,+DAA+D;AAC/D,MAAM,WAAW,0BAA0B;IACzC,iBAAiB,CAAC,EAAE,CAAC,OAAO,EAAE,OAAO,KAAK,OAAO,CAAC,QAAQ,CAAC,CAAC;IAC5D,KAAK,CAAC,CAAC,OAAO,EAAE,OAAO,GAAG,OAAO,CAAC,QAAQ,CAAC,CAAC;CAC7C;AAED,MAAM,WAAW,gBAAgB;IAC/B,sBAAsB,CAAC,EAAE,CAAC,OAAO,EAAE;QACjC,KAAK,EAAE;YACL,GAAG,EAAE,MAAM,CAAC;YACZ,IAAI,EAAE,MAAM,GAAG,IAAI,CAAC;YACpB,KAAK,EAAE,MAAM,CAAC;YACd,UAAU,EAAE;gBAAE,IAAI,EAAE,MAAM,CAAC;gBAAC,GAAG,EAAE,MAAM,CAAC;gBAAC,QAAQ,EAAE,MAAM,CAAA;aAAE,CAAC;YAC5D,KAAK,CAAC,EAAE,OAAO,CAAC;SACjB,CAAC;KACH,KAAK,0BAA0B,CAAC;CAClC;AAED,wBAAgB,mBAAmB,IAAI,gBAAgB,CAMtD;AAED;;;;;GAKG;AACH,wBAAsB,4BAA4B,CAChD,UAAU,EAAE,gBAAgB,EAC5B,UAAU,EAAE;IAAE,IAAI,EAAE,MAAM,CAAC;IAAC,GAAG,EAAE,MAAM,CAAC;IAAC,QAAQ,EAAE,MAAM,CAAA;CAAE,EAC3D,KAAK,EAAE,OAAO,EACd,IAAI,GAAE,MAAM,GAAG,IAAW,GACzB,OAAO,CAAC,0BAA0B,CAAC,CAarC;AA6BD,gDAAgD;AAChD,UAAU,gBAAgB;IACxB,aAAa,IAAI,0BAA0B,CAAC;CAC7C;AAED;;;;;;;;GAQG;AACH,UAAU,mBAAmB;IAC3B,GAAG,CAAC,EAAE,EAAE,MAAM,EAAE,IAAI,EAAE,MAAM,OAAO,CAAC,OAAO,CAAC,GAAG;QAAE,qBAAqB,CAAC,IAAI,EAAE,MAAM,GAAG,OAAO,CAAA;KAAE,CAAC;IAChG,IAAI,CAAC,IAAI,EAAE,OAAO,GAAG,gBAAgB,CAAC;CACvC;AAED;;;;GAIG;AACH,MAAM,WAAW,gBAAgB;IAC/B,MAAM,CAAC,EAAE,mBAAmB,CAAC;CAC9B;AAaD;;;;;;;;;;;;;;;;;;;;;;;;;;;GA2BG;AACH,wBAAsB,YAAY,CAChC,GAAG,EAAE,kBAAkB,EACvB,KAAK,EAAE;IACL,GAAG,EAAE,MAAM,CAAC;IACZ,GAAG,EAAE,MAAM,CAAC;IACZ,SAAS,CAAC,IAAI,EAAE,MAAM,GAAG,OAAO,GAAG,OAAO,CAAC,OAAO,CAAC,CAAC;CACrD,GACA,OAAO,CAAC,IAAI,CAAC,CAuBf;AAED;;;;;;;;;;;;;GAaG;AACH,wBAAgB,iBAAiB,CAAC,IAAI,EAAE,MAAM,GAAG,MAAM,CAEtD;AA+DD;;;;;;;GAOG;AACH,MAAM,MAAM,aAAa,GAAG,IAAI,CAAC,aAAa,EAAE,UAAU,CAAC,GAAG;IAAE,IAAI,EAAE,MAAM,CAAA;CAAE,CAAC;AAE/E;;;;;;;;;;GAUG;AACH,wBAAgB,SAAS,CAAC,GAAG,EAAE,kBAAkB,EAAE,GAAG,EAAE,gBAAgB,GAAG,SAAS,CAEnF;AAED,qBAAa,SAAS;IAElB,OAAO,CAAC,QAAQ,CAAC,GAAG;IACpB,OAAO,CAAC,QAAQ,CAAC,GAAG;gBADH,GAAG,EAAE,kBAAkB,EACvB,GAAG,EAAE,gBAAgB;IAGxC,8EAA8E;IAC9E,KAAK,CACH,IAAI,EAAE,MAAM,kBAAkB,EAC9B,UAAU,EAAE,uBAAuB,EACnC,MAAM,EAAE,iBAAiB,GACxB,aAAa;IAIhB;;;;;;;;;;;;OAYG;IACH,GAAG,CAAC,CAAC,EACH,UAAU,EAAE,uBAAuB,EACnC,MAAM,EAAE,aAAa,EACrB,OAAO,EAAE,CAAC,QAAQ,EAAE,QAAQ,KAAK,OAAO,CAAC,CAAC,CAAC,GAC1C,OAAO,CAAC,CAAC,CAAC;CAGd"}
+\ No newline at end of file
++{"version":3,"file":"workerd-facet-host.d.ts","sourceRoot":"","sources":["../src/workerd-facet-host.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;GAaG;AAmBH,OAAO,EAGL,KAAK,aAAa,EAElB,KAAK,aAAa,EAClB,KAAK,iBAAiB,EACtB,KAAK,gBAAgB,EACrB,KAAK,kBAAkB,EACvB,KAAK,uBAAuB,EAC7B,MAAM,qBAAqB,CAAC;AAI7B,+DAA+D;AAC/D,MAAM,WAAW,0BAA0B;IACzC,iBAAiB,CAAC,EAAE,CAAC,OAAO,EAAE,OAAO,KAAK,OAAO,CAAC,QAAQ,CAAC,CAAC;IAC5D,KAAK,CAAC,CAAC,OAAO,EAAE,OAAO,GAAG,OAAO,CAAC,QAAQ,CAAC,CAAC;CAC7C;AAED,MAAM,WAAW,gBAAgB;IAC/B,sBAAsB,CAAC,EAAE,CAAC,OAAO,EAAE;QACjC,KAAK,EAAE;YACL,GAAG,EAAE,MAAM,CAAC;YACZ,IAAI,EAAE,MAAM,GAAG,IAAI,CAAC;YACpB,KAAK,EAAE,MAAM,CAAC;YACd,UAAU,EAAE;gBAAE,IAAI,EAAE,MAAM,CAAC;gBAAC,GAAG,EAAE,MAAM,CAAC;gBAAC,QAAQ,EAAE,MAAM,CAAA;aAAE,CAAC;YAC5D,KAAK,CAAC,EAAE,OAAO,CAAC;SACjB,CAAC;KACH,KAAK,0BAA0B,CAAC;CAClC;AAED,wBAAgB,mBAAmB,IAAI,gBAAgB,CAMtD;AAED;;;;;GAKG;AACH,wBAAsB,4BAA4B,CAChD,UAAU,EAAE,gBAAgB,EAC5B,UAAU,EAAE;IAAE,IAAI,EAAE,MAAM,CAAC;IAAC,GAAG,EAAE,MAAM,CAAC;IAAC,QAAQ,EAAE,MAAM,CAAA;CAAE,EAC3D,KAAK,EAAE,OAAO,EACd,IAAI,GAAE,MAAM,GAAG,IAAW,GACzB,OAAO,CAAC,0BAA0B,CAAC,CAarC;AA6BD,gDAAgD;AAChD,UAAU,gBAAgB;IACxB,aAAa,IAAI,0BAA0B,CAAC;CAC7C;AAED;;;;;;;;;;;;;GAaG;AACH,UAAU,mBAAmB;IAC3B,GAAG,CAAC,EAAE,EAAE,MAAM,GAAG,IAAI,EAAE,IAAI,EAAE,MAAM,OAAO,GAAG;QAAE,qBAAqB,CAAC,IAAI,EAAE,MAAM,GAAG,OAAO,CAAA;KAAE,CAAC;IAC9F,IAAI,CAAC,IAAI,EAAE,OAAO,GAAG,gBAAgB,CAAC;CACvC;AAED;;;;GAIG;AACH,MAAM,WAAW,gBAAgB;IAC/B,MAAM,CAAC,EAAE,mBAAmB,CAAC;CAC9B;AAaD;;;;;;;;;;;;;;;;;;;;;;;;;;;GA2BG;AACH,wBAAsB,YAAY,CAChC,GAAG,EAAE,kBAAkB,EACvB,KAAK,EAAE;IACL,GAAG,EAAE,MAAM,CAAC;IACZ,GAAG,EAAE,MAAM,CAAC;IACZ,SAAS,CAAC,IAAI,EAAE,MAAM,GAAG,OAAO,GAAG,OAAO,CAAC,OAAO,CAAC,CAAC;CACrD,GACA,OAAO,CAAC,IAAI,CAAC,CAuBf;AAED;;;;;;;;;;;;;GAaG;AACH,wBAAgB,iBAAiB,CAAC,IAAI,EAAE,MAAM,GAAG,MAAM,CAEtD;AA+DD;;;;;;;GAOG;AACH,MAAM,MAAM,aAAa,GAAG,IAAI,CAAC,aAAa,EAAE,UAAU,CAAC,GAAG;IAAE,IAAI,EAAE,MAAM,CAAA;CAAE,CAAC;AAE/E;;;;;;;;;;GAUG;AACH,wBAAgB,SAAS,CAAC,GAAG,EAAE,kBAAkB,EAAE,GAAG,EAAE,gBAAgB,GAAG,SAAS,CAEnF;AAED,qBAAa,SAAS;IAElB,OAAO,CAAC,QAAQ,CAAC,GAAG;IACpB,OAAO,CAAC,QAAQ,CAAC,GAAG;gBADH,GAAG,EAAE,kBAAkB,EACvB,GAAG,EAAE,gBAAgB;IAGxC,8EAA8E;IAC9E,KAAK,CACH,IAAI,EAAE,MAAM,kBAAkB,EAC9B,UAAU,EAAE,uBAAuB,EACnC,MAAM,EAAE,iBAAiB,GACxB,aAAa;IAIhB;;;;;;;;;;;;OAYG;IACH,GAAG,CAAC,CAAC,EACH,UAAU,EAAE,uBAAuB,EACnC,MAAM,EAAE,aAAa,EACrB,OAAO,EAAE,CAAC,QAAQ,EAAE,QAAQ,KAAK,OAAO,CAAC,CAAC,CAAC,GAC1C,OAAO,CAAC,CAAC,CAAC;CAGd;AAyLD;;;;;;;;;;;;GAYG;AACH,wBAAsB,oBAAoB,CACxC,GAAG,EAAE,gBAAgB,EACrB,IAAI,EAAE,MAAM,kBAAkB,EAC9B,UAAU,EAAE,uBAAuB,EACnC,IAAI,EAAE,gBAAgB,GACrB,OAAO,CAAC,MAAM,CAAC,MAAM,EAAE,OAAO,CAAC,CAAC,CAiBlC"}
+\ No newline at end of file
+diff --git a/dist/workerd-facet-host.js b/dist/workerd-facet-host.js
+index c5a55fb..7b813fd 100644
+--- a/dist/workerd-facet-host.js
++++ b/dist/workerd-facet-host.js
+@@ -373,14 +373,41 @@ async function runOneShot(ctx, env, supervisor, params, consume) {
+         disposeRpcResource(supervisorBinding);
+     }
+ }
+-async function residentWorkerConfig(env, disk, supervisor, boot) {
++/**
++ * The WorkerCode the loader callback returns for one resident boot: the
++ * module map from {@link residentLoaderConfig} (or the staged assembler),
++ * plus the isolate's env and network posture.
++ *
++ * A `code` boot with an explicit `env` — defined, even as `{}` — is the
++ * embedder's whole statement about the isolate: the env rides through
++ * exactly as minted (loopback stubs by reference) with `globalOutbound`,
++ * `limits` and `capabilities` beside it, and the composed supervisor
++ * entrypoint is not consulted at all, so no SUPERVISOR binding appears.
++ * Without one, the default holds: inherited network plus a SUPERVISOR
++ * minted from the composed entrypoint for the coordinator's identity.
++ */
++export async function residentWorkerConfig(env, disk, supervisor, boot) {
++    if (boot.kind === 'code' && boot.code.env !== undefined) {
++        const isolated = await residentLoaderConfig(boot.code, disk());
++        assertModuleMapWithinCodeLimit(configModules(isolated));
++        return isolated;
++    }
+     const config = boot.kind === 'staged'
+         ? await stagedBootAssembler()(env, boot.stage)
+         : await residentLoaderConfig(boot.code, disk());
+-    assertModuleMapWithinCodeLimit(config.modules ?? {});
++    assertModuleMapWithinCodeLimit(configModules(config));
+     const supervisorRpc = supervisorEntrypoint();
+     if (!supervisorRpc) {
+         throw new Error(`Nimbus: ctx.exports.${supervisorEntrypointName() ?? '<supervisor entrypoint>'} unavailable`);
+     }
+     return { ...config, env: { SUPERVISOR: supervisorRpc({ props: supervisor }) } };
+ }
++/** The module map a loader config assembled, or empty when it named none. */
++function configModules(config) {
++    const modules = 'modules' in config ? config.modules : undefined;
++    if (typeof modules !== 'object' || modules === null)
++        return {};
++    // Loader configs only ever carry a module map under this key.
++    const map = modules;
++    return map;
++}
 diff --git a/src/composition.ts b/src/composition.ts
-index 7242f397d94f8d044b48745924d72e954eecef22..b99d0cd20bbdd14142d276a2427d7bc1f7cbab14 100644
+index 7242f39..b99d0cd 100644
 --- a/src/composition.ts
 +++ b/src/composition.ts
 @@ -1,127 +1,29 @@
@@ -358,3 +625,166 @@ index 7242f397d94f8d044b48745924d72e954eecef22..b99d0cd20bbdd14142d276a2427d7bc1
 +  FabricComposition,
 +  StagedBootAssembler,
 +} from '@nimbus-sh/platform/composition.js';
+diff --git a/src/process-fabric.ts b/src/process-fabric.ts
+index 1a88684..4714f38 100644
+--- a/src/process-fabric.ts
++++ b/src/process-fabric.ts
+@@ -131,6 +131,36 @@ export const ResidentCodeSpecSchema = z.object({
+    * image store below and the spec names it.
+    */
+   vfsTextModules: z.record(z.string(), z.string()).optional(),
++  /**
++   * The isolate's exact `env`: one entry per binding the embedder minted,
++   * carried by reference so loopback stubs survive untouched. Defined —
++   * even as `{}` — means the embedder takes the whole env and no
++   * SUPERVISOR binding is injected; absent keeps the default (a SUPERVISOR
++   * minted from the composed supervisor entrypoint).
++   */
++  env: z.record(z.string(), z.unknown()).optional(),
++  /**
++   * Outbound network: `null` denies every `fetch()`/`connect()` inside the
++   * isolate; absent inherits the parent's network. Only `null` is
++   * expressible here — a redirecting outbound belongs to the embedder's
++   * staged assembler, not to a serializable code spec.
++   */
++  globalOutbound: z.null().optional(),
++  /**
++   * CPU and subrequest bounds enforced at the isolate boundary. A load that
++   * omits them gets the account's whole compute budget, so callers that
++   * run untrusted programs always set both.
++   */
++  limits: z
++    .object({ cpuMs: z.number().optional(), subRequests: z.number().optional() })
++    .optional(),
++  /**
++   * Opaque WorkerCode passthrough, retained verbatim by
++   * {@link residentLoaderConfig}. No caller sets one today; the field
++   * exists so a future loader capability does not need a spec revision
++   * to travel beside the module map.
++   */
++  capabilities: z.unknown().optional(),
+ });
+ 
+ export type ResidentCodeSpec = z.infer<typeof ResidentCodeSpecSchema>;
+@@ -238,6 +268,12 @@ export interface ResidentDiskReader {
+  * path, verifying each generated image against the digest its own path claims.
+  * Runs inside the loader's cache-miss callback, so the bytes exist only for
+  * the duration of the load.
++ *
++ * The spec's isolation posture rides along verbatim: an explicit `env` is
++ * the isolate's whole env (loopback stubs by reference, never cloned or
++ * re-minted), `globalOutbound: null` denies outbound, `limits` bounds the
++ * run, and `capabilities` is retained untouched. Absent fields stay absent
++ * so the worker config can tell "embedder takes the env" from the default.
+  */
+ export async function residentLoaderConfig(
+   spec: ResidentCodeSpec,
+@@ -258,6 +294,10 @@ export async function residentLoaderConfig(
+     compatibilityFlags: spec.compatibilityFlags,
+     mainModule: spec.mainModule,
+     modules: { ...spec.modules, ...resolved },
++    ...(spec.env !== undefined ? { env: spec.env } : {}),
++    ...(spec.globalOutbound !== undefined ? { globalOutbound: spec.globalOutbound } : {}),
++    ...(spec.limits !== undefined ? { limits: spec.limits } : {}),
++    ...(spec.capabilities !== undefined ? { capabilities: spec.capabilities } : {}),
+   };
+ }
+ 
+diff --git a/src/vendor/types.ts b/src/vendor/types.ts
+index f6e2236..5cb8bc8 100644
+--- a/src/vendor/types.ts
++++ b/src/vendor/types.ts
+@@ -31,6 +31,21 @@ export interface WorkerCode {
+   compatibilityDate: string;
+   compatibilityFlags?: string[];
+   allowExperimental?: boolean;
++  /**
++   * CPU and subrequest bounds enforced at the isolate boundary, mirroring
++   * `workerdResourceLimits` in @cloudflare/workers-types. A load that omits
++   * them gets the account's whole compute budget.
++   */
++  limits?: {
++    cpuMs?: number;
++    subRequests?: number;
++  };
++  /**
++   * Opaque loader capability passthrough. No caller sets one today; the
++   * field exists so a future loader capability travels beside the module
++   * map without a type revision at every seam.
++   */
++  capabilities?: unknown;
+   mainModule: string;
+   modules: Record<string, ModuleContent>;
+   env?: Record<string, unknown>;
+diff --git a/src/workerd-facet-host.ts b/src/workerd-facet-host.ts
+index eb227b8..9bc697f 100644
+--- a/src/workerd-facet-host.ts
++++ b/src/workerd-facet-host.ts
+@@ -136,9 +136,14 @@ interface LoadedWorkerStub {
+  * Durable Object class, so a resident process can be re-entered; `load` is
+  * unkeyed and yields a stateless entrypoint, which is all a program that ends
+  * with its call can ever need.
++ *
++ * `get` stays wide on purpose: the platform passes a null id for the unkeyed
++ * call and answers the callback with the code object or a promise of it, so a
++ * narrower declaration would refuse the real binding. The fabric itself always
++ * passes a string id and a promise callback.
+  */
+ interface WorkerLoaderBinding {
+-  get(id: string, code: () => Promise<unknown>): { getDurableObjectClass(name: string): unknown };
++  get(id: string | null, code: () => unknown): { getDurableObjectClass(name: string): unknown };
+   load(code: unknown): LoadedWorkerStub;
+ }
+ 
+@@ -546,18 +551,34 @@ async function runOneShot<T>(
+   }
+ }
+ 
+-async function residentWorkerConfig(
++/**
++ * The WorkerCode the loader callback returns for one resident boot: the
++ * module map from {@link residentLoaderConfig} (or the staged assembler),
++ * plus the isolate's env and network posture.
++ *
++ * A `code` boot with an explicit `env` — defined, even as `{}` — is the
++ * embedder's whole statement about the isolate: the env rides through
++ * exactly as minted (loopback stubs by reference) with `globalOutbound`,
++ * `limits` and `capabilities` beside it, and the composed supervisor
++ * entrypoint is not consulted at all, so no SUPERVISOR binding appears.
++ * Without one, the default holds: inherited network plus a SUPERVISOR
++ * minted from the composed entrypoint for the coordinator's identity.
++ */
++export async function residentWorkerConfig(
+   env: ResidentFacetEnv,
+   disk: () => ResidentDiskReader,
+   supervisor: ResidentSupervisorProps,
+   boot: ResidentBootSpec,
+ ): Promise<Record<string, unknown>> {
++  if (boot.kind === 'code' && boot.code.env !== undefined) {
++    const isolated = await residentLoaderConfig(boot.code, disk());
++    assertModuleMapWithinCodeLimit(configModules(isolated));
++    return isolated;
++  }
+   const config = boot.kind === 'staged'
+     ? await stagedBootAssembler()(env, boot.stage)
+     : await residentLoaderConfig(boot.code, disk());
+-  assertModuleMapWithinCodeLimit(
+-    (config as { modules?: Record<string, unknown> }).modules ?? {},
+-  );
++  assertModuleMapWithinCodeLimit(configModules(config));
+   const supervisorRpc = supervisorEntrypoint();
+   if (!supervisorRpc) {
+     throw new Error(
+@@ -566,3 +587,12 @@ async function residentWorkerConfig(
+   }
+   return { ...config, env: { SUPERVISOR: supervisorRpc({ props: supervisor }) } };
+ }
++
++/** The module map a loader config assembled, or empty when it named none. */
++function configModules(config: object): Record<string, unknown> {
++  const modules: unknown = 'modules' in config ? config.modules : undefined;
++  if (typeof modules !== 'object' || modules === null) return {};
++  // Loader configs only ever carry a module map under this key.
++  const map: Record<string, unknown> = modules as Record<string, unknown>;
++  return map;
++}
