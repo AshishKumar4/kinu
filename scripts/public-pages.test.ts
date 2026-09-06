@@ -46,6 +46,8 @@ interface WidthIntegrity {
   readonly scroll: number;
   readonly clipped: number;
   readonly worst: readonly string[];
+  readonly cut: number;
+  readonly cutWorst: readonly string[];
 }
 
 interface DemoBeat {
@@ -461,17 +463,30 @@ beforeAll(async () => {
           return false;
         };
         const worst: string[] = [];
+        const cutWorst: string[] = [];
         for (const element of document.querySelectorAll('main *, header *, footer *')) {
           const box = element.getBoundingClientRect();
           if (box.width === 0 || box.height === 0) continue;
           if ((box.right > viewport + 1 || box.left < -1) && !contained(element)) {
             worst.push(`${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)} [${String(Math.round(box.left))},${String(Math.round(box.right))}]`);
           }
+          // The second half of the same defect, which the viewport axis above
+          // cannot see: an element whose OWN content is wider than its box, with
+          // `overflow-x: visible`, is cut by whichever ancestor clips — no
+          // ellipsis to say so and nothing to scroll. Its box may sit entirely
+          // inside the viewport, so containment is not the question here.
+          const style = getComputedStyle(element);
+          if (style.overflowX !== 'visible' || element.scrollWidth <= element.clientWidth + 2) continue;
+          if (!contained(element)) {
+            cutWorst.push(`${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)} [${String(element.clientWidth)}<${String(element.scrollWidth)}]`);
+          }
         }
         return {
           scroll: document.documentElement.scrollWidth - viewport,
           clipped: worst.length,
           worst: worst.slice(0, 6),
+          cut: cutWorst.length,
+          cutWorst: cutWorst.slice(0, 6),
         };
       });
       const surfacesFit = await page.evaluate(() => {
@@ -677,6 +692,10 @@ describe('public pages are responsive', () => {
       expect(
         integrity.clipped,
         `landing@${where} silently clips: ${integrity.worst.join(' · ')}`,
+      ).toBe(0);
+      expect(
+        integrity.cut,
+        `landing@${where} cuts its own content: ${integrity.cutWorst.join(' · ')}`,
       ).toBe(0);
     }
   });

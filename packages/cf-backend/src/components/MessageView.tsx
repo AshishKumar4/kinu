@@ -235,7 +235,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
           </span>
         ) : (
           <span className="flex min-w-0 items-baseline gap-2">
-            <strong className="shrink-0 text-[11.5px] font-medium p-text-2">{description || toolLabel(toolName)}</strong>
+            <strong className="min-w-0 truncate text-[11.5px] font-medium p-text-2">{description || toolLabel(toolName)}</strong>
             <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
             {runtime && <span className="shrink-0 font-mono text-[9.5px] p-text-4">{runtime}</span>}
           </span>
