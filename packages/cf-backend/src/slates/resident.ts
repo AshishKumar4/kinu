@@ -3,7 +3,7 @@ import type { ContentStore } from '@agent-core/core/content';
 import { processes, type ResidentFacetEnv } from '@nimbus-sh/fabric/workerd-facet-host.js';
 import { facetImagePath, facetImagePathDigest, type ResidentBootSpec } from '@nimbus-sh/fabric/process-fabric.js';
 import { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
-import type { RouteableFacetTarget } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_SESSION_USER, type RouteableFacetTarget } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import type { JsonValue, SlateProcess, SlateProject } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
@@ -65,6 +65,16 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
   ].join('\n');
 }
 
+async function compileSlate(bundler: EsbuildService, entry: string, options: Parameters<EsbuildService['build']>[1]) {
+  try { return await bundler.build([entry], options); }
+  catch (cause) {
+    if (cause instanceof Error && 'errors' in cause && Array.isArray(cause.errors)) {
+      throw new KinuError('bad_input', 'Slate compilation failed', { cause });
+    }
+    throw cause;
+  }
+}
+
 export class ResidentSlateProcesses {
   private bundler: EsbuildService | undefined;
 
@@ -74,8 +84,8 @@ export class ResidentSlateProcesses {
     const session = await this.deps.session();
     const main = input.project.main;
     if (main === undefined) throw new KinuError('bad_input', 'package.json main must name the Worker module');
-    const bundler = this.bundler ??= new EsbuildService(session.vfs);
-    const server = await bundler.build([`${input.root}/${main}`], {
+    const bundler = this.bundler ??= new EsbuildService(session.vfs.as(CRED_SESSION_USER));
+    const server = await compileSlate(bundler, `${input.root}/${main}`, {
       bundle: true, format: 'esm', platform: 'neutral', outfile: '/application.js', external: ['cloudflare:*', 'node:*'],
     });
     if (server.errors.length !== 0) throw new KinuError('bad_input', server.errors.map((error) => error.text).join('\n'));
@@ -84,7 +94,7 @@ export class ResidentSlateProcesses {
     let assets: typeof server.outputFiles = [];
     if (input.project.browser !== undefined) {
       const browser = input.project.browser;
-      const client = await bundler.build([`${input.root}/${browser}`], {
+      const client = await compileSlate(bundler, `${input.root}/${browser}`, {
         bundle: true, format: 'esm', platform: 'browser', outfile: new URL(browser, 'https://slate.invalid/').pathname,
       });
       if (client.errors.length !== 0) throw new KinuError('bad_input', client.errors.map((error) => error.text).join('\n'));
