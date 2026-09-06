@@ -5,7 +5,7 @@
  * resident process with no outbound, its `Gadget` a Cap'n Web `RpcTarget`
  * built with the process `env`, and each binding in that `env` a loopback
  * entrypoint that calls back into this object over a stub. The loader, the
- * `globalOutbound: null` refusal and the HTTP-batch hop between the process
+ * inherited outbound and the HTTP-batch hop between the process
  * and the host are all platform. What the unit tier checks is the pure half
  * (path resolution, source names, the MCP review); this file checks that the
  * whole thing holds together under workerd.

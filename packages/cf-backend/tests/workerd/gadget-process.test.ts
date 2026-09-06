@@ -2,19 +2,19 @@
  * The gadget server boundary, executed under the runtime that enforces it.
  *
  * WHY THE WORKERD POOL. A gadget server runs as a resident process of the
- * owning object, booted through the fabric with `globalOutbound: null`, and
- * every binding in its `env` is a loopback entrypoint that calls back into
- * the owner over a stub. The loader, the process lifetime, the outbound
- * refusal and the entrypoint hop are all platform: `bun test` has none of
- * them, so nothing there can say whether a server is actually contained. The
- * pool is the only tier that can.
+ * owning object, booted through the fabric, and every binding in its `env`
+ * is a loopback entrypoint that calls back into the owner over a stub. The
+ * loader, the process lifetime and the entrypoint hop are all platform:
+ * `bun test` has none of them, so nothing there can say what a server can
+ * reach. The pool is the only tier that can.
  *
  * WHAT THE PROBE DRIVES. A real `GadgetHost` over the real file plane on the
  * probe's own SQLite, minting each binding from this test worker's own
  * `exports` exactly as production mints from the Worker's, a strict approval
  * policy with nobody to ask, and a fixed `listBackgroundJobs` answer. The
- * assertions below are the pairs that discriminate: egress blocked beside a
- * files read that answers, a read inside the root beside a read above it, a
+ * assertions below are the pairs that discriminate: the workspace's own
+ * network reachable beside a files read that answers, a read inside the root
+ * beside a read above it, a
  * listed source beside an unlisted one, the declared `env` beside everything
  * else.
  */
@@ -34,7 +34,7 @@ export class Gadget extends RpcTarget {
     globalThis.__tick = (globalThis.__tick ?? 0) + 1;
     return globalThis.__tick;
   }
-  async egress() { try { await fetch('https://example.com'); return 'reached'; } catch (e) { return 'blocked: ' + e.message; } }
+  async egress() { try { const r = await fetch('https://example.com'); return 'reached: ' + r.status; } catch (e) { return 'blocked: ' + e.message; } }
   async ownStorage() { await this.env.FILES.write('state.txt', 'own'); return this.env.FILES.read('state.txt'); }
   async storageAuthority() { return typeof this.ctx; }
   async readFile(p) { return await this.env.FILES.read(p); }
@@ -112,11 +112,13 @@ describe('the gadget server boundary under workerd', () => {
     expect(valueOf(await subject.gadgetCall('probe', 'tick', []))).toBe(3);
   });
 
-  it('blocks egress while the files binding reads inside its root', async () => {
+  it('reaches the workspace network while the files binding reads inside its root', async () => {
     const subject = await seed('gadget-process-egress');
-    // The discriminating pair agent-core SPEC C13-CLOUDFLARE-DYNAMIC-NO-EGRESS
-    // asks for: no network, and the declared bindings still answering.
-    expect(String(valueOf(await subject.gadgetCall('probe', 'egress', [])))).toMatch(/^blocked: /);
+    // The server inherits the owner's outbound like every other resident
+    // process; what it may NOT do is reach a workspace plane it did not declare,
+    // which the declared-env case below holds. Under miniflare the fetch reaches
+    // the loopback and answers; on the platform it reaches the network.
+    expect(String(valueOf(await subject.gadgetCall('probe', 'egress', [])))).toMatch(/^reached: /);
     expect(valueOf(await subject.gadgetCall('probe', 'readFile', ['note.txt']))).toBe('probe data\n');
     expect(valueOf(await subject.gadgetCall('probe', 'writeFile', ['from-gadget.txt', 'written by gadget']))).toEqual({
       path: 'gadgets/probe/data/from-gadget.txt',

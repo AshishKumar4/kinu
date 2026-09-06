@@ -213,7 +213,7 @@ for another or for the agent's shell.
 
 1. reads `server.js` and the manifest fresh from the file plane;
 2. checks the method name with `isGadgetMethodName` and the args as an array of JSON values;
-3. spawns a resident process with the server bytes and an `env` that holds one loopback stub per declared binding, with `globalOutbound: null` and limits of 2000 CPU ms and 64 subrequests;
+3. spawns a resident process with the server bytes and an `env` that holds one loopback stub per declared binding; the process inherits the workspace's outbound network and runs under the platform's own limits;
 4. sends the call as framed Cap'n Web HTTP batch bytes through `resident.handleHttpRequest` over an `RpcSession` transport, and answers the JSON value or a refusal with its class first. The process side serves the bytes with `newHttpBatchRpcResponse`.
 
 State that must last lives in the `files` binding, by default `gadgets/<slug>/data`. The process keeps no SQLite of its own. A write under `gadgets/<slug>/` releases the resident process. The next call boots a new server from the files as they stand then. The file plane's event bus (`session.vfs.events.on`, subscribed in `OrchestratorAgent.onStart`) carries the write, whichever path wrote it.
@@ -265,7 +265,7 @@ The UI re-lists gadgets and remounts the open frame, which fetches
 | External services | the `mcp` binding's connection: read-only tools now, side effects after the owner decides | nothing | any connection the manifest did not name; any credential | `reviewGadgetMcpCall` + `decideApproval`; the credential never leaves UserDO (`user/mcp.ts`) |
 | Storage | none: no `ctx`, no SQLite; lasting state lives in the `files` binding, by default `gadgets/<slug>/data` | none (opaque origin: no cookies, no localStorage) | the workspace object's SQLite, other gadgets, any path outside the binding root | the runner passes no `ctx`; `gadgetFilesRoot` + `resolveGadgetFilePath` hold the binding to its root |
 | Host document and session | nothing | nothing: opaque origin, no `allow-same-origin`, `frame-src 'none'` inside | the owner's session cookie, `/api/*`, the SPA DOM | the sandbox attribute; `__Host-` cookies; the bridge accepts only its own frame's port |
-| Compute | 2000 CPU ms and 64 subrequests per call | the browser tab | the account's compute budget | `GADGET_LIMITS_PER_CALL` on the resident spawn |
+| Compute | the platform's own Worker limits | the browser tab | nothing beyond them | the Worker Loader |
 | Spoofing host chrome | cannot title itself as a host surface | draws only inside its frame | Approve, consent, credential and settings chrome | `RESERVED_GADGET_TITLES` at parse time; the tab strip marks the group |
 | What crosses out | JSON return values, thrown errors, console lines | JSON calls over one MessagePort, console lines, user-activated `_blank` links | anything else | the bridge's forwarding target; `window.open` neutered in the prefix |
 

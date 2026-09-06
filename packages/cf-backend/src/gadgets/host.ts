@@ -3,17 +3,17 @@
  *
  * ONE RESIDENT PROCESS PER GADGET. `server.js` exports `class Gadget extends RpcTarget`
  * with `constructor(env)`. The host boots it through the fabric's own
- * `processes(ctx, env).spawn`, with `globalOutbound: null` and an `env` that holds
- * exactly the manifest's bindings. That is the one loader path agent-written code
+ * `processes(ctx, env).spawn` with an `env` that holds exactly the manifest's
+ * bindings. That is the one loader path agent-written code
  * takes: a workspace `node` server and a gadget server boot through the same `spawn`.
  *
  * WHAT THE PROCESS HOLDS. Its `env` is the manifest's bindings, each a loopback stub
  * minted here with the workspace, the gadget and the binding name as props
  * (`gadgets/bindings.ts`), and nothing else: no namespace, no secret, no `SUPERVISOR`,
  * no `LOADER`. A name the manifest did not declare resolves to `undefined` in the
- * process, never to something ambient. The boot carries a CPU and subrequest bound
- * (`GADGET_LIMITS_PER_CALL`): a boot without one spends the account's whole compute
- * budget, a capability nobody delegated.
+ * process, never to something ambient. Network and compute are the workspace's own:
+ * the process inherits the parent's outbound like every other resident process, and
+ * the platform's limits are the only ones on it.
  *
  * HOW A CALL TRAVELS. The host validates the method name and the JSON args, then opens
  * a Cap'n Web session over a transport that POSTs the framed batch to the process
@@ -68,16 +68,6 @@ import type {
  *  deploys under (wrangler.jsonc `compatibility_date`), so a gadget meets the
  *  platform its host measured. */
 const GADGET_COMPATIBILITY_DATE = '2025-12-01';
-
-/**
- * The bound one call into a gadget carries. CPU is what a runaway loop costs
- * and subrequests are what a binding-call storm costs; both throw at the
- * boundary the moment they are reached (Dynamic Workers docs, usage/limits).
- * Two seconds is beyond any dashboard read and short of a mining loop; 64 is
- * enough binding calls to draw a page and few enough that a loop announces
- * itself.
- */
-const GADGET_LIMITS_PER_CALL = { cpuMs: 2_000, subRequests: 64 } as const;
 
 /** What `env.<NAME>` is inside the process: the loopback stub of the binding
  *  kind's entrypoint class, so `server.js` reaches that class's methods and
@@ -489,8 +479,6 @@ export class GadgetHost {
           [GADGET_CAPNWEB_MODULE]: await capnwebSource(),
         },
         env: this.mintEnv(record.slug, record.manifest),
-        globalOutbound: null,
-        limits: { ...GADGET_LIMITS_PER_CALL },
       },
     };
     const process = processes(this.deps.ctx, this.deps.env).spawn(
