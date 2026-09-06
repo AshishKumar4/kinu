@@ -55,6 +55,7 @@
     "anti-slop/no-unknown-type-aliases": "error",
     "anti-slop/no-untyped-console": "error",
     "anti-slop/no-unsafe-dictionary-type": "error",
+    "anti-slop/no-vacuous-type-predicate": "error",
     "anti-slop/no-wait-until-in-durable-object": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-cause-on-rethrow": "error",

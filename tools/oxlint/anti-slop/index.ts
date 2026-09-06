@@ -21,6 +21,7 @@ import { noUnknownParametersRule } from "./rules/no-unknown-parameters.ts";
 import { noUnknownReturnsRule } from "./rules/no-unknown-returns.ts";
 import { noUnknownTypeAliasesRule } from "./rules/no-unknown-type-aliases.ts";
 import { noUnsafeDictionaryTypeRule } from "./rules/no-unsafe-dictionary-type.ts";
+import { noVacuousTypePredicateRule } from "./rules/no-vacuous-type-predicate.ts";
 import { noWaitUntilInDurableObjectRule } from "./rules/no-wait-until-in-durable-object.ts";
 import { noWidenThenAssertRule } from "./rules/no-widen-then-assert.ts";
 import { requireCauseOnRethrowRule } from "./rules/require-cause-on-rethrow.ts";
@@ -57,6 +58,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-untyped-console": noUntypedConsoleRule,
 		"no-unknown-returns": noUnknownReturnsRule,
 		"no-unknown-type-aliases": noUnknownTypeAliasesRule,
+		"no-vacuous-type-predicate": noVacuousTypePredicateRule,
 		"no-wait-until-in-durable-object": noWaitUntilInDurableObjectRule,
 		"no-widen-then-assert": noWidenThenAssertRule,
 		"require-cause-on-rethrow": requireCauseOnRethrowRule,
