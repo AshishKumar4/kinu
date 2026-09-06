@@ -1,0 +1,13 @@
+export { FILESYSTEM_ERROR_CODES, FilesystemError } from "./error.js";
+export type { FilesystemErrorCode } from "./error.js";
+export { FILESYSTEM_CONTRIBUTIONS, FILESYSTEM_OPERATION_CONTRACTS, FILESYSTEM_OPERATIONS, FilesystemBackend, FilesystemFacet, FilesystemReaderBackend, FilesystemTargetState, FilesystemWriteMode } from "./facet.js";
+export type { FilesystemEntryKind, FilesystemListInput, FilesystemMkdirInput, FilesystemMoveInput, FilesystemPage, FilesystemReadInput, FilesystemReadRange, FilesystemRemoveInput, FilesystemStat, FilesystemStatInput, FilesystemTargetCases, FilesystemWriteInput } from "./facet.js";
+export { InterleavedFilesystemBackend } from "./interleaved.js";
+export { MemoryFilesystemBackend } from "./memory.js";
+export { MountFilesystemBackend } from "./mount.js";
+export type { FilesystemMount } from "./mount.js";
+export { ObservedFilesystemBackend, FilesystemObservationBackend } from "./observed.js";
+export type { FilesystemObservation } from "./observed.js";
+export { FILESYSTEM_ISOLATION, createFilesystemManifest } from "./manifest.js";
+export { normalizeFilesystemPath } from "./path.js";
+export { ReadonlyFilesystemBackend } from "./readonly.js";

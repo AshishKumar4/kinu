@@ -188,7 +188,7 @@ export function workspaceScope(): string {
   if (scope !== undefined) return scope;
   const found = new Set<string>();
   for (const file of trackedFiles()) {
-    if (!/^packages\/[^/]+\/package\.json$/.test(file)) continue;
+    if (!/^packages\/[^/]+\/package\.json$/.test(file) || file === 'packages/agent-core/package.json') continue;
     const { name } = v.parse(PackageNameSchema, JSON.parse(readRepositoryFile(root, file)));
     if (name === undefined || !name.startsWith('@')) continue;
     found.add(name.slice(0, name.indexOf('/')));
@@ -297,8 +297,11 @@ export const isAntiSlopSuite = (file: string): boolean =>
 export const isAntiSlopRuleSuite = (file: string): boolean =>
   file.startsWith(ANTI_SLOP_RULES) && isRunnableSuite(file);
 
-/** Parseable by `syntax.ts`. */
-export const isParseable = (file: string): boolean => PARSEABLE.test(file);
+/** Pinned upstream bytes: drift.test.ts owns them rather than Kinu's source gates. */
+export const isVendoredSource = (file: string): boolean => file.startsWith('packages/agent-core/dist/');
+
+/** Kinu-maintained code parseable by `syntax.ts`. */
+export const isParseable = (file: string): boolean => PARSEABLE.test(file) && !isVendoredSource(file);
 
 /** Loaded by raw `node --experimental-strip-types` rather than by Bun or a
  *  bundler, and therefore the one set whose imports must carry an explicit

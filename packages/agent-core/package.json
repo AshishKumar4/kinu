@@ -1,0 +1,82 @@
+{
+  "name": "@agent-core/core",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./actors": {
+      "types": "./dist/actors/index.d.ts",
+      "import": "./dist/actors/index.js"
+    },
+    "./authority": {
+      "types": "./dist/authority-public.d.ts",
+      "import": "./dist/authority-public.js"
+    },
+    "./agents/runs": {
+      "types": "./dist/agents/runs/index.d.ts",
+      "import": "./dist/agents/runs/index.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    },
+    "./content": {
+      "types": "./dist/content/index.d.ts",
+      "import": "./dist/content/index.js"
+    },
+    "./definition": {
+      "types": "./dist/definition/index.d.ts",
+      "import": "./dist/definition/index.js"
+    },
+    "./facets": {
+      "types": "./dist/facets-public.d.ts",
+      "import": "./dist/facets-public.js"
+    },
+    "./identity": {
+      "types": "./dist/identity/index.d.ts",
+      "import": "./dist/identity/index.js"
+    },
+    "./environment-provider": {
+      "types": "./dist/environments/public.d.ts",
+      "import": "./dist/environments/public.js"
+    },
+    "./invocations": {
+      "types": "./dist/invocations/index.d.ts",
+      "import": "./dist/invocations/index.js"
+    },
+    "./mediation": {
+      "types": "./dist/mediation-public.d.ts",
+      "import": "./dist/mediation-public.js"
+    },
+    "./operations": {
+      "types": "./dist/operations/index.d.ts",
+      "import": "./dist/operations/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol/public.d.ts",
+      "import": "./dist/protocol/public.js"
+    },
+    "./slate-provider": {
+      "types": "./dist/slates/public.d.ts",
+      "import": "./dist/slates/public.js"
+    },
+    "./slates": {
+      "types": "./dist/slates/index.d.ts",
+      "import": "./dist/slates/index.js"
+    },
+    "./substrates/sqlite": {
+      "types": "./dist/substrates/sqlite/index.d.ts",
+      "import": "./dist/substrates/sqlite/index.js"
+    }
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "fast-json-patch": "3.1.1",
+    "semver": "7.8.5"
+  }
+}

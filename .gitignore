@@ -5,6 +5,7 @@ node_modules/
 /coverage/
 packages/cf-backend/public/_assets
 dist/
+!packages/agent-core/dist/
 *.db
 *.db-journal
 *.db-wal

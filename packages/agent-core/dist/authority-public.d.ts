@@ -1,0 +1,15 @@
+export { Binding, BindingCredentialCustody } from "./authority/binding.js";
+export { InvalidationWatermark, PathEpochEvidence, ScopeEpoch } from "./authority/epoch.js";
+export { Grant } from "./authority/grant.js";
+export { GrantId } from "./authority/id.js";
+export { AuthorityPermit, AuthorityPermitExpectation } from "./authority/permit.js";
+export { AuthorityPermitAdmissionPort, AuthorityPermitIssuer, StoredAuthorityPermitAdmissionPort } from "./authority/permit-store.js";
+export { AuthorityCheckEvidence, AuthorityCheckRequest } from "./authority/evidence.js";
+export { TargetAuthorityPermitRequest } from "./authority/permit-request.js";
+export { TargetAuthorityPermitDenial } from "./authority/permit-denial.js";
+export { AuthorityPermitAuthenticator, AuthorityPermitIssuedRecordSource } from "./authority/permit-authentication.js";
+export type { AuthenticatedAuthorityPermit } from "./authority/permit-authentication.js";
+export type { AuthorityPermitExpectationInit, AuthorityPermitIssueStore, AuthorityPermitTargetAdmissionStore, AuthorityPermitTargetDenialStore, AuthorityPermitTargetRequestStore, AuthorityPermitTargetStore } from "./authority/index.js";
+export { RunTargetLeaseEvidenceStore, TargetLeaseEvidence, TargetLeaseEvidenceIssuer, TargetLeaseEvidenceKey, TargetLeaseEvidenceReference, TargetLeaseEvidenceSourcePort } from "./authority/index.js";
+export type { TargetLeaseEvidenceBinding, TargetLeaseEvidenceInit, TargetLeaseEvidenceSourceState, TargetLeaseEvidenceSourceStore, TargetLeaseEvidenceStore, TargetLeaseEvidenceTarget } from "./authority/index.js";
+export { FacetRef } from "./facets/index.js";

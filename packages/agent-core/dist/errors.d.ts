@@ -1,0 +1,6 @@
+export type AgentCoreErrorCode = "actor.closed" | "actor.stale-callback" | "assurance.duplicate-evidence" | "assurance.invalid-claim" | "assurance.observation-refused" | "assurance.unknown-fault" | "assurance.unknown-premise" | "authority.denied" | "binding.invalid" | "codec.invalid" | "codec.unknown-major" | "content.invalid-range" | "content.not-found" | "environment.closed-session" | "environment.invalid-session" | "environment.stale-session" | "facet.inactive" | "invocation.invalid" | "lease.invalid" | "operation.invalid-input" | "operation.invalid-output" | "operation.missing" | "plan.cycle" | "plan.duplicate-dependency" | "plan.duplicate-task" | "plan.foreign-declaration" | "plan.unknown-dependency" | "plan.unknown-task" | "protocol.duplicate" | "protocol.invalid-envelope" | "protocol.invalid-state" | "protocol.revision-conflict" | "run.invalid-state" | "run.model-input-unrebuildable" | "schema.unreadable" | "slate.invalid-version" | "slate.unpublished" | "subscription.invalid" | "turn.invalid-state" | "turn.model-input-unaccounted" | "turn.model-input-undurable";
+export declare class AgentCoreError extends Error {
+    readonly code: AgentCoreErrorCode;
+    constructor(code: AgentCoreErrorCode, message: string);
+}
+export declare function invariant(condition: boolean, code: AgentCoreErrorCode, message: string): asserts condition;

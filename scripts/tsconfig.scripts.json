@@ -18,7 +18,8 @@
     "jsxImportSource": "@opentui/react"
   },
   "include": [
-    "**/*.ts"
+    "**/*.ts",
+    "../packages/agent-core/drift.test.ts"
   ],
   "//exclude": "The first five are declared compiler debt. The last six are workerd sources, not Bun programs: they need @cloudflare/workers-types rather than [bun, node] and are compiled by the tsconfig.json beside each of them, which `bun run check` runs. `fixtures/payload-transport/isolate-relay.ts` is one of those sources rather than a Worker entry — it is the isolate upload the payload instrument's owning-DO arm imports, and it takes R2 types for the same reason the Worker beside it does. Excluding them here is layering, not an exemption.",
   "exclude": [
