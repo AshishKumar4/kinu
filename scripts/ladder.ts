@@ -1153,10 +1153,10 @@ export const LADDER: readonly Gate[] = [
       + 'documents rather than the rendered page.',
   },
   {
-    run: 'bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts',
+    run: 'bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts',
     tier: 'ci',
-    // Two puppeteer suites, one gate: both boot the same gallery and both measure a
-    // browser giving up on something. Measured 2026-08-27: 38s together.
+    // Measured 2026-09-06, these 48 browser tests pass in 13.84 seconds.
+    // The snapshot suite exercises Files and memory recovery after read faults.
     seconds: 45,
     catches: 'what the browser does when a client-side failure has nowhere to go. The '
       + 'error boundary reports to the server rather than only to a console nobody '
@@ -1164,7 +1164,8 @@ export const LADDER: readonly Gate[] = [
       + 'both stay reachable, and a rejected lazy chunk offers the one-shot reload '
       + 'that recovers a stale build. Both classes shipped green under every '
       + 'source-reading gate in this repository, because the defect is a state the '
-      + 'user is left in rather than a call that is absent.',
+      + 'user is left in rather than a call that is absent. A workspace reconnect '
+      + 'must refresh the mounted Files pane and current memory after read failures.',
     blind: 'a local browser over a locally built bundle. A stale asset served from the '
       + 'edge, a real network stall that never delivers headers, and whether the '
       + 'report reaches a deployed sink are all outside it. Nothing compares pixels.',
