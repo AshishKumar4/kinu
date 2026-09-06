@@ -628,7 +628,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
   });
   const run = await runNodeAgent({
     nodeId: id, rootId, parentId: parent.id, depth: atDepth,
-    task: resolved.task,
+    task: input.task,
     rationale: input.rationale,
     base: prompt.system,
     messages: input.context === 'fork' ? [...input.prefix, seed] : [seed],
