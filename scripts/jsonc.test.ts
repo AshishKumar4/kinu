@@ -10,9 +10,13 @@ test('comments and trailing commas do not change bytes inside strings', () => {
 });
 
 test('repeated commas are invalid rather than silently removed', () => {
-  expect(() => parseJsonc('{"literal":"ok","values":[1,,]}', ConfigSchema, 'config')).toThrow();
+  expect(() => parseJsonc('{"literal":"ok","values":[1,,]}', ConfigSchema, 'config')).toThrow(SyntaxError);
+  expect(parseJsonc('{"literal":"ok","values":[1,]}', ConfigSchema, 'config'))
+    .toEqual({ literal: 'ok', values: [1] });
 });
 
 test('an incomplete block comment cannot hide malformed input', () => {
-  expect(() => parseJsonc('{"literal":"ok","values":[]} /* incomplete', ConfigSchema, 'config')).toThrow();
+  expect(() => parseJsonc('{"literal":"ok","values":[]} /* incomplete', ConfigSchema, 'config')).toThrow(SyntaxError);
+  expect(parseJsonc('{"literal":"ok","values":[]} /* complete */', ConfigSchema, 'config'))
+    .toEqual({ literal: 'ok', values: [] });
 });
