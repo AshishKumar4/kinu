@@ -774,6 +774,87 @@
     "evaluation_json",
     "created_at"
   ],
+  "slate_content_chunks@packages/core/src/identity/workspace-schema.ts": [
+    "digest",
+    "offset",
+    "bytes"
+  ],
+  "slate_content@packages/core/src/identity/workspace-schema.ts": [
+    "digest",
+    "size",
+    "hint"
+  ],
+  "slate_deployment_reservations@packages/core/src/identity/workspace-schema.ts": [
+    "id",
+    "workspace_id",
+    "slate_id",
+    "parent_id",
+    "bytes"
+  ],
+  "slate_deployments@packages/core/src/identity/workspace-schema.ts": [
+    "id",
+    "workspace_id",
+    "slate_id",
+    "parent_id",
+    "bytes"
+  ],
+  "slate_invocations@packages/core/src/identity/workspace-schema.ts": [
+    "id",
+    "slate_id",
+    "request",
+    "attempt",
+    "owner_epoch",
+    "state"
+  ],
+  "slate_previews@packages/core/src/identity/workspace-schema.ts": [
+    "id",
+    "workspace_id",
+    "slate_id",
+    "parent_id",
+    "bytes"
+  ],
+  "slate_publications@packages/core/src/identity/workspace-schema.ts": [
+    "id",
+    "workspace_id",
+    "slate_id",
+    "parent_id",
+    "bytes"
+  ],
+  "slate_receipts@packages/core/src/identity/workspace-schema.ts": [
+    "id",
+    "invocation_id",
+    "attempt",
+    "outcome",
+    "error",
+    "finished_at"
+  ],
+  "slate_resource_reservations@packages/core/src/identity/workspace-schema.ts": [
+    "id",
+    "workspace_id",
+    "slate_id",
+    "parent_id",
+    "bytes"
+  ],
+  "slate_resources@packages/core/src/identity/workspace-schema.ts": [
+    "id",
+    "workspace_id",
+    "slate_id",
+    "parent_id",
+    "bytes"
+  ],
+  "slate_versions@packages/core/src/identity/workspace-schema.ts": [
+    "id",
+    "workspace_id",
+    "slate_id",
+    "parent_id",
+    "bytes"
+  ],
+  "slates@packages/core/src/identity/workspace-schema.ts": [
+    "id",
+    "workspace_id",
+    "revision",
+    "bytes"
+  ],
   "sleep_time_updates@packages/cf-backend/src/orchestrator.ts": [
     "effect_key",
     "update_json",

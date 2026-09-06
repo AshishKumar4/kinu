@@ -383,6 +383,18 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // needs-you queue that decides them lives. A local session keeps its
     // interactive channel (the human is at the terminal), so nothing parks.
     deferred_approvals: EVERYWHERE,
+    slates: EVERYWHERE,
+    slate_versions: EVERYWHERE,
+    slate_publications: EVERYWHERE,
+    slate_deployments: EVERYWHERE,
+    slate_resources: EVERYWHERE,
+    slate_previews: EVERYWHERE,
+    slate_deployment_reservations: EVERYWHERE,
+    slate_resource_reservations: EVERYWHERE,
+    slate_content: EVERYWHERE,
+    slate_content_chunks: EVERYWHERE,
+    slate_invocations: EVERYWHERE,
+    slate_receipts: EVERYWHERE,
     // Which workspace instruction bytes the owner approved for system placement
     // (KINU-N028). EVERYWHERE for the same reason prompt_section_versions is:
     // the prompt builder classifies AGENTS.md and skills on every turn on every
