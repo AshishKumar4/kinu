@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import * as v from 'valibot';
 import { isParseable, isPatternSource, readMatching, trackedFiles } from './sources';
 import { declaredName, memberCalleeName, ownerName, parse, regexPattern, walk } from './syntax';
@@ -115,107 +115,21 @@ export const PATTERN_REVIEWS = {
   schema: 'DEFERRED: reads a restricted DDL corpus without executing it. Replacing it with SQLite changes validation and side effects; preserve the schema gate contract first.',
   protected: 'DEFERRED: layergate and devbox are explicit non-goals. The inventory includes their candidates without changing their checks.',
 };
-const CANDIDATE_REVIEW = {
-  'lean/check-traceability.mjs': 'traceability',
-  'packages/cf-backend/src/actor-agent.ts': 'traversal',
-  'packages/cf-backend/src/components/background-event.ts': 'framing',
-  'packages/cf-backend/src/email/inbound.ts#stripQuotedReply': 'framing',
-  'packages/cf-backend/src/email/inbound.ts#htmlToText': 'html',
-  'packages/cf-backend/src/hooks/use-kinu.ts': 'framing',
-  'packages/cf-backend/src/lib/terminal-lane.ts': 'cli',
-  'packages/cf-backend/tests/helpers/declared-members.ts': 'sourceGate',
-  'packages/cf-backend/tests/unit-agent-registry.test.ts': 'lexical',
-  'packages/cf-backend/tests/unit-backend-twins.test.ts': 'sourceGate',
-  'packages/cf-backend/tests/unit-connect-device-panel.test.ts': 'lexical',
-  'packages/cf-backend/tests/unit-device-sandbox-row.test.ts': 'lexical',
-  'packages/cf-backend/tests/unit-do-init-gate.test.ts': 'lexical',
-  'packages/cf-backend/tests/unit-egress-interception.test.ts': 'sourceGate',
-  'packages/cf-backend/tests/unit-email-outbound.test.ts': 'lexical',
-  'packages/cf-backend/tests/unit-email-outbox.test.ts': 'lexical',
-  'packages/cf-backend/tests/unit-fork-runs-revalidation.test.ts': 'lexical',
-  'packages/cf-backend/tests/unit-kumo-token-coverage.test.ts': 'sourceGate',
-  'packages/cf-backend/tests/unit-public-shell.test.ts': 'lexical',
-  'packages/cf-backend/tests/unit-rpc-gate.test.ts': 'sourceGate',
-  'packages/cf-backend/tests/unit-rpc-surface.test.ts': 'sourceGate',
-  'packages/cli-backend/src/claude-cli-provider.ts': 'xml',
-  'packages/cli-backend/src/claude-cli-provider.ts#parseNdjson': 'framing',
-  'packages/cli-backend/tests/local-session.test.ts': 'lexical',
-  'packages/cli/src/attachments.ts': 'cli',
-  'packages/cli/src/device-connect.ts': 'daemon',
-  'packages/cli/src/tui/actions.tsx': 'cli',
-  'packages/cli/src/tui/context-status.ts': 'lexical',
-  'packages/cli/tests/device-connect.test.ts': 'daemon',
-  'packages/core/src/bench/longhorizon.ts': 'framing',
-  'packages/core/src/craft/in-episode.ts': 'sourceGate',
-  'packages/core/src/craft/source.ts': 'traversal',
-  'packages/core/src/eval/corpus.ts': 'framing',
-  'packages/core/src/events/ingress/email.ts': 'lexical',
-  'packages/core/src/evolution/scaffold-handbook.ts': 'handbook',
-  'packages/core/src/heads/head-summary.ts': 'traversal',
-  'packages/core/src/prompting/attachment-sanitizer.ts': 'traversal',
-  'packages/core/src/prompts/structured.ts': 'framing',
-  'packages/core/src/safety/approval-gate.ts': 'safety',
-  'packages/core/src/safety/egress-destination.ts': 'safety',
-  'packages/core/src/scaffold/safety-patterns.ts': 'safety',
-  'packages/core/src/skills/loader.ts': 'cli',
-  'packages/core/src/skills/parse.ts': 'lexical',
-  'packages/core/src/utils/markdown-frontmatter.ts': 'frontmatter',
-  'packages/core/src/vfs/diff.ts': 'framing',
-  'packages/core/src/vfs/observe.ts': 'traversal',
-  'packages/core/src/web/markdown.ts': 'html',
-  'packages/core/src/web/provider.ts': 'html',
-  'packages/core/tests/contract-model-call-reporting.test.ts': 'sourceGate',
-  'packages/core/tests/contract-publication-seal.test.ts': 'sourceGate',
-  'packages/core/tests/contract-workspace-schema.test.ts': 'sourceGate',
-  'packages/core/tests/unit-backend-host-contract.test.ts': 'sourceGate',
-  'packages/core/tests/unit-instruction-placement.test.ts': 'lexical',
-  'packages/core/tests/unit-layergate.test.ts': 'protected',
-  'packages/core/tests/unit-volatile-context.test.ts': 'lexical',
-  'packages/devbox/src/cas/overlay-runner.ts': 'protected',
-  'packages/devbox/src/lifecycle.ts': 'protected',
-  'packages/devbox/tests/snapshot-chain.test.ts': 'protected',
-  'packages/devbox/tests/support/strategy-machine.ts': 'protected',
-  'packages/test-utils/src/ambient-env.ts': 'traversal',
-  'packages/test-utils/src/hard-tasks/cost-model.ts': 'sourceGate',
-  'scripts/bench-devbox-decision.test.ts': 'protected',
-  'scripts/bench-devbox-strategies.ts': 'xml',
-  'scripts/bench-devbox-strategies.ts#parseOverlaySweep': 'framing',
-  'scripts/bench-devbox-strategies.ts#parseOptions': 'cli',
-  'scripts/bench.test.ts': 'lexical',
-  'scripts/bench.ts': 'cli',
-  'scripts/coverage-lcov.ts': 'framing',
-  'scripts/dead-code.ts': 'traversal',
-  'scripts/devbox-holder-probe.ts': 'protected',
-  'scripts/egress-interception.ts': 'sourceGate',
-  'scripts/eval-report.ts': 'cli',
-  'scripts/eval-workspaces.ts': 'cli',
-  'scripts/eval.ts': 'cli',
-  'scripts/fixtures/fuse-probe/core.ts': 'traversal',
-  'scripts/patch-parity.ts': 'framing',
-  'scripts/pattern-inventory.ts': 'lexical',
-  'scripts/payload-transport.test.ts': 'sourceGate',
-  'scripts/preflight.test.ts': 'sourceGate',
-  'scripts/review-package.ts': 'lexical',
-  'scripts/review-round2.ts': 'lexical',
-  'scripts/scanner-bundle-gate.ts': 'sourceGate',
-  'scripts/schema-drift.ts': 'schema',
-  'scripts/secret-scan.ts': 'safety',
-  'scripts/silent-drop.ts': 'sourceGate',
-  'scripts/skip-ratchet.ts': 'xml',
-  'scripts/syntax.ts': 'traversal',
-  'tests/evals/device-session.ts': 'lexical',
-  'tools/oxlint/anti-slop/gate.test.ts': 'sourceGate',
-  'tools/oxlint/anti-slop/gate.test.ts#directive': 'lexical',
-  'tools/oxlint/anti-slop/import-extension.gate.test.ts': 'sourceGate',
-  'tools/oxlint/anti-slop/no-ambient-git.gate.test.ts': 'sourceGate',
-  'tools/oxlint/anti-slop/rules/require-safety-comment-for-type-assertion.ts': 'lexical',
-} satisfies Readonly<Record<string, keyof typeof PATTERN_REVIEWS>>;
+const ReviewedSiteSchema = v.object({
+  file: v.string(), kind: v.string(), owner: v.string(), sourceSha256: v.string(),
+  decision: v.picklist(Object.keys(PATTERN_REVIEWS)),
+});
+type PatternReview = v.InferOutput<typeof ReviewedSiteSchema>;
 
-function reviewedKey(key: string): key is keyof typeof CANDIDATE_REVIEW {
-  return Object.hasOwn(CANDIDATE_REVIEW, key);
+function sourceHash(source: string): string {
+  return createHash('sha256').update(source).digest('hex');
 }
 
-export function buildPatternInventory(corpus: ReadonlyMap<string, string>) {
+function reviewKey(site: Pick<PatternSite, 'file' | 'kind' | 'owner'>, digest: string): string {
+  return JSON.stringify([site.file, site.kind, site.owner, digest]);
+}
+
+export function buildPatternInventory(corpus: ReadonlyMap<string, string>, reviews: readonly PatternReview[] = []) {
   const sites: PatternSite[] = [];
   const python: [string, string][] = [];
   const measured: string[] = [];
@@ -238,23 +152,22 @@ export function buildPatternInventory(corpus: ReadonlyMap<string, string>) {
   sites.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.kind.localeCompare(b.kind));
   const counts = { lexical: 0, composition: 0, code: 0, scanner: 0, shell: 0 };
   for (const site of sites) counts[site.category]++;
+  const reviewed = new Map<string, string>();
+  for (const review of reviews) reviewed.set(reviewKey(review, review.sourceSha256), review.decision);
   const candidates = sites.filter(site => site.category === 'code' || site.category === 'scanner')
-    .map(site => {
-      const key = `${site.file}#${site.owner}`;
-      const decision = reviewedKey(key) ? CANDIDATE_REVIEW[key]
-        : reviewedKey(site.file) ? CANDIDATE_REVIEW[site.file] : null;
-      return { ...site, decision };
-    });
+    .map(site => ({ ...site, decision: reviewed.get(reviewKey(site, sourceHash(site.source))) ?? null }));
   return { measured: measured.sort(), categories: PATTERN_CATEGORIES, reviews: PATTERN_REVIEWS, counts, sites, candidates };
 }
 
 function located<TSite extends PatternSite>({ source, ...fields }: TSite) {
-  return { ...fields, sourceSha256: createHash('sha256').update(source).digest('hex') };
+  return { ...fields, sourceSha256: sourceHash(source) };
 }
 
 if (import.meta.main) {
   const corpus = readMatching(isPatternSource);
-  const result = buildPatternInventory(corpus);
+  const recorded = v.parse(v.object({ candidates: v.array(ReviewedSiteSchema) }),
+    JSON.parse(readFileSync(new URL('./pattern-inventory.json', import.meta.url), 'utf8')));
+  const result = buildPatternInventory(corpus, recorded.candidates);
   const governed = trackedFiles().filter(isPatternSource).sort();
   assert.deepEqual(result.measured, governed);
   assert.ok(result.sites.length > 0 && result.counts.composition > 0, 'pattern census is empty');
@@ -269,9 +182,9 @@ if (import.meta.main) {
     { file: 'scripts/setup-worktree.sh', owner: 'SCOPES and package name', classification: 'REPLACED',
       replacement: 'JSON.parse reads the top-level manifest name instead of sed field extraction',
       proof: 'The nested-name smoke fixture returned @wrong before the change and @right after it.' }];
-  if (process.argv.includes('--write')) writeFileSync(new URL('./pattern-inventory.json', import.meta.url), `${JSON.stringify({
+  if (process.argv.includes('--write') && pending.length === 0) writeFileSync(new URL('./pattern-inventory.json', import.meta.url), `${JSON.stringify({
     measuredOn: '2026-09-06', ...result, sites: result.sites.map(located), candidates: result.candidates.map(located), replacements,
   }, null, 2)}\n`);
-  process.stdout.write(`pattern-inventory: ${result.measured.length} measured = ${governed.length} governed files; ${result.sites.length} sites; ${JSON.stringify(result.counts)}; ${result.candidates.length} candidates; ${pending.length} unreviewed; ${replacements.length} parsers replaced. Blind spots: runtime aliases of RegExp, implicit regex coercion, unnamed scanners, other native languages, and vendored agent-core output. Python uses its AST; shell entries identify whole pattern commands, not each embedded language token. Classification is syntactic; candidate decisions are reviewed judgments.\n`);
+  process.stdout.write(`pattern-inventory: ${result.measured.length} measured = ${governed.length} governed files; ${result.sites.length} sites; ${JSON.stringify(result.counts)}; ${result.candidates.length} candidates; ${pending.length} unreviewed; ${replacements.length} parsers replaced. Blind spots: runtime aliases of RegExp, implicit regex coercion, unnamed scanners, other native languages, and vendored agent-core output. Python uses its AST; shell entries identify whole pattern commands, not each embedded language token. Classification is syntactic. A review matches only unchanged source bytes, file, owner and kind; changed dependencies or surrounding semantics need human review. Review decisions in the artifact remain author assertions.\n`);
   if (pending.length > 0) process.exitCode = 1;
 }

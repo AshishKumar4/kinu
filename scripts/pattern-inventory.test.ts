@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { buildPatternInventory, inventoryJavaScript } from './pattern-inventory';
 
 test('the AST distinguishes patterns from comments, division and quoted source', () => {
@@ -44,4 +45,17 @@ test('an input outside the governed language set is refused', () => {
   expect(() => buildPatternInventory(new Map([['docs/example.md', '/text/']]))).toThrow(Error);
   expect(buildPatternInventory(new Map([['scripts/example.ts', 'export const value = 1;']])).measured)
     .toEqual(['scripts/example.ts']);
+});
+
+test('a candidate review belongs to its source bytes, not every parser in its file', () => {
+  const file = 'packages/cf-backend/src/hooks/use-kinu.ts';
+  const pattern = String.raw`/export\s+(.*)/`;
+  const source = `const matcher = ${pattern};`;
+  const review = { file, kind: 'regex-literal', owner: 'matcher',
+    sourceSha256: createHash('sha256').update(pattern).digest('hex'), decision: 'framing' };
+  const decisions = (code: string) => buildPatternInventory(new Map([[file, code]]), [review])
+    .candidates.map(site => site.decision);
+  expect(decisions(source)).toEqual(['framing']);
+  expect(decisions(`${source}\nconst newParser = ${pattern};`)).toEqual(['framing', null]);
+  expect(decisions(String.raw`const matcher = /import\s+(.*)/;`)).toEqual([null]);
 });
