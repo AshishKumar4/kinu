@@ -637,7 +637,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   const constructed = v.safeParse(ConstructedModelSchema, deps.model);
   const named = v.safeParse(v.string(), deps.model);
   const modelContext: PromptModelContext = constructed.success
-    ? { id: constructed.output.modelId, provider: constructed.output.provider }
+    ? { id: constructed.output.modelId, provider: constructed.output.provider.split('.', 1)[0] }
     : named.success ? { id: named.output } : {};
 
   /** Whether any turn settled a conversation at all. A provider stream that
@@ -696,7 +696,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         tools: deps.tools,
         modelContext,
         cache: {
-          providerId: modelContext.provider?.split('.', 1)[0],
+          providerId: modelContext.provider,
           modelId: modelContext.id,
           sessionKey: agentAffinityKey(input.rootId),
         },
