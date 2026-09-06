@@ -13,6 +13,7 @@ import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { CodemodeEgress } from "./src/codemode-egress";
 import type { GadgetBinding } from "./src/gadgets/bindings";
+import type { SlateBinding } from "./src/slates/bindings";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
 
 // This file has top-level imports (for the DO class generics below), which
@@ -188,6 +189,7 @@ declare global {
       mainModule: {
         CodemodeEgress: typeof CodemodeEgress;
         GadgetBinding: typeof GadgetBinding;
+        SlateBinding: typeof SlateBinding;
       };
     }
   }

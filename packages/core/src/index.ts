@@ -255,6 +255,10 @@ export { parseSlateProject, slateExecutorName, type SlateProject, type SlateBind
 export { SlateBindingRequestSchema, routeSlateBindingCall, type SlateBindingRequest, type SlateBindingRoute } from './slates/bindings';
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
+export {
+  isSlateMethodName, SLATES_CHANGED_EVENT, type SlateCallResult,
+  type SlateSummary, type SlateProblem, type SlatesChangedEvent,
+} from './slates/rpc';
 
 // Gadgets — agent-written apps: a server the resident process hosts with only
 // its declared bindings and no ctx or SQLite, a client in a sandboxed iframe. See docs/LIVE-UI.md.

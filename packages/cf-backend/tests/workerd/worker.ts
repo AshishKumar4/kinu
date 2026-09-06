@@ -38,7 +38,7 @@ export { TerminalEffectProbeDO } from './terminal-effect-probe';
 // The Files-tab EIO probe — the same charter exception: the real workspace
 // file plane under the runtime whose CSP is the defect.
 export { FilesEioProbeDO } from './files-eio-probe';
-export { SlateProcessProbeDO } from './slate-process-probe';
+export { SlateProcessProbeDO, SlateDepthProbe } from './slate-process-probe';
 // The gadget-process probe — the same charter exception: the real `GadgetHost`
 // over the real file plane, under the runtime whose loader, process lifetime
 // and outbound refusal are the boundary under test.

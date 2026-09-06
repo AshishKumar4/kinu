@@ -1,12 +1,26 @@
-import { DurableObject } from 'cloudflare:workers';
+import { DurableObject, WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { MemoryContentStore } from '@agent-core/core/content';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import { parseSlateProject, type SlateProcess } from '@kinu.run/core';
+import { parseSlateProject, routeSlateBindingCall, type SlateProcess, type JsonValue, type SlateCallResult } from '@kinu.run/core';
 import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses } from '../../src/slates/resident';
+
+export class SlateDepthProbe extends WorkerEntrypoint {
+  async call(member: string, args: JsonValue[], depth: number): Promise<SlateCallResult> {
+    const project = parseSlateProject({ main: 'server.ts', slate: { bindings: { PEER: { kind: 'app', id: 'peer' } } } });
+    try {
+      const route = routeSlateBindingCall({ id: 'probe', project, name: 'PEER', request: { member, args, depth } });
+      if (route.kind !== 'app') throw new Error('Expected app route');
+      return { ok: true, value: { depth: route.depth, args: [...route.args] } };
+    } catch (cause) {
+      if (!(cause instanceof KinuError)) throw cause;
+      return { ok: false, reason: cause.code, error: cause.message };
+    }
+  }
+}
 
 export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
@@ -29,13 +43,13 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     '  calls += 1;',
     '  return Response.json({ calls, path: new URL(request.url).pathname });',
     '} };',
-  ].join('\n')): Promise<void> {
+  ].join('\n'), bindDepth = false): Promise<void> {
     const root = '/home/user/slates/notes';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
     files.writeFile(`${root}/server.ts`, source);
     this.process = await this.resident.start({
-      key: crypto.randomUUID(), root, port: 8789, bindings: {},
+      key: crypto.randomUUID(), root, port: 8789, bindings: bindDepth ? { PEER: exports.SlateDepthProbe({}) } : {},
       project: parseSlateProject({ main: 'server.ts' }),
     });
   }
@@ -62,8 +76,10 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     return response;
   }
 
-  async request(path: string): Promise<{ status: number; body: string }> {
-    const response = await this.ports.routeRequest(8789, new Request(`https://slate.invalid${path}`), path);
+  async request(path: string, depth = 0): Promise<{ status: number; body: string }> {
+    const response = await this.ports.routeRequest(8789, new Request(
+      'https://slate.invalid' + path, { headers: { 'x-slate-depth': String(depth) } },
+    ), path);
     if (response === null) return { status: 404, body: 'No listener' };
     return { status: response.status, body: await response.text() };
   }

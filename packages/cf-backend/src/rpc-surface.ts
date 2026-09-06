@@ -452,6 +452,7 @@ const ORCHESTRATOR_METHODS = [
   // browser socket that could name a binding could reach the owner's MCP
   // connections as a gadget, and the gate inside decides per manifest.
   'gadgetBindingCall',
+  'slateBindingCall',
   // The one method the supervisor entrypoint calls on the object that owns a
   // workspace: a facet's filesystem calls arrive here through the composed
   // `OrchestratorAgent` namespace. Listed (not sealed away) but never

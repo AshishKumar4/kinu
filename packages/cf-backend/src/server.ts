@@ -99,6 +99,7 @@ export { CodemodeEgress } from "./codemode-egress";
 // manifest binding with `ctx.exports.GadgetBinding({ props })` (gadgets/host.ts) and
 // resolved here by export name, exactly as `CodemodeEgress` is.
 export { GadgetBinding } from "./gadgets/bindings";
+export { SlateBinding } from "./slates/bindings";
 // REQUIRED for outbound interception, and silent if forgotten. The Sandbox DO
 // builds its interception fetchers from `ctx.exports.ContainerProxy`, so
 // without this export `applyOutboundInterception` throws and no egress handler

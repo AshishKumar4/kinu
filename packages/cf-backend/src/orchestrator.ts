@@ -25,6 +25,7 @@ import {
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { GadgetHost } from "./gadgets/host";
+import { SlateHost } from "./slates/host";
 import { applyWorkspaceBoxOp, type WorkspaceBoxOp, type WorkspaceBoxResult } from "./workspace-box-rpc";
 import {
   hostedFacetAgentName, type HostedFacetHomes, type HostedFacetKind, type HostedNodeHome,
@@ -70,6 +71,7 @@ import {
   // Gadgets — core owns the manifest, the file layout and the binding route;
   // this object boots the resident processes (gadgets/host.ts).
   type GadgetBindingRequest, type GadgetCallResult, type GadgetDataSource, type GadgetProblem, type GadgetSummary,
+  type SlateBindingRequest, type SlateCallResult,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   type ScaffoldRunResult,
   // The scaffold evolution control plane (core owns the drivers; this actor
@@ -3989,6 +3991,28 @@ export class OrchestratorAgent extends ActorAgent {
    */
   async gadgetBindingCall(slug: string, name: string, request: GadgetBindingRequest): Promise<GadgetCallResult> {
     return this.gadgets.bindingCall(String(slug), String(name), request);
+  }
+
+  private _slates: SlateHost | undefined;
+
+  private get slates(): SlateHost {
+    this._slates ??= new SlateHost({
+      ctx: this.ctx, env: this.env, workspace: this.name,
+      session: () => this.hostedWorkspace().bundle.session(),
+      registerPort: (pid, port, target) => this.hostedWorkspace().registerPort(pid, port, target),
+      unregisterPorts: (pid) => this.hostedWorkspace().unregisterPorts(pid),
+      providers: () => this.gadgetNamespaces(),
+      data: (source) => this.gadgetDataSource(source),
+      mcp: async (server, tool, args) => {
+        const { stub, caller } = await this.userHub();
+        return v.parse(JsonValueSchema, JSON.parse(await stub.userMcp_callTool(caller, server, tool, args)));
+      },
+    });
+    return this._slates;
+  }
+
+  async slateBindingCall(id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult> {
+    return this.slates.bindingCall(id, name, request);
   }
 
   @callable() async getToolDescriptions() {

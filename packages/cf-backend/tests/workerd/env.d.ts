@@ -18,7 +18,7 @@ import type { SendAdmissionProbeDO } from './send-admission-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
-import type { SlateProcessProbeDO } from './slate-process-probe';
+import type { SlateProcessProbeDO, SlateDepthProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { GadgetBinding } from '../../src/gadgets/bindings';
 declare global {
@@ -60,6 +60,7 @@ declare global {
       mainModule: {
         CodemodeEgress: typeof CodemodeEgress;
         GadgetBinding: typeof GadgetBinding;
+        SlateDepthProbe: typeof SlateDepthProbe;
       };
     }
   }
