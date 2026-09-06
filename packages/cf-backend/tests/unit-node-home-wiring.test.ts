@@ -767,6 +767,29 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
 
 
 describe('the in-isolate plane acts as the node on both surfaces', () => {
+  test('main and a node keep private temporary files after workspace reset', async () => {
+    const database = new Database(':memory:');
+    databases.push(database);
+    const sql = hostedSql(database);
+    const transactions = { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } };
+    const first = createWorkspace({ sql, transactions, generation: 1 });
+    const provision = agentHomeNodeProvisioner(first.privileged().then((host) => ({ ...host, sql })));
+    const identity = await provision(node('reset'));
+    if (identity.isolation !== 'private-home') throw new Error('node needs its own home');
+    const child = await first.asAgent(identity);
+    expect(await first.shell.exec('echo main > /tmp/note; echo shared > /home/user/shared')).toMatchObject({ exitCode: 0 });
+    expect(await child.shell.exec('echo node > /tmp/note')).toMatchObject({ exitCode: 0 });
+    expect((await first.shell.exec('echo $HOME $TMPDIR')).stdout.trim()).toBe('/home/user /tmp/main');
+    // A reset discards the instance and keeps its database.
+    const second = createWorkspace({ sql, transactions, generation: 2 });
+    const restored = await second.asAgent(identity);
+    expect((await second.shell.exec('cat /tmp/note')).stdout).toBe('main\n');
+    expect((await restored.shell.exec('cat /tmp/note')).stdout).toBe('node\n');
+    expect(await restored.vfs.readFile('/home/user/shared', { encoding: 'utf8' })).toBe('shared\n');
+    const root = (await second.privileged()).root;
+    expect(root.exists('tmp/main/note')).toBe(true);
+    await second.destroy();
+  });
   test('its own writes pass, a sibling is refused, and the ORIGIN keeps its own identity', async () => {
     const database = new Database(':memory:');
     databases.push(database);

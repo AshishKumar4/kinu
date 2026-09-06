@@ -312,11 +312,9 @@ export function provisionAgentHome(root: HomeRootVfs, agentName: string, identit
 /**
  * Make `/tmp` resolve to this agent's own tmp for this agent's uid.
  *
- * The directory itself is {@link provisionAgentHome}'s, because it is a line in
- * the layout table like the home is. This registers the rewrite and nothing
- * else, and it exists only in this isolate: `confinePrincipal` is a `SqliteVFS`
- * method with no RPC, so a remote session points `TMPDIR` at the same directory
- * and a command that hardcodes `/tmp` there lands in the shared one.
+ * The workspace owner provisions the directory and registers this mapping.
+ * Hosted facets ask that owner over RPC. Both file and shell operations use
+ * its principal registry. Workspace boot restores mappings after a reset.
  */
 export function confineAgentTmp(
   confiner: TmpConfiner,

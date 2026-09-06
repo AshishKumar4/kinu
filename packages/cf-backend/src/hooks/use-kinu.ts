@@ -1084,11 +1084,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     return () => agent.removeEventListener("open", onOpen);
   }, [agent, refreshDeployedBuild, sessionRecovery]);
 
-  // Typed RPC — the single boundary cast (unknown → T) lives here so call sites
-  // read rpc<T>("getFoo", []) cast-free. Memoized on `agent` so it's a stable
-  // identity (surface effects keyed on [rpc] don't refetch each render). Every
-  // outcome feeds the corpse detector: a timeout while the socket claims OPEN
-  // is evidence, any other outcome is proof of life.
+  // Keep the transport stable within one read generation. A reconnect or
+  // manual retry changes its identity so mounted resource readers also reload.
+  // Snapshot-only refresh left Files on a failed read until a manual refresh.
   const rpc = useMemo(() => {
     const call = bindRpc(agent);
     return async <T,>(method: string, args: unknown[] = []): Promise<T> => {
@@ -1101,7 +1099,7 @@ export function useKinu(target?: string | KinuActorAddress) {
         throw cause;
       }
     };
-  }, [agent, sessionRecovery]);
+  }, [agent, sessionRecovery, loadGeneration]);
 
   // Root sockets keep the existing application heartbeat. Subordinate sockets
   // need an acknowledged frame: without the root surface's live-data polls, an
