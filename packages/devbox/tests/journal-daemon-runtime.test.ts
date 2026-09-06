@@ -3,7 +3,9 @@ import { dirname, join, resolve } from 'node:path';
 
 import { afterAll, describe, expect, test } from 'bun:test';
 
-import { readJournalDelta } from '../src/capture/journal/client';
+import { captureFromJournalDelta, readJournalDelta } from '../src/capture/journal/client';
+import { buildMerklePack, openMerklePack } from '../src/candidates/merkle-pack';
+import { MemoryCandidateObjectSink, readStagedCandidateObjectForTest } from '../src/candidates/publication';
 import type { ExportedFence, MatrixReport, ScenarioReport } from './journal-daemon-runtime-types';
 
 const packageRoot = resolve(dirname(new URL(import.meta.url).pathname), '..');
@@ -131,7 +133,33 @@ async function auditExportedFence(fence: ExportedFence): Promise<string> {
   const range = (entry.ranges ?? [])[0];
   if (range === undefined) throw new Error('the exported delta stages no bytes for after-cut.txt');
   const bytes = await delta.stage.read(entry.path, range.offset, range.length);
-  return new TextDecoder().decode(bytes);
+  try {
+    const capture = captureFromJournalDelta(delta, {
+      captureId: 'runtime-hardlinks', epoch: '1', baseRevision: '0', stableStageHandle: fence.manifestPath,
+    });
+    const built = await buildMerklePack(capture, { sink: new MemoryCandidateObjectSink() });
+    const objects = new Map<string, Uint8Array>();
+    for (const object of built.staged) objects.set(object.ref.key, await readStagedCandidateObjectForTest(object));
+    const view = await openMerklePack(built.root, {
+      async readRange(intent) {
+        const object = objects.get(intent.exactKey);
+        if (object === undefined) throw new Error(`missing staged object ${intent.exactKey}`);
+        return object.slice(Number(intent.byteOffset), Number(intent.byteOffset) + Number(intent.byteLength));
+      },
+      async readRun(run) {
+        const object = objects.get(run.key);
+        if (object === undefined) throw new Error(`missing staged object ${run.key}`);
+        return object.slice(run.offset, run.offset + run.length);
+      },
+    }, { operationId: 'runtime-read', attemptId: 'read-1', boxId: 'runtime', epoch: '1', expiresAt: '9999999999999' });
+    const first = await view.stat('hard-target');
+    expect(first).toMatchObject({ kind: 'file', size: 6, mode: 0o644 });
+    expect(await view.stat('hard-link')).toEqual(first);
+    expect(new TextDecoder().decode(await view.readRange('hard-link', 0, 6))).toBe('shared');
+    return new TextDecoder().decode(bytes);
+  } finally {
+    delta.close();
+  }
 }
 
 /** The matrix's scenarios, in the order it runs them. */

@@ -218,15 +218,17 @@ export class LazyContainer {
   async #list(dir: string): Promise<void> {
     const restore = this.#restore;
     if (restore === null || this.#listed.has(dir)) return;
-    this.#listed.add(dir);
     for (const entry of await restore.list(dir)) {
-      if (this.tree.has(entry.path)) continue;
-      const linked = entry.kind === 'file' ? restore.linkedPath(entry.ino) : undefined;
-      if (linked !== undefined && linked !== entry.path && this.tree.has(linked)) {
-        this.tree.link(linked, entry.path);
-        continue;
+      if (!this.tree.has(entry.path)) {
+        const linked = entry.kind === 'file' ? restore.linkedPath(entry.ino) : undefined;
+        if (linked !== undefined && linked !== entry.path && this.tree.has(linked)) {
+          this.tree.link(linked, entry.path);
+        } else {
+          this.tree.plant([entry]);
+        }
       }
-      this.tree.plant([entry]);
+      if (entry.kind === 'file') await restore.bindInode(entry.path, this.tree.ino(entry.path));
     }
+    this.#listed.add(dir);
   }
 }

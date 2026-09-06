@@ -228,6 +228,21 @@ describe('a seal costs what changed, not what the tree holds', () => {
     expect(large.storeOps).toBe(small.storeOps);
   }, 120_000);
 
+  test('a lost boundary map reuses published chunks instead of adding and retiring their packs', async () => {
+    const fixture = openSidecar({ maxPackBytes: 64 * 1024 });
+    const seed = new Seeded(91);
+    fixture.daemon.plant([fileEntry('data.bin', seed.fill(new Uint8Array(512 * 1024)), 71, metadataOf(seed))]);
+    await publish(fixture, 'the packed base');
+    const existing = new Set(fixture.payload.ops.filter((op) => op.op === 'put').map((op) => op.key));
+    const before = fixture.payload.ops.length;
+    fixture.daemon.adopt(fixture.daemon.tree);
+    fixture.daemon.pwrite('data.bin', 400 * 1024, seed.fill(new Uint8Array(4096)));
+    await publish(fixture, 'the seal without boundary hints');
+    expect(fixture.core.status().work.seal.wholeFiles).toBe(1);
+    expect(fixture.payload.ops.slice(before).filter((op) => op.op === 'put' && existing.has(op.key))).toEqual([]);
+    expectSameTree(fixture.daemon.tree.snapshot(), await served(fixture), 'the republished head');
+  });
+
   test('a database page rewrite moves the dirty pages, not the database', async () => {
     const fixture = openSidecar();
     const seed = new Seeded(31);

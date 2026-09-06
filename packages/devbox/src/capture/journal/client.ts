@@ -257,18 +257,18 @@ export async function readJournalDelta(fence: JournalFence): Promise<JournalDelt
  * the parent; a row staged whole, and every row of a first fence, carries none
  * and its extents are the file.
  */
-function sealedRowContent(row: DeltaDirtyFile, partial: boolean): SealedContent {
+function sealedRowContent(row: DeltaDirtyFile, partial: boolean, sourceId: string): SealedContent {
   const extents = row.ranges.map((range) => ({ offset: range.offset, length: range.length, sha256: range.sha256 }));
   if (partial && !row.whole) {
     return {
       kind: 'sealed',
       size: row.size,
-      sourceId: row.path,
+      sourceId,
       extents,
       dirty: row.dirty.map((range) => ({ offset: range.offset, length: range.length })),
     };
   }
-  return { kind: 'sealed', size: row.size, sourceId: row.path, extents };
+  return { kind: 'sealed', size: row.size, sourceId, extents };
 }
 
 /**
@@ -324,6 +324,7 @@ export function captureFromJournalDelta(
   const manifest = delta.manifest;
   const partial = manifest.base !== null;
   const entries: NodeEntry[] = [];
+  const inodeSources = new Map<string, string>();
   for (const row of manifest.entries) {
     const metadata: PosixMetadata = {
       uid: row.uid,
@@ -342,8 +343,15 @@ export function captureFromJournalDelta(
       entries.push({ path: row.path, kind: 'dir', mode: row.mode, ino: Number(row.ino), metadata });
       continue;
     }
+    // The stage links every name of an inode to one sealed file. Give those
+    // rows one reader identity without changing their own extents or metadata.
+    let sourceId = inodeSources.get(row.ino);
+    if (sourceId === undefined) {
+      sourceId = row.path;
+      inodeSources.set(row.ino, sourceId);
+    }
     entries.push({
-      path: row.path, kind: 'file', mode: row.mode, ino: Number(row.ino), metadata, content: sealedRowContent(row, partial),
+      path: row.path, kind: 'file', mode: row.mode, ino: Number(row.ino), metadata, content: sealedRowContent(row, partial, sourceId),
     });
   }
   const capture: Capture = {

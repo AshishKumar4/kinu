@@ -11,7 +11,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { appendFile, chmod, mkdir, open, readdir, readFile, rename, rm, stat, truncate, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, link, mkdir, open, readdir, readFile, rename, rm, stat, truncate, unlink, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import * as v from 'valibot';
 import { join } from 'node:path';
@@ -754,6 +754,8 @@ async function posixAndFence(): Promise<void> {
       adopt(checks, forked, 'fork');
 
       await writeFile(join(space.mount, 'after-cut.txt'), 'after the cut');
+      await writeFile(join(space.mount, 'hard-target'), 'shared');
+      await link(join(space.mount, 'hard-target'), join(space.mount, 'hard-link'));
       /* Read HERE, and not after the next fence, because here is the only
        * moment the daemon guarantees these records exist. A metadata mutation
        * appends its INTENT before the effect and its RESULT before the reply,

@@ -474,14 +474,17 @@ async function chunkDirtyFile(input: ChunkFileInput): Promise<ChunkedFile> {
 
   const wholeFile = async (dead: readonly ExtentV2[] | null): Promise<ChunkedFile> => {
     const pass = await chunkWindow({ offset: 0, length: file.size }, null);
-    const extents = normalizeExtents(pass.extents);
+    const extents = normalizeExtents(dead === null ? pass.extents : reuseKnown(pass.extents, dead));
     if (extentsSpan(extents) !== file.size) {
       throw new MerklePackError(
         'malformed-node',
         `${file.path} chunked to ${extentsSpan(extents)} bytes and its stat says ${file.size}`,
       );
     }
-    if (dead !== null) input.countDead(dead);
+    if (dead !== null) {
+      const kept = new Set(extents.map((extent) => extent.digest));
+      input.countDead(dead.filter((extent) => !kept.has(extent.digest)));
+    }
     const pages = pagesFor(extents, null, []);
     return {
       path: file.path,

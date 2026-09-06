@@ -262,10 +262,8 @@ export class SidecarCore {
       mounts: 0,
       replayUnits: 0,
     };
-    // The daemon starts with an empty boundary map on a fresh instance, so its
-    // first fence over any file stages that file whole. The build counts that
-    // in `wholeFiles` and this hand-back teaches it the boundaries, so the
-    // second seal of the same file is incremental again.
+    // Seed the head now; each lazy file fault binds its published boundaries
+    // to the inode the replacement container actually created.
     await this.#ports.daemon.boundaries({
       cut: envelope.cut.cut,
       generation: envelope.generation,
@@ -282,7 +280,7 @@ export class SidecarCore {
     // declare because the container is what holds the bytes.
     this.#lazy = this.#lazyPorts === null
       ? null
-      : new LazyRestore(this.#view, this.#lazyPorts);
+      : this.restoreLazily(this.#lazyPorts);
     this.#attach = {
       kind: 'attached',
       rootEnvelopeId: control.head.pointer.rootEnvelopeId,
@@ -308,7 +306,25 @@ export class SidecarCore {
     const view = this.#view;
     if (view === null) throw new Error('a lazy restore needs an attached head; attach first');
     this.#lazyPorts = ports;
-    const restore = new LazyRestore(view, ports);
+    const restore = new LazyRestore(view, ports, async (path, ino) => {
+      const head = this.#head;
+      const current = this.#view;
+      if (head === null || current === null) throw new Error('a restored inode needs a published head');
+      const stat = await current.stat(path);
+      if (stat?.kind !== 'file') throw new Error(`restored inode ${path} is not a published file`);
+      const boundaries = await current.boundaries(path);
+      if (this.#head?.pointer.rootEnvelopeId !== head.pointer.rootEnvelopeId) {
+        throw new Error('the published head changed while binding a restored inode');
+      }
+      await this.#ports.daemon.boundaries({
+        cut: head.envelope.cut.cut,
+        generation: head.envelope.generation,
+        root: head.pointer.rootEnvelopeId,
+        maxChunkBytes: this.#chunkMax(),
+        files: [{ ino: String(ino), path, size: stat.size, boundaries }],
+        removed: [],
+      });
+    });
     this.#lazy = restore;
     return restore;
   }

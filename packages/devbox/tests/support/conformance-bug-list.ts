@@ -30,7 +30,8 @@ export interface KnownRed {
  * fence through `captureFromJournalDelta` as the deployed runner does, and
  * its 6.12, 6.14, 6.15 and 6.21 rows cleared; the modeled daemon began to
  * key its dirty set and boundary map by inode as the C daemon does, and the
- * `merkle-pack`/6.14 row below appeared.
+ * `merkle-pack`/6.14 row appeared. The restored-inode boundary handback
+ * cleared that row on 2026-09-06; the remaining rows still fail.
  */
 export const KNOWN_RED: readonly KnownRed[] = [
   {
@@ -68,12 +69,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     cell: '6.21',
     since: '2026-09-05',
     reason: "64 KiB backup bytesPut 2934023 at 10,000 files against 411000 at 1,000: the commit rewrites the tree manifest, so a fixed change puts bytes that grow with the tree",
-  },
-  {
-    arm: 'merkle-pack',
-    cell: '6.14',
-    since: '2026-09-05',
-    reason: "the 64 KiB in-place commit after the wake did not commit: 'A generation cannot retire a pack it adds'. The daemon's boundary map is empty after a container replacement and the v2 sidecar's attach hands it no file rows (bench/sidecar/core.ts, `files: []`), so the first write after a wake stages the 64 MiB file whole; the v2 build re-packs it into packs the parent already holds and the envelope names them as both added and retired. Until 2026-09-05 the modeled daemon kept a path-keyed map across the replacement and credited the windows",
   },
   {
     arm: 'merkle-pack',
