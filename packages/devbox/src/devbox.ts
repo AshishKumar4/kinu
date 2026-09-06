@@ -2371,22 +2371,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * before it asks. See {@link R2fsPorts.parkSession}.
    */
   async quiesce(): Promise<CheckpointOutcome> {
-    // NO CONTAINER, NOTHING TO COMMIT, AND NOTHING TO ASK. The work directory
-    // died with the instance, so a final checkpoint has nothing to read; what
-    // it would do instead is worse than nothing. Every container call travels
-    // through the SDK's connection, and that connection STARTS a container to
-    // answer it, so a checkpoint issued here ran its runner on a fresh
-    // instance with no mount and no daemon. MEASURED, run 20260906072721
-    // (2026-09-06, merkle-pack): after the fault cut killed the container,
-    // the arm's release ran this method; the checkpoint's first process
-    // question raised a fresh instance (`Default session initialized` five
-    // seconds after `Sandbox stopped`), its runner failed against it, the
-    // heartbeat then read that instance as a replacement and re-drove a full
-    // restoration into the teardown that followed, and the teardown's stop
-    // landed on the restore's mount command: `Sandbox operation
-    // commands.execute was interrupted while the runtime connection was
-    // closing`. The generation turns over so the box stops claiming a work
-    // directory it does not have; the next wake restores the published head.
+    // NO CONTAINER, NOTHING TO COMMIT, AND NOTHING TO ASK: a container call
+    // STARTS an instance to answer it, so a checkpoint here ran on a fresh
+    // instance with no mount (run 20260906072721, 2026-09-06; the ordering is
+    // in tests/container-gone.test.ts). The generation turns over instead.
     if (this.ctx.container?.running !== true) {
       this.#invalidateGeneration();
       return {
