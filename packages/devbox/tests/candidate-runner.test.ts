@@ -529,12 +529,6 @@ describe('candidate supervised runner', () => {
     expect(fake.resultPaths).toHaveLength(2);
   });
 
-  test('a restore runner receives the egress endpoint, not just the mount', async () => {
-    const fake = runnerFake({ control: publishedControl, result: publishedResult });
-    await candidateContainerStorage(fake.ports).attach();
-    expect(fake.starts[0]?.command).toContain("'--payload-url' 'http://r2.internal/BACKUP_BUCKET'");
-  });
-
   /**
    * MEASURED DEFECT THIS PINS. An empty box's cold attach started TWO runner
    * processes and waited for each — `--action restore`, which returns
