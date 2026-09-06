@@ -528,7 +528,7 @@ describe('workspace.gadgets / workspace.gadget', () => {
     const exec = buildExec(rt);
     expect(await exec.tools.gadget.execute('health', 'list')).toMatchObject({ ok: false, reason: 'unsupported' });
     expect(await exec.tools.gadget.execute('../x', 'list')).toMatchObject({ ok: false, reason: 'bad_input' });
-    expect(await exec.tools.gadget.execute('health', 'fetch')).toMatchObject({ ok: false, reason: 'bad_input' });
+    expect(await exec.tools.gadget.execute('health', '_private')).toMatchObject({ ok: false, reason: 'bad_input' });
   });
 
   test('a call reaches the host with the slug, the method and JSON arguments, and answers its value', async () => {
