@@ -173,15 +173,18 @@ if (import.meta.main) {
   assert.ok(result.sites.length > 0 && result.counts.composition > 0, 'pattern census is empty');
   const pending = result.candidates.filter(site => site.decision === null);
   for (const site of pending) process.stderr.write(`${site.file}:${site.line} ${site.owner}: ${site.kind}\n`);
-  const replacements = [{ file: 'packages/cli-backend/src/executor.ts', owner: 'addImplicitReturn',
-      classification: 'REPLACED', replacement: 'Acorn expression and statement ranges in packages/core/src/craft/source.ts',
+  const replacements = [{ file: 'packages/cli-backend/src/executor.ts', owner: 'createSandboxedExecutor',
+      classification: 'REPLACED', replacement: 'Package-owned @cloudflare/codemode/normalize through typed local runtime adapters',
       proof: 'bun test packages/cli-backend/tests/executor.test.ts packages/cli-backend/tests/execute-tools-factory.test.ts' },
     { file: 'scripts/jsonc.ts', owner: 'parseJsonc', classification: 'REPLACED',
       replacement: 'Bun.JSONC.parse followed by the existing Valibot schema',
       proof: 'bun test scripts/jsonc.test.ts scripts/release-config.test.ts scripts/analytics-datasets.test.ts' },
     { file: 'scripts/setup-worktree.sh', owner: 'SCOPES and package name', classification: 'REPLACED',
       replacement: 'JSON.parse reads the top-level manifest name instead of sed field extraction',
-      proof: 'The nested-name smoke fixture returned @wrong before the change and @right after it.' }];
+      proof: 'The nested-name smoke fixture returned @wrong before the change and @right after it.' },
+    { file: 'scripts/bench-devbox-strategies.ts', owner: 'parseOptions', classification: 'REPLACED',
+      replacement: 'node:util.parseArgs tokenizes declared options; benchmark domain validation remains local',
+      proof: 'bun test scripts/bench-devbox-decision.test.ts --test-name-pattern "standard option syntax|frozen scope|verify-only wins"' }];
   if (process.argv.includes('--write') && pending.length === 0) writeFileSync(new URL('./pattern-inventory.json', import.meta.url), `${JSON.stringify({
     measuredOn: '2026-09-06', ...result, sites: result.sites.map(located), candidates: result.candidates.map(located), replacements,
   }, null, 2)}\n`);

@@ -1032,8 +1032,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - Feedback capture completion respects screenshot opt-out and newer captures. A held-encoder browser probe on 2026-09-06 sent a 33,814 B screenshot before the fix and no screenshot after it.
 - The devbox driver can judge publication cuts with opt-in `--fault-cuts`. Local tests on 2026-09-06 proved CUT and NOT-CUT; unarmed storage operations stayed at 5 with zero added control RPCs.
 
-- Added a generated inventory of regex and parser sites, with separate classifications for retained and deferred candidates.
-- Fixed multiline executor return parsing with Acorn. JSONC parsing preserves string bytes and rejects malformed commas and comments. Workspace setup reads top-level manifest names with JSON.parse.
+- Added a generated inventory of regex and parser sites. Reviews match exact candidate source; retained and deferred decisions remain separate.
+- Local code-mode execution now uses `@cloudflare/codemode` normalization. Its adapters bind providers and execute the resulting callable once.
+- JSONC parsing preserves string bytes and rejects malformed commas and comments. Workspace setup reads top-level manifest names with `JSON.parse`.
+- Benchmark options use the platform parser. `--arms=merkle-pack` selects that arm; missing values and unknown flags refuse instead of choosing a different run.
 - Added `no-vacuous-type-predicate` for explicit guards whose entire body returns literal true. On 2026-09-06, all 26 prior anti-slop rules remained enabled beside the new rule.
 
 ## [0.2.0] - 2026-08-07

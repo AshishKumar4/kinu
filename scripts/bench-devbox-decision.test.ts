@@ -2805,9 +2805,9 @@ describe('arm selection and frozen historical context', () => {
     expect(() => parseOptions(['--arms', 'bounded-layers,bounded-layers'])).toThrow(
       '--arms repeats "bounded-layers"; each requested arm must appear exactly once',
     );
-    expect(() => parseOptions(['--control', '--plan'])).toThrow(
-      '--control requires <strategy>=<path>',
-    );
+    expect(() => parseOptions(['--control', '--plan'])).toThrow(expect.objectContaining({
+      code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+    }));
     expect(() => parseOptions(['--control', 'snapshot-chain'])).toThrow(
       '--control requires <strategy>=<path>; got "snapshot-chain"',
     );
@@ -2823,6 +2823,16 @@ describe('arm selection and frozen historical context', () => {
       '--control', 'snapshot-chain=bench-artifacts/one.json',
       '--control', 'snapshot-chain=bench-artifacts/two.json',
     ])).toThrow('--control must not repeat strategy "snapshot-chain"');
+  });
+
+  test('standard option syntax selects the requested arm and rejects malformed options', () => {
+    expect(parseOptions(['--arms=merkle-pack', '--verify-only']).arms).toEqual(['merkle-pack']);
+    expect(() => parseOptions(['--arms'])).toThrow(expect.objectContaining({
+      code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+    }));
+    expect(() => parseOptions(['--fault-cut'])).toThrow(expect.objectContaining({
+      code: 'ERR_PARSE_ARGS_UNKNOWN_OPTION',
+    }));
   });
 
   test('plans the named arms and reports strategy-qualified control context', () => {
