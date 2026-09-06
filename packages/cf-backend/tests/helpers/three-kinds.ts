@@ -26,10 +26,9 @@
  * then `beforeStep` produced, which Think uses verbatim (`finalMessages =
  * config.messages ?? messages`), so it is the request and not a rehearsal of one.
  *
- * That asymmetry is not a convenience. It IS the finding under measurement: the
- * actor kinds cannot be driven to a provider request outside workerd because their
- * loop belongs to Think, while a node's loop belongs to core. A fixture that hid the
- * asymmetry behind a shared stub would prove the three kinds agree about a stub.
+ * Request observations use the assembly hooks so the provider-specific options
+ * remain visible. Failure observations instead drive Think's actual runTurn with
+ * an injected model: the SDK's error serialization is part of that contract.
  *
  * ## Declared differences
  *
@@ -49,7 +48,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import type {
   ChatResponseResult, PrepareStepContext, StepConfig, ToolCallResultContext,
-  TurnConfig, TurnContext,
+  TurnConfig, TurnContext, Think,
 } from '@cloudflare/think';
 import * as v from 'valibot';
 import {
@@ -69,9 +68,9 @@ import {
   type NodeAgentDeps,
   type NodeAgentInput,
   type NodeRun,
-  type Usage,
+  type Usage, type ModelProvider,
 } from '@kinu.run/core';
-import { createRecordingLogger, renderCauseChain } from '@kinu.run/core/obs';
+import { createRecordingLogger } from '@kinu.run/core/obs';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 // Harness FIRST: its module body installs the SDK mocks, and the provider
@@ -681,7 +680,8 @@ export interface ModelSetResult {
  * types — so a Think release that changes a hook signature fails here rather than
  * being absorbed by a hand-written approximation of it.
  */
-export interface ActorTurnSurface {
+export interface ActorTurnSurface extends Pick<Think, 'onStart' | 'runTurn'> {
+  harnessModelProvider(): ModelProvider;
   beforeTurn(ctx: TurnContext): Promise<TurnConfig | void>;
   beforeStep(ctx: PrepareStepContext): StepConfig | void;
   afterToolCall(ctx: ToolCallResultContext): Promise<void>;
@@ -909,9 +909,7 @@ export interface SettledToolObservation {
 export interface TerminalRecord {
   readonly status: string;
   readonly errorMessage: string | null;
-  /** Whether the kind's terminal-record entry point can receive an `Error` at all.
-   *  A `string` boundary has already discarded the cause chain before our writer
-   *  runs, so the two answers are different findings. */
+  /** Whether this observation injects a native Error before serialization. */
   readonly acceptsError: boolean;
 }
 
@@ -971,17 +969,13 @@ function actorFixture(
     // getter, so reading it is the same act production performs.
     background: async () => hasJobRunner(agent) ? 'wired' : 'absent',
     terminalOnFailure: async (error) => {
-      await openActorTurn(agent);
-      // Think's own field. `ChatResponseResult.error` is declared `string`, so the
-      // best a caller could possibly hand this writer is the rendered chain — which
-      // is what is handed here, so the measurement is of OUR writer and not of a
-      // caller that under-supplies it.
-      await agent.onChatResponse({
-        status: 'error', error: renderCauseChain(error),
-        requestId: 'req-fail', continuation: false,
-        message: { id: 'assistant-fail', role: 'assistant', parts: [] },
-      });
-      return readRunEnd(db, false);
+      // Throw at the provider, not at onChatResponse: Think must carry the cause
+      // through stream serialization and invoke the actor's real terminal hook.
+      const model = new MockLanguageModelV3({ doStream: async () => { throw error; } });
+      agent.harnessModelProvider().createModel = () => model;
+      await agent.onStart();
+      await agent.runTurn({ input: 'do the thing' });
+      return readRunEnd(db, true);
     },
     terminalOnAbort: async () => {
       await openActorTurn(agent);
