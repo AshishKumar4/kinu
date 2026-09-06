@@ -2,9 +2,8 @@
 // behaviours it must match the CF codemode sandbox on: capture console.* (so it
 // never leaks to the CLI's stdout, which under `kinu exec --json` IS the
 // event stream) and return it as `logs`; and implicit-return a trailing bare
-// expression so the model gets its value instead of undefined. Code is
-// multi-line — one statement per line — as the model actually writes it, which
-// is what the shared addImplicitReturn is built for.
+// expression so the model gets its value.
+// The transform reads JavaScript structure, including multiline expressions.
 import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu.run/core';
