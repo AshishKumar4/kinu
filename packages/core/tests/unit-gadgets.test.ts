@@ -152,7 +152,7 @@ describe('gadgets on the file plane', () => {
   test('lists valid gadgets, names broken ones, and ignores plain directories', async () => {
     const vfs = memoryVfs({
       'gadgets/health/gadget.json': JSON.stringify(manifest()),
-      'gadgets/health/server.js': 'export class Gadget {}',
+      'gadgets/health/server.js': "import { RpcTarget } from './capnweb.js'; export class Gadget extends RpcTarget {}",
       'gadgets/health/client.js': 'document.body.textContent = "hi"',
       'gadgets/broken/gadget.json': '{"v":1,"title":"Releases"}',
       'gadgets/notes/README.md': 'not a gadget',
@@ -194,16 +194,16 @@ describe('gadgets on the file plane', () => {
     expect(await readGadgetClient(vfs, 'health')).toEqual({ ok: true, js: 'render()', css: 'body{}' });
   });
 
-  test('the server digest is over the bytes the isolate loads', async () => {
+  test('the server digest is over the bytes the resident process boots', async () => {
     const vfs = memoryVfs({
       'gadgets/health/gadget.json': JSON.stringify(manifest()),
-      'gadgets/health/server.js': 'export class Gadget { hello() { return 1 } }',
+      'gadgets/health/server.js': "import { RpcTarget } from './capnweb.js'; export class Gadget extends RpcTarget { hello() { return 1 } }",
     });
     const first = await readGadgetServer(vfs, 'health');
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     expect(first.digest).toBe(sha256Hex(first.js));
-    await vfs.writeFile('gadgets/health/server.js', 'export class Gadget { hello() { return 2 } }');
+    await vfs.writeFile('gadgets/health/server.js', "import { RpcTarget } from './capnweb.js'; export class Gadget extends RpcTarget { hello() { return 2 } }");
     const second = await readGadgetServer(vfs, 'health');
     expect(second.ok && second.digest !== first.digest).toBe(true);
   });
@@ -212,9 +212,9 @@ describe('gadgets on the file plane', () => {
 // ── the bridge's name rule ──────────────────────────────────────────────────
 
 describe('gadget method names the bridge forwards', () => {
-  test('forwards ordinary identifiers and refuses the runtime\'s own handlers', () => {
-    for (const name of ['list', 'addItem', 'get_state', 'v2']) expect(isGadgetMethodName(name)).toBe(true);
-    for (const name of ['fetch', 'alarm', 'constructor', 'webSocketMessage', '_private', '#secret', 'a.b', '', 'x'.repeat(65)]) {
+  test('forwards JSON methods and refuses the constructor and private names', () => {
+    for (const name of ['list', 'addItem', 'get_state', 'v2', 'fetch', 'alarm', 'connect', 'webSocketMessage', 'webSocketClose', 'webSocketError']) expect(isGadgetMethodName(name)).toBe(true);
+    for (const name of ['constructor', '_private', '#secret', 'a.b', '', 'x'.repeat(65)]) {
       expect(isGadgetMethodName(name)).toBe(false);
     }
   });

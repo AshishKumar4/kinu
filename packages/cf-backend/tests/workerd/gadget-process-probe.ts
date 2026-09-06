@@ -1,21 +1,21 @@
 /**
  * The gadget server boundary, executed for real in workerd.
  *
- * `bun test` cannot host this: the isolate a gadget server runs in is a
- * dynamic Worker with no outbound, its `Gadget` class is a facet of this
- * object, and each binding in its `env` is a loopback entrypoint that calls
- * back into this object over a stub. The loader, the facet storage, the
- * `globalOutbound: null` refusal and the RPC hop between the isolate and the
- * host are all platform. What the unit tier checks is the pure half (path
- * resolution, source names, the MCP review); this file checks that the whole
- * thing holds together under workerd.
+ * `bun test` cannot host this: the process a gadget server runs in is a
+ * resident process with no outbound, its `Gadget` a Cap'n Web `RpcTarget`
+ * built with the process `env`, and each binding in that `env` a loopback
+ * entrypoint that calls back into this object over a stub. The loader, the
+ * `globalOutbound: null` refusal and the HTTP-batch hop between the process
+ * and the host are all platform. What the unit tier checks is the pure half
+ * (path resolution, source names, the MCP review); this file checks that the
+ * whole thing holds together under workerd.
  *
  * WHAT THE PROBE DRIVES. The real file plane over this object's own SQLite,
  * composed the way the files-eio probe composes it (`NimbusWorkspace.create`
  * with no runtimes, the session credential, `nimbusSessionFiles` over a box
  * whose `files` are the credentialed vfs), and a real `GadgetHost` from
- * `src/gadgets/host.ts` over that plane, with `loader: env.LOADER` and
- * `facets: this.ctx.facets`. The host mints each binding from this test
+ * `src/gadgets/host.ts` over that plane, with `ctx: this.ctx` and the
+ * loader binding. The host mints each binding from this test
  * worker's own `exports`, which publishes the production binding classes
  * exactly as `src/server.ts` does. The `data` port answers one fixed value
  * for `listBackgroundJobs`, the `mcp` port offers one read-only tool and one
@@ -52,7 +52,7 @@ import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
  * again, which is excessively deep. The narrow view also says what a caller
  * may reach.
  */
-export interface GadgetFacetProbeRpc extends Rpc.DurableObjectBranded {
+export interface GadgetProcessProbeRpc extends Rpc.DurableObjectBranded {
   gadgetCall(slug: string, method: string, args: JsonValue[]): Promise<GadgetCallResult>;
   gadgetBindingCall(slug: string, name: string, request: GadgetBindingRequest): Promise<GadgetCallResult>;
   writeGadget(slug: string, files: Record<string, string>): Promise<{ written: number }>;
@@ -82,7 +82,7 @@ function absentAsNull<T>(read: () => T): T | null {
   }
 }
 
-export class GadgetFacetProbeDO extends DurableObject<Cloudflare.Env> {
+export class GadgetProcessProbeDO extends DurableObject<Cloudflare.Env> {
   private _composed: Promise<Composed> | undefined;
   private broadcasts: Array<{ type: typeof GADGETS_CHANGED_EVENT; slugs: string[] }> = [];
   private mcpCalls: string[] = [];
@@ -133,8 +133,8 @@ export class GadgetFacetProbeDO extends DurableObject<Cloudflare.Env> {
       const host = new GadgetHost({
         workspace: this.ctx.id.name ?? 'probe',
         vfs: () => plane,
-        loader: this.env.LOADER,
-        facets: this.ctx.facets,
+        ctx: this.ctx,
+        env: { LOADER: this.env.LOADER },
         broadcast: (event: { type: typeof GADGETS_CHANGED_EVENT; slugs: string[] }) => {
           this.broadcasts.push({ type: event.type, slugs: [...event.slugs] });
         },

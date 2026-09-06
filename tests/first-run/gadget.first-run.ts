@@ -58,15 +58,16 @@ const METHOD = 'ping';
 const ANSWER = 'pong';
 
 /**
- * The ask, in the words a person uses. It names the files, the method and
- * the answer, and nothing about the host: writing the code here would rebuild
- * the very fixture that missed the defect.
+ * The ask, in the words a person uses. It names the files, the server shape,
+ * the method and the answer, and nothing about the host: writing the code here
+ * would rebuild the very fixture that missed the defect.
  */
 const ASK = 'Add a gadget named "hello" under gadgets/hello/: a gadget.json with v 1 '
-  + 'titled "Hello", a server.js whose Gadget class has a method named ping that takes no '
-  + 'arguments and returns the string "pong", and a client.js that calls ping over the '
-  + 'gadget bridge and shows its answer. Reply with the word "pong" on its own line once '
-  + 'the gadget answers it.';
+  + 'titled "Hello", a server.js that imports RpcTarget from \'./capnweb.js\' and exports class '
+  + 'Gadget extends RpcTarget with constructor(env) { super(); this.env = env; } and a method '
+  + 'named ping that takes no arguments and returns the string "pong", and a client.js that '
+  + 'calls ping over the gadget bridge and shows its answer. Reply with the word "pong" on its '
+  + 'own line once the gadget answers it.';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
 const liveTest = test.skipIf(PLAN === null);

@@ -1,13 +1,13 @@
 /**
  * The gadget server boundary, executed under the runtime that enforces it.
  *
- * WHY THE WORKERD POOL. A gadget server runs as a facet of the owning object,
- * loaded through the dynamic-Worker loader with `globalOutbound: null`, and
+ * WHY THE WORKERD POOL. A gadget server runs as a resident process of the
+ * owning object, booted through the fabric with `globalOutbound: null`, and
  * every binding in its `env` is a loopback entrypoint that calls back into
- * the owner over a stub. The loader, the facet lifetime and storage, the
- * outbound refusal and the entrypoint hop are all platform: `bun test` has
- * none of them, so nothing there can say whether a server is actually
- * contained. The pool is the only tier that can.
+ * the owner over a stub. The loader, the process lifetime, the outbound
+ * refusal and the entrypoint hop are all platform: `bun test` has none of
+ * them, so nothing there can say whether a server is actually contained. The
+ * pool is the only tier that can.
  *
  * WHAT THE PROBE DRIVES. A real `GadgetHost` over the real file plane on the
  * probe's own SQLite, minting each binding from this test worker's own
@@ -22,14 +22,21 @@ import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { GadgetCallResult, JsonValue } from '@kinu.run/core';
 import {
-  PROBE_JOBS, PROBE_MCP_READ_TOOL, PROBE_MCP_WRITE_TOOL, type GadgetFacetProbeRpc,
-} from './gadget-facet-probe';
+  PROBE_JOBS, PROBE_MCP_READ_TOOL, PROBE_MCP_WRITE_TOOL, type GadgetProcessProbeRpc,
+} from './gadget-process-probe';
 
-const SERVER_JS = `import { DurableObject } from 'cloudflare:workers';
-export class Gadget extends DurableObject {
+const SERVER_JS = `import { RpcTarget } from './capnweb.js';
+export class Gadget extends RpcTarget {
+  constructor(env) { super(); this.env = env; }
   async echo(x) { return 'echo:' + x; }
+  async boom() { throw new Error('plain boom'); }
+  async tick() {
+    globalThis.__tick = (globalThis.__tick ?? 0) + 1;
+    return globalThis.__tick;
+  }
   async egress() { try { await fetch('https://example.com'); return 'reached'; } catch (e) { return 'blocked: ' + e.message; } }
-  async ownStorage() { this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS t(x)'); return 'own'; }
+  async ownStorage() { await this.env.FILES.write('state.txt', 'own'); return this.env.FILES.read('state.txt'); }
+  async storageAuthority() { return typeof this.ctx; }
   async readFile(p) { return await this.env.FILES.read(p); }
   async writeFile(p, t) { return await this.env.FILES.write(p, t); }
   async data(s) { return await this.env.WORKSPACE.read(s); }
@@ -65,16 +72,16 @@ function refusalOf(result: GadgetCallResult): Extract<GadgetCallResult, { ok: fa
 describe('the gadget server boundary under workerd', () => {
   // The binding is bare (`./env.d.ts`), so the stub is re-read as the probe's
   // narrow RPC view here rather than called through its mapped stub type.
-  const open = (name: string): GadgetFacetProbeRpc => {
-    const stub = env.GADGET_FACET_PROBE.get(env.GADGET_FACET_PROBE.idFromName(name));
-    // SAFETY: the binding the test worker guarantees serves GadgetFacetProbeDO
+  const open = (name: string): GadgetProcessProbeRpc => {
+    const stub = env.GADGET_PROCESS_PROBE.get(env.GADGET_PROCESS_PROBE.idFromName(name));
+    // SAFETY: the binding the test worker guarantees serves GadgetProcessProbeDO
     // (vitest.config.ts names its class), whose six methods match this view exactly.
     // The stub parks in `unknown` because calling through its mapped stub type makes
     // type instantiation excessively deep (TS2589); the methods it answers are
     // verified against the probe class, not parsed here.
     const untyped = stub as unknown;
     // SAFETY: the same stub the binding guarantees, re-read here as the narrow view.
-    return untyped as GadgetFacetProbeRpc;
+    return untyped as GadgetProcessProbeRpc;
   };
 
   async function seed(name: string, serverJs: string = SERVER_JS) {
@@ -87,13 +94,26 @@ describe('the gadget server boundary under workerd', () => {
     return subject;
   }
 
-  it('answers a method through the facet', async () => {
-    const subject = await seed('gadget-facet-echo');
+  it('answers a method through the resident process', async () => {
+    const subject = await seed('gadget-process-echo');
     expect(valueOf(await subject.gadgetCall('probe', 'echo', ['ping']))).toBe('echo:ping');
   });
 
+  it('answers a plain server throw as io', async () => {
+    const subject = await seed('gadget-process-boom');
+    const refusal = refusalOf(await subject.gadgetCall('probe', 'boom', []));
+    expect(refusal.error).toContain('plain boom');
+  });
+
+  it('runs each call against the server exactly once', async () => {
+    const subject = await seed('gadget-process-tick');
+    expect(valueOf(await subject.gadgetCall('probe', 'tick', []))).toBe(1);
+    expect(valueOf(await subject.gadgetCall('probe', 'tick', []))).toBe(2);
+    expect(valueOf(await subject.gadgetCall('probe', 'tick', []))).toBe(3);
+  });
+
   it('blocks egress while the files binding reads inside its root', async () => {
-    const subject = await seed('gadget-facet-egress');
+    const subject = await seed('gadget-process-egress');
     // The discriminating pair agent-core SPEC C13-CLOUDFLARE-DYNAMIC-NO-EGRESS
     // asks for: no network, and the declared bindings still answering.
     expect(String(valueOf(await subject.gadgetCall('probe', 'egress', [])))).toMatch(/^blocked: /);
@@ -105,28 +125,28 @@ describe('the gadget server boundary under workerd', () => {
     expect(valueOf(await subject.gadgetCall('probe', 'readFile', ['from-gadget.txt']))).toBe('written by gadget');
   });
   it('denies a files read above the binding root', async () => {
-    const subject = await seed('gadget-facet-files-deny');
+    const subject = await seed('gadget-process-files-deny');
     // The denial crosses one more hop on the way out: the binding answers
-    // `denied`, the isolate throws it, and the outer call classifies a thrown
+    // `denied`, the process throws it, and the outer call classifies a thrown
     // call as `io` — so the class is asserted on the message here and exactly
     // on the hop below.
     const refusal = refusalOf(await subject.gadgetCall('probe', 'readFile', ['../../../SOUL.md']));
     expect(refusal.error).toContain('denied');
   });
   it('answers a listed read model and denies an unlisted one', async () => {
-    const subject = await seed('gadget-facet-data');
+    const subject = await seed('gadget-process-data');
     expect(valueOf(await subject.gadgetCall('probe', 'data', ['listBackgroundJobs']))).toEqual(PROBE_JOBS);
     const refusal = refusalOf(await subject.gadgetCall('probe', 'data', ['listPendingActions']));
     expect(refusal.error).toContain('denied');
   });
 
-  it('hands the isolate only its declared bindings', async () => {
-    const subject = await seed('gadget-facet-ambient');
+  it('hands the process only its declared bindings', async () => {
+    const subject = await seed('gadget-process-ambient');
     expect(valueOf(await subject.gadgetCall('probe', 'ambient', []))).toEqual(['FILES', 'GITHUB', 'WORKSPACE']);
   });
 
   it('runs a read-only MCP tool and refuses a side effect nobody can approve', async () => {
-    const subject = await seed('gadget-facet-mcp');
+    const subject = await seed('gadget-process-mcp');
     expect(valueOf(await subject.gadgetCall('probe', 'mcp', [PROBE_MCP_READ_TOOL]))).toEqual({
       called: PROBE_MCP_READ_TOOL,
     });
@@ -139,7 +159,7 @@ describe('the gadget server boundary under workerd', () => {
   it('answers denied on the binding hop itself, with the exact class', async () => {
     // The same three refusals as the entrypoints reach them: no isolate in
     // between, so the deciding hop's own class is what the test reads.
-    const subject = await seed('gadget-facet-hop');
+    const subject = await seed('gadget-process-hop');
     const files = await subject.gadgetBindingCall('probe', 'FILES', {
       kind: 'files', op: 'read', path: '../../../SOUL.md',
     });
@@ -155,26 +175,48 @@ describe('the gadget server boundary under workerd', () => {
     expect(mcpRefusal.reason).toBe('denied');
     expect(mcpRefusal.error).toContain('NOT RUN');
   });
-  it('keeps facet storage of its own', async () => {
-    const subject = await seed('gadget-facet-storage');
+  it('keeps lasting state in the files binding, with no ctx of its own', async () => {
+    const subject = await seed('gadget-process-storage');
     expect(valueOf(await subject.gadgetCall('probe', 'ownStorage', []))).toBe('own');
+    expect(valueOf(await subject.gadgetCall('probe', 'storageAuthority', []))).toBe('undefined');
   });
 
-  it('refuses reserved method names before any facet is touched', async () => {
-    const subject = await seed('gadget-facet-names');
-    expect(refusalOf(await subject.gadgetCall('probe', 'fetch', [])).reason).toBe('bad_input');
+  it('refuses the constructor and private names before any process boots', async () => {
+    const subject = await seed('gadget-process-names');
+    expect(refusalOf(await subject.gadgetCall('probe', 'constructor', [])).reason).toBe('bad_input');
     expect(refusalOf(await subject.gadgetCall('probe', '_private', [])).reason).toBe('bad_input');
   });
 
-  it('restarts the facet on the rewritten server', async () => {
-    const subject = await seed('gadget-facet-rewrite');
+  it('forwards a formerly reserved name to the server', async () => {
+    // The server is a Cap'n Web target, not a Durable Object: `fetch` is an
+    // ordinary method name now. The probe server defines no such method, so
+    // the call fails past the bridge as `io`.
+    const subject = await seed('gadget-process-fetch');
+    expect(refusalOf(await subject.gadgetCall('probe', 'fetch', [])).reason).toBe('io');
+  });
+
+  it('boots the new server after a rewrite', async () => {
+    const subject = await seed('gadget-process-rewrite');
     expect(valueOf(await subject.gadgetCall('probe', 'echo', ['ping']))).toBe('echo:ping');
     await subject.writeGadget('probe', { 'server.js': SERVER_V2 });
     expect(valueOf(await subject.gadgetCall('probe', 'echo', ['ping']))).toBe('v2:ping');
   });
 
+  it('refuses a server written against the bare specifier', async () => {
+    // The docs name `./capnweb.js` because the boot map carries that key and
+    // the loader resolves nothing else: a server written the old way never
+    // boots, and the call answers `io` naming the missing module. If the
+    // platform ever resolves bare specifiers, this test goes red to say the
+    // docs may relax.
+    const bare = SERVER_JS.replace("from './capnweb.js'", "from 'capnweb'");
+    const subject = await seed('gadget-process-spelling', bare);
+    const refusal = refusalOf(await subject.gadgetCall('probe', 'echo', ['ping']));
+    expect(refusal.reason).toBe('io');
+    expect(refusal.error).toContain('capnweb');
+  });
+
   it('broadcasts the slug when files under gadgets/ change', async () => {
-    const subject = await seed('gadget-facet-changed');
+    const subject = await seed('gadget-process-changed');
     expect(valueOf(await subject.gadgetCall('probe', 'echo', ['ping']))).toBe('echo:ping');
     await subject.filesChanged(['home/user/gadgets/probe/server.js']);
     expect(await subject.readBroadcasts()).toEqual([{ type: 'gadgets_changed', slugs: ['probe'] }]);

@@ -119,14 +119,14 @@ export interface InlineExecutorDeps {
    */
   toolchain?: readonly ExecutorCapability[];
   /**
-   * Call a method on a gadget's server — the facet the host runs `server.js`
-   * in. Supplied by a backend that hosts gadget servers (the Cloudflare
-   * workspace object); absent on one that cannot, where `workspace.gadget`
-   * answers `unsupported` and `workspace.gadgets()` still lists the files.
+   * Call a method on a gadget's server — the resident process the host boots
+   * `server.js` in. Supplied by a backend that hosts gadget servers (the
+   * Cloudflare workspace object); absent on one that cannot, where
+   * `workspace.gadget` answers `unsupported` and `workspace.gadgets()` still
+   * lists the files.
    */
   gadgetCall?: (slug: string, method: string, args: JsonValue[]) => Promise<GadgetCallResult>;
 }
-
 /**
  * Every VFS error out of `workspace.*` carries the correction the model needs
  * (vfsAddressingHint — shared with the `file` tool, which addresses the same
@@ -425,8 +425,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     // writes with the file plane, and the host reacts to the write.
     gadgets: {
       description:
-        'List the gadgets under gadgets/<slug>/ — agent-written apps with a server.js the host runs ' +
-        'in an isolated facet and a client.js it renders as a workspace tab. Broken manifests are ' +
+        'List the gadgets under gadgets/<slug>/ — agent-written apps with a server.js the host boots ' +
+        'in a resident process and a client.js it renders as a workspace tab. Broken manifests are ' +
         'reported beside the valid ones.',
       execute: async (): Promise<JsonValue> => {
         const listing = await listGadgets(vfs);
@@ -457,7 +457,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         }
         if (!deps.gadgetCall) {
           return { ok: false, ...refusalOf(new KinuError('unsupported',
-            'This workspace cannot run gadget servers; the hosted workspace runs them in a facet.')) };
+            'This workspace cannot run gadget servers; the hosted workspace runs them in a resident process.')) };
         }
         const rest = v.safeParse(v.array(JsonValueSchema), args.slice(2));
         if (!rest.success) {
@@ -528,8 +528,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
    *                Binding = { kind: 'files', root?: string }        // a workspace directory, default gadgets/<slug>/data
    *                        | { kind: 'workspace' }                   // the read models: ${GADGET_DATA_SOURCES.join(', ')}
    *                        | { kind: 'mcp', server: string, tools?: string[] }  // an owner-configured MCP connection; side effects need the owner's approval
-   *   server.js    \`export class Gadget extends DurableObject { async list() { ... } }\` (import { DurableObject } from 'cloudflare:workers').
-   *                Runs with NO network; \`this.ctx.storage.sql\` is its own SQLite; \`this.env.<NAME>\` is exactly the manifest's bindings:
+   *   server.js    \`import { RpcTarget } from './capnweb.js'; export class Gadget extends RpcTarget { constructor(env) { super(); this.env = env; } async list() { ... } }\`.
+   *                Runs with NO network and NO ctx or SQLite; keep lasting state in files: \`this.env.<NAME>\` is exactly the manifest's bindings:
    *                files: read(path)/write(path, text)/list(dir)/remove(path) · workspace: read(source) · mcp: tools()/call(tool, args)
    *   client.js    an ES module in a sandboxed iframe with no network; \`gadget\` is in scope as a stub of the server: \`await gadget.list()\`
    *   client.css   optional stylesheet, inlined

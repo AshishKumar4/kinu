@@ -4437,11 +4437,10 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected deferralChannel(): DeferredApprovalChannel | undefined { return undefined; }
 
-  /**
-   * A call into a gadget's server. The facet lives on the object that owns
-   * the workspace, so a facet actor — a subordinate, a head — reaches it over
-   * that object's stub; the orchestrator overrides this with its own host.
-   */
+  /** A call into a gadget's server. The resident process lives on the object
+   *  that owns the workspace, so a facet actor — a subordinate, a head —
+   *  reaches it over that object's stub; the orchestrator overrides this with
+   *  its own host. */
   async gadgetCall(slug: string, method: string, args: JsonValue[]): Promise<GadgetCallResult> {
     return gadgetOwner(this.env, this.workspaceName()).gadgetCall(slug, method, args);
   }

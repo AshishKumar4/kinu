@@ -1,6 +1,6 @@
 /**
- * Gadgets — agent-written apps: a server the host runs in a dynamic-worker
- * facet with no network and only the bindings its manifest declares, and a
+ * Gadgets — agent-written apps: a server the resident process hosts with only
+ * the bindings its manifest declares and no `ctx` or SQLite, and a
  * client the host runs in a sandboxed iframe with no network and one
  * MessagePort to its server. See docs/LIVE-UI.md.
  */

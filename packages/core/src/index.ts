@@ -245,8 +245,8 @@ export type * from './types/mcts';
 export type * from './types/craft';
 export type * from './types/evaluation';
 
-// Gadgets — agent-written apps: a server the host runs as a facet with only
-// its declared bindings, a client in a sandboxed iframe. See docs/LIVE-UI.md.
+// Gadgets — agent-written apps: a server the resident process hosts with only
+// its declared bindings and no ctx or SQLite, a client in a sandboxed iframe. See docs/LIVE-UI.md.
 export {
   GADGET_DIR, GADGET_MANIFEST_FILE, GADGET_SERVER_FILE, GADGET_CLIENT_FILE, GADGET_CLIENT_STYLE_FILE,
   GADGET_SERVER_CLASS, GADGET_LIMITS, GADGET_DATA_SOURCES, GADGETS_CHANGED_EVENT,

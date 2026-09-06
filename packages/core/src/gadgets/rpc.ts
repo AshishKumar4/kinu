@@ -2,33 +2,27 @@
  * The call contract between a gadget's client and its server, as the host
  * carries it: the iframe names a method and JSON arguments over its
  * MessagePort, the browser forwards them over the workspace RPC as
- * `gadgetCall(slug, method, args)`, and the owning object invokes that method
- * on the facet. One name rule and one result shape, shared by every hop.
+ * `gadgetCall(slug, method, args)`, and the owning object carries them to the
+ * resident process over Cap'n Web HTTP batch. One name rule and one result
+ * shape, shared by every hop.
  */
 
-import * as v from 'valibot';
 import type { JsonValue } from '../utils/json';
 import type { Refusal } from '../obs/index';
 import type { GadgetRecord } from './files';
 import { gadgetBindings } from './manifest';
 
-/**
- * Method names the runtime reserves on a Durable Object class. Calling one
- * through the bridge would reach the platform's handler, not the gadget's
- * API: `fetch` is the HTTP entry, `alarm` the timer, the `webSocket*` trio
- * the hibernation hooks, and `constructor` is not a method at all.
- */
-const GadgetHostMethodSchema = v.picklist([
-  'constructor', 'fetch', 'alarm', 'connect', 'webSocketMessage', 'webSocketClose', 'webSocketError',
-]);
-
 const METHOD_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
 
-/** An identifier the bridge will forward. Names starting with `_` are the
- *  gadget's own private convention and stay unreachable, the same line
- *  Cap'n Web draws for `#`-prefixed members. */
+/**
+ * An identifier the bridge forwards. The server is a Cap'n Web `RpcTarget`:
+ * prototype methods answer, instance properties do not, `#`-prefixed and
+ * `Object.prototype` members never do. `constructor` is not a method, and
+ * names starting with `_` stay host-blocked as the gadget's own private
+ * convention.
+ */
 export function isGadgetMethodName(name: string): boolean {
-  return METHOD_RE.test(name) && !v.is(GadgetHostMethodSchema, name);
+  return METHOD_RE.test(name) && name !== 'constructor' && !name.startsWith('_');
 }
 
 /** What a forwarded call answers: the method's JSON value, or a refusal with

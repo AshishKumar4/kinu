@@ -8,8 +8,8 @@
  * "it was valid when we looked" is not a property a later read may assume.
  *
  * Reads only. Nothing in core writes a gadget: the agent does, and the host
- * reacts to the write (`vfs.events` in the owning object) by restarting the
- * facet and telling the UI.
+ * reacts to the write (`vfs.events` in the owning object) by releasing the
+ * resident process and telling the UI. The next call boots a new server.
  */
 
 import type { VFS } from '../types/primitives';
@@ -144,8 +144,8 @@ export async function readGadgetClient(vfs: VFS, slug: string): Promise<GadgetRe
   return { ok: true, js, css };
 }
 
-/** The server half with a digest of exactly the bytes the isolate will
- *  load — the identity a warm isolate is reused under. */
+/** The server half with a digest of exactly the bytes the resident process
+ *  boots — the identity a write changes. */
 export async function readGadgetServer(vfs: VFS, slug: string): Promise<GadgetReadResult<{ js: string; digest: string }>> {
   const gadget = await readGadget(vfs, slug);
   if (!gadget.ok) return gadget;
@@ -158,8 +158,8 @@ export async function readGadgetServer(vfs: VFS, slug: string): Promise<GadgetRe
     return { ok: false, ...refusalOf(new KinuError('bad_input',
       `${gadgetPath(slug, GADGET_SERVER_FILE)} is ${js.length} characters; the limit is ${GADGET_LIMITS.serverChars}.`)) };
   }
-  // `sha256Hex` is the repository's one digest: the bytes the isolate loads,
-  // so two gadgets with the same source share a digest and one edited source
-  // never does.
+  // `sha256Hex` is the repository's one digest: the bytes the resident process
+  // boots, so two gadgets with the same source share a digest and one edited
+  // source never does.
   return { ok: true, js, digest: sha256Hex(js) };
 }

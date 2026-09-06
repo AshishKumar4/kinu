@@ -50,7 +50,7 @@ declare global {
        *  calling through a stub mapped over the probe's JSON-recursive methods
        *  makes type instantiation excessively deep (TS2589), so `open()` in the
        *  test re-reads the stub as the probe's narrow RPC view instead. */
-      GADGET_FACET_PROBE: DurableObjectNamespace;
+      GADGET_PROCESS_PROBE: DurableObjectNamespace;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }

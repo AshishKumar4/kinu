@@ -1,9 +1,9 @@
 /**
  * What each binding kind lets a gadget server do — the pure half.
  *
- * The host mints one loopback stub per manifest entry into the isolate's
- * `env`, and every call on a stub comes back to the owning object, which
- * asks THIS module what the call may reach before it touches anything:
+ * The host places one loopback stub per manifest entry into the resident
+ * process `env`, and every call on a stub comes back to the owning object,
+ * which asks THIS module what the call may reach before it touches anything:
  *
  *   files      a path, resolved under the binding's root and refused if it
  *              would leave it (`resolveGadgetFilePath`)

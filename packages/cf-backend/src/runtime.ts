@@ -312,7 +312,7 @@ export interface CFRuntimeHooks {
    */
   deferrals?: () => DeferredApprovalChannel | undefined;
   /** `workspace.gadget(slug, method, ...args)`: a call into a gadget's server,
-   *  answered by the workspace object that hosts the facet. */
+   *  answered by the workspace object that boots its resident process. */
   gadgetCall?: (slug: string, method: string, args: JsonValue[]) => Promise<GadgetCallResult>;
   /** Attribute writes made through this actor's canonical workspace file
    * plane. Used by heads to report only their own direct file mutations while

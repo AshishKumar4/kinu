@@ -3,18 +3,24 @@
  * code runs.
  *
  * A gadget is a directory under `gadgets/` in the workspace: `gadget.json`
- * (this manifest), `server.js` (a Durable Object class the host runs in a
- * dynamic-worker facet with no network) and `client.js` (a module the host
+ * (this manifest), `server.js` (a Cap'n Web `RpcTarget` the resident process
+ * hosts with `env` and nothing else) and `client.js` (a module the host
  * runs in a sandboxed iframe with no network). The manifest is the half a
  * host, a reviewer or a test can read without executing anything: the title
  * the tab wears and the bindings the server may reach. That split is the
  * FacetManifest / runtime-class split of agent-core SPEC §4.1, and it is what
  * makes a gadget's reach inspectable as data.
  *
+ * The server shape is fixed: `server.js` imports `RpcTarget` from `./capnweb.js`
+ * and exports `class Gadget extends RpcTarget` with
+ * `constructor(env) { super(); this.env = env; }`. Each prototype method is a
+ * JSON RPC method. User code receives no `ctx` and no SQLite. State that must
+ * last lives in the `files` binding, by default `gadgets/<slug>/data`.
+ *
  * Bindings are the whole of what a server can reach. Each entry is a
  * capability the workspace introduces under a name the code addresses as
- * `env.<NAME>`; the host mints exactly these into the isolate and nothing
- * else (SPEC §4.7, `C13-AUTH-ISOLATE-NAMESPACE-CLOSED`). The kinds are closed:
+ * `env.<NAME>`; the host places exactly these into the resident process env
+ * and nothing else (SPEC §4.7, `C13-AUTH-ISOLATE-NAMESPACE-CLOSED`). The kinds are closed:
  *
  *   files      a directory of the workspace file plane, rooted at `root`
  *   workspace  the closed list of read models in `sources.ts`
@@ -37,12 +43,12 @@ export const GADGET_SERVER_FILE = 'server.js';
 export const GADGET_CLIENT_FILE = 'client.js';
 export const GADGET_CLIENT_STYLE_FILE = 'client.css';
 
-/** The class `server.js` exports and the host instantiates as the facet. */
+/** The class `server.js` exports and the resident process boots with `env`. */
 export const GADGET_SERVER_CLASS = 'Gadget';
 
 /** Bounds, in UTF-16 code units as `String.length` counts them. Each is a
- *  denial-of-service answer: the host reads these files into an isolate and a
- *  document, and a manifest names what it mints. */
+ *  denial-of-service answer: the host reads these files into a resident
+ *  process and a document, and a manifest names what it mints. */
 export const GADGET_LIMITS = {
   slugChars: 40,
   titleChars: 60,
@@ -55,8 +61,8 @@ export const GADGET_LIMITS = {
 } as const;
 
 /** The directory name is the slug: lowercase, digits and hyphens, starting
- *  with a letter or digit. Fixed here because the slug travels into a facet
- *  name, a loader id and a surface kind, none of which may carry a path. */
+ *  with a letter or digit. Fixed here because the slug travels into a resident
+ *  process name and a surface kind, neither of which may carry a path. */
 const SLUG_RE = new RegExp(`^[a-z0-9][a-z0-9-]{0,${GADGET_LIMITS.slugChars - 1}}$`);
 
 export function isGadgetSlug(value: string): boolean {
@@ -166,8 +172,8 @@ export function gadgetBindings(manifest: GadgetManifest): ReadonlyArray<readonly
 }
 
 /** Where a `files` binding is rooted: its own `root`, or the gadget's data
- *  directory. Resolved in one place so the isolate's props and the host's
- *  path check cannot disagree. */
+ *  directory. Resolved in one place so the resident process props and the
+ *  host's path check cannot disagree. */
 export function gadgetFilesRoot(slug: string, binding: GadgetFilesBinding): string {
   return binding.root ?? `${GADGET_DIR}/${slug}/data`;
 }

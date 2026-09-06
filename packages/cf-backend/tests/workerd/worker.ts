@@ -42,10 +42,10 @@ export { FilesEioProbeDO } from './files-eio-probe';
 // library workspace under the runtime whose CSP blocks its `node` shim and
 // whose edge answers loopback `fetch` with a 1003 page.
 export { PreviewPortProbeDO } from './preview-port-probe';
-// The gadget-facet probe — the same charter exception: the real `GadgetHost`
-// over the real file plane, under the runtime whose loader, facet storage and
-// outbound refusal are the boundary under test.
-export { GadgetFacetProbeDO } from './gadget-facet-probe';
+// The gadget-process probe — the same charter exception: the real `GadgetHost`
+// over the real file plane, under the runtime whose loader, process lifetime
+// and outbound refusal are the boundary under test.
+export { GadgetProcessProbeDO } from './gadget-process-probe';
 // The production sandbox egress entrypoint, exported here exactly as
 // `src/server.ts` exports it, so `codemode-sandbox.test.ts` can prove the
 // `exports` loopback resolves it under the compatibility date we deploy.
