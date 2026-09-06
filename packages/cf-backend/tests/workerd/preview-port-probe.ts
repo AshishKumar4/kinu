@@ -1,26 +1,6 @@
-/**
- * Port-preview probe: the staged workspace defects, executed for real in workerd.
- *
- * Two observations from the acceptance lane on staging b04c01d31, both measured
- * here against the REAL library workspace over this object's own SQLite:
- *
- *   1. `node -e` and `node <file>` answer "Code generation from strings
- *      disallowed for this context" — the `node` command shim compiles its
- *      source with `new Function`, which workerd forbids. `bun test` runs the
- *      same shim happily, which is why the suite stayed green.
- *
- *   2. `curl http://127.0.0.1:<port>/` answers a Cloudflare `error code: 1003`
- *      page. The library registry loads `curl` with no kernel, so the virtual
- *      port check is skipped and the loopback request falls through to the
- *      platform `fetch`, which reaches the edge instead of the virtual server.
- *
- * `NimbusWorkspace.create` directly, not the Kinu bundle boot: same reason as
- * the files-eio probe — the bundle's runtime toolkit imports a CJS graph this
- * pool cannot shim, and the read under test never reaches it.
- */
 import { DurableObject } from 'cloudflare:workers';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import { wireWorkspaceLoopback } from '@kinu.run/core';
+import { wireWorkspaceLoopback } from '../../../core/src/vfs/workspace-runtimes';
 
 export interface ShellProbeReport {
   readonly exitCode: number;

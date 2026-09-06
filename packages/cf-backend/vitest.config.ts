@@ -41,8 +41,9 @@
  * names both projects. Neither tsconfig may carry a comment: tsc accepts JSONC
  * there, but `scripts/capability-parity.ts` reads tsconfig with `JSON.parse`.
  */
+import { fileURLToPath } from 'node:url';
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
-import { transform } from 'esbuild';
+import { buildSync, transform } from 'esbuild';
 import { defineConfig, type Plugin } from 'vitest/config';
 
 /**
@@ -92,14 +93,22 @@ function standardDecorators(): Plugin {
   };
 }
 
+const workerCompatibility = { compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'] };
+
+const hostedPreviewProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/preview-port-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/preview-port-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 export default defineConfig({
   plugins: [
     standardDecorators(),
     cloudflareTest({
       main: './tests/workerd/worker.ts',
       miniflare: {
-        compatibilityDate: '2025-12-01',
-        compatibilityFlags: ['nodejs_compat'],
+        ...workerCompatibility,
         // `new_sqlite_classes` in wrangler.jsonc:100-115 is what production
         // registers these under; miniflare spells the same thing `useSQLite`.
         // Without it `ctx.storage.sql` throws and the init-gate read would
@@ -108,6 +117,16 @@ export default defineConfig({
         // (`wrangler.jsonc` `worker_loaders`), so the sandbox test below runs
         // the real @cloudflare/codemode executor over the real module graph.
         workerLoaders: { LOADER: {} },
+        modulesRules: [{ type: 'CompiledWasm', include: ['**/*.wasm'] }],
+        // The privileged Vitest runner permits eval and would mask the hosted Node refusal.
+        workers: [{
+          name: 'hosted-preview-probe', ...workerCompatibility,
+          modules: hostedPreviewProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          durableObjects: { PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true } },
+        }],
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
           NEIGHBOUR: { className: 'NeighbourDO', useSQLite: true },
@@ -128,7 +147,8 @@ export default defineConfig({
           STREAM_LIFECYCLE: { className: 'StreamLifecycleDO', useSQLite: true },
           SEND_ADMISSION_PROBE: { className: 'SendAdmissionProbeDO', useSQLite: true },
           FILES_EIO_PROBE: { className: 'FilesEioProbeDO', useSQLite: true },
-          PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true },
+          PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', scriptName: 'hosted-preview-probe', useSQLite: true },
+          SLATE_PROCESS_PROBE: { className: 'SlateProcessProbeDO', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
           GADGET_PROCESS_PROBE: { className: 'GadgetProcessProbeDO', useSQLite: true },
           OrchestratorAgent: { className: 'GadgetProcessProbeDO', useSQLite: true },

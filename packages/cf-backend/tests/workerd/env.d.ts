@@ -18,6 +18,7 @@ import type { SendAdmissionProbeDO } from './send-admission-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
+import type { SlateProcessProbeDO } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { GadgetBinding } from '../../src/gadgets/bindings';
 declare global {
@@ -44,6 +45,7 @@ declare global {
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
+      SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeDO>;
       /** The gadget probe. Bare, the way `gadgetOwner` takes the orchestrator:
        *  calling through a stub mapped over the probe's JSON-recursive methods
        *  makes type instantiation excessively deep (TS2589), so `open()` in the
