@@ -16,11 +16,13 @@
     "no-sentinel-catch",
     "no-unaccounted-catch",
     "no-untyped-console",
+    "no-vacuous-type-predicate",
     "no-wait-until-in-durable-object",
     "require-cause-on-rethrow",
     "require-runtime-import-extension"
   ],
   "kinuRuleGates": {
+    "no-vacuous-type-predicate.gate.test.ts": ["no-vacuous-type-predicate"],
     "import-extension.gate.test.ts": [
       "require-runtime-import-extension"
     ],
@@ -48,6 +50,9 @@
     ]
   },
   "vendored": {
+    "no-vacuous-type-predicate.gate.test.ts": { "kinuOnly": true },
+    "rules/no-vacuous-type-predicate.ts": { "kinuOnly": true },
+    "rules/no-vacuous-type-predicate.test.ts": { "kinuOnly": true },
     "drift.test.ts": {
       "kinuOnly": true
     },
@@ -59,8 +64,8 @@
     },
     "index.ts": {
       "upstream": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f",
-      "local": "6c0fe2e4d8bca5cbfcde8dd2fab528a3ff6140de60305ed3cb36bcaacee674e0",
-      "reason": "Registers the Kinu-authored rules (see kinuRules) alongside the vendored ones: the five no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, no-copy-rpc-stub, no-untyped-console, require-runtime-import-extension, and the dormant no-elapsed-work-deadline registration. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
+      "local": "9ac62b00ecc5bad9875bce44a92aa6bee3b4d6806ddbcb4c2de18ce6422cefaa",
+      "reason": "Registers the Kinu-local rules declared in kinuRules, including no-vacuous-type-predicate, beside the pinned upstream rules. Upstream has no counterpart for these policy rules."
     },
     "live-tree.gate.test.ts": {
       "kinuOnly": true

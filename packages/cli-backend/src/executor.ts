@@ -42,8 +42,6 @@ function detectLanguages(): readonly [string, ...string[]] {
   return ['javascript', ...installed];
 }
 
-
-
 export function createSandboxedExecutor(): Executor {
   let detectedLanguages: readonly [string, ...string[]] | undefined;
   return {
@@ -238,7 +236,6 @@ async function executeInProcess(
   // Use Function constructor with explicitly passed context vars
   const argNames = Object.keys(context);
   const argValues = argNames.map(k => context[k]);
-
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

@@ -1026,6 +1026,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   terminal report status is now reclaimable and only `running` and `interrupted`
   are held, which is exactly the pair under which work can still continue.
 
+- Added comment-citation and claim-shape checks. On 2026-09-06, the generated pattern inventory classified 2707 sites in 2109 TS/JS, Python and shell files and recorded 170 candidate reviews.
+- Fixed multiline executor return parsing with Acorn. JSONC parsing preserves string bytes and rejects malformed commas and comments. Workspace setup reads top-level manifest names with JSON.parse.
+- Added `no-vacuous-type-predicate` for explicit guards whose entire body returns literal true. On 2026-09-06, all 26 prior anti-slop rules remained enabled beside the new rule.
+
 ## [0.2.0] - 2026-08-07
 
 The first versioned release. Kinu sat on a frozen `0.1.0` for four months

@@ -303,6 +303,18 @@ export const isVendoredSource = (file: string): boolean => file.startsWith('pack
 /** Kinu-maintained code parseable by `syntax.ts`. */
 export const isParseable = (file: string): boolean => PARSEABLE.test(file) && !isVendoredSource(file);
 
+const LintConfigSchema = v.object({
+  ignorePatterns: v.array(v.pipe(v.string(), v.regex(/^[^*?[\]{}]+$/u))),
+});
+let lintIgnoreRoots: readonly string[] | undefined;
+
+/** The exact literal-root policy that the live Oxlint invocation applies. */
+export function isLintSource(file: string): boolean {
+  if (!isParseable(file)) return false;
+  lintIgnoreRoots ??= v.parse(LintConfigSchema, JSON.parse(readRepositoryFile(root, '.oxlintrc.json'))).ignorePatterns;
+  return !lintIgnoreRoots.some(ignored => file === ignored || file.startsWith(`${ignored}/`));
+}
+
 /** Source languages covered by the pattern inventory. */
 export const isPatternSource = (file: string): boolean =>
   isParseable(file) || file.endsWith('.py') || file.endsWith('.sh');

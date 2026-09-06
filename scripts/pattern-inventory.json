@@ -2042,6 +2042,7 @@
     "tools/oxlint/anti-slop/no-elapsed-deadline.gate.test.ts",
     "tools/oxlint/anti-slop/no-swallow.gate.test.ts",
     "tools/oxlint/anti-slop/no-untyped-console.gate.test.ts",
+    "tools/oxlint/anti-slop/no-vacuous-type-predicate.gate.test.ts",
     "tools/oxlint/anti-slop/no-wait-until.gate.test.ts",
     "tools/oxlint/anti-slop/rules.test.ts",
     "tools/oxlint/anti-slop/rules/no-ambient-git-in-tests.test.ts",
@@ -2088,6 +2089,8 @@
     "tools/oxlint/anti-slop/rules/no-unsafe-dictionary-type.ts",
     "tools/oxlint/anti-slop/rules/no-untyped-console.test.ts",
     "tools/oxlint/anti-slop/rules/no-untyped-console.ts",
+    "tools/oxlint/anti-slop/rules/no-vacuous-type-predicate.test.ts",
+    "tools/oxlint/anti-slop/rules/no-vacuous-type-predicate.ts",
     "tools/oxlint/anti-slop/rules/no-wait-until-in-durable-object.test.ts",
     "tools/oxlint/anti-slop/rules/no-wait-until-in-durable-object.ts",
     "tools/oxlint/anti-slop/rules/no-widen-then-assert.test.ts",
@@ -22749,7 +22752,15 @@
     },
     {
       "file": "scripts/sources.ts",
-      "line": 419,
+      "line": 307,
+      "kind": "regex-literal",
+      "owner": "ignorePatterns",
+      "category": "lexical",
+      "sourceSha256": "549688cdb7239ed58c1dd5340a4c44ffc00d04ae648af988879669ee3992b5aa"
+    },
+    {
+      "file": "scripts/sources.ts",
+      "line": 431,
       "kind": "regex-literal",
       "owner": "HISTORY_OID",
       "category": "lexical",
@@ -22757,7 +22768,7 @@
     },
     {
       "file": "scripts/sources.ts",
-      "line": 636,
+      "line": 648,
       "kind": "regex-literal",
       "owner": "match",
       "category": "lexical",
@@ -23333,7 +23344,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 82,
+      "line": 83,
       "kind": "hand-parser",
       "owner": "parseRuleRegistry",
       "category": "scanner",
@@ -23341,7 +23352,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 88,
+      "line": 89,
       "kind": "regex-literal",
       "owner": "parseRuleRegistry",
       "category": "code",
@@ -23349,7 +23360,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 112,
+      "line": 113,
       "kind": "regex-literal",
       "owner": "match",
       "category": "lexical",
@@ -23357,7 +23368,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 194,
+      "line": 195,
       "kind": "regex-literal",
       "owner": "GENERATED_BANNER",
       "category": "lexical",
@@ -23365,7 +23376,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 235,
+      "line": 236,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -23373,7 +23384,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 236,
+      "line": 237,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -23381,7 +23392,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 237,
+      "line": 238,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -23389,7 +23400,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 282,
+      "line": 283,
       "kind": "regex-literal",
       "owner": "commandTokens",
       "category": "lexical",
@@ -23397,7 +23408,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 324,
+      "line": 325,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -23405,7 +23416,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 348,
+      "line": 349,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -23413,7 +23424,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 349,
+      "line": 350,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -23421,7 +23432,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 350,
+      "line": 351,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -23429,7 +23440,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 356,
+      "line": 357,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -23437,7 +23448,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 359,
+      "line": 360,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -23445,7 +23456,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 362,
+      "line": 363,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -23453,7 +23464,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 363,
+      "line": 364,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -23461,7 +23472,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 367,
+      "line": 368,
       "kind": "regex-literal",
       "owner": "directive",
       "category": "code",
@@ -23469,7 +23480,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 372,
+      "line": 373,
       "kind": "regex-literal",
       "owner": "isForbiddenLintDirective",
       "category": "lexical",
@@ -23514,14 +23525,6 @@
       "owner": "stem",
       "category": "lexical",
       "sourceSha256": "51e9200ecf2ee72ebdb1bd651805fe7bc28711f95d4bddeb1f59fc0b9fa3eeaf"
-    },
-    {
-      "file": "tools/oxlint/anti-slop/live-tree.gate.test.ts",
-      "line": 51,
-      "kind": "regex-literal",
-      "owner": "ignoredRoots",
-      "category": "lexical",
-      "sourceSha256": "549688cdb7239ed58c1dd5340a4c44ffc00d04ae648af988879669ee3992b5aa"
     },
     {
       "file": "tools/oxlint/anti-slop/no-ambient-git.gate.test.ts",
@@ -25266,7 +25269,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 82,
+      "line": 83,
       "kind": "hand-parser",
       "owner": "parseRuleRegistry",
       "category": "scanner",
@@ -25275,7 +25278,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 88,
+      "line": 89,
       "kind": "regex-literal",
       "owner": "parseRuleRegistry",
       "category": "code",
@@ -25284,7 +25287,7 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "line": 367,
+      "line": 368,
       "kind": "regex-literal",
       "owner": "directive",
       "category": "code",
