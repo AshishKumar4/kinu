@@ -972,15 +972,8 @@ async function body(request: Request): Promise<DriverBody> {
 
 
 
-/**
- * The routes that reach storage and never the box's live tree, served ahead
- * of the operation router: the deployed probe's two diagnostic reads (the
- * candidate control dump and the incident ledger, archived after the ladder
- * and after the wake) and the G4 fault cells, which run against an isolated
- * per-call namespace. The switch below stays the router for the operations
- * that arm, write, or tear down. Null answers any other route.
- */
-async function serveStorageOnlyRoutes(
+/** Diagnostic reads and fault injection share the instrument route boundary. */
+async function serveInstrumentRoutes(
   route: string,
   input: DriverBody,
   env: BenchEnv,
@@ -988,7 +981,40 @@ async function serveStorageOnlyRoutes(
   box: BenchStub,
   name: string,
   started: number,
+  url: URL,
+  counter: DurableObjectStub<BenchOpCounter>,
 ): Promise<Response | null> {
+  switch (route) {
+    case 'POST /checkpoint-cut': {
+      if (env.BENCH_PUBLICATION_CUT !== '1') {
+        throw new Error('NOT-CUT: this Worker boot did not enable --fault-cuts');
+      }
+      const op = input.op ?? '';
+      if (op.length === 0) return json({ ok: false, error: 'op is required' }, 400);
+      const kind: CheckpointKind = input.kind === 'tick' ? 'tick' : 'quiesce';
+      await counter.armCut(op, storePrefixOf(env, strategy, name));
+      const row = await box.armBenchOperation({ op, operation: 'checkpoint', kind });
+      return json({ ok: true, token: row.token, kind, state: row.state, ms: Date.now() - started }, 202);
+    }
+    case 'GET /fault-cut':
+      return json(await counter.readCut(url.searchParams.get('token') ?? ''));
+    case 'POST /fault-cut/kill': {
+      const token = url.searchParams.get('token') ?? '';
+      const receipt = await counter.readCut(token);
+      if (receipt.prefix !== storePrefixOf(env, strategy, name)) {
+        throw new Error('the publication cut belongs to another box');
+      }
+      if (receipt.state !== 'held') return json(await counter.finishCut(token, false));
+      const stopped = await box.killWithoutQuiesce();
+      return json(await counter.finishCut(token, stopped));
+    }
+    case 'POST /fault-cut/cancel':
+      return json(await counter.finishCut(url.searchParams.get('token') ?? '', false));
+    case 'POST /fault-cut/clear': {
+      await counter.clearCut(url.searchParams.get('token') ?? '');
+      return json({ ok: true });
+    }
+  }
   if (route === 'GET /incidents') {
     // Every filed failure, oldest first. Totals say how many; only the
     // reasons say what. Called after the ladder and after the wake but
@@ -1073,7 +1099,7 @@ export default {
 
     try {
       const route = `${request.method} ${url.pathname}`;
-      const aside = await serveStorageOnlyRoutes(route, input, env, strategy, box, name, started);
+      const aside = await serveInstrumentRoutes(route, input, env, strategy, box, name, started, url, counter);
       if (aside !== null) return aside;
       switch (route) {
         case 'POST /create': {
@@ -1132,43 +1158,16 @@ export default {
         // durable schedule row and its outcome is read back by token through
         // `GET /operation`. `armBenchOperation` records the deployed runs this
         // repairs and why the request could not stay the operation's clock.
-        case 'POST /checkpoint-cut':
         case 'POST /checkpoint': {
           const op = input.op ?? '';
           if (op.length === 0) return json({ ok: false, error: 'op is required' }, 400);
-          if (route === 'POST /checkpoint-cut' && env.BENCH_PUBLICATION_CUT !== '1') {
-            throw new Error('NOT-CUT: this Worker boot did not enable --fault-cuts');
-          }
           const kind: CheckpointKind = input.kind === 'tick' ? 'tick' : 'quiesce';
-          if (route === 'POST /checkpoint-cut') {
-            await counter.armCut(op, storePrefixOf(env, strategy, name));
-          }
           const row = await box.armBenchOperation({ op, operation: 'checkpoint', kind });
           return json({
             ok: true, token: row.token, kind, state: row.state, ms: Date.now() - started,
           }, 202);
         }
 
-        case 'GET /fault-cut': {
-          return json(await counter.readCut(url.searchParams.get('token') ?? ''));
-        }
-        case 'POST /fault-cut/kill': {
-          const token = url.searchParams.get('token') ?? '';
-          const receipt = await counter.readCut(token);
-          if (receipt.prefix !== storePrefixOf(env, strategy, name)) {
-            throw new Error('the publication cut belongs to another box');
-          }
-          if (receipt.state !== 'held') return json(await counter.finishCut(token, false));
-          const stopped = await box.killWithoutQuiesce();
-          return json(await counter.finishCut(token, stopped));
-        }
-        case 'POST /fault-cut/cancel': {
-          return json(await counter.finishCut(url.searchParams.get('token') ?? '', false));
-        }
-        case 'POST /fault-cut/clear': {
-          await counter.clearCut(url.searchParams.get('token') ?? '');
-          return json({ ok: true });
-        }
 
         case 'POST /stop': {
           // The real quiesce path — final checkpoint, keepAlive off, SIGTERM —
