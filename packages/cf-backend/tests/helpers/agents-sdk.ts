@@ -269,15 +269,15 @@ export function mockAgentsSdk(): void {
        * `tests/workerd/do-alarm.test.ts` fires a real one. What this covers is
        * the row bookkeeping around it.
        */
-      async schedule(when: Date, callback: string, payload?: JsonValue): Promise<{
+      async schedule(when: Date | number, callback: string, payload?: JsonValue): Promise<{
         id: string; callback: string; payload: JsonValue; type: string; time: number;
       }> {
         const row = {
           id: `sched-${String(++harnessScheduleSeq)}`,
           callback,
           payload: payload ?? null,
-          type: 'scheduled',
-          time: Math.floor(when.getTime() / 1000),
+          type: when instanceof Date ? 'scheduled' : 'delayed',
+          time: Math.floor((when instanceof Date ? when.getTime() : Date.now() + when * 1000) / 1000),
         };
         this.#scheduleTable().exec(
           `INSERT INTO cf_agents_schedules (id, callback, payload, type, time)
