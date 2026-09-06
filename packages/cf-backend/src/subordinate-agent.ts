@@ -1350,12 +1350,7 @@ export class SubordinateAgent extends ActorAgent {
    *  rollout against turns measuring 151/294/509s. A measured span is what makes
    *  the next such number arguable instead of guessed.
    *
-   *  The model is the TURN's, resolved through `MODEL_ROUTE_POLICY.mcts` —
-   *  `invocation`, so a rollout runs on the same tier the turn that ordered the
-   *  search runs on. A null spec at a hardcoded `'low'` never consults the
-   *  profile: every branch runs the account default at an effort nothing chose,
-   *  so a role on any other tier is searched by models it did not select and the
-   *  comparison is between the wrong things.
+   *  The model follows MODEL_ROUTE_POLICY.mcts at the invoking turn's tier.
    *
    *  Spend is reported by the ENGINE, not here, and deliberately: it returns
    *  `usage` to `mcts/engine.ts`, which files one `mcts` row per branch call
