@@ -658,7 +658,7 @@ export async function runLifecycle(
     // carries container bytes, and the only channel this suite has for that is
     // the workload harness — which is installed after the wake, so a racing
     // call cannot use it. The property is held instead by
-    // `packages/devbox/tests/restore-in-gate.test.ts`, which drives an operation
+    // `packages/devbox/tests/restoration-visibility.test.ts`, which drives an operation
     // during EVERY restore phase and pins that it observes only the finished
     // world or a box that names what is missing.
     const woke = await step('wake-attach', async (deadlineMs) =>

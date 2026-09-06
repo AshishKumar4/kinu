@@ -333,7 +333,7 @@ function executorLimitsSuffix(exec: PromptExecutorInfo): string {
  *
  * The `run` tool's own description tells the model that "available binaries and
  * process features are listed in this workspace provider's capabilities"
- * (tools/inline.ts). Until this rendered, that sentence pointed at a list the
+ * (packages/core/src/execution/inline.ts). Until this rendered, that sentence pointed at a list the
  * model was never given: the field was declared on PromptExecutorInfo,
  * populated by the router, and read by nothing — so the model guessed, and a
  * clone into an environment without the headroom for it read as a mystery.

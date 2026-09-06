@@ -156,7 +156,7 @@ export function exportedDeclarations(file: string, text: string, tree?: SyntaxNo
   for (const statement of (tree ?? parse(file, text).root).children) {
     for (const name of importedNames(statement)) imported.add(name);
     if (statement.type === 'ImportDeclaration') continue;
-    // `export … from '…'` never declares anything here.
+    // `export … from '…'` never declares a local name; see {@link isReExport}.
     if (isReExport(statement)) continue;
     for (const name of exportedLocalNames(statement)) specifiers.add(name);
 

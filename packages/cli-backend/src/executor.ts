@@ -13,7 +13,7 @@
  * provider functions cannot be passed across process boundaries.
  */
 
-import { decodeJsonValue, JsonValueSchema } from '@kinu.run/core';
+import { addImplicitReturn, decodeJsonValue, JsonValueSchema } from '@kinu.run/core';
 import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu.run/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -40,29 +40,6 @@ function detectLanguages(): readonly [string, ...string[]] {
     .filter(([, { command }]) => Bun.which(command) !== null)
     .map(([language]) => language);
   return ['javascript', ...installed];
-}
-
-/**
- * If the last non-empty line of code doesn't start with a keyword that
- * indicates a statement (const, let, var, if, for, while, etc.) and
- * doesn't already start with 'return', prepend 'return ' to it.
- * This makes multi-line LLM code like "const x=7;\nx*2" return a value.
- */
-export function addImplicitReturn(code: string): string {
-  const lines = code.split('\n');
-  let lastIdx = lines.length - 1;
-  while (lastIdx >= 0 && !lines[lastIdx]!.trim()) lastIdx--;
-  if (lastIdx < 0) return code;
-
-  const lastLine = lines[lastIdx]!.trim();
-  if (/^(return|const |let |var |if |for |while |do |switch |throw |try |class |function |import |export )/.test(lastLine)) {
-    return code;
-  }
-  if (/^[a-zA-Z_$]\w*\s*=[^=]/.test(lastLine)) {
-    return code;
-  }
-  lines[lastIdx] = `return ${lastLine}`;
-  return lines.join('\n');
 }
 
 export function createSandboxedExecutor(): Executor {
@@ -172,7 +149,13 @@ async function executeInSubprocess(code: string, timeoutMs?: number): Promise<Ex
   // failed run re-executed a throwing expression as statements, so a side
   // effect before the throw landed twice (measured 2026-09-05: an appended
   // marker file held two lines for one call).
-  const autoReturned = addImplicitReturn(code);
+  let autoReturned: string;
+  try {
+    autoReturned = addImplicitReturn(code);
+  } catch (cause) {
+    if (classify({ cause }) !== 'malformed-input') throw cause;
+    return { result: undefined, error: renderThrownChain({ cause }) };
+  }
   const wrapper = `
     const __code = ${JSON.stringify(code)};
     let __expression;
@@ -253,10 +236,10 @@ async function executeInProcess(
   // Use Function constructor with explicitly passed context vars
   const argNames = Object.keys(context);
   const argValues = argNames.map(k => context[k]);
-  const wrapped = `return (async (${argNames.join(', ')}) => { ${addImplicitReturn(code)} })(${argNames.map((_, i) => `arguments[${i}]`).join(', ')})`;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    const wrapped = `return (async (${argNames.join(', ')}) => { ${addImplicitReturn(code)} })(${argNames.map((_, i) => `arguments[${i}]`).join(', ')})`;
     const fn = new Function(wrapped);
     const settled = Promise.resolve(fn(...argValues)).then((value) =>
       value === undefined ? undefined : decodeJsonValue({ value }));

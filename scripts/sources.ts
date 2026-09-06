@@ -284,7 +284,7 @@ export const ANTI_SLOP_RULES = `${ANTI_SLOP_ROOT}rules/`;
  * claimed every future file under it on the strength of one witness. Measured
  * 2026-08-30, the 41 suites here are the disjoint union of 12 named on the
  * `test:anti-slop` command line and 29 the aggregator discovers — and a new
- * top-level `tools/oxlint/anti-slop/foo.test.ts` would have been claimed by the
+ * top-level `tools/oxlint/anti-slop/<name>.test.ts` would have been claimed by the
  * prefix and executed by neither.
  */
 export const isAntiSlopSuite = (file: string): boolean =>
@@ -302,6 +302,22 @@ export const isVendoredSource = (file: string): boolean => file.startsWith('pack
 
 /** Kinu-maintained code parseable by `syntax.ts`. */
 export const isParseable = (file: string): boolean => PARSEABLE.test(file) && !isVendoredSource(file);
+
+const LintConfigSchema = v.object({
+  ignorePatterns: v.array(v.pipe(v.string(), v.regex(/^[^*?[\]{}]+$/u))),
+});
+let lintIgnoreRoots: readonly string[] | undefined;
+
+/** The exact literal-root policy that the live Oxlint invocation applies. */
+export function isLintSource(file: string): boolean {
+  if (!isParseable(file)) return false;
+  lintIgnoreRoots ??= v.parse(LintConfigSchema, JSON.parse(readRepositoryFile(root, '.oxlintrc.json'))).ignorePatterns;
+  return !lintIgnoreRoots.some(ignored => file === ignored || file.startsWith(`${ignored}/`));
+}
+
+/** Source languages covered by the pattern inventory. */
+export const isPatternSource = (file: string): boolean =>
+  isParseable(file) || file.endsWith('.py') || file.endsWith('.sh');
 
 /** Loaded by raw `node --experimental-strip-types` rather than by Bun or a
  *  bundler, and therefore the one set whose imports must carry an explicit

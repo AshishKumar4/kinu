@@ -494,7 +494,7 @@ export {
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
 export { STATE_NAMESPACE, STATE_TYPES, initCodemodeStateTable, createStateCodemodeProvider } from './tools/state-codemode';
-export { admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } from './craft/source';
+export { addImplicitReturn, admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } from './craft/source';
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export {
   describeMcpTool, admitMcpDescriptors, toolSurfaceTokens,

@@ -27,7 +27,7 @@
  *              than over a free function, and the gate used to be blind to
  *              them, so they sat in KNOWN_TWINS with a comment explaining they
  *              were not really twins. Declaring the form makes the claim
- *              machine-checked instead. `this.symbol(` never counts: a method
+ *              machine-checked instead. `this.symbol(` never counts because a method
  *              must not prove itself by calling itself.
  *
  * This gate does not forbid the twins that exist — they are recorded below as

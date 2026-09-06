@@ -608,7 +608,7 @@ export function capturingWorkersAIModel(sessionAffinity?: string): CapturingMode
   return { model: createAgentProviderRegistry(registryOptions).resolveModel(CAPTURE_MODEL_SPEC), captured };
 }
 
-/** Whether this request asked for a stream. `runChat` always does; a one-shot
+/** Whether this request asked for a stream. `runChat` in `chat.ts` always does; a one-shot
  *  completion (a judge call, a title) does not. Parsed at the boundary and read as a
  *  domain value: the same `v.parse(v.string())` `readChatCompletionBody` uses, so a
  *  body the SDK stopped serialising as JSON fails loudly in one place rather than

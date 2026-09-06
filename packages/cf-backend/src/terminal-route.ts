@@ -262,7 +262,7 @@ export async function handleTerminalRequest(
   // PTY surface — verified in the shipped bundle (`getSession`, `terminal`,
   // `wsConnect` on the proxy; `terminal` absent from the class), and the SDK's
   // own bridge declares exactly this pair and narrows once at acquisition
-  // (packages/sandbox/src/bridge/routes.ts, `BridgeSandbox`). Every member used
+  // (https://github.com/cloudflare/sandbox-sdk/blob/main/packages/sandbox/src/bridge/routes.ts, `BridgeSandbox`). Every member used
   // below is therefore reachable: `getSession` and `terminal` from the proxy,
   // `deleteSession` from the class, and `noteTerminalActivity` from KinuSandbox
   // through the same proxy's fall-through to the stub — which is how

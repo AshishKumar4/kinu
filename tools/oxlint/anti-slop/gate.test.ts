@@ -26,6 +26,7 @@ const expectedRules = [
   "anti-slop/no-unknown-type-aliases",
   "anti-slop/no-unsafe-dictionary-type",
   "anti-slop/no-untyped-console",
+  "anti-slop/no-vacuous-type-predicate",
   "anti-slop/no-wait-until-in-durable-object",
   "anti-slop/no-widen-then-assert",
   "anti-slop/require-cause-on-rethrow",

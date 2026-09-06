@@ -146,7 +146,7 @@ function workerdGroups(): SuiteGroup[] {
   // `bunx vitest run --root R tests/workerd/` is the spelling `package.json`'s
   // `test:workerd` and `claims()` already use, spawned as a CHILD PROCESS. No
   // vitest or vite API is imported here on purpose: an import would pull
-  // `packages/cf-backend/vite.config` and its `@vitejs/plugin-react` types into
+  // `packages/cf-backend/vite.config.ts` and its `@vitejs/plugin-react` types into
   // the scripts tsconfig program, which is a different program's problem to
   // carry.
   return [
