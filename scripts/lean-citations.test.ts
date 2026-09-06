@@ -30,8 +30,10 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import * as v from 'valibot';
-import { auditCitations, auditCoverage, citations, type Citations } from './lean-citations';
-import { isTextSource, trackedFiles } from './sources';
+import {
+  auditCitations, auditCoverage, citations, isGovernedCitationFile, type Citations,
+} from './lean-citations';
+import { isTextSource, isVendoredSource, trackedFiles } from './sources';
 
 const repoRoot = resolve(import.meta.dir, '..');
 
@@ -201,6 +203,22 @@ describe('the gate cannot certify an empty scan', () => {
     const seen: Citations = citations();
     auditCitations('docs/FIXTURE.md', nameFirst(LIVE, ARBITRATION), seen);
     expect(auditCoverage(seen)).toEqual([]);
+  });
+});
+
+describe('the corpus this gate governs', () => {
+  test('a Kinu source is governed and a vendored one is not', () => {
+    expect(isGovernedCitationFile('packages/core/src/mcts/engine.ts')).toBe(true);
+    expect(isGovernedCitationFile('packages/agent-core/dist/agents/runs/turn.d.ts')).toBe(false);
+    expect(isGovernedCitationFile('lean/Kinu/MCTS/Arbitration.lean')).toBe(false);
+  });
+
+  test('the vendored half is not vacuous — the tree really carries such files', () => {
+    // Without this, deleting the vendored package would leave a skip that can no
+    // longer fire, which reads as enforcement and enforces nothing.
+    const vendored = trackedFiles().filter((file) => isTextSource(file) && isVendoredSource(file));
+    expect(vendored.length).toBeGreaterThan(0);
+    expect(vendored.every((file) => !isGovernedCitationFile(file))).toBe(true);
   });
 });
 

@@ -38,7 +38,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { isTextSource, readMatching } from './sources';
+import { isTextSource, isVendoredSource, readMatching } from './sources';
 
 const repoRoot = new URL('..', import.meta.url).pathname;
 const leanRoot = join(repoRoot, 'lean');
@@ -493,16 +493,31 @@ export function auditCoverage(seen: Citations): string[] {
 
 /* ── The verdict ───────────────────────────────────────────────────────── */
 
+/**
+ * Whether a text source carries citations this gate governs.
+ *
+ * `lean/` is the other side of the citation and is checked by the traceability
+ * gate. Pinned upstream bytes cite their OWN repository's Lean modules, which
+ * Kinu's `lean/` tree will never contain, so a vendored citation is outside the
+ * set rather than a stale one — `packages/agent-core/drift.test.ts` owns those
+ * bytes by SHA-256. Nothing else is skipped: this gate's own docstring is scanned
+ * like any other file, and the placeholders in it are enrolled in
+ * `CITATION_ILLUSTRATIVE` rather than excluded.
+ *
+ * It is a named predicate rather than two branches inside the entrypoint so the
+ * self-test can assert both directions, and assert that the vendored half is not
+ * vacuous.
+ */
+export const isGovernedCitationFile = (file: string): boolean =>
+  !file.startsWith('lean/') && !isVendoredSource(file);
+
 if (import.meta.main) {
   const seen = citations();
   const findings = auditRegister(seen);
   const corpus = readMatching(isTextSource);
+  const vendored = [...corpus.keys()].filter(isVendoredSource).length;
   for (const [file, text] of corpus) {
-    // `lean/` is the other side of the citation and is checked by the traceability
-    // gate. There is no per-file skip beyond that: this gate's own docstring is
-    // scanned like any other file, and the placeholders in it are enrolled in
-    // `CITATION_ILLUSTRATIVE` rather than excluded.
-    if (file.startsWith('lean/')) continue;
+    if (!isGovernedCitationFile(file)) continue;
     findings.push(...auditCitations(file, text, seen));
   }
   findings.push(...auditCoverage(seen));
@@ -532,6 +547,9 @@ if (import.meta.main) {
     + ' endpoints of a range must be within the module, and nothing verifies that those'
     + ' lines still contain the claimed content — an insertion above a cited range slides'
     + ' it onto different code and stays green. A theorem NAME is the citation shape this'
-    + ' gate can actually verify; a line number is the shape it can only bound.',
+    + ' gate can actually verify; a line number is the shape it can only bound.'
+    + ` ${String(vendored)} vendored file(s) under \`packages/agent-core/dist/\` are excluded:`
+    + " they cite their own repository's Lean modules, which this tree does not carry, so"
+    + ' nothing here checks an upstream citation.',
   );
 }
