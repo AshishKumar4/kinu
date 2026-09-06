@@ -33,30 +33,9 @@
 //      from; this one is the run whose count a claim can cite.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 
-import { isParseable, trackedFiles } from "../../../scripts/sources.ts";
+import { isLintSource, trackedFiles } from "../../../scripts/sources.ts";
 import { describeDiagnostic, lintJson } from "./shared/oxlint-json.ts";
-
-const config = JSON.parse(readFileSync(".oxlintrc.json", "utf8"));
-
-/** The governed set: the shared enumeration, minus the config's literal ignore
- *  roots. A glob in `ignorePatterns` would make the governed set underivable
- *  here, so a non-literal root fails rather than being approximated. */
-function governedSet(): readonly string[] {
-  const ignoredRoots = config.ignorePatterns.map((pattern: unknown) => {
-    assert.ok(typeof pattern === "string", "every ignore pattern must be a string");
-    assert.match(
-      pattern,
-      /^[^*?[\]{}]+$/u,
-      `ignore pattern ${JSON.stringify(pattern)} is not a literal root, so this gate cannot derive its governed source set exactly`,
-    );
-    return pattern;
-  });
-  const isIgnored = (file: string): boolean =>
-    ignoredRoots.some((root: string) => file === root || file.startsWith(`${root}/`));
-  return trackedFiles().filter(isParseable).filter((file) => !isIgnored(file)).sort();
-}
 
 /** The measured set: what oxlint lists before it lints. */
 function measuredSet(): readonly string[] {
@@ -76,7 +55,7 @@ function measuredSet(): readonly string[] {
   return files;
 }
 
-const governed = governedSet();
+const governed = trackedFiles().filter(isLintSource).sort();
 const measured = measuredSet();
 assert.deepEqual(
   measured,

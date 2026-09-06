@@ -123,7 +123,7 @@ kinu label report <agent>            # what the labels established
 
 The estimator is prediction-powered inference (Angelopoulos et al. 2023) with a prediction-stratified rectifier, factored so it transports across slices. Sensitivity and specificity are estimated once, with the population re-weighting the design requires. Each slice's observed rate is corrected by Rogan–Gladen, `θ̂ = (p̂ + q̂₀ − 1)/(q̂₁ + q̂₀ − 1)`, the delta method propagating all three uncertainties. Over the population the labels came from, that is algebraically the same estimate as the stratified PPI form.
 
-`kinu alignment <agent>` always prints the corrected block beneath K_align. With no labels it reads `uncalibrated`. That stops the reader assuming classifier and truth agree.
+`kinu alignment <agent>` prints the corrected block beneath K_align when text output is selected. With no labels it reads `uncalibrated`. That stops the reader assuming classifier and truth agree.
 
 ### Can two models do the labeling next time?
 

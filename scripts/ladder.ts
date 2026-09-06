@@ -105,6 +105,20 @@ export const LADDER: readonly Gate[] = [
     blind: 'anything inside the repository. It only reads the machine.',
   },
   {
+    run: 'bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts',
+    tier: 'push',
+    seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.
+    catches: 'a pattern census that mistakes strings for regexes or a JSONC parser that changes data',
+    blind: 'semantic quality of a reviewed parser candidate',
+  },
+  {
+    run: 'bun scripts/pattern-inventory.ts',
+    tier: 'push',
+    seconds: 2.5, // Measured 2026-09-06 on the 24-thread workstation.
+    catches: 'unclassified code-pattern and named scanner candidates in the shared source corpus',
+    blind: 'runtime aliases, unnamed scanners, native source and embedded shell language tokens',
+  },
+  {
     run: 'bun run check',
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box (load 2.3, worktree
@@ -1490,11 +1504,11 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run verify:lean',
     tier: 'deploy',
     // 2.2s WARM, median of 2.19 / 2.20 on the 24-thread box, 2026-08-21: `lake
-    // build` is a no-op once `lean/.lake` holds the build, so this figure sits on
+    // build` is a no-op once the Lean build cache holds the build, so this figure sits on
     // the same basis as every other one here, a prepared checkout.
     //
     // COLD IT IS ~15 MINUTES, and that is what CI pays: the lean-verify workflow
-    // caches `~/.elan` and not `lean/.lake`, so a runner rebuilds 330 theorems
+    // caches `~/.elan` and not the Lean build cache, so a runner rebuilds 330 theorems
     // every time. That is why CI_EXEMPT keeps it off the ci tier, and why both
     // figures are written down rather than averaged into one that describes
     // neither machine.

@@ -13,7 +13,7 @@ export interface BenchArmBindings<TNamespace extends NamedNamespace = NamedNames
   MerklePackBox?: TNamespace;
 }
 
-/** The namespace-valued keys; `BENCH_SELECTED_ARMS` never names a binding. */
+/** The namespace-valued keys; `BENCH_SELECTED_ARMS` never names a binding in {@link BenchArmBindings}. */
 type ArmBindingKey = Exclude<keyof BenchArmBindings, 'BENCH_SELECTED_ARMS'>;
 
 const BINDING_NAME = {

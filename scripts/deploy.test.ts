@@ -44,6 +44,8 @@ const BENCH_GATE_FILES = [
 const REQUIRED_GATES = [
   "bun scripts/preflight.ts",
   "bun run check",
+  "bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts",
+  "bun scripts/pattern-inventory.ts",
   "bun test scripts/deploy.test.ts",
   "bun run test",
   "bun run gate:python-suites",
@@ -885,7 +887,7 @@ describe("one deploy path", () => {
   });
 
   // Harness boundary: the manifest's own `scripts` block, parsed. Blind spot:
-  // one level of indirection — a script that runs `bun scripts/x.ts` is one word
+  // one level of indirection — a script that runs `bun scripts/<name>.ts` is one word
   // here whatever `x.ts` launches.
   test("no package script launches an eval outside the tier script", () => {
     let tierLaunches = 0;
@@ -970,7 +972,7 @@ describe("one deploy path", () => {
 
   // Harness boundary: the PARSED YAML of every tracked `.github` file, so a body
   // is read as GitHub will run it and a commented-out command is not a finding.
-  // Blind spot: what a body then executes — `bun scripts/x.ts` is one word here
+  // Blind spot: what a body then executes — `bun scripts/<name>.ts` is one word here
   // whatever `x.ts` publishes.
   test("every automation file GitHub executes is in the denominator", () => {
     expect(automationFiles, "the enumerator stopped listing the deploy workflow")

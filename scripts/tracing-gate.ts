@@ -53,7 +53,7 @@
  * throughout). The legacy `TraceItem` has no `spans` field. Shape is readable
  * only from Cloudflare's own ingestion, which needs an API token scope this
  * account's wrangler session does not hold — so that assertion is `blocked()`,
- * non-zero by default, in `scripts/tracing-shape-gate.ts`.
+ * unmeasured on the deployed platform; local span delivery is checked below.
  */
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';

@@ -38,7 +38,7 @@
  * splitting commands. This is a guardrail against accidents, not an adversary
  * model.
  *
- * Influences come from Hermes's tools/approval.py (battle-tested regex set
+ * Influences come from https://github.com/NousResearch/hermes-agent/blob/main/tools/approval.py (battle-tested regex set
  * for sudo / rm -rf / shell-meta escapes / cloud-metadata SSRF). Source
  * patterns ported here aren't a 1:1 copy — that file is 62K — but follow
  * the same intuition + add Cloudflare-Workers-specific deny rules.

@@ -52,4 +52,20 @@ describe('createSandboxedExecutor', () => {
     expect(result).toEqual({ result: undefined, error: 'boom' });
     expect(readFileSync(marker, 'utf8').trim().split('\n')).toHaveLength(1);
   });
+  test('returns the final expression across lines and trailing comments', async () => {
+    const executor = createSandboxedExecutor();
+    const source = 'const values = [20, 22];\nvalues.reduce(\n(sum, value) => sum + value,\n0\n)\n// result';
+    expect(await executor.execute(source, [])).toEqual({ result: 42 });
+    expect(await executor.execute('const n = await probe.seed();\n(n +\n41)\n// result', [
+      { name: 'probe', fns: { seed: async () => 1 } },
+    ])).toEqual({ result: 42 });
+  });
+  test('honors an explicit return after an awaited operation', async () => {
+    const executor = createSandboxedExecutor();
+    expect(await executor.execute('await Promise.resolve(1); return "done";', []))
+      .toEqual({ result: 'done' });
+    expect(await executor.execute('await probe.seed(); return "done";', [
+      { name: 'probe', fns: { seed: async () => 1 } },
+    ])).toEqual({ result: 'done' });
+  });
 });

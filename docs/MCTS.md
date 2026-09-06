@@ -6,7 +6,7 @@ facets; local branches use isolated processes with their own SQLite state.
 ## No tool reaches this engine
 
 Read before wiring. `swarm | hire | ask | send | reply | list | dismiss`
-never dispatches here; model-facing calls refuse or reach another engine.
+never dispatches here; model-facing calls refuse or reach another engine (`packages/core/src/tools/agents-tool.ts`).
 
 Models use `action:'swarm'`, `depth`, the verifier registry and
 `strategy/swarm-run.ts`. It shares `uct.ts`, `backpropagation.ts`,

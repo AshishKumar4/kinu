@@ -36,7 +36,7 @@ import {
 } from '@kinu.run/core';
 import { tool, jsonSchema } from 'ai';
 import { createRequire } from 'node:module';
-import { addImplicitReturn } from './executor';
+import { addImplicitReturn } from '@kinu.run/core';
 import * as v from 'valibot';
 
 export interface NodeExecuteToolFactoryDeps {

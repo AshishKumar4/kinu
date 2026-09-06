@@ -47,7 +47,7 @@ const ABBREVIATION = new RegExp(
  * reach, and no distance replaces it: a table row must not inherit the row above
  * it, and that boundary is not a number. But a unit is only evidence of PROXIMITY
  * in a file that has units, and a machine-written one has none.
- * `scripts/axis-ergonomics/runs/axis-zoo3.json` is 206KB of recorded replies
+ * The removed axis-zoo3 recording was 206KB of recorded replies
  * carrying no blank line, so it was ONE paragraph: a single `Self-MoA` on line 176
  * reached line 3800, and every integer between them — array indices, an ISO
  * timestamp's `-08` — arrived as an unlocated claim about a paper.

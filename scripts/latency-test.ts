@@ -5,7 +5,7 @@
  *
  * Usage: AI_GATEWAY_AUTH='Bearer <token>' bun scripts/latency-test.ts
  *
- * Reads AI_GATEWAY_URL from packages/cf-backend/.dev.vars. The token is this
+ * Reads AI_GATEWAY_URL from the backend development variables. The token is this
  * script's own: it speaks raw HTTPS, so it cannot use the Workers AI binding the
  * Worker itself reaches the gateway through. Kinu needs no such token.
  */
