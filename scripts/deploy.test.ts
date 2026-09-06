@@ -69,7 +69,7 @@ const REQUIRED_GATES = [
   "bun test scripts/wired.test.ts",
   "bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts",
   "bun test scripts/public-pages.test.ts",
-  "bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts",
+  "bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts",
   "bun test scripts/react-runtime-identity.test.ts",
   "bun test scripts/nested-container-resolution.test.ts",
       "bun test scripts/swarm-tree-geometry.test.ts",

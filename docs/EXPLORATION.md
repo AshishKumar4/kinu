@@ -502,21 +502,23 @@ and renames onto it, so a failure mid-write leaves the old target byte-exact and
 removes the temp. Cost, measured: a small file is one call to read and two to
 write; a file one chunk over the bound is three each.
 
-Substrate proof: 27 tests, 0 fail, measured 2026-08-27 in
-`packages/cf-backend/tests/unit-node-home-wiring.test.ts`. It covers the uid
-floor, uid-0-only `chown`, the mode, sibling `EACCES` through the shell AND
-through the file tools, byte-exact binary transfer, chunked transfer across the
-bound with its call count, atomic replacement under a failed commit, hostile
-names, refusal-versus-absence on `stat` and `exists`, the read window a grader
-needs, reset idempotence, and cleanup that removes bytes and keeps the uid row.
-Local dispatch plus absent-host coverage: 3 tests, 0 fail, measured 2026-08-19 in
-`packages/cli-backend/tests/swarm-node-home.test.ts`.
+Measured 2026-09-06, `packages/cf-backend/tests/unit-node-home-wiring.test.ts`
+passes 26 tests with 0 failures. It covers home ownership, sibling write
+refusal, shared reads, binary transfer, and reset recovery.
+`packages/cli-backend/tests/swarm-node-home.test.ts` passes 4 tests with
+0 failures. It covers local dispatch, absent-host behavior, and a runtime
+reset that retains the node home and private temporary files.
 
-A bare `/tmp` resolves to the facet's own tmp on both backends. The hosted
-provisioner runs on the object that owns the workspace and registers the rewrite
-on that object's own principal registry, so a command that hardcodes `/tmp/x`
-stays private, and a rename inside that `/tmp` resolves through the same
-registry.
+The main agent keeps `HOME=/home/user` and uses `TMPDIR=/tmp/main`.
+Workspace boot provisions its temporary directory before commands run.
+A bare `/tmp` resolves to each agent's own temporary directory on both
+backends. Hosted facets ask the workspace owner to register their mappings.
+Boot restores these mappings after a reset.
+
+Measured 2026-09-06, `bun scripts/workspace-planes-probe.ts` reads four
+distinct temporary-file values from main, swarm node, head, and subordinate
+planes. All four read the same shared workspace file. The second runtime
+generation returns the same values without copying files.
 
 `shared-origin-plane` remains the honest state of a runtime with no provisioner:
 a harness runtime, or a plane bound to a physical directory, which has no

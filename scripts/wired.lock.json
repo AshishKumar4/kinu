@@ -480,7 +480,6 @@
   "packages/core/src/vfs/agent-home.ts#AGENT_HOME_MODE (unreached-export)",
   "packages/core/src/vfs/agent-home.ts#AGENT_TMP_MODE (unreached-export)",
   "packages/core/src/vfs/agent-home.ts#AGENT_UID_FLOOR (unreached-export)",
-  "packages/core/src/vfs/agent-home.ts#MAIN_AGENT (unreached-export)",
   "packages/core/src/vfs/agent-home.ts#SESSION_UID (unreached-export)",
   "packages/core/src/vfs/diff.ts#computeWorkspaceDiff (unreached-export)",
   "packages/core/src/vfs/errno.ts#VfsError (unreached-export)",

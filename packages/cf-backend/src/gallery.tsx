@@ -902,6 +902,21 @@ let galleryAgentPlan: PlanReview = {
 };
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (new URLSearchParams(location.search).has("workspaceFault")) {
+    const state = document.documentElement.dataset;
+    const reads = ["getExecutorFiles", "getWorkspaceSnapshot", "getMemoryContent"];
+    if (reads.includes(method) && state.workspaceFault === "1") throw new Error("Network connection lost");
+    const revision = state.workspaceRevision ?? "before";
+    if (method === "getExecutorFiles") return rpcResult({ path: "/", entries: [
+      { name: `${revision}.txt`, isDir: false, size: 12, mtimeMs: revision === "before" ? 1 : 2 },
+    ] }).json<T>();
+    if (method === "listMounts") return rpcResult([]).json<T>();
+    if (method === "getMemoryContent") return rpcResult(`Memory ${revision}`).json<T>();
+    if (method === "getWorkspaceSnapshot") {
+      const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
+      return rpcResult({ ...snapshot, memoryContent: `Memory ${revision}` }).json<T>();
+    }
+  }
   if (new URLSearchParams(location.search).get("terminal") === "denied" && method === "getWorkspaceSnapshot") {
     return new Promise<T>(() => {});
   }

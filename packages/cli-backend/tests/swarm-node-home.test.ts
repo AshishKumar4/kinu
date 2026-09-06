@@ -159,6 +159,27 @@ async function runShippedSwarm(fork: AgentsForkDeps): Promise<SettledNode[]> {
 }
 
 describe('a node in a shipped agents.swarm run reports private-home', () => {
+  test('a local node keeps its home and private scratch through runtime reset', async () => {
+    const database = new Database(':memory:');
+    databases.push(database);
+    const config = { dbPath: scratchPath('node-reset', 'agent.db'), llm: DUMMY_LLM, hostRoot: null };
+    const first = createCLIRuntime(database, config);
+    const provision = nodeHomeWiring(first).provisionNodeHome();
+    const home = await provision({ nodeId: 'reset', rootId: 'reset', depth: 1 });
+    if (home.isolation !== 'private-home' || !first.nodeRuntime) throw new Error('node plane missing');
+    const before = await first.nodeRuntime(home);
+    if (!before.shell) throw new Error('node shell missing');
+    expect(await before.shell.exec('echo private > /tmp/note; echo answer > "$HOME/answer"')).toMatchObject({ exitCode: 0 });
+    await first.storage.vfs.writeFile('/home/user/shared', 'shared');
+    const second = createCLIRuntime(database, config);
+    if (!second.nodeRuntime) throw new Error('reset node plane missing');
+    const after = await second.nodeRuntime(home);
+    if (!after.shell) throw new Error('reset node shell missing');
+    expect(await after.shell.exec('echo $HOME $TMPDIR; cat /tmp/note; cat "$HOME/answer"; cat /home/user/shared'))
+      .toMatchObject({ exitCode: 0, stdout: `${home.home} ${home.tmp}\nprivate\nanswer\nshared` });
+    expect(await second.storage.vfs.exists('/tmp/note')).toBe(false);
+    await expect(second.storage.vfs.writeFile(`${home.home}/answer`, 'stolen')).rejects.toThrow();
+  });
   test('every node of the run, and the count the preset fans', async () => {
     const rt = cliRuntime('swarm-node-home-private');
     const { provisionNodeHome } = nodeHomeWiring(rt);

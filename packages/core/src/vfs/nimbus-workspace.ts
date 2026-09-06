@@ -44,7 +44,7 @@ import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import { restoreAgentTmpConfinements, type HomeRootVfs, type TmpConfiner } from './agent-home';
+import { agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, type HomeRootVfs, type TmpConfiner } from './agent-home';
 import { provisionWorkspaceRuntimes } from './workspace-runtimes';
 import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
@@ -403,6 +403,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
             transactions: opts.transactions,
             generation: opts.generation,
             cwd: WORKSPACE_ROOT,
+            env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
             // The embedder's fabric, stated once per isolate. A workspace
             // whose host can run dynamic workers reaches them through this:
             // the fabric mints every facet's `env.SUPERVISOR` binding from
@@ -423,11 +424,12 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           };
           if (opts.runtimeFacets !== undefined) provisioning.facets = opts.runtimeFacets;
           await provisionWorkspaceRuntimes(provisioning);
-          // The `/tmp` rewrites are isolate memory over a durable layout, so a
-          // fresh filesystem re-derives them from the homes it finds. Without
-          // this every facet provisioned before an eviction comes back with a
-          // home and no private `/tmp`.
-          restoreAgentTmpConfinements(opts.sql, workspace.vfs.as(CRED_KERNEL), workspace.vfs);
+          const root = workspace.vfs.as(CRED_KERNEL);
+          const main = agentIdentity(opts.sql, MAIN_AGENT);
+          provisionAgentHome(root, MAIN_AGENT, main);
+          confineAgentTmp(workspace.vfs, MAIN_AGENT, main);
+          // Rebuild each live facet's temporary-path mapping after a reset.
+          restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
           workspace.vfs.events.on((batch) => {
             if (fileListeners.size === 0) return;
             const paths = batch.map((event) => event.path);
