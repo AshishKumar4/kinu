@@ -98,8 +98,9 @@ bun run test:anti-slop
 ```
 
 `@agent-core/core` is also private and unpublished. Its built runtime and declarations
-live in `packages/agent-core/dist`, without source maps. `upstream.json` pins the source
-commit and the SHA-256 of every file. `drift.test.ts` checks that exact set and names
+live in `packages/agent-core/dist`, with the `.js.map` files its runtime references.
+Declaration maps stay excluded. `upstream.json` pins the source commit and
+the SHA-256 of every file. `drift.test.ts` checks that exact set and names
 changed files. Build upstream with `node ./scripts/build.mjs` before a sync. Keep its
 exports and runtime dependencies in the workspace manifest. `scripts/sources.ts`
 declares these bytes as vendored: lint and typecheck govern Kinu code, while the drift
