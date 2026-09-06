@@ -21790,7 +21790,7 @@
     },
     {
       "file": "scripts/pattern-inventory.ts",
-      "line": 229,
+      "line": 143,
       "kind": "regex-literal",
       "owner": "buildPatternInventory",
       "category": "lexical",
