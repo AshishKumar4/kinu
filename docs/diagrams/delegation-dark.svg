@@ -92,7 +92,7 @@
   <rect x="24" y="423" width="462" height="75" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
   <text class="b" x="36" y="442" text-anchor="start" fill="var(--purple)">a node runs as</text>
   <text class="xs" x="36" y="457" fill="var(--fg)">cf</text>
-  <text class="xs" x="70" y="457">ExplorationAgent facets — co-located Durable Objects</text>
+  <text class="xs" x="70" y="457">SubordinateAgent facets — co-located Durable Objects</text>
   <text class="xs" x="36" y="472" fill="var(--fg)">cli</text>
   <text class="xs" x="70" y="472">the search’s own process. A host is a transport: the</text>
   <text class="xs" x="36" y="487" fill="var(--fg)"></text>

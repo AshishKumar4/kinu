@@ -172,7 +172,7 @@
   <text class="xs" x="36" y="680" fill="var(--fg)">executor</text>
   <text class="xs" x="154" y="680">a Worker Loader isolate</text>
   <text class="xs" x="36" y="697" fill="var(--fg)">swarm nodes</text>
-  <text class="xs" x="154" y="697">ExplorationAgent facets (co-located DOs)</text>
+  <text class="xs" x="154" y="697">SubordinateAgent facets (co-located DOs)</text>
   <text class="xs" x="36" y="714" fill="var(--fg)">subordinates</text>
   <text class="xs" x="154" y="714">SubordinateAgent facets</text>
   <text class="xs" x="36" y="731" fill="var(--fg)">also</text>
