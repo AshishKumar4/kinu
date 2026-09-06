@@ -60,4 +60,12 @@ describe('createSandboxedExecutor', () => {
       { name: 'probe', fns: { seed: async () => 1 } },
     ])).toEqual({ result: 42 });
   });
+  test('honors an explicit return after an awaited operation', async () => {
+    const executor = createSandboxedExecutor();
+    expect(await executor.execute('await Promise.resolve(1); return "done";', []))
+      .toEqual({ result: 'done' });
+    expect(await executor.execute('await probe.seed(); return "done";', [
+      { name: 'probe', fns: { seed: async () => 1 } },
+    ])).toEqual({ result: 'done' });
+  });
 });

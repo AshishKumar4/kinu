@@ -230,7 +230,7 @@ async function run(
 }
 
 const CREATE_DOUBLE =
-  'await workspace.createTool("doubleIt", "doubles a number", "async (n) => n * 2"); return "made";';
+  'return await workspace.createTool("doubleIt", "doubles a number", "async (n) => n * 2");';
 
 describe('crafted-tool discovery and execution use the production CLI adapter', () => {
   test('workspace.listTools exposes exactly the callable inherited craft set before reuse', async () => {
@@ -244,7 +244,7 @@ describe('crafted-tool discovery and execution use the production CLI adapter', 
       result: { ok: true, name: 'doubleIt', action: 'created' },
     });
     const createIncrement = await execute({
-      code: 'await workspace.createTool("increment", "adds one", "async (n) => n + 1"); return "made";',
+      code: 'return await workspace.createTool("increment", "adds one", "async (n) => n + 1");',
     });
     expect(createIncrement).toEqual({
       result: { ok: true, name: 'increment', action: 'created' },
