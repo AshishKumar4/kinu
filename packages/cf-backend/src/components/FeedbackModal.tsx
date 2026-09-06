@@ -95,22 +95,28 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
   /** The POST in flight. Stop and the teardown effect below both end it through
    *  this one handle, so a stalled request can never outlive the dialog. */
   const inFlight = useRef<AbortController | null>(null);
+  const captureGeneration = useRef(0);
 
   const take = useCallback(() => {
+    const generation = ++captureGeneration.current;
     setShot({ phase: "capturing" });
     setMarks([]);
     const captureFailed = <Thrown,>(thrown: Thrown): void => {
       diagnostics.failure("feedback.capture_failed", toKinuError({
         doing: "capture the page for a feedback report", cause: thrown, otherwise: "unsupported",
       }));
-      setShot({ phase: "failed", reason: renderThrownChain({ cause: thrown }) });
+      if (generation === captureGeneration.current) {
+        setShot({ phase: "failed", reason: renderThrownChain({ cause: thrown }) });
+      }
     };
     // One frame, so the dialog's own paint lands before the clone is taken —
     // otherwise the omit hook removes nodes the browser has not laid out and
     // the page underneath is captured mid-reflow.
     requestAnimationFrame(() => {
+      if (generation !== captureGeneration.current) return;
       void capturePage().then(
         (capture) => {
+          if (generation !== captureGeneration.current) return;
           setShot(tooLarge(capture.blob.size)
             ? {
               phase: "failed",
@@ -126,6 +132,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     if (wanted) take();
     else setShot({ phase: "off" });
+    return () => { captureGeneration.current += 1; };
   }, [wanted, take]);
 
   // DECODE once per capture. Re-decoding a multi-megabyte PNG on every drawn

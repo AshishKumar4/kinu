@@ -1026,6 +1026,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   terminal report status is now reclaimable and only `running` and `interrupted`
   are held, which is exactly the pair under which work can still continue.
 
+- Feedback capture completion respects screenshot opt-out and newer captures. A held-encoder browser probe on 2026-09-06 sent a 33,814 B screenshot before the fix and no screenshot after it.
+
 ## [0.2.0] - 2026-08-07
 
 The first versioned release. Kinu sat on a frozen `0.1.0` for four months
