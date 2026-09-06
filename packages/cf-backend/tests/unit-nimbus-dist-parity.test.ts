@@ -108,3 +108,41 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
   expect(() => root.chmod('home/agent-a/s.sh', 0o755)).not.toThrow();
   expect(root.stat('home/agent-a/s.sh').mode & 0o777).toBe(0o755);
 });
+
+test('dist keeps file bytes coherent across an embedder transaction rollback', () => {
+  const database = new Database(':memory:');
+  try {
+    const sql: SqlDatabase = {
+      exec(query: string, ...bindings: SqlValue[]) {
+        const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
+        const bound = bindings.map(sqlBinding);
+        if (statement.columnNames.length > 0) return statement.all(...bound);
+        statement.run(...bound);
+        return [];
+      },
+    };
+    const vfs = new SqliteVFS(sql, {
+      storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() },
+    });
+    const files = vfs.as(ROOT);
+    const original = new TextEncoder().encode('committed source bytes');
+    const replacement = new TextEncoder().encode('replacement source bytes that must roll back');
+    expect(vfs.withTransaction).toBeFunction();
+    const atomic = <T,>(body: () => T): T => vfs.withTransaction(body);
+    const committed = atomic(() => {
+      files.writeFile('server.js', original);
+      return files.readFile('server.js');
+    });
+    expect(committed).toEqual(original);
+    expect(files.readFile('server.js')).toEqual(original);
+
+    const failure = new Error('source write failed');
+    expect(() => atomic(() => {
+      files.writeFile('server.js', replacement);
+      throw failure;
+    })).toThrow(expect.objectContaining({ cause: failure }));
+    expect(files.readFile('server.js')).toEqual(original);
+  } finally {
+    database.close();
+  }
+});
