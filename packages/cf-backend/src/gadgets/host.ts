@@ -35,13 +35,22 @@
  * gadget state (see below), so the bound is the edit count, not traffic.
  *
  * STATE. The process keeps no SQLite and receives no `ctx`. State that must last lives
- * in the `files` binding, by default `gadgets/<slug>/data` (`gadgetFilesRoot`).
+ * in the workspace file plane, reached through a `workspace` namespace binding.
  *
  * BINDING CALLS come back here (`bindingCall`), re-read the manifest — the plane is
- * agent-writable and the process was built from an earlier read — and decide with the
- * pure half in `@kinu.run/core` (`gadgets/bindings.ts`): a file path under the root or
- * refused, a read model on the list or refused, an MCP tool through the same approval
- * ladder the shell answers to.
+ * agent-writable and the process was built from an earlier read — and route with the
+ * pure decision in `@kinu.run/core` (`gadgets/bindings.ts`). Then the host runs the
+ * route as the agent's own call would run: a namespace member through the provider's
+ * `execute` exactly as codemode dispatches it, which already carries the executor's own
+ * approval gate for a shell command (execution/approval.ts); a read model through the
+ * orchestrator's `@callable`; an MCP tool through the owner's UserDO, allowlist and
+ * all; another gadget's method through `call`, one hop deeper. No gate of its own.
+ *
+ * DEPTH. An app that binds an app can close a cycle. Each call carries its hop count to
+ * the process on the batch request, the runner keeps it in an `AsyncLocalStorage` for
+ * the life of that batch, and every binding call the server makes carries it back, so
+ * `routeGadgetBindingCall` refuses the hop past `GADGET_LIMITS.appDepth`. A refused hop
+ * is the server's own error, boxed like any other; the processes stay up.
  */
 
 import * as v from 'valibot';
@@ -51,33 +60,33 @@ import { processes } from '@nimbus-sh/fabric/workerd-facet-host.js';
 import type { ResidentFacet, ResidentFacetEnv } from '@nimbus-sh/fabric/workerd-facet-host.js';
 import type { ResidentBootSpec, ResidentDiskReader } from '@nimbus-sh/fabric/process-fabric.js';
 import {
-  GADGET_DIR, GADGETS_CHANGED_EVENT, GADGET_LIMITS, GADGET_SERVER_CLASS, JsonObjectSchema, JsonValueSchema, WORKSPACE_ROOT,
-  decideApproval, ensureDir, gadgetBindings, gadgetFilesRoot, gadgetSummary, isGadgetMethodName, isGadgetSlug,
-  listGadgets, readGadget, readGadgetClient, readGadgetServer, resolveGadgetDataSource, resolveGadgetFilePath,
-  reviewGadgetMcpCall, sha256Hex,
-  type ApprovalSpend, type GadgetBinding, type GadgetBindingKind, type GadgetCallResult, type GadgetDataSource,
-  type GadgetManifest, type GadgetMcpTool, type GadgetProblem, type GadgetRecord, type GadgetSummary, type JsonObject,
-  type JsonValue, type ShellApprovalPolicy, type VFS,
+  GADGET_DIR, GADGETS_CHANGED_EVENT, GADGET_SERVER_CLASS, GadgetBindingRequestSchema, JsonValueSchema, WORKSPACE_ROOT,
+  gadgetBindings, gadgetSummary, isGadgetMethodName, isGadgetSlug,
+  listGadgets, readGadget, readGadgetClient, readGadgetServer, routeGadgetBindingCall, sha256Hex,
+  type CodemodeProvider, type GadgetBindingRoute, type GadgetCallResult, type GadgetDataSource,
+  type GadgetManifest, type GadgetProblem, type GadgetRecord, type GadgetSummary, type JsonObject,
+  type JsonValue, type VFS,
 } from '@kinu.run/core';
-import { KinuError, refusalOf, renderThrownChain, toKinuError, tolerateAsync } from '@kinu.run/core/obs';
-import type {
-  GadgetBindingProps, GadgetBindingRequest, GadgetFilesBinding, GadgetMcpBinding, GadgetWorkspaceBinding,
-} from './bindings';
+import { KinuError, refusalOf, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import type { GadgetBinding, GadgetBindingProps } from './bindings';
 
 /** The runtime a gadget's process is pinned to. The same date the Worker
  *  deploys under (wrangler.jsonc `compatibility_date`), so a gadget meets the
  *  platform its host measured. */
 const GADGET_COMPATIBILITY_DATE = '2025-12-01';
 
-/** What `env.<NAME>` is inside the process: the loopback stub of the binding
- *  kind's entrypoint class, so `server.js` reaches that class's methods and
- *  nothing else. */
-type GadgetBindingStub = Fetcher<GadgetFilesBinding | GadgetWorkspaceBinding | GadgetMcpBinding>;
+/** What `env.<NAME>` is inside the process before the runner wraps it: the
+ *  loopback stub of the one binding entrypoint, so `server.js` reaches its
+ *  `call` and nothing else. */
+type GadgetBindingStub = Fetcher<GadgetBinding>;
 
 /** The process's `env`: one stub per declared binding, and nothing else. */
 interface GadgetProcessEnv {
   [name: string]: GadgetBindingStub;
 }
+
+/** The header a call carries its app-to-app hop count on, read by the runner. */
+const GADGET_DEPTH_HEADER = 'x-gadget-depth';
 
 /**
  * Gadget pids live above the workspace process table, so a gadget never takes
@@ -116,6 +125,15 @@ function boxedGadgetError(value: JsonValue): string | null {
  * process `env` and answers Cap'n Web HTTP batch on it. Plain text, so the
  * boot carries no build step: the map holds this, `server.js`, and `capnweb.js`.
  *
+ * BINDINGS ARE PROXIES. A Workers RPC stub answers only the methods its class
+ * declares, and the one binding class declares `call(member, args, depth)`
+ * (gadgets/bindings.ts). The runner wraps each stub so `env.NAME.member(...args)`
+ * becomes that call, carrying the hop count the batch arrived with: the host
+ * sends it on `x-gadget-depth`, `handleHttpRequest` keeps it in an
+ * `AsyncLocalStorage` for the life of the batch, and the Proxy reads it at the
+ * moment the server calls. Two batches in flight on one process cannot see
+ * each other's count.
+ *
  * Method failures cross as VALUES, never as rejections. The server answers a
  * thrown method with a rejected batch, and a rejection on this hop surfaces
  * twice: once on the caller's await, once as an unhandled rejection in the
@@ -129,8 +147,23 @@ function boxedGadgetError(value: JsonValue): string | null {
  */
 const GADGET_RUNNER_SOURCE = [
   'import { DurableObject } from "cloudflare:workers";',
+  'import { AsyncLocalStorage } from "node:async_hooks";',
   'import { newHttpBatchRpcResponse } from "./capnweb.js";',
   `import { ${GADGET_SERVER_CLASS} } from "./server.js";`,
+  'const __gadgetDepth = new AsyncLocalStorage();',
+  'function __gadgetBind(stub) {',
+  '  return new Proxy(Object.create(null), {',
+  '    get(_target, member) {',
+  '      if (typeof member !== "string" || member === "then") return undefined;',
+  '      return (...args) => stub.call(member, args, __gadgetDepth.getStore() ?? 0);',
+  '    },',
+  '  });',
+  '}',
+  'function __gadgetEnv(env) {',
+  '  const bound = {};',
+  '  for (const name of Object.keys(env)) bound[name] = __gadgetBind(env[name]);',
+  '  return Object.freeze(bound);',
+  '}',
   'function __gadgetBoxError(error) {',
   `  return { ${GADGET_ERROR_KEY}: error instanceof Error ? error.message : String(error) };`,
   '}',
@@ -159,16 +192,20 @@ const GADGET_RUNNER_SOURCE = [
   '};',
   'export class NimbusProcess extends DurableObject {',
   '  constructor(ctx, env) { super(ctx, env); this.server = null; }',
+  '  __gadgetServer() {',
+  `    this.server ??= new Proxy(new ${GADGET_SERVER_CLASS}(__gadgetEnv(this.env)), __gadgetHandler);`,
+  '    return this.server;',
+  '  }',
   '  async startProcess() {',
-  `    if (this.server === null) this.server = new Proxy(new ${GADGET_SERVER_CLASS}(this.env), __gadgetHandler);`,
+  '    this.__gadgetServer();',
   '    return { ok: true };',
   '  }',
   '  async fetch(request) {',
   '    return this.handleHttpRequest(request);',
   '  }',
   '  async handleHttpRequest(request) {',
-  `    if (this.server === null) this.server = new Proxy(new ${GADGET_SERVER_CLASS}(this.env), __gadgetHandler);`,
-  '    return newHttpBatchRpcResponse(request, this.server);',
+  `    const depth = Number(request.headers.get("${GADGET_DEPTH_HEADER}") ?? "0");`,
+  '    return __gadgetDepth.run(depth, () => newHttpBatchRpcResponse(request, this.__gadgetServer()));',
   '  }',
   '}',
 ].join('\n');
@@ -191,12 +228,6 @@ function capnwebSource(): Promise<string> {
   return capnwebBundle;
 }
 
-export interface GadgetMcpPort {
-  /** The connection's tools as the owner's UserDO describes them. */
-  tools(server: string): Promise<GadgetMcpTool[]>;
-  call(server: string, tool: string, args: JsonObject): Promise<JsonValue>;
-}
-
 export interface GadgetHostDeps {
   /** The workspace's name — the Durable Object's, which is what a binding's
    *  props carry back to find this object. */
@@ -209,11 +240,17 @@ export interface GadgetHostDeps {
   readonly ctx: DurableObjectState;
   readonly env: ResidentFacetEnv;
   readonly broadcast: (event: { type: typeof GADGETS_CHANGED_EVENT; slugs: string[] }) => void;
-  /** One read model by name. The name has already passed `resolveGadgetDataSource`. */
+  /** The namespaces a `namespace` binding may reach, exactly the surfaces the
+   *  agent's own `execute_tools` sandbox dispatches to — the router's gated
+   *  executor providers and the projected namespaces (`web`, `memory`, ...).
+   *  Read per call: an executor attaches and detaches while the object lives. */
+  readonly providers: () => readonly CodemodeProvider[];
+  /** One read model by name, for an `rpc` binding. The name passed the
+   *  manifest parser, which holds it to the `workspace.read` list. */
   readonly data: (source: GadgetDataSource) => Promise<JsonValue>;
-  readonly mcp: GadgetMcpPort;
-  /** The same ladder the shell answers to — mode, standing grants, channel, queue. */
-  readonly approval: ShellApprovalPolicy;
+  /** One MCP tool call on one of the owner's connections, for an `mcp`
+   *  binding: the same UserDO call the agent's own MCP tools make. */
+  readonly mcp: { call(server: string, tool: string, args: JsonObject): Promise<JsonValue> };
 }
 
 /** The gadget server as the host calls it: any forwarded name, JSON in, JSON out.
@@ -260,9 +297,11 @@ export class GadgetHost {
    * One call into a gadget's server, exactly as its client would make it.
    *
    * Reads the server and the manifest fresh, so an edit since the last call
-   * boots the new code before this call lands.
+   * boots the new code before this call lands. `depth` is how many app-to-app
+   * hops the caller is already down: zero from a client or the agent, one more
+   * per `app` binding crossed (see the class note on DEPTH).
    */
-  async call(slug: string, method: string, args: JsonValue[]): Promise<GadgetCallResult> {
+  async call(slug: string, method: string, args: JsonValue[], depth = 0): Promise<GadgetCallResult> {
     if (!isGadgetSlug(slug)) {
       return { ok: false, ...refusalOf(new KinuError('bad_input', `"${slug}" is not a gadget slug`)) };
     }
@@ -289,7 +328,7 @@ export class GadgetHost {
     }
     let value: unknown;
     try {
-      value = await this.invoke(process, method, parsedArgs.output);
+      value = await this.invoke(process, method, parsedArgs.output, depth);
     } catch (cause) {
       this.retire(slug);
       return { ok: false, ...refusalOf(toKinuError({ doing: `gadget ${slug}.${method}`, cause, otherwise: 'io' })) };
@@ -309,104 +348,56 @@ export class GadgetHost {
   /**
    * A call through one of the gadget's bindings, back from its process.
    *
-   * The manifest is re-read here rather than trusted from the boot: the stub
-   * proves the process was built with this binding name, and the manifest as
-   * it stands now decides what the name reaches.
+   * The request is parsed here, whatever transport carried it: the process is
+   * agent code. The manifest is re-read rather than trusted from the boot: the
+   * stub proves the process was built with this binding name, and the manifest
+   * as it stands now decides what the name reaches (`routeGadgetBindingCall`).
+   * The route then runs as the agent's own call would.
    */
-  async bindingCall(slug: string, name: string, request: GadgetBindingRequest): Promise<GadgetCallResult> {
+  async bindingCall(slug: string, name: string, request: JsonValue): Promise<GadgetCallResult> {
+    const parsed = v.safeParse(GadgetBindingRequestSchema, request);
+    if (!parsed.success) {
+      return { ok: false, ...refusalOf(new KinuError('bad_input',
+        `a binding call is { member, args: JSON[], depth }: ${renderThrownChain({ cause: new v.ValiError(parsed.issues) })}`)) };
+    }
     const gadget = await readGadget(this.deps.vfs(), slug);
     if (!gadget.ok) return gadget;
-    const binding = gadgetBindings(gadget.record.manifest).find(([bound]) => bound === name)?.[1];
-    if (!binding || binding.kind !== request.kind) {
-      return { ok: false, ...refusalOf(new KinuError('denied',
-        `gadget "${slug}" no longer declares a ${request.kind} binding named ${name}`)) };
-    }
+    const routed = routeGadgetBindingCall({ slug, manifest: gadget.record.manifest, name, request: parsed.output });
+    if (!routed.ok) return routed;
     try {
-      switch (request.kind) {
-        case 'files':
-          return await this.filesCall(slug, binding, request);
-        case 'workspace':
-          return await this.workspaceCall(request);
-        case 'mcp':
-          return await this.mcpCall(slug, binding, request);
-      }
+      return await this.run(routed.route);
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `gadget ${slug} binding ${name}`, cause, otherwise: 'io' })) };
     }
   }
 
-  private async filesCall(
-    slug: string,
-    binding: GadgetBinding,
-    request: Extract<GadgetBindingRequest, { kind: 'files' }>,
-  ): Promise<GadgetCallResult> {
-    if (binding.kind !== 'files') throw new Error('unreachable: a files request on a non-files binding');
-    const resolved = resolveGadgetFilePath(gadgetFilesRoot(slug, binding), request.path);
-    if (!resolved.ok) return resolved;
-    const vfs = this.deps.vfs();
-    switch (request.op) {
-      case 'read': {
-        const raw = await tolerateAsync(() => vfs.readFile(resolved.path, { encoding: 'utf8' }), 'enoent');
-        if (raw === undefined) {
-          return { ok: false, ...refusalOf(new KinuError('missing', `no file at ${resolved.path}`)) };
+  /** Run one routed binding call through the seam the agent's own call takes. */
+  private async run(route: GadgetBindingRoute): Promise<GadgetCallResult> {
+    switch (route.kind) {
+      case 'namespace': {
+        const provider = this.deps.providers().find((candidate) => candidate.name === route.namespace);
+        if (!provider) {
+          return { ok: false, ...refusalOf(new KinuError('unavailable',
+            `namespace ${route.namespace} is not available in this workspace right now`)) };
         }
-        return { ok: true, value: raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw };
-      }
-      case 'write': {
-        if (request.text.length > GADGET_LIMITS.clientChars) {
+        if (!Object.hasOwn(provider.tools, route.member)) {
+          return { ok: false, ...refusalOf(new KinuError('missing',
+            `${route.namespace} has no member ${route.member}; it offers ${Object.keys(provider.tools).join(', ')}`)) };
+        }
+        const answered = await provider.tools[route.member]?.execute(...route.args);
+        const value = v.safeParse(JsonValueSchema, answered === undefined ? null : answered);
+        if (!value.success) {
           return { ok: false, ...refusalOf(new KinuError('bad_input',
-            `a gadget write is at most ${GADGET_LIMITS.clientChars} characters`)) };
+            `${route.namespace}.${route.member} answered a value that is not JSON: ${renderThrownChain({ cause: new v.ValiError(value.issues) })}`)) };
         }
-        const parent = resolved.path.slice(0, resolved.path.lastIndexOf('/'));
-        if (parent) await ensureDir(vfs, parent);
-        await vfs.writeFile(resolved.path, request.text);
-        return { ok: true, value: { path: resolved.path, chars: request.text.length } };
+        return { ok: true, value: value.output };
       }
-      case 'list': {
-        const names = await tolerateAsync(() => vfs.readdir(resolved.path), 'enoent');
-        return { ok: true, value: names ?? [] };
-      }
-      case 'remove': {
-        await tolerateAsync(() => vfs.unlink(resolved.path), 'enoent');
-        return { ok: true, value: { path: resolved.path } };
-      }
-    }
-  }
-
-  private async workspaceCall(request: Extract<GadgetBindingRequest, { kind: 'workspace' }>): Promise<GadgetCallResult> {
-    const resolved = resolveGadgetDataSource(request.source);
-    if (!resolved.ok) return resolved;
-    return { ok: true, value: await this.deps.data(resolved.source) };
-  }
-
-  private async mcpCall(
-    slug: string,
-    binding: GadgetBinding,
-    request: Extract<GadgetBindingRequest, { kind: 'mcp' }>,
-  ): Promise<GadgetCallResult> {
-    if (binding.kind !== 'mcp') throw new Error('unreachable: an mcp request on a non-mcp binding');
-    const tools = await this.deps.mcp.tools(binding.server);
-    if (request.op === 'tools') {
-      const offered = binding.tools === undefined ? tools : tools.filter((tool) => binding.tools?.includes(tool.name));
-      return { ok: true, value: offered.map((tool) => ({ name: tool.name, readOnly: tool.readOnly })) };
-    }
-    const args = v.safeParse(JsonObjectSchema, request.args);
-    if (!args.success) {
-      return { ok: false, ...refusalOf(new KinuError('bad_input', 'mcp arguments must be a JSON object')) };
-    }
-    const reviewed = reviewGadgetMcpCall({ slug, binding, tool: request.tool, args: args.output, tools });
-    if (!reviewed.ok) return reviewed;
-    const decision = await decideApproval(reviewed.review.subject, reviewed.review.review, this.deps.approval);
-    if (!decision.run) {
-      return { ok: false, ...refusalOf(new KinuError('denied', decision.message)) };
-    }
-    const spent: ApprovalSpend | undefined = decision.spent;
-    try {
-      return { ok: true, value: await this.deps.mcp.call(binding.server, request.tool, args.output) };
-    } finally {
-      // The call reached the connection: the grant is consumed whatever the
-      // tool answered, which is the reading `gateExec` takes too.
-      if (spent) this.deps.approval.deferrals?.settle(spent, 'spent');
+      case 'rpc':
+        return { ok: true, value: await this.deps.data(route.method) };
+      case 'mcp':
+        return { ok: true, value: await this.deps.mcp.call(route.server, route.tool, route.args) };
+      case 'app':
+        return this.call(route.id, route.method, [...route.args], route.depth + 1);
     }
   }
 
@@ -471,7 +462,9 @@ export class GadgetHost {
       kind: 'code',
       code: {
         compatibilityDate: GADGET_COMPATIBILITY_DATE,
-        compatibilityFlags: [],
+        // The runner's `AsyncLocalStorage` (the per-batch hop count) and nothing
+        // else of Node: the server itself sees the same platform the Worker does.
+        compatibilityFlags: ['nodejs_als'],
         mainModule: GADGET_RUNNER_MODULE,
         modules: {
           [GADGET_RUNNER_MODULE]: GADGET_RUNNER_SOURCE,
@@ -500,8 +493,9 @@ export class GadgetHost {
    * bytes go in on one POST to `handleHttpRequest`, and the framed answer
    * comes back on its response. One batch per call; the process holds no
    * session between calls, which is what lets a retire take effect at once.
+   * The hop count rides the request as a header the runner reads.
    */
-  private async invoke(process: ResidentFacet, method: string, args: JsonValue[]): Promise<JsonValue> {
+  private async invoke(process: ResidentFacet, method: string, args: JsonValue[], depth: number): Promise<JsonValue> {
     // One HTTP batch per call, framed exactly as Cap'n Web's own batch client
     // frames it: sends accumulate until a macrotask, then ride one POST to
     // `handleHttpRequest`, and the response lines answer the receives. The
@@ -515,6 +509,7 @@ export class GadgetHost {
       batchToSend = null;
       const response = await process.handleHttpRequest(new Request('https://gadget/', {
         method: 'POST',
+        headers: { [GADGET_DEPTH_HEADER]: String(depth) },
         body: batch.join('\n'),
       }));
       if (!response.ok) {
@@ -566,26 +561,16 @@ export class GadgetHost {
     return pid;
   }
 
-  /** Mint one stub per declared binding: the whole of the process's reach. */
+  /** Mint one stub per declared binding: the whole of the process's reach.
+   *  Every kind is the one entrypoint class, read by name from this Worker's
+   *  own exports so the class the process reaches is the one `server.ts`
+   *  publishes, carrying props only this Worker can write. */
   private mintEnv(slug: string, manifest: GadgetManifest): GadgetProcessEnv {
     const env: GadgetProcessEnv = {};
-    for (const [name, binding] of gadgetBindings(manifest)) {
-      env[name] = mintGadgetBinding(binding.kind, { workspace: this.deps.workspace, slug, name });
+    for (const [name] of gadgetBindings(manifest)) {
+      const props: GadgetBindingProps = { workspace: this.deps.workspace, slug, name };
+      env[name] = exports.GadgetBinding({ props });
     }
     return env;
-  }
-}
-
-/**
- * The stub for one binding: the loopback form of its kind's entrypoint class,
- * read by name from this Worker's own exports so the class the process reaches
- * is the one `server.ts` publishes under it, carrying props only this Worker
- * can write.
- */
-function mintGadgetBinding(kind: GadgetBindingKind, props: GadgetBindingProps): GadgetBindingStub {
-  switch (kind) {
-    case 'files': return exports.GadgetFilesBinding({ props });
-    case 'workspace': return exports.GadgetWorkspaceBinding({ props });
-    case 'mcp': return exports.GadgetMcpBinding({ props });
   }
 }

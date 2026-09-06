@@ -1,7 +1,7 @@
 /**
  * The drift gate under agent-authored gadgets.
  *
- * `packages/core` owns the list of RPC methods a gadget's `workspace`
+ * `packages/core` owns the list of RPC methods a gadget's `rpc`
  * binding may name, because the manifest is validated in core, at write
  * time — and core is platform-clean, so it cannot read the Cloudflare scope
  * table that decides what those names actually cost. Nothing stops the two

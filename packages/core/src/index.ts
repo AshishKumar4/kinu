@@ -250,15 +250,15 @@ export type * from './types/evaluation';
 export {
   GADGET_DIR, GADGET_MANIFEST_FILE, GADGET_SERVER_FILE, GADGET_CLIENT_FILE, GADGET_CLIENT_STYLE_FILE,
   GADGET_SERVER_CLASS, GADGET_LIMITS, GADGET_DATA_SOURCES, GADGETS_CHANGED_EVENT,
-  parseGadgetManifest, gadgetBindings, gadgetFilesRoot, isGadgetSlug, isGadgetDataSource,
+  parseGadgetManifest, gadgetBindings, isGadgetSlug,
   listGadgets, readGadget, readGadgetClient, readGadgetServer,
   isGadgetMethodName, gadgetSummary,
-  resolveGadgetFilePath, resolveGadgetDataSource, reviewGadgetMcpCall,
+  GadgetBindingRequestSchema, routeGadgetBindingCall,
   type GadgetManifest, type GadgetManifestResult, type GadgetBinding, type GadgetBindingKind,
-  type GadgetFilesBinding, type GadgetMcpBinding, type GadgetDataSource,
+  type GadgetDataSource,
   type GadgetRecord, type GadgetProblem, type GadgetListing, type GadgetReadResult,
   type GadgetCallResult, type GadgetsChangedEvent, type GadgetSummary,
-  type GadgetMcpTool, type GadgetMcpReview,
+  type GadgetBindingRequest, type GadgetBindingRoute, type GadgetBindingRouteResult,
 } from './gadgets/index';
 
 // Release lane — governed patch/deploy over a bound source — separate from scaffold evolution.
@@ -1267,7 +1267,6 @@ export {
   parseApprovalGrant,
   approvalGrants,
   gateExec,
-  decideApproval,
   grantsAreSubset,
   resolveInheritedGrants,
   createInheritedApprovalPolicy,

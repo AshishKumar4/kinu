@@ -9,10 +9,10 @@ import {
   EGRESS_PLACEHOLDER_PREFIX,
   createInheritedApprovalPolicy,
   createScrubStream,
-  decideApproval,
   egressHostMatches,
   egressSecretRule,
   findEgressPlaceholders,
+  gateExec,
   grantsAreSubset,
   isEgressPlaceholder,
   parseEgressSecretRule,
@@ -23,6 +23,7 @@ import {
   type ApprovalGrant,
   type EgressSecretBinding,
   type ShellApprovalMode,
+  type ShellApprovalPolicy,
 } from '../src/index';
 
 /** A placeholder of the real shape: prefix + 43 base64url characters. */
@@ -159,52 +160,6 @@ describe('approval composition', () => {
     expect(parseEgressSecretRule('rm-rf')).toBeNull();
     expect(parseEgressSecretRule('egress-secret:')).toBeNull();
   });
-
-  test('an egress binding is gated even on the agent\'s own container', () => {
-    // `sandbox` is in AGENT_OWN_EXECUTORS, which exempts LOCAL harm. An egress
-    // carrying the owner's credential reaches out, so the exemption must not
-    // reach it — proven through the real ladder, with nobody to ask.
-    const decision = decideApproval(
-      { command: 'bind', executor: 'sandbox' },
-      reviewEgressBinding(STRIPE),
-      { mode: () => 'strict' },
-    );
-    return decision.then((d) => {
-      expect(d.run).toBe(false);
-      expect(d.run === false && d.message).toContain('needs owner approval');
-    });
-  });
-
-  test('a standing grant stops the asking', async () => {
-    const granted: ApprovalGrant = { rule: egressSecretRule('bind-stripe'), executor: 'sandbox' };
-    const decision = await decideApproval(
-      { command: 'bind', executor: 'sandbox' },
-      reviewEgressBinding(STRIPE),
-      { mode: () => 'strict', granted: (g) => g.rule === granted.rule && g.executor === granted.executor },
-    );
-    expect(decision.run).toBe(true);
-  });
-
-  test('a grant for a DIFFERENT binding does not authorise this one', async () => {
-    const decision = await decideApproval(
-      { command: 'bind', executor: 'sandbox' },
-      reviewEgressBinding(STRIPE),
-      { mode: () => 'strict', granted: (g) => g.rule === egressSecretRule('bind-github') },
-    );
-    expect(decision.run).toBe(false);
-  });
-
-  test('a grant on a different executor does not authorise this one', async () => {
-    const decision = await decideApproval(
-      { command: 'bind', executor: 'sandbox' },
-      reviewEgressBinding(STRIPE),
-      {
-        mode: () => 'strict',
-        granted: (g) => g.rule === egressSecretRule('bind-stripe') && g.executor === 'laptop',
-      },
-    );
-    expect(decision.run).toBe(false);
-  });
 });
 
 describe('grants are the workspace set, or a subset', () => {
@@ -276,16 +231,28 @@ describe('inherited approval policy', () => {
     expect(policy.requestApproval).toBeUndefined();
   });
 
+  /** The ladder as production reaches it: `gateExec` over a command whose
+   *  review gates on the agent's own container. A force-push reaches out, so
+   *  `sandbox` does not exempt it — the same standing an egress binding has. */
+  const GATED = 'git push --force origin main';
+  const GATED_RULE = 'git-force-push';
+  function ladder(policy: ShellApprovalPolicy) {
+    const ran: string[] = [];
+    const run = gateExec<string>(
+      async (command) => { ran.push(command); return `ran:${command}`; },
+      (message) => message,
+      'sandbox',
+      policy,
+    );
+    return { ran, run: () => run(GATED) };
+  }
+
   test('the ladder resolves the root before reading, so a granted facet does not re-ask', async () => {
     // The whole point, end to end: the owner granted this on the workspace,
     // the facet holds no grant of its own, and the facet does not ask again.
-    const grant = { rule: egressSecretRule('bind-stripe'), executor: 'sandbox' };
-    const probe = rootSource('strict', [grant]);
-    const policy = createInheritedApprovalPolicy(probe.source);
-    const decision = await decideApproval(
-      { command: 'bind', executor: 'sandbox' }, reviewEgressBinding(STRIPE), policy,
-    );
-    expect(decision.run).toBe(true);
+    const probe = rootSource('strict', [{ rule: GATED_RULE, executor: 'sandbox' }]);
+    const gate = ladder(createInheritedApprovalPolicy(probe.source));
+    expect(await gate.run()).toBe(`ran:${GATED}`);
     expect(probe.calls()).toBe(1);
   });
 
@@ -294,12 +261,12 @@ describe('inherited approval policy', () => {
       fetchRoot: () => Promise.reject(new Error('root DO unreachable')),
       ownGrants: () => null,
     });
-    await expect(decideApproval(
-      { command: 'bind', executor: 'sandbox' }, reviewEgressBinding(STRIPE), policy,
-    )).rejects.toThrow('root DO unreachable');
+    const gate = ladder(policy);
+    await expect(gate.run()).rejects.toThrow('root DO unreachable');
+    expect(gate.ran).toEqual([]);
     // And the cached answer never widened.
     expect(policy.mode()).toBe('strict');
-    expect(policy.granted?.({ rule: egressSecretRule('bind-stripe'), executor: 'sandbox' })).toBe(false);
+    expect(policy.granted?.({ rule: GATED_RULE, executor: 'sandbox' })).toBe(false);
   });
 });
 

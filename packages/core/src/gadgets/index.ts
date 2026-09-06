@@ -8,12 +8,11 @@
 export {
   GADGET_DIR, GADGET_MANIFEST_FILE, GADGET_SERVER_FILE, GADGET_CLIENT_FILE, GADGET_CLIENT_STYLE_FILE,
   GADGET_SERVER_CLASS, GADGET_LIMITS,
-  parseGadgetManifest, gadgetBindings, gadgetFilesRoot, isGadgetSlug,
+  parseGadgetManifest, gadgetBindings, isGadgetSlug,
   type GadgetManifest, type GadgetManifestResult, type GadgetBinding, type GadgetBindingKind,
-  type GadgetFilesBinding, type GadgetMcpBinding,
 } from './manifest';
 
-export { GADGET_DATA_SOURCES, isGadgetDataSource, type GadgetDataSource } from './sources';
+export { GADGET_DATA_SOURCES, type GadgetDataSource } from './sources';
 
 export {
   listGadgets, readGadget, readGadgetClient, readGadgetServer,
@@ -26,6 +25,6 @@ export {
 } from './rpc';
 
 export {
-  resolveGadgetFilePath, resolveGadgetDataSource, reviewGadgetMcpCall,
-  type GadgetMcpTool, type GadgetMcpReview,
+  GadgetBindingRequestSchema, routeGadgetBindingCall,
+  type GadgetBindingRequest, type GadgetBindingRoute, type GadgetBindingRouteResult,
 } from './bindings';

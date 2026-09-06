@@ -25,7 +25,6 @@ import {
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { GadgetHost } from "./gadgets/host";
-import type { GadgetBindingRequest } from "./gadgets/bindings";
 import { applyWorkspaceBoxOp, type WorkspaceBoxOp, type WorkspaceBoxResult } from "./workspace-box-rpc";
 import {
   hostedFacetAgentName, type HostedFacetHomes, type HostedFacetKind, type HostedNodeHome,
@@ -68,10 +67,9 @@ import {
   nanoid, type HeadRunView,
   // Canonical memory-note write primitive
   appendMemoryNote,
-  // Gadgets — core owns the manifest, the file layout and the binding rules;
+  // Gadgets — core owns the manifest, the file layout and the binding route;
   // this object boots the resident processes (gadgets/host.ts).
-  McpToolSurfaceSchema,
-  type GadgetCallResult, type GadgetDataSource, type GadgetMcpTool, type GadgetProblem, type GadgetSummary,
+  type GadgetBindingRequest, type GadgetCallResult, type GadgetDataSource, type GadgetProblem, type GadgetSummary,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   type ScaffoldRunResult,
   // The scaffold evolution control plane (core owns the drivers; this actor
@@ -3925,28 +3923,24 @@ export class OrchestratorAgent extends ActorAgent {
       ctx: this.ctx,
       env: { LOADER: this.env.LOADER },
       broadcast: (event) => this.broadcast(JSON.stringify(event)),
+      providers: () => this.gadgetNamespaces(),
       data: (source) => this.gadgetDataSource(source),
+      // The same UserDO call the agent's own MCP tools make (actor-agent.ts
+      // `mcpToolsCache`): the connection's allowlist and tier apply there.
       mcp: {
-        tools: (server) => this.gadgetMcpTools(server),
         call: async (server, tool, args) => {
           const { stub, caller } = await this.userHub();
           const raw = await stub.userMcp_callTool(caller, server, tool, args);
           return v.parse(JsonValueSchema, JSON.parse(raw));
         },
       },
-      approval: {
-        mode: () => getShellApprovalMode(this.config).mode,
-        granted: (grant) => getShellApprovalGrants(this.config).grants
-          .some((g) => g.rule === grant.rule && g.executor === grant.executor),
-        deferrals: this.deferrals.channel,
-      },
     });
     return this._gadgets;
   }
 
-  /** One read model by name, for a gadget's `workspace` binding. The name has
-   *  passed `resolveGadgetDataSource`; each member is `@callable` and classed
-   *  `workspace.read` (tests/unit-gadget-sources.test.ts holds that). */
+  /** One read model by name, for a gadget's `rpc` binding. The manifest parser
+   *  holds the name to `GADGET_DATA_SOURCES`; each member is `@callable` and
+   *  classed `workspace.read` (tests/unit-gadget-sources.test.ts holds that). */
   private async gadgetDataSource(source: GadgetDataSource): Promise<JsonValue> {
     // No annotation: each thunk keeps its getter's own type, and indexing by
     // `GadgetDataSource` still fails the build when a source has no thunk.
@@ -3967,16 +3961,6 @@ export class OrchestratorAgent extends ActorAgent {
     return v.parse(JsonValueSchema, await reads[source]());
   }
 
-  /** One connection's tools, with the read-only annotation the gatekeeper
-   *  reads, as the owner's UserDO describes them. */
-  private async gadgetMcpTools(server: string): Promise<GadgetMcpTool[]> {
-    const { stub, caller } = await this.userHub();
-    const surface = v.parse(McpToolSurfaceSchema, JSON.parse(await stub.userMcp_toolDescriptors(caller)));
-    return surface.descriptors
-      .filter((descriptor) => descriptor.serverId === server)
-      .map((descriptor) => ({ name: descriptor.name, readOnly: descriptor.readOnly === true }));
-  }
-
   /** The tabs to draw, and the directories that failed to be one. Titles are
    *  agent-authored, so the UI marks them. */
   @callable() async listGadgets(): Promise<{ gadgets: GadgetSummary[]; problems: GadgetProblem[] }> {
@@ -3991,17 +3975,17 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** One call from a gadget's client to its server, forwarded by the UI's
    *  bridge: the resident process's method, JSON in, JSON out. Interactive-only
-   *  in the RPC gate: a call may act through an MCP binding. */
+   *  in the RPC gate: a call may act through any binding the agent holds. */
   @callable() async gadgetCall(slug: string, method: string, args: JsonValue[]): Promise<GadgetCallResult> {
     return this.gadgets.call(String(slug), String(method), args);
   }
 
   /** A gadget server's call through one of its bindings, back from its
-   *  process. Reached by the loopback entrypoints in gadgets/bindings.ts over
+   *  process. Reached by the loopback entrypoint in gadgets/bindings.ts over
    * this object's stub, and by nothing else: deliberately NOT `@callable`,
    * because a browser socket that could name a binding could reach the
-   * owner's MCP connections as a gadget. `sealRpcSurface` keeps it on the
-   * stub transport.
+   * agent's executors and the owner's MCP connections as a gadget.
+   * `sealRpcSurface` keeps it on the stub transport.
    */
   async gadgetBindingCall(slug: string, name: string, request: GadgetBindingRequest): Promise<GadgetCallResult> {
     return this.gadgets.bindingCall(String(slug), String(name), request);

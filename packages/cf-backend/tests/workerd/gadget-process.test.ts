@@ -10,19 +10,20 @@
  *
  * WHAT THE PROBE DRIVES. A real `GadgetHost` over the real file plane on the
  * probe's own SQLite, minting each binding from this test worker's own
- * `exports` exactly as production mints from the Worker's, a strict approval
- * policy with nobody to ask, and a fixed `listBackgroundJobs` answer. The
- * assertions below are the pairs that discriminate: the workspace's own
- * network reachable beside a files read that answers, a read inside the root
- * beside a read above it, a
- * listed source beside an unlisted one, the declared `env` beside everything
- * else.
+ * `exports` exactly as production mints from the Worker's, a router of two
+ * executor providers gated the way the agent's own are, a fixed
+ * `listBackgroundJobs` answer and a recording MCP port. The assertions below
+ * are the pairs that discriminate: the workspace's own network reachable
+ * beside a file read that answers, a shell command that runs beside one the
+ * executor's own gate parks, a listed member beside an unlisted one, a
+ * declared `env` beside everything else, and one app composing another
+ * beside the cycle that closes on itself.
  */
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import type { GadgetCallResult, JsonValue } from '@kinu.run/core';
+import { GADGET_LIMITS, type GadgetCallResult, type JsonValue } from '@kinu.run/core';
 import {
-  PROBE_JOBS, PROBE_MCP_READ_TOOL, PROBE_MCP_WRITE_TOOL, type GadgetProcessProbeRpc,
+  PROBE_JOBS, PROBE_MCP_TOOL, PROBE_PARKED_ID, type GadgetProcessProbeRpc,
 } from './gadget-process-probe';
 
 const SERVER_JS = `import { RpcTarget } from './capnweb.js';
@@ -35,26 +36,48 @@ export class Gadget extends RpcTarget {
     return globalThis.__tick;
   }
   async egress() { try { const r = await fetch('https://example.com'); return 'reached: ' + r.status; } catch (e) { return 'blocked: ' + e.message; } }
-  async ownStorage() { await this.env.FILES.write('state.txt', 'own'); return this.env.FILES.read('state.txt'); }
   async storageAuthority() { return typeof this.ctx; }
-  async readFile(p) { return await this.env.FILES.read(p); }
-  async writeFile(p, t) { return await this.env.FILES.write(p, t); }
-  async data(s) { return await this.env.WORKSPACE.read(s); }
+  async shell(command) { return await this.env.WS.exec(command); }
+  async readFile(p) { return await this.env.WS.readFile(p); }
+  async writeFile(p, t) { return await this.env.WS.writeFile(p, t); }
+  async sandbox(command) { return await this.env.SANDBOX.exec(command); }
+  async sandboxRead(p) { return await this.env.SANDBOX.readFile(p); }
+  async data(method) { return await this.env.DATA[method](); }
   async ambient() { return Object.keys(this.env).sort(); }
-  async mcp(tool) { return await this.env.GITHUB.call(tool, {}); }
+  async mcp(tool, args) { return await this.env.GITHUB[tool](args ?? {}); }
+  async inner(method, ...args) { return await this.env.INNER[method](...args); }
+  async loop(n) { return await this.env.INNER.loop(n + 1); }
 }
 `;
 
 const SERVER_V2 = SERVER_JS.replace("return 'echo:' + x", "return 'v2:' + x");
 
+/** The app `probe` composes: it answers, and it binds `probe` back so a
+ *  `loop` between the two never ends on its own. */
+const INNER_SERVER_JS = `import { RpcTarget } from './capnweb.js';
+export class Gadget extends RpcTarget {
+  constructor(env) { super(); this.env = env; }
+  async echo(x) { return 'inner:' + x; }
+  async loop(n) { return await this.env.OUTER.loop(n + 1); }
+}
+`;
+
 const MANIFEST = {
   v: 1,
   title: 'Probe',
   bindings: {
-    FILES: { kind: 'files', root: 'gadgets/probe/data' },
-    WORKSPACE: { kind: 'workspace' },
+    WS: { kind: 'namespace', namespace: 'workspace' },
+    SANDBOX: { kind: 'namespace', namespace: 'sandbox', members: ['exec'] },
+    DATA: { kind: 'rpc', methods: ['listBackgroundJobs'] },
     GITHUB: { kind: 'mcp', server: 'github' },
+    INNER: { kind: 'app', id: 'inner' },
   },
+};
+
+const INNER_MANIFEST = {
+  v: 1,
+  title: 'Inner',
+  bindings: { OUTER: { kind: 'app', id: 'probe' } },
 };
 
 /** The call's value, or a failure naming the refusal instead of the shape. */
@@ -91,6 +114,10 @@ describe('the gadget server boundary under workerd', () => {
       'server.js': serverJs,
       'data/note.txt': 'probe data\n',
     });
+    await subject.writeGadget('inner', {
+      'gadget.json': JSON.stringify(INNER_MANIFEST),
+      'server.js': INNER_SERVER_JS,
+    });
     return subject;
   }
 
@@ -112,74 +139,97 @@ describe('the gadget server boundary under workerd', () => {
     expect(valueOf(await subject.gadgetCall('probe', 'tick', []))).toBe(3);
   });
 
-  it('reaches the workspace network while the files binding reads inside its root', async () => {
+  it('reaches the workspace network, and the file plane and the shell through the workspace namespace', async () => {
     const subject = await seed('gadget-process-egress');
     // The server inherits the owner's outbound like every other resident
-    // process; what it may NOT do is reach a workspace plane it did not declare,
+    // process; what it may NOT do is reach a namespace it did not declare,
     // which the declared-env case below holds. Under miniflare the fetch reaches
     // the loopback and answers; on the platform it reaches the network.
     expect(String(valueOf(await subject.gadgetCall('probe', 'egress', [])))).toMatch(/^reached: /);
-    expect(valueOf(await subject.gadgetCall('probe', 'readFile', ['note.txt']))).toBe('probe data\n');
-    expect(valueOf(await subject.gadgetCall('probe', 'writeFile', ['from-gadget.txt', 'written by gadget']))).toEqual({
-      path: 'gadgets/probe/data/from-gadget.txt',
-      chars: 17,
+    expect(valueOf(await subject.gadgetCall('probe', 'readFile', ['gadgets/probe/data/note.txt']))).toBe('probe data\n');
+    expect(valueOf(await subject.gadgetCall('probe', 'writeFile', ['gadgets/probe/data/from-gadget.txt', 'written by gadget'])))
+      .toBe('written by gadget');
+    expect(valueOf(await subject.gadgetCall('probe', 'readFile', ['gadgets/probe/data/from-gadget.txt']))).toBe('written by gadget');
+    expect(valueOf(await subject.gadgetCall('probe', 'shell', ['echo hi']))).toBe('ran: echo hi');
+    expect(await subject.readShellCommands()).toEqual(['echo hi']);
+  });
+
+  it('parks a sandbox command on the executor\'s own gate and tells the app it did not run', async () => {
+    const subject = await seed('gadget-process-sandbox');
+    expect(valueOf(await subject.gadgetCall('probe', 'sandbox', ['ls']))).toBe('sandbox ran: ls');
+    // A force-push reaches past the machine, so the sandbox provider's own gate
+    // (the one codemode's `sandbox.exec` answers to) parks it on the owner.
+    // The app is told exactly that, never that it ran.
+    const parked = String(valueOf(await subject.gadgetCall('probe', 'sandbox', ['git push --force origin main'])));
+    expect(parked).toContain('NOT RUN');
+    expect(parked).toContain(PROBE_PARKED_ID);
+    expect(await subject.readParked()).toEqual([{ command: 'git push --force origin main', executor: 'sandbox' }]);
+    expect(await subject.readShellCommands()).toEqual(['sandbox:ls']);
+  });
+
+  it('denies a namespace member the manifest did not list, and a namespace the workspace lacks', async () => {
+    const subject = await seed('gadget-process-members');
+    const withheld = refusalOf(await subject.gadgetCall('probe', 'sandboxRead', ['x']));
+    expect(withheld.error).toContain('denied');
+    expect(withheld.error).toContain('exec');
+    await subject.writeGadget('probe', {
+      'gadget.json': JSON.stringify({
+        ...MANIFEST, bindings: { ...MANIFEST.bindings, WS: { kind: 'namespace', namespace: 'laptop' } },
+      }),
     });
-    expect(valueOf(await subject.gadgetCall('probe', 'readFile', ['from-gadget.txt']))).toBe('written by gadget');
+    const absent = refusalOf(await subject.gadgetCall('probe', 'shell', ['echo hi']));
+    expect(absent.error).toContain('unavailable');
+    expect(absent.error).toContain('laptop');
   });
-  it('denies a files read above the binding root', async () => {
-    const subject = await seed('gadget-process-files-deny');
-    // The denial crosses one more hop on the way out: the binding answers
-    // `denied`, the process throws it, and the outer call classifies a thrown
-    // call as `io` — so the class is asserted on the message here and exactly
-    // on the hop below.
-    const refusal = refusalOf(await subject.gadgetCall('probe', 'readFile', ['../../../SOUL.md']));
-    expect(refusal.error).toContain('denied');
-  });
-  it('answers a listed read model and denies an unlisted one', async () => {
+
+  it('answers a declared read model and denies one the manifest did not list', async () => {
     const subject = await seed('gadget-process-data');
     expect(valueOf(await subject.gadgetCall('probe', 'data', ['listBackgroundJobs']))).toEqual(PROBE_JOBS);
-    const refusal = refusalOf(await subject.gadgetCall('probe', 'data', ['listPendingActions']));
+    const refusal = refusalOf(await subject.gadgetCall('probe', 'data', ['getExecutors']));
     expect(refusal.error).toContain('denied');
   });
 
   it('hands the process only its declared bindings', async () => {
     const subject = await seed('gadget-process-ambient');
-    expect(valueOf(await subject.gadgetCall('probe', 'ambient', []))).toEqual(['FILES', 'GITHUB', 'WORKSPACE']);
+    expect(valueOf(await subject.gadgetCall('probe', 'ambient', []))).toEqual(['DATA', 'GITHUB', 'INNER', 'SANDBOX', 'WS']);
   });
 
-  it('runs a read-only MCP tool and refuses a side effect nobody can approve', async () => {
+  it('calls an MCP tool on the named connection exactly as the agent would', async () => {
     const subject = await seed('gadget-process-mcp');
-    expect(valueOf(await subject.gadgetCall('probe', 'mcp', [PROBE_MCP_READ_TOOL]))).toEqual({
-      called: PROBE_MCP_READ_TOOL,
+    expect(valueOf(await subject.gadgetCall('probe', 'mcp', [PROBE_MCP_TOOL, { id: 7 }]))).toEqual({
+      called: PROBE_MCP_TOOL, args: { id: 7 },
     });
-    const refusal = refusalOf(await subject.gadgetCall('probe', 'mcp', [PROBE_MCP_WRITE_TOOL]));
-    expect(refusal.error).toContain('denied');
-    expect(refusal.error).toContain('NOT RUN');
-    expect(await subject.readMcpCalls()).toEqual([PROBE_MCP_READ_TOOL]);
+    expect(await subject.readMcpCalls()).toEqual([`github/${PROBE_MCP_TOOL}`]);
+  });
+
+  it('composes another app over the same call path and refuses a cycle by depth', async () => {
+    const subject = await seed('gadget-process-compose');
+    expect(valueOf(await subject.gadgetCall('probe', 'inner', ['echo', 'x']))).toBe('inner:x');
+    const cycle = refusalOf(await subject.gadgetCall('probe', 'loop', [0]));
+    expect(cycle.error).toContain(`app hop ${GADGET_LIMITS.appDepth + 1}`);
+    expect(cycle.error).toContain('cycle');
+    // Both servers stayed up: a refused hop is the app's own error, not a dead process.
+    expect(valueOf(await subject.gadgetCall('probe', 'inner', ['echo', 'again']))).toBe('inner:again');
   });
 
   it('answers denied on the binding hop itself, with the exact class', async () => {
-    // The same three refusals as the entrypoints reach them: no isolate in
+    // The same refusals as the entrypoints reach them: no isolate in
     // between, so the deciding hop's own class is what the test reads.
     const subject = await seed('gadget-process-hop');
-    const files = await subject.gadgetBindingCall('probe', 'FILES', {
-      kind: 'files', op: 'read', path: '../../../SOUL.md',
-    });
-    expect(refusalOf(files).reason).toBe('denied');
-    const data = await subject.gadgetBindingCall('probe', 'WORKSPACE', {
-      kind: 'workspace', op: 'read', source: 'listPendingActions',
-    });
+    const member = await subject.gadgetBindingCall('probe', 'SANDBOX', { member: 'readFile', args: ['x'], depth: 0 });
+    expect(refusalOf(member).reason).toBe('denied');
+    const data = await subject.gadgetBindingCall('probe', 'DATA', { member: 'getExecutors', args: [], depth: 0 });
     expect(refusalOf(data).reason).toBe('denied');
-    const mcp = await subject.gadgetBindingCall('probe', 'GITHUB', {
-      kind: 'mcp', op: 'call', tool: PROBE_MCP_WRITE_TOOL, args: {},
-    });
-    const mcpRefusal = refusalOf(mcp);
-    expect(mcpRefusal.reason).toBe('denied');
-    expect(mcpRefusal.error).toContain('NOT RUN');
+    const undeclared = await subject.gadgetBindingCall('probe', 'FILES', { member: 'read', args: ['x'], depth: 0 });
+    expect(refusalOf(undeclared).reason).toBe('denied');
+    const deep = await subject.gadgetBindingCall('probe', 'INNER', { member: 'echo', args: ['x'], depth: GADGET_LIMITS.appDepth });
+    expect(refusalOf(deep).reason).toBe('denied');
+    const malformed = await subject.gadgetBindingCall('probe', 'WS', { member: 'exec', args: 'ls', depth: 0 });
+    expect(refusalOf(malformed).reason).toBe('bad_input');
   });
-  it('keeps lasting state in the files binding, with no ctx of its own', async () => {
+
+  it('runs with no ctx of its own', async () => {
     const subject = await seed('gadget-process-storage');
-    expect(valueOf(await subject.gadgetCall('probe', 'ownStorage', []))).toBe('own');
     expect(valueOf(await subject.gadgetCall('probe', 'storageAuthority', []))).toBe('undefined');
   });
 

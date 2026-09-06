@@ -19,9 +19,7 @@ import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
-import type {
-  GadgetFilesBinding, GadgetMcpBinding, GadgetWorkspaceBinding,
-} from '../../src/gadgets/bindings';
+import type { GadgetBinding } from '../../src/gadgets/bindings';
 declare global {
   namespace Cloudflare {
     interface Env {
@@ -59,9 +57,7 @@ declare global {
     interface GlobalProps {
       mainModule: {
         CodemodeEgress: typeof CodemodeEgress;
-        GadgetFilesBinding: typeof GadgetFilesBinding;
-        GadgetWorkspaceBinding: typeof GadgetWorkspaceBinding;
-        GadgetMcpBinding: typeof GadgetMcpBinding;
+        GadgetBinding: typeof GadgetBinding;
       };
     }
   }

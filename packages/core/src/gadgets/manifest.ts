@@ -14,27 +14,35 @@
  * The server shape is fixed: `server.js` imports `RpcTarget` from `./capnweb.js`
  * and exports `class Gadget extends RpcTarget` with
  * `constructor(env) { super(); this.env = env; }`. Each prototype method is a
- * JSON RPC method. User code receives no `ctx` and no SQLite. State that must
- * last lives in the `files` binding, by default `gadgets/<slug>/data`.
+ * JSON RPC method. User code receives no `ctx` and no SQLite.
  *
- * Bindings are the whole of what a server can reach. Each entry is a
- * capability the workspace introduces under a name the code addresses as
- * `env.<NAME>`; the host places exactly these into the resident process env
- * and nothing else (SPEC §4.7, `C13-AUTH-ISOLATE-NAMESPACE-CLOSED`). The kinds are closed:
+ * Bindings are the whole of what a server can reach. Each entry passes ONE of
+ * the agent's own capabilities into the process under a name the code
+ * addresses as `env.<NAME>.<member>(...args)`; the host places exactly these
+ * into the resident process env and nothing else (SPEC §4.7,
+ * `C13-AUTH-ISOLATE-NAMESPACE-CLOSED`). A binding passes the capability gated
+ * exactly as the agent's own call is, and no more: there is no binding-specific
+ * approval rule. The four planes:
  *
- *   files      a directory of the workspace file plane, rooted at `root`
- *   workspace  the closed list of read models in `sources.ts`
- *   mcp        one MCP connection the owner configured, every call judged by
- *              the approval gate (`gatekeeper.ts`)
+ *   namespace  a codemode namespace the workspace has (`workspace`, `sandbox`,
+ *              `laptop`, `parent`, `web`, `memory`, `tasks`, `agents`, ...),
+ *              every member or the listed ones
+ *   rpc        the workspace object's own read models, each classed
+ *              `workspace.read` (`sources.ts`), named one by one
+ *   mcp        one MCP connection the owner configured, every tool or the
+ *              listed ones
+ *   app        another gadget's server, over the same call path
  *
  * Validation is fail-closed: `v.strictObject` rejects unknown keys rather
  * than stripping them, so a manifest written against a vocabulary this file
  * does not have is an error the model sees, not a gadget with a binding it
- * silently lacks.
+ * silently lacks. Whether the workspace HAS a namespace or a connection is a
+ * call-time answer: the manifest only says what the app asks for.
  */
 
 import * as v from 'valibot';
 import { renderIssues } from '../utils/json';
+import { GADGET_DATA_SOURCES } from './sources';
 
 /** Where gadgets live, relative to the workspace root. */
 export const GADGET_DIR = 'gadgets';
@@ -46,9 +54,10 @@ export const GADGET_CLIENT_STYLE_FILE = 'client.css';
 /** The class `server.js` exports and the resident process boots with `env`. */
 export const GADGET_SERVER_CLASS = 'Gadget';
 
-/** Bounds, in UTF-16 code units as `String.length` counts them. Each is a
- *  denial-of-service answer: the host reads these files into a resident
- *  process and a document, and a manifest names what it mints. */
+/** Bounds, in UTF-16 code units as `String.length` counts them, plus the one
+ *  hop count. Each is a denial-of-service answer: the host reads these files
+ *  into a resident process and a document, a manifest names what it mints,
+ *  and an app that binds an app can close a cycle. */
 export const GADGET_LIMITS = {
   slugChars: 40,
   titleChars: 60,
@@ -58,6 +67,9 @@ export const GADGET_LIMITS = {
   serverChars: 512 * 1024,
   clientChars: 1024 * 1024,
   manifestChars: 8 * 1024,
+  /** How many app-to-app hops one call may be down before the next is
+   *  refused. A cycle is refused by this count, not by a registry. */
+  appDepth: 8,
 } as const;
 
 /** The directory name is the slug: lowercase, digits and hyphens, starting
@@ -73,26 +85,34 @@ export function isGadgetSlug(value: string): boolean {
  *  case, the convention every Workers binding already follows. */
 const BINDING_NAME_RE = new RegExp(`^[A-Z][A-Z0-9_]{0,${GADGET_LIMITS.bindingNameChars - 1}}$`);
 
-/** A workspace-relative directory: no leading slash, no `.`/`..` segment, no
- *  empty segment. The file plane resolves it under the workspace root. */
-const RELATIVE_DIR_RE = /^(?!\.{1,2}(\/|$))[^/\0]+(\/(?!\.{1,2}(\/|$))[^/\0]+)*$/;
+/** A codemode namespace name as the sandbox spells it (`workspace`, `web`,
+ *  `laptop`): lowercase, digits and underscores, starting with a letter. */
+const NAMESPACE_RE = /^[a-z][a-z0-9_]{0,39}$/;
 
-const relativeDir = v.pipe(
-  v.string(),
-  v.maxLength(200),
-  v.regex(RELATIVE_DIR_RE, 'root must be a workspace-relative directory with no . or .. segment'),
-);
+/** A member the app may call on a binding: a provider tool, an MCP tool. Any
+ *  non-empty name the target itself can spell; the target decides at call time. */
+const MemberName = v.pipe(v.string(), v.minLength(1), v.maxLength(80));
 
-const McpToolName = v.pipe(v.string(), v.minLength(1), v.maxLength(80));
-
-const FilesBinding = v.strictObject({
-  kind: v.literal('files'),
-  /** Defaults to `gadgets/<slug>/data` — a gadget's own corner of the tree. */
-  root: v.optional(relativeDir),
+const NamespaceBinding = v.strictObject({
+  kind: v.literal('namespace'),
+  namespace: v.pipe(v.string(), v.regex(NAMESPACE_RE, 'a namespace is a codemode name: lowercase letters, digits and underscores')),
+  /** The members the binding answers. Absent means every member the
+   *  provider has; present, the list is the whole of what the binding answers. */
+  members: v.optional(v.pipe(v.array(MemberName), v.minLength(1), v.maxLength(64))),
 });
 
-const WorkspaceBinding = v.strictObject({
-  kind: v.literal('workspace'),
+const RpcBinding = v.strictObject({
+  kind: v.literal('rpc'),
+  /** The read models the binding answers, each one of the closed
+   *  `workspace.read` list. A method of any other class fails here. */
+  methods: v.pipe(
+    v.array(v.picklist(
+      GADGET_DATA_SOURCES,
+      (issue) => `${issue.received} is not a read model an rpc binding may name; the workspace.read list is ${GADGET_DATA_SOURCES.join(', ')}`,
+    )),
+    v.minLength(1),
+    v.maxLength(GADGET_DATA_SOURCES.length),
+  ),
 });
 
 const McpBinding = v.strictObject({
@@ -101,15 +121,19 @@ const McpBinding = v.strictObject({
   server: v.pipe(v.string(), v.minLength(1), v.maxLength(80)),
   /** The tools the gadget may call. Absent means every tool the server
    *  offers; present, the list is the whole of what the binding answers. */
-  tools: v.optional(v.pipe(v.array(McpToolName), v.maxLength(64))),
+  tools: v.optional(v.pipe(v.array(MemberName), v.maxLength(64))),
 });
 
-const GadgetBindingSchema = v.variant('kind', [FilesBinding, WorkspaceBinding, McpBinding]);
+const AppBinding = v.strictObject({
+  kind: v.literal('app'),
+  /** The other gadget's slug. Whether it exists is a call-time answer. */
+  id: v.pipe(v.string(), v.regex(SLUG_RE, 'an app id is a gadget slug: lowercase letters, digits and hyphens')),
+});
+
+const GadgetBindingSchema = v.variant('kind', [NamespaceBinding, RpcBinding, McpBinding, AppBinding]);
 
 export type GadgetBinding = v.InferOutput<typeof GadgetBindingSchema>;
 export type GadgetBindingKind = GadgetBinding['kind'];
-export type GadgetFilesBinding = Extract<GadgetBinding, { kind: 'files' }>;
-export type GadgetMcpBinding = Extract<GadgetBinding, { kind: 'mcp' }>;
 
 /** ASCII titles only: `normalizeGadgetTitle` folds to ASCII letters and
  *  digits, and a Cyrillic `а` would vanish in the fold and pass the reserved
@@ -169,13 +193,6 @@ export function parseGadgetManifest<Input>(input: Input): GadgetManifestResult {
  *  written. One accessor, so every consumer treats an absent map as empty. */
 export function gadgetBindings(manifest: GadgetManifest): ReadonlyArray<readonly [string, GadgetBinding]> {
   return Object.entries(manifest.bindings ?? {});
-}
-
-/** Where a `files` binding is rooted: its own `root`, or the gadget's data
- *  directory. Resolved in one place so the resident process props and the
- *  host's path check cannot disagree. */
-export function gadgetFilesRoot(slug: string, binding: GadgetFilesBinding): string {
-  return binding.root ?? `${GADGET_DIR}/${slug}/data`;
 }
 
 /**

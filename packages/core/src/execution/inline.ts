@@ -524,13 +524,15 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   /**
    * Gadgets: agent-written apps under gadgets/<slug>/. Write the files with the
    * file plane; the host reacts to the write (no publish call).
-   *   gadget.json  { v: 1, title, subtitle?, bindings?: Record<NAME, Binding> }
-   *                Binding = { kind: 'files', root?: string }        // a workspace directory, default gadgets/<slug>/data
-   *                        | { kind: 'workspace' }                   // the read models: ${GADGET_DATA_SOURCES.join(', ')}
-   *                        | { kind: 'mcp', server: string, tools?: string[] }  // an owner-configured MCP connection; side effects need the owner's approval
+   *   gadget.json  { v: 1, title, subtitle?, bindings?: Record<NAME, Binding> }. A binding passes one of YOUR
+   *                capabilities into the server, gated exactly as your own call is:
+   *                Binding = { kind: 'namespace', namespace: string, members?: string[] }  // a codemode namespace: workspace, sandbox, laptop, parent, web, memory, tasks, agents, ...
+   *                        | { kind: 'rpc', methods: string[] }                            // read models, each one of: ${GADGET_DATA_SOURCES.join(', ')}
+   *                        | { kind: 'mcp', server: string, tools?: string[] }              // an owner-configured MCP connection, by id
+   *                        | { kind: 'app', id: string }                                    // another gadget's server (composition; a cycle is refused by depth)
    *   server.js    \`import { RpcTarget } from './capnweb.js'; export class Gadget extends RpcTarget { constructor(env) { super(); this.env = env; } async list() { ... } }\`.
-   *                Runs with NO network and NO ctx or SQLite; keep lasting state in files: \`this.env.<NAME>\` is exactly the manifest's bindings:
-   *                files: read(path)/write(path, text)/list(dir)/remove(path) · workspace: read(source) · mcp: tools()/call(tool, args)
+   *                No ctx and no SQLite; \`this.env.<NAME>\` is exactly the manifest's bindings, every one spelled the same way:
+   *                \`await this.env.WS.exec('ls')\`, \`await this.env.WS.readFile(p)\`, \`await this.env.DATA.getExecutors()\`, \`await this.env.GITHUB.list_issues({ state: 'open' })\`, \`await this.env.TODO.addItem('milk')\`
    *   client.js    an ES module in a sandboxed iframe with no network; \`gadget\` is in scope as a stub of the server: \`await gadget.list()\`
    *   client.css   optional stylesheet, inlined
    * Every server method is callable here too:

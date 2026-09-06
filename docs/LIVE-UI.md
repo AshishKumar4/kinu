@@ -182,28 +182,40 @@ surface".
 
 The manifest's `bindings` map is the whole of what the server reaches. Each
 entry becomes one loopback stub in the resident process `env`, minted by the
-workspace object with `exports.<Class>({ props })` and the workspace, gadget
-and binding name as props (`cf-backend/src/gadgets/bindings.ts`,
+workspace object with `exports.GadgetBinding({ props })` and the workspace,
+gadget and binding name as props (`cf-backend/src/gadgets/bindings.ts`,
 `host.ts` `mintEnv`). Nothing else is in `env`: no namespace, no `LOADER`, no
-secret. A binding call comes back to the workspace object
-(`gadgetBindingCall`, stub transport only), which re-reads the manifest and
-decides with the pure rules in `core/src/gadgets/bindings.ts`.
+secret. The process-side runner wraps each stub so every plane is spelled the
+same way, `env.<NAME>.<member>(...args)`. A binding call comes back to the
+workspace object (`gadgetBindingCall`, stub transport only) as one request,
+`{ member, args, depth }`. The object re-reads the manifest and routes with
+the one pure decision in `core/src/gadgets/bindings.ts`
+(`routeGadgetBindingCall`), then runs the route as the agent's own call would.
 
-| Binding kind | What `env.<NAME>` offers | The Kinu seam that mints and enforces it |
+A binding passes one of the agent's OWN capabilities into the process, gated
+exactly as the agent's own call is and no more. There is no binding-specific
+approval rule, no second allowlist and no second table.
+
+| Binding kind | What `env.<NAME>.<member>(...args)` reaches | The Kinu seam that runs it, and its gate |
 |---|---|---|
-| `files` (`root?`) | `read(path)`, `write(path, text)`, `list(dir)`, `remove(path)` under the root, default `gadgets/<slug>/data` | the workspace file plane (`rt.storage.vfs`, the same plane the `file` tool writes); `resolveGadgetFilePath` refuses every path that leaves the root |
-| `workspace` | `read(source)` for the closed list `GADGET_DATA_SOURCES` (`core/src/gadgets/sources.ts`) | the orchestrator's `@callable` read models, each classed `workspace.read` in `cli/rpc-gate.ts` (`tests/unit-gadget-sources.test.ts` holds the list to the gate); the needs-you and consent queues stay off the list |
-| `mcp` (`server`, `tools?`) | `tools()`, `call(tool, args)` on one owner-configured connection | the owner's UserDO (`userMcp_toolDescriptors`, `userMcp_callTool` behind the `mcp.tools` capability tier) reached through `userHub()`, with every call judged by `decideApproval` (`core/src/safety/approval-gate.ts`): a read-only tool (MCP `readOnlyHint`) runs; anything else is parked on the owner through the deferred-approval queue under executor `gadget:<slug>` and rule `gadget_mcp_action` |
+| `namespace` (`namespace`, `members?`) | one member of a codemode namespace the workspace has: `workspace`, `sandbox`, `laptop`, `parent`, `web`, `memory`, `tasks`, `agents`, ... | the same provider surfaces the agent's `execute_tools` sandbox dispatches to (`ActorAgent.gadgetNamespaces`): the router's executor providers arrive gated by `gateProviderExec` (`core/src/execution/approval.ts`), so a shell command meets the executor's own approval gate and parks on the owner under that executor's name; a namespace the workspace lacks is `unavailable` at call time |
+| `rpc` (`methods`) | one declared read model, with no arguments | the orchestrator's `@callable` read models, each classed `workspace.read` in `cli/rpc-gate.ts`; the manifest parser holds `methods` to `GADGET_DATA_SOURCES` (`core/src/gadgets/sources.ts`), so a method of any other class fails at parse; `tests/unit-gadget-sources.test.ts` holds the list to the gate |
+| `mcp` (`server`, `tools?`) | one tool on one owner-configured connection, with one JSON object | the owner's UserDO (`userMcp_callTool` behind the `mcp.tools` capability tier), the same call the agent's own MCP tools make: the connection's `allowed_tools` answer for the gadget as they answer for the agent |
+| `app` (`id`) | one method on another gadget's server | `GadgetHost.call` on the other gadget, one hop deeper; the hop past `GADGET_LIMITS.appDepth` (8) is refused, which is how a cycle ends |
 
-The MCP binding's `server` names the connection id. Discovery and dispatch
-use that id. Renaming the connection does not change the binding.
+The MCP binding's `server` names the connection id. Renaming the connection
+does not change the binding.
 
-Two deliberate differences from the reference. Kinu does not simulate an
-outcome while the owner decides: the gadget is told the call is queued and
-NOT run, the honesty rule `safety/deferred-approval.ts` already states for the
-agent's own commands. And an owner's `always` grant scopes to
-(`gadget_mcp_action`, `gadget:<slug>`), so a grant to one gadget never answers
-for another or for the agent's shell.
+The hop count is real, not a registry: `GadgetHost.call` sends it to the
+process on the batch request, the runner keeps it in an `AsyncLocalStorage`
+for the life of that batch (`compatibilityFlags: ['nodejs_als']`), and every
+binding call the server makes carries it back. A refused hop is the server's
+own error, boxed like any other; the processes stay up.
+
+One deliberate difference from the reference. Kinu does not simulate an
+outcome while the owner decides: when an executor's gate parks a command, the
+gadget is told the call is queued and NOT run, the honesty rule
+`safety/deferred-approval.ts` already states for the agent's own commands.
 
 ### 2.2 The server half
 
@@ -216,7 +228,7 @@ for another or for the agent's shell.
 3. spawns a resident process with the server bytes and an `env` that holds one loopback stub per declared binding; the process inherits the workspace's outbound network and runs under the platform's own limits;
 4. sends the call as framed Cap'n Web HTTP batch bytes through `resident.handleHttpRequest` over an `RpcSession` transport, and answers the JSON value or a refusal with its class first. The process side serves the bytes with `newHttpBatchRpcResponse`.
 
-State that must last lives in the `files` binding, by default `gadgets/<slug>/data`. The process keeps no SQLite of its own. A write under `gadgets/<slug>/` releases the resident process. The next call boots a new server from the files as they stand then. The file plane's event bus (`session.vfs.events.on`, subscribed in `OrchestratorAgent.onStart`) carries the write, whichever path wrote it.
+State that must last lives in the workspace file plane, reached through a `workspace` namespace binding (`env.<NAME>.writeFile(path, text)`). The process keeps no SQLite of its own. A write under `gadgets/<slug>/` releases the resident process. The next call boots a new server from the files as they stand then. The file plane's event bus (`session.vfs.events.on`, subscribed in `OrchestratorAgent.onStart`) carries the write, whichever path wrote it.
 
 ### 2.3 The client half
 
@@ -260,10 +272,11 @@ The UI re-lists gadgets and remounts the open frame, which fetches
 | Row | The server sees | The client sees | Neither can reach | Enforced by |
 |---|---|---|---|---|
 | Network | nothing: `fetch`/`connect` throw | nothing: `connect-src 'none'`, `default-src 'none'` | the internet, the app origin, the preview hosts | `globalOutbound: null` on the resident spawn (host.ts); the meta CSP (gadget-document.ts) and `frame-src` of the app document (`lib/security-headers.ts`) |
-| Files | the `files` binding's root, read and write | nothing | the rest of the workspace tree, SOUL.md, memory/, other workspaces | `resolveGadgetFilePath` over the manifest root, re-read per call (host.ts `bindingCall`) |
-| Workspace data | the `workspace` binding's closed read-model list | nothing | the needs-you queue, consents, instruction approvals, anything with a free argument | `GADGET_DATA_SOURCES` + `resolveGadgetDataSource`; `unit-gadget-sources.test.ts` holds it to `workspace.read` |
-| External services | the `mcp` binding's connection: read-only tools now, side effects after the owner decides | nothing | any connection the manifest did not name; any credential | `reviewGadgetMcpCall` + `decideApproval`; the credential never leaves UserDO (`user/mcp.ts`) |
-| Storage | none: no `ctx`, no SQLite; lasting state lives in the `files` binding, by default `gadgets/<slug>/data` | none (opaque origin: no cookies, no localStorage) | the workspace object's SQLite, other gadgets, any path outside the binding root | the runner passes no `ctx`; `gadgetFilesRoot` + `resolveGadgetFilePath` hold the binding to its root |
+| Executors and files | the members of each `namespace` binding, on the agent's own executors: the workspace file plane and shell, the container, the device, the projected namespaces | nothing | any namespace the manifest did not name; a member outside a declared `members` list | `routeGadgetBindingCall` over the manifest, re-read per call (host.ts `bindingCall`); each provider's own gate (`gateProviderExec`) and device consent, as for the agent |
+| Workspace data | the `rpc` binding's declared read models | nothing | the needs-you queue, consents, instruction approvals, anything with a free argument | the manifest parser holds `methods` to `GADGET_DATA_SOURCES`; `unit-gadget-sources.test.ts` holds it to `workspace.read` |
+| External services | the `mcp` binding's connection, through the owner's own `allowed_tools` | nothing | any connection the manifest did not name; any tool the owner withheld; any credential | `userMcp_callTool` in UserDO, the agent's own path; the credential never leaves UserDO (`user/mcp.ts`) |
+| Other gadgets | the `app` binding's server, one hop deeper | nothing | a chain past `GADGET_LIMITS.appDepth` hops, so a cycle | the hop count on the batch request and in the runner's `AsyncLocalStorage`; `routeGadgetBindingCall` refuses the hop past the bound |
+| Storage | none: no `ctx`, no SQLite; lasting state lives in the workspace file plane through a `workspace` binding | none (opaque origin: no cookies, no localStorage) | the workspace object's SQLite | the runner passes no `ctx` |
 | Host document and session | nothing | nothing: opaque origin, no `allow-same-origin`, `frame-src 'none'` inside | the owner's session cookie, `/api/*`, the SPA DOM | the sandbox attribute; `__Host-` cookies; the bridge accepts only its own frame's port |
 | Compute | the platform's own Worker limits | the browser tab | nothing beyond them | the Worker Loader |
 | Spoofing host chrome | cannot title itself as a host surface | draws only inside its frame | Approve, consent, credential and settings chrome | `RESERVED_GADGET_TITLES` at parse time; the tab strip marks the group |

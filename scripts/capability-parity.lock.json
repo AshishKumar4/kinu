@@ -119,6 +119,7 @@
   "movable packages/cf-backend/src/user/schema.ts",
   "movable packages/cf-backend/src/user/validate.ts",
   "movable packages/cf-backend/src/user/workspace-capability.ts",
+  "movable packages/cf-backend/src/workspace-box-rpc.ts",
   "movable packages/cli-backend/src/agent-host/driver-lease.ts",
   "movable packages/cli-backend/src/branch-protocol.ts",
   "movable packages/cli-backend/src/craft-executor.ts",

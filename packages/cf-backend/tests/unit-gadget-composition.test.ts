@@ -3,7 +3,7 @@ import { orchestratorHarness } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 
-test('a gadget names the MCP connection id on discovery and dispatch', async () => {
+test('an mcp binding names the connection id and dispatches exactly as the agent\'s own tool would', async () => {
   resetRecordedMcp();
   const ownerUserId = '0123456789abcdef0123456789abcdef';
   const workspace = 'gadget-mcp';
@@ -15,40 +15,38 @@ test('a gadget names the MCP connection id on discovery and dispatch', async () 
   await user.userDO.userMcp_list(owner);
   user.sql.exec(`INSERT INTO user_mcp_servers
     (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-    VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL, 0, 0)`);
+    VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, '["read_issue"]', 0, 0)`);
   await user.userDO.userMcp_list(owner);
-  seedMcpTools('connection-id', [{
-    name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true },
-  }]);
+  seedMcpTools('connection-id', [
+    { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+    { name: 'create_issue', inputSchema: { type: 'object' } },
+  ]);
   const vfs = actor.agent.observeRuntime().storage.vfs;
   await vfs.mkdir('gadgets/issues', { recursive: true });
   const bind = (server: string) => vfs.writeFile('gadgets/issues/gadget.json', JSON.stringify({
     v: 1, title: 'Issues', bindings: { GITHUB: { kind: 'mcp', server } },
   }));
+  const call = (tool: string) => actor.agent.gadgetBindingCall('issues', 'GITHUB', { member: tool, args: [{}], depth: 0 });
   try {
+    // The binding names the connection ID, never the display name: a binding
+    // written against the name reaches no server.
     await bind('github');
-    const namedTools = await actor.agent.gadgetBindingCall('issues', 'GITHUB', { kind: 'mcp', op: 'tools' });
-    const namedCall = await actor.agent.gadgetBindingCall('issues', 'GITHUB', {
-      kind: 'mcp', op: 'call', tool: 'read_issue', args: {},
-    });
-    expect({ tools: namedTools, call: namedCall }).toMatchObject({
-      tools: { ok: true, value: [] },
-      call: { ok: false, reason: 'missing' },
-    });
+    const byName = await call('read_issue');
+    expect(byName.ok).toBe(false);
+    if (byName.ok) return;
+    expect(byName.error).toContain('Unknown MCP server');
 
     await bind('connection-id');
-    expect(await actor.agent.gadgetBindingCall('issues', 'GITHUB', { kind: 'mcp', op: 'tools' }))
-      .toEqual({ ok: true, value: [{ name: 'read_issue', readOnly: true }] });
-    expect(await actor.agent.gadgetBindingCall('issues', 'GITHUB', {
-      kind: 'mcp', op: 'call', tool: 'read_issue', args: {},
-    })).toEqual({ ok: true, value: { content: [] } });
+    expect(await call('read_issue')).toEqual({ ok: true, value: { content: [] } });
+    // The owner's own allowlist on the connection answers for the gadget as it
+    // answers for the agent: no second gate, and no second allowlist.
+    const withheld = await call('create_issue');
+    expect(withheld.ok).toBe(false);
+    if (withheld.ok) return;
+    expect(withheld.error).toContain('allowed_tools');
 
     await user.userDO.userMcp_update(owner, 'connection-id', { name: 'renamed-github' });
-    expect(await actor.agent.gadgetBindingCall('issues', 'GITHUB', { kind: 'mcp', op: 'tools' }))
-      .toEqual({ ok: true, value: [{ name: 'read_issue', readOnly: true }] });
-    expect(await actor.agent.gadgetBindingCall('issues', 'GITHUB', {
-      kind: 'mcp', op: 'call', tool: 'read_issue', args: {},
-    })).toEqual({ ok: true, value: { content: [] } });
+    expect(await call('read_issue')).toEqual({ ok: true, value: { content: [] } });
   } finally {
     await user.joinFibers();
     user.close();

@@ -735,26 +735,29 @@ export function gateExec<R>(
  * The mode/grant/channel/deferral ladder, over ANY reviewable action.
  *
  * Split out of {@link gateExec} because a command is not the only thing the
- * owner is asked about. An egress request that would carry one of their
- * secrets is the same question — mode, then standing grants, then the
- * interactive channel, then the deferral queue — asked about a different
- * subject. Two copies of this ladder would be two places for "strict with
- * nobody listening" to drift into a silent allow, so there is one.
+ * owner could be asked about — an egress request that would carry one of
+ * their secrets is the same question (mode, then standing grants, then the
+ * interactive channel, then the deferral queue) about a different subject —
+ * and two copies of this ladder would be two places for "strict with nobody
+ * listening" to drift into a silent allow. Private, because {@link gateExec}
+ * is the one boundary that runs it today: the egress-binding consent
+ * `egress-gate.ts` describes is not built, and a gadget binding passes the
+ * agent's own capability gated as the agent's own call is, so it asks nothing
+ * of its own. A second subject exports it again when it arrives.
  *
  * `subject.command` is the human-readable action the owner is shown; for a
- * shell boundary it is literally the command line, for another subject it is
- * whatever names the action. Standing grants are applied here, not by the
- * caller: a rule the owner already blessed on this executor must stop the
- * asking no matter which boundary asked.
+ * shell boundary it is literally the command line. Standing grants are
+ * applied here, not by the caller: a rule the owner already blessed on this
+ * executor must stop the asking no matter which boundary asked.
  *
  * A `run: true` reached by replaying a parked grant carries the SPEND it made.
  * The caller owns what happens next, so the caller is the only one who can say
  * whether the action happened — it must hand that spend back to
  * {@link DeferredApprovalChannel.settle} once it knows, and leave it unsettled
  * when it never finds out. {@link gateExec} does this for every gated command
- * boundary; a caller running its own ladder (an egress binding) owns its own.
+ * boundary.
  */
-export async function decideApproval(
+async function decideApproval(
   subject: { readonly command: string; readonly executor: string },
   rawReview: ApprovalResult,
   policy: ShellApprovalPolicy,

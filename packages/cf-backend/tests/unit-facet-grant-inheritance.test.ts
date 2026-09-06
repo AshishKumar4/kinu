@@ -14,8 +14,8 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import {
-  createInheritedApprovalPolicy, decideApproval, egressSecretRule,
-  grantsAreSubset, resolveInheritedGrants, reviewEgressBinding,
+  createInheritedApprovalPolicy, egressSecretRule, gateExec,
+  grantsAreSubset, resolveInheritedGrants,
   type ApprovalGrant, type ShellApprovalMode,
 } from '@kinu.run/core';
 import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
@@ -23,8 +23,14 @@ import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
 
 const root = new URL('../', import.meta.url).pathname;
 
+/** A force-push reaches out, so the agent's own `sandbox` does not exempt it:
+ *  the one command rule here that a root grant can stand for. */
+const GATED = 'git push --force origin main';
+const GATED_RULE = 'git-force-push';
+
 const ROOT_GRANTS: ApprovalGrant[] = [
   { rule: 'rm-recursive', executor: 'sandbox' },
+  { rule: GATED_RULE, executor: 'sandbox' },
   { rule: egressSecretRule('stripe'), executor: 'sandbox' },
 ];
 
@@ -69,14 +75,18 @@ describe('a facet holds the root set, or a subset of it', () => {
   }
 
   test('a facet that recorded nothing inherits the whole root set — it does not re-ask', async () => {
+    // Through `gateExec`, the seam every shell boundary is wrapped with: the
+    // ladder resolves the root before it reads a grant.
     const probe = source('strict', null);
-    const policy = createInheritedApprovalPolicy(probe.deps);
-    const decision = await decideApproval(
-      { command: 'bind stripe', executor: 'sandbox' },
-      reviewEgressBinding({ id: 'stripe', label: 'Stripe', host: 'api.stripe.com' }),
-      policy,
+    const ran: string[] = [];
+    const run = gateExec<string>(
+      async (command) => { ran.push(command); return `ran:${command}`; },
+      (message) => message,
+      'sandbox',
+      createInheritedApprovalPolicy(probe.deps),
     );
-    expect(decision.run).toBe(true);
+    expect(await run(GATED)).toBe(`ran:${GATED}`);
+    expect(ran).toEqual([GATED]);
     expect(probe.fetches()).toBe(1);
   });
 

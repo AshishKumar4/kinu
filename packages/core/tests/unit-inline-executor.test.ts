@@ -503,7 +503,7 @@ describe('workspace.createTool — the tool is born scorable', () => {
 // ── gadgets ─────────────────────────────────────────────────────────────────
 
 describe('workspace.gadgets / workspace.gadget', () => {
-  const manifest = JSON.stringify({ v: 1, title: 'Deploy health', bindings: { WORKSPACE: { kind: 'workspace' } } });
+  const manifest = JSON.stringify({ v: 1, title: 'Deploy health', bindings: { DATA: { kind: 'rpc', methods: ['getExecutors'] } } });
 
   test('lists what the file plane holds, problems beside the valid gadgets', async () => {
     const { rt } = createTestRuntime();
@@ -518,7 +518,7 @@ describe('workspace.gadgets / workspace.gadget', () => {
       gadgets: v.array(v.object({ slug: v.string(), title: v.string(), hasClient: v.boolean(), hasServer: v.boolean(), bindings: v.array(v.string()) })),
       problems: v.array(v.object({ slug: v.string(), error: v.string() })),
     }), await exec.tools.gadgets.execute());
-    expect(listed.gadgets).toEqual([{ slug: 'health', title: 'Deploy health', hasClient: true, hasServer: false, bindings: ['WORKSPACE'] }]);
+    expect(listed.gadgets).toEqual([{ slug: 'health', title: 'Deploy health', hasClient: true, hasServer: false, bindings: ['DATA'] }]);
     expect(listed.problems.map((p) => p.slug)).toEqual(['broken']);
     expect(listed.problems[0]?.error).toContain('host owns');
   });
@@ -547,8 +547,8 @@ describe('workspace.gadgets / workspace.gadget', () => {
     expect(await exec.tools.gadget.execute('todo', 'addItem', () => 1)).toMatchObject({ ok: false, reason: 'bad_input' });
   });
 
-  test('the codemode declarations name every read model a workspace binding may read', () => {
-    // The model authors against `types`; the binding enforces GADGET_DATA_SOURCES.
+  test('the codemode declarations name every read model an rpc binding may name', () => {
+    // The model authors against `types`; the manifest parser enforces GADGET_DATA_SOURCES.
     const exec = buildExec(createTestRuntime().rt);
     for (const source of GADGET_DATA_SOURCES) expect(exec.types).toContain(source);
   });

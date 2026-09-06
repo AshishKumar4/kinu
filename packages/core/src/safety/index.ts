@@ -11,7 +11,6 @@ export {
   parseApprovalGrant,
   approvalGrants,
   gateExec,
-  decideApproval,
   grantsAreSubset,
   resolveInheritedGrants,
   createInheritedApprovalPolicy,

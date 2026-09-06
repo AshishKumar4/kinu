@@ -37,9 +37,11 @@
  * What is NOT here. Approval is not a per-request question — a request that
  * blocked for minutes waiting for the owner is a hung build, and asking once
  * per request would train the owner to stop reading. The owner is asked once,
- * when a secret is BOUND to a host, through the one approval ladder in
- * `approval-gate.ts` ({@link reviewEgressBinding} supplies the review,
- * `decideApproval` runs the ladder). Bindings reaching {@link planEgress} are
+ * when a secret is BOUND to a host. {@link reviewEgressBinding} is the review
+ * that question would carry through the one approval ladder in
+ * `approval-gate.ts` (the ladder `gateExec` runs, private there until a second
+ * subject arrives); today the owner's standing grants are applied directly
+ * ({@link grantedEgressBindings}). Bindings reaching {@link planEgress} are
  * already approved; this file's job at request time is to enforce the
  * destination, not to re-litigate consent.
  *
@@ -189,8 +191,8 @@ export function egressHostMatches(pattern: string, host: string): boolean {
  * pattern-match, and a rule that fires on every egress regardless of text is
  * not a pattern.
  *
- * A standing grant still short-circuits it, through the ordinary
- * `afterGrants` path in `decideApproval`. Asking twice for the same binding is
+ * A standing grant still short-circuits it, through the ordinary grant path
+ * of the ladder in `approval-gate.ts`. Asking twice for the same binding is
  * the thing the grant exists to prevent.
  */
 export function reviewEgressBinding(

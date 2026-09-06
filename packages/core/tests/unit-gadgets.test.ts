@@ -12,9 +12,9 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   GADGET_DATA_SOURCES, GADGET_LIMITS,
-  gadgetFilesRoot, gadgetSummary, isGadgetMethodName, listGadgets,
+  gadgetSummary, isGadgetMethodName, listGadgets,
   parseGadgetManifest, readGadget, readGadgetClient, readGadgetServer,
-  resolveGadgetDataSource, resolveGadgetFilePath, reviewGadgetMcpCall,
+  routeGadgetBindingCall, type GadgetBindingRequest, type GadgetManifest,
 } from '../src/gadgets/index';
 import { sha256Hex } from '../src/safety/argument-digest';
 import type { VFS } from '../src/types/primitives';
@@ -68,18 +68,20 @@ function memoryVfs(seed: Record<string, string> = {}): VFS {
 // ── the manifest is closed ──────────────────────────────────────────────────
 
 describe('gadget manifest — what a gadget may declare', () => {
-  test('accepts a title with the three binding kinds', () => {
+  test('accepts a title with the four binding kinds', () => {
     const out = parseGadgetManifest(manifest({
       subtitle: 'What shipped today',
       bindings: {
-        FILES: { kind: 'files', root: 'reports' },
-        WORKSPACE: { kind: 'workspace' },
+        WS: { kind: 'namespace', namespace: 'workspace' },
+        WEB: { kind: 'namespace', namespace: 'web', members: ['search'] },
+        DATA: { kind: 'rpc', methods: ['listBackgroundJobs', 'getExecutors'] },
         GITHUB: { kind: 'mcp', server: 'github', tools: ['list_issues'] },
+        TODO: { kind: 'app', id: 'todo' },
       },
     }));
     expect(out.ok).toBe(true);
     if (!out.ok) return;
-    expect(Object.keys(out.manifest.bindings ?? {})).toEqual(['FILES', 'WORKSPACE', 'GITHUB']);
+    expect(Object.keys(out.manifest.bindings ?? {})).toEqual(['WS', 'WEB', 'DATA', 'GITHUB', 'TODO']);
   });
 
   test('refuses a binding kind that does not exist, rather than dropping it', () => {
@@ -92,29 +94,50 @@ describe('gadget manifest — what a gadget may declare', () => {
   test('refuses unknown keys instead of stripping them', () => {
     for (const bad of [
       manifest({ html: '<script>' }),
-      manifest({ bindings: { FILES: { kind: 'files', write: true } } }),
-      manifest({ bindings: { W: { kind: 'workspace', sources: ['listPendingActions'] } } }),
+      manifest({ bindings: { WS: { kind: 'namespace', namespace: 'workspace', write: true } } }),
+      manifest({ bindings: { D: { kind: 'rpc', methods: ['getExecutors'], sources: ['listPendingActions'] } } }),
+      manifest({ bindings: { A: { kind: 'app', id: 'todo', methods: ['list'] } } }),
     ]) {
       expect(parseGadgetManifest(bad).ok).toBe(false);
     }
   });
 
-  test('a binding name is the env key the code spells, so it is UPPER_SNAKE_CASE', () => {
-    for (const name of ['files', 'Files', '1FILES', 'FILES-A', 'A'.repeat(33)]) {
-      expect(parseGadgetManifest(manifest({ bindings: { [name]: { kind: 'workspace' } } })).ok).toBe(false);
+  test('an rpc binding names workspace.read read models and nothing else, at parse', () => {
+    for (const method of ['listPendingActions', 'listPendingConsents', 'sampleOutcomeLabeling', 'destroyAgent', 'getMctsNodeDetail']) {
+      const out = parseGadgetManifest(manifest({ bindings: { D: { kind: 'rpc', methods: [method] } } }));
+      expect(out.ok).toBe(false);
+      if (out.ok) return;
+      expect(out.error).toContain(method);
     }
-    expect(parseGadgetManifest(manifest({ bindings: { MY_FILES2: { kind: 'workspace' } } })).ok).toBe(true);
-    // valibot's `record` drops the prototype-walking keys rather than
-    // validating them, so a manifest naming one mints nothing under it.
-    const walker = parseGadgetManifest(JSON.parse('{"v":1,"title":"Deploy health","bindings":{"__proto__":{"kind":"workspace"}}}'));
-    expect(walker.ok && Object.keys(walker.manifest.bindings ?? {})).toEqual([]);
+    expect(parseGadgetManifest(manifest({ bindings: { D: { kind: 'rpc', methods: [] } } })).ok).toBe(false);
+    expect(parseGadgetManifest(manifest({ bindings: { D: { kind: 'rpc', methods: [...GADGET_DATA_SOURCES] } } })).ok).toBe(true);
   });
 
-  test('a files root is workspace-relative and cannot climb', () => {
-    for (const root of ['/etc', '../other', 'a/../b', 'reports/..', '.', '']) {
-      expect(parseGadgetManifest(manifest({ bindings: { F: { kind: 'files', root } } })).ok).toBe(false);
+  test('a namespace is a codemode name and an app id is a slug; neither is looked up at parse', () => {
+    for (const namespace of ['', 'Work space', '../x', 'a'.repeat(41)]) {
+      expect(parseGadgetManifest(manifest({ bindings: { N: { kind: 'namespace', namespace } } })).ok).toBe(false);
     }
-    expect(parseGadgetManifest(manifest({ bindings: { F: { kind: 'files', root: 'reports/2026' } } })).ok).toBe(true);
+    // Whether the workspace HAS the namespace is a call-time answer.
+    expect(parseGadgetManifest(manifest({ bindings: { N: { kind: 'namespace', namespace: 'laptop' } } })).ok).toBe(true);
+    expect(parseGadgetManifest(manifest({ bindings: { N: { kind: 'namespace', namespace: 'workspace', members: [] } } })).ok).toBe(false);
+    for (const id of ['', 'Todo', '../x', 'a b']) {
+      expect(parseGadgetManifest(manifest({ bindings: { A: { kind: 'app', id } } })).ok).toBe(false);
+    }
+    expect(parseGadgetManifest(manifest({ bindings: { A: { kind: 'app', id: 'other-app' } } })).ok).toBe(true);
+  });
+
+  test('a binding name is the env key the code spells, so it is UPPER_SNAKE_CASE', () => {
+    const rpc = { kind: 'rpc', methods: ['getExecutors'] };
+    for (const name of ['files', 'Files', '1FILES', 'FILES-A', 'A'.repeat(33)]) {
+      expect(parseGadgetManifest(manifest({ bindings: { [name]: rpc } })).ok).toBe(false);
+    }
+    expect(parseGadgetManifest(manifest({ bindings: { MY_FILES2: rpc } })).ok).toBe(true);
+    // valibot's `record` drops the prototype-walking keys rather than
+    // validating them, so a manifest naming one mints nothing under it.
+    const walker = parseGadgetManifest(JSON.parse(
+      '{"v":1,"title":"Deploy health","bindings":{"__proto__":{"kind":"rpc","methods":["getExecutors"]}}}',
+    ));
+    expect(walker.ok && Object.keys(walker.manifest.bindings ?? {})).toEqual([]);
   });
 
   test('refuses the host surfaces as titles, whatever the case or spacing', () => {
@@ -133,16 +156,11 @@ describe('gadget manifest — what a gadget may declare', () => {
 
   test('bounds what the host mints and draws', () => {
     const many = Object.fromEntries(
-      Array.from({ length: GADGET_LIMITS.bindings + 1 }, (_, i) => [`B${i}`, { kind: 'workspace' }]),
+      Array.from({ length: GADGET_LIMITS.bindings + 1 }, (_, i) => [`B${i}`, { kind: 'rpc', methods: ['getExecutors'] }]),
     );
     expect(parseGadgetManifest(manifest({ bindings: many })).ok).toBe(false);
     expect(parseGadgetManifest(manifest({ title: 'x'.repeat(GADGET_LIMITS.titleChars + 1) })).ok).toBe(false);
     expect(parseGadgetManifest(manifest({ v: 2 })).ok).toBe(false);
-  });
-
-  test('a files binding defaults to the gadget\'s own data directory', () => {
-    expect(gadgetFilesRoot('todo', { kind: 'files' })).toBe('gadgets/todo/data');
-    expect(gadgetFilesRoot('todo', { kind: 'files', root: 'reports' })).toBe('reports');
   });
 });
 
@@ -222,56 +240,67 @@ describe('gadget method names the bridge forwards', () => {
 
 // ── what each binding reaches ───────────────────────────────────────────────
 
-describe('gadget bindings — the pure half of each kind', () => {
-  test('a files binding resolves under its root and refuses every way out', () => {
-    expect(resolveGadgetFilePath('reports', 'today/summary.md')).toEqual({ ok: true, path: 'reports/today/summary.md' });
-    expect(resolveGadgetFilePath('reports', './a//b/../c.md')).toEqual({ ok: true, path: 'reports/a/c.md' });
-    expect(resolveGadgetFilePath('reports', '')).toEqual({ ok: true, path: 'reports' });
-    for (const escape of ['../SOUL.md', 'a/../../x', '/home/user/SOUL.md', 'a\0b']) {
-      expect(resolveGadgetFilePath('reports', escape)).toMatchObject({ ok: false, reason: 'denied' });
-    }
+describe('gadget bindings — the one pure decision over the manifest and the request', () => {
+  const declared: GadgetManifest = {
+    v: 1,
+    title: 'Deploy health',
+    bindings: {
+      WS: { kind: 'namespace', namespace: 'workspace' },
+      WEB: { kind: 'namespace', namespace: 'web', members: ['search'] },
+      DATA: { kind: 'rpc', methods: ['listBackgroundJobs'] },
+      GITHUB: { kind: 'mcp', server: 'github', tools: ['list_issues'] },
+      ANY_MCP: { kind: 'mcp', server: 'linear' },
+      TODO: { kind: 'app', id: 'todo' },
+    },
+  };
+  const request = (member: string, args: GadgetBindingRequest['args'] = [], depth = 0): GadgetBindingRequest =>
+    ({ member, args, depth });
+  const route = (name: string, req: GadgetBindingRequest) =>
+    routeGadgetBindingCall({ slug: 'health', manifest: declared, name, request: req });
+
+  test('a name the manifest no longer declares is denied, whatever the member', () => {
+    expect(route('FILES', request('read', ['x']))).toMatchObject({ ok: false, reason: 'denied' });
   });
 
-  test('a workspace binding reads the closed list and nothing host-owned', () => {
-    for (const source of GADGET_DATA_SOURCES) expect(resolveGadgetDataSource(source).ok).toBe(true);
-    for (const withheld of ['listPendingActions', 'listPendingConsents', 'sampleOutcomeLabeling', 'destroyAgent', 'getMctsNodeDetail']) {
-      expect(resolveGadgetDataSource(withheld)).toMatchObject({ ok: false, reason: 'denied' });
-    }
-  });
-
-  test('an mcp binding refuses a tool the manifest did not introduce before any ladder runs', () => {
-    const out = reviewGadgetMcpCall({
-      slug: 'issues', binding: { kind: 'mcp', server: 'github', tools: ['list_issues'] },
-      tool: 'create_issue', args: { title: 'x' },
-      tools: [{ name: 'list_issues', readOnly: true }, { name: 'create_issue', readOnly: false }],
+  test('a namespace binding routes any member when none are listed, and only the listed ones otherwise', () => {
+    expect(route('WS', request('exec', ['ls']))).toEqual({
+      ok: true, route: { kind: 'namespace', namespace: 'workspace', member: 'exec', args: ['ls'] },
     });
-    expect(out).toMatchObject({ ok: false, reason: 'denied' });
+    expect(route('WEB', request('search', ['kinu']))).toMatchObject({ ok: true, route: { kind: 'namespace', member: 'search' } });
+    const withheld = route('WEB', request('fetch', ['https://example.com']));
+    expect(withheld).toMatchObject({ ok: false, reason: 'denied' });
+    if (withheld.ok) return;
+    expect(withheld.error).toContain('search');
   });
 
-  test('an mcp binding reports a tool the connection does not offer as missing', () => {
-    const out = reviewGadgetMcpCall({
-      slug: 'issues', binding: { kind: 'mcp', server: 'github' },
-      tool: 'nope', args: {}, tools: [{ name: 'list_issues', readOnly: true }],
+  test('an rpc binding routes a declared read model with no arguments', () => {
+    expect(route('DATA', request('listBackgroundJobs'))).toEqual({
+      ok: true, route: { kind: 'rpc', method: 'listBackgroundJobs' },
     });
-    expect(out).toMatchObject({ ok: false, reason: 'missing' });
+    expect(route('DATA', request('getExecutors'))).toMatchObject({ ok: false, reason: 'denied' });
+    expect(route('DATA', request('listBackgroundJobs', [5]))).toMatchObject({ ok: false, reason: 'bad_input' });
   });
 
-  test('a read-only tool is an observation; a side effect is the owner\'s decision, keyed to the gadget', () => {
-    const tools = [{ name: 'list_issues', readOnly: true }, { name: 'create_issue', readOnly: false }];
-    const binding = { kind: 'mcp', server: 'github' } as const;
-    const read = reviewGadgetMcpCall({ slug: 'issues', binding, tool: 'list_issues', args: {}, tools });
-    expect(read.ok && read.review.review.decision).toBe('allow');
-    const write = reviewGadgetMcpCall({ slug: 'issues', binding, tool: 'create_issue', args: { title: 'x' }, tools });
-    expect(write.ok).toBe(true);
-    if (!write.ok) return;
-    expect(write.review.review.decision).toBe('gate');
-    // The rule and the executor are what a standing grant is stored under
-    // (docs/LIVE-UI.md §2.1), so the literals are the contract: a renamed
-    // rule would orphan every grant an owner has given.
-    expect(write.review.review.hits.map((h) => h.rule)).toEqual(['gadget_mcp_action']);
-    expect(write.review.subject).toEqual({
-      command: 'mcp github/create_issue {"title":"x"}',
-      executor: 'gadget:issues',
+  test('an mcp binding routes a tool as its member with one JSON object, on the named connection', () => {
+    expect(route('GITHUB', request('list_issues', [{ state: 'open' }]))).toEqual({
+      ok: true, route: { kind: 'mcp', server: 'github', tool: 'list_issues', args: { state: 'open' } },
     });
+    expect(route('ANY_MCP', request('create_issue'))).toEqual({
+      ok: true, route: { kind: 'mcp', server: 'linear', tool: 'create_issue', args: {} },
+    });
+    expect(route('GITHUB', request('create_issue', [{ title: 'x' }]))).toMatchObject({ ok: false, reason: 'denied' });
+    expect(route('GITHUB', request('list_issues', ['open']))).toMatchObject({ ok: false, reason: 'bad_input' });
+    expect(route('GITHUB', request('list_issues', [{}, {}]))).toMatchObject({ ok: false, reason: 'bad_input' });
+  });
+
+  test('an app binding routes a method on the other app one hop deeper, until the depth bound', () => {
+    expect(route('TODO', request('addItem', ['milk'], 2))).toEqual({
+      ok: true, route: { kind: 'app', id: 'todo', method: 'addItem', args: ['milk'], depth: 2 },
+    });
+    expect(route('TODO', request('_private'))).toMatchObject({ ok: false, reason: 'bad_input' });
+    const cycle = route('TODO', request('addItem', [], GADGET_LIMITS.appDepth));
+    expect(cycle).toMatchObject({ ok: false, reason: 'denied' });
+    if (cycle.ok) return;
+    expect(cycle.error).toContain(String(GADGET_LIMITS.appDepth));
   });
 });

@@ -1,130 +1,135 @@
 /**
- * What each binding kind lets a gadget server do — the pure half.
+ * What a binding call may reach — the pure half, in one decision.
  *
+ * Every binding is the same shape to the process: `env.<NAME>.<member>(...args)`.
  * The host places one loopback stub per manifest entry into the resident
- * process `env`, and every call on a stub comes back to the owning object,
- * which asks THIS module what the call may reach before it touches anything:
+ * process `env`, and every call on a stub comes back to the owning object as
+ * ONE request — the member and its JSON arguments, plus how many app-to-app
+ * hops the caller is already down. The object asks THIS function what the
+ * manifest, as it stands now, lets that request reach, and only then touches
+ * anything:
  *
- *   files      a path, resolved under the binding's root and refused if it
- *              would leave it (`resolveGadgetFilePath`)
- *   workspace  a read model name, refused unless `sources.ts` lists it
- *              (`resolveGadgetDataSource`)
- *   mcp        a tool call, reviewed for the approval ladder
- *              (`reviewGadgetMcpCall`)
+ *   namespace  the provider's member, refused unless the manifest lists it
+ *              (or lists none)
+ *   rpc        one declared read model, with no arguments
+ *   mcp        one tool on the declared connection, with one JSON object
+ *   app        one method on the other gadget, one hop deeper
  *
- * The review for `mcp` is the gatekeeper. It answers the same question the
- * shell gate answers about a command — allow, or ask the owner — so it feeds
- * `decideApproval` (safety/approval-gate.ts) rather than a second ladder:
- * mode, then standing grants, then the interactive channel, then the deferral
- * queue. A read-only tool (the MCP `readOnlyHint` annotation) is an
- * observation and runs; anything else is a side effect and is the owner's
- * decision. Kinu does not simulate an outcome while the owner decides: the
- * gadget is told the call is queued and NOT run, which is the honesty rule
- * `safety/deferred-approval.ts` states for the agent's own commands.
+ * Nothing here is a gate. A binding passes the agent's OWN capability into the
+ * process, gated exactly as the agent's own call is and no more: a shell
+ * command meets the executor's own approval gate inside the provider's
+ * `execute` (execution/approval.ts), an MCP tool meets the owner's connection
+ * allowlist inside UserDO, a read model is the read the owner can already
+ * make. The decision is over the manifest, the request and nothing else, so
+ * it can sit behind any transport: the loopback entrypoint today, an HTTP
+ * capability endpoint tomorrow.
  */
 
-import type { JsonValue } from '../utils/json';
+import * as v from 'valibot';
+import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError, refusalOf, type Refusal } from '../obs/index';
-import type { ApprovalResult } from '../safety/approval-gate';
-import { isGadgetDataSource, type GadgetDataSource } from './sources';
-import type { GadgetMcpBinding } from './manifest';
+import type { GadgetDataSource } from './sources';
+import { GADGET_LIMITS, gadgetBindings, type GadgetManifest } from './manifest';
+import { isGadgetMethodName } from './rpc';
 
-/** The rule a side-effecting MCP call trips. One rule, so an owner's
- *  `always` grant scopes to "this gadget may act on this connection". The
- *  grant is stored under this string, so a rename orphans every grant given. */
-const GADGET_MCP_ACTION_RULE = 'gadget_mcp_action';
+/** One call through a binding, as the workspace object receives it from any
+ *  transport. Parsed at the boundary: the process is agent code. */
+export const GadgetBindingRequestSchema = v.strictObject({
+  member: v.string(),
+  args: v.array(JsonValueSchema),
+  /** App-to-app hops already taken by the caller. Zero for a server's own call. */
+  depth: v.pipe(v.number(), v.integer(), v.minValue(0)),
+});
 
-/**
- * A path a `files` binding may touch: `requested` joined under `root`, with
- * every `.` and `..` segment resolved, refused when the result leaves the
- * root. Absolute paths are refused outright rather than re-rooted — a
- * gadget that wrote `/home/user/SOUL.md` meant that file, and a silent
- * rewrite would hide the refusal it deserves.
- */
-export function resolveGadgetFilePath(root: string, requested: string): { ok: true; path: string } | ({ ok: false } & Refusal) {
-  if (requested.startsWith('/') || requested.includes('\0')) {
-    return { ok: false, ...refusalOf(new KinuError('denied',
-      `"${requested}" is outside this binding: paths are relative to ${root}/`)) };
+export type GadgetBindingRequest = v.InferOutput<typeof GadgetBindingRequestSchema>;
+
+/** What the manifest lets a request reach. The host runs exactly this. */
+export type GadgetBindingRoute =
+  | {
+    readonly kind: 'namespace';
+    readonly namespace: string;
+    readonly member: string;
+    readonly args: readonly JsonValue[];
   }
-  const segments: string[] = [];
-  for (const segment of requested.split('/')) {
-    if (segment === '' || segment === '.') continue;
-    if (segment === '..') {
-      if (segments.length === 0) {
-        return { ok: false, ...refusalOf(new KinuError('denied',
-          `"${requested}" leaves ${root}/, which is all this binding reaches`)) };
-      }
-      segments.pop();
-      continue;
-    }
-    segments.push(segment);
-  }
-  return { ok: true, path: segments.length === 0 ? root : `${root}/${segments.join('/')}` };
-}
-
-/** The read model a `workspace` binding may read, or the refusal. */
-export function resolveGadgetDataSource(name: string): { ok: true; source: GadgetDataSource } | ({ ok: false } & Refusal) {
-  if (!isGadgetDataSource(name)) {
-    return { ok: false, ...refusalOf(new KinuError('denied',
-      `"${name}" is not a workspace read model a gadget may read`)) };
-  }
-  return { ok: true, source: name };
-}
-
-/** An MCP tool as the connection describes it: the one annotation the
- *  gatekeeper reads. Absent annotations are a side effect until proven
- *  otherwise. */
-export interface GadgetMcpTool {
-  readonly name: string;
-  readonly readOnly: boolean;
-}
-
-export interface GadgetMcpReview {
-  /** What the owner is shown, and what a standing grant is keyed on. */
-  readonly subject: { readonly command: string; readonly executor: string };
-  readonly review: ApprovalResult;
-}
-
-/**
- * Review one MCP call from a gadget.
- *
- * Refused before any ladder runs when the manifest did not introduce the
- * tool (`denied`) or the connection does not offer it (`missing`). Otherwise
- * the review says whether the owner is asked.
- */
-export function reviewGadgetMcpCall(input: {
-  readonly slug: string;
-  readonly binding: GadgetMcpBinding;
-  readonly tool: string;
-  readonly args: JsonValue;
-  /** The connection's tools, as the owner's UserDO describes them. */
-  readonly tools: readonly GadgetMcpTool[];
-}): { ok: true; review: GadgetMcpReview } | ({ ok: false } & Refusal) {
-  const { slug, binding, tool, args } = input;
-  if (binding.tools !== undefined && !binding.tools.includes(tool)) {
-    return { ok: false, ...refusalOf(new KinuError('denied',
-      `gadget "${slug}" did not introduce tool "${tool}" on ${binding.server}: its manifest lists ${binding.tools.join(', ') || 'no tools'}`)) };
-  }
-  const described = input.tools.find((candidate) => candidate.name === tool);
-  if (!described) {
-    return { ok: false, ...refusalOf(new KinuError('missing',
-      `connection ${binding.server} offers no tool named "${tool}"`)) };
-  }
-  // The executor is prefixed so a grant given to a gadget never answers for
-  // the agent's own shell, or the reverse. Stored with the grant, like the rule.
-  const subject = {
-    command: `mcp ${binding.server}/${tool} ${JSON.stringify(args)}`,
-    executor: `gadget:${slug}`,
+  | { readonly kind: 'rpc'; readonly method: GadgetDataSource }
+  | { readonly kind: 'mcp'; readonly server: string; readonly tool: string; readonly args: JsonObject }
+  | {
+    readonly kind: 'app';
+    readonly id: string;
+    readonly method: string;
+    readonly args: readonly JsonValue[];
+    /** The caller's depth; the hop into `id` is one more. */
+    readonly depth: number;
   };
-  const review: ApprovalResult = described.readOnly
-    ? { decision: 'allow', hits: [] }
-    : {
-      decision: 'gate',
-      hits: [{
-        decision: 'gate',
-        rule: GADGET_MCP_ACTION_RULE,
-        explanation: `${binding.server}/${tool} has side effects and gadget "${slug}" is calling it`,
-      }],
-    };
-  return { ok: true, review: { subject, review } };
+
+export type GadgetBindingRouteResult =
+  | { readonly ok: true; readonly route: GadgetBindingRoute }
+  | ({ readonly ok: false } & Refusal);
+
+function refuse(code: 'denied' | 'bad_input', message: string): GadgetBindingRouteResult {
+  return { ok: false, ...refusalOf(new KinuError(code, message)) };
+}
+
+/**
+ * Decide one binding call from the manifest as it stands now.
+ *
+ * Re-run on every call rather than trusted from the boot: the stub proves the
+ * process was built with this binding NAME, and the manifest decides what the
+ * name reaches today.
+ */
+export function routeGadgetBindingCall(input: {
+  readonly slug: string;
+  readonly manifest: GadgetManifest;
+  readonly name: string;
+  readonly request: GadgetBindingRequest;
+}): GadgetBindingRouteResult {
+  const { slug, name, request } = input;
+  const binding = gadgetBindings(input.manifest).find(([bound]) => bound === name)?.[1];
+  if (!binding) {
+    return refuse('denied', `gadget "${slug}" no longer declares a binding named ${name}`);
+  }
+  const { member, args } = request;
+  switch (binding.kind) {
+    case 'namespace': {
+      if (binding.members !== undefined && !binding.members.includes(member)) {
+        return refuse('denied',
+          `${name} does not offer ${binding.namespace}.${member}: gadget "${slug}" listed ${binding.members.join(', ')}`);
+      }
+      return { ok: true, route: { kind: 'namespace', namespace: binding.namespace, member, args } };
+    }
+    case 'rpc': {
+      const method = binding.methods.find((declared) => declared === member);
+      if (method === undefined) {
+        return refuse('denied', `${name} does not offer ${member}: gadget "${slug}" listed ${binding.methods.join(', ')}`);
+      }
+      if (args.length > 0) {
+        return refuse('bad_input', `${name}.${member} is a read model and takes no arguments`);
+      }
+      return { ok: true, route: { kind: 'rpc', method } };
+    }
+    case 'mcp': {
+      if (binding.tools !== undefined && !binding.tools.includes(member)) {
+        return refuse('denied',
+          `${name} does not offer ${member} on ${binding.server}: gadget "${slug}" listed ${binding.tools.join(', ') || 'no tools'}`);
+      }
+      if (args.length > 1) {
+        return refuse('bad_input', `${name}.${member} takes one JSON object of arguments`);
+      }
+      const parsed = v.safeParse(JsonObjectSchema, args[0] ?? {});
+      if (!parsed.success) {
+        return refuse('bad_input', `${name}.${member} takes one JSON object of arguments`);
+      }
+      return { ok: true, route: { kind: 'mcp', server: binding.server, tool: member, args: parsed.output } };
+    }
+    case 'app': {
+      if (!isGadgetMethodName(member)) {
+        return refuse('bad_input', `"${member}" is not a method name the bridge forwards`);
+      }
+      if (request.depth >= GADGET_LIMITS.appDepth) {
+        return refuse('denied',
+          `${name}.${member} would be app hop ${request.depth + 1}; the bound is ${GADGET_LIMITS.appDepth}, so this is a cycle or a chain too deep`);
+      }
+      return { ok: true, route: { kind: 'app', id: binding.id, method: member, args, depth: request.depth } };
+    }
+  }
 }

@@ -1,5 +1,5 @@
 /**
- * The workspace data a gadget's `workspace` binding may read.
+ * The workspace data a gadget's `rpc` binding may read.
  *
  * A binding names an RPC method; it never names a URL, a table, or a file.
  * The containment argument rests on this list being closed and on every
@@ -28,7 +28,6 @@
  *     a new list entry.
  */
 
-import * as v from 'valibot';
 export const GADGET_DATA_SOURCES = [
   'getAlignmentConvergence',
   'getExecutors',
@@ -45,10 +44,3 @@ export const GADGET_DATA_SOURCES = [
 ] as const;
 
 export type GadgetDataSource = (typeof GADGET_DATA_SOURCES)[number];
-
-/** The closed source list, as the schema the binding checks membership against. */
-const GadgetDataSourceSchema = v.picklist(GADGET_DATA_SOURCES);
-
-export function isGadgetDataSource(value: string): value is GadgetDataSource {
-  return v.is(GadgetDataSourceSchema, value);
-}

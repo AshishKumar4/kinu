@@ -224,7 +224,7 @@ import {
   JsonObjectSchema, JsonValueSchema, TIER_IDS, projectJsonValue, changeActiveRole,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
   resolveAgentTurnProfile, resolveRoutingProfile,
-  createMemoryCodemodeProvider, createTasksCodemodeProvider,
+  createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
   beginModelOperation, toolSurfaceTokens,
   // Plan mode's one completion surface and the deps-gated report tool. Both sat
@@ -4475,6 +4475,24 @@ export abstract class ActorAgent extends Think<Env> {
   protected turnCodemodeProviders(mode: WorkMode): CodemodeProvider[] {
     return [...this.baseCodemodeProviders(), ...this.extraCodemodeProviders()]
       .filter((provider) => mode !== 'plan' || provider.name !== 'release');
+  }
+
+  /**
+   * Every namespace a gadget's `namespace` binding may reach: the surfaces the
+   * agent's own `execute_tools` sandbox dispatches to on a build turn, minus the
+   * sandbox's two internal ones (`tools`, `state`). The router's providers come
+   * gated exactly as codemode receives them (execution/approval.ts), and the
+   * projected namespaces are the same factories the sandbox is built from, so a
+   * member runs for a gadget precisely as it runs for the agent. Read per call:
+   * an executor attaches and detaches while this object lives.
+   */
+  protected gadgetNamespaces(): CodemodeProvider[] {
+    return [
+      ...(this.rt.executionRouter?.getProviders() ?? []),
+      createWebCodemodeProvider(this.getWebSearchProvider()),
+      createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
+      ...this.turnCodemodeProviders('build'),
+    ];
   }
 
   /** Build (or return cached) this DO's execute_tools tool. Construction (see
