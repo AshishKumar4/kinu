@@ -35,6 +35,7 @@ export interface GalleryAgent {
 	addEventListener(type: string, listener: EventListener): void;
 	removeEventListener(type: string, listener: EventListener): void;
 	close(): void;
+	reopen(): void;
 }
 
 interface AgentHandlers {
@@ -82,6 +83,11 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 			},
 			removeEventListener: (type, listener) => { listeners.get(type)?.delete(listener); },
 			close: () => { listeners.clear(); },
+			reopen: () => {
+				handlers.current.onClose?.(new CloseEvent("close", { code: 1006 }));
+				handlers.current.onOpen?.(new Event("open"));
+				for (const listener of listeners.get("open") ?? []) listener(new Event("open"));
+			},
 		};
 	}, []);
 	useEffect(() => {
@@ -93,7 +99,10 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 			return;
 		}
 		handlers.current.onOpen?.(new Event("open"));
-	}, []);
+		const reconnect = () => { agent.reopen(); };
+		window.addEventListener("gallery-reconnect", reconnect);
+		return () => window.removeEventListener("gallery-reconnect", reconnect);
+	}, [agent]);
 	return agent;
 }
 
