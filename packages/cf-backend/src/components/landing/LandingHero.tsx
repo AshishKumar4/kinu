@@ -1,5 +1,5 @@
 import { Button } from '@cloudflare/kumo';
-import { useEffect, useRef, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 
 import { useCopy } from '@/hooks/use-copy';
 import { LandingActionLink } from './LandingActionLink';
@@ -25,11 +25,6 @@ interface TreeState {
 }
 
 type Rgb = readonly [red: number, green: number, blue: number];
-interface TreePalette {
-  readonly accent: Rgb;
-  readonly bright: Rgb;
-  readonly text: Rgb;
-}
 
 function cssRgb(name: string): Rgb {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -50,13 +45,6 @@ function rgba([red, green, blue]: Rgb, alpha: number): string {
   return `rgba(${String(red)},${String(green)},${String(blue)},${String(alpha)})`;
 }
 
-function treePalette(): TreePalette {
-  return {
-    accent: cssRgb('--c-accent'),
-    bright: cssRgb('--c-accent-fg'),
-    text: cssRgb('--c-text'),
-  };
-}
 
 function pseudoRandom(seed: number): () => number {
   let value = seed;
@@ -139,154 +127,185 @@ function drawTree(
   width: number,
   height: number,
   ratio: number,
-  palette: TreePalette,
+  ink: Rgb,
 ): void {
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
-  const settledAt = state.lastAppear + 2_000;
-  const time = Math.min(elapsed, settledAt);
+  const time = Math.min(elapsed, state.lastAppear + 2_000);
   const winningProgress = Math.max(0, Math.min(1, (time - state.lastAppear - 500) / 1_200));
-  const sway = (node: TreeNode): number => Math.sin(elapsed / 2_400 + node.phase) * (1.5 + node.depth * 0.9);
+  const sway = (node: TreeNode): number => Math.sin(elapsed / 3_600 + node.phase) * (0.6 + node.depth * 0.35);
 
   for (const node of state.nodes) {
-    if (node.hidden) continue;
-    if (node.parent === null) continue;
+    if (node.hidden || node.parent === null) continue;
     const parent = state.nodes[node.parent];
     if (parent === undefined) continue;
-    const arrival = Math.min(1, Math.max(0, (time - node.appear) / 700));
-    if (arrival <= 0) continue;
-    const eased = arrival < 1 ? 1 - (1 - arrival) ** 3 : 1;
-    const startX = parent.x;
     const startY = parent.y + sway(parent);
-    const endX = startX + (node.x - startX) * eased;
-    const endY = startY + (node.y + sway(node) - startY) * eased;
+    const endY = node.y + sway(node);
+    const distance = node.x - parent.x;
     const pruned = node.pruned || parent.pruned;
     const selected = !pruned && state.winningPath.has(node.id) && state.winningPath.has(parent.id);
-    if (pruned) {
-      context.setLineDash([2.5, 6]);
-      context.strokeStyle = rgba(palette.accent, 0.2);
-      context.lineWidth = 0.75;
-    } else {
-      context.setLineDash([]);
-      const strength = selected ? 0.2 + 0.6 * winningProgress : 0.17;
-      const gradient = context.createLinearGradient(startX, startY, endX, endY);
-      gradient.addColorStop(0, rgba(palette.accent, strength * 0.45));
-      gradient.addColorStop(1, rgba(palette.bright, strength));
-      context.strokeStyle = gradient;
-      context.lineWidth = selected ? 0.9 + 0.9 * winningProgress : 0.85;
-    }
+    const arrival = Math.min(1, Math.max(0, (time - node.appear) / 700));
     context.beginPath();
-    context.moveTo(startX, startY);
-    const controlX = startX + (endX - startX) * 0.55;
-    context.bezierCurveTo(controlX, startY, startX + (endX - startX) * 0.45, endY, endX, endY);
+    context.moveTo(parent.x, startY);
+    context.bezierCurveTo(parent.x + distance * 0.55, startY, parent.x + distance * 0.45, endY, node.x, endY);
+    context.setLineDash(pruned ? [2, 5] : []);
+    context.strokeStyle = rgba(ink, pruned ? 0.17 : selected ? 0.2 + 0.65 * winningProgress : 0.12 + 0.17 * arrival);
+    context.lineWidth = selected ? 1 + winningProgress : 0.8;
     context.stroke();
     context.setLineDash([]);
+
+    if (selected && winningProgress > 0.9) {
+      const t = (elapsed / 3_400 - node.depth * 0.19) % 1;
+      const u = 1 - t;
+      const x = u ** 3 * parent.x + 3 * u ** 2 * t * (parent.x + distance * 0.55)
+        + 3 * u * t ** 2 * (parent.x + distance * 0.45) + t ** 3 * node.x;
+      const y = (u ** 3 + 3 * u ** 2 * t) * startY + (3 * u * t ** 2 + t ** 3) * endY;
+      context.beginPath();
+      context.arc(x, y, 2, 0, Math.PI * 2);
+      context.fillStyle = rgba(ink, 0.9);
+      context.fill();
+    }
   }
 
   for (const node of state.nodes) {
     if (node.hidden) continue;
     const arrival = Math.min(1, Math.max(0, (time - node.appear) / 620));
-    if (arrival <= 0) continue;
-    const x = node.x;
     const y = node.y + sway(node);
     const root = node.parent === null;
     const winner = node.id === state.winner;
     const selected = state.winningPath.has(node.id);
-    const pruned = node.pruned;
-    const leaf = node.pruned || node.children.every((child) => state.nodes[child]?.hidden === true);
-    const radius = (root ? 5 : leaf ? 3.6 : 2.6) * (0.5 + 0.5 * arrival);
-    if (pruned) {
+    const radius = root ? 6 : winner ? 5 : node.pruned ? 2 : 2.6;
+    if (root || (winner && winningProgress > 0.1)) {
       context.beginPath();
-      context.arc(x, y, radius * 0.82, 0, Math.PI * 2);
-      context.fillStyle = rgba(palette.accent, 0.34);
-      context.fill();
-      continue;
+      context.arc(node.x, y, radius + 6, 0, Math.PI * 2);
+      context.strokeStyle = rgba(ink, 0.2);
+      context.lineWidth = 1;
+      context.stroke();
     }
     context.beginPath();
-    context.arc(x, y, winner ? radius * (1 + 0.5 * winningProgress) : radius, 0, Math.PI * 2);
-    context.fillStyle = winner && winningProgress > 0.1
-      ? rgba(palette.text, 0.5 + 0.5 * winningProgress)
-      : selected && winningProgress > 0.1
-        ? rgba(palette.accent, 0.3 + 0.45 * winningProgress)
-        : root
-          ? rgba(palette.bright, 0.6)
-          : rgba(palette.accent, leaf ? 0.5 : 0.36);
+    context.arc(node.x, y, radius, 0, Math.PI * 2);
+    context.fillStyle = rgba(ink, node.pruned ? 0.25 : selected ? 0.3 + 0.7 * arrival : 0.15 + 0.25 * arrival);
     context.fill();
   }
 }
 
+const STATIC_TREE = buildTree(720, 520);
+
 function SearchCanvas(): ReactElement {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const controlsRef = useRef<{ replay(): void; pause(): void } | null>(null);
+  const [ready, setReady] = useState(false);
+  const [playing, setPlaying] = useState(true);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas === null) return;
     const context = canvas.getContext('2d');
     if (context === null) return;
-    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
     let timer = 0;
-    let started = performance.now();
-    let dimensions = { width: 520, height: 620, ratio: 1 };
-    let tree = buildTree(dimensions.width, dimensions.height);
-    let lastElapsed = 700;
+    let visible = false;
+    let paused = false;
+    let contextLost = false;
+    let lastTick = performance.now();
+    let elapsed = 180;
+    let dimensions = { width: 720, height: 520, ratio: 1 };
+    let tree = STATIC_TREE;
+    let ink = cssRgb('--c-accent-fg');
 
-    const resize = (): boolean => {
+    const paint = (): void => {
+      if (contextLost) return;
+      drawTree(context, tree, elapsed, dimensions.width, dimensions.height, dimensions.ratio, ink);
+      canvas.dataset.settled = String(elapsed >= tree.lastAppear + 2_000);
+    };
+    const stop = (): void => { window.clearTimeout(timer); timer = 0; };
+    const tick = (): void => {
+      const now = performance.now();
+      elapsed += now - lastTick;
+      lastTick = now;
+      paint();
+      timer = window.setTimeout(tick, 34);
+    };
+    const syncPlayback = (): void => {
+      stop();
+      if (reduced.matches) { elapsed = tree.lastAppear + 2_000; paint(); }
+      if (!visible || document.hidden || paused || reduced.matches || contextLost) return;
+      lastTick = performance.now();
+      timer = window.setTimeout(tick, 34);
+    };
+    const resize = (): void => {
       const box = canvas.getBoundingClientRect();
-      if (box.width < 4 || box.height < 4) return false;
+      if (box.width < 4 || box.height < 4) return;
       const ratio = Math.min(2, window.devicePixelRatio || 1);
       const width = Math.round(box.width * ratio);
       const height = Math.round(box.height * ratio);
-      if (canvas.width === width && canvas.height === height) return false;
+      if (canvas.width === width && canvas.height === height) return;
       canvas.width = width;
       canvas.height = height;
       dimensions = { width: box.width, height: box.height, ratio };
       tree = buildTree(box.width, box.height);
       canvas.dataset.pruned = String(tree.nodes.filter((node) => node.pruned).length);
       canvas.dataset.hidden = String(tree.nodes.filter((node) => node.hidden).length);
-      canvas.dataset.visible = String(tree.nodes.filter((node) => !node.hidden).length);
-      return true;
+      if (reduced.matches) elapsed = tree.lastAppear + 2_000;
+      paint();
     };
-    const paint = (elapsed: number): void => {
-      lastElapsed = elapsed;
-      drawTree(context, tree, elapsed, dimensions.width, dimensions.height, dimensions.ratio, treePalette());
-      if (elapsed >= tree.lastAppear + 2_000) canvas.dataset.settled = "true";
-      else delete canvas.dataset.settled;
-    };
-    const draw = (now: number): void => {
-      const settledAt = tree.lastAppear + 2_000;
-      const elapsed = reduced ? settledAt : now - started;
-      paint(elapsed);
-      if (!reduced) timer = window.setTimeout(() => draw(performance.now()), 34);
-    };
-
-    resize();
-    const initialElapsed = reduced ? tree.lastAppear + 2_000 : 180;
-    started = performance.now() - initialElapsed;
-    paint(initialElapsed);
-    if (!reduced) timer = window.setTimeout(() => draw(performance.now()), 34);
-
-    const observer = new ResizeObserver(() => {
-      if (!resize()) return;
-      paint(tree.lastAppear + 2_000);
+    const modeChanged = (): void => { ink = cssRgb('--c-accent-fg'); paint(); };
+    const lost = (event: Event): void => { event.preventDefault(); contextLost = true; stop(); setReady(false); };
+    const restored = (): void => { contextLost = false; resize(); paint(); setReady(true); syncPlayback(); };
+    const sizeObserver = new ResizeObserver(resize);
+    const modeObserver = new MutationObserver(modeChanged);
+    const visibilityObserver = new IntersectionObserver(([entry]) => {
+      visible = entry?.isIntersecting === true;
+      if (visible && !contextLost) { resize(); setReady(true); }
+      syncPlayback();
     });
-    observer.observe(canvas);
-    const modeObserver = new MutationObserver(() => paint(lastElapsed));
-    modeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-mode"] });
+    sizeObserver.observe(canvas);
+    modeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode'] });
+    visibilityObserver.observe(canvas);
+    document.addEventListener('visibilitychange', syncPlayback);
+    reduced.addEventListener('change', syncPlayback);
+    canvas.addEventListener('contextlost', lost);
+    canvas.addEventListener('contextrestored', restored);
+    controlsRef.current = {
+      replay() { elapsed = 180; paused = false; setPlaying(true); paint(); syncPlayback(); },
+      pause() { paused = !paused; setPlaying(!paused); syncPlayback(); },
+    };
     return () => {
-      window.clearTimeout(timer);
-      observer.disconnect();
+      stop();
+      controlsRef.current = null;
+      sizeObserver.disconnect();
       modeObserver.disconnect();
+      visibilityObserver.disconnect();
+      document.removeEventListener('visibilitychange', syncPlayback);
+      reduced.removeEventListener('change', syncPlayback);
+      canvas.removeEventListener('contextlost', lost);
+      canvas.removeEventListener('contextrestored', restored);
     };
   }, []);
 
   return (
-    <div data-hero-graph className="relative hidden min-h-[620px] min-w-0 lg:block">
-      <canvas
-        ref={canvasRef}
-        aria-hidden="true"
-        className="absolute inset-0 size-full opacity-80"
-      />
-    </div>
+    <figure data-hero-graph className="landing-search">
+      <div className="landing-search-heading p-annotation p-text-3"><span>Explore alternatives</span><span className="p-accent">Keep the measured result</span></div>
+      <div className="landing-search-field">
+        <svg viewBox="0 0 720 520" preserveAspectRatio="none" aria-hidden="true" className={ready ? 'hidden' : 'absolute inset-0 size-full'}>
+          {STATIC_TREE.nodes.filter((node) => !node.hidden).map((node) => {
+            const parent = node.parent === null ? undefined : STATIC_TREE.nodes[node.parent];
+            return <g key={node.id} fill="var(--c-accent-fg)" stroke="var(--c-accent-fg)" opacity={STATIC_TREE.winningPath.has(node.id) ? 0.8 : 0.25}>
+              {parent !== undefined && <path d={`M ${parent.x} ${parent.y} C ${parent.x + (node.x - parent.x) * 0.55} ${parent.y}, ${parent.x + (node.x - parent.x) * 0.45} ${node.y}, ${node.x} ${node.y}`} fill="none" strokeWidth={STATIC_TREE.winningPath.has(node.id) ? 1.8 : 0.8} strokeDasharray={node.pruned ? '2 5' : undefined} />}
+              <circle cx={node.x} cy={node.y} r={node.parent === null ? 5 : 2.5} stroke="none" />
+            </g>;
+          })}
+        </svg>
+        <canvas ref={canvasRef} aria-hidden="true" className={`absolute inset-0 size-full ${ready ? 'opacity-100' : 'opacity-0'}`} />
+      </div>
+      <figcaption className="landing-search-caption">
+        <span className="p-annotation p-text-3">Search, score, and improve.</span>
+        <div className="flex gap-1 motion-reduce:hidden">
+          <Button type="button" size="sm" variant="ghost" disabled={!ready} aria-label={playing ? 'Pause search animation' : 'Play search animation'} onClick={() => controlsRef.current?.pause()}>{playing ? 'Pause' : 'Play'}</Button>
+          <Button type="button" size="sm" variant="ghost" disabled={!ready} aria-label="Replay search animation" onClick={() => controlsRef.current?.replay()}>Replay</Button>
+        </div>
+      </figcaption>
+    </figure>
   );
 }
 
