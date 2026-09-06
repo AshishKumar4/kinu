@@ -107,7 +107,11 @@ export class LazyRestore {
    *  names on one inode are a hardlink, and the container must share it. */
   readonly #inodePaths = new Map<number, string>();
 
-  constructor(head: HeadFilesystem, ports: LazyRestorePorts) {
+  constructor(
+    head: HeadFilesystem,
+    ports: LazyRestorePorts,
+    private readonly onBindInode?: (path: string, ino: number) => Promise<void>,
+  ) {
     this.#head = head;
     this.#residency = new Residency({
       read: async (path, offset, length) => await head.readRange(path, offset, length),
@@ -163,6 +167,11 @@ export class LazyRestore {
   /** The path the container should hardlink `ino` to, when it has one already. */
   linkedPath(ino: number): string | undefined {
     return this.#inodePaths.get(ino);
+  }
+
+  /** Bind the published layout after the container has planted this inode. */
+  async bindInode(path: string, ino: number): Promise<void> {
+    await this.onBindInode?.(path, ino);
   }
 
   /** Page in `[offset, offset + length)`, paying for the windows it misses. */
