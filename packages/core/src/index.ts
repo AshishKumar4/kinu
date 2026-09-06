@@ -250,27 +250,14 @@ export { SqliteSlateContentStore } from './slates/content';
 export { SqliteSlateInvocations, type SlateInvocationAuthority } from './slates/invocations';
 export { SlateFiles, slateDirectory } from './slates/files';
 export { WorkspaceSlates, type WorkspaceSlatesDeps } from './slates/runtime';
-export { KinuSlateProvider } from './slates/provider';
-export { parseSlateProject, slateExecutorName, type SlateProject, type SlateBinding } from './slates/project';
+export { parseSlateProject, type SlateProject, type SlateBinding } from './slates/project';
 export { SlateBindingRequestSchema, routeSlateBindingCall, type SlateBindingRequest, type SlateBindingRoute } from './slates/bindings';
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
-
-// Gadgets — agent-written apps: a server the resident process hosts with only
-// its declared bindings and no ctx or SQLite, a client in a sandboxed iframe. See docs/LIVE-UI.md.
 export {
-  GADGET_DIR, GADGET_MANIFEST_FILE, GADGET_SERVER_FILE, GADGET_CLIENT_FILE, GADGET_CLIENT_STYLE_FILE,
-  GADGET_SERVER_CLASS, GADGET_LIMITS, GADGET_DATA_SOURCES, GADGETS_CHANGED_EVENT,
-  parseGadgetManifest, gadgetBindings, isGadgetSlug,
-  listGadgets, readGadget, readGadgetClient, readGadgetServer,
-  isGadgetMethodName, gadgetSummary,
-  GadgetBindingRequestSchema, routeGadgetBindingCall,
-  type GadgetManifest, type GadgetManifestResult, type GadgetBinding, type GadgetBindingKind,
-  type GadgetDataSource,
-  type GadgetRecord, type GadgetProblem, type GadgetListing, type GadgetReadResult,
-  type GadgetCallResult, type GadgetsChangedEvent, type GadgetSummary,
-  type GadgetBindingRequest, type GadgetBindingRoute, type GadgetBindingRouteResult,
-} from './gadgets/index';
+  isSlateMethodName, SlateOperationSchema, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult,
+  type SlateSummary, type SlateProblem, type SlatesChangedEvent,
+} from './slates/rpc';
 
 // Release lane — governed patch/deploy over a bound source — separate from scaffold evolution.
 export {

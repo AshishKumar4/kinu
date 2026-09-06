@@ -57,8 +57,7 @@ ledger.
 | Call | What it makes |
 | --- | --- |
 | `workspace.createTool(name, description, code)` | a reusable crafted tool, callable the same turn |
-| `workspace.gadgets()` | the gadgets under `gadgets/<slug>/`, valid ones and broken manifests |
-| `workspace.gadget(slug, method, ...args)` | a call into a gadget server, the resident process the host boots its `server.js` in |
+| `workspace.slate(operation)` | list or preview authored slates, call a POST route, commit source, inspect history, fork a version, or restore source |
 | `workspace.editFile(path, edits)` | an exact-match edit, with the same gate and, where the backend shares a turn ledger, the same read-before-write state as the native `file` tool `edit` action |
 
 ## file: the file plane
@@ -224,9 +223,9 @@ in-process through `createNodeExecuteToolFactory`. Both bind these namespaces.
 `file` and `workspace.*` share its `TurnFileLedger` read-before-write state.
 `SKILLS_DIR` declares `/workspace/skills/*.md` on that VFS.
 
-### Gadgets
+### Slates
 
-A gadget is agent-written UI under `gadgets/<slug>/`. It has three files: `gadget.json`, `server.js`, `client.js`. `gadget.json` declares `{ v: 1, title, subtitle?, bindings?: Record<NAME, { kind: 'files', root? } | { kind: 'workspace' } | { kind: 'mcp', server, tools? }> }`. `server.js` imports `RpcTarget` from `./capnweb.js` and exports `class Gadget extends RpcTarget` with `constructor(env) { super(); this.env = env; }`. It runs with no network and no `ctx` or SQLite. It sees only `env.<NAME>` for each declared binding. Keep lasting state in `files`, by default `gadgets/<slug>/data`. `client.js` runs in a sandboxed iframe with no network. It sees `gadget` in scope as a stub of the server. See [LIVE-UI.md](./LIVE-UI.md).
+A slate is an authored project under `/home/user/slates/<id>/`. Its `package.json` names a TypeScript Worker module in `main` and declares capabilities in the strict `slate.bindings` field. The default export handles `fetch(request, env)`; introduced capabilities are `env.NAME.member(...args)`. Write files through the ordinary file plane, then use `workspace.slate({op:'preview',id})` to boot a live preview. `call` POSTs a JSON argument array to a named route. `commit` freezes source, `history` reads versions, `fork` copies a version into a new slate, and `restore` restores a version's tree. Running previews are isolate-lifetime processes, not durable records. These operations stay in the existing workspace codemode namespace; the native surface remains eight tools.
 
 ### Projected native tools
 

@@ -1,3 +1,171 @@
+diff --git a/dist/facets/manager.js b/dist/facets/manager.js
+index 382b4ed66c41ba3c224b0e847c2779418bf9e241..e01e91ca6dcc456b37bedd9f9e07765dccd759d5 100644
+--- a/dist/facets/manager.js
++++ b/dist/facets/manager.js
+@@ -3625,7 +3625,7 @@ export class FacetManager {
+         // Lazy-create one if NimbusSession didn't share its own.
+         if (this.vfs && !this.esbuild) {
+             try {
+-                this.esbuild = new EsbuildService(this.vfs);
++                this.esbuild = new EsbuildService(this.vfs.as(CRED_KERNEL));
+             }
+             catch {
+                 this.esbuild = null;
+@@ -4533,7 +4533,7 @@ export class FacetManager {
+     async _residentLaunchBody(entry, code, command, cwd, opts, pacer) {
+         if (this.vfs && !this.esbuild) {
+             try {
+-                this.esbuild = new EsbuildService(this.vfs);
++                this.esbuild = new EsbuildService(this.vfs.as(CRED_KERNEL));
+             }
+             catch {
+                 this.esbuild = null;
+diff --git a/dist/session/init.js b/dist/session/init.js
+index 7380875a023c2f57f9d62e35fbe9e1f7f33ca347..ebf0bd151d63af57025e4ed1ac77176580157ac1 100644
+--- a/dist/session/init.js
++++ b/dist/session/init.js
+@@ -689,7 +689,7 @@ export async function initSession(self, ws) {
+             getEsbuild: () => {
+                 if (!self.esbuildService) {
+                     self.ensureSqliteFs();
+-                    self.esbuildService = new EsbuildService(self.sqliteFs);
++                    self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+                 }
+                 return self.esbuildService;
+             },
+@@ -838,7 +838,7 @@ export async function initSession(self, ws) {
+             getEsbuild: () => {
+                 if (!self.esbuildService) {
+                     self.ensureSqliteFs();
+-                    self.esbuildService = new EsbuildService(self.sqliteFs);
++                    self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+                 }
+                 return self.esbuildService;
+             },
+@@ -886,7 +886,7 @@ export async function initSession(self, ws) {
+                     getEsbuild: () => {
+                         if (!self.esbuildService) {
+                             self.ensureSqliteFs();
+-                            self.esbuildService = new EsbuildService(self.sqliteFs);
++                            self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+                         }
+                         return self.esbuildService;
+                     },
+@@ -956,7 +956,7 @@ export async function initSession(self, ws) {
+         // Lazy-init esbuild service
+         if (!self.esbuildService) {
+             self.ensureSqliteFs();
+-            self.esbuildService = new EsbuildService(self.sqliteFs);
++            self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+         }
+         // Parse flags
+         const flags = {};
+@@ -1091,7 +1091,7 @@ export async function initSession(self, ws) {
+                     // Transform TS to JS
+                     if (cfgName.endsWith('.ts')) {
+                         if (!self.esbuildService)
+-                            self.esbuildService = new EsbuildService(self.sqliteFs);
++                            self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+                         const t = await self.esbuildService.transform(cfgCode, { loader: 'ts', format: 'esm' });
+                         cfgCode = t.code;
+                     }
+@@ -1106,7 +1106,7 @@ export async function initSession(self, ws) {
+         // ── vite build ──
+         if (args[0] === 'build') {
+             if (!self.esbuildService)
+-                self.esbuildService = new EsbuildService(self.sqliteFs);
++                self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+             const htmlPath = cwd + '/index.html';
+             let entryPoint = cwd + '/src/main.tsx';
+             let origHtml = '';
+@@ -1222,7 +1222,7 @@ export async function initSession(self, ws) {
+             }
+             // Start vite on the dist directory
+             if (!self.esbuildService)
+-                self.esbuildService = new EsbuildService(self.sqliteFs);
++                self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+             if (self.viteDevServer?.isRunning)
+                 self.viteDevServer.stop();
+             const previewBasePath = self.viteBasePath;
+@@ -1395,7 +1395,7 @@ export async function initSession(self, ws) {
+             }
+         }
+         if (!self.esbuildService)
+-            self.esbuildService = new EsbuildService(self.sqliteFs);
++            self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+         const previewBasePath = self.viteBasePath;
+         const viteDefine = viteConfig.define;
+         // Vite dev servers are represented as long-running process-table
+@@ -1563,7 +1563,7 @@ export async function initSession(self, ws) {
+         // Lazy-init esbuild
+         if (!self.esbuildService) {
+             self.ensureSqliteFs();
+-            self.esbuildService = new EsbuildService(self.sqliteFs);
++            self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+         }
+         // Parse --root flag; default to the shell cwd so `npm run dev` from
+         // a project directory picks up that project's wrangler.jsonc.
+diff --git a/dist/session/nimbus-session.js b/dist/session/nimbus-session.js
+index e6f176cfa6467893b4d4afa7d1e9fe3f9fefd46c..230d649e4598eeefb49c3b9d99a553f67b6638c0 100644
+--- a/dist/session/nimbus-session.js
++++ b/dist/session/nimbus-session.js
+@@ -1280,7 +1280,7 @@ export class NimbusSession extends CloudflareDurableObject {
+     ensureNpmInstaller(onProgress) {
+         this.ensureSqliteFs();
+         if (!this.esbuildService) {
+-            this.esbuildService = new EsbuildService(this.sqliteFs);
++            this.esbuildService = new EsbuildService(this.sqliteFs.as(CRED_KERNEL));
+         }
+         // ── Lazy fetch-proxy ────────────────────────────────────────────
+         // The fetch-proxy is a singleton dynamic worker (LOADER.load) that
+diff --git a/dist/session/routes.js b/dist/session/routes.js
+index 49a5a147a98d302f9a89df7a0dcaf8fccfc4c718..23e3860c255aa4c389fc113d04750798aad9d611 100644
+--- a/dist/session/routes.js
++++ b/dist/session/routes.js
+@@ -140,7 +140,7 @@ async function restorePersistedDevServer(self, onlyPort) {
+         }
+         self.ensureSqliteFs();
+         if (!self.esbuildService)
+-            self.esbuildService = new EsbuildService(self.sqliteFs);
++            self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+         // Prefer the current request's basePath (just captured from the
+         // X-Nimbus-Base header) over the stored one — the latter is only
+         // a fallback for cold rehydrates that precede any header hit.
+@@ -1051,7 +1051,7 @@ export async function handleFetch(self, request) {
+                 self.viteDevServer.stop();
+             // Start in-process ViteDevServer
+             if (!self.esbuildService)
+-                self.esbuildService = new EsbuildService(self.sqliteFs);
++                self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+             const basePath = self.viteBasePath;
+             // process metadata support: allocate a PID + port even on the
+             // /api/start-vite path so probes that drive vite via the test
+diff --git a/dist/session/rpc.js b/dist/session/rpc.js
+index 9941a9c6b8ca491dec254e88bbd92dd002a565bb..f6fa30d4c51bb620209d66ce9f8e3bcf875d7782 100644
+--- a/dist/session/rpc.js
++++ b/dist/session/rpc.js
+@@ -1027,7 +1027,7 @@ export async function _rpcRouteLoopback(self, port, request) {
+ export async function _rpcTransform(self, code, loader) {
+     if (!self.esbuildService) {
+         self.ensureSqliteFs();
+-        self.esbuildService = new EsbuildService(self.sqliteFs);
++        self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+     }
+     try {
+         const result = await self.esbuildService.transform(code, {
+diff --git a/dist/session/start-real-vite.js b/dist/session/start-real-vite.js
+index e4d7e638d88552252faa09042ce3dbe0f13fd0e4..a681e1b082b9404d7d105bc9ee7897af90013711 100644
+--- a/dist/session/start-real-vite.js
++++ b/dist/session/start-real-vite.js
+@@ -53,7 +53,7 @@ export async function startRealVite(self, opts) {
+         if (cfgPath) {
+             try {
+                 if (!self.esbuildService)
+-                    self.esbuildService = new EsbuildService(self.sqliteFs);
++                    self.esbuildService = new EsbuildService(self.sqliteFs.as(CRED_KERNEL));
+                 const bundleResult = await self.esbuildService.build([cfgPath], {
+                     bundle: true,
+                     format: 'esm',
 diff --git a/dist/session/supervisor-rpc.d.ts b/dist/session/supervisor-rpc.d.ts
 index 25a667e8b6c923a4b51db5a7b90e4c384accf416..037f3fabaab3a9403e4f50a30383e0db4bcbb3f6 100644
 --- a/dist/session/supervisor-rpc.d.ts

@@ -13,7 +13,6 @@ import { createTestRuntime } from './helpers';
 import { createInlineExecutor } from '../src/execution/inline';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode';
-import { GADGET_DATA_SOURCES } from '../src/gadgets/index';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
 import { TurnFileLedger } from '../src/tools/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
@@ -500,56 +499,11 @@ describe('workspace.createTool — the tool is born scorable', () => {
   });
 });
 
-// ── gadgets ─────────────────────────────────────────────────────────────────
-
-describe('workspace.gadgets / workspace.gadget', () => {
-  const manifest = JSON.stringify({ v: 1, title: 'Deploy health', bindings: { DATA: { kind: 'rpc', methods: ['getExecutors'] } } });
-
-  test('lists what the file plane holds, problems beside the valid gadgets', async () => {
-    const { rt } = createTestRuntime();
-    await rt.storage.vfs.mkdir('gadgets/health', { recursive: true });
-    await rt.storage.vfs.writeFile('gadgets/health/gadget.json', manifest);
-    await rt.storage.vfs.writeFile('gadgets/health/client.js', 'document.body.textContent = "hi"');
-    await rt.storage.vfs.mkdir('gadgets/broken', { recursive: true });
-    await rt.storage.vfs.writeFile('gadgets/broken/gadget.json', '{"v":1,"title":"Approvals"}');
-    const exec = buildExec(rt);
-
-    const listed = v.parse(v.object({
-      gadgets: v.array(v.object({ slug: v.string(), title: v.string(), hasClient: v.boolean(), hasServer: v.boolean(), bindings: v.array(v.string()) })),
-      problems: v.array(v.object({ slug: v.string(), error: v.string() })),
-    }), await exec.tools.gadgets.execute());
-    expect(listed.gadgets).toEqual([{ slug: 'health', title: 'Deploy health', hasClient: true, hasServer: false, bindings: ['DATA'] }]);
-    expect(listed.problems.map((p) => p.slug)).toEqual(['broken']);
-    expect(listed.problems[0]?.error).toContain('host owns');
-  });
-
-  test('a call on a backend with no gadget host is unsupported, and a bad name is refused before it', async () => {
-    const { rt } = createTestRuntime();
-    const exec = buildExec(rt);
-    expect(await exec.tools.gadget.execute('health', 'list')).toMatchObject({ ok: false, reason: 'unsupported' });
-    expect(await exec.tools.gadget.execute('../x', 'list')).toMatchObject({ ok: false, reason: 'bad_input' });
-    expect(await exec.tools.gadget.execute('health', '_private')).toMatchObject({ ok: false, reason: 'bad_input' });
-  });
-
-  test('a call reaches the host with the slug, the method and JSON arguments, and answers its value', async () => {
-    const { rt } = createTestRuntime();
-    const calls: Array<[string, string, unknown[]]> = [];
-    const exec = createInlineExecutor({
-      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
-      shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
-      gadgetCall: async (slug, method, args) => {
-        calls.push([slug, method, args]);
-        return { ok: true, value: { added: args[0] } };
-      },
-    });
-    expect(await exec.tools.gadget.execute('todo', 'addItem', 'milk', 2)).toEqual({ ok: true, value: { added: 'milk' } });
-    expect(calls).toEqual([['todo', 'addItem', ['milk', 2]]]);
-    expect(await exec.tools.gadget.execute('todo', 'addItem', () => 1)).toMatchObject({ ok: false, reason: 'bad_input' });
-  });
-
-  test('the codemode declarations name every read model an rpc binding may name', () => {
-    // The model authors against `types`; the manifest parser enforces GADGET_DATA_SOURCES.
+describe('workspace.slate', () => {
+  test('absence is unsupported while invalid operation fields are refused before dispatch', async () => {
     const exec = buildExec(createTestRuntime().rt);
-    for (const source of GADGET_DATA_SOURCES) expect(exec.types).toContain(source);
+    expect(await exec.tools.slate.execute({ op: 'list' })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect(await exec.tools.slate.execute({ op: 'commit', id: '../outside' })).toMatchObject({ ok: false, reason: 'bad_input' });
+    expect(await exec.tools.slate.execute({ op: 'call', id: 'notes', method: 'echo', args: [() => 1] })).toMatchObject({ ok: false, reason: 'bad_input' });
   });
 });

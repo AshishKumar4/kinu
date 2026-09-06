@@ -39,6 +39,17 @@ mount cannot unbind an outbound handler the host installed
 `package.json`, so it governs all seven. Its header still narrates the `@nimbus-sh/core` patch incident,
 because that incident is why the gate exists.
 
+The core patch also ports Nimbus `c9af250e`: `EsbuildService` keeps
+the supplied credentialed view and never acquires kernel authority itself.
+Published core/worker runtime callers select kernel authority explicitly.
+Kinu's resident slate compiler instead uses `CRED_SESSION_USER` for both server
+and browser imports, matching the authoring agent's filesystem view. Its
+separate service object shares the existing module-cached esbuild-wasm namespace;
+it does not allocate a second wasm heap. Compile diagnostics become `bad_input`
+with their cause retained; compiler initialization errors remain runtime failures.
+The workerd slate-process suite checks both the private-file refusal and a working
+authored TypeScript resident process.
+
 ## Ownership
 
 A cloud workspace has ONE durable authority. The `OrchestratorAgent` Durable

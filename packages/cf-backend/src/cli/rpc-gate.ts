@@ -168,7 +168,6 @@ export type AgentRpcAccess = AccessTokenScope | 'interactive' | 'never';
 export const AGENT_RPC_ACCESS = {
   // ── Reads a workspace.read token may perform (old GET /workspaces/:name/*) ──
   getAgentStatus: 'workspace.read',
-  getGadgetClient: 'workspace.read',
   getAlignmentConvergence: 'workspace.read',
   getChatHistoryPage: 'workspace.read',
   getExecutors: 'workspace.read',
@@ -195,7 +194,7 @@ export const AGENT_RPC_ACCESS = {
   getWorkspaceSnapshot: 'workspace.read',
   getWorkspaceTabPresence: 'workspace.read',
   listAgentTasks: 'workspace.read',
-  listGadgets: 'workspace.read',
+  listSlates: 'workspace.read',
   listBackgroundJobs: 'workspace.read',
   listForkRuns: 'workspace.read',
   listPendingConsents: 'workspace.read',
@@ -236,10 +235,10 @@ export const AGENT_RPC_ACCESS = {
   // listing is interactive for the same reason `listPendingActions` is: it is
   // the surface an owner reads immediately before authorising something.
   decideDeferredApprovals: 'interactive',
-  // A gadget call runs agent-written code that may act through an MCP binding
-  // the owner introduced. The bindings' own gate parks side effects on the
-  // owner, and a scoped token still must not be a second way to reach them.
-  gadgetCall: 'interactive',
+  // Authored code can act through the agent's bindings; interactive callers
+  // share the ordinary side-effect gates, not a second binding policy.
+  slate: 'interactive',
+  previewSlate: 'interactive',
   // Instruction trust (KINU-N028), and 'interactive' for exactly the reason
   // above. Approving a workspace instruction file is what grants those bytes
   // system placement, so a scoped token that could call it would be a way for

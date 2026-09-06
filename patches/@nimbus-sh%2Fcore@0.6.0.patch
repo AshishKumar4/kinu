@@ -183,9 +183,18 @@ index 191add4476ef819a3ee6475466976d54dfabb595..f526330ef791bb0900ff98798d39c11e
  export async function extractTarball(tarball) {
      const files = new Map();
 diff --git a/dist/runtime/esbuild-service.d.ts b/dist/runtime/esbuild-service.d.ts
-index d07f6ea2dd282ecd8b761d8861d5a6108251fa2f..691b3064c5c446ca80b72b681194f9b4930a7429 100644
+index d07f6ea2dd282ecd8b761d8861d5a6108251fa2f..9c8d4580a561a6defbaa2c784b605ee06feba09c 100644
 --- a/dist/runtime/esbuild-service.d.ts
 +++ b/dist/runtime/esbuild-service.d.ts
+@@ -16,7 +16,7 @@
+  * this is acceptable for Phase 3. Phase 4+ can move it to a dedicated
+  * facet once wasm module passing to dynamic workers is stable.
+  */
+-import type { SqliteVFS } from '../vfs/sqlite-vfs.js';
++import type { CredentialedVfs } from '../vfs/sqlite-vfs.js';
+ /**
+  * Bundler version tag. BUMP THIS whenever bundling semantics change —
+  * the esbuild plugin's resolver logic, the shared-externals rules, the
 @@ -100,7 +100,7 @@ export declare function getSharedRuntimeExternals(specifier: string): string[];
   * Unicode identifier tables.
   */
@@ -195,11 +204,38 @@ index d07f6ea2dd282ecd8b761d8861d5a6108251fa2f..691b3064c5c446ca80b72b681194f9b4
  export interface TransformResult {
      code: string;
      map: string;
+@@ -130,7 +130,8 @@ export declare class EsbuildService {
+     private initPromise;
+     /** Resolved esbuild namespace — populated by ensureInit() after loadEsbuild(). */
+     private _esbuild;
+-    constructor(vfs: SqliteVFS);
++    /** Build reads use only the caller-supplied view; omit it for transform-only use. */
++    constructor(vfs?: CredentialedVfs);
+     /**
+      * Initialize esbuild-wasm (lazy, on first use). Loads the namespace
+      * via `loadEsbuild()` (which itself is deferred) and caches it on
+@@ -234,7 +235,7 @@ export declare class EsbuildService {
+     }): Promise<BuildResult>;
+     /**
+      * VFS resolver plugin for esbuild.
+-     * Reads directly from the SqliteVFS (synchronous, co-located — no snapshot needed).
++     * Reads through the caller's credentialed view (synchronous, no snapshot needed).
+      * Handles: absolute paths, relative paths, bare specifiers (node_modules).
+      */
+     private makeVfsPlugin;
 diff --git a/dist/runtime/esbuild-service.js b/dist/runtime/esbuild-service.js
-index 3f3fb83bd240e98247945f044983cd0bfc8e7bb7..57d6cef1361d34fc05c619da12e432384b23182a 100644
+index 3f3fb83bd240e98247945f044983cd0bfc8e7bb7..1d457480f615b5a181d750d8c8ce7dfe7dfe390e 100644
 --- a/dist/runtime/esbuild-service.js
 +++ b/dist/runtime/esbuild-service.js
-@@ -823,7 +823,7 @@ async function loadEsbuild() {
+@@ -16,7 +16,6 @@
+  * this is acceptable for Phase 3. Phase 4+ can move it to a dedicated
+  * facet once wasm module passing to dynamic workers is stable.
+  */
+-import { CRED_KERNEL } from './os-contracts.js';
+ import { resolvePackageEntry, resolveExports } from '../_shared/exports-resolver.js';
+ import { normalizeVfsPath, stripLeadingSlashes } from '../vfs/path.js';
+ import { errorText } from '../_shared/error-text.js';
+@@ -823,7 +822,7 @@ async function loadEsbuild() {
      if (_esbuildLoadPromise)
          return _esbuildLoadPromise;
      _esbuildLoadPromise = (async () => {
@@ -208,6 +244,32 @@ index 3f3fb83bd240e98247945f044983cd0bfc8e7bb7..57d6cef1361d34fc05c619da12e43238
          _esbuildMod = mod;
          return _esbuildMod;
      })();
+@@ -844,8 +843,9 @@ export class EsbuildService {
+     initPromise = null;
+     /** Resolved esbuild namespace — populated by ensureInit() after loadEsbuild(). */
+     _esbuild = null;
++    /** Build reads use only the caller-supplied view; omit it for transform-only use. */
+     constructor(vfs) {
+-        this.vfs = vfs.as(CRED_KERNEL);
++        this.vfs = vfs ?? null;
+     }
+     /**
+      * Initialize esbuild-wasm (lazy, on first use). Loads the namespace
+@@ -1107,11 +1107,13 @@ export class EsbuildService {
+     }
+     /**
+      * VFS resolver plugin for esbuild.
+-     * Reads directly from the SqliteVFS (synchronous, co-located — no snapshot needed).
++     * Reads through the caller's credentialed view (synchronous, no snapshot needed).
+      * Handles: absolute paths, relative paths, bare specifiers (node_modules).
+      */
+     makeVfsPlugin() {
+         const vfs = this.vfs;
++        if (!vfs)
++            throw new Error('EsbuildService build requires a VFS');
+         const EXTS = ['', '.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.cjs', '.json', '.css'];
+         const INDEX_FILES = ['index.ts', 'index.tsx', 'index.js', 'index.jsx', 'index.mjs'];
+         // Path helpers shared with git-commands via ./vfs-path.ts.
 diff --git a/dist/substrate/lifo/commands/system/npm.d.ts b/dist/substrate/lifo/commands/system/npm.d.ts
 index 455223fda18674d9d73e5e7761124f868f34b06c..8cceba20f90177bad99099416eacc14662f08c59 100644
 --- a/dist/substrate/lifo/commands/system/npm.d.ts
@@ -826,7 +888,7 @@ index 4f87686c7ef3c59df23c823fb94916581af030a1..22fc9ae570d29fc54f973d707b85c6d3
 +{"version":3,"file":"nimbus-workspace.d.ts","sourceRoot":"","sources":["../../src/workspace/nimbus-workspace.ts"],"names":[],"mappings":"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"}
 \ No newline at end of file
 diff --git a/dist/workspace/nimbus-workspace.js b/dist/workspace/nimbus-workspace.js
-index 78cd6fe11c27f75ae813246021b7677ac673251a..662637f19f030a6416366ee3c4427c551a02ba39 100644
+index 78cd6fe11c27f75ae813246021b7677ac673251a..8dc37bc1b4d963699f5002ab88966243c1215719 100644
 --- a/dist/workspace/nimbus-workspace.js
 +++ b/dist/workspace/nimbus-workspace.js
 @@ -34,6 +34,8 @@ import { rehydrateInstalledRuntimesView, } from '../runtime/installed-runtimes.j
@@ -951,6 +1013,15 @@ index 78cd6fe11c27f75ae813246021b7677ac673251a..662637f19f030a6416366ee3c4427c55
  /**
   * Open the durable filesystem for a host that has not opened one itself.
   *
+@@ -243,7 +313,7 @@ async function registerWasmRuntimes(deps) {
+         getEsbuild: () => {
+             if (!esbuild) {
+                 esbuild = import('../runtime/esbuild-service.js')
+-                    .then((module) => new module.EsbuildService(deps.vfs));
++                    .then((module) => new module.EsbuildService(deps.vfs.as(CRED_KERNEL)));
+             }
+             return esbuild;
+         },
 diff --git a/node_modules/@nimbus-sh/core/dist/workspace/supervisor-op.d.ts b/dist/workspace/supervisor-op.d.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..3681e5813e801d2a6d393b156da84256855e9b00
@@ -1361,10 +1432,20 @@ index baaae3bc6cfcc091f6a5b928191ec94a05a7cbc2..c103c6c9d39fce359267014944610f2b
  export async function extractTarball(
    tarball: ArrayBuffer,
 diff --git a/src/runtime/esbuild-service.ts b/src/runtime/esbuild-service.ts
-index 3d58d8c5d8e35f2da06771cd7f5a24b7ff1893b7..bc72758f2bc01c4d1e1819c1c07f16dc7dd54883 100644
+index 3d58d8c5d8e35f2da06771cd7f5a24b7ff1893b7..3aeb26054d7afda6fc2dd07f28a6a9fd8bead81f 100644
 --- a/src/runtime/esbuild-service.ts
 +++ b/src/runtime/esbuild-service.ts
-@@ -761,7 +761,7 @@ function convertEsmImportsToRequire(src: string): { requires: string; body: stri
+@@ -17,8 +17,7 @@
+  * facet once wasm module passing to dynamic workers is stable.
+  */
+ 
+-import type { CredentialedVfs, SqliteVFS } from '../vfs/sqlite-vfs.js';
+-import { CRED_KERNEL } from './os-contracts.js';
++import type { CredentialedVfs } from '../vfs/sqlite-vfs.js';
+ import { resolvePackageEntry, resolveExports, type ResolvablePackageJson } from '../_shared/exports-resolver.js';
+ import { normalizeVfsPath, stripLeadingSlashes } from '../vfs/path.js';
+ import { errorText } from '../_shared/error-text.js';
+@@ -761,7 +760,7 @@ function convertEsmImportsToRequire(src: string): { requires: string; body: stri
  // The .wasm import is a compile-time asset binding (wrangler resolves
  // it to a WebAssembly.Module) — it does NOT execute esbuild-wasm's
  // main.js, so it's safe to keep at the top level.
@@ -1373,7 +1454,7 @@ index 3d58d8c5d8e35f2da06771cd7f5a24b7ff1893b7..bc72758f2bc01c4d1e1819c1c07f16dc
  import esbuildWasmUrl from 'esbuild-wasm/esbuild.wasm';
  
  /**
-@@ -784,7 +784,7 @@ async function loadEsbuild(): Promise<typeof esbuild> {
+@@ -784,7 +783,7 @@ async function loadEsbuild(): Promise<typeof esbuild> {
    if (_esbuildMod) return _esbuildMod;
    if (_esbuildLoadPromise) return _esbuildLoadPromise;
    _esbuildLoadPromise = (async () => {
@@ -1382,6 +1463,39 @@ index 3d58d8c5d8e35f2da06771cd7f5a24b7ff1893b7..bc72758f2bc01c4d1e1819c1c07f16dc
      _esbuildMod = mod as unknown as typeof esbuild;
      return _esbuildMod;
    })();
+@@ -820,14 +819,15 @@ export interface BuildResult {
+ // ── EsbuildService ──────────────────────────────────────────────────────
+ 
+ export class EsbuildService {
+-  private vfs: CredentialedVfs;
++  private vfs: CredentialedVfs | null;
+   private initialized = false;
+   private initPromise: Promise<void> | null = null;
+   /** Resolved esbuild namespace — populated by ensureInit() after loadEsbuild(). */
+   private _esbuild: typeof esbuild | null = null;
+ 
+-  constructor(vfs: SqliteVFS) {
+-    this.vfs = vfs.as(CRED_KERNEL);
++  /** Build reads use only the caller-supplied view; omit it for transform-only use. */
++  constructor(vfs?: CredentialedVfs) {
++    this.vfs = vfs ?? null;
+   }
+ 
+   /**
+@@ -1136,11 +1136,12 @@ export class EsbuildService {
+ 
+   /**
+    * VFS resolver plugin for esbuild.
+-   * Reads directly from the SqliteVFS (synchronous, co-located — no snapshot needed).
++   * Reads through the caller's credentialed view (synchronous, no snapshot needed).
+    * Handles: absolute paths, relative paths, bare specifiers (node_modules).
+    */
+   private makeVfsPlugin(): esbuild.Plugin {
+     const vfs = this.vfs;
++    if (!vfs) throw new Error('EsbuildService build requires a VFS');
+     const EXTS = ['', '.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.cjs', '.json', '.css'];
+     const INDEX_FILES = ['index.ts', 'index.tsx', 'index.js', 'index.jsx', 'index.mjs'];
+ 
 diff --git a/src/substrate/lifo/commands/system/npm.ts b/src/substrate/lifo/commands/system/npm.ts
 index ead37adb8906f1e66cb300f31db5394f481179a3..5117de7816bd31070a21e9c7a0e875ab24405bae 100644
 --- a/src/substrate/lifo/commands/system/npm.ts
@@ -1842,7 +1956,7 @@ index cd3b184280b5093ec2a519db46fb1222c80217bd..084adeb6dd528db50dd74554198b2606
  
      this.recordDuration(this._postCommitDuration, performance.now() - postCommitStartedAt);
 diff --git a/src/workspace/nimbus-workspace.ts b/src/workspace/nimbus-workspace.ts
-index 6d018c0df83d753085be093d402ae164f793fa6d..b8a7856471fc1b9c477c6264d2518c2b9157af23 100644
+index 6d018c0df83d753085be093d402ae164f793fa6d..bf5ff413b9878407ca376ba0f8dfb3d75f8ef557 100644
 --- a/src/workspace/nimbus-workspace.ts
 +++ b/src/workspace/nimbus-workspace.ts
 @@ -48,6 +48,17 @@ import { seedRuntimePackage, type RuntimePackage } from '../runtime/runtime-pack
@@ -2051,6 +2165,15 @@ index 6d018c0df83d753085be093d402ae164f793fa6d..b8a7856471fc1b9c477c6264d2518c2b
  /**
   * Open the durable filesystem for a host that has not opened one itself.
   *
+@@ -383,7 +524,7 @@ async function registerWasmRuntimes(deps: {
+       getEsbuild: () => {
+         if (!esbuild) {
+           esbuild = import('../runtime/esbuild-service.js')
+-            .then((module) => new module.EsbuildService(deps.vfs));
++            .then((module) => new module.EsbuildService(deps.vfs.as(CRED_KERNEL)));
+         }
+         return esbuild;
+       },
 diff --git a/node_modules/@nimbus-sh/core/src/workspace/supervisor-op.ts b/src/workspace/supervisor-op.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..d56d8e768aabef3d5cd33261d573cdb418a61d17

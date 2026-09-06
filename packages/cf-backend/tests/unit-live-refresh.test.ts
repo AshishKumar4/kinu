@@ -11,7 +11,7 @@ import {
   type MctsProgress,
 } from '../src/hooks/use-kinu';
 import { explorationForkTree } from '../src/lib/fork-tree-rows';
-import { pruneGadgetReloads } from '../src/components/surfaces/presence';
+import { pruneSlateReloads } from '../src/components/surfaces/presence';
 import type { ForkNode } from '../src/lib/protocol';
 import {
   activateMctsProgressActor,
@@ -20,16 +20,14 @@ import {
   type MctsProgressState,
 } from '@kinu.run/core';
 
-test('a fresh gadget list retains reload versions only for published slugs', () => {
+test('a fresh Slate list retains reload versions only for listed ids', () => {
   const previous = new Map([['removed', 4], ['kept', 2]]);
-  const gadgets = [{
-    slug: 'kept', title: 'Kept', subtitle: null, hasClient: true, hasServer: true, bindings: [],
-  }];
-  const pruned = pruneGadgetReloads(previous, gadgets);
+  const slates = [{ id: 'kept', title: 'Kept', bindings: [] }];
+  const pruned = pruneSlateReloads(previous, slates);
   expect([...pruned]).toEqual([['kept', 2]]);
   expect([...previous]).toEqual([['removed', 4], ['kept', 2]]);
-  expect(pruneGadgetReloads(pruned, gadgets)).toBe(pruned);
-  expect([...pruneGadgetReloads(pruned, [])]).toEqual([]);
+  expect(pruneSlateReloads(pruned, slates)).toBe(pruned);
+  expect([...pruneSlateReloads(pruned, [])]).toEqual([]);
 });
 
 const TEST_ACTOR = 'actor';
@@ -337,11 +335,11 @@ describe('workspace live refresh failures', () => {
       memoryContent: 'offline',
       tools: 'offline',
       executors: 'offline',
-      gadgets: 'offline',
+      slates: 'offline',
       consents: 'offline',
       plan: 'offline',
     }, true)).toBe(
-      "Couldn't refresh background jobs, pending actions, MCTS, memory content, tools, executors, gadgets, device consents, and active plan. Showing last known data. offline",
+      "Couldn't refresh background jobs, pending actions, MCTS, memory content, tools, executors, slates, device consents, and active plan. Showing last known data. offline",
     );
   });
 
@@ -377,15 +375,15 @@ describe('workspace live refresh failures', () => {
         admission.admit(TEST_ACTOR, 'tools'),
       ),
       refreshLiveResource(
-        'gadgets',
+        'slates',
         () => Promise.reject('catalog offline'),
         keep,
         errors.report,
-        admission.admit(TEST_ACTOR, 'gadgets'),
+        admission.admit(TEST_ACTOR, 'slates'),
       ),
     ]);
     expect(formatWorkspaceError(errors.errors, true)).toBe(
-      "Couldn't refresh tools and gadgets. Showing last known data. catalog offline",
+      "Couldn't refresh tools and slates. Showing last known data. catalog offline",
     );
 
     await refreshLiveResource(
@@ -396,15 +394,15 @@ describe('workspace live refresh failures', () => {
       admission.admit(TEST_ACTOR, 'tools'),
     );
     expect(formatWorkspaceError(errors.errors, true)).toBe(
-      "Couldn't refresh gadgets. Showing last known data. catalog offline",
+      "Couldn't refresh slates. Showing last known data. catalog offline",
     );
 
     await refreshLiveResource(
-      'gadgets',
+      'slates',
       () => Promise.resolve(['ready']),
       keep,
       errors.report,
-      admission.admit(TEST_ACTOR, 'gadgets'),
+      admission.admit(TEST_ACTOR, 'slates'),
     );
     expect(formatWorkspaceError(errors.errors, true)).toBeNull();
   });

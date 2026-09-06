@@ -9,7 +9,7 @@
  * is a spam surface pointed at the one queue the owner trusts.
  *
  * SECURITY: like `pending-actions.ts`, this must never join
- * `GADGET_DATA_SOURCES`. A gadget that could read this list could render a
+ * `SLATE_READ_MODELS`. A Slate that could read this list could render a
  * convincing fake of it, and this is precisely the surface an owner
  * reads before granting instruction bytes real force. It stays host-owned.
  *

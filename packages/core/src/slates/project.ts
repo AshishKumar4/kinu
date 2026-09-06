@@ -9,7 +9,7 @@ const Binding = v.variant('kind', [
   v.strictObject({ kind: v.literal('namespace'), namespace: Name, members: v.optional(v.array(Name)) }),
   v.strictObject({ kind: v.literal('rpc'), methods: v.pipe(v.array(v.picklist(SLATE_READ_MODELS)), v.minLength(1)) }),
   v.strictObject({ kind: v.literal('mcp'), server: Name, tools: v.optional(v.array(Name)) }),
-  v.strictObject({ kind: v.literal('slate'), id: Name }),
+  v.strictObject({ kind: v.literal('app'), id: Name }),
 ]);
 const SlateMetadata = v.strictObject({
   runtime: v.optional(v.picklist(['worker', 'node']), 'worker'),
@@ -43,8 +43,4 @@ export function parseSlateProject<Input>(input: Input): SlateProject {
     }
   }
   return project;
-}
-
-export function slateExecutorName(project: SlateProject): 'workspace' | 'sandbox' {
-  return project.slate.runtime === 'worker' ? 'workspace' : 'sandbox';
 }

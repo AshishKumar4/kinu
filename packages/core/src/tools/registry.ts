@@ -101,6 +101,7 @@ export const TOOL_REACH = {
   // turns to earn a standing top-level choice.
   release: { native: false, codemode: 'release', replay: 'claimed' },
   agent: { native: false, codemode: 'agent', replay: 'claimed' },
+  slate: { native: false, codemode: 'workspace', replay: 'claimed' },
 } as const satisfies Record<string, ToolReach>;
 
 /**

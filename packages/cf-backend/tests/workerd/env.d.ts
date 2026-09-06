@@ -18,9 +18,8 @@ import type { SendAdmissionProbeDO } from './send-admission-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
-import type { SlateProcessProbeDO } from './slate-process-probe';
+import type { SlateProcessProbeDO, SlateDepthProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
-import type { GadgetBinding } from '../../src/gadgets/bindings';
 declare global {
   namespace Cloudflare {
     interface Env {
@@ -46,11 +45,6 @@ declare global {
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeDO>;
-      /** The gadget probe. Bare, the way `gadgetOwner` takes the orchestrator:
-       *  calling through a stub mapped over the probe's JSON-recursive methods
-       *  makes type instantiation excessively deep (TS2589), so `open()` in the
-       *  test re-reads the stub as the probe's narrow RPC view instead. */
-      GADGET_PROCESS_PROBE: DurableObjectNamespace;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }
@@ -59,7 +53,7 @@ declare global {
     interface GlobalProps {
       mainModule: {
         CodemodeEgress: typeof CodemodeEgress;
-        GadgetBinding: typeof GadgetBinding;
+        SlateDepthProbe: typeof SlateDepthProbe;
       };
     }
   }

@@ -447,11 +447,9 @@ const ORCHESTRATOR_METHODS = [
   // and the registry it is provisioned in exists only on this object.
   'provisionFacetHome',
   'releaseFacetHome',
-  // A gadget server's binding calls, back from its isolate through the
-  // loopback entrypoints (gadgets/bindings.ts). Stub transport only: a
-  // browser socket that could name a binding could reach the owner's MCP
-  // connections as a gadget, and the gate inside decides per manifest.
-  'gadgetBindingCall',
+  // Introduced bindings return only through the stub transport. A browser
+  // cannot mint a binding name to reach the owner's capabilities.
+  'slateBindingCall',
   // The one method the supervisor entrypoint calls on the object that owns a
   // workspace: a facet's filesystem calls arrive here through the composed
   // `OrchestratorAgent` namespace. Listed (not sealed away) but never

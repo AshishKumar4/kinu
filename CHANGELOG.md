@@ -14,6 +14,16 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
+- **Authored slates with durable source and live previews.** Projects under
+  `/home/user/slates/<id>/` use TypeScript and `package.json`, with a strict
+  `slate` field for runtime, title, port, and declared bindings. One codemode
+  operation, `workspace.slate({op: ...})`, lists, previews, calls, commits, reads
+  history, forks versions, and restores source; the eight native tools do not
+  change. Worker previews compile into resident workspace processes and load
+  by URL in a sandboxed iframe, without a browser-to-host RPC bridge. Binding
+  calls keep the workspace's existing capability gates. Source and versions
+  are durable; live processes and preview exposures are not.
+
 - **The CLI installs as a prebuilt build, not a source checkout.** `install.sh`
   now downloads Bun (when the machine has none), one artifact for the machine's
   platform, and the CPython runtime every platform shares. Nothing else. The
@@ -573,10 +583,6 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   is `NOT NULL`.
 
 ### Fixed
-
-- Gadget MCP bindings use the connection id for discovery and calls. Boot retries
-  retain file-change notifications. The first snapshot includes gadget tabs, and
-  removing an open gadget returns the reader to Work.
 
 - Shell approval patterns cover `rm -rf //`, `--no-preserve-root`, `| /bin/sh`, `| sudo sh`, `| dash`, plain `su`, chown flags, refspec-first `git push --force`, setgid modes, reversed `dd` on NVMe and virtio disks, and `mkfs -t`.
 - A release cannot record a staging or production deploy without a deploy command; a hostile default branch is refused and fetched as an explicit refspec; an exec result without an exit code fails closed.

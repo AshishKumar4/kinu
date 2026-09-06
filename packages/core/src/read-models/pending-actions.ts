@@ -8,11 +8,11 @@
  * points at those homes — never a second place to decide, which is how a
  * duplicate rendering goes stale the moment its home evolves.
  *
- * SECURITY: this must never join `GADGET_DATA_SOURCES`. The same argument that
+ * SECURITY: this must never join `SLATE_READ_MODELS`. The same argument that
  * keeps `listPendingConsents` off that list applies with more force here — a
- * gadget that can read the needs-you queue can draw a plausible fake of it,
+ * Slate that can read the needs-you queue can draw a plausible fake of it,
  * and this queue is precisely the surface an owner reads before authorising
- * something. It stays host-owned and boring. See `gadgets/sources.ts`.
+ * something. It stays host-owned. See `slates/read-models.ts`.
  *
  * Pure: the host gathers the reads (some of which cross a DO boundary) and
  * hands them here, so what counts as "pending" and how it is worded is one

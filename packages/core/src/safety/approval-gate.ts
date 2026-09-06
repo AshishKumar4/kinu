@@ -741,7 +741,7 @@ export function gateExec<R>(
  * and two copies of this ladder would be two places for "strict with nobody
  * listening" to drift into a silent allow. Private, because {@link gateExec}
  * is the one boundary that runs it today: the egress-binding consent
- * `egress-gate.ts` describes is not built, and a gadget binding passes the
+ * `egress-gate.ts` describes is not built, and a Slate binding passes the
  * agent's own capability gated as the agent's own call is, so it asks nothing
  * of its own. A second subject exports it again when it arrives.
  *

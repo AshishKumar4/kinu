@@ -739,7 +739,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
     // capability absent from that surface can never be named — and one present
     // but unwired would let a role allow a lane that cannot run.
     expect(codemodeCapabilitiesFor([{ name: 'release' }, { name: 'agent' }])).toEqual(['release', 'agent']);
-    expect(codemodeCapabilitiesFor([{ name: 'agents' }, { name: 'workspace' }])).toEqual([]);
+    expect(codemodeCapabilitiesFor([{ name: 'agents' }, { name: 'workspace' }])).toEqual(['slate']);
     expect(codemodeCapabilitiesFor([])).toEqual([]);
     // Plan mode filters `release` out of its provider list, so a Plan turn's
     // role list cannot name a lane that is physically absent — for free.

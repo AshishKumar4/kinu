@@ -25,7 +25,7 @@
 
 import type {
   NimbusExecOptions, NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult,
-  JsonValue, GadgetCallResult, GadgetBindingRequest,
+  JsonValue, SlateCallResult, SlateBindingRequest, SlateOperation,
 } from '@kinu.run/core';
 
 type BoxFiles = NimbusSandboxHandle['files'];
@@ -118,14 +118,13 @@ export interface WorkspaceBoxRpc {
 /**
  * Every method a caller in this Worker reaches on the object that owns a
  * workspace, as one named owner contract: the file-plane op a facet makes,
- * and the two gadget calls a binding entrypoint or a facet actor makes.
+ * and the slate operations a binding entrypoint or a facet actor makes.
  * Declared here, beside the narrowing that hands it out, so the concrete
  * type is constructed once and each caller takes the slice it needs.
  */
 export interface WorkspaceOwnerRpc extends WorkspaceBoxRpc {
-  gadgetCall(slug: string, method: string, args: JsonValue[]): Promise<GadgetCallResult>;
-  /** The request as the process sent it; the host parses it (`GadgetHost.bindingCall`). */
-  gadgetBindingCall(slug: string, name: string, request: GadgetBindingRequest): Promise<GadgetCallResult>;
+  slate(operation: SlateOperation): Promise<SlateCallResult>;
+  slateBindingCall(id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult>;
 }
 
 interface WorkspaceOwnerNamespace {
@@ -156,8 +155,8 @@ export function workspaceOwner(
   // WorkspaceOwnerNamespace declares, and orchestrator.ts declares
   // `workspaceBoxOp` delegating to `applyWorkspaceBoxOp` — whose switch answers
   // every op with the `WorkspaceBoxResults` member keyed by that op's own name,
-  // the correspondence the interface's generic promises — and `gadgetCall` and
-  // `gadgetBindingCall` with these signatures, delegating to `GadgetHost`.
+  // the correspondence the interface's generic promises — and slate operations
+  // and binding calls with these signatures, delegating to SlateHost.
   const namespace = view as WorkspaceOwnerNamespace;
   return namespace.get(namespace.idFromName(workspaceName));
 }

@@ -1,19 +1,30 @@
 import * as v from 'valibot';
 import { isJsonObject, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
+import { isSlateMethodName } from './rpc';
 import type { SlateReadModel } from './read-models';
 import type { SlateProject } from './project';
+
+const APP_DEPTH_LIMIT = 8;
 
 export const SlateBindingRequestSchema = v.strictObject({
   member: v.pipe(v.string(), v.minLength(1)),
   args: v.array(JsonValueSchema),
+  depth: v.pipe(v.number(), v.integer(), v.minValue(0)),
 });
 export type SlateBindingRequest = v.InferOutput<typeof SlateBindingRequestSchema>;
 export type SlateBindingRoute =
   | { readonly kind: 'namespace'; readonly namespace: string; readonly member: string; readonly args: readonly JsonValue[] }
   | { readonly kind: 'rpc'; readonly method: SlateReadModel }
   | { readonly kind: 'mcp'; readonly server: string; readonly tool: string; readonly args: JsonObject }
-  | { readonly kind: 'slate'; readonly id: string; readonly method: string; readonly args: readonly JsonValue[] };
+  | {
+    readonly kind: 'app';
+    readonly id: string;
+    readonly method: string;
+    readonly args: readonly JsonValue[];
+    /** The caller's depth; the hop into `id` is one more. */
+    readonly depth: number;
+  };
 
 export function routeSlateBindingCall(input: {
   readonly id: string;
@@ -46,7 +57,14 @@ export function routeSlateBindingCall(input: {
       if (args.length > 1 || !isJsonObject(argumentsObject)) throw new KinuError('bad_input', `${name}.${member} takes one JSON object of arguments`);
       return { kind: 'mcp', server: binding.server, tool: member, args: argumentsObject };
     }
-    case 'slate':
-      return { kind: 'slate', id: binding.id, method: member, args };
+    case 'app':
+      if (!isSlateMethodName(member)) {
+        throw new KinuError('bad_input', `"${member}" is not a method name the bridge forwards`);
+      }
+      if (request.depth >= APP_DEPTH_LIMIT) {
+        throw new KinuError('denied',
+          `${name}.${member} would be app hop ${request.depth + 1}; the bound is ${APP_DEPTH_LIMIT}, so this is a cycle or a chain too deep`);
+      }
+      return { kind: 'app', id: binding.id, method: member, args, depth: request.depth };
   }
 }
