@@ -23,7 +23,7 @@ test('a Slate tree restores binaries, executable modes, symlinks and empty direc
     const version = files.capture(id);
     vfs.writeFile(`${directory}/run`, 'changed');
     vfs.writeFile(`${directory}/extra`, 'remove on restore');
-    ws.db.transaction(() => files.restore(id, version))();
+    session.vfs.withTransaction(() => files.restore(id, version));
     expect(vfs.readFile(`${directory}/run`)).toEqual(new Uint8Array([0, 255, 3]));
     expect(vfs.stat(`${directory}/run`).mode & 0o777).toBe(0o755);
     expect(vfs.readlink(`${directory}/link`)).toBe('run');

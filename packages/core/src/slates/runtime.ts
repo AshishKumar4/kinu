@@ -23,19 +23,18 @@ class WorkspaceSlateIds extends SlateIdSource {
 class WorkspaceSlateMutation extends SlateMutationSeam {
   constructor(
     private readonly authority: SlateMutationSeam,
-    private readonly store: SlateStore,
     private readonly files: SlateFiles,
     private readonly restoring: boolean,
   ) { super(); }
 
   mutate<Result>(request: SlateMutationRequest, mutation: () => Result): Promise<Result> {
-    return this.authority.mutate(request, () => this.store.transaction(() => {
+    return this.authority.mutate(request, () => {
       const result = mutation();
       if (request.operation === 'fork' || this.restoring && request.operation === 'update') {
         this.files.restore(request.slateId, request.source);
       }
       return result;
-    }));
+    });
   }
 }
 
@@ -44,6 +43,7 @@ export interface WorkspaceSlatesDeps {
   readonly store: SlateStore;
   readonly files: SlateFiles;
   readonly provider: SlateProvider;
+  /** Owns the outer VFS transaction so record writes and source restoration roll back together. */
   readonly mutations: SlateMutationSeam;
   readonly invocations: SlateInvocationSeam;
   readonly previewValidation: SlatePreviewValidationSeam;
@@ -107,7 +107,7 @@ export class WorkspaceSlates {
   private runtime(authoredId?: SlateId, restoring = false): SlateRuntime {
     return new SlateRuntime(
       this.deps.store, this.deps.provider,
-      new WorkspaceSlateMutation(this.deps.mutations, this.deps.store, this.deps.files, restoring),
+      new WorkspaceSlateMutation(this.deps.mutations, this.deps.files, restoring),
       this.deps.invocations, this.deps.previewValidation, new WorkspaceSlateIds(authoredId),
     );
   }

@@ -17,12 +17,13 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
     const store = new SqliteSlateStore(makeSqlExec(ws.db), (body) => ws.db.transaction(body)());
     const content = new SqliteSlateContentStore(makeSqlExec(ws.db), (body) => ws.db.transaction(body)());
     let allowed = true;
+    const sourceWriteFailure = new Error('source write failed');
     let failWrite = false;
     const files = new SlateFiles({
       ...vfs,
       writeFile(...args: Parameters<typeof vfs.writeFile>) {
         vfs.writeFile(...args);
-        if (failWrite && args[0].endsWith('/server.js')) throw new Error('source write failed');
+        if (failWrite && args[0].endsWith('/server.js')) throw sourceWriteFailure;
       },
     }, content);
     const slates = new WorkspaceSlates({
@@ -30,7 +31,7 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
       provider: new KinuSlateProvider(async () => { throw new Error('source operations must not deploy'); }),
       mutations: { async mutate(_request, mutation) {
         if (!allowed) throw new Error('turn no longer owns mutation');
-        return mutation();
+        return session.vfs.withTransaction(mutation);
       } },
       invocations: {
         async prepare() { throw new Error('source operations must not invoke providers'); },
@@ -57,7 +58,7 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
     expect(vfs.readFileString(`${directory}/server.js`)).toBe('first version');
     expect(store.getVersion(second.id)?.source.value).toBe(second.source.value);
     failWrite = true;
-    await expect(slates.restore(id, second.id)).rejects.toThrow('source write failed');
+    await expect(slates.restore(id, second.id)).rejects.toHaveProperty('cause', sourceWriteFailure);
     expect(vfs.readFileString(`${directory}/server.js`)).toBe('first version');
     expect(store.getSlate(id)?.source.value).toBe(first.source.value);
     failWrite = false;
