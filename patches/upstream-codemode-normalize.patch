@@ -1,0 +1,45 @@
+diff --git a/packages/codemode/package.json b/packages/codemode/package.json
+--- a/packages/codemode/package.json
++++ b/packages/codemode/package.json
+@@ -49,6 +49,11 @@
+       "import": "./dist/index.js",
+       "require": "./dist/index.js"
+     },
++    "./normalize": {
++      "types": "./dist/normalize.d.ts",
++      "import": "./dist/normalize.js",
++      "require": "./dist/normalize.js"
++    },
+     "./ai": {
+       "types": "./dist/ai.d.ts",
+       "import": "./dist/ai.js",
+diff --git a/packages/codemode/scripts/build.ts b/packages/codemode/scripts/build.ts
+--- a/packages/codemode/scripts/build.ts
++++ b/packages/codemode/scripts/build.ts
+@@ -7,6 +7,7 @@ async function main() {
+     dts: true,
+     entry: [
+       "src/index.ts",
++      "src/normalize.ts",
+       "src/ai.ts",
+       "src/mcp.ts",
+       "src/tanstack-ai.ts",
+diff --git a/packages/codemode/scripts/test-normalize-portable.mjs b/packages/codemode/scripts/test-normalize-portable.mjs
+new file mode 100644
+--- /dev/null
++++ b/packages/codemode/scripts/test-normalize-portable.mjs
+@@ -0,0 +1,14 @@
++import assert from "node:assert/strict";
++import { normalizeCode } from "@cloudflare/codemode/normalize";
++
++const execute = (code, probe) =>
++  new Function("probe", `return (\n${normalizeCode(code)}\n)()`)(probe);
++assert.equal(await execute("const n = await Promise.resolve(1);\n(n +\n41)\n// result"), 42);
++assert.equal(await execute("await Promise.resolve(); return 42"), 42);
++assert.deepEqual(await execute("({ answer: 42 })"), { answer: 42 });
++assert.equal(await execute("async () => 42 // result"), 42);
++let calls = 0;
++await assert.rejects(execute('await probe(); throw new Error("boom")', () => ++calls), /boom/);
++assert.equal(calls, 1);
++assert.throws(() => execute("return import.meta"), SyntaxError);
++console.log("portable normalize export: behavior verified without Workers builtins");
