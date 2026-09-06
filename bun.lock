@@ -131,6 +131,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/provider": "^3.0.10",
+        "@cloudflare/codemode": "0.5.1",
         "@kinu.run/agent-utils": "workspace:*",
         "@kinu.run/compaction": "workspace:*",
         "@kinu.run/core": "workspace:*",
@@ -197,6 +198,7 @@
     "@nimbus-sh/worker@0.4.0": "patches/@nimbus-sh%2Fworker@0.4.0.patch",
     "@nimbus-sh/core@0.6.0": "patches/@nimbus-sh%2Fcore@0.6.0.patch",
     "@cloudflare/sandbox@0.12.8": "patches/@cloudflare%2Fsandbox@0.12.8.patch",
+    "@cloudflare/codemode@0.5.1": "patches/@cloudflare%2Fcodemode@0.5.1.patch",
     "agents@0.20.1": "patches/agents@0.20.1.patch",
     "@nimbus-sh/platform@0.1.0": "patches/@nimbus-sh%2Fplatform@0.1.0.patch",
   },

@@ -36,7 +36,7 @@ import {
 } from '@kinu.run/core';
 import { tool, jsonSchema } from 'ai';
 import { createRequire } from 'node:module';
-import { addImplicitReturn } from '@kinu.run/core';
+import { normalizeCode } from '@cloudflare/codemode/normalize';
 import * as v from 'valibot';
 
 export interface NodeExecuteToolFactoryDeps {
@@ -158,12 +158,10 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 
-          // Implicit return (parity with the subprocess executor and the CF
-          // codemode sandbox): a trailing bare expression becomes the tool
-          // result, so `x = compute(); x` returns `x` instead of undefined.
+          // Invoke codemode's normalized callable once with this local surface.
           const fn = new Function(
             ...argNames,
-            `return (async () => {\n${addImplicitReturn(args.code)}\n})()`,
+            `return (\n${normalizeCode(args.code)}\n)()`,
           );
           const rawResult = await fn(...argValues);
           const payload: ExecuteSuccess = {

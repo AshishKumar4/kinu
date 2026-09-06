@@ -12,7 +12,7 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
-import { decodeJsonValue, type JsonValue } from '@kinu.run/core';
+import { admitCraftedSource, decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import { KinuSandboxExecutor, renderToolsPrelude } from '../../src/codemode-sandbox';
 import { codemodeEgress } from '../../src/codemode-egress';
 
@@ -101,6 +101,17 @@ describe('the execute_tools sandbox under workerd', () => {
     const result = await executor.execute(program, [toolsProvider(crafted), stateProvider, workspace]);
     expect(result.error).toBeUndefined();
     expect(result.result).toEqual({ native: { echoed: { action: 'read', path: 'notes.md' } }, quad: 12 });
+  });
+
+  test('admitted crafted source retains the module metadata of its hosted runtime', async () => {
+    const admitted = admitCraftedSource('async () => import.meta', 'metadata');
+    if (!admitted.ok) throw new Error(admitted.error);
+    const result = await executor.execute(
+      'const metadata = await tools.metadata(); return { type: typeof metadata, same: metadata === import.meta };',
+      [toolsProvider([{ name: 'metadata', code: admitted.code, description: '' }])],
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.result).toEqual({ type: 'object', same: true });
   });
 
   test('a crafted tool that does not parse breaks only itself, with the parse error on call', async () => {
