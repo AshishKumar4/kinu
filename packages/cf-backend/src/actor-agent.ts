@@ -275,8 +275,8 @@ import {
   promptCachePlan, hasCacheMarkers, markLastToolForAnthropicCache,
   type PromptCacheStrategy,
 } from "@kinu.run/core";
-import type { CodemodeProvider, DeferredApprovalChannel, GadgetCallResult } from "@kinu.run/core";
-import { gadgetOwner } from "./gadgets/bindings";
+import type { CodemodeProvider, DeferredApprovalChannel, SlateCallResult, SlateOperation } from "@kinu.run/core";
+import { workspaceOwner } from "./workspace-box-rpc";
 import { diagnostics, KinuError, toKinuError, tolerate, type ErrorCode } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserDoRpcMethod } from "./rpc-surface";
@@ -4382,7 +4382,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this._rt) {
       const hooks: CFRuntimeHooks = {
         deferrals: () => this.deferralChannel(),
-        gadgetCall: (slug, method, args) => this.gadgetCall(slug, method, args),
+        slate: (operation) => this.slate(operation),
         reportModelCall: (report) => this.reportModelCall(report),
         turnProfile: () => this._turnProfile,
         resolveProfile: () => this.routingProfile(),
@@ -4437,12 +4437,9 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected deferralChannel(): DeferredApprovalChannel | undefined { return undefined; }
 
-  /** A call into a gadget's server. The resident process lives on the object
-   *  that owns the workspace, so a facet actor — a subordinate, a head —
-   *  reaches it over that object's stub; the orchestrator overrides this with
-   *  its own host. */
-  async gadgetCall(slug: string, method: string, args: JsonValue[]): Promise<GadgetCallResult> {
-    return gadgetOwner(this.env, this.workspaceName()).gadgetCall(slug, method, args);
+  /** Facet actors reach slate operations on the object that owns their workspace. */
+  async slate(operation: SlateOperation): Promise<SlateCallResult> {
+    return workspaceOwner(this.env, this.workspaceName()).slate(operation);
   }
 
   /** `memory.*` / `tasks.*` — unconditional on every ActorAgent (orchestrator

@@ -43,7 +43,7 @@ export interface GadgetBindingProps {
 
 /** The two gadget methods on the workspace object, as the slice of the owner
  *  contract a binding entrypoint or a facet actor holds. */
-export type GadgetOwnerRpc = Pick<WorkspaceOwnerRpc, 'gadgetCall' | 'gadgetBindingCall'>;
+export type GadgetOwnerRpc = Pick<WorkspaceOwnerRpc, 'gadgetBindingCall'>;
 
 export function gadgetOwner(env: { OrchestratorAgent: DurableObjectNamespace }, workspaceName: string): GadgetOwnerRpc {
   return workspaceOwner(env, workspaceName);

@@ -11,7 +11,7 @@
  *   workspace.searchMemory("how to handle errors")
  *   workspace.saveNote("User prefers TypeScript strict mode")
  *   workspace.listTools()
- *   workspace.gadgets()  /  workspace.gadget("todo", "addItem", "milk")
+ *   workspace.slate({ op: 'list' })
  */
 
 import * as v from 'valibot';
@@ -27,13 +27,13 @@ import { KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
-import {
-  GADGET_DATA_SOURCES, listGadgets, gadgetSummary, isGadgetSlug, isGadgetMethodName, type GadgetCallResult,
-} from '../gadgets/index';
+import { SlateOperationSchema, type SlateOperation, type SlateCallResult } from '../slates/rpc';
+import { SLATE_READ_MODELS } from '../slates/read-models';
+import { TOOL_REACH } from '../tools/registry';
 import { createFileDispatcher } from '../tools/file-tool';
 import { TurnFileLedger } from '../tools/file-ledger';
 import { TurnContextBudget } from '../context-budget';
-import { JsonValueSchema, type JsonValue } from '../utils/json';
+import type { JsonValue } from '../utils/json';
 
 const StringSchema = v.string();
 const OptionalPathSchema = v.optional(v.string());
@@ -118,14 +118,8 @@ export interface InlineExecutorDeps {
    * the same list that decides which commands get registered.
    */
   toolchain?: readonly ExecutorCapability[];
-  /**
-   * Call a method on a gadget's server — the resident process the host boots
-   * `server.js` in. Supplied by a backend that hosts gadget servers (the
-   * Cloudflare workspace object); absent on one that cannot, where
-   * `workspace.gadget` answers `unsupported` and `workspace.gadgets()` still
-   * lists the files.
-   */
-  gadgetCall?: (slug: string, method: string, args: JsonValue[]) => Promise<GadgetCallResult>;
+  /** The owning workspace's slate operations; absent when this backend has no slate host. */
+  slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
 }
 /**
  * Every VFS error out of `workspace.*` carries the correction the model needs
@@ -419,52 +413,15 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       },
     },
 
-    // Gadgets sit here rather than on a top-level tool for the same reason
-    // crafted tools do: this is the lane for artifacts the agent authors for
-    // itself. There is no publish call — a gadget is the directory the agent
-    // writes with the file plane, and the host reacts to the write.
-    gadgets: {
-      description:
-        'List the gadgets under gadgets/<slug>/ — agent-written apps with a server.js the host boots ' +
-        'in a resident process and a client.js it renders as a workspace tab. Broken manifests are ' +
-        'reported beside the valid ones.',
-      execute: async (): Promise<JsonValue> => {
-        const listing = await listGadgets(vfs);
-        return {
-          gadgets: listing.gadgets.map((record) => {
-            const summary = gadgetSummary(record);
-            return { ...summary, bindings: [...summary.bindings] };
-          }),
-          problems: listing.problems.map((problem) => ({ ...problem })),
-        };
-      },
-    },
-
-    gadget: {
-      description:
-        'Call a method on a gadget\'s server, exactly as its client.js would: ' +
-        'workspace.gadget("todo", "addItem", "milk"). Answers the method\'s JSON value, or a refusal with `reason`.',
-      execute: async (...args: unknown[]): Promise<JsonValue> => {
-        const slug = parseInput(StringSchema, { value: args[0] });
-        const method = parseInput(StringSchema, { value: args[1] });
-        if (slug === undefined || !isGadgetSlug(slug)) {
-          return { ok: false, ...refusalOf(new KinuError('bad_input',
-            'workspace.gadget: the first argument is the gadget\'s slug (its directory name under gadgets/)')) };
-        }
-        if (method === undefined || !isGadgetMethodName(method)) {
-          return { ok: false, ...refusalOf(new KinuError('bad_input',
-            `workspace.gadget: "${String(method)}" is not a method name the bridge forwards`)) };
-        }
-        if (!deps.gadgetCall) {
-          return { ok: false, ...refusalOf(new KinuError('unsupported',
-            'This workspace cannot run gadget servers; the hosted workspace runs them in a resident process.')) };
-        }
-        const rest = v.safeParse(v.array(JsonValueSchema), args.slice(2));
-        if (!rest.success) {
-          return { ok: false, ...refusalOf(new KinuError('bad_input',
-            'workspace.gadget: arguments after the method name must be JSON values')) };
-        }
-        const result = await deps.gadgetCall(slug, method, rest.output);
+    slate: {
+      description: 'Manage an authored slate: list, preview, call a POST route, commit source, history, fork a version, or restore source.',
+      execute: async <Input>(input: Input): Promise<JsonValue> => {
+        const parsed = v.safeParse(SlateOperationSchema, input);
+        if (!parsed.success) return { ok: false, ...refusalOf(new KinuError('bad_input',
+          'workspace.slate expects a named op and its declared fields', { cause: new v.ValiError(parsed.issues) })) };
+        if (deps.slate === undefined) return { ok: false, ...refusalOf(new KinuError('unsupported',
+          'This backend has no slate host')) };
+        const result = await deps.slate(parsed.output);
         return result.ok ? { ok: true, value: result.value } : { ok: false, reason: result.reason, error: result.error };
       },
     },
@@ -522,27 +479,30 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | ({ ok: false } & Refusal)>;
   /**
-   * Gadgets: agent-written apps under gadgets/<slug>/. Write the files with the
-   * file plane; the host reacts to the write (no publish call).
-   *   gadget.json  { v: 1, title, subtitle?, bindings?: Record<NAME, Binding> }. A binding passes one of YOUR
-   *                capabilities into the server, gated exactly as your own call is:
-   *                Binding = { kind: 'namespace', namespace: string, members?: string[] }  // a codemode namespace: workspace, sandbox, laptop, parent, web, memory, tasks, agents, ...
-   *                        | { kind: 'rpc', methods: string[] }                            // read models, each one of: ${GADGET_DATA_SOURCES.join(', ')}
-   *                        | { kind: 'mcp', server: string, tools?: string[] }              // an owner-configured MCP connection, by id
-   *                        | { kind: 'app', id: string }                                    // another gadget's server (composition; a cycle is refused by depth)
-   *   server.js    \`import { RpcTarget } from './capnweb.js'; export class Gadget extends RpcTarget { constructor(env) { super(); this.env = env; } async list() { ... } }\`.
-   *                No ctx and no SQLite; \`this.env.<NAME>\` is exactly the manifest's bindings, every one spelled the same way:
-   *                \`await this.env.WS.exec('ls')\`, \`await this.env.WS.readFile(p)\`, \`await this.env.DATA.getExecutors()\`, \`await this.env.GITHUB.list_issues({ state: 'open' })\`, \`await this.env.TODO.addItem('milk')\`
-   *   client.js    an ES module in a sandboxed iframe with no network; \`gadget\` is in scope as a stub of the server: \`await gadget.list()\`
-   *   client.css   optional stylesheet, inlined
-   * Every server method is callable here too:
+   * A slate is /home/user/slates/<id>/package.json and an authored TypeScript tree.
+   * package.json main names a Worker module exporting default { fetch(request, env) }.
+   * The strict slate field declares {title?,port?,runtime?:'worker',bindings?:Record<NAME,Binding>}.
+   * Binding = {kind:'namespace',namespace:string,members?:string[]}
+   *         | {kind:'rpc',methods:string[]} // read models: ${SLATE_READ_MODELS.join(', ')}
+   *         | {kind:'mcp',server:string,tools?:string[]}
+   *         | {kind:'app',id:string}.
+   * A binding passes YOUR capability into env.NAME.member(...args), gated exactly as your own call.
+   * Serve UI from fetch; app calls POST a JSON argument array to /<method> and receive JSON.
+   * A preview boots on demand and its running process is never durable. Commit freezes source;
+   * fork copies a committed version; restore changes source, not deployment history.
    */
-  function gadgets(): Promise<{ gadgets: Array<{ slug: string; title: string; subtitle: string | null; hasServer: boolean; hasClient: boolean; bindings: string[] }>; problems: Array<{ slug: string; error: string }> }>;
-  function gadget(slug: string, method: string, ...args: unknown[]): Promise<{ ok: true; value: unknown } | ({ ok: false } & Refusal)>;
+  type SlateValue = null | boolean | number | string | SlateValue[] | { [key: string]: SlateValue };
+  function slate(input:
+    | { op: 'list' }
+    | { op: 'preview' | 'commit' | 'history'; id: string }
+    | { op: 'call'; id: string; method: string; args?: SlateValue[] }
+    | { op: 'fork'; version: string }
+    | { op: 'restore'; id: string; version: string }
+  ): Promise<{ ok: true; value: SlateValue } | ({ ok: false } & Refusal)>;
 }`;
 
   const provider: ExecutorProvider = {
-    name: 'workspace',
+    name: TOOL_REACH.slate.codemode,
     kind: 'workspace',
     files: vfs,
     homeDir: async () => WORKSPACE_ROOT,

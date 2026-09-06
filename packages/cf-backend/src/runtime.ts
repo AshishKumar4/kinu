@@ -30,7 +30,7 @@ import type {
   DeferredApprovalChannel,
   WriteObserver,
   ModelCallSink, SpendSource, ResolvedTurnProfile,
-  GadgetCallResult, JsonValue,
+  SlateCallResult, SlateOperation,
 } from "@kinu.run/core";
 import {
   nimbusSessionFiles, nimbusSessionShell,
@@ -311,9 +311,8 @@ export interface CFRuntimeHooks {
    * from, so 'strict' keeps its explanatory refusal there.
    */
   deferrals?: () => DeferredApprovalChannel | undefined;
-  /** `workspace.gadget(slug, method, ...args)`: a call into a gadget's server,
-   *  answered by the workspace object that boots its resident process. */
-  gadgetCall?: (slug: string, method: string, args: JsonValue[]) => Promise<GadgetCallResult>;
+  /** Slate operations run on the object that owns the authored workspace. */
+  slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
   /** Attribute writes made through this actor's canonical workspace file
    * plane. Used by heads to report only their own direct file mutations while
    * every actor still addresses the same workspace. */
@@ -541,7 +540,7 @@ export function createCFRuntime(
       // unconditionally and read the supplied turn accumulator only when called.
       ledger: () => access.acc?.().files,
       budget: () => access.acc?.().context,
-      gadgetCall: hooks.gadgetCall,
+      slate: hooks.slate,
     },
   }));
   // Register Sandbox executor — Kinu's primary remote exec surface.

@@ -71,7 +71,7 @@ import {
   // Gadgets — core owns the manifest, the file layout and the binding route;
   // this object boots the resident processes (gadgets/host.ts).
   type GadgetBindingRequest, type GadgetCallResult, type GadgetDataSource,
-  type SlateBindingRequest, type SlateCallResult, SLATES_CHANGED_EVENT,
+  type SlateBindingRequest, type SlateCallResult, type SlateOperation, SLATES_CHANGED_EVENT,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   type ScaffoldRunResult,
   // The scaffold evolution control plane (core owns the drivers; this actor
@@ -3968,11 +3968,8 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
 
-  /** One call from a gadget's client to its server, forwarded by the UI's
-   *  bridge: the resident process's method, JSON in, JSON out. Interactive-only
-   *  in the RPC gate: a call may act through any binding the agent holds. */
-  @callable() async gadgetCall(slug: string, method: string, args: JsonValue[]): Promise<GadgetCallResult> {
-    return this.gadgets.call(String(slug), String(method), args);
+  @callable() async slate(operation: SlateOperation): Promise<SlateCallResult> {
+    return this.slates.operation(operation);
   }
 
   /** A gadget server's call through one of its bindings, back from its

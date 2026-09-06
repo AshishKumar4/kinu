@@ -25,7 +25,7 @@
 
 import type {
   NimbusExecOptions, NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult,
-  JsonValue, GadgetCallResult, GadgetBindingRequest, SlateCallResult, SlateBindingRequest,
+  JsonValue, GadgetCallResult, GadgetBindingRequest, SlateCallResult, SlateBindingRequest, SlateOperation,
 } from '@kinu.run/core';
 
 type BoxFiles = NimbusSandboxHandle['files'];
@@ -123,7 +123,7 @@ export interface WorkspaceBoxRpc {
  * type is constructed once and each caller takes the slice it needs.
  */
 export interface WorkspaceOwnerRpc extends WorkspaceBoxRpc {
-  gadgetCall(slug: string, method: string, args: JsonValue[]): Promise<GadgetCallResult>;
+  slate(operation: SlateOperation): Promise<SlateCallResult>;
   /** The request as the process sent it; the host parses it (`GadgetHost.bindingCall`). */
   gadgetBindingCall(slug: string, name: string, request: GadgetBindingRequest): Promise<GadgetCallResult>;
   slateBindingCall(id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult>;

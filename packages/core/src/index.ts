@@ -256,7 +256,7 @@ export { SlateBindingRequestSchema, routeSlateBindingCall, type SlateBindingRequ
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 export {
-  isSlateMethodName, SLATES_CHANGED_EVENT, type SlateCallResult,
+  isSlateMethodName, SlateOperationSchema, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult,
   type SlateSummary, type SlateProblem, type SlatesChangedEvent,
 } from './slates/rpc';
 

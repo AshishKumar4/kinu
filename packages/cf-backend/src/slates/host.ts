@@ -1,10 +1,11 @@
 import { exports } from 'cloudflare:workers';
-import { SlateId } from '@agent-core/core/slates';
+import { WorkspaceId } from '@agent-core/core';
+import { SlateId, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  SlateFiles, SqliteSlateContentStore, slateDirectory, parseSlateProject,
-  SlateBindingRequestSchema, routeSlateBindingCall, JsonValueSchema, isSlateMethodName,
+  SlateFiles, SqliteSlateContentStore, SqliteSlateStore, WorkspaceSlates, slateDirectory, parseSlateProject,
+  SlateBindingRequestSchema, SlateOperationSchema, routeSlateBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName,
   type CodemodeProvider, type JsonValue, type JsonObject, type SlateProject,
   type SlateBindingRoute, type SlateCallResult, type SlateReadModel, type SlateSummary, type SlateProblem,
 } from '@kinu.run/core';
@@ -30,6 +31,8 @@ interface RunningSlate {
 export class SlateHost {
   private readonly content: SqliteSlateContentStore;
   private readonly resident: ResidentSlateProcesses;
+  private readonly store: SqliteSlateStore;
+  private sourceRuntime: WorkspaceSlates | undefined;
   private readonly running = new Map<string, RunningSlate>();
   private readonly starting = new Map<string, Promise<ResidentSlateProcess>>();
   private readonly ports = new Map<string, number>();
@@ -39,12 +42,55 @@ export class SlateHost {
   constructor(private readonly deps: SlateHostDeps) {
     this.content = new SqliteSlateContentStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
     this.resident = new ResidentSlateProcesses({ ...deps, content: this.content });
+    this.store = new SqliteSlateStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
   }
 
   async project(id: string): Promise<SlateProject> {
     const session = await this.deps.session();
     const path = `${slateDirectory(new SlateId(id))}/package.json`;
     return parseSlateProject(JSON.parse(session.vfs.as(CRED_SESSION_USER).readFileString(path)));
+  }
+
+  private async sources(): Promise<WorkspaceSlates> {
+    const session = await this.deps.session();
+    this.sourceRuntime ??= new WorkspaceSlates({
+      workspaceId: new WorkspaceId(this.deps.workspace), store: this.store,
+      files: new SlateFiles(session.vfs.as(CRED_SESSION_USER), this.content),
+      mutations: { mutate: async (request, mutation) => {
+        if (request.workspaceId.value !== this.deps.workspace) throw new KinuError('denied', 'Slate mutation belongs to another workspace');
+        return session.vfs.withTransaction(mutation);
+      } },
+    });
+    return this.sourceRuntime;
+  }
+
+  async operation<Input>(input: Input): Promise<SlateCallResult> {
+    try {
+      const parsed = v.safeParse(SlateOperationSchema, input);
+      if (!parsed.success) throw new KinuError('bad_input', 'Slate operation does not match its declared fields', { cause: new v.ValiError(parsed.issues) });
+      const operation = parsed.output;
+      switch (operation.op) {
+        case 'list': {
+          const listing = await this.list();
+          return { ok: true, value: { slates: listing.slates.map((slate) => ({ ...slate, bindings: [...slate.bindings] })), problems: listing.problems.map((problem) => ({ ...problem })) } };
+        }
+        case 'preview': return await this.preview(operation.id);
+        case 'call': return await this.call(operation.id, operation.method, operation.args ?? []);
+        case 'history': {
+          await this.deps.session();
+          const id = new SlateId(operation.id);
+          const slate = this.store.getSlate(id);
+          if (slate === undefined) throw new KinuError('missing', 'No durable slate record; commit source or open a preview first');
+          if (slate.workspaceId.value !== this.deps.workspace) throw new KinuError('denied', 'Slate belongs to another workspace');
+          return { ok: true, value: projectJsonValue({ value: { slate: slate.toData(), versions: this.store.listVersions(id).map((version) => version.toData()) } }) };
+        }
+        case 'commit': return { ok: true, value: projectJsonValue({ value: (await (await this.sources()).commit(new SlateId(operation.id))).toData() }) };
+        case 'fork': return { ok: true, value: projectJsonValue({ value: (await (await this.sources()).fork(new SlateVersionId(operation.version))).toData() }) };
+        case 'restore': return { ok: true, value: projectJsonValue({ value: (await (await this.sources()).restore(new SlateId(operation.id), new SlateVersionId(operation.version))).toData() }) };
+      }
+    } catch (cause) {
+      return { ok: false, ...refusalOf(toKinuError({ doing: 'slate operation', cause, otherwise: 'io' })) };
+    }
   }
 
   async list(): Promise<{ slates: SlateSummary[]; problems: SlateProblem[] }> {
@@ -148,14 +194,13 @@ export class SlateHost {
   }
 
   private async boot(id: string): Promise<ResidentSlateProcess> {
-    const session = await this.deps.session();
     const root = slateDirectory(new SlateId(id));
-    const files = new SlateFiles(session.vfs.as(CRED_SESSION_USER), this.content);
+    const sources = await this.sources();
     for (;;) {
       const revision = this.revisions.get(id) ?? 0;
       const project = await this.project(id);
       if (project.slate.runtime !== 'worker') throw new KinuError('unsupported', 'Resident slate previews require slate.runtime worker; run node projects through the sandbox executor');
-      const source = session.vfs.withTransaction(() => files.capture(new SlateId(id)));
+      const source = (await sources.synchronize(new SlateId(id))).source;
       const key = `slate:${this.deps.workspace}:${id}:${source.digest.value}`;
       const held = this.running.get(id);
       if (held?.key === key && await held.process.isRunning()) return held.process;

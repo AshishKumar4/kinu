@@ -14,7 +14,8 @@
  * needs workerd) or execute codemode (env.LOADER is a stub that throws). This
  * harness is for observing composition output, not for driving inference.
  */
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
+import { makeSqlExec } from '../../../core/tests/helpers';
 import type { AgentContext, FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import type { ToolSet, UIMessage } from 'ai';
 import type { ChatResponseResult } from '@cloudflare/think';
@@ -25,7 +26,7 @@ import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
   type AgentOrchestrator, type AgentRuntime, type CompletedTurn, type DynamicContext,
   type IngressDescriptor, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
-  type RunEndReason, type SqlExecRow, type SqlValue, type SubordinateRosterStore,
+  type RunEndReason, type SqlValue, type SubordinateRosterStore,
   projectJsonValue,
   type BackgroundJobStore, type JsonValue,
   type DeviceConsentDecision, type DeviceConsentRequest, type DeviceStatus,
@@ -745,20 +746,11 @@ export interface ActorHarness<T> {
   tableNames(): string[];
 }
 
-function nativeBindings(values: SqlValue[]): SQLQueryBindings[] {
-  return values.map((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value);
-}
 
 function makeCtx(db: Database): AgentContext {
+  const canonicalSql = makeSqlExec(db);
   const sqlExec = (query: string, ...bindings: SqlValue[]) => {
-    const stmt = db.prepare<SqlExecRow, SQLQueryBindings[]>(query);
-    const bound = nativeBindings(bindings);
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-      const rows = stmt.all(...bound);
-      return { toArray: () => rows, [Symbol.iterator]: () => rows[Symbol.iterator]() };
-    }
-    stmt.run(...bound);
-    const rows: SqlExecRow[] = [];
+    const rows = canonicalSql.exec(query, ...bindings).toArray();
     return { toArray: () => rows, [Symbol.iterator]: () => rows[Symbol.iterator]() };
   };
   const context = {

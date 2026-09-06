@@ -6,6 +6,10 @@ import * as v from 'valibot';
 import { workspacePath } from '../vfs/workspace-path';
 import type { SqliteSlateContentStore } from './content';
 import { nanoid } from '../utils/nanoid';
+import { KinuError } from '../obs/error';
+
+export const SlateDirectoryName = v.pipe(v.string(), v.minLength(1),
+  v.check((name) => !name.includes('/') && !name.includes('\0') && name !== '.' && name !== '..', 'Slate id must be one directory name'));
 
 const TreePath = v.pipe(v.string(), v.check((path) => path.split('/').every((part) => part !== '' && part !== '.' && part !== '..')));
 const TreeEntry = v.variant('kind', [
@@ -17,9 +21,9 @@ const Tree = v.object({ mode: v.number(), entries: v.array(TreeEntry) });
 type TreeEntry = v.InferOutput<typeof TreeEntry>;
 
 export function slateDirectory(id: SlateId): string {
-  const name = id.value;
-  if (name.includes('/') || name === '.' || name === '..') throw new Error('Slate id must be one directory name');
-  return workspacePath(`slates/${name}`);
+  const name = v.safeParse(SlateDirectoryName, id.value);
+  if (!name.success) throw new KinuError('bad_input', 'Slate id must be one directory name', { cause: new v.ValiError(name.issues) });
+  return workspacePath('slates/' + name.output);
 }
 
 export class SlateFiles {

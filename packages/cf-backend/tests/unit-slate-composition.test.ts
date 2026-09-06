@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test';
+import * as v from 'valibot';
+import type { SlateCallResult } from '@kinu.run/core';
 import { orchestratorHarness } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
@@ -82,4 +84,30 @@ test('the initial snapshot discovers authored Slate projects', async () => {
   expect(await actor.agent.getWorkspaceSnapshot()).toHaveProperty('slates', [
     { id: 'overview', title: 'Overview', bindings: ['JOBS'] },
   ]);
+});
+
+test('the agent slate operation commits, forks and restores its authored source', async () => {
+  const actor = orchestratorHarness();
+  const files = actor.agent.observeRuntime().storage.vfs;
+  const root = '/home/user/slates/notes';
+  await files.mkdir(root, { recursive: true });
+  await files.writeFile(root + '/package.json', JSON.stringify({ main: 'server.ts' }));
+  await files.writeFile(root + '/server.ts', 'export default { fetch() { return new Response("first"); } };');
+  const record = (result: SlateCallResult) => {
+    if (!result.ok) throw new Error(result.reason + ': ' + result.error);
+    return v.parse(v.object({ id: v.string() }), result.value);
+  };
+  const first = record(await actor.agent.slate({ op: 'commit', id: 'notes' }));
+  await files.writeFile(root + '/server.ts', 'export default { fetch() { return new Response("second"); } };');
+  const second = record(await actor.agent.slate({ op: 'commit', id: 'notes' }));
+  const history = await actor.agent.slate({ op: 'history', id: 'notes' });
+  if (!history.ok) throw new Error(history.reason + ': ' + history.error);
+  expect(v.parse(v.object({ versions: v.array(v.object({ id: v.string() })) }), history.value).versions)
+    .toEqual([{ id: first.id }, { id: second.id }]);
+  record(await actor.agent.slate({ op: 'restore', id: 'notes', version: first.id }));
+  expect(await files.readFile(root + '/server.ts', { encoding: 'utf8' })).toContain('"first"');
+  const fork = record(await actor.agent.slate({ op: 'fork', version: second.id }));
+  expect(await files.readFile('/home/user/slates/' + fork.id + '/server.ts', { encoding: 'utf8' })).toContain('"second"');
+  expect(await actor.agent.slate({ op: 'restore', id: fork.id, version: first.id })).toMatchObject({ ok: false, reason: 'missing' });
+  expect(await actor.agent.slate({ op: 'commit', id: '../outside' })).toMatchObject({ ok: false, reason: 'bad_input' });
 });

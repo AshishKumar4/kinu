@@ -6,7 +6,6 @@ import { SlateFiles, slateDirectory } from '../src/slates/files';
 import { SqliteSlateContentStore } from '../src/slates/content';
 import { SqliteSlateStore } from '../src/slates/store';
 import { WorkspaceSlates } from '../src/slates/runtime';
-import { KinuSlateProvider } from '../src/slates/provider';
 import { createTestWorkspace, createWorkspaceBundle, makeSqlExec } from './helpers';
 
 test('Slate source operations require Nimbus atomic-embedding rollback coherence', async () => {
@@ -28,17 +27,10 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
     }, content);
     const slates = new WorkspaceSlates({
       workspaceId: new WorkspaceId('workspace'), store, files,
-      provider: new KinuSlateProvider(async () => { throw new Error('source operations must not deploy'); }),
       mutations: { async mutate(_request, mutation) {
         if (!allowed) throw new Error('turn no longer owns mutation');
         return session.vfs.withTransaction(mutation);
       } },
-      invocations: {
-        async prepare() { throw new Error('source operations must not invoke providers'); },
-        async invoke() { throw new Error('source operations must not invoke providers'); },
-        async reconcile() { throw new Error('source operations must not invoke providers'); },
-      },
-      previewValidation: { async validate() { throw new Error('source operations must not link previews'); } },
     });
     const id = new SlateId('notes');
     const directory = slateDirectory(id);
@@ -47,6 +39,8 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
     vfs.writeFile(`${directory}/server.js`, 'first version');
     const first = await slates.commit(id);
     expect(first.slateId.value).toBe('notes');
+    const publication = await slates.publish(first.id, []);
+    await expect(slates.deploy(publication.id, 'source-only')).rejects.toMatchObject({ code: 'unsupported' });
     vfs.writeFile(`${directory}/server.js`, 'second version');
     const second = await slates.commit(id);
     expect(second.parentVersionId?.value).toBe(first.id.value);

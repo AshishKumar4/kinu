@@ -1,9 +1,11 @@
+import * as v from 'valibot';
 import type { Refusal } from '../obs/index';
-import type { JsonValue } from '../utils/json';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { SlateDirectoryName } from './files';
 
 const METHOD_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
 
-/** A method the Slate bridge may forward to another Slate. */
+/** An app method forwarded as a POST route to another slate. */
 export function isSlateMethodName(name: string): boolean {
   return METHOD_RE.test(name) && name !== 'constructor' && !name.startsWith('_');
 }
@@ -12,6 +14,18 @@ export function isSlateMethodName(name: string): boolean {
 export type SlateCallResult =
   | { readonly ok: true; readonly value: JsonValue }
   | ({ readonly ok: false } & Refusal);
+
+const VersionId = v.pipe(v.string(), v.minLength(1));
+export const SlateOperationSchema = v.variant('op', [
+  v.strictObject({ op: v.literal('list') }),
+  v.strictObject({ op: v.literal('preview'), id: SlateDirectoryName }),
+  v.strictObject({ op: v.literal('call'), id: SlateDirectoryName, method: v.pipe(v.string(), v.check(isSlateMethodName)), args: v.optional(v.array(JsonValueSchema)) }),
+  v.strictObject({ op: v.literal('commit'), id: SlateDirectoryName }),
+  v.strictObject({ op: v.literal('history'), id: SlateDirectoryName }),
+  v.strictObject({ op: v.literal('fork'), version: VersionId }),
+  v.strictObject({ op: v.literal('restore'), id: SlateDirectoryName, version: VersionId }),
+]);
+export type SlateOperation = v.InferOutput<typeof SlateOperationSchema>;
 
 export interface SlateSummary {
   readonly id: string;
