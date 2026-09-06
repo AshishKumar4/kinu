@@ -42,6 +42,7 @@ import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { diagnostics, renderCauseChain, renderThrownChain, toKinuError } from '../obs/index';
 import type { BuiltinToolName } from '../tools/registry';
+import { agentAffinityKey } from '../providers/workers-ai';
 
 /**
  * The mutable findings a head accumulates as it runs — evidence/decisions
@@ -694,6 +695,11 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         history,
         tools: deps.tools,
         modelContext,
+        cache: {
+          providerId: modelContext.provider?.split('.', 1)[0],
+          modelId: modelContext.id,
+          sessionKey: agentAffinityKey(input.rootId),
+        },
         stopWhen: async () => {
           if (deps.isAborted()) return true;
           if (budgetExhausted(input.budget).exhausted) return true;
