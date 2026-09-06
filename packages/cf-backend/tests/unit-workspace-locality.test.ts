@@ -343,4 +343,26 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     );
     expect(forged.status).toBe(404);
   });
+
+  test('a live slate preview refreshes authored code without accepting a visitor hop count', async () => {
+    const actor = actorObject();
+    const capability = 'abcdef0123456789abcdef01';
+    Object.assign(actor.ctx.storage, { get: async (key: string) => key === 'nimbus_preview_capability:3000' ? capability : undefined });
+    let source = 'old';
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx, env: strictEnv(WORKSPACE_BINDINGS),
+      previewUrl: async () => ({ url: 'https://preview.test/' }),
+      refreshPreview: async () => { source = 'edited'; },
+    });
+    await workspace.registerPort(9000, 3000, {
+      handleHttpRequest: async (request) => Response.json({ source, depth: request.headers.get('x-slate-depth') }),
+    });
+    const response = await workspace.routePreview(3000, capability.slice(0, 10), new Request('https://preview.test/', {
+      headers: { 'x-slate-depth': '-9' },
+    }), '/');
+    expect(v.parse(v.object({ source: v.string(), depth: v.nullable(v.string()) }), await response.json()))
+      .toEqual({ source: 'edited', depth: null });
+    workspace.unregisterPorts(9000);
+    expect((await workspace.routePreview(3000, capability.slice(0, 10), new Request('https://preview.test/'), '/')).status).toBe(410);
+  });
 });

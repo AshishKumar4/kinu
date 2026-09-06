@@ -70,8 +70,8 @@ import {
   appendMemoryNote,
   // Gadgets — core owns the manifest, the file layout and the binding route;
   // this object boots the resident processes (gadgets/host.ts).
-  type GadgetBindingRequest, type GadgetCallResult, type GadgetDataSource, type GadgetProblem, type GadgetSummary,
-  type SlateBindingRequest, type SlateCallResult,
+  type GadgetBindingRequest, type GadgetCallResult, type GadgetDataSource,
+  type SlateBindingRequest, type SlateCallResult, SLATES_CHANGED_EVENT,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   type ScaffoldRunResult,
   // The scaffold evolution control plane (core owns the drivers; this actor
@@ -405,7 +405,11 @@ export class OrchestratorAgent extends ActorAgent {
       ctx: this.ctx,
       env: this.env,
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
-      onFilesChanged: (paths) => this.gadgets.filesChanged(paths),
+      onFilesChanged: (paths) => {
+        const ids = this.slates.filesChanged(paths);
+        if (ids.length !== 0) this.broadcast(JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
+      },
+      refreshPreview: (port) => this.slates.refreshPreview(port),
     });
     return this._workspace;
   }
@@ -3963,17 +3967,6 @@ export class OrchestratorAgent extends ActorAgent {
     return v.parse(JsonValueSchema, await reads[source]());
   }
 
-  /** The tabs to draw, and the directories that failed to be one. Titles are
-   *  agent-authored, so the UI marks them. */
-  @callable() async listGadgets(): Promise<{ gadgets: GadgetSummary[]; problems: GadgetProblem[] }> {
-    return this.gadgets.list();
-  }
-
-  /** The client half of one gadget — the module and stylesheet the UI runs in
-   *  its sandboxed iframe. Read fresh from the file plane on every call. */
-  @callable() async getGadgetClient(slug: string): Promise<GadgetCallResult> {
-    return this.gadgets.client(String(slug));
-  }
 
   /** One call from a gadget's client to its server, forwarded by the UI's
    *  bridge: the resident process's method, JSON in, JSON out. Interactive-only
@@ -4007,12 +4000,25 @@ export class OrchestratorAgent extends ActorAgent {
         const { stub, caller } = await this.userHub();
         return v.parse(JsonValueSchema, JSON.parse(await stub.userMcp_callTool(caller, server, tool, args)));
       },
+      expose: async (port) => {
+        const ports = this.hostedWorkspace().box('agent:main').ports;
+        if (!ports?.expose) throw new KinuError('unsupported', 'Workspace port exposure is not available');
+        return ports.expose(port);
+      },
     });
     return this._slates;
   }
 
   async slateBindingCall(id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult> {
     return this.slates.bindingCall(id, name, request);
+  }
+
+  @callable() async listSlates() {
+    return this.slates.list();
+  }
+
+  @callable() async previewSlate(id: string): Promise<SlateCallResult> {
+    return this.slates.preview(id);
   }
 
   @callable() async getToolDescriptions() {
@@ -4269,14 +4275,14 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable()
   async getWorkspaceSnapshot() {
-    const [status, tools, memoryContent, executors, activePlan, tabPresence, { gadgets }] = await Promise.all([
+    const [status, tools, memoryContent, executors, activePlan, tabPresence, { slates }] = await Promise.all([
       this.getAgentStatus(),
       this.getToolDescriptions(),
       this.getMemoryContent(),
       this.getExecutors(),
       this.getActivePlanReview(),
       this.getWorkspaceTabPresence(),
-      this.listGadgets(),
+      this.listSlates(),
     ]);
     const executorOutputs = await Promise.all(
       executors.map(async (e) => ({
@@ -4292,7 +4298,7 @@ export class OrchestratorAgent extends ActorAgent {
       .map((run) => ({ type: 'branch_status' as const, status: 'running' as const, branchId: run.rootId, task: run.task }));
     return {
       status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan,
-      tabPresence, gadgets, pendingSteers: this.pendingSteerRuns(), branchRuns,
+      tabPresence, slates, pendingSteers: this.pendingSteerRuns(), branchRuns,
     };
   }
 

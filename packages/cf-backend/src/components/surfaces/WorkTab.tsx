@@ -11,8 +11,7 @@
  *   Needs you — the pending-action queue. Rendered only when non-empty. Every
  *               row deep-links to where the decision is actually made; nothing
  *               is decided twice. Host-owned: `listPendingActions` is
- *               deliberately not a data source a gadget can read
- *               (core/src/gadgets/sources.ts).
+ *               deliberately not a data source a slate can read.
  *   Now       — the plan's open half and the jobs still running.
  *   Journal   — one reverse-chronological feed of everything settled: jobs,
  *               closed tasks, self-changes. The chips filter that one list;

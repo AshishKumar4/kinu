@@ -33,9 +33,8 @@
  *                                  components over a scripted roster, driven
  *                                  by the chat-and-files browser gate
  *   /gallery.html?frame=markdown → everything MarkdownContent has to render
- *   /gallery.html?frame=gadget   → an agent-authored gadget, sandboxed: the
- *                                  real GadgetFrame over a fixture client that
- *                                  probes its own containment
+ *   /gallery.html?frame=slate    → an agent-authored Slate preview loaded
+ *                                  through the production SlateFrame API
  *   /gallery.html?frame=releases → the Releases board with a pending approval
  *   /gallery.html?frame=work     → the Work surface: needs-you, the plan and
  *                                  running jobs, and the settled journal
@@ -107,9 +106,9 @@ import { WorkspaceBar, InlineRenameTitle } from "@/components/WorkspaceBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/surfaces/WorkSurface";
-import { GadgetFallbackFrame } from "@/gallery-gadget-fallback";
+import { SlateFallbackFrame } from "@/gallery-slate-fallback";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
-import { GadgetFrame } from "@/components/gadgets/GadgetFrame";
+import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { LogBlock } from "@/components/surfaces/ActivitySurface";
@@ -568,7 +567,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     // keep showing them.
     tabPresence: { releases: true, explorations: true },
     activePlan: null,
-    gadgets: [],
+    slates: [],
   },
   getStoredModelSpec: "anthropic/claude-opus-4",
   getShellApprovalMode: "strict",
@@ -3373,67 +3372,26 @@ const BRAIN_STATUS = {
   soul: "# Checkout coupon bug", forkLineage: null, createdAt: NOW - 7 * 864e5,
 } satisfies AgentStatus;
 
-/* ── Agent-authored gadget ──────────────────────────────────── */
+/* ── Agent-authored Slate preview ────────────────────────────── */
 
-// A client of the shape `getGadgetClient` answers, run by the production
-// GadgetFrame — not a mock of it — over a fake rpc. The fixture probes its
-// own containment and reports into its document: whether a network fetch
-// escaped the sandbox, whether the host document was reachable, and what the
-// one allowed call back out answered. It then writes one console line, the
-// one thing besides RPC that may cross out, so the gate can read it in the
-// host document. Plain JS text, exactly as a gadget publishes it: no
-// imports, no syntax a data: URL module could not carry.
-const GADGET_SLUG = "sandbox-probe";
+const GALLERY_SLATE_ID = "sandbox-probe";
+const GALLERY_SLATE_URL = `data:text/html,${encodeURIComponent(
+  "<!doctype html><main><h1>Slate preview</h1><p data-slate-preview>Rendered on the preview URL.</p></main>",
+)}`;
 
-const GADGET_CLIENT_JS = [
-  "const probe = { fetch: 'blocked', parent: 'blocked', rpc: 'unanswered' };",
-  "try {",
-  "  await fetch('https://example.com/');",
-  "  probe.fetch = 'reached';",
-  "} catch { probe.fetch = 'blocked'; }",
-  "try {",
-  "  void window.parent.document;",
-  "  probe.parent = 'reached';",
-  "} catch { probe.parent = 'blocked'; }",
-  "try {",
-  "  probe.rpc = String(await gadget.echo('ping'));",
-  "} catch (error) {",
-  "  probe.rpc = 'failed:' + (error instanceof Error ? error.message : String(error));",
-  "}",
-  "const el = document.createElement('p');",
-  "el.setAttribute('data-gadget-probe', '');",
-  "el.setAttribute('data-fetch', probe.fetch);",
-  "el.setAttribute('data-parent', probe.parent);",
-  "el.setAttribute('data-rpc', probe.rpc);",
-  "el.textContent = 'fetch=' + probe.fetch + ' parent=' + probe.parent + ' rpc=' + probe.rpc;",
-  "document.body.append(el);",
-  "console.error('probe: console reaches the host');",
-].join("\n");
-
-const gadgetRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getGadgetClient") {
-    return rpcResult({ ok: true, value: { js: GADGET_CLIENT_JS, css: null } }).json<T>();
-  }
-  if (method === "gadgetCall") {
-    // The bridge calls as gadgetCall(slug, name, callArgs). The one method
-    // the fixture knows answers echo:ping; anything else is a finding.
-    const parsed = v.safeParse(v.tuple([v.string(), v.string(), v.array(JsonValueSchema)]), args);
-    const name = parsed.success ? parsed.output[1] : "";
-    const first = parsed.success ? parsed.output[2][0] : null;
-    const echoArg = v.safeParse(v.string(), first);
-    const value = name === "echo" && echoArg.success ? `echo:${echoArg.output}` : null;
-    return rpcResult({ ok: true, value }).json<T>();
+/** Gallery-only previewSlate fixture. It exercises SlateFrame, not a deployed preview origin. */
+const slateRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "previewSlate") {
+    return rpcResult({ ok: true, value: { url: GALLERY_SLATE_URL, port: 0 } }).json<T>();
   }
   return stubRpc<T>(method, args);
 };
 
-/** The real frame over the fixture client, so the sandbox the gate asserts
- *  is the one the product mounts — policy, bridge, and refusal path alike. */
-function GadgetSandboxFrame() {
+function SlatePreviewFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] min-h-screen border-x p-border p-5">
-        <GadgetFrame slug={GADGET_SLUG} rpc={gadgetRpc} />
+        <SlateFrame id={GALLERY_SLATE_ID} rpc={slateRpc} />
       </div>
     </div>
   );
@@ -5301,8 +5259,8 @@ async function mount() {
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;
-  else if (frame === "gadget") node = <GadgetSandboxFrame />;
-  else if (frame === "workgadgetfallback") node = <GadgetFallbackFrame rpc={workRpc} />;
+  else if (frame === "slate") node = <SlatePreviewFrame />;
+  else if (frame === "workslatefallback") node = <SlateFallbackFrame rpc={workRpc} />;
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
   else if (frame === "work") node = <WorkFrame />;

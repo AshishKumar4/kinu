@@ -101,6 +101,16 @@ describe('the gated tabs appear only with content', () => {
   });
 });
 
+describe('Slate tab presence', () => {
+  const slates = [{ id: 'overview', title: 'Overview', bindings: [] }];
+
+  test('a listed Slate stays open and an unlisted one falls back', () => {
+    expect(surfaceHasContent('slate:overview', FRESH, EMPTY_TREES, slates)).toBe(true);
+    expect(resolveGatedSurface('slate:overview', FRESH, EMPTY_TREES, slates)).toBe('slate:overview');
+    expect(resolveGatedSurface('slate:removed', FRESH, EMPTY_TREES, slates)).toBe('Work');
+  });
+});
+
 describe('an active tab whose content vanishes falls back', () => {
   test('being on Releases when the lane empties lands on Work', () => {
     expect(resolveGatedSurface('Releases', FRESH, EMPTY_TREES, [])).toBe('Work');

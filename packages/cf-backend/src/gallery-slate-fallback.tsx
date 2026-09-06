@@ -1,49 +1,36 @@
 import { useEffect, useState } from "react";
-import type { GadgetSummary } from "@kinu.run/core";
+import type { SlateSummary } from "@kinu.run/core";
 import type { ForkNode, Rpc } from "@/lib/protocol";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
-import { GADGET_PREFIX } from "@/components/surfaces/presence";
+import { SLATE_PREFIX } from "@/components/surfaces/presence";
 
-const FALLBACK_SLUG = "fallback-probe";
-
-const FALLBACK_GADGETS: readonly GadgetSummary[] = [
-  {
-    slug: FALLBACK_SLUG,
-    title: "Fallback Probe",
-    subtitle: null,
-    hasServer: false,
-    hasClient: true,
-    bindings: [],
-  },
-];
-
+const FALLBACK_ID = "fallback-probe";
+const FALLBACK_SLATES: readonly SlateSummary[] = [{
+  id: FALLBACK_ID,
+  title: "Fallback Probe",
+  bindings: [],
+}];
+const FALLBACK_PREVIEW_URL = `data:text/html,${encodeURIComponent(
+  '<!doctype html><p data-slate-preview>fallback preview running</p>',
+)}`;
 const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
 const NO_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
-/** The fixture client the open tab runs before the removal lands. */
-const FALLBACK_CLIENT_JS = "const el = document.createElement('p');"
-  + "el.setAttribute('data-fallback-client', '');"
-  + "el.textContent = 'fallback probe running';"
-  + "document.body.append(el);";
-
-export function GadgetFallbackFrame({ rpc }: { rpc: Rpc }) {
-  const [gadgets, setGadgets] = useState<readonly GadgetSummary[]>(FALLBACK_GADGETS);
-  const [surface, setSurface] = useState<SurfaceKind>(`${GADGET_PREFIX}${FALLBACK_SLUG}`);
+/** Gallery-only previewSlate fixture. It does not exercise a production origin. */
+export function SlateFallbackFrame({ rpc }: { rpc: Rpc }) {
+  const [slates, setSlates] = useState<readonly SlateSummary[]>(FALLBACK_SLATES);
+  const [surface, setSurface] = useState<SurfaceKind>(`${SLATE_PREFIX}${FALLBACK_ID}`);
   useEffect(() => {
-    const unpublish = (): void => {
-      setGadgets([]);
-    };
-    window.addEventListener("gallery:gadget-unpublish", unpublish);
-    return () => {
-      window.removeEventListener("gallery:gadget-unpublish", unpublish);
-    };
+    const unpublish = (): void => { setSlates([]); };
+    window.addEventListener("gallery:slate-unpublish", unpublish);
+    return () => { window.removeEventListener("gallery:slate-unpublish", unpublish); };
   }, []);
   const frameRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === "getGadgetClient") {
-      return new Response(JSON.stringify({ ok: true, value: { js: FALLBACK_CLIENT_JS, css: null } })).json<T>();
-    }
-    if (method === "gadgetCall") {
-      return new Response(JSON.stringify({ ok: true, value: null })).json<T>();
+    if (method === "previewSlate") {
+      return new Response(JSON.stringify({
+        ok: true,
+        value: { url: FALLBACK_PREVIEW_URL, port: 0 },
+      })).json<T>();
     }
     return rpc(method, args);
   };
@@ -72,7 +59,7 @@ export function GadgetFallbackFrame({ rpc }: { rpc: Rpc }) {
           backgroundJobs={[]}
           onRefreshJobs={() => {}}
           pendingActions={[]}
-          gadgets={gadgets}
+          slates={slates}
           tabPresence={{ releases: true, explorations: true }}
           rpc={frameRpc}
         />

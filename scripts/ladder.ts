@@ -1077,7 +1077,7 @@ export const LADDER: readonly Gate[] = [
       + 'independent instrument bugs cost us to learn.',
   },
   {
-    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts scripts/gadget-sandbox-ux.test.ts',
+    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts',
     tier: 'ci',
     // Measured 2026-08-24 after the six plan checks joined this row:
     // 177.63s and 175.02s over two runs.
@@ -1251,22 +1251,11 @@ export const LADDER: readonly Gate[] = [
       + 'Chrome cost keeps it out of the commit tier.',
   },
   {
-    run: 'bun test scripts/gadget-sandbox-ux.test.ts',
+    run: 'bun test scripts/slate-preview-ux.test.ts',
     tier: 'ci',
-    // Measured 2026-09-05 on the 24-thread box: 2.0/2.0/2.5s over three runs,
-    // gallery build and Chromium included. Declared with headroom for CI cold cache.
     seconds: 5,
-    catches: 'a gadget client that can reach the network, the host document, or '
-      + 'anything but the MessagePort it handed over: the `?frame=gadget` fixture '
-      + 'probes all three from inside the sandbox and the gate reads the exact '
-      + 'sandbox token, the exact content policy, and the three probe outcomes. '
-      + 'Proven red by forcing the fixture to report `reached`: exactly the fetch '
-      + 'assertion fails, the other four stay green.',
-    blind: 'everything the client DOES with its one allowed call. The fixture rpc '
-      + 'answers `echo`, so a gadget server that refuses, a binding the manifest '
-      + 'withdrew, and a client that never calls are unmeasured here — the workerd '
-      + 'gadget-facet probe owns the server half. Chrome cost keeps it out of the '
-      + 'commit tier.',
+    catches: 'whether SlateFrame loads the previewSlate URL in its sandbox and whether a selected Slate that disappears returns the work surface to Work.',
+    blind: 'the preview fixture uses a static data URL, so this does not exercise a deployed preview origin or its server-side authorization.',
   },
   {
     run: 'bun run layergate',

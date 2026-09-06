@@ -6,8 +6,8 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
-  branchHeadId, GADGETS_CHANGED_EVENT, ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
-  type GadgetSummary, type PendingAction, type PlanReview, type RoleId,
+  branchHeadId, ORCHESTRATOR_AGENT_SLUG, SLATES_CHANGED_EVENT, SUBORDINATE_AGENT_SLUG,
+  type PendingAction, type PlanReview, type RoleId, type SlateProblem, type SlateSummary,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
@@ -46,7 +46,7 @@ import {
 } from "./session-recovery";
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "./send-admission";
 import type { AsyncResource } from "./use-async-resource";
-import { pruneGadgetReloads } from "../components/surfaces/presence";
+import { pruneSlateReloads } from "../components/surfaces/presence";
 
 export type { ExecutorInfo };
 
@@ -163,8 +163,7 @@ export interface WorkspaceSnapshot {
   status: AgentStatus;
   tools: ToolDescResult;
   memoryContent: string;
-  gadgets: GadgetSummary[];
-
+  slates: SlateSummary[];
   executors: ExecutorInfo[];
   executorOutputs: Array<{ name: string; outputs: ExecutorOutput[] }>;
   lastActiveExecutor: string | null;
@@ -345,7 +344,7 @@ const SocketMessageSchema = v.variant("type", [
   v.object({ type: v.literal("device_consent_resolved"), consentId: v.string() }),
   v.object({ type: v.literal("work_cancelled") }),
   v.object({ type: v.literal("pending_actions_changed") }),
-  v.object({ type: v.literal(GADGETS_CHANGED_EVENT), slugs: v.array(v.string()) }),
+  v.object({ type: v.literal(SLATES_CHANGED_EVENT), ids: v.array(v.string()) }),
   v.object({
     type: v.literal("branch_status"), branchId: v.string(), task: v.optional(v.string()),
     status: v.optional(v.string()), takeSetId: v.optional(v.string()),
@@ -412,7 +411,7 @@ export type LiveRefreshSource =
   | "memoryContent"
   | "tools"
   | "executors"
-  | "gadgets"
+  | "slates"
   | "consents"
   | "consentResolution"
   | "plan";
@@ -434,13 +433,13 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "tools", label: "tools" },
   { source: "presence", label: "tab presence" },
   { source: "executors", label: "executors" },
-  { source: "gadgets", label: "gadgets" },
+  { source: "slates", label: "slates" },
   { source: "consents", label: "device consents" },
   { source: "consentResolution", label: "device consents" },
   { source: "plan", label: "active plan" },
 ];
 
-/** The live sources the workspace snapshot reads for itself (`loadAllData`).
+/** The live sources the workspace snapshot reads for itself (loadAllData).
  *  A snapshot that landed IS a fresh read of each of them, so its success
  *  clears their failures: leaving them set left the banner reporting stale
  *  data for surfaces the same round trip had just refreshed, and across a
@@ -451,7 +450,7 @@ const SNAPSHOT_SEEDED_SOURCES: readonly LiveRefreshSource[] = [
   "executors",
   "presence",
   "plan",
-  "gadgets",
+  "slates",
 ];
 
 /** A failed read, plus the two failures that belong to an action the user
@@ -771,13 +770,13 @@ export function useKinu(target?: string | KinuActorAddress) {
   // Background jobs (auto-detached >30s tool calls) — single source for the
   // Work surface's Now half and its journal.
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
-  // Gadgets Kinu published for this workspace — the agent-authored tabs at
+  // Slates Kinu published for this workspace — the agent-authored tabs at
   // the right of the work-surface strip. Refreshed with the rest of the live
   // data, because publishing one is a mid-turn workspace write. The
-  // `gadgets_changed` broadcast re-lists at once and bumps the remount
-  // counter of every open tab among its slugs.
-  const [gadgets, setGadgets] = useState<GadgetSummary[]>([]);
-  const [gadgetReloads, setGadgetReloads] = useState<ReadonlyMap<string, number>>(new Map());
+  // slates_changed broadcast re-lists at once and bumps the remount
+  // counter of every open tab among its ids.
+  const [slates, setSlates] = useState<SlateSummary[]>([]);
+  const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
   // Pending device-consent requests — an agent wants to use a connected device;
   // the chat renders a card and the user decides (ask-once-then-remember).
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
@@ -1191,16 +1190,16 @@ export function useKinu(target?: string | KinuActorAddress) {
     setTabPresence,
   ), [refreshCurrentLiveResource, rpc]);
 
-  const applyGadgets = useCallback((listing: GadgetSummary[]) => {
-    setGadgets(listing);
-    setGadgetReloads((previous) => pruneGadgetReloads(previous, listing));
+  const applySlates = useCallback((listing: SlateSummary[]) => {
+    setSlates(listing);
+    setSlateReloads((previous) => pruneSlateReloads(previous, listing));
   }, []);
 
-  const refreshGadgets = useCallback(() => refreshCurrentLiveResource(
-    "gadgets",
-    () => rpc<{ gadgets: GadgetSummary[] }>("listGadgets", []).then((listing) => listing.gadgets),
-    applyGadgets,
-  ), [applyGadgets, refreshCurrentLiveResource, rpc]);
+  const refreshSlates = useCallback(() => refreshCurrentLiveResource(
+    "slates",
+    () => rpc<{ slates: SlateSummary[]; problems: SlateProblem[] }>("listSlates", []).then((listing) => listing.slates),
+    applySlates,
+  ), [applySlates, refreshCurrentLiveResource, rpc]);
 
   // Stable identity: it is an effect dependency in the changelog hook, which
   // re-reads on a timer now — an inline arrow re-armed that effect on every
@@ -1319,22 +1318,22 @@ export function useKinu(target?: string | KinuActorAddress) {
               otherwise: 'io',
             }));
           }
-        } else if (msg.type === GADGETS_CHANGED_EVENT) {
-          // A gadget's files changed on disk. Re-list at once so the strip
-          // learns renames the next poll would only find later, and remount
-          // every open tab among the changed slugs so its frame re-reads.
-          setGadgetReloads((previous) => {
+        } else if (msg.type === SLATES_CHANGED_EVENT) {
+          // A Slate changed on disk. Re-list at once so the strip learns
+          // renames the next poll would only find later, and remount every
+          // open tab among the changed ids so its preview URL re-reads.
+          setSlateReloads((previous) => {
             const next = new Map(previous);
-            for (const slug of msg.slugs) next.set(slug, (next.get(slug) ?? 0) + 1);
+            for (const id of msg.ids) next.set(id, (next.get(id) ?? 0) + 1);
             return next;
           });
           try {
-            await refreshGadgets();
+            await refreshSlates();
           } catch (cause) {
-            diagnostics.failure('workspace.gadgets_refresh_failed', toKinuError({
-              doing: 'refreshing live workspace data',
+            diagnostics.failure("workspace.slates_refresh_failed", toKinuError({
+              doing: "refreshing live workspace data",
               cause,
-              otherwise: 'io',
+              otherwise: "io",
             }));
           }
         } else if (msg.type === "branch_status") {
@@ -1409,7 +1408,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       forgetDeltas();
     };
   }, [
-    agent, bumpHeadActivity, forgetDeltas, refreshBackgroundJobs, refreshGadgets, refreshPendingActions,
+    agent, bumpHeadActivity, forgetDeltas, refreshBackgroundJobs, refreshSlates, refreshPendingActions,
     retireDelta, setConsentResolutionError, setMctsTreeFromProgress, isSubordinate,
   ]);
 
@@ -1465,7 +1464,7 @@ export function useKinu(target?: string | KinuActorAddress) {
           refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
           refreshBackgroundJobs(),
           refreshPendingActions(),
-          refreshGadgets(),
+          refreshSlates(),
           refreshCurrentLiveResource(
             "consents",
             () => rpc<PendingConsent[]>("listPendingConsents", []),
@@ -1492,7 +1491,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     refreshBackgroundJobs,
     refreshCurrentLiveResource,
     refreshExposedPorts,
-    refreshGadgets,
+    refreshSlates,
     refreshPendingActions,
     refreshTabPresence,
     rpc,
@@ -1559,7 +1558,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     }
     if (isSourceCurrent("plan")) setActivePlan(parsePlanReview(snap.activePlan));
     if (isSourceCurrent("presence")) setTabPresence(snap.tabPresence);
-    if (isSourceCurrent("gadgets")) applyGadgets(snap.gadgets);
+    if (isSourceCurrent("slates")) applySlates(snap.slates);
     // REPLACE, never merge. The durable rows are the authority for what is
     // queued and what is running, so a tab that reconnects after a deploy or a
     // corpse redial both LEARNS transitions it missed and DROPS chips for work
@@ -1664,8 +1663,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     setPinnedPorts([]);
     setPreviewError(null);
     setBackgroundJobs([]);
-    setGadgets([]);
-    setGadgetReloads(new Map());
+    setSlates([]);
+    setSlateReloads(new Map());
     setPendingConsents([]);
     setActivePlan(null);
     setPendingActions([]);
@@ -1913,9 +1912,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     refreshPendingActions,
     /** Whether the gated tabs (Releases, Exploration) have content. */
     tabPresence,
-    /** Agent-authored gadgets, as tabs, with their per-slug remount counters. */
-    gadgets,
-    gadgetReloads,
+    /** Agent-authored Slates, as tabs, with their per-id remount counters. */
+    slates,
+    slateReloads,
     /** Pending device-consent requests + the resolver (chat consent cards). */
     pendingConsents,
     resolveConsent,

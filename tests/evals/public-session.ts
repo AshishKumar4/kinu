@@ -98,7 +98,7 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, initRunEventTables,
   parseJsonValue,
-  type GadgetSummary, type JsonValue, type LLMProviderConfig, type RunEvent, type WorkspaceSpend,
+  type JsonValue, type LLMProviderConfig, type RunEvent, type WorkspaceSpend,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
@@ -633,32 +633,24 @@ const ToolDescriptionsSchema = v.object({ crafted: v.array(CraftedToolSchema) })
 /** One tool the model built for itself, as the Tools pane lists it. */
 export type PublicCraftedTool = v.InferOutput<typeof CraftedToolSchema>;
 
-/** One agent-written tab, as `listGadgets` draws it, parsed to the server's
- *  own `GadgetSummary` so a shape this guessed at cannot drift again: the
- *  first deployed run of the gadget row failed on `subtitle: null` against an
- *  optional string here, with the gadget built and listed. */
-const GadgetSummarySchema: v.GenericSchema<unknown, GadgetSummary> = v.object({
-  slug: v.string(),
+/** The Slate tab listing, including projects that could not be loaded. */
+const SlateSummarySchema = v.object({
+  id: v.string(),
   title: v.string(),
-  subtitle: v.nullable(v.string()),
-  hasServer: v.boolean(),
-  hasClient: v.boolean(),
   bindings: v.array(v.string()),
 });
-const GadgetListingSchema = v.object({ gadgets: v.array(GadgetSummarySchema) });
+const SlateListingSchema = v.object({
+  slates: v.array(SlateSummarySchema),
+  problems: v.array(v.object({ id: v.string(), reason: v.string(), error: v.string() })),
+});
+export type PublicSlateListing = v.InferOutput<typeof SlateListingSchema>;
 
-/** One agent-written tab, as the tab strip draws it. */
-export type PublicGadget = v.InferOutput<typeof GadgetSummarySchema>;
-
-/** What `gadgetCall` answers: the method's value, or the refusal with its
- *  class first. The case pins the value it asked for. */
-const GadgetCallResultSchema = v.variant('ok', [
-  v.object({ ok: v.literal(true), value: JsonValueSchema }),
+/** A preview URL and port, or the refusal that prevented startup. */
+const SlatePreviewSchema = v.variant('ok', [
+  v.object({ ok: v.literal(true), value: v.object({ url: v.string(), port: v.number() }) }),
   v.object({ ok: v.literal(false), reason: v.string(), error: v.string() }),
 ]);
-
-/** One call into a gadget's server, as the tab bridge made it. */
-export type PublicGadgetCall = v.InferOutput<typeof GadgetCallResultSchema>;
+export type PublicSlatePreview = v.InferOutput<typeof SlatePreviewSchema>;
 
 /** What `readExecutorFile` answers, exactly as `ExecutorTextFile` declares it
  *  (core/src/read-models/files.ts): the preview's text, or the reason there is
@@ -943,23 +935,22 @@ export class KinuPublicSession {
     return v.parse(ToolDescriptionsSchema, answer).crafted;
   }
 
-  /** The agent-written tabs, as the tab strip draws them. */
-  async listGadgets(): Promise<readonly PublicGadget[]> {
+  /** The agent-written tabs, including project loading failures. */
+  async listSlates(): Promise<PublicSlateListing> {
     const answer = await infraBoundary(
-      `listGadgets on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('listGadgets', []),
+      'listSlates on ' + this.input.origin + '/' + this.workspace,
+      () => this.rpc('listSlates', []),
     );
-    return v.parse(GadgetListingSchema, answer).gadgets;
+    return v.parse(SlateListingSchema, answer);
   }
 
-  /** One call into a gadget's server, the way the tab's bridge makes it:
-   *  the same socket RPC the UI forwards over. */
-  async gadgetCall(slug: string, method: string, args: readonly JsonValue[]): Promise<PublicGadgetCall> {
+  /** Start the authored app through the same RPC used by its tab. */
+  async previewSlate(id: string): Promise<PublicSlatePreview> {
     const answer = await infraBoundary(
-      `gadgetCall(${slug}.${method}) on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('gadgetCall', [slug, method, [...args]]),
+      'previewSlate(' + id + ') on ' + this.input.origin + '/' + this.workspace,
+      () => this.rpc('previewSlate', [id]),
     );
-    return v.parse(GadgetCallResultSchema, answer);
+    return v.parse(SlatePreviewSchema, answer);
   }
 
   /** The durable transcript the web pane is seeded from. */

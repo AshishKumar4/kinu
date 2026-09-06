@@ -167,6 +167,7 @@ export interface HostedWorkspaceDeps {
    */
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   onFilesChanged?(paths: readonly string[]): void;
+  refreshPreview?(port: number): Promise<void>;
 }
 
 export interface HostedWorkspace {
@@ -366,14 +367,20 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       }
       // Booted only past the miss arm: a stale or unknown link is answered
       // above without composing the workspace.
+      await deps.refreshPreview?.(port);
+      const refreshed = portRegistry.get(port)?.capability;
+      if (refreshed === undefined) return new Response(RECYCLED_PREVIEW.body, { status: RECYCLED_PREVIEW.status, headers: { 'cache-control': 'no-store', 'content-type': 'application/json' } });
+      if (refreshed.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) return new Response('Not found', { status: 404 });
+      const publicRequest = new Request(request);
+      publicRequest.headers.delete('x-slate-depth');
       const self = await host();
       // An upgrade cannot cross a Durable Object RPC boundary as a 101, which is
       // why Nimbus keeps a fetch route for exactly this case. This method is
       // reached through the orchestrator's own `fetch`, so it can hand one back.
       if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
-        return await (await nimbusProgrammatic()).routeCapabilityPort(self, port, capability, request, pathname);
+        return await (await nimbusProgrammatic()).routeCapabilityPort(self, port, refreshed, publicRequest, pathname);
       }
-      return await (await nimbusProgrammatic()).rpcRouteCapabilityPort(self, port, capability, request, pathname);
+      return await (await nimbusProgrammatic()).rpcRouteCapabilityPort(self, port, refreshed, publicRequest, pathname);
     },
     destroy: () => bundle.destroy(),
   };

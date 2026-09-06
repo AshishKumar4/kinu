@@ -56,7 +56,6 @@ import {
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier,
 } from '@kinu.run/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
-import { parse, walk } from '../../scripts/syntax';
 import { disposeFailedCase } from '../evals/episode-failure';
 import {
   resolvePublicSessionPlan, type KinuPublicSession, type PublicSessionPlan,
@@ -76,7 +75,7 @@ export const FIRST_RUN_CASES = [
   'two-machines',
   'enter-sends',
   'files-outside-tree',
-  'gadget',
+  'slate',
 ] as const;
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
 
@@ -159,40 +158,16 @@ export const FIRST_RUN_DEFECTS = {
     redDirection: 'the parent of 675444233 has no native ranged read on the box file plane, so '
       + 'the first read of a path outside the workspace tree answers EIO on the deployment.',
   },
-  'gadget': {
-    id: 'gadget',
-    found: 'An agent-built gadget that never answers: the tab draws, the bridge forwards, '
-      + 'and the method fails or the client shows nothing.',
-    missedBecause: 'every gadget suite below the product drives a host the TEST composed — a '
-      + 'fixture manifest, a fixture server, a probe object — so files the MODEL wrote from '
-      + 'words were never read back through the surfaces the tab uses.',
+  'slate': {
+    id: 'slate',
+    found: 'An agent-built slate appears in the tab strip but its HTTP preview cannot answer.',
+    missedBecause: 'Lower-level suites run projects written by test authors. They do not check '
+      + 'whether files authored by the model produce a working preview.',
     provedRedAt: null,
-    redDirection: 'Not proved red against a deployed sha. The build before the gadget commit '
-      + 'has no listGadgets RPC. The first deployed tier run must measure this row.',
+    redDirection: 'Not proved red against a deployed sha. The first deployed tier run must '
+      + 'measure listing, preview startup, and the authored HTTP response.',
   },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
-
-export function isGadgetBridgeCall(client: string, method: string): boolean {
-  let found = false;
-  walk(parse('client.js', client).root, (node) => {
-    const call = node.raw;
-    if (call.type !== 'CallExpression') return;
-    const member = call.callee;
-    if (member.type !== 'MemberExpression') return;
-    if (member.object.type !== 'Identifier' || member.object.name !== 'gadget') return;
-    const property = member.property;
-    if (member.computed) {
-      if (property.type === 'Literal' && property.value === method) found = true;
-    } else if (property.type === 'Identifier' && property.name === method) {
-      found = true;
-    }
-  });
-  return found;
-}
-
-export function isGadgetReplyOnOwnLine(reply: string): boolean {
-  return /^pong$/m.test(reply);
-}
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
 export const FIRST_RUN_TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
@@ -290,7 +265,7 @@ const SHORT_SUBJECT = {
   'two-machines': 'fleet',
   'enter-sends': 'enter',
   'files-outside-tree': 'files',
-  'gadget': 'gadget',
+  'slate': 'slate',
 } satisfies Record<FirstRunCase, string>;
 /** What a case's body is handed, and what it hands back. */
 export interface FirstRunRun {

@@ -6,7 +6,7 @@ import {
   SlateFiles, SqliteSlateContentStore, slateDirectory, parseSlateProject,
   SlateBindingRequestSchema, routeSlateBindingCall, JsonValueSchema, isSlateMethodName,
   type CodemodeProvider, type JsonValue, type JsonObject, type SlateProject,
-  type SlateBindingRoute, type SlateCallResult, type SlateReadModel,
+  type SlateBindingRoute, type SlateCallResult, type SlateReadModel, type SlateSummary, type SlateProblem,
 } from '@kinu.run/core';
 import { ERROR_CODES, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
@@ -18,6 +18,7 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'content'> {
   providers(): readonly CodemodeProvider[];
   data(source: SlateReadModel): Promise<JsonValue>;
   mcp(server: string, tool: string, args: JsonObject): Promise<JsonValue>;
+  expose(port: number): Promise<{ url?: string }>;
 }
 
 interface RunningSlate {
@@ -44,6 +45,41 @@ export class SlateHost {
     const session = await this.deps.session();
     const path = `${slateDirectory(new SlateId(id))}/package.json`;
     return parseSlateProject(JSON.parse(session.vfs.as(CRED_SESSION_USER).readFileString(path)));
+  }
+
+  async list(): Promise<{ slates: SlateSummary[]; problems: SlateProblem[] }> {
+    const session = await this.deps.session();
+    const vfs = session.vfs.as(CRED_SESSION_USER);
+    const slates: SlateSummary[] = [];
+    const problems: SlateProblem[] = [];
+    if (!vfs.exists('/home/user/slates')) return { slates, problems };
+    for (const entry of vfs.readdir('/home/user/slates')) {
+      if (entry.type !== 'directory') continue;
+      try {
+        const project = await this.project(entry.name);
+        slates.push({ id: entry.name, title: project.slate.title ?? project.name ?? entry.name, bindings: Object.keys(project.slate.bindings) });
+      } catch (cause) {
+        problems.push({ id: entry.name, ...refusalOf(toKinuError({ doing: 'slate ' + entry.name, cause, otherwise: 'io' })) });
+      }
+    }
+    return { slates, problems };
+  }
+
+  async preview(id: string): Promise<SlateCallResult> {
+    try {
+      const process = await this.ensure(id);
+      const preview = await this.deps.expose(process.port);
+      if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL');
+      return { ok: true, value: { url: preview.url, port: process.port } };
+    } catch (cause) {
+      return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' preview', cause, otherwise: 'io' })) };
+    }
+  }
+
+  async refreshPreview(port: number): Promise<void> {
+    for (const [id, running] of this.running) {
+      if (running.process.port === port) { await this.ensure(id); return; }
+    }
   }
 
   /** Re-read the slate field on every call: a held stub proves its name, not today's reach. */
