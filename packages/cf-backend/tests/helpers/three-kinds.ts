@@ -218,6 +218,8 @@ export interface ScriptedTurn {
   readonly throwAt?: { readonly call: number; readonly error: Error };
   readonly mission?: MissionRecorder;
   readonly signal?: AbortSignal;
+  readonly provider?: string;
+  readonly modelId?: string;
 }
 
 export interface ScriptedStep {
@@ -282,8 +284,8 @@ export function scriptedProvider(script: ScriptedTurn): ScriptedProvider {
   };
 
   const model = new MockLanguageModelV3({
-    provider: 'three-kinds-fake',
-    modelId: 'three-kinds-fake-model',
+    provider: script.provider ?? 'three-kinds-fake',
+    modelId: script.modelId ?? 'three-kinds-fake-model',
     doGenerate: async (options) => answer(options),
     doStream: async (options) => {
       const settled = answer(options);
@@ -1150,8 +1152,10 @@ export function selfSettlingTool(): NodeAgentDeps['executeTool'] {
 
 /** The swarm node, driven end to end through `runNodeAgent`. */
 function nodeKindFixture(differences: readonly Difference[]): KindFixture {
+  let provider: string | undefined;
+  let modelId: string | undefined;
   const firstRequestOf = async (script: ScriptedTurn, opts?: NodeFixtureOptions) => {
-    const drive = await driveNode(script, opts);
+    const drive = await driveNode({ ...script, provider, modelId }, opts);
     const first = drive.requests[0];
     if (!first) throw new Error('the node issued no provider request');
     return first;
@@ -1200,10 +1204,12 @@ function nodeKindFixture(differences: readonly Difference[]): KindFixture {
       }
       return { request: second, producedOutput: result.output };
     },
+    useModel: async (spec) => {
+      provider = spec.split('/', 1)[0];
+      modelId = spec.slice(spec.indexOf('/') + 1);
+      return 'is-handed-one';
+    },
     toolSurface: () => [...NODE_BUILTIN_TOOLS],
-    // Nothing to set: `NodeAgentDeps.model` is a resolved object the search built,
-    // and the node has no registry of its own to normalise a spec against.
-    useModel: async () => 'is-handed-one',
     transcriptOfToolCall: async (result) => {
       const drive = await driveNode(
         {

@@ -29,25 +29,10 @@ import type { BranchContext, ResolvedSwarm } from './swarm';
 import type { BranchGrant, SwarmBudget } from './swarm-budget';
 import type { PendingSwarmNode, SwarmReentry } from './swarm-resume';
 import { nanoid } from '../utils/nanoid';
+import { diversityAngle } from '../mcts/diversity';
 
-/**
- * WHAT THIS NODE WAS ASKED TO DO, in the words of whoever asked it — and what its
- * siblings were asked, so it knows what to differ from.
- *
- * PRESENT EXACTLY WHERE SOMEBODY WROTE A BRIEF: the caller's own per-node `prompt`
- * under an explicit `nodes` assignment, or the parent's per-branch `rationale` under a
- * granted proposal. Absent for a count-based wave, where nobody wrote one and the
- * engine's own diversity angle is the honest answer.
- *
- * WHY IT HAD TO REACH THE PROMPT AT ALL. `propose_branch` has always asked the model
- * for a `rationale` per branch, and the child never saw it: the string went to
- * `head_journal.rationale` and stopped there, because a swarm node's prompt is
- * `nodeSystemPrompt` plus `branchPrompt` and neither read it. So a parent that wrote
- * "check the cache path specifically" got a child asked the parent's task under a
- * canned angle. It occupies the ANGLE's slot rather than sitting beside it, because two
- * angles is two instructions: a node told both what it was asked and, separately, to
- * take an unrelated canned approach has been given a contradiction to resolve alone.
- */
+/** The node's brief and its siblings' briefs. The caller, parent, or diversity
+ * policy supplies them. The journal preserves the chosen text for re-entry. */
 export interface BranchAssignment {
   readonly brief: string;
   /** The briefs this node's siblings were given, in level order minus its own. */
@@ -160,42 +145,21 @@ export interface LevelSlot {
   readonly assignment: BranchAssignment | null;
 }
 
-/**
- * WHAT THIS ITERATION EXPANDS, one entry per child, every field decided.
- *
- * THE SLOT SET IS NOT THE WIDTH, and only a resumed wave makes them differ: a fresh
- * level fills every slot it is wide, and a resumed one fills the slots whose nodes
- * never recorded an answer while telling each of them the width it was originally
- * asked at. Collapsing the two would re-ask a cut sibling under another sibling's
- * angle.
- *
- * THE ID IS THE LOGICAL NODE. A grant already reserved one per child and a resumed
- * member already has one; anything else mints a fresh id. Minting instead of reusing
- * is how thirty journal rows came to describe five nodes.
- *
- * THE BRIEFS have two sources and one order. A granted level's are its proposal's
- * per-branch rationales, which covers both a node's own `propose_branch` and the
- * caller's explicit `nodes` — those ARE the root's grant. A RESUMED first level has no
- * grant in memory, so its briefs come back off the replayed tool input: the same
- * bytes, at the same slots, because the slot is durable. A resumed level BELOW the
- * first recovers its task from its journal row and not its brief — the proposal that
- * wrote it existed only inside the tool call that made it, which `swarm-resume.ts`
- * names among what a re-entry cannot recover.
- */
+/** Plan fresh slots or reopen unfinished slots under their durable ids.
+ * A re-entry reads briefs from all journalled siblings, including settled ones. */
 export function planLevel(input: {
   readonly resolved: ResolvedSwarm;
   readonly resumed: ResumedWave | null;
   readonly grant: BranchGrant | null;
   /** The level's width — what every member is told about its siblings. */
   readonly width: number;
-  readonly parentDepth: number;
 }): readonly LevelSlot[] {
   const { resolved, resumed, grant, width } = input;
-  const briefs: readonly string[] | null = grant
+  const briefs = grant
     ? grant.proposal.branches.map((branch) => branch.rationale)
-    : resumed && resolved.nodes && input.parentDepth === 0
-      ? resolved.nodes.map((node) => node.prompt)
-      : null;
+    : resumed
+      ? resumed.members[0]?.briefs ?? []
+      : Array.from({ length: width }, (_unused, index) => diversityAngle(index, width));
   /** The slots this call fills, and the pending row behind each where there is one.
    *  Annotated so both arms are checked against one shape rather than widened by a
    *  cast at the point where they meet. */
@@ -213,10 +177,9 @@ export function planLevel(input: {
       // its row recorded them, so the re-run is the same assignment rather than a new
       // one that happens to share an id.
       task: pending?.task ?? branch?.task ?? resolved.task,
-      rationale: pending?.rationale
-        || (branch?.rationale ?? `expansion ${String(index + 1)} of ${String(width)}`),
+      rationale: pending?.rationale ?? brief ?? '',
       context: branch?.context ?? resolved.config.context,
-      assignment: briefs && brief !== undefined
+      assignment: brief !== undefined
         ? { brief, siblings: briefs.filter((_unused, slot) => slot !== index) }
         : null,
     };

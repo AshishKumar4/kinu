@@ -2,17 +2,9 @@
  * The registry `VerifierSpec.kind` is CLOSED over, and the resolution that makes
  * *The closed verifier registry*'s one real guard exist.
  *
- * WHY A REGISTRY AND NOT A STRING. `objective.ts` says "a registered verifier kind"
- * and named no registry, no membership rule and no refusal for an unregistered one.
- * Under that open reading `kind` is a free string — which is a fabricated script
- * wearing a type, exactly the `scripts/simulate_conversion.py` a model invented
- * unprompted — and the guard *"a fabricated script cannot resolve, so the run faults
- * before it can publish"* becomes advisory by that same section's argument that a
- * rule firing on a MISSING field cannot fire on a fabricated one. So membership is a
- * closed set, an unregistered kind is a call-time `bad_input` naming the registered
- * ones, and the refusal deliberately does NOT offer *"or pass a closure"*: the
- * closure arm of `VerifierSource` is unreachable from the tool surface, and offering
- * an unreachable remedy is worse than offering none.
+ * The registry rejects unregistered kinds as bad_input before a run starts.
+ * A caller cannot substitute an invented script such as `scripts/<name>.py`.
+ * The tool surface accepts registered kinds only, so a refusal names those kinds.
  *
  * WHY EACH KIND OWNS A SPEC SCHEMA. Closing `kind` implies a PER-KIND `spec` schema
  * or the boundary validates that the instrument is JSON and nothing about the

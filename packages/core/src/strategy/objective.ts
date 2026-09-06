@@ -204,12 +204,8 @@ export interface VerifierSpec {
   /**
    * A verifier kind, drawn from a CLOSED set the registry declares.
    *
-   * Closed, not a free string, and the reason is *The closed verifier registry*'s own
-   * argument one level up: **a `kind` nobody registered is a fabricated script wearing
-   * a type.** An open string would let a caller invent `'exec-ratio'` exactly as a
-   * model invented `scripts/simulate_conversion.py`, and that section's one real
-   * guard — a fabricated name cannot resolve — would become advisory again. So an
-   * unregistered kind is a CALL-TIME `bad_input` naming the registered kinds.
+   * The registry rejects unregistered kinds as bad_input before a run starts.
+   * A caller cannot substitute an invented script such as `scripts/<name>.py`.
    *
    * Consequence for *Comparability* that follows from closing it: **the registry is
    * part of the objective's identity.** Two runs whose `kind` resolves to different

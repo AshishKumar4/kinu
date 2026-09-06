@@ -1025,6 +1025,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   inside the root object permanently, since a facet id is never reused. Every
   terminal report status is now reclaimable and only `running` and `interrupted`
   are held, which is exactly the pair under which work can still continue.
+- Exploration turns apply the shared provider cache plan; the three-kind contract passed 58 cases on 2026-09-06.
+- Swarm journals preserve each assigned question and restore node briefs after re-entry; two regression cases passed on 2026-09-06.
 
 ## [0.2.0] - 2026-08-07
 

@@ -343,6 +343,8 @@ export interface PendingSwarmNode {
   /** `head_journal.rationale` — its brief, and under an explicit per-node assignment
    *  the caller's own prompt. Empty where the row recorded none. */
   readonly rationale: string;
+  /** Every sibling's durable brief, including siblings that already settled. */
+  readonly briefs: readonly string[];
   /**
    * THE SLOT THIS NODE WAS ORIGINALLY ASKED IN, and the level width it was told
    * about — the pair every expansion prompt is built from (its diversity angle, and
@@ -525,6 +527,7 @@ function pendingNodes(sql: SqlExecutor, rootId: string): readonly PendingSwarmNo
   }
   const pending: PendingSwarmNode[] = [];
   for (const level of levels.values()) {
+    const briefs = level.map((row) => row.rationale ?? '');
     for (const [index, row] of level.entries()) {
       if (row.recorded > 0) continue;
       pending.push({
@@ -534,6 +537,7 @@ function pendingNodes(sql: SqlExecutor, rootId: string): readonly PendingSwarmNo
         task: row.task,
         rationale: row.rationale ?? '',
         index,
+        briefs,
         siblings: level.length,
       });
     }
