@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-05",
-  "files": 2059,
-  "functions": 53626,
+  "measuredAt": "2026-09-06",
+  "files": 2062,
+  "functions": 53682,
   "ceiling": 125,
   "line": 38,
   "inventory": [
@@ -30,15 +30,15 @@
       "complexity": 87
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
-      "complexity": 73
-    },
-    {
       "key": "scripts/bench-devbox-strategies.ts#candidateLifecycleChecks",
       "complexity": 73
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mount",
+      "complexity": 72
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
       "complexity": 72
     },
     {
