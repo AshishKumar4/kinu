@@ -153,8 +153,7 @@ export const PROPOSE_BRANCH_TOOL = 'propose_branch';
  *  to author, never the parent's. */
 export interface NodeAgentInput extends NodeIdentity {
   readonly parentId: string | null;
-  /** The pinned task block, verbatim at every depth (*Inherited context*). Also the
-   *  journal's own record of what this node was asked. */
+  /** The node's assigned question, preserved in its journal row. */
   readonly task: string;
   /** Why this node exists: the search's own task at the root, the accepted
    *  branch's rationale below it. */

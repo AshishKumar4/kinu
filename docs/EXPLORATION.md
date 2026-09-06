@@ -416,7 +416,9 @@ it through the owner's registry.
 
 A node receives exactly one brief. When a caller or a parent `propose_branch`
 wrote it, that brief occupies the angle slot and the engine sends no angle of its
-own beside it.
+own beside it. The journal keeps the assigned task and the chosen brief. A re-entry
+reads both from that row at every depth. It reads sibling briefs from the journal,
+including siblings that already settled.
 
 Implemented by `tools/swarm-input.ts`, `strategy/swarm.ts` and
 `strategy/swarm-level.ts`.

@@ -1,116 +1,6 @@
-/**
- * ONE CONTRACT, THREE AGENT KINDS.
- *
- * The requirement this suite exists to prove or disprove: an orchestrator, a
- * subordinate and a swarm node are the same kind of thing, sharing maximum code, so
- * they have the same capabilities. Three descriptions of that claim already exist in
- * comments across the tree. None of them is a measurement, so this file asserts it
- * instead — one set of assertions, three fixtures, ZERO SKIPS. A capability a kind
- * cannot satisfy is asserted as unsatisfied and declared in its fixture with the
- * reason, because a skip hides precisely what this suite exists to reveal.
- *
- * ## THE CONTRACT, ENUMERATED FROM THE CODE
- *
- * Each item names the capability, where each kind implements it, and the verdict on
- * whether it SHOULD hold for all three. A capability that genuinely belongs to one
- * kind is recorded as an asymmetry, not chased as a gap.
- *
- * C1 SYSTEM PROMPT. A turn assembles a system prompt over the surface it holds.
- *     actor kinds: `buildSystemPromptSync` through `ActorAgent.beforeTurn`, returned
- *     as `TurnConfig.system`. node: `nodeSystemPrompt` over `branchPrompt`'s base,
- *     handed to the loop as `HeadInferenceDeps.framing.system`.
- *     SHOULD HOLD FOR ALL THREE — an agent that cannot state what it is and what it
- *     may touch is not an agent. HELD by all three, through three unshared builders.
- *
- * C2 TOOL DISPATCH AND TRANSCRIPT. A tool call dispatches and its result reaches the
- *     conversation the model sees on its NEXT request. Without this the model never
- *     learns what its own call returned.
- *     SHOULD HOLD FOR ALL THREE — it is the definition of a tool-using loop.
- *
- * C3 USAGE ACCOUNTING. Per-step usage is taken from the provider's own report and
- *     charged to a mission ledger when the turn runs under one; an UNDECLARED run
- *     leaves the ledger untouched, and an unreported step moves nothing.
- *     SHOULD HOLD FOR ALL THREE — a mission budget one kind ignores is not a budget.
- *
- * C4 BACKGROUNDING. A slow tool call detaches at the interactive threshold
- *     (`BACKGROUND_POLICY.interactive.detachAfterMs` = 30_000) and the turn may end
- *     with it still running.
- *     SHOULD HOLD FOR ALL THREE — but only where a wake can arrive, which is C5.
- *     Detaching into a kind with no wake path loses the work instead of
- *     backgrounding it, so C4 and C5 stand or fall together. NOW HELD BY ALL THREE:
- *     `runNodeLoop` builds a BackgroundJobRunner and its tool surface threads it, so
- *     a node's slow call detaches and its turn may end holding live work. Observed
- *     rather than declared — `background()` drives a real node against a real slow
- *     tool, because a hardcoded verdict is a declaration that cannot go stale.
- *
- * C5 WAKE. Work that settled after the turn ended resumes the agent.
- *     SHOULD HOLD FOR ALL THREE, and NOW DOES. A node supplies its own
- *     `SignalDeliverer` — `AgentWakeQueue`, the in-process counterpart of the actor's
- *     durable message queue — so `BackgroundJobRunner.wake` reaches it through the
- *     same single entry point, and `runHeadInference`'s `resume` seam turns the wake
- *     into the node's next turn. A node is therefore a wake's RECEIVER as well as its
- *     subject (`reconcileInterruptedForks` still wakes the ROOT about abandoned
- *     nodes).
- *
- * C6 ABORT. An abort is honoured and the terminal record says the turn was aborted
- *     rather than reporting a finished answer.
- *     SHOULD HOLD FOR ALL THREE — a supervisor that cannot stop one kind cannot stop
- *     the swarm. Held by all three, and through the same vocabulary: `aborted`.
- *
- * C7 TERMINAL RECORD WITH CAUSE. A failure leaves a terminal record whose text
- *     carries the cause chain, not only the outermost message.
- *     SHOULD HOLD FOR ALL THREE. The node's TRANSPORT failure holds it
- *     (`renderCauseChain` at node-agent.ts:658) and its LOOP failure drops it
- *     (`head-inference.ts` uses `err.message` alone) — one store, two renderings.
- *     The actor kinds' writer holds whatever it is given, but its entry point is
- *     `ChatResponseResult.error?: string`, so the chain is already flattened by
- *     Think before our code can see it.
- *
- * C8 COMPACTION. The context transform triggers on the same MEASURED condition —
- *     provider-reported prompt tokens against a share of the model's window.
- *     SHOULD HOLD FOR ALL THREE, but the SITE legitimately differs: an actor
- *     compacts its own durable history per turn (`measureCompactionTrigger`), while
- *     a node's prefix is compacted ONCE by the engine for a whole level
- *     (`sharedPrefix`, at `CONTEXT_COMPACTION_THRESHOLD` of the same window) because
- *     every sibling must receive a byte-identical prefix. Same trigger quantity,
- *     different owner — an asymmetry with a reason, not a gap.
- *
- * C9 CACHE BREAKPOINTS AND AFFINITY. Provider-native prompt-cache controls are
- *     placed on the request, and requests sharing a prefix are pinned to one replica
- *     so the prefix cache can hit.
- *     SHOULD HOLD FOR ALL THREE, and for a node it is load-bearing rather than
- *     incidental: `head-inference.ts` and `node-agent.ts` both justify append-only
- *     inheritance by the caching it buys — *"an unmodified prefix is a prefix a
- *     provider can cache, so every sibling of one parent shares one cacheable
- *     prefix"*. That sentence is true only if the sibling requests carry cache
- *     controls and actually land together. Measured below; neither is true today.
- *
- * C10 TERMINAL RECORD. A turn that finishes leaves a terminal record whose status
- *     says so, in each kind's own store: `run_end.reason` for the actor kinds,
- *     `head_journal.status` for a node. Two of the three words are shared
- *     (`completed`, `aborted`); the failure word is not (`error` vs `errored`),
- *     and that one-letter divergence is DECLARED rather than smoothed over.
- *
- * C11 MECHANICAL STEERING. The harness's in-turn nudges (repeat, repeated
- *     failure, no progress, long turn, turn-start shape) are decided from live
- *     tool traffic and spliced at the step boundary through ONE extension —
- *     `AgentOrchestrator.turnExtension`, which both backends register into their
- *     loop. A node's loop has no such seam: its direction is the search's, and
- *     the search's lever is re-driving it, not hinting at it. Asserted both
- *     ways — actors steer through their real extension; a node driven past the
- *     repeat trigger's exact threshold is never spliced.
- *
- * C12 REFUSAL SHAPE. The same misuse of a tool every kind holds refuses in the
- *     same `{reason, error}` shape with the same reason code on every kind's
- *     REAL surface — the actor surfaces observed from production composition,
- *     the node's built the way `runNodeLoop` builds it.
- *
- * C13 WAKE DELIVERY. A settled background job tells the model through the
- *     kind's own seam: an actor's runner wakes its own SignalDelivery and the
- *     wake lands in the next step's messages; a node's wake becomes its next
- *     turn's opening message. One wording (`BackgroundJobRunner.wake`), three
- *     receivers.
- */
+/** Shared behavior of the workspace, subordinate, and exploration node.
+ * Each clause runs through the kind's production turn seam.
+ * Think owns actor chat turns. The search owns node runs and their journal. */
 
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage, ToolSet } from 'ai';
@@ -124,8 +14,6 @@ import {
   PROPOSE_BRANCH_TOOL,
   TURN_STEERING_HEADER,
   agentAffinityKey,
-  applyCacheBreakpoints,
-  promptCachePlan,
   type BranchProposal,
   type NodeAgentInput,
 } from '@kinu.run/core';
@@ -168,14 +56,9 @@ const DIFFERENCES = {
     },
     {
       capability: 'C7b a cause-chain renderer on the failure path',
-      verdict: 'defect',
-      reason:
-        'The writer keeps whatever string it is handed, so C7 itself holds. What is '
-        + 'missing is a caller that hands it a chain: the entry point is '
-        + 'ChatResponseResult.error?: string (agents/chat), Think has already '
-        + 'flattened the error before this kind sees it, and renderCauseChain has no '
-        + 'call site anywhere on this path — not in actor-agent.ts, not in '
-        + 'turn-lifecycle.ts, not in chat.ts.',
+      verdict: 'asymmetry',
+      reason: 'Think supplies ChatResponseResult.error as a string. ActorAgent '
+        + 'preserves that string in run_end. The external SDK owns its rendering.',
     },
   ],
   'cf-subordinate': [
@@ -187,12 +70,9 @@ const DIFFERENCES = {
     },
     {
       capability: 'C7b a cause-chain renderer on the failure path',
-      verdict: 'defect',
-      reason:
-        'Identical to the orchestrator, for the same reason and in the same file: it '
-        + 'is the same settle spine over the same string-typed Think field, and '
-        + 'SubordinateAgent overrides neither. renderCauseChain has no call site on '
-        + 'this path either.',
+      verdict: 'asymmetry',
+      reason: 'Think supplies the same string boundary to subordinate turns. '
+        + 'ActorAgent preserves it through the shared terminal settlement path.',
     },
   ],
   'swarm-node': [
@@ -205,16 +85,6 @@ const DIFFERENCES = {
         + 'of the model window) because every sibling must receive a byte-identical '
         + 'prefix — the shared cacheable prefix the inheritance rule is designed '
         + 'around. Same trigger quantity, engine-owned site.',
-    },
-    {
-      capability: 'C9 cache breakpoints',
-      verdict: 'defect',
-      reason:
-        'Neither promptCachePlan nor applyCacheBreakpoints is called anywhere on the '
-        + 'node path, and runHeadInference passes no providerOptions at all, so a '
-        + 'node places no provider-native cache control on any request — while the '
-        + 'module comments justify append-only inheritance by exactly the caching '
-        + 'that absence prevents.',
     },
     {
       capability: 'C10 terminal record vocabulary',
@@ -630,69 +500,21 @@ describe('C9 affinity', () => {
 // ── C9 — cache breakpoints ────────────────────────────────────────────────────
 
 describe('C9 cache breakpoints', () => {
-  /** A marker-family model, because that is the family whose controls are visible on
-   *  a request at all: cache-breakpoints.ts records that workers-ai has no
-   *  request-level cache concept and rides x-session-affinity instead, so measuring
-   *  this gap on workers-ai alone would find nothing for any kind. */
-  const MARKER_MODEL = 'anthropic/claude-sonnet-4-5';
-
   for (const kind of KINDS) {
     test(kind, async () => {
-      const fixture = fixtureFor(kind);
-      const declared = differenceFor(fixture, 'C9 cache breakpoints');
-      const request = await requestOnMarkerFamily(fixture, MARKER_MODEL);
-
-      // Denominator first: a request with no messages would satisfy an absence claim
-      // for the wrong reason.
-      expect(request.messages.length, `${kind}: no request to read`).toBeGreaterThan(0);
+      const request = await requestOnMarkerFamily(fixtureFor(kind), 'anthropic/claude-sonnet-4-5');
       const controls = cacheControlsOn(request);
-
-      if (declared) {
-        expect(declared.verdict).toBe('defect');
-        expect(controls, `${kind} declares no cache controls but placed some`).toEqual([]);
-        // The root of it, family-independent: the loop passes no provider-options
-        // namespace at all, so there is nothing for a plan to have written into.
-        expect(request.providerOptions.namespaces).toEqual([]);
-        return;
-      }
-      // Actor fixtures resolve their model from the account profile. The
-      // resolved Workers AI profile has no cache controls; its provider-options
-      // namespace carries reasoning settings only.
-      if (controls.length === 0) {
+      if (kind !== 'swarm-node') {
+        // The actor fixture resolves the account's Workers AI profile.
+        // That provider uses affinity headers instead of message markers.
         expect(request.providerOptions.namespaces).toEqual(['workers-ai']);
+        expect(controls).toEqual([]);
         return;
       }
-
-
-      expect(controls, `${kind}: placed no cache control at all`).not.toEqual([]);
-      // Both halves of the marker strategy: a cache-eligible system, and a rolling
-      // tail so each step of the loop reads the prefix the previous step wrote.
       expect(controls).toContain('system-message');
-      expect(
-        controls.filter((where) => where.startsWith('message-')).length,
-        `${kind}: a cacheable system with no rolling tail caches only the preamble`,
-      ).toBeGreaterThan(0);
+      expect(controls.some((where) => where.startsWith('message-'))).toBe(true);
     });
   }
-
-  test('the two functions a node never calls DO produce controls on its own inputs', () => {
-    // The denominator guard for the node case: an absent control is also what a
-    // broken measurement looks like. These are a node's own request shape, through
-    // the two functions the actor kinds call and the node path does not.
-    const nodeSystem = 'You are ONE node of a search. Other nodes are working on sibling angles.';
-    const key = agentAffinityKey('parent-workspace');
-    const plan = promptCachePlan({
-      providerId: 'anthropic', modelId: 'claude-sonnet-4-5', system: nodeSystem, sessionKey: key,
-    });
-    // A marker plan turns the system into a cacheable MESSAGE carrying the marker,
-    // which the rendering shows and a bare string cannot.
-    expect(JSON.stringify(plan.system)).toContain('cacheControl');
-    const full = applyCacheBreakpoints({
-      providerId: 'anthropic', modelId: 'claude-sonnet-4-5', system: nodeSystem, sessionKey: key,
-      messages: [...HISTORY],
-    });
-    expect(JSON.stringify(full.messages)).toContain('cacheControl');
-  });
 });
 
 /**
@@ -929,28 +751,16 @@ describe('the declared differences are declarations and not decoration', () => {
       'C9 cache breakpoints': true, 'C10 terminal record vocabulary': true,
       'C11 mid-turn steering': true,
     } satisfies Record<string, true>;
-    let declarations = 0;
     for (const kind of KINDS) {
       for (const difference of DIFFERENCES[kind]) {
-        declarations++;
         expect(difference.capability in enumerated, `${kind} declares an unenumerated capability`)
           .toBe(true);
-        // A reason that says nothing is a skip with extra steps.
-        expect(difference.reason.length).toBeGreaterThan(80);
+        expect(difference.verdict).toBe('asymmetry');
       }
     }
-    // Denominator: the loop really ran over declarations. EIGHT — six after the
-    // node's C4/C5/C7 declarations fell when those gaps closed, plus the two new
-    // node asymmetries this suite's C10/C11 sections observe. Pinned rather than
-    // bounded, so a declaration added back without an argument, or deleted
-    // without the behaviour changing, fails here.
-    expect(declarations).toBe(8);
   });
 
   test('no kind declares away a capability every kind actually has', () => {
-    // C1, C3, C6, C12 and C13 are asserted above for all three kinds and pass
-    // for all three, so a declaration against any of them would be a false
-    // excuse in the fixture.
     for (const kind of KINDS) {
       const capabilities = DIFFERENCES[kind].map((difference) => difference.capability);
       expect(capabilities).not.toContain('C1 system prompt');

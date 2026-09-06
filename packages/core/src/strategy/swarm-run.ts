@@ -850,7 +850,7 @@ export async function runSwarm(
     // of failure. Completion, explicit cancellation, or a definitive error is
     // what produces the `expanded` or `failed` value read below.
     const answers = await awaitLevel(
-      planLevel({ resolved, resumed, grant, width, parentDepth: parent.depth })
+      planLevel({ resolved, resumed, grant, width })
         .map((slot): LevelMember => ({
           id: slot.id,
           node: expandChild(expandCtx, {
