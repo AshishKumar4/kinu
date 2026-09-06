@@ -98,8 +98,9 @@ bun run test:anti-slop
 ```
 
 `@agent-core/core` is also private and unpublished. Its built runtime and declarations
-live in `packages/agent-core/dist`, without source maps. `upstream.json` pins the source
-commit and the SHA-256 of every file. `drift.test.ts` checks that exact set and names
+live in `packages/agent-core/dist`, with the `.js.map` files its runtime references.
+Declaration maps stay excluded. `upstream.json` pins the source commit and
+the SHA-256 of every file. `drift.test.ts` checks that exact set and names
 changed files. Build upstream with `node ./scripts/build.mjs` before a sync. Keep its
 exports and runtime dependencies in the workspace manifest. `scripts/sources.ts`
 declares these bytes as vendored: lint and typecheck govern Kinu code, while the drift
@@ -328,7 +329,7 @@ Memory indexing and fork snapshots address the base tree alone.
 
 | Executor   | Namespace  | Binding Required          | Capabilities                |
 |-----------|------------|---------------------------|-----------------------------|
-| Workspace | workspace  | Nimbus over the owning DO's own SQLite | canonical files, POSIX shell, ~95 coreutils, `node`, `npm`, `npx`, `git`; on-demand `bash`, `python3`, `pip` LOCALLY ONLY; processes, ports, previews |
+| Workspace | workspace | Nimbus over the owning DO SQLite or local SQLite | canonical files, POSIX shell, coreutils, package installation, git. Hosted `node` programs refuse runtime compilation; local `node`/`npm`/`npx` and on-demand `bash`/`python3`/`pip` can run. Process and port APIs do not make hosted Node dev servers runnable. |
 | Container | sandbox    | Sandbox DO + Container    | Linux container: git, npm, node, bun, sh/bash, jq, curl; long processes, inbound ports, previews. Probed ABSENT: docker, python3, make, gcc, clang, tsc |
 | Device    | laptop     | WebSocket tunnel from user| the user's own machines, one grant per (workspace, machine); a call names its machine when several are live |
 | Parent    | parent     | (forks only)              | the forked-from workspace's real shell over DO RPC |
@@ -336,12 +337,11 @@ Memory indexing and fork snapshots address the base tree alone.
 Which of those a given session may claim is not a matter of taste: the
 capability set is rendered into the agent's own execution block
 (`prompting/volatile-context.ts` — `— runs: …`), so it is where the model
-decides to send work. Hosted workspace runtimes come from the bound
-`NIMBUS_RUNTIME_CACHE`; local runtimes come from npm packages
-(`vfs/workspace-runtimes.ts`). A runtime still reports unavailable when its
-package is absent from the cache.
-`sh`, `make`, `tsc` and `jq` exist on neither workspace path. When to leave the
-workspace for the container, and why "I need Python" is not a reason:
+decides to send work. The hosted Node refusal is in
+`core/src/vfs/workspace-runtimes.ts`: `workspaceNodeCommand` probes compilation
+at the first program invocation, where workerd blocks the shim. Version and
+help requests do not compile. Runtime catalog entries do not prove that this
+host can execute them. For server hosting and when to use a container, read
 `docs/EXECUTION-LAYER-SPEC.md`.
 
 `DefaultExecutionRouter` manages providers. `runtime.ts` registers them based on

@@ -245,6 +245,17 @@ export type * from './types/mcts';
 export type * from './types/craft';
 export type * from './types/evaluation';
 
+export { SqliteSlateStore } from './slates/store';
+export { SqliteSlateContentStore } from './slates/content';
+export { SqliteSlateInvocations, type SlateInvocationAuthority } from './slates/invocations';
+export { SlateFiles, slateDirectory } from './slates/files';
+export { WorkspaceSlates, type WorkspaceSlatesDeps } from './slates/runtime';
+export { KinuSlateProvider } from './slates/provider';
+export { parseSlateProject, slateExecutorName, type SlateProject, type SlateBinding } from './slates/project';
+export { SlateBindingRequestSchema, routeSlateBindingCall, type SlateBindingRequest, type SlateBindingRoute } from './slates/bindings';
+export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
+export type { SlateProcess } from './slates/process';
+
 // Gadgets — agent-written apps: a server the resident process hosts with only
 // its declared bindings and no ctx or SQLite, a client in a sandboxed iframe. See docs/LIVE-UI.md.
 export {

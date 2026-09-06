@@ -33,14 +33,10 @@
  *
  * WHAT A HOSTED WORKSPACE CAN RUN
  *
- * The filesystem, the shell, ~95 coreutils, `node`, `npm`, `npx` and `git`. NOT
- * the wasm interpreters (`bash`, `python3`, `ruby`, `clang`): those need a facet
- * substrate that compiles and runs a guest module, which on workerd means the
- * dynamic-worker pool the Nimbus session Durable Object composes for itself, and
- * a workspace held as a library has no such thing. The R2 catalogue binding is
- * retained and `runtimes.*` still reaches it, but `python`/`native_binary` are
- * no longer declared to the model — see `runtimeCatalog` at the call site in
- * runtime.ts.
+ * Files, POSIX shell, coreutils, package installation, and isomorphic git.
+ * The hosted node shim cannot run programs: workerd blocks its request-time
+ * string compiler (core/src/vfs/workspace-runtimes.ts). Bundled Worker modules
+ * run as resident Fabric processes; npm dev servers use the sandbox container.
  */
 
 import * as v from 'valibot';
@@ -56,6 +52,7 @@ import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
+import type { RouteableFacetTarget } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   HOST_FABRIC_COMPOSITION,
   nimbusProgrammatic,
@@ -194,6 +191,8 @@ export interface HostedWorkspace {
    * same memoized open with the same failure-clearing retry.
    */
   supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult>;
+  registerPort(pid: number, port: number, target: RouteableFacetTarget): Promise<void>;
+  unregisterPorts(pid: number): void;
   /**
    * Route a preview request whose signed hostname the edge has already
    * verified. `handle` is the capability prefix that hostname carried — the full
@@ -330,6 +329,15 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       boxes.set(shellId, built);
       return built;
     },
+    async registerPort(pid, port, target) {
+      const occupied = portRegistry.get(port);
+      if (occupied !== undefined && occupied.pid !== pid) throw new KinuError('io', `Workspace port ${port} is already in use`);
+      portRegistry.bindFacetStub(pid, target);
+      portRegistry.register(port, pid);
+      const retained = await readWorkspacePortCapability(deps.ctx, port);
+      if (retained !== null && portRegistry.get(port)?.pid === pid) portRegistry.restoreCapability(port, retained);
+    },
+    unregisterPorts(pid) { portRegistry.unregisterByPid(pid); },
     async routePreview(port, handle, request, pathname) {
       const capability = portRegistry.get(port)?.capability;
       // A port re-exposed under a fresh capability: the link named an exposure
@@ -427,10 +435,8 @@ function programmaticHost(
     sqliteFs: session.vfs,
     processes: session.processes,
     portRegistry,
-    // Resident processes and the vite/cirrus dev servers belong to the Nimbus
-    // session's dynamic-worker substrate, which a library-held workspace has
-    // none of. Absent rather than stubbed: every reader of these is already
-    // written for `null`.
+    // The workspace owns resident module processes directly through Fabric.
+    // A second session process owner would split lifetime and port ownership.
     facetManager: null,
     viteDevServer: null,
     cirrusReal: null,

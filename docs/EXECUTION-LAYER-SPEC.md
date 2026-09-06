@@ -181,13 +181,13 @@ workspace registration.
 
 ## When to leave the workspace for the container
 
-The workspace has files, POSIX shell, coreutils, `node`, `npm`, `npx`,
-on-demand local `bash`, `python3`, `pip`, and hosted `git`, `bun`.
-`core/src/vfs/workspace-runtimes.ts` declares ~95 coreutils without a probe
-date, so that is declared, not measured. Runtimes install only when their
-command runs, from R2 hosted or npm packages locally. Python alone is not an
-escalation reason. The CLI has no container: work needing a real machine goes
-to consented `laptop`.
+The workspace has files, POSIX shell, coreutils, package installation and git.
+Local Node programs and on-demand local `bash`, `python3` and `pip` can run.
+Hosted Node programs cannot: `workspaceNodeCommand` in
+`core/src/vfs/workspace-runtimes.ts` probes the shim at the first invocation,
+where workerd forbids its string compiler. Version and help commands do not
+compile a program. A runtime catalog entry is not proof that this host can run it.
+The CLI has no container: work needing a real machine goes to consented `laptop`.
 
 The inventories were probed. `scripts/nimbus-runtime-probe.ts` covers the
 workspace. `executeInExecutor` found `git` 2.34.1, `npm` 10.9.8, `node`
@@ -199,6 +199,8 @@ pull was byte-identical. The inventory comment lives at
 
 Escalate only for structural needs:
 
+- A hosted npm dev server or another program requiring Node process semantics.
+  The workspace Node shim cannot supply them on workerd.
 - Native Linux binaries: Nimbus runs wasm32-wasi and JavaScript, so ELF,
   `.node`, and native Python wheels cannot run there. The
   container runs binaries but cannot build them: no `gcc`, `clang`, or `make`.
@@ -220,12 +222,11 @@ Escalate only for structural needs:
 - A throwaway or destructive tree: a container is disposable and restores
   `/workspace`; the workspace filesystem is durable.
 
-Do not escalate for `docker` (both `docker` and `dockerd` exit 127). Do not
-escalate for Python or pip (the container has no `python3`), inbound previews
-(workspace supports them when configured), long-running processes
-(`startProcess`, table, logs, signals, kill), or hosted `git`
-(isomorphic-git already supplies it). Local
-git work belongs on `laptop`. The container's `git` 2.34.1 needs the outbound
+An inbound port or a long-lived process alone does not select a container.
+The server runtime does. Hosted git already uses isomorphic-git. Local git
+work belongs on `laptop`. Docker and Python are absent from the probed
+container image; selecting that image does not install them. The container
+git path needs the outbound
 interception path (`cf-backend/src/egress/configure.ts`, `egress/outbound.ts`),
 whose production state is not verified here; `scripts/egress-interception.ts`
 records it.
@@ -252,6 +253,28 @@ splitting it across instances that do not exist.
 I keep escalation explicit. A "compute-heavy" heuristic is unauditable and
 wrong in both directions. A declared rule is reviewable against capabilities
 rendered into the agent's execution block.
+
+### Slate preview home
+
+One preview operation must return a URL that serves the Slate. Its home is
+declared in the strict `slate` field of `package.json`, not a second manifest:
+
+- `slate.runtime: "worker"` selects the `workspace` provider. It is the default.
+  Nimbus EsbuildService bundles the authored module named by `main` and the
+  optional browser entry named by `browser`. A resident Fabric process runs
+  the default export's fetch handler and serves the compiled client bytes.
+  This home does not provide Node `listen()`, native dependencies or Vite HMR.
+- `slate.runtime: "node"` selects the `sandbox` provider. Standard npm scripts
+  run a real server on `slate.port`; dependencies and required native tools
+  must be installed in that project.
+
+The declaration selects a provider name. ExecutionRouter decides availability
+and approval. An absent sandbox is a classified refusal, never a switch to a
+Worker. Both homes use the existing preview exposure rail. Running state is
+derived from the process; an exposure row is not evidence of a live server.
+Bindings carry the agent's own capabilities with the same gates: loopback
+stubs in a resident process, HTTP with a scoped token across the container
+boundary. A Slate adds no separate approval policy.
 
 ## Files, security, and provider changes
 

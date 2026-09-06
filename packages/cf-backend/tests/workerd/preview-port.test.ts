@@ -1,27 +1,3 @@
-/**
- * The workspace port preview, executed for real in workerd.
- *
- * WHY THE WORKERD POOL. Both defects are invisible to `bun test`:
- *
- *   1. `node -e` / `node <file>` compile their source with `new Function`,
- *      which workerd forbids ("Code generation from strings disallowed for
- *      this context") while Bun runs happily. The staged acceptance lane met
- *      the raw V8 error where the product owes a reason that names the runtime
- *      a served port needs (the `sandbox` container, per the capability
- *      table) — a raw error is never the answer on this seam.
- *
- *   2. `curl http://127.0.0.1:<port>/` answers a Cloudflare `error code: 1003`
- *      page. The library registry loads `curl` with no kernel, so the virtual
- *      port check is skipped and the loopback request falls through to the
- *      platform `fetch`, which reaches the edge. A loopback fetch answers the
- *      served bytes or a classified refusal, never a bare edge error.
- *
- * WHAT THE PROBE DRIVES. The real library workspace over the DO's own SQLite
- * (the same composition the hosted workspace boots), asserting on the shell's
- * own answers — exit codes, streams, and bodies — so the fix cannot be a
- * narrowed test. The green direction pins the CLASSIFICATION (a reason naming
- * `sandbox`, a curl exit-7 refusal), not the prose around it.
- */
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 
@@ -33,23 +9,10 @@ describe('a served port from the hosted workspace', () => {
 
     const evaluated = await subject.nodeEval();
     const filed = await subject.nodeFile();
-    const combined = `${evaluated.stdout}\n${evaluated.stderr}\n${filed.stdout}\n${filed.stderr}`;
-
-    // RED QUOTE (staging b04c01d31, workerd): both answers carried only
-    // "Code generation from strings disallowed for this context" with no
-    // mention of where a server CAN run.
-    //
-    // This pool does not enforce workerd's codegen block, so here the guard
-    // takes its delegate arm and the programs run; on the hosted runtime it
-    // takes its refusal arm. Either outcome is green, and the raw error alone
-    // is red on every host. The refusal arm itself is pinned deterministically
-    // by the bun-tier executor tests, which replay the staged stderr.
-    const ran = combined.includes('hi') && combined.toLowerCase().includes('kinu live preview');
-    const refused = combined.toLowerCase().includes('sandbox');
-    expect(ran || refused).toBe(true);
-    if (combined.includes('Code generation from strings disallowed')) {
-      expect(combined.toLowerCase()).toContain('sandbox');
-    }
+    expect(evaluated.exitCode).toBe(127);
+    expect(filed.exitCode).toBe(127);
+    expect(evaluated.stderr).toContain('sandbox');
+    expect(filed.stderr).toContain('sandbox');
   });
 
   it('answers a loopback fetch with served bytes or a classified refusal, never a bare 1003', async () => {
