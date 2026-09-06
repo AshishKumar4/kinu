@@ -1,7 +1,7 @@
 # Live UI: gadgets
 
 The agent writes a small app and Kinu runs it. The app's server runs in a
-dynamic-worker facet of the workspace object with no network and only the
+resident process with no network, no `ctx`, no SQLite, and only the
 bindings the app declares. The app's client runs in a sandboxed iframe with no
 network and one MessagePort to its server. This replaces the JSON dashboard
 vocabulary (`packages/core/src/views/`, deleted) with real code the agent
@@ -160,14 +160,14 @@ because they are not code, and that is also their ceiling.
 
 ## 2. Decision
 
-Kinu adopts the cloudflare-os model whole, over the seams it already has.
+Kinu adopts the cloudflare-os model. The server runs on a resident process.
 
 A gadget is a directory `gadgets/<slug>/` in the workspace file plane:
 
 | File | What it is | Who runs it |
 |---|---|---|
 | `gadget.json` | the manifest: `{ v: 1, title, subtitle?, bindings? }` (`core/src/gadgets/manifest.ts`) | the host reads it, never executes it |
-| `server.js` | `export class Gadget extends DurableObject { ... }` | a facet of the workspace object, loaded through the Worker Loader (`cf-backend/src/gadgets/host.ts`) |
+| `server.js` | `import { RpcTarget } from './capnweb.js'; export class Gadget extends RpcTarget` with `constructor(env) { super(); this.env = env; }` | a resident process the host boots per gadget (`cf-backend/src/gadgets/host.ts`) |
 | `client.js` | an ES module; `gadget` is in scope as a stub of the server | a sandboxed srcdoc iframe (`cf-backend/src/components/gadgets/`) |
 | `client.css` | optional stylesheet | inlined into the document |
 
@@ -181,7 +181,7 @@ surface".
 ### 2.1 Bindings are the object-capability model
 
 The manifest's `bindings` map is the whole of what the server reaches. Each
-entry becomes one loopback stub in the isolate's `env`, minted by the
+entry becomes one loopback stub in the resident process `env`, minted by the
 workspace object with `exports.<Class>({ props })` and the workspace, gadget
 and binding name as props (`cf-backend/src/gadgets/bindings.ts`,
 `host.ts` `mintEnv`). Nothing else is in `env`: no namespace, no `LOADER`, no
@@ -207,22 +207,16 @@ for another or for the agent's shell.
 
 ### 2.2 The server half
 
+`server.js` imports `RpcTarget` from `./capnweb.js`. It exports `class Gadget extends RpcTarget`. The constructor keeps `env`: `constructor(env) { super(); this.env = env; }`. Each prototype method is a JSON RPC method. User code receives no `ctx` and no SQLite. The embedder runner hosts `new Gadget(env)` privately. The runner boxes a thrown method into the value `{__gadgetError: message}`, so the host refuses the call as `io` with its message.
+
 `GadgetHost.call` (`cf-backend/src/gadgets/host.ts`):
 
 1. reads `server.js` and the manifest fresh from the file plane;
-2. builds the loader id `gadget:<workspace>:<slug>:<sha256(server.js)>:<sha256(manifest)>`,
-   so a warm isolate is reused only for the same code and the same bindings;
-3. `env.LOADER.get(id, () => ({ compatibilityDate: '2025-12-01', mainModule: 'server.js', modules, env, globalOutbound: null, limits: { cpuMs: 2000, subRequests: 64 } }))`;
-4. `ctx.facets.get('gadget:<slug>', () => ({ class: stub.getDurableObjectClass('Gadget'), id }))`;
-5. invokes the named method with the JSON arguments and answers a JSON value
-   or a refusal with its class first.
+2. checks the method name with `isGadgetMethodName` and the args as an array of JSON values;
+3. spawns a resident process with the server bytes and an `env` that holds one loopback stub per declared binding, with `globalOutbound: null` and limits of 2000 CPU ms and 64 subrequests;
+4. sends the call as framed Cap'n Web HTTP batch bytes through `resident.handleHttpRequest` over an `RpcSession` transport, and answers the JSON value or a refusal with its class first. The process side serves the bytes with `newHttpBatchRpcResponse`.
 
-The facet's SQLite is the gadget's own; the workspace object cannot read it
-and the gadget cannot read the workspace object's. A facet started under one
-load never answers for another: the host compares the running load id on
-every call and `abort`s on a mismatch, and the file plane's event bus
-(`session.vfs.events.on`, subscribed in `OrchestratorAgent.onStart`) aborts
-the facet the moment `gadgets/<slug>/` changes, whichever path wrote it.
+State that must last lives in the `files` binding, by default `gadgets/<slug>/data`. The process keeps no SQLite of its own. A write under `gadgets/<slug>/` releases the resident process. The next call boots a new server from the files as they stand then. The file plane's event bus (`session.vfs.events.on`, subscribed in `OrchestratorAgent.onStart`) carries the write, whichever path wrote it.
 
 ### 2.3 The client half
 
@@ -257,7 +251,7 @@ If the open gadget disappears, the reader returns to Work.
 
 The memoized workspace boot subscribes to file changes once. A retry after an
 activation failure installs the same subscription. The workspace object broadcasts
-`{ type: 'gadgets_changed', slugs }` on the event that restarts the facet.
+`{ type: 'gadgets_changed', slugs }` on the event that releases the resident process.
 The UI re-lists gadgets and remounts the open frame, which fetches
 `getGadgetClient` again.
 
@@ -265,13 +259,13 @@ The UI re-lists gadgets and remounts the open frame, which fetches
 
 | Row | The server sees | The client sees | Neither can reach | Enforced by |
 |---|---|---|---|---|
-| Network | nothing: `fetch`/`connect` throw | nothing: `connect-src 'none'`, `default-src 'none'` | the internet, the app origin, the preview hosts | `globalOutbound: null` (host.ts); the meta CSP (gadget-document.ts) and `frame-src` of the app document (`lib/security-headers.ts`) |
+| Network | nothing: `fetch`/`connect` throw | nothing: `connect-src 'none'`, `default-src 'none'` | the internet, the app origin, the preview hosts | `globalOutbound: null` on the resident spawn (host.ts); the meta CSP (gadget-document.ts) and `frame-src` of the app document (`lib/security-headers.ts`) |
 | Files | the `files` binding's root, read and write | nothing | the rest of the workspace tree, SOUL.md, memory/, other workspaces | `resolveGadgetFilePath` over the manifest root, re-read per call (host.ts `bindingCall`) |
 | Workspace data | the `workspace` binding's closed read-model list | nothing | the needs-you queue, consents, instruction approvals, anything with a free argument | `GADGET_DATA_SOURCES` + `resolveGadgetDataSource`; `unit-gadget-sources.test.ts` holds it to `workspace.read` |
 | External services | the `mcp` binding's connection: read-only tools now, side effects after the owner decides | nothing | any connection the manifest did not name; any credential | `reviewGadgetMcpCall` + `decideApproval`; the credential never leaves UserDO (`user/mcp.ts`) |
-| Storage | its own facet SQLite | none (opaque origin: no cookies, no localStorage) | the workspace object's SQLite, other facets | the facet model (`ctx.facets`) |
+| Storage | none: no `ctx`, no SQLite; lasting state lives in the `files` binding, by default `gadgets/<slug>/data` | none (opaque origin: no cookies, no localStorage) | the workspace object's SQLite, other gadgets, any path outside the binding root | the runner passes no `ctx`; `gadgetFilesRoot` + `resolveGadgetFilePath` hold the binding to its root |
 | Host document and session | nothing | nothing: opaque origin, no `allow-same-origin`, `frame-src 'none'` inside | the owner's session cookie, `/api/*`, the SPA DOM | the sandbox attribute; `__Host-` cookies; the bridge accepts only its own frame's port |
-| Compute | 2000 CPU ms and 64 subrequests per call | the browser tab | the account's compute budget | `GADGET_LIMITS_PER_CALL` on the load |
+| Compute | 2000 CPU ms and 64 subrequests per call | the browser tab | the account's compute budget | `GADGET_LIMITS_PER_CALL` on the resident spawn |
 | Spoofing host chrome | cannot title itself as a host surface | draws only inside its frame | Approve, consent, credential and settings chrome | `RESERVED_GADGET_TITLES` at parse time; the tab strip marks the group |
 | What crosses out | JSON return values, thrown errors, console lines | JSON calls over one MessagePort, console lines, user-activated `_blank` links | anything else | the bridge's forwarding target; `window.open` neutered in the prefix |
 
@@ -311,8 +305,8 @@ host-owned.
   renderer outweighs the embedded Cap'n Web module. Recorded in AGENTS.md §
   Deploy Discipline.
 - Server-to-client callbacks. Cap'n Web can carry a client callback to the
-  parent and on to the workspace object; whether Workers RPC then passes that
-  stub into the facet as a function is untested. Clients poll today.
+  parent and on to the workspace object; whether the resident transport then passes that
+  stub into the process as a function is untested. Clients poll today.
 - `ViewDelta` streaming, `ActionDescriptor` routing and a chat card for a
   gadget's `view()` are vocabulary only.
 - Console forwarding from the server (the reference uses a tail Worker) is

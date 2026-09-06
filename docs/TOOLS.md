@@ -58,7 +58,7 @@ ledger.
 | --- | --- |
 | `workspace.createTool(name, description, code)` | a reusable crafted tool, callable the same turn |
 | `workspace.gadgets()` | the gadgets under `gadgets/<slug>/`, valid ones and broken manifests |
-| `workspace.gadget(slug, method, ...args)` | a call into a gadget server, the facet the host runs its `server.js` in |
+| `workspace.gadget(slug, method, ...args)` | a call into a gadget server, the resident process the host boots its `server.js` in |
 | `workspace.editFile(path, edits)` | an exact-match edit, with the same gate and, where the backend shares a turn ledger, the same read-before-write state as the native `file` tool `edit` action |
 
 ## file: the file plane
@@ -226,7 +226,7 @@ in-process through `createNodeExecuteToolFactory`. Both bind these namespaces.
 
 ### Gadgets
 
-A gadget is agent-written UI under `gadgets/<slug>/`. It has three files: `gadget.json`, `server.js`, `client.js`. `gadget.json` declares `{ v: 1, title, subtitle?, bindings?: Record<NAME, { kind: 'files', root? } | { kind: 'workspace' } | { kind: 'mcp', server, tools? }> }`. `server.js` exports `class Gadget extends DurableObject`. It runs with no network. It sees only `env.<NAME>` for each declared binding. `client.js` runs in a sandboxed iframe with no network. It sees `gadget` in scope as a stub of the server. See [LIVE-UI.md](./LIVE-UI.md).
+A gadget is agent-written UI under `gadgets/<slug>/`. It has three files: `gadget.json`, `server.js`, `client.js`. `gadget.json` declares `{ v: 1, title, subtitle?, bindings?: Record<NAME, { kind: 'files', root? } | { kind: 'workspace' } | { kind: 'mcp', server, tools? }> }`. `server.js` imports `RpcTarget` from `./capnweb.js` and exports `class Gadget extends RpcTarget` with `constructor(env) { super(); this.env = env; }`. It runs with no network and no `ctx` or SQLite. It sees only `env.<NAME>` for each declared binding. Keep lasting state in `files`, by default `gadgets/<slug>/data`. `client.js` runs in a sandboxed iframe with no network. It sees `gadget` in scope as a stub of the server. See [LIVE-UI.md](./LIVE-UI.md).
 
 ### Projected native tools
 
