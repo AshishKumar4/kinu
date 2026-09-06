@@ -34,6 +34,7 @@ import {
   type TurnRequest,
 } from './helpers/three-kinds';
 
+import { orchestratorHarness, subordinateHarness } from './helpers/actor-harness';
 /** A history every kind can be asked to assemble a turn over. */
 const HISTORY: readonly ModelMessage[] = [
   { role: 'user', content: 'Name the cheapest change to the reference implementation.' },
@@ -54,12 +55,6 @@ const DIFFERENCES = {
         + 'beforeStep prunes tool output against the window budget — so that is what '
         + 'is measured here.',
     },
-    {
-      capability: 'C7b a cause-chain renderer on the failure path',
-      verdict: 'asymmetry',
-      reason: 'Think supplies ChatResponseResult.error as a string. ActorAgent '
-        + 'preserves that string in run_end. The external SDK owns its rendering.',
-    },
   ],
   'cf-subordinate': [
     {
@@ -67,12 +62,6 @@ const DIFFERENCES = {
       verdict: 'asymmetry',
       reason: 'Identical to the orchestrator: SubordinateAgent extends ActorAgent and '
         + 'overrides neither hook.',
-    },
-    {
-      capability: 'C7b a cause-chain renderer on the failure path',
-      verdict: 'asymmetry',
-      reason: 'Think supplies the same string boundary to subordinate turns. '
-        + 'ActorAgent preserves it through the shared terminal settlement path.',
     },
   ],
   'swarm-node': [
@@ -383,15 +372,13 @@ describe('C6 an abort is honoured and the terminal record says so', () => {
 // ── C7 — a failure leaves a terminal record carrying its cause ────────────────
 
 describe('C7 a failed turn leaves a terminal record carrying its CAUSE', () => {
-  const INNER = 'upstream returned 502 for the completions route';
-  const wrapped = () => new Error('the provider call failed', { cause: new Error(INNER) });
+  const INNER = 'upstream502';
+  const wrapped = () => new Error('provider failed', { cause: new Error(INNER) });
 
   for (const kind of KINDS) {
     test(kind, async () => {
       const fixture = fixtureFor(kind);
       const record = await fixture.terminalOnFailure(wrapped());
-      const declared = differenceFor(fixture, 'C7 terminal record with cause');
-
       // Every kind must record the failure AT ALL — an unrecorded failure reads as a
       // turn still running for the life of the store, which is the absent-versus-broken
       // confusion in its worst form.
@@ -400,33 +387,34 @@ describe('C7 a failed turn leaves a terminal record carrying its CAUSE', () => {
       const text = record.errorMessage ?? '';
       expect(text, `${kind}: the terminal record carries no error text`).not.toBe('');
       expect(text, `${kind}: the record does not name the failure`)
-        .toContain('the provider call failed');
+        .toContain('provider failed');
 
       // The cause is the whole capability: the outermost message of a wrapped error
       // names the ACTION, and only the cause says what actually went wrong.
-      if (declared) {
-        expect(declared.verdict).toBe('defect');
-        // A declaration has to name the MECHANISM, or it is a skip with prose on it.
-        expect(declared.reason).toContain('renderCauseChain');
-        // And the gap must still be there. This assertion FAILS the day the gap is
-        // closed — with "the declaration is stale" — which is the correct failure:
-        // neither a fixed defect described as open, nor an open one described as fixed,
-        // can survive here.
-        expect(
-          text.includes(INNER),
-          `${kind}: the declared C7 gap is CLOSED — delete the declaration`,
-        ).toBe(false);
-        return;
-      }
       expect(text, `${kind}: the cause chain was dropped from the terminal record`)
         .toContain(INNER);
     });
   }
+  for (const harness of [orchestratorHarness, subordinateHarness]) {
+    test(harness.name + ': preparation failure reaches the RPC caller with its cause', async () => {
+      const { agent } = harness();
+      const errors: string[] = [];
+      agent.harnessModelProvider().createModel = () => { throw wrapped(); };
+      await agent.onStart();
+      await agent.chat('do the thing', {
+        onStart() {},
+        onEvent() {},
+        onDone() { throw new Error('a failed turn must not complete'); },
+        onError(error) { errors.push(error); },
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('provider failed');
+      expect(errors[0]).toContain(INNER);
+    });
+  }
 
   test('swarm-node: a TRANSPORT failure DOES carry the whole chain', async () => {
-    // The one path in the tree that renders a cause chain into a terminal record.
-    // Asserted beside the loop path above so the asymmetry is visible in one file:
-    // same store, same node, two renderings depending on which half failed.
+    // Transport failures and provider failures must preserve the same cause graph.
     const drive = await driveNode(
       { steps: [{ text: 'unreachable' }] },
       {

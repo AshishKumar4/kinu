@@ -54,7 +54,7 @@ import {
 } from "@kinu.run/compaction";
 import { Think, Session } from "@cloudflare/think";
 import { streamText, generateText, tool, jsonSchema, convertToModelMessages } from "ai";
-import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
+import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage, TextStreamPart } from "ai";
 import {
   McpToolSurfaceCache,
 } from "./user/mcp";
@@ -5531,6 +5531,11 @@ export abstract class ActorAgent extends Think<Env> {
 
   // ── Think lifecycle hooks ──────────────────────────────────────
 
+  /** Think otherwise stringifies only Error.message before terminal settlement. */
+  override onChatError(error: Parameters<Think<Env>['onChatError']>[0]): string {
+    return renderThrownChain({ cause: error });
+  }
+
   // Tools the model is allowed to call. Think merges workspace tools (read, write,
   // edit, list, find, grep, delete) with ours, bloating the request by ~2800 tokens.
   // activeTools restricts the model to the built-in tools + session context tools,
@@ -5912,6 +5917,15 @@ export abstract class ActorAgent extends Think<Env> {
     // grep for the name now lands on the loop instead of the mirror.
     cfg.maxSteps = UNBOUNDED_MAX_STEPS;
     cfg.stopWhen = UNBOUNDED_STEPS;
+    // AI SDK reports provider failures as typed error chunks, before Think's
+    // message-only serializer. Keep the native cause graph until this boundary.
+    cfg.experimental_transform = () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
+      transform(chunk, controller) {
+        controller.enqueue(chunk.type === 'error'
+          ? { ...chunk, error: renderThrownChain({ cause: chunk.error }) }
+          : chunk);
+      },
+    });
 
     // Shadow-eval context parity + the evolved-scaffold task source (see the
     // _lastTurnOpts field doc): the effective opts the streamText Think runs
