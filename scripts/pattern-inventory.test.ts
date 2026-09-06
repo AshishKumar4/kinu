@@ -34,10 +34,14 @@ test('Python aliases and shell pattern commands stay in the measured set', () =>
 });
 
 test('a parser failure cannot produce an empty passing census', () => {
-  expect(() => inventoryJavaScript('scripts/broken.ts', 'const =')).toThrow();
-  expect(() => buildPatternInventory(new Map([['scripts/broken.py', 'def broken(']]))).toThrow();
+  expect(() => inventoryJavaScript('scripts/broken.ts', 'const =')).toThrow(Error);
+  expect(() => buildPatternInventory(new Map([['scripts/broken.py', 'def broken(']]))).toThrow(Error);
+  expect(inventoryJavaScript('scripts/valid.ts', 'const token = /x/;').map(site => site.kind))
+    .toEqual(['regex-literal']);
 });
 
 test('an input outside the governed language set is refused', () => {
-  expect(() => buildPatternInventory(new Map([['docs/example.md', '/text/']]))).toThrow();
+  expect(() => buildPatternInventory(new Map([['docs/example.md', '/text/']]))).toThrow(Error);
+  expect(buildPatternInventory(new Map([['scripts/example.ts', 'export const value = 1;']])).measured)
+    .toEqual(['scripts/example.ts']);
 });
