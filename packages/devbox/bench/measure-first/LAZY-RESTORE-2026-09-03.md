@@ -166,3 +166,30 @@ seals still rewrite the full ledger. Those costs remain unbounded by this
 measurement. A separate 2 MiB-file probe with 32 KiB packs refused a
 43,195 B metadata record. No cap was changed to make that probe pass.
 
+## Retirement safety measured locally, 2026-09-06
+
+A 131,072 B repeated-content rewrite caused the old liveness estimate to
+retire a 3,178 B pack. That pack still held an untouched file. Both seals
+reported publication success, but reading the untouched file failed after
+automatic deletion. The estimate counted logical repetitions as physical
+dead bytes. Shared extents can also remain reachable through another file.
+
+The inventory now names `estimatedLiveBytes` and uses wire version 2.
+Replacement counts select compaction candidates; they do not authorize
+retirement. A complete relocation moves data, extent pages, file records,
+symlinks and directory records before the new root retires their packs.
+The local replay deleted zero packs before compaction and one afterwards.
+The untouched file still read `keep me`. Empty files, empty directories
+and symlinks also remained readable after compaction and deletion.
+
+A separate held-read test let a newer publication complete during an old
+compaction scan. The old implementation then lost `fresh.txt`. Compaction
+now binds its publication to the head it scanned and records a stale-parent
+refusal if that head changed. The concurrent file survives.
+
+The v2, sidecar, durability-contract and cut suites passed 55 tests. These
+are algorithm and local store-port proofs. They do not establish a real
+daemon mount, a reset-safe retirement queue, reader lifetime protection or
+an amortized maintenance bound. The deployed v1 report is unchanged.
+
+

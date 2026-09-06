@@ -656,6 +656,14 @@ export class SidecarCore {
     });
     const operation = begun.operation;
     if (operation?.phase !== 'transferring' || begun.head === null) return false;
+    if (begun.head.pointer.rootEnvelopeId !== head.pointer.rootEnvelopeId) {
+      if (operation.bootId === this.#ports.bootId) {
+        await failCandidateOperation({
+          operationId: operation.operationId, failureCode: 'stale-parent', store: authority.control,
+        });
+      }
+      return false;
+    }
     const generation = String(BigInt(begun.head.envelope.generation) + 1n);
     const staged = await this.#stagePayload({
       build: {
@@ -664,7 +672,7 @@ export class SidecarCore {
         seal: { bytesChunked: 0, chunksHashed: 0, nodesRewritten: built.work.nodesRewritten, wholeFiles: 0 },
         boundaries: [],
         removed: [],
-        deadBytes: new Map(),
+        replacedBytes: new Map(),
       },
       parentLedger: ledger,
       capturedCut: {
@@ -837,7 +845,7 @@ export class SidecarCore {
       boxId: this.#ports.boxId,
       generation: input.generation,
       added: input.build.packs.map((pack) => pack.ref),
-      deadBytes: input.build.deadBytes,
+      replacedBytes: input.build.replacedBytes,
       compacted: input.compacted,
     });
     const ledger = packLedgerRef(next.ledger);

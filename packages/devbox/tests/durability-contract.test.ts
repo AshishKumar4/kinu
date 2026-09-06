@@ -397,11 +397,11 @@ const envelopeV2: RootEnvelopeV2 = {
   ledger: ledgerObject,
 };
 const ledger: PackLedger = {
-  version: 1,
+  version: 2,
   format: 'merkle-pack/v2',
   boxId: 'box-1',
   generation: '9',
-  packs: [{ ...pack, liveBytes: '3072', addedInGeneration: '9' }],
+  packs: [{ ...pack, estimatedLiveBytes: '3072', addedInGeneration: '9' }],
 };
 
 const ZERO_WORK = {
@@ -508,7 +508,7 @@ describe('durability v2 wire contracts', () => {
     expect(v.parse(PackLedgerSchema, ledger)).toEqual(ledger);
     expect(() => v.parse(PackLedgerSchema, {
       ...ledger,
-      packs: [{ ...ledger.packs[0], liveBytes: '4097' }],
+      packs: [{ ...ledger.packs[0], estimatedLiveBytes: '4097' }],
     })).toThrow(/more live bytes/u);
     expect(() => v.parse(PackLedgerSchema, {
       ...ledger,
@@ -518,7 +518,7 @@ describe('durability v2 wire contracts', () => {
       key: `v1/merkle-pack/pack/${'d'.repeat(64)}`,
       byteLength: '1',
       sha256: 'd'.repeat(64),
-      liveBytes: '1',
+      estimatedLiveBytes: '1',
       addedInGeneration: '8',
     };
     expect(v.parse(PackLedgerSchema, { ...ledger, packs: [older, ledger.packs[0]] }).packs)

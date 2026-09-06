@@ -108,15 +108,9 @@ export interface MerkleDeltaBuild {
   readonly boundaries: readonly BoundaryRow[];
   /** Paths this generation no longer holds, for the daemon's map. */
   readonly removed: readonly string[];
-  /**
-   * Bytes this generation stopped reaching, by the pack that holds them.
-   *
-   * Incremental and therefore pessimistic: a chunk that died here but is still
-   * reached through another file counts as dead until the audit mark re-derives
-   * the ledger's live counts. That is the direction that only ever DELAYS a
-   * compaction, never one that deletes something a head still reaches.
-   */
-  readonly deadBytes: ReadonlyMap<string, number>;
+  /** Replaced logical bytes by pack. Repeated and shared chunks make this
+   * a compaction hint, never proof that the pack is unreachable. */
+  readonly replacedBytes: ReadonlyMap<string, number>;
 }
 
 // ── the planned tree ─────────────────────────────────────────────────────────
@@ -346,7 +340,7 @@ interface ChunkFileInput {
   readonly stage: DeltaStage;
   readonly zeroCache: Map<number, EmittedChunk>;
   readonly freshChunks: Map<string, FreshChunk>;
-  readonly countDead: (extents: readonly ExtentV2[]) => void;
+  readonly countReplaced: (extents: readonly ExtentV2[]) => void;
   readonly onRead: (bytes: number) => void;
   readonly onHash: () => void;
   readonly onWhole: () => void;
@@ -483,7 +477,7 @@ async function chunkDirtyFile(input: ChunkFileInput): Promise<ChunkedFile> {
     }
     if (dead !== null) {
       const kept = new Set(extents.map((extent) => extent.digest));
-      input.countDead(dead.filter((extent) => !kept.has(extent.digest)));
+      input.countReplaced(dead.filter((extent) => !kept.has(extent.digest)));
     }
     const pages = pagesFor(extents, null, []);
     return {
@@ -529,7 +523,7 @@ async function chunkDirtyFile(input: ChunkFileInput): Promise<ChunkedFile> {
     const to = pass.endedAt;
     const replaced = sliceExtents(extents, from, to);
     const fresh = reuseKnown(pass.extents, replaced);
-    input.countDead(replaced.filter((extent) => !fresh.some((kept) => kept.digest === extent.digest)));
+    input.countReplaced(replaced.filter((extent) => !fresh.some((kept) => kept.digest === extent.digest)));
     const head = sliceExtents(extents, 0, from);
     const tail = sliceExtents(extents, to, extentsSpan(extents));
     extents = normalizeExtents([...head, ...fresh, ...tail]);
@@ -680,20 +674,20 @@ export async function buildMerkleDelta(
   const removed: string[] = [];
   const origins = new Map<string, string>();
   const freshChunks = new Map<string, FreshChunk>();
-  const deadBytes = new Map<string, number>();
+  const replacedBytes = new Map<string, number>();
   const zeroCache = new Map<number, EmittedChunk>();
   let bytesChunked = 0;
   let chunksHashed = 0;
   let wholeFiles = 0;
 
-  const countDead = (extents: readonly ExtentV2[]): void => {
+  const countReplaced = (extents: readonly ExtentV2[]): void => {
     for (const extent of extents) {
       if (extent.pack === UNPLACED_PACK) continue;
-      deadBytes.set(extent.pack, (deadBytes.get(extent.pack) ?? 0) + extent.length * extent.count);
+      replacedBytes.set(extent.pack, (replacedBytes.get(extent.pack) ?? 0) + extent.length * extent.count);
     }
   };
-  const countDeadRecord = (ref: { readonly pack: string; readonly length: number }): void => {
-    deadBytes.set(ref.pack, (deadBytes.get(ref.pack) ?? 0) + ref.length);
+  const countReplacedRecord = (ref: { readonly pack: string; readonly length: number }): void => {
+    replacedBytes.set(ref.pack, (replacedBytes.get(ref.pack) ?? 0) + ref.length);
   };
 
   /**
@@ -716,7 +710,7 @@ export async function buildMerkleDelta(
       for (const entry of record.node.entries) {
         children.set(entry.name, { kind: 'reuse', nodeKind: entry.kind, ref: entry.ref });
       }
-      countDeadRecord(record.ref);
+      countReplacedRecord(record.ref);
     }
     const planned: PlannedDir = { kind: 'dir', stat, children };
     dirs.set(path, planned);
@@ -763,7 +757,7 @@ export async function buildMerkleDelta(
       const above = await materializeDir(parentPathOf(op.path));
       const dropped = above.children.get(nameOf(op.path));
       above.children.delete(nameOf(op.path));
-      if (dropped?.kind === 'reuse') countDeadRecord(dropped.ref);
+      if (dropped?.kind === 'reuse') countReplacedRecord(dropped.ref);
       dirs.delete(op.path);
       removed.push(op.path);
       continue;
@@ -805,7 +799,7 @@ export async function buildMerkleDelta(
       if (record !== null && record.node.kind === 'file') {
         parentNode = record.node;
         parentExtents = await view.fileExtents(origin);
-        countDeadRecord(record.ref);
+        countReplacedRecord(record.ref);
       }
     }
     const planned = await chunkDirtyFile({
@@ -817,7 +811,7 @@ export async function buildMerkleDelta(
       stage: options.stage,
       zeroCache,
       freshChunks,
-      countDead,
+      countReplaced,
       onRead: (bytes) => { bytesChunked += bytes; },
       onHash: () => { chunksHashed += 1; },
       onWhole: () => { wholeFiles += 1; },
@@ -939,7 +933,7 @@ export async function buildMerkleDelta(
     seal: { bytesChunked, chunksHashed, nodesRewritten, wholeFiles },
     boundaries,
     removed,
-    deadBytes,
+    replacedBytes,
   };
 }
 

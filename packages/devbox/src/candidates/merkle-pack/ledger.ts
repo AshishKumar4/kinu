@@ -9,12 +9,10 @@
  * maintenance read it. Lazy attach and file reads use the records in packs
  * directly. A seal still rewrites O(#packs) ledger bytes.
  *
- * WHY LIVENESS IS INCREMENTAL. When a seal replaces an extent, the pack that
- * held the old chunk loses those bytes; that is O(k) bookkeeping the build
- * already has in hand. It is deliberately PESSIMISTIC — a chunk still reached
- * through another file may be counted dead — because the error direction only
- * ever delays a compaction, and the audit mark re-derives the counts from the
- * node records it walks. The opposite error would delete live bytes.
+ * Replaced logical bytes provide a compaction hint. A repeated or shared
+ * extent can outlive the file that replaced it, so subtracting those bytes
+ * can underestimate liveness. Only compaction that relocates every reachable
+ * reference may retire a pack.
  *
  * WHY RETIRE-THEN-DELETE. A container that was told an object exists may still
  * be reading it, so a pack leaves the ledger first and is deleted only after a
@@ -78,8 +76,8 @@ export interface NextLedgerInput {
   readonly generation: string;
   /** The packs this generation PUT, in packing order. */
   readonly added: readonly ImmutableObjectRef[];
-  /** Bytes this generation stopped reaching, by the pack that holds them. */
-  readonly deadBytes: ReadonlyMap<string, number>;
+  /** Replaced logical bytes, including repeated extents. A scheduling hint. */
+  readonly replacedBytes: ReadonlyMap<string, number>;
   /** Packs a compaction rewrote, which are retired whatever their live count. */
   readonly compacted?: readonly string[];
 }
@@ -91,34 +89,34 @@ export interface NextLedger {
 }
 
 /**
- * The ledger after one publish: every parent row minus the bytes this
- * generation killed, without the packs that reached zero live bytes or were
- * compacted away, plus one row per pack it added.
+ * Keep each parent pack until verified compaction retires it. Replaced bytes
+ * reduce its liveness estimate, including to zero, without authorizing GC.
+ * Append the packs this generation added.
  */
 export function nextPackLedger(input: NextLedgerInput): NextLedger {
   const compacted = new Set(input.compacted ?? []);
   const rows: PackLedgerRow[] = [];
   const retired: string[] = [];
   for (const row of input.parent?.packs ?? []) {
-    const dead = input.deadBytes.get(row.key) ?? 0;
-    const live = Math.max(0, Number(row.liveBytes) - dead);
-    if (live === 0 || compacted.has(row.key)) {
+    const replaced = input.replacedBytes.get(row.key) ?? 0;
+    const live = Math.max(0, Number(row.estimatedLiveBytes) - replaced);
+    if (compacted.has(row.key)) {
       retired.push(row.key);
       continue;
     }
-    rows.push({ ...row, liveBytes: String(live) });
+    rows.push({ ...row, estimatedLiveBytes: String(live) });
   }
   for (const ref of input.added) {
     rows.push({
       key: ref.key,
       byteLength: ref.byteLength,
       sha256: ref.sha256,
-      liveBytes: ref.byteLength,
+      estimatedLiveBytes: ref.byteLength,
       addedInGeneration: input.generation,
     });
   }
   const ledger = v.parse(PackLedgerSchema, {
-    version: 1,
+    version: 2,
     format: input.format,
     boxId: input.boxId,
     generation: input.generation,
@@ -128,11 +126,9 @@ export function nextPackLedger(input: NextLedgerInput): NextLedger {
 }
 
 /**
- * A pack is compacted only when more than half its bytes are dead, or when it
- * is small and old enough that the seal cadence left it behind. That is what
- * bounds rewrite amplification: a byte is only ever moved when the pack around
- * it is more than half waste, so the total bytes a workload rewrites stay a
- * constant multiple of the bytes it wrote.
+ * Select packs whose estimated live fraction is small, or which are small
+ * and old. This is a scheduling heuristic. Exact relocation establishes
+ * retirement safety; the estimate alone proves no rewrite-amplification bound.
  */
 export const COMPACTION_DEAD_FRACTION = 0.5;
 export const COMPACTION_SMALL_PACK_BYTES = 1024 * 1024;
@@ -142,7 +138,7 @@ export function compactionCandidates(ledger: PackLedger, generation: string): re
   const now = BigInt(generation);
   return ledger.packs.filter((row) => {
     const size = Number(row.byteLength);
-    const live = Number(row.liveBytes);
+    const live = Number(row.estimatedLiveBytes);
     if (size === 0) return false;
     if (live < size * COMPACTION_DEAD_FRACTION) return true;
     return size < COMPACTION_SMALL_PACK_BYTES
