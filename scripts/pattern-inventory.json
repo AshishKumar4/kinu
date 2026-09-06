@@ -1528,6 +1528,7 @@
     "packages/core/tests/unit-structured-prompts.test.ts",
     "packages/core/tests/unit-subordinates.test.ts",
     "packages/core/tests/unit-swarm-agent-nodes.test.ts",
+    "packages/core/tests/unit-swarm-brief-reentry.test.ts",
     "packages/core/tests/unit-swarm-budget.test.ts",
     "packages/core/tests/unit-swarm-call-fixture.test.ts",
     "packages/core/tests/unit-swarm-depth.test.ts",
@@ -1587,6 +1588,10 @@
     "packages/devbox/bench/measure-first/container.ts",
     "packages/devbox/bench/measure-first/probe.ts",
     "packages/devbox/bench/measure-first/worker.ts",
+    "packages/devbox/bench/publication-bucket.test.ts",
+    "packages/devbox/bench/publication-bucket.ts",
+    "packages/devbox/bench/publication-cut-probe.ts",
+    "packages/devbox/bench/publication-cut.ts",
     "packages/devbox/bench/r2-operations.ts",
     "packages/devbox/bench/security-cells.test.ts",
     "packages/devbox/bench/security-cells.ts",
@@ -1676,6 +1681,7 @@
     "packages/devbox/tests/object-store.test.ts",
     "packages/devbox/tests/overlay-cas.test.ts",
     "packages/devbox/tests/overlay-runner.test.ts",
+    "packages/devbox/tests/publication-cut.test.ts",
     "packages/devbox/tests/r2fs.test.ts",
     "packages/devbox/tests/residency.test.ts",
     "packages/devbox/tests/resource-lane.test.ts",
@@ -1986,6 +1992,8 @@
     "scripts/wired.test.ts",
     "scripts/wired.ts",
     "scripts/workspace-name-ux.test.ts",
+    "scripts/workspace-planes-probe.ts",
+    "scripts/workspace-snapshot-ux.test.ts",
     "scripts/ws-latency-test.ts",
     "scripts/ws-reconnect-drill.ts",
     "scripts/ws-test-harness.ts",
@@ -2133,7 +2141,7 @@
     "protected": "DEFERRED: layergate and devbox are explicit non-goals. The inventory includes their candidates without changing their checks."
   },
   "counts": {
-    "lexical": 2432,
+    "lexical": 2434,
     "composition": 81,
     "code": 118,
     "scanner": 52,
@@ -3262,7 +3270,7 @@
     },
     {
       "file": "packages/cf-backend/src/hooks/use-kinu.ts",
-      "line": 2071,
+      "line": 2069,
       "kind": "hand-parser",
       "owner": "parseMemoryContent",
       "category": "scanner",
@@ -3270,7 +3278,7 @@
     },
     {
       "file": "packages/cf-backend/src/hooks/use-kinu.ts",
-      "line": 2073,
+      "line": 2071,
       "kind": "regex-literal",
       "owner": "sections",
       "category": "lexical",
@@ -3278,7 +3286,7 @@
     },
     {
       "file": "packages/cf-backend/src/hooks/use-kinu.ts",
-      "line": 2083,
+      "line": 2081,
       "kind": "regex-literal",
       "owner": "updatedAt",
       "category": "lexical",
@@ -4086,7 +4094,7 @@
     },
     {
       "file": "packages/cf-backend/tests/helpers/three-kinds.ts",
-      "line": 198,
+      "line": 197,
       "kind": "regex-literal",
       "owner": "namesACacheControl",
       "category": "lexical",
@@ -6861,6 +6869,14 @@
       "sourceSha256": "6e4e870a9fd494195d338b1ad01482b5bcff3243336dd53b2ca292257bbfcb14"
     },
     {
+      "file": "packages/cli-backend/tests/executor.test.ts",
+      "line": 40,
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "category": "lexical",
+      "sourceSha256": "2c7b3a31bc04ef72dd2b72aa5eed5167a327f8693796fa16a0ecd35647c43597"
+    },
+    {
       "file": "packages/cli-backend/tests/head-runtime.test.ts",
       "line": 555,
       "kind": "regex-literal",
@@ -6955,6 +6971,14 @@
       "owner": "chunks",
       "category": "lexical",
       "sourceSha256": "2953dbdb95cc798687492601c81afb9f4e891ecbea761854baf3e24fcb5c09ff"
+    },
+    {
+      "file": "packages/cli-backend/tests/unit-executor-lifecycle.test.ts",
+      "line": 175,
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "category": "lexical",
+      "sourceSha256": "2c7b3a31bc04ef72dd2b72aa5eed5167a327f8693796fa16a0ecd35647c43597"
     },
     {
       "file": "packages/cli-backend/tests/unit-secret-file.test.ts",
@@ -8390,7 +8414,7 @@
     },
     {
       "file": "packages/core/src/craft/source.ts",
-      "line": 109,
+      "line": 93,
       "kind": "hand-parser",
       "owner": "stripExports",
       "category": "scanner",
@@ -8398,7 +8422,7 @@
     },
     {
       "file": "packages/core/src/craft/source.ts",
-      "line": 147,
+      "line": 131,
       "kind": "regex-literal",
       "owner": "trimmed",
       "category": "lexical",
@@ -15278,7 +15302,7 @@
     },
     {
       "file": "packages/devbox/bench/worker.ts",
-      "line": 830,
+      "line": 888,
       "kind": "regex-literal",
       "owner": "offered",
       "category": "lexical",
@@ -15286,7 +15310,7 @@
     },
     {
       "file": "packages/devbox/bench/worker.ts",
-      "line": 869,
+      "line": 927,
       "kind": "regex-literal",
       "owner": "payloadPrefix",
       "category": "lexical",
@@ -15294,9 +15318,9 @@
     },
     {
       "file": "packages/devbox/bench/worker.ts",
-      "line": 949,
+      "line": 1033,
       "kind": "regex-literal",
-      "owner": "serveStorageOnlyRoutes",
+      "owner": "serveInstrumentRoutes",
       "category": "lexical",
       "sourceSha256": "4b36604157ef7dcef4cc76a0c1a545e509018374286769ba36cf9fa2a81d768d"
     },
@@ -18198,7 +18222,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 3157,
+      "line": 3167,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -18206,7 +18230,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 3717,
+      "line": 3727,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -18214,7 +18238,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 3738,
+      "line": 3748,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -18222,7 +18246,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 3769,
+      "line": 3779,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -18230,7 +18254,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 3990,
+      "line": 4000,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -18238,7 +18262,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4105,
+      "line": 4115,
       "kind": "regexp-constructor",
       "owner": "strategyLeaf",
       "category": "composition",
@@ -18246,7 +18270,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4107,
+      "line": 4117,
       "kind": "regexp-constructor",
       "owner": "declared",
       "category": "composition",
@@ -18254,7 +18278,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4152,
+      "line": 4162,
       "kind": "regex-literal",
       "owner": "product",
       "category": "lexical",
@@ -18262,7 +18286,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4153,
+      "line": 4163,
       "kind": "regex-literal",
       "owner": "restated",
       "category": "lexical",
@@ -18270,7 +18294,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4157,
+      "line": 4167,
       "kind": "regex-literal",
       "owner": "kinds",
       "category": "lexical",
@@ -18278,7 +18302,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4183,
+      "line": 4193,
       "kind": "regex-literal",
       "owner": "restated",
       "category": "lexical",
@@ -18286,7 +18310,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4185,
+      "line": 4195,
       "kind": "regex-literal",
       "owner": "admitted",
       "category": "lexical",
@@ -18294,7 +18318,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4187,
+      "line": 4197,
       "kind": "regex-literal",
       "owner": "produced",
       "category": "lexical",
@@ -18302,7 +18326,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4739,
+      "line": 4749,
       "kind": "regex-literal",
       "owner": "template",
       "category": "lexical",
@@ -18310,7 +18334,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4751,
+      "line": 4761,
       "kind": "regex-literal",
       "owner": "words",
       "category": "lexical",
@@ -18318,7 +18342,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4762,
+      "line": 4772,
       "kind": "regex-literal",
       "owner": "product",
       "category": "lexical",
@@ -18326,7 +18350,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4764,
+      "line": 4774,
       "kind": "regex-literal",
       "owner": "restated",
       "category": "lexical",
@@ -18334,7 +18358,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4765,
+      "line": 4775,
       "kind": "regex-literal",
       "owner": "words",
       "category": "lexical",
@@ -18342,7 +18366,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4771,
+      "line": 4781,
       "kind": "regex-literal",
       "owner": "kinds",
       "category": "lexical",
@@ -18350,7 +18374,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4772,
+      "line": 4782,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -18358,7 +18382,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4778,
+      "line": 4788,
       "kind": "regex-literal",
       "owner": "values",
       "category": "lexical",
@@ -18366,7 +18390,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4779,
+      "line": 4789,
       "kind": "regex-literal",
       "owner": "values",
       "category": "lexical",
@@ -18374,7 +18398,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4780,
+      "line": 4790,
       "kind": "regex-literal",
       "owner": "values",
       "category": "lexical",
@@ -18382,7 +18406,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4783,
+      "line": 4793,
       "kind": "regex-literal",
       "owner": "script",
       "category": "lexical",
@@ -18390,7 +18414,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4791,
+      "line": 4801,
       "kind": "regex-literal",
       "owner": "product",
       "category": "lexical",
@@ -18398,7 +18422,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4792,
+      "line": 4802,
       "kind": "regex-literal",
       "owner": "restated",
       "category": "lexical",
@@ -18406,7 +18430,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4799,
+      "line": 4809,
       "kind": "regex-literal",
       "owner": "product",
       "category": "lexical",
@@ -18414,7 +18438,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4800,
+      "line": 4810,
       "kind": "regex-literal",
       "owner": "restated",
       "category": "lexical",
@@ -18422,7 +18446,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4806,
+      "line": 4816,
       "kind": "regex-literal",
       "owner": "block",
       "category": "lexical",
@@ -18430,7 +18454,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4815,
+      "line": 4825,
       "kind": "regex-literal",
       "owner": "block",
       "category": "lexical",
@@ -18438,7 +18462,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4822,
+      "line": 4832,
       "kind": "regex-literal",
       "owner": "reason",
       "category": "lexical",
@@ -18446,7 +18470,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4834,
+      "line": 4844,
       "kind": "regex-literal",
       "owner": "keys",
       "category": "lexical",
@@ -18454,7 +18478,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4836,
+      "line": 4846,
       "kind": "regex-literal",
       "owner": "cases",
       "category": "lexical",
@@ -18462,7 +18486,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4845,
+      "line": 4855,
       "kind": "regex-literal",
       "owner": "cell",
       "category": "lexical",
@@ -18470,43 +18494,11 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4856,
-      "kind": "regex-literal",
-      "owner": "product",
-      "category": "lexical",
-      "sourceSha256": "e8aa5ea64e1419fb0aa66857287967ac8ba4656f2dd4339d1cdac1041df5ea03"
-    },
-    {
-      "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4857,
-      "kind": "regex-literal",
-      "owner": "productKeys",
-      "category": "lexical",
-      "sourceSha256": "2187fb7c3e8430f5f2d46559d154fb7e643a9fb86dc78e7d00615feda00b7bb9"
-    },
-    {
-      "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4859,
-      "kind": "regex-literal",
-      "owner": "restated",
-      "category": "lexical",
-      "sourceSha256": "e8aa5ea64e1419fb0aa66857287967ac8ba4656f2dd4339d1cdac1041df5ea03"
-    },
-    {
-      "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4860,
-      "kind": "regex-literal",
-      "owner": "restatedKeys",
-      "category": "lexical",
-      "sourceSha256": "d6a02957cea614aff2a6171642141dc8156c46da681c80c87c8d1da3d67d2fe7"
-    },
-    {
-      "file": "scripts/bench-devbox-decision.test.ts",
       "line": 4866,
       "kind": "regex-literal",
       "owner": "product",
       "category": "lexical",
-      "sourceSha256": "d4f07c29dc267ef800f841f49be12ec2f834caa34ebc0e16d3d6f0c286b55328"
+      "sourceSha256": "e8aa5ea64e1419fb0aa66857287967ac8ba4656f2dd4339d1cdac1041df5ea03"
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
@@ -18522,7 +18514,7 @@
       "kind": "regex-literal",
       "owner": "restated",
       "category": "lexical",
-      "sourceSha256": "d4f07c29dc267ef800f841f49be12ec2f834caa34ebc0e16d3d6f0c286b55328"
+      "sourceSha256": "e8aa5ea64e1419fb0aa66857287967ac8ba4656f2dd4339d1cdac1041df5ea03"
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
@@ -18534,7 +18526,39 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4878,
+      "line": 4876,
+      "kind": "regex-literal",
+      "owner": "product",
+      "category": "lexical",
+      "sourceSha256": "d4f07c29dc267ef800f841f49be12ec2f834caa34ebc0e16d3d6f0c286b55328"
+    },
+    {
+      "file": "scripts/bench-devbox-decision.test.ts",
+      "line": 4877,
+      "kind": "regex-literal",
+      "owner": "productKeys",
+      "category": "lexical",
+      "sourceSha256": "2187fb7c3e8430f5f2d46559d154fb7e643a9fb86dc78e7d00615feda00b7bb9"
+    },
+    {
+      "file": "scripts/bench-devbox-decision.test.ts",
+      "line": 4879,
+      "kind": "regex-literal",
+      "owner": "restated",
+      "category": "lexical",
+      "sourceSha256": "d4f07c29dc267ef800f841f49be12ec2f834caa34ebc0e16d3d6f0c286b55328"
+    },
+    {
+      "file": "scripts/bench-devbox-decision.test.ts",
+      "line": 4880,
+      "kind": "regex-literal",
+      "owner": "restatedKeys",
+      "category": "lexical",
+      "sourceSha256": "d6a02957cea614aff2a6171642141dc8156c46da681c80c87c8d1da3d67d2fe7"
+    },
+    {
+      "file": "scripts/bench-devbox-decision.test.ts",
+      "line": 4888,
       "kind": "regex-literal",
       "owner": "reads",
       "category": "lexical",
@@ -18542,7 +18566,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4887,
+      "line": 4897,
       "kind": "regex-literal",
       "owner": "served",
       "category": "lexical",
@@ -18550,7 +18574,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4888,
+      "line": 4898,
       "kind": "regex-literal",
       "owner": "servedKeys",
       "category": "lexical",
@@ -18558,7 +18582,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4894,
+      "line": 4904,
       "kind": "regex-literal",
       "owner": "decoded",
       "category": "lexical",
@@ -18566,7 +18590,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4895,
+      "line": 4905,
       "kind": "regex-literal",
       "owner": "decodedKeys",
       "category": "lexical",
@@ -18574,7 +18598,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4901,
+      "line": 4911,
       "kind": "regex-literal",
       "owner": "probe",
       "category": "lexical",
@@ -18582,7 +18606,7 @@
     },
     {
       "file": "scripts/bench-devbox-decision.test.ts",
-      "line": 4908,
+      "line": 4918,
       "kind": "regex-literal",
       "owner": "arm",
       "category": "lexical",
@@ -18590,7 +18614,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 487,
+      "line": 491,
       "kind": "regex-literal",
       "owner": "contextCopySources",
       "category": "lexical",
@@ -18598,7 +18622,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 488,
+      "line": 492,
       "kind": "regex-literal",
       "owner": "copy",
       "category": "lexical",
@@ -18606,7 +18630,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 490,
+      "line": 494,
       "kind": "regex-literal",
       "owner": "tokens",
       "category": "lexical",
@@ -18614,7 +18638,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 867,
+      "line": 871,
       "kind": "regex-literal",
       "owner": "date",
       "category": "lexical",
@@ -18622,7 +18646,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1214,
+      "line": 1220,
       "kind": "regex-literal",
       "owner": "key",
       "category": "code",
@@ -18630,7 +18654,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1217,
+      "line": 1223,
       "kind": "regex-literal",
       "owner": "listObjects",
       "category": "code",
@@ -18638,7 +18662,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1232,
+      "line": 1238,
       "kind": "regex-literal",
       "owner": "key",
       "category": "code",
@@ -18646,7 +18670,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1233,
+      "line": 1239,
       "kind": "regex-literal",
       "owner": "uploadId",
       "category": "code",
@@ -18654,7 +18678,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1279,
+      "line": 1285,
       "kind": "regex-literal",
       "owner": "workerAbsent",
       "category": "lexical",
@@ -18662,7 +18686,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1296,
+      "line": 1302,
       "kind": "regex-literal",
       "owner": "bucketState",
       "category": "lexical",
@@ -18670,7 +18694,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1434,
+      "line": 1440,
       "kind": "regex-literal",
       "owner": "isTransportLoss",
       "category": "lexical",
@@ -18678,7 +18702,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1435,
+      "line": 1441,
       "kind": "regex-literal",
       "owner": "isTransportLoss",
       "category": "lexical",
@@ -18686,7 +18710,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1549,
+      "line": 1555,
       "kind": "regex-literal",
       "owner": "TRANSIENT_REPLACEMENT",
       "category": "lexical",
@@ -18694,7 +18718,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1585,
+      "line": 1591,
       "kind": "regex-literal",
       "owner": "workerResult",
       "category": "lexical",
@@ -18702,7 +18726,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1601,
+      "line": 1609,
       "kind": "regex-literal",
       "owner": "origin",
       "category": "lexical",
@@ -18710,7 +18734,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1606,
+      "line": 1614,
       "kind": "regex-literal",
       "owner": "workerVersion",
       "category": "lexical",
@@ -18718,7 +18742,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 2042,
+      "line": 2050,
       "kind": "regex-literal",
       "owner": "candidateLifecycleChecks",
       "category": "lexical",
@@ -18726,7 +18750,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 3224,
+      "line": 3233,
       "kind": "regex-literal",
       "owner": "lost",
       "category": "lexical",
@@ -18734,7 +18758,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 3899,
+      "line": 3908,
       "kind": "regex-literal",
       "owner": "OVERLAY_FOLDED_PATTERN",
       "category": "lexical",
@@ -18742,7 +18766,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 3910,
+      "line": 3919,
       "kind": "regex-literal",
       "owner": "CANDIDATE_ROOT_PATTERN",
       "category": "lexical",
@@ -18750,7 +18774,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 4882,
+      "line": 4866,
       "kind": "regex-literal",
       "owner": "isTransientContainerCreateError",
       "category": "lexical",
@@ -18758,7 +18782,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 4898,
+      "line": 4882,
       "kind": "regex-literal",
       "owner": "isRearmableStartupRefusal",
       "category": "lexical",
@@ -18766,7 +18790,15 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 7309,
+      "line": 7294,
+      "kind": "regex-literal",
+      "owner": "compareGenerations",
+      "category": "lexical",
+      "sourceSha256": "764a1e7b1ec3484544574e140af307913371b137f9c4a617df7919b321d7cee2"
+    },
+    {
+      "file": "scripts/bench-devbox-strategies.ts",
+      "line": 7294,
       "kind": "regex-literal",
       "owner": "compareGenerations",
       "category": "lexical",
@@ -18775,14 +18807,6 @@
     {
       "file": "scripts/bench-devbox-strategies.ts",
       "line": 7309,
-      "kind": "regex-literal",
-      "owner": "compareGenerations",
-      "category": "lexical",
-      "sourceSha256": "764a1e7b1ec3484544574e140af307913371b137f9c4a617df7919b321d7cee2"
-    },
-    {
-      "file": "scripts/bench-devbox-strategies.ts",
-      "line": 7324,
       "kind": "regex-literal",
       "owner": "CHAIN_SERVED_PATTERN",
       "category": "lexical",
@@ -18790,7 +18814,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 7514,
+      "line": 7499,
       "kind": "regex-literal",
       "owner": "judgeReadOnlyRefusal",
       "category": "lexical",
@@ -18798,7 +18822,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 7529,
+      "line": 7514,
       "kind": "hand-parser",
       "owner": "parseOverlaySweep",
       "category": "scanner",
@@ -18806,7 +18830,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 7535,
+      "line": 7520,
       "kind": "regex-literal",
       "owner": "swept",
       "category": "lexical",
@@ -18814,7 +18838,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 7741,
+      "line": 7726,
       "kind": "regex-literal",
       "owner": "identityProblems",
       "category": "lexical",
@@ -18822,7 +18846,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 7748,
+      "line": 7733,
       "kind": "regex-literal",
       "owner": "identityProblems",
       "category": "lexical",
@@ -18830,7 +18854,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 8177,
+      "line": 8162,
       "kind": "regex-literal",
       "owner": "orphanTeardownExecutor",
       "category": "lexical",
@@ -18838,7 +18862,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 8185,
+      "line": 8170,
       "kind": "regex-literal",
       "owner": "failed",
       "category": "lexical",
@@ -18846,7 +18870,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 8190,
+      "line": 8175,
       "kind": "regex-literal",
       "owner": "orphanTeardownExecutor",
       "category": "lexical",
@@ -18854,7 +18878,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 8196,
+      "line": 8181,
       "kind": "regex-literal",
       "owner": "orphanTeardownExecutor",
       "category": "lexical",
@@ -18862,15 +18886,15 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 8261,
+      "line": 8248,
       "kind": "hand-parser",
       "owner": "parseOptions",
       "category": "scanner",
-      "sourceSha256": "1e33dd6637604da5c82e55ad1bd4724a879b1ff70cc67c1cf04d26381c22bc3d"
+      "sourceSha256": "4c99b6ad50426b4e447504f8c11071a96dce01034b1d1b9ae07040679ea6aec0"
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 8295,
+      "line": 8289,
       "kind": "regex-literal",
       "owner": "runId",
       "category": "lexical",
@@ -18878,7 +18902,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 8324,
+      "line": 8318,
       "kind": "regex-literal",
       "owner": "repetitions",
       "category": "lexical",
@@ -18886,7 +18910,15 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 8477,
+      "line": 8472,
+      "kind": "regex-literal",
+      "owner": "failed",
+      "category": "lexical",
+      "sourceSha256": "84cb68cfcecb2bf4805e268e25c502ff35df2ade69cf7e1044952892cf9c018f"
+    },
+    {
+      "file": "scripts/bench-devbox-strategies.ts",
+      "line": 8487,
       "kind": "regex-literal",
       "owner": "failed",
       "category": "lexical",
@@ -18896,21 +18928,13 @@
       "file": "scripts/bench-devbox-strategies.ts",
       "line": 8492,
       "kind": "regex-literal",
-      "owner": "failed",
-      "category": "lexical",
-      "sourceSha256": "84cb68cfcecb2bf4805e268e25c502ff35df2ade69cf7e1044952892cf9c018f"
-    },
-    {
-      "file": "scripts/bench-devbox-strategies.ts",
-      "line": 8497,
-      "kind": "regex-literal",
       "owner": "replay",
       "category": "lexical",
       "sourceSha256": "b04f8df121793853fc0d3e264a54d8dad05bcc6519794af5466a5e8fa71e791b"
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 8505,
+      "line": 8500,
       "kind": "regex-literal",
       "owner": "replay",
       "category": "lexical",
@@ -20334,7 +20358,7 @@
     },
     {
       "file": "scripts/feedback-ux.test.ts",
-      "line": 623,
+      "line": 581,
       "kind": "regex-literal",
       "owner": "triple",
       "category": "lexical",
@@ -20342,7 +20366,7 @@
     },
     {
       "file": "scripts/feedback-ux.test.ts",
-      "line": 1248,
+      "line": 1199,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -20350,7 +20374,7 @@
     },
     {
       "file": "scripts/feedback-ux.test.ts",
-      "line": 1277,
+      "line": 1228,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -20358,7 +20382,7 @@
     },
     {
       "file": "scripts/feedback-ux.test.ts",
-      "line": 1290,
+      "line": 1241,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -20366,7 +20390,7 @@
     },
     {
       "file": "scripts/feedback-ux.test.ts",
-      "line": 1454,
+      "line": 1405,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -20374,7 +20398,7 @@
     },
     {
       "file": "scripts/feedback-ux.test.ts",
-      "line": 1455,
+      "line": 1406,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -21094,7 +21118,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1676,
+      "line": 1677,
       "kind": "regex-literal",
       "owner": "match",
       "category": "lexical",
@@ -21102,7 +21126,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1701,
+      "line": 1702,
       "kind": "regex-literal",
       "owner": "deployWaves",
       "category": "lexical",
@@ -21110,7 +21134,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1706,
+      "line": 1707,
       "kind": "regex-literal",
       "owner": "match",
       "category": "lexical",
@@ -21118,7 +21142,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1748,
+      "line": 1749,
       "kind": "regex-literal",
       "owner": "match",
       "category": "lexical",
@@ -21126,7 +21150,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1826,
+      "line": 1827,
       "kind": "regex-literal",
       "owner": "named",
       "category": "lexical",
@@ -21134,7 +21158,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1827,
+      "line": 1828,
       "kind": "regex-literal",
       "owner": "resolveWord",
       "category": "lexical",
@@ -21142,7 +21166,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1830,
+      "line": 1831,
       "kind": "regex-literal",
       "owner": "assignment",
       "category": "lexical",
@@ -21150,7 +21174,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1838,
+      "line": 1839,
       "kind": "regex-literal",
       "owner": "targets",
       "category": "lexical",
@@ -21158,7 +21182,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1840,
+      "line": 1841,
       "kind": "regex-literal",
       "owner": "evalTierArms",
       "category": "lexical",
@@ -21166,7 +21190,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1843,
+      "line": 1844,
       "kind": "regex-literal",
       "owner": "evalTierArms",
       "category": "lexical",
@@ -21174,7 +21198,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1851,
+      "line": 1852,
       "kind": "regex-literal",
       "owner": "invocation",
       "category": "lexical",
@@ -21182,7 +21206,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1981,
+      "line": 1982,
       "kind": "regex-literal",
       "owner": "words",
       "category": "lexical",
@@ -21190,7 +21214,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 2035,
+      "line": 2036,
       "kind": "regex-literal",
       "owner": "clean",
       "category": "lexical",
@@ -21198,7 +21222,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 2037,
+      "line": 2038,
       "kind": "regex-literal",
       "owner": "pattern",
       "category": "lexical",
@@ -21206,7 +21230,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 2037,
+      "line": 2038,
       "kind": "regex-literal",
       "owner": "pattern",
       "category": "lexical",
@@ -21214,7 +21238,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 2037,
+      "line": 2038,
       "kind": "regexp-constructor",
       "owner": "pattern",
       "category": "composition",
@@ -23238,7 +23262,7 @@
     },
     {
       "file": "tests/first-run/slate.first-run.ts",
-      "line": 71,
+      "line": 53,
       "kind": "regex-literal",
       "owner": "run",
       "category": "lexical",
@@ -23246,7 +23270,7 @@
     },
     {
       "file": "tests/first-run/slate.first-run.ts",
-      "line": 104,
+      "line": 86,
       "kind": "regex-literal",
       "owner": "reached",
       "category": "lexical",
@@ -23851,7 +23875,7 @@
     },
     {
       "file": "packages/cf-backend/src/hooks/use-kinu.ts",
-      "line": 2071,
+      "line": 2069,
       "kind": "hand-parser",
       "owner": "parseMemoryContent",
       "category": "scanner",
@@ -24148,7 +24172,7 @@
     },
     {
       "file": "packages/core/src/craft/source.ts",
-      "line": 109,
+      "line": 93,
       "kind": "hand-parser",
       "owner": "stripExports",
       "category": "scanner",
@@ -24904,7 +24928,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1214,
+      "line": 1220,
       "kind": "regex-literal",
       "owner": "key",
       "category": "code",
@@ -24913,7 +24937,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1217,
+      "line": 1223,
       "kind": "regex-literal",
       "owner": "listObjects",
       "category": "code",
@@ -24922,7 +24946,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1232,
+      "line": 1238,
       "kind": "regex-literal",
       "owner": "key",
       "category": "code",
@@ -24931,7 +24955,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 1233,
+      "line": 1239,
       "kind": "regex-literal",
       "owner": "uploadId",
       "category": "code",
@@ -24940,7 +24964,7 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 7529,
+      "line": 7514,
       "kind": "hand-parser",
       "owner": "parseOverlaySweep",
       "category": "scanner",
@@ -24949,12 +24973,12 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "line": 8261,
+      "line": 8248,
       "kind": "hand-parser",
       "owner": "parseOptions",
       "category": "scanner",
       "decision": "cli",
-      "sourceSha256": "1e33dd6637604da5c82e55ad1bd4724a879b1ff70cc67c1cf04d26381c22bc3d"
+      "sourceSha256": "4c99b6ad50426b4e447504f8c11071a96dce01034b1d1b9ae07040679ea6aec0"
     },
     {
       "file": "scripts/bench.test.ts",
@@ -25284,9 +25308,9 @@
   "replacements": [
     {
       "file": "packages/cli-backend/src/executor.ts",
-      "owner": "addImplicitReturn",
+      "owner": "createSandboxedExecutor",
       "classification": "REPLACED",
-      "replacement": "Acorn expression and statement ranges in packages/core/src/craft/source.ts",
+      "replacement": "Package-owned @cloudflare/codemode/normalize through typed local runtime adapters",
       "proof": "bun test packages/cli-backend/tests/executor.test.ts packages/cli-backend/tests/execute-tools-factory.test.ts"
     },
     {
@@ -25302,6 +25326,13 @@
       "classification": "REPLACED",
       "replacement": "JSON.parse reads the top-level manifest name instead of sed field extraction",
       "proof": "The nested-name smoke fixture returned @wrong before the change and @right after it."
+    },
+    {
+      "file": "scripts/bench-devbox-strategies.ts",
+      "owner": "parseOptions",
+      "classification": "REPLACED",
+      "replacement": "node:util.parseArgs tokenizes declared options; benchmark domain validation remains local",
+      "proof": "bun test scripts/bench-devbox-decision.test.ts --test-name-pattern \"standard option syntax|frozen scope|verify-only wins\""
     }
   ]
 }

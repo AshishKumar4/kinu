@@ -50,6 +50,7 @@ import {
   describeThrown, publishTeardown, runTeardownOnce, runWrangler,
 } from './fixtures/r2-bench/deploy-substrate';
 import * as v from 'valibot';
+import { parseArgs } from 'node:util';
 import { AwsClient } from 'aws4fetch';
 import { summarize, type Summary } from './fixtures/r2-bench/stats';
 import { parseProbeRun, type ProbeRun } from './fixtures/r2-bench/report';
@@ -8245,19 +8246,27 @@ Options:
 `;
 
 export function parseOptions(argv: readonly string[]): Options {
-  const value = (name: string, fallback: string): string => {
-    const index = argv.indexOf(`--${name}`);
-    return index !== -1 && index + 1 < argv.length ? argv[index + 1]! : fallback;
-  };
+  const { values } = parseArgs({
+    args: argv,
+    allowPositionals: false,
+    options: {
+      arms: { type: 'string', default: DECISIVE_ARMS.join(',') },
+      control: { type: 'string', multiple: true, default: [] },
+      seed: { type: 'string', default: '20260824' },
+      'budget-ms': { type: 'string', default: '8000' },
+      repetitions: { type: 'string' },
+      decisive: { type: 'boolean', default: false },
+      'verify-only': { type: 'boolean', default: false },
+      plan: { type: 'boolean', default: false },
+      'fault-cuts': { type: 'boolean', default: false },
+      keep: { type: 'boolean', default: false },
+      out: { type: 'string' },
+    },
+  });
   const controls: ControlOption[] = [];
   const knownStrategies = STRATEGIES.join(', ');
   const seenControls = new Set<Strategy>();
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] !== '--control') continue;
-    const rawControl = argv[index + 1];
-    if (rawControl === undefined || rawControl.startsWith('--')) {
-      throw new Error('--control requires <strategy>=<path>');
-    }
+  for (const rawControl of values.control) {
     const separator = rawControl.indexOf('=');
     if (separator === -1) {
       throw new Error(`--control requires <strategy>=<path>; got "${rawControl}"`);
@@ -8276,10 +8285,9 @@ export function parseOptions(argv: readonly string[]): Options {
     }
     seenControls.add(strategy);
     controls.push({ strategy, path });
-    index += 1;
   }
   const runId = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-  const requestedArms = value('arms', DECISIVE_ARMS.join(',')).split(',').map((raw): Strategy => {
+  const requestedArms = values.arms.split(',').map((raw): Strategy => {
     const arm = STRATEGIES.find((strategy) => strategy === raw.trim());
     if (arm === undefined) {
       throw new Error(`--arms names "${raw.trim()}"; known arms: ${STRATEGIES.join(', ')}`);
@@ -8299,11 +8307,11 @@ export function parseOptions(argv: readonly string[]): Options {
   // asking for both means the verification, not a silent heavy run: the arm
   // walk's decisive block reads this field, and a probe that ran it anyway
   // would be the failure mode its own suite refuses.
-  const decisive = argv.includes('--decisive') && !argv.includes('--verify-only');
+  const decisive = values.decisive && !values['verify-only'];
   if (decisive && requestedArms.some((arm) => !DECISIVE_ARMS.includes(arm))) {
     throw new Error(SCOPE_FREEZE);
   }
-  const rawRepetitions = value('repetitions', String(decisive ? DECISIVE_REPETITIONS : 1));
+  const rawRepetitions = values.repetitions ?? String(decisive ? DECISIVE_REPETITIONS : 1);
   // THE WHOLE TEXT, not `parseInt`'s prefix of it: `parseInt('1.5')` is 1, so a
   // fractional count would silently become a single repetition and the run
   // would report a number nobody asked for.
@@ -8316,17 +8324,17 @@ export function parseOptions(argv: readonly string[]): Options {
   }
   return {
     runId,
-    seed: Number.parseInt(value('seed', '20260824'), 10),
-    budgetMs: Number.parseInt(value('budget-ms', '8000'), 10),
+    seed: Number.parseInt(values.seed, 10),
+    budgetMs: Number.parseInt(values['budget-ms'], 10),
     decisive,
-    verifyOnly: argv.includes('--verify-only'),
-    plan: argv.includes('--plan'),
-    faultCuts: argv.includes('--fault-cuts'),
-    keep: argv.includes('--keep'),
+    verifyOnly: values['verify-only'],
+    plan: values.plan,
+    faultCuts: values['fault-cuts'],
+    keep: values.keep,
     repetitions,
     controls,
     arms: requestedArms,
-    out: value('out', join('bench-artifacts', `devbox-strategies-${runId}.json`)),
+    out: values.out ?? join('bench-artifacts', `devbox-strategies-${runId}.json`),
   };
 }
 
