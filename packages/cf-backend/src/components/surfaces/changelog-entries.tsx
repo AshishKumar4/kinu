@@ -105,7 +105,10 @@ export function ChangelogFailure(
   if (resource.status === "error") {
     return <LoadFailure what="the changelog" message={resource.message} onRetry={reload} />;
   }
-  return <div className="flex justify-center py-4"><Loader size="sm" /></div>;
+  return <div className="flex items-center justify-center gap-2 py-4 text-xs p-text-3" role="status">
+    <Loader size="sm" />
+    <span>Loading journal…</span>
+  </div>;
 }
 
 export interface ChangelogEntryCardProps {

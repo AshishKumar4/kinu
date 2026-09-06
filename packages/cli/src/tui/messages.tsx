@@ -57,8 +57,8 @@ type WellBoxStyle = Pick<BoxOptions, 'border' | 'borderStyle' | 'borderColor' | 
  */
 function wellBoxStyle(well: TuiThemeColors['well']): WellBoxStyle {
   return {
-    border: true,
-    borderStyle: 'rounded',
+    border: ['left'],
+    borderStyle: 'single',
     borderColor: well.border,
     backgroundColor: well.fill,
     paddingLeft: 1,
@@ -144,7 +144,7 @@ function ToolActivityCard({ rows, callPreviewWidth, resultPreviewWidth, expanded
   return (
     <box
       flexDirection="column"
-      style={{ marginLeft: 2, marginRight: 2, marginBottom: 1, ...wellBoxStyle(well) }}
+      style={{ marginLeft: 2, marginRight: 1, marginBottom: 1, ...wellBoxStyle(well) }}
     >
       <box flexDirection="row" justifyContent="space-between">
         <text>

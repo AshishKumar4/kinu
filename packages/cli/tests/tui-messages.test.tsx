@@ -196,12 +196,12 @@ describe('TUI transcript rendering', () => {
         ));
         const fenced = spans.find((span) => span.text.includes('const FENCED'))!;
         const prose = spans.find((span) => span.text.includes('PROSELINE'))!;
-        const rule = spans.find((span) => span.text.includes('╭'))!;
+        const rail = spans.find((span) => span.text.includes('│'))!;
         expect(hex(fenced.bg)).toBe(theme.colors.well.fill);
         expect(hex(fenced.fg)).toBe(theme.colors.well.code);
-        // The well is a box, not a painted line: its own rounded rule frames the block.
-        expect(hex(rule.bg)).toBe(theme.colors.well.fill);
-        expect(hex(rule.fg)).toBe(theme.colors.well.border);
+        // A single rail keeps the well's grouping without framing prose in chrome.
+        expect(hex(rail.bg)).toBe(theme.colors.well.fill);
+        expect(hex(rail.fg)).toBe(theme.colors.well.border);
         // Prose keeps the canvas and the ink register.
         expect(hex(prose.bg)).not.toBe(theme.colors.well.fill);
         expect(hex(prose.fg)).toBe(theme.colors.text.strong);

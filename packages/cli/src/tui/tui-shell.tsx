@@ -44,8 +44,13 @@ export function tuiLayoutForWidth(width: number): TuiLayout {
   return width >= MEDIUM_LAYOUT_MIN_COLUMNS ? 'medium' : 'narrow';
 }
 
+/** The columns left to the chat scene after an opted-in pinned sidebar. */
+export function sceneWidthFor(width: number, wideSidebarOpen: boolean): number {
+  return tuiLayoutForWidth(width) === 'wide' && wideSidebarOpen
+    ? Math.max(1, width - WORKSPACE_SIDEBAR_COLUMNS)
+    : width;
+}
 const SceneWidthContext = createContext<number | null>(null);
-
 /**
  * The columns the scene owns: the terminal minus the pinned sidebar. The
  * status bar, the transcript and every overlay size themselves to it, not to
@@ -576,7 +581,7 @@ export function TuiShell(props: TuiShellProps) {
     />
   );
 
-  const sceneWidth = sidebarPinned ? Math.max(1, width - WORKSPACE_SIDEBAR_COLUMNS) : width;
+  const sceneWidth = sceneWidthFor(width, preferences.wideSidebarOpen);
   return (
     <box
       flexDirection="row"

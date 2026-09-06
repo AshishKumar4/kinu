@@ -11,7 +11,7 @@ import type { DeviceConnectPromptState } from './use-device-connect';
 import { clipText } from './format';
 import { createKeyDispatcher, useKeybindingRegistry, type TuiActionId } from './actions';
 import {
-  DEFAULT_TUI_THEME_SELECTION,
+  SYSTEM_TUI_THEME_SELECTION,
   REFERENCE_TERMINAL_GROUNDS,
   resolveThemeSelection,
   useTuiTheme,
@@ -793,7 +793,7 @@ export function ThemePickerOverlay({ terminal, selection, onSelect }: ThemePicke
   const keybindings = useKeybindingRegistry();
   const dispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
   const choices = useMemo<ThemeChoice[]>(() => {
-    const system = selection.mode === 'system' ? selection : DEFAULT_TUI_THEME_SELECTION;
+    const system = selection.mode === 'system' ? selection : SYSTEM_TUI_THEME_SELECTION;
     const systemTheme = resolveThemeSelection(registry, system, terminalAppearance);
     return [
       {

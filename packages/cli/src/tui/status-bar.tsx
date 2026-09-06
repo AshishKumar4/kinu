@@ -1,7 +1,6 @@
 import { TUI_MARKS, type ReasoningEffort, type ResolvedTurnProfile } from '@kinu.run/core';
 
 import type { AgentClientMode } from '../agent-client';
-import { VERSION } from '../display';
 import { useKeybindingRegistry } from './actions';
 import { formatContextUsage, modelDisplayName } from './context-status';
 import { clipText } from './format';
@@ -36,12 +35,7 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
   const keybindings = useKeybindingRegistry();
   const innerWidth = Math.max(0, width - 4);
   const connection = connected ? TUI_MARKS.connected : TUI_MARKS.disconnected;
-  const compactVersionTail = ` cli ${VERSION} ${connection}`;
-  const tail = width >= 48
-    ? `  cli ${VERSION}  ${connection}`
-    : width >= 30 && innerWidth - compactVersionTail.length >= 14
-      ? compactVersionTail
-      : ` ${connection}`;
+  const tail = ` ${connection}`;
   const available = Math.max(0, innerWidth - tail.length);
   const identityBudget = Math.min(44, available < 32 ? available : Math.ceil(available * 0.42));
   const versionSuffix = scaffoldVersion !== undefined ? ` v${scaffoldVersion}` : '';
@@ -89,7 +83,7 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
       ? [{ id: 'profile', text: `  ${profile.role.label} · ${profile.tier.id}`, color: colors.intent.accent }]
       : []),
     { id: 'context', text: `  ${formatContextUsage(model, contextTokens, contextWindow)}`, color: colors.text.muted },
-    { id: 'effort', text: `  effort ${reasoningEffort}`, color: colors.text.muted },
+    ...(width >= 100 ? [{ id: 'effort', text: `  effort ${reasoningEffort}`, color: colors.text.muted }] : []),
     ...(autoEvolve !== undefined
       ? [{
           id: 'evolve',

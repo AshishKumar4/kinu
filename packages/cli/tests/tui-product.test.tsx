@@ -32,6 +32,7 @@ import {
   TuiShell,
   agentSourceFromList,
   tuiLayoutForWidth,
+  sceneWidthFor,
   useAgentRoster,
 } from '../src/tui/tui-shell';
 
@@ -169,10 +170,16 @@ describe('TUI product registries', () => {
     expect(() => createThemeRegistry([invisible])).toThrow(/text\.primary\/background\.overlay contrast/);
   });
 
-  test('a system theme selection follows the terminal appearance onto the painted default', async () => {
+  test('the default theme remains painted light regardless of terminal appearance', async () => {
+    for (const appearance of ['dark', 'light'] as const) {
+      expect(await renderedThemeId(appearance)).toBe('kinu-light-solid');
+    }
+  });
+
+  test('the selectable system theme follows terminal appearance', async () => {
+    const system: ThemeSelection = { mode: 'system', darkThemeId: 'kinu-dark-solid', lightThemeId: 'kinu-light-solid' };
     for (const [appearance, expected] of [['dark', 'kinu-dark-solid'], ['light', 'kinu-light-solid']] as const) {
-      const themeId = await renderedThemeId(appearance);
-      expect(themeId).toBe(expected);
+      expect(await renderedThemeId(appearance, system)).toBe(expected);
     }
   });
 
@@ -206,6 +213,11 @@ describe('adaptive TUI shell', () => {
     expect([40, 80, 120, 160].map(tuiLayoutForWidth)).toEqual(['narrow', 'medium', 'wide', 'wide']);
   });
 
+  test('wide overlay geometry excludes the pinned sidebar', () => {
+    expect(sceneWidthFor(160, true)).toBe(132);
+    expect(sceneWidthFor(160, false)).toBe(160);
+    expect(sceneWidthFor(80, true)).toBe(80);
+  });
   test('wide sidebar preference persists through a new provider', () => {
     const path = join(scratchDir('tui-prefs'), 'tui.json');
     const store = createFileTuiPreferenceStore(path);

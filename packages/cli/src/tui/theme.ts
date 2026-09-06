@@ -175,6 +175,11 @@ const DEFAULT_LIGHT_TUI_THEME_ID = 'kinu-light-solid';
  * to show through.
  */
 export const DEFAULT_TUI_THEME_SELECTION: ThemeSelection = Object.freeze({
+  mode: 'theme',
+  themeId: DEFAULT_LIGHT_TUI_THEME_ID,
+});
+/** The optional appearance-following selection the picker offers explicitly. */
+export const SYSTEM_TUI_THEME_SELECTION: ThemeSelection = Object.freeze({
   mode: 'system',
   darkThemeId: DEFAULT_DARK_TUI_THEME_ID,
   lightThemeId: DEFAULT_LIGHT_TUI_THEME_ID,

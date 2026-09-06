@@ -34,7 +34,7 @@ const TEST_TUI_BACKGROUND = BUILTIN_TUI_THEMES[0]!.colors.background.canvas;
 const repoRoot = resolve(__dirname, '../../..');
 
 describe('CLI TUI layout', () => {
-  test('status bar makes the model control discoverable and shows effort', async () => {
+  test('status bar makes the model control discoverable and shows effort without version noise', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 110, height: 8, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
     try {
@@ -53,14 +53,14 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('GPT 5.5');
       expect(frame).toContain('[Ctrl+L]');
       expect(frame).toContain('effort high');
-      expect(frame).toContain(`cli ${VERSION}`);
+      expect(frame).not.toContain('cli ');
 
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
-  test('status bar drops the model control whole on narrow terminals and retains the CLI version', async () => {
+  test('status bar drops the model control whole on narrow terminals and retains connection state', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 52, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
     try {
@@ -79,7 +79,7 @@ describe('CLI TUI layout', () => {
       );
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
-      expect(frame).toContain(`cli ${VERSION}`);
+      expect(frame).toContain('●');
       // Nothing half-clips: too narrow for even the bare name means the
       // control is gone, not an ellipsized fragment.
       expect(frame).not.toContain('A Very Long Model Name That Cannot Fit');

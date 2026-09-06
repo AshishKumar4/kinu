@@ -27,7 +27,7 @@ const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/role', description: 'Show or select this agent role', usage: '/role [id]' },
   { name: '/rename', description: 'Rename this agent; a name you choose is never auto-replaced', usage: '/rename <name>', requires: 'rename' },
   { name: '/settings', description: 'Open interactive settings' },
-  { name: '/theme', description: 'Choose the TUI theme; follows the terminal by default' },
+  { name: '/theme', description: 'Choose the TUI theme; light by default' },
   { name: '/models', description: 'List configured model providers', requires: 'localControls' },
   { name: '/memory', description: 'Show memory' },
   { name: '/changelog', description: 'Review self-changes; revert by index', usage: '/changelog [revert <n>]' },

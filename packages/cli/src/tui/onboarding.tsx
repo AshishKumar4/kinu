@@ -16,7 +16,7 @@ import {
   type OnboardingStepId,
   type WorkspaceLocationChoice,
 } from './preferences';
-import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
+import { SYSTEM_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
 
 export interface OnboardingReadiness {
   readonly location?: WorkspaceLocationChoice;
@@ -150,7 +150,7 @@ export function GuidedOnboarding(props: {
 
   const { registry } = useTuiTheme();
   const themeChoices = useMemo<ReadonlyArray<{ readonly label: string; readonly selection: ThemeSelection }>>(() => [
-    { label: 'Follow the terminal', selection: DEFAULT_TUI_THEME_SELECTION },
+    { label: 'Follow the terminal', selection: SYSTEM_TUI_THEME_SELECTION },
     ...registry.themes.map((theme) => ({ label: theme.label, selection: { mode: 'theme' as const, themeId: theme.id } })),
   ], [registry]);
   const choices = activeStep === 'location'

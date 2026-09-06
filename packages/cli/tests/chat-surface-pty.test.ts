@@ -17,8 +17,8 @@ const entry = resolve(import.meta.dir, 'fixtures/pty-chat.tsx');
 describe('the chat surface on a real terminal, fresh install', () => {
   test('the default theme paints the canvas and writes assistant prose in ink', () => {
     const selection = DEFAULT_TUI_THEME_SELECTION;
-    if (selection.mode !== 'system') throw new Error('the default selection follows the terminal');
-    const dark = BUILTIN_TUI_THEMES.find((theme) => theme.id === selection.darkThemeId)!;
+    if (selection.mode !== 'theme') throw new Error('the default selection opens on light');
+    const light = BUILTIN_TUI_THEMES.find((theme) => theme.id === selection.themeId)!;
     const run = runTuiInPty(entry, {
       steps: [
         { wait: 'Connected to pty', timeout: 15 },
@@ -31,14 +31,13 @@ describe('the chat surface on a real terminal, fresh install', () => {
     // Defect 4: a fresh install paints. The canvas token is defined and its
     // background SGR reaches the terminal, so panels sit on a fill rather
     // than on whatever the terminal happens to be.
-    expect(dark.colors.background.canvas).toBeDefined();
-    const canvas = dark.colors.background.canvas!;
+    const canvas = light.colors.background.canvas!;
     const [red, green, blue] = [1, 3, 5].map((start) => Number.parseInt(canvas.slice(start, start + 2), 16));
     expect(run.raw).toContain(`48;2;${String(red)};${String(green)};${String(blue)}m`);
     // Defect 5: the agent's body is written in the ink register, not the
     // dimmer body register, so it reads as prose beside the muted thinking
     // line and the muted annotations.
-    expect(inkBefore(run.raw, 'agent prose reply')).toBe(dark.colors.text.strong);
-    expect(dark.colors.text.strong).not.toBe(dark.colors.text.primary);
+    expect(inkBefore(run.raw, 'agent prose reply')).toBe(light.colors.text.strong);
+    expect(light.colors.text.strong).not.toBe(light.colors.text.primary);
   }, 60_000);
 });

@@ -28,7 +28,7 @@ export interface LoginProvider {
 /** Sign-in is one decision: choose a configured provider. */
 export function loginDocument(providers: readonly LoginProvider[]): string {
   const body = providers.length === 0
-    ? '<p class="lede">Sign-in is unavailable.</p>'
+    ? '<p class="lede">Sign-in is unavailable.</p><div class="providers"><a class="provider" href="/install">Run Kinu locally</a></div>'
     : `<div class="providers">${providers.map((provider) => (
       `<a class="provider" href="${provider.href}">Continue with ${escapeHtml(provider.label)}</a>`
     )).join('')}</div>`;

@@ -88,7 +88,7 @@ import {
   TuiShell,
   tuiLayoutForWidth,
   usePreservedScrollAnchor,
-  useSceneWidth,
+  sceneWidthFor,
   useTuiProduct,
   useAgentRoster,
   agentSourceFromList,
@@ -187,9 +187,9 @@ function ChatScene({
   readHub,
 }: ChatAppOpts) {
   const { width, height } = useTerminalDimensions();
-  const sceneWidth = useSceneWidth();
   const { colors, definition: activeTheme } = useTuiTheme();
   const { keybindings, preferences, updatePreferences } = useTuiProduct();
+  const sceneWidth = sceneWidthFor(width, preferences.wideSidebarOpen);
   const keyDispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
   const workspaceSource = useMemo(
     () => workspaceSourceInput ?? agentSourceFromList(listSidebarAgents),
@@ -1449,10 +1449,9 @@ function ChatScene({
               : inputState.walkbackOpen
                 ? 'Walk back ›'
                 : null;
-  // The composer's border says one thing: the surface that is open over it,
-  // or that a turn is running. The workspace name is the status bar's, and
-  // the global keys have the command palette; neither belongs on the input.
-  const composerTitle = isProcessing ? '⟳ processing…' : surfaceTitle ?? undefined;
+  // The composer identifies an open surface. Turn progress stays in the
+  // transcript's phase line, so one state is never announced twice.
+  const composerTitle = surfaceTitle ?? undefined;
   // The placeholder is the one line a person reads before typing. While a
   // turn runs, what typing does is the one thing worth saying.
   const composerPlaceholder = !ready
