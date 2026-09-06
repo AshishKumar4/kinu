@@ -702,12 +702,47 @@ interface DeviceConnectOverlayProps {
   terminal: OverlayGeometry;
 }
 
+function wrappedTextRows(text: string, width: number): number {
+  return text.split('\n').reduce((total, line) => {
+    const words = line.split(/\s+/u);
+    let rows = 1;
+    let used = 0;
+    for (const word of words) {
+      const wordColumns = Bun.stringWidth(word);
+      if (used === 0) {
+        rows += Math.max(0, Math.ceil(wordColumns / width) - 1);
+        used = wordColumns % width || Math.min(wordColumns, width);
+      } else if (used + 1 + wordColumns > width) {
+        rows += Math.max(1, Math.ceil(wordColumns / width));
+        used = wordColumns % width || Math.min(wordColumns, width);
+      } else {
+        used += 1 + wordColumns;
+      }
+    }
+    return total + rows;
+  }, 0);
+}
+
+function WrappedPaletteLine({ text, width, color }: { text: string; width: number; color: string }) {
+  return (
+    <box style={{ height: wrappedTextRows(text, width), flexShrink: 0 }}>
+      <text wrapMode="word"><span fg={color}>{text}</span></text>
+    </box>
+  );
+}
+
 export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayProps) {
   const { colors } = useTuiTheme();
   const keybindings = useKeybindingRegistry();
   const paletteWidth = boundedPaletteWidth(terminal, 0.52, 52, 86);
-  const paletteHeight = 9;
   const innerWidth = Math.max(1, paletteWidth - 4);
+  const linking = prompt.phase === 'ask' ? `Linking registers this machine as "${prompt.deviceName}".` : '';
+  const consequence = 'A workspace you approve runs commands here in a sandbox. Revoke it in Account settings → Devices.';
+  const askHeight = prompt.phase === 'ask'
+    ? 2 + wrappedTextRows(prompt.statusLine, innerWidth) + wrappedTextRows(linking, innerWidth)
+      + wrappedTextRows(consequence, innerWidth) + 4
+    : 9;
+  const paletteHeight = Math.min(askHeight, Math.max(3, terminal.height - 2));
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   return (
     <PaletteFrame
@@ -719,9 +754,9 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
     >
       {prompt.phase === 'ask' ? (
         <>
-          <PaletteLine text={prompt.statusLine} width={innerWidth} color={colors.text.primary} />
-          <PaletteLine text={`Linking registers this machine as "${prompt.deviceName}".`} width={innerWidth} color={colors.text.muted} />
-          <PaletteLine text="A workspace you approve runs commands here in a sandbox. Revoke it in Account settings → Devices." width={innerWidth} color={colors.text.muted} />
+          <WrappedPaletteLine text={prompt.statusLine} width={innerWidth} color={colors.text.primary} />
+          <WrappedPaletteLine text={linking} width={innerWidth} color={colors.text.muted} />
+          <WrappedPaletteLine text={consequence} width={innerWidth} color={colors.text.muted} />
           <PaletteLine text={`${keybindings.hint('device.connect')} connect and keep connected`} width={innerWidth} color={colors.intent.accentStrong} />
           <PaletteLine text={`${keybindings.hint('device.ssh')} use this session only`} width={innerWidth} color={colors.intent.accentStrong} />
           <PaletteLine text={`${keybindings.hint('device.dismiss')} don't ask again · ${keybindings.hint('device.not-now')} not now`} width={innerWidth} color={colors.text.muted} />

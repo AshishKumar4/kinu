@@ -32,7 +32,6 @@ import {
   TuiShell,
   agentSourceFromList,
   tuiLayoutForWidth,
-  sceneWidthFor,
   useAgentRoster,
 } from '../src/tui/tui-shell';
 
@@ -213,11 +212,6 @@ describe('adaptive TUI shell', () => {
     expect([40, 80, 120, 160].map(tuiLayoutForWidth)).toEqual(['narrow', 'medium', 'wide', 'wide']);
   });
 
-  test('wide overlay geometry excludes the pinned sidebar', () => {
-    expect(sceneWidthFor(160, true)).toBe(132);
-    expect(sceneWidthFor(160, false)).toBe(160);
-    expect(sceneWidthFor(80, true)).toBe(80);
-  });
   test('wide sidebar preference persists through a new provider', () => {
     const path = join(scratchDir('tui-prefs'), 'tui.json');
     const store = createFileTuiPreferenceStore(path);

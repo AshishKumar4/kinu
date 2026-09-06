@@ -361,7 +361,7 @@ function IncidentsView(): ReactNode {
                 when(i.openedAt),
                 <span className="tabular-nums">{i.failures}</span>,
                 i.alertedAt === null
-                  ? <span className="p-gold text-[11px]">alert owed</span>
+                  ? <span className="p-accent text-[11px]">alert owed</span>
                   : when(i.alertedAt),
                 <span className="p-text-2 text-xs">{i.detail}</span>,
               ],
@@ -527,7 +527,7 @@ function AuditView(): ReactNode {
                   <span className="font-mono text-xs">{a.operation}</span>,
                   <span className="font-mono text-xs">{a.target}</span>,
                   <span className={a.outcome === 'ok' ? 'p-success text-[11px]'
-                    : a.outcome === 'denied' ? 'p-gold text-[11px]' : 'p-danger text-[11px]'}>
+                    : a.outcome === 'denied' ? 'p-accent text-[11px]' : 'p-danger text-[11px]'}>
                     {a.outcome}
                   </span>,
                   <span className="p-text-2 text-xs">{a.detail}</span>,

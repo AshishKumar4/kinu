@@ -45,7 +45,7 @@ const BugFixPlanPanel = lazy(() => import('./BugFixPlanPanel'));
 function candidateChip(candidate: DemoCandidate): ReactElement {
   if (candidate.state === 'running') {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full p-accent-subtle px-2 py-0.5 text-[10px] font-semibold p-gold">
+      <span className="inline-flex items-center gap-1.5 rounded-full p-accent-subtle px-2 py-0.5 text-[10px] font-semibold p-accent">
         <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />running
       </span>
     );
@@ -56,7 +56,7 @@ function candidateChip(candidate: DemoCandidate): ReactElement {
   return (
     <span className="inline-flex items-center gap-1.5">
       <span className="p-badge-success rounded-full px-2 py-0.5 text-[10px] font-semibold">{candidate.result}</span>
-      <span className="rounded-full p-accent-subtle px-2 py-0.5 text-[10px] font-semibold p-gold">selected</span>
+      <span className="rounded-full p-accent-subtle px-2 py-0.5 text-[10px] font-semibold p-accent">selected</span>
     </span>
   );
 }
@@ -316,7 +316,7 @@ export function BugFixDemo(): ReactElement {
         <div className="flex items-center gap-2">
           <span
             data-demo-phase-label
-            className="min-w-[8.5rem] text-right font-mono text-[10px] uppercase tracking-[.12em] p-gold"
+            className="min-w-[8.5rem] text-right font-mono text-[10px] uppercase tracking-[.12em] p-accent"
           >
             {discrete.phaseLabel}
           </span>
@@ -390,13 +390,13 @@ export function BugFixDemo(): ReactElement {
             >
               {discrete.needsYou === 'pending' ? (
                 <>
-                  <div className="border-b border-dashed border-[var(--c-dash)] px-3.5 py-2 text-[11.5px] font-semibold p-gold">Needs you · 1</div>
+                  <div className="border-b border-dashed border-[var(--c-dash)] px-3.5 py-2 text-[11.5px] font-semibold p-accent">Needs you · 1</div>
                   <div className="flex items-center justify-between gap-3 px-3.5 py-3">
                     <span className="text-[12.5px] p-text-2">Fix plan ready for review</span>
                     <button
                       type="button"
                       data-demo-target="review-plan"
-                      className="rounded-full border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] px-2.5 py-0.5 text-[11px] p-gold"
+                      className="rounded-full border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] px-2.5 py-0.5 text-[11px] p-accent"
                     >
                       Review plan
                     </button>
@@ -432,7 +432,7 @@ export function BugFixDemo(): ReactElement {
             <div data-demo-target="tests" data-demo-tests={discrete.testsSettled ? 'settled' : 'pending'} className="overflow-hidden rounded-xl border p-border p-surface">
               {discrete.patchLanded && (
                 <div className="flex items-baseline gap-2 px-3.5 py-2.5">
-                  <span className="text-[10px] p-gold">◈</span>
+                  <span className="text-[10px] p-accent">◈</span>
                   <span className="flex-1 text-xs p-text-2">Migration patched from the selected candidate</span>
                 </div>
               )}

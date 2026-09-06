@@ -128,7 +128,7 @@ function EvolutionCard({ rpc }: { rpc: Rpc }) {
         <div className="p-group">
           {runs.map((run) => (
             <div key={run.runId} className="flex items-center gap-2.5 px-4 py-2.5">
-              <span className="shrink-0 font-mono text-[11px] p-gold">{run.runId}</span>
+              <span className="shrink-0 font-mono text-[11px] p-accent">{run.runId}</span>
               <span className="min-w-0 flex-1 truncate text-[13px] p-text-2">{run.target}</span>
               <span className={`shrink-0 text-[10px] ${run.status === "complete" ? "p-success" : "p-text-4"}`}>{run.status}</span>
               <span className="shrink-0 font-mono text-[10.5px] p-text-4 tabular-nums">{run.iterations} it</span>

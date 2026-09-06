@@ -98,10 +98,10 @@ export default function HomePage() {
         <aside className="order-3 min-w-0 lg:order-none">
           <div className="rounded-[14px] border p-border p-surface px-[18px] py-4">
             <div className="mb-2.5 text-xs font-semibold p-text-4">Setup</div>
-            <Link to="/user/settings" className="block py-[5px] text-[13px] p-gold transition-colors hover:p-accent">
+            <Link to="/user/settings" className="block py-[5px] text-[13px] p-accent">
               Model providers →
             </Link>
-            <a href="/install" className="block py-[5px] text-[13px] p-gold transition-colors hover:p-accent">
+            <a href="/install" className="block py-[5px] text-[13px] p-accent">
               Install the CLI →
             </a>
           </div>
@@ -118,7 +118,7 @@ export default function HomePage() {
                 <Link
                   key={agent.name}
                   to={`/workspace/${agent.name}`}
-                  className={`flex items-center justify-between gap-3 px-[18px] py-3 text-[13.5px] p-text transition-colors hover:p-gold hover:p-elevated ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}
+                  className={`flex items-center justify-between gap-3 px-[18px] py-3 text-[13.5px] p-text transition-colors hover:p-accent hover:p-elevated ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}
                 >
                   <span className="truncate">{agent.displayName || agent.name}</span>
                   <span aria-hidden="true" className="p-text-4">→</span>

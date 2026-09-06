@@ -18,7 +18,8 @@ describe('the chat surface on a real terminal, fresh install', () => {
   test('the default theme paints the canvas and writes assistant prose in ink', () => {
     const selection = DEFAULT_TUI_THEME_SELECTION;
     if (selection.mode !== 'theme') throw new Error('the default selection opens on light');
-    const light = BUILTIN_TUI_THEMES.find((theme) => theme.id === selection.themeId)!;
+    const light = BUILTIN_TUI_THEMES.find((theme) => theme.id === selection.themeId);
+    if (light === undefined) throw new Error(`missing default theme ${selection.themeId}`);
     const run = runTuiInPty(entry, {
       steps: [
         { wait: 'Connected to pty', timeout: 15 },
@@ -28,10 +29,8 @@ describe('the chat surface on a real terminal, fresh install', () => {
         { sleep: 3 },
       ],
     });
-    // Defect 4: a fresh install paints. The canvas token is defined and its
-    // background SGR reaches the terminal, so panels sit on a fill rather
-    // than on whatever the terminal happens to be.
-    const canvas = light.colors.background.canvas!;
+    const canvas = light.colors.background.canvas;
+    if (canvas === undefined) throw new Error('the default theme must paint a canvas');
     const [red, green, blue] = [1, 3, 5].map((start) => Number.parseInt(canvas.slice(start, start + 2), 16));
     expect(run.raw).toContain(`48;2;${String(red)};${String(green)};${String(blue)}m`);
     // Defect 5: the agent's body is written in the ink register, not the

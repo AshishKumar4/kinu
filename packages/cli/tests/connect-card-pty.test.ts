@@ -16,6 +16,7 @@ import { resolve } from 'node:path';
 
 import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER } from '@kinu.run/core';
 
+import { defaultDeviceName } from '../src/device-connect';
 import { runTuiInPty } from './helpers/pty-screen';
 
 const entry = resolve(import.meta.dir, 'fixtures/pty-connect-card.tsx');
@@ -47,5 +48,25 @@ describe('the connect card on a real terminal', () => {
       ['shown', 'agent prose reply', true],
     ]);
     expect(run.screen).not.toContain('quirk');
+  }, 60_000);
+
+  test('shows the whole machine and sandbox consequence at eighty columns', () => {
+    const run = runTuiInPty(entry, {
+      cols: 80,
+      steps: [{ wait: 'not now', timeout: 15 }],
+    });
+    expect(run.screen).toContain('Linking registers this machine as');
+    expect(run.screen.replace(/[│\s]/gu, '')).toContain(defaultDeviceName().replace(/\s/gu, ''));
+    expect(run.screen).toContain('A workspace you approve runs commands here in a');
+    expect(run.screen).toContain('sandbox. Revoke it in Account settings →');
+    expect(run.screen).toContain('Devices.');
+  }, 60_000);
+
+  test('centers the connect card in the wide chat lane', () => {
+    const run = runTuiInPty(entry, { cols: 160, steps: [{ wait: 'not now', timeout: 15 }] });
+    const border = run.screen.split('\n').find((line) => line.includes('╭─Let this agent use this PC?'));
+    if (border === undefined) throw new Error('connect card did not paint');
+    expect(border.indexOf('╭')).toBe(60);
+    expect(border.lastIndexOf('╮')).toBe(127);
   }, 60_000);
 });

@@ -130,7 +130,7 @@ function ModeSegment({ value, onChange, locked, disabled }: {
             title={title}
             className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
               selected
-                ? "border-[rgba(224,164,88,.3)] bg-[rgba(224,164,88,.1)] p-gold"
+                ? "border-[rgba(224,164,88,.3)] bg-[rgba(224,164,88,.1)] p-accent"
                 : "p-border p-text-3 hover:p-text-2 hover:border-[var(--c-accent)]"
             }`}
           >
@@ -307,7 +307,7 @@ export function Composer({
               <input ref={fileInputRef} type="file" multiple className="hidden"
                 onChange={(e) => { attachments.onAdd(e.currentTarget.files); e.currentTarget.value = ""; }} />
               <button type="button" onClick={() => fileInputRef.current?.click()} disabled={disabled}
-                className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border p-border px-3 py-1 text-xs p-text-3 transition-colors hover:p-gold hover:border-[var(--c-accent)]"
+                className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border p-border px-3 py-1 text-xs p-text-3 transition-colors hover:p-accent hover:border-[var(--c-accent)]"
                 aria-label="Attach files" title="Attach files">
                 <span aria-hidden className="text-[13px] leading-none">+</span>
                 <span className="hidden @[26rem]:inline">Attach</span>

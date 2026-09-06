@@ -44,7 +44,7 @@ function FeatureStrip(): ReactElement {
       <div data-feature-strip className="grid grid-cols-1 border-y p-border py-2 sm:grid-cols-2 lg:grid-cols-4 lg:py-8">
         {FEATURES.map(([title, body], index) => (
           <div key={title} className={`py-5 sm:px-6 lg:py-0 lg:first:pl-0 lg:last:pr-0 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)] sm:border-l sm:border-t-0' : ''}`}>
-            <h3 className="mb-2 text-[13px] font-semibold p-gold">{title}</h3>
+            <h3 className="mb-2 text-[13px] font-semibold p-accent">{title}</h3>
             <p className="text-[13.5px] leading-[1.6] p-text-3">{body}</p>
           </div>
         ))}
@@ -62,17 +62,17 @@ function PlatformSection(): ReactElement {
   return (
     <section id="platform" className={SECTION}>
       <RuleLabel>01 · The platform</RuleLabel>
-      <SectionTitle>Close the laptop. <span className="p-gold">The agent keeps working.</span></SectionTitle>
+      <SectionTitle>Close the laptop. <span className="p-accent">The agent keeps working.</span></SectionTitle>
       <p className="mb-10 mt-3.5 max-w-[660px] text-[17px] leading-[1.6] p-text-3">Run durable workspaces in the cloud or keep agents on your terminal.</p>
       <div className="mb-10 overflow-hidden rounded-2xl border p-border p-surface">
         <div className="grid md:grid-cols-2">
           <article className="min-w-0 p-7 sm:p-8">
-            <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-gold">Cloud</span><span className="font-mono text-[10px] p-text-4">Durable · cloud hosted</span></div>
+            <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-accent">Cloud</span><span className="font-mono text-[10px] p-text-4">Durable · cloud hosted</span></div>
             <h3 className="mb-3 text-[24px] font-semibold tracking-[-.025em]">Hosted workspaces and sandboxes</h3>
             <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Start a task and close the browser. Schedules and webhooks keep it running.</p>
           </article>
           <article className="min-w-0 border-t p-border p-7 sm:p-8 md:border-l md:border-t-0">
-            <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-gold">Local</span><span className="font-mono text-[10px] p-text-4">Files stay on your machine</span></div>
+            <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-accent">Local</span><span className="font-mono text-[10px] p-text-4">Files stay on your machine</span></div>
             <h3 className="mb-3 text-[24px] font-semibold tracking-[-.025em]">TUI, CLI, or your editor</h3>
             <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Create a local workspace, or open a cloud workspace from the TUI.</p>
           </article>
@@ -80,7 +80,7 @@ function PlatformSection(): ReactElement {
         <div className="flex flex-wrap items-center justify-between gap-3 border-t p-border p-recessed px-7 py-4 font-mono text-[11px] p-text-4"><span>ONE CORE · CLOUD AND LOCAL</span><span>web · TUI · CLI · ACP</span></div>
       </div>
       <div className="grid border-y p-border md:grid-cols-3">
-        {examples.map(([title, body], index) => <div key={title} className={`py-6 md:px-7 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)] md:border-l md:border-t-0' : 'md:pl-0'} ${index === examples.length - 1 ? 'md:pr-0' : ''}`}><h3 className="mb-2.5 text-[13px] font-semibold p-gold">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}
+        {examples.map(([title, body], index) => <div key={title} className={`py-6 md:px-7 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)] md:border-l md:border-t-0' : 'md:pl-0'} ${index === examples.length - 1 ? 'md:pr-0' : ''}`}><h3 className="mb-2.5 text-[13px] font-semibold p-accent">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}
       </div>
     </section>
   );
@@ -88,14 +88,14 @@ function PlatformSection(): ReactElement {
 
 function QuickstartSection(): ReactElement {
   const clients = [
-    ['In the browser', 'Web', 'Sign in and create a cloud workspace. Open it from any client.', <a key="web" href="/login" className="text-[13px] font-semibold p-gold">Sign in →</a>],
-    ['In the terminal', 'TUI', 'kinu chat opens the full-screen app for cloud or local workspaces.', <code key="tui" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs p-text-2"><span className="p-gold">$</span> kinu chat triage</code>],
-    ['In the terminal', 'CLI', 'Install Kinu on Linux, create a workspace, and run a task.', <code key="cli" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs leading-[1.9] p-text-2"><span className="p-gold">$</span> kinu create triage</code>],
+    ['In the browser', 'Web', 'Sign in and create a cloud workspace. Open it from any client.', <a key="web" href="/login" className="text-[13px] font-semibold p-accent">Sign in →</a>],
+    ['In the terminal', 'TUI', 'kinu chat opens the full-screen app for cloud or local workspaces.', <code key="tui" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs p-text-2"><span className="p-accent">$</span> kinu chat triage</code>],
+    ['In the terminal', 'CLI', 'Install Kinu on Linux, create a workspace, and run a task.', <code key="cli" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs leading-[1.9] p-text-2"><span className="p-accent">$</span> kinu create triage</code>],
   ] as const;
   return (
     <section id="quickstart" className={SECTION}>
       <RuleLabel>02 · Quickstart</RuleLabel>
-      <SectionTitle>Start in the cloud, <span className="p-gold">or entirely on your own machines.</span></SectionTitle>
+      <SectionTitle>Start in the cloud, <span className="p-accent">or entirely on your own machines.</span></SectionTitle>
       <p className="mb-10 mt-3.5 max-w-[620px] text-[17px] leading-[1.6] p-text-3">Use cloud workspaces from any client. Use local workspaces from the terminal.</p>
       <div className="grid gap-5 md:grid-cols-3">
         {clients.map(([eyebrow, title, body, action]) => <div key={title} className={`${CARD} flex flex-col gap-3 p-7`}><div className="text-xs p-text-4">{eyebrow}</div><h3 className="text-xl font-semibold tracking-[-.02em]">{title}</h3><p className="flex-1 text-sm leading-[1.65] p-text-3">{body}</p>{action}</div>)}
@@ -115,14 +115,14 @@ function ClientsSection(): ReactElement {
   return (
     <section id="clients" className={SECTION}>
       <RuleLabel>03 · One workspace, every client</RuleLabel>
-      <SectionTitle>Work from the browser, the terminal, <span className="p-gold">or your editor.</span></SectionTitle>
+      <SectionTitle>Work from the browser, the terminal, <span className="p-accent">or your editor.</span></SectionTitle>
       <p className="mb-10 mt-3.5 max-w-[660px] text-[17px] leading-[1.6] p-text-3">Open the same files and history from a browser, terminal, editor, or SSH session.</p>
       <div className="mb-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        {clients.map(([title, body]) => <div key={title} className={`${CARD} p-6`}><h3 className="mb-2.5 text-[12.5px] font-semibold p-gold">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}
+        {clients.map(([title, body]) => <div key={title} className={`${CARD} p-6`}><h3 className="mb-2.5 text-[12.5px] font-semibold p-accent">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}
       </div>
       <div className={`${CARD} p-6`}>
         <div className="mb-3.5 flex flex-wrap justify-between gap-2 text-xs p-text-4"><span>Recorded · <code>kinu run</code></span><span>workspace “film” · local backend</span></div>
-        <div className="space-y-1 font-mono text-xs leading-[2] p-text-3"><div className="p-text-2"><span className="p-gold">$</span> kinu run film “Find the slowest test in this repo.”</div><div>▸ run · laptop &nbsp; 7 pass · 912 ms</div><div>▸ bench &nbsp; n=6000 43.8ms · n=12000 188.3ms · n=24000 827.3ms</div><p className="pt-2 font-sans text-[13.5px] leading-[1.65] p-text">The slowest test spends most of its time in an O(n²) dedupe pass. A Map keyed by id reduces it to one pass.</p></div>
+        <div className="space-y-1 font-mono text-xs leading-[2] p-text-3"><div className="p-text-2"><span className="p-accent">$</span> kinu run film “Find the slowest test in this repo.”</div><div>▸ run · laptop &nbsp; 7 pass · 912 ms</div><div>▸ bench &nbsp; n=6000 43.8ms · n=12000 188.3ms · n=24000 827.3ms</div><p className="pt-2 font-sans text-[13.5px] leading-[1.65] p-text">The slowest test spends most of its time in an O(n²) dedupe pass. A Map keyed by id reduces it to one pass.</p></div>
       </div>
       <p className="mt-7 text-[13px] p-text-4">Schedules, webhooks, and finished background jobs start turns through the same path.</p>
     </section>
@@ -168,7 +168,7 @@ function SwarmDag(): ReactElement {
             className={`absolute min-w-[150px] -translate-x-1/2 -translate-y-1/2 rounded-xl border px-4 py-3 text-center ${node.tone === 'agent' ? 'border-[var(--c-accent)] p-accent-subtle' : node.tone === 'result' ? 'border-[var(--c-success)] bg-[var(--c-success-tint)]' : 'p-border p-recessed'}`}
             style={{ left: `${String(node.x)}%`, top: `${String(node.y)}%` }}
           >
-            <div className={`text-[12.5px] font-semibold ${node.tone === 'agent' ? 'p-gold' : node.tone === 'result' ? 'p-success' : 'p-text'}`}>{node.label}</div>
+            <div className={`text-[12.5px] font-semibold ${node.tone === 'agent' ? 'p-accent' : node.tone === 'result' ? 'p-success' : 'p-text'}`}>{node.label}</div>
             <div className="mt-1 font-mono text-[9.5px] p-text-4">{node.detail}</div>
           </div>
         ))}
@@ -221,7 +221,7 @@ function EvolutionSection(): ReactElement {
   return (
     <section id="evolution" data-evolution-stage={activeIndex} className={SECTION}>
       <RuleLabel>04 · Self-evolution</RuleLabel>
-      <SectionTitle>The agent learns at <span className="p-gold">four different speeds.</span></SectionTitle>
+      <SectionTitle>The agent learns at <span className="p-accent">four different speeds.</span></SectionTitle>
       <p className="mb-10 mt-3.5 max-w-[720px] text-[17px] leading-[1.6] p-text-3">A tool result can change the next choice. Repeated evidence can change the agent loop itself. Select a timescale to see the full path.</p>
       <div className="grid overflow-hidden rounded-2xl border p-border p-surface lg:grid-cols-[280px_minmax(0,1fr)]">
         <div className="grid gap-px bg-[var(--c-border)] sm:grid-cols-2 lg:grid-cols-1">
@@ -233,19 +233,19 @@ function EvolutionSection(): ReactElement {
               onClick={() => setActiveIndex(index)}
               className={`flex min-h-[88px] items-center justify-between gap-4 p-5 text-left transition-colors ${activeIndex === index ? 'p-accent-subtle' : 'p-recessed hover:p-elevated'}`}
             >
-              <span><span className="block font-mono text-[10px] uppercase tracking-[.13em] p-gold">{stage.time}</span><strong className="mt-1.5 block text-[13.5px] p-text">{stage.title}</strong></span>
-              <span className={`font-mono text-sm ${activeIndex === index ? 'p-gold' : 'p-text-4'}`}>0{index + 1}</span>
+              <span><span className="block font-mono text-[10px] uppercase tracking-[.13em] p-accent">{stage.time}</span><strong className="mt-1.5 block text-[13.5px] p-text">{stage.title}</strong></span>
+              <span className={`font-mono text-sm ${activeIndex === index ? 'p-accent' : 'p-text-4'}`}>0{index + 1}</span>
             </button>
           ))}
         </div>
         <div className="flex min-h-[390px] flex-col justify-between p-5 sm:p-8">
           <div>
-            <div className="mb-7 flex flex-wrap items-baseline justify-between gap-3"><div><div className="font-mono text-[10px] uppercase tracking-[.14em] p-gold">{active.time}</div><h3 className="mt-2 text-[24px] font-semibold tracking-[-.02em] p-text">{active.title}</h3></div><span className="rounded-full border p-border p-recessed px-3 py-1 font-mono text-[10px] p-text-4">evidence → durable state</span></div>
+            <div className="mb-7 flex flex-wrap items-baseline justify-between gap-3"><div><div className="font-mono text-[10px] uppercase tracking-[.14em] p-accent">{active.time}</div><h3 className="mt-2 text-[24px] font-semibold tracking-[-.02em] p-text">{active.title}</h3></div><span className="rounded-full border p-border p-recessed px-3 py-1 font-mono text-[10px] p-text-4">evidence → durable state</span></div>
             <div className="grid items-stretch gap-3 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)]">
               <div className="rounded-xl border p-border p-recessed p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-text-4">Evidence</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.evidence}</p></div>
-              <span aria-hidden="true" className="hidden self-center font-mono p-gold md:block">→</span>
-              <div className="rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] p-accent-subtle p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-gold">Agent changes</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.change}</p></div>
-              <span aria-hidden="true" className="hidden self-center font-mono p-gold md:block">→</span>
+              <span aria-hidden="true" className="hidden self-center font-mono p-accent md:block">→</span>
+              <div className="rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] p-accent-subtle p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-accent">Agent changes</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.change}</p></div>
+              <span aria-hidden="true" className="hidden self-center font-mono p-accent md:block">→</span>
               <div className="rounded-xl border p-border p-recessed p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-text-4">Persists</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.persists}</p></div>
             </div>
           </div>
@@ -260,7 +260,7 @@ function SwarmSection(): ReactElement {
   return (
     <section id="swarm" className={SECTION}>
       <RuleLabel>05 · Subagent DAGs</RuleLabel>
-      <SectionTitle>Your agent can assemble <span className="p-gold">the specialists a task needs.</span></SectionTitle>
+      <SectionTitle>Your agent can assemble <span className="p-accent">the specialists a task needs.</span></SectionTitle>
       <p className="mb-10 mt-3.5 max-w-[780px] text-[17px] leading-[1.6] p-text-3">Your agent can build a DAG for research, optimisation, planning, review, and implementation. Nodes work in parallel and pass evidence onward.</p>
       <SwarmDag />
     </section>
@@ -284,10 +284,10 @@ function DeploySection(): ReactElement {
     <section id="deploy" className={SECTION}>
       <RuleLabel>06 · Self-host</RuleLabel>
       <div className="mb-5 grid items-start gap-10 lg:grid-cols-[1fr_1.12fr] lg:gap-14">
-        <div><SectionTitle>Host Kinu agents <span className="p-gold">yourself.</span></SectionTitle><p className="mb-7 mt-3.5 text-[17px] leading-[1.6] p-text-3">Deploy Kinu to your Cloudflare account. Your agents, files, and model spend stay there.</p><div className="flex flex-wrap gap-3"><LandingActionLink external primary href="https://deploy.workers.cloudflare.com/?url=https://github.com/AshishKumar4/kinu">Deploy to Cloudflare →</LandingActionLink><LandingActionLink external href={`${REPOSITORY}/blob/main/docs/SELF-HOSTING.md`}>Self-hosting guide</LandingActionLink></div></div>
-        <div className={`${CARD} overflow-hidden`}>{steps.map(([step, title, body, command], index) => <div key={step} className={`grid gap-2 px-5 py-5 sm:grid-cols-[96px_1fr] sm:gap-[18px] sm:px-[26px] ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-4">{step}</span><div><p className="text-sm leading-[1.6] p-text-3"><strong className="p-text">{title}</strong> {body}</p><code className="mt-2 block text-xs p-gold">{command}</code></div></div>)}</div>
+        <div><SectionTitle>Host Kinu agents <span className="p-accent">yourself.</span></SectionTitle><p className="mb-7 mt-3.5 text-[17px] leading-[1.6] p-text-3">Deploy Kinu to your Cloudflare account. Your agents, files, and model spend stay there.</p><div className="flex flex-wrap gap-3"><LandingActionLink external primary href="https://deploy.workers.cloudflare.com/?url=https://github.com/AshishKumar4/kinu">Deploy to Cloudflare →</LandingActionLink><LandingActionLink external href={`${REPOSITORY}/blob/main/docs/SELF-HOSTING.md`}>Self-hosting guide</LandingActionLink></div></div>
+        <div className={`${CARD} overflow-hidden`}>{steps.map(([step, title, body, command], index) => <div key={step} className={`grid gap-2 px-5 py-5 sm:grid-cols-[96px_1fr] sm:gap-[18px] sm:px-[26px] ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-4">{step}</span><div><p className="text-sm leading-[1.6] p-text-3"><strong className="p-text">{title}</strong> {body}</p><code className="mt-2 block text-xs p-accent">{command}</code></div></div>)}</div>
       </div>
-      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">{values.map(([title, body]) => <div key={title} className={`${CARD} p-6`}><h3 className="mb-2.5 text-[12.5px] font-semibold p-gold">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}</div>
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">{values.map(([title, body]) => <div key={title} className={`${CARD} p-6`}><h3 className="mb-2.5 text-[12.5px] font-semibold p-accent">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}</div>
     </section>
   );
 }
@@ -296,9 +296,9 @@ function OpenSourceSection(): ReactElement {
   return (
     <section id="cta" className="border-t p-border bg-[linear-gradient(180deg,var(--c-surface)_0%,var(--c-bg)_100%)]">
       <div className={`${SHELL} grid items-center gap-10 py-20 lg:grid-cols-[1.2fr_1fr] lg:gap-14 lg:py-[100px]`}>
-        <div><RuleLabel>07 · Open source</RuleLabel><SectionTitle>Open source, <span className="p-gold">end to end.</span></SectionTitle><p className="mb-9 mt-4 text-[17px] leading-[1.6] p-text-3">MIT-licensed: the agent, both backends, and the CLI.</p><div className="flex flex-wrap gap-3"><LandingActionLink external primary href={REPOSITORY}>Read the source →</LandingActionLink><LandingActionLink href="/login">Try cloud agents</LandingActionLink></div></div>
+        <div><RuleLabel>07 · Open source</RuleLabel><SectionTitle>Open source, <span className="p-accent">end to end.</span></SectionTitle><p className="mb-9 mt-4 text-[17px] leading-[1.6] p-text-3">MIT-licensed: the agent, both backends, and the CLI.</p><div className="flex flex-wrap gap-3"><LandingActionLink external primary href={REPOSITORY}>Read the source →</LandingActionLink><LandingActionLink href="/login">Try cloud agents</LandingActionLink></div></div>
         <div className={`${CARD} px-[26px] py-1.5`}>
-          {[['Licence', <span key="mit">MIT</span>], ['Source', <a key="source" href={REPOSITORY} target="_blank" rel="noreferrer" className="p-gold">github.com/AshishKumar4/kinu</a>], ['Backends', <span key="backends">Cloudflare Workers · POSIX</span>], ['Docs', <span key="docs" className="flex flex-wrap gap-3.5">{['ARCHITECTURE', 'EXPLORATION', 'EVOLUTION', 'DEPLOYMENT'].map((doc) => <a key={doc} href={`${REPOSITORY}/blob/main/docs/${doc}.md`} target="_blank" rel="noreferrer" className="p-gold">{doc.toLowerCase()}</a>)}</span>]].map(([label, value], index) => <div key={String(label)} className={`grid gap-2 py-[15px] sm:grid-cols-[96px_1fr] sm:gap-4 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-4">{label}</span><div className="min-w-0 [overflow-wrap:anywhere] font-mono text-[12.5px] p-text-2">{value}</div></div>)}
+          {[['Licence', <span key="mit">MIT</span>], ['Source', <a key="source" href={REPOSITORY} target="_blank" rel="noreferrer" className="p-accent">github.com/AshishKumar4/kinu</a>], ['Backends', <span key="backends">Cloudflare Workers · POSIX</span>], ['Docs', <span key="docs" className="flex flex-wrap gap-3.5">{['ARCHITECTURE', 'EXPLORATION', 'EVOLUTION', 'DEPLOYMENT'].map((doc) => <a key={doc} href={`${REPOSITORY}/blob/main/docs/${doc}.md`} target="_blank" rel="noreferrer" className="p-accent">{doc.toLowerCase()}</a>)}</span>]].map(([label, value], index) => <div key={String(label)} className={`grid gap-2 py-[15px] sm:grid-cols-[96px_1fr] sm:gap-4 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-4">{label}</span><div className="min-w-0 [overflow-wrap:anywhere] font-mono text-[12.5px] p-text-2">{value}</div></div>)}
         </div>
       </div>
     </section>

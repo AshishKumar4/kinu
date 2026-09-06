@@ -11,7 +11,7 @@ export function KinuMark({ className, size = 20 }: KinuMarkProps): ReactElement 
   return (
     <span
       aria-hidden="true"
-      className={`inline-block shrink-0 p-gold${className ? ` ${className}` : ''}`}
+      className={`inline-block shrink-0 p-accent${className ? ` ${className}` : ''}`}
       style={{ lineHeight: 0 }}
       dangerouslySetInnerHTML={{ __html: mark(size) }}
     />

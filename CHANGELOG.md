@@ -268,10 +268,11 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 ### Changed
 
 - The landing headline stays readable, and the install command wraps on phones.
-  Gold text uses the contrast-safe ink. The Journal names its loading state.
+  Accent text and approval buttons use contrast-safe ink. The Journal names its loading state.
   When sign-in is unavailable, the page links to the CLI installer.
   The TUI defaults to light, keeps every preset, and uses quieter code and tool wells.
-  Approval cards stay centered in the chat pane.
+  Approval cards stay centered in the chat pane. The Connect card wraps the device name
+  and the access explanation instead of cutting them short.
 
 - **One deploy path, an immutable container image, and no credential beside
   unreviewed code.** `packages/cf-backend` declared its own `deploy:staging`

@@ -312,7 +312,7 @@ export default function Sidebar() {
                       </NavLink>
                       <Link
                         to={`/settings/${a.name}`}
-                        className="absolute right-11 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-all p-text-3 hover:p-gold focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-60"
+                        className="absolute right-11 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-all p-text-3 hover:p-accent focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-60"
                         title="Workspace settings"
                         aria-label={`Workspace settings for ${shown}`}
                       ><GearIcon size={11} /></Link>
@@ -349,7 +349,7 @@ export default function Sidebar() {
                     ))}
                     <button
                       onClick={() => window.dispatchEvent(new CustomEvent("kinu:new-agent"))}
-                      className="w-full rounded-lg px-2.5 py-[5px] text-left text-[11.5px] p-text-4 transition-colors hover:p-gold"
+                      className="w-full rounded-lg px-2.5 py-[5px] text-left text-[11.5px] p-text-4 transition-colors hover:p-accent"
                     >
                       + New agent
                     </button>
@@ -359,7 +359,7 @@ export default function Sidebar() {
                   <div className="ml-[21px] mt-0.5 border-l p-border pl-2.5">
                     <button
                       onClick={() => window.dispatchEvent(new CustomEvent("kinu:new-agent"))}
-                      className="w-full rounded-lg px-2.5 py-[5px] text-left text-[11.5px] p-text-4 transition-colors hover:p-gold"
+                      className="w-full rounded-lg px-2.5 py-[5px] text-left text-[11.5px] p-text-4 transition-colors hover:p-accent"
                     >
                       + New agent
                     </button>
@@ -384,7 +384,7 @@ export default function Sidebar() {
           <span className="min-w-0 flex-1 truncate text-[13px] p-text-4">
             {profile?.email ?? (profileFailed ? 'Profile unavailable' : 'loading…')}
           </span>
-          <GearIcon size={14} className="shrink-0 p-text-4 transition-colors hover:p-gold" />
+          <GearIcon size={14} className="shrink-0 p-text-4 transition-colors hover:p-accent" />
         </button>
         {showUserMenu && (
           <div className="absolute bottom-full left-2 right-2 mb-1 p-card p-1.5 p-shadow-menu border p-border z-10">

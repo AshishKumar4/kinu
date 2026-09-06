@@ -1111,9 +1111,9 @@ export default function WorkspacePage() {
       <>
       <div className="flex shrink-0 items-center gap-1 border-b p-border p-sidebar px-3 py-2 md:hidden">
         <button type="button" onClick={() => setMobilePane('chat')} aria-pressed={mobilePane === 'chat'}
-          className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === 'chat' ? 'p-accent-subtle p-gold' : 'p-text-3'}`}>Chat</button>
+          className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === 'chat' ? 'p-accent-subtle p-accent' : 'p-text-3'}`}>Chat</button>
         <button type="button" onClick={() => setMobilePane('workspace')} aria-pressed={mobilePane === 'workspace'}
-          className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === 'workspace' ? 'p-accent-subtle p-gold' : 'p-text-3'}`}>Workspace{state.pendingActions.length > 0 ? ` · ${String(state.pendingActions.length)}` : ''}</button>
+          className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === 'workspace' ? 'p-accent-subtle p-accent' : 'p-text-3'}`}>Workspace{state.pendingActions.length > 0 ? ` · ${String(state.pendingActions.length)}` : ''}</button>
       </div>
       <PanelGroup key={desktopPanels ? "desktop" : mobilePane} className="flex-1">
         {/* ── Column A — Chat / Steer ─────────────────────────── */}

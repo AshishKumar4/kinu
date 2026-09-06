@@ -113,7 +113,7 @@ export function Notice(
   },
 ): ReactNode {
   const toneClass = tone === 'danger' ? 'p-danger'
-    : tone === 'warn' ? 'p-gold'
+    : tone === 'warn' ? 'p-accent'
     : tone === 'ok' ? 'p-success'
     : 'p-text-3';
   return (

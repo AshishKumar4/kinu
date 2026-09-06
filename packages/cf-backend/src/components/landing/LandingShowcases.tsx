@@ -9,7 +9,7 @@ import { MessageView } from '@/components/MessageView';
 import { BugFixDemo } from './BugFixDemo';
 
 export function RuleLabel({ children }: { children: ReactNode }): ReactElement {
-  return <div className="mb-4 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] shrink-0 bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />{children}</div>;
+  return <div className="mb-4 flex items-center gap-3 text-[13px] font-semibold p-accent"><span className="h-px w-[22px] shrink-0 bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />{children}</div>;
 }
 
 const RUN_TABS: TabsItem[] = [{ value: 'run', label: 'Run' }, { value: 'supervise', label: 'Supervise' }];
@@ -92,7 +92,7 @@ function WorkspacePreview(): ReactElement {
               </div>
             ) : (
               <>
-                <div className="flex items-start justify-between gap-4"><div><div className="text-[11px] uppercase tracking-[.14em] p-gold">Supervise</div><h3 className="mt-1.5 text-lg font-semibold p-text">Three agents are working</h3></div><span className="rounded-full p-accent-subtle px-3 py-1 text-[11px] p-gold">2 active · 1 waiting</span></div>
+                <div className="flex items-start justify-between gap-4"><div><div className="text-[11px] uppercase tracking-[.14em] p-accent">Supervise</div><h3 className="mt-1.5 text-lg font-semibold p-text">Three agents are working</h3></div><span className="rounded-full p-accent-subtle px-3 py-1 text-[11px] p-accent">2 active · 1 waiting</span></div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {[['Scout', 'Researching the hot path', '3 sources', 'active'], ['Builder', 'Editing the one-pass dedupe', 'src/dedupe.ts', 'active'], ['Verifier', 'Waiting for Builder', 'bun test summary', 'waiting']].map(([name, task, detail, state]) => (
                     <div key={name} className="rounded-xl border p-border p-surface p-4">
@@ -115,18 +115,18 @@ function WorkspacePreview(): ReactElement {
         </div>
         <aside className="hidden min-w-0 flex-col p-recessed md:flex">
           <div className="flex gap-2.5 overflow-hidden border-b p-border px-3.5 pt-3">
-            <span className="border-b-2 border-[var(--c-accent)] pb-2.5 text-[11.5px] font-semibold p-gold">Work</span>
+            <span className="border-b-2 border-[var(--c-accent)] pb-2.5 text-[11.5px] font-semibold p-accent">Work</span>
             {['Exploration', 'Agent', 'Files'].map((tab) => <span key={tab} className="pb-2.5 text-[11.5px] p-text-4">{tab}</span>)}
           </div>
           <div className="flex flex-col gap-3.5 overflow-hidden p-3.5">
             <div data-decision-state={decision} className="overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_30%,transparent)] p-surface">
               {decision === 'pending' ? (
                 <>
-                  <div className="border-b border-dashed border-[var(--c-dash)] px-3.5 py-2 text-[11.5px] font-semibold p-gold">Needs you · 1</div>
-                  <div className="px-3.5 py-3"><div className="mb-2 text-[12.5px]">Swarm search stopped early</div><div className="flex gap-2 text-[11px]"><button type="button" onClick={() => setDecision('retried')} className="rounded-full border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] px-2.5 py-0.5 p-gold">Retry</button><button type="button" onClick={() => setDecision('dismissed')} className="rounded-full border p-border px-2.5 py-0.5 p-text-4">Dismiss</button></div></div>
+                  <div className="border-b border-dashed border-[var(--c-dash)] px-3.5 py-2 text-[11.5px] font-semibold p-accent">Needs you · 1</div>
+                  <div className="px-3.5 py-3"><div className="mb-2 text-[12.5px]">Swarm search stopped early</div><div className="flex gap-2 text-[11px]"><button type="button" onClick={() => setDecision('retried')} className="rounded-full border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] px-2.5 py-0.5 p-accent">Retry</button><button type="button" onClick={() => setDecision('dismissed')} className="rounded-full border p-border px-2.5 py-0.5 p-text-4">Dismiss</button></div></div>
                 </>
               ) : (
-                <div className="flex items-center justify-between gap-3 px-3.5 py-3"><span className={`text-[11.5px] ${decision === 'retried' ? 'p-success' : 'p-text-4'}`}>{decision === 'retried' ? 'Search restarted' : 'Decision dismissed'}</span><button type="button" onClick={() => setDecision('pending')} className="text-[10.5px] p-gold">Reset</button></div>
+                <div className="flex items-center justify-between gap-3 px-3.5 py-3"><span className={`text-[11.5px] ${decision === 'retried' ? 'p-success' : 'p-text-4'}`}>{decision === 'retried' ? 'Search restarted' : 'Decision dismissed'}</span><button type="button" onClick={() => setDecision('pending')} className="text-[10.5px] p-accent">Reset</button></div>
               )}
             </div>
             <div>
@@ -140,7 +140,7 @@ function WorkspacePreview(): ReactElement {
               <div className="mb-2 text-[11.5px] font-semibold p-text-4">Journal</div>
               <div className="overflow-hidden rounded-xl border p-border p-surface">
                 {[[CHANGE_KIND_GLYPH.tool, 'Crafted a tool: dedupe-bench', '2m'], [CHANGE_KIND_GLYPH.outcomes, 'Graded 2 turns', '18h'], [CHANGE_KIND_GLYPH.fact, 'Remembered the coupon schema', '19h']].map(([icon, label, age], index) => (
-                  <div key={label} className={`flex items-baseline gap-2 px-3.5 py-2.5 ${index < 2 ? 'border-b border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-[10px] p-gold">{icon}</span><span className="flex-1 text-xs p-text-2">{label}</span><span className="text-[10px] p-text-4">{age}</span></div>
+                  <div key={label} className={`flex items-baseline gap-2 px-3.5 py-2.5 ${index < 2 ? 'border-b border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-[10px] p-accent">{icon}</span><span className="flex-1 text-xs p-text-2">{label}</span><span className="text-[10px] p-text-4">{age}</span></div>
                 ))}
               </div>
             </div>
@@ -219,7 +219,7 @@ function TuiPreview(): ReactElement {
     ids.filter((id) => !filtered || drawerMatches(id)).map((id) => (
       <div key={id}>
         <button type="button" onClick={() => onChoose(id)} className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs ${selectClass(id)}`}>
-          <span><span className={agents[id].status === 'running' ? 'p-gold' : 'p-text-4'}>{agents[id].status === 'running' ? TUI_MARKS.activity.running : TUI_MARKS.activity.idle} </span>{agents[id].label}</span>
+          <span><span className={agents[id].status === 'running' ? 'p-accent' : 'p-text-4'}>{agents[id].status === 'running' ? TUI_MARKS.activity.running : TUI_MARKS.activity.idle} </span>{agents[id].label}</span>
           {agents[id].location === 'cloud' && <span className="p-success">live</span>}
         </button>
         {agents[id].subordinate !== null && (
@@ -252,7 +252,7 @@ function TuiPreview(): ReactElement {
         <div className="flex min-w-0 flex-wrap items-center gap-3.5">
           <KinuLogo compact />
           <span>{agent.label}</span>
-          <span className="inline-flex items-center gap-2 p-gold"><span className="size-1.5 rounded-full p-dot-accent" />connected</span>
+          <span className="inline-flex items-center gap-2 p-accent"><span className="size-1.5 rounded-full p-dot-accent" />connected</span>
         </div>
         <div className="flex items-center gap-3">
           <div className="hidden items-center gap-4 sm:flex"><span>{agent.location}</span><span>general · default</span><span>Claude Opus 4</span></div>
@@ -294,14 +294,14 @@ function TuiPreview(): ReactElement {
         <div className="flex min-h-[600px] min-w-0 flex-col font-mono text-xs leading-[1.65]">
           <div className="flex-1 overflow-hidden px-4 py-5 sm:px-7 sm:py-6">
             <div data-tui-role="user" className="mb-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3">
-              <span className="text-[10px] uppercase tracking-[.12em] p-gold">{TUI_MARKS.userGutter}</span>
+              <span className="text-[10px] uppercase tracking-[.12em] p-accent">{TUI_MARKS.userGutter}</span>
               <p className="p-text">{agent.prompt}</p>
             </div>
             <div className="border-y border-[var(--c-border-strong)]">
               {agent.tools.map(([tool, action, result], index) => (
                 <div key={`${tool}-${action}`} className={index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}>
                   <div className="grid grid-cols-[14px_120px_minmax(0,1fr)] gap-3 px-1 pb-1 pt-2.5 sm:grid-cols-[14px_150px_minmax(0,1fr)]">
-                    <span className="p-gold">{TUI_MARKS.toolCall}</span><strong className="font-normal p-text-2">{tool}</strong><span className="truncate p-text-4">{action}</span>
+                    <span className="p-accent">{TUI_MARKS.toolCall}</span><strong className="font-normal p-text-2">{tool}</strong><span className="truncate p-text-4">{action}</span>
                   </div>
                   <div className="pb-2.5 pl-[17px] p-text-4">{TUI_MARKS.toolResult} <span className="p-success">{result}</span></div>
                 </div>
@@ -312,7 +312,7 @@ function TuiPreview(): ReactElement {
             </div>
           </div>
           <div className="border-t border-[var(--c-border-strong)] p-recessed px-4 pb-3 pt-3">
-            <div className="border border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-2.5 p-text-4"><span className="mr-2 p-gold">{TUI_MARKS.prompt}</span>{TUI_COMPOSER_PLACEHOLDER}</div>
+            <div className="border border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-2.5 p-text-4"><span className="mr-2 p-accent">{TUI_MARKS.prompt}</span>{TUI_COMPOSER_PLACEHOLDER}</div>
             <div className="mt-2 flex flex-wrap justify-between gap-3 text-[10px] p-text-4"><span>auto · {agent.location} workspace · connected</span><span>{TUI_ADVERTISED_HINTS.map(({ keys, label }) => `${keys} ${label}`).join(' · ')}</span></div>
           </div>
         </div>
@@ -345,19 +345,19 @@ function CliPreview(): ReactElement {
         <span className="size-2 rounded-full bg-[var(--c-success)] opacity-70" />
         <span className="ml-3 flex-1 text-center text-[10px] uppercase tracking-[.14em] p-text-4">kinu run · checkout</span>
         <div className="flex items-center gap-2">
-          <span className={`text-[10px] uppercase tracking-[.12em] ${stage < 4 ? 'p-gold' : 'p-success'}`}>{stage < 4 ? 'running' : 'exit 0'}</span>
+          <span className={`text-[10px] uppercase tracking-[.12em] ${stage < 4 ? 'p-accent' : 'p-success'}`}>{stage < 4 ? 'running' : 'exit 0'}</span>
           <Button type="button" size="sm" variant="ghost" aria-label="Replay CLI run" onClick={() => { setStage(0); setSequence((value) => value + 1); }} className="!h-7 !rounded-full !px-2.5 !text-[10px]">Replay</Button>
         </div>
       </div>
       <div className="min-h-[360px] p-5 sm:p-7">
-        <div className="mb-6 p-text"><span className="mr-2 p-gold">$</span>kinu run checkout “Audit the coupon flow and fix it.”<span className={`ml-1 inline-block h-[1em] w-[7px] bg-[var(--c-accent)] ${stage === 0 ? 'motion-safe:animate-pulse' : 'opacity-0'}`} /></div>
+        <div className="mb-6 p-text"><span className="mr-2 p-accent">$</span>kinu run checkout “Audit the coupon flow and fix it.”<span className={`ml-1 inline-block h-[1em] w-[7px] bg-[var(--c-accent)] ${stage === 0 ? 'motion-safe:animate-pulse' : 'opacity-0'}`} /></div>
         <div className="border-y border-[var(--c-border-strong)] px-1">
-          <div className={lineClass(stage >= 1)}><span className="p-gold">›</span><span className="p-text-3">run · workspace &nbsp; reproduce coupon failure</span><span className="p-danger">exit 1</span></div>
-          <div className={`${lineClass(stage >= 2)} border-t border-dashed border-[var(--c-dash)]`}><span className="p-gold">›</span><span className="p-text-3">file &nbsp; edit migration and handler</span><span className="p-success">saved</span></div>
-          <div className={`${lineClass(stage >= 3)} border-t border-dashed border-[var(--c-dash)]`}><span className="p-gold">›</span><span className="p-text-3">run · workspace &nbsp; bun test coupon</span><span className="p-success">7 pass</span></div>
+          <div className={lineClass(stage >= 1)}><span className="p-accent">›</span><span className="p-text-3">run · workspace &nbsp; reproduce coupon failure</span><span className="p-danger">exit 1</span></div>
+          <div className={`${lineClass(stage >= 2)} border-t border-dashed border-[var(--c-dash)]`}><span className="p-accent">›</span><span className="p-text-3">file &nbsp; edit migration and handler</span><span className="p-success">saved</span></div>
+          <div className={`${lineClass(stage >= 3)} border-t border-dashed border-[var(--c-dash)]`}><span className="p-accent">›</span><span className="p-text-3">run · workspace &nbsp; bun test coupon</span><span className="p-success">7 pass</span></div>
         </div>
         <div className={`mt-6 grid grid-cols-[52px_minmax(0,1fr)] gap-3 transition-all duration-300 ${stage >= 4 ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`}>
-          <span className="text-[10px] uppercase tracking-[.12em] p-gold">result</span>
+          <span className="text-[10px] uppercase tracking-[.12em] p-accent">result</span>
           <p className="font-sans text-sm leading-[1.65] p-text">The percentage-coupon path is fixed. The migration now fills both coupon kinds, and all seven focused tests pass.</p>
         </div>
       </div>
@@ -381,7 +381,7 @@ export function LandingShowcases({
     <div className="landing-shell">
       <section data-showcase="workspace" className="pt-24">
         <div className="mx-auto mb-11 max-w-[760px] text-center">
-          <h2 className="mb-3 text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Have your agents <span className="p-gold">live in the cloud.</span></h2>
+          <h2 className="mb-3 text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Have your agents <span className="p-accent">live in the cloud.</span></h2>
           <p className="mx-auto max-w-[700px] text-base leading-[1.65] p-text-3">Each workspace keeps files, memory, and one conversation per agent. Attach Linux or your own machine.</p>
           <div className="mt-5 flex flex-wrap justify-center gap-2 font-mono text-[10.5px] p-text-3">
             <span className="rounded-full border p-border p-recessed px-3 py-1.5">{String(storageGb)} GB durable workspace</span>
@@ -393,21 +393,21 @@ export function LandingShowcases({
       </section>
       <section data-showcase="bugfix" className="pt-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
-          <div><RuleLabel>One bug, end to end</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">From bug report <span className="p-gold">to green tests.</span></h2></div>
+          <div><RuleLabel>One bug, end to end</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">From bug report <span className="p-accent">to green tests.</span></h2></div>
           <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Watch Kinu reproduce a failure, revise its plan, compare three patches, and run the focused suite.</p>
         </div>
         <BugFixDemo />
       </section>
       <section data-showcase="tui" className="pt-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
-          <div><RuleLabel>The terminal</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Let your agents live <span className="p-gold">locally.</span></h2></div>
+          <div><RuleLabel>The terminal</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Let your agents live <span className="p-accent">locally.</span></h2></div>
           <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Create local workspaces or open cloud workspaces from your terminal.</p>
         </div>
         <TuiPreview />
       </section>
       <section data-showcase="cli" className="py-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
-          <div><RuleLabel>The CLI</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Automate focused work <span className="p-gold">from any shell.</span></h2></div>
+          <div><RuleLabel>The CLI</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Automate focused work <span className="p-accent">from any shell.</span></h2></div>
           <p className="max-w-[580px] text-base leading-[1.65] p-text-3"><code className="font-mono text-[.9em] p-text-2">kinu run</code> streams one task for scripts or CI, returns the answer, then exits with its status.</p>
         </div>
         <CliPreview />

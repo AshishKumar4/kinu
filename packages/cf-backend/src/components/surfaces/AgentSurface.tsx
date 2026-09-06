@@ -336,7 +336,7 @@ function SubordinatesCard({ rpc, workspaceName }: { rpc: Rpc; workspaceName: str
               </div>
               <Link
                 to={`/workspace/${workspaceName}/agents/${sub.name}`}
-                className="shrink-0 text-[11.5px] font-semibold p-gold transition-colors hover:p-accent"
+                className="shrink-0 text-[11.5px] font-semibold p-accent"
               >Message</Link>
             </div>
           ))}
