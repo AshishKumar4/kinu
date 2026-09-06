@@ -421,11 +421,140 @@ index caf113f6bebd3884e4b95e3cdbc3be5279b986de..4b554fbb827239ed168ef9e1c755aedc
              case 'uninstall':
              case 'remove':
              case 'rm':
+diff --git a/dist/vfs/sqlite-vfs.d.ts b/dist/vfs/sqlite-vfs.d.ts
+index 492628a0714f718baa5fe8fedea4dd160d0fdcca..38035b39f150e341492910c6aa2e0838dcae553c 100644
+--- a/dist/vfs/sqlite-vfs.d.ts
++++ b/dist/vfs/sqlite-vfs.d.ts
+@@ -186,6 +186,7 @@ export declare class SqliteVFS {
+     private _usedBytes;
+     private _revision;
+     private _pathRevisions;
++    private transactionPublication;
+     private readonly _epoch;
+     private _invalidations;
+     private _invalidationBytes;
+@@ -615,6 +616,24 @@ export declare class SqliteVFS {
+     private _estimateBatchBytes;
+     private errorMessage;
+     private isSqliteNoMem;
++    /**
++     * Participate in an embedder's synchronous transaction: VFS writes and SQL
++     * issued by callback commit together; on rollback the in-memory mirror
++     * returns to the committed state before the error is rethrown with cause.
++     *
++     * This method MUST own the outermost transaction on this VFS's SQL host;
++     * use it instead of wrapping VFS calls in storage.transactionSync. Do not
++     * nest it, return a Promise/thenable, or start asynchronous work inside it.
++     * The callback may read its writes. Revisions and events publish only on
++     * commit, once for the combined mutation. Existing credential checks apply.
++     *
++     * Inodes are an always-resident cache (absence means ENOENT), so rollback
++     * discards cached chunks and rebuilds metadata/children/counters from SQL.
++     * No inode snapshot or undo log is retained. Recovery failure is surfaced
++     * with both errors; the embedder must discard this VFS in that case.
++     */
++    withTransaction<T>(callback: () => T): T;
++    private emitMutation;
+     private transactionSync;
+     private executeTransactionPlan;
+     private executeMeasuredTransaction;
 diff --git a/dist/vfs/sqlite-vfs.js b/dist/vfs/sqlite-vfs.js
-index 26d4cb755b4d6c0509bebf44b942df9c68708a8b..c8eb2eb5135f08cd9541724a8a601ae4f920965d 100644
+index 26d4cb755b4d6c0509bebf44b942df9c68708a8b..a20a42d25cfcee301c15c6eb4d2985a4ef50273a 100644
 --- a/dist/vfs/sqlite-vfs.js
 +++ b/dist/vfs/sqlite-vfs.js
-@@ -2507,7 +2507,15 @@ export class SqliteVFS {
+@@ -306,10 +306,9 @@ export class SqliteVFS {
+     _lruShrinkRefcount = 0;
+     // ── Running counters for O(1) getStats() (B3 / AUDIT M10 / M-S8) ──
+     // Replaces the triple scan of this.inodes on every /api/stats poll.
+-    // Bootstrapped in loadInodes(); maintained at every mutator entry:
+-    //   mkdir/rmdir/writeFile/unlink/writeBatch (rename is a no-op —
+-    //   same inode, new path). Invariant: these match a fresh O(N)
+-    //   walk of this.inodes. Unit-tested in the A5/B3 runtime tests.
++    // Bootstrapped in loadInodes(); maintained at committed publication by
++    // mkdir, batch writes/deletes and rename. These match a fresh O(N)
++    // walk of this.inodes; rollback reloads them from the durable rows.
+     _totalFiles = 0;
+     _totalDirs = 0;
+     _usedBytes = 0;
+@@ -323,6 +322,7 @@ export class SqliteVFS {
+     // so unrelated writes no longer invalidate them. In-memory only — the
+     // clock resets with the DO lifetime, exactly like the caches keyed on it.
+     _pathRevisions = new Map();
++    transactionPublication = null;
+     // ── Invalidation log (facet cache coherence) ──────────────────────────
+     // A facet's resident set is a cache of this VFS, and it learns what to
+     // drop by asking `invalidatedSince(cursor)` for the delta. _pathRevisions
+@@ -1255,6 +1255,11 @@ export class SqliteVFS {
+      * additional coverage, since no facet view keys on a grandparent.
+      */
+     bumpRevision(paths) {
++        if (this.transactionPublication) {
++            for (const path of paths)
++                this.transactionPublication.paths.add(path);
++            return;
++        }
+         const rev = ++this._revision;
+         for (const path of paths) {
+             let p = normalizeVfsPath(path);
+@@ -1455,7 +1460,7 @@ export class SqliteVFS {
+         this._addToChildrenIndex(pp, path);
+         this._totalDirs++; // B3
+         this.bumpRevision([path]);
+-        this.events.emit('addDir', path);
++        this.emitMutation('addDir', path);
+     }
+     writeFile(path, content, options, cred, onCommit) {
+         this.assertMutationsAllowed([path]);
+@@ -2224,11 +2229,11 @@ export class SqliteVFS {
+         }
+         const atime = atimeMs !== null && Number.isFinite(atimeMs) ? Math.trunc(atimeMs) : this.now();
+         const mtime = mtimeMs !== null && Number.isFinite(mtimeMs) ? Math.trunc(mtimeMs) : this.now();
++        this.sql.exec("UPDATE inodes SET atime = ?, mtime = ? WHERE path = ?", atime, mtime, inode.path);
+         inode.atime = atime;
+         inode.mtime = mtime;
+-        this.sql.exec("UPDATE inodes SET atime = ?, mtime = ? WHERE path = ?", atime, mtime, inode.path);
+         this.bumpRevision([inode.path]);
+-        this.events.emit('change', inode.path);
++        this.emitMutation('change', inode.path);
+     }
+     /**
+      * Set the permission bits durably. Follows symlinks (POSIX chmod).
+@@ -2266,10 +2271,10 @@ export class SqliteVFS {
+         }
+         this.assertMutationsAllowed([inode.path]);
+         const full = inodeTypeBits(inode.kind) | (mode & 0o7777);
+-        inode.mode = full;
+         this.sql.exec("UPDATE inodes SET mode = ? WHERE path = ?", full, inode.path);
++        inode.mode = full;
+         this.bumpRevision([inode.path]);
+-        this.events.emit('change', inode.path);
++        this.emitMutation('change', inode.path);
+     }
+     chown(path, uid, gid, cred, followLeaf) {
+         const resolved = this.checkAccess(path, 0, cred, { followLeaf });
+@@ -2291,13 +2296,15 @@ export class SqliteVFS {
+         if (gid !== null && gid === inode.gid && cred.uid !== 0 && !owner)
+             throw vfsError('EPERM', resolved.path);
+         this.assertMutationsAllowed([inode.path]);
+-        inode.uid = uid ?? inode.uid;
+-        inode.gid = gid ?? inode.gid;
+-        if (cred.uid !== 0)
+-            inode.mode &= ~0o6000;
+-        this.sql.exec('UPDATE inodes SET uid = ?, gid = ?, mode = ? WHERE path = ?', inode.uid, inode.gid, inode.mode, inode.path);
++        const nextUid = uid ?? inode.uid;
++        const nextGid = gid ?? inode.gid;
++        const nextMode = cred.uid === 0 ? inode.mode : inode.mode & ~0o6000;
++        this.sql.exec('UPDATE inodes SET uid = ?, gid = ?, mode = ? WHERE path = ?', nextUid, nextGid, nextMode, inode.path);
++        inode.uid = nextUid;
++        inode.gid = nextGid;
++        inode.mode = nextMode;
+         this.bumpRevision([inode.path]);
+-        this.events.emit('change', inode.path);
++        this.emitMutation('change', inode.path);
+     }
+     /**
+      * Enumerate the filesystem, one bounded page at a time.
+@@ -2507,7 +2514,15 @@ export class SqliteVFS {
      }
      rename(oldPath, newPath, cred) {
          this.assertMutationsAllowed([oldPath, newPath]);
@@ -442,7 +571,7 @@ index 26d4cb755b4d6c0509bebf44b942df9c68708a8b..c8eb2eb5135f08cd9541724a8a601ae4
          this.checkParentAccess(oldPath, cred);
          this.checkParentAccess(newPath, cred);
          if (oldPath === newPath)
-@@ -2515,9 +2523,6 @@ export class SqliteVFS {
+@@ -2515,9 +2530,6 @@ export class SqliteVFS {
          if (newPath.startsWith(`${oldPath}/`)) {
              throw new Error(`EINVAL: cannot move ${oldPath} inside itself`);
          }
@@ -452,7 +581,7 @@ index 26d4cb755b4d6c0509bebf44b942df9c68708a8b..c8eb2eb5135f08cd9541724a8a601ae4
          this.checkStickyParentMutation(oldPath, inode, cred);
          // W-3 (WASI filesystem WASI): if newPath already exists, unlink it first so the
          // SQL UPDATE doesn't conflict on inodes.path uniqueness. POSIX rename(2)
-@@ -2526,7 +2531,7 @@ export class SqliteVFS {
+@@ -2526,7 +2538,7 @@ export class SqliteVFS {
          // a 2nd `make` after a prior successful build throws on UPDATE
          // failure. Pre-unlink covers both file-over-file and file-over-dir
          // (the latter is rare but POSIX permits it for empty dirs).
@@ -461,6 +590,114 @@ index 26d4cb755b4d6c0509bebf44b942df9c68708a8b..c8eb2eb5135f08cd9541724a8a601ae4
          if (destInode) {
              this.checkStickyParentMutation(newPath, destInode, cred);
              if (destInode.isDir) {
+@@ -2698,7 +2710,7 @@ export class SqliteVFS {
+             }
+         }
+         this.bumpRevision([...touchedPaths]);
+-        this.events.emit('rename', newPath, oldPath);
++        this.emitMutation('rename', newPath, oldPath);
+         this.runContentMaintenanceSafely(1);
+     }
+     /**
+@@ -3347,6 +3359,76 @@ export class SqliteVFS {
+         }
+         return this.errorMessage(error).toUpperCase().includes('SQLITE_NOMEM');
+     }
++    /**
++     * Participate in an embedder's synchronous transaction: VFS writes and SQL
++     * issued by callback commit together; on rollback the in-memory mirror
++     * returns to the committed state before the error is rethrown with cause.
++     *
++     * This method MUST own the outermost transaction on this VFS's SQL host;
++     * use it instead of wrapping VFS calls in storage.transactionSync. Do not
++     * nest it, return a Promise/thenable, or start asynchronous work inside it.
++     * The callback may read its writes. Revisions and events publish only on
++     * commit, once for the combined mutation. Existing credential checks apply.
++     *
++     * Inodes are an always-resident cache (absence means ENOENT), so rollback
++     * discards cached chunks and rebuilds metadata/children/counters from SQL.
++     * No inode snapshot or undo log is retained. Recovery failure is surfaced
++     * with both errors; the embedder must discard this VFS in that case.
++     */
++    withTransaction(callback) {
++        if (this.transactionPublication !== null) {
++            throw new Error('[sqlite-vfs] nested embedder transactions are not supported');
++        }
++        const storage = this.ctx.storage;
++        if (!storage)
++            throw new Error('[sqlite-vfs] atomic storage operation requires transactionSync');
++        const publication = {
++            paths: new Set(),
++            events: new Array(),
++        };
++        const maintenancePending = this.maintenancePending;
++        this.transactionPublication = publication;
++        let result;
++        try {
++            result = storage.transactionSync(() => {
++                const value = callback();
++                if (value !== null && (typeof value === 'object' || typeof value === 'function')
++                    && 'then' in value && typeof value.then === 'function') {
++                    throw new TypeError('[sqlite-vfs] transaction callback must be synchronous');
++                }
++                return value;
++            });
++        }
++        catch (error) {
++            this.evictAll();
++            this.maintenancePending = maintenancePending;
++            try {
++                this.loadInodes();
++            }
++            catch (reloadError) {
++                throw new AggregateError([error, reloadError], '[sqlite-vfs] transaction rollback reload failed', { cause: error });
++            }
++            throw new Error('[sqlite-vfs] embedder transaction rolled back', { cause: error });
++        }
++        finally {
++            this.transactionPublication = null;
++        }
++        if (publication.paths.size > 0)
++            this.bumpRevision([...publication.paths]);
++        for (const event of publication.events) {
++            this.events.emit(event.type, event.path, event.oldPath);
++        }
++        this.runContentMaintenanceSafely(1);
++        return result;
++    }
++    emitMutation(type, path, oldPath) {
++        if (this.transactionPublication) {
++            this.transactionPublication.events.push({ type, path, oldPath });
++        }
++        else {
++            this.events.emit(type, path, oldPath);
++        }
++    }
+     transactionSync(callback) {
+         if (!this.ctx?.storage?.transactionSync) {
+             throw new Error('[sqlite-vfs] atomic storage operation requires transactionSync');
+@@ -3602,6 +3684,8 @@ export class SqliteVFS {
+         return { transactions };
+     }
+     runContentMaintenanceSafely(maxTransactions, force = false) {
++        if (this.transactionPublication)
++            return;
+         if (!force && !this.maintenancePending)
+             return;
+         const startedAt = performance.now();
+@@ -3907,10 +3991,10 @@ export class SqliteVFS {
+         }
+         // 5. Events observe the already-published metadata and revision.
+         for (const inode of deletedInodes) {
+-            this.events.emit(inode.isDir ? 'unlinkDir' : 'unlink', inode.path);
++            this.emitMutation(inode.isDir ? 'unlinkDir' : 'unlink', inode.path);
+         }
+         for (const entry of plan.inodes) {
+-            this.events.emit(entry.isDir ? 'addDir' : replacedPaths.has(entry.path) ? 'change' : 'add', entry.path);
++            this.emitMutation(entry.isDir ? 'addDir' : replacedPaths.has(entry.path) ? 'change' : 'add', entry.path);
+         }
+         this.recordDuration(this._postCommitDuration, performance.now() - postCommitStartedAt);
+         return { inodes: inodeCount, chunks: chunkCount };
 diff --git a/dist/workspace/nimbus-workspace.d.ts b/dist/workspace/nimbus-workspace.d.ts
 index 818b4118eebcf2a6d9266affd6e32966a299e8b7..837cefd25752fc46c9d007760a285f6f39ee80bb 100644
 --- a/dist/workspace/nimbus-workspace.d.ts
@@ -714,7 +951,7 @@ index 78cd6fe11c27f75ae813246021b7677ac673251a..662637f19f030a6416366ee3c4427c55
  /**
   * Open the durable filesystem for a host that has not opened one itself.
   *
-diff --git a/dist/workspace/supervisor-op.d.ts b/dist/workspace/supervisor-op.d.ts
+diff --git a/node_modules/@nimbus-sh/core/dist/workspace/supervisor-op.d.ts b/dist/workspace/supervisor-op.d.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..3681e5813e801d2a6d393b156da84256855e9b00
 --- /dev/null
@@ -818,7 +1055,7 @@ index 0000000000000000000000000000000000000000..3681e5813e801d2a6d393b156da84256
 +export declare function createSupervisorOpHandler(deps: SupervisorOpDeps): (envelope: SupervisorOpEnvelope) => Promise<unknown>;
 +//# sourceMappingURL=supervisor-op.d.ts.map
 \ No newline at end of file
-diff --git a/dist/workspace/supervisor-op.d.ts.map b/dist/workspace/supervisor-op.d.ts.map
+diff --git a/node_modules/@nimbus-sh/core/dist/workspace/supervisor-op.d.ts.map b/dist/workspace/supervisor-op.d.ts.map
 new file mode 100644
 index 0000000000000000000000000000000000000000..246b245d4bb114e1ea1681f6cb9bd59ee2a1ba9c
 --- /dev/null
@@ -826,7 +1063,7 @@ index 0000000000000000000000000000000000000000..246b245d4bb114e1ea1681f6cb9bd59e
 @@ -0,0 +1 @@
 +{"version":3,"file":"supervisor-op.d.ts","sourceRoot":"","sources":["../../src/workspace/supervisor-op.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;;;;;;;;;;;;;;GA6BG;;AAEH,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,sBAAsB,CAAC;AAItD,OAAO,KAAK,EAAE,wBAAwB,EAAE,MAAM,0CAA0C,CAAC;AAEzF;;;;;;;;;;;;;;GAcG;AACH,MAAM,WAAW,oBAAoB;IACnC,wEAAwE;IACxE,QAAQ,CAAC,EAAE,EAAE,MAAM,CAAC;IACpB,mEAAmE;IACnE,QAAQ,CAAC,IAAI,CAAC,EAAE,SAAS,OAAO,EAAE,CAAC;IACnC,gFAAgF;IAChF,QAAQ,CAAC,GAAG,CAAC,EAAE,MAAM,CAAC;IACtB,uEAAuE;IACvE,QAAQ,CAAC,QAAQ,CAAC,EAAE,MAAM,CAAC;IAC3B,wEAAwE;IACxE,QAAQ,CAAC,aAAa,CAAC,EAAE,MAAM,CAAC;IAChC,+CAA+C;IAC/C,QAAQ,CAAC,MAAM,CAAC,EAAE,cAAc,CAAC,UAAU,CAAC,CAAC;CAC9C;AAED,2BAA2B;AAC3B,MAAM,MAAM,mBAAmB,GAAG,CAAC,QAAQ,EAAE,oBAAoB,KAAK,OAAO,CAAC;AAE9E,+DAA+D;AAC/D,MAAM,WAAW,gBAAgB;IAC/B,yCAAyC;IACzC,QAAQ,CAAC,GAAG,EAAE,SAAS,CAAC;IACxB;;;;OAIG;IACH,QAAQ,CAAC,SAAS,CAAC,EAAE,wBAAwB,CAAC;IAC9C;;;;;OAKG;IACH,QAAQ,CAAC,MAAM,CAAC,EAAE,CAAC,MAAM,EAAE,QAAQ,GAAG,QAAQ,EAAE,GAAG,EAAE,MAAM,EAAE,IAAI,EAAE,MAAM,KAAK,IAAI,CAAC;IACnF;;;;OAIG;IACH,QAAQ,CAAC,MAAM,CAAC,EAAE,QAAQ,CAAC,MAAM,CAAC,MAAM,EAAE,mBAAmB,CAAC,CAAC,CAAC;CACjE;AAiDD;;;;;;;GAOG;AACH,wBAAgB,yBAAyB,CACvC,IAAI,EAAE,gBAAgB,GACrB,CAAC,QAAQ,EAAE,oBAAoB,KAAK,OAAO,CAAC,OAAO,CAAC,CAmFtD"}
 \ No newline at end of file
-diff --git a/dist/workspace/supervisor-op.js b/dist/workspace/supervisor-op.js
+diff --git a/node_modules/@nimbus-sh/core/dist/workspace/supervisor-op.js b/dist/workspace/supervisor-op.js
 new file mode 100644
 index 0000000000000000000000000000000000000000..d0cb7783baeb28507673dce8515a523108aface5
 --- /dev/null
@@ -1364,10 +1601,111 @@ index ead37adb8906f1e66cb300f31db5394f481179a3..5117de7816bd31070a21e9c7a0e875ab
  			case 'remove':
  			case 'rm':
 diff --git a/src/vfs/sqlite-vfs.ts b/src/vfs/sqlite-vfs.ts
-index cd3b184280b5093ec2a519db46fb1222c80217bd..b36fd440e4309700609191ec5d9225766383b19f 100644
+index cd3b184280b5093ec2a519db46fb1222c80217bd..084adeb6dd528db50dd74554198b26068a94fc4b 100644
 --- a/src/vfs/sqlite-vfs.ts
 +++ b/src/vfs/sqlite-vfs.ts
-@@ -3199,15 +3199,20 @@ export class SqliteVFS {
+@@ -614,10 +614,9 @@ export class SqliteVFS {
+ 
+   // ── Running counters for O(1) getStats() (B3 / AUDIT M10 / M-S8) ──
+   // Replaces the triple scan of this.inodes on every /api/stats poll.
+-  // Bootstrapped in loadInodes(); maintained at every mutator entry:
+-  //   mkdir/rmdir/writeFile/unlink/writeBatch (rename is a no-op —
+-  //   same inode, new path). Invariant: these match a fresh O(N)
+-  //   walk of this.inodes. Unit-tested in the A5/B3 runtime tests.
++  // Bootstrapped in loadInodes(); maintained at committed publication by
++  // mkdir, batch writes/deletes and rename. These match a fresh O(N)
++  // walk of this.inodes; rollback reloads them from the durable rows.
+   private _totalFiles = 0;
+   private _totalDirs = 0;
+   private _usedBytes = 0;
+@@ -632,6 +631,10 @@ export class SqliteVFS {
+   // so unrelated writes no longer invalidate them. In-memory only — the
+   // clock resets with the DO lifetime, exactly like the caches keyed on it.
+   private _pathRevisions = new Map<string, number>();
++  private transactionPublication: {
++    paths: Set<string>;
++    events: { type: VfsEventType; path: string; oldPath?: string }[];
++  } | null = null;
+ 
+   // ── Invalidation log (facet cache coherence) ──────────────────────────
+   // A facet's resident set is a cache of this VFS, and it learns what to
+@@ -1673,6 +1676,10 @@ export class SqliteVFS {
+    * additional coverage, since no facet view keys on a grandparent.
+    */
+   private bumpRevision(paths: readonly string[]): void {
++    if (this.transactionPublication) {
++      for (const path of paths) this.transactionPublication.paths.add(path);
++      return;
++    }
+     const rev = ++this._revision;
+     for (const path of paths) {
+       let p = normalizeVfsPath(path);
+@@ -1884,7 +1891,7 @@ export class SqliteVFS {
+     this._addToChildrenIndex(pp, path);
+     this._totalDirs++; // B3
+     this.bumpRevision([path]);
+-    this.events.emit('addDir', path);
++    this.emitMutation('addDir', path);
+   }
+ 
+   private writeFile(
+@@ -2905,11 +2912,11 @@ export class SqliteVFS {
+     }
+     const atime = atimeMs !== null && Number.isFinite(atimeMs) ? Math.trunc(atimeMs) : this.now();
+     const mtime = mtimeMs !== null && Number.isFinite(mtimeMs) ? Math.trunc(mtimeMs) : this.now();
++    this.sql.exec("UPDATE inodes SET atime = ?, mtime = ? WHERE path = ?", atime, mtime, inode.path);
+     inode.atime = atime;
+     inode.mtime = mtime;
+-    this.sql.exec("UPDATE inodes SET atime = ?, mtime = ? WHERE path = ?", atime, mtime, inode.path);
+     this.bumpRevision([inode.path]);
+-    this.events.emit('change', inode.path);
++    this.emitMutation('change', inode.path);
+   }
+ 
+   /**
+@@ -2949,10 +2956,10 @@ export class SqliteVFS {
+     }
+     this.assertMutationsAllowed([inode.path]);
+     const full = inodeTypeBits(inode.kind) | (mode & 0o7777);
+-    inode.mode = full;
+     this.sql.exec("UPDATE inodes SET mode = ? WHERE path = ?", full, inode.path);
++    inode.mode = full;
+     this.bumpRevision([inode.path]);
+-    this.events.emit('change', inode.path);
++    this.emitMutation('change', inode.path);
+   }
+ 
+   private chown(
+@@ -2975,18 +2982,21 @@ export class SqliteVFS {
+     }
+     if (gid !== null && gid === inode.gid && cred.uid !== 0 && !owner) throw vfsError('EPERM', resolved.path);
+     this.assertMutationsAllowed([inode.path]);
+-    inode.uid = uid ?? inode.uid;
+-    inode.gid = gid ?? inode.gid;
+-    if (cred.uid !== 0) inode.mode &= ~0o6000;
++    const nextUid = uid ?? inode.uid;
++    const nextGid = gid ?? inode.gid;
++    const nextMode = cred.uid === 0 ? inode.mode : inode.mode & ~0o6000;
+     this.sql.exec(
+       'UPDATE inodes SET uid = ?, gid = ?, mode = ? WHERE path = ?',
+-      inode.uid,
+-      inode.gid,
+-      inode.mode,
++      nextUid,
++      nextGid,
++      nextMode,
+       inode.path,
+     );
++    inode.uid = nextUid;
++    inode.gid = nextGid;
++    inode.mode = nextMode;
+     this.bumpRevision([inode.path]);
+-    this.events.emit('change', inode.path);
++    this.emitMutation('change', inode.path);
+   }
+ 
+   /**
+@@ -3199,15 +3209,20 @@ export class SqliteVFS {
  
    private rename(oldPath: string, newPath: string, cred: VfsCred): void {
      this.assertMutationsAllowed([oldPath, newPath]);
@@ -1391,7 +1729,7 @@ index cd3b184280b5093ec2a519db46fb1222c80217bd..b36fd440e4309700609191ec5d922576
      this.checkStickyParentMutation(oldPath, inode, cred);
  
      // W-3 (WASI filesystem WASI): if newPath already exists, unlink it first so the
-@@ -3217,7 +3222,7 @@ export class SqliteVFS {
+@@ -3217,7 +3232,7 @@ export class SqliteVFS {
      // a 2nd `make` after a prior successful build throws on UPDATE
      // failure. Pre-unlink covers both file-over-file and file-over-dir
      // (the latter is rare but POSIX permits it for empty dirs).
@@ -1400,6 +1738,109 @@ index cd3b184280b5093ec2a519db46fb1222c80217bd..b36fd440e4309700609191ec5d922576
      if (destInode) {
        this.checkStickyParentMutation(newPath, destInode, cred);
        if (destInode.isDir) {
+@@ -3381,7 +3396,7 @@ export class SqliteVFS {
+     }
+ 
+     this.bumpRevision([...touchedPaths]);
+-    this.events.emit('rename', newPath, oldPath);
++    this.emitMutation('rename', newPath, oldPath);
+     this.runContentMaintenanceSafely(1);
+   }
+ 
+@@ -4080,6 +4095,72 @@ export class SqliteVFS {
+     return this.errorMessage(error).toUpperCase().includes('SQLITE_NOMEM');
+   }
+ 
++  /**
++   * Participate in an embedder's synchronous transaction: VFS writes and SQL
++   * issued by callback commit together; on rollback the in-memory mirror
++   * returns to the committed state before the error is rethrown with cause.
++   *
++   * This method MUST own the outermost transaction on this VFS's SQL host;
++   * use it instead of wrapping VFS calls in storage.transactionSync. Do not
++   * nest it, return a Promise/thenable, or start asynchronous work inside it.
++   * The callback may read its writes. Revisions and events publish only on
++   * commit, once for the combined mutation. Existing credential checks apply.
++   *
++   * Inodes are an always-resident cache (absence means ENOENT), so rollback
++   * discards cached chunks and rebuilds metadata/children/counters from SQL.
++   * No inode snapshot or undo log is retained. Recovery failure is surfaced
++   * with both errors; the embedder must discard this VFS in that case.
++   */
++  withTransaction<T>(callback: () => T): T {
++    if (this.transactionPublication !== null) {
++      throw new Error('[sqlite-vfs] nested embedder transactions are not supported');
++    }
++    const storage = this.ctx.storage;
++    if (!storage) throw new Error('[sqlite-vfs] atomic storage operation requires transactionSync');
++    const publication = {
++      paths: new Set<string>(),
++      events: new Array<{ type: VfsEventType; path: string; oldPath?: string }>(),
++    };
++    const maintenancePending = this.maintenancePending;
++    this.transactionPublication = publication;
++    let result: T;
++    try {
++      result = storage.transactionSync(() => {
++        const value = callback();
++        if (value !== null && (typeof value === 'object' || typeof value === 'function')
++            && 'then' in value && typeof value.then === 'function') {
++          throw new TypeError('[sqlite-vfs] transaction callback must be synchronous');
++        }
++        return value;
++      });
++    } catch (error) {
++      this.evictAll();
++      this.maintenancePending = maintenancePending;
++      try {
++        this.loadInodes();
++      } catch (reloadError) {
++        throw new AggregateError([error, reloadError], '[sqlite-vfs] transaction rollback reload failed', { cause: error });
++      }
++      throw new Error('[sqlite-vfs] embedder transaction rolled back', { cause: error });
++    } finally {
++      this.transactionPublication = null;
++    }
++    if (publication.paths.size > 0) this.bumpRevision([...publication.paths]);
++    for (const event of publication.events) {
++      this.events.emit(event.type, event.path, event.oldPath);
++    }
++    this.runContentMaintenanceSafely(1);
++    return result;
++  }
++
++  private emitMutation(type: VfsEventType, path: string, oldPath?: string): void {
++    if (this.transactionPublication) {
++      this.transactionPublication.events.push({ type, path, oldPath });
++    } else {
++      this.events.emit(type, path, oldPath);
++    }
++  }
++
+   private transactionSync(callback: () => void): void {
+     if (!this.ctx?.storage?.transactionSync) {
+       throw new Error('[sqlite-vfs] atomic storage operation requires transactionSync');
+@@ -4448,6 +4529,7 @@ export class SqliteVFS {
+   }
+ 
+   private runContentMaintenanceSafely(maxTransactions: number, force = false): void {
++    if (this.transactionPublication) return;
+     if (!force && !this.maintenancePending) return;
+     const startedAt = performance.now();
+     try {
+@@ -4773,10 +4855,10 @@ export class SqliteVFS {
+ 
+     // 5. Events observe the already-published metadata and revision.
+     for (const inode of deletedInodes) {
+-      this.events.emit(inode.isDir ? 'unlinkDir' : 'unlink', inode.path);
++      this.emitMutation(inode.isDir ? 'unlinkDir' : 'unlink', inode.path);
+     }
+     for (const entry of plan.inodes) {
+-      this.events.emit(entry.isDir ? 'addDir' : replacedPaths.has(entry.path) ? 'change' : 'add', entry.path);
++      this.emitMutation(entry.isDir ? 'addDir' : replacedPaths.has(entry.path) ? 'change' : 'add', entry.path);
+     }
+ 
+     this.recordDuration(this._postCommitDuration, performance.now() - postCommitStartedAt);
 diff --git a/src/workspace/nimbus-workspace.ts b/src/workspace/nimbus-workspace.ts
 index 6d018c0df83d753085be093d402ae164f793fa6d..b8a7856471fc1b9c477c6264d2518c2b9157af23 100644
 --- a/src/workspace/nimbus-workspace.ts
@@ -1610,7 +2051,7 @@ index 6d018c0df83d753085be093d402ae164f793fa6d..b8a7856471fc1b9c477c6264d2518c2b
  /**
   * Open the durable filesystem for a host that has not opened one itself.
   *
-diff --git a/src/workspace/supervisor-op.ts b/src/workspace/supervisor-op.ts
+diff --git a/node_modules/@nimbus-sh/core/src/workspace/supervisor-op.ts b/src/workspace/supervisor-op.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..d56d8e768aabef3d5cd33261d573cdb418a61d17
 --- /dev/null
