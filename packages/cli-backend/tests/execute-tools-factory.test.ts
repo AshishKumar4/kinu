@@ -36,6 +36,12 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
     expect(out.result).toBe(42);
   });
 
+  test('executes a codemode callable with trailing comments once', async () => {
+    const out = await makeTool()({ code: 'async () => { console.log("once"); return 42; } // result' });
+    expect(out.result).toBe(42);
+    expect(out.logs).toEqual(['once']);
+  });
+
   test('code that prints its answer without an explicit return still reaches the model via logs', async () => {
     const out = await makeTool()({ code: 'const x = 21 + 21;\nconsole.log(x)' });
     expect(out.logs).toEqual(['42']);

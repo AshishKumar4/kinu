@@ -1,0 +1,30 @@
+diff --git a/node_modules/@cloudflare/codemode/dist/normalize.d.ts b/dist/normalize.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3fa4f330e244ad8314e30cf1a5d76ae46adf8c78
+--- /dev/null
++++ b/dist/normalize.d.ts
+@@ -0,0 +1 @@
++export declare function normalizeCode(code: string): string;
+diff --git a/node_modules/@cloudflare/codemode/dist/normalize.js b/dist/normalize.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..dcf795c5e4e6b6bde56e983e3eef08795fadb344
+--- /dev/null
++++ b/dist/normalize.js
+@@ -0,0 +1 @@
++export { s as normalizeCode } from "./json-schema-types-D_m9tVnI.js";
+diff --git a/package.json b/package.json
+index 534fe2b3f6ff6616065b31c51af6666b61cc8984..ccb562944a00c3eeb8b61731b2940baf841c8e6e 100644
+--- a/package.json
++++ b/package.json
+@@ -49,6 +49,11 @@
+       "import": "./dist/index.js",
+       "require": "./dist/index.js"
+     },
++    "./normalize": {
++      "types": "./dist/normalize.d.ts",
++      "import": "./dist/normalize.js",
++      "require": "./dist/normalize.js"
++    },
+     "./ai": {
+       "types": "./dist/ai.d.ts",
+       "import": "./dist/ai.js",

@@ -13,7 +13,8 @@
  * provider functions cannot be passed across process boundaries.
  */
 
-import { addImplicitReturn, decodeJsonValue, JsonValueSchema } from '@kinu.run/core';
+import { normalizeCode } from '@cloudflare/codemode/normalize';
+import { decodeJsonValue, JsonValueSchema } from '@kinu.run/core';
 import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu.run/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -144,41 +145,22 @@ async function runToCompletion(
 
 /** Execute in a Bun subprocess with timeout. */
 async function executeInSubprocess(code: string, timeoutMs?: number): Promise<ExecuteResult> {
-  // LLMs often send bare expressions (e.g., "7 * 13") without return. The
-  // expression form is PARSED first and RUN only if it parsed: deciding by a
-  // failed run re-executed a throwing expression as statements, so a side
-  // effect before the throw landed twice (measured 2026-09-05: an appended
-  // marker file held two lines for one call).
-  let autoReturned: string;
-  try {
-    autoReturned = addImplicitReturn(code);
-  } catch (cause) {
-    if (classify({ cause }) !== 'malformed-input') throw cause;
-    return { result: undefined, error: renderThrownChain({ cause }) };
-  }
+  // A compiled binary may have no bun CLI beside it. The in-process adapter
+  // binds the same providers but cannot supply module-only runtime features.
+  const bunBin = Bun.which('bun');
+  if (!bunBin) return executeInProcess(code, [], timeoutMs);
+
   const wrapper = `
-    const __code = ${JSON.stringify(code)};
-    let __expression;
-    try { __expression = (0, eval)("(async () => (" + __code + "))"); }
-    catch (e) { if (!(e instanceof SyntaxError)) throw e; }
-    async function __run() {
-      if (__expression) return await __expression();
-      return await (async () => { ${autoReturned} })();
-    }
     try {
-      const result = await __run();
+      const result = await (
+        ${normalizeCode(code)}
+      )();
       console.log(JSON.stringify({ ok: true, result: result ?? null }));
     } catch (e) {
       console.log(JSON.stringify({ ok: false, error: e.message ?? String(e) }));
     }
   `;
 
-  // A compiled `kinu` binary is not the bun CLI and usually ships without
-  // one beside it (TB2.1: turn review failed in every container-less deploy).
-  // With no subprocess runtime, in-process execution is the real remaining
-  // executor — same code, no isolation, stated here rather than guessed at.
-  const bunBin = Bun.which('bun');
-  if (!bunBin) return executeInProcess(code, [], timeoutMs);
   const run = await runToCompletion([bunBin, 'run'], wrapper, '.mjs', timeoutMs);
   if (run.error) return { result: undefined, error: run.error };
   if (run.exitCode !== 0) {
@@ -207,11 +189,8 @@ function normalizeProviders(
  * In-process execution — for tool-backed code, and for the JS lane on a machine
  * with no subprocess runtime on its PATH.
  *
- * Which runtime resolved decides WHERE the work runs, never what it answers, so
- * a bare expression is given the same value here as the subprocess wrapper gives
- * it: `addImplicitReturn` is the one rule both lanes apply. Without it a model
- * that asked for `7 * 6` was answered `42` beside a `bun` and `undefined` inside
- * a compiled-binary deploy — the same code, silently emptied by a PATH.
+ * Codemode owns source normalization. This adapter only binds the local
+ * providers and invokes the resulting callable once, just like the subprocess.
  */
 async function executeInProcess(
   code: string, providers: ResolvedProvider[], timeoutMs?: number,
@@ -239,8 +218,7 @@ async function executeInProcess(
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const wrapped = `return (async (${argNames.join(', ')}) => { ${addImplicitReturn(code)} })(${argNames.map((_, i) => `arguments[${i}]`).join(', ')})`;
-    const fn = new Function(wrapped);
+    const fn = new Function(...argNames, `return (\n${normalizeCode(code)}\n)()`);
     const settled = Promise.resolve(fn(...argValues)).then((value) =>
       value === undefined ? undefined : decodeJsonValue({ value }));
     if (timeoutMs === undefined) return { result: await settled };

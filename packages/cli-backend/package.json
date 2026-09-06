@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@ai-sdk/provider": "^3.0.10",
+    "@cloudflare/codemode": "0.5.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@nimbus-sh/runtime-bash": "5.2.37",
     "@nimbus-sh/runtime-cpython": "3.13.14",
