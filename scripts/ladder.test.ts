@@ -538,8 +538,8 @@ describe('every test file is claimed by some runner', () => {
   });
 
   test('the root test script covers every package or names the omission and its gate', () => {
-    // `bun run test` is the most-typed command in the repo and it covers 3 of
-    // the 9 workspace packages. Making it cover all 9 was measured and rejected
+    // `bun run test` is the most-typed command in the repo and it covers 4 of
+    // the 10 workspace packages. Making it cover all 10 was measured and rejected
     // twice: as one process, `bun test packages/` is 4,839 tests in 126s with
     // 10 failures from cross-suite interference (bun keeps ONE module mock per
     // specifier for a whole run — see mockAgentsSdk's own docstring); as eight
@@ -551,7 +551,7 @@ describe('every test file is claimed by some runner', () => {
       tracked.flatMap((path) => path.split('/').slice(0, 2).join('/'))
         .filter((prefix) => prefix.startsWith('packages/')),
     );
-    expect(packages.size).toBe(9);
+    expect(packages.size).toBe(10);
 
     const byRootScript = new Set(claims('bun run test', tracked));
     const atCi = gatesFor('ci', deploy);
@@ -724,7 +724,7 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
     }
     const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
     expect(packageJson).toContain(
-      '"test": "bun test --parallel=4 packages/agent-utils/ packages/core/ packages/compaction/"',
+      '"test": "bun test --parallel=4 packages/agent-core/ packages/agent-utils/ packages/core/ packages/compaction/"',
     );
   });
 });
