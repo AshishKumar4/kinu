@@ -203,6 +203,7 @@ gitignored, machine-local `docs/research/`.
 - Avoid loading skills unless they are concretely needed for the task. Keep context focused and prefer direct source inspection for routine repo work.
 - User responses lead with the conclusion, use plain language, and include only decision-relevant detail. Keep them within two rendered pages unless the user explicitly asks for depth.
 - Code reviews, quality audits, and pre-merge review passes MUST load the `thermo-nuclear-code-quality-review` skill and apply its approval bar. This binds the reviewer and every dispatched reviewer/audit subagent; name the skill in their briefs.
+- Do not add doc-claim or prose-shape gates. Review documentation accuracy against its sources without making prose shape a CI requirement.
 
 ## How To Write Docs, Write-Ups, Descriptions, READMEs
 
