@@ -413,6 +413,26 @@ describe('a publish is single PUTs, an ETag-proven body, and one CAS', () => {
 });
 
 describe('a wake serves the head lazily', () => {
+  test('opening and reading a head does not depend on its GC inventory', async () => {
+    const fixture = openSidecar();
+    fixture.daemon.plant(textTree({ 'notes.txt': 'durable contents' }));
+    await publish(fixture, 'the acknowledged head');
+    const snapshot = await fixture.snapshot();
+    if (snapshot.head === null) throw new Error('the fixture has no acknowledged head');
+    const ledgerKey = snapshot.head.envelope.ledger.key;
+    const read = fixture.payload.readRange.bind(fixture.payload);
+    fixture.payload.readRange = async (intent) => {
+      if (intent.exactKey === ledgerKey) throw new Error('GC inventory read unavailable');
+      return await read(intent);
+    };
+    const wake = openSidecar({ bootId: 'replacement', share: fixture });
+    await wake.core.attach();
+    const view = wake.core.view();
+    if (view === null) throw new Error('the acknowledged head was not opened');
+    const bytes = await view.readRange('notes.txt', 0, 16);
+    expect(new TextDecoder().decode(bytes)).toBe('durable contents');
+  });
+
   test('attach plus enter is O(root), one file reads exact, evict then re-read is identical', async () => {
     const wakeOf = async (files: number) => {
       const fixture = openSidecar();
@@ -447,9 +467,8 @@ describe('a wake serves the head lazily', () => {
     };
     const small = await wakeOf(10);
     const large = await wakeOf(100);
-    // THE WAKE PROPERTY. Ten times the files, the same remote operations:
-    // the root record, the ledger, and the root's one child. A wake that
-    // walked the tree would cost one operation per file here.
+    // This tree has one root child at both sizes. Attach and first entry
+    // read those records; a traversal would add one read per file.
     expect(small.attachGets).toBe(large.attachGets);
     expect(small.enterGets).toBe(large.enterGets);
     expect(large.attachGets + large.enterGets).toBeLessThanOrEqual(4);

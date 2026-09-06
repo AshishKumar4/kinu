@@ -5,9 +5,9 @@
  * WHY A LEDGER AND NOT A CLOSURE. A v1 generation published the full closure
  * of its head and verified it object by object, at every publish and again at
  * every attach — O(#objects) remote operations for a fact that never changes.
- * The ledger is the other shape of the same knowledge: one row per LIVE pack,
- * O(#packs) rather than O(#objects), written once per publish and read only by
- * compaction and GC. Nothing on the read or attach path touches it.
+ * The ledger has one row per live pack. Seals, bulk materialization and
+ * maintenance read it. Lazy attach and file reads use the records in packs
+ * directly. A seal still rewrites O(#packs) ledger bytes.
  *
  * WHY LIVENESS IS INCREMENTAL. When a seal replaces an extent, the pack that
  * held the old chunk loses those bytes; that is O(k) bookkeeping the build

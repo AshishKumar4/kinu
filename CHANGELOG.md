@@ -1031,6 +1031,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 - Feedback capture completion respects screenshot opt-out and newer captures. A held-encoder browser probe on 2026-09-06 sent a 33,814 B screenshot before the fix and no screenshot after it.
 - The devbox driver can judge publication cuts with opt-in `--fault-cuts`. Local tests on 2026-09-06 proved CUT and NOT-CUT; unarmed storage operations stayed at 5 with zero added control RPCs.
+- The v2 devbox sidecar no longer reads GC inventory during lazy attach; a 2026-09-06 local probe reduced attach object bytes from 2,530/16,454 to 317/317 at 16/128 files.
 
 ## [0.2.0] - 2026-08-07
 

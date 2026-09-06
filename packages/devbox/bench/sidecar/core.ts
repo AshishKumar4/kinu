@@ -199,7 +199,7 @@ export class SidecarCore {
   #lazy: LazyRestore | null = null;
   #lazyPorts: LazyRestorePorts | null = null;
   #head: CandidateRunControlV2['head'] = null;
-  #ledger: PackLedger | null = null;
+  #ledger: { readonly key: string; readonly value: PackLedger } | null = null;
   #retired: RetiredPack[] = [];
   #restore: RestoreWork = ZERO_RESTORE;
   #seal: SealWork = ZERO_SEAL;
@@ -245,13 +245,13 @@ export class SidecarCore {
     if (control.head === null) {
       this.#view = null;
       this.#lazy = null;
+      this.#ledger = null;
       this.#restore = { ...ZERO_RESTORE, totalRemoteOps: 1, serialRemoteOps: 1 };
       this.#attach = { kind: 'empty' };
       return this.#attach;
     }
     const envelope = control.head.envelope;
     this.#view = await openMerkleV2(envelope.rootObject, this.#ports.payload, this.#identity('attach'));
-    this.#ledger = await this.#readLedger(envelope.ledger, 'attach');
     const hydrate = this.#view.work();
     this.#restore = {
       serialRemoteOps: hydrate.rangeGets + 2,
@@ -383,15 +383,16 @@ export class SidecarCore {
    */
   async materialize(sink: (entries: readonly NodeEntry[]) => Promise<void> | void): Promise<HydrateWork> {
     const view = this.#view;
-    const ledger = this.#ledger;
-    if (view === null || ledger === null) {
+    const head = this.#head;
+    if (view === null || head === null) {
       throw new Error('a materialize needs an attached head; attach first');
     }
+    const ledger = await this.#readLedger(head.envelope.ledger, 'materialize');
     const wholePacks = new Map<string, KnownPack>(
       ledger.packs.map((row) => [row.key, { byteLength: Number(row.byteLength), sha256: row.sha256 }]),
     );
     const bulk = await openMerkleV2(
-      this.#head!.envelope.rootObject,
+      head.envelope.rootObject,
       this.#ports.payload,
       this.#identity('restore'),
       { wholePacks },
@@ -504,7 +505,7 @@ export class SidecarCore {
           lastOperationId: head.pointer.lastOperationId,
         },
       }));
-      parentLedger = this.#ledger ?? await this.#readLedger(head.envelope.ledger, 'seal');
+      parentLedger = await this.#readLedger(head.envelope.ledger, 'seal');
     }
     const build = await buildMerkleDelta(manifest, {
       stage: delta.stage,
@@ -622,7 +623,7 @@ export class SidecarCore {
     for (const key of staged.retired) {
       this.#retired.push({ key, generation: staged.generation, retiredAtMs });
     }
-    this.#ledger = staged.ledger;
+    this.#ledger = { key: staged.draft.ledger.key, value: staged.ledger };
     return { rootEnvelopeId: pointer.rootEnvelopeId, generation: staged.generation };
   }
 
@@ -632,10 +633,10 @@ export class SidecarCore {
    * qualifies, which is the ordinary case.
    */
   async compact(): Promise<boolean> {
-    const ledger = this.#ledger;
     const view = this.#view;
     const head = this.#head;
-    if (ledger === null || view === null || head === null) return false;
+    if (view === null || head === null) return false;
+    const ledger = await this.#readLedger(head.envelope.ledger, 'compaction');
     const candidates = compactionCandidates(ledger, head.envelope.generation);
     if (candidates.length === 0) return false;
     const keys = new Set(candidates.map((row) => row.key));
@@ -793,10 +794,13 @@ export class SidecarCore {
     ref: { readonly key: string; readonly byteLength: string; readonly sha256: string },
     operationId: string,
   ): Promise<PackLedger> {
-    return parsePackLedger(await this.#readRange(
+    if (this.#ledger?.key === ref.key) return this.#ledger.value;
+    const ledger = parsePackLedger(await this.#readRange(
       { key: ref.key, byteOffset: '0', byteLength: ref.byteLength, sha256: ref.sha256 },
       operationId,
     ));
+    this.#ledger = { key: ref.key, value: ledger };
+    return ledger;
   }
 
   async #stagePayload(input: {
