@@ -42,7 +42,9 @@ import {
   JsonObjectSchema,
   asFetchFunction,
   toolCallIdFor,
+  withRateLimitRetry,
   type JsonObject,
+  type RateLimitRetryOptions,
 } from '@kinu.run/core';
 import { diagnostics, renderCauseChain, toKinuError, tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -116,7 +118,23 @@ interface DirectWorkersAIRunner {
   ): Promise<Response | ReadableStream<Uint8Array> | JsonObject>;
 }
 
-export function createDirectWorkersAIFetch(binding: Ai): typeof globalThis.fetch {
+/**
+ * The binding is an inference boundary like the OAuth fetch is, so a rate
+ * limit it answers is waited out the same way (`withRateLimitRetry`): the
+ * upstream's 429 is kept as the adapter's own status, and the retry follows
+ * Retry-After until the completion arrives or the caller cancels. Measured
+ * 2026-09-06 on staging: without this, the SDK's two retries surrendered a
+ * `3021: rate limiting` answer as `Failed after 3 attempts` and the turn ended
+ * with no reply.
+ */
+export function createDirectWorkersAIFetch(
+  binding: Ai,
+  retry: RateLimitRetryOptions = {},
+): typeof globalThis.fetch {
+  return withRateLimitRetry(directWorkersAIFetch(binding), retry);
+}
+
+function directWorkersAIFetch(binding: Ai): typeof globalThis.fetch {
   // Assignable without an assertion: the binding really does own this method,
   // and every arm of the union is narrowed below before use.
   const runner: DirectWorkersAIRunner = binding;
@@ -513,10 +531,15 @@ function unstreamable(model: string, saw: string): Response {
 async function upstreamRefusal(response: Response, model: string): Promise<Response> {
   const body = await response.text();
   diagnostics.event('workers_ai.direct_call_refused', { model, status: response.status });
-  return errorResponse(
+  const refusal = errorResponse(
     response.status,
     upstreamMessage(body) ?? `Workers AI refused ${model} with HTTP ${String(response.status)}.`,
   );
+  // The provider's mandated wait travels with its refusal, so the retry above
+  // follows it instead of guessing a backoff.
+  const retryAfter = response.headers.get('retry-after');
+  if (retryAfter !== null) refusal.headers.set('retry-after', retryAfter);
+  return refusal;
 }
 
 function upstreamMessage(body: string): string | null {

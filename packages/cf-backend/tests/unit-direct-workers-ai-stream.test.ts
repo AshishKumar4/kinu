@@ -19,6 +19,7 @@ import { JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink, type RecordingLogger } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { createDirectWorkersAIFetch } from '../src/providers/direct-workers-ai-fetch';
+import { ProviderPacer, type RateLimitRetryOptions } from '@kinu.run/core';
 
 const MODEL = '@cf/moonshotai/kimi-k2.6';
 const ENDPOINT = 'https://kinu-direct-workers-ai.invalid/chat/completions';
@@ -96,7 +97,7 @@ interface RecordedRun {
 /** A binding whose only member is `run`, answering with whatever the test
  *  returns. Any other member the adapter reached for would fail loudly here
  *  rather than becoming a silent undefined. */
-function directFetch(answer: (run: RecordedRun) => BindingAnswer) {
+function directFetch(answer: (run: RecordedRun) => BindingAnswer, retry: RateLimitRetryOptions = {}) {
   const runs: RecordedRun[] = [];
   const ai = {
     run(model: string, inputs: JsonObject, options?: RunOptions): Promise<BindingAnswer> {
@@ -107,7 +108,7 @@ function directFetch(answer: (run: RecordedRun) => BindingAnswer) {
   };
   // SAFETY: this constructed fixture provides `Ai.run`, and the adapter under
   // test calls no other member of the binding.
-  return { fetch: createDirectWorkersAIFetch(ai as Ai), runs };
+  return { fetch: createDirectWorkersAIFetch(ai as Ai, retry), runs };
 }
 
 function chatBody(extra: JsonObject = {}): string {
@@ -235,6 +236,37 @@ function recordDiagnostics(): RecordingLogger {
 afterEach(() => {
   restoreSink?.();
   restoreSink = undefined;
+});
+
+describe('direct Workers AI binding — a rate limit is waited out, never surrendered', () => {
+  // Measured on staging 2026-09-06 (workspace eval-first-run-enter-sends-enter-8ext33):
+  // the binding answered `3021: rate limiting: inference request per min rate
+  // reached` and the turn ended `Failed after 3 attempts`, the SDK's own two
+  // retries. The OAuth path wraps its fetch in withRateLimitRetry; the binding
+  // path did not, so the doctrine (a rate limit is capacity to wait for, until
+  // cancellation) held for one path and not the other.
+  test('a 429 envelope from the binding is retried until the completion arrives', async () => {
+    const waits: number[] = [];
+    let attempt = 0;
+    const { fetch, runs } = directFetch(() => {
+      attempt += 1;
+      if (attempt < 3) {
+        return new Response(JSON.stringify({ errors: [{ code: 3021, message: 'rate limiting: inference request per min rate reached' }] }), {
+          status: 429, headers: { 'content-type': 'application/json', 'retry-after': '1' },
+        });
+      }
+      // A whole completion, the shape the binding answers an unstreamed request with.
+      return { response: 'OK', usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } };
+    }, {
+      sleep: async (ms) => { waits.push(ms); },
+      pacer: new ProviderPacer({ sleep: async () => {} }),
+      warn: () => {},
+    });
+    const response = await fetch(ENDPOINT, { method: 'POST', body: chatBody() });
+    expect(response.status).toBe(200);
+    expect(runs).toHaveLength(3);
+    expect(waits).toEqual([1_000, 1_000]);
+  });
 });
 
 describe('direct Workers AI binding — incremental streaming', () => {
@@ -652,16 +684,18 @@ describe('direct Workers AI binding — refusals', () => {
   });
 
   test('an upstream failure keeps its status and carries its own message', async () => {
+    // A 502, because a 429 is no longer a failure this adapter surfaces: it is
+    // waited out (see the rate-limit case above).
     const { fetch: direct } = directFetch(() => new Response(
-      JSON.stringify({ errors: [{ code: 3040, message: 'Too many requests' }] }),
-      { status: 429, headers: { 'content-type': 'application/json' } },
+      JSON.stringify({ errors: [{ code: 3040, message: 'Upstream unavailable' }] }),
+      { status: 502, headers: { 'content-type': 'application/json' } },
     ));
 
     const response = await direct(ENDPOINT, { method: 'POST', body: chatBody({ stream: true }) });
 
-    expect(response.status).toBe(429);
+    expect(response.status).toBe(502);
     expect(v.parse(MessageErrorSchema, JSON.parse(await response.text())).error.message)
-      .toBe('3040: Too many requests');
+      .toBe('3040: Upstream unavailable');
   });
 
   test('the binding internal-code envelope is read the way the binding reads it', async () => {

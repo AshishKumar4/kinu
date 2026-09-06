@@ -31,7 +31,7 @@ import { afterAll, describe, test } from 'vitest';
 import { resolve } from 'node:path';
 
 import { workerSession, type EvalObservation } from '@kinu.run/test-utils';
-import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER } from '../../packages/core/src/index';
+import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, type RunEvent } from '../../packages/core/src/index';
 import { runTuiInPty } from '../../packages/cli/tests/helpers/pty-screen';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
@@ -96,6 +96,7 @@ describe(SUITE, () => {
         const subgoals: FirstRunSubgoal[] = [];
         for (const spelling of SPELLINGS) {
           const draft = `${spelling.marker} reply with only OK`;
+          const runsBefore = (await session.runEvents()).filter((event) => event.type === 'run_end').length;
           // The keystrokes a person makes, each after the screen fact a person
           // would wait for. The driver reads the SCREEN — the cell grid the
           // terminal shows — so a word the renderer painted by rewriting only
@@ -140,21 +141,25 @@ describe(SUITE, () => {
           // cannot tell those apart.
           const landed = await turnLanded(session, spelling.marker);
           // The turn the keystroke started runs on the deployment after this
-          // process stops watching the screen. Its reply is awaited so the
-          // spend this case records is that turn's, not a zero read too early.
-          if (landed) await replyLanded(session, spelling.marker);
+          // process stops watching the screen. It is awaited to its own end,
+          // a reply or a recorded failure, so the spend this case records is
+          // that turn's rather than a zero read too early, and a turn the
+          // deployment accepted and never answered is a miss with its reason.
+          const outcome = landed ? await turnSettled(session, spelling.marker, runsBefore) : null;
           const screen = `Screen as the run left it: ${JSON.stringify(run.screen)}`;
           subgoals.push({
             what: spelling.what,
-            reached: unmet === undefined && landed,
+            reached: unmet === undefined && outcome === 'replied',
             detail: unmet !== undefined
               ? `the screen never ${unmet.until === 'gone' ? 'cleared' : 'showed'} ${JSON.stringify(unmet.text)} `
                 + `within ${String(READY_SECONDS)}s on a real pty, so the run stopped there`
                 + `${landed ? ' (the deployment holds the turn regardless)' : ' and no draft was sent'}. ${screen}`
-              : landed
-                ? `${spelling.marker} is a user row in the deployed transcript`
-                : `Enter did NOT send: ${spelling.marker} was typed into the composer and the `
-                  + `deployment recorded no user turn carrying it. ${screen}`,
+              : outcome === 'replied'
+                ? `${spelling.marker} is a user row in the deployed transcript and its turn answered`
+                : outcome === null
+                  ? `Enter did NOT send: ${spelling.marker} was typed into the composer and the `
+                    + `deployment recorded no user turn carrying it. ${screen}`
+                  : `${spelling.marker} landed as a user row and its turn ended without a reply: ${outcome.ended}`,
           });
         }
         return subgoals;
@@ -182,17 +187,28 @@ async function turnLanded(
   }
 }
 
-/** Wait until an assistant row follows the user row carrying `marker`. No
- *  deadline of its own: the turn ends when the deployment says it ended, and
- *  the tier's wall bounds a run that never does. */
-async function replyLanded(
-  session: { history(): Promise<readonly { role: string; text: string }[]> },
+/**
+ * How the turn carrying `marker` ended: an assistant row after the user row,
+ * or a `run_end` the deployment recorded past the `runsBefore` it had when the
+ * keystroke went in. No deadline of its own: the turn ends when the
+ * deployment says it ended, and the tier's wall bounds a run that never does.
+ */
+async function turnSettled(
+  session: {
+    history(): Promise<readonly { role: string; text: string }[]>;
+    runEvents(): Promise<readonly RunEvent[]>;
+  },
   marker: string,
-): Promise<void> {
+  runsBefore: number,
+): Promise<'replied' | { ended: string }> {
   for (;;) {
     const history = await session.history();
     const user = history.findIndex((row) => row.role === 'user' && row.text.includes(marker));
-    if (user >= 0 && history.slice(user + 1).some((row) => row.role === 'assistant')) return;
+    if (user >= 0 && history.slice(user + 1).some((row) => row.role === 'assistant')) return 'replied';
+    const end = (await session.runEvents()).filter((event) => event.type === 'run_end')[runsBefore];
+    if (end !== undefined && end.type === 'run_end') {
+      return { ended: `${end.reason ?? 'ended'}${end.error === undefined ? '' : `: ${end.error}`}` };
+    }
     const tick = Promise.withResolvers<void>();
     setTimeout(tick.resolve, Math.floor(LANDING_MS / LANDING_PROBES));
     await tick.promise;
