@@ -568,7 +568,6 @@
   "packages/devbox/src/durability/contracts.ts#MERKLE_PACK_V2_AWAIT_POINT_DECLARATION (unreached-export)",
   "packages/devbox/src/durability/contracts.ts#PackLedgerRowSchema (unreached-export)",
   "packages/devbox/src/durability/contracts.ts#PayloadGrantSchema (unreached-export)",
-  "packages/devbox/src/durability/contracts.ts#PublishWorkSchema (unreached-export)",
   "packages/devbox/src/durability/contracts.ts#RestoreWorkSchema (unreached-export)",
   "packages/devbox/src/durability/contracts.ts#SIDECAR_ATTACH_KINDS (unreached-export)",
   "packages/devbox/src/durability/contracts.ts#SidecarStatusV1Schema (unreached-export)",
