@@ -1823,8 +1823,6 @@
     "scripts/devbox-holder-probe.ts",
     "scripts/do-init-gate.test.ts",
     "scripts/do-init-gate.ts",
-    "scripts/doc-claims.test.ts",
-    "scripts/doc-claims.ts",
     "scripts/e2e-cli.sh",
     "scripts/e2e-web.sh",
     "scripts/egress-interception.ts",
@@ -2135,7 +2133,7 @@
     "protected": "DEFERRED: layergate and devbox are explicit non-goals. The inventory includes their candidates without changing their checks."
   },
   "counts": {
-    "lexical": 2438,
+    "lexical": 2432,
     "composition": 81,
     "code": 118,
     "scanner": 52,
@@ -19968,7 +19966,7 @@
     },
     {
       "file": "scripts/deploy.sh",
-      "line": 636,
+      "line": 634,
       "kind": "shell-pattern-command",
       "owner": "<shell>",
       "category": "shell",
@@ -19976,7 +19974,7 @@
     },
     {
       "file": "scripts/deploy.sh",
-      "line": 640,
+      "line": 638,
       "kind": "shell-pattern-command",
       "owner": "<shell>",
       "category": "shell",
@@ -19984,7 +19982,7 @@
     },
     {
       "file": "scripts/deploy.sh",
-      "line": 653,
+      "line": 651,
       "kind": "shell-pattern-command",
       "owner": "<shell>",
       "category": "shell",
@@ -19992,7 +19990,7 @@
     },
     {
       "file": "scripts/deploy.sh",
-      "line": 685,
+      "line": 683,
       "kind": "shell-pattern-command",
       "owner": "<shell>",
       "category": "shell",
@@ -20000,7 +19998,7 @@
     },
     {
       "file": "scripts/deploy.sh",
-      "line": 686,
+      "line": 684,
       "kind": "shell-pattern-command",
       "owner": "<shell>",
       "category": "shell",
@@ -20008,7 +20006,7 @@
     },
     {
       "file": "scripts/deploy.sh",
-      "line": 731,
+      "line": 729,
       "kind": "shell-pattern-command",
       "owner": "<shell>",
       "category": "shell",
@@ -20016,7 +20014,7 @@
     },
     {
       "file": "scripts/deploy.sh",
-      "line": 752,
+      "line": 750,
       "kind": "shell-pattern-command",
       "owner": "<shell>",
       "category": "shell",
@@ -20024,7 +20022,7 @@
     },
     {
       "file": "scripts/deploy.sh",
-      "line": 763,
+      "line": 761,
       "kind": "shell-pattern-command",
       "owner": "<shell>",
       "category": "shell",
@@ -20032,7 +20030,7 @@
     },
     {
       "file": "scripts/deploy.sh",
-      "line": 764,
+      "line": 762,
       "kind": "shell-pattern-command",
       "owner": "<shell>",
       "category": "shell",
@@ -20040,7 +20038,7 @@
     },
     {
       "file": "scripts/deploy.test.ts",
-      "line": 716,
+      "line": 714,
       "kind": "regex-literal",
       "owner": "argvPhases",
       "category": "lexical",
@@ -20048,7 +20046,7 @@
     },
     {
       "file": "scripts/deploy.test.ts",
-      "line": 723,
+      "line": 721,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -20056,7 +20054,7 @@
     },
     {
       "file": "scripts/deploy.test.ts",
-      "line": 844,
+      "line": 842,
       "kind": "regex-literal",
       "owner": "PER_PACKAGE_DEPLOY",
       "category": "lexical",
@@ -20064,7 +20062,7 @@
     },
     {
       "file": "scripts/deploy.test.ts",
-      "line": 934,
+      "line": 932,
       "kind": "regex-literal",
       "owner": "automationFiles",
       "category": "lexical",
@@ -20072,7 +20070,7 @@
     },
     {
       "file": "scripts/deploy.test.ts",
-      "line": 1159,
+      "line": 1157,
       "kind": "regex-literal",
       "owner": "declared",
       "category": "lexical",
@@ -20080,7 +20078,7 @@
     },
     {
       "file": "scripts/deploy.test.ts",
-      "line": 1160,
+      "line": 1158,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -20088,7 +20086,7 @@
     },
     {
       "file": "scripts/deploy.test.ts",
-      "line": 1209,
+      "line": 1207,
       "kind": "regex-literal",
       "owner": "<module>",
       "category": "lexical",
@@ -20245,54 +20243,6 @@
       "owner": "annotated",
       "category": "lexical",
       "sourceSha256": "c2be8b4410f8e831c1319986e83283d1a36b5867ff269d636314cd7317e1c876"
-    },
-    {
-      "file": "scripts/doc-claims.ts",
-      "line": 11,
-      "kind": "regex-literal",
-      "owner": "BEHAVIOUR",
-      "category": "lexical",
-      "sourceSha256": "391267453f400fcb1c5874f00e622af15bc59c000259db12adb15900af76a6d9"
-    },
-    {
-      "file": "scripts/doc-claims.ts",
-      "line": 12,
-      "kind": "regex-literal",
-      "owner": "CONDITION",
-      "category": "lexical",
-      "sourceSha256": "925b71df6e1a6145e256310b7a481fc874de4423e1831ad40d71b041376541e6"
-    },
-    {
-      "file": "scripts/doc-claims.ts",
-      "line": 13,
-      "kind": "regex-literal",
-      "owner": "LOCATOR",
-      "category": "lexical",
-      "sourceSha256": "5d31fa2822afcb1ee76148dfdf06418efb6f853e8670ced7c9728240002ad6c8"
-    },
-    {
-      "file": "scripts/doc-claims.ts",
-      "line": 14,
-      "kind": "regex-literal",
-      "owner": "RETIRED",
-      "category": "lexical",
-      "sourceSha256": "72e14d50a2582329287f2bd8b7e0a2bfc8597277d0dcd081f64b0197954fc389"
-    },
-    {
-      "file": "scripts/doc-claims.ts",
-      "line": 40,
-      "kind": "regex-literal",
-      "owner": "value",
-      "category": "lexical",
-      "sourceSha256": "eef6af5ef61aaf6a363dcd9d57a8a42ebb9abf63ddd01fae07c1a9b8b81daefb"
-    },
-    {
-      "file": "scripts/doc-claims.ts",
-      "line": 41,
-      "kind": "regex-literal",
-      "owner": "commentBlocks",
-      "category": "lexical",
-      "sourceSha256": "eb51b66bbc8d8eb769231fdc3f72e6bcfd3456ce9c8af918e0a655c12142f1a1"
     },
     {
       "file": "scripts/egress-interception.ts",
@@ -21144,7 +21094,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1690,
+      "line": 1676,
       "kind": "regex-literal",
       "owner": "match",
       "category": "lexical",
@@ -21152,7 +21102,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1715,
+      "line": 1701,
       "kind": "regex-literal",
       "owner": "deployWaves",
       "category": "lexical",
@@ -21160,7 +21110,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1720,
+      "line": 1706,
       "kind": "regex-literal",
       "owner": "match",
       "category": "lexical",
@@ -21168,7 +21118,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1762,
+      "line": 1748,
       "kind": "regex-literal",
       "owner": "match",
       "category": "lexical",
@@ -21176,7 +21126,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1840,
+      "line": 1826,
       "kind": "regex-literal",
       "owner": "named",
       "category": "lexical",
@@ -21184,7 +21134,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1841,
+      "line": 1827,
       "kind": "regex-literal",
       "owner": "resolveWord",
       "category": "lexical",
@@ -21192,7 +21142,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1844,
+      "line": 1830,
       "kind": "regex-literal",
       "owner": "assignment",
       "category": "lexical",
@@ -21200,7 +21150,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1852,
+      "line": 1838,
       "kind": "regex-literal",
       "owner": "targets",
       "category": "lexical",
@@ -21208,7 +21158,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1854,
+      "line": 1840,
       "kind": "regex-literal",
       "owner": "evalTierArms",
       "category": "lexical",
@@ -21216,7 +21166,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1857,
+      "line": 1843,
       "kind": "regex-literal",
       "owner": "evalTierArms",
       "category": "lexical",
@@ -21224,7 +21174,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1865,
+      "line": 1851,
       "kind": "regex-literal",
       "owner": "invocation",
       "category": "lexical",
@@ -21232,7 +21182,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 1995,
+      "line": 1981,
       "kind": "regex-literal",
       "owner": "words",
       "category": "lexical",
@@ -21240,7 +21190,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 2049,
+      "line": 2035,
       "kind": "regex-literal",
       "owner": "clean",
       "category": "lexical",
@@ -21248,7 +21198,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 2051,
+      "line": 2037,
       "kind": "regex-literal",
       "owner": "pattern",
       "category": "lexical",
@@ -21256,7 +21206,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 2051,
+      "line": 2037,
       "kind": "regex-literal",
       "owner": "pattern",
       "category": "lexical",
@@ -21264,7 +21214,7 @@
     },
     {
       "file": "scripts/ladder.ts",
-      "line": 2051,
+      "line": 2037,
       "kind": "regexp-constructor",
       "owner": "pattern",
       "category": "composition",
