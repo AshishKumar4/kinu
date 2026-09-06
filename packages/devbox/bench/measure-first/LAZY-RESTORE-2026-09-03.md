@@ -137,3 +137,32 @@ opening each arm through `CONFORMANCE_ARMS`, planting and committing the
 cells' own `generatedTree`/`gigabyteTree` fixtures, waking, and reading
 `arm.work().restore` — the same sequence cells 6.13 and 6.14 run, with the
 row printed instead of compared.
+
+## GC inventory removed from attach, 2026-09-06
+
+The v2 sidecar still read its complete pack ledger during attach. The
+record reader did not need that inventory, but the sidecar fetched it
+before returning readiness. A local store fault made the distinction
+observable. With the ledger read unavailable, the old attach failed.
+The revised attach opens the head and reads the exact file bytes.
+
+Measured with seed 17, 16 KiB per file, 32 KiB packs and generated nested
+trees. These are object-store reads during attach, excluding the separate
+control/envelope snapshot. The old implementation is commit 294a47c2d.
+
+| files | ledger B | old reads / B | revised reads / B |
+| ---: | ---: | ---: | ---: |
+| 16 | 2,213 | 2 / 2,530 | 1 / 317 |
+| 128 | 16,137 | 2 / 16,454 | 1 / 317 |
+
+The ledger cache is keyed by its object key. Seals, materialization and
+compaction load it when they need it. The focused v2 and sidecar suites
+passed 26 tests. The unavailable-inventory regression fails before this
+change and passes after it.
+
+This removes one linear attach term. Flat directories still carry an
+unpaged entry array, file headers still carry extent-page arrays, and
+seals still rewrite the full ledger. Those costs remain unbounded by this
+measurement. A separate 2 MiB-file probe with 32 KiB packs refused a
+43,195 B metadata record. No cap was changed to make that probe pass.
+
