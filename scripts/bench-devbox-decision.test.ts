@@ -521,6 +521,14 @@ function armingFixture(options: {
    *  transport loss, and the case a non-idempotent arm publishes twice for. */
   readonly loseFirstArmReply?: boolean;
   readonly settleAs?: 'done' | 'failed';
+  /** The reason a failed publication reports. Defaults to a reason nothing
+   *  classifies as transient, so a test that wants the replacement retry
+   *  names the deployed sentence itself. */
+  readonly failureReason?: string;
+  /** Publications AFTER the first settle `done` whatever `settleAs` says: the
+   *  shape of a stop whose first quiesce lost its container and whose second,
+   *  freshly armed one, finds the box healed. */
+  readonly laterPublicationsSucceed?: boolean;
   readonly outcomeKind?: string;
 }) {
   const tokenByOp = new Map<string, string>();
@@ -565,10 +573,13 @@ function armingFixture(options: {
     if (seen < options.pollsBeforeSettled) {
       return new Response(JSON.stringify({ ok: true, token, state: 'pending' }));
     }
-    const settleAs = options.settleAs ?? 'done';
+    const later = options.laterPublicationsSucceed === true && token !== 'checkpoint-1';
+    const settleAs = later ? 'done' : options.settleAs ?? 'done';
     // The failure reason is a field of the settled reply, present only when the
     // publication failed — which is what `error` means on this route.
-    const failure = settleAs === 'failed' ? 'the publication threw mid-flight' : undefined;
+    const failure = settleAs === 'failed'
+      ? options.failureReason ?? 'the publication threw mid-flight'
+      : undefined;
     return new Response(JSON.stringify({
       ok: settleAs === 'done',
       token,
@@ -576,7 +587,7 @@ function armingFixture(options: {
       // The FIXTURE's own duration, which is the number a measured row keeps:
       // it is unaffected by how long the driver polled for it.
       ms: 41_000,
-      outcome: { kind: options.outcomeKind ?? 'committed', bytes: 4096, movedBytes: 2048 },
+      outcome: { kind: later ? 'committed' : options.outcomeKind ?? 'committed', bytes: 4096, movedBytes: 2048 },
       error: failure,
     }));
   };
@@ -679,6 +690,79 @@ describe('the async checkpoint and stop protocol', () => {
     } finally {
       done.restore();
     }
+  });
+
+  /** The sentence the SDK hands an in-flight command when the container's
+   *  control connection closes under it, verbatim from run
+   *  kinu-devbox-bench-20260905232937 (2026-09-05, merkle-pack, the
+   *  post-ladder stop) and again from run 20260906072721 (2026-09-06, the
+   *  teardown's mount). It is what `retryTransient` classifies as a
+   *  replacement. */
+  const CONNECTION_CLOSED = 'Sandbox operation commands.execute was interrupted while the runtime '
+    + 'connection was closing: RPC session was shut down by disposing the main stub';
+
+  test('a stop whose quiesce lost its container is re-armed as a NEW operation, and the fresh one stops', async () => {
+    // MEASURED, run 20260905232937: the merkle-pack post-ladder stop settled
+    // `failed` with the sentence above, the driver logged "transient
+    // replacement on attempt 1; retrying that request" and "... attempt 2",
+    // and then failed the arm with the SAME sentence — three attempts inside
+    // the ten seconds a sibling arm spent in one readiness drive. `retryTransient`
+    // re-posted the SAME `op`, the fixture answered the row it had already
+    // settled, and no second quiesce ever ran. A retry that re-reads a
+    // failure is not a retry: the replacement it names is exactly what a
+    // fresh quiesce heals before it stops.
+    const fixture = armingFixture({
+      pollsBeforeSettled: 1,
+      settleAs: 'failed',
+      outcomeKind: 'failed',
+      failureReason: CONNECTION_CLOSED,
+      laterPublicationsSucceed: true,
+    });
+    try {
+      const settled = await stopOperation(BENCH_FIXTURE, 'ab-merkle-pack-20260905232937', 'stop', TEST_BOUNDS);
+      expect(settled.ok).toBe(true);
+    } finally {
+      fixture.restore();
+    }
+    // TWO publications: the interrupted quiesce and the fresh one that stopped.
+    expect(fixture.publications()).toBe(2);
+  });
+
+  test('a checkpoint interrupted by a replacement is re-armed the same way', async () => {
+    const fixture = armingFixture({
+      pollsBeforeSettled: 1,
+      settleAs: 'failed',
+      outcomeKind: 'failed',
+      failureReason: CONNECTION_CLOSED,
+      laterPublicationsSucceed: true,
+    });
+    try {
+      const settled = await checkpointOperation(
+        BENCH_FIXTURE, 'ab-merkle-pack-20260905232937', 'tick', 'decisive npm-1', TEST_BOUNDS,
+      );
+      expect(settled.outcome?.kind).toBe('committed');
+    } finally {
+      fixture.restore();
+    }
+    expect(fixture.publications()).toBe(2);
+  });
+
+  test('a failure nothing classifies as transient is answered from its one operation', async () => {
+    // The other direction of the same guard: a quiesce that failed for a
+    // reason of its own (a refused final checkpoint) is NOT re-run, because a
+    // second publication behind a refusal is the double publication the
+    // idempotent arm exists to prevent.
+    const fixture = armingFixture({
+      pollsBeforeSettled: 1, settleAs: 'failed', outcomeKind: 'failed', laterPublicationsSucceed: true,
+    });
+    try {
+      const settled = await stopOperation(BENCH_FIXTURE, 'ab-merkle-pack-20260905232937', 'stop', TEST_BOUNDS);
+      expect(settled.ok).toBe(false);
+      expect(settled.error).toContain('threw mid-flight');
+    } finally {
+      fixture.restore();
+    }
+    expect(fixture.publications()).toBe(1);
   });
 
   test('no minute-scale route is posted as a blocking request any more', () => {

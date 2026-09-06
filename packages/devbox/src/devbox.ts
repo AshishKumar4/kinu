@@ -2371,6 +2371,31 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * before it asks. See {@link R2fsPorts.parkSession}.
    */
   async quiesce(): Promise<CheckpointOutcome> {
+    // NO CONTAINER, NOTHING TO COMMIT, AND NOTHING TO ASK. The work directory
+    // died with the instance, so a final checkpoint has nothing to read; what
+    // it would do instead is worse than nothing. Every container call travels
+    // through the SDK's connection, and that connection STARTS a container to
+    // answer it, so a checkpoint issued here ran its runner on a fresh
+    // instance with no mount and no daemon. MEASURED, run 20260906072721
+    // (2026-09-06, merkle-pack): after the fault cut killed the container,
+    // the arm's release ran this method; the checkpoint's first process
+    // question raised a fresh instance (`Default session initialized` five
+    // seconds after `Sandbox stopped`), its runner failed against it, the
+    // heartbeat then read that instance as a replacement and re-drove a full
+    // restoration into the teardown that followed, and the teardown's stop
+    // landed on the restore's mount command: `Sandbox operation
+    // commands.execute was interrupted while the runtime connection was
+    // closing`. The generation turns over so the box stops claiming a work
+    // directory it does not have; the next wake restores the published head.
+    if (this.ctx.container?.running !== true) {
+      this.#invalidateGeneration();
+      return {
+        kind: 'skipped',
+        reason: 'the container is not running: nothing is attached to commit, and no instance is started to ask',
+        bytes: undefined,
+        movedBytes: undefined,
+      };
+    }
     // The final commit is the one a wake reads back, so it is the last place a
     // replaced container may go unnoticed: see `#healReplacedContainer`.
     await this.#healReplacedContainer();
@@ -2480,8 +2505,18 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** Forget this box's durable bytes. Called when the box itself is deleted;
    *  without it the stored objects outlive the box with nothing left to name
    *  them — see `EXTRACT_TTL_SECONDS` for why no lifecycle rule may sweep
-   *  them. */
+   *  them.
+   *
+   *  THE GENERATION TURNS OVER FIRST. A discard is the end of what the box
+   *  holds, so a restoration still in flight is restoring bytes that are
+   *  about to be gone: it must write nothing durable and publish no readiness
+   *  once this begins, which is what a superseded attempt already guarantees.
+   *  The strategy's own discard then skips the container half when no
+   *  container runs — see `candidateContainerStorage` — so a discard on a
+   *  stopped box never starts an instance to clean a disk that died with the
+   *  last one (run 20260906072721, 2026-09-06, the teardown that did). */
   async discardState(): Promise<void> {
+    this.#invalidateGeneration();
     await this.#requireStorage().discard();
     // The attach evidence describes bytes that no longer exist, so it goes with
     // them rather than outliving them as a claim about nothing.
@@ -3082,7 +3117,23 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
       // REPLACEMENT DETECTION, before any decision is made about an instance
       // that may not be the one that was restored.
-      if (await this.#containerWasReplaced()) {
+      //
+      // ONLY ON A SETTLED RESTORATION, the same scope `#healReplacedContainer`
+      // keeps. The stamp is the LAST thing a restoration does, so for the whole
+      // length of a wake the durable row names the instance the stop took down
+      // and the fresh instance carries no marker: exactly the mismatch this
+      // detector reads as a replacement. MEASURED, run 20260906072721
+      // (2026-09-06, merkle-pack, 07:30:14-16Z): the post-ladder wake was
+      // mounting its store when this beat fired, read the mismatch, turned the
+      // generation over under the wake's own attempt and drove a second
+      // restoration beside it — two `mkdir -p /var/tmp/devbox`, two boot-id
+      // reads, two mount reads inside one second, and two attempts free to
+      // stop and start one journal daemon over one mount, the one hazard the
+      // daemon's own contract forbids. An attempt in flight owns the identity
+      // it is establishing; the beat asks the question only of a box that has
+      // settled on an instance and may have lost it since.
+      const settled = this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair';
+      if (settled && await this.#containerWasReplaced()) {
         console.error(
           '[devbox] the container instance was replaced; re-driving the restoration now '
           + 'rather than waiting for the next operation',
@@ -3619,6 +3670,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return {
       format: strategy,
       runnerPath,
+      containerRunning: () => this.ctx.container?.running === true,
       payloadUrl: candidatePayloadUrl(store.binding),
       mountStore: async () => {
         // The runner slots' directory too: a fresh container's first runner

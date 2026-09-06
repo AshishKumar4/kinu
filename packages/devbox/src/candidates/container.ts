@@ -121,6 +121,9 @@ async function retireRunnerAttempt(
 export interface CandidateContainerPorts {
   readonly format: CandidateContainerFormat;
   readonly runnerPath: string;
+  /** Whether an instance is running now. A discard asks before it touches the
+   *  container, because every container call starts an instance to answer it. */
+  readonly containerRunning: () => boolean;
   /** The SDK egress endpoint writes address; the mount registers it. */
   readonly payloadUrl: string;
   readonly mountStore: () => Promise<void>;
@@ -527,10 +530,19 @@ export function candidateContainerStorage(ports: CandidateContainerPorts): Devbo
       await ports.unmountStore();
     },
     discard: async () => {
-      await ports.stopJournal();
-      await ports.unmountStore();
+      // THE CONTAINER HALF ONLY WHILE A CONTAINER RUNS. The daemon, the store
+      // mount and the runner replies live on the instance and die with it; a
+      // call made to a stopped box starts a fresh instance to answer it, which
+      // is what run 20260906072721 (2026-09-06) measured: the teardown's
+      // discard raised an instance five seconds after the stop, and the
+      // heartbeat then restored a head into it that this very discard was
+      // deleting. The durable half always runs; it is what a discard is.
+      if (ports.containerRunning()) {
+        await ports.stopJournal();
+        await ports.unmountStore();
+        await ports.clearRunnerResults();
+      }
       await ports.clearStore();
-      await ports.clearRunnerResults();
       await ports.clearControl();
     },
   };

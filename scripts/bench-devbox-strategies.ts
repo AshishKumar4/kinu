@@ -2783,9 +2783,24 @@ export interface OperationBounds {
   readonly deadlineMs?: number;
 }
 
-/** One measured checkpoint, through the async protocol. `op` is generated here
- *  so a caller's own retry of THIS call re-asks one operation rather than
- *  starting another. */
+/**
+ * One measured checkpoint, through the async protocol.
+ *
+ * ONE `op` PER ATTEMPT, minted INSIDE the retried closure. The transport-loss
+ * re-post inside `awaitArmedOperation` keeps the attempt's own `op`, so a lost
+ * arming reply still resolves to the one publication it armed. What
+ * `retryTransient` retries is different: an operation that SETTLED with a
+ * replacement — the container gone under the command it was running — and a
+ * settled operation is answered from its row for ever. The `op` used to be
+ * minted once outside the closure, so the retry re-posted the same `op`, the
+ * fixture answered the row it had already settled, and the "retry" read the
+ * same failure three times. MEASURED, run 20260905232937 (2026-09-05): the
+ * merkle-pack post-ladder stop logged "transient replacement on attempt 1",
+ * "attempt 2", and then failed the arm with the identical sentence, all
+ * inside the ten seconds a sibling arm spent in one readiness drive; no
+ * second quiesce ever ran. A fresh `op` is a fresh operation, which is the
+ * only thing that heals the replacement the sentence names.
+ */
 export async function checkpointOperation(
   fixture: Fixture,
   box: string,
@@ -2793,9 +2808,8 @@ export async function checkpointOperation(
   what: string,
   bounds: OperationBounds = {},
 ): Promise<CheckpointReply> {
-  const op = `${what}-${crypto.randomUUID()}`;
   return await retryTransient(what, async () =>
-    await awaitArmedOperation(fixture, box, '/checkpoint', { kind, op }, bounds),
+    await awaitArmedOperation(fixture, box, '/checkpoint', { kind, op: `${what}-${crypto.randomUUID()}` }, bounds),
   );
 }
 
@@ -2829,16 +2843,16 @@ export async function armCheckpointOperation(
 }
 
 /** One stop, through the same protocol. A stop's final checkpoint is the
- *  largest publication an arm takes, which is why it is armed too. */
+ *  largest publication an arm takes, which is why it is armed too. The `op`
+ *  is minted per attempt for the reason `checkpointOperation` states. */
 export async function stopOperation(
   fixture: Fixture,
   box: string,
   what: string,
   bounds: OperationBounds = {},
 ): Promise<StopReply> {
-  const op = `${what}-${crypto.randomUUID()}`;
   const settled = await retryTransient(what, async () =>
-    await awaitArmedOperation(fixture, box, '/stop', { op }, bounds),
+    await awaitArmedOperation(fixture, box, '/stop', { op: `${what}-${crypto.randomUUID()}` }, bounds),
   );
   return {
     ok: settled.state === 'done' && settled.outcome?.kind !== 'failed',

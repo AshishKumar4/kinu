@@ -907,6 +907,7 @@ describe('the candidate container seam answers its own failure', () => {
     return {
       format: 'merkle-pack',
       runnerPath: '/opt/kinu/candidate-runner.bundle.mjs',
+      containerRunning: () => true,
       payloadUrl: 'http://r2.internal/BACKUP_BUCKET',
       mountStore: async () => {},
       unmountStore: async () => {},

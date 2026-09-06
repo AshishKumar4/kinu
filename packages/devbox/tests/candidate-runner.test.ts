@@ -352,6 +352,7 @@ function runnerFake(options: RunnerFakeOptions = {}) {
   const ports: CandidateContainerPorts = {
     format: 'bounded-layers',
     runnerPath: '/runner.ts',
+    containerRunning: () => true,
     payloadUrl: 'http://r2.internal/BACKUP_BUCKET',
     mountStore: async () => {
       mounts += 1;
