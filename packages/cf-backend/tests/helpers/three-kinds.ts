@@ -68,7 +68,7 @@ import {
   type NodeAgentDeps,
   type NodeAgentInput,
   type NodeRun,
-  type Usage, type ModelProvider,
+  type Usage,
 } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { createTestRuntime } from '@kinu.run/test-utils';
@@ -681,7 +681,7 @@ export interface ModelSetResult {
  * being absorbed by a hand-written approximation of it.
  */
 export interface ActorTurnSurface extends Pick<Think, 'onStart' | 'runTurn'> {
-  harnessModelProvider(): ModelProvider;
+  modelFactory?: () => LanguageModel;
   beforeTurn(ctx: TurnContext): Promise<TurnConfig | void>;
   beforeStep(ctx: PrepareStepContext): StepConfig | void;
   afterToolCall(ctx: ToolCallResultContext): Promise<void>;
@@ -969,10 +969,9 @@ function actorFixture(
     // getter, so reading it is the same act production performs.
     background: async () => hasJobRunner(agent) ? 'wired' : 'absent',
     terminalOnFailure: async (error) => {
-      // Throw at the provider, not at onChatResponse: Think must carry the cause
-      // through stream serialization and invoke the actor's real terminal hook.
+      // The public Think configuration hooks inject the external model.
       const model = new MockLanguageModelV3({ doStream: async () => { throw error; } });
-      agent.harnessModelProvider().createModel = () => model;
+      agent.modelFactory = () => model;
       await agent.onStart();
       await agent.runTurn({ input: 'do the thing' });
       return readRunEnd(db, true);
