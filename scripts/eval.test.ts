@@ -158,13 +158,13 @@ describe('seed corpus', () => {
 describe('eval-tier cost report — a zero says which kind of zero it is', () => {
   const measured: SpendLine = {
     suite: 'Behaviour Evals', calls: 42, callsWithoutUsage: 0,
-    usage: { input: 13_415_180, output: 401_195 }, episodesUnmeasured: 0,
+    usage: { input: 13_415_180, output: 401_195 }, episodesUnmeasured: 0, episodesWithoutModel: 0,
   };
   /** The regression, as a line: a suite that drove episodes and accounted for
    *  nothing. Before the meter had `episodesUnmeasured` this line was
    *  indistinguishable from a suite that legitimately never ran. */
   const hole: SpendLine = {
-    suite: 'Behaviour Evals', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 20,
+    suite: 'Behaviour Evals', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 20, episodesWithoutModel: 0,
   };
 
   test('a measured tier reports its real totals and claims nothing more', () => {
@@ -198,7 +198,7 @@ describe('eval-tier cost report — a zero says which kind of zero it is', () =>
 
   test('a tier that genuinely ran nothing is a different sentence from a hole', () => {
     const out = renderSpend([{
-      suite: 'Delegation Evals', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0,
+      suite: 'Delegation Evals', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 0,
     }]);
     expect(out).toContain('0 model call(s)');
     // Nothing ran, nothing is missing, and the report must not cry hole.
@@ -208,7 +208,7 @@ describe('eval-tier cost report — a zero says which kind of zero it is', () =>
   test('a silent provider still under-counts, and that is its own caveat', () => {
     const out = renderSpend([{
       suite: 'E2E Lifecycle', calls: 5, callsWithoutUsage: 2,
-      usage: { input: 100, output: 10 }, episodesUnmeasured: 0,
+      usage: { input: 100, output: 10 }, episodesUnmeasured: 0, episodesWithoutModel: 0,
     }]);
     expect(out).toContain('2 call(s) the provider reported no usage for');
     // A known under-count is not a hole: the calls were seen and counted, only
@@ -241,7 +241,7 @@ describe('eval-tier cost report — a zero says which kind of zero it is', () =>
 describe('eval-tier liveness — a resolved target that called nothing FAILS', () => {
   const measured: SpendLine = {
     suite: 'Live Smoke', calls: 6, callsWithoutUsage: 2,
-    usage: { input: 73_766, output: 470 }, episodesUnmeasured: 0,
+    usage: { input: 73_766, output: 470 }, episodesUnmeasured: 0, episodesWithoutModel: 0,
   };
 
   test('a measured run against a resolved target is proven', () => {
@@ -258,8 +258,8 @@ describe('eval-tier liveness — a resolved target that called nothing FAILS', (
   // reported lines, the lines summed to nothing, and the tier exited 0.
   test('a resolved target with zero calls is UNPROVEN, not a free tier', () => {
     const verdict = livenessVerdict([
-      { suite: 'E2E Lifecycle', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0 },
-      { suite: 'Deep Evolution', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0 },
+      { suite: 'E2E Lifecycle', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 0 },
+      { suite: 'Deep Evolution', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 0 },
     ], true);
     expect(verdict.kind).toBe('unproven');
     expect(renderLiveness(verdict)).toContain('UNPROVEN');
@@ -285,10 +285,21 @@ describe('eval-tier liveness — a resolved target that called nothing FAILS', (
     expect(renderLiveness(verdict)).not.toContain('UNPROVEN');
   });
 
+  test('a declared no-model episode is a measured zero and keeps the run proven', () => {
+    const verdict = livenessVerdict([
+      measured,
+      { suite: 'First-run · files-outside-tree', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 1 },
+    ], true);
+    expect(verdict.kind).toBe('proven');
+    expect(renderSpend([
+      { suite: 'First-run · files-outside-tree', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 1 },
+    ])).toContain('1 episode(s) declared no model');
+  });
+
   test('an unaccounted episode fails even alongside measured calls', () => {
     const verdict = livenessVerdict([
       measured,
-      { suite: 'Behaviour Evals', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 20 },
+      { suite: 'Behaviour Evals', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 20, episodesWithoutModel: 0 },
     ], true);
     expect(verdict.kind).toBe('unproven');
     // Named as its own defect rather than borrowing the zero-call sentence: this
@@ -299,7 +310,7 @@ describe('eval-tier liveness — a resolved target that called nothing FAILS', (
 
   test('calls with no token report anywhere is half a measurement, so it fails', () => {
     const verdict = livenessVerdict([{
-      suite: 'Live Smoke', calls: 2, callsWithoutUsage: 2, usage: {}, episodesUnmeasured: 0,
+      suite: 'Live Smoke', calls: 2, callsWithoutUsage: 2, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 0,
     }], true);
     expect(verdict.kind).toBe('unproven');
     expect(renderLiveness(verdict)).toContain('NOT ONE reported token usage');
@@ -312,7 +323,7 @@ describe('eval-tier liveness — a resolved target that called nothing FAILS', (
   test('a partly silent provider is still proven when any call reported tokens', () => {
     const verdict = livenessVerdict([{
       suite: 'Live Smoke', calls: 6, callsWithoutUsage: 2,
-      usage: { input: 73_766, output: 470 }, episodesUnmeasured: 0,
+      usage: { input: 73_766, output: 470 }, episodesUnmeasured: 0, episodesWithoutModel: 0,
     }], true);
     expect(verdict.kind).toBe('proven');
   });

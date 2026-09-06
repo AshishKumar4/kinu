@@ -376,6 +376,13 @@ export interface LiveModelSpend {
    * zero neither of them earned arrives labelled instead of clean.
    */
   readonly episodesUnmeasured: number;
+  /**
+   * Episodes a suite DECLARED drive no model and whose store agreed. A file-plane
+   * read or a pty keystroke case spends nothing by design; declared, its zero is
+   * a measurement rather than a hole, and a declaration the store contradicts
+   * is refused at the record site as the case's own defect.
+   */
+  readonly episodesWithoutModel: number;
 }
 
 /** The env var naming the file a suite process appends its total to. */
@@ -388,6 +395,7 @@ let spendCalls = 0;
 let spendCallsWithoutUsage = 0;
 let spendUsage: Usage = {};
 let spendEpisodesUnmeasured = 0;
+let spendEpisodesWithoutModel = 0;
 
 /** Record one model call. Pass the AI SDK's `result.usage`. */
 export function recordLiveModelSpend(usage?: LanguageModelUsage): void {
@@ -482,6 +490,17 @@ export function recordWorkspaceSpend(spend: WorkspaceSpend): void {
   spendUsage = addUsage(spendUsage, spend.total.usage);
 }
 
+/** Record an episode its suite declared drives no model. The store must agree:
+ *  a call it accounted for means the declaration is wrong, and that is the
+ *  case's failure, thrown here rather than folded into anyone's total. */
+export function recordNoModelEpisode(spend: WorkspaceSpend): void {
+  if (spend.total.calls !== 0) {
+    throw new Error(`this case declared it drives no model and its store accounted for `
+      + `${String(spend.total.calls)} model call(s)`);
+  }
+  spendEpisodesWithoutModel += 1;
+}
+
 /**
  * What a durable case record says a PREVIOUS process spent on one case.
  *
@@ -536,6 +555,7 @@ export function liveModelSpend(): LiveModelSpend {
     callsWithoutUsage: spendCallsWithoutUsage,
     usage: spendUsage,
     episodesUnmeasured: spendEpisodesUnmeasured,
+    episodesWithoutModel: spendEpisodesWithoutModel,
   };
 }
 
@@ -554,6 +574,7 @@ export function resetLiveModelSpend(): void {
   spendCallsWithoutUsage = 0;
   spendUsage = {};
   spendEpisodesUnmeasured = 0;
+  spendEpisodesWithoutModel = 0;
 }
 
 /**
@@ -581,6 +602,9 @@ export function reportLiveModelSpend(suite: string): LiveModelSpend {
     + (total.episodesUnmeasured > 0
       ? `, ${total.episodesUnmeasured} episode(s) UNMEASURED — this suite drove work whose `
         + 'spend it could not account for, so the totals above are not this suite\'s cost'
+      : '')
+    + (total.episodesWithoutModel > 0
+      ? `, ${total.episodesWithoutModel} episode(s) declared no model, and the store agreed`
       : ''),
   );
   const path = process.env[LIVE_MODEL_SPEND_FILE_ENV]?.trim();

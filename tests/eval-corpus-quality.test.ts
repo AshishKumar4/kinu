@@ -180,7 +180,7 @@ describe('a run that attempted nothing writes no record at all', () => {
     repeats: 1, seed: 1,
     arm: { evolution: true, settle: 'none', tools: FULL_TOOL_SURFACE },
     declaredTasks: ['ws-inventory'], observations,
-    spend: { calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0 },
+    spend: { calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 0 },
     transcripts, repoRoot: join(import.meta.dirname, '..'),
   });
 

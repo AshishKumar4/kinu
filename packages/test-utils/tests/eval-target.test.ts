@@ -36,7 +36,7 @@ import {
   EVAL_BACKEND_ENV, ledgerTotalsFromEvents, probeVerifier, resolveEvalBackend,
   RUN_END_FAILURE_PREFIX, stepBoundEvidence, type EvalTargetWorkspace,
 } from '../src/eval-target';
-import { liveModelSpend, recordWorkspaceSpend, resetLiveModelSpend } from '../src/live-model';
+import { liveModelSpend, recordNoModelEpisode, recordWorkspaceSpend, resetLiveModelSpend } from '../src/live-model';
 
 /** The fake target's observable surface: what the probe wrote, what it ran. */
 interface FakeWorkspace {
@@ -183,6 +183,18 @@ describe('recordWorkspaceSpend — one meter, two readers', () => {
     // measurement and has to read as one. A zero recorded as a zero would make
     // "measured nothing" and "cost nothing" the same reading.
     expect(spend.episodesUnmeasured).toBe(1);
+    resetLiveModelSpend();
+  });
+
+  test('an episode declared to drive no model is a measured zero, and one that spent is refused', () => {
+    // The first-run tier has cases that drive no model by design (a file-plane
+    // read, a pty keystroke). Declared, their zero is a measurement rather than
+    // a hole; a declaration the store contradicts is the case's own defect.
+    resetLiveModelSpend();
+    recordNoModelEpisode(spendOf(0));
+    expect(liveModelSpend()).toMatchObject({ calls: 0, episodesUnmeasured: 0, episodesWithoutModel: 1 });
+    expect(() => recordNoModelEpisode(spendOf(2))).toThrow('declared');
+    expect(liveModelSpend().episodesWithoutModel).toBe(1);
     resetLiveModelSpend();
   });
 

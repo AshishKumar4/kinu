@@ -75,6 +75,7 @@ describe(SUITE, () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
       id: CASE,
+      modelCalls: 'none',
       purpose: 'A workspace whose files a person opens.',
       async run({ session }) {
         // Written through the workspace's own shell rather than the files

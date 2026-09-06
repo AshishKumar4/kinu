@@ -80,6 +80,7 @@ describe(SUITE, () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
       id: CASE,
+      modelCalls: 'expected',
       purpose: 'A precise engineer who builds small live tabs and checks that they answer.',
       async run({ session }) {
         const turn = await session.prompt(ASK);

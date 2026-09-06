@@ -51,7 +51,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  EVAL_MODELS, outcomeRow, publishRunRecord, recordWorkspaceSpend, reportLiveModelSpend,
+  EVAL_MODELS, outcomeRow, publishRunRecord, recordNoModelEpisode, recordWorkspaceSpend, reportLiveModelSpend,
   subgoalOutcome,
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier,
 } from '@kinu.run/test-utils';
@@ -302,6 +302,11 @@ export interface FirstRunCaseSpec {
   readonly id: FirstRunCase;
   /** The mission the REST create is given — what this workspace is FOR. */
   readonly purpose: string;
+  /** Whether the case drives the model. `expected` fails the case when its
+   *  store accounted for no call, because a green over zero calls is the
+   *  vacuous tier this suite was rebuilt to remove; `none` records a measured
+   *  zero and fails the case if the store disagrees. */
+  readonly modelCalls: 'expected' | 'none';
   /** The case, driven the way a user drives it. Returns the subgoals it
    *  checked; every one of them is asserted by {@link runFirstRunCase}. */
   run(input: FirstRunRun): Promise<readonly FirstRunSubgoal[]>;
@@ -339,7 +344,16 @@ export async function runFirstRunCase(
     const subgoals = await spec.run({ session, plan });
 
     // SPEND FIRST. Every path below this line can throw.
-    recordWorkspaceSpend(await session.spend());
+    const spend = await session.spend();
+    if (spec.modelCalls === 'none') {
+      recordNoModelEpisode(spend);
+    } else {
+      if (spend.total.calls === 0) {
+        throw new Error(`${spec.id}: the case drives the model and its store accounted for no `
+          + 'model call, so nothing it asserted was measured against one');
+      }
+      recordWorkspaceSpend(spend);
+    }
 
     const reached = subgoals.filter((subgoal) => subgoal.reached).length;
     const detail = subgoals

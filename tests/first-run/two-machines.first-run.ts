@@ -75,6 +75,7 @@ describe(SUITE, () => {
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
+        modelCalls: 'expected',
         purpose: 'An assistant working across the owner\'s two machines, which it must never '
           + 'confuse for one.',
         async run({ session }) {

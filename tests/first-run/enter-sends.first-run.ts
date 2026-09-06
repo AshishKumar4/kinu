@@ -79,6 +79,7 @@ describe(SUITE, () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
       id: CASE,
+      modelCalls: 'expected',
       purpose: 'A terse assistant. Reply with one short line and use no tools.',
       async run({ session, plan }) {
         const env = {
@@ -138,6 +139,10 @@ describe(SUITE, () => {
           // the text and sent nothing is exactly the defect, and the screen
           // cannot tell those apart.
           const landed = await turnLanded(session, spelling.marker);
+          // The turn the keystroke started runs on the deployment after this
+          // process stops watching the screen. Its reply is awaited so the
+          // spend this case records is that turn's, not a zero read too early.
+          if (landed) await replyLanded(session, spelling.marker);
           const screen = `Screen as the run left it: ${JSON.stringify(run.screen)}`;
           subgoals.push({
             what: spelling.what,
@@ -173,6 +178,23 @@ async function turnLanded(
     if (Date.now() >= deadline) return false;
     const tick = Promise.withResolvers<void>();
     setTimeout(tick.resolve, between);
+    await tick.promise;
+  }
+}
+
+/** Wait until an assistant row follows the user row carrying `marker`. No
+ *  deadline of its own: the turn ends when the deployment says it ended, and
+ *  the tier's wall bounds a run that never does. */
+async function replyLanded(
+  session: { history(): Promise<readonly { role: string; text: string }[]> },
+  marker: string,
+): Promise<void> {
+  for (;;) {
+    const history = await session.history();
+    const user = history.findIndex((row) => row.role === 'user' && row.text.includes(marker));
+    if (user >= 0 && history.slice(user + 1).some((row) => row.role === 'assistant')) return;
+    const tick = Promise.withResolvers<void>();
+    setTimeout(tick.resolve, Math.floor(LANDING_MS / LANDING_PROBES));
     await tick.promise;
   }
 }

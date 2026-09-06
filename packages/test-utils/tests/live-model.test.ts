@@ -118,7 +118,7 @@ describe('reportLiveModelSpend — a line is the suite\'s own spend, not a runni
     // `scripts/eval-spend.ts` parses exactly these four fields. A field missing
     // here is a field the tier's cost report silently drops.
     expect(Object.keys(total).sort())
-      .toEqual(['calls', 'callsWithoutUsage', 'episodesUnmeasured', 'usage']);
+      .toEqual(['calls', 'callsWithoutUsage', 'episodesUnmeasured', 'episodesWithoutModel', 'usage']);
   });
 });
 

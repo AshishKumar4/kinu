@@ -38,6 +38,9 @@ const SpendLineSchema = v.object({
    *  `calls: 0` and this above 0 is a HOLE, not a free tier, and the render
    *  below says which. */
   episodesUnmeasured: v.number(),
+  /** Episodes the suite declared drive no model, with the store agreeing. A
+   *  measured zero, so it never counts against liveness. */
+  episodesWithoutModel: v.number(),
 });
 export type SpendLine = v.InferOutput<typeof SpendLineSchema>;
 
@@ -47,6 +50,7 @@ export interface SpendTotals {
   readonly callsWithoutUsage: number;
   readonly usage: Usage;
   readonly episodesUnmeasured: number;
+  readonly episodesWithoutModel: number;
 }
 
 export function parseSpend(text: string): SpendLine[] {
@@ -63,6 +67,7 @@ export function totalSpend(lines: readonly SpendLine[]): SpendTotals {
     callsWithoutUsage: lines.reduce((n, l) => n + l.callsWithoutUsage, 0),
     usage: lines.reduce<Usage>((total, l) => addUsage(total, l.usage), {}),
     episodesUnmeasured: lines.reduce((n, l) => n + l.episodesUnmeasured, 0),
+    episodesWithoutModel: lines.reduce((n, l) => n + l.episodesWithoutModel, 0),
   };
 }
 
@@ -81,6 +86,9 @@ export function renderSpend(lines: readonly SpendLine[]): string {
     + (l.episodesUnmeasured > 0
       ? `, ${String(l.episodesUnmeasured)} EPISODE(S) UNACCOUNTED — this line is not this `
         + 'suite\'s cost'
+      : '')
+    + (l.episodesWithoutModel > 0
+      ? `, ${String(l.episodesWithoutModel)} episode(s) declared no model`
       : ''));
 
   if (total.suites === 0) {
