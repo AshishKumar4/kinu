@@ -15,11 +15,10 @@
  * It goes out through the same envelope, the same ledger and the same head CAS
  * as a seal, and its `retired` list is what GC deletes after grace.
  *
- * WHY THE AMPLIFICATION IS BOUNDED. A byte is only moved when the pack around
- * it is more than half dead (`ledger.ts`), so each move must be paid for by at
- * least as many dead bytes in the same pack — which is the standard tiered
- * argument, and `CompactionWork.bytesRewritten` is what makes it measurable
- * rather than assumed.
+ * Selection uses estimated liveness and age. The graph walk establishes
+ * retirement safety by relocating data and metadata references. The returned
+ * work counts relocated payload bytes and rewritten nodes; it does not prove
+ * a general amortized bound.
  */
 
 import type { CompactionWork, ObjectRangeRef } from '../../durability/contracts';
@@ -33,7 +32,7 @@ import type { DirEntryV2, ExtentPageRefV2, ExtentV2, NodeV2, RecordRefV2 } from 
 
 export interface CompactionInput {
   readonly view: MerkleV2View;
-  /** The packs the ledger selected: more than half dead, or small and old. */
+  /** Packs selected for relocation from the retained inventory. */
   readonly candidates: ReadonlySet<string>;
   readonly maxPackBytes: number;
 }
@@ -63,17 +62,29 @@ function reference(slot: Slot, id: string): (resolve: ResolvePack) => RecordRefV
 }
 
 /**
- * Rewrite one head so that nothing it reaches lives in a candidate pack.
- * Answers `null` when the head reaches none of them, which is the ordinary
- * case and must not publish an empty generation.
+ * Rewrite every data and metadata reference into candidate packs. A full walk
+ * also proves which candidates are already unreachable. An empty candidate
+ * set requires no work.
  */
 export async function compactMerklePacks(input: CompactionInput): Promise<CompactionBuild | null> {
+  if (input.candidates.size === 0) return null;
   const writer = new PackWriter(input.maxPackBytes);
   const relocated = new Map<string, Slot>();
   const rewrittenFiles = new Map<RecordV2, Rewritten>();
   const touched = new Set<string>();
   let bytesRewritten = 0;
   let nodesRewritten = 0;
+
+  const placeNode = (node: (resolve: ResolvePack) => NodeV2): Rewritten => {
+    let id = '';
+    const slot = writer.placeRecord((resolve) => {
+      const bytes = encodeNodeV2(node(resolve));
+      id = hashNodeV2Bytes(bytes);
+      return bytes;
+    });
+    nodesRewritten += 1;
+    return { ref: reference(slot, id), moved: true };
+  };
 
   const relocateExtents = async (extents: readonly ExtentV2[]): Promise<readonly ExtentV2[] | null> => {
     if (!extents.some((extent) => input.candidates.has(extent.pack))) return null;
@@ -93,28 +104,41 @@ export async function compactMerklePacks(input: CompactionInput): Promise<Compac
       }
       out.push({ slot, extent });
     }
-    // The slots are resolved when the record that names them serializes, so
-    // the placeholder shape is kept until then.
     return out.map((item) => ('slot' in item ? { ...item.extent, pack: PENDING_PACK, offset: item.slot.offset } : item));
   };
 
-  const walk = async (path: string): Promise<Rewritten | null> => {
+  const walk = async (path: string): Promise<Rewritten> => {
     const record = await input.view.record(path);
-    if (record === null) throw new MerklePackError('no-entry', `nothing at ${JSON.stringify(path)}`);
+    if (record === null) throw new MerklePackError('no-entry', 'nothing at ' + JSON.stringify(path));
     const node = record.node;
+    const moveRecord = input.candidates.has(record.ref.pack);
+    if (moveRecord) touched.add(record.ref.pack);
     if (node.kind === 'symlink') {
-      return { ref: () => record.ref, moved: false };
+      return moveRecord ? placeNode(() => node) : { ref: () => record.ref, moved: false };
     }
     if (node.kind === 'page') {
-      throw new MerklePackError('malformed-node', `${JSON.stringify(path)} resolves to an extent page`);
+      throw new MerklePackError('malformed-node', JSON.stringify(path) + ' resolves to an extent page');
     }
     if (node.kind === 'file') {
       const prior = rewrittenFiles.get(record);
       if (prior !== undefined) return prior;
       const extents = await input.view.fileExtents(path);
       const moved = await relocateExtents(extents);
-      if (moved === null) return { ref: () => record.ref, moved: false };
-      const pages = extentPagesV2(moved);
+      let movePages = false;
+      if (node.extents.kind === 'paged') {
+        for (const page of node.extents.pages) {
+          if (!input.candidates.has(page.pack)) continue;
+          touched.add(page.pack);
+          movePages = true;
+        }
+      }
+      if (moved === null && !moveRecord && !movePages) {
+        const unchanged = { ref: () => record.ref, moved: false };
+        rewrittenFiles.set(record, unchanged);
+        return unchanged;
+      }
+      const extentsToWrite = moved ?? extents;
+      const pages = extentPagesV2(extentsToWrite);
       const pageRefs: { slot: Slot; id: string; page: readonly ExtentV2[]; fileOffset: number; bytes: number }[] = [];
       let fileOffset = 0;
       for (const page of pages) {
@@ -129,14 +153,7 @@ export async function compactMerklePacks(input: CompactionInput): Promise<Compac
         pageRefs.push({ slot, id, page, fileOffset, bytes });
         fileOffset += bytes;
       }
-      let id = '';
-      const slot = writer.placeRecord((resolve) => {
-        const encoded = encodeNodeV2(fileNodeOf(node, moved, pageRefs, resolve, relocated));
-        id = hashNodeV2Bytes(encoded);
-        return encoded;
-      });
-      nodesRewritten += 1;
-      const result = { ref: reference(slot, id), moved: true };
+      const result = placeNode((resolve) => fileNodeOf(node, extentsToWrite, pageRefs, resolve, relocated));
       rewrittenFiles.set(record, result);
       return result;
     }
@@ -144,34 +161,21 @@ export async function compactMerklePacks(input: CompactionInput): Promise<Compac
     const children: { readonly entry: DirEntryV2; readonly rewritten: Rewritten }[] = [];
     let childMoved = false;
     for (const entry of node.entries) {
-      const child = await walk(path === '' ? entry.name : `${path}/${entry.name}`);
-      if (child === null) continue;
+      const child = await walk(path === '' ? entry.name : path + '/' + entry.name);
       if (child.moved) childMoved = true;
       children.push({ entry, rewritten: child });
     }
-    if (!childMoved) return { ref: () => record.ref, moved: false };
-    let id = '';
-    const slot = writer.placeRecord((resolve) => {
-      const encoded = encodeNodeV2({
-        kind: 'dir',
-        mode: node.mode,
-        ino: node.ino,
-        entries: children.map(({ entry, rewritten }): DirEntryV2 => ({
-          name: entry.name,
-          kind: entry.kind,
-          ref: rewritten.ref(resolve),
-        })),
-        metadata: node.metadata,
-      });
-      id = hashNodeV2Bytes(encoded);
-      return encoded;
-    });
-    nodesRewritten += 1;
-    return { ref: reference(slot, id), moved: true };
+    if (!childMoved && !moveRecord) return { ref: () => record.ref, moved: false };
+    return placeNode((resolve) => ({
+      kind: 'dir', mode: node.mode, ino: node.ino,
+      entries: children.map(({ entry, rewritten }): DirEntryV2 => ({
+        name: entry.name, kind: entry.kind, ref: rewritten.ref(resolve),
+      })),
+      metadata: node.metadata,
+    }));
   };
 
   const root = await walk('');
-  if (root === null || !root.moved) return null;
   writer.finish();
   const rootRef = root.ref((slot) => writer.keyOf(slot));
   return {
@@ -183,7 +187,7 @@ export async function compactMerklePacks(input: CompactionInput): Promise<Compac
       sha256: rootRef.sha256,
     },
     work: { packsRead: touched.size, bytesRewritten, nodesRewritten },
-    retired: [...touched].sort(),
+    retired: [...input.candidates].sort(),
   };
 }
 

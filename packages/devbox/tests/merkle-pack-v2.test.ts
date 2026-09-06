@@ -37,7 +37,6 @@ import {
 import type { NodeEntry } from '../src/capture/model';
 import { DEFAULT_CHUNK_PARAMS } from '../src/candidates/merkle-pack/chunk';
 import { openMerkleV2 } from '../src/candidates/merkle-pack/view-v2';
-import { parsePackLedger } from '../src/candidates/merkle-pack/ledger';
 import { DEFAULT_MAX_PACK_BYTES_V2 } from '../src/candidates/merkle-pack/build-v2';
 import { beginCandidateOperationV2 } from '../src/candidates/control';
 import { DURABILITY_AWAIT_POINTS } from '../src/durability/contracts';
@@ -496,8 +495,71 @@ describe('a wake serves the head lazily', () => {
   });
 });
 
-describe('compaction pays for itself, and GC deletes only what has served its grace', () => {
-  test('rewriting a workload never costs more than three times the bytes it wrote', async () => {
+describe('compaction and retirement preserve the published head', () => {
+  test('deduplicated dead-byte estimates cannot retire an untouched file', async () => {
+    const fixture = openSidecar({ graceMs: 0 });
+    fixture.daemon.plant([
+      ...textTree({ 'churn.txt': 'x'.repeat(131_072), 'keep.txt': 'keep me', 'empty.txt': '' }),
+      { path: 'link', kind: 'symlink', mode: 0o777, ino: 91, target: 'keep.txt' },
+      { path: 'empty-dir', kind: 'dir', mode: 0o755, ino: 92 },
+    ]);
+    await publish(fixture, 'the shared pack');
+    const head = (await fixture.snapshot()).head;
+    if (head === null) throw new Error('the fixture has no published pack');
+    const originalPack = head.envelope.rootObject.key;
+    fixture.daemon.write('churn.txt', new TextEncoder().encode('y'.repeat(131_072)));
+    await publish(fixture, 'the replacement file');
+    const readKeeper = async (): Promise<string> => {
+      const view = fixture.core.view();
+      if (view === null) throw new Error('the published head has no reader');
+      return new TextDecoder().decode(await view.readRange('keep.txt', 0, 7));
+    };
+    expect(await readKeeper()).toBe('keep me');
+    await fixture.core.compact();
+    await fixture.core.collectGarbage();
+    expect(await readKeeper()).toBe('keep me');
+    const compacted = fixture.core.view();
+    if (compacted === null) throw new Error('compaction lost the published head');
+    expect((await compacted.stat('link'))?.target).toBe('keep.txt');
+    expect((await compacted.stat('empty.txt'))?.size).toBe(0);
+    expect((await compacted.stat('empty-dir'))?.kind).toBe('dir');
+    expect(fixture.payload.objects.has(originalPack)).toBe(false);
+  });
+
+  test('a compaction scan cannot overwrite a publication that passed it', async () => {
+    const fixture = openSidecar({ graceMs: 0 });
+    fixture.daemon.plant(textTree({ 'churn.txt': 'x'.repeat(131_072), 'keep.txt': 'keep me' }));
+    await publish(fixture, 'the shared pack');
+    const original = (await fixture.snapshot()).head;
+    if (original === null) throw new Error('the fixture has no published head');
+    fixture.daemon.write('churn.txt', new TextEncoder().encode('y'.repeat(131_072)));
+    await publish(fixture, 'the changed file');
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const read = fixture.payload.readRange.bind(fixture.payload);
+    let held = false;
+    fixture.payload.readRange = async (intent) => {
+      if (!held && intent.exactKey === original.envelope.rootObject.key) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return await read(intent);
+    };
+    const compaction = fixture.core.compact();
+    await entered.promise;
+    const next = openSidecar({ bootId: 'next-writer', share: fixture });
+    await next.core.attach();
+    next.daemon.write('fresh.txt', new TextEncoder().encode('new publication'));
+    await publish(next, 'the concurrent publication');
+    release.resolve();
+    const published = await compaction;
+    expectSameTree(next.daemon.tree.snapshot(), await served(next), 'the preserved concurrent head');
+    expect(published).toBe(false);
+  });
+
+
+  test('six full overwrites stay within three times their input bytes', async () => {
     const fixture = openSidecar({ maxPackBytes: 256 * 1024, graceMs: 0 });
     const seed = new Seeded(77);
     fixture.daemon.plant([
@@ -546,6 +608,7 @@ describe('compaction pays for itself, and GC deletes only what has served its gr
       fixture.daemon.write('churn.bin', seed.fill(new Uint8Array(200_000)));
       await publish(fixture, `churn ${round}`);
     }
+    await fixture.core.compact();
     const retired = (await fixture.snapshot()).head!.envelope.retired;
     expect(retired.length).toBeGreaterThan(0);
 
@@ -565,24 +628,4 @@ describe('compaction pays for itself, and GC deletes only what has served its gr
     expectSameTree(fixture.daemon.tree.snapshot(), await served(fixture), 'the head after GC');
   }, 120_000);
 
-  test('the ledger only ever names packs a head reaches', async () => {
-    const fixture = openSidecar({ maxPackBytes: 256 * 1024 });
-    const seed = new Seeded(101);
-    fixture.daemon.plant([
-      ...textTree({ 'keep.txt': 'x' }),
-      fileEntry('churn.bin', seed.fill(new Uint8Array(300_000)), 41, metadataOf(seed)),
-    ]);
-    await publish(fixture, 'the base seal');
-    fixture.daemon.write('churn.bin', seed.fill(new Uint8Array(300_000)));
-    await publish(fixture, 'the overwrite seal');
-
-    const envelope = (await fixture.snapshot()).head!.envelope;
-    const ledgerBytes = fixture.payload.objects.get(envelope.ledger.key);
-    expect(ledgerBytes).toBeDefined();
-    const ledger = parsePackLedger(ledgerBytes!);
-    for (const row of ledger.packs) {
-      expect(fixture.payload.objects.has(row.key)).toBe(true);
-      expect(Number(row.liveBytes)).toBeLessThanOrEqual(Number(row.byteLength));
-    }
-  }, 120_000);
 });

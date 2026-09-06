@@ -91,29 +91,28 @@ export const RootEnvelopeV1Schema = v.strictObject({
 });
 export type RootEnvelopeV1 = v.InferOutput<typeof RootEnvelopeV1Schema>;
 
-/** One live pack, as the ledger tracks it: its immutable identity, how many
- * of its bytes the head still reaches, and the generation that PUT it. */
+/** A retained pack and its estimated live bytes. Only verified relocation
+ * authorizes retirement; deduplication can make the estimate too small. */
 export const PackLedgerRowSchema = v.pipe(
   v.strictObject({
     key: ObjectKeySchema,
     byteLength: DecimalSchema,
     sha256: Sha256Schema,
-    liveBytes: DecimalSchema,
+    estimatedLiveBytes: DecimalSchema,
     addedInGeneration: DecimalSchema,
   }),
-  v.check((row) => decimalAtMost(row.liveBytes, row.byteLength), 'A pack cannot have more live bytes than bytes'),
+  v.check((row) => decimalAtMost(row.estimatedLiveBytes, row.byteLength), 'A pack cannot have more live bytes than bytes'),
 );
 export type PackLedgerRow = v.InferOutput<typeof PackLedgerRowSchema>;
 
 /**
- * Every pack a head reaches, written once per publish. It is O(#packs), the
- * one per-publish object that is not O(bytes changed), and it is what GC and
- * compaction read: liveness is tracked here, and a pack is deleted by ledger
- * only, never by listing a prefix or walking a closure.
+ * Packs retained until verified compaction retires them. The inventory is
+ * O(#packs) and is rewritten per publish. Estimated liveness selects work;
+ * it does not authorize deletion.
  */
 export const PackLedgerSchema = v.pipe(
   v.strictObject({
-    version: v.literal(1),
+    version: v.literal(2),
     format: v.picklist(DURABLE_ROOT_FORMATS),
     boxId: IdSchema,
     generation: DecimalSchema,
