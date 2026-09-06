@@ -472,6 +472,8 @@ fi
 run_required_gate "Strict lint and TypeScript" bun run check
 run_required_gate "Claim instrument self-tests" bun test scripts/doc-claims.test.ts
 run_required_gate "Comment citations and behaviour claims" bun scripts/doc-claims.ts
+run_required_gate "Pattern census and parser self-tests" bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts
+run_required_gate "Pattern inventory" bun scripts/pattern-inventory.ts
 run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
 run_required_gate "Agent-utils, Core, and compaction suites" bun run test
 run_required_gate "Bench Python suites" bun run gate:python-suites

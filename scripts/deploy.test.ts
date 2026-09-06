@@ -46,6 +46,8 @@ const REQUIRED_GATES = [
   "bun run check",
   "bun test scripts/doc-claims.test.ts",
   "bun scripts/doc-claims.ts",
+  "bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts",
+  "bun scripts/pattern-inventory.ts",
   "bun test scripts/deploy.test.ts",
   "bun run test",
   "bun run gate:python-suites",

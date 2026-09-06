@@ -119,6 +119,20 @@ export const LADDER: readonly Gate[] = [
     blind: 'relative paths, external references, prose truth, and author-trusted path templates',
   },
   {
+    run: 'bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts',
+    tier: 'push',
+    seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.
+    catches: 'a pattern census that mistakes strings for regexes or a JSONC parser that changes data',
+    blind: 'semantic quality of a reviewed parser candidate',
+  },
+  {
+    run: 'bun scripts/pattern-inventory.ts',
+    tier: 'push',
+    seconds: 2.5, // Measured 2026-09-06 on the 24-thread workstation.
+    catches: 'unclassified code-pattern and named scanner candidates in the shared source corpus',
+    blind: 'runtime aliases, unnamed scanners, native source and embedded shell language tokens',
+  },
+  {
     run: 'bun run check',
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box (load 2.3, worktree
