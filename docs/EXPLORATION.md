@@ -318,7 +318,7 @@ Implemented by `strategy/node-agent.ts`, `heads/head-inference.ts`, `chat.ts`,
 ## What bounds a node
 
 A node has no step cap or default wall clock (owner ruling, 2026-08-21).
-`runChat` has no cap. `UNBOUNDED_STEPS` never fires; a caller's condition can
+`runChat` has no cap. `UNBOUNDED_STEPS` in `chat.ts` never fires; a caller's condition can
 only add a stop reason. `maxDepth: 1` means "this node itself may run". The
 arbiter owns depth.
 

@@ -18,7 +18,7 @@ import { describeProviderError, providerFailureFacts } from '@kinu.run/core';
 
 export interface GuidedFailure {
   /** The failure in the provider's own words. Never empty —
-   *  `describeProviderError` always resolves to something readable. */
+   *  `describeProviderError` always resolves to readable text (`providers/util.ts`). */
   message: string;
   /** The next command to run, when the failure class implies one. */
   hint?: string;

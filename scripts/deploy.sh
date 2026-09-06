@@ -470,6 +470,8 @@ fi
 # package test script and both Layergate proofs. No environment variable may
 # skip one when this production deploy path is running.
 run_required_gate "Strict lint and TypeScript" bun run check
+run_required_gate "Claim instrument self-tests" bun test scripts/doc-claims.test.ts
+run_required_gate "Comment citations and behaviour claims" bun scripts/doc-claims.ts
 run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
 run_required_gate "Agent-utils, Core, and compaction suites" bun run test
 run_required_gate "Bench Python suites" bun run gate:python-suites
