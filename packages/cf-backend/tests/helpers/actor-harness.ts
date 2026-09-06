@@ -16,8 +16,8 @@
 import { Database } from 'bun:sqlite';
 import { makeSqlExec } from '../../../core/tests/helpers';
 import type { AgentContext, FiberRecoveryContext, FiberRecoveryResult } from 'agents';
-import type { ToolSet, UIMessage } from 'ai';
-import type { ChatResponseResult } from '@cloudflare/think';
+import type { LanguageModel, ToolSet, UIMessage } from 'ai';
+import type { ChatResponseResult, TurnConfig, TurnContext } from '@cloudflare/think';
 import type { UserCaller } from '../../src/user/workspace-capability';
 import type { UserDO } from '../../src/user/user-do';
 import { shadowTrialPlan, claimToolEffect } from '@kinu.run/core';
@@ -66,11 +66,13 @@ const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
 /** The orchestrator a test drives, named so suites import the contract instead
  *  of reaching through `ReturnType<typeof orchestratorHarness>`. */
 export class HarnessOrchestratorAgent extends OrchestratorAgent {
-  /** The instance-local provider plugin: inject a model without replacing Think. */
-  harnessModelProvider() {
-    const provider = this.providerRegistry().registry.get('workers-ai');
-    if (!provider) throw new Error('harness requires the workers-ai provider');
-    return provider;
+  modelFactory?: () => LanguageModel;
+  override getModel(): LanguageModel {
+    return this.modelFactory?.() ?? super.getModel();
+  }
+  override async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
+    const config = await super.beforeTurn(ctx);
+    return this.modelFactory ? { ...config, model: this.modelFactory() } : config;
   }
   observeRawTools(): ToolSet { return this.getRawTools(); }
   /** The child substrate — how a subordinate is born and retired here — for
@@ -710,11 +712,13 @@ export interface ObservedNaming {
 }
 
 export class HarnessSubordinateAgent extends SubordinateAgent {
-  /** The same provider seam as the orchestrator, over this actor's registry. */
-  harnessModelProvider() {
-    const provider = this.providerRegistry().registry.get('workers-ai');
-    if (!provider) throw new Error('harness requires the workers-ai provider');
-    return provider;
+  modelFactory?: () => LanguageModel;
+  override getModel(): LanguageModel {
+    return this.modelFactory?.() ?? super.getModel();
+  }
+  override async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
+    const config = await super.beforeTurn(ctx);
+    return this.modelFactory ? { ...config, model: this.modelFactory() } : config;
   }
   /** The base join seam, surfaced for suites that assert the SETTLED
    *  post-activation world — same bridge the orchestrator harness carries. */

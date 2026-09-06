@@ -398,8 +398,8 @@ describe('C7 a failed turn leaves a terminal record carrying its CAUSE', () => {
   for (const harness of [orchestratorHarness, subordinateHarness]) {
     test(harness.name + ': preparation failure reaches the RPC caller with its cause', async () => {
       const { agent } = harness();
+      agent.modelFactory = () => { throw wrapped(); };
       const errors: string[] = [];
-      agent.harnessModelProvider().createModel = () => { throw wrapped(); };
       await agent.onStart();
       await agent.chat('do the thing', {
         onStart() {},
