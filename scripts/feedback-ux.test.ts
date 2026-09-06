@@ -128,8 +128,8 @@ declare global {
     /** Installed by the sabotage stages; each puts the broken global back. */
     __restoreCapture?: () => void;
     __restoreDecode?: () => void;
-    /** Installed by `recordDecodeSettlements`; counts completed preview decodes. */
-    __feedbackDecodeSettlements?: () => number;
+    __heldFeedbackEncodes?: number;
+    __releaseFeedbackEncodes?: () => Promise<void>;
   }
 }
 
@@ -171,48 +171,6 @@ async function recordSubmissions(page: Page): Promise<void> {
 
 async function submissions(page: Page): Promise<Submission[]> {
   return page.evaluate(() => window.__feedbackSent ?? []);
-}
-/**
- * The gallery mounts under StrictMode, so its initial feedback capture has two
- * preview-decode paths. Expose their completion as a page event: callers can
- * wait for the actual work rather than guessing a delay after the first paint.
- */
-async function recordDecodeSettlements(page: Page): Promise<void> {
-  await page.evaluateOnNewDocument(() => {
-    const decode = window.createImageBitmap.bind(window);
-    let settled = 0;
-    const markSettled = (): void => {
-      settled += 1;
-      document.dispatchEvent(new Event('feedback-decode-settled'));
-    };
-    Object.assign(window, {
-      __feedbackDecodeSettlements: () => settled,
-      createImageBitmap: async (image: ImageBitmapSource) => {
-        try {
-          const bitmap = await decode(image);
-          markSettled();
-          return bitmap;
-        } catch (cause) {
-          markSettled();
-          throw cause;
-        }
-      },
-    });
-  });
-}
-
-async function waitForDecodeSettlements(page: Page, count: number): Promise<void> {
-  await page.evaluate((wanted: number) => {
-    if ((window.__feedbackDecodeSettlements?.() ?? 0) >= wanted) return;
-    return new Promise<void>((resolve) => {
-      const settled = (): void => {
-        if ((window.__feedbackDecodeSettlements?.() ?? 0) < wanted) return;
-        document.removeEventListener('feedback-decode-settled', settled);
-        resolve();
-      };
-      document.addEventListener('feedback-decode-settled', settled);
-    });
-  }, count);
 }
 
 
@@ -788,13 +746,9 @@ async function run(): Promise<Observed> {
     // ── note only ────────────────────────────────────────────────────────
     const bare = await browser.newPage();
     await bare.setViewport({ width: 1280, height: 900 });
-    await recordDecodeSettlements(bare);
     await serveFeedback(bare);
     await bare.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
     await openDialog(bare);
-    // The first ready image is not a quiescence boundary: StrictMode's second
-    // capture can still complete and overwrite the later off state.
-    await waitForDecodeSettlements(bare, 2);
     await bare.click('[data-feedback-include-shot]');
     await waitForShotRemoval(bare);
     const shotSectionPresent = await bare.$('[data-feedback-shot]') !== null;
@@ -857,9 +811,7 @@ async function run(): Promise<Observed> {
     const captureMessage = await broken.$eval('[data-feedback-shot="failed"]', (node) => node.textContent ?? '');
     await broken.type('[data-feedback-note]', 'the note survives a failed capture');
     const captureNoteSendable = await broken.$eval('[data-feedback-send]', (node) => !node.hasAttribute('disabled'));
-    // The gallery's StrictMode mount starts two captures. Both must fail before
-    // restoring the sabotaged encoder, or a stale attempt can overwrite off.
-    await diagnosticsSettled(captureDiagnostics, 2);
+    await diagnosticsSettled(captureDiagnostics, 1);
     // The failed state's retry affordance is the checkbox: off, then on again.
     await broken.evaluate(() => window.__restoreCapture?.());
     await broken.click('[data-feedback-include-shot]');
@@ -889,8 +841,7 @@ async function run(): Promise<Observed> {
     await openDialog(undecodable);
     await undecodable.waitForSelector('[data-feedback-shot="failed"]', { timeout: 90_000 });
     const decodeMessage = await undecodable.$eval('[data-feedback-shot="failed"]', (node) => node.textContent ?? '');
-    // Wait for both StrictMode capture/decode paths before restoring the decoder.
-    await diagnosticsSettled(decodeDiagnostics, 2);
+    await diagnosticsSettled(decodeDiagnostics, 1);
     await undecodable.evaluate(() => window.__restoreDecode?.());
     await undecodable.click('[data-feedback-include-shot]');
     await waitForShotRemoval(undecodable);
@@ -1474,5 +1425,37 @@ describe('a send the network never answers', () => {
 
   test('and the dialog can then be left', () => {
     expect(observed.stalled.closedAfterStop).toBe(true);
+  });
+});
+
+test('a capture completed after screenshot opt-out cannot attach to the report', async () => {
+  await withGallery(async ({ browser, origin }) => {
+    const page = await browser.newPage();
+    await serveFeedback(page);
+    await page.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
+    await page.evaluate(() => {
+      const encode = HTMLCanvasElement.prototype.toBlob;
+      const held: (() => Promise<void>)[] = [];
+      window.__heldFeedbackEncodes = 0;
+      HTMLCanvasElement.prototype.toBlob = function (callback, type, quality) {
+        held.push(() => new Promise<void>((resolve) => {
+          encode.call(this, (blob) => { callback(blob); resolve(); }, type, quality);
+        }));
+        window.__heldFeedbackEncodes = held.length;
+      };
+      window.__releaseFeedbackEncodes = async () => {
+        HTMLCanvasElement.prototype.toBlob = encode;
+        await Promise.all(held.map((release) => release()));
+      };
+    });
+    await page.click('[data-feedback-open]');
+    await page.waitForFunction(() => (window.__heldFeedbackEncodes ?? 0) > 0);
+    await page.click('[data-feedback-include-shot]');
+    await waitForShotRemoval(page);
+    await page.evaluate(async () => { await window.__releaseFeedbackEncodes?.(); });
+    await page.type('[data-feedback-note]', 'send no screenshot');
+    await page.click('[data-feedback-send]');
+    await page.waitForSelector('[data-feedback-sent]');
+    expect((await submissions(page)).at(-1)?.screenshot).toBeNull();
   });
 });

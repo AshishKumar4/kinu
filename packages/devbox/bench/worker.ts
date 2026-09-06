@@ -78,6 +78,11 @@ import {
 } from './r2-operations';
 import { bindingFor, storePrefixOf, strategyIsDeployed } from './strategy-dispatch';
 import { runBenchSecurityCells, type SecurityCellsObservation } from './security-cells';
+import {
+  armPublicationCut, finishPublicationCut, holdPublicationAcknowledgement,
+  reachPublicationCut, type PublicationCut,
+} from './publication-cut';
+import { publicationBucket } from './publication-bucket';
 
 interface BenchEnv {
   BACKUP_BUCKET: R2Bucket;
@@ -92,6 +97,8 @@ interface BenchEnv {
   BENCH_TOKEN?: string;
   /** The arms whose bindings the generated fixture config declares. */
   BENCH_SELECTED_ARMS?: string;
+  /** Immutable per deployment. Absent and zero leave object writes uninstrumented. */
+  BENCH_PUBLICATION_CUT?: string;
   /** Set to '1' ONLY for a local `wrangler dev` run, where there is no container
    *  outbound interception and therefore no store mount. Absent on every deploy,
    *  which is what stops a deployed arm from measuring extraction and reporting
@@ -216,15 +223,20 @@ async function maybeFlush(): Promise<void> {
   await flushOps(flushEnv);
 }
 
-/**
- * A bucket that counts every call, including calls on the handles it returns.
- *
- * `Object.create` over the real binding rather than a literal: `R2Bucket` has
- * overloaded methods whose signatures cannot be restated without losing
- * evidence, and delegating through the prototype keeps every overload the
- * platform offers while the wrapper only intercepts the names it counts.
- */
-function countingBucket(bucket: R2Bucket): R2Bucket {
+/** The counter owns the rendezvous across the proxy and box isolates. */
+async function holdPublicationAck(env: BenchEnv, key: string, bytes: number): Promise<void> {
+  const counter = env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops'));
+  await holdPublicationAcknowledgement({
+    reach: (objectKey, size) => counter.reachCut(objectKey, size),
+    read: (token) => counter.readCut(token),
+    wait: () => scheduler.wait(100),
+  }, key, bytes);
+}
+
+/** The existing meter wraps the boot-selected object store. */
+function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
+  const observed = publicationBucket(bucket, env.BENCH_PUBLICATION_CUT,
+    (key, bytes) => holdPublicationAck(env, key, bytes));
   const counted: Partial<R2Bucket> = {
     head: async (key) => { countOp('head'); await maybeFlush(); return await bucket.head(key); },
     delete: async (keys) => {
@@ -240,11 +252,11 @@ function countingBucket(bucket: R2Bucket): R2Bucket {
     createMultipartUpload: async (key, options) => {
       countOp('createMultipartUpload');
       await maybeFlush();
-      return countingMultipart(await bucket.createMultipartUpload(key, options));
+      return countingMultipart(await observed.createMultipartUpload(key, options));
     },
     resumeMultipartUpload: (key, uploadId) => {
       countOp('resumeMultipartUpload');
-      return countingMultipart(bucket.resumeMultipartUpload(key, uploadId));
+      return countingMultipart(observed.resumeMultipartUpload(key, uploadId));
     },
   };
   // `get` and `put` are counted through the prototype chain below, because their
@@ -273,7 +285,7 @@ function countingBucket(bucket: R2Bucket): R2Bucket {
     ) => {
       countOp('put');
       await maybeFlush();
-      return await bucket.put(key, value, options);
+      return await observed.put(key, value, options);
     },
   });
 }
@@ -331,6 +343,50 @@ export interface OpCounts {
 }
 
 export class BenchOpCounter extends DurableObject<BenchEnv> {
+  async armCut(token: string, prefix: string): Promise<void> {
+    await this.ctx.storage.transaction(async (txn) => {
+      const current = await txn.get<PublicationCut>('publication-cut');
+      if (current?.token === token) return;
+      if (current?.state === 'armed' || current?.state === 'held') {
+        throw new Error('another publication cut is active');
+      }
+      await txn.put('publication-cut', armPublicationCut(token, prefix));
+    });
+  }
+
+  async readCut(token: string): Promise<PublicationCut> {
+    const row = await this.ctx.storage.get<PublicationCut>('publication-cut');
+    if (row?.token !== token) throw new Error('no publication cut has this token');
+    return row;
+  }
+
+  async reachCut(key: string, bytes: number): Promise<PublicationCut | null> {
+    return await this.ctx.storage.transaction(async (txn) => {
+      const row = await txn.get<PublicationCut>('publication-cut');
+      if (row === undefined || !key.startsWith(row.prefix)) return null;
+      const next = reachPublicationCut(row, key, bytes);
+      if (next !== row) await txn.put('publication-cut', next);
+      return next;
+    });
+  }
+
+  async finishCut(token: string, stopped: boolean): Promise<PublicationCut> {
+    return await this.ctx.storage.transaction(async (txn) => {
+      const row = await txn.get<PublicationCut>('publication-cut');
+      if (row === undefined) throw new Error('no publication cut is armed');
+      const next = finishPublicationCut(row, token, stopped);
+      await txn.put('publication-cut', next);
+      return next;
+    });
+  }
+
+  async clearCut(token: string): Promise<void> {
+    await this.ctx.storage.transaction(async (txn) => {
+      const row = await txn.get<PublicationCut>('publication-cut');
+      if (row?.token === token) await txn.delete('publication-cut');
+    });
+  }
+
   async bump(batch: OpTally, bytes: ByteTally): Promise<void> {
     const tally = (await this.ctx.storage.get<OpTally>('tally')) ?? {};
     for (const name of OP_NAMES) {
@@ -374,7 +430,7 @@ class CountingContainerProxy extends ContainerProxy {
     // egress handler resolves the bucket out of this entrypoint's env by
     // binding name. Wrapping the Durable Object's env instead counts almost
     // nothing: the s3fs traffic never passes through it.
-    super(ctx, { ...env, BACKUP_BUCKET: countingBucket(env.BACKUP_BUCKET) });
+    super(ctx, { ...env, BACKUP_BUCKET: countingBucket(env.BACKUP_BUCKET, env) });
     flushEnv = env;
   }
 }
@@ -694,9 +750,11 @@ class BenchBox extends Devbox<BenchEnv> {
    * this state — staged journal entries, no fold, no boot marker — and the next
    * commit heals it, which is what makes the replay observable.
    */
-  async killWithoutQuiesce(): Promise<void> {
+  async killWithoutQuiesce(): Promise<boolean> {
+    if (this.ctx.container?.running !== true) return false;
     await this.stop('SIGKILL');
     while (this.ctx.container?.running === true) await scheduler.wait(100);
+    return true;
   }
 
   /**
@@ -718,7 +776,7 @@ class BenchBox extends Devbox<BenchEnv> {
   }
 
   protected override get store(): DevboxStore {
-    return { binding: 'BACKUP_BUCKET', bucket: countingBucket(this.env.BACKUP_BUCKET) };
+    return { binding: 'BACKUP_BUCKET', bucket: countingBucket(this.env.BACKUP_BUCKET, this.env) };
   }
 
   /** Local `wrangler dev` has no outbound interception, so the chain cannot
@@ -914,15 +972,8 @@ async function body(request: Request): Promise<DriverBody> {
 
 
 
-/**
- * The routes that reach storage and never the box's live tree, served ahead
- * of the operation router: the deployed probe's two diagnostic reads (the
- * candidate control dump and the incident ledger, archived after the ladder
- * and after the wake) and the G4 fault cells, which run against an isolated
- * per-call namespace. The switch below stays the router for the operations
- * that arm, write, or tear down. Null answers any other route.
- */
-async function serveStorageOnlyRoutes(
+/** Diagnostic reads and fault injection share the instrument route boundary. */
+async function serveInstrumentRoutes(
   route: string,
   input: DriverBody,
   env: BenchEnv,
@@ -930,7 +981,40 @@ async function serveStorageOnlyRoutes(
   box: BenchStub,
   name: string,
   started: number,
+  url: URL,
+  counter: DurableObjectStub<BenchOpCounter>,
 ): Promise<Response | null> {
+  switch (route) {
+    case 'POST /checkpoint-cut': {
+      if (env.BENCH_PUBLICATION_CUT !== '1') {
+        throw new Error('NOT-CUT: this Worker boot did not enable --fault-cuts');
+      }
+      const op = input.op ?? '';
+      if (op.length === 0) return json({ ok: false, error: 'op is required' }, 400);
+      const kind: CheckpointKind = input.kind === 'tick' ? 'tick' : 'quiesce';
+      await counter.armCut(op, storePrefixOf(env, strategy, name));
+      const row = await box.armBenchOperation({ op, operation: 'checkpoint', kind });
+      return json({ ok: true, token: row.token, kind, state: row.state, ms: Date.now() - started }, 202);
+    }
+    case 'GET /fault-cut':
+      return json(await counter.readCut(url.searchParams.get('token') ?? ''));
+    case 'POST /fault-cut/kill': {
+      const token = url.searchParams.get('token') ?? '';
+      const receipt = await counter.readCut(token);
+      if (receipt.prefix !== storePrefixOf(env, strategy, name)) {
+        throw new Error('the publication cut belongs to another box');
+      }
+      if (receipt.state !== 'held') return json(await counter.finishCut(token, false));
+      const stopped = await box.killWithoutQuiesce();
+      return json(await counter.finishCut(token, stopped));
+    }
+    case 'POST /fault-cut/cancel':
+      return json(await counter.finishCut(url.searchParams.get('token') ?? '', false));
+    case 'POST /fault-cut/clear': {
+      await counter.clearCut(url.searchParams.get('token') ?? '');
+      return json({ ok: true });
+    }
+  }
   if (route === 'GET /incidents') {
     // Every filed failure, oldest first. Totals say how many; only the
     // reasons say what. Called after the ladder and after the wake but
@@ -1015,7 +1099,7 @@ export default {
 
     try {
       const route = `${request.method} ${url.pathname}`;
-      const aside = await serveStorageOnlyRoutes(route, input, env, strategy, box, name, started);
+      const aside = await serveInstrumentRoutes(route, input, env, strategy, box, name, started, url, counter);
       if (aside !== null) return aside;
       switch (route) {
         case 'POST /create': {
@@ -1083,6 +1167,7 @@ export default {
             ok: true, token: row.token, kind, state: row.state, ms: Date.now() - started,
           }, 202);
         }
+
 
         case 'POST /stop': {
           // The real quiesce path — final checkpoint, keepAlive off, SIGTERM —

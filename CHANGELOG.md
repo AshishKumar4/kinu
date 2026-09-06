@@ -1028,6 +1028,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - Exploration turns apply the shared provider cache plan; the three-kind contract passed 58 cases on 2026-09-06.
 - Swarm journals preserve each assigned question and restore node briefs after re-entry; two regression cases passed on 2026-09-06.
 
+- Feedback capture completion respects screenshot opt-out and newer captures. A held-encoder browser probe on 2026-09-06 sent a 33,814 B screenshot before the fix and no screenshot after it.
+- The devbox driver can judge publication cuts with opt-in `--fault-cuts`. Local tests on 2026-09-06 proved CUT and NOT-CUT; unarmed storage operations stayed at 5 with zero added control RPCs.
+
 ## [0.2.0] - 2026-08-07
 
 The first versioned release. Kinu sat on a frozen `0.1.0` for four months

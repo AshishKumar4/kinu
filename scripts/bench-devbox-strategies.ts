@@ -65,6 +65,9 @@ import {
 } from './fixtures/storage-matrix/admission';
 import type { RestoreWork } from '@kinu.run/devbox/durability/contracts';
 import { RestoreReceiptSchema, type RestoreReceipt } from '@kinu.run/devbox/candidates/restore-receipt';
+import {
+  PublicationCutSchema, publicationWasCut, rendezvousPublicationCut,
+} from '../packages/devbox/bench/publication-cut';
 import type { MeasuredCell, StageId } from './fixtures/storage-matrix/protocol';
 import {
   checkCleanup, createManifest, recoverAbandonedRuns, replayTeardown, writeManifest,
@@ -1079,6 +1082,8 @@ export interface Options {
    *  a probe scope can never silently run a decisive workload. */
   verifyOnly: boolean;
   plan: boolean;
+  /** Enables the publication rendezvous in each Worker before its proxy boots. */
+  faultCuts: boolean;
   /** Schema-validated historical context from previous runs. These paths never
    *  affect current-arm ranking. */
   controls: readonly ControlOption[];
@@ -1594,9 +1599,11 @@ function deleteFixtureResources(fixture: ArmFixture): readonly string[] {
 export async function deployFixture(
   token: string,
   fixture: ArmFixture,
+  faultCuts = false,
 ): Promise<{ fixture: Fixture; workerVersion: string; stop: () => readonly string[] }> {
   const output = wrangler([
     'deploy', '--config', fixture.configPath, '--var', `BENCH_TOKEN:${token}`,
+    '--var', `BENCH_PUBLICATION_CUT:${faultCuts ? '1' : '0'}`,
   ]);
   const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
   if (origin === undefined) throw new Error(`deploy printed no workers.dev origin:\n${output.slice(-2500)}`);
@@ -2831,10 +2838,11 @@ export async function armCheckpointOperation(
   box: string,
   kind: 'tick' | 'quiesce',
   what: string,
+  route: '/checkpoint' | '/checkpoint-cut' = '/checkpoint',
 ): Promise<ArmedCheckpoint> {
   const op = `${what}-${crypto.randomUUID()}`;
   const armed = await retryTransient(what, async () =>
-    await call(fixture, 'POST', `/checkpoint?box=${box}`, OperationArmedReplySchema, { kind, op }, STATE_POLL_REQUEST_TIMEOUT_MS),
+    await call(fixture, 'POST', `${route}?box=${box}`, OperationArmedReplySchema, { kind, op }, STATE_POLL_REQUEST_TIMEOUT_MS),
   );
   if (armed.ok !== true || armed.token === undefined || armed.token.length === 0) {
     throw new Error(`${what} did not arm: ${armed.error ?? 'the fixture answered without a token'}`);
@@ -4317,17 +4325,7 @@ interface CutVictim {
   readonly file: string;
 }
 
-/**
- * Arm the victim publication and cut it mid-flight: marker first so its
- * absence post-cut means the cut beat the commit, the 64 MiB file after it
- * so the quiesce is still publishing when the kill lands, two pending polls
- * with the token guard, the kill, then the victim's own outcome. `ms` is the
- * operation's own duration inside the fixture callback — queue time never
- * enters it — so a victim that ran until about the kill delay was in flight
- * when the kill landed, and one that died in a fraction of it never got
- * going. A cut that never met its publication is a miss, returned rather
- * than thrown: the caller records it as an incomplete cell, never a pass.
- */
+/** Hold a stored payload acknowledgement, kill its writer, then judge the receipt. */
 async function fireCutVictim(
   fixture: Fixture,
   box: string,
@@ -4342,51 +4340,36 @@ async function fireCutVictim(
     box,
     `dd if=/dev/urandom of=/workspace/${victim.file} bs=1048576 count=${FAULT_CUT_VICTIM_MIB} 2>/dev/null && sync`,
   );
-  const armed = await armCheckpointOperation(fixture, box, 'quiesce', 'fault-cut victim');
-  const armedAt = Date.now();
-  let missedReason: string | null = null;
-  for (let check = 0; check < 2 && missedReason === null; check += 1) {
-    await delay(1000);
-    const poll = await call(
-      fixture,
-      'GET',
-      `/operation?box=${box}&token=${encodeURIComponent(armed.token)}`,
-      OperationPollReplySchema,
-    );
-    if (poll.state !== 'pending') {
-      missedReason = `the victim checkpoint settled (${poll.state ?? 'no state'}`
-        + `${poll.outcome?.kind === undefined ? '' : `/${poll.outcome.kind}`}) before the kill landed; no publication was in flight`;
+  const armed = await armCheckpointOperation(fixture, box, 'quiesce', 'fault-cut victim', '/checkpoint-cut');
+  const query = `box=${box}&token=${encodeURIComponent(armed.op)}`;
+  const pollOperation = async (): Promise<OperationPollReply> => await call(
+    fixture, 'GET', `/operation?box=${box}&token=${encodeURIComponent(armed.token)}`, OperationPollReplySchema,
+  );
+  try {
+    const receipt = await rendezvousPublicationCut({
+      read: async () => await call(fixture, 'GET', `/fault-cut?${query}`, PublicationCutSchema),
+      pending: async () => (await pollOperation()).state === 'pending',
+      kill: async () => await call(fixture, 'POST', `/fault-cut/kill?${query}`, PublicationCutSchema),
+      cancel: async () => await call(fixture, 'POST', `/fault-cut/cancel?${query}`, PublicationCutSchema),
+      wait: async () => await delay(500),
+    });
+    if (!publicationWasCut(receipt, armed.op)) {
+      return { missedReason: `NOT-CUT: ${JSON.stringify(receipt)}` };
     }
-  }
-  if (missedReason === null) {
-    const killDelayMs = Date.now() - armedAt;
-    await call(fixture, 'POST', `/kill?box=${box}`, AckReplySchema);
     let outcome: OperationPollReply | null = null;
     for (let waited = 0; waited < 120 && outcome === null; waited += 1) {
       await delay(500);
-      const poll = await call(
-        fixture,
-        'GET',
-        `/operation?box=${box}&token=${encodeURIComponent(armed.token)}`,
-        OperationPollReplySchema,
-      );
+      const poll = await pollOperation();
       if (poll.state === 'done' || poll.state === 'failed') outcome = poll;
       else if (poll.state !== 'pending') {
         throw new Error(`the victim answered state "${poll.state ?? 'none'}": ${poll.error ?? 'no reason given'}`);
       }
     }
-    if (outcome === null) throw new Error('the victim never settled after the kill');
-    const victimMs = outcome.ms ?? null;
-    const victimEnd = `${outcome.state ?? '?'}${outcome.outcome?.kind === undefined ? '' : `/${outcome.outcome.kind}`}`
-      + ` in ${victimMs === null ? 'unmeasured' : `${victimMs}`} ms`;
-    if (victimMs === null || victimMs < killDelayMs - 1000) {
-      missedReason = `the victim ran ${victimMs === null ? 'an unmeasured' : `${victimMs}`} ms`
-        + ` against a ${killDelayMs} ms kill delay (${victimEnd}): it never got going, so the kill cut air`;
-    } else {
-      return { victimEnd };
-    }
+    if (outcome === null) throw new Error('the victim never settled after the cut');
+    return { victimEnd: `CUT: ${JSON.stringify(receipt)}; victim ${outcome.state ?? 'unmeasured'}` };
+  } finally {
+    await call(fixture, 'POST', `/fault-cut/clear?${query}`, AckReplySchema);
   }
-  return { missedReason: missedReason ?? 'the victim never armed a publication to cut' };
 }
 
 /**
@@ -6174,6 +6157,7 @@ export interface RunMeta {
    *  the intent the per-arm counts below are read against. */
   'deciding repetitions': string;
   'frozen controls provenance'?: string;
+  'publication rendezvous'?: string;
   INCOMPLETE?: string;
 }
 
@@ -8246,6 +8230,8 @@ Options:
                                     ${STRATEGIES.join(', ')}.
   --plan                            Print the execution plan without deploying.
   --decisive                        Run decisive workloads.
+  --fault-cuts                      Enable the publication rendezvous at Worker boot.
+                                    Without this flag G3 remains unmeasured.
   --verify-only                     Run durability verification and cleanup, without performance
                                     workloads: one arm's ladder, stop, wake and teardown with the
                                     probe's evidence reads. Wins over --decisive.
@@ -8335,6 +8321,7 @@ export function parseOptions(argv: readonly string[]): Options {
     decisive,
     verifyOnly: argv.includes('--verify-only'),
     plan: argv.includes('--plan'),
+    faultCuts: argv.includes('--fault-cuts'),
     keep: argv.includes('--keep'),
     repetitions,
     controls,
@@ -8568,7 +8555,7 @@ async function main(): Promise<number> {
       await armLogContext.run(lane.fixture.strategy, async (): Promise<void> => {
         try {
           wrangler(['r2', 'bucket', 'create', lane.fixture.bucket]);
-          const started = await deployFixture(token, lane.fixture);
+          const started = await deployFixture(token, lane.fixture, options.faultCuts);
           lane.stop = started.stop;
           lane.live = started.fixture;
           lane.workerVersion = started.workerVersion;
@@ -8637,6 +8624,9 @@ async function main(): Promise<number> {
     seed: String(options.seed),
     'loop budget ms': String(options.budgetMs),
     'deciding repetitions': String(options.repetitions),
+    'publication rendezvous': options.faultCuts
+      ? 'armed at Worker boot; one added control RPC per successful object write'
+      : 'unarmed; zero added control RPCs',
   };
   if (frozenControls.length > 0) {
     meta['frozen controls provenance'] = frozenControls

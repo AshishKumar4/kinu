@@ -1910,3 +1910,31 @@ describe('the tool preview redacts through the one canonical policy', () => {
     });
   }, 240_000);
 });
+
+test('file navigation does not pair a new breadcrumb with the old directory', async () => {
+  await withGallery(async ({ browser, origin }) => {
+    const page = await browser.newPage();
+    await page.goto(`${origin}/gallery.html?frame=files`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-files-entry][title="sandbox"]');
+    const mismatches = await page.evaluate(() => new Promise<string[]>((resolve) => {
+      const seen: string[] = [];
+      const observe = (): void => {
+        const crumbs = [...document.querySelectorAll('[data-files-crumb]')]
+          .map((node) => node.textContent ?? '').join('/');
+        if (crumbs.includes('pc') && document.querySelector('[data-files-entry][title="sandbox"]')) {
+          seen.push(crumbs);
+        }
+        if (document.querySelector('[data-files-entry][title="quarterly-report.txt"]')) {
+          changes.disconnect();
+          resolve(seen);
+        }
+      };
+      const changes = new MutationObserver(observe);
+      changes.observe(document.body, { childList: true, subtree: true, characterData: true });
+      const target = document.querySelector<HTMLElement>('[data-files-entry][title="pc"]');
+      if (target === null) throw new Error('the pc mount row is absent');
+      target.click();
+    }));
+    expect(mismatches).toEqual([]);
+  });
+}, 240_000);
