@@ -584,6 +584,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- The slate first-run gate requires an HTTP preview that answers the authored request. An unavailable preview fails both checks.
 - Shell approval patterns cover `rm -rf //`, `--no-preserve-root`, `| /bin/sh`, `| sudo sh`, `| dash`, plain `su`, chown flags, refspec-first `git push --force`, setgid modes, reversed `dd` on NVMe and virtio disks, and `mkfs -t`.
 - A release cannot record a staging or production deploy without a deploy command; a hostile default branch is refused and fetched as an explicit refspec; an exec result without an exit code fails closed.
 - A head that fails to spawn is recorded as errored and its siblings still merge.
