@@ -1,5 +1,5 @@
 {
-  "reason": "Add four measured claim and inventory gates, totaling 3.77 seconds. Existing gate costs and the 20 percent tolerance remain unchanged.",
+  "reason": "Remove the prose gate rejected in the originating specification; retain all other gate costs and tolerances",
   "tiers": {
     "commit": {
       "seconds": 53.24,
@@ -27,13 +27,11 @@
       }
     },
     "push": {
-      "seconds": 383.48,
+      "seconds": 382.41,
       "measuredAt": "2026-09-06",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
-        "bun test scripts/doc-claims.test.ts": 0.17,
-        "bun scripts/doc-claims.ts": 0.9,
         "bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts": 0.2,
         "bun scripts/pattern-inventory.ts": 2.5,
         "bun run check": 37,

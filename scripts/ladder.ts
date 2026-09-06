@@ -105,20 +105,6 @@ export const LADDER: readonly Gate[] = [
     blind: 'anything inside the repository. It only reads the machine.',
   },
   {
-    run: 'bun test scripts/doc-claims.test.ts',
-    tier: 'push',
-    seconds: 0.17, // Measured 2026-09-06 on the 24-thread workstation.
-    catches: 'a comment citation or claim-shape checker that cannot reject its defect fixtures',
-    blind: 'prose truth and claim forms outside the declared grammar',
-  },
-  {
-    run: 'bun scripts/doc-claims.ts',
-    tier: 'push',
-    seconds: 0.9, // Measured 2026-09-06 on the 24-thread workstation.
-    catches: 'dangling rooted comment paths and unqualified absolute behaviour claims',
-    blind: 'relative paths, external references, prose truth, and author-trusted path templates',
-  },
-  {
     run: 'bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts',
     tier: 'push',
     seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.

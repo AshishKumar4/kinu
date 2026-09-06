@@ -44,8 +44,6 @@ const BENCH_GATE_FILES = [
 const REQUIRED_GATES = [
   "bun scripts/preflight.ts",
   "bun run check",
-  "bun test scripts/doc-claims.test.ts",
-  "bun scripts/doc-claims.ts",
   "bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts",
   "bun scripts/pattern-inventory.ts",
   "bun test scripts/deploy.test.ts",
