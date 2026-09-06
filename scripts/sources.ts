@@ -303,6 +303,10 @@ export const isVendoredSource = (file: string): boolean => file.startsWith('pack
 /** Kinu-maintained code parseable by `syntax.ts`. */
 export const isParseable = (file: string): boolean => PARSEABLE.test(file) && !isVendoredSource(file);
 
+/** Source languages covered by the pattern inventory. */
+export const isPatternSource = (file: string): boolean =>
+  isParseable(file) || file.endsWith('.py') || file.endsWith('.sh');
+
 /** Loaded by raw `node --experimental-strip-types` rather than by Bun or a
  *  bundler, and therefore the one set whose imports must carry an explicit
  *  `.ts` — Node's ESM resolver takes a complete path and resolves neither an

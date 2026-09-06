@@ -43,7 +43,7 @@ fi
 # hardcoded: the product scope has been renamed before, and a hardcoded scope
 # leaves every fresh worktree after such a rename with an empty scope directory
 # that fails workspace resolution.
-SCOPES="$(sed -n 's|.*"name"[[:space:]]*:[[:space:]]*"\(@[^/"]*\)/[^"]*".*|\1|p' "$TREE"/packages/*/package.json | sort -u)"
+SCOPES="$(bun -e 'const scopes = new Set(); for (const file of Bun.argv.slice(1)) { const name = JSON.parse(await Bun.file(file).text()).name; if (!name.startsWith("@")) continue; const slash = name.indexOf("/"); if (slash < 2) throw new Error("Invalid package name in " + file); scopes.add(name.slice(0, slash)); } process.stdout.write([...scopes].sort().join("\n"));' "$TREE"/packages/*/package.json)"
 if [ -z "$SCOPES" ]; then
   echo "No workspace scope found in $TREE/packages/*/package.json - refusing to mirror blind." >&2
   exit 1
@@ -78,7 +78,7 @@ mirror() {
     mkdir -p "$dst/$scope"
     for pkg in "$TREE"/packages/*/; do
       [ -f "$pkg/package.json" ] || continue
-      name="$(sed -n 's|.*"name"[[:space:]]*:[[:space:]]*"'"$scope"'/\([^"]*\)".*|\1|p' "$pkg/package.json" | head -1)"
+      name="$(bun -e 'const [scope, file] = Bun.argv.slice(1); const name = JSON.parse(await Bun.file(file).text()).name; if (name.startsWith(scope + "/")) process.stdout.write(name.slice(scope.length + 1));' "$scope" "$pkg/package.json")"
       [ -n "$name" ] || continue
       ln -sfn "../../packages/$(basename "$pkg")" "$dst/$scope/$name"
     done

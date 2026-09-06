@@ -49,6 +49,22 @@ export function parsesAsExpression(source: string): string | null {
   }
 }
 
+/** Return the final expression of a JavaScript function body without reading line shapes. */
+export function addImplicitReturn(source: string): string {
+  if (parsesAsExpression(source) === null) return `return (${source}\n);\n`;
+  const program = acorn.parse(source, {
+    ...ECMA, sourceType: 'script', allowReturnOutsideFunction: true,
+  });
+  const last = program.body.at(-1);
+  if (last?.type !== 'ExpressionStatement' || last.expression.type === 'AssignmentExpression') {
+    return `${source}\n`;
+  }
+  const end = source[last.end - 1] === ';' ? last.end - 1 : last.end;
+  return source.slice(0, last.start)
+    + `return (${source.slice(last.start, end)})`
+    + source.slice(end) + '\n';
+}
+
 /** The names a program declares at its top level, in order. */
 function topLevelDeclarations(program: acorn.Program) {
   const functions: string[] = [];
