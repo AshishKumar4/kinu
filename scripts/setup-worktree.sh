@@ -50,7 +50,7 @@ if [ -z "$SCOPES" ]; then
 fi
 
 mirror() {
-  local src="$1" dst="$2"
+  local src="$1" dst="$2" top="${3:-}"
   # A pre-existing wholesale symlink is exactly the failure mode being repaired.
   [ -L "$dst" ] && rm -f "$dst"
   mkdir -p "$dst"
@@ -64,11 +64,16 @@ mirror() {
     rm -rf "${dst:?}/$name"
     ln -s "$entry" "$dst/$name"
   done
+  # The workspace scope belongs to the TOP-LEVEL node_modules only: the
+  # ../../packages depth below is correct from nowhere else, and a nested
+  # per-package tree never carries a workspace scope. Whether the DONOR has the
+  # scope is a different question and was the wrong test — a scope this tree's
+  # packages declare but the donor has not installed yet is exactly the case
+  # that must still be built. Using the donor as the proxy left the vendored
+  # @agent-core scope absent from every worktree mirrored before its install,
+  # and workspace resolution then failed naming a package the tree really has.
+  [ -n "$top" ] || return 0
   for scope in $SCOPES; do
-    # Only where the donor HAS the scope (the top-level node_modules): a nested
-    # per-package node_modules never carries it, and the ../../packages link
-    # depth below is only correct from the top level.
-    [ -d "$src/$scope" ] || continue
     rm -rf "${dst:?}/$scope"
     mkdir -p "$dst/$scope"
     for pkg in "$TREE"/packages/*/; do
@@ -80,7 +85,7 @@ mirror() {
   done
 }
 
-mirror "$MAIN/node_modules" "$TREE/node_modules"
+mirror "$MAIN/node_modules" "$TREE/node_modules" top
 # Nested per-package trees carry pinned versions (cf-backend's own typescript).
 for nested in "$MAIN"/packages/*/node_modules; do
   [ -d "$nested" ] || continue
