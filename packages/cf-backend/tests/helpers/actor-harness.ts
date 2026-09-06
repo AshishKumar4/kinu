@@ -10,9 +10,8 @@
  * real `ensureSchema` and the real `getRawTools` through this and observes
  * what actually comes out.
  *
- * Boundaries stated honestly: nothing here can RUN a model turn (Think's loop
- * needs workerd) or execute codemode (env.LOADER is a stub that throws). This
- * harness is for observing composition output, not for driving inference.
+ * Think inference can run with an injected provider; codemode cannot execute
+ * here (env.LOADER throws). The SDK base and DO storage remain platform doubles.
  */
 import { Database } from 'bun:sqlite';
 import { makeSqlExec } from '../../../core/tests/helpers';
@@ -67,6 +66,12 @@ const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
 /** The orchestrator a test drives, named so suites import the contract instead
  *  of reaching through `ReturnType<typeof orchestratorHarness>`. */
 export class HarnessOrchestratorAgent extends OrchestratorAgent {
+  /** The instance-local provider plugin: inject a model without replacing Think. */
+  harnessModelProvider() {
+    const provider = this.providerRegistry().registry.get('workers-ai');
+    if (!provider) throw new Error('harness requires the workers-ai provider');
+    return provider;
+  }
   observeRawTools(): ToolSet { return this.getRawTools(); }
   /** The child substrate — how a subordinate is born and retired here — for
    *  suites that drive a lifecycle verb without a roster row in front of it. */
@@ -705,6 +710,12 @@ export interface ObservedNaming {
 }
 
 export class HarnessSubordinateAgent extends SubordinateAgent {
+  /** The same provider seam as the orchestrator, over this actor's registry. */
+  harnessModelProvider() {
+    const provider = this.providerRegistry().registry.get('workers-ai');
+    if (!provider) throw new Error('harness requires the workers-ai provider');
+    return provider;
+  }
   /** The base join seam, surfaced for suites that assert the SETTLED
    *  post-activation world — same bridge the orchestrator harness carries. */
   harnessSettleBackgroundTasks(): Promise<void> { return this.settleBackgroundTasks(); }
@@ -1098,7 +1109,7 @@ export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
     configurable: true,
   });
   Object.defineProperty(harness.agent, 'messages', {
-    value: [{ role: 'user', metadata: { kinuEvent: 'subordinate_task' } }],
+    value: [{ id: 'subordinate-task', role: 'user', parts: [], metadata: { kinuEvent: 'subordinate_task' } }],
     configurable: true,
   });
   ensureActorSchema(harness.agent);
