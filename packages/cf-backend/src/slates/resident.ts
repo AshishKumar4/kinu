@@ -18,11 +18,13 @@ export interface ResidentSlateDeps {
   readonly workspace: string;
   readonly content: ContentStore;
   session(): Promise<Pick<WorkspaceSession, 'vfs' | 'processes'>>;
-  registerPort(pid: number, port: number, target: RouteableFacetTarget): Promise<void>;
+  registerPort(pid: number, port: number, target: RouteableFacetTarget, owner: string): Promise<void>;
   unregisterPorts(pid: number): void;
 }
 export interface ResidentSlateBoot {
   readonly key: string;
+  /** Logical identity independent of source revision and process incarnation. */
+  readonly owner: string;
   readonly root: string;
   readonly project: SlateProject;
   readonly port: number;
@@ -149,7 +151,7 @@ export class ResidentSlateProcesses {
     );
     try {
       await process.started;
-      await this.deps.registerPort(entry.pid, input.port, process);
+      await this.deps.registerPort(entry.pid, input.port, process, input.owner);
     } catch (cause) {
       session.processes.exit(entry.pid, 1);
       this.deps.unregisterPorts(entry.pid);
