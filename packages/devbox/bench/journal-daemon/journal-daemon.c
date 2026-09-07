@@ -83,8 +83,24 @@ _Static_assert(FUSE_DIRECT_IO_ALLOW_MMAP == (1ULL << 36), "unexpected FUSE ABI")
 
 typedef unsigned long long counter;
 
-enum record_kind { REC_INTENT, REC_RESULT, REC_WRITE, REC_FENCE, REC_RECOVER, REC_BASE };
-static const char *const record_names[] = {"INTENT", "RESULT", "W", "FENCE", "RECOVER", "BASE"};
+enum record_kind { REC_INTENT, REC_RESULT, REC_WRITE, REC_FENCE, REC_RECOVER, REC_BASE, REC_HIDE, REC_UNHIDE };
+static const char *const record_names[] = {"INTENT", "RESULT", "W", "FENCE", "RECOVER", "BASE", "HIDE", "UNHIDE"};
+
+/* One inode with handles open through this daemon, and how many. */
+struct open_inode {
+  uint64_t ino;
+  unsigned handles;
+};
+
+/* One name libfuse hid: a file unlinked, or renamed over, while a handle was
+ * open. The daemon recorded the caller's unlink; this is what it must remove
+ * on the last release, or at the next start if the daemon died first. */
+struct hidden_name {
+  char path[PATH_CAP];
+  uint64_t ino;
+  uint64_t sequence;
+  uint64_t generation;
+};
 
 struct flush_request {
   char line[RECORD_CAP];
@@ -141,6 +157,13 @@ struct journal {
    * itself.  Both are the sidecar's to set and are read under `lock`. */
   uint64_t max_chunk;
   struct journal_boundaries boundaries;
+  /* Read under `lock`: the handles open per inode, and the names libfuse hid. */
+  struct open_inode *open_inodes;
+  size_t open_count;
+  size_t open_capacity;
+  struct hidden_name *hidden;
+  size_t hidden_count;
+  size_t hidden_capacity;
   pthread_mutex_t lock;       /* admission, sequence, generation, active, teardown */
   pthread_mutex_t queue_lock; /* record queue, counters */
   pthread_mutex_t wal_lock;   /* wal_fd identity and its appends */
@@ -398,6 +421,152 @@ static int finish_mutation(struct mutation *m, const char *op, const char *path,
   return rc == 0 ? result : rc;
 }
 
+/* ------------------------------------------------------ open inodes ----- */
+
+/* Under `lock`. */
+static struct open_inode *find_open(uint64_t ino) {
+  for (size_t index = 0; index < state.open_count; index++) {
+    if (state.open_inodes[index].ino == ino) return &state.open_inodes[index];
+  }
+  return NULL;
+}
+
+static void note_open(int fd) {
+  struct stat st;
+  if (fstat(fd, &st) != 0) return;
+  pthread_mutex_lock(&state.lock);
+  struct open_inode *held = find_open((uint64_t)st.st_ino);
+  if (held != NULL) {
+    held->handles++;
+  } else {
+    if (state.open_count == state.open_capacity) {
+      size_t capacity = state.open_capacity == 0 ? 64 : state.open_capacity * 2;
+      struct open_inode *grown = realloc(state.open_inodes, capacity * sizeof(*grown));
+      if (grown != NULL) {
+        state.open_inodes = grown;
+        state.open_capacity = capacity;
+      }
+    }
+    if (state.open_count < state.open_capacity) {
+      state.open_inodes[state.open_count].ino = (uint64_t)st.st_ino;
+      state.open_inodes[state.open_count].handles = 1;
+      state.open_count++;
+    }
+  }
+  pthread_mutex_unlock(&state.lock);
+}
+
+static void note_release(int fd) {
+  struct stat st;
+  if (fstat(fd, &st) != 0) return;
+  pthread_mutex_lock(&state.lock);
+  struct open_inode *held = find_open((uint64_t)st.st_ino);
+  if (held != NULL && --held->handles == 0) {
+    *held = state.open_inodes[--state.open_count];
+  }
+  pthread_mutex_unlock(&state.lock);
+}
+
+static bool inode_is_open(uint64_t ino) {
+  pthread_mutex_lock(&state.lock);
+  bool open = find_open(ino) != NULL;
+  pthread_mutex_unlock(&state.lock);
+  return open;
+}
+
+/* ------------------------------------------------------ hidden names ----- */
+
+/* libfuse hides a file that is unlinked, or renamed over, while a handle is
+ * open: it renames the node to `.fuse_hidden<nodeid:8 hex><counter:8 hex>`
+ * in the same directory and unlinks that name on the last release. The
+ * daemon recognises the hide by all three facts, the exact name shape, the
+ * same parent, and an open handle on the source inode, and records it here.
+ * A user unlink of a `.fuse_hidden` name the daemon never hid is an ordinary
+ * journaled unlink. The one collision left is a caller that itself renames an
+ * OPEN file to a same-directory name of exactly this shape: that rename is
+ * indistinguishable from the hide and is journaled as an unlink. */
+static bool hide_shaped(const char *path) {
+  const char *slash = strrchr(path, '/');
+  const char *name = slash == NULL ? path : slash + 1;
+  if (strncmp(name, ".fuse_hidden", 12) != 0 || strlen(name) != 12 + 16) return false;
+  for (const char *p = name + 12; *p != '\0'; p++) {
+    if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f'))) return false;
+  }
+  return true;
+}
+
+static bool same_parent(const char *a, const char *b) {
+  const char *sa = strrchr(a, '/');
+  const char *sb = strrchr(b, '/');
+  size_t la = sa == NULL ? 0 : (size_t)(sa - a);
+  size_t lb = sb == NULL ? 0 : (size_t)(sb - b);
+  return la == lb && strncmp(a, b, la) == 0;
+}
+
+/* Under `lock`. */
+static struct hidden_name *find_hidden(const char *path) {
+  for (size_t index = 0; index < state.hidden_count; index++) {
+    if (strcmp(state.hidden[index].path, path) == 0) return &state.hidden[index];
+  }
+  return NULL;
+}
+
+/* Under `lock`. */
+static int remember_hidden(const char *path, uint64_t ino, uint64_t sequence, uint64_t generation) {
+  if (strlen(path) >= PATH_CAP) return -ENAMETOOLONG;
+  struct hidden_name *held = find_hidden(path);
+  if (held == NULL) {
+    if (state.hidden_count == state.hidden_capacity) {
+      size_t capacity = state.hidden_capacity == 0 ? 8 : state.hidden_capacity * 2;
+      struct hidden_name *grown = realloc(state.hidden, capacity * sizeof(*grown));
+      if (grown == NULL) return -ENOMEM;
+      state.hidden = grown;
+      state.hidden_capacity = capacity;
+    }
+    held = &state.hidden[state.hidden_count++];
+  }
+  memcpy(held->path, path, strlen(path) + 1);
+  held->ino = ino;
+  held->sequence = sequence;
+  held->generation = generation;
+  return 0;
+}
+
+/* Under `lock`. */
+static void forget_hidden(const char *path) {
+  struct hidden_name *held = find_hidden(path);
+  if (held == NULL) return;
+  *held = state.hidden[--state.hidden_count];
+}
+
+static int record_hide(const char *path, uint64_t ino, uint64_t sequence, uint64_t generation) {
+  char aux[32];
+  snprintf(aux, sizeof(aux), "%llu", (counter)ino);
+  pthread_mutex_lock(&state.lock);
+  int rc = remember_hidden(path, ino, sequence, generation);
+  pthread_mutex_unlock(&state.lock);
+  if (rc != 0) return rc;
+  return durable(REC_HIDE, sequence, generation, "hide", 0, path, aux);
+}
+
+static int record_unhide(const char *path, uint64_t ino, uint64_t sequence, uint64_t generation) {
+  char aux[32];
+  snprintf(aux, sizeof(aux), "%llu", (counter)ino);
+  pthread_mutex_lock(&state.lock);
+  forget_hidden(path);
+  pthread_mutex_unlock(&state.lock);
+  return durable(REC_UNHIDE, sequence, generation, "unhide", 0, path, aux);
+}
+
+/* The inode a backing path holds right now, or 0. */
+static uint64_t inode_at(const char *path) {
+  char rel[PATH_CAP];
+  if (relative_path(path, rel) != 0) return 0;
+  struct stat st;
+  if (fstatat(state.root_fd, rel[0] == '\0' ? "." : rel, &st, AT_SYMLINK_NOFOLLOW) != 0) return 0;
+  return (uint64_t)st.st_ino;
+}
+
 /* ----------------------------------------------------------- callbacks --- */
 
 struct dir_handle {
@@ -573,6 +742,7 @@ static int open_handle(const char *path, int flags, struct fuse_file_info *fi) {
   int fd = open_beneath(rel, flags & ~O_DIRECT, 0);
   if (fd < 0) return fd;
   fi->fh = (uint64_t)fd;
+  note_open(fd);
   /* A writable handle is direct: every byte it writes has to arrive here and
    * reach a W record before it reaches the file.  A read-only handle keeps the
    * page cache, so the daemon answers the first read of a range and none of the
@@ -608,6 +778,7 @@ static int pass_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     if (fd >= 0) {
       fi->fh = (uint64_t)fd;
       fi->direct_io = 1;
+      note_open(fd);
     }
     close(parent);
   }
@@ -616,6 +787,7 @@ static int pass_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
 static int pass_release(const char *path, struct fuse_file_info *fi) {
   (void)path;
+  note_release((int)fi->fh);
   return close((int)fi->fh) == 0 ? 0 : neg_errno();
 }
 
@@ -837,34 +1009,41 @@ static int pass_mknod(const char *path, mode_t mode, dev_t rdev) {
   return finish_mutation(&m, "mknod", path, "", result);
 }
 
-/* libfuse renames a file that is unlinked, or renamed over, while a
- * descriptor is open to `.fuse_hiddenNNNN` in the same directory, and
- * unlinks that name on the last release. The caller asked for an unlink, so
- * the journal records an unlink of the caller's name. The hidden name is
- * never journaled: no fence describes it and no head publishes it. */
-static bool hidden_name(const char *path) {
-  const char *slash = strrchr(path, '/');
-  const char *name = slash == NULL ? path : slash + 1;
-  return strncmp(name, ".fuse_hidden", 12) == 0;
-}
-
 static int remove_entry(const char *op, const char *path, int flags) {
   struct mutation m;
-  bool journaled = !hidden_name(path);
-  int rc = journaled ? begin_mutation(op, path, "", &m) : admit_mutation(&m);
+  int rc = begin_mutation(op, path, "", &m);
   if (rc != 0) return rc;
   char name[NAME_MAX + 1];
   int parent = open_parent(path, name);
   int result = parent < 0 ? parent : (unlinkat(parent, name, flags) == 0 ? 0 : neg_errno());
   if (parent >= 0) close(parent);
-  if (!journaled) {
-    release_mutation(&m);
-    return result;
-  }
   return finish_mutation(&m, op, path, "", result);
 }
 
-static int pass_unlink(const char *path) { return remove_entry("unlink", path, 0); }
+/* The last release of a hidden name: libfuse unlinks the name it hid. The
+ * caller's unlink was journaled at the hide, so this removal is admitted,
+ * performed and recorded as the end of the hide, and journaled as nothing
+ * else. An unlink of any other name, whatever it looks like, is ordinary. */
+static int pass_unlink(const char *path) {
+  pthread_mutex_lock(&state.lock);
+  struct hidden_name *hidden = find_hidden(path);
+  uint64_t ino = hidden == NULL ? 0 : hidden->ino;
+  pthread_mutex_unlock(&state.lock);
+  if (hidden == NULL || inode_at(path) != ino) return remove_entry("unlink", path, 0);
+  struct mutation m;
+  int rc = admit_mutation(&m);
+  if (rc != 0) return rc;
+  char name[NAME_MAX + 1];
+  int parent = open_parent(path, name);
+  int result = parent < 0 ? parent : (unlinkat(parent, name, 0) == 0 ? 0 : neg_errno());
+  if (parent >= 0) close(parent);
+  if (result == 0) {
+    int recorded = record_unhide(path, ino, m.sequence, m.generation);
+    if (recorded != 0) result = recorded;
+  }
+  release_mutation(&m);
+  return result;
+}
 static int pass_rmdir(const char *path) { return remove_entry("rmdir", path, AT_REMOVEDIR); }
 
 static int pass_symlink(const char *target, const char *path) {
@@ -896,7 +1075,11 @@ static int pass_link(const char *from, const char *to) {
 }
 
 static int pass_rename(const char *from, const char *to, unsigned int flags) {
-  bool hiding = hidden_name(to) && !hidden_name(from);
+  /* A hide: libfuse's exact name shape, the same parent, and a handle open
+   * on the source inode. Journaled as the unlink the caller asked for. */
+  uint64_t from_ino = inode_at(from);
+  bool hiding = hide_shaped(to) && !hide_shaped(from) && same_parent(from, to)
+                && from_ino != 0 && inode_is_open(from_ino);
   const char *op = hiding ? "unlink" : "rename";
   const char *aux = hiding ? "" : to;
   struct mutation m;
@@ -913,6 +1096,10 @@ static int pass_rename(const char *from, const char *to, unsigned int flags) {
   }
   if (from_parent >= 0) close(from_parent);
   if (to_parent >= 0) close(to_parent);
+  if (hiding && result == 0) {
+    int recorded = record_hide(to, from_ino, m.sequence, m.generation);
+    if (recorded != 0) result = recorded;
+  }
   return finish_mutation(&m, op, from, aux, result);
 }
 
@@ -1009,6 +1196,29 @@ static const struct fuse_operations operations = {
 
 /* ------------------------------------------------------------- control --- */
 
+/* The names still hidden, as HIDE records, into a compact journal. A hide
+ * whose sequence lies inside the unfenced tail is written twice; recovery
+ * remembers one name once. */
+static int copy_hidden(int fd) {
+  pthread_mutex_lock(&state.lock);
+  size_t count = state.hidden_count;
+  struct hidden_name *held = count == 0 ? NULL : malloc(count * sizeof(*held));
+  if (held != NULL) memcpy(held, state.hidden, count * sizeof(*held));
+  pthread_mutex_unlock(&state.lock);
+  if (count != 0 && held == NULL) return -ENOMEM;
+  int rc = 0;
+  for (size_t index = 0; rc == 0 && index < count; index++) {
+    char aux[32];
+    snprintf(aux, sizeof(aux), "%llu", (counter)held[index].ino);
+    char line[RECORD_CAP];
+    int length = format_record(line, sizeof(line), REC_HIDE, held[index].sequence, held[index].generation,
+                               "hide", 0, held[index].path, aux);
+    rc = length < 0 ? length : append_all(fd, line, (size_t)length);
+  }
+  free(held);
+  return rc;
+}
+
 /* Copies every record above `since` from the live journal into `fd`.  Those
  * are the mutations no fence has sealed yet and the next fence derives its
  * dirty set from them, so compaction may never drop them. */
@@ -1094,6 +1304,9 @@ static int compact_journal(void) {
   for (size_t index = 0; rc == 0 && index < count; index++) {
     rc = append_all(fd, records[index], strlen(records[index]));
   }
+  /* A hide outlives the fence that drained it, so the names still hidden
+   * travel into the compact journal ahead of the unfenced tail. */
+  if (rc == 0) rc = copy_hidden(fd);
   if (rc == 0) rc = copy_unfenced_tail(fd, has_fence ? fence_cut : 0);
   /* The compact journal replaces the live one, so it is on the disk before the
    * rename that names it: the one sync outside a fence, and never on a reply. */
@@ -1636,6 +1849,19 @@ static int parse_record(char *line, struct recovery *r) {
     if (generation > r->published) r->published = generation;
     return 0;
   }
+  /* A hide the previous life of this daemon recorded: replayed into the set
+   * so the start can remove what the last release never reached. */
+  if (strcmp(kind, "HIDE") == 0 || strcmp(kind, "UNHIDE") == 0) {
+    journal_field_unescape(fields[5]);
+    uint64_t ino = 0;
+    if (!journal_parse_counter(fields[6], &ino) || fields[5][0] != '/') return -EUCLEAN;
+    pthread_mutex_lock(&state.lock);
+    int rc = 0;
+    if (kind[0] == 'H') rc = remember_hidden(fields[5], ino, sequence, generation);
+    else forget_hidden(fields[5]);
+    pthread_mutex_unlock(&state.lock);
+    return rc;
+  }
   if (strcmp(kind, "RESULT") == 0 || strcmp(kind, "RECOVER") == 0) {
     resolve_intent(r, sequence);
     return 0;
@@ -1692,6 +1918,30 @@ static int recover_journal(void) {
       rc = durable(REC_RECOVER, intent->sequence, intent->generation, intent->op, -ECANCELED, intent->path,
                    intent->aux);
     }
+  }
+  /* Every handle died with the previous daemon, so a name it hid has no
+   * holder left: remove it now, and record that it is gone. A name whose
+   * inode changed since is not the hidden file and is left alone. */
+  if (rc == 0) {
+    pthread_mutex_lock(&state.lock);
+    size_t count = state.hidden_count;
+    struct hidden_name *stale = count == 0 ? NULL : malloc(count * sizeof(*stale));
+    if (stale != NULL) memcpy(stale, state.hidden, count * sizeof(*stale));
+    pthread_mutex_unlock(&state.lock);
+    if (count != 0 && stale == NULL) rc = -ENOMEM;
+    for (size_t index = 0; rc == 0 && index < count; index++) {
+      const struct hidden_name *hidden = &stale[index];
+      if (inode_at(hidden->path) == hidden->ino) {
+        char name[NAME_MAX + 1];
+        int parent = open_parent(hidden->path, name);
+        if (parent >= 0) {
+          if (unlinkat(parent, name, 0) != 0 && errno != ENOENT) rc = neg_errno();
+          close(parent);
+        }
+      }
+      if (rc == 0) rc = record_unhide(hidden->path, hidden->ino, hidden->sequence, hidden->generation);
+    }
+    free(stale);
   }
   free(r.pending);
   return rc;

@@ -105,6 +105,18 @@ async function stopDaemon(daemon: Daemon): Promise<number> {
   return await daemon.process.exited;
 }
 
+/** `ok`, or the errno name a system call answered. Anything that is not an
+ *  errno failure is a defect and propagates. */
+async function errnoOf(call: Promise<unknown>): Promise<string> {
+  try {
+    await call;
+    return 'ok';
+  } catch (error) {
+    if (error instanceof Error && 'code' in error) return String(error.code);
+    throw error;
+  }
+}
+
 /** A positional read on a held descriptor: what `pread(2)` answers, so the
  *  descriptor's own offset never decides what the check sees. */
 async function readAt(handle: FileHandle, position: number, length: number): Promise<string> {
@@ -318,7 +330,13 @@ async function main(): Promise<void> {
     // A write through one name of a published hardlink, the other untouched:
     // both names serve the new bytes and stay one inode.
     await writeFile(join(mount, 'src', 'lib', 'a.ts'), 'export const a = 2;\n');
+    const linkSealStarted = performance.now();
     await publish(first, 'the hardlink write');
+    facts.hardlinkSealMs = Math.round(performance.now() - linkSealStarted);
+    await writeFile(join(mount, 'src', 'plain.ts'), 'export const plain = 1;\n');
+    const plainSealStarted = performance.now();
+    await publish(first, 'the plain write');
+    facts.plainSealMs = Math.round(performance.now() - plainSealStarted);
     const linked = (await servedTree(stores, 'g4')).tree;
     const linkA = linked.find((entry) => entry.path === 'src/lib/a.ts');
     const linkB = linked.find((entry) => entry.path === 'src/lib/a-link.ts');
@@ -349,11 +367,43 @@ async function main(): Promise<void> {
     assert('fresh-boot-attaches', attached.kind === 'attached', attached.kind);
     expectSameTree('fresh-boot-serves-the-compacted-tree', disk3, (await servedTree(stores, 'g5')).tree);
 
-    // ── the daemon dies with unsealed writes; the restarted daemon recovers
-    //    them and the next seal continues the published chain.
+    // ── a caller's own file shaped like a libfuse hide is ordinary data: it
+    //    is published, and its unlink is published, because the daemon tracks
+    //    the hides it performed rather than a name prefix.
+    const callerName = '.fuse_hidden0000abcd0000ef01';
+    await writeFile(join(mount, 'src', callerName), 'mine, not libfuse\'s\n');
+    await publish(first, 'the shaped-name write');
+    const callerHideName = (await servedTree(stores, 'g4b')).tree.find((entry) => entry.path === `src/${callerName}`);
+    assert('a-caller-file-shaped-like-a-hide-is-published',
+      callerHideName?.content?.kind === 'dense' && new TextDecoder().decode(callerHideName.content.bytes) === 'mine, not libfuse\'s\n',
+      callerHideName === undefined ? 'absent' : 'present');
+    await unlink(join(mount, 'src', callerName));
+    await publish(first, 'the shaped-name unlink');
+    assert('a-caller-unlink-of-a-hide-shaped-name-is-published',
+      (await servedTree(stores, 'g4c')).tree.every((entry) => entry.path !== `src/${callerName}`), callerName);
+
+    // ── the daemon dies with unsealed writes, an open descriptor and a hidden
+    //    name outstanding; the restarted daemon recovers the writes, removes
+    //    the hidden name, and the next seal continues the published chain.
     await writeFile(join(mount, 'src', 'after-kill.ts'), 'export const recovered = true;\n');
+    const surviving = await open(join(mount, 'src', 'lib', 'a.ts'), 'r');
+    const ghost = await open(join(mount, 'src', 'ghost.txt'), 'w+');
+    await ghost.write('held open, then unlinked\n', 0);
+    await unlink(join(mount, 'src', 'ghost.txt'));
+    const hiddenBeforeKill = (await readdir(join(space.root, 'src'))).filter((name) => name.startsWith('.fuse_hidden'));
+    assert('a-hide-is-outstanding-before-the-kill', hiddenBeforeKill.length === 1, hiddenBeforeKill.join(','));
     await killDaemon(space, daemon);
     daemon = await startDaemon(space);
+    const hiddenAfterRestart = (await readdir(join(space.root, 'src'))).filter((name) => name.startsWith('.fuse_hidden'));
+    assert('restart-removes-the-hidden-name-the-dead-daemon-left', hiddenAfterRestart.length === 0, hiddenAfterRestart.join(','));
+    // A descriptor on the dead mount is dead; a fresh open on the new mount
+    // serves the bytes the old daemon wrote through before it died.
+    const deadRead = await errnoOf(surviving.read(new Uint8Array(8), 0, 8, 0));
+    assert('a-descriptor-on-the-dead-mount-answers-an-error', deadRead !== 'ok', deadRead);
+    facts.deadDescriptorRead = deadRead;
+    facts.deadDescriptorClose = `${await errnoOf(surviving.close())},${await errnoOf(ghost.close())}`;
+    assert('a-fresh-open-after-restart-serves-the-durable-bytes',
+      (await readFile(join(mount, 'src', 'after-kill.ts'), 'utf8')) === 'export const recovered = true;\n', 'src/after-kill.ts');
     await writeFile(join(mount, 'src', 'after-restart.ts'), 'export const restarted = true;\n');
     const third = openCore(space, stores, 'boot-3', clock);
     await third.attach();
@@ -363,7 +413,9 @@ async function main(): Promise<void> {
     const served4 = await servedTree(stores, 'g6');
     expectSameTree('seal-after-daemon-kill-serves-the-recovered-tree', disk4, served4.tree);
     assert('unsealed-write-before-the-kill-is-published',
-      served4.tree.some((entry) => entry.path === 'src/after-kill.ts'), 'src/after-kill.ts');
+      served4.tree.some((entry) => entry.path === 'src/after-kill.ts')
+      && served4.tree.every((entry) => entry.path !== 'src/ghost.txt' && !entry.path.includes('.fuse_hidden')),
+      served4.tree.filter((entry) => entry.path.startsWith('src/')).map((entry) => entry.path).join(','));
     const control = await candidateRunControlV2(stores.control, stores.envelopes);
     assert('published-chain-is-unbroken', control.head !== null
       && control.head.envelope.parentRootId !== null, `head=${control.head?.pointer.rootEnvelopeId}`);
