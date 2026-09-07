@@ -34,7 +34,7 @@ import {
 } from '../../src/candidates/control';
 import type { CandidateControlStore, CandidateEnvelopeStoreV2 } from '../../src/candidates/control';
 import { LazyRestore } from '../../src/candidates/lazy-restore';
-import type { HeadFilesystem, LazyRestorePorts } from '../../src/candidates/lazy-restore';
+import type { LazyRestorePorts, ReadHead } from '../../src/candidates/lazy-restore';
 import {
   buildMerkleDelta,
   parentFromPublishedV2,
@@ -195,6 +195,7 @@ export class SidecarCore {
   /** The lazy restore a container adopted. It reads through whichever view
    *  is current, so it outlives every re-attach and keeps its residency. */
   #lazy: LazyRestore | null = null;
+  #activeReaders = 0;
   #head: CandidateRunControlV2['head'] = null;
   #ledger: { readonly key: string; readonly value: PackLedger } | null = null;
   /** Retired packs this boot deleted; the next seal drops their ledger rows. */
@@ -297,19 +298,17 @@ export class SidecarCore {
    */
   restoreLazily(ports: LazyRestorePorts): LazyRestore {
     if (this.#view === null) throw new Error('a lazy restore needs an attached head; attach first');
-    const current = (): MerkleV2View => {
+    const readHead: ReadHead = async (read) => {
       const view = this.#view;
       if (view === null) throw new Error('the head this lazy restore serves is no longer attached');
-      return view;
+      this.#activeReaders += 1;
+      try {
+        return await read(view);
+      } finally {
+        this.#activeReaders -= 1;
+      }
     };
-    const head: HeadFilesystem = {
-      stat: (path) => current().stat(path),
-      readdir: (path) => current().readdir(path),
-      extents: (path) => current().extents(path),
-      readRange: (path, offset, length) => current().readRange(path, offset, length),
-      contentId: (path) => current().contentId(path),
-    };
-    const restore = new LazyRestore(head, ports, async (path, ino) => {
+    const restore = new LazyRestore(readHead, ports, async (path, ino) => {
       const attached = this.#head;
       const view = this.#view;
       if (attached === null || view === null) throw new Error('a restored inode needs a published head');
@@ -729,12 +728,13 @@ export class SidecarCore {
     const head = this.#head;
     if (head === null) return ZERO_GC;
     const ledger = await this.#readLedger(head.envelope.ledger, 'gc');
+    if (this.#activeReaders > 0) return ZERO_GC;
     const grace = this.#ports.graceMs ?? DEFAULT_GRACE_MS;
     const due = deletableRetiredPacks(ledger.retired, this.#ports.now(), grace)
       .filter((key) => !this.#deleted.has(key));
     if (due.length === 0) return ZERO_GC;
     for (const key of due) {
-      await this.#ports.payload.deleteObject?.(key);
+      await this.#ports.payload.deleteObject(key);
       this.#deleted.add(key);
     }
     this.#gc = { ...this.#gc, deletes: this.#gc.deletes + due.length };

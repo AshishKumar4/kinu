@@ -2691,6 +2691,7 @@ function headFilesystemForRestore(view: BoundedLayers): HeadFilesystem {
     readdir: async (path) => view.readdir(path),
     extents: async (path) => view.extents(path),
     readRange: async (path, offset, length) => await view.readRange(path, offset, length),
+    contentId: async (path) => `${view.rootId}:${path}`,
   };
 }
 class MountedPayloadStore implements CandidatePayloadStore {
@@ -3154,7 +3155,8 @@ function boundedLayersArm(): ConformanceArm {
         expiresAt: '99999999999999',
       };
       const view = await openBoundedLayers(head.envelope.rootObject, this.#payload(), identity);
-      const restore = new LazyRestore(headFilesystemForRestore(view), {
+      const filesystem = headFilesystemForRestore(view);
+      const restore = new LazyRestore(async (read) => await read(filesystem), {
         place: (path, offset, bytes) => this.tree.hydrate(path, offset, bytes),
         drop: (path, offset, length) => this.tree.dehydrate(path, offset, length),
         now: () => clock,

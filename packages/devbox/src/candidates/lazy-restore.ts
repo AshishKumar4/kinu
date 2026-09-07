@@ -60,10 +60,12 @@ export interface HeadFilesystem {
   readdir(path: string): Promise<readonly string[]>;
   extents(path: string): Promise<readonly FileExtent[]>;
   readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
-  /** A location-free identity of one file's content. A head without one is
-   *  compared by geometry alone, which misses a same-length rewrite. */
-  contentId?(path: string): Promise<string>;
+  /** Stable for the file content within this immutable head. */
+  contentId(path: string): Promise<string>;
 }
+
+/** Acquire one immutable head for the complete asynchronous operation. */
+export type ReadHead = <T>(read: (head: HeadFilesystem) => Promise<T>) => Promise<T>;
 
 /** Where paged-in bytes land, and when they are released. */
 export interface LazyRestorePorts {
@@ -94,26 +96,17 @@ function geometryOf(size: number, extents: readonly FileExtent[]): FileGeometry 
   return { size, data };
 }
 
-/** A placeholder's identity: the head's content id when it serves one, and
- *  the geometry otherwise. */
+/** Identity and geometry of the immutable file a placeholder names. */
 interface PlaceholderIdentity {
-  readonly contentId: string | null;
+  readonly contentId: string;
   readonly geometry: FileGeometry;
 }
 
 async function identityOf(head: HeadFilesystem, path: string, stat: HeadStat): Promise<PlaceholderIdentity> {
-  const [extents, contentId] = await Promise.all([head.extents(path), head.contentId?.(path) ?? null]);
+  const [extents, contentId] = await Promise.all([head.extents(path), head.contentId(path)]);
   return { contentId, geometry: geometryOf(stat.size, extents) };
 }
 
-function sameIdentity(a: PlaceholderIdentity, b: PlaceholderIdentity): boolean {
-  if (a.contentId !== null && b.contentId !== null) return a.contentId === b.contentId;
-  if (a.geometry.size !== b.geometry.size || a.geometry.data.length !== b.geometry.data.length) return false;
-  return a.geometry.data.every((span, at) => {
-    const other = b.geometry.data[at];
-    return other !== undefined && span.offset === other.offset && span.length === other.length;
-  });
-}
 
 /**
  * One published head, restored lazily over one container.
@@ -125,7 +118,7 @@ function sameIdentity(a: PlaceholderIdentity, b: PlaceholderIdentity): boolean {
  * the sweep.
  */
 export class LazyRestore {
-  readonly #head: HeadFilesystem;
+  readonly #readHead: ReadHead;
   readonly #residency: Residency;
   /** Placeholders handed out already, by the inode the head gave them. Two
    *  names on one inode are a hardlink, and the container must share it. */
@@ -137,16 +130,16 @@ export class LazyRestore {
   readonly #registered = new Map<string, PlaceholderIdentity>();
 
   constructor(
-    head: HeadFilesystem,
+    readHead: ReadHead,
     ports: LazyRestorePorts,
     private readonly onBindInode?: (path: string, ino: number) => Promise<void>,
   ) {
-    this.#head = head;
+    this.#readHead = readHead;
     this.#residency = new Residency({
-      read: async (path, offset, length) => {
-        await this.#assertUnmoved(path);
-        return await head.readRange(path, offset, length);
-      },
+      read: async (path, offset, length) => await readHead(async (snapshot) => {
+        await this.#assertUnmoved(snapshot, path);
+        return await snapshot.readRange(path, offset, length);
+      }),
       place: ports.place,
       drop: ports.drop,
       now: ports.now,
@@ -157,15 +150,15 @@ export class LazyRestore {
 
   /** Refuse a page-in for a path the current head describes differently from
    *  the head its placeholder came from. */
-  async #assertUnmoved(path: string): Promise<void> {
+  async #assertUnmoved(head: HeadFilesystem, path: string): Promise<void> {
     const registered = this.#registered.get(path);
     if (registered === undefined) return;
-    const stat = await this.#head.stat(path);
+    const stat = await head.stat(path);
     if (stat === null || stat.kind !== 'file') {
       throw new Error(`lazy restore: ${JSON.stringify(path)} is no longer a file in the current head`);
     }
-    const current = await identityOf(this.#head, path, stat);
-    if (!sameIdentity(registered, current)) {
+    const current = await identityOf(head, path, stat);
+    if (registered.contentId !== current.contentId) {
       throw new Error(`lazy restore: ${JSON.stringify(path)} changed under its placeholder; hydrate before the head moves`);
     }
   }
@@ -176,13 +169,15 @@ export class LazyRestore {
    * payload at all. One record read per child, and nothing below them.
    */
   async list(dir: string): Promise<readonly NodeEntry[]> {
-    const entries: NodeEntry[] = [];
-    for (const name of await this.#head.readdir(dir)) {
-      const path = dir === '' ? name : `${dir}/${name}`;
-      const entry = await this.placeholder(path);
-      if (entry !== null) entries.push(entry);
-    }
-    return entries;
+    return await this.#readHead(async (head) => {
+      const entries: NodeEntry[] = [];
+      for (const name of await head.readdir(dir)) {
+        const path = dir === '' ? name : `${dir}/${name}`;
+        const entry = await this.#placeholder(head, path);
+        if (entry !== null) entries.push(entry);
+      }
+      return entries;
+    });
   }
 
   /**
@@ -191,7 +186,11 @@ export class LazyRestore {
    * learns the path exists, and the first read is what pays for its bytes.
    */
   async placeholder(path: string): Promise<NodeEntry | null> {
-    const stat = await this.#head.stat(path);
+    return await this.#readHead(async (head) => await this.#placeholder(head, path));
+  }
+
+  async #placeholder(head: HeadFilesystem, path: string): Promise<NodeEntry | null> {
+    const stat = await head.stat(path);
     if (stat === null) return null;
     const metadata = stat.metadata ?? RESTORED_METADATA;
     const ino = stat.ino ?? 0;
@@ -199,7 +198,7 @@ export class LazyRestore {
     if (stat.kind === 'symlink') {
       return { path, kind: 'symlink', mode: stat.mode, ino, metadata, target: stat.target ?? '' };
     }
-    const identity = await identityOf(this.#head, path, stat);
+    const identity = await identityOf(head, path, stat);
     this.#registered.set(path, identity);
     this.#residency.register(path, identity.geometry);
     this.#inodePaths.set(ino, this.#inodePaths.get(ino) ?? path);
@@ -245,6 +244,7 @@ export class LazyRestore {
    *  reach bytes the head does not hold. */
   forget(path: string): void {
     this.#residency.forget(path);
+    this.#registered.delete(path);
   }
 
   /** Does this path still page in through this restore — a live placeholder

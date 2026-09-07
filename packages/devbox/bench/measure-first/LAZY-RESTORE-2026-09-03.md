@@ -429,4 +429,29 @@ does not measure FUSE lazy hydration, cloud timing, backup retention or
 full restore after loss of control storage. No arm earns admission from it.
 
 
+## One head per page-in operation, 2026-09-07
+
+The content-identity check in `579d92efd` still had a check/use race. A
+held identity lookup validated `old bytes`. A concurrent publication then
+changed the head, and the range read returned `new bytes`. The regression
+failed with those exact strings. Lazy restore now acquires one immutable
+view for identity, metadata and payload within each asynchronous operation.
+All head adapters supply an identity; geometry-only fallback is removed.
+
+The sidecar tracks these active read operations. Its GC waits until they
+finish rather than assuming a grace interval bounds their duration. With
+zero grace, a held read survived publication and compaction, returned the
+original bytes, and GC deleted retired packs only after release. This
+protects readers owned by this sidecar. It does not establish distributed
+reader leases or lazy fault handling in the real FUSE mount.
+
+That regression also exposed inventory-only compaction failing the root
+receipt check. Compaction now emits its root even when only unreachable
+packs retire. Re-emitting an identical content-addressed pack updates one
+ledger row and removes its pending retirement, rather than duplicating the
+key. An empty-tree compaction then restored an empty directory after GC
+and a fresh boot. The v2, sidecar and contract suites passed 58 tests;
+the conformance suite passed 144.
+
+
 
