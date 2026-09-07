@@ -4,7 +4,7 @@ ARG LIBFUSE_VERSION=3.17.1
 ARG LIBFUSE_SHA256=2d8ae87a4525fbfa1db5e5eb010ff6f38140627a7004554ed88411c1843d51b2
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential ca-certificates curl libssl-dev meson ninja-build pkg-config \
+ && apt-get install -y --no-install-recommends build-essential ca-certificates curl libssl-dev libsqlite3-dev meson ninja-build pkg-config \
  && rm -rf /var/lib/apt/lists/*
 RUN curl --fail --location --silent --show-error \
       "https://github.com/libfuse/libfuse/releases/download/fuse-${LIBFUSE_VERSION}/fuse-${LIBFUSE_VERSION}.tar.gz" \
@@ -20,15 +20,17 @@ RUN curl --fail --location --silent --show-error \
 COPY journal-daemon.c /usr/local/src/kinu-journal-daemon.c
 COPY journal-delta.c /usr/local/src/journal-delta.c
 COPY journal-delta.h /usr/local/src/journal-delta.h
+COPY journal-namespace.c /usr/local/src/journal-namespace.c
+COPY journal-namespace.h /usr/local/src/journal-namespace.h
 RUN cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O2 \
       -I/usr/local/src \
-      /usr/local/src/kinu-journal-daemon.c /usr/local/src/journal-delta.c \
+      /usr/local/src/kinu-journal-daemon.c /usr/local/src/journal-delta.c /usr/local/src/journal-namespace.c \
       -o /usr/local/bin/kinu-journal-daemon \
-      $(pkg-config --cflags --libs fuse3) -lcrypto -pthread
+      $(pkg-config --cflags --libs fuse3) -lcrypto -lsqlite3 -pthread
 # The shutdown races the matrix asserts on resolve cleanly most of the time, so
 # the matrix reruns the same shutdowns against this build, which reports them.
 RUN cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O1 -g -fsanitize=thread \
       -I/usr/local/src \
-      /usr/local/src/kinu-journal-daemon.c /usr/local/src/journal-delta.c \
+      /usr/local/src/kinu-journal-daemon.c /usr/local/src/journal-delta.c /usr/local/src/journal-namespace.c \
       -o /usr/local/bin/kinu-journal-daemon-tsan \
-      $(pkg-config --cflags --libs fuse3) -lcrypto -pthread
+      $(pkg-config --cflags --libs fuse3) -lcrypto -lsqlite3 -pthread

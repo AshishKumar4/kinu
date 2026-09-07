@@ -1038,6 +1038,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - A v2 devbox lazy restore reads the current head on every call; on 2026-09-06 a container that adopted one before four publishes, a compaction and a GC sweep read a deleted pack before the fix and its bytes after it.
 - The v2 devbox sidecar runs against the real journal daemon in a privileged test; the 2026-09-06 run fixed a published hidden name, a WAL byte trigger that counted 0, stale hardlink twins, refused bases after compaction, and mixed-generation page-ins.
 - The devbox daemon uses inode-based low-level FUSE operations; a 2026-09-07 real-mount probe preserved an open file renamed to a caller-authored `.fuse_hidden` name that the prior heuristic omitted from its fence.
+- The devbox daemon persists logical inode aliases; on 2026-09-07 a real-mount regression preserved a hardlink update after ancestor rename, daemon restart and unlink of the only observed name.
 
 ## [0.2.0] - 2026-08-07
 

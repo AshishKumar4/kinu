@@ -40,9 +40,8 @@
 struct journal_dirty_file {
   uint64_t ino;
   uint64_t size;
-  /* The largest link count a write to this inode saw. Above one, a fence
-   * whose touched names no longer hold the inode walks the tree for the
-   * names that do. */
+  /* The largest observed link count. Shared and unnamed live inodes need
+   * reverse-alias lookup when constructing the fence. */
   uint64_t nlink;
   char *path; /* the path a write named, owned */
   uint64_t *offsets; /* sorted, disjoint, owned */
@@ -202,6 +201,9 @@ struct journal_delta_request {
   uint64_t since;
   uint64_t max_chunk;
   const struct journal_boundaries *boundaries;
+  int (*resolve_aliases)(void *context, uint64_t inode, int (*emit)(void *, const char *), void *emit_context);
+  void *alias_context;
+  int (*logical_inode)(void *context, const char *path, uint64_t *inode);
   bool has_base;
   uint64_t base_cut;
   uint64_t base_generation;

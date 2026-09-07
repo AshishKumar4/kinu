@@ -453,5 +453,55 @@ key. An empty-tree compaction then restored an empty directory after GC
 and a fresh boot. The v2, sidecar and contract suites passed 58 tests;
 the conformance suite passed 144.
 
+## Persisted daemon-owned aliases, 2026-09-07
+
+The low-level lookup cache did not contain every surviving alias after a
+daemon restart. Opening one hardlink, unlinking that name, then writing
+through its descriptor left the unobserved sibling stale at publication.
+The real-mount regression found a 21-byte local file against a 20-byte
+restored file. It now passes, including an ancestor directory rename
+before the daemon dies.
+
+`journal-namespace.c` owns stable logical inode IDs and parent-ID/name
+aliases in SQLite. Kernel lookup handles refer to those IDs and may be
+evicted without deleting namespace state. W records and fence entries
+carry the same logical IDs. Reverse lookup uses the alias index; the
+per-fence filesystem walk is removed. Initial ingestion remains a tree
+walk and is charged separately. Local device/inode bindings and the local
+root fingerprint live in a separate SQLite database.
+
+A standalone run of the compiled namespace module used 1,000 and 50,000
+unrelated empty files plus a nested hardlink pair. It renamed the ancestor,
+resolved both aliases, closed the database, reopened it and resolved them
+again. SQLite counters cover its cached prepared statements and page cache.
+The prepared-step count excludes schema setup and transaction-control SQL.
+
+| Measurement | 1,000 unrelated files | 50,000 unrelated files |
+|---|---:|---:|
+| Initial entries ingested | 1,004 | 50,004 |
+| Initial ingestion ms | 9.233 | 213.927 |
+| Rename and reverse-lookup ms | 0.043 | 0.038 |
+| Rename and reverse-lookup prepared steps | 239 | 239 |
+| Rename page writes | 2 | 2 |
+| Reopen ms | 0.395 | 0.286 |
+| Reopen page reads | 9 | 10 |
+| Reopen entries ingested | 0 | 0 |
+| Alias resolution and path lookup page reads | 6 | 10 |
+| Alias resolution and path lookup prepared steps | 183 | 183 |
+| Prepared full-scan steps in either operation | 0 | 0 |
+
+The real-daemon, R2 transport, v2 and sidecar suites passed 36 tests, with
+one inactive narrowed-matrix variant. Namespace format genesis is explicit.
+A pre-existing WAL without this namespace format exits 3 with
+`namespace.open_failed code=-116`; it requires an environment reset.
+
+These are local index measurements. Namespace pages are not yet exported
+with the published head or fetched through a lazy SQLite VFS. The earlier
+one-read attach figure opens a Merkle root while the real backing tree
+already exists. It does not prove a cold mount on a replacement container.
+Fence-coupled namespace export and lazy remote page lookup remain admission
+requirements. No cloud pilot or storage promotion follows from this step.
+
+
 
 
