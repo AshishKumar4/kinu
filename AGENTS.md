@@ -372,7 +372,9 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 - **The AI SDK is not a preference and replacing it is not an option** — asked and answered 2026-08-17, do not reopen without new evidence. `ai` is a REQUIRED peer of `@cloudflare/think` (only `@ai-sdk/react`, `@chat-adapter/telegram`, `react` and `vite` are optional there), `ActorAgent extends Think<Env>`, and every override point is SDK-typed: `getModel(): LanguageModel`, `getTools(): ToolSet`, `beforeTurn(TurnContext{ModelMessage[], ToolSet, LanguageModel})`, `TurnConfig.stopWhen: StopCondition<ToolSet>`. Think does not merely import it — `think.js:7` does `import * as aiSdk from "ai"`, `:301` feature-detects `"registerTelemetry" in aiSdk`, and `:2827` calls `wrapAISDK(aiSdk, …).streamText`, so it branches on which MAJOR of `ai` is installed at runtime. Nor is the CLI the cheap side to swap: `cli-backend/src/local-session.ts:63` drives `runChat` from `@kinu.run/core`, which IS `core/src/chat.ts`, and core holds 54 of the 86 SDK source files. Plus ~1,423 lines of `LanguageModelV2` implementations (`claude-cli-provider.ts`, `opencode-provider.ts`, `providers/codex.ts`) exist only because an SDK model is BEHAVIOUR; alternatives model it as data. Reasoning of record: maximum code reuse across backends, with most logic in core. Full audit: `docs/research/sdk-dependency.md` (gitignored)
 - `@earendil-works/pi-*` is a BENCH SUBJECT only (`scripts/bench-pi-worker.ts`), never a runtime dependency. Ideas may be borrowed with citation; a second AI stack may not be added. **Two different codebases have been cited under one name — keep them apart.** `@earendil-works/pi-*` is UPSTREAM **pi** (Mario Zechner), which ships no sub-agents at all (its `README.md:500`: "**No sub-agents.** … Spawn pi instances via tmux, or build your own with extensions"), so nothing about delegation may be attributed to it. **oh-my-pi** is `can1357/oh-my-pi`, a hard fork at 17.3.7, and it is the source of the `hashline` and `task`-`context` citations
 - `@callable()` decorator for RPC methods exposed to the React UI
-- A tool that cannot do what it was asked answers with a CLASS, never with prose alone: `{ reason: ErrorCode, error: string }`, reason first. `KinuError`/`ErrorCode`/`toKinuError` in `@kinu.run/core/obs` build it, `refusalText` (`execution/exec-result.ts`) puts it on the string channel every executor tool answers on, and `read-models/tool-failures.ts` is the reader that branches on the class. All five executor tools are converted — `sandbox`, `nimbus`, `parent`, `device-tunnel-executor`, `inline` — so a returned `exec error: …` string is now a regression, not a convention to copy. The residue is listed and reasoned in [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) § "What is NOT converted"; `neverthrow` was REJECTED with evidence and must not be added — see § "Why not neverthrow"
+- Executor command methods return `CommandResult`: successful rendered output or a structured refusal from `commandResult`/`refusalOf`. Preserve observed `execution.exitCode`; a denied call has no observed process exit. Successful output remains data even when it resembles an error.
+- Native tool failures use the SDK error channel. The shared `ToolOutcome` records their status and provenance before formatting. Namespace adapters retain branchable refusals; handled refusals do not fail the enclosing program. Read `docs/EXECUTION-LAYER-SPEC.md` and `docs/OBSERVABILITY.md` when changing either boundary.
+- Model feedback projects known native failures from original SDK error entries into reason-first structured errors before admission and caching. Never infer status from result text or arbitrary JSON fields. Historical missing outcome evidence stays unmeasured.
 - Executor tools use positional args (`positionalArgs: true`) for codemode
 - No elapsed LLM, turn, delegation, swarm or compaction deadline. Work ends on provider completion, a definitive failure, or explicit cancellation. Provider rate limits use unbounded capped-backoff retry until cancellation.
 
@@ -391,7 +393,6 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
 - Never log a secret, and never log an object you have not looked inside: no `apiKey`, `authorization`, `body`, `content`, `credential`, `header(s)`, `password`, `prompt`, `secret`, `soul`, `systemPrompt`, `token`. `ReservedLogField` in `@kinu.run/core/obs` makes that a type: a log call carrying one fails to COMPILE, through a variable, an interface, a spread or an index signature alike. A cast still defeats it, and `require-safety-comment-for-type-assertion` makes the cast a written admission
 - Every log carries a stable dotted event name (`capability.read_failed`). That is what makes a failure greppable across Workers Logs and the CLI journal
 - Enforced mechanically by the `no-empty-catch`, `no-sentinel-catch`, `require-cause-on-rethrow` and `no-ddl-in-catch` anti-slop rules. Never add an `oxlint-disable` to pass one
-- A refusal carries its classification, reason FIRST (`{ reason: ErrorCode, error }` via `refusalOf`), because every seam that shows a result to a human or hashes it for steering bounds it to a head slice, and the prose is the long part. Precedents, cited by name because these lines rot: `failure()` in `tools/file-tool.ts`, the `createTool` catch in `execution/inline.ts`, `unsupported()` in `strategy/swarm-run.ts`, and the refusal helper in `strategy/merge-back.ts`
 - `classifyErrorCode` answers `null` when nothing pinned recognises a failure, and `toKinuError` therefore REQUIRES an `otherwise` from its caller. An unknowable cause is a value, never a guessed code: `Worker exceeded resource limits` is what the client sees for BOTH an isolate memory kill and a CPU-time kill, so it is not in the OOM matcher
 - The `Observability`/`Tracer` seam is WIRED at **six** production boundaries, measured 2026-08-24 by grepping `this.tracing.invocation`: `orchestrator.ts` `_kinuTimerTick` (`alarm`/`tick`), `recordHeadStep` (`rpc`/`head.record_step`), `actor-agent.ts` `nodeArbitrate` (`rpc`/`swarm.arbitrate`), `subordinate-agent.ts` `explore` (`rpc`/`mcts.branch`), `runAsHead` (`rpc`/`head.run`), `runAsNode` (`rpc`/`swarm.node`) — cited by name because the line numbers rotted twice in one week. Two of the four `InvocationKind` values are in use — `alarm` and `rpc` — while `fetch` and `websocket` are declared and unused. This bullet has now been wrong in BOTH directions within one day: it first claimed a test fixture was the only caller, then claimed exactly one production call site, and the second was stale the moment five more landed. Re-grep rather than trusting the sentence. The handle comes from the `tracing` getter on `ActorAgent`, which builds `createAgentTracing({tracer: createWorkersTracer(), isolateGen, selfPath})` once per construction; `createWorkersTracer` (`obs/cf-tracer.ts`) goes through `cloudflare:workers`' `tracing.enterSpan`, the only entry point available at our pin. `selfPath` rather than `ctx.id` because two facets with distinct ids both reported under the ROOT's `durableObjectId` on the deployed runtime, so an id-keyed trace collapses every head and node into one orchestrator. Spans are always scoped, and trace context does not survive a hibernation wake or a cold start. Across `alarm()` it is not merely absent but ENFORCED absent: `tracing.invocation` revokes the handle when the method's promise settles, so a span opened from anything that escaped the tick throws
 - The full contract, its status table and the unconverted boundary: [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)
@@ -444,21 +445,20 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
 ## Common Patterns
 
 ```typescript
-// Executor tool pattern — positional args, string returns, no throws.
-// The string is the CURRENT convention and a known defect (Code Style, above):
-// it carries no classification. Until the replacement lands, at least keep the
-// cause chain intact on anything that propagates rather than returning.
+// Executor command boundary: successful text or a structured refusal.
 tools.exec = {
   description: 'Run a command in the environment.',
-  execute: async (...args: unknown[]): Promise<string> => {
+  execute: async (...args): Promise<CommandResult> => {
     const command = parseInput(StringSchema, { value: args[0] });
-    if (command === undefined) return 'exec error: command must be a string';
-    if (!connected) return NOT_CONNECTED_MSG;
+    if (command === undefined) {
+      return refusalOf(new KinuError('bad_input', 'laptop exec: command must be a string'));
+    }
+    const signal = readExecSignal({ context: args[1] });
     try {
-      const result = await doExec(command);
-      return result.stdout || '(no output)';
-    } catch (caught) {
-      return `exec error: ${errorMessage({ error: caught })}`;
+      return commandResult(await doExec(command, signal ? { signal } : undefined));
+    } catch (cause) {
+      if (isAbortError(cause)) throw cause;
+      return refusalOf(deviceFailure({ doing: 'running the device command', cause }));
     }
   },
 };
