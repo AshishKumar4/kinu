@@ -22,7 +22,7 @@ import type { UserCaller } from '../../src/user/workspace-capability';
 import type { UserDO } from '../../src/user/user-do';
 import { shadowTrialPlan, claimToolEffect } from '@kinu.run/core';
 import {
-  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
+  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, resolveAgentTurnProfile,
   type AgentOrchestrator, type AgentRuntime, type CompletedTurn, type DynamicContext,
   type IngressDescriptor, type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type RunEndReason, type SqlValue, type SubordinateRosterStore,
@@ -688,6 +688,18 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** A live turn, which no test can produce without a model. */
   declareTurnInFlight(inFlight: boolean): void { this._inFlight = inFlight; }
+  /** Resolve and install the turn's profile the way `beforeTurn` does, over the
+   *  named surface, so a suite can hold a live turn's reach without a model. */
+  async harnessOpenTurnProfile(availableTools: readonly string[]): Promise<void> {
+    this.installTurnProfile(resolveAgentTurnProfile({
+      ...(await this.profileInputs()),
+      activeRoleId: this.config.getRoleSelection(),
+      workMode: 'build',
+      availableTools,
+      activeSkills: [],
+    }));
+    this._inFlight = true;
+  }
   /** The per-step dynamic context, assembled exactly as a model step sees it —
    *  the shared core assembler over this actor's own stores. */
   observeDynamicContext(): DynamicContext { return this.dynamicContextSnapshot(); }
@@ -737,6 +749,19 @@ export class HarnessSubordinateAgent extends SubordinateAgent {
   /** The identity this facet stamps on its slate operations — the production
    *  method, so a suite acts AS the facet on the owner rather than forging one. */
   observeSlateCaller() { return this.slateCaller(); }
+  /** A live turn's reach, held the way `beforeTurn` holds it: resolved over the
+   *  named surface and installed, with the turn in flight until `declareTurnInFlight(false)`. */
+  async harnessOpenTurnProfile(availableTools: readonly string[]): Promise<void> {
+    this.installTurnProfile(resolveAgentTurnProfile({
+      ...(await this.profileInputs()),
+      activeRoleId: this.config.getRoleSelection(),
+      workMode: 'build',
+      availableTools,
+      activeSkills: [],
+    }));
+    this._inFlight = true;
+  }
+  declareTurnInFlight(inFlight: boolean): void { this._inFlight = inFlight; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
   /** The catalog this facet resolves roles from: builtin unless a suite installs one. */
   private harnessCatalog: ProfileCatalogEnvelope = HARNESS_PROFILE_ENVELOPE;
@@ -1200,8 +1225,11 @@ export async function hiredSubordinateHarness(
     roleId?: string;
     mission: string;
   },
+  /** The owner's world the child is hired INTO — the same UserDO its parent
+   *  was placed in, when a suite drives the owner plane for real. */
+  world?: HarnessActorWorld,
 ): Promise<ActorHarness<HarnessSubordinateAgent>> {
-  const harness = instantiate(HarnessSubordinateAgent, new Database(':memory:'), parent.agent);
+  const harness = instantiate(HarnessSubordinateAgent, new Database(':memory:'), parent.agent, undefined, world);
   Object.defineProperty(harness.agent, 'name', { value: identity.name, configurable: true });
   Object.defineProperty(harness.agent, 'parentPath', {
     value: [{ className: 'OrchestratorAgent', name: 'harness-parent' }],

@@ -3911,8 +3911,8 @@ export class OrchestratorAgent extends ActorAgent {
     return await this.rt.memory.read("memory/MEMORY.md") ?? "";
   }
 
-  /** The agent's read models, held to workspace.read by unit-slate-sources. */
-  private async slateReadModel(source: SlateReadModel): Promise<JsonValue> {
+  /** The workspace root's read models, held to workspace.read by unit-slate-sources. */
+  protected override async slateReadModel(source: SlateReadModel): Promise<JsonValue> {
     const reads = {
       getAlignmentConvergence: () => this.getAlignmentConvergence(),
       getExecutors: () => this.getExecutors(),
@@ -3949,7 +3949,6 @@ export class OrchestratorAgent extends ActorAgent {
       registerPort: (pid, port, target) => this.hostedWorkspace().registerPort(pid, port, target),
       unregisterPorts: (pid) => this.hostedWorkspace().unregisterPorts(pid),
       dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route),
-      data: (source) => this.slateReadModel(source),
       expose: async (port) => {
         const ports = this.hostedWorkspace().box('agent:main').ports;
         if (!ports?.expose) throw new KinuError('unsupported', 'Workspace port exposure is not available');
