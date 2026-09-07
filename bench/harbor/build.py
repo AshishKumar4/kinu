@@ -182,7 +182,11 @@ def _compile(repo_root: Path) -> KinuBuild:
     git_env = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
     revision = subprocess.run(["git", "-C", str(repo_root), "rev-parse", "HEAD"], capture_output=True, text=True, env=git_env)
     source_sha = revision.stdout.strip() if revision.returncode == 0 else None
-    dirty = subprocess.run(["git", "-C", str(repo_root), "diff", "--quiet", "HEAD"], capture_output=True, env=git_env)
+    status = subprocess.run(
+        ["git", "-C", str(repo_root), "status", "--porcelain=v1", "--untracked-files=all"],
+        capture_output=True, text=True, env=git_env,
+    )
+    source_dirty = status.returncode != 0 or bool(status.stdout)
 
     # Emit into the repo's own filesystem: bun's --compile writes a sparse file
     # that does not survive landing on a different device, and /tmp is often a
@@ -215,4 +219,4 @@ def _compile(repo_root: Path) -> KinuBuild:
     probe_binary(binary, repo_root / "node_modules")
     with binary.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    return KinuBuild(binary=binary, modules=modules, source_sha=source_sha, source_dirty=dirty.returncode != 0, binary_sha256=digest)
+    return KinuBuild(binary=binary, modules=modules, source_sha=source_sha, source_dirty=source_dirty, binary_sha256=digest)

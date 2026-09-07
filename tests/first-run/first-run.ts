@@ -343,10 +343,13 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
   observations: EvalObservation[],
 ): Promise<void> {
   const startedAt = Date.now();
-  const session = await plan.open({ subject: spec.id, purpose: spec.purpose });
-  console.warn(`    [first-run] ${spec.id} on ${session.describe}`);
+  let opened: Session | undefined;
   try {
-    await withEpisodeEvidence(session, { transcripts: TRANSCRIPTS, taskId: spec.id, modelCalls: spec.modelCalls }, async (collect) => {
+    await withEpisodeEvidence(async () => {
+      opened = await plan.open({ subject: spec.id, purpose: spec.purpose });
+      return opened;
+    }, { transcripts: TRANSCRIPTS, taskId: spec.id, modelCalls: spec.modelCalls }, async (session, collect) => {
+    console.warn(`    [first-run] ${spec.id} on ${session.describe}`);
     const subgoals = await spec.run({ session, plan });
 
     const { events, history } = await collect();
@@ -397,7 +400,7 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
     }
     throw error;
   } finally {
-    await session.teardown();
+    await opened?.teardown();
   }
 }
 
