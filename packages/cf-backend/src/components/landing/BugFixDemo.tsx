@@ -68,7 +68,7 @@ function candidateChip(candidate: DemoCandidate): ReactElement {
 }
 
 export function BugFixDemo(): ReactElement {
-  const [reduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const [reduced, setReduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const tRef = useRef(reduced ? DEMO_END : 0);
   const cueRef = useRef(cueCountAt(tRef.current));
   const [cueCount, setCueCount] = useState(cueRef.current);
@@ -194,6 +194,23 @@ export function BugFixDemo(): ReactElement {
   useLayoutEffect(() => {
     syncFrame();
   });
+
+  // A person can switch reduced motion on while the story plays. The demo
+  // settles to its final state at once and hides its playback controls.
+  useEffect(() => {
+    const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const preferenceChanged = (): void => {
+      setReduced(preference.matches);
+      if (!preference.matches) return;
+      startedRef.current = true;
+      tRef.current = DEMO_END;
+      setPlaying(false);
+      syncDiscrete();
+      syncFrame();
+    };
+    preference.addEventListener('change', preferenceChanged);
+    return () => preference.removeEventListener('change', preferenceChanged);
+  }, []);
 
   useEffect(() => {
     const stage = stageRef.current;
