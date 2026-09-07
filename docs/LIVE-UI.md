@@ -135,6 +135,20 @@ The preview router distinguishes lifecycle states before booting anything:
   and expose the process again; visiting the stale URL does not restore it.
 - An unknown or mismatched capability returns HTTP 404.
 
+Slate exposures also retain a logical owner: workspace, slate id and the full
+calling actor identity. The existing Nimbus capability record stores that owner
+with the token. A rebuild of the same logical owner can keep its URL; reusing a
+port for another slate or caller cannot inherit the previous URL, even before
+the new caller explicitly exposes it. Ordinary workspace exposures remain
+port-scoped (owner `null`), separate from slate ownership.
+
+The scalar-token record is replaced directly by `{capability, owner}`; there is
+no conversion path. Old-format preview links cease to authorize requests after
+deployment. `workspace.unexposePort(port)` deletes the existing persisted key
+even when no listener remains; no user/authentication reset is necessary.
+`getExposedPorts("workspace")` lists live listeners, not orphaned exposure keys,
+so an empty list does not establish that every old persisted key was removed.
+
 Visitor-supplied `x-slate-depth` is stripped before routing, so a preview visitor
 cannot choose the internal app-call depth.
 

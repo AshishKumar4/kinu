@@ -118,6 +118,64 @@ index e6f176cfa6467893b4d4afa7d1e9fe3f9fefd46c..230d649e4598eeefb49c3b9d99a553f6
          }
          // ── Lazy fetch-proxy ────────────────────────────────────────────
          // The fetch-proxy is a singleton dynamic worker (LOADER.load) that
+diff --git a/dist/session/port-capability.d.ts b/dist/session/port-capability.d.ts
+index 34667e6ef7324ae9c9d9304e0412f3522070192c..0b30cbd27bf59eed179fcdb4b621700e704aab61 100644
+--- a/dist/session/port-capability.d.ts
++++ b/dist/session/port-capability.d.ts
+@@ -26,6 +26,8 @@ export interface PortCapabilityHost {
+         };
+     };
+     portRegistry: PortRegistry;
++    /** Stable logical owner for an embedded process; null retains ordinary port-scoped exposure. */
++    portCapabilityOwner?(port: number): string | null;
+ }
+ export declare function readPortCapability(self: PortCapabilityHost, port: number): Promise<string | null>;
+ /**
+diff --git a/dist/session/port-capability.js b/dist/session/port-capability.js
+index f50e8d2271012d6a728bafedd42b2d047fd3122d..5c2201d2dc5390fd1d1f774292ae5bdf8cb0b63b 100644
+--- a/dist/session/port-capability.js
++++ b/dist/session/port-capability.js
+@@ -19,12 +19,16 @@ import { z } from 'zod/v4';
+ import { PORT_CAPABILITY_KEY_PREFIX } from './keys.js';
+ /** The shape `createPortCapability` mints: 12 random bytes, hex. */
+ const PortCapabilitySchema = z.string().regex(/^[a-f0-9]{24}$/);
++const PortExposureSchema = z.object({ capability: PortCapabilitySchema, owner: z.string().nullable() });
++function owner(self, port) {
++    return self.portCapabilityOwner?.(Number(port)) ?? null;
++}
+ function key(port) {
+     return `${PORT_CAPABILITY_KEY_PREFIX}${Number(port)}`;
+ }
+ export async function readPortCapability(self, port) {
+-    const stored = PortCapabilitySchema.safeParse(await self.ctx.storage.get(key(port)));
+-    return stored.success ? stored.data : null;
++    const stored = PortExposureSchema.safeParse(await self.ctx.storage.get(key(port)));
++    return stored.success && stored.data.owner === owner(self, port) ? stored.data.capability : null;
+ }
+ /**
+  * Re-adopt the persisted capability into whatever the registry holds now.
+@@ -37,7 +41,7 @@ export async function restorePortCapability(self, port) {
+     return self.portRegistry.restoreCapability(Number(port), stored) ? stored : null;
+ }
+ export async function persistPortCapability(self, port, capability) {
+-    await self.ctx.storage.put(key(port), PortCapabilitySchema.parse(capability));
++    await self.ctx.storage.put(key(port), { capability: PortCapabilitySchema.parse(capability), owner: owner(self, port) });
+ }
+ /**
+  * Retire the durable capability for a port. Called before every registration
+diff --git a/dist/session/programmatic.d.ts b/dist/session/programmatic.d.ts
+index 6f9c59df4771b94ca87159573e14aef621c9575a..5b1df8501a85103c7ecc8c6e379fe57316812067 100644
+--- a/dist/session/programmatic.d.ts
++++ b/dist/session/programmatic.d.ts
+@@ -64,6 +64,8 @@ export interface ProgrammaticHost {
+     sqliteFs: SqliteVFS | null;
+     processes: SessionProcessSupervisor;
+     portRegistry: PortRegistry;
++    /** Stable logical owner for an embedded process; null retains ordinary port-scoped exposure. */
++    portCapabilityOwner?(port: number): string | null;
+     facetManager: ProgrammaticFacetManager | null;
+     viteDevServer: ProgrammaticViteServer | null;
+     cirrusReal: ProgrammaticCirrusServer | null;
 diff --git a/dist/session/routes.js b/dist/session/routes.js
 index 49a5a147a98d302f9a89df7a0dcaf8fccfc4c718..23e3860c255aa4c389fc113d04750798aad9d611 100644
 --- a/dist/session/routes.js

@@ -192,7 +192,7 @@ export interface HostedWorkspace {
    * same memoized open with the same failure-clearing retry.
    */
   supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult>;
-  registerPort(pid: number, port: number, target: RouteableFacetTarget): Promise<void>;
+  registerPort(pid: number, port: number, target: RouteableFacetTarget, owner?: string): Promise<void>;
   unregisterPorts(pid: number): void;
   /**
    * Route a preview request whose signed hostname the edge has already
@@ -234,23 +234,16 @@ const RECYCLED_PREVIEW = {
   }),
 } as const;
 
-/**
- * The durable half of a port's capability, as Nimbus's session layer persists
- * it: `nimbus_preview_capability:<port>` in the object's own KV storage, written
- * at the moment the embedder is handed the URL and retired on every fresh
- * registration.
- *
- * Read here rather than through the worker package because the hosted
- * workspace IS the embedder: the row sits in this object's `ctx.storage` and
- * the value is the same one `ports.expose` answered with. Only the 24-hex
- * minted shape is accepted, exactly as `readPortCapability` itself does.
- */
-async function readWorkspacePortCapability(
-  ctx: DurableObjectState,
-  port: number,
-): Promise<string | null> {
+/** The existing Nimbus exposure record. A logical owner scopes embedded apps;
+ * ordinary explicitly exposed workspace ports retain null, port-scoped ownership. */
+const WorkspacePortExposureSchema = v.object({
+  capability: v.pipe(v.string(), v.regex(/^[a-f0-9]{24}$/)),
+  owner: v.nullable(v.string()),
+});
+
+async function readWorkspacePortCapability(ctx: DurableObjectState, port: number) {
   const stored = await ctx.storage.get(`nimbus_preview_capability:${Number(port)}`);
-  const parsed = v.safeParse(v.pipe(v.string(), v.regex(/^[a-f0-9]{24}$/)), stored);
+  const parsed = v.safeParse(WorkspacePortExposureSchema, stored);
   return parsed.success ? parsed.output : null;
 }
 
@@ -284,6 +277,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
   // outlived its isolate names a port nobody is listening on until the agent
   // re-exposes it. `routePreview` is where that distinction becomes an answer.
   const portRegistry = new PortRegistry();
+  const portOwners = new Map<number, string>();
   let composing: Promise<ProgrammaticHost> | undefined;
   const host = async (): Promise<ProgrammaticHost> => {
     composing ??= (async (): Promise<ProgrammaticHost> => {
@@ -302,7 +296,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // `npm install` streams in process — one tarball entry at a time,
         // never a buffered whole — so neither exhausts this isolate the way
         // the guard's refusal claimed they would.
-        return programmaticHost(session, portRegistry, deps);
+        return programmaticHost(session, portRegistry, deps, portOwners);
       } catch (cause) {
         // Same rule as the bundle's `booting` and `planes`: this host lives for
         // the whole actor isolate, and a cached rejection would poison every
@@ -330,15 +324,18 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       boxes.set(shellId, built);
       return built;
     },
-    async registerPort(pid, port, target) {
+    async registerPort(pid, port, target, owner) {
       const occupied = portRegistry.get(port);
       if (occupied !== undefined && occupied.pid !== pid) throw new KinuError('io', `Workspace port ${port} is already in use`);
+      if (owner !== undefined) portOwners.set(pid, owner);
       portRegistry.bindFacetStub(pid, target);
       portRegistry.register(port, pid);
       const retained = await readWorkspacePortCapability(deps.ctx, port);
-      if (retained !== null && portRegistry.get(port)?.pid === pid) portRegistry.restoreCapability(port, retained);
+      if (retained !== null && retained.owner === (owner ?? null) && portRegistry.get(port)?.pid === pid) {
+        portRegistry.restoreCapability(port, retained.capability);
+      }
     },
-    unregisterPorts(pid) { portRegistry.unregisterByPid(pid); },
+    unregisterPorts(pid) { portRegistry.unregisterByPid(pid); portOwners.delete(pid); },
     async routePreview(port, handle, request, pathname) {
       const capability = portRegistry.get(port)?.capability;
       // A port re-exposed under a fresh capability: the link named an exposure
@@ -357,7 +354,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // resolves again. A bare 404 would hide that from both the visitor and
         // the operator; this names it.
         const persisted = await readWorkspacePortCapability(deps.ctx, port);
-        if (persisted !== null && persisted.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) === handle) {
+        if (persisted !== null && persisted.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) === handle) {
           return new Response(RECYCLED_PREVIEW.body, {
             status: RECYCLED_PREVIEW.status,
             headers: { 'cache-control': 'no-store', 'content-type': 'application/json' },
@@ -399,10 +396,15 @@ function programmaticHost(
   session: WorkspaceSession,
   portRegistry: PortRegistry,
   deps: HostedWorkspaceDeps,
+  portOwners: ReadonlyMap<number, string>,
 ): ProgrammaticHost {
   const storage = deps.ctx.storage;
   const catalog = deps.env.NIMBUS_RUNTIME_CACHE;
   return {
+    portCapabilityOwner: (port) => {
+      const entry = portRegistry.get(port);
+      return entry === undefined ? null : portOwners.get(entry.pid) ?? null;
+    },
     _w1SessionDestroyed: false,
     // The runtime catalogue's bucket and nothing else: this env is read by
     // `nimbus install` alone, so handing over the actor's whole Env would put
