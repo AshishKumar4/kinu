@@ -2,12 +2,12 @@ diff --git a/packages/core/src/scaffold/inference-transform.ts b/packages/core/s
 index 201c0a7..77c8c30 100644
 --- a/packages/core/src/scaffold/inference-transform.ts
 +++ b/packages/core/src/scaffold/inference-transform.ts
-@@ -59,7 +59,7 @@ export function scaffoldInferenceTransform(opts: {
+@@ -57,7 +57,7 @@ export function scaffoldInferenceTransform(opts: {
    run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference'>;
  }): InferenceStreamResult {
    const { currentVersion, result, run } = opts;
--  if (currentVersion <= 0) return result;
-+  if (currentVersion < 0) return result;
+-  if (currentVersion <= 0 || run.workMode === 'plan' || currentWorkMode() === 'plan') return result;
++  if (currentVersion < 0 || run.workMode === 'plan' || currentWorkMode() === 'plan') return result;
  
    let delegated = false;
    return {
