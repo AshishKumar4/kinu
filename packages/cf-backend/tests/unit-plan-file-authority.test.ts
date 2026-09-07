@@ -20,8 +20,8 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
   if (planFile === undefined) throw new Error('Plan has no file inspection tool');
   const plan = toolExecute<JsonValue, JsonValue>(planFile);
   expect(await plan({ action: 'read', path })).toEqual(expect.stringContaining('original'));
-  expect(await plan({ action: 'edit', path, edits: [{ old_text: 'original', new_text: 'modified' }] }))
-    .toMatchObject({ reason: 'denied' });
+  await expect(plan({ action: 'edit', path, edits: [{ old_text: 'original', new_text: 'modified' }] }))
+    .rejects.toMatchObject({ code: 'denied' });
   expect(await files.readFile(path, { encoding: 'utf8' })).toBe('original');
   await agent.onChatResponse({
     message: { id: 'plan-answer', role: 'assistant', parts: [{ type: 'text', text: 'Inspection done.' }] },
@@ -35,7 +35,7 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
   await build({ action: 'read', path });
   expect(await build({ action: 'write', path, content: 'built' })).toMatchObject({ ok: true });
   expect(await files.readFile(path, { encoding: 'utf8' })).toBe('built');
-  expect(await plan({ action: 'write', path, content: 'late Plan overwrite' })).toMatchObject({ reason: 'denied' });
+  await expect(plan({ action: 'write', path, content: 'late Plan overwrite' })).rejects.toMatchObject({ code: 'denied' });
   expect(await files.readFile(path, { encoding: 'utf8' })).toBe('built');
 });
 

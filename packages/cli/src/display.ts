@@ -5,8 +5,8 @@
 
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall, parseRefusal } from '@kinu.run/core';
-import type { SearchNode, ReasoningEffort, JsonObject, JsonValue } from '@kinu.run/core';
+import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall } from '@kinu.run/core';
+import type { SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
 import { clipText } from './tui/format';
 import { guideFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
@@ -332,20 +332,11 @@ export function printToolCall(toolName: string, args: JsonObject): void {
   if (summary) console.log(`${DIM('  ')}${MUTED(summary)}`);
 }
 
-/**
- * A tool result, as a person reads it. A refusal — the `{reason, error}`
- * payload executor tools answer failures on (core exec-result.ts) — renders as
- * prose under a ✗, not as the JSON the model reads; everything else keeps the
- * five-line preview, and every cut carries an ellipsis saying it cut.
- */
-export function printToolResult(result: string): void {
-  const refusal = parseRefusal(result);
-  if (refusal) {
-    const [head, ...rest] = refusal.error.split('\n');
-    if (head) console.log(`${DIM('  ✗ ')}${ERR(head)} ${DIM(`(${refusal.reason})`)}`);
-    else console.log(`${DIM('  ✗ ')}${ERR(refusal.reason)}`);
-    for (const line of rest) console.log(`${DIM('      ')}${MUTED(line)}`);
-    console.log(DIM('  ' + '━'.repeat(44)));
+/** Display the recorded invocation status without interpreting output content. */
+export function printToolResult(result: string, outcome: ToolOutcome): void {
+  if (!outcome.success) {
+    console.log(ERR('  failed (' + (outcome.reason ?? 'unclassified') + ')'));
+    for (const line of result.split('\n')) console.log(MUTED('      ' + line));
     return;
   }
   const lines = result.split('\n');

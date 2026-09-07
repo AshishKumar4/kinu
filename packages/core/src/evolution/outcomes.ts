@@ -27,7 +27,6 @@ import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { tolerate } from '../obs/index';
-import { isFailingResultText } from '../execution/exec-result';
 
 /** Every outcome kind, in the ledger's canonical order. The one list — the
  *  table's CHECK constraint, the query filter and the changelog tally all
@@ -184,14 +183,9 @@ export type ExecutionVerdict = 'succeeded' | 'failed';
  *   • the turn's LAST acting call came back a failure → 'failed'.
  *   • otherwise → 'succeeded'.
  *
- * `hadError` alone is not the question, and reading only it is what made this
- * a fake reward. The accumulator raises that flag from the transport
- * discriminator (`success === false`), and the `run` tool catches a non-zero
- * exit and hands it back as an ordinary successful result whose text begins
- * `Error (exit N)`. So a turn whose single command exited 3 arrived here
- * flagless and was graded `accepted` at quality 0.70 — evolution paid a reward
- * for a command that failed. The call cards and the model's own steering hints
- * already read that text; `isFailingResultText` is that same one definition.
+ * Invocation outcomes are recorded before rendering. Neither command stdout nor
+ * a program's returned JSON is evidence of success or failure. Historical calls
+ * without this evidence stay unmeasured.
  *
  * The LAST acting call decides, not any of them, because an intermediate
  * failure the turn went on to fix is the system working: run the suite, see it
@@ -215,9 +209,8 @@ export function executionVerdict(
   const last = acting[acting.length - 1];
   if (last === undefined) return null;
   if (turn.hadError) return 'failed';
-  const result = last.result ?? '';
-  const text = v.is(v.string(), result) ? result : JSON.stringify(result);
-  return isFailingResultText(text) ? 'failed' : 'succeeded';
+  if (last.outcome === undefined) return null;
+  return last.outcome.success ? 'succeeded' : 'failed';
 }
 
 /** The ledger outcome an execution verdict records as. */

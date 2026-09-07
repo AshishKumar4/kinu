@@ -77,7 +77,9 @@ export async function* scaffoldEventsToUIStream(
         yield { type: 'tool-input-available', toolCallId: ev.toolCallId, toolName: ev.name, input: ev.args };
         break;
       case 'tool_result':
-        yield { type: 'tool-output-available', toolCallId: ev.toolCallId, output: ev.result };
+        yield ev.outcome.success
+          ? { type: 'tool-output-available', toolCallId: ev.toolCallId, output: ev.result }
+          : { type: 'tool-output-error', toolCallId: ev.toolCallId, errorText: ev.error ?? 'the tool reported failure without an error' };
         break;
       case 'step_finish':
         yield* closeTextIfOpen();

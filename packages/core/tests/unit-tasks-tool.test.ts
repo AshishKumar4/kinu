@@ -104,19 +104,15 @@ describe('tasks tool', () => {
 
   test('a bad call is refused with what was wrong, never silently', async () => {
     const tasks = setup();
-    expect(await tasks({ action: 'add', titles: [] })).toEqual({ error: 'tasks.add requires `titles` — one or more task titles' });
-    expect(await tasks({ action: 'update', status: 'done' })).toEqual({ error: 'tasks.update requires `id`' });
-    expect(await tasks({ action: 'update', id: 't1', status: 'finished' })).toEqual({
-      error: 'tasks.update requires `status` — one of open, active, done, dropped',
-    });
-    expect(await tasks({ action: 'update', id: 't9', status: 'done' })).toEqual({ error: 'no task t9' });
+    await expect(tasks({ action: 'add', titles: [] })).rejects.toThrow('tasks.add requires `titles` — one or more task titles');
+    await expect(tasks({ action: 'update', status: 'done' })).rejects.toThrow('tasks.update requires `id`');
+    await expect(tasks({ action: 'update', id: 't1', status: 'finished' })).rejects.toThrow('tasks.update requires `status` — one of open, active, done, dropped');
+    await expect(tasks({ action: 'update', id: 't9', status: 'done' })).rejects.toThrow('no task t9');
     // This assertion used to pin `unknown tasks action 'sort'` — a refusal that
     // named nothing the model could use next. The gate existed and asserted the
     // defect. It now names the vocabulary AND echoes what arrived, which is the
     // one wording every native dispatcher shares (registry.unknownActionError).
-    expect(await tasks({ action: 'sort' })).toEqual({
-      error: 'tasks requires `action` — one of add, update, list, mode; got "sort"',
-    });
+    await expect(tasks({ action: 'sort' })).rejects.toThrow('tasks requires `action` — one of add, update, list, mode; got "sort"');
   });
 
   test('a refused title is reported beside the ones that landed', async () => {
@@ -165,25 +161,22 @@ describe('tasks tool', () => {
   describe('a model-supplied action outside the vocabulary is answered WITH the vocabulary', () => {
     test('the exact production payload is refused by naming all four actions', async () => {
       const tasks = setup();
-      const error = v.parse(v.object({ error: v.string() }), await tasks({ action: 'list">' })).error;
-      for (const action of ['add', 'update', 'list', 'mode']) expect(error).toContain(action);
-      // The old answer named none of them. A refusal the model cannot act on is
-      // how a single malformed call becomes a loop.
-      expect(error).not.toContain('unknown tasks action');
+      const pending = tasks({ action: 'list">' });
+      for (const action of ['add', 'update', 'list', 'mode']) await expect(pending).rejects.toThrow(action);
+      await expect(pending).rejects.not.toThrow('unknown tasks action');
     });
 
     test('every wrong shape of action is refused the same way, not crashed on', async () => {
       const tasks = setup();
       for (const action of ['', 'LIST', 'listen', 'add ', '{"action":"list"}']) {
-        const result = v.parse(v.object({ error: v.string() }), await tasks({ action }));
-        expect(result.error).toContain('one of add, update, list, mode');
+        await expect(tasks({ action })).rejects.toThrow('one of add, update, list, mode');
       }
     });
 
     test('a valid action still works, and the list is untouched by a refused call', async () => {
       const tasks = setup();
       await tasks({ action: 'add', titles: ['ship it'] });
-      await tasks({ action: 'list">' });
+      await expect(tasks({ action: 'list">' })).rejects.toMatchObject({ code: 'bad_input' });
       const listed = v.parse(TaskListSchema, await tasks({ action: 'list' }));
       expect(listed.tasks.map((t) => t.id)).toEqual(['t1']);
     });
@@ -192,8 +185,7 @@ describe('tasks tool', () => {
       // TaskListStore.add trims each title, so a non-string element threw a
       // TypeError out of the tool instead of answering the model.
       const tasks = setup();
-      const bad = await tasks({ action: 'add', titles: [1, 2] });
-      expect(v.parse(v.object({ error: v.string() }), bad).error).toContain('array of task titles');
+      await expect(tasks({ action: 'add', titles: [1, 2] })).rejects.toThrow('array of task titles');
     });
   });
 });
@@ -279,9 +271,8 @@ describe('tasks action=mode — the agent\'s durable role', () => {
   test('an unknown role is refused and changes nothing', async () => {
     const { tasks } = roleSetup();
     await tasks({ action: 'mode', role: 'auditor' });
-    const refused = await tasks({ action: 'mode', role: 'yolo' });
-    // The refusal names the role it could not find and the roles it can.
-    expect(refused).toMatchObject({ error: expect.stringMatching(/"yolo"[^]*Known roles: auditor/) });
+    await expect(tasks({ action: 'mode', role: 'yolo' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: expect.stringMatching(/"yolo"[^]*Known roles: auditor/) });
     expect(await tasks({ action: 'mode' })).toEqual({ role: 'auditor' });
   });
 

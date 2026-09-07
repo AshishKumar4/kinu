@@ -23,6 +23,7 @@
  * types an invisible BOM into old_text), and the file is written back in its own
  * ending with its BOM restored.
  */
+import { KinuError } from '../obs/error';
 
 /** One replacement. Every edit in a call matches the file as it was READ, never
  *  the result of a sibling edit. */
@@ -57,6 +58,13 @@ export type FileEditFailure =
 export const FILE_REFUSAL_REASONS = [
   'empty_anchor', 'not_found', 'ambiguous', 'overlap', 'no_change', 'unread', 'stale',
 ] as const satisfies readonly (FileEditFailure | 'unread' | 'stale')[];
+
+/** A native file invocation refused with the file plane's exact verdict. */
+export class FileRefusalError extends KinuError {
+  constructor(readonly verdict: (typeof FILE_REFUSAL_REASONS)[number], message: string) {
+    super('bad_input', message);
+  }
+}
 
 /** Where one applied edit landed, so the caller can report the change without
  *  echoing a diff back into the context. */

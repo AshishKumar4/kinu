@@ -33,6 +33,7 @@ import {
 } from './types';
 import type { ToolCallRecord } from '../evolution/types';
 import type { MissionBudgetRefusal, MissionScope } from '../mission-budget';
+import { failedToolOutcome, type ToolOutcome } from '../tools/outcome';
 import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from '../usage';
 import { nanoid } from '../utils/nanoid';
 import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summary';
@@ -87,8 +88,8 @@ export class HeadCapture {
    *  node-agent.ts exists to improve on. The actor kinds' equivalent
    *  (`TurnAccumulator.recordToolCall`) has always recorded the output; this is the
    *  same treatment, through the same projection. */
-  recordToolCall(name: string, args: JsonObject, result: JsonValue): void {
-    this.toolCalls.push({ name, args, result });
+  recordToolCall(name: string, args: JsonObject, result: JsonValue, outcome: ToolOutcome): void {
+    this.toolCalls.push({ name, args, result, outcome });
   }
 }
 
@@ -114,7 +115,7 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
         const args: JsonObject = { kind, body };
         if (ref !== undefined) args.ref = ref;
         if (confidence !== undefined) args.confidence = confidence;
-        capture.recordToolCall('record_evidence', args, 'ok');
+        capture.recordToolCall('record_evidence', args, 'ok', { success: true });
         return `evidence recorded (id=${ev.id})`;
       },
     })),
@@ -130,7 +131,7 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
       execute: async ({ question, choice, rationale, supportingEvidence }) => {
         const d: Decision = { question, choice, rationale, supportingEvidence };
         capture.recordDecision(d);
-        capture.recordToolCall('record_decision', { question, choice, rationale }, 'ok');
+        capture.recordToolCall('record_decision', { question, choice, rationale }, 'ok', { success: true });
         return 'decision recorded';
       },
     })),
@@ -171,10 +172,10 @@ function recordingTool<Entry extends ToolSet[string]>(
       const args: JsonObject = isJsonObject(value) ? value : { input: value };
       try {
         const result = await execute(input, options);
-        capture.recordToolCall(name, args, projectJsonValue({ value: result }));
+        capture.recordToolCall(name, args, projectJsonValue({ value: result }), { success: true });
         return result;
       } catch (err) {
-        capture.recordToolCall(name, args, `error: ${renderThrownChain({ cause: err })}`);
+        capture.recordToolCall(name, args, renderThrownChain({ cause: err }), failedToolOutcome({ cause: err }));
         throw err;
       }
     },

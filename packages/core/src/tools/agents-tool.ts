@@ -67,7 +67,7 @@ import { VERIFIER_KIND_DOC, VERIFIER_KINDS } from '../strategy/objective';
 import type { Objective } from '../strategy/objective';
 import { readResumeRedrive, readSpawnStarted } from '../jobs/threshold';
 import {
-  localMissionScope, readMissionLimits,
+  localMissionScope, readMissionLimits, MissionBudgetExhausted,
   type MissionGovernor, type MissionScope,
 } from '../mission-budget';
 import type { NodeWorkspace, NodeWorkspaceProvisioner } from '../strategy/node-workspace';
@@ -75,12 +75,11 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, renderThrownChain, refusalOf, toKinuError, type Refusal } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import {
   delegationDepthRefusal,
   delegationExhausted,
   type DelegationBudget,
-  type DelegationDepthRefusal,
 } from '../subordinates/depth';
 import type {
   SubordinateLifetime,
@@ -1243,22 +1242,9 @@ interface AgentsToolCallOptions {
 
 // ── Dispatch helpers ────────────────────────────────────────────────────────
 
-/**
- * A delegation refusal, reason FIRST — the shape and the vocabulary the `file`
- * tool's refusals already carry (tools/file-tool.ts). `bad_input` is that
- * vocabulary's "the arguments do not describe an operation", which is exactly what
- * a call with the wrong argument shape is, and it is what makes the refusal land in
- * `refused` rather than indicting the tool in `broke` when the ledger is read
- * back (read-models/tool-failures.ts). A bare `{error}` envelope classified as
- * `returned_error`: a correct refusal counted as a defect.
- */
-interface BadInputRefusal {
-  reason: 'bad_input';
-  error: string;
-}
-
-function badInput(error: string): BadInputRefusal {
-  return { reason: 'bad_input', error };
+/** Invalid operation inputs fail before delegation; namespace adapters preserve branchable refusals. */
+function badInput(error: string): never {
+  throw new KinuError('bad_input', error);
 }
 
 
@@ -1474,11 +1460,11 @@ async function runSwarmAction(
   // Resolution first, per *Presets* — *Validity over the resolved configuration* is
   // stated over the resolved tuple and has no input without it.
   const resolved = resolveSwarm(call);
-  if ('reason' in resolved) return resolved;
+  if ('reason' in resolved) throw new KinuError(resolved.reason, resolved.error);
   // Legality, per *Validity over the resolved configuration*: over the resolved
   // tuple and never over the preset name.
   const illegal = swarmValidity(resolved);
-  if (illegal) return illegal;
+  if (illegal) throw new KinuError(illegal.reason, illegal.error);
 
   // The mission scope, and with it both enforcement seams: the governed `LLM` for the
   // measurement calls this process makes, and the PORT the run charges its own model
@@ -1568,7 +1554,7 @@ async function runSwarmAction(
   };
   readSpawnStarted(toolOptions)?.();
   const result = await inWorkMode(mode, () => runSwarm(runDeps, resolved));
-  if ('reason' in result) return result;
+  if ('reason' in result) throw new KinuError(result.reason, result.error);
   // THE SPAWN, AND ONLY THE SPAWN. The tokens are already on the ledger: every model
   // call the run made debited as it happened, through `SwarmRunDeps.mission` above, and
   // `report.tokens` is the sum of exactly those calls. Charging it again here would
@@ -1803,7 +1789,7 @@ function agentsInputProperties(deps: AgentsToolDeps) {
  * read like a field of every action — the exact shape that lets a field be
  * accepted where nothing acts on it.
  */
-function requestedTopic(input: AgentsToolInput): { topic: string } | BadInputRefusal {
+function requestedTopic(input: AgentsToolInput): { topic: string } {
   const topic = input.topic?.trim() || 'message';
   return topic === PEER_REPLY_TOPIC
     ? badInput(`topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes`)
@@ -1862,7 +1848,7 @@ export async function dispatchAgentsAction(
   // (read-models/tool-failures.ts), and this is the response an actor at the
   // delegation depth cap gets — the one place absence would otherwise be silent.
   const admission = actionAdmission(actions, mode, input.action);
-  if (admission) return admission;
+  if (admission) throw new KinuError(admission.reason, admission.error);
   // The spawn seam. Launching a helper is what turns one exhausted run into
   // many, so the cap is checked before the launch — for every action that
   // creates or wakes an agent. `list`, `dismiss` and `reply` spend nothing and
@@ -1870,7 +1856,7 @@ export async function dispatchAgentsAction(
   if (input.action === 'swarm' || input.action === 'hire'
     || input.action === 'ask' || input.action === 'send') {
     const refusal = deps.budget?.guard('spawn');
-    if (refusal) return refusal;
+    if (refusal) throw new MissionBudgetExhausted(refusal);
   }
   // The DEPTH seam, and the second half of a containment that is already
   // structural: an actor at the cap is not wired `team` deps at all, so `hire`
@@ -1899,18 +1885,15 @@ export async function dispatchAgentsAction(
 
       case 'hire': {
         const hireDepth = spawnDepthRefusal();
-        if (hireDepth) return hireDepth;
+        if (hireDepth) throw new KinuError(hireDepth.reason, hireDepth.error);
         if ((input.scope ?? 'subordinate') === 'workspace') {
           // Classified, not a bare `{error}`: this is the escape route the depth
           // cap closes — a fresh workspace is the root of its own tree with the
           // whole cap below it — so the one refusal that has to hold must land
           // in `refused` and not indict the tool in `broke`.
           if (!peers) {
-            return {
-              reason: 'denied',
-              error: 'hire scope=workspace creates a whole workspace, which only the workspace orchestrator may do — '
-                + 'hire a subordinate here instead (omit scope), or run a search.',
-            } satisfies DelegationDepthRefusal;
+            throw new KinuError('denied', 'hire scope=workspace creates a whole workspace, which only the workspace orchestrator may do — '
+              + 'hire a subordinate here instead (omit scope), or run a search.');
           }
           if (input.role !== undefined) {
             return badInput('field "role" is not available for action "hire" on this actor');
@@ -1931,10 +1914,7 @@ export async function dispatchAgentsAction(
         if (!team) {
           // Capability absence, and `denied` is what that is: the call is
           // well-formed and this actor does not wire the surface it needs.
-          return {
-            reason: 'denied',
-            error: 'hiring subordinates is not available on this actor',
-          } satisfies DelegationDepthRefusal;
+          throw new KinuError('denied', 'hiring subordinates is not available on this actor');
         }
         if (!peers && input.scope !== undefined) {
           return badInput('field "scope" is not available for action "hire" on this actor');
@@ -1949,10 +1929,7 @@ export async function dispatchAgentsAction(
         // identity the child's next turn cannot resolve.
         const ctx = deps.profile?.();
         if (!ctx) {
-          return {
-            reason: 'denied',
-            error: 'This actor wires no role catalog. Hire cannot resolve a role without one.',
-          } satisfies DelegationDepthRefusal;
+          throw new KinuError('denied', 'This actor wires no role catalog. Hire cannot resolve a role without one.');
         }
         const delegated = resolveDelegatedProfile(ctx, input.role, input.tier);
         if ('error' in delegated) return badInput(delegated.error);
@@ -1975,7 +1952,7 @@ export async function dispatchAgentsAction(
         // ask by name talks to an agent that exists and stays available at the cap.
         if (input.role) {
           const askDepth = spawnDepthRefusal();
-          if (askDepth) return askDepth;
+          if (askDepth) throw new KinuError(askDepth.reason, askDepth.error);
         }
         // The XOR, enforced where a caller can be told about it. The schema
         // states the two targets are exclusive (`AgentsActionInputVariant.excludes`);
@@ -1993,18 +1970,12 @@ export async function dispatchAgentsAction(
         if (input.role) {
           if (!input.message) return badInput('ask requires role and message');
           if (!temporary) {
-            return {
-              reason: 'denied',
-              error: 'ask by `role` creates a temporary agent, which this actor has no substrate for — '
-                + 'name an existing agent with `agent` instead (action:"list" shows the roster).',
-            } satisfies DelegationDepthRefusal;
+            throw new KinuError('denied', 'ask by `role` creates a temporary agent, which this actor has no substrate for — '
+              + 'name an existing agent with `agent` instead (action:"list" shows the roster).');
           }
           const ctx = deps.profile?.();
           if (!ctx) {
-            return {
-              reason: 'denied',
-              error: 'This actor wires no role catalog. Ask cannot resolve a role without one.',
-            } satisfies DelegationDepthRefusal;
+            throw new KinuError('denied', 'This actor wires no role catalog. Ask cannot resolve a role without one.');
           }
           // The ask arm uses the same resolver and the same precedence as a hire.
           // A role this catalog cannot resolve is refused rather than seeded onto
@@ -2032,7 +2003,6 @@ export async function dispatchAgentsAction(
             : 'ask requires agent and message');
         }
         const asked = requestedTopic(input);
-        if ('error' in asked) return asked;
         if (team && await isSubordinate(input.agent)) {
           const assignment: Parameters<TeamToolDeps['assign']>[0] = {
             name: input.agent,
@@ -2062,7 +2032,6 @@ export async function dispatchAgentsAction(
       case 'send': {
         if (!input.agent || !input.message) return badInput('send requires agent and message');
         const sent = requestedTopic(input);
-        if ('error' in sent) return sent;
         if (team && await isSubordinate(input.agent)) {
           const handoff = await team.message({ name: input.agent, content: input.message, mode });
           // Same delivered/queued vocabulary the peer transport already uses:
@@ -2082,10 +2051,7 @@ export async function dispatchAgentsAction(
 
       case 'reply':
         if (!peers) {
-          return {
-            reason: 'denied',
-            error: 'reply needs the peer transport, which this actor does not have',
-          } satisfies DelegationDepthRefusal;
+          throw new KinuError('denied', 'reply needs the peer transport, which this actor does not have');
         }
         if (!input.event_id || !input.message) return badInput('reply requires event_id and message');
         return await peers.reply({ eventId: input.event_id, message: input.message });
@@ -2114,10 +2080,7 @@ export async function dispatchAgentsAction(
 
       case 'dismiss':
         if (!team) {
-          return {
-            reason: 'denied',
-            error: 'dismiss applies to subordinates, which this actor does not have',
-          } satisfies DelegationDepthRefusal;
+          throw new KinuError('denied', 'dismiss applies to subordinates, which this actor does not have');
         }
         if (!input.agent) return badInput('dismiss requires agent');
         return await team.dismiss({
@@ -2126,7 +2089,10 @@ export async function dispatchAgentsAction(
         });
     }
   } catch (err) {
-    return refusalOf(toKinuError({ doing: 'agents.' + input.action, cause: err, otherwise: 'io' }));
+    if (err instanceof KinuError) throw err;
+    const failure = toKinuError({ doing: 'agents.' + input.action, cause: err, otherwise: 'io' });
+    failure.message = renderThrownChain({ cause: failure });
+    throw failure;
   }
 }
 
@@ -2195,7 +2161,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
       } catch (error) {
         // Reason FIRST, the vocabulary every refusal on this surface uses: a call
         // the parse refused is bad input, not a tool that broke.
-        return { reason: 'bad_input', error: renderThrownChain({ cause: error }) };
+        throw new KinuError('bad_input', renderThrownChain({ cause: error }), { cause: error });
       }
       return dispatchAgentsAction(deps, parsed, toolOptions);
     },

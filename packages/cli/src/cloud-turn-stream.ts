@@ -14,7 +14,7 @@
 import * as v from 'valibot';
 import {
   JsonObjectSchema, parseJsonValue,
-  type JsonValue,
+  type JsonValue, type ToolOutcome,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { asRecord } from './options';
@@ -122,10 +122,13 @@ export class CloudTurnStream {
         const result = type.output === 'tool-output-error'
           ? jsonErrorMessage(chunk.errorText, 'tool error')
           : stringifyToolOutput(chunk.output ?? null);
-        if (call) call.result = result;
+        const outcome = type.output === 'tool-output-error'
+          ? { success: false, reason: null } satisfies ToolOutcome
+          : { success: true } satisfies ToolOutcome;
+        if (call) { call.result = result; call.outcome = outcome; }
         this.emit({
           type: 'tool-result', toolName: call?.name ?? 'tool', toolCallId, result,
-          success: type.output !== 'tool-output-error',
+          ...outcome,
         });
         return;
       }

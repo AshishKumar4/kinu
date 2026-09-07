@@ -37,6 +37,7 @@
 
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
+import { failedToolOutcome, ToolOutcomeSchema, type ToolOutcome } from '../tools/outcome';
 import type { Executor } from '../types/primitives';
 import {
   assertJsonValue,
@@ -98,7 +99,7 @@ export const SCAFFOLD_HOST_TYPES = `declare namespace host {
 export type ScaffoldEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'tool_call'; name: string; args: JsonObject; toolCallId: string }
-  | { type: 'tool_result'; toolCallId: string; result?: JsonValue }
+  | { type: 'tool_result'; toolCallId: string; result?: JsonValue; outcome: ToolOutcome; error?: string }
   | { type: 'step_finish'; stepIndex: number; reason?: string }
   | { type: 'done'; result?: JsonValue }
   | { type: 'error'; message: string }
@@ -234,6 +235,8 @@ const ScaffoldEventSchema: v.GenericSchema<ScaffoldEvent> = v.variant('type', [
     type: v.literal('tool_result'),
     toolCallId: v.string(),
     result: v.optional(JsonValueSchema),
+    outcome: ToolOutcomeSchema,
+    error: v.optional(v.string()),
   }),
   v.object({
     type: v.literal('step_finish'),
@@ -301,11 +304,11 @@ function buildHostProvider(opts: {
       await pushEvent({ type: 'tool_call', name: name.output, args: toolArgs, toolCallId: callId });
       try {
         const result = await callTool(name.output, toolArgs);
-        await pushEvent({ type: 'tool_result', toolCallId: callId, result });
+        await pushEvent({ type: 'tool_result', toolCallId: callId, result, outcome: { success: true } });
         return result;
       } catch (err) {
         const msg = renderThrownChain({ cause: err });
-        await pushEvent({ type: 'tool_result', toolCallId: callId, result: { error: msg } });
+        await pushEvent({ type: 'tool_result', toolCallId: callId, error: msg, outcome: failedToolOutcome({ cause: err }) });
         return { error: msg };
       }
     },

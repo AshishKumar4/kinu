@@ -26,13 +26,12 @@ function captureConsole(run: () => void): string[] {
   return lines;
 }
 
-const REFUSAL = JSON.stringify({ reason: 'unavailable', error: 'No device connected.' });
 
 describe('printToolResult', () => {
-  test('a refusal renders as prose under a ✗, never as raw JSON', () => {
-    const lines = captureConsole(() => printToolResult(REFUSAL));
+  test('a recorded failure renders its message and class', () => {
+    const lines = captureConsole(() => printToolResult('No device connected.', { success: false, reason: 'unavailable' }));
     const text = lines.join('\n');
-    expect(text).toContain('✗');
+    expect(text).toContain('failed');
     expect(text).toContain('No device connected.');
     expect(text).toContain('(unavailable)');
     expect(text).not.toContain('{"reason"');
@@ -40,24 +39,30 @@ describe('printToolResult', () => {
 
   test('a multi-line refusal keeps its continuation lines', () => {
     const lines = captureConsole(() =>
-      printToolResult(JSON.stringify({ reason: 'io', error: 'first\nsecond' })));
+      printToolResult('first\nsecond', { success: false, reason: 'io' }));
     const text = lines.join('\n');
     expect(text).toContain('first');
     expect(text).toContain('second');
   });
 
   test('a long result line is cut with an ellipsis that says so', () => {
-    const lines = captureConsole(() => printToolResult('x'.repeat(200)));
+    const lines = captureConsole(() => printToolResult('x'.repeat(200), { success: true }));
     const text = lines.join('\n');
     expect(text).toContain('…');
     expect(text.length).toBeLessThan(200);
   });
 
   test('a result longer than five lines reports the withheld count', () => {
-    const lines = captureConsole(() => printToolResult(['a', 'b', 'c', 'd', 'e', 'f', 'g'].join('\n')));
+    const lines = captureConsole(() => printToolResult(['a', 'b', 'c', 'd', 'e', 'f', 'g'].join('\n'), { success: true }));
     const text = lines.join('\n');
     expect(text).toContain('(2 more lines)');
     expect(text).toContain('…');
+  });
+  test('successful refusal-shaped output is rendered as data', () => {
+    const content = '{"reason":"denied","error":"historical incident"}';
+    const text = captureConsole(() => printToolResult(content, { success: true })).join('\n');
+    expect(text).toContain(content);
+    expect(text).not.toContain('failed');
   });
 });
 

@@ -14,6 +14,7 @@ import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import type { CraftLedger } from '../src/craft/in-episode';
 import { CRAFT_INVOCATION_QUALITY, craftInvocationError } from '../src/craft/in-episode';
 import type { JsonValue } from '../src/utils/json';
+import type { ToolOutcome } from '../src/tools/outcome';
 
 interface Observation { names: string[]; quality: number }
 
@@ -43,7 +44,7 @@ function block(cycle: CraftCycle, code: string, opts: { fails?: boolean; result?
     toolName: 'execute_tools',
     args: { code },
     result: opts.result ?? (opts.fails ? 'Error: something broke' : '{"result":"ok"}'),
-    success: !opts.fails,
+    ...(opts.fails ? { success: false, reason: null } satisfies ToolOutcome : { success: true } satisfies ToolOutcome),
   });
 }
 

@@ -155,14 +155,16 @@ export const CODE_WORK_DID_NOT_START = {
  * addition to the language's error, never a replacement for it.
  */
 export class KinuError extends Error {
-  override readonly name = 'KinuError';
+  override readonly name: string = 'KinuError';
+  declare readonly execution?: { readonly exitCode: number };
 
   constructor(
     readonly code: ErrorCode,
     message: string,
-    options?: { cause?: unknown },
+    options?: ErrorOptions & { execution?: { readonly exitCode: number } },
   ) {
     super(message, options);
+    if (options?.execution !== undefined) this.execution = options.execution;
   }
 }
 

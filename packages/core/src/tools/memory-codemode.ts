@@ -12,6 +12,7 @@ import * as v from 'valibot';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 import { createMemoryDispatcher, type MemoryToolDeps } from './memory-tool';
 import { TOOL_REACH } from './registry';
+import { branchableToolCall } from './outcome';
 
 const SessionOptionsSchema = v.object({
   query: v.optional(v.string()),
@@ -53,7 +54,7 @@ const TYPES_FACTS = `
  */
 export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): CodemodeProvider {
   const hasFacts = !!deps().facts;
-  const dispatch = (action: string) => async (...args: unknown[]): Promise<JsonValue> => {
+  const dispatch = (action: string) => (...args: unknown[]) => branchableToolCall(async (): Promise<JsonValue> => {
     const d = deps();
     const run = createMemoryDispatcher(d);
     switch (action) {
@@ -85,7 +86,7 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
       default:
         return { error: `unknown memory action '${action}'` };
     }
-  };
+  });
 
   const tools: CodemodeProvider['tools'] = {
     save: { planAllowed: true, description: 'Save a prose note or lesson too long to be a keyed value.', execute: dispatch('save') },

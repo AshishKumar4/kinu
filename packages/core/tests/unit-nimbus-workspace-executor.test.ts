@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import {
-  createNimbusWorkspaceExecutor,
+  createNimbusWorkspaceExecutor, createNimbusExecutor,
   nimbusSessionFiles,
   nimbusSessionShell,
   type NimbusSandboxHandle,
@@ -58,6 +58,17 @@ function fakeBox() {
 }
 
 describe('hosted Nimbus workspace provider', () => {
+  test('a transport failure never acquires a fabricated process exit', async () => {
+    const box = fakeBox();
+    box.exec = async (command) => ({ command, success: false, stdout: '', stderr: 'transport unavailable', exitCode: 0 });
+    const namespace = createNimbusExecutor({ box });
+    const result = await namespace.tools.exec.execute('work');
+    expect(result).toMatchObject({ reason: 'io', error: expect.stringContaining('transport unavailable') });
+    expect(result).not.toHaveProperty('execution');
+    const shell = await nimbusSessionShell(box).exec('work');
+    expect(shell).toMatchObject({ exitCode: 0, refusal: { reason: 'io' } });
+    expect(shell.refusal).not.toHaveProperty('execution');
+  });
   test('one workspace namespace owns both files and the live session', async () => {
     const { rt } = createTestRuntime();
     const box = fakeBox();

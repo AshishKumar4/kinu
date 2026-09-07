@@ -34,7 +34,6 @@
 
 import type { ToolSet } from 'ai';
 import { argumentDigest } from '../safety/argument-digest';
-import { refusalText } from '../execution/exec-result';
 import { KinuError } from '../obs/index';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { parseJsonValue, projectJsonValue, type JsonValue } from '../utils/json';
@@ -157,7 +156,7 @@ function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaim
       };
       const claim = claimToolEffect(deps.sql, key);
       if (claim.kind === 'settled') return claim.result;
-      if (claim.kind === 'indeterminate') return refusalText(indeterminateEffect(name, key));
+      if (claim.kind === 'indeterminate') throw indeterminateEffect(name, key);
       const output = await execute(input, options);
       // Durable before published: the caller reads this value only after the
       // row that makes a replay return it instead of running the tool again.

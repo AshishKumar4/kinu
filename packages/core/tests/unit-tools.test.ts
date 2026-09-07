@@ -303,8 +303,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // The pre-flight that keeps a non-serializable value from crashing the turn.
     const circular: CircularValue = {};
     circular.self = circular;
-    expect(await memory.execute({ action: 'remember', key: 'k', value: circular })).toHaveProperty('error');
-    expect(await memory.execute({ action: 'recall', key: '' })).toEqual({ error: 'key must be a non-empty string' });
+    await expect(memory.execute({ action: 'remember', key: 'k', value: circular })).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(memory.execute({ action: 'recall', key: '' })).rejects.toThrow('key must be a non-empty string');
   });
 
   test('the full durable-state surface renders the registry description verbatim', () => {
@@ -516,12 +516,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { rt } = createTestRuntime();
     const t = tools({ ...rt, shell: undefined });
     const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
-    const result = await tool.execute({ command: 'echo hi' });
-    const parsed = v.parse(v.object({ reason: v.string(), error: v.string() }), JSON.parse(result));
-    expect(parsed.reason).toBe('unsupported');
-    expect(parsed.error).toContain('no workspace shell');
-    // The discriminator LEADS, where no clamp can reach it.
-    expect(result.indexOf('"reason"')).toBeLessThan(result.indexOf('"error"'));
+    await expect(tool.execute({ command: 'echo hi' })).rejects.toMatchObject({ code: 'unsupported', message: expect.stringContaining('no workspace shell') });
   });
 
   test('run with an unprovisioned runtime returns structured runtime_not_provisioned', async () => {
@@ -534,16 +529,9 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const t = tools(rt);
     const tool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.run) };
     for (const runtime of ['sandbox', 'nimbus', 'laptop'] as const) {
-      const result = await tool.execute({ command: 'echo hi', runtime });
-      const parsed = v.parse(v.object({
-        reason: v.string(), error: v.string(), runtime: v.string(), message: v.string(),
-      }), JSON.parse(result));
-      expect(parsed.error).toBe('runtime_not_provisioned');
-      expect(parsed.runtime).toBe(runtime);
-      expect(parsed.message.length).toBeGreaterThan(0);
-      // `unavailable`, not `unsupported`: a sandbox provisions on first use and a
-      // laptop comes back when its daemon does, so this is a retry.
-      expect(parsed.reason).toBe('unavailable');
+      const pending = tool.execute({ command: 'echo hi', runtime });
+      await expect(pending).rejects.toMatchObject({ code: 'unavailable' });
+      await expect(pending).rejects.toThrow('runtime_not_provisioned');
     }
   });
 
@@ -560,7 +548,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     // Unprovisioned here, so this is the `refused` branch — which is itself the
     // finding "the runtime was never there", not a failed command.
-    await tool.execute({ command: 'echo hi', runtime: 'sandbox', why: 'needs an inbound port' });
+    await expect(tool.execute({ command: 'echo hi', runtime: 'sandbox', why: 'needs an inbound port' })).rejects.toMatchObject({ code: 'unavailable' });
     expect(escalations.snapshot().escalations).toEqual([
       { runtime: 'sandbox', reason: 'needs an inbound port', outcome: 'refused', count: 1 },
     ]);
@@ -590,10 +578,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // A force-push: gated even on the agent's own workspace, because the harm
     // lands on a remote. `sudo whoami` would run here now — that shell IS the
     // agent's own machine.
-    const result = await tool.execute({ command: 'git push --force origin main' });
-    expect(result).toContain('needs owner approval, nobody to ask');
-    expect(result).toContain('git-force-push');
-    expect(result).not.toContain('setShellApprovalMode');
+    const pending = tool.execute({ command: 'git push --force origin main' });
+    await expect(pending).rejects.toThrow('needs owner approval, nobody to ask');
+    await expect(pending).rejects.toThrow('git-force-push');
+    await expect(pending).rejects.not.toThrow('setShellApprovalMode');
   });
 
   test('execute_tools exposes the workspace and tools globals', async () => {
