@@ -83,8 +83,15 @@ export interface NodeLoopResult {
  * publish the arbiter under this node's id for the life of the run and hand the
  * facet an RPC that reaches it, instead of trying to serialise a decision that
  * depends on a budget the node cannot see.
+ *
+ * The SIGNAL is the search's own cancellation, and it stays on this side of the
+ * RPC for the same reason the arbiter does: a facet cannot be handed a live
+ * object. What a host owes on abort is to stop the node it is hosting — the
+ * in-isolate loop stops itself off the same signal — and to reject the run so
+ * the search records the node the way it records any other cancelled one.
  */
 export type NodeLoopHost = (
   spec: NodeRunSpec,
   arbitrate: NodeArbiter | null,
+  signal: AbortSignal | undefined,
 ) => Promise<NodeLoopResult>;
