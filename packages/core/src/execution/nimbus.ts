@@ -20,8 +20,8 @@ import { shellQuote } from '../utils/shell';
 import { base64ToBytes } from '../utils/base64';
 import type { ExecutorCapability, ExecutorProvider, PortAnsweringExecutor } from './types';
 import { readExecSignal } from './signal';
-import { commandResult, COMMAND_RESULT_TYPE, refusalText, type CommandResult } from './exec-result';
-import { KinuError, refusalOf, renderThrownChain, toKinuError } from '../obs/index';
+import { commandResult, COMMAND_RESULT_TYPE, formatExecResult, refusalText, type CommandResult } from './exec-result';
+import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
@@ -297,14 +297,15 @@ function workspacePortFailure(input: { port: number; cause: unknown }): KinuErro
 function nimbusFailure(input: { doing: string; cause: unknown }): KinuError {
   return toKinuError({ ...input, otherwise: 'io' });
 }
+/** A transport failure is not evidence that a process exited with a made-up code. */
+function nimbusTransportRefusal(result: NimbusExecResult): Refusal | null {
+  return !result.success && result.exitCode === 0
+    ? { reason: 'io', error: 'Nimbus execution did not report success: ' + formatExecResult(result) }
+    : null;
+}
 
-/** `success: false` with a zero exit code is Nimbus reporting a transport-level
- *  failure the exit code cannot express — render it as the failure it is. */
 function normalizeExec(result: NimbusExecResult): CommandResult {
-  return commandResult({
-    ...result,
-    exitCode: !result.success && result.exitCode === 0 ? 1 : result.exitCode,
-  });
+  return nimbusTransportRefusal(result) ?? commandResult(result);
 }
 
 const StringSchema = v.string();
@@ -941,7 +942,9 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
         options?.signal,
         'workspace exec aborted — the command may still finish in the session',
       );
-      return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+      const outcome = { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+      const refusal = nimbusTransportRefusal(result);
+      return refusal === null ? outcome : { ...outcome, refusal };
     },
   };
 }

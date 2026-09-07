@@ -17,7 +17,7 @@ import {
   memoryActionsFor, unknownActionError,
   type MemoryToolAction, type MEMORY_FACT_ACTIONS,
 } from './registry';
-import { renderThrownChain } from '../obs/index';
+import { KinuError, toKinuError, renderThrownChain } from '../obs/index';
 
 const FactKeySchema = v.pipe(v.string(), v.nonEmpty());
 
@@ -92,7 +92,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
     try {
       if (args.around_message_id) {
         const view = conversationSearch.scroll(args.around_message_id, args.window ?? 5, args.max_chars);
-        if (!view) return { error: `no message with id ${args.around_message_id}` };
+        if (!view) throw new KinuError('missing', 'no message with id ' + args.around_message_id);
         return decodeJsonValue({ value: { mode: 'scroll', ...view } });
       }
       if (args.query?.trim()) {
@@ -108,7 +108,10 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
         value: { mode: 'browse', conversations: conversationSearch.browse(args.limit ?? 10) },
       });
     } catch (err) {
-      return { error: `conversation search unavailable: ${renderThrownChain({ cause: err })}` };
+      if (err instanceof KinuError) throw err;
+      const failure = toKinuError({ doing: 'conversation search unavailable', cause: err, otherwise: 'unavailable' });
+      failure.message = renderThrownChain({ cause: failure });
+      throw failure;
     }
   };
 
@@ -116,15 +119,15 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
     action: (typeof MEMORY_FACT_ACTIONS)[number],
     args: MemoryToolInput,
   ): JsonValue => {
-    if (!facts) return { error: 'the keyed-fact actions are not available on this runtime' };
+    if (!facts) throw new KinuError('unsupported', 'the keyed-fact actions are not available on this runtime');
     const key = v.safeParse(FactKeySchema, args.key);
     if (!key.success) {
-      return { error: 'key must be a non-empty string' };
+      throw new KinuError('bad_input', 'key must be a non-empty string');
     }
     if (action === 'remember') {
       let value: JsonValue;
       try { value = decodeJsonValue({ value: args.value }); }
-      catch (error) { return { error: `value not JSON-serializable: ${renderThrownChain({ cause: error })}` }; }
+      catch (error) { throw new KinuError('bad_input', 'value not JSON-serializable', { cause: error }); }
       facts.upsert(key.output, value, { confidence: args.confidence });
       return { ok: true, key: key.output };
     }
@@ -153,14 +156,14 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
     // the refusal are exactly the words that work.
     const action = v.safeParse(ActionSchema, args.action);
     if (!action.success) {
-      return { error: unknownActionError('memory', 'action', args.action, actions) };
+      throw new KinuError('bad_input', unknownActionError('memory', 'action', args.action, actions));
     }
     switch (action.output) {
       case 'save':
-        if (!args.content) return 'memory.save requires `content`.';
+        if (!args.content) throw new KinuError('bad_input', 'memory.save requires `content`.');
         return appendMemoryNote(memory, args.content);
       case 'search':
-        if (!args.query) return 'memory.search requires `query`.';
+        if (!args.query) throw new KinuError('bad_input', 'memory.search requires `query`.');
         return searchMemory(args.query);
       case 'conversations':
         return runConversationsAction(args);

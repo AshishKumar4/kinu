@@ -361,11 +361,8 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     await exec.tools.readFile.execute('unshared.md');
     const fileTool = createFileTool({ vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
-    const result = v.parse(ErrorResultSchema, await execute({
-      action: 'edit', path: 'unshared.md',
-      edits: [{ old_text: 'content', new_text: 'changed' }],
-    }));
-    expect(result.error).toContain('has not been read here yet');
+    await expect(execute({ action: 'edit', path: 'unshared.md', edits: [{ old_text: 'content', new_text: 'changed' }] }))
+      .rejects.toThrow('has not been read here yet');
   });
 });
 

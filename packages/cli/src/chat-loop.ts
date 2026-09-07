@@ -543,7 +543,7 @@ function renderClientEvent(
       break;
     case 'tool-result':
       status.clear();
-      printToolResult(event.result);
+      printToolResult(event.result, event);
       status.show(`finished ${event.toolName}`);
       break;
     case 'step-finish':

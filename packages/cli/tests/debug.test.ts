@@ -83,12 +83,12 @@ function seedInvestigationWorkspace(dbPath: string): void {
   recorder.emit('run-new', { type: 'run_start', agentId: 'w', caused_by: 'chat', userMessage: 'fork with mcts' });
   recorder.emit('run-new', {
     type: 'tool_call_end', name: 'agents', args: { action: 'fork', settle: 'mcts' }, toolCallId: 'tc-1',
-    result: { background: true, jobId: 'job-1', kind: 'agents', message: `contains ${SECRET_TOKEN}` },
+    outcome: { success: true }, result: { background: true, jobId: 'job-1', kind: 'agents', message: 'contains ' + SECRET_TOKEN },
   });
   // The model polls the very job it was just told to stop waiting on.
   recorder.emit('run-new', {
     type: 'tool_call_end', name: 'agent', args: { jobResult: 'job-1' }, toolCallId: 'tc-2',
-    result: { status: 'running' },
+    outcome: { success: true }, result: { status: 'running' },
   });
   recorder.emit('run-new', { type: 'run_end', reason: 'completed' });
 

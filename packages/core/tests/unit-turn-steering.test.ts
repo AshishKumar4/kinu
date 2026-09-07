@@ -92,7 +92,7 @@ async function fail(orch: AgentOrchestrator, toolName: string, times = 1): Promi
   for (let i = 0; i < times; i++) {
     attempt += 1;
     await orch.turnExtension.onToolResult!({
-      toolName, args: { attempt }, result: `boom ${attempt}`, success: false,
+      toolName, args: { attempt }, result: 'boom ' + attempt, success: false, reason: null,
     });
   }
 }
@@ -105,67 +105,20 @@ async function repeat(orch: AgentOrchestrator, toolName: string, args: JsonObjec
   }
 }
 
-describe('isFailingToolResult — a failure the seam had to truncate', () => {
-  test('a bounded prefix of a failure payload still reads as a failure', () => {
-    // chat.ts and the cf afterToolCall both cut the result at 1000 chars, so a
-    // verbose failure arrives as JSON that cannot parse. Reading it as a
-    // success is what silently disabled every consumer of this predicate.
-    const truncated = `{"error":"${'x'.repeat(60)}`;
-    expect(isFailingToolResult({ toolName: 'execute_tools', args: {}, result: truncated, success: true })).toBe(true);
+describe('isFailingToolResult — invocation outcome is independent of rendering', () => {
+  test('a recorded failure stays failed even when the display is truncated', () => {
+    expect(isFailingToolResult({ toolName: 'run', args: {}, result: '{"error":"cut', success: false, reason: 'io', execution: { exitCode: 2 } })).toBe(true);
+    expect(isFailingToolResult({ toolName: 'execute_tools', args: {}, result: '', success: false, reason: null })).toBe(true);
   });
 
-  test('a bounded prefix of a REASON-FIRST refusal still reads as a failure', () => {
-    // A refusal leads with its classification, where no clamp can reach it
-    // (obs/error.ts `Refusal`). Reading only `error` at the head meant a clamped
-    // refusal was indistinguishable from a clamped success — the same defect one
-    // discriminator over.
-    const truncated = `{"reason":"unavailable","error":"${'x'.repeat(60)}`;
-    expect(isFailingToolResult({ toolName: 'run', args: {}, result: truncated, success: true })).toBe(true);
+  test('successful error-shaped JSON and error-prefixed text remain data', () => {
+    expect(isFailingToolResult({ toolName: 'run', args: {}, result: '{"reason":"denied","error":"history"}', success: true })).toBe(false);
+    expect(isFailingToolResult({ toolName: 'run', args: {}, result: 'Error report: zero failures', success: true })).toBe(false);
+    expect(isFailingToolResult({ toolName: 'execute_tools', args: {}, result: '{"error":"cut', success: true })).toBe(false);
   });
 
-  test('a truncated SUCCESS payload is not turned into a failure', () => {
-    const truncated = `{"result":"${'x'.repeat(60)}`;
-    expect(isFailingToolResult({ toolName: 'execute_tools', args: {}, result: truncated, success: true })).toBe(false);
-    expect(isFailingToolResult({ toolName: 'run', args: {}, result: 'plain text output', success: true })).toBe(false);
-  });
-});
-
-describe('isFailingToolResult', () => {
-  test('the harness discriminator', () => {
-    expect(isFailingToolResult({ toolName: 'run', args: {}, result: 'boom', success: false })).toBe(true);
-    expect(isFailingToolResult({ toolName: 'run', args: {}, result: 'ok', success: true })).toBe(false);
-  });
-
-  test('a non-zero exit the run tool RETURNS as a normal result is still a failure', () => {
-    // The case that motivated the mechanism: `run` catches the exit code and
-    // hands back a success-shaped result whose text is the error.
-    expect(isFailingToolResult({
-      toolName: 'run', args: {}, success: true,
-      result: 'Error (exit 2): make: *** [Makefile:12: all] Error 2',
-    })).toBe(true);
-    expect(isFailingToolResult({
-      toolName: 'run', args: {}, success: true, result: 'Error: no workspace shell available in this runtime.',
-    })).toBe(true);
-  });
-
-  test('a structured runtime error counts; output that merely mentions an error does not', () => {
-    expect(isFailingToolResult({
-      toolName: 'run', args: {}, success: true,
-      result: '{"error":"runtime_not_provisioned","runtime":"sandbox"}',
-    })).toBe(true);
-    expect(isFailingToolResult({
-      toolName: 'run', args: {}, success: true, result: '3 tests passed, 0 errors\nError rate: 0%',
-    })).toBe(false);
-    expect(isFailingToolResult({ toolName: 'run', args: {}, success: true, result: '{"ok":true}' })).toBe(false);
-    expect(isFailingToolResult({ toolName: 'run', args: {}, success: true, result: '{not json' })).toBe(false);
-  });
-
-  test('a structured error longer than the old 1000-char clip still parses as a failure', () => {
-    // The clip cut the JSON mid-object, so `JSON.parse` threw and every large
-    // structured failure was scored a success.
-    const payload = JSON.stringify({ error: 'runtime_not_provisioned', log: 'l'.repeat(4_000) });
-    expect(payload.length).toBeGreaterThan(1_000);
-    expect(isFailingToolResult({ toolName: 'run', args: {}, success: true, result: payload })).toBe(true);
+  test('a failure with unknown classification still fails', () => {
+    expect(isFailingToolResult({ toolName: 'run', args: {}, result: 'boom', success: false, reason: null })).toBe(true);
   });
 });
 
@@ -555,7 +508,7 @@ describe('no turn-start or length steering', () => {
 
 describe('execution-recovery detection (the failure ledger\'s second reader)', () => {
   const failing = (s: TurnSteering, args: JsonObject) =>
-    s.onToolResult({ toolName: 'run', args, result: 'Error: boom', success: false });
+    s.onToolResult({ toolName: 'run', args, result: 'Error: boom', success: false, reason: null });
   const clean = (s: TurnSteering, args: JsonObject) =>
     s.onToolResult({ toolName: 'run', args, result: 'ok', success: true });
 
@@ -710,13 +663,10 @@ describe('through a real runChat turn', () => {
     let flakyCalls = 0;
     const orch = newTurn();
     const tools = {
-      // The exit-code shape: the tool SUCCEEDS and returns the failure text.
-      // Each attempt fails DIFFERENTLY, so this exercises the failure streak
-      // rather than the repeat detector (which owns identical answers).
       flaky: tool({
-        description: 'fails by returning its failure',
+        description: 'raises a distinct failure on each invocation',
         inputSchema: z.object({}),
-        execute: async () => `Error (exit 2): make: *** [all] Error 2 (attempt ${++flakyCalls})`,
+        execute: async (): Promise<string> => { throw new Error('build failed on attempt ' + (++flakyCalls)); },
       }),
     };
     for await (const _ of runChat({

@@ -16,7 +16,7 @@ import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types';
 import { unknownActionError } from './registry';
 import type { ReportToolDeps } from './builtins';
 import type { JsonValue } from '../utils/json';
-import { renderThrownChain } from '../obs/index';
+import { KinuError } from '../obs/index';
 
 const StatusSchema = v.picklist(SUBORDINATE_REPORT_STATUSES);
 const ContentSchema = v.pipe(v.string(), v.trim(), v.minLength(1));
@@ -32,8 +32,8 @@ export interface ReportToolInput {
   content: string;
 }
 
-/** What the model gets back: whatever the publish returned, or a refusal. */
-export type ReportToolResult = JsonValue | undefined | { error: string };
+/** A successfully delivered report returns the publisher's domain response unchanged. */
+export type ReportToolResult = JsonValue | undefined;
 
 /**
  * Dispatch one report, parsing both arguments against the one vocabulary.
@@ -48,13 +48,9 @@ export async function dispatchReport(
 ): Promise<ReportToolResult> {
   const status = v.safeParse(StatusSchema, args.status);
   if (!status.success) {
-    return { error: unknownActionError('report', 'status', args.status, SUBORDINATE_REPORT_STATUSES) };
+    throw new KinuError('bad_input', unknownActionError('report', 'status', args.status, SUBORDINATE_REPORT_STATUSES));
   }
   const content = v.safeParse(ContentSchema, args.content);
-  if (!content.success) return { error: 'report requires non-empty `content`' };
-  try {
-    return await deps.report({ status: status.output, content: content.output });
-  } catch (err) {
-    return { error: renderThrownChain({ cause: err }) };
-  }
+  if (!content.success) throw new KinuError('bad_input', 'report requires non-empty `content`');
+  return await deps.report({ status: status.output, content: content.output });
 }

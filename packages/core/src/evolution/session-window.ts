@@ -34,6 +34,7 @@ import {
 } from '../identity/effect-tombstones';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
+import { ToolOutcomeSchema } from '../tools/outcome';
 
 /** The durable mirror of {@link CompletedTurn} — the one schema every table
  *  that stores a snapshotted turn serializes through, because two mirrors of
@@ -46,6 +47,7 @@ export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
     name: v.string(),
     args: JsonObjectSchema,
     result: v.optional(JsonValueSchema),
+    outcome: v.optional(ToolOutcomeSchema),
   })),
   craftedToolsUsed: v.optional(v.array(v.string())),
   steps: v.number(),

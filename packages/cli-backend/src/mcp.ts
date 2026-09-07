@@ -5,7 +5,7 @@
 // lives in core (`admitMcpDescriptors`) and the session applies it, because
 // only the session knows the resolved model figures the budget divides.
 
-import { describeMcpTool, JsonObjectSchema, type JsonObject, type SerializableToolDescriptor } from '@kinu.run/core';
+import { describeMcpTool, decodeJsonValue, JsonObjectSchema, McpToolError, type JsonObject, type SerializableToolDescriptor } from '@kinu.run/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import * as v from 'valibot';
@@ -63,9 +63,7 @@ export interface McpConnection {
    *  config key: server names are unique per agent by construction on the CLI
    *  (the config is a `mcpServers` object), so it routes `call` directly. */
   readonly descriptors: SerializableToolDescriptor[];
-  /** Dispatch one call on the server the tool was discovered from, with that
-   *  server's call budget. A failure is rendered, not thrown: a broken tool
-   *  reports its breakage to the model instead of failing the turn. */
+  /** Dispatch with the server's call budget. Native protocol and transport failures reject. */
   call(serverName: string, toolName: string, args: JsonObject): Promise<string>;
   /** Per-server connection status for UI/CLI diagnostics. */
   readonly diagnostics: McpConnectionDiagnostic[];
@@ -163,16 +161,13 @@ export async function connectMcpServers(
       const client = clients.get(serverName);
       if (!client) throw new Error(`Unknown MCP server: ${serverName}`);
       const timeout = callTimeoutByServer.get(serverName) ?? MCP_CALL_TIMEOUT_MS;
-      try {
-        const res = await client.callTool(
-          { name: toolName, arguments: v.parse(JsonObjectSchema, args ?? {}) },
-          undefined,
-          { timeout },
-        );
-        return formatMcpResult(res);
-      } catch (err) {
-        return `mcp error: ${renderThrownChain({ cause: err })}`;
-      }
+      const res = await client.callTool(
+        { name: toolName, arguments: v.parse(JsonObjectSchema, args ?? {}) },
+        undefined,
+        { timeout },
+      );
+      if (res.isError === true) throw new McpToolError(decodeJsonValue({ value: res }));
+      return formatMcpResult(res);
     },
     async close() {
       // Every client is closed before anything is thrown — one server that will
@@ -202,6 +197,6 @@ type McpToolResult = Awaited<ReturnType<Client['callTool']>>;
 function formatMcpResult(res: McpToolResult): string {
   const content = Array.isArray(res?.content) ? res.content : [];
   const text = content.map((c) => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`)).join('\n');
-  return (res?.isError ? 'MCP tool error: ' : '') + (text || '(no output)');
+  return text || '(no output)';
 }
 

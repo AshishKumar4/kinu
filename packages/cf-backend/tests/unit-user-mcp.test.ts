@@ -20,7 +20,7 @@ import {
   parseMcpHeaders, mcpCredentialTransport,
 } from '../src/user/mcp';
 import {
-  isMcpToolKey, mcpToolKey, stepContextLimit, type JsonObject, type JsonValue,
+  isMcpToolKey, mcpToolKey, stepContextLimit,
   describeMcpTool, admitMcpDescriptors, toolSurfaceTokens,
   type SerializableToolDescriptor,
 } from '@kinu.run/core';
@@ -531,80 +531,6 @@ describe('buildBuiltinTools mcp_ prefix guard', () => {
     for (const n of BUILTIN_TOOLS) {
       expect(isMcpToolKey(n)).toBe(false);
     }
-  });
-});
-
-// ── 5. Orchestrator MCP tool adapter (closure dispatch) ────────────────────
-//
-// We can't boot OrchestratorAgent in a bun test, so we replay the closure
-// construction the same way buildUserMcpTools() does and assert that invoking
-// `.execute()` dispatches to the stub with the caller's workspace name plus
-// the exact (serverId, name, args) the LLM produced. The caller name is the
-// input to UserDO's caller-ownership gate (userMcp_callTool → hasWorkspace).
-
-interface FakeUserDOStub {
-  userMcp_callTool(callerAgentName: string, serverId: string, name: string, args: JsonObject): Promise<JsonValue>;
-}
-
-function buildAdapter(stub: FakeUserDOStub, callerAgentName: string, serverId: string, name: string) {
-  const execute = async (args: JsonObject): Promise<JsonValue> => {
-    try { return await stub.userMcp_callTool(callerAgentName, serverId, name, args); }
-    catch (err) { return { isError: true, error: err instanceof Error ? err.message : String(err) }; }
-  };
-  const adapter = tool({
-    description: `${serverId}/${name}`,
-    inputSchema: jsonSchema<JsonObject>({
-      type: 'object',
-      properties: { x: { type: 'string' } },
-    }),
-    execute,
-  });
-  return { adapter, execute };
-}
-
-describe('orchestrator MCP tool adapter', () => {
-  test('threads the caller workspace name + (serverId, name, args) to the stub', async () => {
-    const captured: Array<{ caller: string; id: string; name: string; args: unknown }> = [];
-    const stub: FakeUserDOStub = {
-      async userMcp_callTool(caller, id, name, args) {
-        captured.push({ caller, id, name, args });
-        return { content: [{ type: 'text', text: 'ok' }] };
-      },
-    };
-    const { adapter, execute } = buildAdapter(stub, 'my-workspace', 'srv1', 'echo');
-    expect(adapter.execute).toBe(execute);
-    const result = await execute({ x: 'hi' });
-    expect(captured[0]).toEqual({ caller: 'my-workspace', id: 'srv1', name: 'echo', args: { x: 'hi' } });
-    expect(result).toEqual({ content: [{ type: 'text', text: 'ok' }] });
-  });
-
-  // The UserDO gate rejects a caller that isn't one of the user's workspaces;
-  // the adapter must surface that rejection as a structured tool error rather
-  // than throw through the model loop. (Fail-closed propagation.)
-  test('surfaces a caller-ownership rejection as a structured tool error', async () => {
-    const owned = new Set(['my-workspace']);
-    const stub: FakeUserDOStub = {
-      async userMcp_callTool(caller) {
-        if (!owned.has(caller)) throw new Error(`MCP call rejected: '${caller}' is not one of your workspaces.`);
-        return { content: [{ type: 'text', text: 'ok' }] };
-      },
-    };
-    const rejected = buildAdapter(stub, 'not-mine', 'srv1', 'echo');
-    expect(await rejected.execute({ x: 'hi' }))
-      .toEqual({ isError: true, error: "MCP call rejected: 'not-mine' is not one of your workspaces." });
-
-    const allowed = buildAdapter(stub, 'my-workspace', 'srv1', 'echo');
-    expect(await allowed.execute({ x: 'hi' }))
-      .toEqual({ content: [{ type: 'text', text: 'ok' }] });
-  });
-
-  test('catches dispatch errors and surfaces them as structured tool errors', async () => {
-    const stub: FakeUserDOStub = {
-      async userMcp_callTool() { throw new Error('upstream MCP server unavailable'); },
-    };
-    const adapter = buildAdapter(stub, 'my-workspace', 'srv1', 'echo');
-    const result = await adapter.execute({ x: 'hi' });
-    expect(result).toEqual({ isError: true, error: 'upstream MCP server unavailable' });
   });
 });
 

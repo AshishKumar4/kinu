@@ -617,9 +617,11 @@ export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './t
 // argument values; see tools/tool-call-summary.ts.
 export {
   summarizeToolCall, describeToolCall, describeCommand,
-  isToolCallFailed, toolCallEffect, clip,
+  toolCallEffect, clip,
   type ToolCallEffect,
 } from './tools/tool-call-summary';
+export { ToolOutcomeSchema, failedToolOutcome, type ToolOutcome } from './tools/outcome';
+export { McpToolError, McpProtocolFailureSchema } from './tools/mcp-error';
 export {
   clampToolResult,
   clampSerializedToolResult,
@@ -755,8 +757,7 @@ export {
   jsonObjectOnlyInstruction,
   stripMarkdownFences,
 } from './prompts/structured';
-export { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window';
-
+export { EVIDENCE_BUDGETS, evidenceWindow, renderToolResult } from './prompts/evidence-window';
 // Runtime builder (shared across backends)
 export { buildRuntime } from './runtime-builder';
 export type { RuntimeComponents } from './runtime-builder';
@@ -977,7 +978,7 @@ export {
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
-  commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, isFailingResultText, parseRefusal, answeredRefusal, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
+  commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, parseRefusal, answeredRefusal, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
   createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,

@@ -8,12 +8,15 @@ import type { MCTSProgressEvent } from '../types/mcts';
 import type { Usage } from '../usage';
 import type { JsonObject, JsonValue } from '../utils/json';
 import type { MissionGovernor } from '../mission-budget';
+import type { ToolOutcome } from '../tools/outcome';
 
 /** A tool call as reported by the AI SDK's structured result */
 export interface ToolCallRecord {
   name: string;
   args: JsonObject;
   result?: JsonValue;
+  /** Absent only in historical turns recorded before invocation outcomes were persisted. */
+  outcome?: ToolOutcome;
 }
 
 /** A completed turn — input + output + metadata for the evolution engine */

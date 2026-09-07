@@ -8,7 +8,7 @@ import { isMcpToolKey, mcpToolKey, type LLMProviderConfig } from '@kinu.run/core
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { connectMcpServers } from '../src/mcp';
-import { scratchPath } from '@kinu.run/test-utils';
+import { scratchPath, scriptedTurnModel } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -112,6 +112,8 @@ describe('connectMcpServers', () => {
       expect(conn.diagnostics).toEqual([{ server: 'echo', status: 'connected', toolCount: 3 }]);
       expect(logs.some((m) => m.includes('mcp: echo'))).toBe(true);
       await expect(conn.call('echo', 'echo', { text: 'hello' })).resolves.toBe('echo: hello');
+      await conn.close();
+      await expect(conn.call('echo', 'echo', { text: 'after disconnect' })).rejects.toBeInstanceOf(Error);
     } finally {
       await conn.close();
     }
@@ -119,6 +121,31 @@ describe('connectMcpServers', () => {
 });
 
 describe('LocalAgentSession MCP surface', () => {
+  test.each([false, true])('MCP isError=%s determines the native SDK outcome, not content fields', async (fail) => {
+    const text = '{"reason":"denied","error":"historical incident"}';
+    let step = 0;
+    const model = scriptedTurnModel({ doGenerate: () => ({
+      content: ++step === 1
+        ? [{ type: 'tool-call', toolCallId: 'mcp-outcome', toolName: 'mcp_echo_echo', input: JSON.stringify({ text, fail }) }]
+        : [{ type: 'text', text: 'done' }],
+      finishReason: { unified: step === 1 ? 'tool-calls' : 'stop', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
+      warnings: [],
+    }) });
+    const { session, events } = sessionWithModel(model);
+    try {
+      await session.connectMcp(mcpServers());
+      await session.send('Call the MCP tool.');
+      const result = events.find((event) => event.type === 'tool-result' && event.toolName === 'mcp_echo_echo');
+      if (fail) {
+        expect(result).toMatchObject({ success: false, reason: null, result: expect.stringContaining('remote failure') });
+        expect(result).not.toHaveProperty('execution');
+      } else {
+        expect(result).toMatchObject({ success: true, result: 'echo: ' + text });
+      }
+    } finally { await session.end(); }
+  });
+
   test('connected MCP tools appear in /tools and in the next model turn', async () => {
     let captured: string[] = [];
     const { session } = sessionWithModel(capturingModel((tools) => { captured = tools; }));

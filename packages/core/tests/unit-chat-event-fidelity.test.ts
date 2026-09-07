@@ -10,8 +10,11 @@ import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet 
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
-import { runChat, collectStepText, ExtensionHost, type ChatEvent, type KinuExtension, type Usage } from '../src/index';
+import { runChat, collectStepText, ExtensionHost, createAgentsTool, createAgentsCodemodeProvider, type ChatEvent, type KinuExtension, type Usage } from '../src/index';
 import { synthesizeToolFallback } from '../src/prompts/evidence-window';
+import { isFailingToolResult } from '../src/orchestrator/turn-steering';
+import { buildBuiltinTools } from '../src/tools/builtins';
+import { createTestRuntime } from './helpers';
 
 type FinishPart = Extract<LanguageModelV3StreamPart, { type: 'finish' }>;
 
@@ -29,6 +32,7 @@ function finishPart(reason: 'stop' | 'tool-calls', usage: FinishPart['usage'] = 
  *  what the ChatEvent seam surfaces. */
 function toolThenTextModel(opts: {
   toolName: string;
+  input?: string;
   firstUsage?: FinishPart['usage'];
 }): LanguageModel {
   let step = 0;
@@ -41,7 +45,7 @@ function toolThenTextModel(opts: {
         ? new ReadableStream<LanguageModelV3StreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
-              c.enqueue({ type: 'tool-call', toolCallId: 'tc1', toolName: opts.toolName, input: '{}' });
+              c.enqueue({ type: 'tool-call', toolCallId: 'tc1', toolName: opts.toolName, input: opts.input ?? '{}' });
               c.enqueue(finishPart('tool-calls', opts.firstUsage));
               c.close();
             },
@@ -80,6 +84,44 @@ async function collect(model: LanguageModel, tools: ToolSet, extensions?: Extens
 }
 
 describe('ChatEvent tool success/error fidelity', () => {
+  test('successful JSON-looking command data does not fail the invocation', async () => {
+    const stdout = JSON.stringify({ reason: 'denied', error: 'historical incident' });
+    const failures: boolean[] = [];
+    const extension: KinuExtension = {
+      name: 'outcome-probe',
+      onToolResult: (ctx) => { failures.push(isFailingToolResult(ctx)); },
+    };
+    const { rt } = createTestRuntime();
+    const tools = buildBuiltinTools({ rt: { ...rt, shell: { exec: async () => ({ stdout, stderr: '', exitCode: 0 }) } } });
+    const model = toolThenTextModel({ toolName: 'run', input: JSON.stringify({ command: 'cat incident.json' }) });
+    const events = await collect(model, tools, new ExtensionHost().register(extension));
+    expect(failures).toEqual([false]);
+    expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ result: stdout, success: true });
+  });
+
+  test('native command failure retains observed exit provenance through the SDK', async () => {
+    const { rt } = createTestRuntime();
+    const tools = buildBuiltinTools({ rt: { ...rt, shell: {
+      exec: async () => ({ stdout: 'tests failed', stderr: 'detail', exitCode: 7 }),
+    } } });
+    const events = await collect(toolThenTextModel({ toolName: 'run', input: JSON.stringify({ command: 'test' }) }), tools);
+    expect(events.find((event) => event.type === 'tool-result')).toMatchObject({
+      success: false, reason: 'io', execution: { exitCode: 7 }, result: expect.stringContaining('tests failed'),
+    });
+  });
+  test.each([
+    { stage: 'resolution', input: { action: 'swarm', preset: 'custom', task: 'inspect', label: 'custom-case' }, reason: 'bad_input', detail: 'config' },
+    { stage: 'validity', input: { action: 'swarm', preset: 'ideate', task: 'inspect', depth: 2 }, reason: 'bad_input', detail: 'depth' },
+    { stage: 'runtime', input: { action: 'swarm', preset: 'ideate', task: 'inspect', models: ['fake/missing'] }, reason: 'unsupported', detail: 'resolver' },
+  ])('native swarm $stage refusal fails the SDK invocation and remains branchable in codemode', async ({ input, reason, detail }) => {
+    const { rt } = createTestRuntime();
+    const deps = { mode: 'build', fork: { rt, model: new MockLanguageModelV3() } } satisfies Parameters<typeof createAgentsTool>[0];
+    const events = await collect(toolThenTextModel({ toolName: 'agents', input: JSON.stringify(input) }), { agents: createAgentsTool(deps) });
+    expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ success: false, reason, result: expect.stringContaining(detail) });
+    const namespace = createAgentsCodemodeProvider(() => deps);
+    expect(await namespace.tools.swarm?.execute(input)).toMatchObject({ reason, error: expect.stringContaining(detail) });
+  });
+
   test('a throwing tool yields a tool-result with success:false and the error text', async () => {
     const seenByExtension: string[] = [];
     const ext: KinuExtension = {

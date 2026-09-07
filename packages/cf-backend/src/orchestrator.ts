@@ -142,7 +142,7 @@ import {
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
   isWorkspaceUnattachedError, WORKSPACE_HAS_NO_OWNER, isDeviceAmbiguityError,
-  CommandResultSchema,
+  CommandResultSchema, ToolOutcomeSchema,
   type CheckpointAvailability, type FileCheckpointListing,
   type FileRestorePlan, type FileRestoreResult,
   // Shared turn lifecycle
@@ -272,6 +272,7 @@ const ToolCallRecordsSchema = v.array(v.object({
   name: v.string(),
   args: v.record(v.string(), JsonValueSchema),
   result: v.optional(JsonValueSchema),
+  outcome: v.optional(ToolOutcomeSchema),
 }));
 
 /** The one agents-SDK schedule row that carries every Kinu-owned wake

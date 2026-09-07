@@ -18,6 +18,7 @@ import type { EscalationSnapshot } from '../execution/escalation';
 import type { MissionBudgetRefusal } from '../mission-budget';
 import type { HeadFileChangeSet } from '../heads/types';
 import type { Usage } from '../usage';
+import type { ToolOutcome } from '../tools/outcome';
 import type { WorkMode } from '../prompting/surface';
 import type {
   SpendSource, ModelOperationKind, ModelOperationOutcome, ModelOperationPhase,
@@ -102,13 +103,10 @@ export type RunEvent =
    *  duplicated: the durable cost of the ledger tracks what the turn DID, not
    *  how much content it moved. Absent when the call took no arguments.
    *
-   *  `error` is the transport discriminator — the tool threw. A command that
-   *  ran and exited non-zero is a SUCCESSFUL call whose `result` text begins
-   *  `Error (exit N)`; the two are different facts and a reader that wants
-   *  "did the work fail" must consult both. When present it is NEVER empty:
-   *  see `FAILURE_WITHOUT_ERROR`. */
+   *  New records carry the SDK invocation outcome separately from arbitrary
+   *  result content. Historical rows lacking it are unmeasured. */
   | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string;
-      args?: JsonValue; result?: JsonValue; error?: string; durationMs?: number })
+      args?: JsonValue; result?: JsonValue; error?: string; durationMs?: number; outcome?: ToolOutcome })
   /** One model request completed — and, in `messages`, WHAT it produced: the
    *  assistant parts and paired tool results of that step alone, appended the
    *  moment the step finished. This is the durable record of the model's own
@@ -396,6 +394,7 @@ export type ApprovalConsumedRecord =
 /** A new event payload sans the base fields the recorder fills in. */
 export type RunEventInput = {
   [K in RunEvent['type']]: Omit<Extract<RunEvent, { type: K }>, keyof RunEventBase> & { type: K }
+    & (K extends 'tool_call_end' ? { outcome: ToolOutcome } : object)
 }[RunEvent['type']];
 
 /**

@@ -33,6 +33,7 @@ import { currentWorkMode } from './work-mode';
 import { TOOL_REACH } from '../tools/registry';
 import { createFileDispatcher } from '../tools/file-tool';
 import { TurnFileLedger } from '../tools/file-ledger';
+import { branchableToolCall } from '../tools/outcome';
 import { TurnContextBudget } from '../context-budget';
 import type { JsonValue } from '../utils/json';
 
@@ -188,7 +189,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const text = parseInput(StringSchema, { value: args[1] });
         if (p === undefined) return refusalOf(new KinuError('bad_input', 'workspace.writeFile: path must be a string'));
         if (text === undefined) return refusalOf(new KinuError('bad_input', 'workspace.writeFile: content must be a string'));
-        const result = await currentFileDispatch()({ action: 'write', path: p, content: text });
+        const result = await branchableToolCall(() => currentFileDispatch()({ action: 'write', path: p, content: text }));
         const success = v.safeParse(FileWriteSuccessSchema, result);
         return success.success
           ? `Written ${success.output.bytes} bytes to ${success.output.path}`
@@ -211,7 +212,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         // read live so an edit gated here refuses identically to a
         // native-tool edit over the SAME turn's read state — cheap
         // (closures only, no I/O), the same cost ConversationSearchStore accepts.
-        return currentFileDispatch()({ action: 'edit', path, edits: list });
+        return branchableToolCall(() => currentFileDispatch()({ action: 'edit', path, edits: list }));
       },
     },
 

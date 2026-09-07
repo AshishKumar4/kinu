@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
-import { applyWorkspaceTitle, canonicalConversationId, createAgentConfigStore, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, invalidateConversationSearchIndex, type GepaOptimizationResult } from '@kinu.run/core';
+import { applyWorkspaceTitle, canonicalConversationId, createAgentConfigStore, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, invalidateConversationSearchIndex, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import {
   DriverLeaseHold,
@@ -700,7 +700,7 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
     case 'tool-call':
       return { type: 'tool-call', toolName: event.toolName, toolCallId: event.toolCallId, args: event.args };
     case 'tool-result':
-      return { type: 'tool-result', toolName: event.toolName, toolCallId: event.toolCallId, result: event.result, success: event.success };
+      return event;
     case 'turn-end':
       const turn: AgentTurnResult = {
         text: event.turn.assistantResponse,
@@ -710,7 +710,8 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
         toolCalls: event.turn.toolCalls.map((call) => ({
           name: call.name,
           args: asRecord({ value: decodeJsonValue({ value: call.args }) }, 'input'),
-          result: call.result === undefined ? undefined : String(call.result),
+          result: call.result === undefined ? undefined : renderToolResult(call.result),
+          outcome: call.outcome,
         })),
       };
       // An all-absent report is an object, and a truthy one — gate on the

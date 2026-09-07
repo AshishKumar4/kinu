@@ -486,18 +486,15 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
       message: 'begin',
       role: 'researcher',
     });
-    const native = await dispatchAgentsAction(deps, nativeInput);
+    const native = dispatchAgentsAction(deps, nativeInput);
+    await expect(native).rejects.toMatchObject({ code: 'bad_input', message: 'field "role" is not available for action "hire" on this actor' });
     const codemode = await member(namespaceOf(fullDeps), 'hire').execute({
       scope: 'workspace',
       mission: 'own the specialist workspace',
       message: 'begin',
       role: 'researcher',
     });
-    expect(native).toEqual({
-      reason: 'bad_input',
-      error: 'field "role" is not available for action "hire" on this actor',
-    });
-    expect(codemode).toEqual(native);
+    expect(codemode).toEqual({ reason: 'bad_input', error: 'field "role" is not available for action "hire" on this actor' });
   });
 });
 
