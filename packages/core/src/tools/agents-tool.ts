@@ -1460,11 +1460,11 @@ async function runSwarmAction(
   // Resolution first, per *Presets* — *Validity over the resolved configuration* is
   // stated over the resolved tuple and has no input without it.
   const resolved = resolveSwarm(call);
-  if ('reason' in resolved) return resolved;
+  if ('reason' in resolved) throw new KinuError(resolved.reason, resolved.error);
   // Legality, per *Validity over the resolved configuration*: over the resolved
   // tuple and never over the preset name.
   const illegal = swarmValidity(resolved);
-  if (illegal) return illegal;
+  if (illegal) throw new KinuError(illegal.reason, illegal.error);
 
   // The mission scope, and with it both enforcement seams: the governed `LLM` for the
   // measurement calls this process makes, and the PORT the run charges its own model
@@ -1554,7 +1554,7 @@ async function runSwarmAction(
   };
   readSpawnStarted(toolOptions)?.();
   const result = await inWorkMode(mode, () => runSwarm(runDeps, resolved));
-  if ('reason' in result) return result;
+  if ('reason' in result) throw new KinuError(result.reason, result.error);
   // THE SPAWN, AND ONLY THE SPAWN. The tokens are already on the ledger: every model
   // call the run made debited as it happened, through `SwarmRunDeps.mission` above, and
   // `report.tokens` is the sum of exactly those calls. Charging it again here would
