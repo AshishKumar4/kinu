@@ -125,6 +125,10 @@ describe('HeadController.run', () => {
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
+      // Each test states the recursion room its scenario spends. One level is
+      // what a split whose heads only report needs: the children inherit zero,
+      // and nothing here splits again.
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(spawnedInputs).toHaveLength(2);
@@ -147,6 +151,7 @@ describe('HeadController.run', () => {
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(result.mergedNarrative).toBe('Unified findings across A and B.');
@@ -166,6 +171,7 @@ describe('HeadController.run', () => {
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     const rows = sql<{ id: string; status: string; summary: string | null }>`
@@ -190,6 +196,7 @@ describe('HeadController.run', () => {
       rootId: 'root-1',
       inheritedContext: baseContext,
       request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     const cached = journal.readCachedMerge('root-1');
@@ -259,6 +266,10 @@ describe('HeadController.run', () => {
       parentHeadId: null,
       inheritedContext: baseContext,
       request: { rationale: 'no heads', heads: [] },
+      // Real room, deliberately: the depth check runs first, so a spent budget
+      // here would raise ITS error and this test would never reach the one it
+      // names.
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     })).rejects.toThrow(/no head tasks/i);
   });
 
@@ -377,6 +388,7 @@ describe('HeadController.run', () => {
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(result.mergedNarrative).toContain('Merge synthesis unavailable');
@@ -403,6 +415,7 @@ describe('HeadController.run', () => {
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(result.mergedNarrative).toContain('Merge synthesis unavailable');
@@ -428,6 +441,7 @@ describe('HeadController.run', () => {
         parentHeadId: null,
         inheritedContext: baseContext,
         request: { ...baseRequest, mergeStrategy: strategy },
+        parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
       });
     }
 
@@ -459,6 +473,7 @@ describe('HeadController.run', () => {
       parentHeadId: null, rootId: 'r-steps',
       inheritedContext: baseContext,
       request: { rationale: 'trace test', heads: [{ task: 'angle A', rationale: 'a' }] },
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     const run = journal.listRuns(10).find((r) => r.rootId === 'r-steps');
@@ -492,6 +507,7 @@ describe('HeadController.run', () => {
       inheritedContext: baseContext,
       request: baseRequest,
       onPhase: (e) => { if (e.kind === 'split') splitIds.push(...e.headIds); },
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     // The run resolves: one head's spawn failure is not the split's failure.
@@ -543,6 +559,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(mergeCalls).toBe(0);
@@ -576,6 +593,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(result.mergedNarrative).toBe('Synthesis of what A found.');
@@ -598,6 +616,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(result.costSummary.headsWithFindings).toBe(1);
@@ -623,6 +642,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     const live = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, rootId: 'root-1', inheritedContext: baseContext, request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     const cached = journal.readCachedMerge('root-1');
@@ -737,6 +757,7 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
       parentHeadId: null, rootId: 'top-root',
       inheritedContext: baseContext,
       request: { rationale: 'Explore two angles', heads: baseRequest.heads },
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     const runs = journal.listRuns(10);
@@ -761,6 +782,7 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
         parentHeadId: null, rootId: root,
         inheritedContext: baseContext,
         request: { rationale: `r-${root}`, heads: [{ task: `t-${root}`, rationale: 'x' }] },
+        parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
       });
     }
     const runs = journal.listRuns(2);
@@ -779,6 +801,7 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
         rootId: root,
         inheritedContext: baseContext,
         request: { rationale: `r-${root}`, heads: [{ task: `t-${root}`, rationale: 'x' }] },
+        parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
       });
     }
     db.prepare("UPDATE head_journal SET spawned_at = 1 WHERE root_id = 'bookmarked'").run();
@@ -869,6 +892,7 @@ describe('merge blind spots', () => {
       inheritedContext: baseContext,
       request: baseRequest,
       onPhase: (e) => { if (e.kind === 'merge') events.push([...e.blindSpots]); },
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(result.blindSpots).toEqual(spots);
@@ -895,6 +919,7 @@ describe('merge blind spots', () => {
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(result.mergedNarrative).toBe('Just a narrative.');
@@ -915,6 +940,7 @@ describe('merge blind spots', () => {
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     // The merge never reached a model, so it cannot have produced a blind spot.
@@ -929,6 +955,7 @@ describe('merge blind spots', () => {
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(result.mergedNarrative).toContain('Merge synthesis unavailable');
@@ -947,6 +974,7 @@ describe('merge blind spots', () => {
     await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(prompt).toContain('blind_spots');
