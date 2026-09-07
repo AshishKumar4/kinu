@@ -19,6 +19,11 @@ import { SidecarDaemonClient, readWalProgress } from '../bench/sidecar/daemon-cl
 import type { NodeEntry } from '../src/capture/model';
 import { openMerkleV2 } from '../src/candidates/merkle-pack/view-v2';
 import type { MerkleV2View } from '../src/candidates/merkle-pack/view-v2';
+import { DirectR2Store } from '../bench/candidate-sidecar';
+import type { SidecarPayloadStore } from '../bench/sidecar/core';
+import type { PackRun } from '../src/candidates/merkle-pack/read';
+import type { ObjectReceipt, PayloadGrant, RangeReadIntent, UploadIntent } from '../src/durability/contracts';
+import type { StoreOp } from './support/sidecar-fixture';
 
 import {
   MemoryEnvelopeStoreV2,
@@ -157,8 +162,44 @@ function expectSameTree(name: string, expected: readonly NodeEntry[], served: re
   assert(name, mismatches.length === 0, `${expected.length} entries; ${mismatches.length} mismatches: ${describeMismatches(mismatches).slice(0, 800)}`);
 }
 
+/** The payload store under measurement: in memory, or the direct R2 transport
+ * over HTTP when `KINU_STORE_ENDPOINT` names an endpoint. Every operation is
+ * counted either way, so the facts compare across the two. */
+class CountedStore implements SidecarPayloadStore {
+  readonly ops: StoreOp[] = [];
+
+  constructor(private readonly inner: SidecarPayloadStore) {}
+
+  issuePayloadGrant(intent: UploadIntent): Promise<PayloadGrant> {
+    return this.inner.issuePayloadGrant(intent);
+  }
+
+  async uploadObject(grant: PayloadGrant, body: ReadableStream<Uint8Array>): Promise<ObjectReceipt> {
+    const receipt = await this.inner.uploadObject(grant, body);
+    this.ops.push({ op: 'put', key: receipt.key, bytes: Number(receipt.byteLength) });
+    return receipt;
+  }
+
+  async readRange(intent: RangeReadIntent): Promise<Uint8Array> {
+    const bytes = await this.inner.readRange(intent);
+    this.ops.push({ op: 'get', key: intent.exactKey, bytes: bytes.byteLength });
+    return bytes;
+  }
+
+  async readRun(run: PackRun): Promise<Uint8Array> {
+    const bytes = await this.inner.readRun(run);
+    this.ops.push({ op: 'get', key: run.key, bytes: bytes.byteLength });
+    return bytes;
+  }
+
+  async deleteObject(key: string): Promise<void> {
+    await this.inner.deleteObject(key);
+    this.ops.push({ op: 'delete', key, bytes: 0 });
+  }
+}
+
 interface Stores {
-  readonly payload: MemoryPayloadStore;
+  readonly payload: CountedStore;
   readonly envelopes: MemoryEnvelopeStoreV2;
   readonly control: MemoryControlStore;
 }
@@ -209,8 +250,10 @@ async function main(): Promise<void> {
   let now = 1_000;
   const clock = (): number => now;
   const space = await workspace();
+  const endpoint = process.env.KINU_STORE_ENDPOINT;
+  facts.payloadStore = endpoint === undefined ? 'memory' : 'direct-r2';
   const stores: Stores = {
-    payload: new MemoryPayloadStore(),
+    payload: new CountedStore(endpoint === undefined ? new MemoryPayloadStore() : new DirectR2Store(endpoint)),
     envelopes: new MemoryEnvelopeStoreV2(),
     control: new MemoryControlStore(),
   };
