@@ -17,12 +17,9 @@ import type { RawSqlExec, VfsEntryStat } from '../types/primitives';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus } from '../vfs/diff';
 import { nanoid } from '../utils/nanoid';
-// The ONE failure predicate. What stood here was a local regex over
-// `Error (exit N)` and `exec error:` — the second is prose no executor writes any
-// more, and neither shape covered the refusal payload they return, so an
-// unconfigured executor's refusal would have been parsed as a git diff.
-import { isFailingResultText } from '../execution/exec-result';
-import { renderThrownChain } from '../obs/index';
+import * as v from 'valibot';
+import { CommandResultSchema } from '../execution/exec-result';
+import { KinuError, renderThrownChain } from '../obs/index';
 
 /**
  * Files bigger than this are excluded from the snapshot — a change-set is a
@@ -255,43 +252,33 @@ async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<Executo
   if (!provider) return { files: [], mode: 'git', error: `Executor "${executorId}" not found` };
   const execTool = provider.tools.exec;
   if (!execTool) return { files: [], mode: 'git', error: `Executor "${executorId}" has no exec tool` };
+  const execute = async (command: string): Promise<string> => {
+    const result = v.parse(CommandResultSchema, await execTool.execute(command));
+    if (!v.is(v.string(), result)) throw new KinuError(result.reason, result.error);
+    return result;
+  };
   try {
     // Keep the two git streams separate: the first is a unified diff; the
     // second is a NUL-delimited path list that must be rendered one file at a
     // time. A single shell pipeline would mix binary NULs into the diff.
-    const root = String(await execTool.execute(
-      `git rev-parse --show-toplevel 2>/dev/null || printf '${NOT_GIT_REPO}'`,
-    )).trim();
+    const root = (await execute(`git rev-parse --show-toplevel 2>/dev/null || printf '${NOT_GIT_REPO}'`)).trim();
     if (root === NOT_GIT_REPO) return { files: [], mode: 'git', notGitRepo: true };
-    if (isFailingResultText(root)) return { files: [], mode: 'git', error: root };
 
     const quotedRoot = `'${root.replace(/'/g, `'\\''`)}'`;
-    const headOutput = String(await execTool.execute(
-      `git -C ${quotedRoot} rev-parse --verify HEAD >/dev/null 2>&1 && printf yes || printf no`,
-    )).trim();
-    if (isFailingResultText(headOutput)) return { files: [], mode: 'git', error: headOutput };
+    const headOutput = (await execute(`git -C ${quotedRoot} rev-parse --verify HEAD >/dev/null 2>&1 && printf yes || printf no`)).trim();
     if (headOutput !== 'yes' && headOutput !== 'no') {
       return { files: [], mode: 'git', error: `Unexpected git HEAD probe output: ${headOutput}` };
     }
     const hasHead = headOutput === 'yes';
     const tracked = hasHead
-      ? String(await execTool.execute(
-          `git -C ${quotedRoot} --no-pager diff --no-ext-diff --no-renames HEAD --`,
-        ))
+      ? await execute(`git -C ${quotedRoot} --no-pager diff --no-ext-diff --no-renames HEAD --`)
       : '';
-    if (isFailingResultText(tracked)) return { files: [], mode: 'git', error: tracked };
     const pathScope = hasHead ? '--others' : '--cached --others';
-    const untracked = String(await execTool.execute(
-      `git -C ${quotedRoot} ls-files ${pathScope} --exclude-standard -z`,
-    ));
-    if (isFailingResultText(untracked)) return { files: [], mode: 'git', error: untracked };
+    const untracked = await execute(`git -C ${quotedRoot} ls-files ${pathScope} --exclude-standard -z`);
     const untrackedDiff = untracked === '(no output)'
       ? ''
-      : String(await execTool.execute(
-          `git -C ${quotedRoot} ls-files ${pathScope} --exclude-standard -z | ` +
-          `xargs -0 -n 1 sh -c '[ -z "$2" ] || git -C "$1" --no-pager diff --no-index --no-ext-diff --no-renames -- /dev/null "$2" || test "$?" -eq 1' sh ${quotedRoot}`,
-        ));
-    if (isFailingResultText(untrackedDiff)) return { files: [], mode: 'git', error: untrackedDiff };
+      : await execute(`git -C ${quotedRoot} ls-files ${pathScope} --exclude-standard -z | ` +
+        `xargs -0 -n 1 sh -c '[ -z "$2" ] || git -C "$1" --no-pager diff --no-index --no-ext-diff --no-renames -- /dev/null "$2" || test "$?" -eq 1' sh ${quotedRoot}`);
     const unified = [tracked === '(no output)' ? '' : tracked, untrackedDiff === '(no output)' ? '' : untrackedDiff]
       .filter(Boolean).join('\n');
     return { files: parseGitDiff(unified), mode: 'git' };
