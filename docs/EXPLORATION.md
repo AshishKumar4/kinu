@@ -324,8 +324,11 @@ left still finishes its own work; its tool surface excludes further splitting.
 
 A node ends when the model stops calling tools and it holds nothing, the search
 aborts it, its mission governor declines the next request, or an opt-in
-`maxWallClockMs` deadline passes. Shipped dispatch declares none. The last three
-are read between steps, so none interrupts one.
+`maxWallClockMs` deadline passes. Shipped dispatch declares none. In-isolate,
+the last three are read between steps, so none interrupts one. A hosted node
+is aborted by evicting its facet (`getCFNodeHost`), which ends the step in
+flight; the search records it `aborted` under the cancel reason, reclaims its
+storage, and boots no facet for a search already cancelled.
 
 Three tool-using nodes still ran at 1,216,358 / 1,310,061 / 1,336,833 ms across
 22 / 25 / 26 steps when a 1,200,000 ms abort fired. Their mean steps were

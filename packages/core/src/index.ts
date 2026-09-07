@@ -1347,6 +1347,10 @@ export {
 
 // Utils
 export { nanoid } from './utils/nanoid';
+// An abort's reason as an Error, so a cancelled run is attributable to whoever
+// cancelled it. Exported because the hosted-node transport evicts off the same
+// reason the search records.
+export { abortCause } from './utils/abort';
 export { hmacSha256Hex, timingSafeEqual } from './utils/crypto';
 // Confidence intervals — every score this system reports travels with one.
 export {
