@@ -37,10 +37,11 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     const call = (tool: string) => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'issues', 'GITHUB', { member: tool, args: [{}], depth: 0 });
 
     await bind('github');
-    expect(await call('read_issue')).toMatchObject({ ok: false, error: expect.stringContaining('Unknown MCP server') });
+    expect(await call('read_issue')).toMatchObject({ ok: false, reason: 'missing' });
     await bind('connection-id');
     expect(await call('read_issue')).toEqual({ ok: true, value: { content: [] } });
-    expect(await call('create_issue')).toMatchObject({ ok: false, error: expect.stringContaining('allowed_tools') });
+    // Outside the owner's allowlist the tool is not on this actor's surface at all.
+    expect(await call('create_issue')).toMatchObject({ ok: false, reason: 'missing' });
 
     await user.userDO.userMcp_update(owner, 'connection-id', { name: 'renamed-github' });
     expect(await call('read_issue')).toEqual({ ok: true, value: { content: [] } });
@@ -52,7 +53,28 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     expect(await call('create_issue')).toEqual({ ok: true, value: { content: [] } });
 
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: [] });
-    expect(await call('read_issue')).toMatchObject({ ok: false, error: expect.stringContaining('allowed_tools') });
+    expect(await call('read_issue')).toMatchObject({ ok: false, reason: 'missing' });
+
+    // The owner's allowlist is not the caller's role. A facet whose role names
+    // only `memory` cannot use a declared MCP binding it could not call natively,
+    // even while the owner permits the tool.
+    await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: ['read_issue'] });
+    const child = await hiredSubordinateHarness(actor, {
+      name: 'issue-reader', displayName: 'Issue reader', nameOrigin: 'user', role: 'general', mission: 'Read issues',
+    }, { userDO: user.userDO, workspace, ownerUserId });
+    // The push a hire makes: the child reaches the owner's MCP plane with the workspace's capability.
+    await child.agent.installWorkspaceCapability(capability);
+    const asChild = child.agent.observeSlateCaller();
+    const childCall = (tool: string) => actor.agent.slateBindingCallAs(asChild, 'issues', 'GITHUB', { member: tool, args: [{}], depth: 0 });
+    expect(await childCall('read_issue')).toEqual({ ok: true, value: { content: [] } });
+    child.agent.harnessInstallCatalog({
+      roles: { scribe: { description: 'Writes prose only.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
+      tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
+    });
+    await child.agent.setSubordinateIdentity({
+      name: 'issue-reader', displayName: 'Issue reader', nameOrigin: 'user', role: 'scribe', mission: 'Read issues', lifetime: 'durable',
+    });
+    expect(await childCall('read_issue')).toMatchObject({ ok: false, reason: 'denied' });
   } finally {
     await user.joinFibers();
     user.close();
@@ -164,17 +186,52 @@ test('a binding held by a facet reaches the facet\'s own files and role, never t
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root only' });
   expect(await call(asChild, 'writeFile', ['/home/user/private.md', 'stolen'])).toMatchObject({ ok: false, reason: 'denied' });
   expect(await rootFiles.readFile('/home/user/private.md', { encoding: 'utf8' })).toBe('root only');
-  // The same binding for the root writes the origin's tree, as the root does.
+  // The same binding for the root writes the origin's tree, as the root does —
+  // under the root's own read-before-overwrite guard, which a blind write trips.
+  expect(await call(ROOT_SLATE_CALLER, 'writeFile', ['/home/user/private.md', 'blind'])).toMatchObject({ ok: false, reason: 'bad_input' });
+  expect(await call(ROOT_SLATE_CALLER, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root only' });
   expect(await call(ROOT_SLATE_CALLER, 'writeFile', ['/home/user/private.md', 'root wrote'])).toMatchObject({ ok: true });
+  expect(await rootFiles.readFile('/home/user/private.md', { encoding: 'utf8' })).toBe('root wrote');
 
   // A role that names no workspace-reaching capability loses the namespace on the next call.
-  child.agent.harnessInstallCatalog({
+  const scribe = {
     roles: { scribe: { description: 'Writes prose only.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
     tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
-  });
-  await child.agent.setSubordinateIdentity({
-    name: 'reader-1', displayName: 'Reader', nameOrigin: 'user', role: 'scribe',
+  } as const;
+  const reseed = (role: string) => child.agent.setSubordinateIdentity({
+    name: 'reader-1', displayName: 'Reader', nameOrigin: 'user', role,
     mission: 'Read what you may', lifetime: 'durable',
   });
+  child.agent.harnessInstallCatalog(scribe);
+  await reseed('scribe');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
+
+  // A COMPLETED turn leaves its resolved profile cached until the next one
+  // opens. A role revoked in that window must not keep the old reach alive.
+  await reseed('general');
+  await child.agent.harnessOpenTurnProfile(['run', 'file', 'execute_tools', 'memory']);
+  expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root wrote' });
+  child.agent.declareTurnInFlight(false);
+  await reseed('scribe');
+  expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
+  // While the turn IS live, the turn's own profile governs, as it does natively.
+  await reseed('general');
+  await child.agent.harnessOpenTurnProfile(['memory']);
+  expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
+  child.agent.declareTurnInFlight(false);
+});
+
+test('workspace read models are the root\'s own reads; a facet holds none of them', async () => {
+  const parent = orchestratorHarness();
+  const rootFiles = parent.agent.observeRuntime().storage.vfs;
+  await rootFiles.mkdir('/home/user/slates/status', { recursive: true });
+  await rootFiles.writeFile('/home/user/slates/status/package.json', JSON.stringify({
+    main: 'server.ts', slate: { bindings: { DATA: { kind: 'rpc', methods: ['getExecutors'] } } },
+  }));
+  const child = await hiredSubordinateHarness(parent, {
+    name: 'peeker', displayName: 'Peeker', nameOrigin: 'user', role: 'general', mission: 'Peek',
+  });
+  const call = (caller: SlateCaller) => parent.agent.slateBindingCallAs(caller, 'status', 'DATA', { member: 'getExecutors', args: [], depth: 0 });
+  expect(await call(ROOT_SLATE_CALLER)).toMatchObject({ ok: true, value: expect.any(Array) });
+  expect(await call(child.agent.observeSlateCaller())).toMatchObject({ ok: false, reason: 'denied' });
 });

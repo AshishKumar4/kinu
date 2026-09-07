@@ -24,10 +24,12 @@ export interface SlateCaller {
 /** The workspace root acting as itself: the owner-facing surfaces mint this locally. */
 export const ROOT_SLATE_CALLER: SlateCaller = { path: [], cred: CRED_SESSION_USER };
 
-/** Distinct actors never share a process or a binding, so this keys both. */
+/** Distinct actors never share a process or a binding, so this keys both — by
+ *  the WHOLE credential (uid, gid, supplementary groups, umask) and the path. */
 export function slateCallerKey(caller: SlateCaller): string {
+  const { uid, gid, groups, umask } = caller.cred;
   const path = caller.path.map((hop) => `${hop.className}/${hop.name}`).join('>');
-  return `${caller.cred.uid}:${caller.cred.gid}|${path}`;
+  return `${uid}:${gid}:${[...groups].sort((a, b) => a - b).join(',')}:${umask}|${path}`;
 }
 
 /** Only the host mints these props; a process receives the stub, not authority to mint one. */

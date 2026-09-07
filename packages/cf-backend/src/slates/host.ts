@@ -7,22 +7,24 @@ import {
   SlateFiles, SqliteSlateContentStore, SqliteSlateStore, WorkspaceSlates, slateDirectory, parseSlateProject,
   SlateBindingRequestSchema, SlateOperationSchema, routeSlateBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName,
   type JsonValue, type SlateProject,
-  type SlateBindingRoute, type SlateCallResult, type SlateReadModel, type SlateSummary, type SlateProblem,
+  type SlateBindingRoute, type SlateCallResult, type SlateSummary, type SlateProblem,
 } from '@kinu.run/core';
 import { ERROR_CODES, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateCallerKey, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
 
 const Failure = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
+/** A refusal a member ANSWERED rather than threw. The file plane's ledger reasons
+ *  (`unread`, `stale`, an edit anchor that did not match) are not error classes;
+ *  each is a precondition the caller did not meet, so the caller hears `bad_input`. */
+const AnsweredRefusal = v.object({ reason: v.string(), error: v.string() });
 
 /** A binding route the calling actor answers with its own capability set. */
-export type SlateCapabilityRoute = Extract<SlateBindingRoute, { kind: 'namespace' | 'mcp' }>;
+export type SlateCapabilityRoute = Exclude<SlateBindingRoute, { kind: 'app' }>;
 
 export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'content'> {
-  /** Run a capability route as the caller: its own providers, its own role reach, its own gates. */
+  /** Run a capability route as the caller: its own providers, its own role reach, its own read models, its own gates. */
   dispatch(caller: SlateCaller, route: SlateCapabilityRoute): Promise<JsonValue>;
-  /** The workspace's read models: workspace-scoped, read-only, held to `workspace.read`. */
-  data(source: SlateReadModel): Promise<JsonValue>;
   expose(port: number): Promise<{ url?: string }>;
 }
 
@@ -154,14 +156,16 @@ export class SlateHost {
   private async run(caller: SlateCaller, route: SlateBindingRoute): Promise<SlateCallResult> {
     switch (route.kind) {
       case 'namespace':
-      case 'mcp': {
+      case 'mcp':
+      case 'rpc': {
         const value = await this.deps.dispatch(caller, route);
-        // A member that ANSWERS a classified refusal (the file plane's
-        // `{reason, error}`) refused; authored code sees the class, not a value.
-        const refused = v.safeParse(Failure, value);
-        return refused.success ? { ok: false, ...refused.output } : { ok: true, value };
+        // A member that ANSWERS a refusal refused; authored code sees the class, not a value.
+        const classified = v.safeParse(Failure, value);
+        if (classified.success) return { ok: false, ...classified.output };
+        const answered = v.safeParse(AnsweredRefusal, value);
+        if (answered.success) return { ok: false, reason: 'bad_input', error: `${answered.output.reason}: ${answered.output.error}` };
+        return { ok: true, value };
       }
-      case 'rpc': return { ok: true, value: await this.deps.data(route.method) };
       // The hop keeps the CALLER's authority: the callee runs for whoever asked, never as its author.
       case 'app': return this.call(caller, route.id, route.method, [...route.args], route.depth + 1);
     }
