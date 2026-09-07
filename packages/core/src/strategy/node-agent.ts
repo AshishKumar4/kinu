@@ -62,6 +62,7 @@ import type { JsonValue } from '../utils/json';
 import { nodeWorkspace, isolationDisclosure } from './node-workspace';
 import { BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS } from './swarm';
 import { renderCauseChain, toKinuError } from '../obs/error';
+import { abortCause } from '../utils/abort';
 import type { Logger } from '../obs/index';
 import type { Usage } from '../usage';
 import type { BranchContext, SwarmSettle } from './swarm';
@@ -828,9 +829,10 @@ export async function runNodeAgent(
   };
 
   // THE TERMINAL WRITE IS OWED BY WHOEVER OPENED THE ROW, and this is the only place
-  // that holds both the open row and the transport. Rethrown rather than turned into a
-  // report: the search counts a node it could not measure as one fewer candidate, and
-  // that is a different claim from a node that ran and reported nothing.
+  // that holds both the open row and the transport. A transport failure is rethrown
+  // rather than turned into a report: the search counts a node it could not measure
+  // as one fewer candidate, and that is a different claim from a node that ran and
+  // reported nothing.
   let run: NodeLoopResult;
   try {
     // THE LOOP RUNS AS THE NODE. A home is uid/gid/mode on real inodes, so it
@@ -839,33 +841,42 @@ export async function runNodeAgent(
     // Resolved inside the try, because a runtime that cannot be built is a node
     // that produced no report and the row below owes that verdict either way.
     if (deps.host !== undefined) {
-      run = await deps.host(spec, input.arbitrate);
+      run = await deps.host(spec, input.arbitrate, deps.signal);
     } else {
       const rt = deps.runtimeForWorkspace ? await deps.runtimeForWorkspace(home) : deps.rt;
       run = await runNodeLoop(spec, nodeLoopDeps(input, deps, rt));
     }
   } catch (cause) {
-    const failure = toKinuError({
-      doing: `run node ${input.nodeId} of this search`, cause, otherwise: 'unavailable',
-    });
-    const chain = renderCauseChain(failure);
-    deps.journal.recordReport({
-      id: input.nodeId,
-      status: 'errored',
-      summary: `Node ${input.nodeId} produced no report: ${chain}`,
-      evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
-      toolCalls: [],
-      // ZERO AND `{}` ARE READINGS, not defaults. No report came back, so nothing here
-      // can say what the node spent; `recordReport` stores an absent usage field as
-      // NULL, which keeps "the provider never reported" distinguishable from "reported
-      // zero". Whatever steps the node did manage are already in `head_steps` under its
-      // own id, which is the progress record either way.
-      stepCount: 0,
-      usage: {},
-      wallClockMs: Date.now() - nodeBudget.spawnedAt,
-      errorMessage: chain,
-    });
-    throw failure;
+    if (deps.signal?.aborted) {
+      // THE CANCELLATION ARRIVING, not a failure of the work. The in-isolate loop
+      // answers its own signal with an `aborted` report; a hosted node's transport
+      // rejects instead, because stopping it IS evicting the facet its RPC was
+      // pending on. The signal is authoritative over the rejection's shape (the
+      // rule `runChat` already applies), so the row reads the same whichever
+      // transport ran the node, under the reason whoever cancelled it gave.
+      const reason = renderCauseChain(toKinuError({
+        doing: `cancel node ${input.nodeId} of this search`, cause: abortCause(deps.signal), otherwise: 'cancelled',
+      }));
+      run = {
+        report: unreportedNode(input.nodeId, nodeBudget.spawnedAt, {
+          status: 'aborted',
+          summary: `Node ${input.nodeId} was cancelled before it reported: ${reason}`,
+          errorMessage: reason,
+        }),
+        reported: null, granted: null, produced: [],
+      };
+    } else {
+      const failure = toKinuError({
+        doing: `run node ${input.nodeId} of this search`, cause, otherwise: 'unavailable',
+      });
+      const chain = renderCauseChain(failure);
+      deps.journal.recordReport(unreportedNode(input.nodeId, nodeBudget.spawnedAt, {
+        status: 'errored',
+        summary: `Node ${input.nodeId} produced no report: ${chain}`,
+        errorMessage: chain,
+      }));
+      throw failure;
+    }
   }
 
   deps.journal.recordReport(run.report);
@@ -884,6 +895,34 @@ export async function runNodeAgent(
     isolation: home.isolation,
     reportedItself: run.reported !== null,
     produced: run.produced,
+  };
+}
+
+/**
+ * The report of a node that produced none — the transport ended the run before
+ * the loop could answer, whether by failing or by carrying out a cancellation.
+ *
+ * ZERO AND `{}` ARE READINGS, not defaults. No report came back, so nothing here
+ * can say what the node spent; `recordReport` stores an absent usage field as
+ * NULL, which keeps "the provider never reported" distinguishable from "reported
+ * zero". Whatever steps the node did manage are already in `head_steps` under its
+ * own id, which is the progress record either way.
+ */
+function unreportedNode(
+  nodeId: string,
+  spawnedAt: number,
+  verdict: { status: 'errored' | 'aborted'; summary: string; errorMessage: string },
+): HeadReport {
+  return {
+    id: nodeId,
+    status: verdict.status,
+    summary: verdict.summary,
+    evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
+    toolCalls: [],
+    stepCount: 0,
+    usage: {},
+    wallClockMs: Date.now() - spawnedAt,
+    errorMessage: verdict.errorMessage,
   };
 }
 

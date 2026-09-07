@@ -267,7 +267,7 @@ import {
 import { createExecuteToolsFactory, type ExecuteToolsFactory } from "./execute-tools";
 import { codemodeEgress } from "./codemode-egress";
 import { createHeadRuntime } from "./head-runtime";
-import { spawnNodeFacet } from "./facet-spawn";
+import { hostNodeLoop } from "./facet-spawn";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
 import {
@@ -5221,7 +5221,8 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Run a tool-using node's loop in a `SubordinateAgent` facet in node mode.
+   * Run a tool-using node's loop in a `SubordinateAgent` facet in node mode —
+   * `hostNodeLoop` over this actor's own facet verbs.
    *
    * Undefined before the agent has an owner, for `getCFHeadRuntime`'s reason: a
    * facet reaches the owner's credentials as its workspace, so without an owner
@@ -5229,9 +5230,9 @@ export abstract class ActorAgent extends Think<Env> {
    * host runs the same loop in this isolate.
    *
    * The arbiter is published under this node's id for the LIFE OF THE RUN and
-   * withdrawn in `finally`, because that registration is the only route a facet
-   * has back to a budget that exists solely in this isolate. Withdrawing it is
-   * not tidiness: an entry that outlived its run would answer a later node
+   * withdrawn when it settles, because that registration is the only route a
+   * facet has back to a budget that exists solely in this isolate. Withdrawing it
+   * is not tidiness: an entry that outlived its run would answer a later node
    * against a settled search, and `nodeArbitrate` refuses rather than granting
    * children nobody would create.
    *
@@ -5246,28 +5247,17 @@ export abstract class ActorAgent extends Think<Env> {
   protected getCFNodeHost(): NodeLoopHost | undefined {
     const ownerUserId = this.getOwnerUserId();
     if (!ownerUserId) return undefined;
-    return async (spec, arbitrate) => {
-      const release = arbitrate
-        ? this.registerNodeArbiter(spec.headInput.id, arbitrate)
-        : null;
-      try {
-        const node = await spawnNodeFacet(this, spec, {
-          ownerUserId,
-          capabilityToken: this.workspaceCapabilityToken(),
-          // The PARENT's workspace, never this facet's own name: the file plane
-          // is keyed by it, so a self-named node would derive a second, empty
-          // filesystem — the regression unit-head-fork.test.ts pins.
-          sharedParent: this.workspaceName(),
-        });
-        return await node.run();
-      } finally {
-        try {
-          await this.facetHomes().release('node', spec.headInput.id);
-        } finally {
-          release?.();
-        }
-      }
-    };
+    return hostNodeLoop(this, {
+      identity: () => ({
+        ownerUserId,
+        capabilityToken: this.workspaceCapabilityToken(),
+        // The PARENT's workspace, never this facet's own name: the file plane
+        // is keyed by it, so a self-named node would derive a second, empty
+        // filesystem — the regression unit-head-fork.test.ts pins.
+        sharedParent: this.workspaceName(),
+      }),
+      registerArbiter: (nodeId, arbitrate) => this.registerNodeArbiter(nodeId, arbitrate),
+    });
   }
 
   /** The search's node home provisioner: the owner's registry, through the
