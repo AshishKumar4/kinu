@@ -2718,7 +2718,7 @@ export class OrchestratorAgent extends ActorAgent {
       vfs: this.rt.storage.vfs,
       config: this.config,
       name: this.name,
-      displayName: this.getDisplayName(),
+      displayName: await this.workspaceTitle() ?? '',
     });
     const profile = this.resolvedTurnProfile();
     return {
