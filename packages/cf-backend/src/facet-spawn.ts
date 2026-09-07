@@ -62,7 +62,10 @@
  */
 
 import type { Agent, SubAgentClass, SubAgentStub } from "agents";
-import type { BranchHandle, HeadId, HeadInput, NodeLoopResult, NodeRunSpec, SpawnedHead } from "@kinu.run/core";
+import type {
+  BranchHandle, HeadId, HeadInput, NodeArbiter, NodeLoopHost, NodeLoopResult, NodeRunSpec, SpawnedHead,
+} from "@kinu.run/core";
+import { abortCause } from "@kinu.run/core";
 import type { SubordinateAgent } from "./subordinate-agent";
 import type { HostedFacetHomes } from "./node-home";
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -442,5 +445,64 @@ export async function spawnNodeFacet(
     abort: (reason) => {
       abortExplorationFacet(host, id, reason);
     },
+  };
+}
+
+/** What a search's isolate lends the transport for one node's run, beyond the
+ *  facet substrate itself: who the facet runs as, and the route a hosted node's
+ *  branch proposal takes back to a budget that exists only in that isolate. */
+export interface HostedNodeSeams {
+  /** Read per spawn: the capability token can rotate between two nodes. */
+  identity(): ExplorationFacetIdentity;
+  /** Publish the node's arbiter under its id for the life of the run; the
+   *  returned function withdraws it. */
+  registerArbiter(nodeId: HeadId, arbitrate: NodeArbiter): () => void;
+}
+
+/**
+ * Core's `NodeLoopHost` over a facet: one facet per node, spawned, run, and
+ * reclaimed through this module's own verbs.
+ *
+ * CANCELLATION IS THE TEARDOWN VERB. The search's signal cannot cross the RPC,
+ * and a facet mid-step has no seam of its own to poll, so an abort evicts the
+ * facet ({@link SpawnedNode.abort}): the pending `runAsNode` rejects, `run()`
+ * reclaims the storage on its way out, and the search records the node as
+ * cancelled off the same signal. The subscription lives exactly as long as the
+ * run — a node that finished first is never evicted by a later abort — and the
+ * two windows around the run are closed explicitly: a search already cancelled
+ * boots no facet, and one cancelled while the facet was booting is reclaimed
+ * without ever being run, because an evicted facet restarts on its next RPC and
+ * `run()` would be that RPC.
+ *
+ * The arbiter is withdrawn in `finally` because that registration is the only
+ * route a facet has back to the search's budget, and an entry outliving its run
+ * would answer a later node against a settled search. The home is released for
+ * the same reason a head's is: the run settling is the terminal point.
+ */
+export function hostNodeLoop(host: FacetHost, seams: HostedNodeSeams): NodeLoopHost {
+  return async (spec, arbitrate, signal) => {
+    if (signal?.aborted) throw abortCause(signal);
+    const nodeId = spec.headInput.id;
+    const withdraw = arbitrate ? seams.registerArbiter(nodeId, arbitrate) : null;
+    try {
+      const node = await spawnNodeFacet(host, spec, seams.identity());
+      if (signal?.aborted) {
+        await deleteExplorationFacet(host, nodeId);
+        throw abortCause(signal);
+      }
+      const evict = () => { node.abort(abortCause(signal).message); };
+      signal?.addEventListener('abort', evict, { once: true });
+      try {
+        return await node.run();
+      } finally {
+        signal?.removeEventListener('abort', evict);
+      }
+    } finally {
+      try {
+        await host.facetHomes().release('node', nodeId);
+      } finally {
+        withdraw?.();
+      }
+    }
   };
 }

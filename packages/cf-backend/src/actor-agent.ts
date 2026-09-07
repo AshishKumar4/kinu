@@ -194,7 +194,6 @@ import {
   mintSubordinateName,
   // The subordinate tree's depth cap — derived per child, never stated by one
   DELEGATION_MAX_DEPTH,
-  abortCause,
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   // Automatic titling — one policy for every root that can be talked to
@@ -268,7 +267,7 @@ import {
 import { createExecuteToolsFactory, type ExecuteToolsFactory } from "./execute-tools";
 import { codemodeEgress } from "./codemode-egress";
 import { createHeadRuntime } from "./head-runtime";
-import { deleteExplorationFacet, spawnNodeFacet } from "./facet-spawn";
+import { hostNodeLoop } from "./facet-spawn";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
 import {
@@ -5222,7 +5221,8 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Run a tool-using node's loop in a `SubordinateAgent` facet in node mode.
+   * Run a tool-using node's loop in a `SubordinateAgent` facet in node mode —
+   * `hostNodeLoop` over this actor's own facet verbs.
    *
    * Undefined before the agent has an owner, for `getCFHeadRuntime`'s reason: a
    * facet reaches the owner's credentials as its workspace, so without an owner
@@ -5230,9 +5230,9 @@ export abstract class ActorAgent extends Think<Env> {
    * host runs the same loop in this isolate.
    *
    * The arbiter is published under this node's id for the LIFE OF THE RUN and
-   * withdrawn in `finally`, because that registration is the only route a facet
-   * has back to a budget that exists solely in this isolate. Withdrawing it is
-   * not tidiness: an entry that outlived its run would answer a later node
+   * withdrawn when it settles, because that registration is the only route a
+   * facet has back to a budget that exists solely in this isolate. Withdrawing it
+   * is not tidiness: an entry that outlived its run would answer a later node
    * against a settled search, and `nodeArbitrate` refuses rather than granting
    * children nobody would create.
    *
@@ -5243,53 +5243,21 @@ export abstract class ActorAgent extends Think<Env> {
    * that reason: the width cap the search already enforces bounds how many
    * facets exist at once, and adding a second limiter would be one policy in two
    * places.
-   *
-   * CANCELLATION IS THE TEARDOWN VERB. The search's signal cannot cross the RPC,
-   * and a facet mid-step has no seam of its own to poll, so an abort evicts the
-   * facet through the SDK's own abort (`SpawnedNode.abort`): the pending
-   * `runAsNode` rejects, `run()` reclaims the storage on its way out, and the
-   * search records the node as cancelled off the same signal. The subscription
-   * lives exactly as long as the run — a node that finished first is never
-   * evicted by a later abort — and the two windows around the run are closed
-   * explicitly: a search already cancelled boots no facet, and one cancelled
-   * while the facet was booting is reclaimed without ever being run, because an
-   * evicted facet restarts on its next RPC and `run()` would be that RPC.
    */
   protected getCFNodeHost(): NodeLoopHost | undefined {
     const ownerUserId = this.getOwnerUserId();
     if (!ownerUserId) return undefined;
-    return async (spec, arbitrate, signal) => {
-      if (signal?.aborted) throw abortCause(signal);
-      const nodeId = spec.headInput.id;
-      const release = arbitrate ? this.registerNodeArbiter(nodeId, arbitrate) : null;
-      try {
-        const node = await spawnNodeFacet(this, spec, {
-          ownerUserId,
-          capabilityToken: this.workspaceCapabilityToken(),
-          // The PARENT's workspace, never this facet's own name: the file plane
-          // is keyed by it, so a self-named node would derive a second, empty
-          // filesystem — the regression unit-head-fork.test.ts pins.
-          sharedParent: this.workspaceName(),
-        });
-        if (signal?.aborted) {
-          await deleteExplorationFacet(this, nodeId);
-          throw abortCause(signal);
-        }
-        const evict = () => { node.abort(abortCause(signal).message); };
-        signal?.addEventListener('abort', evict, { once: true });
-        try {
-          return await node.run();
-        } finally {
-          signal?.removeEventListener('abort', evict);
-        }
-      } finally {
-        try {
-          await this.facetHomes().release('node', nodeId);
-        } finally {
-          release?.();
-        }
-      }
-    };
+    return hostNodeLoop(this, {
+      identity: () => ({
+        ownerUserId,
+        capabilityToken: this.workspaceCapabilityToken(),
+        // The PARENT's workspace, never this facet's own name: the file plane
+        // is keyed by it, so a self-named node would derive a second, empty
+        // filesystem — the regression unit-head-fork.test.ts pins.
+        sharedParent: this.workspaceName(),
+      }),
+      registerArbiter: (nodeId, arbitrate) => this.registerNodeArbiter(nodeId, arbitrate),
+    });
   }
 
   /** The search's node home provisioner: the owner's registry, through the
