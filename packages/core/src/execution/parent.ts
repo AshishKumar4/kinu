@@ -185,6 +185,7 @@ export function createParentExecutor(deps: {
     types: TYPES,
     tools: {
       readFile: {
+        planAllowed: true,
         description: "Read a file from the parent workspace you were forked from, in the parent's own paths.",
         execute: async (...args: unknown[]) => {
           const path = parseInput(StringSchema, { value: args[0] });
@@ -208,6 +209,7 @@ export function createParentExecutor(deps: {
         },
       },
       readdir: {
+        planAllowed: true,
         description: 'List a directory of the parent workspace.',
         execute: async (...args: unknown[]) => {
           const path = args[0] === undefined ? '.' : parseInput(StringSchema, { value: args[0] });
@@ -218,6 +220,7 @@ export function createParentExecutor(deps: {
         },
       },
       exists: {
+        planAllowed: true,
         description: 'Check whether a path exists in the parent workspace.',
         execute: async (...args: unknown[]) => {
           const path = parseInput(StringSchema, { value: args[0] });

@@ -18,6 +18,7 @@ import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type Thre
 import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
 import { nanoid } from '../utils/nanoid';
+import { runWorkModeInvocation } from '../execution/work-mode';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import type { WorkMode } from '../prompting/surface';
 import * as v from 'valibot';
@@ -524,7 +525,9 @@ export class BackgroundJobRunner {
   /** exec → record the outcome → notify → wake. Throws only when a store write
    *  or the wake's durable retry breadcrumb fails; runToSettlement owns that. */
   private async settleAndWake<T>(jobId: string, exec: () => Promise<T>): Promise<void> {
-    const epoch = this.deps.store.epochOf(jobId) ?? 0;
+    const job = this.deps.store.get(jobId);
+    if (job === null) throw new Error('Cannot execute a background job with no durable authority record');
+    const epoch = job.epoch;
     // Three outcomes, because a kind that cannot be re-driven is neither a
     // success nor a crash: it is the LAST word on a job whose work already
     // happened, so it settles with what that work produced rather than with a
@@ -535,7 +538,7 @@ export class BackgroundJobRunner {
       | { readonly kind: 'failed'; readonly error: string }
       | { readonly kind: 'bounded'; readonly why: string };
     let outcome: Recorded;
-    try { outcome = { kind: 'settled', result: await exec() }; }
+    try { outcome = { kind: 'settled', result: await runWorkModeInvocation(job.workMode, exec) }; }
     catch (err) {
       outcome = err instanceof JobNotResumable
         ? { kind: 'bounded', why: 'this kind cannot be re-driven from a durable checkpoint' }

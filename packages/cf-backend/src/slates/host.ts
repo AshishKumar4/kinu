@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateFiles, SqliteSlateContentStore, SqliteSlateStore, WorkspaceSlates, slateDirectory, parseSlateProject,
-  SlateBindingRequestSchema, SlateOperationSchema, routeSlateBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal,
+  SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal,
   type JsonValue, type SlateProject,
   type SlateBindingRoute, type SlateCallResult, type SlateSummary, type SlateProblem,
 } from '@kinu.run/core';
@@ -78,6 +78,7 @@ export class SlateHost {
       const parsed = v.safeParse(SlateOperationSchema, input);
       if (!parsed.success) throw new KinuError('bad_input', 'Slate operation does not match its declared fields', { cause: new v.ValiError(parsed.issues) });
       const operation = parsed.output;
+      requireSlateWorkMode(operation, caller.workMode);
       switch (operation.op) {
         case 'list': {
           const listing = await this.list(caller);
@@ -122,6 +123,7 @@ export class SlateHost {
 
   async preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
     try {
+      requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
       const process = await this.ensure(caller, id);
       const preview = await this.deps.expose(process.port);
       if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL');
@@ -169,6 +171,7 @@ export class SlateHost {
   /** App members are POST routes on the same authored fetch handler that serves the preview. */
   async call(caller: SlateCaller, id: string, method: string, args: JsonValue[], depth = 0): Promise<SlateCallResult> {
     try {
+      requireWorkModePermission(caller.workMode, false, 'Calling authored slate code');
       if (!isSlateMethodName(method)) throw new KinuError('bad_input', `"${method}" is not an app method name`);
       const parsed = v.safeParse(v.array(JsonValueSchema), args);
       if (!parsed.success) throw new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });

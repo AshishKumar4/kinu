@@ -1031,12 +1031,13 @@ export class SubordinateAgent extends ActorAgent {
   }
 
   async onChatResponse(result: ChatResponseResult): Promise<void> {
+    const workMode = this.turnWorkMode();
     const { programmaticUserMessage, errorText, completed, outputContinuation } =
       this.settleTurnEvents(result);
     // The seal's own classification comes back with it, so the roster reads the
     // same verdict instead of classifying the identical facts a second time.
     const { overflowRecovery, end } =
-      this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
+      this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage, workMode });
     // The identity of THIS terminal sequence comes from the shared helper, so
     // the root and its facets key one response the same way.
     //
@@ -1069,7 +1070,7 @@ export class SubordinateAgent extends ActorAgent {
     // Sampled only for a turn the promotion gate can learn from, and keyed on
     // that turn rather than rolled — the root's two reasons, which are this
     // facet's too.
-    const sampledVersion = this.orch.improvementLanesOpen(status, this.turnWorkMode())
+    const sampledVersion = this.orch.improvementLanesOpen(status, workMode)
       ? shadowTrialPlan(this.scaffoldControl, messageId)
       : null;
     // Titled from the first thing its OWNER said to it, and the mission is
@@ -1131,7 +1132,7 @@ export class SubordinateAgent extends ActorAgent {
     const owed = declareTerminalRoster({
       messageId,
       status,
-      workMode: this.turnWorkMode(),
+      workMode,
       continuity: this._turnContinuity,
       completed,
       userText,

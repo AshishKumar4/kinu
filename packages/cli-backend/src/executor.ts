@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import * as v from 'valibot';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
+import { requireBuild } from '@kinu.run/core';
 
 const subprocessResultSchema = v.variant('ok', [
   v.object({ ok: v.literal(true), result: v.optional(JsonValueSchema) }),
@@ -48,6 +49,7 @@ export function createSandboxedExecutor(): Executor {
   return {
     get languages() { return detectedLanguages ??= detectLanguages(); },
     async execute(code, providers, opts): Promise<ExecuteResult> {
+      requireBuild('Native program execution without a constrained runtime');
       const timeoutMs = opts?.timeoutMs;
       const language = opts?.language ?? 'javascript';
 

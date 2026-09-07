@@ -420,6 +420,7 @@ export function createDeviceTunnelExecutor(
     },
 
     readFile: {
+      planAllowed: true,
       description: 'Read a file from the user\'s local filesystem via the desktop daemon.',
       execute: async (...args: unknown[]): Promise<string> => {
         const path = parseInput(StringSchema, { value: args[0] });
@@ -463,6 +464,7 @@ export function createDeviceTunnelExecutor(
     },
 
     readdir: {
+      planAllowed: true,
       description: 'List directory contents on the user\'s local machine.',
       execute: async (...args: unknown[]): Promise<string[] | string> => {
         const path = parseInput(OptionalStringSchema, { value: args[0] });
@@ -482,6 +484,7 @@ export function createDeviceTunnelExecutor(
     },
 
     exists: {
+      planAllowed: true,
       description: 'Check if a path exists on the user\'s local machine.',
       execute: async (...args: unknown[]): Promise<boolean | string> => {
         const path = parseInput(StringSchema, { value: args[0] });

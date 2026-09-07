@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { workspaceOwner } from '../workspace-box-rpc';
-import type { JsonValue, SlateCallResult } from '@kinu.run/core';
+import type { JsonValue, SlateCallResult, WorkMode } from '@kinu.run/core';
 
 /** One hop of an actor's root-relative facet path, as the SDK records it. */
 export interface SlateCallerHop {
@@ -19,10 +19,11 @@ export interface SlateCallerHop {
 export interface SlateCaller {
   readonly path: readonly SlateCallerHop[];
   readonly cred: VfsCred;
+  readonly workMode: WorkMode;
 }
 
 /** The workspace root acting as itself: the owner-facing surfaces mint this locally. */
-export const ROOT_SLATE_CALLER: SlateCaller = { path: [], cred: CRED_SESSION_USER };
+export const ROOT_SLATE_CALLER: SlateCaller = { path: [], cred: CRED_SESSION_USER, workMode: 'build' };
 
 /** Every field changes the VFS view or the permissions of files it creates. */
 export function slateCredentialKey(cred: VfsCred): string {
@@ -31,7 +32,7 @@ export function slateCredentialKey(cred: VfsCred): string {
 
 /** Structured path encoding keeps different actor names from sharing a key. */
 export function slateCallerKey(caller: SlateCaller): string {
-  return JSON.stringify([slateCredentialKey(caller.cred), caller.path]);
+  return JSON.stringify([slateCredentialKey(caller.cred), caller.path, caller.workMode]);
 }
 
 /** Only the host mints these props; a process receives the stub, not authority to mint one. */

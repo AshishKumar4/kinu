@@ -40,6 +40,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
 import { renderThrownChain } from '../obs/index';
+import { permitInPlan } from '../execution/work-mode';
 
 export interface HeadSplitRequest {
   readonly rationale: string;
@@ -91,7 +92,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
   // told it may split zero levels. The wall clock stays a RUNTIME check inside
   // execute — it can pass mid-run, which build time cannot know.
   if (input.budget.maxDepth > 0) {
-    extra.split_subheads = tool({
+    extra.split_subheads = permitInPlan(tool({
       description:
         `Spawn 2-4 child heads recursively to explore narrower sub-questions. ` +
         `Children's findings merge into a single narrative. ` +
@@ -150,10 +151,11 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
           return `split_subheads failed: ${renderThrownChain({ cause: err })}`;
         }
       },
-    });
+    }));
   }
   return buildToolSurface({
     rt: deps.rt,
+    workMode: input.mode,
     webSearch: deps.webSearch,
     admitted: HEAD_BUILTIN_TOOLS,
     wrapAdmitted: (admitted) => withHeadCaptureRecording(admitted, capture),

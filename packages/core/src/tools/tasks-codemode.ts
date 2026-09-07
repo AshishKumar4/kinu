@@ -54,6 +54,7 @@ export function createTasksCodemodeProvider(
     positionalArgs: true,
     tools: {
       add: {
+        planAllowed: true,
         description: 'Write down the whole plan in one call: one title per task.',
         execute: async (...args: unknown[]) => {
           const titles = v.safeParse(TitlesSchema, args[0]);
@@ -67,6 +68,7 @@ export function createTasksCodemodeProvider(
         },
       },
       update: {
+        planAllowed: true,
         description: 'Move one task to active/done/dropped by id.',
         execute: async (...args: unknown[]) => {
           const status = v.safeParse(TaskStatusSchema, args[1]);
@@ -80,10 +82,12 @@ export function createTasksCodemodeProvider(
         },
       },
       list: {
+        planAllowed: true,
         description: 'Read the whole task list back, closed items included.',
         execute: async () => decodeJsonValue({ value: run({ action: 'list' }) }),
       },
       mode: {
+        planAllowed: true,
         description: 'Switch your durable active role by id (applies from your next turn), or read the current role id with no argument.',
         execute: async (...args: unknown[]) => {
           const parsedRole = v.safeParse(v.string(), args[0]);

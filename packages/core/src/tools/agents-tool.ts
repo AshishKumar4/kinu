@@ -32,6 +32,7 @@
  * "Validity over the resolved configuration" and "Accepted and ignored".
  */
 import { tool, jsonSchema } from 'ai';
+import { currentWorkMode, inWorkMode, permitInPlan, requireBuild } from '../execution/work-mode';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import {
@@ -74,7 +75,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, renderThrownChain } from '../obs/index';
+import { diagnostics, renderThrownChain, refusalOf, toKinuError } from '../obs/index';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -1566,7 +1567,7 @@ async function runSwarmAction(
     redrive,
   };
   readSpawnStarted(toolOptions)?.();
-  const result = await runSwarm(runDeps, resolved);
+  const result = await inWorkMode(mode, () => runSwarm(runDeps, resolved));
   if ('reason' in result) return result;
   // THE SPAWN, AND ONLY THE SPAWN. The tokens are already on the ledger: every model
   // call the run made debited as it happened, through `SwarmRunDeps.mission` above, and
@@ -1829,7 +1830,7 @@ export async function dispatchAgentsAction(
   toolOptions?: AgentsToolCallOptions,
 ): Promise<object> {
   const actions = agentsActionsFor(deps);
-  const mode = deps.mode;
+  const mode = deps.mode === 'plan' ? 'plan' : currentWorkMode();
   const team = deps.team;
   const peers = deps.peers;
   // No catch: a roster this cannot read is not a roster without this name. The
@@ -1889,6 +1890,7 @@ export async function dispatchAgentsAction(
         return await runSwarmAction(deps, input, mode, toolOptions, deps.budget);
 
       case 'hire': {
+        inWorkMode(mode, () => requireBuild('agents.hire'));
         const hireDepth = spawnDepthRefusal();
         if (hireDepth) return hireDepth;
         if ((input.scope ?? 'subordinate') === 'workspace') {
@@ -2104,6 +2106,7 @@ export async function dispatchAgentsAction(
       }
 
       case 'dismiss':
+        inWorkMode(mode, () => requireBuild('agents.dismiss'));
         if (!team) {
           return {
             reason: 'denied',
@@ -2117,7 +2120,7 @@ export async function dispatchAgentsAction(
         });
     }
   } catch (err) {
-    return { error: renderThrownChain({ cause: err }) };
+    return refusalOf(toKinuError({ doing: 'agents.' + input.action, cause: err, otherwise: 'io' }));
   }
 }
 
@@ -2128,7 +2131,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
   const team = deps.team;
   const peers = deps.peers;
 
-  return tool({
+  return permitInPlan(tool({
     description: renderAgentsToolDescription(deps),
     inputSchema: jsonSchema<AgentsToolInput>({
       type: 'object',
@@ -2190,5 +2193,5 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
       }
       return dispatchAgentsAction(deps, parsed, toolOptions);
     },
-  });
+  }));
 }

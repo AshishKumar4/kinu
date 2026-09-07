@@ -51,6 +51,11 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     expect(await call('read_issue')).toEqual({ ok: true, value: { content: [] } });
 
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: ['read_issue', 'create_issue'] });
+    const planCaller: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
+    expect(await actor.agent.slateBindingCallAs(planCaller, 'issues', 'GITHUB', { member: 'read_issue', args: [{}], depth: 0 }))
+      .toEqual({ ok: true, value: { content: [] } });
+    expect(await actor.agent.slateBindingCallAs(planCaller, 'issues', 'GITHUB', { member: 'create_issue', args: [{}], depth: 0 }))
+      .toMatchObject({ ok: false, reason: 'denied' });
     await bind('connection-id', ['read_issue']);
     expect(await call('create_issue')).toMatchObject({ ok: false, reason: 'denied' });
     await bind('connection-id');
@@ -264,8 +269,8 @@ test('source capture does not retain a previous caller supplementary group', asy
     options: { cred: CRED_KERNEL },
   });
   expect(protectedFile).toMatchObject({ exitCode: 0 });
-  const grouped: SlateCaller = { path: [], cred: { uid: 1000, gid: 1000, groups: [3000], umask: 0o022 } };
-  const ungrouped: SlateCaller = { path: [], cred: { uid: 1000, gid: 1000, groups: [], umask: 0o022 } };
+  const grouped: SlateCaller = { workMode: 'build', path: [], cred: { uid: 1000, gid: 1000, groups: [3000], umask: 0o022 } };
+  const ungrouped: SlateCaller = { workMode: 'build', path: [], cred: { uid: 1000, gid: 1000, groups: [], umask: 0o022 } };
   expect(await parent.agent.slateAs(grouped, { op: 'commit', id: 'group-source' })).toMatchObject({ ok: true });
   expect(await parent.agent.slateAs(ungrouped, { op: 'commit', id: 'group-source' })).toMatchObject({ ok: false, reason: 'denied' });
 });

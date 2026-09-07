@@ -138,6 +138,7 @@ export default defineConfig({
           })),
           durableObjects: { PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true } },
         }, {
+          workerLoaders: { LOADER: {} },
           name: 'slate-facet-probe', ...workerCompatibility,
           modules: slateFacetProbe.map((file) => ({
             type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',

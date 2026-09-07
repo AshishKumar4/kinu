@@ -27,9 +27,10 @@ import {
 } from './registry';
 import { applyFileEdits, readFileSlice, BOM, type FileEdit } from './file-edit';
 import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from './file-ledger';
-import { DEFAULT_TOOL_RESULT_MAX_CHARS } from './clamp';
+import { DEFAULT_TOOL_RESULT_MAX_CHARS, clampSerializedToolResult } from './clamp';
 import type { JsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
+import { permitInPlan, requireBuild } from '../execution/work-mode';
 
 export interface FileToolDeps {
   /** The agent's canonical workspace filesystem (rt.storage.vfs). */
@@ -51,6 +52,8 @@ export interface FileToolInput {
   offset?: number;
   limit?: number;
   content?: string;
+  /** Literal content to find in a single file; no shell command is evaluated. */
+  query?: string;
   edits?: Array<{ old_text?: string; new_text?: string }>;
 }
 
@@ -60,6 +63,7 @@ interface GateVerdict {
   readonly refusal: string | null;
   readonly reason: FileEditOutcomeReason | null;
 }
+const QuerySchema = v.pipe(v.string(), v.minLength(1));
 
 /**
  * Why a `file` call did not do what it was asked, on the result the MODEL
@@ -115,6 +119,11 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
 export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput) => Promise<JsonValue> {
   const { vfs, ledger, budget } = deps;
 
+  const inspection = async (output: JsonValue): Promise<JsonValue> => {
+    const bounded = await clampSerializedToolResult({ output }, { vfs, budget, producer: 'file_read' });
+    if (bounded === undefined) return failure('io', 'File inspection produced no serializable result');
+    return bounded;
+  };
   /** Text of a file. A VFS is free to answer `{encoding:'utf8'}` with bytes;
    *  decoding beats an unchecked cast that would throw out of `execute`. */
   const readText = async (path: string): Promise<string> => {
@@ -185,8 +194,32 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
     const parsedPath = v.safeParse(PathSchema, args.path);
     if (!parsedPath.success) return failure('bad_input', 'file requires `path`.');
     const path = parsedPath.output;
-
+    if (parsed.output === 'write' || parsed.output === 'edit') requireBuild('file.' + parsed.output);
     switch (parsed.output) {
+      case 'list': {
+        try { return await inspection({ path, entries: await vfs.readdir(path) }); }
+        catch (cause) { return vfsFailure(vfs, { error: cause }, 'list', path); }
+      }
+      case 'stat': {
+        try {
+          const stat = await vfs.stat(path);
+          return stat === null ? failure('missing', 'No path at ' + path) : await inspection({ path, size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.isDir });
+        } catch (cause) { return vfsFailure(vfs, { error: cause }, 'stat', path); }
+      }
+      case 'search': {
+        const query = v.safeParse(QuerySchema, args.query);
+        if (!query.success) return failure('bad_input', 'file search requires a non-empty literal query');
+        try {
+          const content = await readText(path);
+          const matches: { line: number; text: string }[] = [];
+          let line = 0;
+          for (const text of content.split('\n')) {
+            line++;
+            if (text.includes(query.output)) matches.push({ line, text });
+          }
+          return await inspection({ path, matches });
+        } catch (cause) { return vfsFailure(vfs, { error: cause }, 'search', path); }
+      }
       case 'read': {
         let content: string;
         try {
@@ -297,7 +330,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 /** The native `file` tool — a thin AI-SDK wrapper around createFileDispatcher. */
 export function createFileTool(deps: FileToolDeps): ToolSet[string] {
   const run = createFileDispatcher(deps);
-  return tool({
+  return permitInPlan(tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.file,
     inputSchema: jsonSchema<FileToolInput>({
       type: 'object',
@@ -305,12 +338,13 @@ export function createFileTool(deps: FileToolDeps): ToolSet[string] {
         action: {
           type: 'string',
           enum: [...FILE_TOOL_ACTIONS],
-          description: 'read the file, edit exact text inside it, or write it whole.',
+          description: 'read contents, list a directory, stat a path, search a file for literal text, edit exact text, or write a whole file.',
         },
         path: { type: 'string', description: 'Path in this agent\'s own durable workspace filesystem; relative paths resolve at its root. Other environments have their own filesystems, reached through their namespaces in execute_tools.' },
         offset: { type: 'number', description: 'For action=read: 1-indexed first line to return (default 1).' },
         limit: { type: 'number', description: 'For action=read: how many lines to return (default: as many as fit).' },
         content: { type: 'string', description: 'For action=write: the file\'s complete new contents.' },
+        query: { type: 'string', description: 'For action=search: literal text to find in this file; returns matching lines and line numbers.' },
         edits: {
           type: 'array',
           description: 'For action=edit: replacements, all matched against the file as you read it and applied together or not at all.',
@@ -327,5 +361,5 @@ export function createFileTool(deps: FileToolDeps): ToolSet[string] {
       required: ['action', 'path'],
     }),
     execute: async (args: FileToolInput) => run(args),
-  });
+  }));
 }

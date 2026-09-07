@@ -48,6 +48,8 @@ import {
   type JsonValue,
 } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
+import type { WorkMode } from '../prompting/surface';
+import { currentWorkMode, requireWorkModePermission } from '../execution/work-mode';
 
 type SandboxFunction = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
 interface SandboxFunctions {
@@ -178,6 +180,8 @@ export interface ScaffoldRunOptions {
   task: string;
   /** The agent runtime — gives the scaffold access to LLM, memory, sandboxes. */
   rt: AgentRuntime;
+  /** The originating invocation's mode, captured by the host rather than by scaffold code. */
+  workMode?: WorkMode;
   /** Per-event callback. Called synchronously from inside the scaffold's execution. */
   emit: ScaffoldEmitFn;
   /**
@@ -390,6 +394,7 @@ function buildHostProvider(opts: {
  * orchestrator is expected to fall back to streamText() and queue a rollback.
  */
 export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRunResult> {
+  requireWorkModePermission(opts.workMode ?? currentWorkMode(), false, 'Unrestricted scaffold execution');
   const { rt, task, emit, llmStream, callTool, scaffoldCodeOverride } = opts;
   const startedAt = Date.now();
   const capturedEvents: ScaffoldEvent[] = [];
