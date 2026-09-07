@@ -4,6 +4,7 @@ import * as v from 'valibot';
 import { sha256Hex } from '../../cas/hash';
 import { MerklePackError } from '../../candidates/merkle-pack/errors';
 import { BeneathRoot } from '../../native-openat2';
+import { NAMESPACE_PAGE_BYTES } from '../../durability/namespace-page';
 import type { JournalFence } from './client';
 
 const Decimal = v.pipe(v.string(), v.regex(/^(?:0|[1-9]\d*)$/u));
@@ -18,7 +19,7 @@ const NamespaceManifestSchema = v.pipe(v.strictObject({
   cut: Decimal,
   generation: Decimal,
   revision: Decimal,
-  pageBytes: v.literal(4096),
+  pageBytes: v.literal(NAMESPACE_PAGE_BYTES),
   byteLength: Decimal,
   file: v.string(),
   pages: v.array(Page),

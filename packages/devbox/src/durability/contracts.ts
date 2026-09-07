@@ -1,4 +1,5 @@
 import * as v from 'valibot';
+import { NAMESPACE_PAGE_BYTES } from './namespace-page';
 
 const DecimalSchema = v.pipe(
   v.string(),
@@ -109,7 +110,7 @@ export type PackLedgerRow = v.InferOutput<typeof PackLedgerRowSchema>;
  * row lives in the ledger so a boot that did not retire the pack still
  * deletes it, and so a crash between delete and the next seal repeats an
  * idempotent delete rather than leaking the pack. */
-export const RetiredPackRowSchema = v.strictObject({
+const RetiredPackRowSchema = v.strictObject({
   key: ObjectKeySchema,
   retiredInGeneration: DecimalSchema,
   /** Milliseconds since the epoch when the retiring generation was staged. */
@@ -158,14 +159,14 @@ export const PackLedgerSchema = v.pipe(
 export type PackLedger = v.InferOutput<typeof PackLedgerSchema>;
 
 /** A published namespace: where its page map starts, and how long the SQLite
- *  image it maps is. The length is a whole number of 4096-byte pages. */
+ *  image it maps is. The length is a whole number of namespace pages. */
 export const NamespaceRefSchema = v.pipe(
   v.strictObject({
     root: ObjectRangeRefSchema,
     byteLength: DecimalSchema,
   }),
-  v.check((namespace) => BigInt(namespace.byteLength) > 0n && BigInt(namespace.byteLength) % 4096n === 0n,
-    'A namespace image is a whole number of 4096-byte pages'),
+  v.check((namespace) => BigInt(namespace.byteLength) > 0n && BigInt(namespace.byteLength) % BigInt(NAMESPACE_PAGE_BYTES) === 0n,
+    `A namespace image is a whole number of ${NAMESPACE_PAGE_BYTES}-byte pages`),
 );
 export type NamespaceRef = v.InferOutput<typeof NamespaceRefSchema>;
 
