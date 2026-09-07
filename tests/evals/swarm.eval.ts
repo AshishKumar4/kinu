@@ -70,6 +70,7 @@ import {
   type AgentRuntime, type Floor, type JsonValue, type LLMProviderConfig,
   type ObjectiveIdentity,
 } from '../../packages/core/src/index';
+import { KinuError, refusalOf, type Refusal } from '@kinu.run/core/obs';
 import {
   bestInCell, floorDigestOf, recordsFor, verifierDigestOf,
 } from '../../packages/core/src/strategy/records';
@@ -430,10 +431,6 @@ const SwarmResultSchema = v.object({
   candidates: v.array(CandidateSchema),
 });
 
-/** A refusal, which is the OTHER shape this surface returns. Read first and
- *  reported verbatim, because a refusal's text names what the call got wrong and a
- *  schema complaint over it would hide that. */
-const RefusalSchema = v.object({ reason: v.string(), error: v.string() });
 
 /** What this eval SENDS: a swarm call as it crosses the wire. JSON rather than
  *  `AgentsToolInput`, because one test deliberately sends a field that input does not
@@ -441,16 +438,9 @@ const RefusalSchema = v.object({ reason: v.string(), error: v.string() });
  *  SDK validates a call's types against the JSON Schema and never its field names. */
 type SwarmCall = Readonly<Record<string, JsonValue>>;
 
-/**
- * The two shapes `agents.swarm` answers with, as ONE parsed value.
- *
- * The tool returns a run report or a refusal and they are different shapes on
- * purpose — a caller branching on `reason` is asking a different question from one
- * reading a report — so the boundary is here, once, and nothing below it handles an
- * unparsed answer.
- */
+/** The evaluator keeps typed native failures distinct from settled reports. */
 type SwarmOutcome =
-  | { readonly kind: 'refused'; readonly refusal: v.InferOutput<typeof RefusalSchema> }
+  | { readonly kind: 'refused'; readonly refusal: Refusal }
   | { readonly kind: 'ran'; readonly result: v.InferOutput<typeof SwarmResultSchema> };
 
 describe('Swarm evals — a live measured search through the settled tool surface', () => {
@@ -522,21 +512,22 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     const entry = tools.agents;
     if (!entry) throw new Error('the agents tool was not built, so there is no swarm rung to drive');
     const execute = toolExecute<SwarmCall, JsonValue>(entry);
-    // THE BOUNDARY, and the only one: the tool's answer is parsed into the union above
-    // here, so no assertion below ever reads an unparsed field. A refusal is recognised
-    // first because it is the shape that says what a call got wrong.
+    // Native execution rejects typed failures; successful reports are parsed here.
     //
     // `abortSignal` is the ONLY wall-clock bound this surface has — see ENVELOPE_MS for
     // the hour of silence that made it a parameter rather than an option — so it is
     // required rather than optional: a caller that forgot it would be a caller with no
     // bound at all.
     callSwarm = async (args, signal) => {
-      const raw = await execute(args, {
-        toolCallId: 'swarm-eval', messages: [], abortSignal: signal,
-      });
-      const refused = v.safeParse(RefusalSchema, raw);
-      if (refused.success) return { kind: 'refused', refusal: refused.output };
-      return { kind: 'ran', result: v.parse(SwarmResultSchema, raw) };
+      try {
+        const raw = await execute(args, {
+          toolCallId: 'swarm-eval', messages: [], abortSignal: signal,
+        });
+        return { kind: 'ran', result: v.parse(SwarmResultSchema, raw) };
+      } catch (cause) {
+        if (cause instanceof KinuError) return { kind: 'refused', refusal: refusalOf(cause) };
+        throw cause;
+      }
     };
   });
 
