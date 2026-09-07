@@ -208,17 +208,30 @@ test('a binding held by a facet reaches the facet\'s own files and role, never t
 
   // A COMPLETED turn leaves its resolved profile cached until the next one
   // opens. A role revoked in that window must not keep the old reach alive.
+  // The turn is the real one: `beforeTurn` resolves and holds the profile,
+  // `onChatResponse` settles it.
   await reseed('general');
-  await child.agent.harnessOpenTurnProfile(['run', 'file', 'execute_tools', 'memory']);
+  const openTurn = async (content: string) => {
+    const message = { id: `u-${content}`, role: 'user' as const, parts: [{ type: 'text' as const, text: content }] };
+    Object.defineProperty(child.agent, 'messages', { value: [message], configurable: true });
+    await child.agent.beforeTurn({
+      system: 'base', messages: [{ role: 'user', content }], tools: child.agent.observeRawTools(),
+      model: 'harness-model', continuation: false, body: {},
+    });
+  };
+  const settleTurn = (id: string) => child.agent.onChatResponse({
+    message: { id, role: 'assistant', parts: [{ type: 'text', text: 'done' }] },
+    requestId: `req-${id}`, continuation: false, status: 'completed',
+  });
+  await openTurn('read the file');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root wrote' });
-  child.agent.declareTurnInFlight(false);
+  await settleTurn('a-1');
   await reseed('scribe');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
-  // While the turn IS live, the turn's own profile governs, as it does natively.
-  await reseed('general');
-  await child.agent.harnessOpenTurnProfile(['memory']);
+  // While a turn IS live, its own resolved profile governs, as it does natively.
+  await openTurn('read it again');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
-  child.agent.declareTurnInFlight(false);
+  await settleTurn('a-2');
 });
 
 test('workspace read models are the root\'s own reads; a facet holds none of them', async () => {

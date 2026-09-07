@@ -50,6 +50,7 @@ export type FileEditOutcomeReason =
   /** The filesystem refused the read or the write for another reason. */
   | 'io';
 
+
 /** What one turn's edits did. Absent counters never happened.
  *  `attempts`/`applied` count CALLS; `recoveredPaths`/`abandonedPaths` count
  *  PATHS, because recovery is a property of a file, not of a call. */
