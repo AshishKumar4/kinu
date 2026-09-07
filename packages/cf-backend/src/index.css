@@ -981,7 +981,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   .landing-search { min-height: 0; padding-block: 0 2.5rem; }
   .landing-search-field { height: clamp(14rem, 42vw, 26rem); }
 }
-.landing-preview-tabs { min-width: 0; overflow-x: auto; }
+.landing-preview-tabs { min-width: 0; overflow-x: auto; overflow-y: hidden; }
 .landing-preview-tabs [role="tablist"] { min-width: max-content; gap: 0; padding-inline: 0.5rem; }
 .landing-preview-tabs [role="tab"] { min-height: 2.5rem; padding-inline: 0.75rem; font-size: 0.72rem; }
 .landing-preview-tabs [role="tab"][aria-selected="true"] { color: var(--c-accent-fg); }
