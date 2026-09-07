@@ -29,7 +29,7 @@ const WORKSPACE_DEMO_MESSAGES: UIMessage[] = [
       { type: 'tool-execute_tools', toolCallId: 'landing-query', state: 'output-available', input: { code: '// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons`;\nreturn rows;' }, output: '[{"code":"SAVE20","kind":null,"value":20}]' },
       { type: 'text', text: "Tuesday's migration backfilled `kind` for fixed coupons only. I will patch the migration, add a regression test, and run the focused suite." },
       { type: 'tool-file', toolCallId: 'landing-read', state: 'output-available', input: { action: 'read', path: 'packages/checkout/migrations/0042_coupon_kind.sql' }, output: '…' },
-      { type: 'tool-file', toolCallId: 'landing-edit', state: 'output-available', input: { action: 'edit', path: 'packages/checkout/migrations/0042_coupon_kind.sql', edits: [{}, {}] }, output: { error: 'old_text not found or not unique' } },
+      { type: 'tool-file', toolCallId: 'landing-edit', state: 'output-error', input: { action: 'edit', path: 'packages/checkout/migrations/0042_coupon_kind.sql', edits: [{}, {}] }, errorText: 'old_text not found or not unique' },
       { type: 'tool-file', toolCallId: 'landing-write', state: 'output-available', input: { action: 'write', path: 'packages/checkout/tests/coupon-kind.test.ts' }, output: 'ok' },
       { type: 'tool-tasks', toolCallId: 'landing-task', state: 'output-available', input: { action: 'update', id: 't4', status: 'done' }, output: 'ok' },
     ],
