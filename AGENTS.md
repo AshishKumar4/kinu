@@ -139,11 +139,15 @@ edit lands in the primary, no error anywhere. So:
 
 - Every `edit`/`write` path is absolute, under YOUR worktree, and an edit's
   section header carries the SAME absolute path the tag was read from.
-- After the first edit of any file, `git -C <your-worktree> status` must show
-  it changed; if `git -C ~/Kinu status` shows your file instead, stop,
-  extract your diff with `git diff -- <paths>`, apply it in your worktree,
-  and revert the primary path-scoped. Never a bare checkout or reset there.
-  Other agents' work may be in flight beside yours.
+- After your first edit in a worktree, `git -C <your-worktree> status` must
+  show it changed. Name the primary checkout by asking git, never by a literal
+  path: it is the first row of `git worktree list`, and
+  `git rev-parse --path-format=absolute --git-common-dir` resolves its `.git`
+  from inside any tree, so a rename of the primary cannot silence this check.
+  If the primary shows your file instead, stop, extract your diff with
+  `git diff -- <paths>`, apply it in your worktree, and revert the primary
+  path-scoped. Never a bare checkout or reset there. Other agents' work may be
+  in flight beside yours.
 
 Parallel writers use isolated worktrees and make focused commits. Main merges
 and verifies those commits before updating `origin/main`.
@@ -195,8 +199,15 @@ row is DONE only when its command passes. A row with no verifying command is
 UNVERIFIED and counts as open. It exists because an audit found four requests
 that were designed, discussed, built and never wired, and memory was the
 tracking mechanism. Read it before claiming a request is closed, and add a row
-when a new one arrives. The ledger was moved off the public tree into
-gitignored, machine-local `docs/research/`.
+when a new one arrives.
+
+**It lives in the primary checkout only.** `docs/research/` is gitignored and
+machine-local, so it does not follow a worktree: resolve the path against the
+primary checkout (`git worktree list` row one), not against the tree you are
+working in. A worktree that has its own `docs/research/` holds unrelated
+session scratch, and an absent `REQUESTS-LEDGER.md` there means you are
+reading the wrong tree, never that the ledger has no rows. Two copies with
+different contents means one is a fork; say so rather than picking one.
 
 ## Working Style
 
@@ -369,7 +380,7 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 - All DDL uses `IF NOT EXISTS`. Schema init is idempotent
 - Vercel AI SDK v6: `tool()` + `jsonSchema()` for tool definitions
 - `ToolSet` type from `ai` package for tool collections
-- **The AI SDK is not a preference and replacing it is not an option** — asked and answered 2026-08-17, do not reopen without new evidence. `ai` is a REQUIRED peer of `@cloudflare/think` (only `@ai-sdk/react`, `@chat-adapter/telegram`, `react` and `vite` are optional there), `ActorAgent extends Think<Env>`, and every override point is SDK-typed: `getModel(): LanguageModel`, `getTools(): ToolSet`, `beforeTurn(TurnContext{ModelMessage[], ToolSet, LanguageModel})`, `TurnConfig.stopWhen: StopCondition<ToolSet>`. Think does not merely import it — `think.js:7` does `import * as aiSdk from "ai"`, `:301` feature-detects `"registerTelemetry" in aiSdk`, and `:2827` calls `wrapAISDK(aiSdk, …).streamText`, so it branches on which MAJOR of `ai` is installed at runtime. Nor is the CLI the cheap side to swap: `cli-backend/src/local-session.ts:63` drives `runChat` from `@kinu.run/core`, which IS `core/src/chat.ts`, and core holds 54 of the 86 SDK source files. Plus ~1,423 lines of `LanguageModelV2` implementations (`claude-cli-provider.ts`, `opencode-provider.ts`, `providers/codex.ts`) exist only because an SDK model is BEHAVIOUR; alternatives model it as data. Reasoning of record: maximum code reuse across backends, with most logic in core. Full audit: `docs/research/sdk-dependency.md` (gitignored)
+- **The AI SDK is not a preference and replacing it is not an option** — asked and answered 2026-08-17, do not reopen without new evidence. `ai` is a REQUIRED peer of `@cloudflare/think` (only `@ai-sdk/react`, `@chat-adapter/telegram`, `react` and `vite` are optional there), `ActorAgent extends Think<Env>`, and every override point is SDK-typed: `getModel(): LanguageModel`, `getTools(): ToolSet`, `beforeTurn(TurnContext{ModelMessage[], ToolSet, LanguageModel})`, `TurnConfig.stopWhen: StopCondition<ToolSet>`. Think does not merely import it — `think.js:7` does `import * as aiSdk from "ai"`, `:301` feature-detects `"registerTelemetry" in aiSdk`, and `:2827` calls `wrapAISDK(aiSdk, …).streamText`, so it branches on which MAJOR of `ai` is installed at runtime. Nor is the CLI the cheap side to swap: `cli-backend/src/local-session.ts:63` drives `runChat` from `@kinu.run/core`, which IS `core/src/chat.ts`, and core holds 54 of the 86 SDK source files. Plus ~1,423 lines of `LanguageModelV2` implementations (`claude-cli-provider.ts`, `opencode-provider.ts`, `providers/codex.ts`) exist only because an SDK model is BEHAVIOUR; alternatives model it as data. Reasoning of record: maximum code reuse across backends, with most logic in core. Full audit: `docs/research/sdk-dependency.md`, which is gitignored and lives in the primary checkout only (§ The Requests Ledger); read it there before reopening this, and if it cannot be found say so rather than treating the bar as absolute
 - `@earendil-works/pi-*` is a BENCH SUBJECT only (`scripts/bench-pi-worker.ts`), never a runtime dependency. Ideas may be borrowed with citation; a second AI stack may not be added. **Two different codebases have been cited under one name — keep them apart.** `@earendil-works/pi-*` is UPSTREAM **pi** (Mario Zechner), which ships no sub-agents at all (its `README.md:500`: "**No sub-agents.** … Spawn pi instances via tmux, or build your own with extensions"), so nothing about delegation may be attributed to it. **oh-my-pi** is `can1357/oh-my-pi`, a hard fork at 17.3.7, and it is the source of the `hashline` and `task`-`context` citations
 - `@callable()` decorator for RPC methods exposed to the React UI
 - A tool that cannot do what it was asked answers with a CLASS, never with prose alone: `{ reason: ErrorCode, error: string }`, reason first. `KinuError`/`ErrorCode`/`toKinuError` in `@kinu.run/core/obs` build it, `refusalText` (`execution/exec-result.ts`) puts it on the string channel every executor tool answers on, and `read-models/tool-failures.ts` is the reader that branches on the class. All five executor tools are converted — `sandbox`, `nimbus`, `parent`, `device-tunnel-executor`, `inline` — so a returned `exec error: …` string is now a regression, not a convention to copy. The residue is listed and reasoned in [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) § "What is NOT converted"; `neverthrow` was REJECTED with evidence and must not be added — see § "Why not neverthrow"
@@ -393,7 +404,7 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
 - Enforced mechanically by the `no-empty-catch`, `no-sentinel-catch`, `require-cause-on-rethrow` and `no-ddl-in-catch` anti-slop rules. Never add an `oxlint-disable` to pass one
 - A refusal carries its classification, reason FIRST (`{ reason: ErrorCode, error }` via `refusalOf`), because every seam that shows a result to a human or hashes it for steering bounds it to a head slice, and the prose is the long part. Precedents, cited by name because these lines rot: `failure()` in `tools/file-tool.ts`, the `createTool` catch in `execution/inline.ts`, `unsupported()` in `strategy/swarm-run.ts`, and the refusal helper in `strategy/merge-back.ts`
 - `classifyErrorCode` answers `null` when nothing pinned recognises a failure, and `toKinuError` therefore REQUIRES an `otherwise` from its caller. An unknowable cause is a value, never a guessed code: `Worker exceeded resource limits` is what the client sees for BOTH an isolate memory kill and a CPU-time kill, so it is not in the OOM matcher
-- The `Observability`/`Tracer` seam is WIRED at **six** production boundaries, measured 2026-08-24 by grepping `this.tracing.invocation`: `orchestrator.ts` `_kinuTimerTick` (`alarm`/`tick`), `recordHeadStep` (`rpc`/`head.record_step`), `actor-agent.ts` `nodeArbitrate` (`rpc`/`swarm.arbitrate`), `subordinate-agent.ts` `explore` (`rpc`/`mcts.branch`), `runAsHead` (`rpc`/`head.run`), `runAsNode` (`rpc`/`swarm.node`) — cited by name because the line numbers rotted twice in one week. Two of the four `InvocationKind` values are in use — `alarm` and `rpc` — while `fetch` and `websocket` are declared and unused. This bullet has now been wrong in BOTH directions within one day: it first claimed a test fixture was the only caller, then claimed exactly one production call site, and the second was stale the moment five more landed. Re-grep rather than trusting the sentence. The handle comes from the `tracing` getter on `ActorAgent`, which builds `createAgentTracing({tracer: createWorkersTracer(), isolateGen, selfPath})` once per construction; `createWorkersTracer` (`obs/cf-tracer.ts`) goes through `cloudflare:workers`' `tracing.enterSpan`, the only entry point available at our pin. `selfPath` rather than `ctx.id` because two facets with distinct ids both reported under the ROOT's `durableObjectId` on the deployed runtime, so an id-keyed trace collapses every head and node into one orchestrator. Spans are always scoped, and trace context does not survive a hibernation wake or a cold start. Across `alarm()` it is not merely absent but ENFORCED absent: `tracing.invocation` revokes the handle when the method's promise settles, so a span opened from anything that escaped the tick throws
+- The `Observability`/`Tracer` seam is WIRED at **six** production boundaries, re-measured 2026-09-07 at `b48b9bba4` by grepping `this.tracing.invocation`: `orchestrator.ts` `_kinuTimerTick` (`alarm`/`tick`), `recordHeadStep` (`rpc`/`head.record_step`), `actor-agent.ts` `nodeArbitrate` (`rpc`/`swarm.arbitrate`), `subordinate-agent.ts` `explore` (`rpc`/`mcts.branch`), `runAsHead` (`rpc`/`head.run`), `runAsNode` (`rpc`/`swarm.node`) — cited by symbol, not line number, because the line numbers move. Two of the four `InvocationKind` values are in use — `alarm` and `rpc` — while `fetch` and `websocket` are declared and unused (`obs/agent-tracing.ts`). Re-grep before citing a count. The handle comes from the `tracing` getter on `ActorAgent`, which builds `createAgentTracing({tracer: createWorkersTracer(), isolateGen, selfPath})` once per construction; `createWorkersTracer` (`obs/cf-tracer.ts`) goes through `cloudflare:workers`' `tracing.enterSpan`, the only entry point available at our pin. `selfPath` rather than `ctx.id` because two facets with distinct ids both reported under the ROOT's `durableObjectId` on the deployed runtime, so an id-keyed trace collapses every head and node into one orchestrator. Spans are always scoped, and trace context does not survive a hibernation wake or a cold start. Across `alarm()` it is not merely absent but ENFORCED absent: `tracing.invocation` revokes the handle when the method's promise settles, so a span opened from anything that escaped the tick throws
 - The full contract, its status table and the unconverted boundary: [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)
 
 ## CF Backend Specifics
@@ -444,21 +455,25 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
 ## Common Patterns
 
 ```typescript
-// Executor tool pattern — positional args, string returns, no throws.
-// The string is the CURRENT convention and a known defect (Code Style, above):
-// it carries no classification. Until the replacement lands, at least keep the
-// cause chain intact on anything that propagates rather than returning.
+// Executor tool pattern — positional args, and a refusal CLASS on the string
+// channel (Code Style, above). `refusalText` serializes `{ reason, error }`;
+// a bare `exec error: …` string is a regression, not a pattern to copy.
+// An abort propagates; every other failure classifies through the seam's own
+// builder so `read-models/tool-failures.ts` can branch on the reason.
 tools.exec = {
   description: 'Run a command in the environment.',
   execute: async (...args: unknown[]): Promise<string> => {
     const command = parseInput(StringSchema, { value: args[0] });
-    if (command === undefined) return 'exec error: command must be a string';
-    if (!connected) return NOT_CONNECTED_MSG;
+    if (command === undefined) {
+      return refusalText(new KinuError('bad_input', 'laptop exec: command must be a string'));
+    }
+    const signal = readExecSignal({ context: args[1] });
     try {
-      const result = await doExec(command);
-      return result.stdout || '(no output)';
-    } catch (caught) {
-      return `exec error: ${errorMessage({ error: caught })}`;
+      return formatExecResult(await doExec(command, signal ? { signal } : undefined));
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+      return refusalText(deviceFailure({ doing: `laptop exec \`${command}\``, cause: err }));
     }
   },
 };
