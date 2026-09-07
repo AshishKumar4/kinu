@@ -24,12 +24,14 @@ export interface SlateCaller {
 /** The workspace root acting as itself: the owner-facing surfaces mint this locally. */
 export const ROOT_SLATE_CALLER: SlateCaller = { path: [], cred: CRED_SESSION_USER };
 
-/** Distinct actors never share a process or a binding, so this keys both — by
- *  the WHOLE credential (uid, gid, supplementary groups, umask) and the path. */
+/** Every field changes the VFS view or the permissions of files it creates. */
+export function slateCredentialKey(cred: VfsCred): string {
+  return JSON.stringify([cred.uid, cred.gid, cred.groups, cred.umask]);
+}
+
+/** Structured path encoding keeps different actor names from sharing a key. */
 export function slateCallerKey(caller: SlateCaller): string {
-  const { uid, gid, groups, umask } = caller.cred;
-  const path = caller.path.map((hop) => `${hop.className}/${hop.name}`).join('>');
-  return `${uid}:${gid}:${[...groups].sort((a, b) => a - b).join(',')}:${umask}|${path}`;
+  return JSON.stringify([slateCredentialKey(caller.cred), caller.path]);
 }
 
 /** Only the host mints these props; a process receives the stub, not authority to mint one. */

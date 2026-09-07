@@ -20,6 +20,9 @@ import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { SlateProcessProbeDO, SlateDepthProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
+interface SlateFacetRootRpc extends Rpc.DurableObjectBranded {
+  exercise(family: 'subordinate' | 'exploration'): Promise<{ answeredBy: string; method: string; browserCallable: boolean }>;
+}
 declare global {
   namespace Cloudflare {
     interface Env {
@@ -45,6 +48,7 @@ declare global {
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeDO>;
+      SLATE_FACET_ROOT: DurableObjectNamespace<SlateFacetRootRpc>;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }

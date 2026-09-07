@@ -7,6 +7,7 @@ import type { RouteableFacetTarget, VfsCred } from '@nimbus-sh/core/runtime/os-c
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import type { SlateProcess, SlateProject } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
+import { slateCredentialKey } from './bindings';
 
 export interface ResidentSlateProcess extends SlateProcess {
   request(request: Request): Promise<Response>;
@@ -104,7 +105,7 @@ export class ResidentSlateProcesses {
     const session = await this.deps.session();
     const main = input.project.main;
     if (main === undefined) throw new KinuError('bad_input', 'package.json main must name the Worker module');
-    const bundlerKey = `${input.cred.uid}:${input.cred.gid}`;
+    const bundlerKey = slateCredentialKey(input.cred);
     let bundler = this.bundlers.get(bundlerKey);
     if (bundler === undefined) {
       bundler = new EsbuildService(session.vfs.as(input.cred));

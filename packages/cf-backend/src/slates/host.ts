@@ -11,7 +11,7 @@ import {
 } from '@kinu.run/core';
 import { ERROR_CODES, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
-import { slateCallerKey, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
+import { slateCallerKey, slateCredentialKey, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
 
 const Failure = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
 
@@ -57,7 +57,7 @@ export class SlateHost {
 
   private async sources(cred: VfsCred): Promise<WorkspaceSlates> {
     const session = await this.deps.session();
-    const key = `${cred.uid}:${cred.gid}`;
+    const key = slateCredentialKey(cred);
     let runtime = this.sourceRuntimes.get(key);
     if (runtime === undefined) {
       runtime = new WorkspaceSlates({
@@ -151,14 +151,16 @@ export class SlateHost {
 
   private async run(caller: SlateCaller, route: SlateBindingRoute): Promise<SlateCallResult> {
     switch (route.kind) {
-      case 'namespace':
-      case 'mcp':
-      case 'rpc': {
+      case 'namespace': {
         const value = await this.deps.dispatch(caller, route);
         // A member that ANSWERED a refusal refused; authored code sees the class.
         const refused = answeredRefusal(value);
         return refused === null ? { ok: true, value } : { ok: false, ...refused };
       }
+      // MCP owns CallToolResult.isError; read models are application data.
+      // Neither producer declares the internal namespace refusal vocabulary.
+      case 'mcp':
+      case 'rpc': return { ok: true, value: await this.deps.dispatch(caller, route) };
       // The hop keeps the CALLER's authority: the callee runs for whoever asked, never as its author.
       case 'app': return this.call(caller, route.id, route.method, [...route.args], route.depth + 1);
     }

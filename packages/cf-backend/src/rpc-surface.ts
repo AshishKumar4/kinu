@@ -341,6 +341,8 @@ export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, 
  */
 const ACTOR_AGENT_RPC_SURFACE = [
   'deleteWorkspaceFile',
+  // Introduced slate capabilities return to this actor, over native RPC only.
+  'slateBindingDispatch',
   // The owner's UserDO closes this workspace's CLI websockets the moment it
   'closeRevokedCliSockets',
   'closeRevokedSessionSockets',
@@ -512,6 +514,7 @@ export const SUBORDINATE_RPC_SURFACE: readonly string[] = [
  */
 const EXPLORATION_METHODS = [
   'abortHead',
+  'slateBindingDispatch',
   'explore',
   'generateReflection',
   'initHead',

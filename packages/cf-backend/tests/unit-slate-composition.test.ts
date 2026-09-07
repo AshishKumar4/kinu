@@ -6,8 +6,9 @@ import {
 } from '@kinu.run/core';
 import { hiredSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
-import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
+import { resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 
 
 test('an MCP binding follows connection identity, binding scope and the owner allowlist', async () => {
@@ -40,6 +41,9 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     expect(await call('read_issue')).toMatchObject({ ok: false, reason: 'missing' });
     await bind('connection-id');
     expect(await call('read_issue')).toEqual({ ok: true, value: { content: [] } });
+    const incident = { content: [], isError: false, reason: 'denied', error: 'historical incident' };
+    seedMcpAnswer(incident);
+    expect(await call('read_issue')).toEqual({ ok: true, value: incident });
     // Outside the owner's allowlist the tool is not on this actor's surface at all.
     expect(await call('create_issue')).toMatchObject({ ok: false, reason: 'missing' });
 
@@ -247,4 +251,21 @@ test('workspace read models are the root\'s own reads; a facet holds none of the
   const call = (caller: SlateCaller) => parent.agent.slateBindingCallAs(caller, 'status', 'DATA', { member: 'getExecutors', args: [], depth: 0 });
   expect(await call(ROOT_SLATE_CALLER)).toMatchObject({ ok: true, value: expect.any(Array) });
   expect(await call(child.agent.observeSlateCaller())).toMatchObject({ ok: false, reason: 'denied' });
+});
+
+test('source capture does not retain a previous caller supplementary group', async () => {
+  const parent = orchestratorHarness();
+  const files = parent.agent.observeRuntime().storage.vfs;
+  await files.mkdir('/home/user/slates/group-source', { recursive: true });
+  await files.writeFile('/home/user/slates/group-source/package.json', JSON.stringify({ main: 'server.ts' }));
+  await files.writeFile('/home/user/slates/group-source/server.ts', 'export default { fetch() { return new Response("group source"); } };');
+  const protectedFile = await parent.agent.workspaceBoxOp('group-source-fixture', {
+    op: 'exec', command: 'chown 0:3000 /home/user/slates/group-source/server.ts && chmod 640 /home/user/slates/group-source/server.ts',
+    options: { cred: CRED_KERNEL },
+  });
+  expect(protectedFile).toMatchObject({ exitCode: 0 });
+  const grouped: SlateCaller = { path: [], cred: { uid: 1000, gid: 1000, groups: [3000], umask: 0o022 } };
+  const ungrouped: SlateCaller = { path: [], cred: { uid: 1000, gid: 1000, groups: [], umask: 0o022 } };
+  expect(await parent.agent.slateAs(grouped, { op: 'commit', id: 'group-source' })).toMatchObject({ ok: true });
+  expect(await parent.agent.slateAs(ungrouped, { op: 'commit', id: 'group-source' })).toMatchObject({ ok: false, reason: 'denied' });
 });
