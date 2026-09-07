@@ -361,7 +361,6 @@
   "packages/core/src/release/sql-store.ts#ReleaseStoreOptions.id (unsupplied-field)",
   "packages/core/src/release/sql-store.ts#ReleaseStoreOptions.now (unsupplied-field)",
   "packages/core/src/safety/approval-gate.ts#APPROVAL_DENIED (unreached-export)",
-  "packages/core/src/safety/approval-gate.ts#APPROVAL_REVIEW_LABEL (unreached-export)",
   "packages/core/src/safety/approval-gate.ts#ShellApprovalPolicy.deferrals (unsupplied-field)",
   "packages/core/src/safety/approval-gate.ts#ShellApprovalPolicy.remember (unsupplied-field)",
   "packages/core/src/safety/approval-gate.ts#approvalGrants (unreached-export)",

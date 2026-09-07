@@ -514,7 +514,6 @@ export function formatApproval(result: ApprovalResult): string {
 
 /** Human-readable approval diagnostics. Classification and dispatch facts travel structurally. */
 export const APPROVAL_DENIED = 'Denied';
-export const APPROVAL_REVIEW_LABEL = 'Approval review:';
 
 
 /**
