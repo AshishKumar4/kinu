@@ -231,7 +231,7 @@ import {
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
-  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend,
+  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle,
 } from "@kinu.run/core";
 import {
@@ -277,6 +277,9 @@ import {
 } from "@kinu.run/core";
 import type { CodemodeProvider, DeferredApprovalChannel, SlateCallResult, SlateOperation } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-box-rpc";
+import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
+import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
+import type { SlateCapabilityRoute } from "./slates/host";
 import { diagnostics, KinuError, toKinuError, tolerate, type ErrorCode } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserDoRpcMethod } from "./rpc-surface";
@@ -4437,9 +4440,85 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected deferralChannel(): DeferredApprovalChannel | undefined { return undefined; }
 
-  /** Facet actors reach slate operations on the object that owns their workspace. */
+  /**
+   * The actor a slate acts FOR, minted here and nowhere a client can reach: its
+   * facet path under the workspace root — the SDK-recorded ancestors, then this
+   * facet under the class every actor spawns facets as — and the credential its
+   * own file plane already runs as. The root is the empty path as the session
+   * user; a facet without a provisioned home holds no file authority to lend.
+   */
+  protected slateCaller(): SlateCaller {
+    if (this.parentPath.length === 0) return { path: [], cred: CRED_SESSION_USER };
+    const home = this.facetHome();
+    if (home === undefined) throw new KinuError('denied', 'This facet has no provisioned home, so it cannot act on a slate');
+    const path: readonly SlateCallerHop[] = [...this.parentPath.slice(1), { className: this.facetClass().name, name: this.name }];
+    return { path, cred: home.cred };
+  }
+
+  /** Every actor's slate operations run on the object that owns its workspace, as this actor. */
   async slate(operation: SlateOperation): Promise<SlateCallResult> {
-    return workspaceOwner(this.env, this.workspaceName()).slate(operation);
+    return workspaceOwner(this.env, this.workspaceName()).slateAs(this.slateCaller(), operation);
+  }
+
+  /**
+   * One capability route, run AS THIS ACTOR for a slate it holds a binding to.
+   *
+   * The workspace root forwards a facet's binding call down the facet's own path,
+   * one hop at a time, and the actor at the end answers with its own providers
+   * narrowed by its own current role — the same resolver and the same narrowing
+   * its `execute_tools` sandbox is built from — so a binding never reaches more
+   * than the actor holding it does, and a role change is seen on the next call.
+   *
+   * Deliberately NOT `@callable`: reached on the stub transport only.
+   */
+  async slateBindingDispatch(path: readonly SlateCallerHop[], route: SlateCapabilityRoute): Promise<JsonValue> {
+    const [next, ...rest] = path;
+    if (next !== undefined) {
+      if (next.className !== this.facetClass().name) {
+        throw new KinuError('denied', `${next.className} is not a facet class this actor hosts`);
+      }
+      return (await this.subAgent(this.facetClass(), next.name)).slateBindingDispatch(rest, route);
+    }
+    switch (route.kind) {
+      case 'namespace': {
+        const providers = this.slateNamespaces();
+        const provider = (await this.slateReach(providers)).narrowProviders(providers)
+          .find((candidate) => candidate.name === route.namespace);
+        if (!provider) throw new KinuError('denied', `${route.namespace} is not within this actor's reach right now`);
+        if (!Object.hasOwn(provider.tools, route.member)) {
+          throw new KinuError('missing', `${route.namespace} has no member ${route.member}; it offers ${Object.keys(provider.tools).join(', ')}`);
+        }
+        const answered = await provider.tools[route.member]?.execute(...route.args);
+        const value = v.safeParse(JsonValueSchema, answered === undefined ? null : answered);
+        if (!value.success) throw new KinuError('bad_input', `${route.namespace}.${route.member} answered a value that is not JSON`, { cause: new v.ValiError(value.issues) });
+        return value.output;
+      }
+      case 'mcp': {
+        const { stub, caller } = await this.userHub();
+        return v.parse(JsonValueSchema, JSON.parse(await stub.userMcp_callTool(caller, route.server, route.tool, route.args)));
+      }
+    }
+  }
+
+  /**
+   * This actor's CURRENT tool reach, for a binding call that arrives between
+   * turns: the live turn's resolved profile when one is open, else the role
+   * resolved now over the same nameable surface a turn offers — its native
+   * tools and the codemode capabilities the wired providers carry — so the
+   * narrowing a held binding meets is the one its `execute_tools` sandbox meets.
+   */
+  private async slateReach(providers: readonly CodemodeProvider[]): Promise<ToolSurfaceNarrowing> {
+    const live = this._turnProfile;
+    if (live !== null) return narrowToolSurface(live.allowedTools);
+    const profile = resolveAgentTurnProfile({
+      ...(await this.profileInputs()),
+      activeRoleId: this.activeRoleLabel(),
+      workMode: 'build',
+      availableTools: [...actorActiveTools(this.actorToolDeps()), ...codemodeCapabilitiesFor(providers)],
+      activeSkills: [],
+      explicitTier: this.config.getAssignedTier() ?? undefined,
+    });
+    return narrowToolSurface(profile.allowedTools);
   }
 
   /** `memory.*` / `tasks.*` — unconditional on every ActorAgent (orchestrator

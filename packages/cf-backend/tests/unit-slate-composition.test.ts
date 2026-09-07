@@ -1,9 +1,14 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import type { SlateCallResult } from '@kinu.run/core';
-import { orchestratorHarness } from './helpers/actor-harness';
+import {
+  DEFAULT_WORKERS_AI_MODEL_SPEC, agentHome, subordinateAgentName,
+  type JsonValue, type SlateCallResult,
+} from '@kinu.run/core';
+import { hiredSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
+import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
+
 
 test('an MCP binding follows connection identity, binding scope and the owner allowlist', async () => {
   resetRecordedMcp();
@@ -29,7 +34,7 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     const bind = (server: string, tools?: string[]) => vfs.writeFile('/home/user/slates/issues/package.json', JSON.stringify({
       main: 'server.ts', slate: { title: 'Issues', bindings: { GITHUB: { kind: 'mcp', server, tools } } },
     }));
-    const call = (tool: string) => actor.agent.slateBindingCall('issues', 'GITHUB', { member: tool, args: [{}], depth: 0 });
+    const call = (tool: string) => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'issues', 'GITHUB', { member: tool, args: [{}], depth: 0 });
 
     await bind('github');
     expect(await call('read_issue')).toMatchObject({ ok: false, error: expect.stringContaining('Unknown MCP server') });
@@ -110,4 +115,66 @@ test('the agent slate operation commits, forks and restores its authored source'
   expect(await files.readFile('/home/user/slates/' + fork.id + '/server.ts', { encoding: 'utf8' })).toContain('"second"');
   expect(await actor.agent.slate({ op: 'restore', id: fork.id, version: first.id })).toMatchObject({ ok: false, reason: 'missing' });
   expect(await actor.agent.slate({ op: 'commit', id: '../outside' })).toMatchObject({ ok: false, reason: 'bad_input' });
+});
+
+test('a facet cannot restore source that its own filesystem authority cannot write', async () => {
+  const parent = orchestratorHarness();
+  const files = parent.agent.observeRuntime().storage.vfs;
+  const path = '/home/user/slates/root-app/server.ts';
+  await files.mkdir('/home/user/slates/root-app', { recursive: true });
+  await files.writeFile('/home/user/slates/root-app/package.json', JSON.stringify({ main: 'server.ts' }));
+  await files.writeFile(path, 'export default { fetch() { return new Response("first"); } };');
+  const committed = await parent.agent.slate({ op: 'commit', id: 'root-app' });
+  if (!committed.ok) throw new Error(committed.reason + ': ' + committed.error);
+  const version = v.parse(v.object({ id: v.string() }), committed.value);
+  const current = 'export default { fetch() { return new Response("second"); } };';
+  await files.writeFile(path, current);
+  const child = await hiredSubordinateHarness(parent, {
+    name: 'slate-author', displayName: 'Slate author', nameOrigin: 'user',
+    role: 'general', mission: 'Work inside the assigned private home',
+  });
+  await expect(child.agent.observeRuntime().storage.vfs.writeFile(path, 'blocked'))
+    .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
+  const restored = await child.agent.slate({ op: 'restore', id: 'root-app', version: version.id });
+  expect(await files.readFile(path, { encoding: 'utf8' })).toBe(current);
+  expect(restored).toMatchObject({ ok: false, reason: 'denied' });
+});
+
+test('a binding held by a facet reaches the facet\'s own files and role, never the root\'s', async () => {
+  const parent = orchestratorHarness();
+  const rootFiles = parent.agent.observeRuntime().storage.vfs;
+  await rootFiles.mkdir('/home/user/slates/reader', { recursive: true });
+  await rootFiles.writeFile('/home/user/slates/reader/package.json', JSON.stringify({
+    main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace' } } },
+  }));
+  await rootFiles.writeFile('/home/user/private.md', 'root only');
+  const child = await hiredSubordinateHarness(parent, {
+    name: 'reader-1', displayName: 'Reader', nameOrigin: 'user',
+    role: 'general', mission: 'Read what you may',
+  });
+  const childHome = agentHome(subordinateAgentName('reader-1'));
+  const asChild = child.agent.observeSlateCaller();
+  const call = (caller: SlateCaller, member: string, args: JsonValue[]) =>
+    parent.agent.slateBindingCallAs(caller, 'reader', 'FILES', { member, args, depth: 0 });
+
+  // The facet's own home: readable and writable through its binding.
+  expect(await call(asChild, 'writeFile', [`${childHome}/note.md`, 'mine'])).toMatchObject({ ok: true });
+  expect(await rootFiles.readFile(`${childHome}/note.md`, { encoding: 'utf8' })).toBe('mine');
+  // The origin's tree: readable (homes are 0o755) but a write is the facet's own EACCES.
+  expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root only' });
+  expect(await call(asChild, 'writeFile', ['/home/user/private.md', 'stolen'])).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await rootFiles.readFile('/home/user/private.md', { encoding: 'utf8' })).toBe('root only');
+  // The same binding for the root writes the origin's tree, as the root does.
+  expect(await call(ROOT_SLATE_CALLER, 'writeFile', ['/home/user/private.md', 'root wrote'])).toMatchObject({ ok: true });
+
+  // A role that names no workspace-reaching capability loses the namespace on the next call.
+  child.agent.harnessInstallCatalog({
+    roles: { scribe: { description: 'Writes prose only.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
+    tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
+  });
+  await child.agent.setSubordinateIdentity({
+    name: 'reader-1', displayName: 'Reader', nameOrigin: 'user', role: 'scribe',
+    mission: 'Read what you may', lifetime: 'durable',
+  });
+  expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
 });

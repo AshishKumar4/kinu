@@ -447,9 +447,10 @@ const ORCHESTRATOR_METHODS = [
   // and the registry it is provisioned in exists only on this object.
   'provisionFacetHome',
   'releaseFacetHome',
-  // Introduced bindings return only through the stub transport. A browser
-  // cannot mint a binding name to reach the owner's capabilities.
-  'slateBindingCall',
+  // Introduced bindings and facet actors return through the stub transport,
+  // each stamping the actor it acts as. A browser cannot mint a caller.
+  'slateAs',
+  'slateBindingCallAs',
   // The one method the supervisor entrypoint calls on the object that owns a
   // workspace: a facet's filesystem calls arrive here through the composed
   // `OrchestratorAgent` namespace. Listed (not sealed away) but never

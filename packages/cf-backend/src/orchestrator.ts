@@ -25,6 +25,7 @@ import {
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
+import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import { applyWorkspaceBoxOp, type WorkspaceBoxOp, type WorkspaceBoxResult } from "./workspace-box-rpc";
 import {
   hostedFacetAgentName, type HostedFacetHomes, type HostedFacetKind, type HostedNodeHome,
@@ -3929,8 +3930,14 @@ export class OrchestratorAgent extends ActorAgent {
     return v.parse(JsonValueSchema, await reads[source]());
   }
 
+  /** The owner's browser acting on its own workspace: the root caller, minted here. */
   @callable() async slate(operation: SlateOperation): Promise<SlateCallResult> {
-    return this.slates.operation(operation);
+    return this.slates.operation(ROOT_SLATE_CALLER, operation);
+  }
+
+  /** An actor of this workspace acting as itself; DO-only, like `workspaceBoxOp`. */
+  async slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult> {
+    return this.slates.operation(caller, operation);
   }
 
   private _slates: SlateHost | undefined;
@@ -3941,12 +3948,8 @@ export class OrchestratorAgent extends ActorAgent {
       session: () => this.hostedWorkspace().bundle.session(),
       registerPort: (pid, port, target) => this.hostedWorkspace().registerPort(pid, port, target),
       unregisterPorts: (pid) => this.hostedWorkspace().unregisterPorts(pid),
-      providers: () => this.slateNamespaces(),
+      dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route),
       data: (source) => this.slateReadModel(source),
-      mcp: async (server, tool, args) => {
-        const { stub, caller } = await this.userHub();
-        return v.parse(JsonValueSchema, JSON.parse(await stub.userMcp_callTool(caller, server, tool, args)));
-      },
       expose: async (port) => {
         const ports = this.hostedWorkspace().box('agent:main').ports;
         if (!ports?.expose) throw new KinuError('unsupported', 'Workspace port exposure is not available');
@@ -3956,16 +3959,16 @@ export class OrchestratorAgent extends ActorAgent {
     return this._slates;
   }
 
-  async slateBindingCall(id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult> {
-    return this.slates.bindingCall(id, name, request);
+  async slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult> {
+    return this.slates.bindingCall(caller, id, name, request);
   }
 
   @callable() async listSlates() {
-    return this.slates.list();
+    return this.slates.list(ROOT_SLATE_CALLER);
   }
 
   @callable() async previewSlate(id: string): Promise<SlateCallResult> {
-    return this.slates.preview(id);
+    return this.slates.preview(ROOT_SLATE_CALLER, id);
   }
 
   @callable() async getToolDescriptions() {
