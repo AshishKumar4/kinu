@@ -92,7 +92,7 @@ describe('a case gets a fresh workspace, and gives it back', () => {
 });
 
 describe('a partial first-run tier is not evidence', () => {
-  test('five of six cases is inadmissible, and six carries the primary metric', () => {
+  test('omitting a declared case is inadmissible; the complete set carries the primary metric', () => {
     const scored = (id: string): EvalObservation => ({
       taskId: id, repetition: 0, outcome: 'scored',
       scores: [outcomeRow(subgoalOutcome(3, 3, 'every subgoal reached'))],
@@ -100,7 +100,7 @@ describe('a partial first-run tier is not evidence', () => {
     });
     const declared = [...FIRST_RUN_CASES];
 
-    const partial = assessAdmissibility(declared, declared.slice(0, 5).map(scored));
+    const partial = assessAdmissibility(declared, declared.slice(0, -1).map(scored));
     expect(partial.admissible).toBe(false);
     expect(partial.failures.join(' ')).toContain('never attempted');
 
