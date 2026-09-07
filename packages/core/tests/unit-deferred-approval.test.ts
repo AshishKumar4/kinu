@@ -754,3 +754,28 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     expect(queue.list().map((a) => a.id)).toEqual(['defer-2']);
   });
 });
+
+test('no-execution refusals retain their class before native run and executor text formatting', async () => {
+  const denied = setup({ mode: 'deny_all' });
+  expect(parseRefusal(await denied.run.execute({ command: GATED }))).toMatchObject({ reason: 'denied' });
+  expect(denied.executed).toEqual([]);
+  const parked = setup();
+  const result = await parked.shell.exec(GATED);
+  expect(parseRefusal(formatExecResult(result))).toMatchObject({ reason: 'unavailable' });
+  expect(parked.executed).toEqual([]);
+  expect(parked.queue.list()).toMatchObject([{ status: 'queued', command: GATED }]);
+  await parked.queue.decide(['defer-1'], 'denied');
+  expect(parseRefusal(await parked.run.execute({ command: GATED }))).toMatchObject({ reason: 'denied' });
+  expect(parked.executed).toEqual([]);
+});
+
+test('an executed exit-one command remains a command failure even if stdout looks like a refusal', async () => {
+  const stdout = JSON.stringify({ reason: 'denied', error: 'ordinary command data' });
+  const shell = withApprovalGatedShell({ exec: async () => ({ stdout, stderr: 'process failure', exitCode: 1 }) });
+  const result = await shell.exec('false');
+  const rendered = formatExecResult(result);
+  expect(result.exitCode).toBe(1);
+  expect(parseRefusal(rendered)).toBeNull();
+  expect(rendered).toContain(stdout);
+  expect(rendered).toContain('process failure');
+});

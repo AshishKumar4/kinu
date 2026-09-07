@@ -1081,7 +1081,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const ran: string[] = [];
           const gated = s.gateExec<string>(
             async (cmd) => { ran.push(cmd); return `ran:${cmd}`; },
-            (msg) => `denied:${msg}`,
+            (error) => `denied:${error.message}`,
             'laptop',
             { mode: () => 'strict', requestApproval: async () => 'allow' },
           );
@@ -1096,7 +1096,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const ran: string[] = [];
           const gated = s.gateExec<string>(
             async (cmd) => { ran.push(cmd); return 'ran'; },
-            (msg) => `denied:${msg}`,
+            (error) => `denied:${error.message}`,
             'laptop',
           );
           const refused = String(await gated('sudo apt install curl'));
@@ -1111,7 +1111,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const asked: string[] = [];
           const build = (executor: string) => s.gateExec<string>(
             async (cmd) => `ran:${cmd}`,
-            (msg) => `denied:${msg}`,
+            (error) => `denied:${error.message}`,
             executor,
             {
               mode: () => 'strict',

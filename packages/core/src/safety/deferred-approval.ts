@@ -440,6 +440,8 @@ export class DeferredApprovalQueue {
         if (verdict.outcome === 'run') return { run: true, spent: verdict.spend };
         return {
           run: false,
+          // A parked action is an absence of decision, not a refusal: the owner can still approve it.
+          reason: verdict.outcome === 'denied' ? 'denied' : 'unavailable',
           message: verdict.outcome === 'denied'
             ? deniedActionMessage(verdict.action)
             : queuedActionMessage(verdict.action),
