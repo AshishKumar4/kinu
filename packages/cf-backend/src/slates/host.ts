@@ -223,7 +223,8 @@ export class SlateHost {
       }
       const port = project.slate.port ?? this.ports.get(held) ?? this.nextPort++;
       this.ports.set(held, port);
-      const process = await this.resident.start({ key, root, project, port, cred: caller.cred, bindings });
+      const owner = JSON.stringify([this.deps.workspace, id, slateCallerKey(caller)]);
+      const process = await this.resident.start({ key, owner, root, project, port, cred: caller.cred, bindings });
       if ((this.revisions.get(id) ?? 0) !== revision) { await process.stop(); continue; }
       this.running.set(held, { key, caller, id, process });
       return process;

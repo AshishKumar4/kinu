@@ -321,7 +321,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
     const capability = 'abcdef0123456789abcdef01';
-    kv.set('nimbus_preview_capability:3000', capability);
+    kv.set('nimbus_preview_capability:3000', { capability, owner: null });
 
     // The exposure died with an eviction; the durable capability is the one
     // copy that can tell "recycled" from "never existed".
@@ -347,7 +347,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
   test('a live slate preview refreshes authored code without accepting a visitor hop count', async () => {
     const actor = actorObject();
     const capability = 'abcdef0123456789abcdef01';
-    Object.assign(actor.ctx.storage, { get: async (key: string) => key === 'nimbus_preview_capability:3000' ? capability : undefined });
+    Object.assign(actor.ctx.storage, { get: async (key: string) => key === 'nimbus_preview_capability:3000' ? { capability, owner: null } : undefined });
     let source = 'old';
     const workspace = createHostedWorkspace({
       ctx: actor.ctx, env: strictEnv(WORKSPACE_BINDINGS),
@@ -364,5 +364,39 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       .toEqual({ source: 'edited', depth: null });
     workspace.unregisterPorts(9000);
     expect((await workspace.routePreview(3000, capability.slice(0, 10), new Request('https://preview.test/'), '/')).status).toBe(410);
+  });
+
+  test('a recycled slate URL cannot acquire a different logical owner before that owner exposes it', async () => {
+    const actor = actorObject();
+    const kv = new Map<string, JsonValue>();
+    Object.assign(actor.ctx.storage, {
+      get: async (key: string) => kv.get(key),
+      put: async (key: string, value: JsonValue) => { kv.set(key, value); },
+      delete: async (key: string) => kv.delete(key),
+    });
+    const activate = () => createHostedWorkspace({
+      ctx: actor.ctx, env: strictEnv(WORKSPACE_BINDINGS),
+      previewUrl: async (_port, capability) => ({ url: 'https://preview.test/' + capability }),
+    });
+    const first = activate();
+    await first.registerPort(9000, 20000, { handleHttpRequest: async () => new Response('caller A') }, 'workspace/slate-A/caller-A');
+    const exposure = await first.box('agent:main').ports?.expose?.(20000);
+    if (!exposure?.url) throw new Error('The fixture did not expose its first listener');
+    const handle = new URL(exposure.url).pathname.slice(1, 11);
+    expect(await (await first.routePreview(20000, handle, new Request('https://preview.test/'), '/')).text()).toBe('caller A');
+    // A new activation rebuilds the same owner at the same port: retain its URL.
+    const sameOwner = activate();
+    await sameOwner.registerPort(9001, 20000, { handleHttpRequest: async () => new Response('caller A rebuilt') }, 'workspace/slate-A/caller-A');
+    expect(await (await sameOwner.routePreview(20000, handle, new Request('https://preview.test/'), '/')).text()).toBe('caller A rebuilt');
+    // First activity after another activation is call(B), not preview/expose(B).
+    const differentOwner = activate();
+    await differentOwner.registerPort(9002, 20000, { handleHttpRequest: async () => new Response('caller B private data') }, 'workspace/slate-A/caller-B');
+    const refused = await differentOwner.routePreview(20000, handle, new Request('https://preview.test/'), '/');
+    expect(refused.status).toBe(404);
+    expect(await refused.text()).not.toContain('caller B private data');
+    // Ordinary workspace ports cannot inherit a prior slate's scoped exposure either.
+    const ordinary = activate();
+    await ordinary.registerPort(9003, 20000, { handleHttpRequest: async () => new Response('ordinary port') });
+    expect((await ordinary.routePreview(20000, handle, new Request('https://preview.test/'), '/')).status).toBe(404);
   });
 });
