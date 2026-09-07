@@ -142,14 +142,17 @@ function splitRequest(branches: number, rationale = TASK): SplitRequest {
   };
 }
 
-/** One drive of the head, exactly as `resumeBackgroundJob` drives it: a
- *  fresh controller call carrying the stored input and no run identity. */
+/** One drive of the head, exactly as `resumeBackgroundJob` drives it: a fresh
+ *  controller call carrying the stored input — the authored depth room included,
+ *  since a re-drive replays it unchanged — and no run identity. */
 function drive(journal: HeadJournal, spawned: HeadInput[], settles: boolean, branches = 5, pendingHeads?: PendingHead[]) {
   return new HeadController(runtime({ settles, spawned, pendingHeads }), journal).run({
     mode: 'build',
     parentHeadId: null,
     inheritedContext: [],
     request: splitRequest(branches),
+    // One level: these heads report, they never split again.
+    parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
   });
 }
 
@@ -233,10 +236,21 @@ describe('a re-driven fork job stays one run', () => {
     const controller = new HeadController(runtime({ settles: true, spawned }), journal);
     const shared = { mode: 'build' as const, inheritedContext: [], request: splitRequest(2) };
 
-    await controller.run({ ...shared, parentHeadId: null });
-    const [firstParent, secondParent] = spawned.map((head) => head.id);
-    await controller.run({ ...shared, parentHeadId: firstParent ?? '', parentDepth: 1 });
-    await controller.run({ ...shared, parentHeadId: secondParent ?? '', parentDepth: 1 });
+    // Two levels, each stated where it is spent: the root split authors the
+    // room, and every nested split runs on the budget its parent head actually
+    // inherited — the same handoff `split_subheads` makes in production.
+    await controller.run({
+      ...shared, parentHeadId: null,
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
+    });
+    const [firstParent, secondParent] = spawned;
+    if (!firstParent || !secondParent) throw new Error('Expected the root split to spawn two heads');
+    await controller.run({
+      ...shared, parentHeadId: firstParent.id, parentDepth: 1, parentBudget: firstParent.budget,
+    });
+    await controller.run({
+      ...shared, parentHeadId: secondParent.id, parentDepth: 1, parentBudget: secondParent.budget,
+    });
 
     expect(new Set(spawned.map((head) => head.id)).size).toBe(spawned.length);
   });
@@ -261,12 +275,14 @@ describe('a re-driven fork job stays one run', () => {
         journal,
       ).run({
         mode: 'build', parentHeadId: null, inheritedContext: [], request: splitRequest(5),
+        parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
       }),
     );
     expect(compiled).toEqual([]);
 
     await new HeadController(runtime({ settles: true, spawned, compiled }), journal).run({
       mode: 'build', parentHeadId: null, inheritedContext: [], request: splitRequest(5),
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     // ONE synthesis for five branches and four drives.
@@ -306,6 +322,7 @@ describe('a re-driven fork job stays one run', () => {
       parentHeadId: null,
       inheritedContext: [],
       request: splitRequest(2, 'a completely different question'),
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(listForkRuns(sql, null, 30).items.map((run) => run.task).slice().sort())
@@ -354,6 +371,9 @@ describe('a re-driven fork job stays one run', () => {
       parentDepth: 1,
       inheritedContext: [],
       request: splitRequest(2),
+      // The parent head is synthetic here, so its inherited room is authored:
+      // one level, which is all this sub-split spends.
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     const subSplit = spawned.slice(-2);

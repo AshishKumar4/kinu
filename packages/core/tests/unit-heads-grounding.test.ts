@@ -111,6 +111,9 @@ describe('grounded head outcome scores', () => {
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'good', rationale: 'a' }, { task: 'bad', rationale: 'b' }] },
+      // Every split in this file forks once and merges what comes back, so each
+      // one states the single level of recursion room it actually uses.
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(result.grounded).toBe(true);
@@ -142,6 +145,7 @@ describe('grounded head outcome scores', () => {
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'done', rationale: 'a' }, { task: 'gone', rationale: 'b' }] },
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
     const gone = result.headScores.find((s) => s.status === 'aborted')!;
     const done = result.headScores.find((s) => s.status === 'completed')!;
@@ -172,6 +176,7 @@ describe('grounded head outcome scores', () => {
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
       onPhase: (e) => phases.push(e.kind),
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     // Reaching 'merge' is the whole point: that phase is what the run-event
@@ -192,6 +197,7 @@ describe('grounded head outcome scores', () => {
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
     expect(result.grounded).toBe(false);
     expect(result.headScores.every((s) => s.score === 0.5)).toBe(true);
@@ -216,6 +222,7 @@ describe('grounded head outcome scores', () => {
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }] },
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     }));
 
     const lines = stderr.filter((line) => line.includes('"event":"head.judge_ensemble_clamped"'));
@@ -256,6 +263,7 @@ describe('k-sample median merge', () => {
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
     // k=3 merge synthesis calls were made (the merge prompt is identical each time).
     expect(mergePrompts).toHaveLength(3);
@@ -288,6 +296,7 @@ describe('k-sample median merge', () => {
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
     // All k samples were still produced, and one of them is the merge — not an
     // exception that discards the split and its head_merge ledger row.
@@ -307,6 +316,7 @@ describe('k-sample median merge', () => {
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
     expect(mergePrompts).toHaveLength(1);
     expect(result.mergedNarrative).toBe('only');
@@ -332,6 +342,7 @@ describe('evidence is not clipped into the merge', () => {
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
     const prompt = mergePrompts[0]!;
     expect(prompt).toContain(longBody);            // full body, not truncated
