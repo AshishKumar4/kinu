@@ -191,7 +191,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
     const turn = makeTurn({
       turnId: 'exec-1',
-      toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: 'ok' }],
+      toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
     });
     await engine.reviewTurn(turn, null);
 

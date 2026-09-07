@@ -189,7 +189,6 @@ const RoutedResultSchema = v.object({
     sources: v.object({ tierSource: v.string(), presetSource: v.string() }),
   }),
 });
-const RefusalSchema = v.object({ reason: v.string(), error: v.string() });
 
 /** The profile a first attempt would have frozen, built through the REAL
  *  resolver against the v1 catalog — a hand-written snapshot would only prove
@@ -345,11 +344,9 @@ describe('a re-drive continues under the profile it started under', () => {
     // never produce that, which is exactly the asymmetry the pair needs.
     const stored = harness({ envelope: envelopeOf(TIERS_V2, 2), roleId: 'lead' });
     seedInterruptedRun({ rt: stored.rt, task, roleId: 'auditor' });
-    const refusal = v.parse(RefusalSchema, await stored.execute({
-      action: 'swarm', task,
-    }, REDRIVE));
-    expect(refusal.reason).toBe('unavailable');
-    expect(refusal.error).toContain('the judge faulted while scoring');
+    const pending = stored.execute({ action: 'swarm', task }, REDRIVE);
+    await expect(pending).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(pending).rejects.toThrow('the judge faulted while scoring');
 
     const flat = harness({ envelope: envelopeOf(TIERS_V2, 2), roleId: 'lead' });
     seedInterruptedRun({ rt: flat.rt, task, roleId: 'lead' });
@@ -499,16 +496,11 @@ describe('`models` routes each node to its own assigned model', () => {
 
   test('an unresolvable spec is refused by name, before any node runs', async () => {
     const h = perNodeHarness();
-    const refusal = v.parse(RefusalSchema, await h.execute({
-      action: 'swarm', preset: 'ideate', task: 'refuse me cleanly',
-      models: ['m-alpha', 'm-ghost'],
-      branches: 2, depth: 1,
-    }));
-    // bad_input, not unavailable: the spec is the caller's own words on this
-    // surface, the same way a fabricated verifier kind is.
-    expect(refusal.reason).toBe('bad_input');
-    expect(refusal.error).toContain('m-ghost');
-    expect(refusal.error).toContain('models');
+    const pending = h.execute({ action: 'swarm', preset: 'ideate', task: 'refuse me cleanly',
+      models: ['m-alpha', 'm-ghost'], branches: 2, depth: 1 });
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(pending).rejects.toThrow('m-ghost');
+    await expect(pending).rejects.toThrow('models');
     // NOTHING SPENT: no model served a call, so the refusal landed ahead of the
     // first node rather than one wave in.
     expect(h.aCalls()).toBe(0);
@@ -519,15 +511,12 @@ describe('`models` routes each node to its own assigned model', () => {
 
   test('naming models and tier together is refused rather than resolved by precedence', async () => {
     const h = harness({ envelope: envelopeOf(TIERS_V1, 1), roleId: 'lead' });
-    const refusal = v.parse(RefusalSchema, await h.execute({
-      action: 'swarm', preset: 'ideate', task: 'two routing decisions',
-      models: ['m-alpha'], tier: 'deep',
-      branches: 1, depth: 1,
-    }));
-    expect(refusal.reason).toBe('bad_input');
-    expect(refusal.error).toContain('tier');
-    expect(refusal.error).toContain('models');
-    expect(refusal.error).toContain('ignored');
+    const pending = h.execute({ action: 'swarm', preset: 'ideate', task: 'two routing decisions',
+      models: ['m-alpha'], tier: 'deep', branches: 1, depth: 1 });
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(pending).rejects.toThrow('tier');
+    await expect(pending).rejects.toThrow('models');
+    await expect(pending).rejects.toThrow('ignored');
   }, 30_000);
 
   test('the identity digest changes when the models change', () => {

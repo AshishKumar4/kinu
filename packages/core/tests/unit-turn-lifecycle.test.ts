@@ -105,7 +105,8 @@ describe('openTurnRun / closeTurnRun', () => {
     const steering = new TurnSteering();
     // Three DIFFERENT failures of one tool — the failure streak, not a repeat.
     for (const boom of ['boom a', 'boom b', 'boom c']) {
-      steering.onToolResult({ toolName: 'run', args: { command: boom }, result: `Error (exit 2): ${boom}`, success: true });
+      steering.onToolResult({ toolName: 'run', args: { command: boom }, result: 'Error (exit 2): ' + boom,
+        success: false, reason: 'io', execution: { exitCode: 2 } });
     }
     steering.steerFor({ stepNumber: 4, messages: [] });
     steering.onToolCall({ toolName: 'run', args: { command: 'cat config.log' } });

@@ -73,9 +73,7 @@ describe('run tool — interactive shell approval channel', () => {
   test('"deny" reports the refusal to the model and never runs the command', async () => {
     const { run, executed } = harness({ approve: async () => 'deny' });
 
-    const out = await run.execute({ command: GATED });
-
-    expect(out).toContain('Denied by the owner');
+    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('Denied by the owner') });
     expect(executed).toEqual([]);
   });
 
@@ -92,27 +90,21 @@ describe('run tool — interactive shell approval channel', () => {
   test('a channel that declines to decide leaves the standing mode in force', async () => {
     const { run, executed } = harness({ approve: async () => null });
 
-    const out = await run.execute({ command: GATED });
-
-    expect(out).toContain('needs owner approval, nobody to ask');
+    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ code: 'unavailable', message: expect.stringContaining('needs owner approval, nobody to ask') });
     expect(executed).toEqual([]);
   });
 
   test('with no channel wired, strict keeps its explanatory refusal', async () => {
     const { run, executed } = harness({});
 
-    const out = await run.execute({ command: GATED });
-
-    expect(out).toContain('needs owner approval, nobody to ask');
+    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ code: 'unavailable', message: expect.stringContaining('needs owner approval, nobody to ask') });
     expect(executed).toEqual([]);
   });
 
   test('deny_all refuses without consulting the channel', async () => {
     const { run, executed, asked } = harness({ mode: 'deny_all', approve: async () => 'allow' });
 
-    const out = await run.execute({ command: GATED });
-
-    expect(out).toContain('refused by standing policy (deny_all)');
+    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('refused by standing policy (deny_all)') });
     expect(executed).toEqual([]);
     expect(asked).toEqual([]);
   });

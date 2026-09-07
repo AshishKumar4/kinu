@@ -26,7 +26,7 @@ import {
   createAgentsCodemodeProvider,
   createTeamToolDeps,
   createTemporaryAgentPort,
-  delegationBudgetAtDepth,
+  delegationBudgetAtDepth, delegationDepthRefusal,
   receiveSubordinateEvent,
   type SubordinateEventResult,
   renderAgentsToolDescription,
@@ -467,8 +467,8 @@ describe('the roster shows a temporary agent while it runs and keeps its history
       roster: { name: TEMP_NAME, lifetime: 'task', status: 'dismissed' },
     });
     // Readable is not addressable: it cannot be handed new work.
-    expect(await scene.call({ action: 'ask', agent: TEMP_NAME, message: 'one more thing' }))
-      .toMatchObject({ reason: 'bad_input' });
+    await expect(scene.call({ action: 'ask', agent: TEMP_NAME, message: 'one more thing' }))
+      .rejects.toMatchObject({ code: 'bad_input' });
   });
 
   test('a run that could not start is released, not left listed as running', async () => {
@@ -723,24 +723,19 @@ describe('a child that cannot answer still ends the call', () => {
 describe('the two ask targets are exclusive', () => {
   test('naming both agent and role is refused by naming the choice', async () => {
     const scene = makeScene();
-    const refusal = v.parse(Refusal, await scene.call({
-      action: 'ask', agent: 'researcher', role: 'auditor', message: 'go',
-    }));
-    expect(refusal.reason).toBe('bad_input');
-    expect(refusal.error).toContain('ONE target');
+    const pending = scene.call({ action: 'ask', agent: 'researcher', role: 'auditor', message: 'go' });
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(pending).rejects.toThrow('ONE target');
     expect(scene.calls).toEqual([]);
   });
 
   test('naming neither is refused by naming both options', async () => {
     const scene = makeScene();
-    const refusal = v.parse(Refusal, await scene.call({ action: 'ask' }));
-    expect(refusal.reason).toBe('bad_input');
-    expect(refusal.error).toContain('`role`');
-    expect(refusal.error).toContain('`agent`');
-    // A caller that named a message but no target reads the UNCHANGED
-    // existing-agent refusal: that half of the surface did not move.
-    expect(v.parse(Refusal, await scene.call({ action: 'ask', message: 'go' })).error)
-      .toBe('ask requires agent and message');
+    const pending = scene.call({ action: 'ask' });
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(pending).rejects.toThrow('`role`');
+    await expect(pending).rejects.toThrow('`agent`');
+    await expect(scene.call({ action: 'ask', message: 'go' })).rejects.toMatchObject({ code: 'bad_input', message: 'ask requires agent and message' });
   });
 
   test('an existing-agent ask is unchanged: it reports back later, it does not resolve here', async () => {
@@ -806,9 +801,9 @@ describe('the rung is structural, and so is its absence', () => {
     const types = createAgentsCodemodeProvider(() => scene.deps).types ?? '';
     expect(types).toContain('ask(');
     expect(types).not.toContain('context_ref');
-    const refusal = v.parse(Refusal, await scene.call({ action: 'ask', role: 'auditor', message: 'go' }));
-    expect(refusal.reason).toBe('denied');
-    expect(refusal.error).toContain('temporary agent');
+    const pending = scene.call({ action: 'ask', role: 'auditor', message: 'go' });
+    await expect(pending).rejects.toMatchObject({ code: 'denied' });
+    await expect(pending).rejects.toThrow('temporary agent');
     // The existing-agent target still works there — this rung's absence takes
     // nothing else with it.
     expect(agentsActionsFor(scene.deps)).toContain('ask');
@@ -830,29 +825,27 @@ describe('the rung is structural, and so is its absence', () => {
     const capped = makeScene({ delegation: { depth: DELEGATION_MAX_DEPTH } });
     expect(delegationExhausted(capped.deps.team!.delegation)).toBe(true);
 
-    const askRefusal = v.parse(Refusal, await capped.call({
-      action: 'ask', role: 'auditor', message: 'Audit the ledger.',
-    }));
-    const hireRefusal = v.parse(Refusal, await capped.call({
-      action: 'hire', role: 'auditor', mission: 'Audit the ledger.',
-    }));
-    // The SAME refusal: one cap, one classification, one remedy.
-    expect(askRefusal).toEqual(hireRefusal);
-    expect(askRefusal.reason).toBe('denied');
-    expect(askRefusal.error).toContain('ask by `role`');
+    const team = capped.deps.team;
+    if (!team) throw new Error('the depth fixture has no team');
+    const expected = delegationDepthRefusal(team.delegation);
+    const askRefusal = capped.call({ action: 'ask', role: 'auditor', message: 'Audit the ledger.' });
+    await expect(askRefusal).rejects.toMatchObject({ code: expected.reason, message: expected.error });
+    const hireRefusal = capped.call({ action: 'hire', role: 'auditor', mission: 'Audit the ledger.' });
+    await expect(hireRefusal).rejects.toMatchObject({ code: expected.reason, message: expected.error });
+    await expect(askRefusal).rejects.toThrow('ask by `role`');
     // And nothing was created on the way to being refused.
     expect(capped.calls).toEqual([]);
     expect(capped.roster.listAll()).toEqual([]);
 
     // Asking an agent that ALREADY EXISTS adds no depth, so it stays available
     // at the cap — an actor there must still be able to use its own team.
-    expect(await capped.call({ action: 'ask', agent: 'nobody', message: 'x' }))
-      .toMatchObject({ reason: 'bad_input' });
+    await expect(capped.call({ action: 'ask', agent: 'nobody', message: 'x' }))
+      .rejects.toMatchObject({ code: 'bad_input' });
     // …and an EMPTY role is not a spawn either, on either side of the cap: the
     // seam and the dispatch arm read the same truthiness, so this routes as the
     // ask-by-name it is rather than drawing the depth refusal.
-    expect(await capped.call({ action: 'ask', agent: 'nobody', role: '', message: 'x' }))
-      .toMatchObject({ reason: 'bad_input' });
+    await expect(capped.call({ action: 'ask', agent: 'nobody', role: '', message: 'x' }))
+      .rejects.toMatchObject({ code: 'bad_input' });
   });
 
   test('a temporary child is a real agent: it can ask a role of its own until the cap', () => {

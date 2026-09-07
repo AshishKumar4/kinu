@@ -128,7 +128,8 @@ async function grindThenRecover(orch: AgentOrchestrator): Promise<void> {
   if (!onToolResult) throw new Error('Expected an onToolResult extension');
   for (let attempt = 0; attempt < 3; attempt++) {
     await onToolResult({
-      toolName: 'run', args: { command: 'npm test', attempt }, result: 'Error (exit 1): npm not found', success: true,
+      toolName: 'run', args: { command: 'npm test', attempt }, result: 'Error (exit 1): npm not found',
+      success: false, reason: 'io', execution: { exitCode: 1 },
     });
   }
   await onToolResult({

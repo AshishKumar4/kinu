@@ -33,7 +33,6 @@ import type { ToolSet } from 'ai';
  *  payload rather than a tidy stand-in. */
 const MALFORMED = 'list">';
 
-const ErrorSchema = v.object({ error: v.string() });
 
 /** One dispatching tool: how to build it, which argument carries the
  *  discriminant, and the vocabulary a refusal has to name. */
@@ -104,18 +103,11 @@ describe('a model-supplied discriminant is refused with its vocabulary', () => {
   for (const surface of SURFACES) {
     test(`${surface.tool}.${surface.field}`, async () => {
       const exec = surfaceUnder(runtime(), surface);
-      const result = await exec({
-        [surface.field]: MALFORMED, content: 'body', query: 'q', path: 'a.txt',
-      });
-      const { error } = v.parse(ErrorSchema, result);
-
+      const pending = exec({ [surface.field]: MALFORMED, content: 'body', query: 'q', path: 'a.txt' });
+      await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
       // Every reachable value is offered, so one retry can succeed.
-      for (const word of surface.vocabulary) {
-        expect(error).toContain(word);
-      }
-      // And the refusal is about the argument, not a bare restatement of what
-      // the model typed — which is all `unknown tasks action 'list">'` was.
-      expect(error).toContain(surface.field);
+      for (const word of surface.vocabulary) await expect(pending).rejects.toThrow(word);
+      await expect(pending).rejects.toThrow(surface.field);
     });
   }
 

@@ -487,8 +487,8 @@ describe('web builtin', () => {
   test('a call missing the argument its action needs says which', async () => {
     const { rt } = createTestRuntime();
     const execute = toolExecute<WebArgs, JsonValue>(buildWithWeb(rt).web);
-    expect(await execute({ action: 'search' })).toEqual({ error: 'web.search requires `query`' });
-    expect(await execute({ action: 'fetch' })).toEqual({ error: 'web.fetch requires `url`' });
+    await expect(execute({ action: 'search' })).rejects.toMatchObject({ code: 'bad_input', message: 'web.search requires `query`' });
+    await expect(execute({ action: 'fetch' })).rejects.toMatchObject({ code: 'bad_input', message: 'web.fetch requires `url`' });
   });
 
   test('action=fetch clamps a big page to a head with a VFS restore path', async () => {
@@ -510,17 +510,15 @@ describe('web builtin', () => {
     expect(String(saved).length).toBeGreaterThan(out.length);
   });
 
-  test('a provider error maps to a structured error object', async () => {
+  test('a provider error preserves its message and retry metadata on the error channel', async () => {
     const { rt } = createTestRuntime();
     const failing: WebSearchProvider = {
       search: async () => { throw new WebFetchError('rate limited', true); },
       fetch: async () => { throw new WebFetchError('x'); },
     };
     const execute = toolExecute<WebArgs, JsonValue>(buildWithWeb(rt, failing).web);
-    expect(await execute({ action: 'search', query: 'x' }))
-      .toMatchObject({ error: 'rate limited', retriable: true });
-    expect(await execute({ action: 'fetch', url: 'https://example.com' }))
-      .toMatchObject({ error: 'x' });
+    await expect(execute({ action: 'search', query: 'x' })).rejects.toMatchObject({ message: 'rate limited', retriable: true });
+    await expect(execute({ action: 'fetch', url: 'https://example.com' })).rejects.toMatchObject({ message: 'x' });
   });
 
   test('codemode can call web.search() and web.fetch()', async () => {
