@@ -76,6 +76,8 @@ export const FIRST_RUN_CASES = [
   'enter-sends',
   'files-outside-tree',
   'slate',
+  'command-refusal',
+  'preview-address',
 ] as const;
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
 
@@ -166,6 +168,20 @@ export const FIRST_RUN_DEFECTS = {
     provedRedAt: null,
     redDirection: 'Not proved red against a deployed sha. The first deployed tier run must '
       + 'measure listing, preview startup, and the authored HTTP response.',
+  },
+  'command-refusal': {
+    id: 'command-refusal',
+    found: 'A production slate binding and workspace executor reported a command that never ran as ordinary exit-one prose, losing the denied or waiting-for-approval class.',
+    missedBecause: 'Tests checked NOT RUN prose and queue state, not the canonical reason-first executor text channel on the deployed product.',
+    provedRedAt: '53ba25348',
+    redDirection: 'Non-model CLI REST and AgentClient calls compare denied and parked command text with the canonical refusal reader and verify the marker was never written.',
+  },
+  'preview-address': {
+    id: 'preview-address',
+    found: 'Production admitted a workspace name whose length prevented every workspace preview URL.',
+    missedBecause: 'Creation tests used short names; preview-only tests refused the long name after the unusable workspace already existed.',
+    provedRedAt: '53ba25348',
+    redDirection: 'Non-model CLI creation must reject a fresh 32-character address with the 31-character limit, while a fresh 31-character address must serve actual preview HTTP.',
   },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
@@ -266,14 +282,26 @@ const SHORT_SUBJECT = {
   'enter-sends': 'enter',
   'files-outside-tree': 'files',
   'slate': 'slate',
+  'command-refusal': 'command',
+  'preview-address': 'address',
 } satisfies Record<FirstRunCase, string>;
 /** What a case's body is handed, and what it hands back. */
-export interface FirstRunRun {
-  readonly session: KinuPublicSession;
-  readonly plan: PublicSessionPlan;
+export interface FirstRunSession {
+  readonly describe: string;
+  spend(): ReturnType<KinuPublicSession['spend']>;
+  teardown(): Promise<void>;
 }
 
-export interface FirstRunCaseSpec {
+export interface FirstRunPlan<Session extends FirstRunSession> {
+  open(request: { subject: string; purpose: string }): Promise<Session>;
+}
+
+export interface FirstRunRun<Session extends FirstRunSession = KinuPublicSession, Plan = PublicSessionPlan> {
+  readonly session: Session;
+  readonly plan: Plan;
+}
+
+export interface FirstRunCaseSpec<Session extends FirstRunSession = KinuPublicSession, Plan = PublicSessionPlan> {
   readonly id: FirstRunCase;
   /** The mission the REST create is given — what this workspace is FOR. */
   readonly purpose: string;
@@ -284,7 +312,7 @@ export interface FirstRunCaseSpec {
   readonly modelCalls: 'expected' | 'none';
   /** The case, driven the way a user drives it. Returns the subgoals it
    *  checked; every one of them is asserted by {@link runFirstRunCase}. */
-  run(input: FirstRunRun): Promise<readonly FirstRunSubgoal[]>;
+  run(input: FirstRunRun<Session, Plan>): Promise<readonly FirstRunSubgoal[]>;
   /** Tool calls this case made through the deployed plane, for the record's
    *  covariate. Read after `run`, so a case that threw still reports what it
    *  had done by then. */
@@ -307,9 +335,9 @@ export interface FirstRunCaseSpec {
  *   5. TEARDOWN in a `finally` — this DELETES the workspace, so a case that
  *      threw must not leave a row on the account.
  */
-export async function runFirstRunCase(
-  plan: PublicSessionPlan,
-  spec: FirstRunCaseSpec,
+export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
+  plan: FirstRunPlan<Session> & Plan,
+  spec: FirstRunCaseSpec<Session, Plan>,
   observations: EvalObservation[],
 ): Promise<void> {
   const startedAt = Date.now();
@@ -383,11 +411,11 @@ export function expectReached(caseId: FirstRunCase, subgoal: FirstRunSubgoal): v
 /** Publish this suite's record. Called from one `afterAll` per case file, so a
  *  file that crashed still publishes what it observed. */
 export function publishFirstRunRecord(
-  suite: string, declared: readonly FirstRunCase[], observations: EvalObservation[],
+  suite: string, declared: readonly FirstRunCase[], observations: EvalObservation[], modelId: string = EVAL_MODELS[FIRST_RUN_TIER],
 ): void {
   const spend = reportLiveModelSpend(suite);
   publishRunRecord({
-    family: FIRST_RUN_FAMILY, tier: FIRST_RUN_TIER, modelId: EVAL_MODELS[FIRST_RUN_TIER],
+    family: FIRST_RUN_FAMILY, tier: FIRST_RUN_TIER, modelId,
     repeats: 1, seed: 1, arm: FIRST_RUN_ARM, declaredTasks: [...declared], observations, spend,
     transcripts: transcriptRoot(), repoRoot: REPO_ROOT,
   });
