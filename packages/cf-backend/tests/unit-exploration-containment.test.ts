@@ -12,6 +12,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTestRuntime, createTestSql, memberBody, toolExecute } from '@kinu.run/test-utils';
+import { tool, jsonSchema } from 'ai';
 import {
   hiredSubordinateHarness,
   orchestratorHarness,
@@ -87,7 +88,9 @@ function buildSurface(opts?: {
 }) {
   const { rt } = createTestRuntime();
   const capture = new HeadCapture();
-  const executeTool = { description: 'execute_tools', execute: async () => 'ran' };
+  const executeTool = tool({ description: 'execute_tools', inputSchema: jsonSchema<{ code: string }>({
+    type: 'object', properties: { code: { type: 'string' } }, required: ['code'],
+  }), execute: async () => 'ran' });
   const tools = buildHeadToolSet({
     input: opts?.input ?? headInput(),
     capture,
@@ -162,11 +165,8 @@ describe('head tool surface — containment', () => {
       split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }; },
     });
     const split = toolExecute<SplitToolInput, string>(tools.split_subheads);
-    const result = await split({
-      rationale: 'go deeper',
-      heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }],
-    });
-    expect(result).toContain('budget exhausted (wall-clock)');
+    await expect(split({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }))
+      .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('budget exhausted (wall-clock)') });
     expect(splits).toBe(0);
     // Unrecorded, this refusal left no trace in the journal — so how often a
     // head is stopped mid-plan could not be asked of the ledger.
@@ -175,6 +175,7 @@ describe('head tool surface — containment', () => {
     if (!refusal) throw new Error('Expected split refusal to be recorded');
     expect(refusal.name).toBe('split_subheads');
     expect(refusal.result).toContain('wall-clock');
+    expect(refusal.outcome).toEqual({ success: false, reason: 'denied' });
   });
 
   test('split_subheads is NOT refused for spend — a long-running head may still split', async () => {
@@ -202,7 +203,7 @@ describe('head tool surface — containment', () => {
     const { tools, capture } = buildSurface();
     const execute = toolExecute<{ code: string }, string>(tools.execute_tools);
     await execute({ code: 'return 1' });
-    expect(capture.toolCalls.map((c) => c.name)).toEqual(['execute_tools']);
+    expect(capture.toolCalls).toEqual([{ name: 'execute_tools', args: { code: 'return 1' }, result: 'ran', outcome: { success: true } }]);
   });
 
   test('the head prompt describes the real workspace it was given', () => {
