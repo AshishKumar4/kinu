@@ -13,12 +13,11 @@
 import {
   WORKSPACE_HAS_NO_OWNER,
   isDeviceAmbiguityError, isDeviceNotConnectedError, nextDeviceRequestId,
-  JsonValueSchema,
+  JsonValueSchema, shellQuote,
   type DeviceCheckpointHint, type DeviceStatus, type DeviceTransport, type JsonValue,
 } from '@kinu.run/core';
 import { KinuError, diagnostics, renderThrownChain, toKinuError, type LogEventName } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { shellQuote } from './cli/install-command';
 import type { UserCaller } from './user/workspace-capability';
 
 

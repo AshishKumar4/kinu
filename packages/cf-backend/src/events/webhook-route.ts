@@ -47,8 +47,7 @@
  * be addressed at all.
  */
 
-import { isUlid } from '@kinu.run/core';
-import { hmacSha256Hex, timingSafeEqual } from '../lib/crypto';
+import { hmacSha256Hex, isUlid, timingSafeEqual } from '@kinu.run/core';
 import { isWorkspaceName } from '../user/validate';
 
 /** Domain separation, versioned in the label AND in the URL segment, so a

@@ -1,7 +1,6 @@
 [
   "cross-file packages/cf-backend/src/auth/routes.ts#readJsonObject | packages/cf-backend/src/lib/cloudflare-oauth.ts#readJsonObject",
   "cross-file packages/core/src/tools/file-edit.ts#lineSpan | packages/core/src/tools/file-ledger.ts#lineCount",
-  "cross-package packages/cf-backend/src/lib/crypto.ts#timingSafeEqual | packages/core/src/utils/crypto.ts#timingSafeEqual",
   "same-file packages/cf-backend/src/actor-agent.ts#listWorkspaceFiles | packages/cf-backend/src/actor-agent.ts#statWorkspaceFile",
   "same-file packages/cf-backend/src/components/surfaces/changelog-entries.tsx#revert > useCallback | packages/cf-backend/src/components/surfaces/changelog-entries.tsx#revert > useCallback",
   "same-file packages/cf-backend/src/pages/WorkspacePage.tsx#SubordinateChatColumn > useLayoutEffect | packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage > useLayoutEffect",

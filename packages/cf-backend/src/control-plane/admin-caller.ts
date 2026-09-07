@@ -27,8 +27,8 @@
  * session says whose account is acting; the plane runs only when they are the
  * same address.
  */
+import { hmacSha256Hex } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
-import { hmacSha256Hex } from '../lib/crypto';
 import { isFreshAuthTime, type AuthIdentity } from '../auth/session';
 import type { AccessDenial, AccessIdentity } from './access-gate';
 import {
