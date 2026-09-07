@@ -88,6 +88,16 @@ export interface FacetHost extends Pick<Agent<Env>, "subAgent" | "abortSubAgent"
  *  mode's own init RPC as an argument. */
 type ExplorationStub = SubAgentStub<SubordinateAgent>;
 
+/** Preserve each mode's stub width through the shared bootstrap. */
+interface FacetTransport<Stub> extends Omit<FacetHost, 'subAgent'> {
+  subAgent(cls: SubAgentClass<SubordinateAgent>, name: string): Promise<Stub>;
+}
+
+/** The node transport only seeds and runs nodes; it needs no chat or head RPCs. */
+export type NodeFacetHost = FacetTransport<Pick<ExplorationStub, 'setOwner' | 'setSharedParent' | 'initNode' | 'runAsNode'>>;
+
+type FacetLifecycle = Pick<FacetHost, 'facetClass' | 'abortSubAgent' | 'deleteSubAgent'>;
+
 /** What an exploration facet must know before it runs. Both values are
  *  persisted by the facet itself, so a cold activation recovers them. */
 export interface ExplorationFacetIdentity {
@@ -164,7 +174,7 @@ export function isExplorationFacetKey(key: string): boolean {
  * `reason` is that call's own reason channel, for a caller with no graceful-stop
  * RPC to carry it: a node's loop has none, so eviction is the whole of its abort.
  */
-export function abortExplorationFacet(host: FacetHost, id: string, reason?: string): void {
+export function abortExplorationFacet(host: FacetLifecycle, id: string, reason?: string): void {
   host.abortSubAgent(host.facetClass(), explorationFacetKey(id), reason);
 }
 
@@ -182,7 +192,7 @@ export function abortExplorationFacet(host: FacetHost, id: string, reason?: stri
  * Idempotent: the SDK swallows `ctx.facets.delete` for an already-gone facet,
  * so a raced abort and settle both landing here is safe.
  */
-export async function deleteExplorationFacet(host: FacetHost, id: string): Promise<void> {
+export async function deleteExplorationFacet(host: FacetLifecycle, id: string): Promise<void> {
   await host.deleteSubAgent(host.facetClass(), explorationFacetKey(id));
 }
 
@@ -243,7 +253,7 @@ export async function reconcileExplorationFacets(
  * so it is reported together with the bootstrap error instead of hidden behind
  * it.
  */
-async function discardHalfSeededFacet<Cause>(host: FacetHost, id: string, cause: Cause): Promise<never> {
+async function discardHalfSeededFacet<Cause>(host: FacetLifecycle, id: string, cause: Cause): Promise<never> {
   try {
     await deleteExplorationFacet(host, id);
   } catch (cleanupError) {
@@ -271,12 +281,12 @@ interface FacetInitAck {
  * that mode's own init. A facet told what to run before it is told whose
  * credentials to run it with is one RPC away from resolving the wrong model.
  */
-async function bootstrapFacet(
-  host: FacetHost,
+async function bootstrapFacet<Stub extends Pick<ExplorationStub, 'setOwner' | 'setSharedParent'>>(
+  host: FacetTransport<Stub>,
   id: string,
   identity: ExplorationFacetIdentity,
-  init?: (stub: ExplorationStub) => Promise<FacetInitAck>,
-): Promise<ExplorationStub> {
+  init?: (stub: Stub) => Promise<FacetInitAck>,
+): Promise<Stub> {
   const stub = await host.subAgent(host.facetClass(), explorationFacetKey(id));
   try {
     if (identity.ownerUserId) await stub.setOwner(identity.ownerUserId, identity.capabilityToken);
@@ -354,7 +364,7 @@ export async function spawnBranchFacet(
   branchId: string,
   identity: ExplorationFacetIdentity,
 ): Promise<BranchHandle> {
-  const stub = await bootstrapFacet(host, branchId, identity);
+  const stub = await bootstrapFacet<ExplorationStub>(host, branchId, identity);
   return {
     explore: (history, tools, languages, mode, siblings) =>
       stub.explore(history, tools, languages, mode, siblings ?? []),
@@ -379,7 +389,7 @@ export async function spawnHeadFacet(
   input: HeadInput,
   identity: ExplorationFacetIdentity,
 ): Promise<SpawnedHead> {
-  const stub = await bootstrapFacet(host, input.id, identity, (facet) => facet.initHead(input));
+  const stub = await bootstrapFacet<ExplorationStub>(host, input.id, identity, (facet) => facet.initHead(input));
   return {
     id: input.id,
     run: () => runOnceAndReclaim(input.id, 'Head', () => stub.runAsHead(), async () => {
@@ -408,7 +418,7 @@ export async function spawnHeadFacet(
 /** A hosted swarm node's handle — `SpawnedHead`'s shape over a node's result,
  *  because it is the spawner's side of core's `NodeLoopHost`: one call, one
  *  result. */
-export interface SpawnedNode {
+interface SpawnedNode {
   readonly id: HeadId;
   /** Kicks off the node's loop; resolves with everything the search reads out of it. */
   run(): Promise<NodeLoopResult>;
@@ -426,8 +436,8 @@ export interface SpawnedNode {
  *
  *  The node's home is NOT provisioned here: `runNodeAgent` provisions it before it
  *  calls a host, which is why `spec.home` is already a path by the time this runs. */
-export async function spawnNodeFacet(
-  host: FacetHost,
+async function spawnNodeFacet(
+  host: NodeFacetHost,
   spec: NodeRunSpec,
   identity: ExplorationFacetIdentity,
 ): Promise<SpawnedNode> {
@@ -479,7 +489,7 @@ export interface HostedNodeSeams {
  * would answer a later node against a settled search. The home is released for
  * the same reason a head's is: the run settling is the terminal point.
  */
-export function hostNodeLoop(host: FacetHost, seams: HostedNodeSeams): NodeLoopHost {
+export function hostNodeLoop(host: NodeFacetHost, seams: HostedNodeSeams): NodeLoopHost {
   return async (spec, arbitrate, signal) => {
     if (signal?.aborted) throw abortCause(signal);
     const nodeId = spec.headInput.id;
