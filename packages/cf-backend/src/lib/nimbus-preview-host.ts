@@ -11,37 +11,18 @@
  * regex engine being free to find a different one.
  *
  * THE BUDGET. A DNS label holds 63 characters. Port ≤ 4, handle 10, token 15,
- * three separators: 32, leaving 31 for the name — comfortably above the longest
- * name `workspaceSlug` mints (adjective ≤ 11, noun ≤ 8, 8 hex digits, two
- * hyphens = 29) and above the 24 `slugifyName` caps an operator-chosen one at. A
- * longer name is refused rather than truncated: a truncated one would address a
+ * three separators: 32, leaving `WORKSPACE_ADDRESS_MAX` (31) for the name. The
+ * grammar is core's (`identity/naming.ts` `workspaceAddressRefusal`), the same one
+ * creation and forking admit a name against, so every address a workspace can
+ * be given fits here and none is truncated: a truncated one would address a
  * different workspace.
  */
+
+import { workspaceAddressRefusal } from '@kinu.run/core';
 
 const PORT_RE = /^[0-9a-z]{1,4}$/;
 const HANDLE_RE = /^[a-f0-9]{10}$/;
 const TOKEN_RE = /^[a-z2-7]{15}$/;
-/** Every name `workspaceSlug`/`slugifyName` can produce, and nothing that could
- *  be read as another label's field or escape the label at all. */
-const WORKSPACE_RE = /^[a-z0-9](?:[a-z0-9-]{0,29}[a-z0-9])?$/;
-
-/**
- * Why a workspace name cannot be carried in a preview hostname, or null when
- * it can.
- *
- * Every name `workspaceSlug` mints passes. An operator-chosen one may not: the
- * workspace-name grammar (`user/validate.ts`) admits uppercase, dots,
- * underscores and 64 characters, none of which a label can carry. DNS folds
- * case, so a hostname could only ever address a different Durable Object than
- * `MyAgent`. A workspace's name is its object's address and cannot change
- * after creation, so such a workspace has no preview URL for as long as it
- * exists. The words are for the Ports surface, where the owner reads them.
- */
-export function workspacePreviewNameRefusal(workspace: string): string | null {
-  if (WORKSPACE_RE.test(workspace)) return null;
-  return `the workspace name "${workspace}" cannot be a preview hostname label`
-    + ' (a label holds lowercase letters, digits and hyphens, at most 31 characters, and carries no case)';
-}
 
 const HANDLE_LENGTH = 10;
 const TOKEN_LENGTH = 15;
@@ -68,7 +49,7 @@ export function parseWorkspacePreviewLabel(label: string): WorkspacePreviewHost 
   const token = lower.slice(tokenStart, tokenEnd);
   const workspace = lower.slice(tokenEnd + 1);
   if (!PORT_RE.test(portText) || !HANDLE_RE.test(handle) || !TOKEN_RE.test(token)) return null;
-  if (!WORKSPACE_RE.test(workspace)) return null;
+  if (workspaceAddressRefusal(workspace) !== null) return null;
   const port = Number.parseInt(portText, 36);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) return null;
   return { port, workspace, handle, token };
@@ -96,7 +77,7 @@ export function buildWorkspacePreviewHost(parts: {
   }
   if (!HANDLE_RE.test(handle)) throw new Error('Invalid workspace preview capability handle');
   if (!TOKEN_RE.test(token)) throw new Error('Invalid workspace preview token');
-  if (!WORKSPACE_RE.test(workspace)) return null;
+  if (workspaceAddressRefusal(workspace) !== null) return null;
   const label = `${port.toString(36)}-${handle}-${token}-${workspace}`;
   return label.length > 63 ? null : `${label}.${suffix}`;
 }
