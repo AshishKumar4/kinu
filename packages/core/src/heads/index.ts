@@ -26,7 +26,6 @@ export type {
 } from './types';
 
 export {
-  DEFAULT_HEAD_BUDGET,
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
   budgetExhausted,

@@ -20,7 +20,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
-import { DEFAULT_HEAD_BUDGET, type HeadInput } from '../src/heads/types';
+import type { HeadInput } from '../src/heads/types';
 import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
 import {
   MissionGovernor, localMissionScope, type MissionBudgetPort, type MissionScope,
@@ -67,7 +67,7 @@ function headInput(missionLabels?: readonly string[]): HeadInput {
     task: 'do the work', rationale: 'exercise the ledger',
     mode: 'build',
     inheritedContext: [{ id: 'm1', role: 'user', content: 'go', createdAt: 1 }],
-    budget: { ...DEFAULT_HEAD_BUDGET, spawnedAt: Date.now() },
+    budget: { maxDepth: 0, spawnedAt: Date.now() },
     mergeStrategy: 'synthesize',
   };
   return missionLabels ? { ...input, missionLabels } : input;

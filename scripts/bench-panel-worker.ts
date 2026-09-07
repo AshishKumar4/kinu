@@ -171,6 +171,7 @@ async function main(): Promise<void> {
   try {
     merge = await new HeadController(headRuntime, journal).run({
       parentHeadId: null,
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
       mode: 'build',
       inheritedContext: [],
       request: {

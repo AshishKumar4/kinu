@@ -1369,7 +1369,7 @@ export type {
   SerializedMessage,
 } from './heads/index';
 export {
-  DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY,
+  DEFAULT_MERGE_STRATEGY,
   deriveChildBudget, budgetExhausted,
   headStatusUnsettled, storedHeadReportStatus,
   initHeadsTables,
