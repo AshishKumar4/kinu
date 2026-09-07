@@ -606,8 +606,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-card-hover:hover { background: var(--c-elevated); }
 
-/* Code wells retain their surface and scroll behavior. Kumo supplies syntax
-   colors from its light/dark Shiki themes; inline code keeps its own ink.
+/* Code wells retain their surface and scroll behavior. Shiki supplies syntax
+   colors from its light/dark themes; inline code keeps its own ink.
 
    `p-code-scroll` is the part that was actually broken: a long line has
    to scroll, and it can only scroll if the flex/grid parent lets the
@@ -626,19 +626,16 @@ body { background: var(--c-bg); color: var(--c-text); }
   color: var(--c-text-3);
 }
 @layer utilities {
-  .p-code .p-code-highlight { background: transparent !important; border: 0 !important; border-radius: 0 !important; }
   .p-code .p-code-highlight pre {
-    margin: 0 !important; padding: 0.625rem 0.75rem !important;
-    font-size: 12.5px !important; line-height: 1.55 !important;
+    margin: 0; padding: 0.625rem 0.75rem; background: transparent !important;
+    font-size: 12.5px; line-height: 1.55;
     font-family: var(--font-mono);
   }
-  .p-code .p-code-highlight pre:not(.shiki) { color: var(--c-code); }
   [data-mode="dark"] .p-code-highlight .shiki { color: var(--shiki-dark) !important; }
   /* Keep the library hues readable on our wells: light orange reaches 4.50:1;
      opaque Vesper comments reach 5.52:1. No surface colors change. */
   [data-mode="light"] .p-code-highlight .line > span { filter: brightness(0.7); }
   [data-mode="dark"] .p-code-highlight .line > span { color: oklch(from var(--shiki-dark) l c h / 1) !important; }
-  .p-code-highlight > div { min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
 }
 /* The mechanism, shared by the code block and wide tables: `min-width: 0` is
    what lets a track inside a flex/grid column be narrower than its content,
@@ -670,14 +667,14 @@ body { background: var(--c-bg); color: var(--c-text); }
    could never fully hide it — the left edge stayed smeared with nothing to
    scroll. The covers are now opaque and the edge is a rule: the same ink it
    divides with is either there or it is not. */
-.p-code-scroll, .p-code-highlight > div, .p-tabstrip {
+.p-code-scroll, .p-tabstrip {
   background:
     linear-gradient(var(--scroll-ground), var(--scroll-ground)) 0 0 / 12px 100% no-repeat local,
     linear-gradient(var(--scroll-ground), var(--scroll-ground)) 100% 0 / 12px 100% no-repeat local,
     linear-gradient(var(--c-border-strong), var(--c-border-strong)) 0 0 / 1px 100% no-repeat scroll,
     linear-gradient(var(--c-border-strong), var(--c-border-strong)) 100% 0 / 1px 100% no-repeat scroll;
 }
-.p-code-scroll, .p-code-highlight > div { --scroll-ground: var(--c-code-bg); }
+.p-code-scroll { --scroll-ground: var(--c-code-bg); }
 
 /* Inline code sits IN a sentence: it takes the warm ink and a whisper of
    ground, never a border, and it wraps rather than pushing the column. */

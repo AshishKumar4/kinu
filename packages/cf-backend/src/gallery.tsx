@@ -112,7 +112,7 @@ import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { LogBlock } from "@/components/surfaces/ActivitySurface";
-import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock, CodeHighlightProvider } from "@/components/surfaces/shared";
+import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { QualityView } from "@/components/surfaces/evolution-panels";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
@@ -3140,8 +3140,10 @@ function CodeRenderingFrame() {
     ['py', 'def greet(name):\n    return "Hello " + name'],
     ['css', '.result { color: red; padding: 12px; }'],
     ['sql', 'SELECT name FROM results WHERE ready = true;'],
-    ['go', 'package main'],
-    ['rust', 'fn main() {}'],
+    ['go', 'package main\nfunc main() { println("ready") }'],
+    ['rust', 'fn main() { let ready = true; println!("ready"); }'],
+    ['c', '#include <stdio.h>\nint main(void) { printf("ready"); return 0; }'],
+    ['cpp', '#include <iostream>\nint main() { std::cout << "ready"; return 0; }'],
     ['unknown-language', '<script>unknown & safe</script>'],
   ];
   return <div className="flex h-screen p-bg p-text">
@@ -5392,7 +5394,7 @@ async function mount() {
     node = <Routes><Route path="/workspace/:agentId" element={node} /></Routes>;
   }
   createRoot(document.getElementById("root")!).render(
-    <StrictMode><CodeHighlightProvider><MemoryRouter initialEntries={entries}><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></MemoryRouter></CodeHighlightProvider></StrictMode>,
+    <StrictMode><MemoryRouter initialEntries={entries}><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></MemoryRouter></StrictMode>,
   );
 }
 try {

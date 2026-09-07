@@ -2,7 +2,6 @@ import "./index.css";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { primePageDeployedBuildSha } from "./hooks/session-recovery";
-import { CodeHighlightProvider } from "./components/surfaces/shared";
 
 // This page's build identity, read once HERE — at load, before anything has had
 // a chance to fail. Both readers need the deployment that SERVED this document
@@ -17,4 +16,4 @@ primePageDeployedBuildSha();
 const mount = document.getElementById("root");
 if (mount === null) throw new Error("missing #root mount point");
 const root = createRoot(mount);
-root.render(<CodeHighlightProvider><App /></CodeHighlightProvider>);
+root.render(<App />);
