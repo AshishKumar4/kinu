@@ -39,11 +39,10 @@
  * stripped on the way in and this must never become a path that puts them back.
  */
 
+import { workspaceAddressRefusal } from '@kinu.run/core';
 import { previewHostSuffix } from './lib/preview-origin';
 import { timingSafeEqual } from '@kinu.run/core';
-import {
-  buildWorkspacePreviewHost, parseWorkspacePreviewLabel, workspacePreviewNameRefusal,
-} from './lib/nimbus-preview-host';
+import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from './lib/nimbus-preview-host';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { reoriginateRequest } from './lib/http';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH, type WorkspacePreviewUrl } from './workspace-host';
@@ -169,7 +168,7 @@ export async function nimbusPreviewUrl(
   if (!suffix) return { unavailable: 'this deployment has no preview host (PREVIEW_HOST_SUFFIX is not set)' };
   const secret = previewSecrets(env)[0];
   if (!secret) return { unavailable: 'this deployment has no preview signing secret (CREDENTIAL_ENCRYPTION_KEY is not set)' };
-  const refusal = workspacePreviewNameRefusal(workspaceName);
+  const refusal = workspaceAddressRefusal(workspaceName);
   if (refusal !== null) return { unavailable: refusal };
   const handle = capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH);
   const token = await previewToken(secret, workspaceName, port, handle);

@@ -81,7 +81,7 @@ describe('a facet holds the root set, or a subset of it', () => {
     const ran: string[] = [];
     const run = gateExec<string>(
       async (command) => { ran.push(command); return `ran:${command}`; },
-      (message) => message,
+      (error) => error.message,
       'sandbox',
       createInheritedApprovalPolicy(probe.deps),
     );

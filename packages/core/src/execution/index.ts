@@ -24,7 +24,7 @@ export {
 } from './escalation';
 export { DefaultExecutionRouter } from './router';
 export { createInlineExecutor, type InlineExecutorDeps } from './inline';
-export { withApprovalGatedShell, gateProviderExec } from './approval';
+export { withApprovalGatedShell, gateProviderExec, SHELL_COMMAND_MEMBERS } from './approval';
 export {
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError,
   WORKSPACE_BACKUP_DIR,
