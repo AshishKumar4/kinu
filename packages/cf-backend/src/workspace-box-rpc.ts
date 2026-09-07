@@ -27,6 +27,7 @@ import type {
   NimbusExecOptions, NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult,
   JsonValue, SlateCallResult, SlateBindingRequest, SlateOperation,
 } from '@kinu.run/core';
+import type { SlateCaller } from './slates/bindings';
 
 type BoxFiles = NimbusSandboxHandle['files'];
 type BoxPorts = NonNullable<NimbusSandboxHandle['ports']>;
@@ -118,13 +119,13 @@ export interface WorkspaceBoxRpc {
 /**
  * Every method a caller in this Worker reaches on the object that owns a
  * workspace, as one named owner contract: the file-plane op a facet makes,
- * and the slate operations a binding entrypoint or a facet actor makes.
- * Declared here, beside the narrowing that hands it out, so the concrete
- * type is constructed once and each caller takes the slice it needs.
+ * and the slate operations an actor or a binding entrypoint makes AS a caller.
+ * The caller is stamped by actor code on this stub transport; the browser's
+ * own `@callable slate` mints the root caller locally and never takes one.
  */
 export interface WorkspaceOwnerRpc extends WorkspaceBoxRpc {
-  slate(operation: SlateOperation): Promise<SlateCallResult>;
-  slateBindingCall(id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult>;
+  slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult>;
+  slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult>;
 }
 
 interface WorkspaceOwnerNamespace {

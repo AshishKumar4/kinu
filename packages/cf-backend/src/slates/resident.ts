@@ -3,10 +3,11 @@ import type { ContentStore } from '@agent-core/core/content';
 import { processes, type ResidentFacetEnv } from '@nimbus-sh/fabric/workerd-facet-host.js';
 import { facetImagePath, facetImagePathDigest, type ResidentBootSpec } from '@nimbus-sh/fabric/process-fabric.js';
 import { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
-import { CRED_SESSION_USER, type RouteableFacetTarget } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { RouteableFacetTarget, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import type { SlateProcess, SlateProject } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
+import { slateCredentialKey } from './bindings';
 
 export interface ResidentSlateProcess extends SlateProcess {
   request(request: Request): Promise<Response>;
@@ -25,6 +26,8 @@ export interface ResidentSlateBoot {
   readonly root: string;
   readonly project: SlateProject;
   readonly port: number;
+  /** Whose file plane compiles the authored tree: the caller's, never the origin's on its behalf. */
+  readonly cred: VfsCred;
   readonly bindings: Readonly<Record<string, Fetcher>>;
 }
 
@@ -94,7 +97,7 @@ async function compileSlate(bundler: EsbuildService, entry: string, options: Par
 }
 
 export class ResidentSlateProcesses {
-  private bundler: EsbuildService | undefined;
+  private readonly bundlers = new Map<string, EsbuildService>();
 
   constructor(private readonly deps: ResidentSlateDeps) {}
 
@@ -102,7 +105,12 @@ export class ResidentSlateProcesses {
     const session = await this.deps.session();
     const main = input.project.main;
     if (main === undefined) throw new KinuError('bad_input', 'package.json main must name the Worker module');
-    const bundler = this.bundler ??= new EsbuildService(session.vfs.as(CRED_SESSION_USER));
+    const bundlerKey = slateCredentialKey(input.cred);
+    let bundler = this.bundlers.get(bundlerKey);
+    if (bundler === undefined) {
+      bundler = new EsbuildService(session.vfs.as(input.cred));
+      this.bundlers.set(bundlerKey, bundler);
+    }
     const server = await compileSlate(bundler, `${input.root}/${main}`, {
       bundle: true, format: 'esm', platform: 'neutral', outfile: '/application.js', external: ['cloudflare:*', 'node:*'],
     });

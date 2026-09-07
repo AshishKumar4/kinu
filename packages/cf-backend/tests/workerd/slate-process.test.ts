@@ -64,3 +64,21 @@ it('authored fetch failures preserve their cause chain and leave the process cal
     expect(await subject.request('/')).toEqual({ status: 200, body: 'alive' });
   } finally { await subject.stop(); }
 });
+
+it('a compiler warmed with supplementary-group access does not lend it to another caller', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('compiler-groups'));
+  await subject.seedGroupSource();
+  const source = 'import text from "/shared/group.ts"; export default { fetch() { return new Response(text); } };';
+  const first = await subject.compileProbe(source, { uid: 1000, gid: 1000, groups: [3000], umask: 0o022 });
+  expect(first).toEqual({ status: 200, body: 'group-protected-source' });
+  const revoked = await subject.compileProbe(source, { uid: 1000, gid: 1000, groups: [], umask: 0o022 });
+  expect(revoked).toMatchObject({ code: 'bad_input' });
+});
+
+it('both sealed actor families answer the native binding RPC without making it browser-callable', async () => {
+  const root = env.SLATE_FACET_ROOT.get(env.SLATE_FACET_ROOT.idFromName('native-slate-bindings'));
+  const families: readonly ('subordinate' | 'exploration')[] = ['subordinate', 'exploration'];
+  for (const family of families) {
+    expect(await root.exercise(family)).toEqual({ answeredBy: 'facet', method: 'getExecutors', browserCallable: false });
+  }
+});
