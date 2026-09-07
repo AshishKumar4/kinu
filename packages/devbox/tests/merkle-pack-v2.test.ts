@@ -493,6 +493,29 @@ describe('a wake serves the head lazily', () => {
     const reread = await large.container.read('d000/d000/f000000.bin');
     expect(reread).toEqual(wanted.content.bytes);
   });
+
+  test('a container that adopted a lazy restore keeps reading after publish, compaction and GC move the head', async () => {
+    let now = 1_000;
+    const fixture = openSidecar({ graceMs: 10_000, now: () => now, maxPackBytes: 256 * 1024 });
+    const seed = new Seeded(97);
+    fixture.daemon.plant([
+      ...textTree({ 'keep.txt': 'still here' }),
+      fileEntry('churn.bin', seed.fill(new Uint8Array(200_000)), 31, metadataOf(seed)),
+    ]);
+    await publish(fixture, 'the base seal');
+    const container = new LazyContainer(new LiveTree(), () => now);
+    container.adopt(fixture.core.restoreLazily(container.ports()));
+    await container.enter();
+    for (let round = 0; round < 4; round += 1) {
+      fixture.daemon.write('churn.bin', seed.fill(new Uint8Array(200_000)));
+      await publish(fixture, `churn ${round}`);
+    }
+    expect(await fixture.core.compact()).toBe(true);
+    now += 10_001;
+    expect((await fixture.core.collectGarbage()).deletes).toBeGreaterThan(0);
+    // The untouched placeholder pages in through the head that exists now.
+    expect(new TextDecoder().decode(await container.read('keep.txt'))).toBe('still here');
+  }, 120_000);
 });
 
 describe('a wide directory pays for one path, not its width', () => {

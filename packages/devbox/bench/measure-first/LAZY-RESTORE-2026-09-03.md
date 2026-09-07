@@ -246,4 +246,21 @@ no inventory. The grace clock starts at staging, at most one upload
 earlier than publication; the default window is 600,000 ms. 74 focused
 tests pass.
 
+## A lazy reader outlives the head it adopted, 2026-09-06
+
+`restoreLazily` bound the `LazyRestore` to the view open at that moment,
+and every attach built a new restore. A container kept the instance it
+adopted. After four churn publishes, one compaction and one GC sweep past
+grace, that instance read an untouched placeholder from a deleted pack:
+`missing candidate object`. Grace protects a read in flight; it cannot
+protect a reader that keeps resolving through a retired head.
+
+The restore now reads through a `HeadFilesystem` that resolves the
+sidecar's current view on every call, and attach no longer replaces the
+instance. The same replay reads `still here` after the sweep. Residency
+survives a publish, so a placeholder that was hydrated stays hydrated. A
+placeholder for a path the container renamed before hydrating stays in
+the residency map under its old name; it is inert and is not measured.
+The v2, sidecar and conformance suites passed 174 tests.
+
 
