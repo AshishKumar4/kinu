@@ -19,7 +19,7 @@ import {
 } from '../src/index';
 import { buildPendingActions } from '../src/read-models/pending-actions';
 import { gateProviderExec } from '../src/execution/approval';
-import { commandResult, formatExecResult, parseRefusal, type CommandResult } from '../src/execution/exec-result';
+import { commandResult, formatExecResult, type CommandResult } from '../src/execution/exec-result';
 import { KinuError, refusalOf } from '../src/obs/index';
 import type { ExecutorProvider } from '../src/execution/types';
 import { createTestRuntime } from './helpers';
@@ -766,7 +766,7 @@ test('no-execution refusals retain their class before native run and executor te
   expect(denied.executed).toEqual([]);
   const parked = setup();
   const result = await parked.shell.exec(GATED);
-  expect(parseRefusal(formatExecResult(result))).toMatchObject({ reason: 'unavailable' });
+  expect(result.refusal).toMatchObject({ reason: 'unavailable' });
   expect(parked.executed).toEqual([]);
   expect(parked.queue.list()).toMatchObject([{ status: 'queued', command: GATED }]);
   await parked.queue.decide(['defer-1'], 'denied');
@@ -780,7 +780,8 @@ test('an executed exit-one command remains a command failure even if stdout look
   const result = await shell.exec('false');
   const rendered = formatExecResult(result);
   expect(result.exitCode).toBe(1);
-  expect(parseRefusal(rendered)).toBeNull();
+  expect(result.refusal).toBeUndefined();
+  expect(commandResult(result)).toMatchObject({ reason: 'io', execution: { exitCode: 1 } });
   expect(rendered).toContain(stdout);
   expect(rendered).toContain('process failure');
 });

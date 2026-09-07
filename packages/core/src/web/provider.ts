@@ -99,7 +99,7 @@ const MAX_FETCH_BYTES = 2_000_000;
  *  to the platform, so it carries the same bound rather than an invented one. */
 const MAX_REDIRECTS = 20;
 
-export class WebFetchError extends Error {
+class WebFetchError extends Error {
   constructor(message: string, public readonly retriable = false, options?: ErrorOptions) {
     super(message, options);
     this.name = 'WebFetchError';

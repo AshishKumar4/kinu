@@ -97,7 +97,7 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, initRunEventTables,
-  parseJsonValue,
+  parseJsonValue, CommandResultSchema,
   type JsonValue, type LLMProviderConfig, type RunEvent, type WorkspaceSpend,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
@@ -588,15 +588,14 @@ const RunPageSchema = v.variant('status', [
 const RunEventsSchema = v.array(RunEventSchema);
 const SetModelSchema = v.object({ spec: v.string() });
 const SteerSchema = v.object({ landed: v.picklist(['mid-turn', 'queued']) });
-/** What `executeInExecutor` answers, exactly as `ExecutorCommandResult`
- *  declares it (cf-backend/src/lib/protocol.ts:132) — every field optional,
- *  because the orchestrator answers `{error}` alone when the executor is absent
- *  or unavailable and `{stdout, stderr, exitCode}` when the command ran. */
+/** The executor's display fields and its producer-owned command refusal.
+ * Success omits refusal; historical responses may lack classification. */
 const ExecutorCommandSchema = v.object({
   stdout: v.optional(v.string()),
   stderr: v.optional(v.string()),
   exitCode: v.optional(v.number()),
   error: v.optional(v.string()),
+  refusal: v.optional(CommandResultSchema.options[1]),
 });
 
 /** One command's answer on an executor, as the Env pane receives it. */

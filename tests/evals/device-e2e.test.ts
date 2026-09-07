@@ -34,7 +34,7 @@ import { join, resolve } from 'node:path';
 import { UNCONFIGURED_LLM } from '@kinu.run/test-utils';
 import { AGENT_HOME } from '../../packages/cli/src/config';
 import evalsConfig from '../../vitest.evals.config';
-import { resolvePublicSessionPlan } from './public-session';
+import { resolvePublicSessionPlan, type PublicExecutorResult } from './public-session';
 import {
   DEVICE_STEPS, completeSubgoals, deviceArmGate, grantDeviceConsent, listDevicesOverCliRoute,
   readDeviceCommand, requireIsolatedAgentHome, revokeDeviceOverUserRoute, runTeardown,
@@ -171,21 +171,16 @@ describe('teardown undoes everything, in order, even after a failure', () => {
 });
 
 describe('a refusal is not output', () => {
-  test('a classified payload on the stdout channel reads as a refusal', () => {
-    // What a revoked or unattached machine answers — `refusalText` in
-    // core/src/execution/exec-result.ts, read back through core's own parser.
-    const refusal = JSON.stringify({ reason: 'unavailable', error: 'No device connected.' });
-    expect(readDeviceCommand({ stdout: refusal, exitCode: 0 })).toEqual({
-      kind: 'refused', reason: 'unavailable', text: refusal,
+  test('a classified producer refusal is read from its structural channel', () => {
+    const refusal = { reason: 'unavailable', error: 'No device connected.' } satisfies NonNullable<PublicExecutorResult['refusal']>;
+    expect(readDeviceCommand({ stdout: 'display only', exitCode: 1, refusal })).toEqual({
+      kind: 'refused', reason: 'unavailable', text: refusal.error,
     });
   });
 
-  test('the orchestrator\'s own error reads as a refusal before any tool ran', () => {
-    // `executeInExecutor` answers this when the executor is absent or
-    // unavailable (orchestrator.ts:4101-4102), and it carries no class of its
-    // own — so the reader supplies one rather than dropping the answer.
+  test('an unclassified legacy executor error does not invent a no-dispatch reason', () => {
     expect(readDeviceCommand({ error: 'Executor "laptop" is not available' })).toEqual({
-      kind: 'refused', reason: 'executor_unavailable', text: 'Executor "laptop" is not available',
+      kind: 'refused', reason: 'unclassified', text: 'Executor "laptop" is not available',
     });
   });
 
@@ -194,6 +189,8 @@ describe('a refusal is not output', () => {
       .toEqual({ kind: 'output', stdout: 'KINU_DEVICE_ROUNDTRIP_OK\n' });
     expect(readDeviceCommand({ stdout: '', stderr: 'no such file', exitCode: 127 }).kind)
       .toBe('refused');
+    const stdout = '{"reason":"denied","error":"historical incident"}';
+    expect(readDeviceCommand({ stdout, exitCode: 0 })).toEqual({ kind: 'output', stdout });
   });
 });
 
