@@ -12,6 +12,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import * as v from 'valibot';
+import type { ModelMessage } from 'ai';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import {
   MissionGovernor,
@@ -327,7 +328,7 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
 });
 
 describe('model-call seam — the step pipeline declines the next request', () => {
-  const ctx = { stepNumber: 3, messages: [{ role: 'user' as const, content: 'hi' }] };
+  const ctx = { stepNumber: 3, messages: [{ role: 'user', content: 'hi' } satisfies ModelMessage], steps: [] };
 
   test('an exhausted mission stops the turn before the request is issued', () => {
     const governor = newGovernor();

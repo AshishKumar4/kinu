@@ -34,7 +34,7 @@ function toolThenTextModel(opts: {
   toolName: string;
   input?: string;
   firstUsage?: FinishPart['usage'];
-}): LanguageModel {
+}): MockLanguageModelV3 {
   let step = 0;
   return new MockLanguageModelV3({
     provider: 'fake',
@@ -104,10 +104,18 @@ describe('ChatEvent tool success/error fidelity', () => {
     const tools = buildBuiltinTools({ rt: { ...rt, shell: {
       exec: async () => ({ stdout: 'tests failed', stderr: 'detail', exitCode: 7 }),
     } } });
-    const events = await collect(toolThenTextModel({ toolName: 'run', input: JSON.stringify({ command: 'test' }) }), tools);
+    const model = toolThenTextModel({ toolName: 'run', input: JSON.stringify({ command: 'test' }) });
+    const events = await collect(model, tools);
     expect(events.find((event) => event.type === 'tool-result')).toMatchObject({
       success: false, reason: 'io', execution: { exitCode: 7 }, result: expect.stringContaining('tests failed'),
     });
+    expect(model.doStreamCalls[1]?.prompt).toEqual(expect.arrayContaining([expect.objectContaining({
+      role: 'tool', content: expect.arrayContaining([expect.objectContaining({
+        type: 'tool-result', toolCallId: 'tc1', output: {
+          type: 'error-json', value: { reason: 'io', error: expect.stringContaining('tests failed'), execution: { exitCode: 7 } },
+        },
+      })]),
+    })]));
   });
   test.each([
     { stage: 'resolution', input: { action: 'swarm', preset: 'custom', task: 'inspect', label: 'custom-case' }, reason: 'bad_input', detail: 'config' },

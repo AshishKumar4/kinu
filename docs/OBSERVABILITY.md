@@ -417,6 +417,16 @@ result data or stdout prefixes. A codemode program that handles a namespace
 refusal and returns normally succeeds. Unhandled program errors fail; captured
 console output and the original cause remain available in the error channel.
 
+The model-facing error channel is projected separately in the shared
+`prepareStep` pipeline, before extension rewrites, pruning, cache preparation
+and measurement. It uses the SDK's original `tool-error` entries and generated
+response messages, matched by tool-call id within their step, not output text
+or a second error ledger. Known Kinu/file refusals become reason-first
+`error-json` values; unclassified errors remain unclassified. MCP errors carry
+their declared protocol response. Successful data and earlier history are not
+reclassified, even when ids repeat. Original Errors and SDK history are not
+mutated.
+
 ## The five executor tools
 
 `sandbox.ts`, `nimbus.ts`, `parent.ts`, `device-tunnel-executor.ts`, `inline.ts`

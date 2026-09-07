@@ -24,6 +24,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   responses remain available to branchable namespace callers.
   Human CLI failures retain the shared failure mark and explanatory prose;
   structured diagnostics stay in the turn log, not the reader's streams.
+  Known native refusal classes now reach the model's next request as structured,
+  reason-first error feedback, before token accounting and cache preparation.
 
 - **Mechanically enforced Plan authority.** Native and codemode file inspection,
   research records, read-only declared external tools and plan submission remain

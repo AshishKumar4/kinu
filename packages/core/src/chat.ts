@@ -448,11 +448,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         interrupted = true;
       },
       providerOptions,
-      // The shared step pipeline (prompting/prepare-step.ts): extension rewrites
-      // first, then step-boundary tool-output pruning against the window budget,
-      // then the dynamic-context weave, cache tail markers LAST onto the final
-      // array. The cf orchestrator's beforeStep runs the identical composition.
-      prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) =>
+      // The shared step pipeline projects native error feedback before extension
+      // rewrites, pruning, dynamic context, destination normalization and cache
+      // markers. Think's beforeStep uses the same composition and SDK history.
+      prepareStep: ({ stepNumber, messages, steps }) =>
         composePrepareStep({
           extensions,
           cache: rollTail ? { strategy: cache.strategy } : null,
@@ -461,7 +460,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           dynamic: opts.dynamicContext,
           destinationProviderId: opts.cache?.providerId,
           meter: opts.meter,
-        }, { stepNumber: stepOffset + stepNumber, messages }),
+        }, { stepNumber: stepOffset + stepNumber, messages, steps }),
       onStepFinish: async (step) => {
         stepCount++;
         const usage = normalizeUsage(step.usage);

@@ -301,7 +301,7 @@ describe('composePrepareStep (the shared step pipeline)', () => {
       name: 'steer',
       prepareStep: ({ messages }) => [...messages, { role: 'user', content: 'steered' }],
     });
-    const out = await composePrepareStep({ extensions: host, cache: { strategy: { kind: 'anthropic' } } }, { stepNumber: 0, messages: base });
+    const out = await composePrepareStep({ extensions: host, cache: { strategy: { kind: 'anthropic' } } }, { stepNumber: 0, messages: base, steps: [] });
     expect(out?.messages.map((m) => m.content)).toEqual(['a', 'b', 'steered']);
     // The marker rides the injected tail message — proof the markers were
     // applied AFTER the extension rewrite.
@@ -316,7 +316,7 @@ describe('composePrepareStep (the shared step pipeline)', () => {
   test('per-step system override rides the plan (Think TurnConfig is string-only)', async () => {
     const out = await composePrepareStep({
       cache: { strategy: { kind: 'anthropic' }, system: { role: 'system', content: 'cached-sys' } },
-    }, { stepNumber: 0, messages: base });
+    }, { stepNumber: 0, messages: base, steps: [] });
     expect(out?.system).toEqual({ role: 'system', content: 'cached-sys' });
     expect(out?.messages).toHaveLength(2);
   });
@@ -326,9 +326,9 @@ describe('composePrepareStep (the shared step pipeline)', () => {
       name: 'steer',
       prepareStep: ({ messages }) => [...messages, { role: 'user', content: 's' }],
     });
-    expect((await composePrepareStep({ extensions: host }, { stepNumber: 1, messages: base }))?.messages).toHaveLength(3);
-    expect(await composePrepareStep({}, { stepNumber: 1, messages: base })).toBeUndefined();
-    expect(await composePrepareStep({ extensions: new ExtensionHost() }, { stepNumber: 1, messages: base })).toBeUndefined();
+    expect((await composePrepareStep({ extensions: host }, { stepNumber: 1, messages: base, steps: [] }))?.messages).toHaveLength(3);
+    expect(await composePrepareStep({}, { stepNumber: 1, messages: base, steps: [] })).toBeUndefined();
+    expect(await composePrepareStep({ extensions: new ExtensionHost() }, { stepNumber: 1, messages: base, steps: [] })).toBeUndefined();
   });
 });
 
