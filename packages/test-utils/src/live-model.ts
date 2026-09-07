@@ -490,6 +490,11 @@ export function recordWorkspaceSpend(spend: WorkspaceSpend): void {
   spendUsage = addUsage(spendUsage, spend.total.usage);
 }
 
+/** A driven episode whose spend endpoint failed is missing accounting, not free. */
+export function recordUnmeasuredEpisode(): void {
+  spendEpisodesUnmeasured += 1;
+}
+
 /** Record an episode its suite declared drives no model. The store must agree:
  *  a call it accounted for means the declaration is wrong, and that is the
  *  case's failure, thrown here rather than folded into anyone's total. */

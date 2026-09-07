@@ -85,7 +85,7 @@ export const SOLVED_PREDICATE = `${TASK_OUTCOME} rate === 1 — every subgoal re
  */
 function fullySolved(o: ScoredObservation): boolean | null {
   const row = o.scores.find((s) => s.name === TASK_OUTCOME);
-  if (!row || row.eligible === 0) return null;
+  if (!row || row.eligible === 0 || row.rate === null) return null;
   return row.passed === row.eligible;
 }
 
@@ -146,6 +146,8 @@ export interface ScorerComparison {
   readonly candidateEligible: number;
   /** Tasks with a rate on BOTH sides — the pairs every number below rests on. */
   readonly pairedTasks: number;
+  /** Tasks whose observed opportunities lack a measured rate on either side. */
+  readonly unmeasuredTasks: number;
   /** Mean per-task rate over those tasks; null when there are none. */
   readonly baselineRate: number | null;
   readonly candidateRate: number | null;
@@ -355,25 +357,30 @@ function compareScorer(
   let candidateEligible = 0;
   let rateSumBaseline = 0;
   let rateSumCandidate = 0;
+  let unmeasuredTasks = 0;
   for (const task of tasks) {
     let eligibleA = 0;
     let passedA = 0;
     let eligibleB = 0;
     let passedB = 0;
+    let measured = true;
     for (const pair of task.pairs) {
       for (const s of pair.baseline.scores) {
         if (s.name !== name) continue;
         eligibleA += s.eligible;
         passedA += s.passed;
+        if (s.eligible > 0 && s.rate === null) measured = false;
       }
       for (const s of pair.candidate.scores) {
         if (s.name !== name) continue;
         eligibleB += s.eligible;
         passedB += s.passed;
+        if (s.eligible > 0 && s.rate === null) measured = false;
       }
     }
     baselineEligible += eligibleA;
     candidateEligible += eligibleB;
+    if (!measured) { unmeasuredTasks++; continue; }
     if (eligibleA === 0 || eligibleB === 0) continue;
     const rateA = passedA / eligibleA;
     const rateB = passedB / eligibleB;
@@ -386,13 +393,14 @@ function compareScorer(
   const wins = diffs.filter((d) => d > 0).length;
   const losses = diffs.filter((d) => d < 0).length;
   const differingPairs = wins + losses;
-  const boot = pairedTasks === 0 ? null : pairedBootstrapCI(diffs, opts);
+  const boot = pairedTasks === 0 || unmeasuredTasks > 0 ? null : pairedBootstrapCI(diffs, opts);
   const dispersion = pairedTasks === 0 ? 0 : diffs.reduce((s, d) => s + d * d, 0) / pairedTasks;
-  const mde = minimumDetectableEffect({ pairs: pairedTasks, dispersion, alpha, power: opts.power });
+  const mde = unmeasuredTasks > 0 ? Number.POSITIVE_INFINITY
+    : minimumDetectableEffect({ pairs: pairedTasks, dispersion, alpha, power: opts.power });
   const pValue = binomialTwoSidedP(wins, differingPairs);
   const floor = floorPValue(differingPairs);
-  const canReachSignificance = differingPairs > 0 && floor <= alpha;
-  const significant = pairedTasks > 0 && pValue < alpha;
+  const canReachSignificance = unmeasuredTasks === 0 && differingPairs > 0 && floor <= alpha;
+  const significant = unmeasuredTasks === 0 && pairedTasks > 0 && pValue < alpha;
   const effect = boot === null ? null : boot.mean;
   const resolvable = effect !== null && Number.isFinite(mde) && mde > 0 && Math.abs(effect) >= mde;
   const pairsNeeded = effect === null
@@ -410,7 +418,10 @@ function compareScorer(
     : ` [CI ${fmtPp(boot.ci.lo)}..${fmtPp(boot.ci.hi)}, ${String(differingPairs)} of `
       + `${String(pairedTasks)} paired tasks differed]`;
   let verdict: string;
-  if (reach === 'neither') {
+  if (unmeasuredTasks > 0) {
+    verdict = `UNMEASURED: ${String(unmeasuredTasks)} task(s) lack outcome attribution; `
+      + 'observed opportunities remain counted, but this metric has no rate or effect to compare';
+  } else if (reach === 'neither') {
     verdict = `never exercised — no paired observation in either run gave ${name} a single `
       + 'eligible opportunity, so there is no rate here to compare';
   } else if (reach === 'baseline-only') {
@@ -441,11 +452,11 @@ function compareScorer(
   }
 
   return {
-    name, reach, baselineEligible, candidateEligible, pairedTasks,
-    baselineRate: pairedTasks === 0 ? null : rateSumBaseline / pairedTasks,
-    candidateRate: pairedTasks === 0 ? null : rateSumCandidate / pairedTasks,
+    name, reach, baselineEligible, candidateEligible, pairedTasks, unmeasuredTasks,
+    baselineRate: pairedTasks === 0 || unmeasuredTasks > 0 ? null : rateSumBaseline / pairedTasks,
+    candidateRate: pairedTasks === 0 || unmeasuredTasks > 0 ? null : rateSumCandidate / pairedTasks,
     effect, ci: boot === null ? null : boot.ci,
-    pValue: pairedTasks === 0 ? null : pValue,
+    pValue: pairedTasks === 0 || unmeasuredTasks > 0 ? null : pValue,
     wins, losses, ties: pairedTasks - differingPairs, dispersion,
     differingPairs, floorPValue: floor, canReachSignificance, significant,
     mde, resolvable, pairsNeeded, verdict,

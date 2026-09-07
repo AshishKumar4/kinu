@@ -89,8 +89,6 @@ export interface LocalCloudSession {
   origin: string;
   /** CLI bearer (`ptc_…` session or `pta_…` access token with ai.proxy). */
   token: string;
-  /** Workers AI prefix-cache pin (x-session-affinity) for this agent. */
-  sessionAffinity?: string;
 }
 
 // CLOUD_PROXY_PROVIDER_IDS and cloudProxyBaseURL now live beside the route they
@@ -168,6 +166,9 @@ export interface LocalModelResolverConfig {
    *  the worker's AI proxy; when absent they list as unavailable with a
    *  `kinu auth` hint. */
   cloud?: LocalCloudSession;
+  /** Agent-level Workers AI replica pin, shared by the signed-in proxy and
+   * explicit Cloudflare-shaped endpoints. Explicit endpoint headers take precedence. */
+  sessionAffinity?: string;
   fetch?: typeof fetch;
   /** Seam for the local Claude-subscription provider (tests inject a fake
    *  `claude` binary). Production leaves this undefined — the provider spawns
@@ -287,11 +288,15 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   const defaultProvider = defaultProviderFor(localEndpoint);
   if (localEndpoint !== null && defaultProvider === 'workers-ai' && !llmIsCloudProxy) {
+    // The explicit endpoint is Cloudflare-shaped (the product proxy or the
+    // account's own /ai/v1), so it takes the same replica pin the proxy path
+    // below sends: the proxy forwards the header, Workers AI honors it.
+    const pinned = withAffinity(localEndpoint, opts.sessionAffinity);
     registry.register(createGatewayBackedProvider({
       id: 'workers-ai',
       label: 'Cloudflare Workers AI (local gateway)',
       defaultModel: localEndpoint.model,
-      llm: localEndpoint,
+      llm: pinned,
       catalogProviderId: 'cloudflare-workers-ai',
       fetch: opts.fetch,
     }));
@@ -299,7 +304,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       id: 'ai-gateway',
       label: 'Cloudflare AI Gateway (local)',
       defaultModel: workersAiSpec(localEndpoint.model),
-      llm: localEndpoint,
+      llm: pinned,
       catalogProviderId: 'cloudflare-workers-ai',
       catalogModelPrefix: 'workers-ai/',
       fetch: opts.fetch,
@@ -313,6 +318,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
         id: 'workers-ai',
         label: 'Cloudflare Workers AI (your account)',
         cloud,
+        sessionAffinity: opts.sessionAffinity,
         menu,
         defaultModel: DEFAULT_WORKERS_AI_MODEL_ID,
         unavailableReason: 'Connect Cloudflare in your Kinu user settings to use Workers AI.',
@@ -323,6 +329,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       id: 'my-gateway',
       label: 'Your AI Gateway',
       cloud,
+      sessionAffinity: opts.sessionAffinity,
       menu,
       unavailableReason: 'Connect Cloudflare and select an AI Gateway in your Kinu user settings.',
       fetch: opts.fetch,
@@ -448,6 +455,16 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     },
     getAuth: deps.getAuth,
   };
+}
+
+/** The endpoint with the agent's replica pin on its headers, or itself when
+ *  the agent has none - a headers copy only when there is something to add. */
+function withAffinity(llm: LLMProviderConfig, sessionAffinity: string | undefined): LLMProviderConfig {
+  if (!sessionAffinity) return llm;
+  for (const header in llm.headers) {
+    if (header.toLowerCase() === 'x-session-affinity') return llm;
+  }
+  return { ...llm, headers: { ...llm.headers, 'x-session-affinity': sessionAffinity } };
 }
 
 function createGatewayBackedProvider(opts: {
@@ -653,6 +670,7 @@ function createCloudProxyProvider(opts: {
   id: 'workers-ai' | 'my-gateway';
   label: string;
   cloud: LocalCloudSession;
+  sessionAffinity: string | undefined;
   menu: () => Promise<CloudMenu>;
   defaultModel?: string;
   unavailableReason: string;
@@ -660,7 +678,7 @@ function createCloudProxyProvider(opts: {
 }): ModelProvider {
   const baseURL = cloudProxyBaseURL(opts.cloud.origin);
   const headers: CloudProxyHeaders = { Authorization: `Bearer ${opts.cloud.token}` };
-  if (opts.cloud.sessionAffinity) headers['x-session-affinity'] = opts.cloud.sessionAffinity;
+  if (opts.sessionAffinity) headers['x-session-affinity'] = opts.sessionAffinity;
   const prefix = `${opts.id}/`;
   return {
     id: opts.id,

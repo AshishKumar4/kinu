@@ -30,12 +30,11 @@
 import { afterAll, describe, test } from 'vitest';
 import { resolve } from 'node:path';
 
-import { workerSession, type EvalObservation } from '@kinu.run/test-utils';
+import { workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, type RunEvent } from '../../packages/core/src/index';
 import { runTuiInPty } from '../../packages/cli/tests/helpers/pty-screen';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-  type FirstRunSubgoal,
 } from './first-run';
 
 const SUITE = 'First-run · enter-sends';
@@ -72,7 +71,7 @@ const PLAN = firstRunCasePlan(SUITE, CASE);
 const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 
-afterAll(() => { publishFirstRunRecord(SUITE, [CASE], observations); });
+afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
@@ -93,7 +92,7 @@ describe(SUITE, () => {
           PATH: process.env.PATH ?? '',
         };
 
-        const subgoals: FirstRunSubgoal[] = [];
+        const subgoals: EvalSubgoal[] = [];
         for (const spelling of SPELLINGS) {
           const draft = `${spelling.marker} reply with only OK`;
           const runsBefore = (await session.runEvents()).filter((event) => event.type === 'run_end').length;

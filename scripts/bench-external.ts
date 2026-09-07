@@ -23,7 +23,6 @@ import { basename, join, resolve } from 'node:path';
 import * as v from 'valibot';
 import {
   addUsage, computeGain, decodeJsonValue, fmtPp, pairedBinaryComparison, parseJsonValue,
-  usageReported,
 } from '../packages/core/src/index';
 import type { JsonValue, PairedOutcome, Usage } from '../packages/core/src/index';
 import { openRunRetention, resolveArtifactRoot } from './bench-retention';
@@ -35,23 +34,24 @@ const REPO_ROOT = join(import.meta.dir, '..');
  *  a loose parse here would let a schema change quietly redefine the number. */
 const FiniteCount = v.pipe(v.number(), v.finite(), v.minValue(0));
 
+const TrialAgentSchema = v.object({
+  model_name: v.optional(v.nullable(v.string())),
+  kwargs: v.optional(v.nullable(v.object({ evolve: v.optional(v.boolean()) }))),
+});
+const PendingTrialSchema = v.object({ task: v.object({ path: v.string() }), agent: TrialAgentSchema });
+const JobSummarySchema = v.object({ n_total_trials: v.pipe(FiniteCount, v.integer()) });
+
 const TrialSchema = v.object({
   task_name: v.pipe(v.string(), v.minLength(1)),
   task_checksum: v.optional(v.string()),
-  config: v.object({
-    agent: v.object({
-      model_name: v.optional(v.nullable(v.string())),
-      // Named, not a bag of unknowns: `evolve` is the arm state, and reading it
-      // out of an unparsed record is how an arm's own configuration became
-      // something a reader had to guess at.
-      kwargs: v.optional(v.nullable(v.object({ evolve: v.optional(v.boolean()) }))),
-    }),
-  }),
+  config: v.object({ agent: TrialAgentSchema }),
   agent_result: v.nullable(v.object({
     n_input_tokens: v.optional(v.nullable(FiniteCount)),
     n_output_tokens: v.optional(v.nullable(FiniteCount)),
     n_cache_tokens: v.optional(v.nullable(FiniteCount)),
     metadata: v.optional(v.nullable(v.object({
+      usage_complete: v.optional(v.boolean()),
+      evolve: v.optional(v.boolean()),
       tool_calls: v.optional(v.number()),
       // Named, because "did the mechanism act" is the question an arm's own
       // configuration cannot answer. This is the FILTERED subset — only names in
@@ -98,8 +98,8 @@ export interface ExternalTrial {
   /** Harbor prefixes the dataset in 2.1 (`terminal-bench/foo`) and not in 2.0,
    *  so the bare task name is the only key that pairs across releases. */
   taskId: string;
-  reward: number;
-  passed: boolean;
+  reward: number | null;
+  passed: boolean | null;
   checksum: string | null;
   model: string | null;
   /** Whether the run's distinctive mechanism was live, read from the arm's own
@@ -123,6 +123,7 @@ export interface ExternalTrial {
    *  mean the adapter recorded nothing, so a trial that was never metered carries
    *  an empty usage rather than three zeros. */
   usage: Usage;
+  usageComplete: boolean | null;
   errored: boolean;
 }
 
@@ -131,6 +132,7 @@ export interface ExternalArm {
   id: string;
   dir: string;
   trials: ExternalTrial[];
+  declaredTrials: number;
 }
 
 /** Read one Harbor job directory. Every trial subdirectory holding a
@@ -138,39 +140,57 @@ export interface ExternalArm {
 export function readHarborJob(dir: string): ExternalArm {
   const root = resolve(dir);
   if (!existsSync(root)) throw new Error(`no such Harbor job directory: ${root}`);
+  const declared = v.parse(JobSummarySchema, parseJsonValue(readFileSync(join(root, 'result.json'), 'utf8'))).n_total_trials;
   const trials: ExternalTrial[] = [];
   for (const entry of readdirSync(root).sort()) {
     const file = join(root, entry, 'result.json');
-    if (!existsSync(file)) continue;
-    const parsed = v.parse(TrialSchema, parseJsonValue(readFileSync(file, 'utf8')));
-    const reward = parsed.verifier_result?.rewards.reward;
-    if (reward === undefined) {
-      throw new Error(`${file} has no verifier reward — an unscored trial cannot be paired`);
+    if (!existsSync(file)) {
+      const configFile = join(root, entry, 'config.json');
+      if (existsSync(configFile)) {
+        const pending = v.parse(PendingTrialSchema, parseJsonValue(readFileSync(configFile, 'utf8')));
+        trials.push({
+          taskId: basename(pending.task.path), reward: null, passed: null, checksum: null,
+          model: pending.agent.model_name ?? null, evolve: pending.agent.kwargs?.evolve ?? null,
+          evolutionEvents: null, activityEvents: null, executionGradedTurns: null, turnsCompleted: null,
+          toolCalls: null, usage: {}, usageComplete: false, errored: false,
+        });
+      }
+      continue;
     }
+    const parsed = v.parse(TrialSchema, parseJsonValue(readFileSync(file, 'utf8')));
+    const reward = parsed.verifier_result?.rewards.reward ?? null;
     const meta = parsed.agent_result?.metadata;
+    const configuredEvolution = parsed.config.agent.kwargs?.evolve;
+    if (configuredEvolution !== undefined && meta?.evolve !== undefined && configuredEvolution !== meta.evolve) {
+      throw new Error(`${file}: recorded evolution state differs from configured state`);
+    }
     const events = meta?.evolution_events;
     trials.push({
       taskId: parsed.task_name.split('/').pop() ?? parsed.task_name,
       reward,
-      passed: reward >= 1,
+      passed: reward === null ? null : reward >= 1,
       checksum: parsed.task_checksum ?? null,
       model: parsed.config.agent.model_name ?? null,
-      evolve: parsed.config.agent.kwargs?.evolve ?? null,
+      evolve: meta?.evolve ?? configuredEvolution ?? null,
       evolutionEvents: events === undefined ? null : events.length,
       activityEvents: meta?.activity_events === undefined ? null : meta.activity_events.length,
       executionGradedTurns: meta?.turn_grading?.execution_graded ?? null,
       turnsCompleted: meta?.turns_completed ?? null,
       toolCalls: meta?.tool_calls ?? null,
       usage: harborUsage(parsed.agent_result),
+      usageComplete: meta?.usage_complete ?? null,
       errored: parsed.exception_info !== null && parsed.exception_info !== undefined,
     });
   }
-  if (trials.length === 0) throw new Error(`${root} holds no trial result.json files`);
-  return { id: basename(root), dir: root, trials };
+  if (trials.length > declared) throw new Error(`${root}: ${trials.length} trial records exceed ${declared} declared attempts`);
+  return { id: basename(root), dir: root, trials, declaredTrials: declared };
 }
 
 export interface ArmSpend {
   trials: number;
+  verifiedSuccesses: number;
+  verifierFailures: number;
+  unscoredTrials: number;
   /** The arm's total, accumulated with `addUsage`, so a count no trial reported
    *  stays absent instead of summing to a zero the harness never observed. */
   usage: Usage;
@@ -198,18 +218,17 @@ export interface ArmSpend {
   turnsCompleted: number | null;
   /** Trials whose grading probe produced no readable answer. */
   gradingUnreported: number;
-  /** Trials that reported no usage at all — a turn the agent timeout killed
-   *  emits no `turn_end`. While this is non-zero the token totals above are a
-   *  LOWER BOUND, and they under-report exactly the longest trials. */
+  /** Missing or partial usage, including attempts that produced no result file. */
   spendUnreported: number;
 }
 
 export function armSpend(arm: ExternalArm): ArmSpend {
   const events = arm.trials.map((t) => t.evolutionEvents);
   const billable = arm.trials.map((t) => (
-    t.usage.input === undefined || t.usage.output === undefined
+    t.usageComplete !== true || t.usage.input === undefined || t.usage.output === undefined
+      || (t.usage.cacheRead ?? 0) > t.usage.input
       ? null
-      : Math.max(0, t.usage.input - (t.usage.cacheRead ?? 0)) + t.usage.output
+      : t.usage.input - (t.usage.cacheRead ?? 0) + t.usage.output
   ));
   const graded = arm.trials.map((t) => t.executionGradedTurns);
   const completed = arm.trials.map((t) => t.turnsCompleted);
@@ -220,10 +239,13 @@ export function armSpend(arm: ExternalArm): ArmSpend {
     ? null
     : xs.reduce<number>((n, x) => n + (x ?? 0), 0));
   return {
-    trials: arm.trials.length,
+    trials: arm.declaredTrials,
+    verifiedSuccesses: arm.trials.filter((trial) => trial.passed === true).length,
+    verifierFailures: arm.trials.filter((trial) => trial.passed === false).length,
+    unscoredTrials: arm.declaredTrials - arm.trials.filter((trial) => trial.reward !== null).length,
     usage: arm.trials.reduce<Usage>((total, t) => addUsage(total, t.usage), {}),
-    spendUnreported: arm.trials.filter((t) => !usageReported(t.usage)).length,
-    billableTokens: billable.every((tokens) => tokens !== null)
+    spendUnreported: arm.declaredTrials - billable.filter((tokens) => tokens !== null).length,
+    billableTokens: arm.trials.length === arm.declaredTrials && billable.every((tokens) => tokens !== null)
       ? billable.reduce((total, tokens) => total + tokens, 0)
       : null,
     models: [...new Set(arm.trials.map((t) => t.model ?? 'unknown'))].sort(),
@@ -233,14 +255,16 @@ export function armSpend(arm: ExternalArm): ArmSpend {
     trialsWithEvolution: arm.trials.filter((t) => (t.evolutionEvents ?? 0) > 0).length,
     executionGradedTurns: total(graded),
     turnsCompleted: total(completed),
-    gradingUnreported: arm.trials.filter((t) => t.executionGradedTurns === null).length,
+    gradingUnreported: arm.declaredTrials - arm.trials.filter((t) => t.executionGradedTurns !== null).length,
   };
 }
 
 export interface PairedTask {
   taskId: string;
-  a: number;
-  b: number;
+  a: number | null;
+  b: number | null;
+  aRewards: readonly (number | null)[];
+  bRewards: readonly (number | null)[];
   /** Harbor's own task checksum, when both arms recorded one. Equal checksums
    *  mean the two arms were scored on the identical task; unequal ones mean the
    *  flip may be the corpus moving rather than the agent. */
@@ -248,19 +272,33 @@ export interface PairedTask {
 }
 
 export function pairArms(a: ExternalArm, b: ExternalArm) {
-  const byId = (arm: ExternalArm) => new Map(arm.trials.map((t) => [t.taskId, t]));
-  const left = byId(a);
-  const right = byId(b);
+  const grouped = (arm: ExternalArm) => {
+    const tasks = new Map<string, ExternalTrial[]>();
+    for (const trial of arm.trials) {
+      const repeats = tasks.get(trial.taskId);
+      if (repeats) repeats.push(trial); else tasks.set(trial.taskId, [trial]);
+    }
+    return tasks;
+  };
+  const left = grouped(a);
+  const right = grouped(b);
   const paired: PairedTask[] = [];
-  for (const taskId of [...left.keys()].sort()) {
-    const l = left.get(taskId)!;
+  let repeats: number | undefined;
+  for (const [taskId, l] of left) {
     const r = right.get(taskId);
     if (!r) continue;
+    repeats ??= l.length;
+    if (l.length !== r.length || l.length !== repeats) {
+      throw new Error(`${taskId}: unequal repetitions (${l.length} vs ${r.length}; expected ${repeats}); refusing to drop attempts`);
+    }
+    const checksums = [...l, ...r].map((trial) => trial.checksum);
+    const aRewards = l.map((trial) => trial.reward);
+    const bRewards = r.map((trial) => trial.reward);
     paired.push({
-      taskId,
-      a: l.reward,
-      b: r.reward,
-      sameChecksum: l.checksum === null || r.checksum === null ? null : l.checksum === r.checksum,
+      taskId, aRewards, bRewards,
+      a: aRewards.includes(null) ? null : aRewards.reduce<number>((sum, reward) => sum + (reward ?? 0), 0) / l.length,
+      b: bRewards.includes(null) ? null : bRewards.reduce<number>((sum, reward) => sum + (reward ?? 0), 0) / r.length,
+      sameChecksum: checksums.includes(null) ? null : new Set(checksums).size === 1,
     });
   }
   return {
@@ -274,7 +312,7 @@ export function pairArms(a: ExternalArm, b: ExternalArm) {
  *  over two different denominators produced two circulating numbers for the same
  *  observation. Both are reported, each named by what it divides by. */
 export function flipAccounting(paired: readonly PairedTask[]) {
-  const flipped = paired.filter((p) => (p.a >= 1) !== (p.b >= 1));
+  const flipped = paired.filter((p) => p.a !== null && p.b !== null && (p.a >= 1) !== (p.b >= 1));
   const identical = paired.filter((p) => p.sameChecksum === true);
   return {
     flipped: flipped.map((p) => p.taskId),
@@ -342,10 +380,27 @@ export function admissibility(
   const spendB = armSpend(b);
   const candidateEvolves = spendB.evolveFlags.length === 1 && spendB.evolveFlags[0] === true;
   const ratio = billableSpendRatio(a, b);
-  const mismatched = paired.filter((p) => p.sameChecksum === false).map((p) => p.taskId);
+  const mismatched = paired.filter((p) => p.sameChecksum !== true).map((p) => p.taskId);
   const gradedB = spendB.executionGradedTurns;
 
   const conditions: AdmissibilityCondition[] = [
+    {
+      name: 'every declared attempt has an official verifier outcome',
+      met: spendA.unscoredTrials === 0 && spendB.unscoredTrials === 0,
+      detail: `${spendA.unscoredTrials}/${spendA.trials} unscored in A; ${spendB.unscoredTrials}/${spendB.trials} in B`,
+    },
+    {
+      name: 'same model in both arms',
+      met: spendA.models.length === 1 && spendB.models.length === 1 && spendA.models[0] !== 'unknown'
+        && spendA.models[0] === spendB.models[0],
+      detail: `A=${spendA.models.join('/')} B=${spendB.models.join('/')}`,
+    },
+    {
+      name: 'every attempted task is paired',
+      met: paired.length === new Set(a.trials.map((trial) => trial.taskId)).size
+        && paired.length === new Set(b.trials.map((trial) => trial.taskId)).size,
+      detail: `${paired.length} paired task(s) across ${a.trials.length}/${b.trials.length} attempts`,
+    },
     {
       name: 'each arm ran one arm state',
       met: spendA.evolveFlags.length === 1 && spendB.evolveFlags.length === 1,
@@ -419,7 +474,7 @@ function retain(
       corpus: arms.map((arm) => arm.dir).join(' | '),
       manifestHash: 'n/a — provenance lives in each trial result.json',
       seed: 0,
-      repeats: 1,
+      repeats: paired[0]?.aRewards.length ?? 0,
       budget: { wallClockMs: 0, maxTokens: 0 },
       variants: arms.map((arm) => arm.id),
       evolving: arms.some((arm) => arm.trials.some((t) => t.evolve === true)),
@@ -437,6 +492,7 @@ function describeSpend(label: string, spend: ArmSpend): string {
     value === undefined ? 'unreported' : value.toLocaleString()
   );
   return `${label.padEnd(28)} trials=${String(spend.trials).padStart(3)}  `
+    + `verifiedSuccesses=${spend.verifiedSuccesses}/${spend.trials} verifierFailures=${spend.verifierFailures} unscored=${spend.unscoredTrials}  `
     + `billable=${(spend.billableTokens === null ? 'unmeasurable' : spend.billableTokens.toLocaleString()).padStart(12)}  `
     + `in=${count(spend.usage.input).padStart(12)}  `
     + `cached=${count(spend.usage.cacheRead).padStart(12)}  `
@@ -449,8 +505,8 @@ function describeSpend(label: string, spend: ArmSpend): string {
     + `${spend.turnsCompleted ?? 'unreported'}  `
     + `errors=${spend.errored}  models=${spend.models.join(',')}`
     + (spend.spendUnreported > 0
-      ? `\n${' '.repeat(30)}LOWER BOUND: ${spend.spendUnreported}/${spend.trials} trial(s) reported no usage `
-        + '(no turn_end — the agent timeout killed the turn), so these totals omit them entirely'
+      ? `\n${' '.repeat(30)}LOWER BOUND: ${spend.spendUnreported}/${spend.trials} trial(s) lack complete usage evidence; `
+        + 'these totals may omit in-flight or unreported calls'
       : '');
 }
 
@@ -473,9 +529,8 @@ function cmdCompare(args: Map<string, string>): number {
   if (paired.length === 0) throw new Error('the two arms share no task — nothing to pair');
 
   const outcomes: PairedOutcome[] = paired.map((p) => ({
-    taskId: p.taskId, a: [p.a >= 1], b: [p.b >= 1],
+    taskId: p.taskId, a: p.aRewards.map((reward) => reward !== null && reward >= 1), b: p.bRewards.map((reward) => reward !== null && reward >= 1),
   }));
-  const stats = pairedBinaryComparison(outcomes);
   const flips = flipAccounting(paired);
   const spendA = armSpend(a);
   const spendB = armSpend(b);
@@ -486,6 +541,7 @@ function cmdCompare(args: Map<string, string>): number {
     ? 'unmeasurable — an arm holds trials that reported no token counts'
     : 'n/a — arm A billed no tokens';
   const verdict = admissibility(a, b, paired);
+  const stats = verdict.admissible ? pairedBinaryComparison(outcomes) : null;
 
   const report = {
     kind: 'external-paired-comparison',
@@ -510,7 +566,7 @@ function cmdCompare(args: Map<string, string>): number {
   }
   console.log('');
   for (const p of paired) {
-    const mark = (p.a >= 1) === (p.b >= 1) ? '   ' : 'FLIP';
+    const mark = p.a === null || p.b === null ? 'UNSCORED' : (p.a >= 1) === (p.b >= 1) ? '   ' : 'FLIP';
     const same = p.sameChecksum === null ? 'checksum n/a' : p.sameChecksum ? 'same checksum' : 'checksum differs';
     console.log(`  ${mark} ${p.taskId.padEnd(34)} A=${p.a} B=${p.b}  ${same}`);
   }
@@ -527,7 +583,7 @@ function cmdCompare(args: Map<string, string>): number {
   // publishing a bad headline — but an inadmissible pair must not hand a reader
   // a number to quote, because that is exactly how 5/10 over two evolve=false
   // arms became a sentence about self-evolution.
-  if (!verdict.admissible) {
+  if (stats === null) {
     console.log('effect: WITHHELD. A contrast that failed admissibility has no effect to report — the');
     console.log('failing condition above is the result. Per-task rewards are retained in full.');
     console.log(`retained: ${dir}`);
@@ -551,9 +607,16 @@ function cmdGain(args: Map<string, string>): number {
   const { paired, onlyA, onlyB } = pairArms(stateless, stateful);
   if (paired.length === 0) throw new Error('the two arms share no task — nothing to pair');
 
-  const stats = computeGain(paired.map((p) => ({ taskId: p.taskId, stateful: p.b, stateless: p.a })));
   const spendStateful = armSpend(stateful);
   const spendStateless = armSpend(stateless);
+  const complete = spendStateful.unscoredTrials === 0 && spendStateless.unscoredTrials === 0
+    && onlyA.length === 0 && onlyB.length === 0 && paired.every((p) => p.sameChecksum === true)
+    && spendStateful.models.length === 1 && spendStateless.models.length === 1
+    && spendStateful.models[0] === spendStateless.models[0] && spendStateful.models[0] !== 'unknown';
+  const stats = complete ? computeGain(paired.map((p) => {
+    if (p.a === null || p.b === null) throw new Error(`${p.taskId}: official reward is unreported`);
+    return { taskId: p.taskId, stateful: p.b, stateless: p.a };
+  })) : null;
   const report = {
     kind: 'external-gain',
     stateful: { id: stateful.id, dir: stateful.dir, spend: spendStateful },
@@ -567,6 +630,10 @@ function cmdGain(args: Map<string, string>): number {
   console.log(describeSpend('  stateful spend', spendStateful));
   console.log(describeSpend('  stateless spend', spendStateless));
   console.log('');
+  if (stats === null) {
+    console.log(`gain: WITHHELD — incomplete verifier/model/corpus evidence; retained: ${dir}`);
+    return 1;
+  }
   console.log(`stateful reward:  ${stats.statefulReward.toFixed(4)}`);
   console.log(`stateless reward: ${stats.statelessReward.toFixed(4)}`);
   console.log(`mean_gain:        ${stats.gain.toFixed(4)}  (${fmtPp(stats.gain)})`);

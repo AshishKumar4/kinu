@@ -204,6 +204,17 @@ class EvalTargetTest(unittest.TestCase):
             with self.subTest(url=url):
                 self.assertEqual(assert_eval_target(url, {}), url)
 
+    def test_direct_workers_ai_is_not_a_kinu_deployment(self) -> None:
+        endpoint = "https://api.cloudflare.com/client/v4/accounts/account-id/ai/v1"
+        self.assertEqual(assert_eval_target(endpoint, {}), endpoint)
+        for refused in (
+            endpoint.replace("https:", "http:"),
+            endpoint.replace("api.cloudflare.com", "api.cloudflare.com.evil.example"),
+            endpoint.replace("/ai/v1", "/workers/scripts"),
+        ):
+            with self.subTest(url=refused), self.assertRaises(ValueError):
+                assert_eval_target(refused, {})
+
     def test_a_near_miss_of_the_staging_host_is_not_staging(self) -> None:
         for url in (
             "https://staging.kinu.run.evil.example/api/user/ai/v1",

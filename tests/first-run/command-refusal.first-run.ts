@@ -1,8 +1,8 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import { ERROR_CODES } from '@kinu.run/core/obs';
-import type { EvalObservation } from '@kinu.run/test-utils';
-import { FIRST_RUN_DEFECTS, publishFirstRunRecord, runFirstRunCase, type FirstRunSubgoal } from './first-run';
+import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
+import { FIRST_RUN_DEFECTS, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { operatorFirstRunPlan } from './operator-session';
 
 const CASE = 'command-refusal';
@@ -17,7 +17,7 @@ const Answer = v.variant('ok', [
 ]);
 const Queue = v.array(v.object({ command: v.string(), status: v.string(), executor: v.string() }));
 
-afterAll(() => publishFirstRunRecord(SUITE, [CASE], observations, 'no-model'));
+afterAll(() => publishFirstRunRecord(SUITE, undefined, [CASE], observations));
 
 describe(SUITE, () => {
   test.skipIf(PLAN === null)('MEASURED: command-refusal', async () => {
@@ -43,7 +43,7 @@ export default { async fetch(request, env) { const [command] = await request.jso
 END`);
         if (setup.exitCode !== 0) throw new Error('Could not author test slate: ' + setup.stdout);
         const command = 'printf executed > /home/user/first-run-command-effect; npm publish --dry-run';
-        const goals: FirstRunSubgoal[] = [];
+        const goals: EvalSubgoal[] = [];
         for (const policy of ['deny_all', 'strict']) {
           await session.rpc('setShellApprovalMode', [policy]);
           const expected = policy === 'deny_all' ? 'denied' : 'unavailable';

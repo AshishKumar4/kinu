@@ -11,7 +11,7 @@ const observations: EvalObservation[] = [];
 const Exec = v.object({ stdout: v.string(), exitCode: v.number() });
 const Preview = v.object({ ok: v.literal(true), value: v.object({ url: v.string(), port: v.number() }) });
 
-afterAll(() => publishFirstRunRecord(SUITE, [CASE], observations, 'no-model'));
+afterAll(() => publishFirstRunRecord(SUITE, undefined, [CASE], observations));
 
 describe(SUITE, () => {
   test.skipIf(PLAN === null)('MEASURED: preview-address', async () => {

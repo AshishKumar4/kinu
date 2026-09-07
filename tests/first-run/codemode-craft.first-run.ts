@@ -48,11 +48,10 @@
  */
 import { afterAll, describe, test } from 'vitest';
 
-import type { EvalObservation } from '@kinu.run/test-utils';
+import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import type { RunEvent } from '../../packages/core/src/index';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-  type FirstRunSubgoal,
 } from './first-run';
 
 const SUITE = 'First-run · codemode-craft';
@@ -89,7 +88,7 @@ const PLAN = firstRunCasePlan(SUITE, CASE);
 const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 
-afterAll(() => { publishFirstRunRecord(SUITE, [CASE], observations); });
+afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 function isToolCallEnd(event: RunEvent): event is Extract<RunEvent, { type: 'tool_call_end' }> {
   return event.type === 'tool_call_end';
@@ -144,7 +143,7 @@ describe(SUITE, () => {
           .filter((call) => call.error !== undefined)
           .map((call) => `${call.name}: ${String(call.error).slice(0, 200)}`);
 
-        const subgoals: FirstRunSubgoal[] = [
+        const subgoals: EvalSubgoal[] = [
           {
             what: 'crafted',
             reached: crafted.length > 0,

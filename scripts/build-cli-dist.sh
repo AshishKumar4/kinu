@@ -54,6 +54,12 @@ CPYTHON_PATH="node_modules/@nimbus-sh/runtime-cpython"
 BUN="${BUN:-bun}"
 command -v "$BUN" >/dev/null 2>&1 || { echo "build-cli-dist: bun is required" >&2; exit 1; }
 
+# Shared with the Harbor compiled build: one authoritative external-asset set.
+runtime_packages="$("$BUN" -e 'console.log(JSON.parse(await Bun.file(process.argv[1]).text()).join("\n"))' "$ROOT/scripts/cli-runtime-packages.json")"
+mapfile -t RUNTIME_PACKAGES <<< "$runtime_packages"
+EXTERNAL_ARGS=()
+for runtime in "${RUNTIME_PACKAGES[@]}"; do EXTERNAL_ARGS+=(--external "$runtime"); done
+
 MANIFEST="$ROOT/packages/cli/package.json"
 tmp="$(mktemp -d)"
 cleanup() {
@@ -85,8 +91,7 @@ mkdir -p "$stage"
   --target=bun \
   --outdir="$stage" \
   --define "process.env.KINU_BUILD_STAMP=\"$sha\"" \
-  --external '@nimbus-sh/runtime-bash' \
-  --external '@nimbus-sh/runtime-cpython' \
+  "${EXTERNAL_ARGS[@]}" \
   > "$tmp/build.log" || { cat "$tmp/build.log" >&2; echo "build-cli-dist: bun build failed" >&2; exit 1; }
 [ -f "$stage/cli.js" ] || { echo "build-cli-dist: bun build wrote no cli.js" >&2; exit 1; }
 
@@ -99,13 +104,14 @@ mkdir -p "$stage"
 ' "$stage/package.json" "$version"
 
 mkdir -p "$stage/node_modules/@nimbus-sh" "$stage/node_modules/$NATIVE_SCOPE"
-for runtime in runtime-bash runtime-cpython; do
-  source_dir="$ROOT/node_modules/@nimbus-sh/$runtime"
+for runtime in "${RUNTIME_PACKAGES[@]}"; do
+  source_dir="$ROOT/node_modules/$runtime"
   [ -d "$source_dir" ] || {
-    echo "build-cli-dist: @nimbus-sh/$runtime is not installed — run bun install" >&2
+    echo "build-cli-dist: $runtime is not installed — run bun install" >&2
     exit 1
   }
-  cp -RL "$source_dir" "$stage/node_modules/@nimbus-sh/$runtime"
+  mkdir -p "$(dirname "$stage/node_modules/$runtime")"
+  cp -RL "$source_dir" "$stage/node_modules/$runtime"
 done
 
 # One version for every platform's native package: the one this tree resolved.

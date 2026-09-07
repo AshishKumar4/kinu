@@ -1,7 +1,9 @@
 import { describe, test, expect } from 'bun:test';
+import { streamText } from 'ai';
+import * as v from 'valibot';
 import {
   workersAIEffortOption, effortFor, reasoningEffortOptions,
-  mergeProviderOptions, REASONING_EFFORT_FOR_STAGE,
+  mergeProviderOptions, REASONING_EFFORT_FOR_STAGE, createChatModel, JsonObjectSchema, asFetchFunction, type JsonObject,
 } from '../src/index';
 import { REASONING_EFFORTS } from '../src/strategy/effort';
 import type { ReasoningEffort } from '../src/strategy/effort';
@@ -18,20 +20,28 @@ describe('reasoning_effort plumbing', () => {
     expect(workersAIEffortOption(undefined)).toEqual({});
   });
 
-  test('workersAIEffortOption returns providerOptions shape', () => {
-    const opt = workersAIEffortOption('high');
-    expect(opt.providerOptions?.['workers-ai'].reasoning_effort).toBe('high');
-  });
-
-  test('effortFor(stage) shortcut', () => {
-    const opt = effortFor('scaffold_mutation');
-    expect(opt.providerOptions?.['workers-ai'].reasoning_effort).toBe('high');
+  test('configured Workers AI effort reaches the streaming HTTP request without an output cap', async () => {
+    const requests: JsonObject[] = [];
+    const model = createChatModel({
+      kind: 'openai-compat', name: 'workers-ai', modelId: '@cf/zai-org/glm-5.3',
+      baseURL: 'https://fixture.invalid/v1', headers: {},
+      fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+        requests.push(v.parse(JsonObjectSchema, await new Request(input, init).json()));
+        return new Response(`data: ${JSON.stringify({ id: 'x', object: 'chat.completion.chunk', created: 1, model: '@cf/zai-org/glm-5.3',
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+      }),
+    });
+    const result = streamText({ model, prompt: 'probe', maxRetries: 0, ...effortFor('chat') });
+    await result.text;
+    expect(requests[0]?.reasoning_effort).toBe(REASONING_EFFORT_FOR_STAGE.chat);
+    expect(requests[0]?.reasoningEffort).toBeUndefined();
+    expect(requests[0]?.max_tokens).toBeUndefined();
+    expect(requests[0]?.max_completion_tokens).toBeUndefined();
   });
 
   test('maps user effort to each provider family exactly', () => {
-    expect(reasoningEffortOptions('low', 'workers-ai')).toEqual({
-      'workers-ai': { reasoning_effort: 'low' },
-    });
     for (const provider of ['openai', 'opencode', 'codex', 'openai-compat', 'openai-compat:groq'] as const) {
       expect(reasoningEffortOptions('medium', provider)).toEqual({
         openai: { reasoningEffort: 'medium' },
@@ -108,12 +118,6 @@ describe('the reasoning rung a stage gets is a policy, not a list of magnitudes'
       expect(rung(REASONING_EFFORT_FOR_STAGE.scaffold_mutation)).toBeGreaterThan(rung(effort));
     }
 
-    // AND THE RUNG A JUDGE IS GIVEN IS THE RUNG THAT REACHES THE PROVIDER, which is the
-    // only place the policy has any effect. A projection of the table rather than a
-    // restatement of it: both sides move together, so this cannot pin the value — it pins
-    // that the seam does not drop it.
-    expect(effortFor('judge').providerOptions?.['workers-ai'].reasoning_effort)
-      .toBe(REASONING_EFFORT_FOR_STAGE.judge);
   });
 
   test('inside one provider namespace the override beats the base it is layered over', () => {

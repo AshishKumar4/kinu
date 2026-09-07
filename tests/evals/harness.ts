@@ -53,17 +53,18 @@ import * as v from 'valibot';
 import type {
   AgentRuntime, AgentsToolAction, AgentsForkDeps, AgentsToolDeps, BuiltinToolName,
   EvalCase, LLMProviderConfig, ProfileCatalog, ProfileCatalogEnvelope,
-  ProviderCatalogSnapshot, SessionMessage, SessionWriter, Shell, ToolCallRecord,
+  ProviderCatalogSnapshot, SessionMessage, SessionWriter, Shell, ToolCallRecord, ToolOutcome,
 } from '../../packages/core/src/index';
 import {
   RunEventRecorder, activePromptSectionOverrides, agentsActionsFor, buildActorTools,
-  buildSystemPromptSync, classifyToolFailure, createAgentConfigStore, createFactsStore,
+  buildSystemPromptSync, createAgentConfigStore, createFactsStore,
   createAgentsCodemodeProvider, createMemoryCodemodeProvider, createTasksCodemodeProvider,
   currentDateForPrompt, initWorkspaceSchema, isBuiltinToolName, JsonObjectSchema,
-  projectJsonValue, TaskListStore,
+  projectJsonValue, failedToolOutcome, TaskListStore,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
   WORKSPACE_RUN_ID,
 } from '../../packages/core/src/index';
+import { renderThrownChain } from '../../packages/core/src/obs/index';
 import {
   createDefaultWebSearchProvider, createWebCodemodeProvider,
 } from '../../packages/core/src/web/index';
@@ -76,7 +77,7 @@ import {
 import { createNodeExecuteToolFactory } from '../../packages/cli-backend/src/execute-tools-factory';
 import { createNodeCraftedExecute } from '../../packages/cli-backend/src/craft-executor';
 import {
-  hardTaskFor, ledgerTotalsFromEvents, recordLiveModelEpisode,
+  hardTaskFor, ledgerTotalsFromEvents, projectRunEventProvenance, recordLiveModelEpisode,
   scoreTrajectory, seedHardTask, verifyHardTask, walkRunEvents,
   type EvalArmState, type EvalScoreRow, type HardTask, type LedgerTotals,
 } from '@kinu.run/test-utils';
@@ -226,7 +227,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
 export interface StepToolCallLog {
   readonly records: ToolCallRecord[];
   steps: number;
-  onStepFinish(step: StepResult<ToolSet>): void;
+  onStepFinish(step: Pick<StepResult<ToolSet>, 'toolCalls' | 'content'>): void;
 }
 
 export function createStepToolCallLog(): StepToolCallLog {
@@ -235,21 +236,23 @@ export function createStepToolCallLog(): StepToolCallLog {
     steps: 0,
     onStepFinish(step) {
       log.steps += 1;
-      if (step.toolCalls) {
-        for (const tc of step.toolCalls) {
-          log.records.push({
-            name: tc.toolName,
-            args: v.parse(JsonObjectSchema, tc.input),
-            result: null,
-          });
-        }
+      const byId = new Map<string, ToolCallRecord>();
+      for (const call of step.toolCalls) {
+        const record: ToolCallRecord = { name: call.toolName, args: v.parse(JsonObjectSchema, call.input), result: null };
+        log.records.push(record);
+        byId.set(call.toolCallId, record);
       }
-      if (step.toolResults) {
-        for (let i = 0; i < step.toolResults.length; i++) {
-          const toolResult = step.toolResults[i];
-          const idx = log.records.length - step.toolResults.length + i;
-          const record = log.records[idx];
-          if (record && toolResult) record.result = projectJsonValue({ value: toolResult.output });
+      for (const part of step.content) {
+        if (part.type !== 'tool-result' && part.type !== 'tool-error') continue;
+        const record = byId.get(part.toolCallId);
+        if (!record) continue;
+        if (part.type === 'tool-result') {
+          if (part.preliminary) continue;
+          record.result = projectJsonValue({ value: part.output });
+          record.outcome = { success: true };
+        } else {
+          record.result = { error: renderThrownChain({ cause: part.error }) };
+          record.outcome = failedToolOutcome({ cause: part.error });
         }
       }
     },
@@ -469,6 +472,7 @@ export type BehaviourProvenanceEventJson = Record<string, JsonValue> & {
   name?: string;
   durationMs?: number;
   failureClass?: string;
+  outcome?: ToolOutcome;
 };
 
 export interface BehaviourProvenanceJson {
@@ -574,63 +578,39 @@ export function readLedgerTotals(db: Database): LedgerTotals {
   return ledgerTotalsFromEvents(walkRunEvents(new RunEventRecorder(makeSql(db))));
 }
 
-/** How many run events one observation's provenance may carry. A long episode
- *  can produce thousands of rows; the bound keeps a published record a record
- *  rather than a second copy of the ledger, and `totalEvents` beside it says
- *  exactly how much a clipped slice is not showing. */
-const PROVENANCE_EVENT_BOUND = 500;
-
 /**
- * The episode's raw run-event trail, bounded and stripped of everything that
- * could quote the prompt or a secret.
+ * The episode's raw run-event trail off a LOCAL store, as the wire shape a judge
+ * receives.
  *
  * WHY AT ALL. The published observation used to carry aggregates only — counts
  * with no order, no tool names beyond the flat list, no failure classes — so a
  * reader of the record asking "what did this attempt actually DO" had to reopen
  * the SQLite store named in `transcripts`, and after any retention sweep could
- * not answer at all. This carries the ledger's shape: every event in order,
- * each reduced to its structural facts.
+ * not answer at all.
  *
- * WHAT IS DROPPED, deliberately: `userMessage` (the prompt), `args`, `result`,
- * `messages`, `error`/`details` text (an error string can quote file contents),
- * and the model-authored prose fields (`rationale`, `mergedNarrative`,
- * `blindSpots`). What survives is what happened, never what was said. A failed
- * tool call keeps its failure CLASS from `classifyToolFailure` (`exit_127`,
- * `threw`, `denied`, …) so a record can be triaged without reopening anything.
+ * The projection itself — what is kept, what is dropped, the bound — is
+ * `projectRunEventProvenance`, shared with the public-plane families; this is
+ * the seam's walk in front of it and the wire shape behind it. The copy per
+ * event is the index-signature the judge's output type demands, not a second
+ * projection: every field is the shared one's.
  */
 export function collectRunEventProvenance(db: Database): BehaviourProvenanceJson {
-  // The seam's walk, for the reason `readLedgerTotals` uses it: this was the
-  // second of the two local copies the seam's own docstring names, and a third
-  // thing to keep in step with the recorder is how a reader gets a smaller
-  // denominator than the episode had. The SORT stays here because it is this
-  // record's own requirement — the walk is per-run and a published trail is read
-  // in time order.
-  const events = walkRunEvents(new RunEventRecorder(makeSql(db)));
-  events.sort((a, b) =>
-    a.timestamp.localeCompare(b.timestamp)
-    || a.runId.localeCompare(b.runId)
-    || a.eventIndex - b.eventIndex);
-  const projected = events.map((event): BehaviourProvenanceEventJson => {
-    const base = {
-      runId: event.runId,
-      timestamp: event.timestamp,
-      eventIndex: event.eventIndex,
-      type: event.type,
-    };
-    if (event.type !== 'tool_call_end') return base;
-    const toolCall: BehaviourProvenanceEventJson = {
-      ...base,
-      name: event.name,
-    };
-    if (event.durationMs !== undefined) toolCall.durationMs = event.durationMs;
-    const failure = classifyToolFailure(event);
-    if (failure) toolCall.failureClass = failure.reason;
-    return toolCall;
-  });
+  const { totalEvents, bound, events } = projectRunEventProvenance(
+    walkRunEvents(new RunEventRecorder(makeSql(db))),
+  );
   return {
-    totalEvents: projected.length,
-    bound: PROVENANCE_EVENT_BOUND,
-    events: projected.slice(0, PROVENANCE_EVENT_BOUND),
+    totalEvents,
+    bound,
+    events: events.map((event): BehaviourProvenanceEventJson => {
+      const row: BehaviourProvenanceEventJson = {
+        runId: event.runId, timestamp: event.timestamp, eventIndex: event.eventIndex, type: event.type,
+      };
+      if (event.name !== undefined) row.name = event.name;
+      if (event.durationMs !== undefined) row.durationMs = event.durationMs;
+      if (event.failureClass !== undefined) row.failureClass = event.failureClass;
+      if (event.outcome !== undefined) row.outcome = event.outcome;
+      return row;
+    }),
   };
 }
 
