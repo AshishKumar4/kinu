@@ -21,7 +21,7 @@ import { describe, expect, test } from 'bun:test';
 import type { NodeLoopResult, NodeRunSpec } from '@kinu.run/core';
 import { runNodeAgent } from '@kinu.run/core';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
-import type { FacetHost } from '../src/facet-spawn';
+import type { NodeFacetHost } from '../src/facet-spawn';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
@@ -75,29 +75,25 @@ function facetTransport(options: { holdBoot?: boolean } = {}) {
       return inFlight.promise;
     },
   };
-  const host = {
-    subAgent: async (_cls: { name: string }, name: string) => {
+  const host: NodeFacetHost = {
+    subAgent: async (_cls, name) => {
       calls.push(`subAgent ${name}`);
       return stub;
     },
-    abortSubAgent: (_cls: { name: string }, name: string, reason?: string) => {
+    abortSubAgent: (_cls, name, reason) => {
       calls.push(`abortSubAgent ${name}`);
       inFlight.reject(new Error(`facet evicted: ${reason ?? 'no reason'}`));
     },
-    deleteSubAgent: async (_cls: { name: string }, name: string) => {
+    deleteSubAgent: async (_cls, name) => {
       calls.push(`deleteSubAgent ${name}`);
     },
     facetClass: () => FakeExplorationFacet,
     facetHomes: () => ({
       provision: async () => { throw new Error('a node home is provisioned by the search, never by its transport'); },
-      release: async (kind: string, id: string) => { calls.push(`releaseFacetHome ${kind}:${id}`); },
+      release: async (kind, id) => { calls.push(`releaseFacetHome ${kind}:${id}`); },
     }),
-    listSubAgents: () => [],
   };
-  // SAFETY: this locally constructed host implements every member FacetHost
-  // owns — the SDK verbs plus `facetClass` and `facetHomes` — and the stub it
-  // returns declares every node-mode method the spawner reaches.
-  const loop = hostNodeLoop(host as FacetHost, {
+  const loop = hostNodeLoop(host, {
     identity: () => ({ ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main' }),
     registerArbiter: () => () => { calls.push('withdrawArbiter'); },
   });
