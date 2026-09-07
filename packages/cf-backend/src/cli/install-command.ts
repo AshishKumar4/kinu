@@ -1,3 +1,5 @@
+import { shellQuote } from '@kinu.run/core';
+
 export interface CliInstallCommandOptions {
   origin: string;
   setup?: boolean;
@@ -33,9 +35,4 @@ export function buildCliSetupCommand(origin: string): string {
 
 export function buildCliAuthCommand(origin: string): string {
   return `kinu auth --origin ${shellQuote(normalizeCliOrigin(origin))}`;
-}
-
-export function shellQuote(value: string): string {
-  const escaped = value.replace(/'/g, `'\\''`);
-  return `'${escaped}'`;
 }

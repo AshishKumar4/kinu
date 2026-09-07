@@ -52,7 +52,8 @@
 
 import * as v from 'valibot';
 import { isWorkspaceName } from '../user/validate';
-import { sha256Hex, timingSafeEqual } from './crypto';
+import { timingSafeEqual } from '@kinu.run/core';
+import { sha256Hex } from './crypto';
 import { readKvJson, writeKvJson, type KvStore } from './kv';
 
 /** Every container this deployment addresses is `kinu-<workspace>`. One
