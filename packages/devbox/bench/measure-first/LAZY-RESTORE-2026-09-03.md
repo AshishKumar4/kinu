@@ -391,4 +391,42 @@ tests. The mount probe also passes over DirectR2Store and local workerd
 R2. These results do not prove cloud lifecycle or lazy FUSE hydration.
 
 
+## Counted local comparison, 2026-09-07
+
+`bun packages/devbox/bench/measure-first/local-comparison.ts` runs five
+conformance adapters on identical trees of 1,000 and 5,000 files. Each file
+starts at 4 KiB. Twenty checkpoints each follow one 4 KiB overwrite. A
+replacement then attaches and reads the first edited file, checking its
+bytes. The seed is 3 and the target stride is 7,919. No cloud resources
+were used. Merkle-pack here means `merklePackV2Arm`, not deployed v1.
+
+The first instrument charged a complete pack body for every range GET.
+That fixture was wrong. Both candidate adapters now charge only the
+returned range. A 4,096 B read from a 1 MiB pack returns and counts
+4,096 B. All 144 conformance cases pass after the correction.
+
+Counts include GET, PUT, HEAD, LIST and DELETE. Bytes include reads and
+writes. Base and edit windows include workspace writes and checkpoints.
+
+| Arm | Files | Whole-run operations | Whole-run bytes | Wake and first-read operations | Wake and first-read bytes |
+|---|---:|---:|---:|---:|---:|
+| snapshot-chain | 1,000 | 49 | 12,599,984 | 6 | 5,755,344 |
+| r2fs | 1,000 | 1,078 | 4,182,016 | 1 | 4,096 |
+| overlay-cas | 1,000 | 3,462 | 36,017,617 | 3 | 4,127 |
+| bounded-layers | 1,000 | 2,509 | 21,812,881 | 7 | 345,744 |
+| merkle-pack/v2 | 1,000 | 1,369 | 6,790,550 | 84 | 236,146 |
+| snapshot-chain | 5,000 | 49 | 57,740,394 | 6 | 28,324,319 |
+| r2fs | 5,000 | 5,142 | 20,566,016 | 1 | 4,096 |
+| overlay-cas | 5,000 | 15,718 | 179,362,155 | 3 | 4,127 |
+| bounded-layers | 5,000 | 10,509 | 107,170,195 | 7 | 1,695,187 |
+| merkle-pack/v2 | 5,000 | 1,607 | 27,407,781 | 133 | 878,103 |
+
+V2 moves fewer bytes than snapshot-chain here but makes more requests.
+Its modeled path fault calls `LazyRestore.list` on each parent directory,
+reading every sibling record before the requested file. That is a
+fixable first-touch cost, not a Merkle-tree lower bound. This comparison
+does not measure FUSE lazy hydration, cloud timing, backup retention or
+full restore after loss of control storage. No arm earns admission from it.
+
+
 
