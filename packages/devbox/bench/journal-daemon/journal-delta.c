@@ -782,19 +782,34 @@ static int stat_touched(const struct journal_delta_request *request, struct delt
   return 0;
 }
 
-/* Does any dirty inode carry more names than the journal touched? A write
- * through one name of a hardlinked file must reach every name at the cut,
- * and a name the journal never saw is found only by looking. */
+/* Does the inode behind a present touched path carry more names than the
+ * journal touched? Set once every touched path is stat-ed. */
+static bool touched_multilink(const struct delta *delta, uint64_t ino) {
+  for (size_t index = 0; index < delta->path_count; index++) {
+    const struct touched *entry = &delta->paths[index];
+    if (entry->present && entry->ino == ino && S_ISREG(entry->st.st_mode) && entry->st.st_nlink > 1) return true;
+  }
+  return false;
+}
+
+/* Does any dirty or touched inode carry more names than the journal touched?
+ * A write or a metadata change through one name of a hardlinked file must
+ * reach every name at the cut, and a name the journal never saw is found
+ * only by looking. */
 static bool needs_link_walk(const struct delta *delta) {
   for (size_t index = 0; index < delta->dirty.count; index++) {
     if (delta->dirty.files[index].nlink > 1) return true;
+  }
+  for (size_t index = 0; index < delta->path_count; index++) {
+    const struct touched *entry = &delta->paths[index];
+    if (entry->present && S_ISREG(entry->st.st_mode) && entry->st.st_nlink > 1) return true;
   }
   return false;
 }
 
 /* One walk of the backing tree, remembering every regular file whose inode
- * a multi-link write dirtied. O(tree), paid only in the generation that
- * wrote through a hardlink; every other fence stays O(k). */
+ * a multi-link write or metadata change touched. O(tree), paid only in the
+ * generation that changed a hardlinked inode; every other fence stays O(k). */
 static int walk_link_names(int dir_fd, const char *prefix, struct delta *delta) {
   int fd = openat(dir_fd, prefix[0] == '\0' ? "." : prefix, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
   if (fd < 0) return neg_errno();
@@ -828,7 +843,9 @@ static int walk_link_names(int dir_fd, const char *prefix, struct delta *delta) 
     }
     if (!S_ISREG(st.st_mode)) continue;
     struct journal_dirty_file *file = journal_dirty_find(&delta->dirty, (uint64_t)st.st_ino);
-    if (file != NULL && file->nlink > 1) rc = remember_path(delta, path);
+    if ((file != NULL && file->nlink > 1) || touched_multilink(delta, (uint64_t)st.st_ino)) {
+      rc = remember_path(delta, path);
+    }
     errno = 0;
   }
   if (rc == 0 && errno != 0) rc = neg_errno();
@@ -1310,8 +1327,11 @@ int journal_delta_stage(const struct journal_delta_request *request, char manife
   memset(&delta, 0, sizeof(delta));
   journal_dirty_init(&delta.dirty);
   int rc = read_delta(request, &delta);
-  if (rc == 0 && needs_link_walk(&delta)) rc = walk_link_names(request->root_fd, "", &delta);
   if (rc == 0) rc = stat_touched(request, &delta);
+  if (rc == 0 && needs_link_walk(&delta)) {
+    rc = walk_link_names(request->root_fd, "", &delta);
+    if (rc == 0) rc = stat_touched(request, &delta);
+  }
   if (rc == 0) {
     if (delta.op_count > 1) qsort(delta.ops, delta.op_count, sizeof(*delta.ops), compare_ops);
     if (delta.path_count > 1) qsort(delta.paths, delta.path_count, sizeof(*delta.paths), compare_touched);

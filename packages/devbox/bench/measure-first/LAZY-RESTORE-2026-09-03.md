@@ -354,4 +354,41 @@ seal 2 PUTs and 113,255 B, 5 GC deletes, 1 attach read. The head
 authority stays in memory in this test; the Durable Object side is the
 workerd suite's.
 
+## Inode-based mount boundary, 2026-09-07
+
+The filename heuristic in `6d1ec29c7` loses caller data. POSIX does not
+reserve `.fuse_hidden` names. The earlier namespace-reservation claim is
+withdrawn. A real-mount probe opened `original`, renamed it while open to
+`.fuse_hidden00001234abcdef00`, then fenced. The image built from
+`33ea69ea8` returned `{"disk":"caller bytes","described":false}` and
+exit 1. The low-level image returned the same bytes with `described:true`
+and exit 0. This supersedes the filename-based repair above.
+
+The daemon now uses `fuse_lowlevel_ops`. Each node holds an O_PATH handle
+and a kernel lookup count. Hardlink names share a backing inode identity.
+GETATTR uses that handle even when the request has no file handle. Unlink
+removes the actual name. Rename records the requested destination. No
+filename controls deletion, and no HIDE or UNHIDE record remains.
+The reference boundary is libfuse 3.17.1 `example/passthrough_ll.c`,
+specifically `lo_getattr`, `lo_setattr`, `lo_open` and `lo_unlink`.
+
+The real-daemon regression covers caller hide-like names, rename while
+open, true unlink, held-descriptor fstat, writes, truncate and fsync. The
+same run found a hardlink metadata defect. Chmod through one name served
+modes 600 and 644 after publication. The fence now describes metadata
+changes through every surviving alias and serves 600 through both names.
+That alias discovery still walks the tree and remains an open cost.
+
+After daemon death, a cached read can succeed. In this run it returned
+`ok`; fsync and write returned `ENOTCONN`. Fresh opens after restart
+returned the prior bytes. The earlier universal dead-read-error claim
+is withdrawn. The runtime matrix retains named-write checks and checks
+nameless writes against their recorded link count and described inode.
+
+`bun test packages/devbox/tests/journal-daemon-runtime.test.ts` passed
+its full matrix. The real-daemon, journal and sidecar suites passed 18
+tests. The mount probe also passes over DirectR2Store and local workerd
+R2. These results do not prove cloud lifecycle or lazy FUSE hydration.
+
+
 

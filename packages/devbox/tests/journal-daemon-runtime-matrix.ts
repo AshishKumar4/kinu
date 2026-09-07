@@ -713,19 +713,23 @@ async function checkSealedFiles(sealed: SealedFence, first: Fence, ctx: {
   assert(checks, 'no-post-cut-entry', !sealed.manifest.entries.some((entry) => entry.path === 'after-cut.txt'),
     'after-cut.txt is absent from the sealed manifest');
 
-  /* Every write the journal shows is either described by an entry or is a
-   * path that no longer exists at the cut, whose removal the operation list
-   * carries.  A write to a file that IS still there and is not described is
-   * a lost write, which is the whole failure this cell exists to catch. */
-  const written = new Set(parseJournal(await readFile(ctx.journal))
-    .filter((record) => record.kind === 'W' && record.sequence <= first.cut)
-    .map((record) => record.path.replace(/^\//, '')));
-  const describedFiles = new Set(sealed.manifest.entries.filter((entry) => entry.kind === 'file').map((entry) => entry.path));
+  /* Named writes must reach their surviving path. A nameless write is
+   * retired only when fstat recorded zero links; otherwise its inode must
+   * occur in the fence. This also covers an unobserved hardlink alias. */
+  const writes = parseJournal(await readFile(ctx.journal))
+    .filter((record) => record.kind === 'W' && record.sequence <= first.cut);
+  const written = new Set(writes.filter((record) => record.path !== '').map((record) => record.path.replace(/^\//, '')));
+  const described = sealed.manifest.entries.filter((entry) => entry.kind === 'file');
+  const describedFiles = new Set(described.map((entry) => entry.path));
+  const describedInodes = new Set(described.map((entry) => entry.ino));
   const missed = [...written].filter((path) => !describedFiles.has(path) && existsSync(join(ctx.root, path)));
-  const retired = [...written].filter((path) => !describedFiles.has(path) && !existsSync(join(ctx.root, path)));
+  for (const record of writes) {
+    if (record.path !== '') continue;
+    const [ino, , , links] = record.aux.split(' ');
+    if (links !== '0' && !describedInodes.has(ino ?? '')) missed.push(`nameless inode ${ino} with ${links} links`);
+  }
   assert(checks, 'every-surviving-journaled-write-is-described', missed.length === 0,
-    `written=${written.size} described=${describedFiles.size} goneAtTheCut=${retired.length} ` +
-    `missed=${missed.slice(0, 5).join(',')}`);
+    `written=${writes.length} described=${describedFiles.size} missed=${missed.join(',')}`);
 
 }
 

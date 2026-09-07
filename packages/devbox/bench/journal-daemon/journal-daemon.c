@@ -33,7 +33,6 @@
 #define FUSE_USE_VERSION 317
 #define _GNU_SOURCE
 
-#include <fuse3/fuse.h>
 #include <fuse3/fuse_kernel.h>
 #include <fuse3/fuse_lowlevel.h>
 
@@ -41,7 +40,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <linux/openat2.h>
 #include <openssl/sha.h>
 #include <poll.h>
 #include <pthread.h>
@@ -60,6 +58,7 @@
 #include <sys/types.h>
 #include <sys/un.h>
 #include <sys/xattr.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "journal-delta.h"
@@ -83,24 +82,8 @@ _Static_assert(FUSE_DIRECT_IO_ALLOW_MMAP == (1ULL << 36), "unexpected FUSE ABI")
 
 typedef unsigned long long counter;
 
-enum record_kind { REC_INTENT, REC_RESULT, REC_WRITE, REC_FENCE, REC_RECOVER, REC_BASE, REC_HIDE, REC_UNHIDE };
-static const char *const record_names[] = {"INTENT", "RESULT", "W", "FENCE", "RECOVER", "BASE", "HIDE", "UNHIDE"};
-
-/* One inode with handles open through this daemon, and how many. */
-struct open_inode {
-  uint64_t ino;
-  unsigned handles;
-};
-
-/* One name libfuse hid: a file unlinked, or renamed over, while a handle was
- * open. The daemon recorded the caller's unlink; this is what it must remove
- * on the last release, or at the next start if the daemon died first. */
-struct hidden_name {
-  char path[PATH_CAP];
-  uint64_t ino;
-  uint64_t sequence;
-  uint64_t generation;
-};
+enum record_kind { REC_INTENT, REC_RESULT, REC_WRITE, REC_FENCE, REC_RECOVER, REC_BASE };
+static const char *const record_names[] = {"INTENT", "RESULT", "W", "FENCE", "RECOVER", "BASE"};
 
 struct flush_request {
   char line[RECORD_CAP];
@@ -125,7 +108,7 @@ struct journal {
   int wake_fd;
   char state_path[PATH_CAP];
   char socket_path[PATH_CAP];
-  struct fuse *fuse;
+  struct fuse_session *session;
   uint64_t sequence;
   uint64_t generation;
   uint64_t base_cut;
@@ -157,13 +140,6 @@ struct journal {
    * itself.  Both are the sidecar's to set and are read under `lock`. */
   uint64_t max_chunk;
   struct journal_boundaries boundaries;
-  /* Read under `lock`: the handles open per inode, and the names libfuse hid. */
-  struct open_inode *open_inodes;
-  size_t open_count;
-  size_t open_capacity;
-  struct hidden_name *hidden;
-  size_t hidden_count;
-  size_t hidden_capacity;
   pthread_mutex_t lock;       /* admission, sequence, generation, active, teardown */
   pthread_mutex_t queue_lock; /* record queue, counters */
   pthread_mutex_t wal_lock;   /* wal_fd identity and its appends */
@@ -178,79 +154,6 @@ struct journal {
 static struct journal state;
 
 static int neg_errno(void) { return errno == 0 ? -EIO : -errno; }
-
-/* ---------------------------------------------------------------- paths --- */
-
-/* FUSE paths are absolute names in the virtual namespace.  The backing store
- * only ever receives checked relative names under the retained root fd. */
-static int relative_path(const char *path, char out[PATH_CAP]) {
-  if (path == NULL || path[0] != '/') return -EINVAL;
-  const char *cursor = path + 1;
-  if (*cursor == '\0') {
-    out[0] = '\0';
-    return 0;
-  }
-  size_t used = 0;
-  while (*cursor != '\0') {
-    const char *start = cursor;
-    while (*cursor != '\0' && *cursor != '/') cursor++;
-    size_t part = (size_t)(cursor - start);
-    if (part == 0 || part > NAME_MAX) return -EPERM;
-    if (part == 1 && start[0] == '.') return -EPERM;
-    if (part == 2 && start[0] == '.' && start[1] == '.') return -EPERM;
-    if (used != 0) {
-      if (used + 1 >= PATH_CAP) return -ENAMETOOLONG;
-      out[used++] = '/';
-    }
-    if (used + part >= PATH_CAP) return -ENAMETOOLONG;
-    memcpy(out + used, start, part);
-    used += part;
-    if (*cursor == '/') cursor++;
-  }
-  out[used] = '\0';
-  return 0;
-}
-
-static int split_parent(const char *path, char parent[PATH_CAP], char name[NAME_MAX + 1]) {
-  char rel[PATH_CAP];
-  int rc = relative_path(path, rel);
-  if (rc != 0) return rc;
-  if (rel[0] == '\0') return -EBUSY;
-  char *slash = strrchr(rel, '/');
-  if (slash == NULL) {
-    parent[0] = '\0';
-    memcpy(name, rel, strlen(rel) + 1);
-    return 0;
-  }
-  *slash = '\0';
-  memcpy(name, slash + 1, strlen(slash + 1) + 1);
-  memcpy(parent, rel, strlen(rel) + 1);
-  return 0;
-}
-
-static int open_beneath(const char *rel, int flags, mode_t mode) {
-  struct open_how how = {
-    .flags = (uint64_t)(flags | O_CLOEXEC),
-    .mode = mode,
-    .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS,
-  };
-  const char *name = rel[0] == '\0' ? "." : rel;
-  long fd = syscall(SYS_openat2, state.root_fd, name, &how, sizeof(how));
-  return fd < 0 ? neg_errno() : (int)fd;
-}
-
-/* An O_PATH handle names any node, including a symlink, without traversing it. */
-static int open_node(const char *path) {
-  char rel[PATH_CAP];
-  int rc = relative_path(path, rel);
-  return rc != 0 ? rc : open_beneath(rel, O_PATH | O_NOFOLLOW, 0);
-}
-
-static int open_parent(const char *path, char name[NAME_MAX + 1]) {
-  char parent[PATH_CAP];
-  int rc = split_parent(path, parent, name);
-  return rc != 0 ? rc : open_beneath(parent, O_PATH | O_DIRECTORY, 0);
-}
 
 /* ------------------------------------------------------------- journal --- */
 
@@ -421,461 +324,6 @@ static int finish_mutation(struct mutation *m, const char *op, const char *path,
   return rc == 0 ? result : rc;
 }
 
-/* ------------------------------------------------------ open inodes ----- */
-
-/* Under `lock`. */
-static struct open_inode *find_open(uint64_t ino) {
-  for (size_t index = 0; index < state.open_count; index++) {
-    if (state.open_inodes[index].ino == ino) return &state.open_inodes[index];
-  }
-  return NULL;
-}
-
-static void note_open(int fd) {
-  struct stat st;
-  if (fstat(fd, &st) != 0) return;
-  pthread_mutex_lock(&state.lock);
-  struct open_inode *held = find_open((uint64_t)st.st_ino);
-  if (held != NULL) {
-    held->handles++;
-  } else {
-    if (state.open_count == state.open_capacity) {
-      size_t capacity = state.open_capacity == 0 ? 64 : state.open_capacity * 2;
-      struct open_inode *grown = realloc(state.open_inodes, capacity * sizeof(*grown));
-      if (grown != NULL) {
-        state.open_inodes = grown;
-        state.open_capacity = capacity;
-      }
-    }
-    if (state.open_count < state.open_capacity) {
-      state.open_inodes[state.open_count].ino = (uint64_t)st.st_ino;
-      state.open_inodes[state.open_count].handles = 1;
-      state.open_count++;
-    }
-  }
-  pthread_mutex_unlock(&state.lock);
-}
-
-static void note_release(int fd) {
-  struct stat st;
-  if (fstat(fd, &st) != 0) return;
-  pthread_mutex_lock(&state.lock);
-  struct open_inode *held = find_open((uint64_t)st.st_ino);
-  if (held != NULL && --held->handles == 0) {
-    *held = state.open_inodes[--state.open_count];
-  }
-  pthread_mutex_unlock(&state.lock);
-}
-
-static bool inode_is_open(uint64_t ino) {
-  pthread_mutex_lock(&state.lock);
-  bool open = find_open(ino) != NULL;
-  pthread_mutex_unlock(&state.lock);
-  return open;
-}
-
-/* ------------------------------------------------------ hidden names ----- */
-
-/* libfuse hides a file that is unlinked, or renamed over, while a handle is
- * open: it renames the node to `.fuse_hidden<nodeid:8 hex><counter:8 hex>`
- * in the same directory and unlinks that name on the last release. The
- * daemon recognises the hide by all three facts, the exact name shape, the
- * same parent, and an open handle on the source inode, and records it here.
- * A user unlink of a `.fuse_hidden` name the daemon never hid is an ordinary
- * journaled unlink. The one collision left is a caller that itself renames an
- * OPEN file to a same-directory name of exactly this shape: that rename is
- * indistinguishable from the hide and is journaled as an unlink. */
-static bool hide_shaped(const char *path) {
-  const char *slash = strrchr(path, '/');
-  const char *name = slash == NULL ? path : slash + 1;
-  if (strncmp(name, ".fuse_hidden", 12) != 0 || strlen(name) != 12 + 16) return false;
-  for (const char *p = name + 12; *p != '\0'; p++) {
-    if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f'))) return false;
-  }
-  return true;
-}
-
-static bool same_parent(const char *a, const char *b) {
-  const char *sa = strrchr(a, '/');
-  const char *sb = strrchr(b, '/');
-  size_t la = sa == NULL ? 0 : (size_t)(sa - a);
-  size_t lb = sb == NULL ? 0 : (size_t)(sb - b);
-  return la == lb && strncmp(a, b, la) == 0;
-}
-
-/* Under `lock`. */
-static struct hidden_name *find_hidden(const char *path) {
-  for (size_t index = 0; index < state.hidden_count; index++) {
-    if (strcmp(state.hidden[index].path, path) == 0) return &state.hidden[index];
-  }
-  return NULL;
-}
-
-/* Under `lock`. */
-static int remember_hidden(const char *path, uint64_t ino, uint64_t sequence, uint64_t generation) {
-  if (strlen(path) >= PATH_CAP) return -ENAMETOOLONG;
-  struct hidden_name *held = find_hidden(path);
-  if (held == NULL) {
-    if (state.hidden_count == state.hidden_capacity) {
-      size_t capacity = state.hidden_capacity == 0 ? 8 : state.hidden_capacity * 2;
-      struct hidden_name *grown = realloc(state.hidden, capacity * sizeof(*grown));
-      if (grown == NULL) return -ENOMEM;
-      state.hidden = grown;
-      state.hidden_capacity = capacity;
-    }
-    held = &state.hidden[state.hidden_count++];
-  }
-  memcpy(held->path, path, strlen(path) + 1);
-  held->ino = ino;
-  held->sequence = sequence;
-  held->generation = generation;
-  return 0;
-}
-
-/* Under `lock`. */
-static void forget_hidden(const char *path) {
-  struct hidden_name *held = find_hidden(path);
-  if (held == NULL) return;
-  *held = state.hidden[--state.hidden_count];
-}
-
-static int record_hide(const char *path, uint64_t ino, uint64_t sequence, uint64_t generation) {
-  char aux[32];
-  snprintf(aux, sizeof(aux), "%llu", (counter)ino);
-  pthread_mutex_lock(&state.lock);
-  int rc = remember_hidden(path, ino, sequence, generation);
-  pthread_mutex_unlock(&state.lock);
-  if (rc != 0) return rc;
-  return durable(REC_HIDE, sequence, generation, "hide", 0, path, aux);
-}
-
-static int record_unhide(const char *path, uint64_t ino, uint64_t sequence, uint64_t generation) {
-  char aux[32];
-  snprintf(aux, sizeof(aux), "%llu", (counter)ino);
-  pthread_mutex_lock(&state.lock);
-  forget_hidden(path);
-  pthread_mutex_unlock(&state.lock);
-  return durable(REC_UNHIDE, sequence, generation, "unhide", 0, path, aux);
-}
-
-/* The inode a backing path holds right now, or 0. */
-static uint64_t inode_at(const char *path) {
-  char rel[PATH_CAP];
-  if (relative_path(path, rel) != 0) return 0;
-  struct stat st;
-  if (fstatat(state.root_fd, rel[0] == '\0' ? "." : rel, &st, AT_SYMLINK_NOFOLLOW) != 0) return 0;
-  return (uint64_t)st.st_ino;
-}
-
-/* ----------------------------------------------------------- callbacks --- */
-
-struct dir_handle {
-  DIR *dp;
-  struct dirent *entry;
-  off_t offset;
-};
-
-static void *pass_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
-  cfg->use_ino = 1;
-  /* libfuse hides a file that is unlinked while a descriptor is open: the
-   * node is renamed to `.fuse_hiddenNNNN` and removed on the last release.
-   * `hard_remove` would make the unlink real, but the kernel sends GETATTR
-   * without a handle, so libfuse answers ESTALE to fstat on the nameless
-   * inode (measured 2026-09-06, sidecar-real-daemon-run.ts); `nullpath_ok`
-   * would hand every handle callback a NULL path and lose the name a W
-   * record binds its bytes to. Hiding stays. `pass_rename` and `pass_unlink`
-   * keep the hidden name out of the journal, so a fence never publishes it. */
-  /* The daemon is the only mutator of the backing root, so the kernel may hold
-   * a name and an attribute for thirty seconds; every change that invalidates
-   * one arrives through these callbacks.  Zero cost a round trip per path
-   * component: `small-stat-1k` measured 163.1 ms against 3.6 ms native
-   * (bench/measure-first/MEASUREMENTS.md, 2026-09-02). */
-  cfg->entry_timeout = 30;
-  cfg->attr_timeout = 30;
-  cfg->negative_timeout = 30;
-  /* The high level API owns conn->want; libfuse refuses a session that mixes it
-   * with the extended field. */
-  bool negotiated = (conn->capable & FUSE_CAP_DIRECT_IO_ALLOW_MMAP) != 0;
-  if (negotiated) conn->want |= FUSE_CAP_DIRECT_IO_ALLOW_MMAP;
-  /* Truncation then arrives inside the open that asked for it, in one round trip
-   * and on the one path the journal records. */
-  if ((conn->capable & FUSE_CAP_ATOMIC_O_TRUNC) != 0) conn->want |= FUSE_CAP_ATOMIC_O_TRUNC;
-  /* FUSE_CAP_PASSTHROUGH is deliberately NOT asked for, even where the kernel
-   * offers it.  Passthrough is a property of the INODE and it is exclusive: the
-   * kernel expects every open of an inode to be passthrough or none to be, so a
-   * read-only passthrough handle makes the next open(O_RDWR) of the same file
-   * fail with EIO, and a read-only open of a file another handle has mapped
-   * fails the same way.  Writes have to stay intercepted to reach a W record,
-   * so both handles exist on the same file and the mixture is unavoidable.
-   * Read-only opens therefore keep the PAGE CACHE, which is legal in every one
-   * of those mixtures, stays coherent with an intercepted write (the kernel
-   * drops the cached range), and is the faster of the two anyway: 601,647 4 KiB
-   * random reads/s against passthrough's 518,891 and 556,067 native
-   * (bench/measure-first/MEASUREMENTS.md, 2026-09-02). */
-  pthread_mutex_lock(&state.lock);
-  state.mmap_negotiated = negotiated;
-  pthread_mutex_unlock(&state.lock);
-  if (!negotiated) {
-    fprintf(stderr, "journal-daemon: kernel refuses FUSE_CAP_DIRECT_IO_ALLOW_MMAP\n");
-    kill(getpid(), SIGTERM);
-  }
-  return NULL;
-}
-
-static int pass_getattr(const char *path, struct stat *st, struct fuse_file_info *fi) {
-  if (fi != NULL) return fstat((int)fi->fh, st) == 0 ? 0 : neg_errno();
-  int fd = open_node(path);
-  if (fd < 0) return fd;
-  int rc = fstat(fd, st) == 0 ? 0 : neg_errno();
-  close(fd);
-  return rc;
-}
-
-static int pass_access(const char *path, int mask) {
-  int fd = open_node(path);
-  if (fd < 0) return fd;
-  long rc = syscall(SYS_faccessat2, fd, "", mask, AT_EACCESS | AT_EMPTY_PATH);
-  int out = rc == 0 ? 0 : neg_errno();
-  close(fd);
-  return out;
-}
-
-/* The backing tree is one filesystem, so its statistics come from the root fd
- * once the named node is proven to resolve beneath it. */
-static int pass_statfs(const char *path, struct statvfs *st) {
-  int fd = open_node(path);
-  if (fd < 0) return fd;
-  close(fd);
-  return fstatvfs(state.root_fd, st) == 0 ? 0 : neg_errno();
-}
-
-static int pass_readlink(const char *path, char *buffer, size_t size) {
-  if (size == 0) return -EINVAL;
-  int fd = open_node(path);
-  if (fd < 0) return fd;
-  ssize_t length = readlinkat(fd, "", buffer, size - 1);
-  int rc = length < 0 ? neg_errno() : 0;
-  if (length >= 0) buffer[length] = '\0';
-  close(fd);
-  return rc;
-}
-
-static int pass_opendir(const char *path, struct fuse_file_info *fi) {
-  char rel[PATH_CAP];
-  int rc = relative_path(path, rel);
-  if (rc != 0) return rc;
-  int fd = open_beneath(rel, O_RDONLY | O_DIRECTORY, 0);
-  if (fd < 0) return fd;
-  struct dir_handle *dir = calloc(1, sizeof(*dir));
-  if (dir == NULL) {
-    close(fd);
-    return -ENOMEM;
-  }
-  dir->dp = fdopendir(fd);
-  if (dir->dp == NULL) {
-    rc = neg_errno();
-    close(fd);
-    free(dir);
-    return rc;
-  }
-  fi->fh = (uint64_t)(uintptr_t)dir;
-  return 0;
-}
-
-static int pass_readdir(const char *path, void *buffer, fuse_fill_dir_t fill, off_t offset, struct fuse_file_info *fi,
-                        enum fuse_readdir_flags flags) {
-  (void)path;
-  struct dir_handle *dir = (struct dir_handle *)(uintptr_t)fi->fh;
-  if (offset != dir->offset) {
-    seekdir(dir->dp, offset);
-    dir->entry = NULL;
-    dir->offset = offset;
-  }
-  for (;;) {
-    if (dir->entry == NULL) {
-      errno = 0;
-      dir->entry = readdir(dir->dp);
-      if (dir->entry == NULL) return errno == 0 ? 0 : neg_errno();
-    }
-    struct stat st;
-    enum fuse_fill_dir_flags fill_flags = FUSE_FILL_DIR_DEFAULTS;
-    if ((flags & FUSE_READDIR_PLUS) != 0 &&
-        fstatat(dirfd(dir->dp), dir->entry->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-      fill_flags = FUSE_FILL_DIR_PLUS;
-    } else {
-      memset(&st, 0, sizeof(st));
-      st.st_ino = dir->entry->d_ino;
-      st.st_mode = (mode_t)(dir->entry->d_type << 12);
-    }
-    off_t next = telldir(dir->dp);
-    if (fill(buffer, dir->entry->d_name, &st, next, fill_flags) != 0) return 0;
-    dir->entry = NULL;
-    dir->offset = next;
-  }
-}
-
-static int pass_releasedir(const char *path, struct fuse_file_info *fi) {
-  (void)path;
-  struct dir_handle *dir = (struct dir_handle *)(uintptr_t)fi->fh;
-  int rc = closedir(dir->dp) == 0 ? 0 : neg_errno();
-  free(dir);
-  return rc;
-}
-
-static int pass_fsyncdir(const char *path, int datasync, struct fuse_file_info *fi) {
-  struct dir_handle *dir = (struct dir_handle *)(uintptr_t)fi->fh;
-  const char *op = datasync ? "fdatasyncdir" : "fsyncdir";
-  struct mutation m;
-  int rc = begin_mutation(op, path, "", &m);
-  if (rc != 0) return rc;
-  int fd = dirfd(dir->dp);
-  int result = (datasync ? fdatasync(fd) : fsync(fd)) == 0 ? 0 : neg_errno();
-  return finish_mutation(&m, op, path, "", result);
-}
-
-/* O_DIRECT alignment on the backing file is the daemon's concern, never the
- * caller's, so it is dropped while every other open flag is honoured. */
-static int open_handle(const char *path, int flags, struct fuse_file_info *fi) {
-  char rel[PATH_CAP];
-  int rc = relative_path(path, rel);
-  if (rc != 0) return rc;
-  int fd = open_beneath(rel, flags & ~O_DIRECT, 0);
-  if (fd < 0) return fd;
-  fi->fh = (uint64_t)fd;
-  note_open(fd);
-  /* A writable handle is direct: every byte it writes has to arrive here and
-   * reach a W record before it reaches the file.  A read-only handle keeps the
-   * page cache, so the daemon answers the first read of a range and none of the
-   * re-reads; an intercepted write drops the cached range, so the two handles
-   * stay coherent. */
-  bool writable = (flags & O_ACCMODE) != O_RDONLY;
-  fi->direct_io = writable ? 1 : 0;
-  fi->keep_cache = writable ? 0 : 1;
-  return 0;
-}
-
-/* With atomic truncation negotiated, an open carries the only record of a
- * mutation, so it is journaled exactly like an explicit truncate. */
-static int pass_open(const char *path, struct fuse_file_info *fi) {
-  if ((fi->flags & O_TRUNC) == 0) return open_handle(path, fi->flags, fi);
-  struct mutation m;
-  int rc = begin_mutation("open-truncate", path, "", &m);
-  if (rc != 0) return rc;
-  int result = open_handle(path, fi->flags, fi);
-  return finish_mutation(&m, "open-truncate", path, "", result);
-}
-
-static int pass_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
-  struct mutation m;
-  int rc = begin_mutation("create", path, "", &m);
-  if (rc != 0) return rc;
-  char name[NAME_MAX + 1];
-  int parent = open_parent(path, name);
-  int result = parent;
-  if (parent >= 0) {
-    int fd = openat(parent, name, (fi->flags & ~O_DIRECT) | O_CREAT | O_CLOEXEC, mode);
-    result = fd < 0 ? neg_errno() : 0;
-    if (fd >= 0) {
-      fi->fh = (uint64_t)fd;
-      fi->direct_io = 1;
-      note_open(fd);
-    }
-    close(parent);
-  }
-  return finish_mutation(&m, "create", path, "", result);
-}
-
-static int pass_release(const char *path, struct fuse_file_info *fi) {
-  (void)path;
-  note_release((int)fi->fh);
-  return close((int)fi->fh) == 0 ? 0 : neg_errno();
-}
-
-/* flush reports what close(2) would report; durability is fsync's job. */
-static int pass_flush(const char *path, struct fuse_file_info *fi) {
-  (void)path;
-  int copy = dup((int)fi->fh);
-  if (copy < 0) return neg_errno();
-  return close(copy) == 0 ? 0 : neg_errno();
-}
-
-static int pass_read(const char *path, char *buffer, size_t size, off_t offset, struct fuse_file_info *fi) {
-  (void)path;
-  atomic_fetch_add_explicit(&state.reads, 1, memory_order_relaxed);
-  ssize_t n = pread((int)fi->fh, buffer, size, offset);
-  return n < 0 ? neg_errno() : (int)n;
-}
-
-static int pass_write(const char *path, const char *buffer, size_t size, off_t offset, struct fuse_file_info *fi) {
-  struct stat st;
-  if (fstat((int)fi->fh, &st) != 0) return neg_errno();
-  struct mutation m;
-  int rc = begin_write((uint64_t)st.st_ino, (uint64_t)st.st_nlink, path, offset, size, &m);
-  if (rc != 0) return rc;
-  ssize_t n = pwrite((int)fi->fh, buffer, size, offset);
-  release_mutation(&m);
-  pthread_mutex_lock(&state.queue_lock);
-  state.writes++;
-  pthread_mutex_unlock(&state.queue_lock);
-  return n < 0 ? neg_errno() : (int)n;
-}
-
-/* A caller's fsync still flushes the file it named: that is the durability the
- * caller asked for, and it is the only sync left on a reply path. */
-static int pass_fsync(const char *path, int datasync, struct fuse_file_info *fi) {
-  const char *op = datasync ? "fdatasync" : "fsync";
-  struct mutation m;
-  int rc = begin_mutation(op, path, "", &m);
-  if (rc != 0) return rc;
-  int fd = (int)fi->fh;
-  int result = (datasync ? fdatasync(fd) : fsync(fd)) == 0 ? 0 : neg_errno();
-  pthread_mutex_lock(&state.queue_lock);
-  state.backing_fsyncs++;
-  pthread_mutex_unlock(&state.queue_lock);
-  return finish_mutation(&m, op, path, "", result);
-}
-
-static int pass_fallocate(const char *path, int mode, off_t offset, off_t length, struct fuse_file_info *fi) {
-  struct mutation m;
-  int rc = begin_mutation("fallocate", path, "", &m);
-  if (rc != 0) return rc;
-  int result = fallocate((int)fi->fh, mode, offset, length) == 0 ? 0 : neg_errno();
-  return finish_mutation(&m, "fallocate", path, "", result);
-}
-
-static off_t pass_lseek(const char *path, off_t offset, int whence, struct fuse_file_info *fi) {
-  (void)path;
-  off_t at = lseek((int)fi->fh, offset, whence);
-  return at < 0 ? neg_errno() : at;
-}
-
-/* A metadata change either uses the caller's handle or a fresh one opened
- * beneath the root; nothing resolves a path in the backing namespace twice. */
-static int handle_or_open(const char *path, struct fuse_file_info *fi, int flags) {
-  if (fi != NULL) return (int)fi->fh;
-  char rel[PATH_CAP];
-  int rc = relative_path(path, rel);
-  return rc != 0 ? rc : open_beneath(rel, flags, 0);
-}
-
-/* A metadata record carries the argument its replay needs: the delta manifest
- * describes the tree at the cut, and the operation list says how it got there. */
-static int pass_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
-  char aux[32];
-  if (snprintf(aux, sizeof(aux), "%llu", (counter)size) >= (int)sizeof(aux)) return -ENAMETOOLONG;
-  struct mutation m;
-  int rc = begin_mutation("truncate", path, aux, &m);
-  if (rc != 0) return rc;
-  int fd = handle_or_open(path, fi, O_WRONLY);
-  int result = fd < 0 ? fd : (ftruncate(fd, size) == 0 ? 0 : neg_errno());
-  if (fi == NULL && fd >= 0) close(fd);
-  return finish_mutation(&m, "truncate", path, aux, result);
-}
-
-static int reject_root_metadata(const char *path) {
-  return strcmp(path, "/") == 0 ? -EOPNOTSUPP : 0;
-}
-
 static bool valid_utf8(const char *text) {
   const unsigned char *p = (const unsigned char *)text;
   while (*p != '\0') {
@@ -920,304 +368,1244 @@ static bool valid_utf8(const char *text) {
   return true;
 }
 
-static int pass_chmod(const char *path, mode_t mode, struct fuse_file_info *fi) {
-  int root = reject_root_metadata(path);
-  if (root != 0) return root;
-  char aux[16];
-  if (snprintf(aux, sizeof(aux), "%u", (unsigned)(mode & 07777)) >= (int)sizeof(aux)) return -ENAMETOOLONG;
-  struct mutation m;
-  int rc = begin_mutation("chmod", path, aux, &m);
-  if (rc != 0) return rc;
-  int fd = handle_or_open(path, fi, O_RDONLY | O_NOFOLLOW);
-  int result = fd < 0 ? fd : (fchmod(fd, mode) == 0 ? 0 : neg_errno());
-  if (fi == NULL && fd >= 0) close(fd);
-  return finish_mutation(&m, "chmod", path, aux, result);
-}
+/* ----------------------------------------------------------- inodes ------- */
 
-static int pass_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi) {
-  int root = reject_root_metadata(path);
-  if (root != 0) return root;
-  char aux[32];
-  if (snprintf(aux, sizeof(aux), "%u %u", (unsigned)uid, (unsigned)gid) >= (int)sizeof(aux)) return -ENAMETOOLONG;
-  struct mutation m;
-  int rc = begin_mutation("chown", path, aux, &m);
-  if (rc != 0) return rc;
-  int result;
-  if (fi != NULL) {
-    result = fchown((int)fi->fh, uid, gid) == 0 ? 0 : neg_errno();
-  } else {
-    char name[NAME_MAX + 1];
-    int parent = open_parent(path, name);
-    result = parent < 0 ? parent : (fchownat(parent, name, uid, gid, AT_SYMLINK_NOFOLLOW) == 0 ? 0 : neg_errno());
-    if (parent >= 0) close(parent);
-  }
-  return finish_mutation(&m, "chown", path, aux, result);
-}
-
-static int pass_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi) {
-  int root = reject_root_metadata(path);
-  if (root != 0) return root;
-  char aux[64];
-  if (snprintf(aux, sizeof(aux), "%llu %llu",
-               (counter)((uint64_t)tv[0].tv_sec * 1000000000ULL + (uint64_t)tv[0].tv_nsec),
-               (counter)((uint64_t)tv[1].tv_sec * 1000000000ULL + (uint64_t)tv[1].tv_nsec)) >= (int)sizeof(aux)) {
-    return -ENAMETOOLONG;
-  }
-  struct mutation m;
-  int rc = begin_mutation("utimens", path, aux, &m);
-  if (rc != 0) return rc;
-  int result;
-  if (fi != NULL) {
-    result = futimens((int)fi->fh, tv) == 0 ? 0 : neg_errno();
-  } else {
-    char name[NAME_MAX + 1];
-    int parent = open_parent(path, name);
-    result = parent < 0 ? parent : (utimensat(parent, name, tv, AT_SYMLINK_NOFOLLOW) == 0 ? 0 : neg_errno());
-    if (parent >= 0) close(parent);
-  }
-  return finish_mutation(&m, "utimens", path, aux, result);
-}
-
-static int pass_mkdir(const char *path, mode_t mode) {
-  struct mutation m;
-  int rc = begin_mutation("mkdir", path, "", &m);
-  if (rc != 0) return rc;
+/*
+ * The mount is served by the low-level API, so every operation names an
+ * inode the daemon holds an O_PATH handle on, never a path it has to resolve
+ * again. That is what makes an unlink an unlink: the name goes, the handle
+ * stays, and a descriptor a caller still holds keeps reading, writing,
+ * fstat-ing and fsync-ing the inode until it closes. The high-level API
+ * could not do this: it either renamed the open file to `.fuse_hiddenNNNN`
+ * (a name the journal and a fence would then see) or, with `hard_remove`,
+ * answered ESTALE to fstat because the kernel sends GETATTR without a handle
+ * (measured 2026-09-06, sidecar-real-daemon-run.ts).
+ *
+ * One node per backing inode, found by (dev, ino), so two hardlink names
+ * are one node. A node remembers every name it was reached by this boot; the
+ * first is its canonical name, and that is the path the journal records for
+ * an operation that arrives by inode rather than by name. An operation that
+ * arrives by (parent, name) is journaled under exactly that name.
+ */
+struct node_name {
+  fuse_ino_t parent;
   char name[NAME_MAX + 1];
-  int parent = open_parent(path, name);
-  int result = parent < 0 ? parent : (mkdirat(parent, name, mode) == 0 ? 0 : neg_errno());
-  if (parent >= 0) close(parent);
-  return finish_mutation(&m, "mkdir", path, "", result);
+};
+
+struct node {
+  fuse_ino_t id;
+  uint64_t generation;
+  int fd; /* O_PATH */
+  dev_t dev;
+  ino_t ino;
+  uint64_t nlookup;
+  /* Children that name this node as a parent keep it resident. */
+  uint64_t children;
+  struct node_name *names;
+  size_t name_count;
+  size_t name_capacity;
+  struct node *hash_next;
+  bool live;
+};
+
+#define NODE_HASH 4096
+/* The daemon is the only mutator of the backing root, so the kernel may hold
+ * a name and an attribute for thirty seconds; every change that invalidates
+ * one arrives through these callbacks.  Zero cost a round trip per path
+ * component: `small-stat-1k` measured 163.1 ms against 3.6 ms native
+ * (bench/measure-first/MEASUREMENTS.md, 2026-09-02). */
+#define ATTR_TIMEOUT_SECONDS 30.0
+
+static struct {
+  struct node **table; /* by id; 0 unused, 1 the root */
+  size_t count;
+  size_t capacity;
+  fuse_ino_t *free_ids;
+  size_t free_count;
+  size_t free_capacity;
+  uint64_t generation;
+  struct node *hash[NODE_HASH];
+  pthread_mutex_t lock;
+} nodes;
+
+static size_t node_slot(dev_t dev, ino_t ino) {
+  return (size_t)(((uint64_t)ino * 0x9e3779b97f4a7c15ULL) ^ (uint64_t)dev) % NODE_HASH;
 }
 
-static int pass_mknod(const char *path, mode_t mode, dev_t rdev) {
-  struct mutation m;
-  int rc = begin_mutation("mknod", path, "", &m);
+/* Under `nodes.lock`. */
+static struct node *node_by_id(fuse_ino_t id) {
+  if (id == 0 || id >= nodes.count) return NULL;
+  struct node *node = nodes.table[id];
+  return node != NULL && node->live ? node : NULL;
+}
+
+/* Under `nodes.lock`. */
+static struct node *node_by_identity(dev_t dev, ino_t ino) {
+  for (struct node *node = nodes.hash[node_slot(dev, ino)]; node != NULL; node = node->hash_next) {
+    if (node->live && node->dev == dev && node->ino == ino) return node;
+  }
+  return NULL;
+}
+
+/* Under `nodes.lock`. Takes ownership of `fd`. */
+static struct node *node_insert(int fd, const struct stat *st) {
+  struct node *node = calloc(1, sizeof(*node));
+  if (node == NULL) return NULL;
+  fuse_ino_t id;
+  if (nodes.free_count > 0) {
+    id = nodes.free_ids[--nodes.free_count];
+  } else {
+    if (nodes.count == nodes.capacity) {
+      size_t capacity = nodes.capacity == 0 ? 1024 : nodes.capacity * 2;
+      struct node **grown = realloc(nodes.table, capacity * sizeof(*grown));
+      if (grown == NULL) {
+        free(node);
+        return NULL;
+      }
+      nodes.table = grown;
+      nodes.capacity = capacity;
+    }
+    if (nodes.count == 0) nodes.count = 1; /* id 0 is never a node */
+    id = nodes.count++;
+  }
+  node->id = id;
+  node->generation = ++nodes.generation;
+  node->fd = fd;
+  node->dev = st->st_dev;
+  node->ino = st->st_ino;
+  node->live = true;
+  size_t slot = node_slot(st->st_dev, st->st_ino);
+  node->hash_next = nodes.hash[slot];
+  nodes.hash[slot] = node;
+  nodes.table[id] = node;
+  return node;
+}
+
+/* Under `nodes.lock`. */
+static void node_unhash(struct node *node) {
+  size_t slot = node_slot(node->dev, node->ino);
+  struct node **cursor = &nodes.hash[slot];
+  while (*cursor != NULL) {
+    if (*cursor == node) {
+      *cursor = node->hash_next;
+      return;
+    }
+    cursor = &(*cursor)->hash_next;
+  }
+}
+
+/* Under `nodes.lock`. The kernel forgot the node and no child names it. */
+static void node_free(struct node *node) {
+  node_unhash(node);
+  nodes.table[node->id] = NULL;
+  node->live = false;
+  if (nodes.free_count == nodes.free_capacity) {
+    size_t capacity = nodes.free_capacity == 0 ? 256 : nodes.free_capacity * 2;
+    fuse_ino_t *grown = realloc(nodes.free_ids, capacity * sizeof(*grown));
+    if (grown != NULL) {
+      nodes.free_ids = grown;
+      nodes.free_capacity = capacity;
+    }
+  }
+  if (nodes.free_count < nodes.free_capacity) nodes.free_ids[nodes.free_count++] = node->id;
+  for (size_t index = 0; index < node->name_count; index++) {
+    struct node *parent = node_by_id(node->names[index].parent);
+    if (parent != NULL && parent->children > 0 && --parent->children == 0 && parent->nlookup == 0
+        && parent->id != FUSE_ROOT_ID) {
+      node_free(parent);
+    }
+  }
+  free(node->names);
+  close(node->fd);
+  free(node);
+}
+
+/* Under `nodes.lock`. Remember one name a node was reached by. */
+static int node_add_name(struct node *node, fuse_ino_t parent, const char *name) {
+  for (size_t index = 0; index < node->name_count; index++) {
+    if (node->names[index].parent == parent && strcmp(node->names[index].name, name) == 0) return 0;
+  }
+  if (node->name_count == node->name_capacity) {
+    size_t capacity = node->name_capacity == 0 ? 1 : node->name_capacity * 2;
+    struct node_name *grown = realloc(node->names, capacity * sizeof(*grown));
+    if (grown == NULL) return -ENOMEM;
+    node->names = grown;
+    node->name_capacity = capacity;
+  }
+  struct node_name *entry = &node->names[node->name_count++];
+  entry->parent = parent;
+  memcpy(entry->name, name, strlen(name) + 1);
+  struct node *above = node_by_id(parent);
+  if (above != NULL) above->children++;
+  return 0;
+}
+
+/* Under `nodes.lock`. A name is gone: an unlink, or the source of a rename. */
+static void node_drop_name(struct node *node, fuse_ino_t parent, const char *name) {
+  for (size_t index = 0; index < node->name_count; index++) {
+    if (node->names[index].parent != parent || strcmp(node->names[index].name, name) != 0) continue;
+    memmove(node->names + index, node->names + index + 1, (node->name_count - index - 1) * sizeof(*node->names));
+    node->name_count--;
+    struct node *above = node_by_id(parent);
+    if (above != NULL && above->children > 0) above->children--;
+    return;
+  }
+}
+
+/* Under `nodes.lock`. The absolute FUSE path of a node by its canonical
+ * name, the spelling every journal record carries. A node with no name left
+ * (its last name was unlinked while a handle stayed open) has no path, and
+ * an operation on it is journaled as nothing: no name at the cut can carry
+ * the change. */
+static int node_path(const struct node *node, char out[PATH_CAP]) {
+  if (node->id == FUSE_ROOT_ID) {
+    out[0] = '/';
+    out[1] = '\0';
+    return 0;
+  }
+  if (node->name_count == 0) return -ENOENT;
+  char parent_path[PATH_CAP];
+  struct node *parent = node_by_id(node->names[0].parent);
+  if (parent == NULL) return -ESTALE;
+  int rc = node_path(parent, parent_path);
   if (rc != 0) return rc;
-  char name[NAME_MAX + 1];
-  int parent = open_parent(path, name);
-  int result = parent;
-  if (parent >= 0) {
+  int written = parent->id == FUSE_ROOT_ID
+    ? snprintf(out, PATH_CAP, "/%s", node->names[0].name)
+    : snprintf(out, PATH_CAP, "%s/%s", parent_path, node->names[0].name);
+  return written < 0 || written >= PATH_CAP ? -ENAMETOOLONG : 0;
+}
+
+/* The canonical path of an inode, or -ENOENT for a nameless one. */
+static int path_of_inode(fuse_ino_t id, char out[PATH_CAP]) {
+  pthread_mutex_lock(&nodes.lock);
+  struct node *node = node_by_id(id);
+  int rc = node == NULL ? -ESTALE : node_path(node, out);
+  pthread_mutex_unlock(&nodes.lock);
+  return rc;
+}
+
+/* The path of a name under a parent: what a caller spelled. */
+static int path_of_name(fuse_ino_t parent, const char *name, char out[PATH_CAP]) {
+  char parent_path[PATH_CAP];
+  int rc = path_of_inode(parent, parent_path);
+  if (rc != 0) return rc;
+  int written = parent == FUSE_ROOT_ID
+    ? snprintf(out, PATH_CAP, "/%s", name)
+    : snprintf(out, PATH_CAP, "%s/%s", parent_path, name);
+  return written < 0 || written >= PATH_CAP ? -ENAMETOOLONG : 0;
+}
+
+/* The O_PATH handle of an inode, or -1. The handle lives as long as the
+ * node, which the kernel's lookup count and the node's children keep. */
+static int fd_of(fuse_ino_t id) {
+  pthread_mutex_lock(&nodes.lock);
+  struct node *node = node_by_id(id);
+  int fd = node == NULL ? -1 : node->fd;
+  pthread_mutex_unlock(&nodes.lock);
+  return fd;
+}
+
+static bool acceptable_name(const char *name) {
+  if (name[0] == '\0' || strchr(name, '/') != NULL) return false;
+  if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) return false;
+  return strlen(name) <= NAME_MAX;
+}
+
+/* Resolve one name under a parent into a node, counting the kernel's lookup.
+ * A backing entry that is already a node gets one more name and one more
+ * lookup; a new one gets a node of its own. */
+static int lookup_node(fuse_ino_t parent, const char *name, struct fuse_entry_param *entry) {
+  if (!acceptable_name(name)) return -EPERM;
+  int parent_fd = fd_of(parent);
+  if (parent_fd < 0) return -ESTALE;
+  int fd = openat(parent_fd, name, O_PATH | O_NOFOLLOW | O_CLOEXEC);
+  if (fd < 0) return neg_errno();
+  struct stat st;
+  if (fstatat(fd, "", &st, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) != 0) {
+    int rc = neg_errno();
+    close(fd);
+    return rc;
+  }
+  pthread_mutex_lock(&nodes.lock);
+  struct node *node = node_by_identity(st.st_dev, st.st_ino);
+  if (node != NULL) {
+    close(fd);
+  } else {
+    node = node_insert(fd, &st);
+    if (node == NULL) {
+      pthread_mutex_unlock(&nodes.lock);
+      close(fd);
+      return -ENOMEM;
+    }
+  }
+  int rc = node_add_name(node, parent, name);
+  if (rc == 0) node->nlookup++;
+  memset(entry, 0, sizeof(*entry));
+  entry->ino = node->id;
+  entry->generation = node->generation;
+  entry->attr = st;
+  entry->attr_timeout = ATTR_TIMEOUT_SECONDS;
+  entry->entry_timeout = ATTR_TIMEOUT_SECONDS;
+  pthread_mutex_unlock(&nodes.lock);
+  return rc;
+}
+
+static void forget_node(fuse_ino_t id, uint64_t count) {
+  pthread_mutex_lock(&nodes.lock);
+  struct node *node = node_by_id(id);
+  if (node != NULL && node->id != FUSE_ROOT_ID) {
+    node->nlookup = count >= node->nlookup ? 0 : node->nlookup - count;
+    if (node->nlookup == 0 && node->children == 0) node_free(node);
+  }
+  pthread_mutex_unlock(&nodes.lock);
+}
+
+/* ----------------------------------------------------------- callbacks --- */
+
+static void reply_errno(fuse_req_t req, int rc) {
+  fuse_reply_err(req, rc < 0 ? -rc : rc);
+}
+
+static void ll_init(void *userdata, struct fuse_conn_info *conn) {
+  (void)userdata;
+  bool negotiated = (conn->capable & FUSE_CAP_DIRECT_IO_ALLOW_MMAP) != 0;
+  if (negotiated) fuse_set_feature_flag(conn, FUSE_CAP_DIRECT_IO_ALLOW_MMAP);
+  /* Truncation then arrives inside the open that asked for it, in one round trip
+   * and on the one path the journal records. */
+  if ((conn->capable & FUSE_CAP_ATOMIC_O_TRUNC) != 0) fuse_set_feature_flag(conn, FUSE_CAP_ATOMIC_O_TRUNC);
+  /* FUSE_CAP_PASSTHROUGH is deliberately NOT asked for, even where the kernel
+   * offers it.  Passthrough is a property of the INODE and it is exclusive: the
+   * kernel expects every open of an inode to be passthrough or none to be, so a
+   * read-only passthrough handle makes the next open(O_RDWR) of the same file
+   * fail with EIO, and a read-only open of a file another handle has mapped
+   * fails the same way.  Writes have to stay intercepted to reach a W record,
+   * so both handles exist on the same file and the mixture is unavoidable.
+   * Read-only opens therefore keep the PAGE CACHE, which is legal in every one
+   * of those mixtures, stays coherent with an intercepted write (the kernel
+   * drops the cached range), and is the faster of the two anyway: 601,647 4 KiB
+   * random reads/s against passthrough's 518,891 and 556,067 native
+   * (bench/measure-first/MEASUREMENTS.md, 2026-09-02). */
+  pthread_mutex_lock(&state.lock);
+  state.mmap_negotiated = negotiated;
+  pthread_mutex_unlock(&state.lock);
+  if (!negotiated) {
+    fprintf(stderr, "journal-daemon: kernel refuses FUSE_CAP_DIRECT_IO_ALLOW_MMAP\n");
+    kill(getpid(), SIGTERM);
+  }
+}
+
+static void ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
+  struct fuse_entry_param entry;
+  int rc = lookup_node(parent, name, &entry);
+  if (rc == -ENOENT) {
+    /* A negative entry the kernel may keep for the same window as a positive one. */
+    memset(&entry, 0, sizeof(entry));
+    entry.entry_timeout = ATTR_TIMEOUT_SECONDS;
+    fuse_reply_entry(req, &entry);
+    return;
+  }
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  fuse_reply_entry(req, &entry);
+}
+
+static void ll_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
+  forget_node(ino, nlookup);
+  fuse_reply_none(req);
+}
+
+static void ll_forget_multi(fuse_req_t req, size_t count, struct fuse_forget_data *forgets) {
+  for (size_t index = 0; index < count; index++) forget_node(forgets[index].ino, forgets[index].nlookup);
+  fuse_reply_none(req);
+}
+
+static void ll_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+  struct stat st;
+  int rc;
+  if (fi != NULL) {
+    rc = fstat((int)fi->fh, &st) == 0 ? 0 : neg_errno();
+  } else {
+    int fd = fd_of(ino);
+    rc = fd < 0 ? -ESTALE : (fstatat(fd, "", &st, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) == 0 ? 0 : neg_errno());
+  }
+  if (rc != 0) reply_errno(req, rc);
+  else fuse_reply_attr(req, &st, ATTR_TIMEOUT_SECONDS);
+}
+
+/* Reopen an O_PATH handle with real access, through the kernel's own magic
+ * link, which resolves the inode and not any name. */
+static int reopen(int path_fd, int flags) {
+  char procname[64];
+  snprintf(procname, sizeof(procname), "/proc/self/fd/%d", path_fd);
+  int fd = open(procname, (flags & ~(O_NOFOLLOW | O_DIRECT)) | O_CLOEXEC);
+  return fd < 0 ? neg_errno() : fd;
+}
+
+/* One journaled metadata change on an inode, by its canonical path. A nameless
+ * inode's change is admitted and applied but journaled as nothing: no name at
+ * the cut can describe it. */
+static int inode_mutation(fuse_ino_t ino, const char *op, const char *aux, struct mutation *m, bool *journaled,
+                          char path[PATH_CAP]) {
+  int rc = path_of_inode(ino, path);
+  if (rc == -ENOENT) {
+    *journaled = false;
+    return admit_mutation(m);
+  }
+  if (rc != 0) return rc;
+  *journaled = true;
+  return begin_mutation(op, path, aux, m);
+}
+
+static int end_inode_mutation(struct mutation *m, bool journaled, const char *op, const char *path, const char *aux,
+                              int result) {
+  if (!journaled) {
+    release_mutation(m);
+    return result;
+  }
+  return finish_mutation(m, op, path, aux, result);
+}
+
+static void ll_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *fi) {
+  int fd = fd_of(ino);
+  if (fd < 0) {
+    reply_errno(req, -ESTALE);
+    return;
+  }
+  if (ino == FUSE_ROOT_ID && (to_set & (FUSE_SET_ATTR_MODE | FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID
+                                        | FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME)) != 0) {
+    reply_errno(req, -EOPNOTSUPP);
+    return;
+  }
+  char path[PATH_CAP];
+  char procname[64];
+  snprintf(procname, sizeof(procname), "/proc/self/fd/%d", fd);
+  if ((to_set & FUSE_SET_ATTR_MODE) != 0) {
+    char aux[16];
+    snprintf(aux, sizeof(aux), "%u", (unsigned)(attr->st_mode & 07777));
+    struct mutation m;
+    bool journaled;
+    int rc = inode_mutation(ino, "chmod", aux, &m, &journaled, path);
+    if (rc != 0) {
+      reply_errno(req, rc);
+      return;
+    }
+    int result = (fi != NULL ? fchmod((int)fi->fh, attr->st_mode) : chmod(procname, attr->st_mode)) == 0
+      ? 0 : neg_errno();
+    result = end_inode_mutation(&m, journaled, "chmod", path, aux, result);
+    if (result != 0) {
+      reply_errno(req, result);
+      return;
+    }
+  }
+  if ((to_set & (FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID)) != 0) {
+    uid_t uid = (to_set & FUSE_SET_ATTR_UID) != 0 ? attr->st_uid : (uid_t)-1;
+    gid_t gid = (to_set & FUSE_SET_ATTR_GID) != 0 ? attr->st_gid : (gid_t)-1;
+    char aux[32];
+    snprintf(aux, sizeof(aux), "%u %u", (unsigned)uid, (unsigned)gid);
+    struct mutation m;
+    bool journaled;
+    int rc = inode_mutation(ino, "chown", aux, &m, &journaled, path);
+    if (rc != 0) {
+      reply_errno(req, rc);
+      return;
+    }
+    int result = fchownat(fd, "", uid, gid, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) == 0 ? 0 : neg_errno();
+    result = end_inode_mutation(&m, journaled, "chown", path, aux, result);
+    if (result != 0) {
+      reply_errno(req, result);
+      return;
+    }
+  }
+  if ((to_set & FUSE_SET_ATTR_SIZE) != 0) {
+    char aux[32];
+    snprintf(aux, sizeof(aux), "%llu", (counter)attr->st_size);
+    struct mutation m;
+    bool journaled;
+    int rc = inode_mutation(ino, "truncate", aux, &m, &journaled, path);
+    if (rc != 0) {
+      reply_errno(req, rc);
+      return;
+    }
+    int result = (fi != NULL ? ftruncate((int)fi->fh, attr->st_size) : truncate(procname, attr->st_size)) == 0
+      ? 0 : neg_errno();
+    result = end_inode_mutation(&m, journaled, "truncate", path, aux, result);
+    if (result != 0) {
+      reply_errno(req, result);
+      return;
+    }
+  }
+  if ((to_set & (FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME)) != 0) {
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    struct timespec tv[2];
+    tv[0].tv_sec = 0;
+    tv[0].tv_nsec = UTIME_OMIT;
+    tv[1].tv_sec = 0;
+    tv[1].tv_nsec = UTIME_OMIT;
+    if ((to_set & FUSE_SET_ATTR_ATIME_NOW) != 0) tv[0] = now;
+    else if ((to_set & FUSE_SET_ATTR_ATIME) != 0) tv[0] = attr->st_atim;
+    if ((to_set & FUSE_SET_ATTR_MTIME_NOW) != 0) tv[1] = now;
+    else if ((to_set & FUSE_SET_ATTR_MTIME) != 0) tv[1] = attr->st_mtim;
+    /* The record carries the times the tree will show, so an omitted one is
+     * read from the inode rather than spelled as the OMIT sentinel. */
+    struct stat st;
+    if (fstatat(fd, "", &st, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) != 0) {
+      reply_errno(req, neg_errno());
+      return;
+    }
+    struct timespec shown[2] = {
+      tv[0].tv_nsec == UTIME_OMIT ? st.st_atim : tv[0],
+      tv[1].tv_nsec == UTIME_OMIT ? st.st_mtim : tv[1],
+    };
+    char aux[64];
+    if (snprintf(aux, sizeof(aux), "%llu %llu",
+                 (counter)((uint64_t)shown[0].tv_sec * 1000000000ULL + (uint64_t)shown[0].tv_nsec),
+                 (counter)((uint64_t)shown[1].tv_sec * 1000000000ULL + (uint64_t)shown[1].tv_nsec)) >= (int)sizeof(aux)) {
+      reply_errno(req, -ENAMETOOLONG);
+      return;
+    }
+    struct mutation m;
+    bool journaled;
+    int rc = inode_mutation(ino, "utimens", aux, &m, &journaled, path);
+    if (rc != 0) {
+      reply_errno(req, rc);
+      return;
+    }
+    int result;
+    if (fi != NULL) result = futimens((int)fi->fh, tv) == 0 ? 0 : neg_errno();
+    else result = utimensat(fd, "", tv, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) == 0 ? 0 : neg_errno();
+    result = end_inode_mutation(&m, journaled, "utimens", path, aux, result);
+    if (result != 0) {
+      reply_errno(req, result);
+      return;
+    }
+  }
+  ll_getattr(req, ino, fi);
+}
+
+static void ll_readlink(fuse_req_t req, fuse_ino_t ino) {
+  int fd = fd_of(ino);
+  if (fd < 0) {
+    reply_errno(req, -ESTALE);
+    return;
+  }
+  char buffer[PATH_CAP];
+  ssize_t length = readlinkat(fd, "", buffer, sizeof(buffer) - 1);
+  if (length < 0) {
+    reply_errno(req, neg_errno());
+    return;
+  }
+  buffer[length] = '\0';
+  fuse_reply_readlink(req, buffer);
+}
+
+static void ll_access(fuse_req_t req, fuse_ino_t ino, int mask) {
+  int fd = fd_of(ino);
+  if (fd < 0) {
+    reply_errno(req, -ESTALE);
+    return;
+  }
+  long rc = syscall(SYS_faccessat2, fd, "", mask, AT_EACCESS | AT_EMPTY_PATH);
+  reply_errno(req, rc == 0 ? 0 : neg_errno());
+}
+
+/* The backing tree is one filesystem, so its statistics come from the root fd
+ * once the named node is proven to resolve beneath it. */
+static void ll_statfs(fuse_req_t req, fuse_ino_t ino) {
+  if (fd_of(ino) < 0) {
+    reply_errno(req, -ESTALE);
+    return;
+  }
+  struct statvfs st;
+  if (fstatvfs(state.root_fd, &st) != 0) reply_errno(req, neg_errno());
+  else fuse_reply_statfs(req, &st);
+}
+
+/* A new entry under a parent: journaled under the name the caller spelled,
+ * then looked up so the kernel gets its node. */
+static void reply_created(fuse_req_t req, fuse_ino_t parent, const char *name, int result,
+                          struct fuse_file_info *fi) {
+  if (result != 0) {
+    reply_errno(req, result);
+    return;
+  }
+  struct fuse_entry_param entry;
+  int rc = lookup_node(parent, name, &entry);
+  if (rc != 0) {
+    if (fi != NULL) close((int)fi->fh);
+    reply_errno(req, rc);
+    return;
+  }
+  if (fi != NULL) fuse_reply_create(req, &entry, fi);
+  else fuse_reply_entry(req, &entry);
+}
+
+static void ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev) {
+  char path[PATH_CAP];
+  int rc = acceptable_name(name) ? path_of_name(parent, name, path) : -EPERM;
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  struct mutation m;
+  rc = begin_mutation("mknod", path, "", &m);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  int parent_fd = fd_of(parent);
+  int result = parent_fd < 0 ? -ESTALE : 0;
+  if (result == 0) {
     if (S_ISREG(mode)) {
-      int fd = openat(parent, name, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode);
+      int fd = openat(parent_fd, name, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode);
       result = fd < 0 ? neg_errno() : 0;
       if (fd >= 0) close(fd);
     } else {
-      result = mknodat(parent, name, mode, rdev) == 0 ? 0 : neg_errno();
+      result = mknodat(parent_fd, name, mode, rdev) == 0 ? 0 : neg_errno();
     }
-    close(parent);
   }
-  return finish_mutation(&m, "mknod", path, "", result);
+  reply_created(req, parent, name, finish_mutation(&m, "mknod", path, "", result), NULL);
 }
 
-static int remove_entry(const char *op, const char *path, int flags) {
+static void ll_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode) {
+  char path[PATH_CAP];
+  int rc = acceptable_name(name) ? path_of_name(parent, name, path) : -EPERM;
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
   struct mutation m;
-  int rc = begin_mutation(op, path, "", &m);
-  if (rc != 0) return rc;
-  char name[NAME_MAX + 1];
-  int parent = open_parent(path, name);
-  int result = parent < 0 ? parent : (unlinkat(parent, name, flags) == 0 ? 0 : neg_errno());
-  if (parent >= 0) close(parent);
-  return finish_mutation(&m, op, path, "", result);
+  rc = begin_mutation("mkdir", path, "", &m);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  int parent_fd = fd_of(parent);
+  int result = parent_fd < 0 ? -ESTALE : (mkdirat(parent_fd, name, mode) == 0 ? 0 : neg_errno());
+  reply_created(req, parent, name, finish_mutation(&m, "mkdir", path, "", result), NULL);
 }
 
-/* The last release of a hidden name: libfuse unlinks the name it hid. The
- * caller's unlink was journaled at the hide, so this removal is admitted,
- * performed and recorded as the end of the hide, and journaled as nothing
- * else. An unlink of any other name, whatever it looks like, is ordinary. */
-static int pass_unlink(const char *path) {
-  pthread_mutex_lock(&state.lock);
-  struct hidden_name *hidden = find_hidden(path);
-  uint64_t ino = hidden == NULL ? 0 : hidden->ino;
-  pthread_mutex_unlock(&state.lock);
-  if (hidden == NULL || inode_at(path) != ino) return remove_entry("unlink", path, 0);
+static void ll_symlink(fuse_req_t req, const char *target, fuse_ino_t parent, const char *name) {
+  char path[PATH_CAP];
+  int rc = acceptable_name(name) ? path_of_name(parent, name, path) : -EPERM;
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
   struct mutation m;
-  int rc = admit_mutation(&m);
-  if (rc != 0) return rc;
-  char name[NAME_MAX + 1];
-  int parent = open_parent(path, name);
-  int result = parent < 0 ? parent : (unlinkat(parent, name, 0) == 0 ? 0 : neg_errno());
-  if (parent >= 0) close(parent);
+  rc = begin_mutation("symlink", path, target, &m);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  int parent_fd = fd_of(parent);
+  int result = parent_fd < 0 ? -ESTALE : (symlinkat(target, parent_fd, name) == 0 ? 0 : neg_errno());
+  reply_created(req, parent, name, finish_mutation(&m, "symlink", path, target, result), NULL);
+}
+
+/* The name goes and the node stays: a handle still open keeps the inode. */
+static void remove_name(fuse_req_t req, const char *op, fuse_ino_t parent, const char *name, int flags) {
+  char path[PATH_CAP];
+  int rc = acceptable_name(name) ? path_of_name(parent, name, path) : -EPERM;
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  struct mutation m;
+  rc = begin_mutation(op, path, "", &m);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  int parent_fd = fd_of(parent);
+  int result = -ESTALE;
+  struct stat st;
+  bool known = parent_fd >= 0 && fstatat(parent_fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0;
+  if (parent_fd >= 0) result = unlinkat(parent_fd, name, flags) == 0 ? 0 : neg_errno();
+  if (result == 0 && known) {
+    pthread_mutex_lock(&nodes.lock);
+    struct node *node = node_by_identity(st.st_dev, st.st_ino);
+    if (node != NULL) node_drop_name(node, parent, name);
+    pthread_mutex_unlock(&nodes.lock);
+  }
+  reply_errno(req, finish_mutation(&m, op, path, "", result));
+}
+
+static void ll_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
+  remove_name(req, "unlink", parent, name, 0);
+}
+
+static void ll_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
+  remove_name(req, "rmdir", parent, name, AT_REMOVEDIR);
+}
+
+static void ll_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse_ino_t newparent,
+                      const char *newname, unsigned int flags) {
+  char from[PATH_CAP];
+  char to[PATH_CAP];
+  int rc = acceptable_name(name) && acceptable_name(newname) ? path_of_name(parent, name, from) : -EPERM;
+  if (rc == 0) rc = path_of_name(newparent, newname, to);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  struct mutation m;
+  rc = begin_mutation("rename", from, to, &m);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  int from_fd = fd_of(parent);
+  int to_fd = fd_of(newparent);
+  int result = from_fd < 0 || to_fd < 0 ? -ESTALE : 0;
+  struct stat moved;
+  struct stat replaced;
+  bool had_moved = result == 0 && fstatat(from_fd, name, &moved, AT_SYMLINK_NOFOLLOW) == 0;
+  bool had_replaced = result == 0 && fstatat(to_fd, newname, &replaced, AT_SYMLINK_NOFOLLOW) == 0;
   if (result == 0) {
-    int recorded = record_unhide(path, ino, m.sequence, m.generation);
-    if (recorded != 0) result = recorded;
+    long ok = syscall(SYS_renameat2, from_fd, name, to_fd, newname, flags);
+    result = ok == 0 ? 0 : neg_errno();
   }
+  if (result == 0) {
+    pthread_mutex_lock(&nodes.lock);
+    bool exchange = (flags & RENAME_EXCHANGE) != 0;
+    if (had_moved) {
+      struct node *node = node_by_identity(moved.st_dev, moved.st_ino);
+      if (node != NULL) {
+        node_drop_name(node, parent, name);
+        node_add_name(node, newparent, newname);
+      }
+    }
+    if (had_replaced) {
+      struct node *node = node_by_identity(replaced.st_dev, replaced.st_ino);
+      if (node != NULL) {
+        node_drop_name(node, newparent, newname);
+        if (exchange) node_add_name(node, parent, name);
+      }
+    }
+    pthread_mutex_unlock(&nodes.lock);
+  }
+  reply_errno(req, finish_mutation(&m, "rename", from, to, result));
+}
+
+static void ll_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const char *newname) {
+  char from[PATH_CAP];
+  char to[PATH_CAP];
+  int rc = acceptable_name(newname) ? path_of_inode(ino, from) : -EPERM;
+  if (rc == 0) rc = path_of_name(newparent, newname, to);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  struct mutation m;
+  rc = begin_mutation("link", to, from, &m);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  int fd = fd_of(ino);
+  int parent_fd = fd_of(newparent);
+  int result = fd < 0 || parent_fd < 0 ? -ESTALE : 0;
+  if (result == 0) {
+    char procname[64];
+    snprintf(procname, sizeof(procname), "/proc/self/fd/%d", fd);
+    result = linkat(AT_FDCWD, procname, parent_fd, newname, AT_SYMLINK_FOLLOW) == 0 ? 0 : neg_errno();
+  }
+  reply_created(req, newparent, newname, finish_mutation(&m, "link", to, from, result), NULL);
+}
+
+struct dir_handle {
+  DIR *dp;
+  struct dirent *entry;
+  off_t offset;
+};
+
+static void ll_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+  int path_fd = fd_of(ino);
+  if (path_fd < 0) {
+    reply_errno(req, -ESTALE);
+    return;
+  }
+  int fd = openat(path_fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (fd < 0) {
+    reply_errno(req, neg_errno());
+    return;
+  }
+  struct dir_handle *dir = calloc(1, sizeof(*dir));
+  if (dir == NULL) {
+    close(fd);
+    reply_errno(req, -ENOMEM);
+    return;
+  }
+  dir->dp = fdopendir(fd);
+  if (dir->dp == NULL) {
+    int rc = neg_errno();
+    close(fd);
+    free(dir);
+    reply_errno(req, rc);
+    return;
+  }
+  fi->fh = (uint64_t)(uintptr_t)dir;
+  fuse_reply_open(req, fi);
+}
+
+static void read_directory(fuse_req_t req, fuse_ino_t ino, size_t size, off_t offset, struct fuse_file_info *fi,
+                           bool plus) {
+  struct dir_handle *dir = (struct dir_handle *)(uintptr_t)fi->fh;
+  char *buffer = calloc(1, size);
+  if (buffer == NULL) {
+    reply_errno(req, -ENOMEM);
+    return;
+  }
+  if (offset != dir->offset) {
+    seekdir(dir->dp, offset);
+    dir->entry = NULL;
+    dir->offset = offset;
+  }
+  size_t used = 0;
+  int rc = 0;
+  for (;;) {
+    if (dir->entry == NULL) {
+      errno = 0;
+      dir->entry = readdir(dir->dp);
+      if (dir->entry == NULL) {
+        if (errno != 0) rc = neg_errno();
+        break;
+      }
+    }
+    off_t next = telldir(dir->dp);
+    size_t added;
+    if (plus) {
+      struct fuse_entry_param entry;
+      const char *name = dir->entry->d_name;
+      bool dot = name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'));
+      memset(&entry, 0, sizeof(entry));
+      if (dot) {
+        entry.attr.st_ino = dir->entry->d_ino;
+        entry.attr.st_mode = (mode_t)(dir->entry->d_type << 12);
+      } else {
+        int looked = lookup_node(ino, name, &entry);
+        if (looked != 0) {
+          rc = looked;
+          break;
+        }
+      }
+      added = fuse_add_direntry_plus(req, buffer + used, size - used, name, &entry, next);
+      if (added > size - used && !dot) forget_node(entry.ino, 1);
+    } else {
+      struct stat st;
+      memset(&st, 0, sizeof(st));
+      st.st_ino = dir->entry->d_ino;
+      st.st_mode = (mode_t)(dir->entry->d_type << 12);
+      added = fuse_add_direntry(req, buffer + used, size - used, dir->entry->d_name, &st, next);
+    }
+    if (added > size - used) break;
+    used += added;
+    dir->entry = NULL;
+    dir->offset = next;
+  }
+  if (rc != 0 && used == 0) reply_errno(req, rc);
+  else fuse_reply_buf(req, buffer, used);
+  free(buffer);
+}
+
+static void ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t offset, struct fuse_file_info *fi) {
+  read_directory(req, ino, size, offset, fi, false);
+}
+
+static void ll_readdirplus(fuse_req_t req, fuse_ino_t ino, size_t size, off_t offset, struct fuse_file_info *fi) {
+  read_directory(req, ino, size, offset, fi, true);
+}
+
+static void ll_releasedir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+  (void)ino;
+  struct dir_handle *dir = (struct dir_handle *)(uintptr_t)fi->fh;
+  int rc = closedir(dir->dp) == 0 ? 0 : neg_errno();
+  free(dir);
+  reply_errno(req, rc);
+}
+
+static void ll_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync, struct fuse_file_info *fi) {
+  struct dir_handle *dir = (struct dir_handle *)(uintptr_t)fi->fh;
+  const char *op = datasync ? "fdatasyncdir" : "fsyncdir";
+  char path[PATH_CAP];
+  struct mutation m;
+  bool journaled;
+  int rc = inode_mutation(ino, op, "", &m, &journaled, path);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  int fd = dirfd(dir->dp);
+  int result = (datasync ? fdatasync(fd) : fsync(fd)) == 0 ? 0 : neg_errno();
+  reply_errno(req, end_inode_mutation(&m, journaled, op, path, "", result));
+}
+
+/* A writable handle is direct: every byte it writes has to arrive here and
+ * reach a W record before it reaches the file.  A read-only handle keeps the
+ * page cache, so the daemon answers the first read of a range and none of the
+ * re-reads; an intercepted write drops the cached range, so the two handles
+ * stay coherent.  O_DIRECT alignment on the backing file is the daemon's
+ * concern, never the caller's, so it is dropped while every other open flag
+ * is honoured. */
+static void open_flags(struct fuse_file_info *fi, int fd) {
+  fi->fh = (uint64_t)fd;
+  bool writable = (fi->flags & O_ACCMODE) != O_RDONLY;
+  fi->direct_io = writable ? 1 : 0;
+  fi->keep_cache = writable ? 0 : 1;
+}
+
+/* With atomic truncation negotiated, an open carries the only record of a
+ * mutation, so it is journaled exactly like an explicit truncate. */
+static void ll_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+  int path_fd = fd_of(ino);
+  if (path_fd < 0) {
+    reply_errno(req, -ESTALE);
+    return;
+  }
+  if ((fi->flags & O_TRUNC) == 0) {
+    int fd = reopen(path_fd, fi->flags);
+    if (fd < 0) {
+      reply_errno(req, fd);
+      return;
+    }
+    open_flags(fi, fd);
+    fuse_reply_open(req, fi);
+    return;
+  }
+  char path[PATH_CAP];
+  struct mutation m;
+  bool journaled;
+  int rc = inode_mutation(ino, "open-truncate", "", &m, &journaled, path);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  int fd = reopen(path_fd, fi->flags);
+  int result = end_inode_mutation(&m, journaled, "open-truncate", path, "", fd < 0 ? fd : 0);
+  if (result != 0) {
+    if (fd >= 0) close(fd);
+    reply_errno(req, result);
+    return;
+  }
+  open_flags(fi, fd);
+  fuse_reply_open(req, fi);
+}
+
+static void ll_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, struct fuse_file_info *fi) {
+  char path[PATH_CAP];
+  int rc = acceptable_name(name) ? path_of_name(parent, name, path) : -EPERM;
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  struct mutation m;
+  rc = begin_mutation("create", path, "", &m);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  int parent_fd = fd_of(parent);
+  int fd = -1;
+  int result = parent_fd < 0 ? -ESTALE : 0;
+  if (result == 0) {
+    fd = openat(parent_fd, name, (fi->flags & ~(O_DIRECT | O_NOFOLLOW)) | O_CREAT | O_CLOEXEC, mode);
+    result = fd < 0 ? neg_errno() : 0;
+  }
+  result = finish_mutation(&m, "create", path, "", result);
+  if (result != 0) {
+    if (fd >= 0) close(fd);
+    reply_errno(req, result);
+    return;
+  }
+  fi->fh = (uint64_t)fd;
+  fi->direct_io = 1;
+  reply_created(req, parent, name, 0, fi);
+}
+
+static void ll_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+  (void)ino;
+  reply_errno(req, close((int)fi->fh) == 0 ? 0 : neg_errno());
+}
+
+/* flush reports what close(2) would report; durability is fsync's job. */
+static void ll_flush(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+  (void)ino;
+  int copy = dup((int)fi->fh);
+  if (copy < 0) {
+    reply_errno(req, neg_errno());
+    return;
+  }
+  reply_errno(req, close(copy) == 0 ? 0 : neg_errno());
+}
+
+static void ll_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t offset, struct fuse_file_info *fi) {
+  (void)ino;
+  atomic_fetch_add_explicit(&state.reads, 1, memory_order_relaxed);
+  struct fuse_bufvec buffer = FUSE_BUFVEC_INIT(size);
+  buffer.buf[0].flags = FUSE_BUF_IS_FD | FUSE_BUF_FD_SEEK;
+  buffer.buf[0].fd = (int)fi->fh;
+  buffer.buf[0].pos = offset;
+  fuse_reply_data(req, &buffer, FUSE_BUF_SPLICE_MOVE);
+}
+
+static void ll_write_buf(fuse_req_t req, fuse_ino_t ino, struct fuse_bufvec *in, off_t offset,
+                         struct fuse_file_info *fi) {
+  struct stat st;
+  if (fstat((int)fi->fh, &st) != 0) {
+    reply_errno(req, neg_errno());
+    return;
+  }
+  size_t size = fuse_buf_size(in);
+  char path[PATH_CAP];
+  int named = path_of_inode(ino, path);
+  if (named == -ENOENT) path[0] = '\0';
+  else if (named != 0) {
+    reply_errno(req, named);
+    return;
+  }
+  struct mutation m;
+  int rc = begin_write((uint64_t)st.st_ino, (uint64_t)st.st_nlink, path, offset, size, &m);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  struct fuse_bufvec out = FUSE_BUFVEC_INIT(size);
+  out.buf[0].flags = FUSE_BUF_IS_FD | FUSE_BUF_FD_SEEK;
+  out.buf[0].fd = (int)fi->fh;
+  out.buf[0].pos = offset;
+  ssize_t n = fuse_buf_copy(&out, in, 0);
   release_mutation(&m);
-  return result;
-}
-static int pass_rmdir(const char *path) { return remove_entry("rmdir", path, AT_REMOVEDIR); }
-
-static int pass_symlink(const char *target, const char *path) {
-  struct mutation m;
-  int rc = begin_mutation("symlink", path, target, &m);
-  if (rc != 0) return rc;
-  char name[NAME_MAX + 1];
-  int parent = open_parent(path, name);
-  int result = parent < 0 ? parent : (symlinkat(target, parent, name) == 0 ? 0 : neg_errno());
-  if (parent >= 0) close(parent);
-  return finish_mutation(&m, "symlink", path, target, result);
+  pthread_mutex_lock(&state.queue_lock);
+  state.writes++;
+  pthread_mutex_unlock(&state.queue_lock);
+  if (n < 0) reply_errno(req, (int)n);
+  else fuse_reply_write(req, (size_t)n);
 }
 
-static int pass_link(const char *from, const char *to) {
+/* A caller's fsync still flushes the file it named: that is the durability the
+ * caller asked for, and it is the only sync left on a reply path. */
+static void ll_fsync(fuse_req_t req, fuse_ino_t ino, int datasync, struct fuse_file_info *fi) {
+  const char *op = datasync ? "fdatasync" : "fsync";
+  char path[PATH_CAP];
   struct mutation m;
-  int rc = begin_mutation("link", to, from, &m);
-  if (rc != 0) return rc;
-  char from_name[NAME_MAX + 1];
-  char to_name[NAME_MAX + 1];
-  int from_parent = open_parent(from, from_name);
-  int to_parent = open_parent(to, to_name);
-  int result = from_parent < 0 ? from_parent : to_parent;
-  if (from_parent >= 0 && to_parent >= 0) {
-    result = linkat(from_parent, from_name, to_parent, to_name, 0) == 0 ? 0 : neg_errno();
+  bool journaled;
+  int rc = inode_mutation(ino, op, "", &m, &journaled, path);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
   }
-  if (from_parent >= 0) close(from_parent);
-  if (to_parent >= 0) close(to_parent);
-  return finish_mutation(&m, "link", to, from, result);
+  int fd = (int)fi->fh;
+  int result = (datasync ? fdatasync(fd) : fsync(fd)) == 0 ? 0 : neg_errno();
+  pthread_mutex_lock(&state.queue_lock);
+  state.backing_fsyncs++;
+  pthread_mutex_unlock(&state.queue_lock);
+  reply_errno(req, end_inode_mutation(&m, journaled, op, path, "", result));
 }
 
-static int pass_rename(const char *from, const char *to, unsigned int flags) {
-  /* A hide: libfuse's exact name shape, the same parent, and a handle open
-   * on the source inode. Journaled as the unlink the caller asked for. */
-  uint64_t from_ino = inode_at(from);
-  bool hiding = hide_shaped(to) && !hide_shaped(from) && same_parent(from, to)
-                && from_ino != 0 && inode_is_open(from_ino);
-  const char *op = hiding ? "unlink" : "rename";
-  const char *aux = hiding ? "" : to;
+static void ll_fallocate(fuse_req_t req, fuse_ino_t ino, int mode, off_t offset, off_t length,
+                         struct fuse_file_info *fi) {
+  char path[PATH_CAP];
   struct mutation m;
-  int rc = begin_mutation(op, from, aux, &m);
-  if (rc != 0) return rc;
-  char from_name[NAME_MAX + 1];
-  char to_name[NAME_MAX + 1];
-  int from_parent = open_parent(from, from_name);
-  int to_parent = open_parent(to, to_name);
-  int result = from_parent < 0 ? from_parent : to_parent;
-  if (from_parent >= 0 && to_parent >= 0) {
-    long moved = syscall(SYS_renameat2, from_parent, from_name, to_parent, to_name, flags);
-    result = moved == 0 ? 0 : neg_errno();
+  bool journaled;
+  int rc = inode_mutation(ino, "fallocate", "", &m, &journaled, path);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
   }
-  if (from_parent >= 0) close(from_parent);
-  if (to_parent >= 0) close(to_parent);
-  if (hiding && result == 0) {
-    int recorded = record_hide(to, from_ino, m.sequence, m.generation);
-    if (recorded != 0) result = recorded;
-  }
-  return finish_mutation(&m, op, from, aux, result);
+  int result = fallocate((int)fi->fh, mode, offset, length) == 0 ? 0 : neg_errno();
+  reply_errno(req, end_inode_mutation(&m, journaled, "fallocate", path, "", result));
+}
+
+static void ll_lseek(fuse_req_t req, fuse_ino_t ino, off_t offset, int whence, struct fuse_file_info *fi) {
+  (void)ino;
+  off_t at = lseek((int)fi->fh, offset, whence);
+  if (at < 0) reply_errno(req, neg_errno());
+  else fuse_reply_lseek(req, at);
 }
 
 /* Extended attributes need a readable handle: the kernel allows them only on
- * regular files and directories, so a final symlink is reported unsupported. */
-static int open_xattr(const char *path) {
-  char rel[PATH_CAP];
-  int rc = relative_path(path, rel);
-  if (rc != 0) return rc;
-  int fd = open_beneath(rel, O_RDONLY | O_NOFOLLOW, 0);
-  return fd == -ELOOP ? -EOPNOTSUPP : fd;
+ * regular files and directories, so a symlink is reported unsupported. */
+static int xattr_target(fuse_ino_t ino, char procname[64]) {
+  int fd = fd_of(ino);
+  if (fd < 0) return -ESTALE;
+  struct stat st;
+  if (fstatat(fd, "", &st, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) != 0) return neg_errno();
+  if (S_ISLNK(st.st_mode)) return -EOPNOTSUPP;
+  snprintf(procname, 64, "/proc/self/fd/%d", fd);
+  return 0;
 }
 
-static int pass_setxattr(const char *path, const char *name, const char *value, size_t size, int flags) {
-  int root = reject_root_metadata(path);
-  if (root != 0) return root;
-  if (!valid_utf8(name)) return -EILSEQ;
+static void ll_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const char *value, size_t size,
+                        int flags) {
+  if (ino == FUSE_ROOT_ID) {
+    reply_errno(req, -EOPNOTSUPP);
+    return;
+  }
+  if (!valid_utf8(name)) {
+    reply_errno(req, -EILSEQ);
+    return;
+  }
+  char procname[64];
+  int rc = xattr_target(ino, procname);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  char path[PATH_CAP];
   struct mutation m;
-  int rc = begin_mutation("setxattr", path, name, &m);
-  if (rc != 0) return rc;
-  int fd = open_xattr(path);
-  int result = fd < 0 ? fd : (fsetxattr(fd, name, value, size, flags) == 0 ? 0 : neg_errno());
-  if (fd >= 0) close(fd);
-  return finish_mutation(&m, "setxattr", path, name, result);
+  bool journaled;
+  rc = inode_mutation(ino, "setxattr", name, &m, &journaled, path);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  int result = setxattr(procname, name, value, size, flags) == 0 ? 0 : neg_errno();
+  reply_errno(req, end_inode_mutation(&m, journaled, "setxattr", path, name, result));
 }
 
-static int pass_getxattr(const char *path, const char *name, char *value, size_t size) {
-  if (!valid_utf8(name)) return -EILSEQ;
-  int fd = open_xattr(path);
-  if (fd < 0) return fd;
-  ssize_t length = fgetxattr(fd, name, value, size);
-  int rc = length < 0 ? neg_errno() : (int)length;
-  close(fd);
-  return rc;
+static void ll_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name, size_t size) {
+  if (!valid_utf8(name)) {
+    reply_errno(req, -EILSEQ);
+    return;
+  }
+  char procname[64];
+  int rc = xattr_target(ino, procname);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  if (size == 0) {
+    ssize_t length = getxattr(procname, name, NULL, 0);
+    if (length < 0) reply_errno(req, neg_errno());
+    else fuse_reply_xattr(req, (size_t)length);
+    return;
+  }
+  char *value = malloc(size);
+  if (value == NULL) {
+    reply_errno(req, -ENOMEM);
+    return;
+  }
+  ssize_t length = getxattr(procname, name, value, size);
+  if (length < 0) reply_errno(req, neg_errno());
+  else fuse_reply_buf(req, value, (size_t)length);
+  free(value);
 }
 
-static int pass_listxattr(const char *path, char *list, size_t size) {
-  int fd = open_xattr(path);
-  if (fd < 0) return fd;
-  ssize_t length = flistxattr(fd, list, size);
-  int rc = length < 0 ? neg_errno() : (int)length;
-  close(fd);
-  return rc;
+static void ll_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size) {
+  char procname[64];
+  int rc = xattr_target(ino, procname);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  if (size == 0) {
+    ssize_t length = listxattr(procname, NULL, 0);
+    if (length < 0) reply_errno(req, neg_errno());
+    else fuse_reply_xattr(req, (size_t)length);
+    return;
+  }
+  char *list = malloc(size);
+  if (list == NULL) {
+    reply_errno(req, -ENOMEM);
+    return;
+  }
+  ssize_t length = listxattr(procname, list, size);
+  if (length < 0) reply_errno(req, neg_errno());
+  else fuse_reply_buf(req, list, (size_t)length);
+  free(list);
 }
 
-static int pass_removexattr(const char *path, const char *name) {
-  int root = reject_root_metadata(path);
-  if (root != 0) return root;
-  if (!valid_utf8(name)) return -EILSEQ;
+static void ll_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
+  if (ino == FUSE_ROOT_ID) {
+    reply_errno(req, -EOPNOTSUPP);
+    return;
+  }
+  if (!valid_utf8(name)) {
+    reply_errno(req, -EILSEQ);
+    return;
+  }
+  char procname[64];
+  int rc = xattr_target(ino, procname);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  char path[PATH_CAP];
   struct mutation m;
-  int rc = begin_mutation("removexattr", path, name, &m);
-  if (rc != 0) return rc;
-  int fd = open_xattr(path);
-  int result = fd < 0 ? fd : (fremovexattr(fd, name) == 0 ? 0 : neg_errno());
-  if (fd >= 0) close(fd);
-  return finish_mutation(&m, "removexattr", path, name, result);
+  bool journaled;
+  rc = inode_mutation(ino, "removexattr", name, &m, &journaled, path);
+  if (rc != 0) {
+    reply_errno(req, rc);
+    return;
+  }
+  int result = removexattr(procname, name) == 0 ? 0 : neg_errno();
+  reply_errno(req, end_inode_mutation(&m, journaled, "removexattr", path, name, result));
 }
 
-static const struct fuse_operations operations = {
-  .init = pass_init,
-  .getattr = pass_getattr,
-  .access = pass_access,
-  .statfs = pass_statfs,
-  .readlink = pass_readlink,
-  .opendir = pass_opendir,
-  .readdir = pass_readdir,
-  .releasedir = pass_releasedir,
-  .fsyncdir = pass_fsyncdir,
-  .open = pass_open,
-  .create = pass_create,
-  .release = pass_release,
-  .flush = pass_flush,
-  .read = pass_read,
-  .write = pass_write,
-  .fsync = pass_fsync,
-  .fallocate = pass_fallocate,
-  .lseek = pass_lseek,
-  .truncate = pass_truncate,
-  .chmod = pass_chmod,
-  .chown = pass_chown,
-  .utimens = pass_utimens,
-  .mkdir = pass_mkdir,
-  .mknod = pass_mknod,
-  .unlink = pass_unlink,
-  .rmdir = pass_rmdir,
-  .symlink = pass_symlink,
-  .link = pass_link,
-  .rename = pass_rename,
-  .setxattr = pass_setxattr,
-  .getxattr = pass_getxattr,
-  .listxattr = pass_listxattr,
-  .removexattr = pass_removexattr,
+static const struct fuse_lowlevel_ops operations = {
+  .init = ll_init,
+  .lookup = ll_lookup,
+  .forget = ll_forget,
+  .forget_multi = ll_forget_multi,
+  .getattr = ll_getattr,
+  .setattr = ll_setattr,
+  .readlink = ll_readlink,
+  .access = ll_access,
+  .statfs = ll_statfs,
+  .mknod = ll_mknod,
+  .mkdir = ll_mkdir,
+  .symlink = ll_symlink,
+  .unlink = ll_unlink,
+  .rmdir = ll_rmdir,
+  .rename = ll_rename,
+  .link = ll_link,
+  .opendir = ll_opendir,
+  .readdir = ll_readdir,
+  .readdirplus = ll_readdirplus,
+  .releasedir = ll_releasedir,
+  .fsyncdir = ll_fsyncdir,
+  .open = ll_open,
+  .create = ll_create,
+  .release = ll_release,
+  .flush = ll_flush,
+  .read = ll_read,
+  .write_buf = ll_write_buf,
+  .fsync = ll_fsync,
+  .fallocate = ll_fallocate,
+  .lseek = ll_lseek,
+  .setxattr = ll_setxattr,
+  .getxattr = ll_getxattr,
+  .listxattr = ll_listxattr,
+  .removexattr = ll_removexattr,
 };
 
-/* ------------------------------------------------------------- control --- */
-
-/* The names still hidden, as HIDE records, into a compact journal. A hide
- * whose sequence lies inside the unfenced tail is written twice; recovery
- * remembers one name once. */
-static int copy_hidden(int fd) {
-  pthread_mutex_lock(&state.lock);
-  size_t count = state.hidden_count;
-  struct hidden_name *held = count == 0 ? NULL : malloc(count * sizeof(*held));
-  if (held != NULL) memcpy(held, state.hidden, count * sizeof(*held));
-  pthread_mutex_unlock(&state.lock);
-  if (count != 0 && held == NULL) return -ENOMEM;
-  int rc = 0;
-  for (size_t index = 0; rc == 0 && index < count; index++) {
-    char aux[32];
-    snprintf(aux, sizeof(aux), "%llu", (counter)held[index].ino);
-    char line[RECORD_CAP];
-    int length = format_record(line, sizeof(line), REC_HIDE, held[index].sequence, held[index].generation,
-                               "hide", 0, held[index].path, aux);
-    rc = length < 0 ? length : append_all(fd, line, (size_t)length);
+/* The root node: the retained root directory as an O_PATH handle, id 1. */
+static int open_root_node(const char *root_path) {
+  int fd = open(root_path, O_PATH | O_DIRECTORY | O_CLOEXEC);
+  if (fd < 0) return neg_errno();
+  struct stat st;
+  if (fstat(fd, &st) != 0) {
+    int rc = neg_errno();
+    close(fd);
+    return rc;
   }
-  free(held);
-  return rc;
+  pthread_mutex_init(&nodes.lock, NULL);
+  pthread_mutex_lock(&nodes.lock);
+  struct node *root = node_insert(fd, &st);
+  pthread_mutex_unlock(&nodes.lock);
+  if (root == NULL) {
+    close(fd);
+    return -ENOMEM;
+  }
+  if (root->id != FUSE_ROOT_ID) return -EIO;
+  root->nlookup = 1;
+  return 0;
 }
+
+/* ------------------------------------------------------------- control --- */
 
 /* Copies every record above `since` from the live journal into `fd`.  Those
  * are the mutations no fence has sealed yet and the next fence derives its
@@ -1304,9 +1692,6 @@ static int compact_journal(void) {
   for (size_t index = 0; rc == 0 && index < count; index++) {
     rc = append_all(fd, records[index], strlen(records[index]));
   }
-  /* A hide outlives the fence that drained it, so the names still hidden
-   * travel into the compact journal ahead of the unfenced tail. */
-  if (rc == 0) rc = copy_hidden(fd);
   if (rc == 0) rc = copy_unfenced_tail(fd, has_fence ? fence_cut : 0);
   /* The compact journal replaces the live one, so it is on the disk before the
    * rename that names it: the one sync outside a fence, and never on a reply. */
@@ -1499,9 +1884,8 @@ static void detach_session(void) {
   state.detached = true;
   pthread_mutex_unlock(&state.lock);
   if (!mine) return;
-  struct fuse_session *session = fuse_get_session(state.fuse);
-  fuse_session_exit(session);
-  fuse_session_unmount(session);
+  fuse_session_exit(state.session);
+  fuse_session_unmount(state.session);
 }
 
 static void begin_shutdown(void) {
@@ -1849,19 +2233,6 @@ static int parse_record(char *line, struct recovery *r) {
     if (generation > r->published) r->published = generation;
     return 0;
   }
-  /* A hide the previous life of this daemon recorded: replayed into the set
-   * so the start can remove what the last release never reached. */
-  if (strcmp(kind, "HIDE") == 0 || strcmp(kind, "UNHIDE") == 0) {
-    journal_field_unescape(fields[5]);
-    uint64_t ino = 0;
-    if (!journal_parse_counter(fields[6], &ino) || fields[5][0] != '/') return -EUCLEAN;
-    pthread_mutex_lock(&state.lock);
-    int rc = 0;
-    if (kind[0] == 'H') rc = remember_hidden(fields[5], ino, sequence, generation);
-    else forget_hidden(fields[5]);
-    pthread_mutex_unlock(&state.lock);
-    return rc;
-  }
   if (strcmp(kind, "RESULT") == 0 || strcmp(kind, "RECOVER") == 0) {
     resolve_intent(r, sequence);
     return 0;
@@ -1918,30 +2289,6 @@ static int recover_journal(void) {
       rc = durable(REC_RECOVER, intent->sequence, intent->generation, intent->op, -ECANCELED, intent->path,
                    intent->aux);
     }
-  }
-  /* Every handle died with the previous daemon, so a name it hid has no
-   * holder left: remove it now, and record that it is gone. A name whose
-   * inode changed since is not the hidden file and is left alone. */
-  if (rc == 0) {
-    pthread_mutex_lock(&state.lock);
-    size_t count = state.hidden_count;
-    struct hidden_name *stale = count == 0 ? NULL : malloc(count * sizeof(*stale));
-    if (stale != NULL) memcpy(stale, state.hidden, count * sizeof(*stale));
-    pthread_mutex_unlock(&state.lock);
-    if (count != 0 && stale == NULL) rc = -ENOMEM;
-    for (size_t index = 0; rc == 0 && index < count; index++) {
-      const struct hidden_name *hidden = &stale[index];
-      if (inode_at(hidden->path) == hidden->ino) {
-        char name[NAME_MAX + 1];
-        int parent = open_parent(hidden->path, name);
-        if (parent >= 0) {
-          if (unlinkat(parent, name, 0) != 0 && errno != ENOENT) rc = neg_errno();
-          close(parent);
-        }
-      }
-      if (rc == 0) rc = record_unhide(hidden->path, hidden->ino, hidden->sequence, hidden->generation);
-    }
-    free(stale);
   }
   free(r.pending);
   return rc;
@@ -2000,6 +2347,11 @@ int main(int argc, char **argv) {
     fprintf(stderr, "journal-daemon: cannot retain root and state directories: %s\n", strerror(errno));
     return 3;
   }
+  int rooted = open_root_node(argv[2]);
+  if (rooted != 0) {
+    fprintf(stderr, "journal-daemon: cannot open the root node: %s\n", strerror(-rooted));
+    return 3;
+  }
   state.wal_fd = openat(state.state_fd, WAL_NAME, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
   state.wake_fd = eventfd(0, EFD_CLOEXEC);
   if (state.wal_fd < 0 || state.wake_fd < 0) {
@@ -2026,21 +2378,21 @@ int main(int argc, char **argv) {
       fuse_opt_add_arg(&args, "default_permissions") != 0) {
     return 3;
   }
-  state.fuse = fuse_new(&args, &operations, sizeof(operations), NULL);
+  state.session = fuse_session_new(&args, &operations, sizeof(operations), NULL);
   fuse_opt_free_args(&args);
-  if (state.fuse == NULL) {
+  if (state.session == NULL) {
     fprintf(stderr, "journal-daemon: cannot create the session\n");
     return 3;
   }
-  if (fuse_mount(state.fuse, argv[4]) != 0) {
+  if (fuse_session_mount(state.session, argv[4]) != 0) {
     fprintf(stderr, "journal-daemon: cannot mount %s\n", argv[4]);
-    fuse_destroy(state.fuse);
+    fuse_session_destroy(state.session);
     return 3;
   }
   if (start_control() != 0) {
     fprintf(stderr, "journal-daemon: cannot serve the control socket\n");
     detach_session();
-    fuse_destroy(state.fuse);
+    fuse_session_destroy(state.session);
     return 3;
   }
 
@@ -2051,7 +2403,7 @@ int main(int argc, char **argv) {
   if (loop != NULL) {
     fuse_loop_cfg_set_clone_fd(loop, 1);
     fuse_loop_cfg_set_max_threads(loop, 16);
-    status = fuse_loop_mt(state.fuse, loop);
+    status = fuse_session_loop_mt(state.session, loop);
     fuse_loop_cfg_destroy(loop);
   }
 
@@ -2061,7 +2413,7 @@ int main(int argc, char **argv) {
   begin_shutdown();
   wake_control();
   pthread_join(state.control_thread, NULL);
-  fuse_destroy(state.fuse);
+  fuse_session_destroy(state.session);
   close(state.socket_fd);
   unlink(state.socket_path);
 

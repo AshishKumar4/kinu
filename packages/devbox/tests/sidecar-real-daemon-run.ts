@@ -10,7 +10,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { link, lstat, mkdir, open, readdir, readFile, readlink, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { chmod, link, lstat, mkdir, open, readdir, readFile, readlink, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -353,17 +353,17 @@ async function main(): Promise<void> {
     assert('second-seal-publishes-generation-3', generation2 === '3', `generation=${generation2}`);
     const afterPublish = await readAt(held, 0, originalIndex.length);
     assert('open-descriptor-survives-a-publish', afterPublish === originalIndex, JSON.stringify(afterPublish));
-    // The head sealed while the descriptor was open: the caller's unlink is
-    // what it records, and libfuse's hidden name reaches neither the head nor
-    // the backing tree once the descriptor closes.
+    // The head sealed while the descriptor was open records the caller's
+    // unlink and nothing else; the unlinked name is gone from the backing
+    // tree the moment it is unlinked, and stays gone after the close.
     const sealedOpen = (await servedTree(stores, 'g2')).tree;
-    assert('head-sealed-with-an-open-unlinked-inode-carries-no-hidden-name',
+    assert('head-sealed-with-an-open-unlinked-inode-carries-only-the-unlink',
       sealedOpen.every((entry) => entry.path !== 'src/main.ts' && !entry.path.includes('.fuse_hidden')),
       sealedOpen.filter((entry) => entry.path.startsWith('src/')).map((entry) => entry.path).join(','));
+    const openNames = await readdir(join(space.root, 'src'));
+    assert('unlink-leaves-no-substitute-name-on-the-backing-tree',
+      !openNames.some((name) => name.startsWith('.fuse_hidden')) && !openNames.includes('main.ts'), openNames.join(','));
     await held.close();
-    const closedNames = await readdir(join(space.root, 'src'));
-    assert('release-removes-the-hidden-name-from-the-backing-tree',
-      !closedNames.some((name) => name.startsWith('.fuse_hidden')), closedNames.join(','));
     const disk2 = await diskTree(space.root);
     expectSameTree('generation-3-serves-the-mutated-tree', disk2, sealedOpen);
     const twin = (await servedTree(stores, 'g2c')).tree.find((entry) => entry.path === 'twin-b.txt');
@@ -389,6 +389,40 @@ async function main(): Promise<void> {
       linkText(linkA) === 'export const a = 2;\n' && linkText(linkB) === 'export const a = 2;\n'
       && linkA !== undefined && linkB !== undefined && linkA.ino === linkB.ino,
       `a=${JSON.stringify(linkText(linkA))} link=${JSON.stringify(linkText(linkB))} sameInode=${linkA?.ino === linkB?.ino}`);
+    await rename(join(mount, 'src', 'lib', 'a.ts'), join(mount, 'src', 'lib', 'a-link.ts'));
+    await writeFile(join(mount, 'src', 'lib', 'a.ts'), 'export const a = 2;\n');
+    await publish(first, 'a same-inode rename followed by a write');
+    const aliases = (await servedTree(stores, 'same-inode')).tree;
+    assert('same-inode-rename-preserves-both-hardlink-names',
+      aliases.some((entry) => entry.path === 'src/lib/a.ts')
+      && aliases.some((entry) => entry.path === 'src/lib/a-link.ts'),
+      aliases.filter((entry) => entry.path.startsWith('src/lib/')).map((entry) => entry.path).join(','));
+    // A metadata change through the other name of the hardlink reaches both.
+    await chmod(join(mount, 'src', 'lib', 'a-link.ts'), 0o600);
+    await publish(first, 'the hardlink chmod');
+    const remoded = (await servedTree(stores, 'g4m')).tree;
+    const modeA = remoded.find((entry) => entry.path === 'src/lib/a.ts')?.mode;
+    const modeB = remoded.find((entry) => entry.path === 'src/lib/a-link.ts')?.mode;
+    assert('published-hardlink-twin-follows-a-chmod-through-the-other-name',
+      modeA === 0o600 && modeB === 0o600, `a=${modeA?.toString(8)} link=${modeB?.toString(8)}`);
+
+    // The counterexample the name heuristic could not survive: a caller
+    // renames an OPEN file to exactly libfuse's hide shape in the same
+    // directory. It is a rename, and the head carries the new name and bytes.
+    const renamedOpen = await open(join(mount, 'src', 'lib', 'a.ts'), 'r');
+    const hideLike = '.fuse_hidden00001234abcdef00';
+    await rename(join(mount, 'src', 'lib', 'a.ts'), join(mount, 'src', 'lib', hideLike));
+    await publish(first, 'the rename of an open file to a hide-like name');
+    const renamedTree = (await servedTree(stores, 'g4r')).tree;
+    const renamedEntry = renamedTree.find((entry) => entry.path === `src/lib/${hideLike}`);
+    assert('an-open-file-renamed-to-a-hide-like-name-is-published-under-that-name',
+      renamedEntry !== undefined && linkText(renamedEntry) === 'export const a = 2;\n'
+      && renamedTree.every((entry) => entry.path !== 'src/lib/a.ts'),
+      renamedTree.filter((entry) => entry.path.startsWith('src/lib/')).map((entry) => entry.path).join(','));
+    assert('the-renamed-open-descriptor-still-reads',
+      (await readAt(renamedOpen, 0, 19)) === 'export const a = 2;', 'read');
+    await renamedOpen.close();
+    await rename(join(mount, 'src', 'lib', hideLike), join(mount, 'src', 'lib', 'a.ts'));
 
     // ── compaction and GC on the real tree, then a fresh boot serves it.
     for (let round = 0; round < 3; round += 1) {
@@ -410,9 +444,9 @@ async function main(): Promise<void> {
     assert('fresh-boot-attaches', attached.kind === 'attached', attached.kind);
     expectSameTree('fresh-boot-serves-the-compacted-tree', disk3, (await servedTree(stores, 'g5')).tree);
 
-    // ── a caller's own file shaped like a libfuse hide is ordinary data: it
-    //    is published, and its unlink is published, because the daemon tracks
-    //    the hides it performed rather than a name prefix.
+    // ── a caller's own file named like a libfuse hide is ordinary data: it
+    //    is published, and its unlink is published, because the daemon never
+    //    substitutes a name and never reads one back as a signal.
     const callerName = '.fuse_hidden0000abcd0000ef01';
     await writeFile(join(mount, 'src', callerName), 'mine, not libfuse\'s\n');
     await publish(first, 'the shaped-name write');
@@ -425,25 +459,32 @@ async function main(): Promise<void> {
     assert('a-caller-unlink-of-a-hide-shaped-name-is-published',
       (await servedTree(stores, 'g4c')).tree.every((entry) => entry.path !== `src/${callerName}`), callerName);
 
-    // ── the daemon dies with unsealed writes, an open descriptor and a hidden
-    //    name outstanding; the restarted daemon recovers the writes, removes
-    //    the hidden name, and the next seal continues the published chain.
+    // ── the daemon dies with unsealed writes, an open descriptor and an
+    //    unlinked-but-open inode outstanding; the restarted daemon recovers
+    //    the writes and the next seal continues the published chain.
     await writeFile(join(mount, 'src', 'after-kill.ts'), 'export const recovered = true;\n');
     const surviving = await open(join(mount, 'src', 'lib', 'a.ts'), 'r');
     const ghost = await open(join(mount, 'src', 'ghost.txt'), 'w+');
     await ghost.write('held open, then unlinked\n', 0);
     await unlink(join(mount, 'src', 'ghost.txt'));
-    const hiddenBeforeKill = (await readdir(join(space.root, 'src'))).filter((name) => name.startsWith('.fuse_hidden'));
-    assert('a-hide-is-outstanding-before-the-kill', hiddenBeforeKill.length === 1, hiddenBeforeKill.join(','));
+    const namesBeforeKill = await readdir(join(space.root, 'src'));
+    assert('an-unlinked-open-inode-has-no-name-before-the-kill',
+      !namesBeforeKill.includes('ghost.txt') && !namesBeforeKill.some((name) => name.startsWith('.fuse_hidden')),
+      namesBeforeKill.join(','));
     await killDaemon(space, daemon);
     daemon = await startDaemon(space);
-    const hiddenAfterRestart = (await readdir(join(space.root, 'src'))).filter((name) => name.startsWith('.fuse_hidden'));
-    assert('restart-removes-the-hidden-name-the-dead-daemon-left', hiddenAfterRestart.length === 0, hiddenAfterRestart.join(','));
-    // A descriptor on the dead mount is dead; a fresh open on the new mount
-    // serves the bytes the old daemon wrote through before it died.
+    const namesAfterRestart = await readdir(join(space.root, 'src'));
+    assert('restart-leaves-no-substitute-name-behind',
+      !namesAfterRestart.some((name) => name.startsWith('.fuse_hidden')), namesAfterRestart.join(','));
+    // A descriptor on the dead mount cannot reach a daemon: anything that
+    // must (fsync, a write) answers an error. A read the page cache holds
+    // may still answer from the cache; that is the kernel's, and recorded.
     const deadRead = await errnoOf(surviving.read(new Uint8Array(8), 0, 8, 0));
-    assert('a-descriptor-on-the-dead-mount-answers-an-error', deadRead !== 'ok', deadRead);
-    facts.deadDescriptorRead = deadRead;
+    const deadSync = await errnoOf(ghost.sync());
+    const deadWrite = await errnoOf(ghost.write('after death', 0));
+    assert('a-descriptor-on-the-dead-mount-cannot-reach-a-daemon', deadSync !== 'ok' && deadWrite !== 'ok',
+      `read=${deadRead} fsync=${deadSync} write=${deadWrite}`);
+    facts.deadDescriptor = `read=${deadRead} fsync=${deadSync} write=${deadWrite}`;
     facts.deadDescriptorClose = `${await errnoOf(surviving.close())},${await errnoOf(ghost.close())}`;
     assert('a-fresh-open-after-restart-serves-the-durable-bytes',
       (await readFile(join(mount, 'src', 'after-kill.ts'), 'utf8')) === 'export const recovered = true;\n', 'src/after-kill.ts');
