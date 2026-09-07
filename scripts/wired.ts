@@ -101,9 +101,9 @@ import {
   trackedFiles,
 } from './sources';
 import {
-  classMembers, collapsePath, declarationOf, declaredName, identifierText, importBindings,
+  classMembers, collapsePath, declarationOf, declaredName, identifierText,
   importedNames, IMPORT_CANDIDATES, isFunctionLike, isOptionalMember, isReExport, literalText,
-  methodKind, moduleSpecifiers,
+  importUses, methodKind, moduleSpecifiers,
   NAMESPACE, parse, type Parsed, reExportBindings, referencedNames, returnTypeOf, superClassName,
   type SyntaxNode, walk,
 } from './syntax';
@@ -171,9 +171,8 @@ export interface Module {
    *  DEFAULT, so without this the name `Foo` has no consumer and every
    *  default-exported React page in the tree reads as unwired. */
   readonly defaultName: string | undefined;
-  readonly imports: ReadonlyMap<string, Origin>;
+  readonly consumedImports: readonly Origin[];
   readonly forwards: readonly Forward[];
-  readonly referenced: ReadonlySet<string>;
   /** Modules this file names, resolved into the reacher corpus. */
   readonly edges: readonly string[];
 }
@@ -337,7 +336,6 @@ export function buildGraph(reachers: ReadonlyMap<string, string>): Graph {
 
   for (const [file, text] of reachers) {
     const { root: tree } = parseOnce(file, text);
-    const imports = new Map<string, Origin>();
     const forwards: Forward[] = [];
     const edges = new Set<string>();
 
@@ -355,28 +353,28 @@ export function buildGraph(reachers: ReadonlyMap<string, string>): Graph {
         continue;
       }
       edges.add(target);
-      for (const bound of importBindings(statement)) {
-        imports.set(bound.local, { file: target, imported: bound.imported });
-      }
       for (const bound of reExportBindings(statement)) {
         forwards.push({ file: target, imported: bound.imported, exported: bound.local });
       }
     }
-    // A dynamic `import('./x')` is an edge and binds nothing.
+    // Dynamic imports reach a file even when no imported binding is consumed.
     for (const specifier of moduleSpecifiers(tree)) {
       const { file: target } = resolve(file, specifier);
       if (target !== undefined) edges.add(target);
     }
 
+    const consumedImports = importUses(tree).flatMap(use => {
+      const { file: target } = resolve(file, use.specifier);
+      return target === undefined ? [] : [{ file: target, imported: use.imported }];
+    });
     const exports = exportedDeclarations(file, text, tree);
     modules.set(file, {
       file,
       exports,
       values: exportedValues(tree, exports),
       defaultName: defaultExportName(tree),
-      imports,
+      consumedImports,
       forwards,
-      referenced: referencedNames(tree),
       edges: [...edges],
     });
   }
@@ -765,8 +763,7 @@ export function measureReach(
   for (const file of live) {
     const module = graph.modules.get(file);
     if (module === undefined) continue;
-    for (const [local, origin] of module.imports) {
-      if (!module.referenced.has(local)) continue;
+    for (const origin of module.consumedImports) {
       if (origin.imported === NAMESPACE) {
         everySite(origin.file, graph.modules, reached, new Set());
         continue;
@@ -1236,6 +1233,9 @@ export const describe = (entry: Unwired): string =>
  * clean, which is when somebody is deciding how much to trust the signal.
  */
 export const BLIND_SPOTS: readonly string[] = [
+  'DYNAMIC IMPORT LIMITS — NOT DETECTED beyond the forms below. Awaited literal imports support direct named bindings and literal namespace members. '
+  + 'Promise callbacks, reassigned bindings, nested/rest/default destructuring and namespace escapes are not followed. '
+  + 'Static namespace imports retain whole-module reach. Reach is file-level, not a function call graph.',
   'DYNAMIC DISPATCH THROUGH A REGISTRY OR A STRING KEY — NOT DETECTED. A handler registered '
   + 'as `registry.register(x)` and selected later by an id read off the wire is reached '
   + 'through a VALUE, not through a name, so reachability over identifiers says nothing about '

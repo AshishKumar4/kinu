@@ -156,7 +156,61 @@ describe('an exported value with no production consumer', () => {
   });
 });
 
-/* ── The false positive that would get it switched off ─────────────────── */
+describe('awaited dynamic import consumers', () => {
+  const lazyFile = `${BASE}lazy.ts`;
+  const lazySource = 'export function highlightCode() { return "html"; } export const unused = 1;';
+  const unused = `${lazyFile}#unused (unreached-export)`;
+  const highlight = `${lazyFile}#highlightCode (unreached-export)`;
+  const inspect = (body: string) => census(new Map([
+    [lazyFile, lazySource],
+    [`${BASE}main.ts`, `if (import.meta.main) void main(); async function main() { ${body} }`],
+  ]));
+
+  test('a called named binding reaches only its export', () => {
+    expect(inspect('const { highlightCode } = await import("./lazy"); return highlightCode();')).toEqual([unused]);
+  });
+  test('aliases and namespace properties retain the imported name', () => {
+    expect(inspect('const { highlightCode: render } = await import("./lazy"); return render();')).toEqual([unused]);
+    expect(inspect('const module = await import("./lazy"); return module.highlightCode();')).toEqual([unused]);
+    expect(inspect('const module = await import("./lazy"); return module["highlightCode"]();')).toEqual([unused]);
+  });
+  test('side effects and unused bindings reach no exports', () => {
+    expect(inspect('await import("./lazy");')).toEqual([highlight, unused]);
+    expect(inspect('const { highlightCode } = await import("./lazy");')).toEqual([highlight, unused]);
+    expect(inspect('const module = await import("./lazy");')).toEqual([highlight, unused]);
+  });
+  test('same local names in separate functions cannot share uses', () => {
+    const source = `if (import.meta.main) void first();
+      async function first() { const { highlightCode: render } = await import("./lazy"); return render(); }
+      async function second() { const { unused: render } = await import("./lazy"); }`;
+    expect(census(new Map([[lazyFile, lazySource], [`${BASE}main.ts`, source]]))).toEqual([unused]);
+  });
+  test('a local shadow cannot use an imported binding', () => {
+    expect(inspect('const { highlightCode } = await import("./lazy"); function nested(highlightCode: () => string) { return highlightCode(); }'))
+      .toEqual([highlight, unused]);
+    const source = `import { unused as render } from "./lazy";
+      if (import.meta.main) void main();
+      async function main() { const { highlightCode: render } = await import("./lazy"); return render(); }`;
+    expect(census(new Map([[lazyFile, lazySource], [`${BASE}main.ts`, source]]))).toEqual([unused]);
+  });
+  test('block and catch bindings shadow imported names', () => {
+    expect(inspect('const { highlightCode: render } = await import("./lazy"); { const render = () => "local"; render(); }'))
+      .toEqual([highlight, unused]);
+    expect(inspect('const { highlightCode: render } = await import("./lazy"); try {} catch (render) { console.log(render); }'))
+      .toEqual([highlight, unused]);
+  });
+  test('a reassignment or namespace escape cannot credit an export', () => {
+    expect(inspect('let { highlightCode: render } = await import("./lazy"); render = () => "local"; render();'))
+      .toEqual([highlight, unused]);
+    expect(inspect('const module = await import("./lazy"); consume(module);'))
+      .toEqual([highlight, unused]);
+  });
+  test('static JSX imports remain production consumers', () => {
+    const source = 'import { highlightCode as View } from "./lazy"; if (import.meta.main) console.log(<View />);';
+    expect(census(new Map([[lazyFile, lazySource], [`${BASE}main.tsx`, source]]))).toEqual([unused]);
+  });
+});
+
 
 describe('a barrel', () => {
   test('does not hide a symbol a production module imports through it', () => {
