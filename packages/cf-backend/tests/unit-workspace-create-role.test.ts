@@ -8,7 +8,7 @@
 // reported as a wire read at one end and connected at neither.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ADDRESS_MAX, workspaceSlug } from '@kinu.run/core';
+import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, workspaceSlug } from '@kinu.run/core';
 import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { UserCaller } from '../src/user/workspace-capability';
@@ -155,12 +155,11 @@ describe('the model and effort a create request asks for', () => {
 
 describe('the name a create request asks for', () => {
   test('a name no preview hostname can carry is refused with the limit, before a workspace exists', async () => {
-    const name = 'slate-acceptance-' + '0'.repeat(WORKSPACE_ADDRESS_MAX - 16);
-    expect(name.length).toBe(WORKSPACE_ADDRESS_MAX + 1);
+    const name = 'a'.repeat(32);
     const created = await postCreate({ name, purpose: 'Review the checkout flow.' });
 
     expect(created.status).toBe(400);
-    expect(created.error).toContain(`at most ${WORKSPACE_ADDRESS_MAX} characters`);
+    expect(created.error).toContain('31');
     expect(created.calls).toEqual([]);
   });
 

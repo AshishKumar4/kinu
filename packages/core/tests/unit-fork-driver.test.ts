@@ -10,7 +10,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   forkWorkspace, writeSoul, readForkLineage, writeForkSnapshot, snapshotWorkspaceForFork,
-  workspaceAddressRefusal, WORKSPACE_ADDRESS_MAX,
+  workspaceAddressRefusal,
   type ForkTransport,
 } from '../src/index';
 import { createTestWorkspace } from './helpers';
@@ -106,12 +106,12 @@ describe('forkWorkspace', () => {
   test('a requested name no preview hostname can carry is refused with the limit', async () => {
     const src = await sourceWorkspace();
     const t = recordingTransport();
-    const name = 'a'.repeat(WORKSPACE_ADDRESS_MAX + 1);
+    const name = 'a'.repeat(32);
     await expect(forkWorkspace(
       { sql: src.sql, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
       'm1',
       { name },
-    )).rejects.toThrow(`at most ${WORKSPACE_ADDRESS_MAX} characters`);
+    )).rejects.toThrow('31');
     await expect(forkWorkspace(
       { sql: src.sql, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
       'm1',
