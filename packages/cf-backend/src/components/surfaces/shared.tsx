@@ -6,6 +6,8 @@
 import { memo, useState, type ReactNode } from "react";
 import { CaretRightIcon, CopyIcon, ImageBrokenIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
+import { CodeHighlighted, ShikiProvider, type CodeHighlightedProps } from "@cloudflare/kumo/code";
+import { bundledLanguagesInfo } from "shiki/langs";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { MAX_LINES_PER_FILE, type DiffLine } from "@kinu.run/core";
@@ -38,26 +40,31 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
   );
 }
 
-/**
- * A fenced code block.
- *
- * Kumo's `<Code>` is its deprecated no-highlight component: it renders a
- * transparent, unpadded `w-auto` slab and nothing else, so every long line
- * escaped its container and was clipped by the wrapper's `overflow-hidden`.
- * Kumo's replacement (`CodeHighlighted`) hardcodes `github-light`/`vesper`
- * with no way to pass a theme, which would put GitHub's blues and purples on
- * a warm umber ground. So the block owns its own surface, in the same terms
- * the landing page sets its install command: one warm ink, a recessed
- * ground, a hairline, and a header welded to the body.
- *
- * `min-w-0` on the scroller is load-bearing — inside the flex column the
- * chat is built from, a track without it takes its content's width and
- * overflows the column instead of scrolling.
- */
+const CODE_LANGUAGES: CodeHighlightedProps['lang'][] = [
+  'javascript', 'typescript', 'jsx', 'tsx', 'json', 'jsonc', 'html', 'css', 'python',
+  'yaml', 'markdown', 'graphql', 'sql', 'bash', 'shell', 'diff', 'hcl', 'toml',
+];
+
+export function CodeHighlightProvider({ children }: { children: ReactNode }) {
+  return <ShikiProvider engine="javascript" languages={CODE_LANGUAGES}>{children}</ShikiProvider>;
+}
+
+/** Fence names and source extensions resolve to the library's grammar names. */
+function codeLanguage(language: string): CodeHighlightedProps['lang'] | undefined {
+  const name = language.toLowerCase();
+  const grammar = bundledLanguagesInfo.find((entry) => entry.id === name || entry.aliases?.includes(name));
+  return grammar === undefined ? undefined : CODE_LANGUAGES.find((supported) => (
+    supported === grammar.id || grammar.aliases?.includes(supported)
+  ));
+}
+
+/** One code well for fences, tool inputs and source viewers. Unknown grammars
+ * stay readable as plain text. The library loads once at the application root. */
 export function CodeBlock({ children, className }: { children: React.ReactNode; className?: string }) {
   const { status, copy } = useCopy();
   const code = String(children).replace(/\n$/, "");
   const lang = className?.replace(/^language-/, "") ?? "";
+  const language = codeLanguage(lang);
   return (
     <div className="p-code my-2 rounded-lg overflow-hidden">
       <div className="p-code-head flex items-center justify-between gap-2 px-3 py-1 text-[10px]">
@@ -67,7 +74,9 @@ export function CodeBlock({ children, className }: { children: React.ReactNode; 
           <CopyIcon size={12} />{copyLabel(status)}
         </button>
       </div>
-      <pre className="p-scroll-x p-code-scroll m-0 px-3 py-2.5 text-[12.5px] leading-[1.55]"><code>{code}</code></pre>
+      {language === undefined
+        ? <pre className="p-scroll-x p-code-scroll m-0 px-3 py-2.5 text-[12.5px] leading-[1.55]"><code>{code}</code></pre>
+        : <CodeHighlighted code={code} lang={language} className="p-code-highlight" />}
     </div>
   );
 }
