@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateFiles, SqliteSlateContentStore, SqliteSlateStore, WorkspaceSlates, slateDirectory, parseSlateProject,
-  SlateBindingRequestSchema, SlateOperationSchema, routeSlateBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName,
+  SlateBindingRequestSchema, SlateOperationSchema, routeSlateBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal,
   type JsonValue, type SlateProject,
   type SlateBindingRoute, type SlateCallResult, type SlateSummary, type SlateProblem,
 } from '@kinu.run/core';
@@ -14,10 +14,6 @@ import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProce
 import { slateCallerKey, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
 
 const Failure = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
-/** A refusal a member ANSWERED rather than threw. The file plane's ledger reasons
- *  (`unread`, `stale`, an edit anchor that did not match) are not error classes;
- *  each is a precondition the caller did not meet, so the caller hears `bad_input`. */
-const AnsweredRefusal = v.object({ reason: v.string(), error: v.string() });
 
 /** A binding route the calling actor answers with its own capability set. */
 export type SlateCapabilityRoute = Exclude<SlateBindingRoute, { kind: 'app' }>;
@@ -159,12 +155,9 @@ export class SlateHost {
       case 'mcp':
       case 'rpc': {
         const value = await this.deps.dispatch(caller, route);
-        // A member that ANSWERS a refusal refused; authored code sees the class, not a value.
-        const classified = v.safeParse(Failure, value);
-        if (classified.success) return { ok: false, ...classified.output };
-        const answered = v.safeParse(AnsweredRefusal, value);
-        if (answered.success) return { ok: false, reason: 'bad_input', error: `${answered.output.reason}: ${answered.output.error}` };
-        return { ok: true, value };
+        // A member that ANSWERED a refusal refused; authored code sees the class.
+        const refused = answeredRefusal(value);
+        return refused === null ? { ok: true, value } : { ok: false, ...refused };
       }
       // The hop keeps the CALLER's authority: the callee runs for whoever asked, never as its author.
       case 'app': return this.call(caller, route.id, route.method, [...route.args], route.depth + 1);

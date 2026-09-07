@@ -4012,9 +4012,6 @@ export abstract class ActorAgent extends Think<Env> {
   /** Immutable role/tier/tool profile resolved once for the active turn. */
   private _turnProfileInputs: ProfileAuthorityInputs | null = null;
   private _turnProfile: ResolvedTurnProfile | null = null;
-  /** The one place a resolved profile becomes THE turn's: `beforeTurn`, and a
-   *  harness standing in for it. Read by every per-turn consumer of the role. */
-  protected installTurnProfile(profile: ResolvedTurnProfile): void { this._turnProfile = profile; }
   /** Resolved active skill set for the current turn. Built in beforeTurn, read
    *  by the per-step dynamic context and the turn-local tail. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
@@ -5806,7 +5803,7 @@ export abstract class ActorAgent extends Think<Env> {
       // for.
       explicitTier: readTurnTier(body) ?? this.config.getAssignedTier() ?? undefined,
     });
-    this.installTurnProfile(profile);
+    this._turnProfile = profile;
     const workMode = profile.workMode;
     const allowedTools = new Set(profile.allowedTools);
     const toolAllowed = (name: string): boolean => allowedTools.has(name);

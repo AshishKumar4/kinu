@@ -41,9 +41,13 @@
 
 import * as v from 'valibot';
 import { ERROR_CODES, refusalOf, tolerate, type KinuError, type Refusal } from '../obs/index';
-import { parseJsonValue } from '../utils/json';
+import { parseJsonValue, type JsonValue } from '../utils/json';
+import { FILE_REFUSAL_REASONS } from '../tools/file-edit';
 
 const RefusalSchema = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
+/** A verdict the file plane answered with (`tools/file-tool.ts` `failure()`): the
+ *  caller did not meet the operation's precondition. Not an error class. */
+const FileVerdictSchema = v.object({ reason: v.picklist(FILE_REFUSAL_REASONS), error: v.string() });
 const ErrorResultSchema = v.object({ error: v.string() });
 
 /** The shape every transport settles a command into. */
@@ -100,6 +104,26 @@ export function parseRefusal(result: string): Refusal | null {
   if (json === undefined) return null;
   const parsed = v.safeParse(RefusalSchema, json);
   return parsed.success ? { reason: parsed.output.reason, error: parsed.output.error } : null;
+}
+
+/**
+ * The refusal a codemode member ANSWERED with, or null when its answer is a value.
+ *
+ * A provider member returns rather than throws (see `refusalText`), so a script
+ * can branch; a caller that hands the answer on as a RESULT — a slate binding —
+ * must recover the class. Two OBJECT shapes and only two, each the exact payload
+ * its producer writes: an `ErrorCode` refusal (`refusalOf`) and a file-plane
+ * verdict, which is the caller's own unmet precondition and so `bad_input`. A
+ * string is never read here: `readFile` answers file CONTENT as a string, and
+ * content that happens to spell a refusal is still content. A value that merely
+ * carries `reason`/`error` fields of some other vocabulary is data, and stays data.
+ */
+export function answeredRefusal(payload: JsonValue): Refusal | null {
+  const classified = v.safeParse(RefusalSchema, payload);
+  if (classified.success) return { reason: classified.output.reason, error: classified.output.error };
+  const verdict = v.safeParse(FileVerdictSchema, payload);
+  if (verdict.success) return { reason: 'bad_input', error: `${verdict.output.reason}: ${verdict.output.error}` };
+  return null;
 }
 
 export function formatExecResult(result: ExecOutcome): string {

@@ -45,6 +45,19 @@ export type FileEditFailure =
   /** Every replacement produced the text it replaced. */
   | 'no_change';
 
+/**
+ * The file plane's own refusal reasons — verdicts the tool reached, not error
+ * classes: the anchor failures above plus the two the turn ledger raises, a write
+ * over contents the caller has not read (`unread`) or read before they changed
+ * (`stale`). `missing`, `denied` and `io` are NOT here; they are `ErrorCode`s
+ * shared with every other tool. Declared on this leaf so the reader in
+ * `execution/exec-result.ts` and the census in `read-models/tool-failures.ts`
+ * take one list without either importing the ledger.
+ */
+export const FILE_REFUSAL_REASONS = [
+  'empty_anchor', 'not_found', 'ambiguous', 'overlap', 'no_change', 'unread', 'stale',
+] as const satisfies readonly (FileEditFailure | 'unread' | 'stale')[];
+
 /** Where one applied edit landed, so the caller can report the change without
  *  echoing a diff back into the context. */
 export interface AppliedEdit {

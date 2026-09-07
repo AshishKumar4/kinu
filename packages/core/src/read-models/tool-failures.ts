@@ -41,24 +41,7 @@ import { citesApprovalDenial } from '../safety/approval-gate';
 import { FAILURE_WITHOUT_ERROR, type RunEvent } from '../events/types';
 import { JsonObjectSchema, parseJsonValue, type JsonValue } from '../utils/json';
 import { CODE_IS_REFUSAL, ERROR_CODES, tolerate } from '../obs/index';
-
-/**
- * The file plane's own refusal reasons — the ones that are not error CLASSES but
- * decisions the text surgery made about an anchor:
- *
- *   not_found / ambiguous / empty_anchor / overlap — the anchor does not identify
- *     one span, so a splice would be a guess at where to write.
- *   no_change — the replacement equals what it replaces.
- *   unread / stale — the read-before-write contract: the caller does not know
- *     what it would discard.
- *
- * Every one is the tool doing its job, which is why the list is named for its
- * verdict. `missing`, `io` and `bad_input` are NOT here — they are `ErrorCode`s,
- * shared with every other tool, and two of the three are not refusals at all.
- */
-const FILE_REFUSAL_REASONS = [
-  'empty_anchor', 'not_found', 'ambiguous', 'overlap', 'no_change', 'unread', 'stale',
-] as const;
+import { FILE_REFUSAL_REASONS } from '../tools/file-edit';
 
 /**
  * The reason vocabulary a tool writes onto its own result: every `ErrorCode`,
