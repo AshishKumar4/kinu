@@ -30,7 +30,7 @@ import { homedir, tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import * as v from 'valibot';
 
-import { parseJsonValue, parseRefusal } from '../../packages/core/src/index';
+import { parseJsonValue } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import { infraBoundary } from '@kinu.run/test-utils';
 import { AGENT_HOME } from '../../packages/cli/src/config';
@@ -428,27 +428,15 @@ export async function revokeDeviceOverUserRoute(
   });
 }
 
-/**
- * What one command on the device plane actually did.
- *
- * THREE ANSWERS, and a case has to tell them apart. The orchestrator answers
- * `{error}` when the executor is absent or unavailable before any tool runs
- * (orchestrator.ts:4101-4102). The device tool itself answers a CLASSIFIED
- * refusal on the stdout channel — `{"reason":"unavailable","error":"No device
- * connected…"}` — which is what a revoked machine produces. Anything else is
- * output, and output is the only one that proves a round-trip.
- */
+/** Read the executor's declared status channels; stdout is always command data. */
 export type DeviceCommandVerdict =
   | { readonly kind: 'output'; readonly stdout: string }
   | { readonly kind: 'refused'; readonly reason: string; readonly text: string };
 
 export function readDeviceCommand(result: PublicExecutorResult): DeviceCommandVerdict {
-  if (result.error !== undefined) {
-    return { kind: 'refused', reason: 'executor_unavailable', text: result.error };
-  }
+  if (result.refusal !== undefined) return { kind: 'refused', reason: result.refusal.reason, text: result.refusal.error };
+  if (result.error !== undefined) return { kind: 'refused', reason: 'unclassified', text: result.error };
   const stdout = result.stdout ?? '';
-  const refusal = parseRefusal(stdout);
-  if (refusal !== null) return { kind: 'refused', reason: refusal.reason, text: stdout };
   if ((result.exitCode ?? 0) !== 0) {
     return { kind: 'refused', reason: 'nonzero_exit', text: result.stderr ?? stdout };
   }

@@ -9,7 +9,8 @@ import {
   type DeviceTransport,
 } from '../src/execution/device-tunnel-executor';
 import { deviceFleetAsk, type DeviceFleetEntry, type DeviceStatus } from '../src/execution/device-status';
-import { answeredRefusal, parseRefusal } from '../src/execution/exec-result';
+import { answeredRefusal } from '../src/execution/exec-result';
+import { parseJsonValue } from '../src/utils/json';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { toolExecute } from '@kinu.run/test-utils';
@@ -92,13 +93,12 @@ describe('the device fleet at the executor surface', () => {
     const provider = createDeviceTunnelExecutor(t);
 
     const offline = answeredRefusal(await provider.tools.exec.execute('ls', { device: 'spare box' }) ?? null);
-    const unknown = parseRefusal(String(await provider.tools.readFile.execute('/etc/hosts', { device: 'toaster' })));
+    const unknown = parseJsonValue(String(await provider.tools.readFile.execute('/etc/hosts', { device: 'toaster' })));
 
     expect(offline?.reason).toBe('unavailable');
     expect(offline?.error).toContain('"spare box"');
     expect(offline?.error).toContain('ashish@studio, mrwhite@rig');
-    expect(unknown?.reason).toBe('unavailable');
-    expect(unknown?.error).toContain('"toaster"');
+    expect(unknown).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('"toaster"') });
     expect(t.sent).toEqual([]);
   });
 

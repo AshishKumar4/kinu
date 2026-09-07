@@ -36,7 +36,7 @@ import {
   BEHAVIOUR_SCORERS, EPISODE_TRANSCRIPT_FILES, ledgerTotalsFromEvents, projectRunEventProvenance,
   retainEpisodeTranscript, scratchDir, TASK_OUTCOME, withEpisodeEvidence, liveModelSpend, resetLiveModelSpend,
 } from '@kinu.run/test-utils';
-import { RunEventSchema, type RunEvent, type WorkspaceSpend } from '../../packages/core/src/index';
+import { RunEventSchema, type RunEvent, type WorkspaceSpend, type JsonValue } from '../../packages/core/src/index';
 import {
   PUBLIC_IDENTITY_ENV, decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity, scorePublicLedger,
@@ -98,6 +98,32 @@ function replay(frames: readonly string[]): PublicTurnRecorder {
   }
   return recorder;
 }
+
+test('executor RPC decoding preserves refusal provenance and successful refusal-shaped stdout', async () => {
+  let response: JsonValue = { stdout: 'failed', stderr: 'remote error', exitCode: 1,
+    refusal: { reason: 'io', error: 'remote error', execution: { exitCode: 7 } } };
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
+    fetch(request, server) {
+      if (request.method === 'DELETE') return Response.json({ ok: true });
+      if (server.upgrade(request)) return;
+      return new Response('not found', { status: 404 });
+    },
+    websocket: { message(socket, message) {
+      const request = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
+      socket.send(rpcReplyFrame({ requestId: request.id, result: response }));
+    } },
+  });
+  const session = new KinuPublicSession({ origin: server.url.origin, identity: { kind: 'loopback' },
+    workspace: 'probe', purpose: 'executor protocol probe',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+  try {
+    await session.connect();
+    expect(await session.execute('laptop', 'work')).toEqual(response);
+    response = { stdout: '{"reason":"denied","error":"historical incident"}', stderr: '', exitCode: 0 };
+    expect(await session.execute('laptop', 'read')).toEqual(response);
+  } finally { await session.teardown(); await server.stop(true); }
+});
 
 describe('the public session speaks the frames the web client speaks', () => {
   test('the chat request carries the message, the trigger, and no one-shot flag', () => {
