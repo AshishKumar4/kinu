@@ -215,7 +215,7 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
             />
           ) : (
             <div className="px-3">
-              <CodeBlock className={`language-${name.split('.').at(-1) ?? ''}`}>{content}</CodeBlock>
+              <CodeBlock className={`language-${name.slice(name.lastIndexOf(".") + 1)}`}>{content}</CodeBlock>
               {file.truncated && <p className="text-xs p-text-4">… preview truncated. Download the full file.</p>}
             </div>
           )
