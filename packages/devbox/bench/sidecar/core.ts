@@ -34,7 +34,7 @@ import {
 } from '../../src/candidates/control';
 import type { CandidateControlStore, CandidateEnvelopeStoreV2 } from '../../src/candidates/control';
 import { LazyRestore } from '../../src/candidates/lazy-restore';
-import type { LazyRestorePorts } from '../../src/candidates/lazy-restore';
+import type { HeadFilesystem, LazyRestorePorts } from '../../src/candidates/lazy-restore';
 import {
   buildMerkleDelta,
   parentFromPublishedV2,
@@ -192,11 +192,9 @@ export class SidecarCore {
       cause instanceof Error ? cause.message : String(cause),
     );
   #view: MerkleV2View | null = null;
-  /** The lazy restore this box is serving the head through, once a container
-   *  has asked for one. Reopened by every attach, because it reads through
-   *  the view that attach opened. */
+  /** The lazy restore a container adopted. It reads through whichever view
+   *  is current, so it outlives every re-attach and keeps its residency. */
   #lazy: LazyRestore | null = null;
-  #lazyPorts: LazyRestorePorts | null = null;
   #head: CandidateRunControlV2['head'] = null;
   #ledger: { readonly key: string; readonly value: PackLedger } | null = null;
   /** Retired packs this boot deleted; the next seal drops their ledger rows. */
@@ -272,15 +270,10 @@ export class SidecarCore {
       files: [],
       removed: [],
     });
-    // A LAZY RESTORE READS THROUGH THE VIEW THIS ATTACH JUST OPENED, so the
-    // one the previous attach handed out is stale the moment the head moves.
-    // Reopening here rather than dropping it keeps a container that asked for
-    // lazy service lazy across the re-attach a publish performs; what it does
-    // NOT do is claim residency for the new head, which is the container's to
-    // declare because the container is what holds the bytes.
-    this.#lazy = this.#lazyPorts === null
-      ? null
-      : this.restoreLazily(this.#lazyPorts);
+    // A LAZY RESTORE READS THROUGH THE CURRENT VIEW, resolved per call, so
+    // the restore a container adopted before this attach keeps serving the
+    // head that exists now. Its residency is untouched: a placeholder for an
+    // unchanged path still names bytes the new head holds at that path.
     this.#attach = {
       kind: 'attached',
       rootEnvelopeId: control.head.pointer.rootEnvelopeId,
@@ -303,23 +296,32 @@ export class SidecarCore {
    * same container a restore over the NEW head without it asking again.
    */
   restoreLazily(ports: LazyRestorePorts): LazyRestore {
-    const view = this.#view;
-    if (view === null) throw new Error('a lazy restore needs an attached head; attach first');
-    this.#lazyPorts = ports;
-    const restore = new LazyRestore(view, ports, async (path, ino) => {
-      const head = this.#head;
-      const current = this.#view;
-      if (head === null || current === null) throw new Error('a restored inode needs a published head');
-      const stat = await current.stat(path);
+    if (this.#view === null) throw new Error('a lazy restore needs an attached head; attach first');
+    const current = (): MerkleV2View => {
+      const view = this.#view;
+      if (view === null) throw new Error('the head this lazy restore serves is no longer attached');
+      return view;
+    };
+    const head: HeadFilesystem = {
+      stat: (path) => current().stat(path),
+      readdir: (path) => current().readdir(path),
+      extents: (path) => current().extents(path),
+      readRange: (path, offset, length) => current().readRange(path, offset, length),
+    };
+    const restore = new LazyRestore(head, ports, async (path, ino) => {
+      const attached = this.#head;
+      const view = this.#view;
+      if (attached === null || view === null) throw new Error('a restored inode needs a published head');
+      const stat = await view.stat(path);
       if (stat?.kind !== 'file') throw new Error(`restored inode ${path} is not a published file`);
-      const boundaries = await current.boundaries(path);
-      if (this.#head?.pointer.rootEnvelopeId !== head.pointer.rootEnvelopeId) {
+      const boundaries = await view.boundaries(path);
+      if (this.#head?.pointer.rootEnvelopeId !== attached.pointer.rootEnvelopeId) {
         throw new Error('the published head changed while binding a restored inode');
       }
       await this.#ports.daemon.boundaries({
-        cut: head.envelope.cut.cut,
-        generation: head.envelope.generation,
-        root: head.pointer.rootEnvelopeId,
+        cut: attached.envelope.cut.cut,
+        generation: attached.envelope.generation,
+        root: attached.pointer.rootEnvelopeId,
         maxChunkBytes: this.#chunkMax(),
         files: [{ ino: String(ino), path, size: stat.size, boundaries }],
         removed: [],
@@ -330,7 +332,7 @@ export class SidecarCore {
   }
 
   /** The lazy restore this box is serving through, if a container asked for
-   *  one. Answers the CURRENT head's: every attach reopens it. */
+   *  one. It reads the current head whichever attach opened it. */
   lazyRestore(): LazyRestore | null {
     return this.#lazy;
   }
