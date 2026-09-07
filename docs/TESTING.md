@@ -67,7 +67,8 @@ measure the packages separately. Bare paths, same day:
 | `bun test packages/cli` | 625 | 75 | the substring also selects `packages/cli-backend/tests` |
 
 `bun run test:workerd` is `vitest run --root packages/cf-backend
-tests/workerd/`. Its inventory, measured 2026-09-05 by listing
+tests/workerd/ && vitest run --root packages/devbox tests/workerd/`. Its
+cf-backend inventory, measured 2026-09-05 by listing
 `packages/cf-backend/tests/workerd/*.test.ts`, has 23 files:
 `abort-final-chunk`, `agent-fiber-recovery`, `codemode-sandbox`,
 `decorated-agent`, `device-inflight`, `do-alarm`, `do-eviction-recovery`,

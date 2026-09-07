@@ -8,7 +8,7 @@ Production answers on https://kinu.run, staging on https://staging.kinu.run. Pre
 
 One app origin per environment (`workers_dev` false in both), so `CLI_PUBLIC_ORIGIN` names the whole set. The Worker redirects cleartext to HTTPS and sends HSTS for that host plus the preview subtree. Any other hostname reaching the Worker is not an app origin and gets served as nothing.
 
-Production's preview suffix is `kinu.run` itself, so previews are strict subdomains of the app host and `*.kinu.run/*` matches previews, never the app. Staging leaves `PREVIEW_HOST_SUFFIX` empty (`staging.kinu.run` is no wildcard parent) and serves no previews. Staging binds as a route (`pattern: "staging.kinu.run"`, `zone_name: "kinu.run"`), not a custom domain: production's wildcard already claims `*.kinu.run/*`, and exact-route-beats-wildcard is the only precedence rule Cloudflare documents unambiguously.
+Production's preview suffix is `kinu.run` itself, so previews are strict subdomains of the app host and `*.kinu.run/*` matches previews, never the app. Staging leaves `PREVIEW_HOST_SUFFIX` empty (`staging.kinu.run` is no wildcard parent) and serves no previews. Staging binds as a route (`pattern: "staging.kinu.run/*"`, `zone_name: "kinu.run"`), not a custom domain: production's wildcard already claims `*.kinu.run/*`, and exact-route-beats-wildcard is the only precedence rule Cloudflare documents unambiguously.
 
 ## Local development
 
