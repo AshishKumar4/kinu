@@ -358,6 +358,13 @@ export class DurableStore {
     return held?.bytes ?? null;
   }
 
+  range(key: string, offset: number, length: number): Uint8Array | null {
+    const held = this.objects.get(key);
+    const bytes = held?.bytes.subarray(offset, offset + length) ?? null;
+    this.ops.push({ op: 'get', key, bytes: bytes?.byteLength ?? 0 });
+    return bytes;
+  }
+
   /** The metadata stored beside `key`, or null for an absent object. */
   meta(key: string): Readonly<Record<string, string>> | null {
     return this.objects.get(key)?.meta ?? null;
@@ -2722,16 +2729,15 @@ class MountedPayloadStore implements CandidatePayloadStore {
   }
 
   async readRange(intent: RangeReadIntent): Promise<Uint8Array> {
-    const bytes = this.durable.get(`${this.payloadPrefix}/${intent.exactKey}`);
+    const bytes = this.durable.range(`${this.payloadPrefix}/${intent.exactKey}`, Number(intent.byteOffset), Number(intent.byteLength));
     if (bytes === null) throw new Error(`missing candidate object: ${intent.exactKey}`);
-    const offset = Number(intent.byteOffset);
-    return bytes.slice(offset, offset + Number(intent.byteLength));
+    return bytes;
   }
 
   async readRun(run: PackRun): Promise<Uint8Array> {
-    const bytes = this.durable.get(`${this.payloadPrefix}/${run.key}`);
+    const bytes = this.durable.range(`${this.payloadPrefix}/${run.key}`, run.offset, run.length);
     if (bytes === null) throw new Error(`missing candidate object: ${run.key}`);
-    return bytes.slice(run.offset, run.offset + run.length);
+    return bytes;
   }
 }
 
@@ -3596,15 +3602,14 @@ function merklePackV2Arm(): ConformanceArm {
             };
           },
           readRange: async (intent: RangeReadIntent) => {
-            const bytes = durable.get(`${paths.payloadPrefix}/${intent.exactKey}`);
+            const bytes = durable.range(`${paths.payloadPrefix}/${intent.exactKey}`, Number(intent.byteOffset), Number(intent.byteLength));
             if (bytes === null) throw new Error(`missing candidate object: ${intent.exactKey}`);
-            const offset = Number(intent.byteOffset);
-            return bytes.slice(offset, offset + Number(intent.byteLength));
+            return bytes;
           },
           readRun: async (run: PackRun) => {
-            const bytes = durable.get(`${paths.payloadPrefix}/${run.key}`);
+            const bytes = durable.range(`${paths.payloadPrefix}/${run.key}`, run.offset, run.length);
             if (bytes === null) throw new Error(`missing candidate object: ${run.key}`);
-            return bytes.slice(run.offset, run.offset + run.length);
+            return bytes;
           },
           deleteObject: async (key: string) => {
             durable.delete(`${paths.payloadPrefix}/${key}`);
