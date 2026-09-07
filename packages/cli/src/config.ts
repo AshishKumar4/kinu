@@ -25,6 +25,7 @@ import {
   type LLMProviderConfig,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
+  shellQuote,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import {
@@ -729,9 +730,6 @@ export function pathHint(): string | null {
   return (process.env.PATH ?? '').split(':').includes(BIN_DIR) ? null : `Add ${BIN_DIR} to PATH for kinu aliases.`;
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
 
 function validateIdentifier(value: string, noun: string): void {
   if (!KINU_IDENTIFIER_RE.test(value)) {
