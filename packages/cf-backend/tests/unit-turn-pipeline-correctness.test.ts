@@ -785,10 +785,12 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('async beforeTurn(ctx: TurnContext)'),
       actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
     );
-    expect(beforeTurn).toContain('const submittedTools = { ...ctx.tools, ...effectiveTools };');
+    // The counted surface is the mode-resolved toolset the turn submits, and
+    // the same set is what Think receives after the mode binding.
+    expect(beforeTurn).toContain('const submittedTools = { ...modeTools, ...effectiveTools };');
     expect(beforeTurn).toContain('effectiveActiveTools.flatMap((name) => {');
     expect(beforeTurn).toContain('const entry = submittedTools[name];');
-    expect(beforeTurn).toContain('tools: { ...ctx.tools, ...cfg.tools }');
+    expect(beforeTurn).toContain('cfg.tools = toolsForInvocation(workMode, { ...modeTools, ...effectiveTools });');
   });
 
   test('attachment sanitization runs on the whole history BEFORE the extension transform', () => {
