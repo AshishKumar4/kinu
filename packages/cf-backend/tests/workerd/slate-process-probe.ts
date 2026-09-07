@@ -1,7 +1,7 @@
 import { DurableObject, WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { MemoryContentStore } from '@agent-core/core/content';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
-import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { parseSlateProject, routeSlateBindingCall, type SlateProcess, type JsonValue, type SlateCallResult } from '@kinu.run/core';
@@ -43,13 +43,13 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     '  calls += 1;',
     '  return Response.json({ calls, path: new URL(request.url).pathname });',
     '} };',
-  ].join('\n'), bindDepth = false): Promise<void> {
+  ].join('\n'), bindDepth = false, cred: VfsCred = CRED_SESSION_USER): Promise<void> {
     const root = '/home/user/slates/notes';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
     files.writeFile(`${root}/server.ts`, source);
     this.process = await this.resident.start({
-      key: crypto.randomUUID(), root, port: 8789, cred: CRED_SESSION_USER,
+      key: crypto.randomUUID(), root, port: 8789, cred,
       bindings: bindDepth ? { PEER: exports.SlateDepthProbe({}) } : {},
       project: parseSlateProject({ main: 'server.ts' }),
     });
@@ -61,13 +61,20 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     kernel.writeFile('/root/private.ts', 'export default "kernel-private-source";', { mode: 0o600 });
   }
 
+  async seedGroupSource(): Promise<void> {
+    const kernel = this.vfs.as(CRED_KERNEL);
+    kernel.mkdir('/shared', { recursive: true });
+    kernel.writeFile('/shared/group.ts', 'export default "group-protected-source";', { mode: 0o640 });
+    kernel.chown('/shared/group.ts', 0, 3000);
+  }
+
   async readPrivateSourceAsAgent() {
     try { return { content: this.vfs.as(CRED_SESSION_USER).readFileString('/root/private.ts') }; }
     catch (cause) { return { error: renderThrownChain({ cause }) }; }
   }
 
-  async compileProbe(source: string) {
-    try { await this.start(source); }
+  async compileProbe(source: string, cred: VfsCred = CRED_SESSION_USER) {
+    try { await this.start(source, false, cred); }
     catch (cause) {
       if (!(cause instanceof KinuError)) throw cause;
       return { code: cause.code, detail: renderThrownChain({ cause }) };

@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import type { AgentContext, Connection, ConnectionContext, FiberRecoveryContext, WSMessage } from 'agents';
 import { parseJsonValue, type JsonObject, type JsonValue, type SqlValue } from '@kinu.run/core';
 import type { McpCredentialTransport } from '../../src/user/mcp';
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 type ModuleMockFactory = Parameters<typeof mock.module>[1];
 
@@ -921,6 +921,11 @@ const mcpDiscovered: string[] = [];
 /** The failure the next `callTool` throws. An `Error`, because that is what the
  *  SDK's transports raise and what the classification under test reads. */
 let mcpCallToolFailure: Error | null = null;
+let mcpCallToolAnswer: CallToolResult | undefined;
+
+export function seedMcpAnswer(answer: CallToolResult): void {
+  mcpCallToolAnswer = answer;
+}
 
 /** The failure the next discovery PROBE runs into. The SDK's reauthorization
  *  path sends its own request when `discoverIfConnected` re-probes a live
@@ -1098,6 +1103,7 @@ export function seedMcpTools(id: string, tools: RecordedMcpConnection['tools']):
 }
 
 export function resetRecordedMcp(): void {
+  mcpCallToolAnswer = undefined;
   mcpServers.clear();
   mcpEstablished.length = 0;
   mcpDiscovered.length = 0;
@@ -1270,16 +1276,15 @@ class FakeMCPClientManager {
     connection.connectionState = isMcpDiscoveryUnauthorized(probe) ? 'authenticating' : 'connected';
   }
 
-  /** The SDK's `CallToolResult`, as much of it as this mock produces: an empty
-   *  content list, or the seeded failure. `content` blocks are the SDK's
-   *  discriminated `{ type, text? }` shape rather than `unknown`, so a caller
-   *  reading a result gets a contract. */
-  async callTool(): Promise<{ content: { type: string; text?: string }[] }> {
+  /** A real MCP result, including protocol error state and permitted extension fields. */
+  async callTool(): Promise<CallToolResult> {
     const failure = mcpCallToolFailure;
     if (failure !== null) {
       mcpCallToolFailure = null;
       throw failure;
     }
-    return { content: [] };
+    const answer = mcpCallToolAnswer;
+    mcpCallToolAnswer = undefined;
+    return answer ?? { content: [] };
   }
 }

@@ -81,8 +81,10 @@ root's providers; a facet (a subordinate, a head, a node) acts as its own
 provisioned uid with its own role-narrowed providers. Reach is the open turn's
 profile only while that turn is in flight; between turns the role is resolved
 afresh on every call, so a role revoked after a turn completes is seen at once.
-Source operations run under the same credential, so a facet that cannot write
-a tree directly cannot commit, fork into, or restore it through a slate either.
+Source capture and compilation use that actor's credentialed reads; fork and
+restore use its credentialed writes. A facet cannot restore a tree it cannot
+write directly. Source, compiler and process caches distinguish the full
+credential: uid, gid, supplementary groups and umask.
 Each caller boots its own resident process, and an app hop keeps the caller's
 authority rather than adopting the callee's author. A declaration is not a
 permission grant, and there is no binding-specific approval ladder. The host
@@ -96,8 +98,10 @@ removed reach.
 | `mcp`: `server`, `tools?` | One owner-configured MCP connection, named by connection id rather than display name. Optional `tools` narrows reach; the owner's allowed-tool policy shapes the actor's descriptor surface, and the caller's ROLE must admit the tool's key (`mcp_<server>_<tool>`) exactly as the native turn admits it. Calls take one JSON object, or no arguments for `{}`. |
 | `app`: `id` | A JSON POST route on another slate's authored server. The callee runs for the caller: its declared bindings resolve with the originating actor's authority. Calls carry depth through the resident request and its AsyncLocalStorage context; a ninth app hop refuses. |
 
-A queued approval is not a simulated success. Binding failures preserve their
-refusal class. Neither credentials nor the workspace object's storage are
+A queued approval is not a simulated success. Namespace refusal results keep
+their failure class. MCP results retain their own `isError` protocol and read
+models retain their JSON payload; business-data `reason`/`error` fields are not
+interpreted as namespace refusals. Neither credentials nor the workspace object's storage are
 introduced as bindings. Lasting application state belongs in the workspace file
 plane or another explicitly available capability, not process memory.
 
