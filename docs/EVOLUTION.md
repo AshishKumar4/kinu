@@ -15,9 +15,9 @@ The fitness signal is execution, observed at the host. A crafted tool that raise
 Two gates stand between observation and effect. The misevolution veto runs before
 each crafted-tool write. The injection floor is reachable because
 `workspace.createTool` calls `craftStore.create`
-(`core/src/execution/inline.ts:300-373`). The `crafted_tools` quality columns
+(`core/src/execution/inline.ts`). The `crafted_tools` quality columns
 default to `0.5`, the `CRAFT_NEUTRAL_PRIOR` value
-(`core/src/craft/schemas.ts:13-18`; `craft/in-episode.ts:100`), so an unscored
+(`agent-utils/src/stores/craft.ts`; `core/src/craft/in-episode.ts`), so an unscored
 tool cannot bypass the filter. Extracted candidates use the same store
 (`core/src/craft/conflict.ts:119`). Each settled block updates that row in one
 synchronous SQL statement.

@@ -25,19 +25,31 @@ it directly: `core/src/events/outbox.ts:30` builds its outbox on
 `@nimbus-sh/fabric/outbox.js`. `@nimbus-sh/worker` also depends on fabric, so
 the resolved tree holds it either way.
 
-`patches/` holds seven patch files. Four are Nimbus patches:
+`patches/` holds nine files. Eight are `patchedDependencies` entries that bun
+applies at install. Four of those are Nimbus patches:
 `@nimbus-sh%2Fcore@0.6.0.patch`, `@nimbus-sh%2Ffabric@0.2.0.patch`,
 `@nimbus-sh%2Fplatform@0.1.0.patch`, and `@nimbus-sh%2Fworker@0.4.0.patch`. The
-other three are `@plannotator%2Fui@0.30.0.patch`,
-`@cloudflare%2Fsandbox@0.12.8.patch`, and `agents@0.20.1.patch`. The core patch
+other four are `@plannotator%2Fui@0.30.0.patch`,
+`@cloudflare%2Fsandbox@0.12.8.patch`, `agents@0.20.1.patch`, and
+`@cloudflare%2Fcodemode@0.5.1.patch`. The core patch
 re-points `esbuild-wasm` at its browser entrypoint (`esbuild-wasm/esm/browser.js`) so the
-Worker bundle does not instantiate the Go-imports build. All seven are declared in
-the root `package.json`'s `patchedDependencies` (`package.json:152-160`). The sandbox patch makes the SDK's handler-map assignments MERGE, so configuring a bucket
+Worker bundle does not instantiate the Go-imports build. All eight are declared in
+the root `package.json`'s `patchedDependencies`. The sandbox patch makes the SDK's handler-map assignments MERGE, so configuring a bucket
 mount cannot unbind an outbound handler the host installed
-(`KinuSandbox.outboundHandlers`, `cf-backend/src/kinu-sandbox.ts`). `bun run gate:patch-parity`
+(`KinuSandbox.outboundHandlers`, `cf-backend/src/kinu-sandbox.ts`). The codemode
+patch adds the `./normalize` subpath export and the `dist/normalize.js` behind
+it, which `cli-backend/src/executor.ts` and
+`cli-backend/src/execute-tools-factory.ts` import as `normalizeCode`.
+`bun run gate:patch-parity`
 (`scripts/patch-parity.ts`) reads `patchedDependencies` out of the root
-`package.json`, so it governs all seven. Its header still narrates the `@nimbus-sh/core` patch incident,
+`package.json`, so it governs those eight. Its header still narrates the `@nimbus-sh/core` patch incident,
 because that incident is why the gate exists.
+
+The ninth file, `upstream-codemode-normalize.patch`, is not a
+`patchedDependencies` entry, so bun never applies it and `gate:patch-parity`
+does not govern it. It patches the codemode repository's own
+`packages/codemode/` sources, which is the upstream proposal behind the export
+the installed patch supplies locally.
 
 The core patch also ports Nimbus `c9af250e`: `EsbuildService` keeps
 the supplied credentialed view and never acquires kernel authority itself.

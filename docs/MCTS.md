@@ -14,8 +14,9 @@ Models use `action:'swarm'`, `depth`, the verifier registry and
 [EXPLORATION.md](./EXPLORATION.md) for that surface.
 
 Every caller calls `runMCTS` directly: lifetime evolution
-(`evolution/engine.ts`, `lifetimeMCTSBudget`), `tests/evals/exploration.eval.test.ts`
-and `integration-mcts.test.ts`. The `createMCTSStrategy` adapter and the
+(`evolution/engine.ts`, `lifetimeMCTSBudget`) is the only one in product code,
+and the rest are suites, among them `tests/evals/exploration.eval.test.ts` and
+`packages/core/tests/integration-mcts.test.ts`. The `createMCTSStrategy` adapter and the
 `StrategyRegistry` it was registered in are gone. No production path ever built
 that registry, so the adapter only added a shape in front of the engine. `mcts_search_runs`
 (`mcts/search-store.ts`) retains config, iteration and budget under a lease

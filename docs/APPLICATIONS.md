@@ -39,8 +39,8 @@ graph TB
     end
 ```
 
-The web UI exposes the agent's internal state across six surfaces: Output,
-Work, Releases, Exploration, Agent, and Environment.
+The web UI exposes the agent's internal state across the work surfaces Output,
+Work, Files, Releases, Exploration, Agent, and Environment.
 
 ### Personal assistant with durable memory
 
