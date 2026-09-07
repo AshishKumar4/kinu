@@ -48,7 +48,7 @@ const OTHER_ID = 'b'.repeat(32);
  * request. The cursor walk is driven off the cursor in the query string, which
  * is also how the real store decides.
  */
-type Answer = (url: URL) => CannedAnswer;
+type Answer = (url: URL) => CannedAnswer | Promise<CannedAnswer>;
 
 function page(status: number, body: JsonValue): Answer {
   return () => answer(status, body);
@@ -102,7 +102,7 @@ async function serveControl(browserPage: Page, fixture: Fixture): Promise<Probe>
       });
       return;
     }
-    const { status, body } = answer(url);
+    const { status, body } = await answer(url);
     await request.respond({
       status, contentType: 'application/json', body: JSON.stringify(body),
     });
@@ -221,11 +221,7 @@ function detailBody(over: Record<string, JsonValue>): JsonValue {
  *  for the panel grid the read produces. Network idle is not readiness — the
  *  intercepted answer settles before React commits. */
 async function openWorkspaceRow(browserPage: Page): Promise<void> {
-  await browserPage.evaluate(() => {
-    const row = [...document.querySelectorAll('tbody tr')]
-      .find((node) => node.textContent?.includes('checkout-fixes'));
-    if (row instanceof HTMLElement) row.click();
-  });
+  await browserPage.locator('tbody tr ::-p-text(checkout-fixes)').setTimeout(15_000).click();
   // Lowercased, because `innerText` is RENDERED text and the panel titles carry
   // an `uppercase` class — the same reason the assertions below compare in lower
   // case rather than pinning a CSS transform.
@@ -477,14 +473,23 @@ describe('the control plane in a browser', () => {
   test('a workspace drilldown reports a down panel instead of blanking the page', async () => {
     await withGallery(async ({ browser, origin }) => {
       const browserPage = await browser.newPage();
+      const rowsReady = Promise.withResolvers<void>();
       const probe = await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
-        workspaces: (url) => url.pathname.endsWith('/workspaces')
-          ? answer(200, { status: 'end', items: [workspaceRow()] })
-          : answer(200, detailBody({ executors: { status: 'failed', reason: 'the sandbox is not reachable' } })),
+        workspaces: async (url) => {
+          if (url.pathname.endsWith('/workspaces')) {
+            await rowsReady.promise;
+            return answer(200, { status: 'end', items: [workspaceRow()] });
+          }
+          return answer(200, detailBody({ executors: { status: 'failed', reason: 'the sandbox is not reachable' } }));
+        },
       });
       await openControl(browserPage, origin, 'Workspaces');
-      await openWorkspaceRow(browserPage);
+      const opened = openWorkspaceRow(browserPage);
+      // Let the click attempt run while the list response is still held.
+      await browserPage.evaluate(() => document.querySelector('tbody'));
+      rowsReady.resolve();
+      await opened;
 
       const text = (await browserPage.evaluate(() => document.body.innerText)).toLowerCase();
       expect(text).toContain('recent runs');
