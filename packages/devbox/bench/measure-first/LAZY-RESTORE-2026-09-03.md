@@ -341,4 +341,17 @@ walked measured 10 ms against 8 ms for a plain seal. It is O(tree) and is
 paid only by a generation that wrote through a multi-link inode. A links
 table carried by the head would remove the walk; it is not built.
 
+## The direct R2 transport over workerd, 2026-09-06
+
+The same runner takes `KINU_STORE_ENDPOINT` and then publishes through
+`DirectR2Store`, the HTTP transport the container uses against the
+intercepted R2 endpoint in production. The host test serves that wire from
+a workerd worker over a persisted R2 bucket (one PUT per pack answered with
+an ETag, range GETs answered 206, DELETE) and runs the container on the
+host network. All 28 checks pass over both transports. Store writes and
+bytes are equal seal for seal: first seal 4 PUTs and 762,564 B, second
+seal 2 PUTs and 113,255 B, 5 GC deletes, 1 attach read. The head
+authority stays in memory in this test; the Durable Object side is the
+workerd suite's.
+
 

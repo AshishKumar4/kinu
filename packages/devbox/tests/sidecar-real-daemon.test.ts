@@ -10,7 +10,10 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { Miniflare } from 'miniflare';
 import { realpathSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 const packageRoot = resolve(dirname(new URL(import.meta.url).pathname), '..');
@@ -81,7 +84,64 @@ function dependencyRoot(): string {
   return dirname(realpathSync(join(repoRoot, 'node_modules', 'valibot')));
 }
 
-async function runSidecar(): Promise<Report> {
+/**
+ * The direct R2 transport's wire, served by workerd's R2 over HTTP: one PUT
+ * per pack answered with an ETag, range GETs answered 206, DELETE. This is
+ * the shape `DirectR2Store` speaks to the intercepted endpoint in production,
+ * persisted to a directory so the bytes outlive the process.
+ */
+const R2_ENDPOINT_WORKER = `
+export default {
+  async fetch(request, env) {
+    const key = decodeURIComponent(new URL(request.url).pathname.slice(1));
+    if (request.method === 'PUT') {
+      const object = await env.BUCKET.put(key, await request.arrayBuffer());
+      return new Response(null, { status: 200, headers: { etag: object.httpEtag } });
+    }
+    if (request.method === 'DELETE') {
+      await env.BUCKET.delete(key);
+      return new Response(null, { status: 204 });
+    }
+    if (request.method !== 'GET') return new Response(null, { status: 405 });
+    const range = request.headers.get('range');
+    const span = range === null ? null : /^bytes=(\\d+)-(\\d+)$/u.exec(range);
+    if (range !== null && span === null) return new Response(null, { status: 416 });
+    const object = await env.BUCKET.get(key, span === null
+      ? undefined
+      : { range: { offset: Number(span[1]), length: Number(span[2]) - Number(span[1]) + 1 } });
+    if (object === null) return new Response(null, { status: 404 });
+    return new Response(object.body, { status: span === null ? 200 : 206, headers: { etag: object.httpEtag } });
+  },
+};
+`;
+
+async function withR2Endpoint<T>(body: (endpoint: string) => Promise<T>): Promise<T> {
+  const persist = await mkdtemp(join(tmpdir(), 'sidecar-r2-'));
+  const runtime = new Miniflare({
+    host: '127.0.0.1',
+    port: 0,
+    resourcePersistencePath: persist,
+    workers: [{
+      config: {
+        name: 'r2-endpoint', type: 'worker', compatibilityDate: '2026-04-14',
+        manifest: {
+          mainModule: 'index.mjs', modulesRoot: '/',
+          modules: { 'index.mjs': { type: 'esm', contents: R2_ENDPOINT_WORKER } },
+        },
+        env: { BUCKET: { type: 'r2', name: 'BUCKET' } },
+      },
+    }],
+  });
+  try {
+    const url = await runtime.ready;
+    return await body(url.origin);
+  } finally {
+    await runtime.dispose();
+    await rm(persist, { recursive: true, force: true });
+  }
+}
+
+async function runSidecar(endpoint?: string): Promise<Report> {
   const built = await run(['docker', 'build', '-t', image, daemonContext]);
   if (built.code !== 0) throw new Error(`daemon image build failed:\n${built.stderr.slice(-4000)}`);
   const dependencies = dependencyRoot();
@@ -89,10 +149,14 @@ async function runSidecar(): Promise<Report> {
     '-v', `${repoRoot}:${repoRoot}:ro`,
     ...(dependencies.startsWith(`${repoRoot}/`) ? [] : ['-v', `${dependencies}:${dependencies}:ro`]),
   ];
+  // The R2 endpoint listens on the host loopback, so the container shares the
+  // host network for that run and nothing else changes.
+  const network = endpoint === undefined ? [] : ['--network', 'host', '-e', `KINU_STORE_ENDPOINT=${endpoint}`];
   const executed = await run([
     'docker', 'run', '--rm', '--privileged', '--device', '/dev/fuse',
     '--entrypoint', '/bin/sh',
     '-e', 'HOME=/tmp',
+    ...network,
     ...mounts,
     '-w', repoRoot,
     image, '-lc', `mkdir -p /work && exec bun ${runner}`,
@@ -104,17 +168,32 @@ async function runSidecar(): Promise<Report> {
   return JSON.parse(line.slice('REPORT '.length));
 }
 
+function expectGreen(report: Report, store: string): void {
+  const failed = report.checks.filter((check) => !check.ok).map((check) => `${check.check}: ${check.detail}`);
+  expect(report.error, failed.join('; ')).toBeUndefined();
+  expect(report.checks.map((check) => check.check)).toEqual([...CHECKS]);
+  expect(failed).toEqual([]);
+  expect(report.facts.payloadStore).toBe(store);
+  expect(report.facts.compacted).toBe(1);
+  expect(Number(report.facts.gcDeletes)).toBeGreaterThan(0);
+  // A fresh boot opens the head with one range read: the root record.
+  expect(report.facts.freshAttachReads).toBe(1);
+  expect(Number(report.facts.secondSealPuts)).toBeLessThan(Number(report.facts.firstSealPuts));
+}
+
 describe('the v2 sidecar over the real journal daemon', () => {
   test('seals, publishes, compacts, collects and recovers a real mount, and keeps POSIX descriptor semantics', async () => {
-    const report = await runSidecar();
-    const failed = report.checks.filter((check) => !check.ok).map((check) => `${check.check}: ${check.detail}`);
-    expect(report.error, failed.join('; ')).toBeUndefined();
-    expect(report.checks.map((check) => check.check)).toEqual([...CHECKS]);
-    expect(failed).toEqual([]);
-    expect(report.facts.compacted).toBe(1);
-    expect(Number(report.facts.gcDeletes)).toBeGreaterThan(0);
-    // A fresh boot opens the head with one range read: the root record.
-    expect(report.facts.freshAttachReads).toBe(1);
-    expect(Number(report.facts.secondSealPuts)).toBeLessThan(Number(report.facts.firstSealPuts));
+    expectGreen(await runSidecar(), 'memory');
   }, 600_000);
+
+  test('does the same over the direct R2 transport against a persisted workerd bucket', async () => {
+    const memory = await runSidecar();
+    const r2 = await withR2Endpoint(async (endpoint) => await runSidecar(endpoint));
+    expectGreen(r2, 'direct-r2');
+    // The transport changes nothing the deciding metric counts: the same
+    // number of store writes and the same bytes, seal for seal.
+    for (const fact of ['firstSealPuts', 'firstSealBytes', 'secondSealPuts', 'secondSealBytes', 'gcDeletes', 'freshAttachReads'] as const) {
+      expect(r2.facts[fact], fact).toBe(memory.facts[fact]);
+    }
+  }, 900_000);
 });
