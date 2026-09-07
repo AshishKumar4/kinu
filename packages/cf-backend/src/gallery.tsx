@@ -112,7 +112,7 @@ import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { LogBlock } from "@/components/surfaces/ActivitySurface";
-import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent } from "@/components/surfaces/shared";
+import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { QualityView } from "@/components/surfaces/evolution-panels";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
@@ -3130,6 +3130,31 @@ function MarkdownFrame() {
     </div>
   );
 }
+function CodeRenderingFrame() {
+  const [source, setSource] = useState('const pending = "stream');
+  const samples = [
+    ['js', 'export const answer = "ready"; // result'],
+    ['ts', 'interface Result { value: number }\nconst answer: Result = { value: 42 };'],
+    ['json', '{"ready": true, "count": 42, "name": "result"}'],
+    ['shell', '# report\nexport NAME="result"\necho "$NAME"'],
+    ['py', 'def greet(name):\n    return "Hello " + name'],
+    ['css', '.result { color: red; padding: 12px; }'],
+    ['sql', 'SELECT name FROM results WHERE ready = true;'],
+    ['go', 'package main\nfunc main() { println("ready") }'],
+    ['rust', 'fn main() { let ready = true; println!("ready"); }'],
+    ['c', '#include <stdio.h>\nint main(void) { printf("ready"); return 0; }'],
+    ['cpp', '#include <iostream>\nint main() { std::cout << "ready"; return 0; }'],
+    ['unknown-language', '<script>unknown & safe</script>'],
+  ];
+  return <div className="flex h-screen p-bg p-text">
+    <aside className="w-60 shrink-0 border-r p-border"><Sidebar /></aside>
+    <main className="min-w-0 flex-1 overflow-auto p-4">
+      {samples.map(([language, code]) => <section key={language} data-code-sample={language}><CodeBlock className={`language-${language}`}>{code}</CodeBlock></section>)}
+      <label>Streaming source<textarea aria-label="Streaming source" value={source} onChange={(event) => setSource(event.currentTarget.value)} /></label>
+      <section data-code-sample="stream"><CodeBlock className="language-js">{source}</CodeBlock></section>
+    </main>
+  </div>;
+}
 
 function GalleryModal() {
   return (
@@ -5255,6 +5280,7 @@ async function mount() {
     );
   }
   else if (frame === "markdown") node = <MarkdownFrame />;
+  else if (frame === "coderendering") node = <CodeRenderingFrame />;
   else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "chatsteer") node = <ChatSteerFrame />;
   else if (frame === "chatempty") node = <ChatEmptyFrame />;

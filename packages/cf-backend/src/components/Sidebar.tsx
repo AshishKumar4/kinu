@@ -290,7 +290,7 @@ export default function Sidebar() {
                       <NavLink
                         to={`/workspace/${a.name}`}
                         className={({ isActive: linkActive }) =>
-                          `flex items-center gap-2 rounded-lg py-[7px] pl-3 pr-16 transition-colors ${
+                          `flex items-center gap-2 rounded-lg py-[7px] pl-3 pr-16 lg:pr-3 lg:group-hover:pr-16 lg:group-focus-within:pr-16 transition-colors ${
                             linkActive ? 'bg-[var(--c-elevated)]' : 'hover:bg-[var(--c-elevated)]'
                           }`
                         }
@@ -301,14 +301,14 @@ export default function Sidebar() {
                         <span className="size-1.5 shrink-0 rounded-full">
                           {live?.running
                             ? <span className="block size-1.5 rounded-full p-dot-success p-dot-pulse" title="Working now" />
-                            : (live?.unseenChangelog ?? 0) > 0
-                              ? <span className="block size-1.5 rounded-full p-dot-accent" title={`${live!.unseenChangelog} new self-change${live!.unseenChangelog === 1 ? "" : "s"}`} />
+                            : live !== undefined && live.unseenChangelog > 0
+                              ? <span className="block size-1.5 rounded-full p-dot-accent" title={`${live.unseenChangelog} new self-change${live.unseenChangelog === 1 ? "" : "s"}`} />
                               : isActive
                                 ? <span className="block size-1.5 rounded-full p-dot-accent" />
                                 : null}
                         </span>
                         <span className={`min-w-0 flex-1 truncate text-[13px] ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'} ${a.displayName.trim() ? '' : 'italic p-text-3'}`}>{shown}</span>
-                        {age && <span className="shrink-0 text-[10.5px] tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0">{age}</span>}
+                        {age && <span className="w-[30px] shrink-0 text-right text-[10.5px] tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
                       </NavLink>
                       <Link
                         to={`/settings/${a.name}`}

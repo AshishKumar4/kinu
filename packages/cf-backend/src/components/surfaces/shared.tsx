@@ -3,9 +3,10 @@
  * surfaces — kept in one place so there is a single source of truth (DRY) for
  * markdown rendering, code blocks, and empty states.
  */
-import { memo, useState, type ReactNode } from "react";
+import { memo, useCallback, useState, type ReactNode } from "react";
 import { CaretRightIcon, CopyIcon, ImageBrokenIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { MAX_LINES_PER_FILE, type DiffLine } from "@kinu.run/core";
@@ -38,26 +39,20 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
   );
 }
 
-/**
- * A fenced code block.
- *
- * Kumo's `<Code>` is its deprecated no-highlight component: it renders a
- * transparent, unpadded `w-auto` slab and nothing else, so every long line
- * escaped its container and was clipped by the wrapper's `overflow-hidden`.
- * Kumo's replacement (`CodeHighlighted`) hardcodes `github-light`/`vesper`
- * with no way to pass a theme, which would put GitHub's blues and purples on
- * a warm umber ground. So the block owns its own surface, in the same terms
- * the landing page sets its install command: one warm ink, a recessed
- * ground, a hairline, and a header welded to the body.
- *
- * `min-w-0` on the scroller is load-bearing — inside the flex column the
- * chat is built from, a track without it takes its content's width and
- * overflows the column instead of scrolling.
- */
+
+/** One code well for fences, tool inputs and source viewers. Unknown grammars
+ * stay readable as plain text. One cached highlighter loads grammars on demand. */
 export function CodeBlock({ children, className }: { children: React.ReactNode; className?: string }) {
   const { status, copy } = useCopy();
   const code = String(children).replace(/\n$/, "");
   const lang = className?.replace(/^language-/, "") ?? "";
+  const { resource, reload } = useAsyncResource(useCallback(async () => {
+    if (!lang) return { code, language: lang, html: null };
+    const { highlightCode } = await import("./code-highlighter");
+    return highlightCode(code, lang);
+  }, [code, lang]));
+  const html = resource.status === "ready" && resource.value.code === code && resource.value.language === lang
+    ? resource.value.html : null;
   return (
     <div className="p-code my-2 rounded-lg overflow-hidden">
       <div className="p-code-head flex items-center justify-between gap-2 px-3 py-1 text-[10px]">
@@ -67,7 +62,10 @@ export function CodeBlock({ children, className }: { children: React.ReactNode; 
           <CopyIcon size={12} />{copyLabel(status)}
         </button>
       </div>
-      <pre className="p-scroll-x p-code-scroll m-0 px-3 py-2.5 text-[12.5px] leading-[1.55]"><code>{code}</code></pre>
+      {html === null
+        ? <pre className="p-scroll-x p-code-scroll m-0 px-3 py-2.5 text-[12.5px] leading-[1.55]"><code>{code}</code></pre>
+        : <div className="p-scroll-x p-code-scroll"><div className="p-code-highlight" dangerouslySetInnerHTML={{ __html: html }} /></div>}
+      {resource.status === "error" && <button type="button" onClick={reload} className="px-3 py-1 text-xs p-warning" title={resource.message}>Syntax highlighting failed. Retry</button>}
     </div>
   );
 }

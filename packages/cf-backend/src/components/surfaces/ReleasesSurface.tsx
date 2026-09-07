@@ -40,7 +40,7 @@ import { isPreviewUrl } from "@/lib/preview-origin";
 import { releaseSubstrate, type ExecutorInfo } from "@/lib/executors";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { EmptyState } from "./shared";
+import { EmptyState, CodeBlock } from "./shared";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
 /**
@@ -342,9 +342,7 @@ function ChangeDetail({
         {change.patch && (
           <div>
             <div className="text-[11px] p-text-3 mb-1">Patch</div>
-            <pre className="rounded-lg border p-border p-fill p-3 max-h-[360px] overflow-auto text-[10px] font-mono leading-relaxed whitespace-pre-wrap">
-              {change.patch}
-            </pre>
+            <div className="max-h-[360px] overflow-auto"><CodeBlock className="language-diff">{change.patch}</CodeBlock></div>
           </div>
         )}
       </section>
