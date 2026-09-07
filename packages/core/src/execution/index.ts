@@ -15,7 +15,7 @@ export type {
 export { EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS } from './types';
 
 export {
-  commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, parseRefusal, answeredRefusal, type ExecOutcome,
+  commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
   STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
 } from './exec-result';
 export {
@@ -24,7 +24,7 @@ export {
 } from './escalation';
 export { DefaultExecutionRouter } from './router';
 export { createInlineExecutor, type InlineExecutorDeps } from './inline';
-export { withApprovalGatedShell, gateProviderExec, SHELL_COMMAND_MEMBERS } from './approval';
+export { withApprovalGatedShell, gateProviderExec } from './approval';
 export {
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError,
   WORKSPACE_BACKUP_DIR,

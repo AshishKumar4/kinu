@@ -24,7 +24,6 @@ import {
   assertSafeUrl,
   isSafeUrl,
   UnsafeUrlError,
-  WebFetchError,
   stripBase64Images,
   TOOL_OUTPUT_DIR,
   decodeJsonValue,
@@ -211,7 +210,7 @@ describe('web provider — search', () => {
   test('empty query is rejected', async () => {
     const { fetch } = stubFetch(() => ({ body: '' }));
     const provider = createDefaultWebSearchProvider({ fetch });
-    await expect(provider.search('   ')).rejects.toBeInstanceOf(WebFetchError);
+    await expect(provider.search('   ')).rejects.toMatchObject({ message: 'search query is empty', retriable: false });
   });
 });
 
@@ -274,7 +273,7 @@ describe('web provider — fetch', () => {
   test('http error maps to a WebFetchError', async () => {
     const { fetch } = stubFetch(() => ({ status: 404, body: 'nope' }));
     const provider = createDefaultWebSearchProvider({ fetch });
-    await expect(provider.fetch('https://example.com/missing')).rejects.toBeInstanceOf(WebFetchError);
+    await expect(provider.fetch('https://example.com/missing')).rejects.toMatchObject({ message: expect.stringContaining('404'), retriable: false });
   });
 
   test('SECURITY: a redirect to a private/metadata address is refused before the second hop', async () => {
@@ -296,7 +295,7 @@ describe('web provider — fetch', () => {
     }, { preconnect: fetch.preconnect }) satisfies typeof fetch;
     const provider = createDefaultWebSearchProvider({ fetch: fakeFetch });
     const attempt = provider.fetch('https://example.com/start');
-    await expect(attempt).rejects.toBeInstanceOf(WebFetchError);
+    await expect(attempt).rejects.toMatchObject({ retriable: false });
     // The refusal leads with the guard's reason, like the initial-URL check.
     await expect(attempt).rejects.toThrow(/169\.254\.169\.254/);
     expect(calls).toEqual(['https://example.com/start']); // never left for the metadata host
@@ -438,14 +437,14 @@ describe('url safety (SSRF + exfil guards)', () => {
   test('provider.fetch refuses the mapped form too — nothing leaves the runtime', async () => {
     const { fetch, calls } = stubFetch(() => ({ body: 'x' }));
     const provider = createDefaultWebSearchProvider({ fetch });
-    await expect(provider.fetch('http://[::ffff:169.254.169.254]/')).rejects.toBeInstanceOf(WebFetchError);
+    await expect(provider.fetch('http://[::ffff:169.254.169.254]/')).rejects.toMatchObject({ retriable: false });
     expect(calls.length).toBe(0);
   });
 
   test('provider.fetch refuses an unsafe URL', async () => {
     const { fetch, calls } = stubFetch(() => ({ body: 'x' }));
     const provider = createDefaultWebSearchProvider({ fetch });
-    await expect(provider.fetch('http://169.254.169.254/')).rejects.toBeInstanceOf(WebFetchError);
+    await expect(provider.fetch('http://169.254.169.254/')).rejects.toMatchObject({ retriable: false });
     expect(calls.length).toBe(0); // never left the runtime
   });
 });
@@ -512,13 +511,12 @@ describe('web builtin', () => {
 
   test('a provider error preserves its message and retry metadata on the error channel', async () => {
     const { rt } = createTestRuntime();
-    const failing: WebSearchProvider = {
-      search: async () => { throw new WebFetchError('rate limited', true); },
-      fetch: async () => { throw new WebFetchError('x'); },
-    };
+    const failing = createDefaultWebSearchProvider({ fetch: stubFetch(url => ({
+      status: url.includes('duckduckgo') ? 429 : 404, body: 'upstream refused',
+    })).fetch });
     const execute = toolExecute<WebArgs, JsonValue>(buildWithWeb(rt, failing).web);
-    await expect(execute({ action: 'search', query: 'x' })).rejects.toMatchObject({ message: 'rate limited', retriable: true });
-    await expect(execute({ action: 'fetch', url: 'https://example.com' })).rejects.toMatchObject({ message: 'x' });
+    await expect(execute({ action: 'search', query: 'x' })).rejects.toMatchObject({ message: expect.stringContaining('rate-limited'), retriable: true });
+    await expect(execute({ action: 'fetch', url: 'https://example.com' })).rejects.toMatchObject({ message: expect.stringContaining('404'), retriable: false });
   });
 
   test('codemode can call web.search() and web.fetch()', async () => {

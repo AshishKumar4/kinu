@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createParentExecutor, type ParentWorkspaceHandle } from '../src/execution/parent';
-import { parseRefusal } from '../src/execution/exec-result';
+import { parseJsonValue } from '../src/utils/json';
 
 function parentHandle(calls: string[]): ParentWorkspaceHandle {
   return {
@@ -36,7 +36,7 @@ describe('parent executor input validation', () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
     const out = String(await parent.tools.readFile.execute(undefined));
-    expect(parseRefusal(out)?.reason).toBe('bad_input');
+    expect(parseJsonValue(out)).toMatchObject({ reason: 'bad_input' });
     expect(calls).toEqual([]);
   });
 
@@ -44,7 +44,7 @@ describe('parent executor input validation', () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
     const out = String(await parent.tools.writeFile.execute(undefined, 'x'));
-    expect(parseRefusal(out)?.reason).toBe('bad_input');
+    expect(parseJsonValue(out)).toMatchObject({ reason: 'bad_input' });
     expect(calls).toEqual([]);
   });
 
@@ -52,7 +52,7 @@ describe('parent executor input validation', () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
     const out = String(await parent.tools.exists.execute(undefined));
-    expect(parseRefusal(out)?.reason).toBe('bad_input');
+    expect(parseJsonValue(out)).toMatchObject({ reason: 'bad_input' });
     expect(calls).toEqual([]);
   });
 
@@ -67,7 +67,7 @@ describe('parent executor input validation', () => {
   test('readdir with a non-string path refuses, while no path still lists the root', async () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
-    expect(parseRefusal(String(await parent.tools.readdir.execute(123)))?.reason).toBe('bad_input');
+    expect(parseJsonValue(String(await parent.tools.readdir.execute(123)))).toMatchObject({ reason: 'bad_input' });
     expect(calls).toEqual([]);
     await parent.tools.readdir.execute(undefined);
     expect(calls).toEqual(['list:.']);

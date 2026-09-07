@@ -4,7 +4,7 @@
 
 import type {
 	ActivityLogEntry, ContextComposition, HeadReportStatus,
-	HeadUnsettledStatus, StepTelemetry, Usage, WorkspaceSpend,
+	HeadUnsettledStatus, StepTelemetry, Usage, WorkspaceSpend, CommandResult,
 } from "@kinu.run/core";
 
 /**
@@ -132,6 +132,7 @@ export interface ExecutorCommandResult {
 	stderr?: string;
 	exitCode?: number;
 	error?: string;
+	refusal?: Exclude<CommandResult, string>;
 }
 
 export type SubordinateStatus = "idle" | "working" | "awaiting_input" | "dismissed";

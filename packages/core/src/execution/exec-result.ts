@@ -1,8 +1,8 @@
 /** Command result projection and display formatting. Invocation status never comes from text. */
 
 import * as v from 'valibot';
-import { ERROR_CODES, refusalOf, tolerate, KinuError, type Refusal } from '../obs/index';
-import { parseJsonValue, type JsonValue } from '../utils/json';
+import { ERROR_CODES, refusalOf, KinuError, type Refusal } from '../obs/index';
+import type { JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../tools/file-edit';
 
 const RefusalSchema = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
@@ -29,15 +29,6 @@ export function refusalText(error: KinuError | Refusal): string {
   return JSON.stringify(error instanceof KinuError ? refusalOf(error) : { reason: error.reason, error: error.error });
 }
 
-/** Decode a declared refusal-string channel. A matching shape alone is not invocation evidence. */
-export function parseRefusal(result: string): Refusal | null {
-  const text = result.trimStart();
-  if (!text.startsWith('{')) return null;
-  const json = tolerate(() => parseJsonValue(text), 'malformed-input');
-  if (json === undefined) return null;
-  const parsed = v.safeParse(RefusalSchema, json);
-  return parsed.success ? { reason: parsed.output.reason, error: parsed.output.error } : null;
-}
 
 /**
  * The refusal a codemode member ANSWERED with, or null when its answer is a value.
