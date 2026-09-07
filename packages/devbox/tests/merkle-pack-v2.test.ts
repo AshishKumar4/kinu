@@ -516,6 +516,22 @@ describe('a wake serves the head lazily', () => {
     // The untouched placeholder pages in through the head that exists now.
     expect(new TextDecoder().decode(await container.read('keep.txt'))).toBe('still here');
   }, 120_000);
+
+  test('a page-in refuses a placeholder whose path the head rewrote, rather than mixing two generations', async () => {
+    const fixture = openSidecar();
+    fixture.daemon.plant(textTree({ 'stale.txt': 'first generation content', 'other.txt': 'x' }));
+    await publish(fixture, 'the base seal');
+    const container = new LazyContainer(new LiveTree(), () => 1_000);
+    container.adopt(fixture.core.restoreLazily(container.ports()));
+    await container.enter();
+    // The daemon rewrites the path behind the container's back: same length,
+    // so geometry alone cannot tell, and the head moves before any page-in.
+    fixture.daemon.write('stale.txt', new TextEncoder().encode('SECOND generation content'.slice(0, 24)));
+    await publish(fixture, 'the rewrite');
+    await expect(container.read('stale.txt')).rejects.toThrow(/changed under its placeholder/u);
+    // An untouched sibling still pages in through the current head.
+    expect(new TextDecoder().decode(await container.read('other.txt'))).toBe('x');
+  });
 });
 
 describe('a wide directory pays for one path, not its width', () => {

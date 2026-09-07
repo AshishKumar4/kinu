@@ -263,4 +263,49 @@ placeholder for a path the container renamed before hydrating stays in
 the residency map under its old name; it is inert and is not measured.
 The v2, sidecar and conformance suites passed 174 tests.
 
+## The v2 sidecar over the real daemon, 2026-09-06
+
+`tests/sidecar-real-daemon-run.ts` drives the shipped `SidecarCore` through
+`SidecarDaemonClient` against the real journal daemon inside the privileged
+image, with in-memory payload, envelope and control stores. The host suite
+`tests/sidecar-real-daemon.test.ts` runs it and pins its 22 checks by name.
+The tree is 308 entries: a 300-file directory, nesting, a symlink, a
+hardlink and a 3 MiB file. It found five defects at the daemon boundary.
+
+1. A file unlinked while a descriptor was open was published under
+   libfuse's `.fuse_hiddenNNNN` name. `hard_remove` was measured and
+   rejected: the kernel sends GETATTR without a handle, so `fstat` on the
+   nameless inode answered ESTALE, and `nullpath_ok` would hand every
+   handle callback a NULL path and lose the name a W record binds to. The
+   daemon keeps hiding and journals the hide as the caller's `unlink`; the
+   hidden name is never journaled, described or published.
+2. `readWalProgress` parsed `W <ino> <path> <offset> <length>` split on
+   spaces; the record is seven tab-separated fields with aux
+   `ino offset length`. The seal cadence's byte trigger counted 0 for every
+   write. It now counts 3,148,667 for 3,148,667 written.
+3. A write through one name of a hardlink whose other name the generation
+   never touched left the twin stale, with and without an unlink of the
+   written name. W records now carry the link count; a fence whose dirty
+   inode has more than one link walks the tree once and describes every
+   present name. Every other fence stays O(k).
+4. The daemon refused every base hand-back after the first compaction
+   (ERANGE): a compaction re-roots the same cut at a higher generation and
+   the base rule required the fence's exact generation. A base now names
+   the latest fence's cut at that generation or later and moves forward; the
+   daemon adopts the head's generation so its next fence continues it.
+   Recovery applies the same rule to BASE records.
+5. A lazy page-in resolved bytes through the current head by path. A path
+   rewritten to the same length between registration and page-in would
+   have mixed two generations in one file. The v2 view now serves a
+   location-free `contentId` (size, holes, chunk digests) and the restore
+   refuses a page-in whose identity moved. A compaction keeps the identity;
+   a same-length rewrite changes it and the page-in is refused by name.
+
+Measured on the real mount: first seal 4 PUTs and 762,564 B; second seal 2
+PUTs and 113,255 B; fresh attach 1 range read; compaction retired 3 packs
+and GC deleted 3 after grace; a SIGKILL with an unsealed write recovered
+and the next seal published generation 9 on an unbroken chain. An open
+descriptor kept its inode across rename, unlink, replacement and a publish.
+The daemon matrix (14 scenarios), the v2 and conformance suites pass.
+
 

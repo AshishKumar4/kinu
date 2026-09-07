@@ -380,9 +380,10 @@ static int begin_mutation(const char *op, const char *path, const char *aux, str
  * that cannot take the record — a full state filesystem is the case that
  * matters — refuses the write without touching a byte of the tree, so a
  * restart's dirty set covers every write that returned. */
-static int begin_write(uint64_t ino, const char *path, off_t offset, size_t size, struct mutation *m) {
-  char aux[96];
-  int formatted = journal_write_record(aux, sizeof(aux), ino, (uint64_t)offset, (uint64_t)size);
+static int begin_write(uint64_t ino, uint64_t nlink, const char *path, off_t offset, size_t size,
+                       struct mutation *m) {
+  char aux[128];
+  int formatted = journal_write_record(aux, sizeof(aux), ino, (uint64_t)offset, (uint64_t)size, nlink);
   if (formatted < 0) return formatted;
   int rc = admit_mutation(m);
   if (rc != 0) return rc;
@@ -407,6 +408,14 @@ struct dir_handle {
 
 static void *pass_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
   cfg->use_ino = 1;
+  /* libfuse hides a file that is unlinked while a descriptor is open: the
+   * node is renamed to `.fuse_hiddenNNNN` and removed on the last release.
+   * `hard_remove` would make the unlink real, but the kernel sends GETATTR
+   * without a handle, so libfuse answers ESTALE to fstat on the nameless
+   * inode (measured 2026-09-06, sidecar-real-daemon-run.ts); `nullpath_ok`
+   * would hand every handle callback a NULL path and lose the name a W
+   * record binds its bytes to. Hiding stays. `pass_rename` and `pass_unlink`
+   * keep the hidden name out of the journal, so a fence never publishes it. */
   /* The daemon is the only mutator of the backing root, so the kernel may hold
    * a name and an attribute for thirty seconds; every change that invalidates
    * one arrives through these callbacks.  Zero cost a round trip per path
@@ -629,7 +638,7 @@ static int pass_write(const char *path, const char *buffer, size_t size, off_t o
   struct stat st;
   if (fstat((int)fi->fh, &st) != 0) return neg_errno();
   struct mutation m;
-  int rc = begin_write((uint64_t)st.st_ino, path, offset, size, &m);
+  int rc = begin_write((uint64_t)st.st_ino, (uint64_t)st.st_nlink, path, offset, size, &m);
   if (rc != 0) return rc;
   ssize_t n = pwrite((int)fi->fh, buffer, size, offset);
   release_mutation(&m);
@@ -828,14 +837,30 @@ static int pass_mknod(const char *path, mode_t mode, dev_t rdev) {
   return finish_mutation(&m, "mknod", path, "", result);
 }
 
+/* libfuse renames a file that is unlinked, or renamed over, while a
+ * descriptor is open to `.fuse_hiddenNNNN` in the same directory, and
+ * unlinks that name on the last release. The caller asked for an unlink, so
+ * the journal records an unlink of the caller's name. The hidden name is
+ * never journaled: no fence describes it and no head publishes it. */
+static bool hidden_name(const char *path) {
+  const char *slash = strrchr(path, '/');
+  const char *name = slash == NULL ? path : slash + 1;
+  return strncmp(name, ".fuse_hidden", 12) == 0;
+}
+
 static int remove_entry(const char *op, const char *path, int flags) {
   struct mutation m;
-  int rc = begin_mutation(op, path, "", &m);
+  bool journaled = !hidden_name(path);
+  int rc = journaled ? begin_mutation(op, path, "", &m) : admit_mutation(&m);
   if (rc != 0) return rc;
   char name[NAME_MAX + 1];
   int parent = open_parent(path, name);
   int result = parent < 0 ? parent : (unlinkat(parent, name, flags) == 0 ? 0 : neg_errno());
   if (parent >= 0) close(parent);
+  if (!journaled) {
+    release_mutation(&m);
+    return result;
+  }
   return finish_mutation(&m, op, path, "", result);
 }
 
@@ -871,8 +896,11 @@ static int pass_link(const char *from, const char *to) {
 }
 
 static int pass_rename(const char *from, const char *to, unsigned int flags) {
+  bool hiding = hidden_name(to) && !hidden_name(from);
+  const char *op = hiding ? "unlink" : "rename";
+  const char *aux = hiding ? "" : to;
   struct mutation m;
-  int rc = begin_mutation("rename", from, to, &m);
+  int rc = begin_mutation(op, from, aux, &m);
   if (rc != 0) return rc;
   char from_name[NAME_MAX + 1];
   char to_name[NAME_MAX + 1];
@@ -885,7 +913,7 @@ static int pass_rename(const char *from, const char *to, unsigned int flags) {
   }
   if (from_parent >= 0) close(from_parent);
   if (to_parent >= 0) close(to_parent);
-  return finish_mutation(&m, "rename", from, to, result);
+  return finish_mutation(&m, op, from, aux, result);
 }
 
 /* Extended attributes need a readable handle: the kernel allows them only on
@@ -1180,10 +1208,19 @@ static int run_base(uint64_t cut, uint64_t generation, const char *root) {
     pthread_mutex_unlock(&state.lock);
     return 0;
   }
+  /* A base names the head the next fence is partial against. It is accepted
+   * fresh, or when it names the cut of the latest fence and moves forward:
+   * the ordinary hand-back after a fence, or a re-root of the same cut at a
+   * higher generation, which is what a compaction publishes without a fence
+   * (measured 2026-09-06, sidecar-real-daemon-run.ts: the old rule refused
+   * every hand-back after the first compaction). A lower cut, a cut this
+   * daemon never fenced, or a different root at the same cut and generation
+   * is refused. */
   bool fresh = !state.has_base && !state.has_fence && state.sequence == 0 && state.generation == 1;
-  bool matches_fence = state.has_fence && cut == state.fence_cut && generation == state.fence_generation;
-  if (!fresh && (!matches_fence
-      || (state.has_base && (cut <= state.base_cut || generation <= state.base_generation)))) {
+  bool at_fence = state.has_fence && cut == state.fence_cut && generation >= state.fence_generation;
+  bool forward = !state.has_base || cut > state.base_cut
+                 || (cut == state.base_cut && generation > state.base_generation);
+  if (!fresh && !(at_fence && forward)) {
     state.admitted = true;
     pthread_cond_broadcast(&state.admit);
     pthread_mutex_unlock(&state.lock);
@@ -1198,10 +1235,11 @@ static int run_base(uint64_t cut, uint64_t generation, const char *root) {
     state.base_generation = generation;
     memcpy(state.base_root, root, sizeof(state.base_root));
     state.has_base = true;
-    if (fresh) {
-      state.sequence = cut;
-      state.generation = generation + 1;
-    }
+    if (fresh) state.sequence = cut;
+    /* The next fence continues the head's generation, so a publish the
+     * daemon did not fence (a compaction) does not leave the two counters
+     * one apart for the rest of the boot. */
+    if (generation + 1 > state.generation) state.generation = generation + 1;
     pthread_mutex_unlock(&state.lock);
     int compacted = compact_journal();
     if (compacted != 0) fprintf(stderr, "journal-daemon: compaction failed: %s\n", strerror(-compacted));
@@ -1581,15 +1619,16 @@ static int parse_record(char *line, struct recovery *r) {
   if (strcmp(kind, "BASE") == 0) {
     if (strcmp(fields[2], "base") != 0 || strcmp(fields[3], "0") != 0 || !is_root_id(fields[5])
         || fields[6][0] != '\0') return -EUCLEAN;
+    /* The same rule `run_base` applied when it wrote the record: a base names
+     * the latest fence's cut at that fence's generation or a later one (a
+     * compaction re-roots the same cut), and never moves backwards. */
     if (r->has_base) {
       bool identical = r->base_cut == sequence && r->base_generation == generation
                        && strcmp(r->base_root, fields[5]) == 0;
-      if (!identical && (sequence <= r->base_cut || generation <= r->base_generation)) return -EUCLEAN;
-      if (!identical && (!r->has_fence || sequence != r->fence_cut || generation != r->fence_generation)) {
-        return -EUCLEAN;
-      }
+      bool forward = sequence > r->base_cut || (sequence == r->base_cut && generation > r->base_generation);
+      if (!identical && !forward) return -EUCLEAN;
     }
-    if (r->has_fence && (sequence != r->fence_cut || generation != r->fence_generation)) return -EUCLEAN;
+    if (r->has_fence && (sequence != r->fence_cut || generation < r->fence_generation)) return -EUCLEAN;
     r->has_base = true;
     r->base_cut = sequence;
     r->base_generation = generation;

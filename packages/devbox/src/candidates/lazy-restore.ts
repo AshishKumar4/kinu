@@ -60,6 +60,9 @@ export interface HeadFilesystem {
   readdir(path: string): Promise<readonly string[]>;
   extents(path: string): Promise<readonly FileExtent[]>;
   readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
+  /** A location-free identity of one file's content. A head without one is
+   *  compared by geometry alone, which misses a same-length rewrite. */
+  contentId?(path: string): Promise<string>;
 }
 
 /** Where paged-in bytes land, and when they are released. */
@@ -91,6 +94,27 @@ function geometryOf(size: number, extents: readonly FileExtent[]): FileGeometry 
   return { size, data };
 }
 
+/** A placeholder's identity: the head's content id when it serves one, and
+ *  the geometry otherwise. */
+interface PlaceholderIdentity {
+  readonly contentId: string | null;
+  readonly geometry: FileGeometry;
+}
+
+async function identityOf(head: HeadFilesystem, path: string, stat: HeadStat): Promise<PlaceholderIdentity> {
+  const [extents, contentId] = await Promise.all([head.extents(path), head.contentId?.(path) ?? null]);
+  return { contentId, geometry: geometryOf(stat.size, extents) };
+}
+
+function sameIdentity(a: PlaceholderIdentity, b: PlaceholderIdentity): boolean {
+  if (a.contentId !== null && b.contentId !== null) return a.contentId === b.contentId;
+  if (a.geometry.size !== b.geometry.size || a.geometry.data.length !== b.geometry.data.length) return false;
+  return a.geometry.data.every((span, at) => {
+    const other = b.geometry.data[at];
+    return other !== undefined && span.offset === other.offset && span.length === other.length;
+  });
+}
+
 /**
  * One published head, restored lazily over one container.
  *
@@ -106,6 +130,11 @@ export class LazyRestore {
   /** Placeholders handed out already, by the inode the head gave them. Two
    *  names on one inode are a hardlink, and the container must share it. */
   readonly #inodePaths = new Map<number, string>();
+  /** What each placeholder was registered against. A page-in serves those
+   *  bytes or refuses: the head is read per operation, and a path whose
+   *  content moved between registration and page-in would otherwise mix two
+   *  generations inside one file. */
+  readonly #registered = new Map<string, PlaceholderIdentity>();
 
   constructor(
     head: HeadFilesystem,
@@ -114,13 +143,31 @@ export class LazyRestore {
   ) {
     this.#head = head;
     this.#residency = new Residency({
-      read: async (path, offset, length) => await head.readRange(path, offset, length),
+      read: async (path, offset, length) => {
+        await this.#assertUnmoved(path);
+        return await head.readRange(path, offset, length);
+      },
       place: ports.place,
       drop: ports.drop,
       now: ports.now,
       pageBytes: ports.pageBytes,
       idleMs: ports.idleMs,
     });
+  }
+
+  /** Refuse a page-in for a path the current head describes differently from
+   *  the head its placeholder came from. */
+  async #assertUnmoved(path: string): Promise<void> {
+    const registered = this.#registered.get(path);
+    if (registered === undefined) return;
+    const stat = await this.#head.stat(path);
+    if (stat === null || stat.kind !== 'file') {
+      throw new Error(`lazy restore: ${JSON.stringify(path)} is no longer a file in the current head`);
+    }
+    const current = await identityOf(this.#head, path, stat);
+    if (!sameIdentity(registered, current)) {
+      throw new Error(`lazy restore: ${JSON.stringify(path)} changed under its placeholder; hydrate before the head moves`);
+    }
   }
 
   /**
@@ -152,7 +199,9 @@ export class LazyRestore {
     if (stat.kind === 'symlink') {
       return { path, kind: 'symlink', mode: stat.mode, ino, metadata, target: stat.target ?? '' };
     }
-    this.#residency.register(path, geometryOf(stat.size, await this.#head.extents(path)));
+    const identity = await identityOf(this.#head, path, stat);
+    this.#registered.set(path, identity);
+    this.#residency.register(path, identity.geometry);
     this.#inodePaths.set(ino, this.#inodePaths.get(ino) ?? path);
     return {
       path,

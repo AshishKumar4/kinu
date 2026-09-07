@@ -71,6 +71,9 @@ export interface MerkleV2View {
   extents(path: string): Promise<readonly MerkleFileExtent[]>;
   /** The packed extent list of one file, extent pages resolved. */
   fileExtents(path: string): Promise<readonly ExtentV2[]>;
+  /** A location-free identity of one file's content: equal across a
+   *  compaction, different after any byte or geometry change. */
+  contentId(path: string): Promise<string>;
   /** The chunk boundaries the next incremental seal resumes from. */
   boundaries(path: string): Promise<readonly number[]>;
   readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
@@ -472,6 +475,18 @@ export async function openMerkleV2(
     },
     async fileExtents(path: string): Promise<readonly ExtentV2[]> {
       return await flatExtents(await fileAt(path));
+    },
+    async contentId(path: string): Promise<string> {
+      const node = await fileAt(path);
+      const extents = await flatExtents(node);
+      // Location-free: chunk digests, lengths and repeats, holes and size.
+      // A compaction moves the bytes and leaves this unchanged.
+      const spelled = JSON.stringify([
+        node.size,
+        [...node.holes].sort((a, b) => a.o - b.o).map((hole) => [hole.o, hole.l]),
+        extents.map((extent) => [extent.digest, extent.length, extent.count]),
+      ]);
+      return sha256Hex(new TextEncoder().encode(spelled));
     },
     async boundaries(path: string): Promise<readonly number[]> {
       return fileBoundaries(await flatExtents(await fileAt(path)));

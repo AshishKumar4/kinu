@@ -52,15 +52,26 @@ import { readJournalDelta as readJournalDeltaBound } from '../../src/capture/jou
 
 /**
  * The WAL tail, as the seal cadence reads it: how many bytes of writes the
- * daemon has recorded since the last seal. `W <ino> <path> <offset> <length>`
- * is one write, and the length is the byte count the trigger sums; every other
- * record is a metadata op and contributes nothing to the eight-MiB threshold.
+ * daemon has recorded since the last seal. One record is seven tab-separated
+ * fields, `sequence kind op outcome generation path aux` (`format_record`,
+ * `journal-daemon.c`); a write is kind `W` with aux `ino offset length nlink`
+ * (`journal_write_record`, `journal-delta.c`). The length is the byte count
+ * the trigger sums; every other record is a metadata op and contributes
+ * nothing to the eight-MiB threshold.
  */
-/** Node raises `Error` subclasses with an errno `code` on system-call
- *  failures; this narrows without an assertion. */
 export interface WalProgress {
   readonly offset: number;
   readonly dirtyBytes: number;
+}
+
+/** The bytes one WAL line adds to the dirty count: a W record's length, else zero. */
+export function walRecordDirtyBytes(line: string): number {
+  const fields = line.split('\t');
+  if (fields.length !== 7 || fields[1] !== 'W') return 0;
+  const aux = fields[6].split(' ');
+  if (aux.length !== 4) return 0;
+  const bytes = Number(aux[2]);
+  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : 0;
 }
 
 export async function readWalProgress(walPath: string, fromOffset: number): Promise<WalProgress> {
@@ -85,12 +96,7 @@ export async function readWalProgress(walPath: string, fromOffset: number): Prom
     const lastNewline = text.lastIndexOf('\n');
     if (lastNewline < 0) return { offset: fromOffset, dirtyBytes: 0 };
     let dirtyBytes = 0;
-    for (const line of text.slice(0, lastNewline).split('\n')) {
-      const parts = line.split(' ');
-      if (parts[0] !== 'W' || parts.length < 5) continue;
-      const bytes = Number(parts[4]);
-      if (Number.isSafeInteger(bytes) && bytes > 0) dirtyBytes += bytes;
-    }
+    for (const line of text.slice(0, lastNewline).split('\n')) dirtyBytes += walRecordDirtyBytes(line);
     return { offset: fromOffset + Buffer.byteLength(text.slice(0, lastNewline + 1)), dirtyBytes };
   } finally {
     await handle.close();

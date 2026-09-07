@@ -1036,6 +1036,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - Wide v2 devbox directories use 64-way page trees; a 2026-09-06 local probe held one-entry update PUT bytes at 15,790/30,115 and lookup reads at 3/4 for 500/50,000 siblings.
 - The v2 devbox ledger carries retired packs until deleted; a 2026-09-06 local replay showed a restarted boot leaking 4 retired packs before the fix and deleting all 4 after it.
 - A v2 devbox lazy restore reads the current head on every call; on 2026-09-06 a container that adopted one before four publishes, a compaction and a GC sweep read a deleted pack before the fix and its bytes after it.
+- The v2 devbox sidecar runs against the real journal daemon in a privileged test; the 2026-09-06 run fixed a published hidden name, a WAL byte trigger that counted 0, stale hardlink twins, refused bases after compaction, and mixed-generation page-ins.
 
 ## [0.2.0] - 2026-08-07
 

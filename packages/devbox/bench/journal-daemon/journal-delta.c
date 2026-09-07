@@ -79,23 +79,27 @@ bool journal_parse_counter(const char *text, uint64_t *out) {
   return true;
 }
 
-int journal_write_record(char *out, size_t cap, uint64_t ino, uint64_t offset, uint64_t length) {
-  int written = snprintf(out, cap, "%llu %llu %llu", (counter)ino, (counter)offset, (counter)length);
+int journal_write_record(char *out, size_t cap, uint64_t ino, uint64_t offset, uint64_t length, uint64_t nlink) {
+  int written = snprintf(out, cap, "%llu %llu %llu %llu", (counter)ino, (counter)offset, (counter)length,
+                         (counter)nlink);
   return written < 0 || (size_t)written >= cap ? -ENAMETOOLONG : written;
 }
 
-/* Reads back the three decimals a W record's aux carries. */
-static bool parse_write_aux(const char *aux, uint64_t *ino, uint64_t *offset, uint64_t *length) {
-  char scratch[96];
+/* Reads back the four decimals a W record's aux carries. */
+static bool parse_write_aux(const char *aux, uint64_t *ino, uint64_t *offset, uint64_t *length, uint64_t *nlink) {
+  char scratch[128];
   if (strlen(aux) >= sizeof(scratch)) return false;
   memcpy(scratch, aux, strlen(aux) + 1);
   char *save = NULL;
   const char *first = strtok_r(scratch, " ", &save);
   const char *second = strtok_r(NULL, " ", &save);
   const char *third = strtok_r(NULL, " ", &save);
-  if (first == NULL || second == NULL || third == NULL || strtok_r(NULL, " ", &save) != NULL) return false;
+  const char *fourth = strtok_r(NULL, " ", &save);
+  if (first == NULL || second == NULL || third == NULL || fourth == NULL || strtok_r(NULL, " ", &save) != NULL) {
+    return false;
+  }
   return journal_parse_counter(first, ino) && journal_parse_counter(second, offset)
-         && journal_parse_counter(third, length);
+         && journal_parse_counter(third, length) && journal_parse_counter(fourth, nlink);
 }
 
 /* ---------------------------------------------------------------- dirty --- */
@@ -169,7 +173,7 @@ static int union_range(struct journal_dirty_file *file, uint64_t offset, uint64_
 }
 
 int journal_dirty_add(struct journal_dirty_set *set, uint64_t ino, const char *path, uint64_t offset,
-                     uint64_t length) {
+                     uint64_t length, uint64_t nlink) {
   struct journal_dirty_file *file = journal_dirty_find(set, ino);
   if (file == NULL) {
     if (grow_files(set) != 0) return -ENOMEM;
@@ -188,6 +192,7 @@ int journal_dirty_add(struct journal_dirty_set *set, uint64_t ino, const char *p
     free(file->path);
     file->path = renamed;
   }
+  if (nlink > file->nlink) file->nlink = nlink;
   return union_range(file, offset, length) != 0 ? -ENOMEM : 0;
 }
 
@@ -725,12 +730,13 @@ static int read_delta(const struct journal_delta_request *request, struct delta 
       uint64_t ino = 0;
       uint64_t offset = 0;
       uint64_t length = 0;
-      if (!parse_write_aux(fields[6], &ino, &offset, &length)) {
+      uint64_t nlink = 0;
+      if (!parse_write_aux(fields[6], &ino, &offset, &length, &nlink)) {
         rc = -EUCLEAN;
         break;
       }
       const char *written = relative_name(fields[5]);
-      rc = journal_dirty_add(&delta->dirty, ino, written, offset, length);
+      rc = journal_dirty_add(&delta->dirty, ino, written, offset, length, nlink);
       if (rc == 0) rc = remember_path(delta, written);
       continue;
     }
@@ -776,23 +782,74 @@ static int stat_touched(const struct journal_delta_request *request, struct delt
   return 0;
 }
 
+/* Does any dirty inode carry more names than the journal touched? A write
+ * through one name of a hardlinked file must reach every name at the cut,
+ * and a name the journal never saw is found only by looking. */
+static bool needs_link_walk(const struct delta *delta) {
+  for (size_t index = 0; index < delta->dirty.count; index++) {
+    if (delta->dirty.files[index].nlink > 1) return true;
+  }
+  return false;
+}
+
+/* One walk of the backing tree, remembering every regular file whose inode
+ * a multi-link write dirtied. O(tree), paid only in the generation that
+ * wrote through a hardlink; every other fence stays O(k). */
+static int walk_link_names(int dir_fd, const char *prefix, struct delta *delta) {
+  int fd = openat(dir_fd, prefix[0] == '\0' ? "." : prefix, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0) return neg_errno();
+  DIR *dp = fdopendir(fd);
+  if (dp == NULL) {
+    close(fd);
+    return neg_errno();
+  }
+  int rc = 0;
+  struct dirent *entry;
+  errno = 0;
+  while (rc == 0 && (entry = readdir(dp)) != NULL) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+    char path[JOURNAL_PATH_CAP];
+    int written = prefix[0] == '\0'
+      ? snprintf(path, sizeof(path), "%s", entry->d_name)
+      : snprintf(path, sizeof(path), "%s/%s", prefix, entry->d_name);
+    if (written < 0 || (size_t)written >= sizeof(path)) {
+      rc = -ENAMETOOLONG;
+      break;
+    }
+    struct stat st;
+    if (fstatat(dir_fd, path, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+      if (errno == ENOENT) continue;
+      rc = neg_errno();
+      break;
+    }
+    if (S_ISDIR(st.st_mode)) {
+      rc = walk_link_names(dir_fd, path, delta);
+      continue;
+    }
+    if (!S_ISREG(st.st_mode)) continue;
+    struct journal_dirty_file *file = journal_dirty_find(&delta->dirty, (uint64_t)st.st_ino);
+    if (file != NULL && file->nlink > 1) rc = remember_path(delta, path);
+    errno = 0;
+  }
+  if (rc == 0 && errno != 0) rc = neg_errno();
+  closedir(dp);
+  return rc;
+}
+
 /* Binds each dirty inode to the name it has at the cut, which is not always
- * the name its writes used: a rename moves it, an unlink retires it. */
+ * the name its writes used: a rename moves it, an unlink retires it, and a
+ * hardlink keeps it under every other name. Every present name of a dirty
+ * inode is described dirty; the first in path order is the one its bytes
+ * are staged under. */
 static void bind_dirty_paths(struct delta *delta) {
   for (size_t index = 0; index < delta->dirty.count; index++) {
     struct journal_dirty_file *file = &delta->dirty.files[index];
-    struct touched *named = find_touched(delta, file->path);
-    if (named != NULL && named->present && named->ino == file->ino) {
-      named->dirty = true;
-      file->size = (uint64_t)named->st.st_size;
-      continue;
-    }
     struct touched *found = NULL;
     for (size_t at = 0; at < delta->path_count; at++) {
-      if (delta->paths[at].present && delta->paths[at].ino == file->ino) {
-        found = &delta->paths[at];
-        break;
-      }
+      struct touched *candidate = &delta->paths[at];
+      if (!candidate->present || candidate->ino != file->ino) continue;
+      candidate->dirty = true;
+      if (found == NULL) found = candidate;
     }
     if (found == NULL) {
       /* The inode is gone at the cut; the operation list carries its removal
@@ -801,12 +858,13 @@ static void bind_dirty_paths(struct delta *delta) {
       file->size = 0;
       continue;
     }
-    found->dirty = true;
     file->size = (uint64_t)found->st.st_size;
-    char *rebound = copy_string(found->path);
-    if (rebound != NULL) {
-      free(file->path);
-      file->path = rebound;
+    if (strcmp(file->path, found->path) != 0) {
+      char *rebound = copy_string(found->path);
+      if (rebound != NULL) {
+        free(file->path);
+        file->path = rebound;
+      }
     }
   }
 }
@@ -1252,6 +1310,7 @@ int journal_delta_stage(const struct journal_delta_request *request, char manife
   memset(&delta, 0, sizeof(delta));
   journal_dirty_init(&delta.dirty);
   int rc = read_delta(request, &delta);
+  if (rc == 0 && needs_link_walk(&delta)) rc = walk_link_names(request->root_fd, "", &delta);
   if (rc == 0) rc = stat_touched(request, &delta);
   if (rc == 0) {
     if (delta.op_count > 1) qsort(delta.ops, delta.op_count, sizeof(*delta.ops), compare_ops);

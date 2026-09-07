@@ -307,6 +307,7 @@ export class SidecarCore {
       readdir: (path) => current().readdir(path),
       extents: (path) => current().extents(path),
       readRange: (path, offset, length) => current().readRange(path, offset, length),
+      contentId: (path) => current().contentId(path),
     };
     const restore = new LazyRestore(head, ports, async (path, ino) => {
       const attached = this.#head;
