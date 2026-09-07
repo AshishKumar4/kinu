@@ -86,8 +86,9 @@ fi
 
 echo "── first-run tier ────────────────────────────────────────"
 echo "target:   $KINU_ORIGIN"
-echo "cases:    $(ls tests/first-run/*.first-run.ts | wc -l | tr -d ' ') (one per defect found by hand)"
+echo "declared cases: $(ls tests/first-run/*.first-run.ts | wc -l | tr -d ' ') (executed/skipped cases are listed in JUnit)"
 echo "──────────────────────────────────────────────────────────"
+echo "Operator-only checks need their explicit target and authority; skipped cases remain unverified."
 
 # `bun --bun` is REQUIRED, not stylistic: the pty case spawns through
 # `Bun.spawnSync` and the public session opens a header-carrying WebSocket,
