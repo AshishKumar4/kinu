@@ -453,13 +453,14 @@ describe('the workspace keeps exactly one wake row', () => {
     const dueSec = Math.floor(Date.now() / 1000) - 5;
     db.prepare(`UPDATE cf_agents_schedules SET time = ? WHERE id = ?`).run(dueSec, armed.id);
 
-    await agent.createTimerTrigger({ atMs: Date.now() + 2 * DAY_MS, label: 'later' });
+    const laterAtMs = Date.now() + 2 * DAY_MS;
+    await agent.createTimerTrigger({ atMs: laterAtMs, label: 'later' });
 
     const rows = (await agent.listSchedules()).filter((row) => row.callback === KINU_TIMER_CALLBACK);
     // The due row survives (it is a wake the platform still owes) and the new
     // work has a future row of its own.
     expect(rows.map((row) => row.time).sort((a, b) => a - b))
-      .toEqual([dueSec, Math.ceil((Date.now() + 2 * DAY_MS) / 1000)]);
+      .toEqual([dueSec, Math.ceil(laterAtMs / 1000)]);
   });
 
   test('two concurrent arms converge on ONE wake row, the earliest', async () => {
