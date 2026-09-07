@@ -6097,8 +6097,8 @@ export abstract class ActorAgent extends Think<Env> {
 
   beforeStep(ctx: PrepareStepContext): StepConfig | void {
     // The shared step pipeline (core prompting/prepare-step.ts, identical on
-    // the CLI): extension prepareStep rewrites first, step-boundary tool-output
-    // pruning against the window budget next, then the dynamic-context weave,
+    // the CLI): typed SDK error projection, extension rewrites, tool-output
+    // pruning against the window budget, dynamic-context weave,
     // then the replay re-key for the provider about to receive this request,
     // then the cache plan rolls the tail breakpoints onto the FINAL message
     // array so each request of the agentic loop reads the prefix the previous
@@ -6121,7 +6121,7 @@ export abstract class ActorAgent extends Think<Env> {
       budget: this.budget,
       dynamic: { ledger: this.dynamicLedger, snapshot: () => this.dynamicContextSnapshot() },
       meter: this.acc.composition,
-    }, { stepNumber: ctx.stepNumber, messages: ctx.messages });
+    }, { stepNumber: ctx.stepNumber, messages: ctx.messages, steps: ctx.steps });
   }
 
   /** The byte-stability invariant as telemetry: the system prompt hash should

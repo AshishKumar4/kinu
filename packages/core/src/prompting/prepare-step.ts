@@ -6,16 +6,18 @@
  *   0. mission budget guard        — the turn is about to issue another priced
  *      request, so an exhausted mission label stops it HERE, before the spend,
  *      rather than after N more steps of an unbounded run
- *   1. extension prepareStep chain — mid-turn steering / plugin rewrites
- *   2. step-boundary tool-output pruning — an over-budget step context
+ *   1. typed SDK error feedback — project original native errors into their
+ *      model-facing error channel before anything prices or rewrites the request
+ *   2. extension prepareStep chain — mid-turn steering / plugin rewrites
+ *   3. step-boundary tool-output pruning — an over-budget step context
  *      shrinks OLD tool outputs (step-prune.ts), so a long tool-heavy turn
  *      stops re-paying its own tool traffic on every request
- *   3. dynamic-context weave        — the live state of the system, re-read at
+ *   4. dynamic-context weave        — the live state of the system, re-read at
  *      THIS step and appended as a new `<dynamic_context>` block only when it
  *      changed (volatile-context.ts). Runs after the rewrites above so the
  *      ledger's frozen positions are coordinates in the array the model
  *      actually receives
- *   4. prompt-cache tail markers    — LAST, onto the final message array,
+ *   5. prompt-cache tail markers    — LAST, onto the final message array,
  *      so every request of the agentic loop reads the prefix the previous
  *      step wrote regardless of what extensions injected, pruning shrank, or
  *      the ledger appended.
@@ -33,6 +35,7 @@ import { markCacheTail, type PromptCacheStrategy } from './cache-breakpoints';
 import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune';
 import { normalizeReplayForDestination } from './replay-normalization';
 import type { DynamicContext, DynamicContextLedger } from './volatile-context';
+import { projectToolErrorFeedback, type ToolErrorStep } from './tool-error-feedback';
 
 /** The in-flight turn's cache plan for marker strategies. `system` is the
  *  cache-eligible system override for backends whose turn-level system
@@ -88,6 +91,13 @@ export type StepPrepareResult =
   | { system?: string | SystemModelMessage; messages: ModelMessage[] }
   | undefined;
 
+export interface StepPrepareContext {
+  readonly stepNumber: number;
+  readonly messages: ModelMessage[];
+  /** The SDK's own completed steps, not a second outcome registry. */
+  readonly steps: readonly ToolErrorStep[];
+}
+
 /** Run the step pipeline. Returns the step overrides (AI SDK
  *  `PrepareStepResult` shape), or `undefined` when nothing changed. The
  *  synchronous path remains synchronous; an extension that must finish I/O
@@ -100,27 +110,28 @@ export type StepPrepareResult =
  *  (the default) can never reach that branch. */
 export function composePrepareStep(
   pipeline: StepPipeline,
-  ctx: { stepNumber: number; messages: ModelMessage[] },
+  ctx: StepPrepareContext,
 ): StepPrepareResult | Promise<StepPrepareResult> {
   const refusal = pipeline.budget?.guard('model_call');
   if (refusal) throw new MissionBudgetExhausted(refusal);
-  const steered = pipeline.extensions?.runPrepareStep(ctx);
+  const projected = projectToolErrorFeedback(ctx.messages, ctx.steps);
+  const prepared = projected === undefined ? ctx : { ...ctx, messages: projected };
+  const steered = pipeline.extensions?.runPrepareStep(prepared);
   if (steered instanceof Promise) {
-    return steered.then((messages) => finishPrepareStep(pipeline, ctx, messages));
+    return steered.then((messages) => finishPrepareStep(pipeline, ctx, messages ?? projected));
   }
-  return finishPrepareStep(pipeline, ctx, steered);
+  return finishPrepareStep(pipeline, ctx, steered ?? projected);
 }
 
 function finishPrepareStep(
   pipeline: StepPipeline,
-  ctx: { stepNumber: number; messages: ModelMessage[] },
+  ctx: StepPrepareContext,
   steered: ModelMessage[] | undefined,
 ): StepPrepareResult {
   const base = steered ?? ctx.messages;
-  // The weave runs AFTER the prune (step 3 — frozen block positions have to be
-  // coordinates in the array the model actually receives), so the pruner has
-  // to be TOLD what the ledger is about to hand back. Unreserved it prices a
-  // request smaller than the one that gets sent, by the ledger's whole size.
+  // The weave runs AFTER pruning: frozen block positions refer to the final
+  // message array. Reserve its overhead before pruning, or the request would
+  // be priced smaller than the one actually sent.
   const pruned = pipeline.prune
     ? pruneStepToolOutputs(base, pipeline.dynamic
       ? { ...pipeline.prune, reservedTokens: (pipeline.prune.reservedTokens ?? 0) + pipeline.dynamic.ledger.overheadTokens }
