@@ -40,6 +40,8 @@ import {
 } from './verifier-registry';
 import { measuredHalf, normalisedScore, paretoObjectiveAxes, PUBLISHING_CARRIES } from './objective';
 import { argumentDigest } from '../safety/argument-digest';
+import { workModeRefusal } from '../execution/work-mode';
+import type { WorkMode } from '../prompting/surface';
 
 import type { ModelCallSink } from '../events/model-call';
 import type { WebSearchProvider } from '../web/index';
@@ -72,16 +74,25 @@ export function unavailable(error: string): Refusal {
 export function badInput(error: string): Refusal {
   return refusalOf(new KinuError('bad_input', error));
 }
-
 /**
- * Whether this tree can execute the resolved shape, or the refusal naming what it
- * would have needed.
+ * Whether this tree can execute the resolved shape now, or the refusal naming what
+ * it would have needed.
  *
  * Every arm names the one thing that is missing and the one move that fixes it, because
  * *Refusals* holds that a refusal offering two remedies was measured being corrected to
- * the wrong one.
+ * the wrong one. Plan may explore and merge findings; a run that measures, publishes
+ * through its carry, or applies its result to the project is Build work.
  */
-export function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
+export function regionRefusal(resolved: ResolvedSwarm, mode: WorkMode): Refusal | null {
+  const composition = compositionRefusal(resolved);
+  if (composition) return composition;
+  const { config, settle } = resolved;
+  const publishes = config.advance.kind !== 'pareto' && PUBLISHING_CARRIES.some((carry) => carry === config.carry.kind);
+  const planAllowed = settle === 'merge' && config.score.kind !== 'verify' && !publishes;
+  return workModeRefusal(mode, planAllowed, 'Search measurement, publication or project apply');
+}
+
+function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
   const { config, caps } = resolved;
   const depth = caps.depth;
   if (!depth) {

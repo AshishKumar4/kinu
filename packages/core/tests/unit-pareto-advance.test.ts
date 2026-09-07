@@ -118,8 +118,8 @@ describe('Pareto advance with a publishing carry', () => {
       if ('reason' in call) throw new Error(`the tuple must resolve so validity can refuse it: ${call.error}`);
       expect(swarmValidity(call)).toMatchObject({ reason: 'bad_input' });
       expect(swarmValidity(call)?.error).toContain('advance:"pareto"');
-      expect(regionRefusal(call)).toMatchObject({ reason: 'bad_input' });
-      expect(regionRefusal(call)?.error).toContain('advance:"pareto"');
+      expect(regionRefusal(call, 'build')).toMatchObject({ reason: 'bad_input' });
+      expect(regionRefusal(call, 'build')?.error).toContain('advance:"pareto"');
     }
   });
 });
