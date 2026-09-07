@@ -796,20 +796,18 @@ export default function WorkspacePage() {
     };
   }, [agentId]);
 
-  // The ONE rule that steers the surface on its own: a newly exposed sandbox
-  // port switches to Output, where the running app is. Environment used to run
-  // a second, competing rule over the same signal — two owners of one decision,
-  // which is a bug however either of them behaves — and it went with the
-  // preview panes it drove.
-  // (Port discovery itself lives in useKinu' live-data poll, so this fires
-  // from any surface.)
+  // New ports can bring Output forward from Work, but must not replace a
+  // selected surface. In particular, booting a slate must leave its live
+  // source-refresh owner mounted.
   const prevPortCountRef = useRef(0);
   useEffect(() => {
     const n = state.pinnedPorts.length;
     const planOwnsOutput = chatMode === "plan"
       || visiblePlan?.status === "pending"
       || visiblePlan?.status === "changes_requested";
-    if (n > prevPortCountRef.current && !planOwnsOutput) setSurface("Output");
+    if (n > prevPortCountRef.current && !planOwnsOutput) {
+      setSurface((selected) => selected === "Work" ? "Output" : selected);
+    }
     prevPortCountRef.current = n;
   }, [chatMode, state.pinnedPorts.length, visiblePlan?.status]);
 
