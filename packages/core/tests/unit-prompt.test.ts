@@ -1040,7 +1040,7 @@ describe('buildSystemPromptSync', () => {
       .toContain('Background-resume mode');
     const plan = buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: true });
     expect(plan).toContain('submit_plan');
-    expect(plan).toContain('Do not change files, system state, releases, or deployments');
+    expect(plan).toContain('Do not change project files, system resources, releases, or deployments');
     expect(plan).toContain('Do not expose ports or produce preview or output links');
     expect(plan).toContain('Until the plan is approved, do not begin implementation');
 
@@ -1076,7 +1076,7 @@ describe('buildSystemPromptSync', () => {
       workMode: workModeForTurnMetadata(planWake),
     });
     expect(planPrompt).toContain('fetch the referenced job result first');
-    expect(planPrompt).toContain('Do not change files, system state, releases, or deployments');
+    expect(planPrompt).toContain('Do not change project files, system resources, releases, or deployments');
   });
 
   test('the two axes are read from different metadata keys and neither can suppress the other', () => {
@@ -1139,7 +1139,7 @@ describe('buildSystemPromptSync', () => {
           instructions: role.instructions,
         },
       });
-      expect(prompt).toContain('Do not change files, system state, releases, or deployments');
+      expect(prompt).toContain('Do not change project files, system resources, releases, or deployments');
       expect(prompt).toContain('Until the plan is approved, do not begin implementation');
       expect(prompt).toContain('Do not expose ports or produce preview or output links');
       for (const line of planOnly.split('\n')) expect(prompt).toContain(line);
