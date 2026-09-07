@@ -135,52 +135,56 @@ export interface ExternalArm {
   declaredTrials: number;
 }
 
-/** Read one Harbor job directory. Every trial subdirectory holding a
- *  `result.json` is a trial; anything else in there is job-level bookkeeping. */
+/** Decode one trial directory. A configured unfinished trial is retained; a
+ * bookkeeping entry without a trial result or config contributes no record. */
+function readHarborTrial(directory: string): ExternalTrial | null {
+  const file = join(directory, 'result.json');
+  if (!existsSync(file)) {
+    const configFile = join(directory, 'config.json');
+    if (!existsSync(configFile)) return null;
+    const pending = v.parse(PendingTrialSchema, parseJsonValue(readFileSync(configFile, 'utf8')));
+    return {
+      taskId: basename(pending.task.path), reward: null, passed: null, checksum: null,
+      model: pending.agent.model_name ?? null, evolve: pending.agent.kwargs?.evolve ?? null,
+      evolutionEvents: null, activityEvents: null, executionGradedTurns: null, turnsCompleted: null,
+      toolCalls: null, usage: {}, usageComplete: false, errored: false,
+    };
+  }
+  const parsed = v.parse(TrialSchema, parseJsonValue(readFileSync(file, 'utf8')));
+  const reward = parsed.verifier_result?.rewards.reward ?? null;
+  const meta = parsed.agent_result?.metadata;
+  const configuredEvolution = parsed.config.agent.kwargs?.evolve;
+  if (configuredEvolution !== undefined && meta?.evolve !== undefined && configuredEvolution !== meta.evolve) {
+    throw new Error(`${file}: recorded evolution state differs from configured state`);
+  }
+  const events = meta?.evolution_events;
+  return {
+    taskId: parsed.task_name.split('/').pop() ?? parsed.task_name,
+    reward,
+    passed: reward === null ? null : reward >= 1,
+    checksum: parsed.task_checksum ?? null,
+    model: parsed.config.agent.model_name ?? null,
+    evolve: meta?.evolve ?? configuredEvolution ?? null,
+    evolutionEvents: events === undefined ? null : events.length,
+    activityEvents: meta?.activity_events === undefined ? null : meta.activity_events.length,
+    executionGradedTurns: meta?.turn_grading?.execution_graded ?? null,
+    turnsCompleted: meta?.turns_completed ?? null,
+    toolCalls: meta?.tool_calls ?? null,
+    usage: harborUsage(parsed.agent_result),
+    usageComplete: meta?.usage_complete ?? null,
+    errored: parsed.exception_info !== null && parsed.exception_info !== undefined,
+  };
+}
+
+/** The job summary owns the attempted denominator, including absent trial records. */
 export function readHarborJob(dir: string): ExternalArm {
   const root = resolve(dir);
   if (!existsSync(root)) throw new Error(`no such Harbor job directory: ${root}`);
   const declared = v.parse(JobSummarySchema, parseJsonValue(readFileSync(join(root, 'result.json'), 'utf8'))).n_total_trials;
   const trials: ExternalTrial[] = [];
   for (const entry of readdirSync(root).sort()) {
-    const file = join(root, entry, 'result.json');
-    if (!existsSync(file)) {
-      const configFile = join(root, entry, 'config.json');
-      if (existsSync(configFile)) {
-        const pending = v.parse(PendingTrialSchema, parseJsonValue(readFileSync(configFile, 'utf8')));
-        trials.push({
-          taskId: basename(pending.task.path), reward: null, passed: null, checksum: null,
-          model: pending.agent.model_name ?? null, evolve: pending.agent.kwargs?.evolve ?? null,
-          evolutionEvents: null, activityEvents: null, executionGradedTurns: null, turnsCompleted: null,
-          toolCalls: null, usage: {}, usageComplete: false, errored: false,
-        });
-      }
-      continue;
-    }
-    const parsed = v.parse(TrialSchema, parseJsonValue(readFileSync(file, 'utf8')));
-    const reward = parsed.verifier_result?.rewards.reward ?? null;
-    const meta = parsed.agent_result?.metadata;
-    const configuredEvolution = parsed.config.agent.kwargs?.evolve;
-    if (configuredEvolution !== undefined && meta?.evolve !== undefined && configuredEvolution !== meta.evolve) {
-      throw new Error(`${file}: recorded evolution state differs from configured state`);
-    }
-    const events = meta?.evolution_events;
-    trials.push({
-      taskId: parsed.task_name.split('/').pop() ?? parsed.task_name,
-      reward,
-      passed: reward === null ? null : reward >= 1,
-      checksum: parsed.task_checksum ?? null,
-      model: parsed.config.agent.model_name ?? null,
-      evolve: meta?.evolve ?? configuredEvolution ?? null,
-      evolutionEvents: events === undefined ? null : events.length,
-      activityEvents: meta?.activity_events === undefined ? null : meta.activity_events.length,
-      executionGradedTurns: meta?.turn_grading?.execution_graded ?? null,
-      turnsCompleted: meta?.turns_completed ?? null,
-      toolCalls: meta?.tool_calls ?? null,
-      usage: harborUsage(parsed.agent_result),
-      usageComplete: meta?.usage_complete ?? null,
-      errored: parsed.exception_info !== null && parsed.exception_info !== undefined,
-    });
+    const trial = readHarborTrial(join(root, entry));
+    if (trial !== null) trials.push(trial);
   }
   if (trials.length > declared) throw new Error(`${root}: ${trials.length} trial records exceed ${declared} declared attempts`);
   return { id: basename(root), dir: root, trials, declaredTrials: declared };
