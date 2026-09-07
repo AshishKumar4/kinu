@@ -107,7 +107,7 @@ export {
   planWorkspaceTitle,
   resolveWorkspaceTitle,
   suggestWorkspaceTitle,
-  workspaceSlug,
+  workspaceSlug, workspaceAddressRefusal, WORKSPACE_ADDRESS_MAX,
   workspaceTitleFromMission,
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,

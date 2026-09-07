@@ -16,17 +16,18 @@
  * That is the whole of the per-backend difference.
  */
 
-import { nanoid } from '../utils/nanoid';
+import { workspaceAddressRefusal, workspaceSlug } from './naming';
 import { forkPointExists } from './conversation-store';
 import type { SqlExecutor } from '../types/primitives';
 import type { ForkFileSource } from './fork-transfer';
 
 /**
- * A fork's name. Stricter than the general workspace-name rule (no dots): a
- * fork name is generated as often as it is chosen, and the generated form is
- * `<source>-fork-<id>`.
+ * A fork's name is a workspace address like any other: a requested one is
+ * admitted against the one address grammar (`naming.ts`), and a generated one is a
+ * fresh {@link workspaceSlug} — neutral, and short enough for a preview hostname,
+ * where `<source>-fork-<id>` built on a 29-character slug was not. Lineage lives
+ * in the fork record, not in the address.
  */
-const FORK_NAME = /^[A-Za-z0-9_-]+$/;
 
 /** How a fork reaches the workspace it is creating. */
 export interface ForkTransport {
@@ -95,10 +96,9 @@ export async function forkWorkspace(
   const requestedName = opts?.name?.trim();
   const name = requestedName && requestedName.length > 0
     ? requestedName
-    : `${deps.sourceName}-fork-${nanoid(6)}`;
-  if (!FORK_NAME.test(name)) {
-    throw new Error(`invalid agent name: "${name}" — allowed: A-Z, a-z, 0-9, _ and -`);
-  }
+    : workspaceSlug(crypto.randomUUID());
+  const refusal = workspaceAddressRefusal(name);
+  if (refusal !== null) throw new Error(`invalid agent name: ${refusal}`);
   if (requestedName && await deps.transport.occupied(name)) {
     throw new Error(`agent name already exists: "${name}"`);
   }

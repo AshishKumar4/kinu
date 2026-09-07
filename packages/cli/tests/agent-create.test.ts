@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { workspaceSlug } from '@kinu.run/core';
+import { asFetchFunction, workspaceSlug } from '@kinu.run/core';
 import {
   createCloudAgentFromMission,
   suggestAgentIdentityFromMission,
@@ -108,6 +108,28 @@ describe('CLI mission workspace names', () => {
       displayName: 'Jarvis',
       purpose: 'Manage my calendar',
     });
+  });
+});
+
+describe('a cloud workspace name the hub refuses', () => {
+  test('kinu create surfaces the hub\'s own limit, verbatim, and records no workspace', async () => {
+    // The hub owns the address grammar (a preview hostname label, at most 31
+    // characters); the CLI's job is to hand its refusal to the person unchanged.
+    const refusal = 'Invalid workspace name: the workspace name "slate-acceptance-20260907-8898094b" cannot be a preview hostname label (a label holds lowercase letters, digits and hyphens, at most 31 characters, and carries no case)';
+    const seen: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = asFetchFunction(async (input, init) => {
+      seen.push(String(input) + ' ' + String(init?.method));
+      return Response.json({ error: refusal }, { status: 400 });
+    });
+    try {
+      const { createCloudAgent } = await import('../src/cloud-api');
+      await expect(createCloudAgent('https://kinu.test', 'ptc_token', { name: 'slate-acceptance-20260907-8898094b', purpose: 'x' }))
+        .rejects.toThrow(refusal);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(seen).toEqual(['https://kinu.test/api/cli/workspaces POST']);
   });
 });
 

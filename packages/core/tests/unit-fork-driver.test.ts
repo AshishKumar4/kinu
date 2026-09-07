@@ -10,6 +10,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   forkWorkspace, writeSoul, readForkLineage, writeForkSnapshot, snapshotWorkspaceForFork,
+  workspaceAddressRefusal, WORKSPACE_ADDRESS_MAX,
   type ForkTransport,
 } from '../src/index';
 import { createTestWorkspace } from './helpers';
@@ -60,7 +61,7 @@ describe('forkWorkspace', () => {
     src.db.close();
   });
 
-  test('an unnamed fork is named after its source and never pre-checked', async () => {
+  test('an unnamed fork gets a fresh workspace address a preview hostname can carry, never pre-checked', async () => {
     const src = await sourceWorkspace();
     const t = recordingTransport();
     const out = await forkWorkspace(
@@ -68,7 +69,8 @@ describe('forkWorkspace', () => {
       'm2',
     );
 
-    expect(out.name).toMatch(/^atlas-fork-[A-Za-z0-9_-]{6}$/);
+    expect(workspaceAddressRefusal(out.name)).toBeNull();
+    expect(out.name).not.toContain('atlas');
     // Failing a fork over a random-id collision helps nobody, so a generated
     // name is not probed at all.
     expect(t.probed).toEqual([]);
@@ -96,6 +98,25 @@ describe('forkWorkspace', () => {
       'm1',
       { name: 'has spaces' },
     )).rejects.toThrow('invalid agent name');
+    expect(t.probed).toEqual([]);
+    expect(t.delivered).toEqual([]);
+    src.db.close();
+  });
+
+  test('a requested name no preview hostname can carry is refused with the limit', async () => {
+    const src = await sourceWorkspace();
+    const t = recordingTransport();
+    const name = 'a'.repeat(WORKSPACE_ADDRESS_MAX + 1);
+    await expect(forkWorkspace(
+      { sql: src.sql, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
+      'm1',
+      { name },
+    )).rejects.toThrow(`at most ${WORKSPACE_ADDRESS_MAX} characters`);
+    await expect(forkWorkspace(
+      { sql: src.sql, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
+      'm1',
+      { name: 'MyFork' },
+    )).rejects.toThrow('carries no case');
     expect(t.probed).toEqual([]);
     expect(t.delivered).toEqual([]);
     src.db.close();
