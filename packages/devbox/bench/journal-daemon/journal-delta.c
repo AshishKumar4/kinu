@@ -777,79 +777,54 @@ static int stat_touched(const struct journal_delta_request *request, struct delt
       return neg_errno();
     }
     entry->present = true;
-    entry->ino = (uint64_t)entry->st.st_ino;
+    if (request->logical_inode == NULL) return -EOPNOTSUPP;
+    int rc = request->logical_inode(request->alias_context, entry->path, &entry->ino);
+    if (rc != 0) return rc;
   }
   return 0;
 }
 
-/* Does the inode behind a present touched path carry more names than the
- * journal touched? Set once every touched path is stat-ed. */
-static bool touched_multilink(const struct delta *delta, uint64_t ino) {
-  for (size_t index = 0; index < delta->path_count; index++) {
-    const struct touched *entry = &delta->paths[index];
-    if (entry->present && entry->ino == ino && S_ISREG(entry->st.st_mode) && entry->st.st_nlink > 1) return true;
-  }
-  return false;
+static int remember_alias(void *context, const char *path) {
+  return remember_path(context, path);
 }
 
-/* Does any dirty or touched inode carry more names than the journal touched?
- * A write or a metadata change through one name of a hardlinked file must
- * reach every name at the cut, and a name the journal never saw is found
- * only by looking. */
-static bool needs_link_walk(const struct delta *delta) {
+static int compare_inode(const void *left, const void *right) {
+  uint64_t a = *(const uint64_t *)left, b = *(const uint64_t *)right;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/* Resolve changed inode aliases through the daemon-owned reverse index. */
+static int resolve_link_names(const struct journal_delta_request *request, struct delta *delta) {
+  size_t count = 0;
   for (size_t index = 0; index < delta->dirty.count; index++) {
-    if (delta->dirty.files[index].nlink > 1) return true;
+    const struct journal_dirty_file *file = &delta->dirty.files[index];
+    if (file->nlink > 1 || (file->path[0] == '\0' && file->nlink > 0)) count++;
   }
   for (size_t index = 0; index < delta->path_count; index++) {
     const struct touched *entry = &delta->paths[index];
-    if (entry->present && S_ISREG(entry->st.st_mode) && entry->st.st_nlink > 1) return true;
+    if (entry->present && S_ISREG(entry->st.st_mode) && entry->st.st_nlink > 1) count++;
   }
-  return false;
-}
-
-/* One walk of the backing tree, remembering every regular file whose inode
- * a multi-link write or metadata change touched. O(tree), paid only in the
- * generation that changed a hardlinked inode; every other fence stays O(k). */
-static int walk_link_names(int dir_fd, const char *prefix, struct delta *delta) {
-  int fd = openat(dir_fd, prefix[0] == '\0' ? "." : prefix, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-  if (fd < 0) return neg_errno();
-  DIR *dp = fdopendir(fd);
-  if (dp == NULL) {
-    close(fd);
-    return neg_errno();
+  if (count == 0) return 0;
+  if (request->resolve_aliases == NULL) return -EOPNOTSUPP;
+  if (count > SIZE_MAX / sizeof(uint64_t)) return -EOVERFLOW;
+  uint64_t *inodes = malloc(count * sizeof(*inodes));
+  if (inodes == NULL) return -ENOMEM;
+  size_t used = 0;
+  for (size_t index = 0; index < delta->dirty.count; index++) {
+    const struct journal_dirty_file *file = &delta->dirty.files[index];
+    if (file->nlink > 1 || (file->path[0] == '\0' && file->nlink > 0)) inodes[used++] = file->ino;
   }
+  for (size_t index = 0; index < delta->path_count; index++) {
+    const struct touched *entry = &delta->paths[index];
+    if (entry->present && S_ISREG(entry->st.st_mode) && entry->st.st_nlink > 1) inodes[used++] = entry->ino;
+  }
+  qsort(inodes, used, sizeof(*inodes), compare_inode);
   int rc = 0;
-  struct dirent *entry;
-  errno = 0;
-  while (rc == 0 && (entry = readdir(dp)) != NULL) {
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
-    char path[JOURNAL_PATH_CAP];
-    int written = prefix[0] == '\0'
-      ? snprintf(path, sizeof(path), "%s", entry->d_name)
-      : snprintf(path, sizeof(path), "%s/%s", prefix, entry->d_name);
-    if (written < 0 || (size_t)written >= sizeof(path)) {
-      rc = -ENAMETOOLONG;
-      break;
-    }
-    struct stat st;
-    if (fstatat(dir_fd, path, &st, AT_SYMLINK_NOFOLLOW) != 0) {
-      if (errno == ENOENT) continue;
-      rc = neg_errno();
-      break;
-    }
-    if (S_ISDIR(st.st_mode)) {
-      rc = walk_link_names(dir_fd, path, delta);
-      continue;
-    }
-    if (!S_ISREG(st.st_mode)) continue;
-    struct journal_dirty_file *file = journal_dirty_find(&delta->dirty, (uint64_t)st.st_ino);
-    if ((file != NULL && file->nlink > 1) || touched_multilink(delta, (uint64_t)st.st_ino)) {
-      rc = remember_path(delta, path);
-    }
-    errno = 0;
+  for (size_t index = 0; rc == 0 && index < used; index++) {
+    if (index > 0 && inodes[index] == inodes[index - 1]) continue;
+    rc = request->resolve_aliases(request->alias_context, inodes[index], remember_alias, delta);
   }
-  if (rc == 0 && errno != 0) rc = neg_errno();
-  closedir(dp);
+  free(inodes);
   return rc;
 }
 
@@ -1328,10 +1303,8 @@ int journal_delta_stage(const struct journal_delta_request *request, char manife
   journal_dirty_init(&delta.dirty);
   int rc = read_delta(request, &delta);
   if (rc == 0) rc = stat_touched(request, &delta);
-  if (rc == 0 && needs_link_walk(&delta)) {
-    rc = walk_link_names(request->root_fd, "", &delta);
-    if (rc == 0) rc = stat_touched(request, &delta);
-  }
+  if (rc == 0) rc = resolve_link_names(request, &delta);
+  if (rc == 0) rc = stat_touched(request, &delta);
   if (rc == 0) {
     if (delta.op_count > 1) qsort(delta.ops, delta.op_count, sizeof(*delta.ops), compare_ops);
     if (delta.path_count > 1) qsort(delta.paths, delta.path_count, sizeof(*delta.paths), compare_touched);

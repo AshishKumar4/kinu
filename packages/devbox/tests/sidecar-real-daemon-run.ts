@@ -112,7 +112,7 @@ async function stopDaemon(daemon: Daemon): Promise<number> {
 
 /** `ok`, or the errno name a system call answered. Anything that is not an
  *  errno failure is a defect and propagates. */
-async function errnoOf(call: Promise<unknown>): Promise<string> {
+async function errnoOf<T>(call: Promise<T>): Promise<string> {
   try {
     await call;
     return 'ok';
@@ -464,6 +464,7 @@ async function main(): Promise<void> {
     //    the writes and the next seal continues the published chain.
     await writeFile(join(mount, 'src', 'after-kill.ts'), 'export const recovered = true;\n');
     const surviving = await open(join(mount, 'src', 'lib', 'a.ts'), 'r');
+    await rename(join(mount, 'src/lib'), join(mount, 'src/renamed-lib'));
     const ghost = await open(join(mount, 'src', 'ghost.txt'), 'w+');
     await ghost.write('held open, then unlinked\n', 0);
     await unlink(join(mount, 'src', 'ghost.txt'));
@@ -491,6 +492,11 @@ async function main(): Promise<void> {
     await writeFile(join(mount, 'src', 'after-restart.ts'), 'export const restarted = true;\n');
     const third = openCore(space, stores, 'boot-3', clock);
     await third.attach();
+    const lastObserved = await open(join(mount, 'src/renamed-lib/a.ts'), 'r+');
+    await unlink(join(mount, 'src/renamed-lib/a.ts'));
+    await lastObserved.write('restored alias bytes\n', 0);
+    await lastObserved.truncate(21);
+    await lastObserved.close();
     const generationAfterKill = await publish(third, 'the seal after a daemon kill');
     facts.generationAfterKill = generationAfterKill;
     const disk4 = await diskTree(space.root);

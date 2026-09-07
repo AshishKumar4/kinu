@@ -1,18 +1,15 @@
 /* Journaling FUSE passthrough with an out-of-band sealing fence.
  *
- * Every backing operation is fd-relative: paths from the FUSE namespace are
- * validated, then resolved with openat2(RESOLVE_BENEATH) against a root fd that
- * is retained for the lifetime of the daemon, so a swapped symlink or a ".."
- * component can never reach outside the backing tree.
+ * Backing operations use retained inode handles. A directory-entry operation
+ * resolves one name relative to its parent handle, without following symlinks.
+ * Logical identity and aliases live in the daemon-owned namespace index.
  *
- * Every write records one W record naming its inode, path, offset and length
- * BEFORE the pwrite it describes; every metadata mutation records an INTENT
- * before its effect and a RESULT before its reply.  One writer thread appends
- * all of them with write(2), and no mutation reply waits for a disk: the WAL
- * only has to survive a DAEMON death on this instance, where the written pages
- * are still in the page cache, and an instance death takes the backing root
- * and the WAL together.  A caller's own fsync still flushes the backing file
- * it named.
+ * A write records its logical inode, path, offset, length and link count
+ * before its effect. Metadata operations record an INTENT before the effect
+ * and a RESULT before replying. The writer thread appends without an fsync.
+ * Namespace SQLite uses WAL with synchronous=NORMAL and may checkpoint.
+ * An instance loss takes the local tree and journals together; publication
+ * establishes remote durability. A caller fsync still flushes its file.
  *
  * A fence arrives out of band on an AF_UNIX socket.  It closes admission,
  * drains the mutations already in flight (which makes the journal complete
@@ -62,6 +59,9 @@
 #include <unistd.h>
 
 #include "journal-delta.h"
+#include "journal-namespace.h"
+
+static struct journal_namespace *inode_namespace;
 
 #ifndef FUSE_CAP_DIRECT_IO_ALLOW_MMAP
 #error "libfuse 3.17.1 with FUSE_CAP_DIRECT_IO_ALLOW_MMAP is required"
@@ -381,29 +381,19 @@ static bool valid_utf8(const char *text) {
  * answered ESTALE to fstat because the kernel sends GETATTR without a handle
  * (measured 2026-09-06, sidecar-real-daemon-run.ts).
  *
- * One node per backing inode, found by (dev, ino), so two hardlink names
- * are one node. A node remembers every name it was reached by this boot; the
- * first is its canonical name, and that is the path the journal records for
- * an operation that arrives by inode rather than by name. An operation that
- * arrives by (parent, name) is journaled under exactly that name.
+ * One cached node per backing (device,inode) keeps hardlinked descriptors
+ * together. Kernel node IDs are temporary handles. The persisted namespace
+ * owns logical IDs and parent-ID/name aliases, including unobserved names
+ * after a daemon restart. Kernel lookup eviction does not delete that state.
  */
-struct node_name {
-  fuse_ino_t parent;
-  char name[NAME_MAX + 1];
-};
-
 struct node {
   fuse_ino_t id;
   uint64_t generation;
+  uint64_t logical_id;
   int fd; /* O_PATH */
   dev_t dev;
   ino_t ino;
   uint64_t nlookup;
-  /* Children that name this node as a parent keep it resident. */
-  uint64_t children;
-  struct node_name *names;
-  size_t name_count;
-  size_t name_capacity;
   struct node *hash_next;
   bool live;
 };
@@ -494,7 +484,7 @@ static void node_unhash(struct node *node) {
   }
 }
 
-/* Under `nodes.lock`. The kernel forgot the node and no child names it. */
+/* Under `nodes.lock`. Release a kernel lookup cache entry. */
 static void node_free(struct node *node) {
   node_unhash(node);
   nodes.table[node->id] = NULL;
@@ -508,80 +498,22 @@ static void node_free(struct node *node) {
     }
   }
   if (nodes.free_count < nodes.free_capacity) nodes.free_ids[nodes.free_count++] = node->id;
-  for (size_t index = 0; index < node->name_count; index++) {
-    struct node *parent = node_by_id(node->names[index].parent);
-    if (parent != NULL && parent->children > 0 && --parent->children == 0 && parent->nlookup == 0
-        && parent->id != FUSE_ROOT_ID) {
-      node_free(parent);
-    }
-  }
-  free(node->names);
   close(node->fd);
   free(node);
 }
 
-/* Under `nodes.lock`. Remember one name a node was reached by. */
-static int node_add_name(struct node *node, fuse_ino_t parent, const char *name) {
-  for (size_t index = 0; index < node->name_count; index++) {
-    if (node->names[index].parent == parent && strcmp(node->names[index].name, name) == 0) return 0;
-  }
-  if (node->name_count == node->name_capacity) {
-    size_t capacity = node->name_capacity == 0 ? 1 : node->name_capacity * 2;
-    struct node_name *grown = realloc(node->names, capacity * sizeof(*grown));
-    if (grown == NULL) return -ENOMEM;
-    node->names = grown;
-    node->name_capacity = capacity;
-  }
-  struct node_name *entry = &node->names[node->name_count++];
-  entry->parent = parent;
-  memcpy(entry->name, name, strlen(name) + 1);
-  struct node *above = node_by_id(parent);
-  if (above != NULL) above->children++;
-  return 0;
-}
-
-/* Under `nodes.lock`. A name is gone: an unlink, or the source of a rename. */
-static void node_drop_name(struct node *node, fuse_ino_t parent, const char *name) {
-  for (size_t index = 0; index < node->name_count; index++) {
-    if (node->names[index].parent != parent || strcmp(node->names[index].name, name) != 0) continue;
-    memmove(node->names + index, node->names + index + 1, (node->name_count - index - 1) * sizeof(*node->names));
-    node->name_count--;
-    struct node *above = node_by_id(parent);
-    if (above != NULL && above->children > 0) above->children--;
-    return;
-  }
-}
-
-/* Under `nodes.lock`. The absolute FUSE path of a node by its canonical
- * name, the spelling every journal record carries. A node with no name left
- * (its last name was unlinked while a handle stayed open) has no path, and
- * an operation on it is journaled as nothing: no name at the cut can carry
- * the change. */
-static int node_path(const struct node *node, char out[PATH_CAP]) {
-  if (node->id == FUSE_ROOT_ID) {
-    out[0] = '/';
-    out[1] = '\0';
-    return 0;
-  }
-  if (node->name_count == 0) return -ENOENT;
-  char parent_path[PATH_CAP];
-  struct node *parent = node_by_id(node->names[0].parent);
-  if (parent == NULL) return -ESTALE;
-  int rc = node_path(parent, parent_path);
-  if (rc != 0) return rc;
-  int written = parent->id == FUSE_ROOT_ID
-    ? snprintf(out, PATH_CAP, "/%s", node->names[0].name)
-    : snprintf(out, PATH_CAP, "%s/%s", parent_path, node->names[0].name);
-  return written < 0 || written >= PATH_CAP ? -ENAMETOOLONG : 0;
-}
-
-/* The canonical path of an inode, or -ENOENT for a nameless one. */
-static int path_of_inode(fuse_ino_t id, char out[PATH_CAP]) {
+/* Kernel node IDs are cache handles. The namespace owns logical identity. */
+static uint64_t logical_of(fuse_ino_t id) {
   pthread_mutex_lock(&nodes.lock);
   struct node *node = node_by_id(id);
-  int rc = node == NULL ? -ESTALE : node_path(node, out);
+  uint64_t logical = node == NULL ? 0 : node->logical_id;
   pthread_mutex_unlock(&nodes.lock);
-  return rc;
+  return logical;
+}
+
+static int path_of_inode(fuse_ino_t id, char out[PATH_CAP]) {
+  uint64_t logical = logical_of(id);
+  return logical == 0 ? -ESTALE : journal_namespace_path(inode_namespace, logical, out);
 }
 
 /* The path of a name under a parent: what a caller spelled. */
@@ -595,8 +527,7 @@ static int path_of_name(fuse_ino_t parent, const char *name, char out[PATH_CAP])
   return written < 0 || written >= PATH_CAP ? -ENAMETOOLONG : 0;
 }
 
-/* The O_PATH handle of an inode, or -1. The handle lives as long as the
- * node, which the kernel's lookup count and the node's children keep. */
+/* The O_PATH handle stays live while the kernel retains its node. */
 static int fd_of(fuse_ino_t id) {
   pthread_mutex_lock(&nodes.lock);
   struct node *node = node_by_id(id);
@@ -626,6 +557,10 @@ static int lookup_node(fuse_ino_t parent, const char *name, struct fuse_entry_pa
     close(fd);
     return rc;
   }
+  uint64_t logical = 0;
+  int rc = journal_namespace_lookup(inode_namespace, logical_of(parent), name, &logical);
+  if (rc == 0) rc = journal_namespace_bind_existing(inode_namespace, &st, logical);
+  if (rc != 0) { close(fd); return rc; }
   pthread_mutex_lock(&nodes.lock);
   struct node *node = node_by_identity(st.st_dev, st.st_ino);
   if (node != NULL) {
@@ -638,8 +573,8 @@ static int lookup_node(fuse_ino_t parent, const char *name, struct fuse_entry_pa
       return -ENOMEM;
     }
   }
-  int rc = node_add_name(node, parent, name);
-  if (rc == 0) node->nlookup++;
+  node->logical_id = logical;
+  node->nlookup++;
   memset(entry, 0, sizeof(*entry));
   entry->ino = node->id;
   entry->generation = node->generation;
@@ -655,7 +590,7 @@ static void forget_node(fuse_ino_t id, uint64_t count) {
   struct node *node = node_by_id(id);
   if (node != NULL && node->id != FUSE_ROOT_ID) {
     node->nlookup = count >= node->nlookup ? 0 : node->nlookup - count;
-    if (node->nlookup == 0 && node->children == 0) node_free(node);
+    if (node->nlookup == 0) node_free(node);
   }
   pthread_mutex_unlock(&nodes.lock);
 }
@@ -923,6 +858,21 @@ static void ll_statfs(fuse_req_t req, fuse_ino_t ino) {
   else fuse_reply_statfs(req, &st);
 }
 
+static int finish_created(struct mutation *m, const char *op, const char *path, const char *aux,
+                          int result, fuse_ino_t parent, const char *name) {
+  if (result == 0) {
+    struct stat st;
+    int parent_fd = fd_of(parent);
+    if (parent_fd < 0) result = -ESTALE;
+    else if (fstatat(parent_fd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) result = neg_errno();
+    else {
+      uint64_t logical = 0;
+      result = journal_namespace_bind(inode_namespace, logical_of(parent), name, &st, &logical);
+    }
+  }
+  return finish_mutation(m, op, path, aux, result);
+}
+
 /* A new entry under a parent: journaled under the name the caller spelled,
  * then looked up so the kernel gets its node. */
 static void reply_created(fuse_req_t req, fuse_ino_t parent, const char *name, int result,
@@ -966,7 +916,7 @@ static void ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t
       result = mknodat(parent_fd, name, mode, rdev) == 0 ? 0 : neg_errno();
     }
   }
-  reply_created(req, parent, name, finish_mutation(&m, "mknod", path, "", result), NULL);
+  reply_created(req, parent, name, finish_created(&m, "mknod", path, "", result, parent, name), NULL);
 }
 
 static void ll_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode) {
@@ -984,7 +934,7 @@ static void ll_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t
   }
   int parent_fd = fd_of(parent);
   int result = parent_fd < 0 ? -ESTALE : (mkdirat(parent_fd, name, mode) == 0 ? 0 : neg_errno());
-  reply_created(req, parent, name, finish_mutation(&m, "mkdir", path, "", result), NULL);
+  reply_created(req, parent, name, finish_created(&m, "mkdir", path, "", result, parent, name), NULL);
 }
 
 static void ll_symlink(fuse_req_t req, const char *target, fuse_ino_t parent, const char *name) {
@@ -1002,7 +952,7 @@ static void ll_symlink(fuse_req_t req, const char *target, fuse_ino_t parent, co
   }
   int parent_fd = fd_of(parent);
   int result = parent_fd < 0 ? -ESTALE : (symlinkat(target, parent_fd, name) == 0 ? 0 : neg_errno());
-  reply_created(req, parent, name, finish_mutation(&m, "symlink", path, target, result), NULL);
+  reply_created(req, parent, name, finish_created(&m, "symlink", path, target, result, parent, name), NULL);
 }
 
 /* The name goes and the node stays: a handle still open keeps the inode. */
@@ -1021,15 +971,8 @@ static void remove_name(fuse_req_t req, const char *op, fuse_ino_t parent, const
   }
   int parent_fd = fd_of(parent);
   int result = -ESTALE;
-  struct stat st;
-  bool known = parent_fd >= 0 && fstatat(parent_fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0;
   if (parent_fd >= 0) result = unlinkat(parent_fd, name, flags) == 0 ? 0 : neg_errno();
-  if (result == 0 && known) {
-    pthread_mutex_lock(&nodes.lock);
-    struct node *node = node_by_identity(st.st_dev, st.st_ino);
-    if (node != NULL) node_drop_name(node, parent, name);
-    pthread_mutex_unlock(&nodes.lock);
-  }
+  if (result == 0) result = journal_namespace_remove(inode_namespace, logical_of(parent), name);
   reply_errno(req, finish_mutation(&m, op, path, "", result));
 }
 
@@ -1060,33 +1003,12 @@ static void ll_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse_
   int from_fd = fd_of(parent);
   int to_fd = fd_of(newparent);
   int result = from_fd < 0 || to_fd < 0 ? -ESTALE : 0;
-  struct stat moved;
-  struct stat replaced;
-  bool had_moved = result == 0 && fstatat(from_fd, name, &moved, AT_SYMLINK_NOFOLLOW) == 0;
-  bool had_replaced = result == 0 && fstatat(to_fd, newname, &replaced, AT_SYMLINK_NOFOLLOW) == 0;
   if (result == 0) {
     long ok = syscall(SYS_renameat2, from_fd, name, to_fd, newname, flags);
     result = ok == 0 ? 0 : neg_errno();
   }
-  if (result == 0) {
-    pthread_mutex_lock(&nodes.lock);
-    bool exchange = (flags & RENAME_EXCHANGE) != 0;
-    if (had_moved) {
-      struct node *node = node_by_identity(moved.st_dev, moved.st_ino);
-      if (node != NULL) {
-        node_drop_name(node, parent, name);
-        node_add_name(node, newparent, newname);
-      }
-    }
-    if (had_replaced) {
-      struct node *node = node_by_identity(replaced.st_dev, replaced.st_ino);
-      if (node != NULL) {
-        node_drop_name(node, newparent, newname);
-        if (exchange) node_add_name(node, parent, name);
-      }
-    }
-    pthread_mutex_unlock(&nodes.lock);
-  }
+  if (result == 0) result = journal_namespace_rename(inode_namespace, logical_of(parent), name,
+                                                   logical_of(newparent), newname, flags);
   reply_errno(req, finish_mutation(&m, "rename", from, to, result));
 }
 
@@ -1113,7 +1035,7 @@ static void ll_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const 
     snprintf(procname, sizeof(procname), "/proc/self/fd/%d", fd);
     result = linkat(AT_FDCWD, procname, parent_fd, newname, AT_SYMLINK_FOLLOW) == 0 ? 0 : neg_errno();
   }
-  reply_created(req, newparent, newname, finish_mutation(&m, "link", to, from, result), NULL);
+  reply_created(req, newparent, newname, finish_created(&m, "link", to, from, result, newparent, newname), NULL);
 }
 
 struct dir_handle {
@@ -1314,7 +1236,7 @@ static void ll_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
     fd = openat(parent_fd, name, (fi->flags & ~(O_DIRECT | O_NOFOLLOW)) | O_CREAT | O_CLOEXEC, mode);
     result = fd < 0 ? neg_errno() : 0;
   }
-  result = finish_mutation(&m, "create", path, "", result);
+  result = finish_created(&m, "create", path, "", result, parent, name);
   if (result != 0) {
     if (fd >= 0) close(fd);
     reply_errno(req, result);
@@ -1367,7 +1289,7 @@ static void ll_write_buf(fuse_req_t req, fuse_ino_t ino, struct fuse_bufvec *in,
     return;
   }
   struct mutation m;
-  int rc = begin_write((uint64_t)st.st_ino, (uint64_t)st.st_nlink, path, offset, size, &m);
+  int rc = begin_write(logical_of(ino), (uint64_t)st.st_nlink, path, offset, size, &m);
   if (rc != 0) {
     reply_errno(req, rc);
     return;
@@ -1595,6 +1517,7 @@ static int open_root_node(const char *root_path) {
   pthread_mutex_init(&nodes.lock, NULL);
   pthread_mutex_lock(&nodes.lock);
   struct node *root = node_insert(fd, &st);
+  if (root != NULL) root->logical_id = 1;
   pthread_mutex_unlock(&nodes.lock);
   if (root == NULL) {
     close(fd);
@@ -1723,6 +1646,14 @@ static int compact_journal(void) {
   return rc;
 }
 
+static int resolve_aliases(void *context, uint64_t ino, int (*emit)(void *, const char *), void *emit_context) {
+  return journal_namespace_aliases(context, ino, emit, emit_context);
+}
+
+static int logical_inode(void *context, const char *path, uint64_t *ino) {
+  return journal_namespace_id_at(context, path, ino);
+}
+
 /* The fence body.  Admission is closed, the mutations in flight have drained
  * and the backing root is synced, so the journal above the previous fence is an
  * exact account of what changed and journal-delta.c stages exactly that. */
@@ -1747,7 +1678,10 @@ static int run_fence(uint64_t *cut_out, uint64_t *generation_out, char manifest[
     .since = state.has_fence ? state.fence_cut : 0,
     .max_chunk = state.max_chunk,
     .boundaries = &state.boundaries,
+    .resolve_aliases = resolve_aliases,
+    .alias_context = inode_namespace,
     .has_base = state.has_base,
+    .logical_inode = logical_inode,
     .base_cut = state.base_cut,
     .base_generation = state.base_generation,
     .base_root = state.base_root,
@@ -2054,16 +1988,28 @@ static bool handle_control(int fd) {
     counter reads = atomic_load_explicit(&state.reads, memory_order_relaxed);
     struct stat st;
     long long journal_bytes = fstat(state.wal_fd, &st) == 0 ? (long long)st.st_size : -1;
+    struct journal_namespace_work namespace_work;
+    int measured = journal_namespace_work(inode_namespace, &namespace_work);
     fputs("{\"id\":", out);
     journal_json_string(out, id);
+    if (measured != 0) {
+      fputs(",\"ok\":false,\"error\":", out);
+      journal_json_string(out, strerror(-measured));
+      fputs("}\n", out);
+    } else {
     fprintf(out,
             ",\"ok\":true,\"sequence\":%llu,\"generation\":%llu,\"active\":%u,\"admitted\":%s,\"records\":%llu,"
             "\"batches\":%llu,\"journalBytes\":%lld,\"directIoAllowMmap\":%s,\"reads\":%llu,"
             "\"writes\":%llu,\"walBytes\":%llu,\"walFsyncs\":%llu,\"backingFsyncs\":%llu,"
-            "\"boundaryFiles\":%zu}\n",
+            "\"boundaryFiles\":%zu,\"namespace\":{\"pageReads\":%llu,\"pageWrites\":%llu,\"cacheHits\":%llu,"
+            "\"preparedSteps\":%llu,\"preparedFullscanSteps\":%llu,\"aliasesReturned\":%llu,\"entriesIngested\":%llu}}\n",
             (counter)sequence, (counter)generation, active, admitted ? "true" : "false", records, batches,
             journal_bytes, mmap_negotiated ? "true" : "false", reads, writes, wal_bytes,
-            wal_fsyncs, backing_fsyncs, boundary_files);
+            wal_fsyncs, backing_fsyncs, boundary_files,
+            (counter)namespace_work.page_reads, (counter)namespace_work.page_writes, (counter)namespace_work.cache_hits,
+            (counter)namespace_work.prepared_steps, (counter)namespace_work.prepared_fullscan_steps,
+            (counter)namespace_work.aliases_returned, (counter)namespace_work.entries_ingested);
+    }
   } else if (strcmp(op, "stop") == 0) {
     pthread_mutex_lock(&state.lock);
     uint64_t sequence = state.sequence;
@@ -2286,6 +2232,11 @@ static int recover_journal(void) {
     if (r.count > 1) qsort(r.pending, r.count, sizeof(*r.pending), compare_pending);
     for (size_t index = 0; rc == 0 && index < r.count; index++) {
       const struct pending_intent *intent = &r.pending[index];
+      if (strcmp(intent->op, "rename") == 0 || strcmp(intent->op, "link") == 0) {
+        rc = journal_namespace_reconcile(inode_namespace, state.root_fd, intent->aux);
+      }
+      if (rc == 0) rc = journal_namespace_reconcile(inode_namespace, state.root_fd, intent->path);
+      if (rc != 0) break;
       rc = durable(REC_RECOVER, intent->sequence, intent->generation, intent->op, -ECANCELED, intent->path,
                    intent->aux);
     }
@@ -2350,6 +2301,11 @@ int main(int argc, char **argv) {
   int rooted = open_root_node(argv[2]);
   if (rooted != 0) {
     fprintf(stderr, "journal-daemon: cannot open the root node: %s\n", strerror(-rooted));
+    return 3;
+  }
+  int indexed = journal_namespace_open(state.state_path, state.root_fd, &inode_namespace);
+  if (indexed != 0) {
+    fprintf(stderr, "namespace.open_failed code=%d\n", indexed);
     return 3;
   }
   state.wal_fd = openat(state.state_fd, WAL_NAME, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
@@ -2424,6 +2380,7 @@ int main(int argc, char **argv) {
   pthread_join(state.writer_thread, NULL);
 
   journal_boundaries_release(&state.boundaries);
+  journal_namespace_close(inode_namespace);
   close(state.wal_fd);
   close(state.wake_fd);
   close(state.state_fd);

@@ -88,6 +88,15 @@ export interface StatsReply {
   readonly backingFsyncs: number;
   /** Files whose published chunk boundaries the daemon currently holds. */
   readonly boundaryFiles: number;
+  readonly namespace: {
+    readonly pageReads: number;
+    readonly pageWrites: number;
+    readonly cacheHits: number;
+    readonly preparedSteps: number;
+    readonly preparedFullscanSteps: number;
+    readonly aliasesReturned: number;
+    readonly entriesIngested: number;
+  };
 }
 
 export interface StopReply {
