@@ -25,7 +25,7 @@
  * downgrade. Domain separation is the label, so neither value can stand in for
  * the other.
  */
-import { hmacSha256Hex } from '../lib/crypto';
+import { hmacSha256Hex } from '@kinu.run/core';
 import * as v from 'valibot';
 
 /**
