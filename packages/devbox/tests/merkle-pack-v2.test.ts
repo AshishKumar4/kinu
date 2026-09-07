@@ -538,6 +538,50 @@ describe('a wake serves the head lazily', () => {
     expect((await restore.placeholder('stale.txt'))?.kind).toBe('file');
     expect(new TextDecoder().decode(await container.read('stale.txt'))).toBe('SECOND generation content'.slice(0, 24));
   });
+
+  test('publication during identity verification cannot switch the payload generation', async () => {
+    const fixture = openSidecar({ graceMs: 0 });
+    fixture.daemon.plant(textTree({ 'held.txt': 'old bytes' }));
+    await publish(fixture, 'the original file');
+    const container = new LazyContainer(new LiveTree(), () => 1_000);
+    container.adopt(fixture.core.restoreLazily(container.ports()));
+    await container.enter();
+    const view = fixture.core.view();
+    if (view === null) throw new Error('Missing published view');
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const identify = view.contentId;
+    view.contentId = async (path) => {
+      const id = await identify(path);
+      entered.resolve();
+      await release.promise;
+      return id;
+    };
+    const reading = container.read('held.txt');
+    await entered.promise;
+    fixture.daemon.write('held.txt', new TextEncoder().encode('new bytes'));
+    await publish(fixture, 'the newer file');
+    await fixture.core.compact();
+    expect((await fixture.core.collectGarbage()).deletes).toBe(0);
+    release.resolve();
+    expect(new TextDecoder().decode(await reading)).toBe('old bytes');
+    expect((await fixture.core.collectGarbage()).deletes).toBeGreaterThan(0);
+  });
+
+  test('compaction can retain an identical root pack while reclaiming an empty tree', async () => {
+    const fixture = openSidecar({ graceMs: 0 });
+    fixture.daemon.plant(textTree({ 'gone.txt': 'retire these bytes' }));
+    await publish(fixture, 'the populated tree');
+    fixture.daemon.remove('gone.txt');
+    await publish(fixture, 'the empty tree');
+    await fixture.core.compact();
+    expect((await fixture.core.collectGarbage()).deletes).toBeGreaterThan(0);
+    const restarted = openSidecar({ share: fixture, bootId: 'after-empty-compaction' });
+    await restarted.core.attach();
+    const view = restarted.core.view();
+    if (view === null) throw new Error('Missing compacted head');
+    expect(await view.readdir('')).toEqual([]);
+  });
 });
 
 describe('a wide directory pays for one path, not its width', () => {

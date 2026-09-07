@@ -170,7 +170,9 @@ export async function compactMerklePacks(input: CompactionInput): Promise<Compac
     const pages = await knownDirPages(node.entries, (level) => input.view.dirPages(level));
     const movePages = pages.some((page) => input.candidates.has(page.ref.pack));
     for (const page of pages) if (input.candidates.has(page.ref.pack)) touched.add(page.ref.pack);
-    if (!childMoved && !moveRecord && !movePages) return { ref: () => record.ref, moved: false };
+    // Publication requires a receipt for the pack carrying the root. Emit
+    // that root even when only unreachable inventory was selected.
+    if (path !== '' && !childMoved && !moveRecord && !movePages) return { ref: () => record.ref, moved: false };
     const rewrittenByName = new Map(children.map(({ entry, rewritten }) => [entry.name, rewritten]));
     const tree = buildDirTree(
       writer,

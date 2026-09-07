@@ -100,9 +100,17 @@ export interface NextLedger {
  */
 export function nextPackLedger(input: NextLedgerInput): NextLedger {
   const compacted = new Set(input.compacted ?? []);
+  const added = new Map(input.added.map((ref) => [ref.key, ref]));
   const rows: PackLedgerRow[] = [];
   const retired: string[] = [];
   for (const row of input.parent?.packs ?? []) {
+    const replacement = added.get(row.key);
+    if (replacement !== undefined) {
+      if (replacement.sha256 !== row.sha256 || replacement.byteLength !== row.byteLength) {
+        throw new MerklePackError('invalid-parameter', `immutable pack identity changed for ${row.key}`);
+      }
+      continue;
+    }
     const replaced = input.replacedBytes.get(row.key) ?? 0;
     const live = Math.max(0, Number(row.estimatedLiveBytes) - replaced);
     if (compacted.has(row.key)) {
@@ -120,7 +128,8 @@ export function nextPackLedger(input: NextLedgerInput): NextLedger {
       addedInGeneration: input.generation,
     });
   }
-  const retiredRows: RetiredPackRow[] = (input.parent?.retired ?? []).filter((row) => !input.deleted?.has(row.key));
+  const retiredRows: RetiredPackRow[] = (input.parent?.retired ?? [])
+    .filter((row) => !input.deleted?.has(row.key) && !added.has(row.key));
   for (const key of retired) {
     retiredRows.push({ key, retiredInGeneration: input.generation, retiredAtMs: String(input.nowMs) });
   }
