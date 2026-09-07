@@ -1711,7 +1711,7 @@ export class OrchestratorAgent extends ActorAgent {
     // than being classified again below for the roster: one turn, one reading of
     // how it ended.
     const { overflowRecovery, end } =
-      this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
+      this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage, workMode: turnMode });
     // The identity of THIS terminal sequence comes from the shared helper, so
     // the root and its facets key one response the same way.
     //
@@ -3932,7 +3932,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** The owner's browser acting on its own workspace: the root caller, minted here. */
   @callable() async slate(operation: SlateOperation): Promise<SlateCallResult> {
-    return this.slates.operation(ROOT_SLATE_CALLER, operation);
+    return this.slates.operation(this.slateCaller(), operation);
   }
 
   /** An actor of this workspace acting as itself; DO-only, like `workspaceBoxOp`. */
@@ -3948,7 +3948,7 @@ export class OrchestratorAgent extends ActorAgent {
       session: () => this.hostedWorkspace().bundle.session(),
       registerPort: (pid, port, target, owner) => this.hostedWorkspace().registerPort(pid, port, target, owner),
       unregisterPorts: (pid) => this.hostedWorkspace().unregisterPorts(pid),
-      dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route),
+      dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route, caller.workMode),
       expose: async (port) => {
         const ports = this.hostedWorkspace().box('agent:main').ports;
         if (!ports?.expose) throw new KinuError('unsupported', 'Workspace port exposure is not available');

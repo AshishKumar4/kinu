@@ -525,9 +525,9 @@ export function memoryActionsFor(hasFacts: boolean): readonly MemoryToolAction[]
 export const WEB_TOOL_ACTIONS = ['search', 'fetch'] as const;
 export type WebToolAction = (typeof WEB_TOOL_ACTIONS)[number];
 
-/** The `file` plane's three actions — the one file/execution surface's whole
+/** The `file` plane's actions — the one file/execution surface's whole
  *  vocabulary, declared beside its siblings for the same reason. */
-export const FILE_TOOL_ACTIONS = ['read', 'write', 'edit'] as const;
+export const FILE_TOOL_ACTIONS = ['read', 'write', 'edit', 'list', 'stat', 'search'] as const;
 export type FileToolAction = (typeof FILE_TOOL_ACTIONS)[number];
 
 /**
@@ -715,7 +715,7 @@ export const BUILTIN_TOOL_SPECS = {
   // they mirror (workspace.readFile / writeFile), so there is one vocabulary.
   file: {
     name: 'file',
-    summary: 'Read files, replace exact text inside them, and create them in the agent\'s canonical workspace filesystem — including its mounts: a connected device\'s files at /pc, a bound container\'s at /sandbox.',
+    summary: 'Inspect file contents, directory entries, metadata and literal text matches; replace exact text or create files in the canonical workspace. Plan permits inspection, not writes.',
     whenToUse:
       'Every canonical workspace file you read or change; mounted machine files under /pc or /sandbox when live (a namespace call is the alternative for commands there). '
       + 'read pages through a large file with offset/limit. '

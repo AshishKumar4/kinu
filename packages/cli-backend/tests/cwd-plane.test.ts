@@ -19,9 +19,9 @@ import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { AgentRuntime, LLMProviderConfig, WriteEvent, WriteObserver } from '@kinu.run/core';
-import { createAgentConfigStore, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT } from '@kinu.run/core';
+import { buildBuiltinTools, createAgentConfigStore, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
-import { scratchDir } from '@kinu.run/test-utils';
+import { scratchDir, toolExecute } from '@kinu.run/test-utils';
 import {
   buildCLIHeadRuntime, createCLIRuntime, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
   type CLIRuntime,
@@ -345,4 +345,26 @@ describe('a runtime with no directory bound', () => {
     // states that it shares the origin plane instead.
     expect(agentRuntime(state, 'bound', project).nodeHome).toBeUndefined();
   });
+});
+
+test('local Plan file inspection remains useful without granting native project writes', async () => {
+  const { state, project } = roots('plan-cwd-inspection');
+  writeFileSync(join(project, 'inspect.txt'), 'alpha\nneedle\nomega');
+  const rt = agentRuntime(state, 'inspector', project);
+  const planned = buildBuiltinTools({ rt, workMode: 'plan' });
+  const file = planned.file;
+  if (file === undefined) throw new Error('No Plan file tool');
+  const inspect = toolExecute(file);
+  expect(await inspect({ action: 'list', path: '.' })).toMatchObject({ entries: expect.arrayContaining(['inspect.txt']) });
+  expect(await inspect({ action: 'stat', path: 'inspect.txt' })).toMatchObject({ isDir: false, size: 18 });
+  expect(await inspect({ action: 'search', path: 'inspect.txt', query: 'needle' })).toMatchObject({ matches: [{ line: 2, text: 'needle' }] });
+  expect(await inspect({ action: 'read', path: 'inspect.txt' })).toEqual(expect.stringContaining('needle'));
+  expect(await inspect({ action: 'write', path: 'inspect.txt', content: 'changed' })).toMatchObject({ reason: 'denied' });
+  expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('alpha\nneedle\nomega');
+  const buildFile = buildBuiltinTools({ rt, workMode: 'build' }).file;
+  if (buildFile === undefined) throw new Error('No Build file tool');
+  const build = toolExecute(buildFile);
+  await build({ action: 'read', path: 'inspect.txt' });
+  expect(await build({ action: 'write', path: 'inspect.txt', content: 'built' })).toMatchObject({ ok: true });
+  expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('built');
 });

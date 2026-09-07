@@ -22,6 +22,7 @@ import type { SlateProcessProbeDO, SlateDepthProbe } from './slate-process-probe
 import type { CodemodeEgress } from '../../src/codemode-egress';
 interface SlateFacetRootRpc extends Rpc.DurableObjectBranded {
   exercise(family: 'subordinate' | 'exploration'): Promise<{ answeredBy: string; method: string; browserCallable: boolean }>;
+  code(mode: 'plan' | 'build', code: string): Promise<{ answer: string; file: string }>;
 }
 declare global {
   namespace Cloudflare {

@@ -52,6 +52,7 @@ import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
 import type { HeadInferenceDeps } from '../heads/head-inference';
 import { buildToolSurface } from '../tools/builtins';
 import { AgentWakeQueue } from '../jobs/wake-queue';
+import { permitInPlan } from '../execution/work-mode';
 import { BackgroundJobRunner } from '../jobs/runner';
 import type { BackgroundJobRunnerDeps } from '../jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../jobs/store';
@@ -387,7 +388,7 @@ function buildProposeTool(
   scratch: NodeScratch,
 ): ToolSet {
   return {
-    [PROPOSE_BRANCH_TOOL]: tool({
+    [PROPOSE_BRANCH_TOOL]: permitInPlan(tool({
       description:
         `Ask the search to spend part of its budget exploring ${String(BRANCH_PROPOSAL_WIDTH.min)}-`
         + `${String(BRANCH_PROPOSAL_WIDTH.max)} narrower threads of your task. You are PROPOSING, `
@@ -464,7 +465,7 @@ function buildProposeTool(
           + 'They are created when you finish and report, and they receive your report as their seed, '
           + 'so put in it what they will need.';
       },
-    }),
+    })),
   };
 }
 
@@ -496,6 +497,7 @@ function buildNodeToolSet(input: {
   // the handle the model was told rather than a result it never saw.
   return buildToolSurface({
     rt: deps.rt,
+    workMode: input.mode,
     logger: deps.logger,
     report: {
       report: async ({ status, content }): Promise<JsonValue> => {

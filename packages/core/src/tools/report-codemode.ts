@@ -36,6 +36,7 @@ export function createReportCodemodeProvider(deps: () => ReportToolDeps): Codemo
     positionalArgs: true,
     tools: {
       send: {
+        planAllowed: true,
         description: 'Report progress, completion, or a blocker to the workspace orchestrator.',
         execute: async (...args: unknown[]) => {
           const positional = v.safeParse(PositionalSchema, [args[0], args[1]]);

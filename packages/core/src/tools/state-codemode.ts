@@ -46,6 +46,7 @@ export function createStateCodemodeProvider(sql: SqlExecutor): CodemodeProvider 
     positionalArgs: true,
     tools: {
       get: {
+        planAllowed: true,
         description: 'Read a value saved by an earlier program; null when absent.',
         execute: async (...args: unknown[]) => {
           const key = v.safeParse(KeySchema, args[0]);
@@ -56,6 +57,7 @@ export function createStateCodemodeProvider(sql: SqlExecutor): CodemodeProvider 
         },
       },
       set: {
+        planAllowed: true,
         description: 'Save a JSON value under a key (overwrites).',
         execute: async (...args: unknown[]) => {
           const key = v.safeParse(KeySchema, args[0]);
@@ -69,6 +71,7 @@ export function createStateCodemodeProvider(sql: SqlExecutor): CodemodeProvider 
         },
       },
       delete: {
+        planAllowed: true,
         description: 'Remove a key.',
         execute: async (...args: unknown[]) => {
           const key = v.safeParse(KeySchema, args[0]);
@@ -78,6 +81,7 @@ export function createStateCodemodeProvider(sql: SqlExecutor): CodemodeProvider 
         },
       },
       list: {
+        planAllowed: true,
         description: 'Keys saved so far, optionally under a prefix.',
         execute: async (...args: unknown[]) => {
           const prefix = v.safeParse(PrefixSchema, args[0]);

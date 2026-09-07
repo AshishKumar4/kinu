@@ -14,6 +14,14 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
+- **Mechanically enforced Plan authority.** Native and codemode file inspection,
+  research records, read-only declared external tools and plan submission remain
+  available, while project writes, opaque process execution, ports and deployment
+  require Build. Hosted analysis runs with constrained callbacks and no raw egress;
+  native local code has no equivalent read-only runtime and refuses Plan. Turn,
+  child and durable-job mode is captured across queue and resume boundaries. Plan
+  does not evaluate promoted scaffold initializers; normal Build behavior remains.
+
 - **Authored slates with durable source and live previews.** Projects under
   `/home/user/slates/<id>/` use TypeScript and `package.json`, with a strict
   `slate` field for runtime, title, port, and declared bindings. One codemode

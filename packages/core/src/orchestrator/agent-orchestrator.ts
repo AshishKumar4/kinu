@@ -278,6 +278,16 @@ export class AgentOrchestrator {
     this.deps.budget?.activate(readMissionLabels(metadata));
   }
 
+  /** Role resolution can further restrict a Build request after accounting opens.
+   * Disable resource-changing improvement lanes without resetting that turn's accounting. */
+  restrictTurnWorkMode(mode: WorkMode): void {
+    if (mode !== 'plan' || this.activeWorkMode === 'plan') return;
+    this.activeWorkMode = 'plan';
+    this.turnEvolutionEnabled = false;
+    this.craft.reset(false);
+    this.observeRecoveries = false;
+  }
+
   /** One recovery observed: hand it to the engine's ledger now (durable
    *  mid-episode) and keep it for the turn's run event. */
   private recordRecovery(finding: RecoveryFinding): void {

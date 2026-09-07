@@ -52,7 +52,7 @@ export interface InjectableCraftedTool {
  * fresh so mid-turn-saved tools are visible to the NEXT execute_tools call.
  */
 export function selectInjectableCraftedTools(
-  craftStore: CraftStore,
+  craftStore: Pick<CraftStore, 'list'>,
   sql: SqlExecutor,
 ): InjectableCraftedTool[] {
   const rows = craftStore.list().map((row) => ({

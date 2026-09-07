@@ -29,7 +29,7 @@
  * user code. That is the same path the CF LOADER executor produces.
  */
 
-import { decodeJsonValue } from '@kinu.run/core';
+import { decodeJsonValue, requireBuild } from '@kinu.run/core';
 import type { CraftedToolExecute, CraftedToolExecuteFn, JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 
@@ -56,6 +56,7 @@ export function createNodeCraftedExecute(): CraftedToolExecute {
     };
 
     const execute: CraftedToolExecuteFn = async (arg) => {
+      requireBuild('Native crafted code without a constrained runtime');
       const fn = ensure();
       return fn(arg);
     };

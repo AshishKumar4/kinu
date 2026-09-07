@@ -35,6 +35,7 @@ import {
 } from './executor';
 import { projectJsonValue } from '../utils/json';
 import { scaffoldEventsToUIStream } from './ui-stream';
+import { currentWorkMode } from '../execution/work-mode';
 
 /** Structural mirror of Think's StreamableResult — core cannot import the
  *  backend SDK (layering), and the seam only needs this shape. */
@@ -56,7 +57,7 @@ export function scaffoldInferenceTransform(opts: {
   run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference'>;
 }): InferenceStreamResult {
   const { currentVersion, result, run } = opts;
-  if (currentVersion <= 0) return result;
+  if (currentVersion <= 0 || run.workMode === 'plan' || currentWorkMode() === 'plan') return result;
 
   let delegated = false;
   return {

@@ -31,6 +31,7 @@ import { parseRefusal } from './exec-result';
 import * as v from 'valibot';
 import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
 import type { Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
+import { requireBuild } from './work-mode';
 
 const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
   stdin: v.optional(v.string()),
@@ -80,7 +81,10 @@ export function withApprovalGatedShell(
     policy,
   );
   return {
-    exec: (command, stdinOrOptions) => execute(command, stdinOrOptions),
+    exec: (command, stdinOrOptions) => {
+      requireBuild('Workspace shell execution');
+      return execute(command, stdinOrOptions);
+    },
   };
 }
 
@@ -140,8 +144,12 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
         return text.success ? parseRefusal(text.output)?.reason ?? null : null;
       },
     );
-    GATED_EXECUTES.add(gated);
-    tools[name] = { ...entry, execute: gated };
+    const execute: ExecutorTool['execute'] = (...args) => {
+      requireBuild(provider.name + '.' + name);
+      return gated(...args);
+    };
+    GATED_EXECUTES.add(execute);
+    tools[name] = { ...entry, execute };
     changed = true;
   }
   return changed ? { ...provider, tools } : provider;

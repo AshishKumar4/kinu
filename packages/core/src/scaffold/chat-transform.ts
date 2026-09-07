@@ -29,6 +29,7 @@
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { ChatEvent } from '../chat';
+import { currentWorkMode } from '../execution/work-mode';
 import { JsonObjectSchema, projectJsonValue, type JsonValue } from '../utils/json';
 import { UsageSchema } from '../usage';
 import {
@@ -98,7 +99,7 @@ export function scaffoldChatTransform(opts: {
   chat: AsyncIterable<ChatEvent>;
   run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference'>;
 }): AsyncIterable<ChatEvent> {
-  if (opts.currentVersion <= 0) return opts.chat;
+  if (opts.currentVersion <= 0 || opts.run.workMode === 'plan' || currentWorkMode() === 'plan') return opts.chat;
   return scaffoldTurn(opts.chat, opts.run);
 }
 

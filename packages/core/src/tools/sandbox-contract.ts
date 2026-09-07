@@ -29,6 +29,7 @@ import * as v from 'valibot';
 import type { ToolSet } from 'ai';
 import { JsonObjectSchema, JsonValueSchema, decodeJsonValue, type JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
+import { hasPlanPermission } from '../execution/work-mode';
 
 /** A provider's host-side result before the executor validates the VM boundary
  *  as JSON. Domain objects are allowed here; functions and symbols are not. */
@@ -48,6 +49,7 @@ export interface CodemodeProvider {
   readonly name: string;
   readonly tools: Record<string, {
     readonly description: string;
+    readonly planAllowed?: boolean;
     readonly execute: (...args: unknown[]) => Promise<CodemodeResult>;
   }>;
   readonly types?: string;
@@ -190,6 +192,7 @@ export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
     if (name === SANDBOX_TOOL || execute === undefined) continue;
     out[name] = {
       description: tool.description ?? name,
+      planAllowed: hasPlanPermission(tool),
       execute: async (...args: unknown[]) => {
         const input = v.safeParse(JsonObjectSchema, args[0] === undefined ? {} : args[0]);
         if (!input.success) {

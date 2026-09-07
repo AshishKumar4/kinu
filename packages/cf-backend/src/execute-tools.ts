@@ -22,16 +22,16 @@
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool, type ToolSet } from 'ai';
-import type { AgentsToolDeps, DeviceRequestChannel, SqlExecutor } from "@kinu.run/core";
+import type { AgentsToolDeps, DeviceRequestChannel, SqlExecutor, CraftStore, ExecutionRouter } from "@kinu.run/core";
 import {
   createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider,
   renderExecuteToolsDescription, renderToolsDeclaration, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE,
-  type WebSearchProvider, type CodemodeProvider,
+  type WebSearchProvider, type CodemodeProvider, type WorkMode,
+  currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode,
 } from "@kinu.run/core";
 import {
   KinuSandboxExecutor, renderToolsPrelude, selectInjectableCraftedTools,
 } from "./codemode-sandbox";
-import type { CFRuntime } from "./runtime";
 
 export interface ExecuteToolsFactoryOptions {
   /** env.LOADER — the WorkerLoader every sandboxed execute runs inside. */
@@ -40,7 +40,7 @@ export interface ExecuteToolsFactoryOptions {
   egress: Fetcher | null;
   /** The actor's runtime: craftStore (crafted source) and executionRouter
    *  (the `workspace` / `sandbox` / `laptop` namespaces). */
-  rt: Pick<CFRuntime, 'craftStore' | 'executionRouter'>;
+  rt: { craftStore: Pick<CraftStore, 'list'>; executionRouter?: Pick<ExecutionRouter, 'getProviders'> };
   /** The actor's bound SQL — craft-score lookups and the `state` store. */
   sql: SqlExecutor;
   /** The registered workspace name the prelude reports as `env.workspace`. */
@@ -99,7 +99,6 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
   const { loader, rt, sql, webSearch } = options;
   if (!loader) throw new Error("CF runtime missing LOADER binding");
 
-  const executor = new KinuSandboxExecutor({ loader, egress: options.egress });
   const stateProvider = createStateCodemodeProvider(sql);
   // `agents.*` — the delegation tool projected into the sandbox, so a workflow
   // is a crafted tool scripting agents/workspace rather than a new engine.
@@ -130,51 +129,65 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
 
   return {
     toolFor(native) {
-      const crafted = selectInjectableCraftedTools(rt.craftStore, sql);
-      // The `tools` namespace: native tools dispatched to the host, crafted
-      // tools defined in the prelude. The declaration is rendered from the set
-      // as it is NOW; the callable half, prelude included, is re-read on every
-      // call below. Core's two contract functions skip the sandbox's own entry.
-      // This build passes no prelude: createCodeTool resolves providers to name
-      // plus fns and drops it, so building one here would parse and stringify
-      // every crafted tool and discard the result each build.
-      const toolsProvider: CodemodeProvider = {
-        name: CRAFTED_TOOL_NAMESPACE,
-        tools: nativeToolFunctions(native),
-        types: renderToolsDeclaration(native, crafted),
-        positionalArgs: true,
-      };
-      const providers: Parameters<typeof createCodeTool>[0]["tools"] = [toolsProvider, stateProvider];
-      if (agentsProvider) providers.push(agentsProvider);
-      if (options.extraProviders) providers.push(...options.extraProviders());
-      providers.push(webProvider, ...executorProviders);
-
-      return createCodeTool({
-        // The docstring is core's (registry.renderExecuteToolsDescription):
-        // `{{types}}` is the token createCodeTool substitutes the assembled
-        // namespace declarations into.
-        description: renderExecuteToolsDescription('{{types}}'),
-        tools: providers,
-        executor: {
-          // Per call: the crafted set is re-read so a tool saved a program ago
-          // is callable now, and the `tools` prelude is rebuilt from the same
-          // rows. createCodeTool froze the native fns when the tool was built;
-          // they are the finished set's, which is what this tool exists for.
-          execute: (code, resolved) => {
-            const live = Array.isArray(resolved)
-              ? resolved.map((provider) => provider.name === CRAFTED_TOOL_NAMESPACE
-                ? {
-                  name: provider.name,
-                  fns: provider.fns,
-                  prelude: renderToolsPrelude(
-                    selectInjectableCraftedTools(rt.craftStore, sql),
-                    { workspace: options.workspace },
-                  ),
-                }
-                : provider)
-              : resolved;
-            return executor.execute(code, live);
+      const build = (mode: WorkMode): Tool => {
+        const executor = new KinuSandboxExecutor({ loader, egress: mode === 'plan' ? null : options.egress });
+        const crafted = selectInjectableCraftedTools(rt.craftStore, sql);
+        // The `tools` namespace: native tools dispatched to the host, crafted
+        // tools defined in the prelude. The declaration is rendered from the set
+        // as it is NOW; the callable half, prelude included, is re-read on every
+        // call below. Core's two contract functions skip the sandbox's own entry.
+        // This build passes no prelude: createCodeTool resolves providers to name
+        // plus fns and drops it, so building one here would parse and stringify
+        // every crafted tool and discard the result each build.
+        const toolsProvider: CodemodeProvider = {
+          name: CRAFTED_TOOL_NAMESPACE,
+          tools: nativeToolFunctions(toolsInWorkMode(mode, native)),
+          types: renderToolsDeclaration(native, crafted),
+          positionalArgs: true,
+        };
+        const providers: CodemodeProvider[] = [toolsProvider, stateProvider];
+        if (agentsProvider) providers.push(agentsProvider);
+        if (options.extraProviders) providers.push(...options.extraProviders());
+        providers.push(webProvider, ...executorProviders);
+  
+        return createCodeTool({
+          // The docstring is core's (registry.renderExecuteToolsDescription):
+          // `{{types}}` is the token createCodeTool substitutes the assembled
+          // namespace declarations into.
+          description: renderExecuteToolsDescription('{{types}}'),
+          tools: providersInWorkMode(mode, providers),
+          executor: {
+            // Per call: the crafted set is re-read so a tool saved a program ago
+            // is callable now, and the `tools` prelude is rebuilt from the same
+            // rows. createCodeTool froze the native fns when the tool was built;
+            // they are the finished set's, which is what this tool exists for.
+            execute: (code, resolved) => {
+              const live = Array.isArray(resolved)
+                ? resolved.map((provider) => provider.name === CRAFTED_TOOL_NAMESPACE
+                  ? {
+                    name: provider.name,
+                    fns: provider.fns,
+                    prelude: renderToolsPrelude(
+                      selectInjectableCraftedTools(rt.craftStore, sql),
+                      { workspace: options.workspace },
+                    ),
+                  }
+                  : provider)
+                : resolved;
+              return executor.execute(code, live);
+            },
           },
+        });
+      };
+      const unrestricted = build('build');
+      let planning: Tool | undefined;
+      return permitInPlan({
+        ...unrestricted,
+        execute: (input, context) => {
+          const selected = currentWorkMode() === 'plan' ? (planning ??= build('plan')) : unrestricted;
+          const execute = selected.execute;
+          if (execute === undefined) throw new Error('Codemode executor is not callable');
+          return execute(input, context);
         },
       });
     },

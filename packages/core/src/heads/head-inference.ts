@@ -92,11 +92,12 @@ export class HeadCapture {
   }
 }
 
+import { permitInPlan } from '../execution/work-mode';
 /** The two accumulator tools every head has — record_evidence / record_decision,
  *  pushing into the shared HeadCapture. Backend scratch tools are merged on top. */
 export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
   return {
-    record_evidence: tool({
+    record_evidence: permitInPlan(tool({
       description:
         "Record a piece of evidence you've gathered. Use this for facts you want surfaced in the merge synthesis.",
       inputSchema: jsonSchema<{ kind: Evidence['kind']; body: string; ref?: string; confidence?: number }>({
@@ -116,8 +117,8 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
         capture.recordToolCall('record_evidence', args, 'ok');
         return `evidence recorded (id=${ev.id})`;
       },
-    }),
-    record_decision: tool({
+    })),
+    record_decision: permitInPlan(tool({
       description: 'Record a decision the head considered.',
       inputSchema: jsonSchema<{ question: string; choice: string; rationale: string; supportingEvidence?: string[] }>({
         type: 'object', required: ['question', 'choice', 'rationale'],
@@ -132,7 +133,7 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
         capture.recordToolCall('record_decision', { question, choice, rationale }, 'ok');
         return 'decision recorded';
       },
-    }),
+    })),
   };
 }
 
