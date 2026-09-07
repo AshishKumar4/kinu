@@ -291,7 +291,7 @@ describe('CloudAgentClient protocol', () => {
     const result = await turn;
     expect(result.text).toBe('Hi there');
     expect(result.steps).toBe(1);
-    expect(result.toolCalls).toEqual([{ name: 'memory', args: { q: 'x' }, result: 'found it' }]);
+    expect(result.toolCalls).toEqual([{ name: 'memory', args: { q: 'x' }, result: 'found it', outcome: { success: true } }]);
     expect(events.map((event) => event.type)).toEqual([
       'turn-start', 'text-delta', 'tool-call', 'tool-result', 'step-finish', 'text-delta', 'turn-end',
     ]);
@@ -360,7 +360,7 @@ describe('CloudAgentClient protocol', () => {
     mock.reply(responseChunk(request.id, {}, true));
 
     const result = await turn;
-    expect(result.toolCalls).toEqual([{ name: 'shell', args: {}, result: 'command not found' }]);
+    expect(result.toolCalls).toEqual([{ name: 'shell', args: {}, result: 'command not found', outcome: { success: false, reason: null } }]);
     await client.close();
   });
 

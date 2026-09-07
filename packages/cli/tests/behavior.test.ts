@@ -490,7 +490,7 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
       expect(created.exitCode).toBe(0);
 
       const proc = await runCliAsync(["run", "refusy", "try the nonexistent runtime"], { home, env });
-      expect(proc.exitCode).toBe(0);
+      expect(proc.exitCode).toBe(1);
       const stdout = toText(proc.stdout);
       expect(stdout).toContain("✗");
       expect(stdout).toContain("runtime_not_provisioned");

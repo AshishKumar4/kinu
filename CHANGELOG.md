@@ -22,6 +22,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   without outcome evidence remain unmeasured.
   Native MCP protocol errors now also use the SDK error channel; their full
   responses remain available to branchable namespace callers.
+  Human CLI failures retain the shared failure mark and explanatory prose;
+  structured diagnostics stay in the turn log, not the reader's streams.
 
 - **Mechanically enforced Plan authority.** Native and codemode file inspection,
   research records, read-only declared external tools and plan submission remain

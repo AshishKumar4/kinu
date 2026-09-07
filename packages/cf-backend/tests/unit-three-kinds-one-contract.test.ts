@@ -3,8 +3,7 @@
  * Think owns actor chat turns. The search owns node runs and their journal. */
 
 import { describe, expect, test } from 'bun:test';
-import type { ModelMessage, ToolSet } from 'ai';
-import * as v from 'valibot';
+import type { ModelMessage } from 'ai';
 import {
   BACKGROUND_POLICY,
   BUILTIN_TOOLS,
@@ -35,6 +34,7 @@ import {
 } from './helpers/three-kinds';
 
 import { orchestratorHarness, subordinateHarness } from './helpers/actor-harness';
+import { toolExecute } from '@kinu.run/test-utils';
 /** A history every kind can be asked to assemble a turn over. */
 const HISTORY: readonly ModelMessage[] = [
   { role: 'user', content: 'Name the cheapest change to the reference implementation.' },
@@ -655,36 +655,18 @@ interface MalformedFileCall {
   readonly path: string;
 }
 
-/** Drive one kind's real `file` entry with the malformed call and return the
- *  refusal it names, parsed here so the assertion reads a domain value. */
-async function refusalOf(
-  toolEntry: ToolSet[string],
-  call: MalformedFileCall,
-): Promise<{ reason: string; error: string }> {
-  const execute = toolEntry.execute;
-  if (!execute) throw new Error('the tool entry has no executor');
-  // SAFETY: the AI-SDK `tool()` wrapper hands its input to the dispatcher
-  // verbatim — `jsonSchema<T>` is a compile-time annotation with no runtime
-  // validation on this path — so the malformed call is guaranteed to reach the
-  // dispatcher's own bad_input refusal (file-tool.ts), which is the result
-  // under assertion; the widened value is never read after the call.
-  const result = await execute(call as Parameters<typeof execute>[0], {
-    toolCallId: 'call-refusal-shape', messages: [...HISTORY],
-  });
-  return v.parse(v.object({ reason: v.string(), error: v.string() }), result);
-}
 
 describe('C12 the same misuse refuses in the same shape on every kind\'s real surface', () => {
   const MISUSE: MalformedFileCall = { action: 'transmogrify', path: '/' };
 
   for (const kind of KINDS) {
     test(kind, async () => {
-      // Reason FIRST — the discriminator survives every clamp that bounds the
-      // prose — with the shared vocabulary's own word for a malformed call.
-      const refusal = await refusalOf(fixtureFor(kind).tool('file'), MISUSE);
-      expect(refusal.reason, `${kind}: the refusal carried the wrong classification`)
-        .toBe('bad_input');
-      expect(refusal.error.length, `${kind}: the refusal named nothing`).toBeGreaterThan(0);
+      const pending = toolExecute<MalformedFileCall, void>(fixtureFor(kind).tool('file'))(MISUSE, {
+        toolCallId: 'call-refusal-shape', messages: [...HISTORY],
+      });
+      await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
+      await expect(pending).rejects.toThrow(MISUSE.action);
+      await expect(pending).rejects.toThrow('action');
     });
   }
 });

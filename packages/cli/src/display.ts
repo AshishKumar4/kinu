@@ -5,7 +5,7 @@
 
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall } from '@kinu.run/core';
+import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall, TUI_MARKS } from '@kinu.run/core';
 import type { SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
 import { clipText } from './tui/format';
 import { guideFailure } from './provider-guidance';
@@ -335,7 +335,7 @@ export function printToolCall(toolName: string, args: JsonObject): void {
 /** Display the recorded invocation status without interpreting output content. */
 export function printToolResult(result: string, outcome: ToolOutcome): void {
   if (!outcome.success) {
-    console.log(ERR('  failed (' + (outcome.reason ?? 'unclassified') + ')'));
+    console.log(ERR('  ' + TUI_MARKS.failure + ' failed (' + (outcome.reason ?? 'unclassified') + ')'));
     for (const line of result.split('\n')) console.log(MUTED('      ' + line));
     return;
   }
