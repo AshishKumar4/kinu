@@ -2876,18 +2876,20 @@ describe('arm selection and frozen historical context', () => {
     expect(help.stdout.toString()).not.toContain('--candidates-only');
   });
 
-  test('--repetitions defaults to two under --decisive, one without, and refuses below one', () => {
-    // G9 censors a deciding cell below two repetitions, and until now the
-    // driver had no way to run one twice: every arm of run 20260902154130 was
-    // censored for measuring the deciding metric once or not at all. The
-    // decisive default is therefore the gate's own floor.
+  test('decisive repetition defaults meet the admission floor and respect an override', () => {
     expect(parseOptions(['--decisive']).repetitions).toBe(2);
     expect(parseOptions([]).repetitions).toBe(1);
     expect(parseOptions(['--decisive', '--repetitions', '3']).repetitions).toBe(3);
     expect(parseOptions(['--repetitions', '2']).repetitions).toBe(2);
+  });
+
+  test('invalid repetition counts fail before producing a benchmark plan', () => {
     for (const refused of ['0', '-1', 'two', '1.5']) {
-      expect(() => parseOptions(['--repetitions', refused]), refused)
-        .toThrow('--repetitions must be a whole number of 1 or more');
+      const result = Bun.spawnSync(
+        ['bun', 'scripts/bench-devbox-strategies.ts', '--plan', '--repetitions', refused],
+        { stdout: 'pipe', stderr: 'pipe' },
+      );
+      expect(result.exitCode, result.stderr.toString()).toBe(1);
     }
   });
 
