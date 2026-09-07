@@ -35,6 +35,8 @@ import { DEFAULT_CHUNK_PARAMS, chunkStagedRegion, validateChunkParams } from './
 import type { ChunkParams, EmittedChunk, StagedRange } from './chunk';
 import { chunkWindows, fileBoundaries } from './delta';
 import type { BoundaryRow, DeltaDirtyFile, DeltaManifestV2, DeltaStage, DeltaStagedRange } from './delta';
+import { buildDirTree, knownDirPages } from './dir-tree';
+import type { KnownDirPage } from './dir-tree';
 import { MerklePackError } from './errors';
 import { PackWriter } from './pack-layout';
 import type { BuiltPack, ResolvePack, Slot } from './pack-layout';
@@ -104,6 +106,8 @@ export interface MerkleDeltaBuild {
   readonly rootObject: ObjectRangeRef;
   /** What the build measured. The fence owns `bytesStaged`. */
   readonly seal: Omit<SealWork, 'bytesStaged'>;
+  /** Directory pages this generation wrote, and pages reused by reference. */
+  readonly dirPages: { readonly written: number; readonly reused: number };
   /** The boundaries of the files this generation rewrote, for the daemon. */
   readonly boundaries: readonly BoundaryRow[];
   /** Paths this generation no longer holds, for the daemon's map. */
@@ -149,6 +153,8 @@ interface PlannedDir {
   readonly kind: 'dir';
   stat: PlannedStat;
   readonly children: Map<string, PlannedChild>;
+  /** The parent generation's pages for this directory, for reuse by reference. */
+  knownPages: readonly KnownDirPage[];
 }
 
 interface PlannedSymlink {
@@ -171,6 +177,9 @@ const EMPTY_METADATA: PosixMetadataJson = {
 
 /** A fresh chunk's extent carries this pack until placement resolves it. */
 const UNPLACED_PACK = '\u0000fresh';
+/** A fresh child's reference before its record is placed. Never serialized:
+ * `buildDirTree` resolves every pending entry through `refOf` at placement. */
+const PENDING_CHILD_REF: RecordRefV2 = { id: '', sha256: '', pack: UNPLACED_PACK, offset: 0, length: 0 };
 
 function statOf(file: DeltaDirtyFile): PlannedStat {
   const ino = Number(file.ino);
@@ -702,17 +711,21 @@ export async function buildMerkleDelta(
     const record = view === null ? null : await view.record(origin);
     const children = new Map<string, PlannedChild>();
     let stat: PlannedStat = { mode: DEFAULT_DIR_MODE, ino: 0, metadata: EMPTY_METADATA };
+    let knownPages: readonly KnownDirPage[] = [];
     if (record !== null) {
       if (record.node.kind !== 'dir') {
         throw new MerklePackError('not-a-directory', `${JSON.stringify(origin)} is not a directory in the parent`);
       }
       stat = { mode: record.node.mode, ino: record.node.ino, metadata: record.node.metadata ?? EMPTY_METADATA };
-      for (const entry of record.node.entries) {
+      const parentView = view;
+      if (parentView === null) throw new MerklePackError('invalid-parameter', 'a parent record needs a parent view');
+      for (const entry of await parentView.dirEntries(origin)) {
         children.set(entry.name, { kind: 'reuse', nodeKind: entry.kind, ref: entry.ref });
       }
+      knownPages = await knownDirPages(record.node.entries, (level) => parentView.dirPages(level));
       countReplacedRecord(record.ref);
     }
-    const planned: PlannedDir = { kind: 'dir', stat, children };
+    const planned: PlannedDir = { kind: 'dir', stat, children, knownPages };
     dirs.set(path, planned);
     if (path !== '') {
       const above = await materializeDir(parentPathOf(path));
@@ -828,6 +841,8 @@ export async function buildMerkleDelta(
   const chunkSlots = new Map<string, Slot>();
   const recordSlots = new Map<PlannedNode | PlannedPage, { slot: Slot; id: string }>();
   let nodesRewritten = 0;
+  let dirPagesWritten = 0;
+  let dirPagesReused = 0;
 
   const placeChunks = (extents: readonly ExtentV2[]): void => {
     for (const extent of extents) {
@@ -905,15 +920,30 @@ export async function buildMerkleDelta(
     for (const child of dir.children.values()) {
       if (child.kind === 'fresh' && child.node.kind === 'dir') placeDir(child.node);
     }
+    const entries = [...dir.children.entries()].map(([name, child]): DirEntryV2 => ({
+      name,
+      kind: child.kind === 'reuse' ? child.nodeKind : child.node.kind,
+      ref: child.kind === 'reuse' ? child.ref : PENDING_CHILD_REF,
+    }));
+    const pending = new Map<string, PlannedNode>();
+    for (const [name, child] of dir.children) if (child.kind === 'fresh') pending.set(name, child.node);
+    const tree = buildDirTree(
+      writer,
+      entries,
+      dir.knownPages,
+      (slice, resolve) => slice.map((entry) => {
+        const fresh = pending.get(entry.name);
+        return fresh === undefined ? entry : { ...entry, ref: refOf(fresh, resolve) };
+      }),
+      (entry) => !pending.has(entry.name),
+    );
+    dirPagesWritten += tree.pagesWritten;
+    dirPagesReused += tree.pagesReused;
     placeRecord(dir, (resolve) => ({
       kind: 'dir',
       mode: dir.stat.mode,
       ino: dir.stat.ino,
-      entries: [...dir.children.entries()].map(([name, child]): DirEntryV2 => ({
-        name,
-        kind: child.kind === 'reuse' ? child.nodeKind : child.node.kind,
-        ref: child.kind === 'reuse' ? child.ref : refOf(child.node, resolve),
-      })),
+      entries: tree.entries(resolve),
       metadata: dir.stat.metadata,
     }));
   };
@@ -931,6 +961,7 @@ export async function buildMerkleDelta(
       sha256: rootRecord.slot.sha256,
     },
     seal: { bytesChunked, chunksHashed, nodesRewritten, wholeFiles },
+    dirPages: { written: dirPagesWritten, reused: dirPagesReused },
     boundaries,
     removed,
     replacedBytes,

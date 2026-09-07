@@ -670,6 +670,7 @@ export class SidecarCore {
         packs: built.packs,
         rootObject: built.rootObject,
         seal: { bytesChunked: 0, chunksHashed: 0, nodesRewritten: built.work.nodesRewritten, wholeFiles: 0 },
+        dirPages: { written: 0, reused: 0 },
         boundaries: [],
         removed: [],
         replacedBytes: new Map(),

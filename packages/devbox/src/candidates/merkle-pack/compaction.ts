@@ -25,6 +25,7 @@ import type { CompactionWork, ObjectRangeRef } from '../../durability/contracts'
 
 import { MerklePackError } from './errors';
 import { PackWriter } from './pack-layout';
+import { buildDirTree, knownDirPages } from './dir-tree';
 import type { BuiltPack, ResolvePack, Slot } from './pack-layout';
 import type { MerkleV2View, RecordV2 } from './view-v2';
 import { encodeNodeV2, extentPagesV2, hashNodeV2Bytes } from './wire';
@@ -116,8 +117,8 @@ export async function compactMerklePacks(input: CompactionInput): Promise<Compac
     if (node.kind === 'symlink') {
       return moveRecord ? placeNode(() => node) : { ref: () => record.ref, moved: false };
     }
-    if (node.kind === 'page') {
-      throw new MerklePackError('malformed-node', JSON.stringify(path) + ' resolves to an extent page');
+    if (node.kind === 'page' || node.kind === 'dirpage') {
+      throw new MerklePackError('malformed-node', JSON.stringify(path) + ' resolves to a page record');
     }
     if (node.kind === 'file') {
       const prior = rewrittenFiles.get(record);
@@ -158,19 +159,37 @@ export async function compactMerklePacks(input: CompactionInput): Promise<Compac
       return result;
     }
 
+    const entries = await input.view.dirEntries(path);
     const children: { readonly entry: DirEntryV2; readonly rewritten: Rewritten }[] = [];
     let childMoved = false;
-    for (const entry of node.entries) {
+    for (const entry of entries) {
       const child = await walk(path === '' ? entry.name : path + '/' + entry.name);
       if (child.moved) childMoved = true;
       children.push({ entry, rewritten: child });
     }
-    if (!childMoved && !moveRecord) return { ref: () => record.ref, moved: false };
+    const pages = await knownDirPages(node.entries, (level) => input.view.dirPages(level));
+    const movePages = pages.some((page) => input.candidates.has(page.ref.pack));
+    for (const page of pages) if (input.candidates.has(page.ref.pack)) touched.add(page.ref.pack);
+    if (!childMoved && !moveRecord && !movePages) return { ref: () => record.ref, moved: false };
+    const rewrittenByName = new Map(children.map(({ entry, rewritten }) => [entry.name, rewritten]));
+    const tree = buildDirTree(
+      writer,
+      children.map(({ entry, rewritten }) => ({
+        name: entry.name,
+        kind: entry.kind,
+        ref: rewritten.moved ? { ...entry.ref, pack: MOVING_CHILD } : entry.ref,
+      })),
+      pages.filter((page) => !input.candidates.has(page.ref.pack)),
+      (slice, resolve) => slice.map((entry) => {
+        const rewritten = rewrittenByName.get(entry.name);
+        if (rewritten === undefined) throw new MerklePackError('malformed-node', `unknown child ${entry.name}`);
+        return { name: entry.name, kind: entry.kind, ref: rewritten.ref(resolve) };
+      }),
+      (entry) => rewrittenByName.get(entry.name)?.moved !== true,
+    );
     return placeNode((resolve) => ({
       kind: 'dir', mode: node.mode, ino: node.ino,
-      entries: children.map(({ entry, rewritten }): DirEntryV2 => ({
-        name: entry.name, kind: entry.kind, ref: rewritten.ref(resolve),
-      })),
+      entries: tree.entries(resolve),
       metadata: node.metadata,
     }));
   };
@@ -190,6 +209,9 @@ export async function compactMerklePacks(input: CompactionInput): Promise<Compac
     retired: [...input.candidates].sort(),
   };
 }
+
+/** A child whose record moved in this compaction, before its slot resolves. */
+const MOVING_CHILD = '\u0000moving';
 
 /** A relocated extent carries this pack until the naming record serializes. */
 const PENDING_PACK = '\u0000moved';

@@ -28,7 +28,7 @@ import { coalescePackRuns } from './read';
 import type { MerkleFileExtent, MerklePackReader, PackRun, RangeIdentity, StatInfo } from './read';
 import { fileBoundaries } from './delta';
 import { SELF_PACK, decodeNodeV2, hashNodeV2Bytes } from './wire';
-import type { ExtentV2, NodeV2, RecordRefV2 } from './wire';
+import type { DirEntriesV2, DirEntryV2, DirPageRefV2, ExtentV2, NodeV2, RecordRefV2 } from './wire';
 
 /** One pack whose whole body a caller already knows the length and digest of —
  *  the ledger's row for it. A view opened with these may fetch a pack once,
@@ -63,6 +63,10 @@ export interface MerkleV2View {
   record(path: string): Promise<RecordV2 | null>;
   stat(path: string): Promise<StatInfo | null>;
   readdir(path: string): Promise<readonly string[]>;
+  /** Every entry of one directory, sorted by name, whole page tree read. */
+  dirEntries(path: string): Promise<readonly DirEntryV2[]>;
+  /** The pages of a directory record's tree, with each page's decoded entries. */
+  dirPages(entries: DirEntriesV2): Promise<readonly { readonly ref: DirPageRefV2; readonly entries: DirEntriesV2 }[]>;
   /** The data/hole geometry a restore writes, in file order. */
   extents(path: string): Promise<readonly MerkleFileExtent[]>;
   /** The packed extent list of one file, extent pages resolved. */
@@ -98,18 +102,35 @@ function resolveRecord(node: NodeV2, home: string): NodeV2 {
             },
           };
     case 'dir':
-      return {
-        ...node,
-        entries: node.entries.map((entry) => ({
-          ...entry,
-          ref: { ...entry.ref, pack: inPack(entry.ref.pack, home) },
-        })),
-      };
+      return { ...node, entries: resolveDirEntries(node.entries, home) };
+    case 'dirpage':
+      return { kind: 'dirpage', entries: resolveDirEntries(node.entries, home) };
     case 'page':
       return { kind: 'page', extents: node.extents.map((extent) => resolveExtent(extent, home)) };
     default:
       return node;
   }
+}
+
+function resolveDirEntries(entries: DirEntriesV2, home: string): DirEntriesV2 {
+  if (entries.kind === 'inline') {
+    return {
+      kind: 'inline',
+      entries: entries.entries.map((entry) => ({ ...entry, ref: { ...entry.ref, pack: inPack(entry.ref.pack, home) } })),
+    };
+  }
+  return { kind: 'paged', pages: entries.pages.map((page) => ({ ...page, pack: inPack(page.pack, home) })) };
+}
+
+/** The child page whose name range can hold `name`: the last page whose first
+ * name is not after it. Names below the first page's first name are absent. */
+export function dirPageFor(pages: readonly DirPageRefV2[], name: string): DirPageRefV2 | null {
+  let chosen: DirPageRefV2 | null = null;
+  for (const page of pages) {
+    if (page.firstName > name) break;
+    chosen = page;
+  }
+  return chosen;
 }
 
 
@@ -293,6 +314,35 @@ export async function openMerkleV2(
   }
   records.set(`${rootRef.pack}@${rootRef.offset}+${rootRef.length}`, Promise.resolve(rootRecord));
 
+  /** One entry by name through a bounded-height path of directory pages. */
+  const lookupEntry = async (entries: DirEntriesV2, name: string): Promise<DirEntryV2 | null> => {
+    let level = entries;
+    for (;;) {
+      if (level.kind === 'inline') return level.entries.find((child) => child.name === name) ?? null;
+      const page = dirPageFor(level.pages, name);
+      if (page === null) return null;
+      const loaded = await record(page);
+      if (loaded.node.kind !== 'dirpage') {
+        throw new MerklePackError('malformed-node', `directory page ${page.id} is a ${loaded.node.kind}`);
+      }
+      level = loaded.node.entries;
+    }
+  };
+  /** Every entry, in name order. This reads the whole page tree and is the
+   * one linear directory operation. */
+  const listEntries = async (entries: DirEntriesV2): Promise<readonly DirEntryV2[]> => {
+    if (entries.kind === 'inline') return entries.entries;
+    const out: DirEntryV2[] = [];
+    for (const page of entries.pages) {
+      const loaded = await record(page);
+      if (loaded.node.kind !== 'dirpage') {
+        throw new MerklePackError('malformed-node', `directory page ${page.id} is a ${loaded.node.kind}`);
+      }
+      out.push(...await listEntries(loaded.node.entries));
+    }
+    return out;
+  };
+
   const walk = async (path: string): Promise<RecordV2 | null> => {
     if (path === '') return rootRecord;
     if (!isCanonicalJournalPath(path)) {
@@ -306,8 +356,8 @@ export async function openMerkleV2(
           `${name} under ${path} is not a directory`,
         );
       }
-      const entry = held.node.entries.find((child) => child.name === name);
-      if (entry === undefined) return null;
+      const entry = await lookupEntry(held.node.entries, name);
+      if (entry === null) return null;
       const child = await record(entry.ref);
       if (child.node.kind !== entry.kind) {
         throw new MerklePackError(
@@ -367,6 +417,26 @@ export async function openMerkleV2(
   return {
     rootRef: rootRecord.ref,
     record: walk,
+    async dirEntries(path: string): Promise<readonly DirEntryV2[]> {
+      const held = await walk(path);
+      if (held === null) throw new MerklePackError('no-entry', `nothing at ${JSON.stringify(path)}`);
+      if (held.node.kind !== 'dir') {
+        throw new MerklePackError('not-a-directory', `${JSON.stringify(path)} is not a directory`);
+      }
+      return await listEntries(held.node.entries);
+    },
+    async dirPages(entries: DirEntriesV2) {
+      if (entries.kind === 'inline') return [];
+      const out: { readonly ref: DirPageRefV2; readonly entries: DirEntriesV2 }[] = [];
+      for (const page of entries.pages) {
+        const loaded = await record(page);
+        if (loaded.node.kind !== 'dirpage') {
+          throw new MerklePackError('malformed-node', `directory page ${page.id} is a ${loaded.node.kind}`);
+        }
+        out.push({ ref: page, entries: loaded.node.entries });
+      }
+      return out;
+    },
     async stat(path: string): Promise<StatInfo | null> {
       const held = await walk(path);
       if (held === null) return null;
@@ -395,7 +465,7 @@ export async function openMerkleV2(
       if (held.node.kind !== 'dir') {
         throw new MerklePackError('not-a-directory', `${JSON.stringify(path)} is not a directory`);
       }
-      return held.node.entries.map((entry) => entry.name);
+      return (await listEntries(held.node.entries)).map((entry) => entry.name);
     },
     async extents(path: string): Promise<readonly MerkleFileExtent[]> {
       return geometry(await fileAt(path));

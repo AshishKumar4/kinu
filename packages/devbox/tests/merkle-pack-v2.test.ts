@@ -495,6 +495,38 @@ describe('a wake serves the head lazily', () => {
   });
 });
 
+describe('a wide directory pays for one path, not its width', () => {
+  test('one entry update and one lookup stay logarithmic from 500 to 50,000 siblings', async () => {
+    const measure = async (width: number) => {
+      const fixture = openSidecar();
+      const files: Record<string, string> = {};
+      for (let i = 0; i < width; i += 1) files[`wide/f${String(i).padStart(6, '0')}.txt`] = `v${i}`;
+      fixture.daemon.plant(textTree(files));
+      await publish(fixture, `the ${width}-wide base`);
+      const putBytes = () => fixture.payload.ops.filter((op) => op.op === 'put').reduce((sum, op) => sum + op.bytes, 0);
+      const before = putBytes();
+      fixture.daemon.write('wide/f000010.txt', new TextEncoder().encode('changed'));
+      await publish(fixture, `the ${width}-wide update`);
+      const updateBytes = putBytes() - before;
+      const wake = openSidecar({ bootId: `wake-${width}`, share: fixture });
+      await wake.core.attach();
+      const view = wake.core.view();
+      if (view === null) throw new Error('the wake opened no head');
+      const lookupStart = fixture.payload.ops.length;
+      expect(new TextDecoder().decode(await view.readRange('wide/f000010.txt', 0, 7))).toBe('changed');
+      const lookupReads = fixture.payload.ops.length - lookupStart;
+      expect((await view.readdir('wide')).length).toBe(width);
+      return { updateBytes, lookupReads };
+    };
+    const small = await measure(500);
+    const large = await measure(50_000);
+    // 100x the siblings costs at most one more tree level: bytes rewritten
+    // and records read grow by a bounded step, never by the width ratio.
+    expect(large.updateBytes).toBeLessThan(small.updateBytes * 3);
+    expect(large.lookupReads).toBeLessThanOrEqual(small.lookupReads + 2);
+  }, 120_000);
+});
+
 describe('compaction and retirement preserve the published head', () => {
   test('deduplicated dead-byte estimates cannot retire an untouched file', async () => {
     const fixture = openSidecar({ graceMs: 0 });
