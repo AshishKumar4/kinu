@@ -45,6 +45,26 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
         const firstAge = ages[0];
         if (firstAge === undefined) throw new Error('no sidebar ages');
         for (const age of ages) expect(Math.abs(age.right - firstAge.right)).toBeLessThan(1);
+        const firstRow = 'aside ul > li:first-child';
+        expect(await page.$eval(firstRow + ' a[href^="/workspace/"]', (link) => {
+          const title = link.children[1];
+          if (title === undefined) throw new Error('workspace title absent');
+          return title.scrollWidth > title.clientWidth;
+        })).toBeTrue();
+        for (const action of ['a[href^="/settings/"]', 'button[title="Rename"]', 'button[title="Remove"]']) {
+          await page.focus(firstRow + ' ' + action);
+          await page.waitForFunction(() => {
+            const age = document.querySelector('aside ul > li:first-child a[href^="/workspace/"]')?.lastElementChild;
+            return age !== null && age !== undefined && getComputedStyle(age).opacity === '0';
+          });
+          const bounds = await page.$eval(firstRow, (row) => {
+            const title = row.querySelector('a[href^="/workspace/"]')?.children[1];
+            const active = document.activeElement;
+            if (title === undefined || active === null) throw new Error('focused row missing');
+            return { titleRight: title.getBoundingClientRect().right, actionLeft: active.getBoundingClientRect().left };
+          });
+          expect(bounds.titleRight).toBeLessThan(bounds.actionLeft);
+        }
         const updated = 'export const finished = "' + 'stream complete '.repeat(20) + '";\nconsole.log(finished);';
         await page.focus('textarea');
         await page.keyboard.down('Control');
