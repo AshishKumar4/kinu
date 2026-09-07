@@ -15,7 +15,7 @@ export type {
 export { EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS } from './types';
 
 export {
-  formatExecResult, isFailingResultText, parseRefusal, answeredRefusal, type ExecOutcome,
+  commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, isFailingResultText, parseRefusal, answeredRefusal, type ExecOutcome,
   STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
 } from './exec-result';
 export {

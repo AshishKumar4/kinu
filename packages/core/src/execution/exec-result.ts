@@ -110,8 +110,8 @@ export function parseRefusal(result: string): Refusal | null {
 /**
  * The refusal a codemode member ANSWERED with, or null when its answer is a value.
  *
- * A provider member returns rather than throws (see `refusalText`), so a script
- * can branch; a caller that hands the answer on as a RESULT — a slate binding —
+ * A provider member returns rather than throws, so a script can branch;
+ * a caller that hands the answer on as a RESULT — a slate binding —
  * must recover the class. Two OBJECT shapes and only two, each the exact payload
  * its producer writes: an `ErrorCode` refusal (`refusalOf`) and a file-plane
  * verdict, which is the caller's own unmet precondition and so `bad_input`. A
@@ -125,6 +125,18 @@ export function answeredRefusal(payload: JsonValue): Refusal | null {
   const verdict = v.safeParse(FileVerdictSchema, payload);
   if (verdict.success) return { reason: 'bad_input', error: `${verdict.output.reason}: ${verdict.output.error}` };
   return null;
+}
+
+/** Command data stays text; execution failures retain their producer's class. */
+export type CommandResult = string | Refusal;
+export const CommandResultSchema = v.union([v.string(), RefusalSchema]);
+export const COMMAND_RESULT_TYPE = 'string | { reason: '
+  + ERROR_CODES.map((code) => JSON.stringify(code)).join(' | ') + '; error: string }';
+
+export function commandResult(result: ExecOutcome): CommandResult {
+  if (result.refusal !== undefined) return result.refusal;
+  const output = formatExecResult(result);
+  return (result.exitCode ?? 0) === 0 ? output : { reason: 'io', error: output };
 }
 
 export function formatExecResult(result: ExecOutcome): string {

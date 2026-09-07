@@ -7,7 +7,7 @@
 // `workspace.exec`, an executor's `exec`), not just the renderer.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
-import { formatExecResult, parseRefusal, refusalText } from '../src/execution/exec-result';
+import { formatExecResult, parseRefusal, refusalText, type CommandResult } from '../src/execution/exec-result';
 import { createInlineExecutor } from '../src/execution/inline';
 import { createNimbusExecutor } from '../src/execution/nimbus';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
@@ -17,7 +17,7 @@ import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
 
-type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
+type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<CommandResult> };
 
 /** A pytest-shaped failure: everything diagnostic on stdout, nothing on stderr. */
 const PYTEST = {
@@ -30,7 +30,7 @@ const runToolOver = (shell: Shell): RunTool => {
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
   return {
-    execute: toolExecute<{ command: string; runtime?: string }, string>(
+    execute: toolExecute<{ command: string; runtime?: string }, CommandResult>(
       buildBuiltinTools({ rt: runtime }).run,
     ),
   };
@@ -98,8 +98,18 @@ describe('the surfaces the model reads', () => {
   test('the `run` tool surfaces a failing test suite\'s stdout', async () => {
     const run = runToolOver({ exec: async () => PYTEST });
     const out = await run.execute({ command: 'pytest' });
-    expect(out).toContain('test_add - assert 3 == 4');
-    expect(out).toStartWith('Error (exit 1)');
+    expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('test_add - assert 3 == 4') });
+  });
+
+  test('successful refusal-shaped stdout stays data in native run and codemode', async () => {
+    const stdout = JSON.stringify({ reason: 'denied', error: 'historical incident' });
+    const shell: Shell = { exec: async () => ({ stdout, stderr: '', exitCode: 0 }) };
+    expect(await runToolOver(shell).execute({ command: 'cat incident.json' })).toBe(stdout);
+    const { rt } = createTestRuntime();
+    const provider = createInlineExecutor({
+      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore, shell,
+    });
+    expect(await provider.tools.exec?.execute('cat incident.json')).toBe(stdout);
   });
 
   test('`run` on a successful command with warnings keeps the warnings', async () => {
@@ -113,12 +123,11 @@ describe('the surfaces the model reads', () => {
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => PYTEST },
     });
-    const out = String(await provider.tools.exec!.execute('pytest'));
-    expect(out).toStartWith('Error (exit 1)');
-    expect(out).toContain('1 failed, 2 passed');
+    const out = await provider.tools.exec?.execute('pytest');
+    expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('1 failed, 2 passed') });
   });
 
-  test('a remote container exec reports failures with the `Error` prefix the harness detects', async () => {
+  test('a remote container exec retains its exit failure and diagnostics', async () => {
     const nimbus = createNimbusExecutor({
       box: {
         ready: async () => {},
@@ -132,9 +141,8 @@ describe('the surfaces the model reads', () => {
         },
       },
     });
-    const out = String(await nimbus.tools.exec!.execute('pytest'));
-    expect(out).toStartWith('Error (exit 1)');
-    expect(out).toContain('test_add - assert 3 == 4');
+    const out = await nimbus.tools.exec?.execute('pytest');
+    expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('test_add - assert 3 == 4') });
   });
 
   test('the device tunnel reports failures the same way', async () => {
@@ -143,9 +151,8 @@ describe('the surfaces the model reads', () => {
       status: () => ({ connected: true, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
     });
-    const out = String(await laptop.tools.exec!.execute('pytest'));
-    expect(out).toStartWith('Error (exit 1)');
-    expect(out).toContain('test_add - assert 3 == 4');
+    const out = await laptop.tools.exec?.execute('pytest');
+    expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('test_add - assert 3 == 4') });
   });
   test('nimbus readFile on a missing path refuses with reason missing, not an empty string', async () => {
     const nimbus = createNimbusExecutor({

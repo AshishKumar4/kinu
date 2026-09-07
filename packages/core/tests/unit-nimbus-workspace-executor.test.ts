@@ -218,31 +218,23 @@ describe('a workspace whose host cannot compile node programs', () => {
     });
   }
 
-  test('exec answers the container, not the compiler', async () => {
-    // The hosted runtime forbids `new Function`, so the workspace `node` shim
-    // dies as a raw V8 error. The model branches on `reason`, so the tool
-    // answers the classified refusal naming the container a served port needs.
+  test('a command that exited nonzero retains its execution failure', async () => {
     const box = fakeBox();
     box.exec = async (command) => ({
       command, success: false, stdout: '', stderr: CODEGEN_STDERR, exitCode: 1,
     });
-    const refusal = JSON.parse(String(await blockedProvider(box).tools.exec.execute('node -e \'console.log(1)\'')));
-    expect(refusal.reason).toBe('unsupported');
-    expect(refusal.error).toContain('sandbox');
+    const refusal = await blockedProvider(box).tools.exec.execute('node -e "console.log(1)"');
+    expect(refusal).toMatchObject({ reason: 'io', error: expect.stringContaining(CODEGEN_STDERR) });
   });
 
-  test('a dead server reads the same way in its logs', async () => {
-    // `startProcess` reports the pid while the process is still compiling; the
-    // failure lands in `logs`. A log that carries the compiler's complaint is
-    // the same fact as the exec above and gets the same classification.
+  test('process logs are data even when they contain a compiler failure', async () => {
     const box = fakeBox();
     box.processes = {
       kill: async (pid) => ({ ok: true, pid }),
       logs: async (pid) => ({ pid, text: CODEGEN_STDERR }),
     };
-    const refusal = JSON.parse(String(await blockedProvider(box).tools.logs.execute(41)));
-    expect(refusal.reason).toBe('unsupported');
-    expect(refusal.error).toContain('sandbox');
+    const logs = await blockedProvider(box).tools.logs.execute(41);
+    expect(JSON.parse(String(logs))).toEqual({ pid: 41, text: CODEGEN_STDERR });
   });
 
   test('exposing a port nothing listens on names the container', async () => {

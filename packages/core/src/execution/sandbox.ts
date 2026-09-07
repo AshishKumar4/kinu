@@ -20,8 +20,8 @@ import * as v from 'valibot';
 import { isAbortError } from '@kinu.run/agent-utils';
 import type { ExecutorProvider, ExecutorCapability } from './types';
 import { readExecSignal } from './signal';
-import { formatExecResult, refusalText } from './exec-result';
-import { diagnostics, KinuError, renderThrownChain, toKinuError } from '../obs/index';
+import { commandResult, COMMAND_RESULT_TYPE, refusalText, type CommandResult } from './exec-result';
+import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError } from '../obs/index';
 import type { VFS } from '../types/primitives';
 import { makeVfsError } from '../vfs/errno';
 import type { VfsNativeReads } from '../vfs/mounts';
@@ -285,10 +285,8 @@ export async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): P
   throw lastErr;
 }
 
-function normalize(res: { output?: string; stdout?: string; stderr?: string; exitCode?: number }): string {
-  // @cloudflare/sandbox returns { stdout, stderr, exitCode }; older versions
-  // returned { output, exitCode }. Accept both.
-  return formatExecResult({ ...res, stdout: res.stdout ?? res.output ?? '' });
+function normalize(res: { output?: string; stdout?: string; stderr?: string; exitCode?: number }): CommandResult {
+  return commandResult({ ...res, stdout: res.stdout ?? res.output ?? '' });
 }
 
 /** The caller gave up before this attempt reached the container, so there is no
@@ -375,11 +373,11 @@ export function createSandboxExecutor(
         + 'A workspace restored after the container slept keeps its source and its LOCKFILES but '
         + 'not its regenerable trees (node_modules, .venv, build output): if an import fails after '
         + 'a restore, run one `bun install` before concluding anything is missing.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED_REFUSAL;
+      execute: async (...args: unknown[]): Promise<CommandResult> => {
+        if (!handle) return refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
         const command = parseInput(StringSchema, { value: args[0] });
         if (command === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox exec: command must be a string'));
+          return refusalOf(new KinuError('bad_input', 'sandbox exec: command must be a string'));
         }
         const signal = readExecSignal({ context: args[1] });
         try {
@@ -412,7 +410,7 @@ export function createSandboxExecutor(
           return normalize(res);
         } catch (err) {
           if (isAbortError(err)) throw err;
-          return refusalText(sandboxFailure({ doing: `sandbox exec \`${command}\``, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `sandbox exec \`${command}\``, cause: err }));
         }
       },
     },
@@ -627,11 +625,11 @@ export function createSandboxExecutor(
         'spec, so the process COMES BACK when the container restarts; a bare `nohup … &` does ' +
         'not and is lost. Returns JSON {processId}. Prefer this over `exec "cmd &"` for any ' +
         'long-running server.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED_REFUSAL;
+      execute: async (...args: unknown[]): Promise<CommandResult> => {
+        if (!handle) return refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
         const command = parseInput(StringSchema, { value: args[0] });
         if (command === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox startProcess: command must be a string'));
+          return refusalOf(new KinuError('bad_input', 'sandbox startProcess: command must be a string'));
         }
         const rawOpts = parseInput(
           v.union([v.string(), v.object({ cwd: v.optional(v.string()) })]),
@@ -656,7 +654,7 @@ export function createSandboxExecutor(
           });
           return JSON.stringify({ ...started, cwd, restartable: true });
         } catch (err) {
-          return refusalText(sandboxFailure({ doing: `sandbox startProcess \`${command}\``, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `sandbox startProcess \`${command}\``, cause: err }));
         }
       },
     },
@@ -727,7 +725,7 @@ export function createSandboxExecutor(
  * nohup-and-background job dies with the container and is NOT restorable.
  */
 declare namespace sandbox {
-  function exec(command: string): Promise<string>;
+  function exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;
   function readFile(path: string): Promise<string>;
   function writeFile(path: string, content: string): Promise<string>;
   function listFiles(path: string): Promise<string>;
@@ -736,7 +734,7 @@ declare namespace sandbox {
   /** "true" or "false" — or a refusal payload, if the container could not be asked. */
   function exists(path: string): Promise<string>;
   /** Supervised background process: returns JSON {processId,restartable:true}. */
-  function startProcess(command: string, opts?: { cwd?: string }): Promise<string>;
+  function startProcess(command: string, opts?: { cwd?: string }): Promise<${COMMAND_RESULT_TYPE}>;
   function stopProcess(processId: string): Promise<string>;
   /** JSON rows {processId,pid,status,restartable,command}. */
   function listProcesses(): Promise<string>;

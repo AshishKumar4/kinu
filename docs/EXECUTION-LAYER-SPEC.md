@@ -71,6 +71,26 @@ namespace is the routing decision. `register()` applies `gateProviderExec`
 `workspace.exec` is exempt. `withApprovalGatedShell` already gates it;
 `startProcess` is gated here.
 
+Command tools (`exec`, `startProcess`, and Nimbus `runCode`) and native `run`
+return `string | Refusal`. Successful output remains a string, including output
+that happens to contain JSON fields named `reason` or `error`. Failure is an
+object `{ reason: ErrorCode, error: string }`, never serialized into stdout.
+The error includes the exit diagnostic and both output streams when a command
+exits nonzero; its class is `io`. An executed failure spends its approval grant.
+A gate denial preserves `denied`; a queued request preserves `unavailable`,
+and neither dispatches a command. Only producer-classified no-execution
+outcomes qualify for a grant refund.
+
+Slate namespace bindings return `{ ok: true, value }` for successful command
+text and `{ ok: false, reason, error }` for structural failures. File contents,
+process logs and MCP payloads are not interpreted as command failures.
+
+The terminal RPC `executeInExecutor` retains its display fields
+`{ stdout, stderr, exitCode }` and adds `refusal: { reason, error }` for a
+failed command-tool result, omitted on success. Its exit code is the display
+status (zero or one), not a reconstruction of the remote process's numeric
+exit code. Callers needing the class read `refusal`, never parse the display.
+
 `AgentRuntime.executor` is Core's baseline execution primitive;
 `AgentRuntime.executionRouter` serves tools and UI. `storage.vfs` is the
 canonical VFS plus mounts. Memory indexing, fork snapshots and identity

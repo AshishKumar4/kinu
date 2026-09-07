@@ -28,7 +28,7 @@
 
 import { gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import * as v from 'valibot';
-import { parseRefusal, refusalText } from './exec-result';
+import { answeredRefusal } from './exec-result';
 import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
 import type { Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { requireBuild } from './work-mode';
@@ -38,10 +38,6 @@ const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.
   stdin: v.optional(v.string()),
   signal: v.optional(v.instance(AbortSignal)),
 }));
-
-/** An executor tool's result on its STRING channel — the only shape a
- *  classified refusal can arrive on (`execution/exec-result.ts`). */
-const ResultTextSchema = v.string();
 
 function parseShellExecOptions(input: { value: unknown }): string | ShellExecOptions | undefined {
   const text = v.safeParse(v.string(), input.value);
@@ -55,8 +51,8 @@ function parseShellExecOptions(input: { value: unknown }): string | ShellExecOpt
  * calls directly and `createInlineExecutor`'s `workspace.exec()` calls
  * underneath it. A refusal is shaped as a command that did not run: exit 1 with
  * the message on stderr for readers of the process fields, plus the gate's own
- * classification in `refusal`, so `formatExecResult` renders the same
- * reason-first payload every executor tool answers with. An executed command
+ * classification in `refusal`. Command tools retain that object; display-only
+ * readers may format it. An executed command
  * that exits 1 carries no `refusal` and stays a command failure, whatever its
  * stdout says.
  *
@@ -94,11 +90,8 @@ export function withApprovalGatedShell(
  *  backgrounded) — see execution/nimbus.ts. VFS-shaped tools (`readFile`,
  *  `writeFile`, `readdir`, ...) are a different capability and out of scope
  *  for a shell-command reviewer.
- *
- *  Exported because these members answer on the reason-first TEXT channel
- *  `formatExecResult`/`refusalText` define: a command's rendering is never file
- *  content, so a caller forwarding one of THESE answers as a result may read the
- *  classification back with `parseRefusal`. No other member's string is read. */
+ * The names identify shell capabilities for approval, never an output format.
+ */
 export const SHELL_COMMAND_MEMBERS = ['exec', 'startProcess'] as const;
 
 /** Functions this module has already wrapped, keyed by the wrapped
@@ -133,20 +126,10 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
     // the grant is spelled with.
     const gated = gateExec<ExecutorToolResult>(
       (command, ...rest) => entry.execute(command, ...rest),
-      (error) => refusalText(error),
+      (error) => refusalOf(error),
       provider.name,
       policy,
-      // The classification an executor tool already answers with. Every kind of
-      // provider — laptop, sandbox, Nimbus, a hosted workspace's startProcess —
-      // renders a classified failure through the ONE refusal payload
-      // `execution/exec-result.ts` defines, so reading it here covers all of
-      // them at once and no executor has to remember to opt in. A result that
-      // is not that payload carries no classification, which is the honest
-      // answer for a command's own output.
-      (result) => {
-        const text = v.safeParse(ResultTextSchema, result);
-        return text.success ? parseRefusal(text.output)?.reason ?? null : null;
-      },
+      (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null,
     );
     const execute: ExecutorTool['execute'] = (...args) => {
       requireBuild(provider.name + '.' + name);

@@ -72,7 +72,7 @@ describe('gateProviderExec — the executor-seam gate', () => {
     const { provider, executed } = fakeShellProvider('nimbus');
     const gated = gateProviderExec(provider, strictNoChannelPolicy());
     const result = await gated.tools.exec!.execute(DENY);
-    expect(String(result)).toContain('rm-rf-root');
+    expect(result).toMatchObject({ error: expect.stringContaining('rm-rf-root') });
     expect(executed).toEqual([]);
   });
 
@@ -82,7 +82,7 @@ describe('gateProviderExec — the executor-seam gate', () => {
     const { provider, executed } = fakeShellProvider('laptop', 'laptop');
     const gated = gateProviderExec(provider, strictNoChannelPolicy());
     const result = await gated.tools.exec!.execute(GATE);
-    expect(String(result)).toContain('needs owner approval');
+    expect(result).toMatchObject({ error: expect.stringContaining('needs owner approval') });
     expect(executed).toEqual([]);
   });
 
@@ -106,7 +106,7 @@ describe('gateProviderExec — the executor-seam gate', () => {
     const { provider, executed } = fakeShellProvider('nimbus');
     const gated = gateProviderExec(provider, strictNoChannelPolicy());
     const result = await gated.tools.startProcess!.execute(DENY);
-    expect(String(result)).toContain('rm-rf-root');
+    expect(result).toMatchObject({ error: expect.stringContaining('rm-rf-root') });
     expect(executed).toEqual([]);
   });
 
@@ -127,7 +127,7 @@ describe('gateProviderExec — the executor-seam gate', () => {
     const gated = gateProviderExec(provider, strictNoChannelPolicy());
     expect(gated.tools.exec!.execute).toBe(provider.tools.exec!.execute);
     const result = await gated.tools.startProcess!.execute(DENY);
-    expect(String(result)).toContain('rm-rf-root');
+    expect(result).toMatchObject({ error: expect.stringContaining('rm-rf-root') });
     expect(executed).toEqual([]);
   });
 
@@ -171,7 +171,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
     // This is EXACTLY the call codemode's `nimbus.exec("rm -rf /x")` makes —
     // the router hands the LLM sandbox this same tools.exec.execute.
     const result = await router.getProvider('nimbus')!.tools.exec!.execute(DENY);
-    expect(String(result)).toContain('rm-rf-root');
+    expect(result).toMatchObject({ error: expect.stringContaining('rm-rf-root') });
     expect(executed).toEqual([]);
   });
 
@@ -183,7 +183,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
     const fromGetProviders = router.getProviders().find((p) => p.name === 'sandbox');
     expect(fromGetProviders).toBeDefined();
     const result = await fromGetProviders!.tools.exec!.execute(DENY);
-    expect(String(result)).toContain('rm-rf-root');
+    expect(result).toMatchObject({ error: expect.stringContaining('rm-rf-root') });
     expect(executed).toEqual([]);
   });
 
@@ -203,7 +203,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
     router.register(provider);
 
     const result = await router.getProvider('nimbus')!.tools.exec!.execute(DENY);
-    expect(String(result)).toContain('rm-rf-root');
+    expect(result).toMatchObject({ error: expect.stringContaining('rm-rf-root') });
     expect(executed).toEqual([]);
   });
 
@@ -221,7 +221,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
     router.register(provider);
 
     const denied = await router.getProvider('nimbus')!.tools.exec!.execute(GATE);
-    expect(String(denied)).toContain('needs owner approval');
+    expect(denied).toMatchObject({ error: expect.stringContaining('needs owner approval') });
 
     mode = 'allow_all';
     const allowed = await router.getProvider('nimbus')!.tools.exec!.execute(GATE);
@@ -265,7 +265,7 @@ describe('the executor reaches the gate', () => {
     router.register(provider);
 
     const result = await router.getProvider('laptop')!.tools.exec!.execute(HOUSEKEEPING);
-    expect(String(result)).toContain('Denied by the owner');
+    expect(result).toMatchObject({ error: expect.stringContaining('Denied by the owner') });
     expect(executed).toEqual([]);
     expect(asked.map((r) => r.executor)).toEqual(['laptop']);
   });
@@ -286,8 +286,7 @@ describe('the executor reaches the gate', () => {
     expect(asked).toEqual([]);
 
     // …and buys nothing for the rule it did not name.
-    expect(String(await router.getProvider('laptop')!.tools.exec!.execute('sudo reboot')))
-      .toContain('Denied by the owner');
+    expect(await router.getProvider('laptop')!.tools.exec!.execute('sudo reboot')).toMatchObject({ error: expect.stringContaining('Denied by the owner') });
     expect(asked.map((r) => r.command)).toEqual(['sudo reboot']);
   });
 });

@@ -19,8 +19,8 @@ import {
 } from '../src/index';
 import { buildPendingActions } from '../src/read-models/pending-actions';
 import { gateProviderExec } from '../src/execution/approval';
-import { formatExecResult, parseRefusal, refusalText } from '../src/execution/exec-result';
-import { KinuError } from '../src/obs/index';
+import { commandResult, formatExecResult, parseRefusal, type CommandResult } from '../src/execution/exec-result';
+import { KinuError, refusalOf } from '../src/obs/index';
 import type { ExecutorProvider } from '../src/execution/types';
 import { createTestRuntime } from './helpers';
 import { makeSql, makeExecRaw } from './helpers';
@@ -31,7 +31,7 @@ import { makeSql, makeExecRaw } from './helpers';
  *  box and no longer the owner's decision. */
 const GATED = 'git push --force origin main';
 
-type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
+type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<CommandResult> };
 
 function setup(opts: {
   mode?: 'strict' | 'allow_all' | 'deny_all';
@@ -80,7 +80,7 @@ function setup(opts: {
   const runtime: AgentRuntime = { ...rt, shell };
   const tools = buildBuiltinTools({ rt: runtime });
   const run: RunTool = {
-    execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run),
+    execute: toolExecute<{ command: string; runtime?: string }, CommandResult>(tools.run),
   };
   return {
     queue, store, shell, executed, delivered, granted, audited, run,
@@ -100,11 +100,7 @@ describe('a gated action nobody is there to approve', () => {
     // the id, and that a decision is coming. The doctrine around it — carry on
     // or stop, re-issuing returns the same answer — is true of every parked
     // action on every turn, so it lives in the system prompt, not here.
-    // `run` renders a failing exec as `Error (exit 1)` + stderr, so the one
-    // line the model reads is the whole of what the gate contributed.
-    expect(out).toContain(
-      'NOT RUN — queued for owner approval (defer-1): git-force-push on workspace. A decision will wake you.',
-    );
+    expect(out).toMatchObject({ error: expect.stringContaining('NOT RUN — queued for owner approval (defer-1): git-force-push on workspace. A decision will wake you.') });
     expect(queue.list().map((a) => a.command)).toEqual([GATED]);
   });
 
@@ -137,7 +133,7 @@ describe('a gated action nobody is there to approve', () => {
     const first = await run.execute({ command: GATED });
     const second = await run.execute({ command: GATED });
 
-    expect(second).toBe(first);
+    expect(second).toEqual(first);
     expect(queue.list()).toHaveLength(1);
   });
 
@@ -169,7 +165,7 @@ describe('the standing modes still decide first', () => {
     // instructions about.
     const { run, executed, queue } = setup({ mode: 'deny_all' });
     const out = await run.execute({ command: GATED });
-    expect(out).toContain('refused by standing policy (deny_all)');
+    expect(out).toMatchObject({ error: expect.stringContaining('refused by standing policy (deny_all)') });
     expect(executed).toEqual([]);
     expect(queue.list()).toEqual([]);
   });
@@ -183,7 +179,7 @@ describe('the standing modes still decide first', () => {
 
   test('a channel that says deny is a decision, not an absence', async () => {
     const { run, queue } = setup({ approve: async () => 'deny' });
-    expect(await run.execute({ command: GATED })).toContain('Denied by the owner');
+    expect(await run.execute({ command: GATED })).toMatchObject({ error: expect.stringContaining('Denied by the owner') });
     expect(queue.list()).toEqual([]);
   });
 
@@ -192,13 +188,13 @@ describe('the standing modes still decide first', () => {
     // answering. `null` has always meant "nobody is listening"; it now parks
     // instead of manufacturing a refusal.
     const { run, queue } = setup({ approve: async () => null });
-    expect(await run.execute({ command: GATED })).toContain('NOT RUN');
+    expect(await run.execute({ command: GATED })).toMatchObject({ error: expect.stringContaining('NOT RUN') });
     expect(queue.list()).toHaveLength(1);
   });
 
   test('with no queue wired at all, strict keeps its old explanatory refusal', async () => {
     const { run, executed } = setup({ noQueue: true });
-    expect(await run.execute({ command: GATED })).toContain('needs owner approval, nobody to ask');
+    expect(await run.execute({ command: GATED })).toMatchObject({ error: expect.stringContaining('needs owner approval, nobody to ask') });
     expect(executed).toEqual([]);
   });
 });
@@ -308,7 +304,7 @@ describe('what an approval actually buys', () => {
     const second = await run.execute({ command: GATED });
 
     expect(executed).toEqual([GATED]);
-    expect(second).toContain('NOT RUN');
+    expect(second).toMatchObject({ error: expect.stringContaining('NOT RUN') });
     expect(queue.list().map((a) => a.id)).toEqual(['defer-2']);
   });
 
@@ -317,7 +313,7 @@ describe('what an approval actually buys', () => {
     await run.execute({ command: 'npm publish a' });
     await queue.decide(['defer-1'], 'approved');
 
-    expect(await run.execute({ command: 'npm publish b' })).toContain('NOT RUN');
+    expect(await run.execute({ command: 'npm publish b' })).toMatchObject({ error: expect.stringContaining('NOT RUN') });
     expect(executed).toEqual([]);
   });
 
@@ -331,7 +327,7 @@ describe('what an approval actually buys', () => {
     const out = await run.execute({ command: GATED });
 
     expect(executed).toEqual([]);
-    expect(out).toContain('NOT RUN — the owner refused this (defer-1). Not a timeout; find another way.');
+    expect(out).toMatchObject({ error: expect.stringContaining('NOT RUN — the owner refused this (defer-1). Not a timeout; find another way.') });
     expect(queue.list()).toEqual([]);
   });
 
@@ -344,13 +340,13 @@ describe('what an approval actually buys', () => {
     const { run, queue, store, executed, advance } = setup();
     await run.execute({ command: GATED });
     await queue.decide(['defer-1'], 'denied');
-    expect(await run.execute({ command: GATED })).toContain('the owner refused this (defer-1)');
+    expect(await run.execute({ command: GATED })).toMatchObject({ error: expect.stringContaining('the owner refused this (defer-1)') });
 
     advance(DENIAL_STANDING_MS + 1);
     const out = await run.execute({ command: GATED });
 
     expect(executed).toEqual([]);
-    expect(out).toContain('NOT RUN — queued for owner approval (defer-2)');
+    expect(out).toMatchObject({ error: expect.stringContaining('NOT RUN — queued for owner approval (defer-2)') });
     expect(queue.list().map((a) => a.id)).toEqual(['defer-2']);
     // The expired refusal did not merely stop answering: its row is gone.
     expect(store.get('defer-1')).toBeNull();
@@ -398,7 +394,7 @@ describe('what an approval actually buys', () => {
     await queue.decide(['defer-1'], 'always');
 
     expect(granted).toEqual(['git-force-push@workspace']);
-    expect(await run.execute({ command: 'npm publish' })).toContain('NOT RUN');
+    expect(await run.execute({ command: 'npm publish' })).toMatchObject({ error: expect.stringContaining('NOT RUN') });
     expect(executed).toEqual([]);
   });
 });
@@ -581,7 +577,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     const executed: string[] = [];
     /** What the machine answers. Swapped per phase: not connected, then
      *  connected. */
-    let answer: () => string = () => 'ran';
+    let answer: () => CommandResult = () => 'ran';
     const provider: ExecutorProvider = {
       name: 'laptop',
       kind: 'laptop',
@@ -604,11 +600,10 @@ describe('an approval outlives an attempt that never reached the machine', () =>
       mode: () => 'strict',
       deferrals: queue.channel,
     });
-    const exec = async (command: string): Promise<string> =>
-      String(await gated.tools.exec!.execute(command));
+    const exec = (command: string) => gated.tools.exec?.execute(command);
     return {
       queue, store, exec, executed, audited,
-      answerWith: (next: () => string) => { answer = next; },
+      answerWith: (next: () => CommandResult) => { answer = next; },
     };
   }
 
@@ -616,18 +611,18 @@ describe('an approval outlives an attempt that never reached the machine', () =>
    *  the laptop path already produces when no machine is attached
    *  (execution/device-tunnel-executor.ts NOT_CONNECTED_REFUSAL). The test
    *  reads the CODE, never the prose. */
-  const notConnected = () => refusalText(new KinuError('unavailable', 'No device connected.'));
+  const notConnected = () => refusalOf(new KinuError('unavailable', 'No device connected.'));
 
   test('a definitive did-not-run leaves the grant spendable and asks nobody again', async () => {
     const { queue, store, exec, executed, answerWith } = deviceSetup();
     answerWith(notConnected);
 
-    expect(await exec(GATED)).toContain('NOT RUN — queued for owner approval (defer-1)');
+    expect(await exec(GATED)).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('defer-1') });
     await queue.decide(['defer-1'], 'approved');
 
     // The woken re-issue. The command reaches an executor that is not there,
     // so nothing ran on any machine.
-    expect(parseRefusal(await exec(GATED))?.reason).toBe('unavailable');
+    expect(await exec(GATED)).toMatchObject({ reason: 'unavailable' });
     expect(executed).toEqual([GATED]);
 
     // The owner approved a RUN, and no run happened: the grant they gave is
@@ -653,7 +648,18 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     // One approval, one execution — and one audit for the spend that stuck.
     expect(audited).toEqual([{ approvalId: 'defer-1', command: GATED, executor: 'laptop' }]);
     // A fourth attempt has no grant left and parks a fresh row.
-    expect(await exec(GATED)).toContain('NOT RUN — queued for owner approval (defer-2)');
+    expect(await exec(GATED)).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('defer-2') });
+  });
+
+  test('successful refusal-shaped stdout spends the grant rather than refunding it', async () => {
+    const { queue, store, exec, executed, answerWith } = deviceSetup();
+    const stdout = JSON.stringify({ reason: 'unavailable', error: 'historical incident' });
+    answerWith(() => stdout);
+    await exec(GATED);
+    await queue.decide(['defer-1'], 'approved');
+    expect(await exec(GATED)).toBe(stdout);
+    expect(executed).toEqual([GATED]);
+    expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
   });
 
   test('a command that reached the machine and FAILED there does not refund', async () => {
@@ -664,8 +670,8 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     await exec(GATED);
     await queue.decide(['defer-1'], 'approved');
 
-    answerWith(() => formatExecResult({ stdout: '', stderr: 'rejected', exitCode: 1 }));
-    expect(await exec(GATED)).toContain('Error (exit 1)');
+    answerWith(() => commandResult({ stdout: '', stderr: 'rejected', exitCode: 1 }));
+    expect(await exec(GATED)).toMatchObject({ reason: 'io' });
 
     expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
@@ -680,8 +686,8 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     await exec(GATED);
     await queue.decide(['defer-1'], 'approved');
 
-    answerWith(() => refusalText(new KinuError('io', 'the tunnel closed mid-call')));
-    expect(parseRefusal(await exec(GATED))?.reason).toBe('io');
+    answerWith(() => refusalOf(new KinuError('io', 'the tunnel closed mid-call')));
+    expect(await exec(GATED)).toMatchObject({ reason: 'io' });
 
     expect(store.standing(GATED, 'laptop', 1_010)).toBeNull();
   });
@@ -742,7 +748,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     const spend = store.spend('defer-1');
     if (!spend) throw new Error('the approved grant must be spendable');
     // Consumer B finds nothing standing and parks its own row.
-    expect(await exec(GATED)).toContain('NOT RUN — queued for owner approval (defer-2)');
+    expect(await exec(GATED)).toMatchObject({ error: expect.stringContaining('NOT RUN — queued for owner approval (defer-2)') });
     // A never reached the machine, so the grant comes back beside defer-2.
     queue.channel.settle(spend.spend, 'did-not-run');
 
@@ -757,7 +763,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
 
 test('no-execution refusals retain their class before native run and executor text formatting', async () => {
   const denied = setup({ mode: 'deny_all' });
-  expect(parseRefusal(await denied.run.execute({ command: GATED }))).toMatchObject({ reason: 'denied' });
+  expect(await denied.run.execute({ command: GATED })).toMatchObject({ reason: 'denied' });
   expect(denied.executed).toEqual([]);
   const parked = setup();
   const result = await parked.shell.exec(GATED);
@@ -765,7 +771,7 @@ test('no-execution refusals retain their class before native run and executor te
   expect(parked.executed).toEqual([]);
   expect(parked.queue.list()).toMatchObject([{ status: 'queued', command: GATED }]);
   await parked.queue.decide(['defer-1'], 'denied');
-  expect(parseRefusal(await parked.run.execute({ command: GATED }))).toMatchObject({ reason: 'denied' });
+  expect(await parked.run.execute({ command: GATED })).toMatchObject({ reason: 'denied' });
   expect(parked.executed).toEqual([]);
 });
 

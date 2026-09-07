@@ -20,8 +20,8 @@ import { shellQuote } from '../utils/shell';
 import { base64ToBytes } from '../utils/base64';
 import type { ExecutorCapability, ExecutorProvider, PortAnsweringExecutor } from './types';
 import { readExecSignal } from './signal';
-import { formatExecResult, refusalText } from './exec-result';
-import { KinuError, renderThrownChain, toKinuError } from '../obs/index';
+import { commandResult, COMMAND_RESULT_TYPE, refusalText, type CommandResult } from './exec-result';
+import { KinuError, refusalOf, renderThrownChain, toKinuError } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
@@ -262,29 +262,6 @@ function invokesWorkspaceNode(command: string): boolean {
   return /(^|[;&|(\s])node(\s|$)/m.test(command);
 }
 
-function refuseWorkspaceNode(): string {
-  return refusalText(new KinuError('unsupported', WORKSPACE_NODE_REFUSAL));
-}
-
-/** A rendered exec result, or the container's name when no node program ran. */
-function normalizeWorkspaceExec(command: string, rendered: string): string {
-  if (rendered.includes(WORKSPACE_NODE_UNAVAILABLE_MARK)) return refuseWorkspaceNode();
-  if (invokesWorkspaceNode(command) && rendered.includes(CODEGEN_BLOCKED_MARK)) {
-    return refuseWorkspaceNode();
-  }
-  return rendered;
-}
-
-/**
- * A rendered result with no command to judge it by — `runCode` runs the code
- * itself, `logs` reads a process's own output. Either mark classifies: both
- * are written only when a program failed to compile.
- */
-function normalizeWorkspaceResult(rendered: string): string {
-  return rendered.includes(CODEGEN_BLOCKED_MARK) || rendered.includes(WORKSPACE_NODE_UNAVAILABLE_MARK)
-    ? refuseWorkspaceNode()
-    : rendered;
-}
 
 /** A thrown failure, classified the same way before it becomes `io`. */
 function workspaceExecFailure(input: { doing: string; cause: unknown; command?: string }): KinuError {
@@ -323,8 +300,8 @@ function nimbusFailure(input: { doing: string; cause: unknown }): KinuError {
 
 /** `success: false` with a zero exit code is Nimbus reporting a transport-level
  *  failure the exit code cannot express — render it as the failure it is. */
-function normalizeExec(result: NimbusExecResult): string {
-  return formatExecResult({
+function normalizeExec(result: NimbusExecResult): CommandResult {
+  return commandResult({
     ...result,
     exitCode: !result.success && result.exitCode === 0 ? 1 : result.exitCode,
   });
@@ -385,7 +362,7 @@ function stringifyResult(input: { value: unknown }): string {
  * and the agent burned the rest of its calls discovering that nothing was
  * listening.
  */
-function formatStartResult(result: NimbusStartResult, namespace: string): string {
+function formatStartResult(result: NimbusStartResult, namespace: string): CommandResult {
   const running = result.process.state === 'running';
   const lines = [
     running
@@ -397,7 +374,7 @@ function formatStartResult(result: NimbusStartResult, namespace: string): string
     lines.push(`listening on port${result.ports.length > 1 ? 's' : ''} ${result.ports.map((p) => p.port).join(', ')} — ${namespace}.exposePort(<port>) returns the preview URL`);
   }
   lines.push(`output: ${namespace}.logs(${result.pid}) · stop: ${namespace}.killProcess(${result.pid})`);
-  return lines.join('\n');
+  return commandResult({ stdout: lines.join('\n'), exitCode: running ? 0 : result.process.exitCode ?? 0 });
 }
 
 /**
@@ -411,7 +388,7 @@ function formatStartResult(result: NimbusStartResult, namespace: string): string
  * themselves are already shared, which is what made the divergence silent.
  */
 const SESSION_CONTROL_TYPES =
-  `  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<string>;
+  `  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<${COMMAND_RESULT_TYPE}>;
   function killProcess(pid: number | { pid: number }): Promise<string>;
   function logs(pid: number | { pid: number; lines?: number; bytes?: number }): Promise<string>;
   function exposePort(port: number | { port: number }): Promise<string>;
@@ -444,41 +421,41 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Run a shell command in the Nimbus development environment.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED_REFUSAL;
+      execute: async (...args: unknown[]): Promise<CommandResult> => {
+        if (!box) return refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
         const command = parseInput(StringSchema, { value: args[0] });
         if (command === undefined) {
-          return refusalText(new KinuError('bad_input', 'nimbus exec: command must be a string'));
+          return refusalOf(new KinuError('bad_input', 'nimbus exec: command must be a string'));
         }
         const signal = readExecSignal({ context: args[1] });
         try {
           // Nimbus exec exposes no kill for an in-flight command — abort
           // stops the wait; the command may still finish in the sandbox.
-          return normalizeWorkspaceExec(command, normalizeExec(await raceAbort(
+          return normalizeExec(await raceAbort(
             () => touch(() => box.exec(command)),
             signal,
             'nimbus exec aborted — the command may still finish in the sandbox',
-          )));
+          ));
         } catch (err) {
           if (isAbortError(err)) throw err;
-          return refusalText(workspaceExecFailure({ doing: `nimbus exec \`${command}\``, cause: err, command }));
+          return refusalOf(workspaceExecFailure({ doing: `nimbus exec \`${command}\``, cause: err, command }));
         }
       },
     },
     runCode: {
       description: 'Run code in Nimbus using the requested language runtime.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED_REFUSAL;
-        if (!box.runCode) return handleLacks('runCode');
+      execute: async (...args: unknown[]): Promise<CommandResult> => {
+        if (!box) return refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
+        if (!box.runCode) return refusalOf(new KinuError('unsupported', 'Nimbus SDK handle does not expose runCode'));
         const code = parseInput(StringSchema, { value: args[0] });
         if (code === undefined) {
-          return refusalText(new KinuError('bad_input', 'nimbus runCode: code must be a string'));
+          return refusalOf(new KinuError('bad_input', 'nimbus runCode: code must be a string'));
         }
         const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
         try {
-          return normalizeWorkspaceResult(normalizeExec(await touch(() => box.runCode!(code, options))));
+          return normalizeExec(await touch(() => box.runCode!(code, options)));
         } catch (err) {
-          return refusalText(workspaceExecFailure({ doing: 'nimbus runCode', cause: err }));
+          return refusalOf(workspaceExecFailure({ doing: 'nimbus runCode', cause: err }));
         }
       },
     },
@@ -565,7 +542,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     stat: {
       planAllowed: true,
       description: 'Get file or directory metadata from Nimbus.',
-      execute: async (...args: unknown[]): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<CommandResult> => {
         if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
         if (path === undefined) {
@@ -615,18 +592,18 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     },
     startProcess: {
       description: 'Start a background process in Nimbus; returns while it is still running.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED_REFUSAL;
-        if (!box.startProcess) return handleLacks('startProcess');
+      execute: async (...args: unknown[]): Promise<CommandResult> => {
+        if (!box) return refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
+        if (!box.startProcess) return refusalOf(new KinuError('unsupported', 'Nimbus SDK handle does not expose startProcess'));
         const command = parseInput(StringSchema, { value: args[0] });
         if (command === undefined) {
-          return refusalText(new KinuError('bad_input', 'nimbus startProcess: command must be a string'));
+          return refusalOf(new KinuError('bad_input', 'nimbus startProcess: command must be a string'));
         }
         const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
         try {
           return formatStartResult(await touch(() => box.startProcess!(command, options)), namespace);
         } catch (err) {
-          return refusalText(workspaceExecFailure({ doing: `nimbus startProcess \`${command}\``, cause: err, command }));
+          return refusalOf(workspaceExecFailure({ doing: `nimbus startProcess \`${command}\``, cause: err, command }));
         }
       },
     },
@@ -672,7 +649,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
           ? { lines: input.lines, bytes: input.bytes }
           : undefined;
         try {
-          return normalizeWorkspaceResult(stringifyResult({ value: await touch(() => readLogs(pid, options)) }));
+          return stringifyResult({ value: await touch(() => readLogs(pid, options)) });
         } catch (err) {
           return refusalText(workspaceExecFailure({ doing: `nimbus logs ${pid}`, cause: err }));
         }
@@ -818,15 +795,15 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
  * handle has no such surface and a retry cannot change that.
  */
 declare namespace ${namespace} {
-  function exec(command: string): Promise<string>;
-  function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<string>;
+  function exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;
+  function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<${COMMAND_RESULT_TYPE}>;
   function readFile(path: string): Promise<string>;
   function writeFile(path: string, content: string): Promise<string>;
   function listFiles(path?: string): Promise<string>;
   function readdir(path?: string): Promise<string>;
   /** true or false — or a refusal payload, if the session could not be asked. */
   function exists(path: string): Promise<boolean | string>;
-  function stat(path: string): Promise<string>;
+  function stat(path: string): Promise<${COMMAND_RESULT_TYPE}>;
   function mkdir(path: string): Promise<string>;
   function rm(path: string): Promise<string>;
 ${SESSION_CONTROL_TYPES}
@@ -905,26 +882,10 @@ export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts)
     ...sessionTools
   } = session.tools;
   const sessionTypes = `
-  function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<string>;
+  function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<${COMMAND_RESULT_TYPE}>;
 ${SESSION_CONTROL_TYPES}`;
 
-  // The model drives `workspace.exec`, which is the inline executor's shell
-  // tool over this same box — not the session namespaced one above. A node
-  // program that died as a compiler complaint must reach the model classified
-  // here too, or the workspace's own front door stays raw while its side door
-  // refuses properly.
   const workspaceTools = { ...inline.tools, ...sessionTools };
-  const innerExec = workspaceTools.exec;
-  workspaceTools.exec = {
-    ...innerExec,
-    execute: async (...args: unknown[]) => {
-      const command = parseInput(StringSchema, { value: args[0] });
-      const rendered = await innerExec.execute(...args);
-      const text = parseInput(StringSchema, { value: rendered });
-      if (command === undefined || text === undefined) return rendered;
-      return normalizeWorkspaceExec(command, text);
-    },
-  };
 
   return {
     ...inline,

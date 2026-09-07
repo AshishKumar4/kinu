@@ -39,8 +39,8 @@ import type { VFS, VfsEntryStat } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
 import { makeVfsError } from '../vfs/errno';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { formatExecResult, refusalText } from './exec-result';
-import { KinuError, renderThrownChain, toKinuError } from '../obs/index';
+import { commandResult, COMMAND_RESULT_TYPE, refusalText, type CommandResult } from './exec-result';
+import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import {
   connectedDevices, deviceFleetAsk, deviceByName, freshDeviceToolchain,
@@ -265,11 +265,11 @@ function readDeviceSelection(input: { context: unknown }): string | undefined {
  *  never on the representation of a string. */
 type CallTarget =
   | { readonly kind: 'target'; readonly deviceId: string | undefined }
-  | { readonly kind: 'refusal'; readonly text: string };
+  | { readonly kind: 'refusal'; readonly refusal: Refusal };
 
 type CallView =
   | { readonly kind: 'view'; readonly view: DeviceVFS }
-  | { readonly kind: 'refusal'; readonly text: string };
+  | { readonly kind: 'refusal'; readonly refusal: Refusal };
 
 /**
  * Create the laptop (`laptop.*`) executor over a device transport. The transport
@@ -362,10 +362,10 @@ export function createDeviceTunnelExecutor(
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Execute a command on the user\'s local machine via the device tunnel.',
-      execute: async (...args: unknown[]): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<CommandResult> => {
         const command = parseInput(StringSchema, { value: args[0] });
         if (command === undefined) {
-          return refusalText(new KinuError('bad_input', 'laptop exec: command must be a string'));
+          return refusalOf(new KinuError('bad_input', 'laptop exec: command must be a string'));
         }
         const signal = readExecSignal({ context: args[1] });
         // Which machine this call is FOR. Undefined lets the transport and hub
@@ -373,7 +373,7 @@ export function createDeviceTunnelExecutor(
         // several live machines refuses there instead of picking one.
         const deviceName = readDeviceSelection({ context: args[1] });
         const device = resolveForCall(transport, deviceName);
-        if (device.kind === 'refusal') return device.text;
+        if (device.kind === 'refusal') return device.refusal;
         const deviceId = device.deviceId;
         // The identity is minted HERE, before the frame goes out, because it is
         // what a cancellation names: the daemon registers this command's
@@ -403,18 +403,18 @@ export function createDeviceTunnelExecutor(
             () => terminateDeviceExec(rpc, requestId, deviceId),
           );
           const parsed = v.parse(DeviceExecResultSchema, result);
-          return formatExecResult(parsed);
+          return commandResult(parsed);
         } catch (err) {
           if (isAbortError(err)) throw err;
-          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+          if (isDeviceNotConnectedError(err)) return refusalOf(new KinuError('unavailable', NOT_CONNECTED));
           // The machine cannot run a command under the tier it was given. That
           // is a REFUSAL with a named cause and a fix, not a transport fault,
           // and the message already reads as one — prefixing it with the
           // command would bury the sentence that says what to do about it.
           if (isSandboxUnavailableError(err)) {
-            return refusalText(new KinuError('denied', renderThrownChain({ cause: err })));
+            return refusalOf(new KinuError('denied', renderThrownChain({ cause: err })));
           }
-          return refusalText(deviceFailure({ doing: `laptop exec \`${command}\``, cause: err }));
+          return refusalOf(deviceFailure({ doing: `laptop exec \`${command}\``, cause: err }));
         }
       },
     },
@@ -429,7 +429,7 @@ export function createDeviceTunnelExecutor(
         }
         try {
           const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
-          if (target.kind === 'refusal') return target.text;
+          if (target.kind === 'refusal') return refusalText(target.refusal);
           const view = target.view;
           return v.parse(v.string(), await view.readFile(path, { encoding: 'utf8' }));
         } catch (err) {
@@ -452,7 +452,7 @@ export function createDeviceTunnelExecutor(
         }
         try {
           const target = filesForCall(transport, consent, readDeviceSelection({ context: args[2] }));
-          if (target.kind === 'refusal') return target.text;
+          if (target.kind === 'refusal') return refusalText(target.refusal);
           const view = target.view;
           await view.writeFile(path, content);
           return `Written ${content.length} bytes to ${path}`;
@@ -473,7 +473,7 @@ export function createDeviceTunnelExecutor(
         }
         try {
           const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
-          if (target.kind === 'refusal') return target.text;
+          if (target.kind === 'refusal') return refusalText(target.refusal);
           const view = target.view;
           return await view.readdir(path ?? await view.homeDir());
         } catch (err) {
@@ -497,7 +497,7 @@ export function createDeviceTunnelExecutor(
         }
         try {
           const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
-          if (target.kind === 'refusal') return target.text;
+          if (target.kind === 'refusal') return refusalText(target.refusal);
           const view = target.view;
           return await view.exists(path);
         } catch (err) {
@@ -572,7 +572,7 @@ export function createDeviceTunnelExecutor(
  */
 declare namespace laptop {
   /** Execute a command on the user's local machine */
-  function exec(command: string, opts?: { device?: string }): Promise<string>;
+  function exec(command: string, opts?: { device?: string }): Promise<${COMMAND_RESULT_TYPE}>;
   /** Read a file from the user's local filesystem */
   function readFile(path: string, opts?: { device?: string }): Promise<string>;
   /** Write a file to the user's local filesystem */
@@ -629,7 +629,7 @@ function resolveForCall(
 ): CallTarget {
   const fleet = transport.status().devices;
   const live = connectedDevices(fleet);
-  const refuse = (error: KinuError): CallTarget => ({ kind: 'refusal', text: refusalText(error) });
+  const refuse = (error: KinuError): CallTarget => ({ kind: 'refusal', refusal: refusalOf(error) });
   if (named === undefined) {
     if (live.length > 1) return refuse(new KinuError('bad_input', deviceFleetAsk(fleet)));
     return { kind: 'target', deviceId: live[0]?.id };
