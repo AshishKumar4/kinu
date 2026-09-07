@@ -285,7 +285,8 @@ fi
 # The backend is in every filename, so a cloud run cannot overwrite a local
 # run's evidence in the same tree and `eval-spend.ts --expect-live` keeps
 # asserting liveness per arm rather than over a merged total.
-REPORT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kinu-eval-tier-XXXXXX")"
+REPORT_DIR="$(bun scripts/bench-retention.ts --family eval --backend "$BACKEND")"
+echo "retained reports: $REPORT_DIR"
 JUNIT="$REPORT_DIR/junit-bun-$BACKEND.xml"
 JUNIT_EVALS="$REPORT_DIR/junit-vitest-$BACKEND.xml"
 JUNIT_SWARM="$REPORT_DIR/junit-swarm-$BACKEND.xml"
@@ -308,7 +309,6 @@ SPEND="$REPORT_DIR/spend-$BACKEND.jsonl"
 : > "$SPEND_OPTIMIZATION"
 : > "$SPEND_TRAJECTORY"
 : > "$SPEND_DEVICE"
-trap 'rm -rf "$REPORT_DIR"' EXIT
 
 # The ONE place this is set. `liveModelTarget` refuses to spend without it, so a
 # credential exported in a developer's shell can no longer make the commit hook

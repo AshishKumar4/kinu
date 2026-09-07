@@ -75,9 +75,8 @@ export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptio
     llm: llmConfig,
     credentials: resolveProviderCredentials(),
     codexAuthStore: createCodexAuthStore(),
-    cloud: cloud
-      ? { ...cloud, sessionAffinity: opts.agentName ? agentAffinityKey(opts.agentName) : undefined }
-      : undefined,
+    cloud: cloud ?? undefined,
+    sessionAffinity: opts.agentName ? agentAffinityKey(opts.agentName) : undefined,
     claudeCli: opts.claudeCli,
   });
   return { llmConfig, resolver };

@@ -33,7 +33,7 @@ import { generateText, stepCountIs, type LanguageModel } from 'ai';
 import type { AgentRuntime, AgentsToolAction, EvalCase, LLMProviderConfig, RunEvent, SeekCursor } from '../../packages/core/src/index';
 import {
   CRAFT_NEUTRAL_PRIOR,
-  censusToolFailures, classifyToolFailure, compareSurface, DefaultExecutionRouter,
+  censusToolFailures, compareSurface, DefaultExecutionRouter,
   initWorkspaceSchema, listRuns, observedActionEnum, renderConformanceFindings,
   RunEventRecorder,
 } from '../../packages/core/src/index';
@@ -43,7 +43,7 @@ import { makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   AdoptedSpendMeter, HARD_TASKS, INFRA_FAILURE_MARKER, caseKey, findResumableEvalDir,
-  formatAdoptedSpend,
+  formatAdoptedSpend, infraBoundary,
   liveModelSpend, openEvalProgress, recordLiveModelEpisode, resetLiveModelSpend,
   hardTaskCases, toolExecute, type EvalArmState, type EvalObservation,
 } from '@kinu.run/test-utils';
@@ -52,7 +52,7 @@ import {
 import { REFERENCE_FILE, SOLUTION_FILE } from '../../packages/core/src/index';
 
 import {
-  buildEvalAgentSurface, recordRequestSurface,
+  buildEvalAgentSurface, createStepToolCallLog, recordRequestSurface,
   DegenerateRuntimeError, requireExecutorSurface,
   requireSandboxedExecutors, runBehaviourTask, UnsandboxedRuntimeError,
   type BehaviourScoreJson, type EvalAgentSurface,
@@ -232,6 +232,23 @@ async function run(
 const CREATE_DOUBLE =
   'return await workspace.createTool("doubleIt", "doubles a number", "async (n) => n * 2");';
 
+test('the SDK step collector pairs outcomes by call id and never interprets result data', () => {
+  const log = createStepToolCallLog();
+  log.onStepFinish({
+    toolCalls: [
+      { type: 'tool-call', toolCallId: 'first', toolName: 'file', input: {} },
+      { type: 'tool-call', toolCallId: 'second', toolName: 'run', input: {} },
+    ],
+    content: [
+      { type: 'tool-error', toolCallId: 'second', toolName: 'run', input: {}, error: new Error('invocation failed') },
+      { type: 'tool-result', toolCallId: 'first', toolName: 'file', input: {}, output: { error: 'ordinary file contents' } },
+    ],
+  });
+  expect(log.records[0]?.outcome).toEqual({ success: true });
+  expect(log.records[0]?.result).toEqual({ error: 'ordinary file contents' });
+  expect(log.records[1]?.outcome).toEqual({ success: false, reason: null });
+});
+
 describe('crafted-tool discovery and execution use the production CLI adapter', () => {
   test('workspace.listTools exposes exactly the callable inherited craft set before reuse', async () => {
     const { rt, surface } = await openRuntimeProbe('crafted-production-set');
@@ -284,8 +301,7 @@ describe('crafted-tool discovery and execution use the production CLI adapter', 
     // And there is no second one. The alias that used to be declared and refuse
     // calls is gone, so a call written against it reaches nothing at all: this
     // is what goes red if a second namespace is ever bound again.
-    expect(JSON.stringify(await execute({ code: 'return await codemode.doubleIt(21);' })))
-      .toContain('codemode is not defined');
+    await expect(execute({ code: 'return await codemode.doubleIt(21);' })).rejects.toThrow();
     expect(await execute({ code: 'return await tools.increment(41);' }))
       .toEqual({ result: 42 });
   }, 0);
@@ -608,11 +624,9 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
     const rows = toolCallRows(db).filter((r) => r.name === 'execute_tools');
     expect(rows).toHaveLength(2);
     for (const row of rows) {
-      // An absent binding comes back as a result the tool called an error, not
-      // as a thrown call — the `returned_error` class named in
-      // read-models/tool-failures.ts:230-232. Asserting the class rather than a
-      // string keeps this from passing on a call that never ran.
-      expect(classifyToolFailure(row)?.reason).toBe('returned_error');
+      // Refusal comes from the SDK invocation outcome, not from matching
+      // an error-shaped string returned as ordinary tool data.
+      expect(row.outcome?.success).toBe(false);
       expect(JSON.stringify(row.result)).toContain('laptop');
     }
   }, 0);
@@ -1273,11 +1287,35 @@ describe('infra-vs-behavioural — a provider failure is not the agent doing not
       new DegenerateRunError('ws-fix-broken', 1, 0, ['run_end: TypeError: x is not a function']),
     )).toEqual({ kind: 'settled', outcome: 'inert' });
 
-    // Anything that is not a degenerate run never consulted a turn error at all —
-    // a harness guard, a schema refusal — so it cannot be resumable.
+    // Anything that is not a degenerate run and carries no boundary label never
+    // consulted a turn error at all — a harness guard, a schema refusal — so it
+    // cannot be resumable.
     expect(disposeFailedCase(new DegenerateRuntimeError('t', 'rt.executionRouter is absent')))
       .toEqual({ kind: 'settled', outcome: 'errored' });
     expect(disposeFailedCase(new Error('boom'))).toEqual({ kind: 'settled', outcome: 'errored' });
+  });
+
+  test('a failure raised at a declared boundary is the environment\'s, whichever plane raised it', async () => {
+    // The public plane has no DegenerateRunError for a socket that died
+    // mid-turn: `infraBoundary` labels the failure where it happens, and the
+    // ratchet already counts that label as infrastructure. The record used to
+    // file the same failure as `errored` — the harness's fault, settled, never
+    // retried — so one outage was two different failures depending on which
+    // reader you asked.
+    let boundary: Error | null = null;
+    try {
+      await infraBoundary('turn on staging/eval-ws', () =>
+        Promise.reject(new Error('the workspace socket closed')));
+    } catch (error) {
+      boundary = error instanceof Error ? error : null;
+    }
+    if (boundary === null) throw new Error('unreachable: the boundary must reject with an Error');
+    expect(disposeFailedCase(boundary)).toEqual({ kind: 'resumable', outcome: 'incomplete' });
+    // The control: the same sentence WITHOUT the boundary's label is a plain
+    // throw and stays terminal, so a classifier sniffing message text for
+    // "socket" could not pass this.
+    expect(disposeFailedCase(new Error('the workspace socket closed')))
+      .toEqual({ kind: 'settled', outcome: 'errored' });
   });
 });
 

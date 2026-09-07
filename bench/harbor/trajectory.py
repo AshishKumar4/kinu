@@ -63,6 +63,12 @@ _SPEC.loader.exec_module(_events)
 
 parse_events = _events.parse_events
 read_grading = _events.read_grading
+read_spend = _events.read_spend
+step_usage = _events.step_usage
+model_usage_complete = _events.model_usage_complete
+tool_outcome_counts = _events.tool_outcome_counts
+WorkspaceSpend = _events.WorkspaceSpend
+Usage = _events.Usage
 run_events = _events.run_events
 turn_usage = _events.turn_usage
 usage_reported = _events.usage_reported
@@ -84,10 +90,15 @@ class KinuRunSummary:
     #: The subset that is actually evolution. This is the field a reader may
     #: use to decide whether the mechanism under test ran.
     evolution_events: list[dict[str, str]] = field(default_factory=list)
-    usage: dict[str, int] | None = None
+    usage: Usage | None = None
+    usage_complete: bool = False
+    usage_source: str = "unreported"
+    model_calls: int | None = None
+    catalog_usd: float | None = None
     #: The agent's durable run-event ledger, verbatim — the only copy that
     #: survives the container, and where a nudge/budget measurement lives.
     run_events: list[dict[str, Any]] = field(default_factory=list)
+    tool_outcomes: dict[str, int] = field(default_factory=dict)
 
 
 def read_events(path: Path) -> list[dict[str, Any]]:
@@ -187,6 +198,7 @@ def build_trajectory(
     agent_version: str,
     model_name: str | None,
     agent_extra: dict[str, Any],
+    workspace_spend: WorkspaceSpend | None = None,
 ) -> tuple[Trajectory, KinuRunSummary]:
     summary = KinuRunSummary()
     builder = _StepBuilder(model_name)
@@ -210,9 +222,13 @@ def build_trajectory(
         elif kind == "message_end":
             builder.add_final_message(str(event.get("text") or ""))
         elif kind == "turn_end":
-            summary.turn_steps = _as_int(event.get("steps"))
-            summary.duration_ms = _as_int(event.get("durationMs"))
-            summary.had_error = bool(event.get("hadError"))
+            steps = _as_int(event.get("steps"))
+            duration = _as_int(event.get("durationMs"))
+            if steps is not None:
+                summary.turn_steps = (summary.turn_steps or 0) + steps
+            if duration is not None:
+                summary.duration_ms = (summary.duration_ms or 0) + duration
+            summary.had_error = bool(summary.had_error) or bool(event.get("hadError"))
         elif kind == "evolution":
             record = {
                 "event": str(event.get("event") or ""),
@@ -225,17 +241,33 @@ def build_trajectory(
         elif kind == "error":
             message = str(event.get("message") or "")
             summary.errors.append(message)
+            summary.had_error = True
             builder.add_system(message, {"kinu_event": "error"})
 
     # Instrumentation, not conversation: the ledger is recorded whole rather
     # than folded into ATIF steps, which describe what the agent said and did.
     summary.run_events = run_events(events)
+    summary.tool_outcomes = tool_outcome_counts(events)
 
-    # Absent rather than zero when the provider reported nothing. The gate is
-    # `usage_reported`, not "are any of the values non-zero": a turn that
-    # genuinely reported zeros WAS metered, and calling that unmetered is the
-    # same fabrication in the opposite direction.
-    usage = turn_usage(events)
+    finished = sum(e.get("type") == "turn_end" for e in events)
+    started = sum(e.get("type") == "turn_start" for e in events)
+    closed = finished > 0 and finished == started and not summary.had_error
+    if workspace_spend is not None:
+        usage = workspace_spend.usage
+        summary.model_calls = workspace_spend.calls
+        summary.catalog_usd = workspace_spend.usd
+        summary.usage_source = "workspace-ledger"
+        summary.usage_complete = (
+            closed and workspace_spend.calls_without_usage == 0
+            and model_usage_complete(events, workspace_spend.calls)
+        )
+    elif not closed:
+        usage = step_usage(events)
+        summary.usage_source = "completed-steps-floor"
+    else:
+        usage = turn_usage(events)
+        summary.usage_source = "completed-turns"
+        summary.usage_complete = False  # no whole-workspace producer ledger
     summary.usage = usage if usage_reported(usage) else None
 
     extra = dict(agent_extra)
@@ -245,6 +277,9 @@ def build_trajectory(
         extra["evolution_events"] = summary.evolution_events
 
     final_extra: dict[str, Any] = {}
+    final_extra["usage_complete"] = summary.usage_complete
+    final_extra["usage_source"] = summary.usage_source
+    final_extra["tool_outcomes"] = summary.tool_outcomes
     if summary.turn_steps is not None:
         final_extra["kinu_turn_steps"] = summary.turn_steps
     if summary.duration_ms is not None:

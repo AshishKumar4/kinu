@@ -52,6 +52,9 @@ interface TrialSpec {
   checksum?: string;
   /** Emit a trial with no usage at all — what a killed turn leaves behind. */
   noUsage?: boolean;
+  noAgentResult?: boolean;
+  noVerifierResult?: boolean;
+  partialUsage?: boolean;
 }
 
 /** A Harbor job directory holding one `result.json` per trial, in the shape the
@@ -60,8 +63,8 @@ function job(name: string, trials: readonly TrialSpec[]): string {
   const root = scratchDir('bench-external');
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
-  for (const spec of trials) {
-    const trialDir = join(dir, `${spec.task}__x`);
+  for (const [index, spec] of trials.entries()) {
+    const trialDir = join(dir, `${spec.task}__${index}`);
     mkdirSync(trialDir);
     const event = (name: string, count: number) =>
       Array.from({ length: count }, () => ({ event: name, message: name }));
@@ -70,6 +73,7 @@ function job(name: string, trials: readonly TrialSpec[]): string {
     // distinction half these tests exist to hold.
     const metadata = {
       evolve: spec.evolve,
+      usage_complete: !spec.noUsage && !spec.partialUsage,
       tool_calls: 5,
       evolution_events: event('reflection', spec.evolutionEvents ?? 0),
       activity_events: event('bg_job_started', spec.activityEvents ?? spec.evolutionEvents ?? 0),
@@ -82,18 +86,18 @@ function job(name: string, trials: readonly TrialSpec[]): string {
       task_name: `terminal-bench/${spec.task}`,
       task_checksum: spec.checksum ?? `sum-${spec.task}`,
       config: { agent: { model_name: 'flash', kwargs: { evolve: spec.evolve } } },
-      agent_result: spec.noUsage ? { metadata } : {
+      agent_result: spec.noAgentResult ? null : spec.noUsage ? { metadata } : {
         n_input_tokens: spec.promptTokens ?? 100_000,
         n_output_tokens: spec.outputTokens ?? 1_000,
         n_cache_tokens: 0,
         metadata,
       },
-      verifier_result: { rewards: { reward: spec.reward } },
+      verifier_result: spec.noVerifierResult ? null : { rewards: { reward: spec.reward } },
       exception_info: null,
     }));
   }
   // Job-level bookkeeping sits beside the trials and must not read as a trial.
-  writeFileSync(join(dir, 'result.json'), JSON.stringify({ job: name }));
+  writeFileSync(join(dir, 'result.json'), JSON.stringify({ n_total_trials: trials.length }));
   writeFileSync(join(dir, 'job.log'), 'started\n');
   return dir;
 }
@@ -306,6 +310,77 @@ describe('spend coverage', () => {
     // would make this arm look cheaper than the arm it is equalized against,
     // which is the one direction that claim cannot afford to be wrong in.
     expect(spend.billableTokens).toBeNull();
+  });
+});
+
+describe('repeated-trial denominators', () => {
+  test('keeps every reward and refuses unequal repetitions', () => {
+    const a = readHarborJob(job('a', [
+      { task: 'repeat', reward: 0, evolve: false },
+      { task: 'repeat', reward: 1, evolve: false },
+    ]));
+    const b = readHarborJob(job('b', [
+      { task: 'repeat', reward: 1, evolve: true },
+      { task: 'repeat', reward: 1, evolve: true },
+    ]));
+    const row = pairArms(a, b).paired[0];
+    expect(row?.aRewards).toEqual([0, 1]);
+    expect(row?.bRewards).toEqual([1, 1]);
+    expect(row?.a).toBe(0.5);
+    expect(row?.b).toBe(1);
+    expect(() => pairArms(a, { ...b, trials: b.trials.slice(1) })).toThrow('unequal repetitions');
+  });
+
+  test('an unfinished configured trial cannot disappear from the denominator', () => {
+    const path = job('partial', [{ task: 'done', reward: 1, evolve: false }]);
+    const pending = join(path, 'pending__x');
+    mkdirSync(pending);
+    writeFileSync(join(pending, 'config.json'), JSON.stringify({ task: { path: '/tasks/pending' }, agent: { model_name: 'flash' } }));
+    writeFileSync(join(path, 'result.json'), JSON.stringify({ n_total_trials: 3 }));
+    const arm = readHarborJob(path);
+    const summary = armSpend(arm);
+    expect(summary.trials).toBe(3);
+    expect(summary.verifiedSuccesses).toBe(1);
+    expect(summary.unscoredTrials).toBe(2);
+    expect(summary.spendUnreported).toBe(2);
+    expect(arm.trials.find((trial) => trial.taskId === 'pending')?.reward).toBeNull();
+    expect(summary.billableTokens).toBeNull();
+  });
+  test('partial metering keeps the verifier success but refuses an equal-spend claim', () => {
+    const arm = readHarborJob(job('partial-spend', [{ task: 'solved', reward: 1, evolve: true, partialUsage: true }]));
+    const summary = armSpend(arm);
+    expect(summary.verifiedSuccesses).toBe(1);
+    expect(summary.trials).toBe(1);
+    expect(summary.usage.input).toBe(100000);
+    expect(summary.spendUnreported).toBe(1);
+    expect(summary.billableTokens).toBeNull();
+  });
+  test('contradictory cached input cannot become a cheap complete trial', () => {
+    const arm = readHarborJob(job('bad-cache-usage', [{ task: 'solved', reward: 1, evolve: false }]));
+    const trial = arm.trials[0];
+    if (!trial) throw new Error('missing trial fixture');
+    trial.usage = { input: 0, output: 0, cacheRead: 40192 };
+    const summary = armSpend(arm);
+    expect(summary.verifiedSuccesses).toBe(1);
+    expect(summary.usage).toEqual(trial.usage);
+    expect(summary.billableTokens).toBeNull();
+    expect(summary.spendUnreported).toBe(1);
+  });
+  test('official success and failure survive absent internal telemetry', () => {
+    const arm = readHarborJob(job('no-trace', [
+      { task: 'solved', reward: 1, evolve: true, noAgentResult: true },
+      { task: 'failed', reward: 0, evolve: true, noAgentResult: true },
+      { task: 'ungraded', reward: 1, evolve: true, noAgentResult: true, noVerifierResult: true },
+    ]));
+    const summary = armSpend(arm);
+    expect(summary.verifiedSuccesses).toBe(1);
+    expect(summary.verifierFailures).toBe(1);
+    expect(summary.unscoredTrials).toBe(1);
+    expect(summary.trials).toBe(3);
+    expect(summary.gradingUnreported).toBe(3);
+    expect(arm.trials.find((trial) => trial.taskId === 'solved')?.passed).toBe(true);
+    expect(arm.trials.find((trial) => trial.taskId === 'failed')?.passed).toBe(false);
+    expect(arm.trials.find((trial) => trial.taskId === 'ungraded')?.passed).toBeNull();
   });
 });
 

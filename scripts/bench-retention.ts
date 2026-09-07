@@ -12,10 +12,11 @@
 // `openRunRetention` proves the location is writable by writing to it before the
 // first attempt runs. There is deliberately no way to turn this off: a scored
 // run that writes nowhere durable fails at argument parsing.
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import * as v from 'valibot';
+import { parseArgs } from 'node:util';
 import { AttemptOutcomeSchema, parseJsonValue } from '../packages/core/src/index';
 import type { AttemptBudget, AttemptOutcome, JsonValue } from '../packages/core/src/index';
 
@@ -215,4 +216,23 @@ export function readRetainedAttempts(dir: string): AttemptOutcome[] {
     .split('\n')
     .filter((line) => line.trim())
     .map((line) => v.parse(AttemptOutcomeSchema, parseJsonValue(line)));
+}
+
+/** Shell runners use the same durable artifact policy as scored runs. */
+export function createEvalReportDirectory(family: 'eval' | 'first-run', backend: 'local' | 'cloud'): string {
+  const root = resolveArtifactRoot({
+    flag: undefined, env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS },
+    repoRoot: resolve(import.meta.dirname, '..'), runRoot: tmpdir(),
+  });
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  return mkdtempSync(join(root, `${family}-reports-${backend}-`));
+}
+
+if (import.meta.main) {
+  const { values } = parseArgs({ options: { family: { type: 'string' }, backend: { type: 'string' } } });
+  if ((values.family !== 'eval' && values.family !== 'first-run')
+    || (values.backend !== 'local' && values.backend !== 'cloud')) {
+    throw new Error('Specify --family eval|first-run and --backend local|cloud');
+  }
+  console.log(createEvalReportDirectory(values.family, values.backend));
 }

@@ -15,6 +15,9 @@ this (``bun run gate:python-suites``) derives the same invocation from
 from __future__ import annotations
 
 import importlib.util
+import asyncio
+import json
+import shutil
 import sys
 import tempfile
 import time
@@ -99,6 +102,40 @@ class BuildScratchSweep(unittest.TestCase):
     def test_the_window_is_a_parameter_the_caller_can_tighten(self) -> None:
         leaked = self._leak("eeee", age_seconds=5)
         self.assertEqual(sweep(self.root, time.time(), max_age_seconds=1.0), [leaked])
+
+
+class RelocatableBuild(unittest.TestCase):
+    def test_installed_binary_reads_its_own_manifest_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            entry = root / _BUILD.CLI_ENTRYPOINT
+            entry.parent.mkdir(parents=True)
+            entry.write_text(
+                "import bash from '@nimbus-sh/runtime-bash';\n"
+                "import python from '@nimbus-sh/runtime-cpython';\n"
+                "console.log(bash + ' + ' + python);\n"
+            )
+            for name, marker in zip(_BUILD.EXTERNAL_MODULES, ("bash-owned", "python-owned")):
+                package = root / "node_modules" / name
+                package.mkdir(parents=True)
+                (package / "package.json").write_text(json.dumps({"name": name, "type": "module", "exports": "./index.js"}))
+                (package / "manifest.json").write_text(json.dumps(marker))
+                (package / "index.js").write_text(
+                    "import {readFileSync} from 'node:fs';\n"
+                    "export default JSON.parse(readFileSync(new URL('manifest.json', import.meta.url), 'utf8'));\n"
+                )
+            build = asyncio.run(_BUILD.build_kinu_binary(root))
+            installed = Path(temp) / "installed"
+            installed.mkdir()
+            binary = installed / "kinu"
+            shutil.copy2(build.binary, binary)
+            for name, source in build.modules.items():
+                shutil.copytree(source, installed / "node_modules" / name)
+            shutil.rmtree(root)
+            self.assertEqual(_BUILD.probe_binary(binary, installed / "node_modules"), "bash-owned + python-owned")
+            shutil.rmtree(installed / "node_modules")
+            with self.assertRaises(RuntimeError):
+                _BUILD.probe_binary(binary, installed / "node_modules")
 
 
 if __name__ == "__main__":

@@ -51,9 +51,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  EVAL_MODELS, outcomeRow, publishRunRecord, recordNoModelEpisode, recordWorkspaceSpend, reportLiveModelSpend,
-  subgoalOutcome,
-  type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier,
+  EVAL_MODELS, ledgerTotalsFromEvents, outcomeRow, projectRunEventProvenance, publishRunRecord,
+  reportLiveModelSpend, retainEpisodeTranscript, subgoalsOutcome, withEpisodeEvidence,
+  type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalSubgoal, type EvalTier,
 } from '@kinu.run/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 import { disposeFailedCase } from '../evals/episode-failure';
@@ -186,29 +186,18 @@ export const FIRST_RUN_ARM: EvalArmState = { evolution: false, settle: 'none', t
 const REPO_ROOT = join(import.meta.dirname, '../..');
 
 /** Retained beside the record, never under a swept root — the same
- *  `resolveArtifactRoot` rule every other family states. */
-function transcriptRoot(): string {
-  return join(
-    resolveArtifactRoot({
-      flag: undefined, env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS },
-      repoRoot: REPO_ROOT, runRoot: tmpdir(),
-    }),
-    `first-run-${FIRST_RUN_TIER}-${String(Date.now())}`,
-  );
-}
-
-/**
- * One case's subgoal: what was checked, whether it held, and the evidence.
- *
- * The evidence is not decoration. A first-run failure is read by somebody who
- * was not watching the run, and "MISSED" with no server text is a failure nobody
- * can act on.
- */
-export interface FirstRunSubgoal {
-  readonly what: string;
-  readonly reached: boolean;
-  readonly detail: string;
-}
+ *  `resolveArtifactRoot` rule every other family states. ONE directory per
+ *  suite process, resolved at import: every case retains its ledger and its
+ *  transcript under it before its subgoals are asserted, and the record this
+ *  process publishes names the same directory. It used to be minted at publish
+ *  time, so the record pointed at a directory nothing had ever written into. */
+const TRANSCRIPTS = join(
+  resolveArtifactRoot({
+    flag: undefined, env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS },
+    repoRoot: REPO_ROOT, runRoot: tmpdir(),
+  }),
+  `first-run-${FIRST_RUN_TIER}-${String(Date.now())}`,
+);
 
 /**
  * The live plan for one case, or the reason this environment has none.
@@ -284,15 +273,17 @@ export interface FirstRunCaseSpec {
   readonly modelCalls: 'expected' | 'none';
   /** The case, driven the way a user drives it. Returns the subgoals it
    *  checked; every one of them is asserted by {@link runFirstRunCase}. */
-  run(input: FirstRunRun): Promise<readonly FirstRunSubgoal[]>;
-  /** Tool calls this case made through the deployed plane, for the record's
-   *  covariate. Read after `run`, so a case that threw still reports what it
-   *  had done by then. */
+  run(input: FirstRunRun): Promise<readonly EvalSubgoal[]>;
+  /** Calls this case made through the deployed plane that the workspace's own
+   *  ledger does not see — `executeInExecutor` on a linked machine, a pty
+   *  keystroke — for the record's covariate, ADDED to the ledger's own tool-call
+   *  count. Read after `run`, so a case that threw still reports what it had
+   *  done by then. */
   calls?(): number;
 }
 
 /**
- * Run one first-run case against the deployed product and publish its record.
+ * Run one first-run case against the deployed product and record it.
  *
  * THE ORDER IS THE CONTRACT, and every line of it was a defect in some sibling
  * arm before it was a rule here:
@@ -300,11 +291,18 @@ export interface FirstRunCaseSpec {
  *   1. A FRESH workspace, through the public REST. Never reused between cases.
  *   2. SPEND FIRST — recorded before any assertion can throw, because what a run
  *      cost is a fact about the run rather than a reward for passing.
- *   3. THE OBSERVATION before the assertions, so a missed subgoal still reaches
+ *   3. THE LEDGER, READ. Turns, tool calls and tokens come off the workspace's
+ *      own run-event routes, the same read the trajectory arm scores from. The
+ *      observation used to carry `turns: 0, tokensIn: 0` as literals, so every
+ *      record this tier ever published was INADMISSIBLE — "zero graded turns"
+ *      — beside a spend line showing the eight calls it had just made.
+ *   4. THE EVIDENCE, RETAINED: ledger, transcript and verdicts under the
+ *      directory the record names, before any verdict on them.
+ *   5. THE OBSERVATION before the assertions, so a missed subgoal still reaches
  *      the record with what the case actually saw. A record that only
  *      accumulates successes is not evidence.
- *   4. EVERY subgoal asserted, each in its own failure message.
- *   5. TEARDOWN in a `finally` — this DELETES the workspace, so a case that
+ *   6. EVERY subgoal asserted, each in its own failure message.
+ *   7. TEARDOWN in a `finally` — this DELETES the workspace, so a case that
  *      threw must not leave a row on the account.
  */
 export async function runFirstRunCase(
@@ -316,32 +314,26 @@ export async function runFirstRunCase(
   const session = await plan.open({ subject: spec.id, purpose: spec.purpose });
   console.warn(`    [first-run] ${spec.id} on ${session.describe}`);
   try {
+    await withEpisodeEvidence(session, { transcripts: TRANSCRIPTS, taskId: spec.id, modelCalls: spec.modelCalls }, async (collect) => {
     const subgoals = await spec.run({ session, plan });
 
-    // SPEND FIRST. Every path below this line can throw.
-    const spend = await session.spend();
-    if (spec.modelCalls === 'none') {
-      recordNoModelEpisode(spend);
-    } else {
-      if (spend.total.calls === 0) {
-        throw new Error(`${spec.id}: the case drives the model and its store accounted for no `
-          + 'model call, so nothing it asserted was measured against one');
-      }
-      recordWorkspaceSpend(spend);
-    }
+    const { events, history } = await collect();
+    const totals = ledgerTotalsFromEvents(events);
+    const retained = retainEpisodeTranscript(TRANSCRIPTS, spec.id, { events, history, subgoals });
 
-    const reached = subgoals.filter((subgoal) => subgoal.reached).length;
-    const detail = subgoals
-      .map((subgoal) => `${subgoal.what}: ${subgoal.reached ? 'ok' : 'MISSED'} — ${subgoal.detail}`)
-      .join('; ');
-    const scores: EvalScoreRow[] = [
-      outcomeRow(subgoalOutcome(reached, subgoals.length, detail)),
-    ];
+    const outcome = subgoalsOutcome(subgoals, { turns: totals.turns, toolCalls: totals.toolCalls });
+    const scores: EvalScoreRow[] = [outcomeRow(outcome)];
     observations.push({
       taskId: spec.id, repetition: 0, outcome: 'scored', scores,
-      turns: 0, toolCalls: spec.calls?.() ?? 0,
-      tokensIn: 0, tokensOut: 0, ms: Date.now() - startedAt,
+      turns: totals.turns, toolCalls: totals.toolCalls + (spec.calls?.() ?? 0),
+      toolNames: totals.toolNames,
+      tokensIn: totals.tokensIn, tokensOut: totals.tokensOut, reasoningOut: totals.reasoningOut,
+      provenance: projectRunEventProvenance(events),
+      ms: Date.now() - startedAt,
     });
+    console.warn(`    [first-run] ${spec.id}: ${String(totals.turns)} turn(s), `
+      + `${String(totals.toolCalls)} tool call(s), ${String(outcome.reached)}/${String(outcome.total)} `
+      + `subgoals — retained at ${retained}`);
     for (const subgoal of subgoals) {
       console.warn(`    [first-run] ${spec.id}/${subgoal.what}: `
         + `${subgoal.reached ? 'ok' : 'MISSED'} — ${subgoal.detail}`);
@@ -350,17 +342,27 @@ export async function runFirstRunCase(
     for (const subgoal of subgoals) {
       expectReached(spec.id, subgoal);
     }
+    });
   } catch (error) {
     // THREE CAUSES AND ONE VALUE THAT NAMES WHICH — the behaviour arm's own
     // classification, reused rather than re-derived: `inert` is the product
     // producing nothing, `errored` is this harness failing, and a case the
     // ENVIRONMENT killed is neither and stays resumable.
+    //
+    // ONE ROW PER CASE. A case that was already scored carries its verdict
+    // above — the throw after it is `expectReached` naming the miss, which the
+    // outcome row holds as partial credit — so a second row here would count one
+    // attempt twice and file the product's shortcoming as this harness failing.
+    // Measured on 2026-09-06: the `slate` record carried `scored` (3/4) AND
+    // `errored: slate/replied …` for the same pairing key.
     const thrown = error instanceof Error ? error : new Error(String(error));
-    observations.push({
-      taskId: spec.id, repetition: 0,
-      outcome: disposeFailedCase(thrown).outcome,
-      reason: thrown.message,
-    });
+    if (!observations.some((o) => o.taskId === spec.id)) {
+      observations.push({
+        taskId: spec.id, repetition: 0,
+        outcome: disposeFailedCase(thrown).outcome,
+        reason: thrown.message,
+      });
+    }
     throw error;
   } finally {
     await session.teardown();
@@ -375,20 +377,25 @@ export async function runFirstRunCase(
  * failure text is the whole point, and a plain `Error` carries it identically in
  * every runner.
  */
-export function expectReached(caseId: FirstRunCase, subgoal: FirstRunSubgoal): void {
+export function expectReached(caseId: FirstRunCase, subgoal: EvalSubgoal): void {
   if (subgoal.reached) return;
   throw new Error(`${caseId}/${subgoal.what}: ${subgoal.detail}`);
 }
 
 /** Publish this suite's record. Called from one `afterAll` per case file, so a
- *  file that crashed still publishes what it observed. */
+ *  file that crashed still publishes what it observed. The model id is the one
+ *  the plan PINNED — `setModel` on the workspace — read off the plan rather
+ *  than re-derived from the tier, so the record cannot name a model the run
+ *  did not drive; with no plan nothing ran and the tier default is the only
+ *  honest label for a record `publishRunRecord` will refuse anyway. */
 export function publishFirstRunRecord(
-  suite: string, declared: readonly FirstRunCase[], observations: EvalObservation[],
+  suite: string, plan: PublicSessionPlan | null, declared: readonly FirstRunCase[],
+  observations: EvalObservation[],
 ): void {
   const spend = reportLiveModelSpend(suite);
   publishRunRecord({
-    family: FIRST_RUN_FAMILY, tier: FIRST_RUN_TIER, modelId: EVAL_MODELS[FIRST_RUN_TIER],
+    family: FIRST_RUN_FAMILY, tier: FIRST_RUN_TIER, modelId: plan?.llm.model ?? EVAL_MODELS[FIRST_RUN_TIER],
     repeats: 1, seed: 1, arm: FIRST_RUN_ARM, declaredTasks: [...declared], observations, spend,
-    transcripts: transcriptRoot(), repoRoot: REPO_ROOT,
+    transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
   });
 }

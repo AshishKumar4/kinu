@@ -49,7 +49,7 @@ import {
   ActivitySpendSchema, callAgentRpc, createCloudAgent, deleteCloudAgent,
 } from '../../packages/cli/src/cloud-api';
 import {
-  evalTargetVerdict, evalWorkspaceName, infraBoundary, probeVerifier,
+  compareRunEventOrder, evalTargetVerdict, evalWorkspaceName, infraBoundary, probeVerifier,
   type AgentEvalTarget, type EvalExecutor, type EvalSearchLedger, type EvalTargetProbe,
   type EvalTargetWorkspace,
 } from '@kinu.run/test-utils';
@@ -212,10 +212,7 @@ class CloudEvalTarget implements AgentEvalTarget {
       if (page.status === 'end') break;
       cursor = page.next;
     }
-    events.sort((a, b) =>
-      a.timestamp.localeCompare(b.timestamp)
-      || a.runId.localeCompare(b.runId)
-      || a.eventIndex - b.eventIndex);
+    events.sort(compareRunEventOrder);
     return events;
   }
 
