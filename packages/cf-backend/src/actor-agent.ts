@@ -231,6 +231,7 @@ import {
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
+  toolsForInvocation, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle,
 } from "@kinu.run/core";
@@ -1735,6 +1736,7 @@ export abstract class ActorAgent extends Think<Env> {
     errorText: string | undefined;
     completed: boolean;
     programmaticUserMessage: UIMessage | null;
+    workMode: WorkMode;
   }): SettledTurnTelemetry {
     const { errorText, completed, programmaticUserMessage } = turn;
     let overflowRecovery: OverflowRecoveryDecision | null = null;
@@ -1787,7 +1789,7 @@ export abstract class ActorAgent extends Think<Env> {
         steering: this.orch.steering.snapshot(),
         craft: this.orch.craft.snapshot(),
         recoveries: this.orch.recoverySnapshot(),
-        workMode: this.turnWorkMode(),
+        workMode: turn.workMode,
         ...end,
       });
     }
@@ -3294,6 +3296,7 @@ export abstract class ActorAgent extends Think<Env> {
       result,
       run: {
         rt: this.rt,
+        workMode: this.turnWorkMode(),
         // beforeTurn stashed this turn's prepared opts just before streamText
         // fired (turns are serialized on the TurnQueue, so it is THIS turn's).
         task: extractLastUserText(this._lastTurnOpts?.messages ?? []),
@@ -3448,7 +3451,7 @@ export abstract class ActorAgent extends Think<Env> {
       for (const d of descriptors) {
         const serverId = d.serverId;
         const mcpName = d.name;
-        tools[d.toolKey] = tool({
+        const entry = tool({
           description: d.description ?? `${d.serverName}/${mcpName}`,
           inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
           execute: async (args) => {
@@ -3459,6 +3462,7 @@ export abstract class ActorAgent extends Think<Env> {
             } catch (err) { return { isError: true, error: renderThrownChain({ cause: err }) }; }
           },
         });
+        tools[d.toolKey] = d.readOnly === true ? permitInPlan(entry) : entry;
       }
       // An MCP server is a bulk producer like any other. Apply the same result
       // clamp and spill path as built-in tools.
@@ -4447,11 +4451,12 @@ export abstract class ActorAgent extends Think<Env> {
    * user; a facet without a provisioned home holds no file authority to lend.
    */
   protected slateCaller(): SlateCaller {
-    if (this.parentPath.length === 0) return { path: [], cred: CRED_SESSION_USER };
+    const workMode = currentWorkMode();
+    if (this.parentPath.length === 0) return { path: [], cred: CRED_SESSION_USER, workMode };
     const home = this.facetHome();
     if (home === undefined) throw new KinuError('denied', 'This facet has no provisioned home, so it cannot act on a slate');
     const path: readonly SlateCallerHop[] = [...this.parentPath.slice(1), { className: this.facetClass().name, name: this.name }];
-    return { path, cred: home.cred };
+    return { path, cred: home.cred, workMode };
   }
 
   /** Every actor's slate operations run on the object that owns its workspace, as this actor. */
@@ -4471,17 +4476,17 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * Deliberately NOT `@callable`: reached on the stub transport only.
    */
-  async slateBindingDispatch(path: readonly SlateCallerHop[], route: SlateBindingRoute): Promise<JsonValue> {
+  async slateBindingDispatch(path: readonly SlateCallerHop[], route: SlateBindingRoute, mode: WorkMode): Promise<JsonValue> {
     const [next, ...rest] = path;
     if (next !== undefined) {
       if (next.className !== this.facetClass().name) {
         throw new KinuError('denied', `${next.className} is not a facet class this actor hosts`);
       }
-      return (await this.subAgent(this.facetClass(), next.name)).slateBindingDispatch(rest, route);
+      return (await this.subAgent(this.facetClass(), next.name)).slateBindingDispatch(rest, route, mode);
     }
     switch (route.kind) {
       case 'namespace': {
-        const providers = this.slateNamespaces();
+        const providers = providersInWorkMode(mode, this.slateNamespaces());
         const reach = await this.slateReach(providers);
         const provider = reach.narrowProviders(providers).find((candidate) => candidate.name === route.namespace);
         if (!provider) throw new KinuError('denied', `${route.namespace} is not within this actor's reach right now`);
@@ -4501,6 +4506,7 @@ export abstract class ActorAgent extends Think<Env> {
         const surface = v.parse(McpToolSurfaceSchema, JSON.parse(await stub.userMcp_toolDescriptors(caller)));
         const descriptor = surface.descriptors.find((d) => d.serverId === route.server && d.name === route.tool);
         if (descriptor === undefined) throw new KinuError('missing', `${route.server} offers no tool ${route.tool} to this actor`);
+        requireWorkModePermission(mode, descriptor.readOnly === true, descriptor.toolKey);
         const reach = await this.slateReach(this.slateNamespaces(), [descriptor.toolKey]);
         if (!reach.allowsTool(descriptor.toolKey)) throw new KinuError('denied', `${descriptor.toolKey} is not within this actor's reach right now`);
         return v.parse(JsonValueSchema, JSON.parse(await stub.userMcp_callTool(caller, route.server, route.tool, route.args)));
@@ -5218,6 +5224,7 @@ export abstract class ActorAgent extends Think<Env> {
 
       const builtinDeps: Parameters<typeof buildActorTools>[0] = {
         rt: this.rt,
+        workMode: mode,
         // The once-only boundary for tools whose effects leave this object.
         // `turnId` is a closure because the toolset is cached across turns; the
         // checkpoint's turn id is the DURABLE id of the message this turn opened
@@ -5795,6 +5802,8 @@ export abstract class ActorAgent extends Think<Env> {
     });
     this._turnProfile = profile;
     const workMode = profile.workMode;
+    this.orch.restrictTurnWorkMode(workMode);
+    const modeTools = workMode === requestedWorkMode ? ctx.tools : this.getRawToolsForWorkMode(workMode);
     const allowedTools = new Set(profile.allowedTools);
     const toolAllowed = (name: string): boolean => allowedTools.has(name);
     const promptActiveTools = activeTools.filter(toolAllowed);
@@ -5936,7 +5945,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (measured.providerReportedTokens !== undefined) {
       assembly.providerReportedTokens = measured.providerReportedTokens;
     }
-    const submittedTools = { ...ctx.tools, ...effectiveTools };
+    const submittedTools = { ...modeTools, ...effectiveTools };
     const providers = this.providerRegistry();
     // NORMALISED, and by the same registry that will serve the request. The
     // model actually submitted comes from `resolveModel`, which normalises
@@ -5967,7 +5976,7 @@ export abstract class ActorAgent extends Think<Env> {
     };
     cfg.messages = await assembleTurnMessages(assembly);
 
-    if (Object.keys(effectiveTools).length > 0) cfg.tools = effectiveTools;
+    cfg.tools = toolsForInvocation(workMode, { ...modeTools, ...effectiveTools });
     cfg.activeTools = effectiveActiveTools;
 
     // Prompt-cache plan for this turn — the same core derivation `runChat`
@@ -6190,11 +6199,10 @@ export abstract class ActorAgent extends Think<Env> {
     if (!parsed.success) return null;
     return v.is(v.string(), parsed.output.kinuEvent) ? parsed.output.kinuEvent : null;
   }
-
   /** What the turn may do. Plan is explicit user intent on the driving
    * message; everything else is ordinary unconstrained work. */
   protected turnWorkMode(): WorkMode {
-    return workModeForTurnMetadata(this.turnDrivingMetadata());
+    return this._inFlight && this._turnProfile !== null ? this._turnProfile.workMode : workModeForTurnMetadata(this.turnDrivingMetadata());
   }
 
   /** Why the turn is running — read from the event alone, never from the work

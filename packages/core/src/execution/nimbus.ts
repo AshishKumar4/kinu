@@ -483,6 +483,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
       },
     },
     readFile: {
+      planAllowed: true,
       description: 'Read a file from the Nimbus filesystem.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!box) return NOT_CONFIGURED_REFUSAL;
@@ -521,6 +522,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
       },
     },
     listFiles: {
+      planAllowed: true,
       description: 'List directory contents in Nimbus.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!box) return NOT_CONFIGURED_REFUSAL;
@@ -537,10 +539,12 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
       },
     },
     readdir: {
+      planAllowed: true,
       description: 'Alias for listFiles.',
       execute: async (...args: unknown[]) => tools.listFiles.execute(args[0] ?? root),
     },
     exists: {
+      planAllowed: true,
       description: 'Check whether a path exists in Nimbus.',
       execute: async (...args: unknown[]): Promise<boolean | string> => {
         if (!box) return NOT_CONFIGURED_REFUSAL;
@@ -559,6 +563,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
       },
     },
     stat: {
+      planAllowed: true,
       description: 'Get file or directory metadata from Nimbus.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!box) return NOT_CONFIGURED_REFUSAL;

@@ -384,6 +384,7 @@ export function createWebCodemodeProvider(provider: WebSearchProvider) {
     types: TYPES,
     tools: {
       search: {
+        planAllowed: true,
         description: 'web.search(query, { limit? }) → { results: [{ title, url, snippet, date, position }], answer?, source }',
         execute: async (...args: unknown[]) => {
           const query = String(args[0] ?? '');
@@ -393,6 +394,7 @@ export function createWebCodemodeProvider(provider: WebSearchProvider) {
         },
       },
       fetch: {
+        planAllowed: true,
         description: 'web.fetch(url) → { url, title?, retrievedAt, markdown }',
         execute: async (...args: unknown[]) => provider.fetch(String(args[0] ?? '')),
       },

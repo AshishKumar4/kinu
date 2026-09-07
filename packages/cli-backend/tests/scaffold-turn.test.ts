@@ -26,6 +26,7 @@ import {
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { scratchPath } from '@kinu.run/test-utils';
+import { existsSync, readFileSync } from 'node:fs';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -331,4 +332,24 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     expect(claims).toHaveLength(1);
     expect(claims[0]?.normalized_call_id).toBe(`${trialId}#0`);
   }, 30_000);
+});
+
+test('Plan does not run a promoted native scaffold, but Build still can', async () => {
+  const { rt, session, events } = await setup('the standard Plan loop answered');
+  const marker = scratchPath('plan-scaffold-effect', 'marker.txt');
+  const initialized = scratchPath('plan-scaffold-initializer', 'marker.txt');
+  await installScaffold(rt, {
+    version: 1, status: 'current',
+    code: 'const fs = await import("node:fs/promises"); await fs.writeFile(' + JSON.stringify(initialized) + ', "initializer effect"); async function run() { await fs.writeFile(' + JSON.stringify(marker) + ', "native scaffold effect"); await host.emit({type:"text_delta",text:"scaffold ran"}); }',
+  });
+  await session.setRole('planner');
+  await session.send('Plan only.');
+  expect(existsSync(marker)).toBe(false);
+  expect(existsSync(initialized)).toBe(false);
+  expect(streamed(events)).toBe('the standard Plan loop answered');
+  await session.setRole('general');
+  await session.send('Run the configured Build loop.');
+  expect(readFileSync(marker, 'utf8')).toBe('native scaffold effect');
+  expect(readFileSync(initialized, 'utf8')).toBe('initializer effect');
+  await session.end();
 });

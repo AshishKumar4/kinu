@@ -100,6 +100,8 @@ import { diagnostics, KinuError, renderThrownChain, toKinuError, type Logger } f
 // The admitted-set filter beside the sets it narrows (heads/types.ts). That
 // module holds no runtime import, so this edge cannot close a ring.
 import { keepBuiltins } from '../heads/types';
+import { toolsInWorkMode, permitInPlan, requireBuild } from '../execution/work-mode';
+import type { WorkMode } from '../prompting/surface';
 
 type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
 type ExecutableToolEntry = NonNullable<ToolSet[string]>;
@@ -134,6 +136,8 @@ export interface ExecuteToolsSurface {
 export type ExecuteToolsBuilder = (surface: ExecuteToolsSurface) => ToolSet[string];
 
 export interface BuiltinToolDeps {
+  /** Fixed authority of this constructed tool surface. */
+  workMode?: WorkMode;
   rt: AgentRuntime;
   /** Filter cutoff override (default: DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection). */
   minEffectiveScore?: number;
@@ -469,8 +473,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       required: ['command'],
     }),
     execute: async (args: { command: string; runtime?: string; device?: string; why?: string }, options?: ToolExecutionOptions) => {
+      requireBuild('Native shell execution');
       const signal = options?.abortSignal;
-      // No gate here — the approval ladder (reviewCommand / shellApprovalMode
+      // No separate approval rule here — the approval ladder (reviewCommand / shellApprovalMode
       // / the interactive channel) lives at the execution seam this tool
       // dispatches to: the `shell` a workspace command runs through, and
       // every ExecutionRouter provider's `exec` for everything else (see
@@ -612,7 +617,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const runMemoryAction = createMemoryDispatcher({
     memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql,
   });
-  tools.memory = tool({
+  tools.memory = permitInPlan(tool({
     description: renderToolSchemaDescription(memoryToolSpec(!!facts)),
     inputSchema: jsonSchema<MemoryToolInput>({
       type: 'object',
@@ -652,7 +657,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       required: ['action'],
     }),
     execute: async (args: MemoryToolInput) => runMemoryAction(args),
-  });
+  }));
 
   // ── 6. tasks — the agent's own task list and durable role ─────────────────
   // Unconditional, like `file` and `memory`: it needs one SQL handle and every
@@ -662,7 +667,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // codemode namespace (tasks-codemode.ts).
   const taskList = new TaskListStore(rt.storage.sql);
   const runTasksAction = createTasksDispatcher(taskList, createAgentConfigStore(rt.storage.sql), deps.roleAuthority);
-  tools.tasks = tool({
+  tools.tasks = permitInPlan(tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.tasks,
     inputSchema: jsonSchema<TasksToolInput>({
       type: 'object',
@@ -695,7 +700,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       required: ['action'],
     }),
     execute: async (args: TasksToolInput) => runTasksAction(args),
-  });
+  }));
 
   // ── 7. web — live web research (search / fetch) ───────────────────────────
   // One capability used as a pair: search discovers ranked results, fetch
@@ -706,7 +711,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // wired in each backend's execute_tools assembly.
   const webSearch = deps.webSearch;
   if (webSearch) {
-    tools.web = tool({
+    tools.web = permitInPlan(tool({
       description: BUILTIN_TOOL_DESCRIPTIONS.web,
       inputSchema: jsonSchema<WebToolInput>({
         type: 'object',
@@ -755,13 +760,13 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           return webErrorResult(err instanceof Error ? err : String(err));
         }
       },
-    });
+    }));
   }
 
   // ── 8. report — subordinate → parent progress spine ───────────────────────
   if (deps.report) {
     const report = deps.report;
-    tools.report = tool({
+    tools.report = permitInPlan(tool({
       description: BUILTIN_TOOL_DESCRIPTIONS.report,
       inputSchema: jsonSchema<ReportToolInput>({
         type: 'object',
@@ -779,7 +784,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       // validates its two arguments one way on both surfaces (this body used to
       // hand-check `content` and never check `status` at all).
       execute: async (args: ReportToolInput) => dispatchReport(report, args),
-    });
+    }));
   }
 
   // ── submit_plan — Plan mode's one completion surface ─────────────────────
@@ -787,7 +792,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // stable surface every turn can build. This tool exists only on a Plan turn,
   // where ActorAgent wires this dependency and adds the name to activeTools.
   if (deps.submitPlan) {
-    tools.submit_plan = tool({
+    tools.submit_plan = permitInPlan(tool({
       description: [
         'Submit the current Markdown implementation plan for interactive owner review.',
         'On the first call, write the full plan with one edit starting at line 1. After changes are requested, use the line numbers in the feedback turn to make targeted edits.',
@@ -824,7 +829,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           message: 'Plan submitted and awaiting review. Do not implement or produce a preview; end this turn now.',
         };
       },
-    });
+    }));
   }
 
   // No builtin may take the `mcp_` prefix (isMcpToolKey is the one predicate,
@@ -839,7 +844,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     }
   }
 
-  return tools;
+  return toolsInWorkMode(deps.workMode ?? 'build', tools);
 }
 
 /** Render search results model-ready: a ranked list of title + url + snippet
@@ -902,7 +907,7 @@ export function installExecuteTools(
         deps.toolSurfacing,
       )
     : {};
-  const built = build({ native: surface, craftedTools, providers: rt.executionRouter?.getProviders() ?? [] });
+  const built = build({ native: toolsInWorkMode(deps.workMode ?? 'build', surface), craftedTools, providers: rt.executionRouter?.getProviders() ?? [] });
   const clamp = { vfs: rt.storage.vfs, producer: 'execute_tools' as const };
   surface.execute_tools = withClampedToolResult(
     built,
@@ -946,7 +951,7 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
     const direct = { value: deps.executeTool };
     if (isExecutableToolEntry(direct)) builtin = { ...deps, preBuiltExecuteTool: deps.executeTool };
   }
-  const built = buildBuiltinTools(builtin);
+  const built = buildBuiltinTools(builtin.workMode === 'plan' ? { ...builtin, workMode: 'build' } : builtin);
   const narrowed = deps.admitted === undefined ? built : keepBuiltins(built, deps.admitted);
   const recorded = deps.wrapAdmitted === undefined ? narrowed : deps.wrapAdmitted(narrowed);
   const merged = deps.extra === undefined ? recorded : { ...recorded, ...deps.extra };
@@ -964,5 +969,6 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
     }
   }
   const finished = deps.post === undefined ? surface : { ...surface, ...deps.post };
-  return deps.wrapFinished === undefined ? finished : deps.wrapFinished(finished);
+  const modeBound = toolsInWorkMode(deps.workMode ?? 'build', finished);
+  return deps.wrapFinished === undefined ? modeBound : deps.wrapFinished(modeBound);
 }

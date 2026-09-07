@@ -32,6 +32,8 @@ export type ExecutorToolResult = JsonValue | undefined;
 
 export interface ExecutorTool {
   description: string;
+  /** Explicit producer contract: this operation is safe for Plan inspection/research. */
+  planAllowed?: boolean;
   execute: (...args: unknown[]) => Promise<ExecutorToolResult>;
 }
 

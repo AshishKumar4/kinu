@@ -88,14 +88,14 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
   };
 
   const tools: CodemodeProvider['tools'] = {
-    save: { description: 'Save a prose note or lesson too long to be a keyed value.', execute: dispatch('save') },
-    search: { description: 'Search memory notes (hybrid FTS5 + Vectorize when wired).', execute: dispatch('search') },
-    conversations: { description: 'Read this agent’s past conversation: search, scroll, or browse.', execute: dispatch('conversations') },
+    save: { planAllowed: true, description: 'Save a prose note or lesson too long to be a keyed value.', execute: dispatch('save') },
+    search: { planAllowed: true, description: 'Search memory notes (hybrid FTS5 + Vectorize when wired).', execute: dispatch('search') },
+    conversations: { planAllowed: true, description: 'Read this agent’s past conversation: search, scroll, or browse.', execute: dispatch('conversations') },
   };
   if (hasFacts) {
-    tools.remember = { description: 'Upsert a keyed fact you look up by name later.', execute: dispatch('remember') };
-    tools.recall = { description: 'Recall a keyed fact by name.', execute: dispatch('recall') };
-    tools.forget = { description: 'Forget a keyed fact by name.', execute: dispatch('forget') };
+    tools.remember = { planAllowed: true, description: 'Upsert a keyed fact you look up by name later.', execute: dispatch('remember') };
+    tools.recall = { planAllowed: true, description: 'Recall a keyed fact by name.', execute: dispatch('recall') };
+    tools.forget = { planAllowed: true, description: 'Forget a keyed fact by name.', execute: dispatch('forget') };
   }
 
   return {

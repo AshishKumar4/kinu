@@ -16,8 +16,10 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type {
   LanguageModelV2CallOptions,
   LanguageModelV2Usage,
+  LanguageModelV2StreamPart,
 } from '@ai-sdk/provider';
 import type { LLMProviderConfig } from '@kinu.run/core';
+import { inWorkMode } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
@@ -4409,4 +4411,43 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
     expect(rows.some((row) => row.type === 'model_operation' && row.source === 'judge')).toBe(true);
     await session.end();
   });
+});
+
+test('an authorized Build turn queued behind Plan regains native file authority', async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let step = 0;
+  const base = fakeModel('done');
+  const model = new TestLanguageModelV2({
+    provider: 'fake', modelId: 'fake-model', doGenerate: (options) => base.doGenerate(options),
+    doStream: async (options) => {
+      const current = step++;
+      if (current === 0) { entered.resolve(); await release.promise; }
+      if (current % 2 !== 0) return base.doStream(options);
+      return { stream: new ReadableStream<LanguageModelV2StreamPart>({
+        start(controller) {
+          controller.enqueue({ type: 'stream-start', warnings: [] });
+          controller.enqueue({ type: 'tool-call', toolCallId: 'file-' + current, toolName: 'file', input: JSON.stringify({ action: 'write', path: '/home/user/queued-build.txt', content: 'authorized Build' }) });
+          controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 } });
+          controller.close();
+        },
+      }) };
+    },
+  });
+  const { session, rt, events } = setup('done', model);
+  await session.setRole('planner');
+  const plan = inWorkMode('plan', () => session.send('Inspect without changes.'));
+  await entered.promise;
+  const build = session.send('Now implement the change.');
+  await session.setRole('general');
+  release.resolve();
+  await plan;
+  await build;
+  expect(await rt.storage.vfs.readFile('/home/user/queued-build.txt', { encoding: 'utf8' })).toBe('authorized Build');
+  const writes = events.filter((event) => event.type === 'tool-result' && event.toolName === 'file');
+  expect(writes).toHaveLength(2);
+  const refused = v.parse(v.object({ result: v.string() }), writes[0]);
+  expect(v.parse(v.pipe(v.string(), v.parseJson(), v.object({ reason: v.string() })), refused.result).reason).toBe('denied');
+  expect(writes[1]).toMatchObject({ success: true });
+  await session.end();
 });

@@ -249,6 +249,7 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
 
   for (const action of actions) {
     tools[action] = {
+      planAllowed: true,
       description: memberDescription(action, initialDeps),
       execute: async (...args: unknown[]) => {
         // The node sandbox appends its exec context as a trailing argument, so a

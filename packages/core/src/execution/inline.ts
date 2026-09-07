@@ -27,8 +27,9 @@ import { KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
-import { SlateOperationSchema, type SlateOperation, type SlateCallResult } from '../slates/rpc';
+import { SlateOperationSchema, requireSlateWorkMode, type SlateOperation, type SlateCallResult } from '../slates/rpc';
 import { SLATE_READ_MODELS } from '../slates/read-models';
+import { currentWorkMode } from './work-mode';
 import { TOOL_REACH } from '../tools/registry';
 import { createFileDispatcher } from '../tools/file-tool';
 import { TurnFileLedger } from '../tools/file-ledger';
@@ -163,6 +164,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
   const tools: ExecutorProvider['tools'] = {
     readFile: {
+      planAllowed: true,
       description: 'Read a file from the agent workspace. Returns content as string.',
       execute: async (...args: unknown[]) => {
         const p = parseInput(StringSchema, { value: args[0] });
@@ -214,6 +216,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     },
 
     readdir: {
+      planAllowed: true,
       description: 'List entries in a directory.',
       execute: async (...args: unknown[]) => {
         const path = parseInput(OptionalPathSchema, { value: args[0] });
@@ -228,6 +231,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     },
 
     exists: {
+      planAllowed: true,
       description: 'Check if a path exists.',
       execute: async (...args: unknown[]) => {
         const path = parseInput(StringSchema, { value: args[0] });
@@ -255,6 +259,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     },
 
     searchMemory: {
+      planAllowed: true,
       description: 'Search long-term memory using FTS5 full-text search. Returns matching chunks.',
       execute: async (...args: unknown[]) => {
         const query = parseInput(StringSchema, { value: args[0] });
@@ -278,6 +283,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     },
 
     listTools: {
+      planAllowed: true,
       description: 'List crafted tools as an array of { name, description, qualityScore }.',
       execute: async () => {
         // Return a real array so LLM code like `const tools = await workspace.listTools(); tools.filter(...)` works.
@@ -414,11 +420,13 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     },
 
     slate: {
+      planAllowed: true,
       description: 'Manage an authored slate: list, preview, call a POST route, commit source, history, fork a version, or restore source.',
       execute: async <Input>(input: Input): Promise<JsonValue> => {
         const parsed = v.safeParse(SlateOperationSchema, input);
         if (!parsed.success) return { ok: false, ...refusalOf(new KinuError('bad_input',
           'workspace.slate expects a named op and its declared fields', { cause: new v.ValiError(parsed.issues) })) };
+        requireSlateWorkMode(parsed.output, currentWorkMode());
         if (deps.slate === undefined) return { ok: false, ...refusalOf(new KinuError('unsupported',
           'This backend has no slate host')) };
         const result = await deps.slate(parsed.output);
