@@ -590,6 +590,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - The slate first-run gate requires an HTTP preview that answers the authored request. An unavailable preview fails both checks.
 - A head at the recursion limit can finish its own tool work. Exhausted split depth blocks new children, not the current head.
 - Recursive head splits now require the inherited parent budget. The unused three-level fallback and its request override were removed.
+- Cancelling a search stops its hosted swarm nodes. The search's abort now evicts each node's facet through the SDK's own abort, so a node mid-step stops instead of running its whole loop after the operator cancelled; the node settles as `aborted` under the cancel reason, its storage is reclaimed, and a search already cancelled boots no facet.
 - Shell approval patterns cover `rm -rf //`, `--no-preserve-root`, `| /bin/sh`, `| sudo sh`, `| dash`, plain `su`, chown flags, refspec-first `git push --force`, setgid modes, reversed `dd` on NVMe and virtio disks, and `mkfs -t`.
 - A release cannot record a staging or production deploy without a deploy command; a hostile default branch is refused and fetched as an explicit refspec; an exec result without an exit code fails closed.
 - A head that fails to spawn is recorded as errored and its siblings still merge.
