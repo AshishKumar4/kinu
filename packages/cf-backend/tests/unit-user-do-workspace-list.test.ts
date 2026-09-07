@@ -12,6 +12,7 @@ import {
 } from './helpers/user-do';
 import { handleUserRequest } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
+import { orchestratorHarness } from './helpers/actor-harness';
 
 const OVERFLOW = 205;
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -270,6 +271,24 @@ describe('a deletion that could not finish', () => {
 });
 
 describe('root-cloud title authority', () => {
+  test('a cold workspace status reads its generated title from the owner registry', async () => {
+    const user = createTestUserDO();
+    const owner = await testOwner();
+    const workspace = 'quiet-maple-a1b2c3d4';
+    await user.userDO.registerWorkspace(owner, workspace);
+    await user.userDO.setWorkspaceDisplayName(owner, workspace, 'Build the release dashboard', 'auto');
+    await user.userDO.ensureWorkspaceCapability(workspace, null);
+    const capability = user.installed.get(workspace);
+    if (capability === undefined) throw new Error('The workspace has no capability');
+    const actor = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId: USER_ID });
+    actor.agent.harnessHoldsCapability(capability);
+    try {
+      expect(await actor.agent.getAgentStatus()).toMatchObject({ displayName: 'Build the release dashboard' });
+    } finally {
+      actor.db.close();
+      user.close();
+    }
+  });
   test('registration records whose title it is and reads it back', async () => {
     const harness = createTestUserDO();
     const owner = await testOwner();
