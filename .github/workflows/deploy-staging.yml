@@ -1,30 +1,8 @@
 name: Deploy staging
 
-# staging.kinu.run served for days with nothing deploying it. Every push went to
-# production, staging drifted, and the eval tier — which points at staging by
-# default — was measuring a build nobody could name.
-#
-# This runs `scripts/deploy.sh staging`, which is the SAME script `bun run deploy`
-# runs against production. It is not a lighter path: the 53 required gates, the
-# CLI asset check and all six post-deploy smoke checks are the script's, not this
-# file's, so they cannot be absent here and present there.
-#
-# ON EVERY PUSH TO MAIN, so staging is the tip. Plus a daily run, because a deploy
-# that only happens on a push cannot catch the account drifting underneath a
-# Worker nobody has touched: `gate:infra` found staging's deployed version
-# predating the MonitorDO migration exactly that way.
-#
-# WHAT THIS CANNOT DO WITHOUT A PERSON. `CLOUDFLARE_API_TOKEN` has to be minted
-# in the dashboard by someone who can sign in there. Without it the script's
-# wrangler probe refuses and prints the scopes to ask for. It stops before the
-# build, so a missing token costs a red run and never a half-deployed staging.
-#
-# The token's SCOPE is also that person's decision and cannot be narrowed from
-# here: nothing in a repository can reduce what an account-scoped API token is
-# allowed to do. What this file can do, and does, is bind the token to one
-# GitHub environment and give the job no repository authority it does not use.
-# See docs/DEPLOYMENT.md § Staging deploys itself for the two settings an
-# operator has to make in the dashboard.
+# Staging is deferred while production is the direct deployment target.
+# Manual runs retain the normal deployment gates, asset checks and smoke checks.
+# The staging environment still owns its scoped Cloudflare credential.
 
 # The job reads the checkout and nothing else. Without this block the workflow
 # inherits whatever the repository's default token permissions happen to be,
@@ -34,10 +12,6 @@ permissions:
   contents: read
 
 on:
-  push:
-    branches: [main]
-  schedule:
-    - cron: '0 4 * * *'
   workflow_dispatch:
 
 # One staging deploy at a time. Two concurrent runs would race on the same Worker

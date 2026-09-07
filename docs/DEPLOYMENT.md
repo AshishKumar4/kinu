@@ -218,7 +218,7 @@ bun run deploy:staging        # staging, https://staging.kinu.run
 
 Both call `scripts/deploy.sh` (§ Deploy Script) with the environment as sole argument. One script, so the gates, CLI asset check and six smoke checks cannot exist for production and sit absent for staging.
 
-Staging also deploys itself, and the operator setup that needs is in § Staging deploys itself. The daily run catches account drift under a Worker nobody touched. That run is how `gate:infra` found staging predating the MonitorDO migration.
+Staging is currently deferred. Its manual workflow and credential setup remain available in § Manual staging deployment. Production is the direct deployment target.
 
 Never run bare `wrangler deploy`: it skips the CLI asset check, and production shipped assetless once. Downloads served the SPA shell while the site looked fine, killing every fresh install and update on checksum mismatch.
 
@@ -428,9 +428,9 @@ bun run deploy:staging
 
 That is `scripts/deploy.sh staging`, the same script production runs. It exports `CLOUDFLARE_ENV=staging` so Vite generates the config the deploy redirect points at, builds the CLI archive, deploys, and runs the six smoke checks against `staging.kinu.run`. No package deploys itself: `packages/cf-backend` once declared its own `deploy:staging` around a bare `wrangler deploy`, which skipped every gate and both asset checks, and `scripts/deploy.test.ts` now fails if a package script or a document names a second deploy path.
 
-#### Staging deploys itself
+#### Manual staging deployment
 
-`.github/workflows/deploy-staging.yml` runs `bun run deploy:staging` on every push to `main`, once a day, and on demand. The daily run is what catches the account drifting under a Worker nobody touched.
+`.github/workflows/deploy-staging.yml` runs `bun run deploy:staging` only on manual dispatch. Automatic main-push and daily staging deployments are disabled while staging is deferred. The deployment gates are unchanged.
 
 The job holds a Cloudflare credential, so it asks for a GitHub environment and for read-only repository permissions, installs its Lean toolchain from a checksum-verified release, and checks out with no persisted git token. Three things it cannot do for itself:
 
@@ -442,7 +442,7 @@ The job holds a Cloudflare credential, so it asks for a GitHub environment and f
 
 `scripts/release-config.test.ts` (required gate) holds these properties: every workflow declares its token permissions, every credential-bearing job names an environment, a credential-bearing job reachable from a pull request pins the base revision, no workflow pipes a download into a shell, and no action is used from a moving ref.
 
-Staging is the only target tests and evals may hit, so before an eval arm spends anything, verify it runs the branch you think:
+Live eval targets must be explicit. Staging remains the default for older runners; an authorized production run must use the runner's production allowance and real credentials, never the staging dev identity. Verify the deployed revision before spending:
 
 ```bash
 bun scripts/staging-preflight.ts            # refuses on a mismatch
