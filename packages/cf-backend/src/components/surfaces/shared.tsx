@@ -6,10 +6,6 @@
 import { memo, useCallback, useState, type ReactNode } from "react";
 import { CaretRightIcon, CopyIcon, ImageBrokenIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
-import { createBundledHighlighter, makeSingletonHighlighter } from "shiki/core";
-import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
-import { bundledLanguagesBase, bundledLanguagesInfo } from "shiki/langs";
-import { bundledThemes } from "shiki/themes";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -43,21 +39,6 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
   );
 }
 
-const getCodeHighlighter = makeSingletonHighlighter(createBundledHighlighter({
-  langs: bundledLanguagesBase,
-  themes: bundledThemes,
-  engine: () => createJavaScriptRegexEngine(),
-}));
-
-async function highlightCode(code: string, language: string) {
-  const name = language.toLowerCase();
-  const grammar = bundledLanguagesInfo.find((entry) => entry.id === name || entry.aliases?.includes(name));
-  if (grammar === undefined) return { code, language, html: null };
-  const highlighter = await getCodeHighlighter({ langs: [grammar.id], themes: ['github-light', 'vesper'] });
-  return { code, language, html: highlighter.codeToHtml(code, {
-    lang: grammar.id, themes: { light: 'github-light', dark: 'vesper' },
-  }) };
-}
 
 /** One code well for fences, tool inputs and source viewers. Unknown grammars
  * stay readable as plain text. One cached highlighter loads grammars on demand. */
@@ -65,7 +46,11 @@ export function CodeBlock({ children, className }: { children: React.ReactNode; 
   const { status, copy } = useCopy();
   const code = String(children).replace(/\n$/, "");
   const lang = className?.replace(/^language-/, "") ?? "";
-  const { resource, reload } = useAsyncResource(useCallback(() => highlightCode(code, lang), [code, lang]));
+  const { resource, reload } = useAsyncResource(useCallback(async () => {
+    if (!lang) return { code, language: lang, html: null };
+    const { highlightCode } = await import("./code-highlighter");
+    return highlightCode(code, lang);
+  }, [code, lang]));
   const html = resource.status === "ready" && resource.value.code === code && resource.value.language === lang
     ? resource.value.html : null;
   return (
