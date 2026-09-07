@@ -192,4 +192,37 @@ are algorithm and local store-port proofs. They do not establish a real
 daemon mount, a reset-safe retirement queue, reader lifetime protection or
 an amortized maintenance bound. The deployed v1 report is unchanged.
 
+## Directory page trees measured locally, 2026-09-06
+
+A directory record held every entry inline. One entry update rewrote the
+whole record, and one lookup read it whole. Entries now live in a page
+tree with a fanout of 64 (`DIR_ENTRIES_PER_PAGE`). Each node holds at
+most 64 entries or 64 child-page refs. A lookup reads one node per level.
+An update rewrites one node per level and reuses sibling pages by
+reference. A full listing reads every page.
+
+Measured on the local store port with one 7-byte file update in a
+directory of `width` siblings, PUT bytes for the whole seal and record
+reads for one path lookup after a fresh attach:
+
+| width | update PUT bytes | lookup reads | full-listing reads |
+|---|---|---|---|
+| 50 | 11,289 | 2 | 0 |
+| 500 | 15,790 | 3 | 7 |
+| 5,000 | 27,718 | 4 | 79 |
+| 50,000 | 30,115 | 4 | 793 |
+
+A 1,000x width increase costs one to two more tree levels. A fanout of 256
+was measured first and rejected: a full leaf was about 50 KiB, so a 2,000
+wide directory paid 53,649 B per update. Each entry carries two 64-hex
+digests and a name, about 200 B, which sets the leaf size. The listing
+cost is linear in width and is charged as such.
+
+The test `a wide directory pays for one path, not its width` pins the
+bound at 500 against 50,000 siblings. The v2, wire, sidecar and contract
+suites passed 70 tests. Update bytes above 500 siblings are dominated by
+the two 13 KiB leaf pages that hold the changed entry and the
+intermediate page above it; a compact entry encoding would cut that
+further and is not measured.
+
 

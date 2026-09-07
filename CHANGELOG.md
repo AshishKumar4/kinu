@@ -1033,6 +1033,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - The devbox driver can judge publication cuts with opt-in `--fault-cuts`. Local tests on 2026-09-06 proved CUT and NOT-CUT; unarmed storage operations stayed at 5 with zero added control RPCs.
 - The v2 devbox sidecar no longer reads GC inventory during lazy attach; a 2026-09-06 local probe reduced attach object bytes from 2,530/16,454 to 317/317 at 16/128 files.
 - Local v2 devbox regressions on 2026-09-06 exposed and fixed premature shared-pack deletion, dangling metadata after compaction, and loss of a concurrent publication.
+- Wide v2 devbox directories use 64-way page trees; a 2026-09-06 local probe held one-entry update PUT bytes at 15,790/30,115 and lookup reads at 3/4 for 500/50,000 siblings.
 
 ## [0.2.0] - 2026-08-07
 

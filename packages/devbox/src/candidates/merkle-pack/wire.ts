@@ -297,6 +297,24 @@ export interface DirEntryV2 {
   readonly ref: RecordRefV2;
 }
 
+/** One child page of a directory tree: the first name below it, how many
+ * entries it covers, and its height (0 names entries, k names pages). */
+export interface DirPageRefV2 extends RecordRefV2 {
+  readonly firstName: string;
+  readonly entries: number;
+  readonly height: number;
+}
+
+/** A directory node holds entries directly, or a full row of child pages. */
+export type DirEntriesV2 =
+  | { readonly kind: 'inline'; readonly entries: readonly DirEntryV2[] }
+  | { readonly kind: 'paged'; readonly pages: readonly DirPageRefV2[] };
+
+/** A directory node holds at most this many entries or child-page refs.
+ * Each entry carries about 200 B of names, digests and location, so a full
+ * leaf is about 13 KiB. One entry update rewrites one leaf per level. */
+export const DIR_ENTRIES_PER_PAGE = 64;
+
 export type FileExtentsV2 =
   | { readonly kind: 'inline'; readonly extents: readonly ExtentV2[] }
   | { readonly kind: 'paged'; readonly pages: readonly ExtentPageRefV2[] };
@@ -316,7 +334,7 @@ export type NodeV2 =
       readonly kind: 'dir';
       readonly mode: number;
       readonly ino: number;
-      readonly entries: readonly DirEntryV2[];
+      readonly entries: DirEntriesV2;
       readonly metadata?: PosixMetadataJson;
     }
   | {
@@ -326,7 +344,8 @@ export type NodeV2 =
       readonly target: string;
       readonly metadata?: PosixMetadataJson;
     }
-  | { readonly kind: 'page'; readonly extents: readonly ExtentV2[] };
+  | { readonly kind: 'page'; readonly extents: readonly ExtentV2[] }
+  | { readonly kind: 'dirpage'; readonly entries: DirEntriesV2 };
 
 const Positive = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
 const PackTableSchema = v.array(
@@ -352,6 +371,16 @@ const WireDirEntrySchema = v.strictObject({
   k: v.picklist(['file', 'dir', 'symlink']),
   ...WireRecordRefEntries,
 });
+const WireDirPageRefSchema = v.strictObject({
+  r: Hex64,
+  s: Hex64,
+  f: v.pipe(v.string(), v.minLength(1)),
+  p: Count,
+  o: Count,
+  l: Positive,
+  e: Positive,
+  h: Count,
+});
 
 const WireNodeV2Schema = v.variant('t', [
   v.strictObject({
@@ -372,7 +401,8 @@ const WireNodeV2Schema = v.variant('t', [
     m: ModeSchema,
     i: Count,
     P: PackTableSchema,
-    e: v.array(WireDirEntrySchema),
+    e: v.optional(v.array(WireDirEntrySchema)),
+    D: v.optional(v.array(WireDirPageRefSchema)),
     metadata: v.optional(PosixMetadataSchema),
   }),
   v.strictObject({
@@ -389,8 +419,16 @@ const WireNodeV2Schema = v.variant('t', [
     P: PackTableSchema,
     c: v.array(WireExtentSchema),
   }),
+  v.strictObject({
+    v: v.literal(2),
+    t: v.literal('D'),
+    P: PackTableSchema,
+    e: v.optional(v.array(WireDirEntrySchema)),
+    D: v.optional(v.array(WireDirPageRefSchema)),
+  }),
 ]);
 type WireNodeV2 = v.InferOutput<typeof WireNodeV2Schema>;
+type WireNodeV2Input = v.InferInput<typeof WireNodeV2Schema>;
 
 /** Sum of `length × count` over extents, or null past the safe range. */
 function extentSpan(extents: ReadonlyArray<{ l: number; n: number }>): number | null {
@@ -409,7 +447,9 @@ function packIndexes(node: Exclude<WireNodeV2, { t: 'l' }>): readonly number[] {
     case 'f':
       return node.c !== undefined ? node.c.map((extent) => extent.p) : (node.x ?? []).map((page) => page.p);
     case 'd':
-      return node.e.map((entry) => entry.p);
+      return node.e !== undefined ? node.e.map((entry) => entry.p) : (node.D ?? []).map((page) => page.p);
+    case 'D':
+      return node.e !== undefined ? node.e.map((entry) => entry.p) : (node.D ?? []).map((page) => page.p);
     default:
       return node.c.map((extent) => extent.p);
   }
@@ -463,9 +503,9 @@ function fileProblem(node: Extract<WireNodeV2, { t: 'f' }>): string | null {
   return null;
 }
 
-function dirProblem(node: Extract<WireNodeV2, { t: 'd' }>): string | null {
+function sortedEntriesProblem(entries: ReadonlyArray<{ n: string }>): string | null {
   let previous: string | null = null;
-  for (const entry of node.e) {
+  for (const entry of entries) {
     if (!canonicalChildName(entry.n)) return `directory entry name ${JSON.stringify(entry.n)} is not canonical`;
     if (previous === entry.n) return `directory entry ${JSON.stringify(entry.n)} repeats`;
     if (previous !== null && previous > entry.n) return `directory entries are not sorted at ${JSON.stringify(entry.n)}`;
@@ -474,8 +514,41 @@ function dirProblem(node: Extract<WireNodeV2, { t: 'd' }>): string | null {
   return null;
 }
 
+function dirTreeProblem(node: { readonly e?: ReadonlyArray<{ n: string }>; readonly D?: ReadonlyArray<v.InferOutput<typeof WireDirPageRefSchema>> }, root: boolean): string | null {
+  if ((node.e === undefined) === (node.D === undefined)) {
+    return 'a directory node names entries or child pages, exactly one of the two';
+  }
+  if (node.e !== undefined) {
+    if (node.e.length > DIR_ENTRIES_PER_PAGE) {
+      return `${node.e.length} inline entries exceed ${DIR_ENTRIES_PER_PAGE}; above that a directory names child pages`;
+    }
+    if (!root && node.e.length === 0) return 'a directory page holds at least one entry';
+    return sortedEntriesProblem(node.e);
+  }
+  const pages = node.D ?? [];
+  if (pages.length < 2) return 'child pages replace an entry list only above one page of entries';
+  if (pages.length > DIR_ENTRIES_PER_PAGE) {
+    return `${pages.length} child pages exceed ${DIR_ENTRIES_PER_PAGE}; a wider row needs another level`;
+  }
+  const height = pages[0]?.h ?? 0;
+  const capacity = DIR_ENTRIES_PER_PAGE ** (height + 1);
+  for (const [i, page] of pages.entries()) {
+    if (!canonicalChildName(page.f)) return `directory page ${i} starts at a non-canonical name`;
+    if (page.h !== height) return `directory page ${i} has height ${page.h}; its siblings have ${height}`;
+    if (page.e > capacity) return `directory page ${i} claims ${page.e} entries above a height-${height} capacity of ${capacity}`;
+    if (i < pages.length - 1 && page.e !== capacity) {
+      return `directory page ${i} covers ${page.e} entries; every page but the last is full at ${capacity}`;
+    }
+  }
+  return sortedEntriesProblem(pages.map((page) => ({ n: page.f })));
+}
+
+function dirProblem(node: Extract<WireNodeV2, { t: 'd' }>): string | null {
+  return dirTreeProblem(node, true);
+}
+
 function nonCanonical(node: WireNodeV2): string | null {
-  if (node.t !== 'x') {
+  if (node.t !== 'x' && node.t !== 'D') {
     const names = node.metadata === undefined ? [] : Object.keys(node.metadata.xattrs);
     for (let i = 1; i < names.length; i += 1) {
       if (names[i - 1] >= names[i]) return 'xattr names are not sorted';
@@ -489,6 +562,9 @@ function nonCanonical(node: WireNodeV2): string | null {
       break;
     case 'd':
       own = dirProblem(node);
+      break;
+    case 'D':
+      own = dirTreeProblem(node, false);
       break;
     default:
       own =
@@ -537,6 +613,71 @@ export function extentPagesV2(extents: readonly ExtentV2[]): readonly (readonly 
   }
   if (page.length > 0) pages.push(page);
   return pages;
+}
+
+export function sortDirEntriesV2(entries: readonly DirEntryV2[]): DirEntryV2[] {
+  return [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+function wireDirEntries(table: PackTable, entries: readonly DirEntryV2[]): v.InferInput<typeof WireDirEntrySchema>[] {
+  return sortDirEntriesV2(entries).map((entry) => ({
+    n: entry.name,
+    k: entry.kind,
+    r: entry.ref.id,
+    s: entry.ref.sha256,
+    p: table.indexOf(entry.ref.pack),
+    o: entry.ref.offset,
+    l: entry.ref.length,
+  }));
+}
+
+/** The wire spelling of a directory node's entries: `e` inline, or `D` pages. */
+type WireDirTree = Pick<Extract<WireNodeV2Input, { t: 'D' }>, 'e' | 'D'>;
+
+function wireDirTree(table: PackTable, entries: DirEntriesV2): WireDirTree {
+  if (entries.kind === 'inline') return { e: wireDirEntries(table, entries.entries) };
+  return {
+    D: entries.pages.map((page) => ({
+      r: page.id,
+      s: page.sha256,
+      f: page.firstName,
+      p: table.indexOf(page.pack),
+      o: page.offset,
+      l: page.length,
+      e: page.entries,
+      h: page.height,
+    })),
+  };
+}
+
+function resolveDirTree(
+  table: readonly string[],
+  entries: ReadonlyArray<v.InferOutput<typeof WireDirEntrySchema>> | undefined,
+  pages: ReadonlyArray<v.InferOutput<typeof WireDirPageRefSchema>> | undefined,
+): DirEntriesV2 {
+  if (entries !== undefined) {
+    return {
+      kind: 'inline',
+      entries: entries.map((entry) => ({
+        name: entry.n,
+        kind: entry.k,
+        ref: { id: entry.r, sha256: entry.s, pack: table[entry.p], offset: entry.o, length: entry.l },
+      })),
+    };
+  }
+  return {
+    kind: 'paged',
+    pages: (pages ?? []).map((page) => ({
+      id: page.r,
+      sha256: page.s,
+      firstName: page.f,
+      pack: table[page.p],
+      offset: page.o,
+      length: page.l,
+      entries: page.e,
+      height: page.h,
+    })),
+  };
 }
 
 /** Assigns pack indexes in first-use order; the table is what the record carries. */
@@ -610,24 +751,21 @@ function wireNodeV2(node: NodeV2): v.InferInput<typeof WireNodeV2Schema> {
       };
     }
     case 'dir': {
-      const entries = [...node.entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      const tree = wireDirTree(table, node.entries);
       return {
         v: 2,
         t: 'd',
         m: node.mode,
         i: node.ino,
         P: table.keys,
-        e: entries.map((entry) => ({
-          n: entry.name,
-          k: entry.kind,
-          r: entry.ref.id,
-          s: entry.ref.sha256,
-          p: table.indexOf(entry.ref.pack),
-          o: entry.ref.offset,
-          l: entry.ref.length,
-        })),
+        e: tree.e,
+        D: tree.D,
         metadata: wireMetadata(node.metadata),
       };
+    }
+    case 'dirpage': {
+      const tree = wireDirTree(table, node.entries);
+      return { v: 2, t: 'D', P: table.keys, e: tree.e, D: tree.D };
     }
     case 'symlink':
       return { v: 2, t: 'l', m: node.mode, i: node.ino, g: node.target, metadata: wireMetadata(node.metadata) };
@@ -702,15 +840,13 @@ export function decodeNodeV2(bytes: Uint8Array): NodeV2 {
         : { kind: 'file', mode: wire.m, ino: wire.i, size: wire.s, extents, holes: wire.h, metadata: wire.metadata };
     }
     case 'd': {
-      const entries = wire.e.map((entry) => ({
-        name: entry.n,
-        kind: entry.k,
-        ref: { id: entry.r, sha256: entry.s, pack: wire.P[entry.p], offset: entry.o, length: entry.l },
-      }));
+      const entries = resolveDirTree(wire.P, wire.e, wire.D);
       return wire.metadata === undefined
         ? { kind: 'dir', mode: wire.m, ino: wire.i, entries }
         : { kind: 'dir', mode: wire.m, ino: wire.i, entries, metadata: wire.metadata };
     }
+    case 'D':
+      return { kind: 'dirpage', entries: resolveDirTree(wire.P, wire.e, wire.D) };
     case 'l':
       return wire.metadata === undefined
         ? { kind: 'symlink', mode: wire.m, ino: wire.i, target: wire.g }

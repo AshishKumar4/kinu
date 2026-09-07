@@ -74,11 +74,12 @@ const inlineFile: NodeV2 = {
   metadata,
 };
 
+const dirEntries = [entry('a.txt', 'file', 1), entry('b', 'dir', 2, PACK_B), entry('link', 'symlink', 3, SELF_PACK)];
 const dir: NodeV2 = {
   kind: 'dir',
   mode: 0o755,
   ino: 1,
-  entries: [entry('a.txt', 'file', 1), entry('b', 'dir', 2, PACK_B), entry('link', 'symlink', 3, SELF_PACK)],
+  entries: { kind: 'inline', entries: dirEntries },
 };
 
 const symlink: NodeV2 = { kind: 'symlink', mode: 0o777, ino: 9, target: '../a.txt', metadata };
@@ -190,7 +191,7 @@ describe('merkle-pack/v2 canonical form', () => {
     const forward = encodeNodeV2({ ...dir, metadata });
     const shuffled: NodeV2 = {
       ...dir,
-      entries: [dir.entries[2], dir.entries[0], dir.entries[1]],
+      entries: { kind: 'inline', entries: [dirEntries[2], dirEntries[0], dirEntries[1]] },
       metadata: { ...metadata, xattrs: { 'user.b': 'Yg==', 'user.a': 'YQ==' } },
     };
     // The canonical DIGEST is pinned as a literal, not recomputed: this is
@@ -198,7 +199,7 @@ describe('merkle-pack/v2 canonical form', () => {
     // change to the canonical order is a wire break, not a refactor. Drift
     // fails this test by name, which is the point.
     expect(hashNodeV2Bytes(encodeNodeV2(shuffled))).toBe(hashNodeV2Bytes(forward));
-    const other = encodeNodeV2({ ...dir, metadata, entries: [...dir.entries].reverse() });
+    const other = encodeNodeV2({ ...dir, metadata, entries: { kind: 'inline', entries: [...dirEntries].reverse() } });
     expect(hashNodeV2Bytes(other)).toBe(hashNodeV2Bytes(forward));
     // A DIFFERENT record hashes differently, so the equality above is not
     // vacuous: the sorter orders, it does not erase.
@@ -221,7 +222,7 @@ describe('merkle-pack/v2 canonical form', () => {
 
   test('a repeated or unsorted directory name is refused, at encode and at decode', () => {
     expectRefused(
-      () => encodeNodeV2({ ...dir, entries: [dir.entries[0], entry('a.txt', 'dir', 5)] }),
+      () => encodeNodeV2({ ...dir, entries: { kind: 'inline', entries: [dirEntries[0], entry('a.txt', 'dir', 5)] } }),
       'invalid-parameter',
       /"a\.txt" repeats/u,
     );
@@ -230,7 +231,7 @@ describe('merkle-pack/v2 canonical form', () => {
     const bytes = new TextEncoder().encode(JSON.stringify(wire));
     expectRefused(() => decodeNodeV2(bytes), 'malformed-node', /not sorted at "b"/u);
     expectRefused(
-      () => encodeNodeV2({ ...dir, entries: [entry('..', 'dir', 5)] }),
+      () => encodeNodeV2({ ...dir, entries: { kind: 'inline', entries: [entry('..', 'dir', 5)] } }),
       'invalid-parameter',
       /name "\.\." is not canonical/u,
     );
