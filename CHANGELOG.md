@@ -601,6 +601,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- Recovery eval credit requires the authored seeded-test command on the workspace, an observed nonzero process exit, and its later successful rerun; unrelated failed/successful commands cannot substitute.
+- First-run and trajectory session-opening failures remain attempted cases with retained open errors and explicitly unavailable evidence channels. Unmeasured spend is not replaced by a fabricated zero.
+- Harbor build provenance includes untracked files and Git failures when deciding whether source is clean.
+
 - Sidebar ages align with the row's right edge. Fenced code and source previews show syntax colors and retain copy and scrolling.
 - Workers AI SDK requests now carry the configured reasoning effort to both the HTTP endpoint and native binding adapter. The policy defaults and output limits are unchanged.
 - Explicit Workers AI endpoints now receive the agent's replica pin; caller-supplied affinity headers retain precedence regardless of header case. No live cache or latency improvement is claimed.
