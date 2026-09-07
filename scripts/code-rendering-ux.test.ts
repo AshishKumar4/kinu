@@ -18,7 +18,7 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
         await page.goto(`${origin}/gallery.html?frame=coderendering`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('[data-code-sample="js"] code');
         await page.waitForFunction(() => document.fonts.status === 'loaded');
-        await page.waitForFunction(() => document.querySelectorAll('[data-code-sample="js"] code span').length > 1);
+        await page.waitForFunction(() => [...document.querySelectorAll('[data-code-sample]')].every((sample) => sample.getAttribute('data-code-sample') === 'unknown-language' || sample.querySelectorAll('code span').length > 1));
         const colors = await page.evaluate(() => [...document.querySelectorAll('[data-code-sample]')].map((sample) => {
           const code = sample.querySelector('code');
           const walker = document.createTreeWalker(code ?? sample, NodeFilter.SHOW_TEXT);
@@ -29,7 +29,7 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
           }
           return { language: sample.getAttribute('data-code-sample'), colors: [...ink] };
         }));
-        for (const sample of colors.filter((item) => item.language !== 'unknown-language' && item.language !== 'go' && item.language !== 'rust')) {
+        for (const sample of colors.filter((item) => item.language !== 'unknown-language')) {
           expect(sample.colors.length, `${mode} ${sample.language} syntax colors`).toBeGreaterThan(1);
         }
         const ages = await page.$$eval('aside ul > li', (rows) => rows.flatMap((row) => {
@@ -46,9 +46,12 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
         if (firstAge === undefined) throw new Error('no sidebar ages');
         for (const age of ages) expect(Math.abs(age.right - firstAge.right)).toBeLessThan(1);
         const updated = 'export const finished = "' + 'stream complete '.repeat(20) + '";\nconsole.log(finished);';
-        await page.$eval('textarea', (element) => { element.value = ''; });
-        await page.type('textarea', updated);
-        await page.waitForFunction((text) => document.querySelector('[data-code-sample="stream"] code')?.textContent === text, {}, updated);
+        await page.focus('textarea');
+        await page.keyboard.down('Control');
+        await page.keyboard.press('a');
+        await page.keyboard.up('Control');
+        await page.keyboard.sendCharacter(updated);
+        await page.waitForFunction((text) => document.querySelector('[data-code-sample="stream"] .shiki code')?.textContent === text, {}, updated);
         const streamed = await page.$eval('[data-code-sample="stream"]', (sample) => {
           const colors = new Set([...sample.querySelectorAll('code span')].map((token) => getComputedStyle(token).color));
           let scrollable = false;
@@ -62,9 +65,6 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
         expect(streamed.colors).toBeGreaterThan(1);
         expect(streamed.scrollable).toBeTrue();
         expect(await page.$eval('[data-code-sample="unknown-language"] code', (code) => code.textContent)).toBe('<script>unknown & safe</script>');
-        for (const [language, source] of [['go', 'package main'], ['rust', 'fn main() {}']]) {
-          expect(await page.$eval(`[data-code-sample="${language}"] code`, (code) => code.textContent)).toBe(source);
-        }
         await page.bringToFront();
         await page.$eval('[data-code-sample="stream"] button', (button) => button.click());
         await page.waitForFunction(() => document.querySelector('[data-code-sample="stream"] button')?.textContent?.includes('Copied'));
