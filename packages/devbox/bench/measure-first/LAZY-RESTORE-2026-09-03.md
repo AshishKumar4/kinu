@@ -502,6 +502,24 @@ already exists. It does not prove a cold mount on a replacement container.
 Fence-coupled namespace export and lazy remote page lookup remain admission
 requirements. No cloud pilot or storage promotion follows from this step.
 
+## Immutable daemon selection, 2026-09-07
+
+The runtime and sidecar suites used the shared Docker tag
+`kinu-journal-daemon:matrix`. A concurrent worktree could replace that tag
+between build and run. The tag resolved to image `09ba54401c23`, and the
+sidecar reader counted zero WAL bytes for 3,148,667 bytes written. The
+intended namespace image was `06f762496879`. Each suite now obtains an
+immutable image ID through Docker `--iidfile` and uses it for execution
+and cleanup. It neither reads nor updates a shared daemon tag.
+
+Running the intended image exposed a separate data-loss case. A new
+single-link file written before an ancestor directory rename disappeared
+from the restored tree. The fence resolved aliases only for hardlinks.
+It now resolves every written logical inode through the index. The same
+real-mount scenario covers single-link and hardlink updates, ancestor
+rename and restart. Both daemon suites pass with immutable image IDs.
+
+
 
 
 

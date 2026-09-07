@@ -7,11 +7,11 @@ import { captureFromJournalDelta, readJournalDelta } from '../src/capture/journa
 import { buildMerklePack, openMerklePack } from '../src/candidates/merkle-pack';
 import { MemoryCandidateObjectSink, readStagedCandidateObjectForTest } from '../src/candidates/publication';
 import type { ExportedFence, MatrixReport, ScenarioReport } from './journal-daemon-runtime-types';
+import { buildJournalDaemonImage } from './support/journal-daemon-image';
 
 const packageRoot = resolve(dirname(new URL(import.meta.url).pathname), '..');
 const testsRoot = join(packageRoot, 'tests');
 const daemonContext = join(packageRoot, 'bench', 'journal-daemon');
-const image = 'kinu-journal-daemon:matrix';
 const probeSource = join(testsRoot, 'journal-daemon-runtime-probe.c');
 const matrixEntry = join(testsRoot, 'journal-daemon-runtime-matrix.ts');
 /* The sealed stage and the tree it copies must live on a filesystem that keeps
@@ -41,11 +41,16 @@ const exportBase = '/var/tmp';
 const NARROWED = process.env.KINU_RUNTIME_SCENARIO;
 
 const exported: string[] = [];
+const exportImages = new Map<string, string>();
 /* The daemon writes the export as root, so the image that ran it removes what it
  * left: the host only ever owns the temporary directory itself. */
 afterAll(async () => {
   for (const dir of exported.splice(0)) {
-    await run(['docker', 'run', '--rm', '-v', `${dir}:${dir}`, '--entrypoint', 'find', image, dir, '-mindepth', '1', '-delete']);
+    const image = exportImages.get(dir);
+    if (image !== undefined) {
+      const cleaned = await run(['docker', 'run', '--rm', '-v', `${dir}:${dir}`, '--entrypoint', 'find', image, dir, '-mindepth', '1', '-delete']);
+      if (cleaned.code !== 0) throw new Error(`Daemon export cleanup failed: ${cleaned.stderr}`);
+    }
     await rm(dir, { recursive: true });
   }
 });
@@ -64,8 +69,8 @@ async function run(cmd: string[]): Promise<{ code: number; stdout: string; stder
 async function runMatrix(exportDir: string): Promise<MatrixReport> {
   /* The image compiles the daemon with -Wall -Wextra -Werror -Wpedantic, so a
    * successful build is the proof that the C sources stay warning free. */
-  const built = await run(['docker', 'build', '-t', image, daemonContext]);
-  if (built.code !== 0) throw new Error(`daemon image build failed:\n${built.stderr.slice(-4000)}`);
+  const image = await buildJournalDaemonImage(daemonContext);
+  exportImages.set(exportDir, image);
 
   const script = [
     'cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O2',

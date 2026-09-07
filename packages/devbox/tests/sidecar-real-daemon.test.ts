@@ -16,11 +16,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import * as v from 'valibot';
+import { buildJournalDaemonImage } from './support/journal-daemon-image';
 
 const packageRoot = resolve(dirname(new URL(import.meta.url).pathname), '..');
 const repoRoot = resolve(packageRoot, '../..');
 const daemonContext = join(packageRoot, 'bench', 'journal-daemon');
-const image = 'kinu-journal-daemon:matrix';
 const runner = join(packageRoot, 'tests', 'sidecar-real-daemon-run.ts');
 
 const ReportSchema = v.object({
@@ -105,8 +105,7 @@ async function withR2Endpoint<T>(body: (endpoint: string) => Promise<T>): Promis
 }
 
 async function runSidecar(endpoint?: string): Promise<Report> {
-  const built = await run(['docker', 'build', '-t', image, daemonContext]);
-  if (built.code !== 0) throw new Error(`daemon image build failed:\n${built.stderr.slice(-4000)}`);
+  const image = await buildJournalDaemonImage(daemonContext);
   const dependencies = dependencyRoot();
   const mounts = [
     '-v', `${repoRoot}:${repoRoot}:ro`,
