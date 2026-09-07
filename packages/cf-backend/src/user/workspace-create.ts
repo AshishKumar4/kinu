@@ -5,7 +5,7 @@ import {
   defaultSpecFor,
   effortFor,
   workspaceTitlePrompt,
-  fallbackWorkspaceIdentity,
+  fallbackWorkspaceIdentity, workspaceAddressRefusal,
   parseWorkspaceTitle,
   renderSoulMarkdown,
   isReasoningEffort,
@@ -228,6 +228,11 @@ function createInitialCloudAgentIdentity(
 ): InitialCloudAgentIdentity {
   const requestedName = input.name?.trim();
   if (requestedName) {
+    // A workspace's name is its object's address and cannot change after
+    // creation, so a name no preview hostname could carry is refused here, with
+    // the limit, rather than admitted as a workspace whose ports never preview.
+    const refusal = workspaceAddressRefusal(requestedName);
+    if (refusal !== null) throw new Error(`Invalid workspace name: ${refusal}`);
     return {
       name: requestedName,
       displayName: input.displayName?.trim() || requestedName,

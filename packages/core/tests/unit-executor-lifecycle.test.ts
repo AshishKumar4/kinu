@@ -201,7 +201,8 @@ describe("executor lifecycle state", () => {
       available: false,
       status: "not_configured",
     });
-    expect(await executor.tools.exec.execute("echo ok")).toContain("not configured");
+    expect(await executor.tools.exec.execute("echo ok"))
+      .toMatchObject({ reason: 'unavailable', error: expect.stringContaining('not configured') });
     expect(await executor.tools.exposePort.execute(3000)).toContain("not configured");
     const provided = await executor.exposePort!(3000);
     expect(provided.supported).toBe(false);
@@ -289,7 +290,7 @@ describe("executor lifecycle state", () => {
     expect(readies).toBe(2);
     // ...while the creation ran exactly once, and its failure is stated.
     expect(starts).toBe(1);
-    expect(String(out)).toContain("network connection lost");
+    expect(out).toMatchObject({ error: expect.stringContaining('network connection lost') });
   });
 
   test("Nimbus adapter uses the SDK sandbox handle shape", async () => {

@@ -31,8 +31,8 @@ import type { VFS } from '../types/primitives';
 import { makeVfsError, type VfsErrorCode } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
-import { formatExecResult, refusalText } from './exec-result';
-import { KinuError } from '../obs/index';
+import { commandResult, COMMAND_RESULT_TYPE, refusalText } from './exec-result';
+import { KinuError, refusalOf } from '../obs/index';
 
 type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
 
@@ -144,7 +144,7 @@ const TYPES = `declare namespace parent {
    * coreutils, pipes, redirects and loops its own agent has. This is the fast
    * way to search it: \`grep -rn TODO .\`, \`find . -name '*.ts'\`.
    */
-  function exec(command: string): Promise<string>;
+  function exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;
 }`;
 
 /**
@@ -248,10 +248,10 @@ export function createParentExecutor(deps: {
           // code it arrived with.
           const command = parseInput(StringSchema, { value: args[0] });
           if (command === undefined) {
-            return refusalText(new KinuError('bad_input', 'parent exec: command must be a string'));
+            return refusalOf(new KinuError('bad_input', 'parent exec: command must be a string'));
           }
           const signal = readExecSignal({ context: args[1] });
-          return formatExecResult(value(await raceAbort(
+          return commandResult(value(await raceAbort(
             () => deps.handle.exec(command),
             signal,
             'parent exec aborted — the command may still finish in the parent workspace',

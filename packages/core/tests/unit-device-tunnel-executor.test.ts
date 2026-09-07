@@ -331,9 +331,9 @@ describe('createDeviceTunnelExecutor', () => {
     // it: `unavailable` is what puts a device that is not attached in the census's
     // platform part instead of counting it against the tool. Asserting the prose
     // alone is what let this ship as a value no reader could see was a failure.
-    expect(JSON.parse(String(fromHub))).toMatchObject({ reason: 'unavailable' });
+    expect(fromHub).toMatchObject({ reason: 'unavailable' });
     expect(JSON.parse(String(fromTunnel))).toMatchObject({ reason: 'unavailable' });
-    expect(fromHub).toContain('kinu connect');
+    expect(fromHub).toMatchObject({ error: expect.stringContaining('kinu connect') });
     expect(fromTunnel).toContain('kinu connect');
     await expect(createDeviceTunnelExecutor(hubRejects).connect()).rejects.toThrow('kinu connect');
   });
@@ -344,7 +344,7 @@ describe('createDeviceTunnelExecutor', () => {
     });
     // `io`, not `unavailable`: the device answered and its filesystem said no.
     // Pooling the two would read a permission problem as an absent machine.
-    expect(JSON.parse(String(await createDeviceTunnelExecutor(t).tools.exec.execute('ls')))).toEqual({
+    expect(await createDeviceTunnelExecutor(t).tools.exec.execute('ls')).toEqual({
       reason: 'io',
       error: 'laptop exec `ls`: permission denied',
     });

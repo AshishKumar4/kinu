@@ -9,7 +9,7 @@ import {
   type DeviceTransport,
 } from '../src/execution/device-tunnel-executor';
 import { deviceFleetAsk, type DeviceFleetEntry, type DeviceStatus } from '../src/execution/device-status';
-import { parseRefusal } from '../src/execution/exec-result';
+import { answeredRefusal, parseRefusal, type CommandResult } from '../src/execution/exec-result';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { toolExecute } from '@kinu.run/test-utils';
@@ -73,8 +73,7 @@ describe('the device fleet at the executor surface', () => {
     const t = fleetTransport([STUDIO, RIG, SPARE]);
     const provider = createDeviceTunnelExecutor(t);
 
-    const answer = String(await provider.tools.exec.execute('make'));
-    const refusal = parseRefusal(answer);
+    const refusal = answeredRefusal(await provider.tools.exec.execute('make') ?? null);
 
     expect(refusal?.reason).toBe('bad_input');
     // The ask names every LIVE machine with its platform, and nothing else:
@@ -92,7 +91,7 @@ describe('the device fleet at the executor surface', () => {
     const t = fleetTransport([STUDIO, RIG, SPARE]);
     const provider = createDeviceTunnelExecutor(t);
 
-    const offline = parseRefusal(String(await provider.tools.exec.execute('ls', { device: 'spare box' })));
+    const offline = answeredRefusal(await provider.tools.exec.execute('ls', { device: 'spare box' }) ?? null);
     const unknown = parseRefusal(String(await provider.tools.readFile.execute('/etc/hosts', { device: 'toaster' })));
 
     expect(offline?.reason).toBe('unavailable');
@@ -155,7 +154,7 @@ describe('the device fleet at the executor surface', () => {
     expect(bare.sent).toEqual([{ method: 'exec', params: ['echo hi'], deviceId: undefined }]);
     // A NAME cannot be matched without the fleet, and that is said rather
     // than sent to whichever machine the hub would pick.
-    const named = parseRefusal(String(await provider.tools.exec.execute('echo hi', { device: 'ashish@studio' })));
+    const named = answeredRefusal(await provider.tools.exec.execute('echo hi', { device: 'ashish@studio' }) ?? null);
     expect(named?.reason).toBe('unavailable');
     expect(named?.error).toContain('not known here yet');
   });
@@ -242,7 +241,7 @@ describe('the run tool names the machine', () => {
     const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router } });
     return {
       t,
-      run: toolExecute<{ command: string; runtime: string; device?: string; why?: string }, string>(tools.run),
+      run: toolExecute<{ command: string; runtime: string; device?: string; why?: string }, CommandResult>(tools.run),
     };
   }
 
@@ -252,7 +251,7 @@ describe('the run tool names the machine', () => {
     expect(await run({ command: 'uname', runtime: 'laptop', device: 'mrwhite@rig', why: 'their GPU' })).toBe('ran on dev-rig');
     expect(t.sent.map((frame) => frame.deviceId)).toEqual(['dev-rig']);
 
-    const refusal = parseRefusal(await run({ command: 'uname', runtime: 'laptop', why: 'their GPU' }));
+    const refusal = answeredRefusal(await run({ command: 'uname', runtime: 'laptop', why: 'their GPU' }));
     expect(refusal?.reason).toBe('bad_input');
     expect(refusal?.error).toContain('name the machine this command runs on');
     expect(t.sent).toHaveLength(1);

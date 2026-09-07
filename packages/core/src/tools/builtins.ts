@@ -89,14 +89,14 @@ import { filterByEffectiveScore } from '../craft/ema';
 import { attributeCraftedFailure } from '../craft/attribution';
 import { craftedToolDescription } from './sandbox-contract';
 import { DEFAULT_CONFIG } from '../config';
-import { formatExecResult, isFailingResultText, refusalText } from '../execution/exec-result';
+import { commandResult, CommandResultSchema, type CommandResult } from '../execution/exec-result';
 import { TurnEscalationLedger } from '../execution/escalation';
 import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool';
 import { createTasksDispatcher, type TasksToolInput } from './tasks-tool';
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index';
 import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review';
 import type { JsonValue } from '../utils/json';
-import { diagnostics, KinuError, renderThrownChain, toKinuError, type Logger } from '../obs/index';
+import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError, type Logger } from '../obs/index';
 // The admitted-set filter beside the sets it narrows (heads/types.ts). That
 // module holds no runtime import, so this edge cannot close a ring.
 import { keepBuiltins } from '../heads/types';
@@ -491,8 +491,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       // uses that shape (run-file-steer.ts) — outside the clamp, so the note is
       // never the part that gets truncated.
       const steer = fileToolSteer(args.command);
-      const clamp = async (text: string) => {
+      const clamp = async (result: CommandResult): Promise<CommandResult> => {
+        const text = v.is(v.string(), result) ? result : result.error;
         const clamped = await clampToolResult(text, { vfs: rt.storage.vfs, budget, producer: 'run' });
+        if (!v.is(v.string(), result)) return { ...result, error: clamped };
         return steer ? `${steer}\n\n${clamped}` : clamped;
       };
       const defaultRuntime = 'workspace';
@@ -504,9 +506,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
             'no workspace shell available in this runtime',
           );
           logger.failure(RUN_SHELL_ABSENT, refusal, { runtime: runtimeKey });
-          return refusalText(refusal);
+          return refusalOf(refusal);
         }
-        return clamp(formatExecResult(await shell.exec(args.command, signal ? { signal } : undefined)));
+        return clamp(commandResult(await shell.exec(args.command, signal ? { signal } : undefined)));
       }
       // Everything below this line is an ESCALATION: the work is leaving this
       // agent's own shell for an environment that must be provisioned, costs a
@@ -529,7 +531,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         // install card matches on it (cf-backend WorkspacePage.tsx:76-80).
         const refusal = new KinuError('unavailable', 'runtime_not_provisioned');
         logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
-        return JSON.stringify({
+        return {
           reason: refusal.code,
           error: refusal.message,
           runtime: runtimeKey,
@@ -539,7 +541,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               : runtimeKey === 'sandbox'
                 ? 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use — retry.'
                 : `Runtime "${runtimeKey}" is not registered.`,
-        });
+        };
       }
       const execTool = provider.tools.exec;
       if (!execTool) {
@@ -549,20 +551,20 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         // to keep those apart.
         const refusal = new KinuError('unsupported', 'runtime_does_not_support_exec');
         logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
-        return JSON.stringify({
+        return {
           reason: refusal.code,
           error: refusal.message,
           runtime: runtimeKey,
           message: `Runtime "${runtimeKey}" is provisioned but does not expose shell exec.`,
-        });
+        };
       }
       // The trailing context every executor's exec reads: the abort signal,
       // and — for a device runtime — which of the user's machines the command
       // is for. An executor with no fleet ignores the device.
       const context = { signal, device: args.device };
-      let result: string;
+      let result: CommandResult;
       try {
-        result = String(await execTool.execute(args.command, context));
+        result = v.parse(CommandResultSchema, await execTool.execute(args.command, context));
       } catch (caught) {
         // A remote executor that cannot kill an in-flight command stops WAITING
         // and throws (execution/signal.ts), and the platform's own memory wall
@@ -577,15 +579,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         });
         escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'failed' });
         logger.failure(RUN_ESCALATION_FAILED, failure, { runtime: runtimeKey });
-        return refusalText(failure);
+        return refusalOf(failure);
       }
-      // The ONE failure predicate (exec-result.ts). A non-zero exit comes back
-      // as an ordinary successful result prefixed `Error (exit N)`, so reading
-      // the transport discriminator here would score every failed command a win.
       escalations.observe({
         runtime: runtimeKey,
         reason: args.why,
-        outcome: isFailingResultText(result) ? 'failed' : 'ok',
+        outcome: v.is(v.string(), result) ? 'ok' : 'failed',
       });
       return clamp(result);
     },

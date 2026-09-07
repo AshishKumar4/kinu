@@ -142,9 +142,7 @@ import {
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
   isWorkspaceUnattachedError, WORKSPACE_HAS_NO_OWNER, isDeviceAmbiguityError,
-  // The one definition of "this executor output is a failure", shared with the
-  // renderer that produces both shapes it recognises.
-  isFailingResultText,
+  CommandResultSchema,
   type CheckpointAvailability, type FileCheckpointListing,
   type FileRestorePlan, type FileRestoreResult,
   // Shared turn lifecycle
@@ -230,7 +228,7 @@ import {
   TURN_AUTHOR_METADATA_KEY,
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu.run/core";
-import { classify, diagnostics, KinuError, renderCauseChain, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { deleteExplorationFacet, reconcileExplorationFacets, type ExplorationFacetLedgerStatus } from "./facet-spawn";
@@ -4253,38 +4251,36 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable() async executeInExecutor(executorId: string, command: string, device?: string) {
     const provider = this.rt.executionRouter?.getProvider(executorId);
-    if (!provider) return { error: `Executor "${executorId}" not found` };
-    if (!provider.isAvailable()) return { error: `Executor "${executorId}" is not available` };
+    if (!provider) return { error: `Executor "${executorId}" not found`,
+      refusal: refusalOf(new KinuError('missing', `Executor "${executorId}" not found`)) };
+    if (!provider.isAvailable()) return { error: `Executor "${executorId}" is not available`,
+      refusal: refusalOf(new KinuError('unavailable', `Executor "${executorId}" is not available`)) };
 
     const execTool = provider.tools.exec;
-    if (!execTool) return { error: `Executor "${executorId}" has no exec tool` };
+    if (!execTool) return { error: `Executor "${executorId}" has no exec tool`,
+      refusal: refusalOf(new KinuError('unsupported', `Executor "${executorId}" has no exec tool`)) };
     // The fleet names its machine per call (docs/EXECUTION-LAYER-SPEC.md
     // "The user's account is a fleet"): device rides as the tool context
     // the laptop executor reads (readDeviceSelection), and a call that
     // carries none keeps today's unnamed answer. Tools that read no context
     // never see one.
     try {
-      const result = device === undefined ? await execTool.execute(command) : await execTool.execute(command, { device });
-      const stdout = v.is(v.string(), result) ? result : JSON.stringify(result);
-      // The ONE failure predicate (core execution/exec-result.ts). What stood here
-      // was a third prose matcher listing `exec error:`, `read error:` and friends
-      // — prefixes no executor writes any more, and one that never matched the
-      // shapes that mattered: an unconfigured sandbox and an unattached laptop
-      // both drew as exit 0 in this terminal. The refusal payload those now return
-      // is one of the two shapes `isFailingResultText` is defined over.
-      const isError = isFailingResultText(stdout);
+      const result = v.parse(CommandResultSchema, device === undefined ? await execTool.execute(command) : await execTool.execute(command, { device }));
+      const output = v.is(v.string(), result)
+        ? { stdout: result, stderr: '', exitCode: 0 }
+        : { stdout: result.error, stderr: result.error, exitCode: 1, refusal: result };
 
       void this.sql`INSERT INTO executor_output (executor, command, stdout, stderr, exit_code)
-        VALUES (${executorId}, ${command}, ${stdout}, ${isError ? stdout : ''}, ${isError ? 1 : 0})`;
+        VALUES (${executorId}, ${command}, ${output.stdout}, ${output.stderr}, ${output.exitCode})`;
 
       this.broadcast(JSON.stringify({
-        type: 'executor-output', executor: executorId, command, stdout,
-        stderr: isError ? stdout : '', exitCode: isError ? 1 : 0, timestamp: Date.now(),
+        type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now(),
       }));
 
-      return { stdout, stderr: isError ? stdout : '', exitCode: isError ? 1 : 0 };
+      return output;
     } catch (err) {
-      const errMsg = renderThrownChain({ cause: err });
+      const refusal = refusalOf(toKinuError({ doing: 'execute on ' + executorId, cause: err, otherwise: 'io' }));
+      const errMsg = refusal.error;
       void this.sql`INSERT INTO executor_output (executor, command, stderr, exit_code)
         VALUES (${executorId}, ${command}, ${errMsg}, ${1})`;
       // Broadcast on error too — symmetric with the success branch above.
@@ -4292,9 +4288,9 @@ export class OrchestratorAgent extends ActorAgent {
       // it renders only from broadcasts. (STABILITY-AUDIT §B4.)
       this.broadcast(JSON.stringify({
         type: 'executor-output', executor: executorId, command, stdout: '',
-        stderr: errMsg, exitCode: 1, timestamp: Date.now(),
+        stderr: errMsg, exitCode: 1, refusal, timestamp: Date.now(),
       }));
-      return { error: errMsg, exitCode: 1 };
+      return { error: errMsg, exitCode: 1, refusal };
     }
   }
 

@@ -40,7 +40,7 @@
  */
 
 import * as v from 'valibot';
-import { ERROR_CODES, refusalOf, tolerate, type KinuError, type Refusal } from '../obs/index';
+import { ERROR_CODES, refusalOf, tolerate, KinuError, type Refusal } from '../obs/index';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../tools/file-edit';
 
@@ -55,6 +55,7 @@ export interface ExecOutcome {
   readonly stdout?: string;
   readonly stderr?: string;
   readonly exitCode?: number;
+  readonly refusal?: Refusal;
 }
 
 export const STDOUT_LABEL = '--- stdout ---';
@@ -82,8 +83,8 @@ export const NO_OUTPUT = '(no output)';
  * `tools/file-tool.ts` returns its refusals and `run`'s escalation paths return
  * theirs.
  */
-export function refusalText(error: KinuError): string {
-  return JSON.stringify(refusalOf(error));
+export function refusalText(error: KinuError | Refusal): string {
+  return JSON.stringify(error instanceof KinuError ? refusalOf(error) : { reason: error.reason, error: error.error });
 }
 
 /**
@@ -109,8 +110,8 @@ export function parseRefusal(result: string): Refusal | null {
 /**
  * The refusal a codemode member ANSWERED with, or null when its answer is a value.
  *
- * A provider member returns rather than throws (see `refusalText`), so a script
- * can branch; a caller that hands the answer on as a RESULT — a slate binding —
+ * A provider member returns rather than throws, so a script can branch;
+ * a caller that hands the answer on as a RESULT — a slate binding —
  * must recover the class. Two OBJECT shapes and only two, each the exact payload
  * its producer writes: an `ErrorCode` refusal (`refusalOf`) and a file-plane
  * verdict, which is the caller's own unmet precondition and so `bad_input`. A
@@ -126,7 +127,20 @@ export function answeredRefusal(payload: JsonValue): Refusal | null {
   return null;
 }
 
+/** Command data stays text; execution failures retain their producer's class. */
+export type CommandResult = string | Refusal;
+export const CommandResultSchema = v.union([v.string(), RefusalSchema]);
+export const COMMAND_RESULT_TYPE = 'string | { reason: '
+  + ERROR_CODES.map((code) => JSON.stringify(code)).join(' | ') + '; error: string }';
+
+export function commandResult(result: ExecOutcome): CommandResult {
+  if (result.refusal !== undefined) return result.refusal;
+  const output = formatExecResult(result);
+  return (result.exitCode ?? 0) === 0 ? output : { reason: 'io', error: output };
+}
+
 export function formatExecResult(result: ExecOutcome): string {
+  if (result.refusal !== undefined) return refusalText(result.refusal);
   const stdout = result.stdout ?? '';
   const stderr = result.stderr ?? '';
   const exitCode = result.exitCode ?? 0;

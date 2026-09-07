@@ -274,3 +274,49 @@ test('source capture does not retain a previous caller supplementary group', asy
   expect(await parent.agent.slateAs(grouped, { op: 'commit', id: 'group-source' })).toMatchObject({ ok: true });
   expect(await parent.agent.slateAs(ungrouped, { op: 'commit', id: 'group-source' })).toMatchObject({ ok: false, reason: 'denied' });
 });
+
+test('a command the approval ladder stops answers every surface with its class, and never runs', async () => {
+  const actor = orchestratorHarness();
+  const files = actor.agent.observeRuntime().storage.vfs;
+  await files.mkdir('/home/user/slates/shell', { recursive: true });
+  await files.writeFile('/home/user/slates/shell/package.json', JSON.stringify({
+    main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace', members: ['exec'] } } },
+  }));
+  const marker = '/home/user/never-written.txt';
+  const gated = 'npm publish --dry-run && printf ran > ' + marker;
+  const binding = (command = gated) => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'shell', 'FILES', { member: 'exec', args: [command], depth: 0 });
+  const codemode = () => {
+    const workspace = (actor.agent.observeRuntime().executionRouter?.getProviders() ?? []).find((provider) => provider.name === 'workspace');
+    if (workspace === undefined) throw new Error('No workspace provider');
+    return workspace.tools.exec.execute(gated);
+  };
+
+  await actor.agent.setShellApprovalMode('deny_all');
+  expect(await binding()).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await codemode()).toMatchObject({ reason: 'denied' });
+  expect(await actor.agent.executeInExecutor('workspace', gated)).toMatchObject({ refusal: { reason: 'denied' } });
+  expect(await files.stat(marker)).toBeNull();
+
+  await actor.agent.setShellApprovalMode('strict');
+  const parked = await binding();
+  expect(parked).toMatchObject({ ok: false, reason: 'unavailable' });
+  expect(await codemode()).toMatchObject({ reason: 'unavailable' });
+  expect(await actor.agent.executeInExecutor('workspace', gated)).toMatchObject({ refusal: { reason: 'unavailable' } });
+  expect(await files.stat(marker)).toBeNull();
+  const queued = await actor.agent.listDeferredApprovals();
+  expect(queued).toMatchObject([{ status: 'queued', command: gated, executor: 'workspace' }]);
+  await actor.agent.decideDeferredApprovals(queued.map((action) => action.id), 'denied');
+  expect(await binding()).toMatchObject({ ok: false, reason: 'denied' });
+
+  await actor.agent.setShellApprovalMode('allow_all');
+  const incident = JSON.stringify({ reason: 'denied', error: 'historical incident' });
+  await files.writeFile('/home/user/incident.json', incident);
+  expect(await binding('cat /home/user/incident.json')).toEqual({ ok: true, value: incident });
+  expect(await actor.agent.executeInExecutor('workspace', 'cat /home/user/incident.json'))
+    .toEqual({ stdout: incident, stderr: '', exitCode: 0 });
+  expect(await actor.agent.executeInExecutor('workspace', 'echo failed; echo detail >&2; exit 1'))
+    .toMatchObject({ exitCode: 1, refusal: { reason: 'io', error: expect.stringContaining('detail') } });
+  const failed = await binding('printf ran > ' + marker + '; exit 1');
+  expect(failed).toMatchObject({ ok: false, reason: 'io' });
+  expect(await files.readFile(marker, { encoding: 'utf8' })).toBe('ran');
+});

@@ -645,7 +645,7 @@ export type ApprovalSpendOutcome =
 export interface DeferredApprovalChannel {
   park(req: ShellApprovalRequest):
     | { readonly run: true; readonly spent: ApprovalSpend }
-    | { readonly run: false; readonly message: string };
+    | { readonly run: false; readonly reason: 'denied' | 'unavailable'; readonly message: string };
   /** Close out a spend `park` reported. Called exactly once per spend on every
    *  path the wrapped execute RETURNS on; never called when its outcome is
    *  unknown. Idempotent, and safe to call late. */
@@ -703,7 +703,7 @@ function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, execut
  */
 export function gateExec<R>(
   execute: (command: string, ...rest: unknown[]) => Promise<R>,
-  denyResult: (message: string) => R,
+  denyResult: (error: KinuError) => R,
   executor: string,
   policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
   refusalCode?: (result: R) => ErrorCode | null,
@@ -718,7 +718,7 @@ export function gateExec<R>(
     const decision = await decideApproval(
       { command: cmd, executor }, reviewCommand(cmd, executor), policy,
     );
-    if (!decision.run) return denyResult(decision.message);
+    if (!decision.run) return denyResult(decision.error);
     const result = await execute(cmd, ...rest);
     if (decision.spent) {
       const code = refusalCode?.(result) ?? null;
@@ -763,19 +763,19 @@ async function decideApproval(
   policy: ShellApprovalPolicy,
 ): Promise<
   | { readonly run: true; readonly spent?: ApprovalSpend }
-  | { readonly run: false; readonly message: string }
+  | { readonly run: false; readonly error: KinuError }
 > {
   const { command: cmd, executor } = subject;
   // Before anything is read: a facet's answers live in its root's storage.
   await policy.resolve?.();
   const mode = policy.mode();
   const review = afterGrants(rawReview, policy, executor);
-  const deny = (message: string) => ({ run: false, message }) as const;
+  const refuse = (reason: ErrorCode, message: string) => ({ run: false, error: new KinuError(reason, message) } satisfies { run: false; error: KinuError });
   /** The grant a park replayed, if one was. Held across the ladder because the
    *  spend happens mid-decision and is reported at the end. */
   let spent: ApprovalSpend | undefined;
   if (review.decision === 'deny') {
-    return deny(`${APPROVAL_DENIED} — ${formatApproval(review)}`);
+    return refuse('denied', `${APPROVAL_DENIED} — ${formatApproval(review)}`);
   }
   if (review.decision === 'gate') {
     if (mode === 'allow_all') {
@@ -803,21 +803,21 @@ async function decideApproval(
         const parked = mode === 'strict'
           ? policy.deferrals?.park({ command: cmd, executor, review })
           : undefined;
-        if (parked && !parked.run) return deny(parked.message);
+        if (parked && !parked.run) return refuse(parked.reason, parked.message);
         if (!parked) {
           // 'deny_all' is an answer the owner already gave; 'strict' with no
           // queue and no channel is an absence. Saying "nobody to ask" under
           // deny_all would invite the agent to keep asking.
-          return deny(mode === 'deny_all'
-            ? `NOT RUN — refused by standing policy (deny_all) — ${formatApproval(review)}`
-            : `NOT RUN — needs owner approval, nobody to ask — ${formatApproval(review)}`);
+          return mode === 'deny_all'
+            ? refuse('denied', `NOT RUN — refused by standing policy (deny_all) — ${formatApproval(review)}`)
+            : refuse('unavailable', `NOT RUN — needs owner approval, nobody to ask — ${formatApproval(review)}`);
         }
         // parked.run — the owner approved this command while the agent was
         // away and the grant has just been spent; fall through to execute,
         // carrying the spend out so the caller can close it.
         spent = parked.spent;
       } else if (!approvalGrants(outcome)) {
-        return deny(`${APPROVAL_DENIED} by the owner — ${formatApproval(review)}`);
+        return refuse('denied', `${APPROVAL_DENIED} by the owner — ${formatApproval(review)}`);
       } else if (outcome === 'allow_always') {
         // Scoped to exactly what was asked: these rules, this executor.
         policy.remember?.(gatedGrants(review, executor));
@@ -826,7 +826,7 @@ async function decideApproval(
   }
   if (review.decision === 'warn') {
     if (mode === 'deny_all') {
-      return deny(`${APPROVAL_DENIED} (deny_all mode) — ${formatApproval(review)}`);
+      return refuse('denied', `${APPROVAL_DENIED} (deny_all mode) — ${formatApproval(review)}`);
     }
     diagnostics.failure(
       'approval.warn_unenforced',
