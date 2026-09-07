@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,7 @@ USAGE_FIELDS: tuple[str, ...] = (
 #: provider did not report it, and a field that is 0 means the provider reported
 #: zero. Zero-filling the two together is how a run nobody metered came out
 #: looking free.
-Usage = dict[str, int]
+Usage = dict[str, int | float]
 
 Event = dict[str, Any]
 
@@ -128,6 +129,32 @@ def read_grading(path: Path) -> TurnGrading | None:
         return None
 
 
+@dataclass(frozen=True)
+class WorkspaceSpend:
+    calls: int
+    calls_without_usage: int
+    usage: Usage
+    usd: float | None
+
+
+def read_spend(path: Path) -> WorkspaceSpend | None:
+    """Read the existing `kinu spend --json` ledger; missing is not zero."""
+    try:
+        total = json.loads(path.read_text(encoding="utf-8"))["total"]
+        calls, missing = total["calls"], total["callsWithoutUsage"]
+        if type(calls) is not int or type(missing) is not int or not 0 <= missing <= calls:
+            return None
+        usage = total["usage"]
+        if not isinstance(usage, dict):
+            return None
+        usd = total.get("usd")
+        if usd is not None and (isinstance(usd, bool) or not isinstance(usd, (int, float)) or not math.isfinite(usd)):
+            return None
+        return WorkspaceSpend(calls, missing, _reported_fields(usage), usd)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def parse_events(stdout: str) -> list[Event]:
     """Parse the NDJSON stream, skipping blank and malformed lines."""
     events: list[Event] = []
@@ -214,9 +241,9 @@ def _reported_fields(usage: dict[str, Any]) -> Usage:
     reported: Usage = {}
     for field in USAGE_FIELDS:
         value = usage.get(field)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             continue
-        reported[field] = int(value)
+        reported[field] = value
     return reported
 
 
@@ -242,6 +269,66 @@ def turn_usage(events: list[Event]) -> Usage:
             continue
         total = add_usage(total, _reported_fields(usage))
     return total
+
+
+def _recorded_events(events: list[Event], *kinds: str) -> list[Event]:
+    rows: dict[tuple[str, int], Event] = {}
+    for event in run_events(events, *kinds):
+        run_id, index = event.get("runId"), event.get("eventIndex")
+        if not isinstance(run_id, str) or not run_id or type(index) is not int or index < 0:
+            raise ValueError("A run-event row has no valid run/event identity")
+        key = (run_id, index)
+        if key in rows and rows[key] != event:
+            raise ValueError(f"Conflicting run-event rows for {key!r}")
+        rows[key] = event
+    return list(rows.values())
+
+
+def tool_outcome_counts(events: list[Event]) -> dict[str, int]:
+    """Count producer outcomes without interpreting a tool's returned data."""
+    rows = _recorded_events(events, "tool_call_end")
+    counts = {"observed": len(rows), "succeeded": 0, "failed": 0, "unmeasured": 0}
+    for row in rows:
+        outcome = row.get("outcome")
+        if isinstance(outcome, dict) and type(outcome.get("success")) is bool:
+            counts["succeeded" if outcome["success"] else "failed"] += 1
+        elif outcome is None and isinstance(row.get("error"), str) and row["error"]:
+            # Explicit legacy errors prove failure, but carry no inferred class.
+            counts["failed"] += 1
+        else:
+            counts["unmeasured"] += 1
+    return counts
+
+
+def model_usage_complete(events: list[Event], calls: int) -> bool:
+    """Aggregated usage is not proof that every call reported both token buckets.
+
+    Require a matching per-call census and reject contradictory cache counts.
+    This establishes reported-field coverage, not a provider billing receipt.
+    """
+    rows = _recorded_events(events, "step_finish", "model_call")
+    if not rows or len(rows) != calls:
+        return False
+    for row in rows:
+        usage = row.get("usage")
+        if not isinstance(usage, dict):
+            return False
+        reported = _reported_fields(usage)
+        if "input" not in reported or "output" not in reported:
+            return False
+        if reported.get("cacheRead", 0) > reported["input"]:
+            return False
+    return True
+
+
+def step_usage(events: list[Event]) -> Usage:
+    """Completed step usage, deduplicated; never add overlapping turn totals."""
+    usage: Usage = {}
+    for event in _recorded_events(events, "step_finish", "model_call"):
+        reported = event.get("usage")
+        if event["type"] == "step_finish" and isinstance(reported, dict):
+            usage = add_usage(usage, _reported_fields(reported))
+    return usage
 
 
 def sum_usages(usages: list[Usage]) -> Usage:

@@ -239,8 +239,9 @@ export interface BehaviourScore {
   readonly eligible: number;
   /** Of those, opportunities it took correctly — the numerator. */
   readonly passed: number;
-  /** passed/eligible, or null when nothing was eligible. */
+  /** passed/eligible, or null when opportunities or their outcomes are unmeasured. */
   readonly rate: number | null;
+  readonly measured?: Readonly<Record<string, number>>;
   /** One line of evidence naming the counts, for the run record. */
   readonly detail: string;
 }
@@ -545,53 +546,29 @@ export function parseFailureMix(detail: string): readonly (readonly [string, num
   });
 }
 
-/**
- * Did the agent's tool calls succeed — and where they did not, WHY?
- *
- * TWO KINDS OF FAILURE, and counting only the first is a defect this scorer
- * shipped with. `error` is the TRANSPORT discriminator: the tool itself threw. A
- * command that ran fine and exited non-zero is an ordinary SUCCESSFUL result
- * whose text begins `Error (exit N)` (`formatExecResult`, execution/
- * exec-result.ts:72), so a scorer reading only `error` counts a failed build, a
- * failed test run and a failed `git apply` as successes. That exact confusion
- * graded a command exiting 3 as `accepted` at quality 0.70 in the evolution
- * reward, and it is the inverted-contamination shape: the worst call in the turn
- * contributing the best number.
- *
- * THE HISTOGRAM COUNTED THE WRONG ROWS. It was built over every call, so every
- * published mix summed to `eligible` and described the run's tool USAGE while
- * sitting beside a failure rate — a census of calls read as a census of
- * failures. Run flash-a scored 103/126 and could not say which 23 failed.
- *
- * AND THE RATE POOLED FOUR DIFFERENT FACTS. `censusToolFailures` splits them,
- * because which part a failure sits in is the whole finding: a tool that
- * REFUSED correctly (an `old_text` that is not in the file, an unread file) is
- * the FAIL-loudly contract working; a command that ran and exited non-zero is
- * the WORK failing, which on a repair task is the agent finding the broken test
- * it was sent to find; a command that exited 127 is a program the WORKSPACE DOES
- * NOT HAVE, which is a platform gap and not the agent's doing at all; only the
- * remainder is a candidate defect. The headline stays the pooled rate so it
- * remains comparable with every run already in the ledger, and the detail names
- * the split so the number can be read correctly.
- *
- * This is the coarsest instrument here and deliberately so: it is the one that
- * still has a non-zero denominator on a task too small to craft, spill, steer or
- * edit, so a run is never scored entirely on absent mechanisms.
- */
+/** Tool health is attributed by the producer outcome, not by returned text.
+ * Missing historical outcomes stay in the observed denominator and suppress
+ * the rate. Explicit legacy errors prove generic failure, not a failure class. */
 export const toolOutcomes: BehaviourScorer = {
   name: 'tool_outcomes',
-  asserts: 'tool calls returned AND the command they ran did not fail',
+  asserts: 'producer-attributed tool outcomes, with complete attribution required for a rate',
   score(sql) {
     const rows = eventsOfType(sql, 'tool_call_end');
     const census = censusToolFailures(rows);
+    const succeeded = rows.filter((row) => row.outcome?.success === true).length;
     const failed = census.failures.length;
+    const unmeasured = rows.length - succeeded - failed;
     const detail = [
-      `${String(rows.length - failed)}/${String(rows.length)} tool calls returned`,
+      `${String(succeeded)} succeeded, ${String(failed)} failed, ${String(unmeasured)} unmeasured / ${String(rows.length)} observed calls`,
       `${String(census.refused)} refused, ${String(census.workFailed)} work failed, `
-        + `${String(census.runtimeMissing)} runtime absent, ${String(census.broke)} broke`,
+        + `${String(census.runtimeMissing)} runtime absent, ${String(census.broke)} broke or unclassified`,
     ];
     if (census.byKey.length > 0) detail.push(formatFailureMix(census.byKey));
-    return verdict(rows.length, rows.length - failed, detail.join('; '));
+    return {
+      eligible: rows.length, passed: succeeded,
+      rate: rows.length === 0 || unmeasured > 0 ? null : succeeded / rows.length,
+      detail: detail.join('; '), measured: { succeeded, failed, unmeasured },
+    };
   },
 };
 

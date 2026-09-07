@@ -111,6 +111,25 @@ function scorerOf(comparison: AttributableComparison, name = SCORER): ScorerComp
   return found;
 }
 
+test('missing outcome attribution withholds a covariate without dropping observed opportunities or task results', () => {
+  const baseline = run('base', [
+    scored('known', 0, [score(SCORER, 4, 2)]),
+    scored('unmeasured', 0, [{ ...score(SCORER, 4, 0), rate: null }]),
+  ]);
+  const candidate = run('candidate', [
+    scored('known', 0, [score(SCORER, 4, 4)]),
+    scored('unmeasured', 0, [score(SCORER, 4, 4)]),
+  ]);
+  const comparison = attributable(compareRuns(baseline, candidate, OPTS));
+  const covariance = scorerOf(comparison);
+  expect(covariance.baselineEligible).toBe(8);
+  expect(covariance.candidateEligible).toBe(8);
+  expect(covariance.baselineRate).toBeNull();
+  expect(covariance.effect).toBeNull();
+  expect(covariance.pValue).toBeNull();
+  expect(comparison.headline.pairs).toBe(2);
+});
+
 describe('compareRuns — a clean improvement', () => {
   test('seven differing pairs of eight: positive effect, interval excluding zero', () => {
     const comparison = attributable(compareRuns(

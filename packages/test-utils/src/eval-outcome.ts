@@ -141,6 +141,32 @@ export function outcomeRow(outcome: TaskOutcome): EvalScoreRow {
   return measured === undefined ? row : { ...row, measured };
 }
 
+/**
+ * One machine-checked subgoal's verdict: what was checked, whether it held, and
+ * the evidence. Named because the detail line a record carries is built from
+ * these, and a subgoal whose meaning lives only in a boolean is one nobody can
+ * read back. Shared by every family that grades a case as a count of these —
+ * the trajectory arm and the first-run tier — so the retained verdicts under a
+ * run's `transcripts` are one shape whichever family wrote them.
+ */
+export interface EvalSubgoal {
+  readonly what: string;
+  readonly reached: boolean;
+  readonly detail: string;
+}
+
+/** The `subgoalOutcome` verdict over a list of subgoals, with the detail line
+ *  every consumer reads: each subgoal named, `ok` or `MISSED`, and its evidence. */
+export function subgoalsOutcome(
+  subgoals: readonly EvalSubgoal[], measured?: Readonly<Record<string, number>>,
+): TaskOutcome {
+  const reached = subgoals.filter((subgoal) => subgoal.reached).length;
+  const detail = subgoals
+    .map((subgoal) => `${subgoal.what}: ${subgoal.reached ? 'ok' : 'MISSED'} — ${subgoal.detail}`)
+    .join('; ');
+  return subgoalOutcome(reached, subgoals.length, detail, measured);
+}
+
 /** A verdict from a count of independently checkable subgoals. The natural shape
  *  for partial credit, and the one a search can climb. */
 export function subgoalOutcome(

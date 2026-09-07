@@ -192,6 +192,37 @@ class UsageReading(unittest.TestCase):
             {"output": 4},
         )
 
+    def test_partial_step_usage_survives_without_a_turn_end(self) -> None:
+        step = {"type": "run_event", "event": {"type": "step_finish", "runId": "r", "eventIndex": 3, "usage": {"input": 120, "output": 7, "neurons": 3.75}}}
+        stream = [{"type": "turn_start"}, step, step]
+        self.assertEqual(events.step_usage(stream), {"input": 120, "output": 7, "neurons": 3.75})
+        self.assertEqual(turn_usage(stream), {})
+        stream.append({"type": "turn_end", "usage": {"input": 120, "output": 7, "neurons": 3.75}})
+        self.assertEqual(events.step_usage(stream), turn_usage(stream))
+
+    def test_whole_workspace_probe_preserves_unknown_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "spend.json"
+            path.write_text(json.dumps({"total": {"calls": 8, "callsWithoutUsage": 1, "usage": {"input": 123, "neurons": 1.25}, "usd": 0.5}}))
+            receipt = events.read_spend(path)
+            self.assertIsNotNone(receipt)
+            self.assertEqual(receipt.calls, 8)
+            self.assertEqual(receipt.calls_without_usage, 1)
+            self.assertEqual(receipt.usage, {"input": 123, "neurons": 1.25})
+            self.assertNotIn("output", receipt.usage)
+            path.write_text(json.dumps({"total": {"calls": True, "callsWithoutUsage": 0, "usage": {}}}))
+            self.assertIsNone(events.read_spend(path))
+
+    def test_complete_usage_requires_every_call_and_consistent_token_buckets(self) -> None:
+        first = {"type": "run_event", "event": {"type": "step_finish", "runId": "r", "eventIndex": 1, "usage": {"input": 100, "output": 7}}}
+        second = {"type": "run_event", "event": {"type": "model_call", "runId": "r", "eventIndex": 2, "usage": {"input": 20}}}
+        self.assertFalse(events.model_usage_complete([first, second], 2))
+        second["event"]["usage"]["output"] = 3
+        self.assertTrue(events.model_usage_complete([first, first, second], 2))
+        self.assertFalse(events.model_usage_complete([first, second], 3))
+        second["event"]["usage"]["cacheRead"] = 21
+        self.assertFalse(events.model_usage_complete([first, second], 2))
+
     def test_add_usage_keeps_a_field_neither_side_reported_absent(self) -> None:
         self.assertEqual(
             add_usage({"input": 1}, {"output": 2, "cacheRead": 0}),
@@ -268,6 +299,20 @@ class RunEvents(unittest.TestCase):
     def test_a_stream_without_a_ledger_reads_as_empty_not_an_error(self) -> None:
         self.assertEqual(run_events(parse_events(REAL_TURN)), [])
         self.assertEqual(run_events([{"type": "run_event", "event": "not-an-object"}]), [])
+
+
+class ToolOutcomeCensusTest(unittest.TestCase):
+    def test_structural_outcome_wins_and_legacy_payloads_remain_unmeasured(self) -> None:
+        rows = [
+            {"type": "tool_call_end", "runId": "r", "eventIndex": 1, "outcome": {"success": True}, "result": {"error": "ordinary successful data"}},
+            {"type": "tool_call_end", "runId": "r", "eventIndex": 2, "outcome": {"success": False, "reason": None}, "result": "ok"},
+            {"type": "tool_call_end", "runId": "r", "eventIndex": 3, "result": "Error (exit 1)"},
+            {"type": "tool_call_end", "runId": "r", "eventIndex": 4, "error": "legacy explicit failure"},
+        ]
+        stream = [{"type": "run_event", "event": row} for row in rows + rows[:1]]
+        before = json.dumps(stream)
+        self.assertEqual(events.tool_outcome_counts(stream), {"observed": 4, "succeeded": 1, "failed": 2, "unmeasured": 1})
+        self.assertEqual(json.dumps(stream), before)
 
 
 class ActivityVersusEvolutionTest(unittest.TestCase):

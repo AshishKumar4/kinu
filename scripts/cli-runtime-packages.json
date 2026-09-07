@@ -1,0 +1,4 @@
+[
+  "@nimbus-sh/runtime-bash",
+  "@nimbus-sh/runtime-cpython"
+]

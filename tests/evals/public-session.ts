@@ -105,8 +105,8 @@ import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
 import { createUserUiMessage, type AgentTurnResult } from '../../packages/cli/src/agent-client';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
 import {
-  createTestSql, evalNameSlug, evalTargetVerdict, evalWorkspaceName, infraBoundary,
-  resolveEvalBackend, scoreTrajectory, workerSession,
+  compareRunEventOrder, createTestSql, evalNameSlug, evalTargetVerdict, evalWorkspaceName,
+  infraBoundary, resolveEvalBackend, scoreTrajectory, workerSession,
   EVAL_BACKEND_ENV,
   type EvalScoreRow,
 } from '@kinu.run/test-utils';
@@ -1001,10 +1001,7 @@ export class KinuPublicSession {
       if (page.status === 'end') break;
       after = page.next.after;
     }
-    events.sort((a, b) =>
-      a.timestamp.localeCompare(b.timestamp)
-      || a.runId.localeCompare(b.runId)
-      || a.eventIndex - b.eventIndex);
+    events.sort(compareRunEventOrder);
     return events;
   }
 
@@ -1043,10 +1040,11 @@ export class KinuPublicSession {
 
   /** One file off the workspace plane, through the route the web file manager
    *  reads. */
-  readFile(path: string): Promise<string> {
+  readFile(path: string, options: { allowMissing?: boolean } = {}): Promise<string> {
     return infraBoundary(`GET files ${path}`, async () => {
       const response = await fetch(this.filesUrl(path), { headers: webHeaders(this.input.identity) });
       const text = await response.text();
+      if (response.status === 404 && options.allowMissing) return '';
       if (!response.ok) {
         throw new Error(`could not read ${path} over the files route: ${String(response.status)} `
           + `${response.statusText} — ${text.slice(0, 200)}`);

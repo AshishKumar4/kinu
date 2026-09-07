@@ -228,12 +228,14 @@ export const LEDGER_EVENTS: readonly RunEvent[] = [
     type: 'tool_call_end', runId: 'run-1', eventIndex: 2, timestamp: TIMESTAMP,
     name: 'file', toolCallId: 'call-1',
     args: { action: 'write', path: 'note.txt' }, result: 'Wrote note.txt', durationMs: 12,
+    outcome: { success: true },
   },
   {
     type: 'tool_call_end', runId: 'run-1', eventIndex: 3, timestamp: TIMESTAMP,
     name: 'run', toolCallId: 'call-2',
     args: { command: 'bun test broken.test.ts' },
     result: 'Error (exit 1)\n--- stderr ---\n1 fail', durationMs: 900,
+    outcome: { success: false, reason: null, execution: { exitCode: 1 } },
   },
   { type: 'step_finish', runId: 'run-1', eventIndex: 4, timestamp: TIMESTAMP, stepIndex: 0, reason: 'tool-calls' },
   {
@@ -245,6 +247,7 @@ export const LEDGER_EVENTS: readonly RunEvent[] = [
     type: 'tool_call_end', runId: 'run-1', eventIndex: 7, timestamp: TIMESTAMP,
     name: 'file', toolCallId: 'call-3',
     args: { action: 'edit', path: 'broken.ts' }, result: 'Applied 1 edit', durationMs: 20,
+    outcome: { success: true },
   },
   {
     type: 'file_edit', runId: 'run-1', eventIndex: 8, timestamp: TIMESTAMP,
@@ -254,6 +257,7 @@ export const LEDGER_EVENTS: readonly RunEvent[] = [
     type: 'tool_call_end', runId: 'run-1', eventIndex: 9, timestamp: TIMESTAMP,
     name: 'run', toolCallId: 'call-4',
     args: { command: 'bun test broken.test.ts' }, result: '1 pass, 0 fail', durationMs: 850,
+    outcome: { success: true },
   },
   { type: 'completion_gate', runId: 'run-1', eventIndex: 10, timestamp: TIMESTAMP, converted: false },
   { type: 'step_finish', runId: 'run-1', eventIndex: 11, timestamp: TIMESTAMP, stepIndex: 1, reason: 'stop' },

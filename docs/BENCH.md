@@ -353,6 +353,27 @@ harbor run \
   --jobs-dir /tmp/harbor-jobs -n 1 -y
 ```
 
+A system comparison needs a second agent on the same task with explicitly
+recorded inference settings and resources. `bench.harbor.pi_agent:PiComparator`
+uses Harbor's stock pi agent with GLM-5.3-specific metadata and file-based auth.
+The adapter requires `--ak version=<npm version>` and the model
+`kinu/@cf/zai-org/glm-5.3`; it will not price another model with GLM's rates.
+Its default `--thinking medium` matches Kinu's configured chat effort, **not**
+the historical baseline wire: that baseline omitted `reasoning_effort`.
+Local translation proofs observe `medium` after the Kinu fix and in pi0.73.1.
+Pi's stock request sets a 32000-token output cap and requests stream usage;
+Kinu's tested HTTP request omits both. These differences are not erased or
+called a matched comparison. The live external comparator has not run.
+Install-only and scripted-endpoint proofs are not benchmark scores.
+
+```bash
+harbor run \
+  --agent bench.harbor.pi_agent:PiComparator --ak version=0.73.1 \
+  -m kinu/@cf/zai-org/glm-5.3 \
+  -p <task-dir> --allow-agent-host kinu.run \
+  --jobs-dir bench-artifacts/harbor-jobs -n 1 -k 1 -r 0 -y
+```
+
 Four launchers around the edges of the harness exist as scripts:
 `scripts/tbench-arm.sh` (one Terminal-Bench 2.1 arm),
 `scripts/tbench-after-deploy.sh` (the same arm, held until the deployed worker
