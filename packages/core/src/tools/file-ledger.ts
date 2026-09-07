@@ -45,8 +45,11 @@ export type FileEditOutcomeReason =
   | 'stale'
   /** The path does not exist, or is not a file. */
   | 'missing'
-  /** The filesystem refused the read or the write. */
+  /** The caller's own credential may not read or write the path. */
+  | 'denied'
+  /** The filesystem refused the read or the write for another reason. */
   | 'io';
+
 
 /** What one turn's edits did. Absent counters never happened.
  *  `attempts`/`applied` count CALLS; `recoveredPaths`/`abandonedPaths` count

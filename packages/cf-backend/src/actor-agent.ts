@@ -226,12 +226,12 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile,
   createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
-  beginModelOperation, toolSurfaceTokens,
+  beginModelOperation, toolSurfaceTokens, McpToolSurfaceSchema,
   // Plan mode's one completion surface and the deps-gated report tool. Both sat
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
-  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend,
+  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle,
 } from "@kinu.run/core";
 import {
@@ -275,8 +275,10 @@ import {
   promptCachePlan, hasCacheMarkers, markLastToolForAnthropicCache,
   type PromptCacheStrategy,
 } from "@kinu.run/core";
-import type { CodemodeProvider, DeferredApprovalChannel, SlateCallResult, SlateOperation } from "@kinu.run/core";
+import type { CodemodeProvider, DeferredApprovalChannel, SlateBindingRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-box-rpc";
+import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
+import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
 import { diagnostics, KinuError, toKinuError, tolerate, type ErrorCode } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserDoRpcMethod } from "./rpc-surface";
@@ -4437,9 +4439,109 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected deferralChannel(): DeferredApprovalChannel | undefined { return undefined; }
 
-  /** Facet actors reach slate operations on the object that owns their workspace. */
+  /**
+   * The actor a slate acts FOR, minted here and nowhere a client can reach: its
+   * facet path under the workspace root — the SDK-recorded ancestors, then this
+   * facet under the class every actor spawns facets as — and the credential its
+   * own file plane already runs as. The root is the empty path as the session
+   * user; a facet without a provisioned home holds no file authority to lend.
+   */
+  protected slateCaller(): SlateCaller {
+    if (this.parentPath.length === 0) return { path: [], cred: CRED_SESSION_USER };
+    const home = this.facetHome();
+    if (home === undefined) throw new KinuError('denied', 'This facet has no provisioned home, so it cannot act on a slate');
+    const path: readonly SlateCallerHop[] = [...this.parentPath.slice(1), { className: this.facetClass().name, name: this.name }];
+    return { path, cred: home.cred };
+  }
+
+  /** Every actor's slate operations run on the object that owns its workspace, as this actor. */
   async slate(operation: SlateOperation): Promise<SlateCallResult> {
-    return workspaceOwner(this.env, this.workspaceName()).slate(operation);
+    return workspaceOwner(this.env, this.workspaceName()).slateAs(this.slateCaller(), operation);
+  }
+
+  /**
+   * One capability route, run AS THIS ACTOR for a slate it holds a binding to.
+   *
+   * The workspace root forwards a facet's binding call down the facet's own path,
+   * one hop at a time, and the actor at the end answers with its own surface
+   * narrowed by its own current role — the same resolver and the same narrowing
+   * its native tools and its `execute_tools` sandbox are built from — so a
+   * binding never reaches more than the actor holding it does, and a role change
+   * is seen on the next call.
+   *
+   * Deliberately NOT `@callable`: reached on the stub transport only.
+   */
+  async slateBindingDispatch(path: readonly SlateCallerHop[], route: SlateBindingRoute): Promise<JsonValue> {
+    const [next, ...rest] = path;
+    if (next !== undefined) {
+      if (next.className !== this.facetClass().name) {
+        throw new KinuError('denied', `${next.className} is not a facet class this actor hosts`);
+      }
+      return (await this.subAgent(this.facetClass(), next.name)).slateBindingDispatch(rest, route);
+    }
+    switch (route.kind) {
+      case 'namespace': {
+        const providers = this.slateNamespaces();
+        const reach = await this.slateReach(providers);
+        const provider = reach.narrowProviders(providers).find((candidate) => candidate.name === route.namespace);
+        if (!provider) throw new KinuError('denied', `${route.namespace} is not within this actor's reach right now`);
+        if (!Object.hasOwn(provider.tools, route.member)) {
+          throw new KinuError('missing', `${route.namespace} has no member ${route.member}; it offers ${Object.keys(provider.tools).join(', ')}`);
+        }
+        const answered = await provider.tools[route.member]?.execute(...route.args);
+        const value = v.safeParse(JsonValueSchema, answered === undefined ? null : answered);
+        if (!value.success) throw new KinuError('bad_input', `${route.namespace}.${route.member} answered a value that is not JSON`, { cause: new v.ValiError(value.issues) });
+        return value.output;
+      }
+      case 'mcp': {
+        // The nameable unit of an MCP tool on this actor's surface is its
+        // descriptor key, and the role admits it by that key — the same
+        // `toolAllowed(d.toolKey)` the native turn applies.
+        const { stub, caller } = await this.userHub();
+        const surface = v.parse(McpToolSurfaceSchema, JSON.parse(await stub.userMcp_toolDescriptors(caller)));
+        const descriptor = surface.descriptors.find((d) => d.serverId === route.server && d.name === route.tool);
+        if (descriptor === undefined) throw new KinuError('missing', `${route.server} offers no tool ${route.tool} to this actor`);
+        const reach = await this.slateReach(this.slateNamespaces(), [descriptor.toolKey]);
+        if (!reach.allowsTool(descriptor.toolKey)) throw new KinuError('denied', `${descriptor.toolKey} is not within this actor's reach right now`);
+        return v.parse(JsonValueSchema, JSON.parse(await stub.userMcp_callTool(caller, route.server, route.tool, route.args)));
+      }
+      case 'rpc': return this.slateReadModel(route.method);
+      case 'app': throw new KinuError('bad_input', 'An app hop is answered by the slate host, not by an actor');
+    }
+  }
+
+  /**
+   * A workspace read model, as this actor may read it. The twelve
+   * `SLATE_READ_MODELS` are the workspace ROOT's own `@callable` reads of
+   * root state (its snapshot, memory, status, jobs); no facet declares them and
+   * none is on the surface a facet reaches its root through, so the base answer
+   * is the absence of that capability. The orchestrator overrides this.
+   */
+  protected async slateReadModel(source: SlateReadModel): Promise<JsonValue> {
+    throw new KinuError('denied', `${source} is a workspace read model this actor does not hold`);
+  }
+
+  /**
+   * This actor's CURRENT tool reach, for a binding call.
+   *
+   * The open turn's resolved profile while a turn is IN FLIGHT — `_inFlight`,
+   * not the cached profile, which outlives its turn until the next `beforeTurn`
+   * and would let a role revoked between turns keep the old reach — else the
+   * role resolved now over the same nameable surface a turn offers: native
+   * tools, the codemode capabilities the wired providers carry, and any MCP
+   * tool keys the caller is deciding on.
+   */
+  private async slateReach(providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = []): Promise<ToolSurfaceNarrowing> {
+    if (this._inFlight && this._turnProfile !== null) return narrowToolSurface(this._turnProfile.allowedTools);
+    const profile = resolveAgentTurnProfile({
+      ...(await this.profileInputs()),
+      activeRoleId: this.activeRoleLabel(),
+      workMode: 'build',
+      availableTools: [...actorActiveTools(this.actorToolDeps()), ...mcpToolKeys, ...codemodeCapabilitiesFor(providers)],
+      activeSkills: [],
+      explicitTier: this.config.getAssignedTier() ?? undefined,
+    });
+    return narrowToolSurface(profile.allowedTools);
   }
 
   /** `memory.*` / `tasks.*` — unconditional on every ActorAgent (orchestrator

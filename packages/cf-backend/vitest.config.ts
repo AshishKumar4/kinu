@@ -45,6 +45,7 @@ import { fileURLToPath } from 'node:url';
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { buildSync, transform } from 'esbuild';
 import { defineConfig, type Plugin } from 'vitest/config';
+import { builtinModules } from 'node:module';
 
 /**
  * `@callable()` is a TC39 standard decorator, and Vite 8 transforms TypeScript
@@ -102,6 +103,16 @@ const hostedPreviewProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+const slateFacetProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-facet-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-facet-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'],
+  target: 'es2022',
+  alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 export default defineConfig({
   plugins: [
     standardDecorators(),
@@ -126,6 +137,13 @@ export default defineConfig({
             path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
           })),
           durableObjects: { PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true } },
+        }, {
+          name: 'slate-facet-probe', ...workerCompatibility,
+          modules: slateFacetProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          durableObjects: { SLATE_FACET_ROOT: { className: 'SlateFacetRootProbe', useSQLite: true } },
         }],
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
@@ -149,6 +167,7 @@ export default defineConfig({
           FILES_EIO_PROBE: { className: 'FilesEioProbeDO', useSQLite: true },
           PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', scriptName: 'hosted-preview-probe', useSQLite: true },
           SLATE_PROCESS_PROBE: { className: 'SlateProcessProbeDO', useSQLite: true },
+          SLATE_FACET_ROOT: { className: 'SlateFacetRootProbe', scriptName: 'slate-facet-probe', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
         },
       },

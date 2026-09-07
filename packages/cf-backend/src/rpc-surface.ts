@@ -341,6 +341,8 @@ export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, 
  */
 const ACTOR_AGENT_RPC_SURFACE = [
   'deleteWorkspaceFile',
+  // Introduced slate capabilities return to this actor, over native RPC only.
+  'slateBindingDispatch',
   // The owner's UserDO closes this workspace's CLI websockets the moment it
   'closeRevokedCliSockets',
   'closeRevokedSessionSockets',
@@ -447,9 +449,10 @@ const ORCHESTRATOR_METHODS = [
   // and the registry it is provisioned in exists only on this object.
   'provisionFacetHome',
   'releaseFacetHome',
-  // Introduced bindings return only through the stub transport. A browser
-  // cannot mint a binding name to reach the owner's capabilities.
-  'slateBindingCall',
+  // Introduced bindings and facet actors return through the stub transport,
+  // each stamping the actor it acts as. A browser cannot mint a caller.
+  'slateAs',
+  'slateBindingCallAs',
   // The one method the supervisor entrypoint calls on the object that owns a
   // workspace: a facet's filesystem calls arrive here through the composed
   // `OrchestratorAgent` namespace. Listed (not sealed away) but never
@@ -511,6 +514,7 @@ export const SUBORDINATE_RPC_SURFACE: readonly string[] = [
  */
 const EXPLORATION_METHODS = [
   'abortHead',
+  'slateBindingDispatch',
   'explore',
   'generateReflection',
   'initHead',

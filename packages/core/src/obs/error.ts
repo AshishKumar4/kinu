@@ -367,23 +367,34 @@ const OOM_SIGNATURES: readonly RegExp[] = [
  * knows what an unrecognised failure means AT ITS OWN SEAM — for an exec
  * transport, `io`; for an argument decoder, `bad_input` — and saying so is one
  * word.
+ *
+ * The whole cause chain is read, outermost first. A wrapper that says what was
+ * being done (`new Error('…', { cause })`) adds no class of its own, and the
+ * class it wraps is the one the site that raised it knew: a VFS transaction
+ * rolled back over `EACCES` is a denial, not an I/O fault.
  */
 export function classifyErrorCode(input: { cause: unknown }): ErrorCode | null {
-  const caught = input.cause;
-  if (caught instanceof KinuError) return caught.code;
-  // `classify` owns the malformed-input signatures, and at this layer malformed
-  // input is what it says: the value handed in does not parse.
-  if (classify({ cause: caught }) === 'malformed-input') return 'bad_input';
-  if (!(caught instanceof Error)) return null;
+  const seen = new Set<Error>();
+  let caught: unknown = input.cause;
+  for (;;) {
+    if (caught instanceof KinuError) return caught.code;
+    // `classify` owns the malformed-input signatures, and at this layer malformed
+    // input is what it says: the value handed in does not parse.
+    if (classify({ cause: caught }) === 'malformed-input') return 'bad_input';
+    if (!(caught instanceof Error) || seen.has(caught)) break;
+    seen.add(caught);
 
-  const byName = CODE_BY_ERROR_NAME.get(caught.name);
-  if (byName !== undefined) return byName;
+    const byName = CODE_BY_ERROR_NAME.get(caught.name);
+    if (byName !== undefined) return byName;
 
-  const errno = errnoCode(caught);
-  const byErrno = errno === null ? undefined : CODE_BY_ERRNO.get(errno);
-  if (byErrno !== undefined) return byErrno;
+    const errno = errnoCode(caught);
+    const byErrno = errno === null ? undefined : CODE_BY_ERRNO.get(errno);
+    if (byErrno !== undefined) return byErrno;
 
-  const chain = renderCauseChain(caught);
+    caught = caught.cause;
+  }
+  if (!(input.cause instanceof Error)) return null;
+  const chain = renderCauseChain(input.cause);
   return OOM_SIGNATURES.some((signature) => signature.test(chain)) ? 'oom' : null;
 }
 

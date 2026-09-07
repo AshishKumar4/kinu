@@ -666,6 +666,7 @@ export function useWorkspaceRpc(agentId: string) {
   const agent = useAgent({
     agent: ORCHESTRATOR_AGENT_SLUG,
     name: agentId,
+    protocol: window.location.protocol === "https:" ? "wss" : "ws",
     onOpen: useCallback(() => setConnectionStatus("connected"), []),
     onClose: useCallback(() => setConnectionStatus("disconnected"), []),
     onError: useCallback(() => setConnectionStatus("error"), []),
@@ -873,6 +874,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   const agentOptions: Parameters<typeof useAgent>[0] = {
     agent: ORCHESTRATOR_AGENT_SLUG,
     name: actorAddress.workspace,
+    // The SDK's localhost default is ws, even when this document uses HTTPS.
+    protocol: window.location.protocol === "https:" ? "wss" : "ws",
     // onOpen always wins — even if a prior onError pinned the status to
     // "error", a successful reopen must recover the UI. Without this, a
     // single transient error event traps the user on the disconnect
