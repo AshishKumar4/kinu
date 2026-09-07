@@ -159,7 +159,7 @@ import type { ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api"
 import * as v from "valibot";
 import { serveGalleryRpc } from "@/gallery-agent-stub";
 
-const frame = new URLSearchParams(location.search).get("frame");
+const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 const squareButtonVariant = "square";
 const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 
@@ -3258,7 +3258,7 @@ function Palette() {
 /** The public documents, by frame name. The install command is the production
  *  one rather than this dev server's, so the frame photographs the copy a
  *  visitor reads. */
-function publicDocument(name: string | null): string | null {
+function publicDocument(name: string): string | null {
   const install = `curl -fsSL 'https://kinu.run/install.sh' | bash`;
   if (name === "login") {
     return loginDocument([
@@ -5391,7 +5391,7 @@ async function mount() {
     const { default: HomePage } = await import("@/pages/HomePage");
     node = <div className="h-screen p-bg p-text"><HomePage /></div>;
   } else node = <All />;
-  if (frame !== null && frame in EXPLORATION_FRAMES) {
+  if (frame in EXPLORATION_FRAMES) {
     entries = [`/workspace/${GALLERY_WORKSPACE}`];
     node = <Routes><Route path="/workspace/:agentId" element={node} /></Routes>;
   }
