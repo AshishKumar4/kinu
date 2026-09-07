@@ -103,7 +103,7 @@ function runScenario(body: string, opts: {
     ${body}
     console.log(JSON.stringify(steps));
   `;
-  const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome, ...opts.env };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: kinuHome, KINU_HOME: kinuHome, ...opts.env };
   for (const name of ['KINU_TOKEN', 'KINU_ORIGIN']) {
     if (!(name in (opts.env ?? {}))) delete env[name];
   }
@@ -121,7 +121,7 @@ function runScenario(body: string, opts: {
 }
 
 function expectOk(step: StepOutcome | undefined): JsonValue {
-  expect(step?.ok).toBe(true);
+  expect(step?.ok, step?.error ?? 'scenario returned no step result').toBe(true);
   return step?.value ?? null;
 }
 
@@ -885,6 +885,21 @@ describe('control commands route model/effort by session state', () => {
    *  local — an existing database, no configured ref. */
   const SEED_LOCAL_AGENT = `
     {
+      process.env.OPENAI_API_KEY = 'profile-scenario-credential';
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        if (url.href === 'https://models.dev/api.json') {
+          return Promise.resolve(Response.json({
+            openai: { models: { 'gpt-4o-mini': { id: 'gpt-4o-mini', tool_call: true } } },
+            'account-gateway': {
+              npm: '@ai-sdk/openai-compatible', api: 'https://account-gateway.test/v1',
+              models: { 'custom-model': { id: 'custom-model', tool_call: true } },
+            },
+          }));
+        }
+        return realFetch(input, init);
+      };
       const { mkdirSync, writeFileSync } = await import('node:fs');
       mkdirSync(process.env.KINU_HOME + '/probe-agent', { recursive: true });
       writeFileSync(process.env.KINU_HOME + '/probe-agent/agent.db', '');
@@ -962,6 +977,15 @@ describe('control commands route model/effort by session state', () => {
         // A stand-in account server: GET answers the current catalog, PUT
         // applies the whole-catalog edit and bumps the version.
         accountServer = Bun.serve({ port: 0, fetch: async (req) => {
+          if (new URL(req.url).pathname === '/api/user/ai/proxy/credentials') {
+            return Response.json({ credentials: [{ key: 'account-gateway.bearer' }] });
+          }
+          if (new URL(req.url).pathname === '/api/cli/models') {
+            return Response.json({
+              models: [{ provider: 'account-gateway', spec: 'account-gateway/custom-model', label: 'Account model' }],
+              failures: [],
+            });
+          }
           if (req.method === 'PUT') {
             const body = await req.json();
             if (body.expectedVersion !== version) {
@@ -969,7 +993,7 @@ describe('control commands route model/effort by session state', () => {
             }
             current = body.catalog;
             version += 1;
-            return Response.json({ ok: true, envelope: envelope(current) });
+            return Response.json(envelope(current));
           }
           return Response.json(envelope(current));
         }});
@@ -986,7 +1010,7 @@ describe('control commands route model/effort by session state', () => {
         // when the server answered a GET first (expectedVersion) and accepted
         // the PUT after.
         const { modelCommand } = await import('./packages/cli/src/commands/control.ts');
-        await quiet(() => modelCommand('probe-agent', 'openai/gpt-4o-mini', {}));
+        await quiet(() => modelCommand('probe-agent', 'account-gateway/custom-model', {}));
         return 'set';
       });
       await step('nextTurn', async () => {
@@ -1006,12 +1030,13 @@ describe('control commands route model/effort by session state', () => {
         return 'stopped';
       });
     `);
+    expect(expectOk(steps.model)).toBe('set');
     const tier = v.parse(ParsedControlTier, expectOk(steps.nextTurn)).catalog.tiers.default;
-    expect(tier.model).toBe('openai/gpt-4o-mini');
+    expect(tier.model).toBe('account-gateway/custom-model');
     // The signed-out slot stayed untouched: the account store is canonical.
     expect(expectOk(steps.localSlot)).toBeNull();
     // And the cache a next offline read would fall back to carries it too.
-    expect(expectOk(steps.cacheSlot)).toMatchObject({ model: 'openai/gpt-4o-mini' });
+    expect(expectOk(steps.cacheSlot)).toMatchObject({ model: 'account-gateway/custom-model' });
   }, 20_000);
 });
 
