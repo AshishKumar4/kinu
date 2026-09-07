@@ -230,8 +230,8 @@ import {
   // Plan mode's one completion surface and the deps-gated report tool. Both sat
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
-  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
-  toolsForInvocation, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission,
+  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ToolOutcome, renderToolResult,
+  toolsForInvocation, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle,
 } from "@kinu.run/core";
@@ -6246,11 +6246,12 @@ export abstract class ActorAgent extends Think<Env> {
     // Think 0.4 shape (toolName/input/output/success/durationMs) → the core
     // accumulator records it + fires the activity log + run-event sinks.
     const input = jsonObject(ctx.input);
+    const outcome = ctx.success ? { success: true } satisfies ToolOutcome : failedToolOutcome({ cause: ctx.error });
     const recorded: Parameters<TurnAccumulator['recordToolCall']>[0] = {
       toolName: ctx.toolName,
       input,
       durationMs: ctx.durationMs,
-      success: ctx.success,
+      ...outcome,
     };
     if (ctx.success && ctx.output !== undefined) recorded.output = projectJsonValue({ value: ctx.output });
     if (!ctx.success) recorded.error = ctx.error;
@@ -6258,12 +6259,8 @@ export abstract class ActorAgent extends Think<Env> {
     await this.extensions.emitToolResult({
       toolName: ctx.toolName,
       args: input,
-      // Same shape the CLI seam emits: the FULL stringified result. The turn
-      // steering hashes this as the call's identity and reads it to decide
-      // failure, so a head slice made two different outputs sharing a long
-      // preamble indistinguishable and hid every >1000-char structured error.
-      result: String(ctx.success ? ctx.output ?? '' : ctx.error ?? ''),
-      success: ctx.success,
+      result: ctx.success ? renderToolResult(ctx.output) : renderThrownChain({ cause: ctx.error }),
+      ...outcome,
     });
   }
 

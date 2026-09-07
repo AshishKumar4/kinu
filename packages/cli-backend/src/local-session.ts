@@ -169,7 +169,7 @@ import {
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  stepContextLimit, admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, permitInPlan, runWorkModeInvocation,
+  stepContextLimit, admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, permitInPlan, runWorkModeInvocation, ToolOutcomeSchema, type ToolOutcome,
 } from '@kinu.run/core';
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
@@ -400,7 +400,7 @@ export type SessionEvent =
   | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string; workMode: WorkMode }
   | { type: 'text-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
-  | { type: 'tool-result'; toolName: string; toolCallId: string; result: string; success: boolean }
+  | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
   | { type: 'turn-end'; turn: CompletedTurn }
   | { type: 'error'; message: string }
   | { type: 'evolution'; event: string; message: string }
@@ -2799,8 +2799,8 @@ export class LocalAgentSession implements BackendHost {
             // backend's afterToolCall. A failed tool flags the turn.
             this.orch.acc.recordToolCall(ev.success
               ? { toolName: ev.toolName, input: call?.args ?? {}, success: true, output: ev.result }
-              : { toolName: ev.toolName, input: call?.args ?? {}, success: false, error: ev.error ?? ev.result });
-            this.emit({ type: 'tool-result', toolName: ev.toolName, toolCallId: ev.toolCallId, result: ev.result, success: ev.success });
+              : { toolName: ev.toolName, input: call?.args ?? {}, success: false, reason: ev.reason, execution: ev.execution, error: ev.error ?? ev.result });
+            this.emit({ type: 'tool-result', toolName: ev.toolName, toolCallId: ev.toolCallId, result: ev.result, ...v.parse(ToolOutcomeSchema, ev) });
             break;
           }
           case 'step-finish': {

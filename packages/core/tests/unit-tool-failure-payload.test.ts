@@ -61,41 +61,32 @@ function runToolOver(shell: Shell): RunTool {
 describe('a failed `run` tells the model what actually happened', () => {
   test('a nonzero exit keeps stdout — the failing suite is legible, not swallowed', async () => {
     const run = runToolOver(failingSuiteShell());
-    const out = await run.execute({ command: 'bun test' });
+    const pending = run.execute({ command: 'bun test' });
 
     // The diagnosis, not just the verdict. Without these the model is told only
     // that something exited 1, which is the same information as no message.
-    expect(out).toContain('applies the discount before tax');
-    expect(out).toContain('Expected: 90');
-    expect(out).toContain('checkout.test.ts:41');
+    await expect(pending).rejects.toThrow('applies the discount before tax');
+    await expect(pending).rejects.toThrow('Expected: 90');
+    await expect(pending).rejects.toThrow('checkout.test.ts:41');
   });
 
   test('the exit code still rides along, so failure stays unambiguous', async () => {
     const run = runToolOver(failingSuiteShell());
-    const out = await run.execute({ command: 'bun test' });
-
-    // Keeping stdout must not cost the failure signal: a model that only sees
-    // suite output cannot tell a failing run from a passing one that printed
-    // the word "fail", and the delegation nudge reads this prefix too.
-    expect(out).toMatch(/exit 1/);
+    await expect(run.execute({ command: 'bun test' })).rejects.toMatchObject({ code: 'io', execution: { exitCode: 1 } });
   });
 
   test('stderr is not dropped either when the command wrote to both', async () => {
     const run = runToolOver(failingSuiteShell('error: script "test" exited with code 1'));
-    const out = await run.execute({ command: 'bun test' });
-
-    expect(out).toContain('applies the discount before tax');
-    expect(out).toContain('script "test" exited with code 1');
+    const pending = run.execute({ command: 'bun test' });
+    await expect(pending).rejects.toThrow('applies the discount before tax');
+    await expect(pending).rejects.toThrow('script "test" exited with code 1');
   });
 
   test('a failure with no output at all says so, rather than trailing into nothing', async () => {
     const run = runToolOver({ exec: async () => ({ stdout: '', stderr: '', exitCode: 127 }) });
-    const out = await run.execute({ command: 'nosuchbinary' });
-
-    // The degenerate case: the model must be able to distinguish "the command
-    // said nothing" from "the payload lost what it said".
-    expect(out).toMatch(/exit 127/);
-    expect(out.trim()).not.toMatch(/exit 127\)?:?$/);
+    const pending = run.execute({ command: 'nosuchbinary' });
+    await expect(pending).rejects.toMatchObject({ execution: { exitCode: 127 } });
+    await expect(pending).rejects.toThrow('(no output)');
   });
 
   test('a successful command is unchanged — stdout only, no error framing', async () => {
@@ -123,10 +114,8 @@ describe('the inline executor `exec` honours the same contract', () => {
 
   test('a nonzero exit keeps stdout', async () => {
     const exec = inlineExec(failingSuiteShell());
-    const out = String(await exec.tools.exec.execute('bun test'));
-
-    expect(out).toContain('applies the discount before tax');
-    expect(out).toMatch(/exit 1/);
+    const out = await exec.tools.exec.execute('bun test');
+    expect(out).toMatchObject({ execution: { exitCode: 1 }, error: expect.stringContaining('applies the discount before tax') });
   });
 
   test('a clean run is untouched', async () => {

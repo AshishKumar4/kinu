@@ -97,8 +97,9 @@ describe('parseRefusal', () => {
 describe('the surfaces the model reads', () => {
   test('the `run` tool surfaces a failing test suite\'s stdout', async () => {
     const run = runToolOver({ exec: async () => PYTEST });
-    const out = await run.execute({ command: 'pytest' });
-    expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('test_add - assert 3 == 4') });
+    await expect(run.execute({ command: 'pytest' })).rejects.toMatchObject({
+      code: 'io', execution: { exitCode: 1 }, message: expect.stringContaining('test_add - assert 3 == 4'),
+    });
   });
 
   test('successful refusal-shaped stdout stays data in native run and codemode', async () => {

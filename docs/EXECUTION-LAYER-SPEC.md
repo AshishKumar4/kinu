@@ -71,15 +71,23 @@ namespace is the routing decision. `register()` applies `gateProviderExec`
 `workspace.exec` is exempt. `withApprovalGatedShell` already gates it;
 `startProcess` is gated here.
 
-Command tools (`exec`, `startProcess`, and Nimbus `runCode`) and native `run`
-return `string | Refusal`. Successful output remains a string, including output
-that happens to contain JSON fields named `reason` or `error`. Failure is an
-object `{ reason: ErrorCode, error: string }`, never serialized into stdout.
-The error includes the exit diagnostic and both output streams when a command
-exits nonzero; its class is `io`. An executed failure spends its approval grant.
+Namespace command tools (`exec`, `startProcess`, and Nimbus `runCode`)
+return a successful string or a branchable refusal object
+`{ reason, error, execution?: { exitCode } }`. The execution field is present
+only when the producer observed the process exit. An actual nonzero exit has
+class `io` and retains both diagnostic streams; an unknown transport outcome
+does not acquire an invented exit code. An executed failure spends its grant.
 A gate denial preserves `denied`; a queued request preserves `unavailable`,
 and neither dispatches a command. Only producer-classified no-execution
 outcomes qualify for a grant refund.
+
+Native invocations use the SDK error channel. For example, native `run`
+returns successful text but raises a classified `KinuError` for an operation
+failure, retaining observed exit metadata. The explicit namespace adapters
+return typed operation refusals as values so authored code can branch on them.
+A codemode program that handles such a value and returns normally succeeds;
+an unhandled program exception fails. Neither arbitrary returned JSON nor
+stdout can determine invocation status.
 
 Slate namespace bindings return `{ ok: true, value }` for successful command
 text and `{ ok: false, reason, error }` for structural failures. File contents,

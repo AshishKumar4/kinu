@@ -41,6 +41,7 @@ import { JsonObjectSchema, type JsonObject } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES } from './providers/rate-limit-retry';
 import { diagnostics, toKinuError } from './obs/index';
+import { failedToolOutcome, type ToolOutcome } from './tools/outcome';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -61,7 +62,7 @@ export type ChatEvent =
    *  error text on failure; `success`/`error` carry the discriminator the
    *  evolution signal reads (hadError, outcome review) — matching the cf
    *  backend's afterToolCall. */
-  | { type: 'tool-result'; toolName: string; toolCallId: string; result: string; success: boolean; error?: string }
+  | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string; error?: string } & ToolOutcome)
   /** `usage` is what the provider reported for THIS step's request, and only
    *  that: a field it did not mention stays absent, a zero it did report stays
    *  a zero. `usage.input` doubles as the caller's measured compaction signal
@@ -546,10 +547,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             // A tool threw: the error is the durable outcome the evolution signal
             // reads. The extension seam sees the error text as the result (same as
             // the cf afterToolCall), and the discriminator rides success/error.
+            const outcome = failedToolOutcome({ cause: chunk.error });
             const error = describeProviderError({ cause: chunk.error });
             const input = parseToolArgs(chunk.input);
-            await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result: error, success: false });
-            yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, success: false, error };
+            await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result: error, ...outcome });
+            yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, error, ...outcome };
             break;
           }
           case 'finish-step': {

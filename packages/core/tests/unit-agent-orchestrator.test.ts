@@ -16,6 +16,7 @@ import type { AgentSignal } from '../src/types/signals';
 import type { CompletedTurn } from '../src/evolution/types';
 import type { JsonObject, SqlExec } from '../src/index';
 import { makeSqlExec } from './helpers';
+import type { ToolOutcome } from '../src/tools/outcome';
 
 function makeSql(): SqlExec {
   return makeSqlExec(new Database(':memory:'));
@@ -763,7 +764,7 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
       toolName: 'execute_tools',
       args: { code },
       result: failure ?? 'ok',
-      success: failure === undefined,
+      ...(failure === undefined ? { success: true } satisfies ToolOutcome : { success: false, reason: null } satisfies ToolOutcome),
     });
   }
 
@@ -854,7 +855,7 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
     for (let i = 0; i < 3; i++) {
       await orch.turnExtension.onToolCall?.({ toolName: 'run', args: { command: `x${i}` } });
       await orch.turnExtension.onToolResult?.({
-        toolName: 'run', args: { command: `x${i}` }, result: `Error: no ${i}`, success: false,
+        toolName: 'run', args: { command: 'x' + i }, result: 'Error: no ' + i, success: false, reason: null,
       });
     }
     // Three failures on one tool with no success between fires the repeated_failure steer.

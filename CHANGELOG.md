@@ -14,6 +14,13 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
+- **Structural tool invocation outcomes.** Native operation failures now use
+  the SDK error channel; namespace refusals remain branchable values. New tool
+  records retain the invocation outcome, producer classification and observed
+  process exit separately from rendered output. Successful JSON-looking data no
+  longer creates false failure badges or execution penalties; historical calls
+  without outcome evidence remain unmeasured.
+
 - **Mechanically enforced Plan authority.** Native and codemode file inspection,
   research records, read-only declared external tools and plan submission remain
   available, while project writes, opaque process execution, ports and deployment

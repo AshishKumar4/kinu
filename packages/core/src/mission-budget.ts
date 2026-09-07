@@ -48,6 +48,7 @@ import { estimateTokens, estimateUsdCost } from './llm';
 import type { ModelPricing } from './providers/types';
 import type { JsonValue } from './utils/json';
 import { usageReported, usageTotal, type Usage } from './usage';
+import { KinuError } from './obs/error';
 
 /** A cap on a label. Either dimension may be omitted; a label with neither is a
  *  pure accounting scope (it meters, it never refuses). */
@@ -331,10 +332,10 @@ function toSnapshot(row: MissionRow): MissionBudgetSnapshot {
 /** Thrown by a governed `LLM` when the model-call seam declines. Carries the
  *  structured refusal so a catching caller reports the real reason instead of a
  *  bare message. */
-export class MissionBudgetExhausted extends Error {
+export class MissionBudgetExhausted extends KinuError {
+  override readonly name = 'MissionBudgetExhausted';
   constructor(readonly refusal: MissionBudgetRefusal) {
-    super(refusal.note);
-    this.name = 'MissionBudgetExhausted';
+    super('denied', refusal.note);
   }
 }
 

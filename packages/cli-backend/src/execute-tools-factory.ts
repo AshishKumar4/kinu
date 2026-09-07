@@ -62,11 +62,6 @@ interface ExecuteSuccess {
   result: JsonValue;
   logs?: string[];
 }
-interface ExecuteFailure {
-  result: undefined;
-  error: string;
-  logs?: string[];
-}
 /**
  * Build the CLI's `execute_tools` builder. Pass as `executeTools` to
  * `buildActorTools`, or call it with a finished confined surface (heads).
@@ -178,12 +173,8 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           // ReferenceError here (no dispatcher involved — `run` was simply
           // never one of the bound argNames above); rewrite that one shape
           // into an actionable correction, same as the CF codemode sandbox.
-          const payload: ExecuteFailure = {
-            result: undefined,
-            error: explainNativeToolReferenceError(renderThrownChain({ cause: error })),
-          };
-          if (logs.length > 0) payload.logs = logs;
-          return payload;
+          const message = explainNativeToolReferenceError(renderThrownChain({ cause: error }));
+          throw new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error });
         } finally {
           await Promise.allSettled(pendingCalls);
         }

@@ -394,9 +394,28 @@ use it. Envelope keys nest fields. `createRecordingLogger()` keeps it assertable
 
 `AGENTS.md` rejects `Result<T, KinuError>` via `neverthrow`: it cannot
 cross `run`, `tool_call_end` or `execute_tools` structured clone.
-`{ reason, error }` can, and `read-models/tool-failures.ts` parses it.
-`@kinu.run/core` already has two runtime dependencies. `KinuError` uses native
-`cause`. `refusalOf` serializes domain failures.
+`{ reason, error }` crosses namespace boundaries; native invocations use the
+SDK's thrown-error channel. `KinuError` retains native `cause` and any
+producer-observed process exit metadata.
+
+## Invocation outcomes
+
+`ToolOutcome` (`core/src/tools/outcome.ts`) is the recorded SDK invocation
+outcome: `{ success: true }` or `{ success: false, reason, execution? }`.
+`reason` is an existing error class or file verdict, or `null` when no
+producer-owned classification survived. `execution.exitCode` is included only
+when a producer observed that exit. A diagnostic string is not its substitute.
+
+Both SDK hooks capture this outcome before rendering. New `tool_call_end`
+events require an `outcome` field; completed-turn tool records retain the same
+field. Decoders permit its absence in historical records without rewriting
+them. Missing outcome evidence is unmeasured, not successful. An explicit old
+`error` establishes a failure but does not establish its class.
+
+Steering, UI status and execution reward read the outcome, never JSON-looking
+result data or stdout prefixes. A codemode program that handles a namespace
+refusal and returns normally succeeds. Unhandled program errors fail; captured
+console output and the original cause remain available in the error channel.
 
 ## The five executor tools
 
@@ -405,10 +424,10 @@ under `core/src/execution/` classify call failures. Re-counted 2026-08-24:
 still five. Container lifecycle moved to `@kinu.run/devbox`. These remain tool
 failures, not container health.
 
-`refusalText(error)` (`execution/exec-result.ts:81`) is
-`JSON.stringify(refusalOf(error))`. It sits beside its reader,
-`isFailingResultText` (`:148`). Tools return it because LLM-generated
-`execute_tools` code can branch on `reason`. A throw ends the block.
+Command namespaces return structural refusal values so authored code can handle
+them. Native tools raise the same typed operation failures through the SDK.
+`refusalText` remains a codec for explicitly declared string-valued namespace
+channels, not a predicate for arbitrary tool output.
 
 ### What the classification distinguishes, per tool
 
@@ -435,25 +454,23 @@ Four fixed defects are pinned by `core/tests/unit-tool-failure-census.test.ts`:
 `laptop.exists` returned `'false'` / `false` for an unmade call, the latter
 swallowing its error. `workspace.readdir` returned `[]`. Each now refuses.
 
-`refused` holds `bad_input`, `denied`, `unsupported`. `runtimeMissing` holds
-`unavailable`. `broke` holds `missing`, `timeout`, `cancelled`, `oom`, `io`.
-Nothing maps to `workFailed`: classified work never ran. Executed failure
-is `Error (exit N)`. `PART_BY_CODE` is
-`satisfies Readonly<Record<ErrorCode, CensusPart>>`
-(`unit-tool-failure-census.test.ts:507-522`). On 2026-08-18, flipping
-`CODE_IS_REFUSAL.denied` and `unavailable` to `runtimeMissing` failed 8 of 37.
-Re-run 2026-08-24: 37 pass.
+Without observed execution metadata, `refused` holds `bad_input`, `denied`,
+`unsupported` and the file plane's refusal verdicts; `runtimeMissing` holds
+`unavailable`. Other classes belong to `broke` unless execution evidence
+establishes that the work itself failed. An observed nonzero process exit is
+classified from its numeric field: ordinary failing commands count as
+`workFailed`, while the existing shell-specific 124/126/127 distinctions stay
+separate. Class `io` alone does not say whether work ran.
 
-The `cf-backend` `executorOutputIsError` is gone. It was a third prose matcher
-(`exec error:`, `read error:`) for prefixes executors no longer write. It missed
-the two important shapes. The Executors tab drew an unconfigured sandbox and
-unattached laptop as exit 0. It now calls `isFailingResultText`.
+The Executors terminal uses the structural command result and forwards its
+`refusal` metadata. A successful command whose stdout is
+`{"reason":"denied","error":"historical incident"}` remains exit-zero data.
 
 ## What is not converted
 
-- `run` workspace-shell success. `formatExecResult(...)`
-  (`exec-result.ts:105`) keeps non-zero exits as `Error (exit N)` prose. The
-  prefix steers the model and `read-models/tool-failures.ts` parses its exit.
+- Namespace operation results and returned child/verifier/report verdicts remain
+  values. The caller may handle them; they do not make an enclosing codemode
+  invocation fail unless its program raises an unhandled exception.
 - `ExecutorProvider` ports. Typed `{ supported, reason }` differs from parsed
   strings. `sandbox.listExposedPorts` and `nimbus.listExposedPorts` still use
   `[]` for an absent handle or preview host.

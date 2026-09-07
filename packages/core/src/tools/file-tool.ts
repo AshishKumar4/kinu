@@ -25,11 +25,11 @@ import { memoryIndexPath } from '../memory/note';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, FILE_TOOL_ACTIONS, unknownActionError, type FileToolAction,
 } from './registry';
-import { applyFileEdits, readFileSlice, BOM, type FileEdit } from './file-edit';
+import { applyFileEdits, readFileSlice, BOM, FILE_REFUSAL_REASONS, FileRefusalError, type FileEdit } from './file-edit';
 import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from './file-ledger';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS, clampSerializedToolResult } from './clamp';
 import type { JsonValue } from '../utils/json';
-import { renderThrownChain } from '../obs/index';
+import { KinuError, renderThrownChain } from '../obs/index';
 import { permitInPlan, requireBuild } from '../execution/work-mode';
 
 export interface FileToolDeps {
@@ -80,12 +80,10 @@ const QuerySchema = v.pipe(v.string(), v.minLength(1));
  */
 export type FileToolFailureReason = FileEditOutcomeReason | 'bad_input';
 
-/** A failure result, reason FIRST. Every seam that shows a tool result to a
- *  human or a steering hash bounds it to a head slice (1000 chars), and the
- *  refusal prose is the long part — so the discriminator leads, where no clamp
- *  can reach it. */
-function failure(reason: FileToolFailureReason, error: string): JsonValue {
-  return { reason, error };
+/** Fail at the operation that made the decision; callers choose the native or namespace boundary. */
+function failure(reason: FileToolFailureReason, error: string): never {
+  if (v.is(v.picklist(FILE_REFUSAL_REASONS), reason)) throw new FileRefusalError(reason, error);
+  throw new KinuError(reason, error);
 }
 
 /** A VFS failure, rendered for the model and classified for the ledger. */
@@ -123,7 +121,10 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   const inspect = async (action: 'list' | 'stat' | 'search', path: string, read: () => Promise<JsonValue | null>): Promise<JsonValue> => {
     let output: JsonValue | null;
     try { output = await read(); }
-    catch (cause) { return vfsFailure(vfs, { error: cause }, action, path); }
+    catch (cause) {
+      const refused = await vfsFailure(vfs, { error: cause }, action, path);
+      return failure(refused.reason, refused.error);
+    }
     if (output === null) return failure('missing', 'No path at ' + path);
     const bounded = await clampSerializedToolResult({ output }, { vfs, budget, producer: 'file_read' });
     return bounded ?? failure('io', 'File inspection produced no serializable result');

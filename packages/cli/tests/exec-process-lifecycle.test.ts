@@ -228,9 +228,26 @@ describe("kinu exec — a one-shot run terminates", () => {
 
       const events: JsonObject[] = run.stdout.trim().split("\n").map(parseJsonObject);
 
-      expect(events.some((e) => e.type === "tool_call" || e.type === "tool_result")).toBe(true);
+      const toolResult = events.find((event) => event.type === 'tool_result');
+      expect(toolResult?.toolCallId).toBe(events.find((event) => event.type === 'tool_call')?.toolCallId);
+      expect(toolResult).toMatchObject({ success: true, toolCallId: expect.any(String) });
       expect(JSON.stringify(events)).toContain("server-started");
       expect(events.find((e) => e.type === "turn_end")).toMatchObject({ hadError: false });
+    } finally {
+      await server.stop();
+    }
+  }, 240_000);
+  test('a native command failure carries class and observed exit in exec JSON', async () => {
+    const home = newHome();
+    const server = modelThatRuns('printf diagnostic; exit 7');
+    const env = { KINU_BASE_URL: 'http://127.0.0.1:' + server.port, KINU_AUTH: 'Bearer mock', KINU_MODEL: 'mock-model' };
+    try {
+      expect((await runCli(['create', 'failureflow', '--mode', 'local', '--purpose', 'error outcome flow'], env, home, 120_000)).exitCode).toBe(0);
+      const run = await runCli(['exec', '--workspace', 'failureflow', '--json', 'Run the command'], env, home, 90_000);
+      expect(run.timedOut).toBe(false);
+      const events = run.stdout.trim().split('\n').map(parseJsonObject);
+      const result = events.find((event) => event.type === 'tool_result');
+      expect(result).toMatchObject({ success: false, reason: 'io', execution: { exitCode: 7 }, result: expect.stringContaining('diagnostic') });
     } finally {
       await server.stop();
     }

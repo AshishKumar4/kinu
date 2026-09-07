@@ -33,6 +33,9 @@
  */
 
 import { readExecSignal } from '../execution/signal';
+import { branchableToolCall } from './outcome';
+import { MissionBudgetExhausted } from '../mission-budget';
+import { projectJsonValue } from '../utils/json';
 import * as v from 'valibot';
 import type { CodemodeProvider } from './sandbox-contract';
 import { TOOL_REACH, type AgentsToolAction } from './registry';
@@ -251,7 +254,7 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
     tools[action] = {
       planAllowed: true,
       description: memberDescription(action, initialDeps),
-      execute: async (...args: unknown[]) => {
+      execute: (...args: unknown[]) => branchableToolCall(async () => {
         // The node sandbox appends its exec context as a trailing argument, so a
         // member called with no options of its own arrives as `list({ signal })`.
         // That object is the HOST's, never a field the script wrote: it is found
@@ -282,8 +285,13 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
           return { reason: 'bad_input', error: `agents.${action}: ${renderThrownChain({ cause: error })}` };
         }
         const signal = readExecSignal({ context });
-        return dispatchAgentsAction({ ...deps(), mode }, input, signal ? { abortSignal: signal } : undefined);
-      },
+        try {
+          return await dispatchAgentsAction({ ...deps(), mode }, input, signal ? { abortSignal: signal } : undefined);
+        } catch (cause) {
+          if (cause instanceof MissionBudgetExhausted) return projectJsonValue({ value: cause.refusal });
+          throw cause;
+        }
+      }),
     };
   }
 

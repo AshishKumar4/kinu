@@ -30,7 +30,10 @@ import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { ChatEvent } from '../chat';
 import { currentWorkMode } from '../execution/work-mode';
-import { JsonObjectSchema, projectJsonValue, type JsonValue } from '../utils/json';
+import { JsonObjectSchema, projectJsonValue } from '../utils/json';
+import { ToolOutcomeSchema } from '../tools/outcome';
+import { renderToolResult } from '../prompts/evidence-window';
+import { FAILURE_WITHOUT_ERROR } from '../events/types';
 import { UsageSchema } from '../usage';
 import {
   runScaffold,
@@ -39,19 +42,6 @@ import {
 } from './executor';
 import { pumpScaffoldEvents } from './event-pump';
 
-/** A `host.callTool` result is the tool's own output, or `{ error }` when the
- *  dispatch threw — the shape `buildHostProvider` guarantees. */
-const ToolErrorSchema = v.object({ error: v.string() });
-const StringResultSchema = v.string();
-
-function toolOutcome(result: JsonValue | undefined): { result: string; success: boolean; error?: string } {
-  const error = v.safeParse(ToolErrorSchema, result);
-  const stringResult = v.safeParse(StringResultSchema, result);
-  const text = stringResult.success ? stringResult.output : JSON.stringify(result ?? null) ?? 'null';
-  return error.success
-    ? { result: text, success: false, error: error.output.error }
-    : { result: text, success: true };
-}
 
 const ModelMessagesSchema = v.custom<ModelMessage[]>((input) =>
   modelMessageSchema.array().safeParse(input).success,
@@ -65,14 +55,12 @@ const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
     toolCallId: v.string(),
     args: JsonObjectSchema,
   }),
-  v.object({
-    type: v.literal('tool-result'),
-    toolName: v.string(),
-    toolCallId: v.string(),
-    result: v.string(),
-    success: v.boolean(),
-    error: v.optional(v.string()),
-  }),
+  v.variant('success', [
+    v.object({ type: v.literal('tool-result'), toolName: v.string(), toolCallId: v.string(),
+      result: v.string(), error: v.optional(v.string()), ...ToolOutcomeSchema.options[0].entries }),
+    v.object({ type: v.literal('tool-result'), toolName: v.string(), toolCallId: v.string(),
+      result: v.string(), error: v.optional(v.string()), ...ToolOutcomeSchema.options[1].entries }),
+  ]),
   v.object({
     type: v.literal('step-finish'),
     stepIndex: v.number(),
@@ -154,7 +142,9 @@ async function* scaffoldTurn(
           type: 'tool-result',
           toolName: toolNames.get(ev.toolCallId) ?? 'unknown',
           toolCallId: ev.toolCallId,
-          ...toolOutcome(ev.result),
+          result: ev.outcome.success ? renderToolResult(ev.result) : ev.error ?? FAILURE_WITHOUT_ERROR,
+          error: ev.error,
+          ...ev.outcome,
         };
         break;
       case 'step_finish':

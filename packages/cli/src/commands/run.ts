@@ -4,7 +4,7 @@ import { listConfiguredAgentRefs, requireAuthConfig } from '../config';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import { createAgentClient, type AgentClientFlags } from '../client-factory';
 import type { AgentClient, AgentClientEvent } from '../agent-client';
-import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, ToolOutcomeSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { CliSessionOptions } from '../session';
 import { chatCommand } from './chat';
@@ -501,7 +501,7 @@ function renderRunEvent(event: AgentClientEvent): void {
       printToolCall(event.toolName, event.args);
       break;
     case 'tool-result':
-      printToolResult(event.result);
+      printToolResult(event.result, event);
       break;
     case 'error':
       console.log(`\n${formatFailure({ cause: event.message })}`);
@@ -541,9 +541,9 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
     case 'text-delta':
       return [{ type: 'message_delta', role: 'assistant', delta: event.delta }];
     case 'tool-call':
-      return [{ type: 'tool_call', toolName: event.toolName, args: event.args }];
+      return [{ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, args: event.args }];
     case 'tool-result':
-      return [{ type: 'tool_result', toolName: event.toolName, result: event.result }];
+      return [{ type: 'tool_result', toolName: event.toolName, toolCallId: event.toolCallId, result: event.result, ...v.parse(ToolOutcomeSchema, event) }];
     case 'turn-end': {
       const turnEnd: JsonObject = {
         type: 'turn_end',

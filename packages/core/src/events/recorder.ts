@@ -25,6 +25,7 @@ import {
   type ModelOperationSink, type SpendSource, type SpendTally,
 } from './model-call';
 import { diagnostics, toKinuError } from '../obs/index';
+import { ToolOutcomeSchema } from '../tools/outcome';
 
 /** A stored model message, validated by the AI SDK's OWN schema rather than a
  *  hand-written copy of its part unions — the same predicate the compaction
@@ -76,7 +77,7 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('tool_call_end'), name: v.string(),
     toolCallId: v.string(), args: v.optional(JsonValueSchema),
     result: v.optional(JsonValueSchema), error: v.optional(v.string()),
-    durationMs: v.optional(v.number()) }),
+    durationMs: v.optional(v.number()), outcome: v.optional(ToolOutcomeSchema) }),
   v.object({ ...BaseFields, type: v.literal('step_finish'), stepIndex: v.number(),
     reason: v.optional(v.string()), messages: v.optional(v.array(StoredModelMessageSchema)),
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),

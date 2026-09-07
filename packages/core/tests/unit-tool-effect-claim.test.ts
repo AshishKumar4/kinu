@@ -15,7 +15,7 @@ import { createTestSql, toolExecute } from '@kinu.run/test-utils';
 import { jsonSchema, tool } from 'ai';
 import {
   claimToolEffect, initToolEffectClaimTable, releaseTurnEffectClaims, settleToolEffect,
-  withEffectClaims, replayPolicyFor, parseRefusal, type EffectClaimDeps, type JsonValue,
+  withEffectClaims, replayPolicyFor, type EffectClaimDeps, type JsonValue,
 } from '../src/index';
 
 /** A workspace's claim table over a real SQLite, plus the deps the wrapper
@@ -102,11 +102,9 @@ describe('tool effect claims', () => {
     // here on, whether it landed is genuinely unknown.
     await expect(execute({ to: 'ops@example.test' }, OPTIONS)).rejects.toThrow('connection dropped');
 
-    const replayed = await execute({ to: 'ops@example.test' }, OPTIONS);
-
-    const refusal = parseRefusal(String(replayed));
-    expect(refusal?.reason).toBe('denied');
-    expect(refusal?.error).toContain('never recorded');
+    const replayed = execute({ to: 'ops@example.test' }, OPTIONS);
+    await expect(replayed).rejects.toMatchObject({ code: 'denied' });
+    await expect(replayed).rejects.toThrow('never recorded');
   });
 
   test('a different call in the same turn is not a replay', async () => {
@@ -230,8 +228,7 @@ describe('tool effect claims', () => {
     // ASSERTION 2, the recovery. A replay of the same provider response arrives
     // while the first effect is still open. It must refuse, because whether the
     // effect landed is unknown, and it must not run the tool a second time.
-    const reentered = await execute({ to: 'ops@example.test' }, OPTIONS);
-    expect(parseRefusal(String(reentered))?.reason).toBe('denied');
+    await expect(execute({ to: 'ops@example.test' }, OPTIONS)).rejects.toMatchObject({ code: 'denied' });
     expect(calls).toEqual(['ops@example.test']);
 
     // ASSERTION 3. Releasing the original continuation settles the one effect,

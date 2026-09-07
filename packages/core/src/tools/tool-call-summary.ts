@@ -15,47 +15,13 @@
  * read as `edit, /a/b.ts, [{"old":"…` there and `Edited b.ts — 3 replacements`
  * on the web. One vocabulary, one home, both surfaces.
  */
-import { isFailingToolResult } from '../orchestrator/turn-steering';
-import { renderThrownChain } from '../obs/index';
-import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import * as v from 'valibot';
 
 /** Chip budget — long enough for a command or a short task, short enough to
  *  stay on one line next to the name, runtime badge and duration. */
 const MAX = 72;
 
-/**
- * Whether a tool call is a failure, as the agent itself would read it — not
- * just as the transport does.
- *
- * The `run` tool (and every built-in) catches its own failure and RETURNS it
- * as an ordinary, successful result — `Error (exit 1)…` or `{"error": "…"}`
- * (execution/exec-result.ts, tools/builtins.ts) — because that text is what
- * steers the model's next step. A card that only checks the transport state
- * renders that exact case as a plain success: the curl that came back
- * `HTTP 500` looks identical to the one that came back `HTTP 200`. This reuses
- * the SAME predicate core's turn-steering already keys the agent's own
- * self-correction hints on, so the UI and the agent see failure the same way.
- */
-export function isToolCallFailed<Input, Output>(
-  toolName: string, input: Input, output: Output, protocolFailed: boolean,
-): boolean {
-  if (protocolFailed) return true;
-  if (output == null) return false;
-  const parsedOutput = v.safeParse(JsonValueSchema, output);
-  if (!parsedOutput.success) return false;
-  const result = v.is(v.string(), parsedOutput.output) ? parsedOutput.output : jsonOrString(parsedOutput.output);
-  const parsedInput = v.safeParse(JsonObjectSchema, input);
-  return isFailingToolResult({ toolName, args: parsedInput.success ? parsedInput.output : {}, result, success: true });
-}
-
-function jsonOrString(value: JsonValue): string {
-  try {
-    return JSON.stringify(value);
-  } catch (error) {
-    return `unserializable tool call part: ${renderThrownChain({ cause: error })}`;
-  }
-}
 
 function str(input: JsonObject, key: string): string {
   const value = input[key];
