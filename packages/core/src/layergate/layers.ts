@@ -1609,7 +1609,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'backend-turn-driver/turn-snapshot',
-        asserts: 'the graded CompletedTurn: hadError from a failed tool, origin, no fabricated usage, conditional turnId',
+        asserts: 'the graded CompletedTurn: explicit invocation outcomes, hadError from a failed tool, origin, no fabricated usage, conditional turnId',
         observe: (s) => {
           const clean = new TurnAccumulator();
           clean.recordToolCall({ toolName: 'run', input: { command: 'ls' }, success: true, output: 'ok' });

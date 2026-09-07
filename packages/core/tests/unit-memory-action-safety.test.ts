@@ -83,18 +83,15 @@ function memoryTool(facts: FactsStore) {
 describe('the memory tool refuses actions it does not know', () => {
   test('a misspelled action is named back to the model, not guessed at', async () => {
     const facts = recordingFacts();
-    const result = await memoryTool(facts).execute({ action: 'forgt', key: 'deploy.target' });
-
-    // Naming the action back is what lets the model correct itself; a generic
-    // "invalid input" leaves it retrying the same wrong verb.
-    expect(JSON.stringify(result)).toContain('forgt');
+    await expect(memoryTool(facts).execute({ action: 'forgt', key: 'deploy.target' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('forgt') });
   });
 
   test('and it deletes nothing on the way', async () => {
     const facts = recordingFacts();
     facts.upsert('deploy.target', 'production');
 
-    await memoryTool(facts).execute({ action: 'forgt', key: 'deploy.target' });
+    await expect(memoryTool(facts).execute({ action: 'forgt', key: 'deploy.target' })).rejects.toMatchObject({ code: 'bad_input' });
 
     expect(facts.forgotten).toEqual([]);
     expect(facts.recall('deploy.target')?.value).toBe('production');
@@ -108,7 +105,7 @@ describe('the memory tool refuses actions it does not know', () => {
     // Names chosen to sit next to the real ones: near-misses are what a model
     // actually emits, and a prefix/substring dispatch would let them through.
     for (const action of ['delete', 'remove', 'forget_all', 'rememberr', 'Forget', 'recall_all', '']) {
-      await tool.execute({ action, key: 'user.tz' });
+      await expect(tool.execute({ action, key: 'user.tz' })).rejects.toMatchObject({ code: 'bad_input' });
     }
 
     expect(facts.forgotten).toEqual([]);
@@ -136,7 +133,7 @@ describe('the memory tool refuses actions it does not know', () => {
     facts.upsert('a', 1);
     facts.upsert('b', 2);
 
-    await memoryTool(facts).execute({ action: 'forget' });
+    await expect(memoryTool(facts).execute({ action: 'forget' })).rejects.toMatchObject({ code: 'bad_input' });
 
     expect(facts.forgotten).toEqual([]);
     expect(facts.recall('a')).not.toBeNull();

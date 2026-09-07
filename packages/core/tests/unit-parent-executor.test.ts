@@ -59,8 +59,8 @@ describe('parent executor input validation', () => {
   test('exec with no command refuses instead of running "undefined"', async () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
-    const out = String(await parent.tools.exec.execute(undefined));
-    expect(parseRefusal(out)?.reason).toBe('bad_input');
+    const out = await parent.tools.exec.execute(undefined);
+    expect(out).toMatchObject({ reason: 'bad_input', error: expect.stringContaining('command must be a string') });
     expect(calls).toEqual([]);
   });
 

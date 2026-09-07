@@ -9,7 +9,7 @@ export const LOCKED_BASELINE: Baseline = {
   'backend-turn-driver/prompt-token-trigger': '1f11659c0558bb43',
   'backend-turn-driver/run-bracket': '9d79b402e3189d13',
   'backend-turn-driver/run-bracket-never-throws': 'e8218e7869269183',
-  'backend-turn-driver/turn-snapshot': '90ca127617a7b1cb',
+  'backend-turn-driver/turn-snapshot': 'f9f84531afa1bc35',
   'compaction/checkpoint-roundtrip': '6bff22387523df71',
   'compaction/first-pass-prompt': 'b9b3d9b8e7e82e07',
   'compaction/iterative-prompt': '520c887b8dfc267c',

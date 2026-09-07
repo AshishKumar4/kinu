@@ -9,7 +9,7 @@ import {
   type DeviceTransport,
 } from '../src/execution/device-tunnel-executor';
 import { deviceFleetAsk, type DeviceFleetEntry, type DeviceStatus } from '../src/execution/device-status';
-import { answeredRefusal, parseRefusal, type CommandResult } from '../src/execution/exec-result';
+import { answeredRefusal, parseRefusal } from '../src/execution/exec-result';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { toolExecute } from '@kinu.run/test-utils';
@@ -241,7 +241,7 @@ describe('the run tool names the machine', () => {
     const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router } });
     return {
       t,
-      run: toolExecute<{ command: string; runtime: string; device?: string; why?: string }, CommandResult>(tools.run),
+      run: toolExecute<{ command: string; runtime: string; device?: string; why?: string }, string>(tools.run),
     };
   }
 
@@ -251,9 +251,9 @@ describe('the run tool names the machine', () => {
     expect(await run({ command: 'uname', runtime: 'laptop', device: 'mrwhite@rig', why: 'their GPU' })).toBe('ran on dev-rig');
     expect(t.sent.map((frame) => frame.deviceId)).toEqual(['dev-rig']);
 
-    const refusal = answeredRefusal(await run({ command: 'uname', runtime: 'laptop', why: 'their GPU' }));
-    expect(refusal?.reason).toBe('bad_input');
-    expect(refusal?.error).toContain('name the machine this command runs on');
+    const pending = run({ command: 'uname', runtime: 'laptop', why: 'their GPU' });
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(pending).rejects.toThrow('name the machine this command runs on');
     expect(t.sent).toHaveLength(1);
   });
 
