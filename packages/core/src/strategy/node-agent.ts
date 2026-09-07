@@ -776,18 +776,9 @@ export async function runNodeAgent(
     { nodeId: input.nodeId, rootId: input.rootId, depth: input.depth },
     deps.provisionHome,
   );
-  // `maxDepth: 1` means "this node itself may run", and that is the whole of what a
-  // node's own budget governs. Recursion is not a node's to spend — the arbiter owns
-  // depth, and a node at the search's depth cap must still do its work rather than being
-  // stopped before its first step, which is what a depth of 0 would do here
-  // (`budgetExhausted` treats it as exhausted).
-  //
-  // THE DEADLINE IS OPT-IN. Absent is the ruling's default: no wall clock over a
-  // node's work (owner ruling, 2026-08-21). Present, `stopWhen`'s
-  // `budgetExhausted` honours it between steps — the search or a test declaring a
-  // tighter deadline than "until the work is done".
+  // The swarm owns recursion. This node has no independent split budget.
   const nodeBudget: HeadBudget = {
-    maxDepth: 1,
+    maxDepth: 0,
     spawnedAt: Date.now(),
     maxWallClockMs: deps.maxWallClockMs,
   };
@@ -801,11 +792,6 @@ export async function runNodeAgent(
     mode: input.mode,
     rationale: input.rationale,
     inheritedContext: [...input.inherited],
-    // `maxDepth: 1` means "this node itself may run", and that is the whole of what
-    // a node's own budget governs. Recursion is not a node's to spend — the arbiter
-    // owns depth, and a node at the search's depth cap must still do its work
-    // rather than being stopped before its first step, which is what a depth of 0
-    // would do here (`budgetExhausted` treats it as exhausted).
     budget: nodeBudget,
     // The journal's own label column speaks the head vocabulary. A search settles
     // by `settleOf` and the run's report records that; this maps the one honest

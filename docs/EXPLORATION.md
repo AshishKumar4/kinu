@@ -319,8 +319,8 @@ Implemented by `strategy/node-agent.ts`, `heads/head-inference.ts`, `chat.ts`,
 
 A node has no step cap or default wall clock (owner ruling, 2026-08-21).
 `runChat` has no cap. `UNBOUNDED_STEPS` in `chat.ts` never fires; a caller's condition can
-only add a stop reason. `maxDepth: 1` means "this node itself may run". The
-arbiter owns depth.
+only add a stop reason. The arbiter owns node depth. A head with no split depth
+left still finishes its own work; its tool surface excludes further splitting.
 
 A node ends when the model stops calling tools and it holds nothing, the search
 aborts it, its mission governor declines the next request, or an opt-in

@@ -435,17 +435,9 @@ export function deriveChildBudget(parent: HeadBudget, now: number = Date.now()):
   };
 }
 
-/**
- * Whether this head may still spawn, and whether a requested deadline has passed.
- *
- * Only two things can be spent: recursion depth, and the wall-clock a caller
- * explicitly asked for. There is no token dimension — cumulative spend is the
- * mission budget governor's job (mission-budget.ts), which owns a real ledger
- * across a whole mission instead of a per-head pool that starves a fork before
- * it can do the work the split assumed.
- */
+/** Whether a caller-requested deadline has passed. Split depth is checked
+ * where children are created; it cannot stop work in an existing head. */
 export function budgetExhausted(b: HeadBudget) {
-  if (b.maxDepth <= 0) return { exhausted: true, reason: 'max-depth' };
   if (b.maxWallClockMs !== undefined && Date.now() - b.spawnedAt >= b.maxWallClockMs) {
     return { exhausted: true, reason: 'wall-clock' };
   }

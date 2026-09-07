@@ -331,11 +331,8 @@ describe('every node runs to the deadline its caller declared, and to none other
   }, 60_000);
 
   test('a clock the caller declared reaches the node verbatim; zero is a declaration', async () => {
-    // THE WHOLE of `runSwarm`'s clock resolution: pass-through or absent, nothing
-    // derived. ZERO IS A DECLARATION, NOT AN ABSENCE — `budgetExhausted` treats
-    // `maxDepth: 0` as exhausted, and `node-agent.ts` records that as a deliberate
-    // meaning rather than an accident. `unit-swarm-node-envelope.test.ts` holds
-    // the behaviour a zero clock produces.
+    // Zero is an explicit elapsed-time budget, not an absent one.
+    // unit-swarm-node-envelope.test.ts covers the zero-clock behavior.
     const settled: Outcome = { status: 'completed', content: fenced(WASTEFUL), stepCount: 4 };
     const cases = [
       { name: 'nothing declared', declare: {}, clock: undefined },
