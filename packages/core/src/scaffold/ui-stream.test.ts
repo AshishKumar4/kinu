@@ -68,7 +68,7 @@ describe('scaffoldEventsToUIStream', () => {
     const chunks = await collect(scaffoldEventsToUIStream(scriptedRunner([
       { type: 'text_delta', text: 'thinking' },
       { type: 'tool_call', name: 'run', args: { command: 'ls' }, toolCallId: 'tc1' },
-      { type: 'tool_result', toolCallId: 'tc1', result: { stdout: 'a\nb' } },
+      { type: 'tool_result', toolCallId: 'tc1', result: { stdout: 'a\nb' }, outcome: { success: true } },
       { type: 'done' },
     ])));
     const types = chunks.map(c => c.type);

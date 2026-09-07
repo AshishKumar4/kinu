@@ -9,6 +9,7 @@ import type { ReportToolDeps } from './builtins';
 import { dispatchReport } from './report-tool';
 import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types';
 import { TOOL_REACH } from './registry';
+import { branchableToolCall } from './outcome';
 
 /** Positional args arrive untyped from the sandbox; narrowing them to two
  *  strings is this surface's only job. Which statuses exist, and what an empty
@@ -38,14 +39,14 @@ export function createReportCodemodeProvider(deps: () => ReportToolDeps): Codemo
       send: {
         planAllowed: true,
         description: 'Report progress, completion, or a blocker to the workspace orchestrator.',
-        execute: async (...args: unknown[]) => {
+        execute: (...args: unknown[]) => branchableToolCall(async () => {
           const positional = v.safeParse(PositionalSchema, [args[0], args[1]]);
           if (!positional.success) {
             return { error: 'report.send requires a status and content, both strings' };
           }
           const [status, content] = positional.output;
           return await dispatchReport(deps(), { status, content });
-        },
+        }),
       },
     },
   };

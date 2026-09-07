@@ -81,7 +81,7 @@ describe("CLI transcripts", () => {
       { type: "tool-result", toolName: "read_file", toolCallId: "tc-1", result: "contents", success: true },
       { type: "text-delta", delta: "second text " },
       { type: "tool-call", toolName: "write_file", toolCallId: "tc-2", args: { path: "b.ts" } },
-      { type: "tool-result", toolName: "write_file", toolCallId: "tc-2", result: "failed", success: false },
+      { type: "tool-result", toolName: "write_file", toolCallId: "tc-2", result: "failed", success: false, reason: null },
       { type: "text-delta", delta: "third text" },
       { type: "turn-end", turn: { text: turnText, toolCalls: [], steps: 2, durationMs: 1, hadError: false } },
     ];

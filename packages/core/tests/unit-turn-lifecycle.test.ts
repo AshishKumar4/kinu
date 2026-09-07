@@ -236,7 +236,7 @@ describe('snapshotCompletedTurn', () => {
   test('a failed tool call flags the turn, and reported usage rides along', () => {
     const acc = new TurnAccumulator();
     acc.reset(Date.now());
-    acc.recordToolCall({ toolName: 'run', success: false, error: 'exit 1' });
+    acc.recordToolCall({ toolName: 'run', success: false, reason: null, error: 'exit 1' });
     acc.recordStep({ usage: { input: 7, output: 3 } });
     const turn = snapshotCompletedTurn(acc, {
       userMessage: 'u', assistantResponse: 'a', sessionId: 's', origin: 'programmatic',
@@ -341,7 +341,7 @@ describe('creditedTurnId', () => {
   test('a failed tool call inside a turn that still answered does not void the credit', () => {
     const acc = new TurnAccumulator();
     acc.reset(0);
-    acc.recordToolCall({ toolName: 'run', input: {}, success: false, error: 'exit 1' });
+    acc.recordToolCall({ toolName: 'run', input: {}, success: false, reason: null, error: 'exit 1' });
     acc.recordToolCall({ toolName: 'run', input: {}, success: true, output: 'ok' });
     expect(acc.hadError).toBe(true);
     expect(creditedTurnId({ messageId: 'msg-1', completed: true, workMode: 'build' })).toBe('msg-1');

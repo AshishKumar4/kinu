@@ -1,7 +1,7 @@
 import { BoxRenderable, CodeRenderable, type BoxOptions, type MarkdownOptions } from '@opentui/core';
 import { useCallback, useRef } from 'react';
 
-import { parseRefusal, TUI_MARKS } from '@kinu.run/core';
+import { TUI_MARKS } from '@kinu.run/core';
 
 import type { AgentClientStatus } from '../agent-client';
 import { clipText } from './format';
@@ -139,7 +139,7 @@ function ToolActivityCard({ rows, callPreviewWidth, resultPreviewWidth, expanded
   const { colors } = useTuiTheme();
   const { well } = colors;
   const calls = rows.filter((row) => row.kind === 'call').length;
-  const failed = rows.filter((row) => row.kind === 'result' && (row.message.success === false || parseRefusal(row.message.content) !== null)).length;
+  const failed = rows.filter((row) => row.kind === 'result' && row.message.success === false).length;
   const rule = '┄'.repeat(Math.max(1, resultPreviewWidth));
   return (
     <box
@@ -184,22 +184,6 @@ function ToolCallRow({ toolName, args, previewWidth }: { toolName: string; args?
 
 function ToolResultRow({ content, success, previewWidth, expanded }: { content: string; success?: boolean; previewWidth: number; expanded: boolean }) {
   const { well } = useTuiTheme().colors;
-  const refusal = parseRefusal(content);
-  if (refusal) {
-    const [head, ...rest] = refusal.error.split('\n');
-    return (
-      <box flexDirection="column" style={{ paddingLeft: 2 }}>
-        <text>
-          <span fg={well.danger}>{TUI_MARKS.failure} refused</span>
-          {head ? <span fg={well.ink}> {clipText(head, previewWidth)}</span> : null}
-          <span fg={well.muted}> ({refusal.reason})</span>
-        </text>
-        {rest.slice(0, expanded ? 12 : 3).map((line, index) => (
-          <text key={`${String(index)}-${line}`}><span fg={well.muted}>{expanded ? line : clipText(line, previewWidth)}</span></text>
-        ))}
-      </box>
-    );
-  }
   const lines = expanded ? content.split('\n').slice(0, 20) : [clipText(content.replace(/\s+/g, ' '), previewWidth)];
   return (
     <box flexDirection="column" style={{ paddingLeft: 2 }}>

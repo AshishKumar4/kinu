@@ -93,10 +93,10 @@ import { commandResult, CommandResultSchema, type CommandResult } from '../execu
 import { TurnEscalationLedger } from '../execution/escalation';
 import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool';
 import { createTasksDispatcher, type TasksToolInput } from './tasks-tool';
-import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index';
+import { type WebSearchProvider, type WebSearchResponse } from '../web/index';
 import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review';
 import type { JsonValue } from '../utils/json';
-import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError, type Logger } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, toKinuError, type Logger } from '../obs/index';
 // The admitted-set filter beside the sets it narrows (heads/types.ts). That
 // module holds no runtime import, so this edge cannot close a ring.
 import { keepBuiltins } from '../heads/types';
@@ -420,14 +420,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       properties: { code: { type: 'string', description: 'JavaScript code to execute' } },
       required: ['code'],
     }),
-    execute: async () => ({
-      result: undefined,
-      error:
-        'execute_tools is not configured on this runtime. The backend must supply ' +
-        'deps.preBuiltExecuteTool to buildBuiltinTools or deps.executeTools to ' +
-        'buildActorTools (CF: cf-backend/createExecuteToolsFactory; CLI: ' +
-        '@kinu.run/cli-backend/createNodeExecuteToolFactory).',
-    }),
+    execute: async (): Promise<JsonValue> => {
+      throw new KinuError('unsupported', 'execute_tools is not configured on this runtime. The backend must supply '
+        + 'deps.preBuiltExecuteTool to buildBuiltinTools or deps.executeTools to '
+        + 'buildActorTools (CF: cf-backend/createExecuteToolsFactory; CLI: '
+        + '@kinu.run/cli-backend/createNodeExecuteToolFactory).');
+    },
   });
 
   // Restorable result budget: oversize execute_tools results are offloaded to
@@ -491,10 +489,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       // uses that shape (run-file-steer.ts) — outside the clamp, so the note is
       // never the part that gets truncated.
       const steer = fileToolSteer(args.command);
-      const clamp = async (result: CommandResult): Promise<CommandResult> => {
+      const clamp = async (result: CommandResult): Promise<string> => {
         const text = v.is(v.string(), result) ? result : result.error;
         const clamped = await clampToolResult(text, { vfs: rt.storage.vfs, budget, producer: 'run' });
-        if (!v.is(v.string(), result)) return { ...result, error: clamped };
+        if (!v.is(v.string(), result)) throw new KinuError(result.reason, clamped, { execution: result.execution });
         return steer ? `${steer}\n\n${clamped}` : clamped;
       };
       const defaultRuntime = 'workspace';
@@ -506,7 +504,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
             'no workspace shell available in this runtime',
           );
           logger.failure(RUN_SHELL_ABSENT, refusal, { runtime: runtimeKey });
-          return refusalOf(refusal);
+          throw refusal;
         }
         return clamp(commandResult(await shell.exec(args.command, signal ? { signal } : undefined)));
       }
@@ -531,17 +529,13 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         // install card matches on it (cf-backend WorkspacePage.tsx:76-80).
         const refusal = new KinuError('unavailable', 'runtime_not_provisioned');
         logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
-        return {
-          reason: refusal.code,
-          error: refusal.message,
-          runtime: runtimeKey,
-          message:
-            runtimeKey === 'laptop'
-              ? 'The "laptop" runtime requires the Kinu PC daemon. Ask the user to install it from the Executors tab.'
-              : runtimeKey === 'sandbox'
-                ? 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use — retry.'
-                : `Runtime "${runtimeKey}" is not registered.`,
-        };
+        throw new KinuError(refusal.code, refusal.message + ': ' + (
+          runtimeKey === 'laptop'
+            ? 'The "laptop" runtime requires the Kinu PC daemon. Ask the user to install it from the Executors tab.'
+            : runtimeKey === 'sandbox'
+              ? 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use — retry.'
+              : 'Runtime "' + runtimeKey + '" is not registered.'
+        ), { cause: refusal });
       }
       const execTool = provider.tools.exec;
       if (!execTool) {
@@ -551,12 +545,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         // to keep those apart.
         const refusal = new KinuError('unsupported', 'runtime_does_not_support_exec');
         logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
-        return {
-          reason: refusal.code,
-          error: refusal.message,
-          runtime: runtimeKey,
-          message: `Runtime "${runtimeKey}" is provisioned but does not expose shell exec.`,
-        };
+        throw new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
       }
       // The trailing context every executor's exec reads: the abort signal,
       // and — for a device runtime — which of the user's machines the command
@@ -579,7 +568,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         });
         escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'failed' });
         logger.failure(RUN_ESCALATION_FAILED, failure, { runtime: runtimeKey });
-        return refusalOf(failure);
+        throw failure;
       }
       escalations.observe({
         runtime: runtimeKey,
@@ -733,30 +722,26 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         // model's next call can succeed.
         const action = v.safeParse(WebActionSchema, args.action);
         if (!action.success) {
-          return { error: unknownActionError('web', 'action', args.action, WEB_TOOL_ACTIONS) };
+          throw new KinuError('bad_input', unknownActionError('web', 'action', args.action, WEB_TOOL_ACTIONS));
         }
-        try {
-          switch (action.output) {
-            case 'search': {
-              if (!args.query) return { error: 'web.search requires `query`' };
-              const res = await webSearch.search(args.query, args.limit !== undefined ? { limit: args.limit } : undefined);
-              return formatSearchResults(res);
-            }
-            case 'fetch': {
-              if (!args.url) return { error: 'web.fetch requires `url`' };
-              const res = await webSearch.fetch(args.url);
-              // Restorable clamp: oversized pages are offloaded to the
-              // workspace VFS and reduced to a re-readable head (see
-              // clamp.ts), so a big page never rots the session.
-              const header = `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n`;
-              const body = await clampToolResult(res.markdown, {
-                vfs: rt.storage.vfs, budget, producer: 'web_fetch',
-              });
-              return header + body;
-            }
+        switch (action.output) {
+          case 'search': {
+            if (!args.query) throw new KinuError('bad_input', 'web.search requires `query`');
+            const res = await webSearch.search(args.query, args.limit !== undefined ? { limit: args.limit } : undefined);
+            return formatSearchResults(res);
           }
-        } catch (err) {
-          return webErrorResult(err instanceof Error ? err : String(err));
+          case 'fetch': {
+            if (!args.url) throw new KinuError('bad_input', 'web.fetch requires `url`');
+            const res = await webSearch.fetch(args.url);
+            // Restorable clamp: oversized pages are offloaded to the
+            // workspace VFS and reduced to a re-readable head (see
+            // clamp.ts), so a big page never rots the session.
+            const header = `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n`;
+            const body = await clampToolResult(res.markdown, {
+              vfs: rt.storage.vfs, budget, producer: 'web_fetch',
+            });
+            return header + body;
+          }
         }
       },
     }));
@@ -862,13 +847,6 @@ function formatSearchResults(res: WebSearchResponse): string {
   return lines.join('\n');
 }
 
-/** Map a web tool failure to an honest, model-actionable error object. */
-function webErrorResult(err: Error | string) {
-  if (err instanceof WebFetchError) {
-    return err.retriable ? { error: err.message, retriable: true } : { error: err.message };
-  }
-  return { error: err instanceof Error ? err.message : err };
-}
 
 function isExecutableToolEntry(
   input: { value: unknown },

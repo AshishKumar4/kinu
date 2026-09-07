@@ -71,11 +71,11 @@ describe('run tool — workspace shell abort', () => {
     const run = toolExecute<{ command: string; runtime?: string }, CommandResult>(tools.run);
 
     controller.abort();
-    const result = await run(
+    const pending = run(
       { command: 'cat big.txt && cat big2.txt' },
       { toolCallId: 'abort-test', messages: [], abortSignal: controller.signal },
     );
-    expect(result).toMatchObject({ reason: 'io', error: expect.stringContaining('exit 130') });
+    await expect(pending).rejects.toMatchObject({ code: 'io', execution: { exitCode: 130 }, message: expect.stringContaining('exit 130') });
     expect(executed).toEqual(['cat big.txt && cat big2.txt']);
   });
 });

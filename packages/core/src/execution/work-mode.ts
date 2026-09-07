@@ -62,14 +62,8 @@ export function toolsInWorkMode(mode: WorkMode, tools: ToolSet): ToolSet {
     narrowed[name] = {
       ...entry,
       execute: (input, options) => inWorkMode(mode, async () => {
-        try {
-          requireWorkModePermission(mode, permitted, name);
-          return await execute(input, options);
-        }
-        catch (cause) {
-          if (!(cause instanceof KinuError)) throw cause;
-          return refusalOf(cause);
-        }
+        requireWorkModePermission(mode, permitted, name);
+        return await execute(input, options);
       }),
     };
   }

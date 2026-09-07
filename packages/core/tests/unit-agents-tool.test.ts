@@ -23,7 +23,7 @@ import {
   delegationBudgetAtDepth, ROOT_DELEGATION_BUDGET,
   SWARM_PRESET_DOCTRINE,
   PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
-  classifyToolFailure, JsonObjectSchema,
+  classifyToolFailure, JsonObjectSchema, failedToolOutcome,
   type AgentsToolInput,
   type AgentsForkDeps, type AgentsToolDeps, type PeersToolDeps,
   type AgentsProfileContext,
@@ -31,9 +31,19 @@ import {
   type SubordinateDelivery, type SubordinateHandoff,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC,
 } from '../src/index';
-import { CODE_IS_REFUSAL, ERROR_CODES } from '../src/obs/index';
+import { renderThrownChain } from '../src/obs/index';
 import { inWorkMode } from '../src/execution/work-mode';
 import { buildToolSurface } from '../src/tools/builtins';
+
+async function recordedFailure(pending: Promise<AgentsTestResult>, args: AgentsToolInput) {
+  try { await pending; }
+  catch (cause) {
+    return classifyToolFailure({ type: 'tool_call_end', eventIndex: 0, runId: 'run-1',
+      timestamp: new Date().toISOString(), name: 'agents', toolCallId: 'tc-1',
+      args: v.parse(JsonObjectSchema, args), error: renderThrownChain({ cause }), outcome: failedToolOutcome({ cause }) });
+  }
+  throw new Error('the native agents invocation did not fail');
+}
 
 interface Call { action: string; input: object }
 type AgentsTestResult = object | string | number | boolean | null | undefined;
@@ -88,7 +98,6 @@ const testModel = scriptedTurnModel({
     warnings: [],
   }),
 });
-const ErrorResultSchema = v.object({ error: v.string() });
 /** The briefs a STORED `fork` row carried. Kept as a fixture because the resume
  *  translation has to name them as dropped; no live call takes them. */
 const twoForks = [
@@ -273,11 +282,7 @@ describe('agents tool — registration and dep-gating', () => {
 
   test('an unavailable action is a sharp error, not a deps call', async () => {
     const t = agentsTool({ fork: forkDeps() });
-    expect(await t.execute({ action: 'hire', role: 'r', mission: 'm' }))
-      .toEqual({
-        reason: 'unsupported',
-        error: 'action "hire" is not available here. Available: swarm',
-      });
+    await expect(t.execute({ action: 'hire', role: 'r', mission: 'm' })).rejects.toMatchObject({ code: 'unsupported', message: 'action "hire" is not available here. Available: swarm' });
   });
 });
 
@@ -302,12 +307,13 @@ describe('agents tool — the field contract', () => {
     /* SAFETY: a field `AgentsToolInput` does not declare, which is precisely what
        reaches `execute` in production — the AI SDK validates a tool call's TYPES
        against the JSON Schema and never its field NAMES. */
-    const refusal = v.parse(v.object({ reason: v.string(), error: v.string() }), await t.execute({
+    const input: AgentsToolInput & { budgetUsd: number; budgetLabel: string } = {
       action: 'swarm', task: 'explore', budgetUsd: 5, budgetLabel: 'audit',
-    } as AgentsToolInput));
-    expect(refusal.reason).toBe('bad_input');
-    expect(refusal.error).toContain('unknown field "budgetUsd" — did you mean "budget_usd"?');
-    expect(refusal.error).toContain('unknown field "budgetLabel" — did you mean "budget_label"?');
+    };
+    const pending = t.execute(input);
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(pending).rejects.toThrow('unknown field "budgetUsd" — did you mean "budget_usd"?');
+    await expect(pending).rejects.toThrow('unknown field "budgetLabel" — did you mean "budget_label"?');
   });
 
   test('the refusal counts as the tool DECLINING, not as the tool breaking', async () => {
@@ -315,16 +321,8 @@ describe('agents tool — the field contract', () => {
     // is the caller's spelling, so it must land in `refused` rather than
     // indicting the tool in `broke` — otherwise closing one silence buys a
     // false defect rate in the ledger.
-    const args = { action: 'swarm', task: 'explore', budgetUsd: 5 };
-    /* SAFETY: the mis-spelled field is the subject of the test. Every field name
-       is validated by `execute` before any field is read, so this object is
-       refused rather than acted on. */
-    const result = await agentsTool({ fork: forkDeps() }).execute(args as AgentsToolInput);
-    expect(classifyToolFailure({
-      type: 'tool_call_end', eventIndex: 0, runId: 'run-1',
-      timestamp: new Date().toISOString(), name: 'agents', toolCallId: 'tc-1',
-      args: v.parse(JsonObjectSchema, args), result: v.parse(JsonObjectSchema, result),
-    })).toEqual({
+    const args: AgentsToolInput & { budgetUsd: number } = { action: 'swarm', task: 'explore', budgetUsd: 5 };
+    expect(await recordedFailure(agentsTool({ fork: forkDeps() }).execute(args), args)).toEqual({
       tool: 'agents', action: 'swarm', reason: 'bad_input',
       refused: true, workFailed: false, runtimeMissing: false,
     });
@@ -336,11 +334,9 @@ describe('agents tool — the field contract', () => {
     // answered by the handler's own missing-`preset` refusal, which is how we know
     // the caps were accepted rather than rejected under another name.
     const t = agentsTool({ fork: forkDeps() });
-    const refusal = v.parse(ErrorResultSchema, await t.execute({
-      action: 'swarm', task: 'explore', budget_usd: 5, budget_label: 'audit',
-    }));
-    expect(refusal.error).toContain('swarm needs `preset`');
-    expect(refusal.error).not.toContain('unknown field');
+    const pending = t.execute({ action: 'swarm', task: 'explore', budget_usd: 5, budget_label: 'audit' });
+    await expect(pending).rejects.toThrow('swarm needs `preset`');
+    await expect(pending).rejects.not.toThrow('unknown field');
   });
 
   /** One advertised property's description, off the real tool the model is handed. */
@@ -366,10 +362,8 @@ describe('agents tool — the field contract', () => {
   });
 
   test('the missing-`preset` refusal names the same presets the property does', async () => {
-    const refusal = v.parse(ErrorResultSchema, await agentsTool({ fork: forkDeps() }).execute({
-      action: 'swarm', task: 'explore',
-    }));
-    expect(refusal.error).toContain(SWARM_PRESET_DOCTRINE.join(' '));
+    await expect(agentsTool({ fork: forkDeps() }).execute({ action: 'swarm', task: 'explore' }))
+      .rejects.toThrow(SWARM_PRESET_DOCTRINE.join(' '));
   });
 
   test('the front objective kinds are advertised as pareto-only, not refused', () => {
@@ -395,12 +389,10 @@ describe('agents tool — the field contract', () => {
     // at all, which is the same silence one layer in.
     const team = makeTeam();
     const t = agentsTool({ team: team.deps });
-    const refusal = v.parse(ErrorResultSchema, await t.execute({
-      action: 'hire', role: 'researcher', mission: 'survey the landscape', budget_usd: 5,
-    }));
-    expect(refusal.error).toContain('field "budget_usd" does not apply to action "hire"');
-    expect(refusal.error).toContain('it is read by swarm');
-    expect(refusal.error).toContain('action "hire" takes: agent, role, mission');
+    const pending = t.execute({ action: 'hire', role: 'researcher', mission: 'survey the landscape', budget_usd: 5 });
+    await expect(pending).rejects.toThrow('field "budget_usd" does not apply to action "hire"');
+    await expect(pending).rejects.toThrow('it is read by swarm');
+    await expect(pending).rejects.toThrow('action "hire" takes: agent, role, mission');
     // Refused BEFORE the spawn, so nothing was hired under a cap nothing holds.
     expect(team.calls).toEqual([]);
   });
@@ -454,9 +446,10 @@ describe('agents tool — delegation depth', () => {
 
     // Depth 4 is the deepest that exists; the hire it would make is depth 5.
     const atCap = depthDeps(4);
-    const refusal = await agentsTool(atCap.deps).execute({ action: 'hire', role: 'researcher', mission: 'm' });
-    expect(refusal).toEqual({ reason: 'denied', error: expect.stringContaining('depth 4') });
-    expect(refusal).toMatchObject({ error: expect.stringContaining('depth 5') });
+    const pending = agentsTool(atCap.deps).execute({ action: 'hire', role: 'researcher', mission: 'm' });
+    await expect(pending).rejects.toMatchObject({ code: 'denied' });
+    await expect(pending).rejects.toThrow('depth 4');
+    await expect(pending).rejects.toThrow('depth 5');
     // Refused BEFORE the substrate: nothing was spawned, so a refusal cannot
     // leave a half-made subordinate behind.
     expect(atCap.team.calls).toEqual([]);
@@ -464,11 +457,8 @@ describe('agents tool — delegation depth', () => {
 
   test('the refusal lands in refused, not in broke', async () => {
     const { deps } = depthDeps(4);
-    const refusal = v.parse(
-      v.object({ reason: v.picklist([...ERROR_CODES]), error: v.string() }),
-      await agentsTool(deps).execute({ action: 'hire', role: 'researcher', mission: 'm' }),
-    );
-    expect(CODE_IS_REFUSAL[refusal.reason]).toBe(true);
+    const args: AgentsToolInput = { action: 'hire', role: 'researcher', mission: 'm' };
+    expect(await recordedFailure(agentsTool(deps).execute(args), args)).toMatchObject({ reason: 'denied', refused: true });
   });
 
   // The escape the cap has to close: a WORKSPACE is the root of its own tree
@@ -477,11 +467,9 @@ describe('agents tool — delegation depth', () => {
   // orchestrator — and the refusal says so rather than reading as a defect.
   test('a subordinate cannot mint a fresh root to escape its own subtree', async () => {
     const { deps, team } = depthDeps(2);
-    const refusal = await agentsTool(deps).execute({
-      action: 'hire', scope: 'workspace', mission: 'a tree of my own', message: 'go',
-    });
-    expect(refusal).toMatchObject({ reason: 'denied' });
-    expect(refusal).toMatchObject({ error: expect.stringContaining('only the workspace orchestrator') });
+    const pending = agentsTool(deps).execute({ action: 'hire', scope: 'workspace', mission: 'a tree of my own', message: 'go' });
+    await expect(pending).rejects.toMatchObject({ code: 'denied' });
+    await expect(pending).rejects.toThrow('only the workspace orchestrator');
     expect(team.calls).toEqual([]);
     // …and the roster path stays open: the point is that it cannot leave its
     // subtree, not that it cannot delegate.
@@ -511,7 +499,6 @@ describe('agents tool — delegation depth', () => {
  * refusal in this codebase.
  */
 describe('agents tool — the swarm refusal seam', () => {
-  const RefusalSchema = v.object({ reason: v.string(), error: v.string() });
 
   /** The options bag the background wrapper arms on a spawn-shaped call. Built
    *  here rather than inline so the extra key is not an excess property on a
@@ -523,27 +510,19 @@ describe('agents tool — the swarm refusal seam', () => {
   test('a swarm with no preset is refused at the seam — before the spawn is announced', async () => {
     const tool = agentsTool({ fork: forkDeps() });
     let announced = 0;
-    const result = v.parse(RefusalSchema, await tool.execute(
-      { action: 'swarm', task: 'split the work' },
-      spawnAnnouncing(() => { announced += 1; }),
-    ));
-    // The whole point of enforcing here: an unrunnable search must not detach
-    // and come back as a wake about work that never started.
+    const pending = tool.execute({ action: 'swarm', task: 'split the work' }, spawnAnnouncing(() => { announced += 1; }));
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(pending).rejects.toThrow(/\bpreset\b/);
     expect(announced).toBe(0);
-    expect(result.reason).toBe('bad_input');
-    expect(result.error).toMatch(/\bpreset\b/);
   });
 
   test('a swarm with no task is the same refusal, and names where the metric goes', async () => {
     const tool = agentsTool({ fork: forkDeps() });
     let announced = 0;
-    const result = v.parse(RefusalSchema, await tool.execute(
-      { action: 'swarm', preset: 'ideate' },
-      spawnAnnouncing(() => { announced += 1; }),
-    ));
+    const pending = tool.execute({ action: 'swarm', preset: 'ideate' }, spawnAnnouncing(() => { announced += 1; }));
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(pending).rejects.toThrow('`objective`');
     expect(announced).toBe(0);
-    expect(result.reason).toBe('bad_input');
-    expect(result.error).toContain('`objective`');
   });
 
   test('a swarm refusal counts as the tool DECLINING, not as the tool breaking', async () => {
@@ -552,12 +531,7 @@ describe('agents tool — the swarm refusal seam', () => {
     // the tool in `broke` — which is where the old bare `{error}` envelopes went.
     const tool = agentsTool({ fork: forkDeps() });
     const args: AgentsToolInput = { action: 'swarm', task: 't' };
-    const result = await tool.execute(args);
-    expect(classifyToolFailure({
-      type: 'tool_call_end', eventIndex: 0, runId: 'run-1',
-      timestamp: new Date().toISOString(), name: 'agents', toolCallId: 'tc-1',
-      args: v.parse(JsonObjectSchema, args), result: v.parse(JsonObjectSchema, result),
-    })).toEqual({
+    expect(await recordedFailure(tool.execute(args), args)).toEqual({
       tool: 'agents', action: 'swarm', reason: 'bad_input',
       refused: true, workFailed: false, runtimeMissing: false,
     });
@@ -596,8 +570,12 @@ describe('agents tool — subordinate actions', () => {
           if (file === undefined) throw new Error('Child has no file tool');
           const execute = toolExecute(file);
           await execute({ action: 'read', path });
-          const result = await execute({ action: 'write', path, content: 'changed' });
-          return { ...await temporaryPortStub.run(), answer: JSON.stringify(result) };
+          const pending = execute({ action: 'write', path, content: 'changed' });
+          if (request.mode === 'plan') {
+            await expect(pending).rejects.toMatchObject({ code: 'denied' });
+            return { ...await temporaryPortStub.run(), answer: 'denied' };
+          }
+          return { ...await temporaryPortStub.run(), answer: JSON.stringify(await pending) };
         },
       },
     };
@@ -605,8 +583,8 @@ describe('agents tool — subordinate actions', () => {
     const planned = await inWorkMode('plan', () => parent.execute({ action: 'ask', role: 'researcher', message: 'Inspect' }));
     expect(planned).toMatchObject({ status: 'completed', answer: expect.stringContaining('denied') });
     expect(await rt.storage.vfs.readFile(path, { encoding: 'utf8' })).toBe('original');
-    expect(await inWorkMode('plan', () => parent.execute({ action: 'hire', role: 'researcher', mission: 'Create a permanent worker' })))
-      .toMatchObject({ reason: 'denied' });
+    await expect(inWorkMode('plan', () => parent.execute({ action: 'hire', role: 'researcher', mission: 'Create a permanent worker' })))
+      .rejects.toMatchObject({ code: 'denied' });
     await parent.execute({ action: 'ask', role: 'researcher', message: 'Implement' });
     expect(await rt.storage.vfs.readFile(path, { encoding: 'utf8' })).toBe('changed');
   });
@@ -626,10 +604,8 @@ describe('agents tool — subordinate actions', () => {
   test('hire and ask without a catalog refuse', async () => {
     const { deps } = makeTeam();
     const t = agentsTool({ team: deps });
-    expect(await t.execute({ action: 'hire', role: 'researcher', mission: 'Map the landscape' }))
-      .toMatchObject({ reason: 'denied' });
-    expect(await t.execute({ action: 'ask', role: 'researcher', message: 'Survey auth' }))
-      .toMatchObject({ reason: 'denied' });
+    await expect(t.execute({ action: 'hire', role: 'researcher', mission: 'Map the landscape' })).rejects.toMatchObject({ code: 'denied' });
+    await expect(t.execute({ action: 'ask', role: 'researcher', message: 'Survey auth' })).rejects.toMatchObject({ code: 'denied' });
   });
 
 
@@ -778,14 +754,10 @@ describe('agents tool — subordinate actions', () => {
     // mistake is bad_input and lands in `refused`.
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
-    expect(await t.execute({ action: 'hire', role: 'r' }))
-      .toEqual({ reason: 'bad_input', error: 'hire requires role and mission' });
-    expect(await t.execute({ action: 'ask', agent: 'x' }))
-      .toEqual({ reason: 'bad_input', error: 'ask requires agent and message' });
-    expect(await t.execute({ action: 'send', message: 'x' }))
-      .toEqual({ reason: 'bad_input', error: 'send requires agent and message' });
-    expect(await t.execute({ action: 'dismiss' }))
-      .toEqual({ reason: 'bad_input', error: 'dismiss requires agent' });
+    await expect(t.execute({ action: 'hire', role: 'r' })).rejects.toMatchObject({ code: 'bad_input', message: 'hire requires role and mission' });
+    await expect(t.execute({ action: 'ask', agent: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'ask requires agent and message' });
+    await expect(t.execute({ action: 'send', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'send requires agent and message' });
+    await expect(t.execute({ action: 'dismiss' })).rejects.toMatchObject({ code: 'bad_input', message: 'dismiss requires agent' });
     expect(calls).toEqual([]);
   });
 
@@ -798,22 +770,13 @@ describe('agents tool — subordinate actions', () => {
     // which the enum never admits) and stay classified for whoever loosens the
     // gate first.
     const t = agentsTool({ peers: makePeers().deps });
-    expect(await t.execute({ action: 'hire', role: 'r', mission: 'm' })).toEqual({
-      reason: 'denied',
-      error: 'hiring subordinates is not available on this actor',
-    });
+    await expect(t.execute({ action: 'hire', role: 'r', mission: 'm' })).rejects.toMatchObject({ code: 'denied', message: 'hiring subordinates is not available on this actor' });
   });
 
   test('a name on neither roster is a caller mistake, not an unknown transport state', async () => {
     const t = agentsTool({ team: makeTeam().deps });
-    expect(await t.execute({ action: 'ask', agent: 'ghost', message: 'x' })).toEqual({
-      reason: 'bad_input',
-      error: 'unknown agent "ghost" — check the roster with action:"list"',
-    });
-    expect(await t.execute({ action: 'send', agent: 'ghost', message: 'x' })).toEqual({
-      reason: 'bad_input',
-      error: 'unknown agent "ghost" — check the roster with action:"list"',
-    });
+    await expect(t.execute({ action: 'ask', agent: 'ghost', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'unknown agent "ghost" — check the roster with action:"list"' });
+    await expect(t.execute({ action: 'send', agent: 'ghost', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'unknown agent "ghost" — check the roster with action:"list"' });
   });
 
   test('deps exceptions surface as tool error objects (never throw into the turn)', async () => {
@@ -821,11 +784,7 @@ describe('agents tool — subordinate actions', () => {
       assign: async () => { throw new Error('subordinate "researcher" is dismissed'); },
     });
     const t = agentsTool({ team: deps });
-    const result = v.parse(
-      ErrorResultSchema,
-      await t.execute({ action: 'ask', agent: 'researcher', message: 'x' }),
-    );
-    expect(result.error).toContain('dismissed');
+    await expect(t.execute({ action: 'ask', agent: 'researcher', message: 'x' })).rejects.toThrow('dismissed');
   });
 });
 
@@ -900,24 +859,18 @@ describe('agents tool — peer workspace actions', () => {
   test('missing required args are sharp errors, not deps calls', async () => {
     const { deps, calls } = makePeers();
     const t = agentsTool({ peers: deps });
-    expect(await t.execute({ action: 'ask', agent: 'scout' }))
-      .toEqual({ reason: 'bad_input', error: 'ask requires agent and message' });
-    expect(await t.execute({ action: 'send', message: 'x' }))
-      .toEqual({ reason: 'bad_input', error: 'send requires agent and message' });
-    expect(await t.execute({ action: 'reply', message: 'x' }))
-      .toEqual({ reason: 'bad_input', error: 'reply requires event_id and message' });
-    expect(await t.execute({ action: 'hire', scope: 'workspace', message: 'x' }))
-      .toEqual({ reason: 'bad_input', error: 'hire scope=workspace requires mission and message' });
+    await expect(t.execute({ action: 'ask', agent: 'scout' })).rejects.toMatchObject({ code: 'bad_input', message: 'ask requires agent and message' });
+    await expect(t.execute({ action: 'send', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'send requires agent and message' });
+    await expect(t.execute({ action: 'reply', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'reply requires event_id and message' });
+    await expect(t.execute({ action: 'hire', scope: 'workspace', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'hire scope=workspace requires mission and message' });
     expect(calls).toEqual([]);
   });
 
   test(`the reserved "${PEER_REPLY_TOPIC}" topic is rejected`, async () => {
     const { deps, calls } = makePeers();
     const t = agentsTool({ peers: deps });
-    const result = v.parse(v.object({ error: v.optional(v.string()) }), await t.execute({
-      action: 'send', agent: 'scout', message: 'x', topic: PEER_REPLY_TOPIC,
-    }));
-    expect(result.error).toContain('reserved');
+    await expect(t.execute({ action: 'send', agent: 'scout', message: 'x', topic: PEER_REPLY_TOPIC }))
+      .rejects.toThrow('reserved');
     expect(calls).toEqual([]);
   });
 });

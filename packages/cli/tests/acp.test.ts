@@ -249,7 +249,7 @@ describe('kinu acp — prompt turn', () => {
     const fake = fakeClient({
       events: [
         { type: 'tool-call', toolName: 'run', toolCallId: 'tc-9', args: { command: 'false' } },
-        { type: 'tool-result', toolName: 'run', toolCallId: 'tc-9', result: 'exit 1', success: false },
+        { type: 'tool-result', toolName: 'run', toolCallId: 'tc-9', result: 'exit 1', success: false, reason: null },
       ],
     });
 
@@ -270,7 +270,7 @@ describe('kinu acp — prompt turn', () => {
         { type: 'tool-call', toolName: 'run', toolCallId: 'a', args: { command: 'one' } },
         { type: 'tool-call', toolName: 'run', toolCallId: 'b', args: { command: 'two' } },
         { type: 'tool-result', toolName: 'run', toolCallId: 'b', result: 'second', success: true },
-        { type: 'tool-result', toolName: 'run', toolCallId: 'a', result: 'first', success: false },
+        { type: 'tool-result', toolName: 'run', toolCallId: 'a', result: 'first', success: false, reason: null },
       ],
     });
 

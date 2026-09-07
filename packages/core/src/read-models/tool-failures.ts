@@ -36,11 +36,9 @@
  */
 
 import * as v from 'valibot';
-import { isFailingResultText } from '../execution/exec-result';
-import { citesApprovalDenial } from '../safety/approval-gate';
 import { FAILURE_WITHOUT_ERROR, type RunEvent } from '../events/types';
-import { JsonObjectSchema, parseJsonValue, type JsonValue } from '../utils/json';
-import { CODE_IS_REFUSAL, ERROR_CODES, tolerate } from '../obs/index';
+import { JsonObjectSchema } from '../utils/json';
+import { CODE_IS_REFUSAL, ERROR_CODES } from '../obs/index';
 import { FILE_REFUSAL_REASONS } from '../tools/file-edit';
 
 /**
@@ -184,87 +182,25 @@ export interface ToolFailure {
   readonly runtimeMissing: boolean;
 }
 
-/** Exit code from the prefix `formatExecResult` writes, or null. */
-function exitCodeOf(text: string): number | null {
-  const match = /^Error \(exit (-?\d+)\)/.exec(text.trimStart());
-  if (!match?.[1]) return null;
-  const code = Number.parseInt(match[1], 10);
-  return Number.isNaN(code) ? null : code;
-}
-
-/**
- * The result as an object, on either backend. The cf sink stores the tool's
- * structured output as-is; the CLI sink renders it through `JSON.stringify`
- * first (chat.ts `renderToolResult`), so the same payload arrives as a JSON
- * string. Both are read here so an attribution is not backend-specific — the
- * defect class this whole tier exists to catch.
- */
-function resultObject(result: JsonValue | undefined): Record<string, JsonValue> | null {
-  const direct = v.safeParse(JsonObjectSchema, result);
-  if (direct.success) return direct.output;
-  const text = v.safeParse(v.string(), result);
-  if (!text.success || !text.output.trimStart().startsWith('{')) return null;
-  const parsed = tolerate(() => parseJsonValue(text.output), 'malformed-input');
-  const object = v.safeParse(JsonObjectSchema, parsed);
-  return object.success ? object.output : null;
-}
-
-/**
- * Attribute one completed call, or null when it did not fail.
- *
- * Two kinds of failure and both are read, because counting only the first was
- * a real defect: `error` is the TRANSPORT discriminator — the tool threw — and
- * a command that ran and exited non-zero is an ordinary SUCCESSFUL result whose
- * text begins `Error (exit N)`. A reader consulting only `error` scored a
- * failing build as a success.
- */
+/** Attribute only the recorded invocation outcome, never a successful tool's data. */
 export function classifyToolFailure(
   row: Extract<RunEvent, { type: 'tool_call_end' }>,
 ): ToolFailure | null {
   const args = v.safeParse(JsonObjectSchema, row.args);
   const action = args.success ? v.safeParse(v.string(), args.output.action) : null;
   const base = { tool: row.name, action: action?.success ? action.output : null };
-
-  const threw = row.error != null && row.error !== '';
-  const resultText = v.safeParse(v.string(), row.result);
-  // Narrowed once, so the exit code and the approval check read the same value
-  // rather than re-narrowing a parse result at each use.
-  const text = resultText.success ? resultText.output : null;
-  const failingResult = text !== null && isFailingResultText(text);
-  const object = resultObject(row.result);
-  const objectReason = object ? v.safeParse(ToolReasonSchema, object.reason) : null;
-  // A structured `{error, …}` payload is a failure however it is carried: the
-  // cf sink keeps it an object, where `isFailingResultText` never sees it.
-  const failingObject = object !== null && object.error !== undefined;
-  if (!threw && !failingResult && !failingObject) return null;
-
-  if (objectReason?.success) return { ...base, ...attribute(objectReason.output) };
-
-  const exit = text !== null ? exitCodeOf(text) : null;
-  if (text !== null && exit !== null && exit !== 0) {
-    // The APPROVAL LADDER refusing is checked before the exit code, because a
-    // denial arrives as an ordinary non-zero exit and would otherwise read as
-    // the work failing. It is the clearest correct refusal there is: the command
-    // never ran because policy said it must not.
-    if (citesApprovalDenial(text)) return { ...base, ...attribute('denied') };
-    // A named shell code means the work never ran; any other non-zero exit is
-    // the work itself failing, which on a repair task is the finding. 127 is the
-    // workspace lacking the program outright, and `partOfReason` is where both
-    // of those verdicts live.
-    return { ...base, ...attribute(EXEC_REASON_BY_EXIT.get(exit) ?? `exit_${String(exit)}`) };
+  const outcome = row.outcome;
+  if (outcome === undefined) {
+    return row.error != null && row.error !== ''
+      ? { ...base, ...attribute(row.error === FAILURE_WITHOUT_ERROR ? 'failed_without_error' : 'threw') }
+      : null;
   }
-
-  if (threw) {
-    return {
-      ...base,
-      ...attribute(row.error === FAILURE_WITHOUT_ERROR ? 'failed_without_error' : 'threw'),
-    };
+  if (outcome.success) return null;
+  const exit = outcome.execution?.exitCode;
+  if (exit !== undefined && exit !== 0) {
+    return { ...base, ...attribute(EXEC_REASON_BY_EXIT.get(exit) ?? 'exit_' + String(exit)) };
   }
-  // The tool answered with an error instead of raising one. Its own reason
-  // rather than the residual: WHY is unknown, but WHERE is not, and calling that
-  // unclassified would hide a whole class — every `execute_tools` block that
-  // failed inside a runtime missing the method it called arrived exactly here.
-  return { ...base, ...attribute(failingObject ? 'returned_error' : 'unclassified') };
+  return { ...base, ...attribute(outcome.reason ?? 'unclassified') };
 }
 
 /**

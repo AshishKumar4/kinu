@@ -76,7 +76,6 @@ import {
   type JsonObject,
   type JsonValue,
 } from '../utils/json';
-import { isFailingResultText } from '../execution/exec-result';
 
 /** Identical calls answered identically before the turn is told it is looping.
  *  Three is the first count that is a loop rather than a retry: one repeat is a
@@ -144,18 +143,9 @@ function noProgressText(steps: number): string {
     + 'This is a hint, not an instruction — push on if the ground you are re-covering is the right ground.';
 }
 
-/**
- * True when a tool result is a failure the model should be able to see as one.
- *
- * The harness discriminator (`success`) is necessary but not sufficient: the
- * `run` tool catches a non-zero exit and RETURNS it as a normal result string
- * (`Error (exit 2)…`), which is exactly the case that motivated this whole
- * mechanism. Reading that text is `isFailingResultText`, which lives next to
- * the renderer that writes the prefix — one definition, shared with the call
- * cards and with evolution's execution verdict.
- */
+/** SDK invocation status is independent of the value a successful tool returned. */
 export function isFailingToolResult(ctx: ToolResultContext): boolean {
-  return !ctx.success || isFailingResultText(ctx.result);
+  return !ctx.success;
 }
 
 /** One tool called one way. Hashed rather than stored: an `execute_tools`

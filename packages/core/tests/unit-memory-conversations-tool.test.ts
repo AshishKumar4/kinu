@@ -86,16 +86,13 @@ describe('memory tool — conversations action', () => {
 
   test('returns a clean error for an unknown anchor id', async () => {
     const { memoryExec } = setup();
-    const res = v.parse(
-      v.object({ error: v.string() }),
-      await memoryExec({ action: 'conversations', around_message_id: 'missing' }),
-    );
-    expect(res.error).toContain('missing');
+    await expect(memoryExec({ action: 'conversations', around_message_id: 'missing' }))
+      .rejects.toMatchObject({ code: 'missing', message: expect.stringContaining('missing') });
   });
 
   test('save and search actions are unchanged', async () => {
     const { memoryExec } = setup();
-    expect(await memoryExec({ action: 'search' })).toBe('memory.search requires `query`.');
-    expect(await memoryExec({ action: 'save' })).toBe('memory.save requires `content`.');
+    await expect(memoryExec({ action: 'search' })).rejects.toThrow('memory.search requires `query`.');
+    await expect(memoryExec({ action: 'save' })).rejects.toThrow('memory.save requires `content`.');
   });
 });

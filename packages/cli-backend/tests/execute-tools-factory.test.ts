@@ -62,9 +62,9 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
   });
 
   test('a throw still surfaces the console output produced before it', async () => {
-    const out = await makeTool()({ code: 'console.log("before");\nthrow new Error("boom");' });
-    expect(out.error).toBe('boom');
-    expect(out.logs).toEqual(['before']);
+    const pending = makeTool()({ code: 'console.log("before");\nthrow new Error("boom");' });
+    await expect(pending).rejects.toThrow('boom');
+    await expect(pending).rejects.toThrow('Console output:\nbefore');
   });
 
   test('no console call means no logs field', async () => {
@@ -78,20 +78,20 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
   // model no idea why. Real evidence from production (2026-08-12 debug
   // audit): a model wrote exactly this and got only the bare V8 message back.
   test('calling the native `run` tool from inside execute_tools gets an actionable hint, not a bare ReferenceError', async () => {
-    const out = await makeTool()({ code: 'return await run({ runtime: "sandbox", command: "ls" });' });
-    expect(out.error).toContain('run is not defined');
-    expect(out.error).toContain('"run" is a native Kinu tool');
-    expect(out.error).toContain('`tools.run(input)`');
+    const pending = makeTool()({ code: 'return await run({ runtime: "sandbox", command: "ls" });' });
+    await expect(pending).rejects.toThrow('run is not defined');
+    await expect(pending).rejects.toThrow('"run" is a native Kinu tool');
+    await expect(pending).rejects.toThrow('`tools.run(input)`');
     // Where the capability actually is now comes from TOOL_REACH, so the
     // pointer is the namespace rather than one hand-picked member — and it is
     // right for all eight native tools instead of only `run`.
-    expect(out.error).toContain('through the `workspace` namespace');
+    await expect(pending).rejects.toThrow('through the `workspace` namespace');
   });
 
   test('an unrelated ReferenceError for a name that is not a native tool stays a bare message', async () => {
-    const out = await makeTool()({ code: 'return totallyUndefinedThing;' });
-    expect(out.error).toContain('totallyUndefinedThing is not defined');
-    expect(out.error).not.toContain('native Kinu tool');
+    const pending = makeTool()({ code: 'return totallyUndefinedThing;' });
+    await expect(pending).rejects.toThrow('totallyUndefinedThing is not defined');
+    await expect(pending).rejects.not.toThrow('native Kinu tool');
   });
 });
 
@@ -139,11 +139,9 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
     const { tool } = makeToolWithFailingProvider(
       new Error("ENOENT: no such file or directory, scandir '/app' — workspace.* is the agent's own virtual filesystem"),
     );
-    const out = await tool({ code: 'const e = await workspace.readdir("/app");\ne' });
-
-    expect(out.result).toBeUndefined();
-    expect(out.error).toContain('ENOENT');
-    expect(out.error).toContain("workspace.* is the agent's own virtual filesystem");
+    const pending = tool({ code: 'const e = await workspace.readdir("/app");\ne' });
+    await expect(pending).rejects.toThrow('ENOENT');
+    await expect(pending).rejects.toThrow("workspace.* is the agent's own virtual filesystem");
   });
 
   test('a rejection caught by the model\'s own code is handled there, not swallowed', async () => {

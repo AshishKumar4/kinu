@@ -38,7 +38,8 @@ import { budgetExhausted, HEAD_BUILTIN_TOOLS } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
-import { renderThrownChain } from '../obs/index';
+import { KinuError, renderThrownChain } from '../obs/index';
+import { failedToolOutcome } from '../tools/outcome';
 import { permitInPlan } from '../execution/work-mode';
 
 export interface HeadSplitRequest {
@@ -121,16 +122,16 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
         // are stopped mid-plan was unanswerable from the ledger.
         const exhausted = budgetExhausted(input.budget);
         if (exhausted.exhausted) {
-          const refusal = `Cannot split: budget exhausted (${exhausted.reason}).`;
-          capture.recordToolCall('split_subheads', { rationale, heads }, refusal);
-          return refusal;
+          const failure = new KinuError('denied', 'Cannot split: budget exhausted (' + exhausted.reason + ').');
+          capture.recordToolCall('split_subheads', { rationale, heads }, failure.message, failedToolOutcome({ cause: failure }));
+          throw failure;
         }
         try {
           const result = await deps.split({
             rationale, heads, mergeStrategy: merge_strategy ?? input.mergeStrategy,
           });
           for (const id of result.childHeadIds) capture.childHeadIds.push(id);
-          capture.recordToolCall('split_subheads', { rationale, heads }, `merged ${result.headCount}`);
+          capture.recordToolCall('split_subheads', { rationale, heads }, 'merged ' + result.headCount, { success: true });
           const lines: string[] = [result.narrative];
           if (result.decisions.length) {
             lines.push('', "Children's selected decisions:");
@@ -146,8 +147,8 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
           }
           return lines.join('\n');
         } catch (err) {
-          capture.recordToolCall('split_subheads', { rationale, heads }, 'error');
-          return `split_subheads failed: ${renderThrownChain({ cause: err })}`;
+          capture.recordToolCall('split_subheads', { rationale, heads }, renderThrownChain({ cause: err }), failedToolOutcome({ cause: err }));
+          throw err;
         }
       },
     }));

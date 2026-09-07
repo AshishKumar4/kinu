@@ -21,7 +21,7 @@ import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
   ADVISOR_SEVERITY_LABEL, JsonObjectSchema, JsonValueSchema,
-  describeToolCall, isToolCallFailed, summarizeToolCall, toolCallEffect,
+  describeToolCall, summarizeToolCall, toolCallEffect,
 } from "@kinu.run/core";
 import type { AdvisorSeverity, InlineSteer, JsonObject, JsonValue, PlacedSteer } from "@kinu.run/core";
 import * as v from "valibot";
@@ -336,10 +336,9 @@ function partEffect(part: AnyToolPart) {
   return toolCallEffect(getToolName(part), partInput(part));
 }
 
-/** Whether this part failed — protocol-level (`output-error`) or the quieter
- *  kind a built-in catches and returns as a normal result (isToolCallFailed). */
+/** The UI protocol records whether the tool invocation failed. Output is data. */
 function partFailed(part: AnyToolPart): boolean {
-  return isToolCallFailed(getToolName(part), part.input, partOutput(part), part.state === "output-error");
+  return part.state === 'output-error';
 }
 
 function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {

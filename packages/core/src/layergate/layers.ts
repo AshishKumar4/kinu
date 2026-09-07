@@ -1615,7 +1615,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           clean.recordToolCall({ toolName: 'run', input: { command: 'ls' }, success: true, output: 'ok' });
           clean.recordStep({ usage: { input: 7, output: 3 } });
           const failed = new TurnAccumulator();
-          failed.recordToolCall({ toolName: 'run', success: false, error: 'exit 1' });
+          failed.recordToolCall({ toolName: 'run', success: false, reason: null, error: 'exit 1' });
           failed.recordStep({});
           return {
             clean: s.snapshotCompletedTurn(clean, {

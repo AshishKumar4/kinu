@@ -12,7 +12,10 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
-import { admitCraftedSource, decodeJsonValue, type JsonValue } from '@kinu.run/core';
+import { admitCraftedSource, decodeJsonValue, failedToolOutcome, type ToolOutcome, type JsonValue } from '@kinu.run/core';
+import { createCodeTool } from '@cloudflare/codemode/ai';
+import { generateText, stepCountIs } from 'ai';
+import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { KinuSandboxExecutor, renderToolsPrelude } from '../../src/codemode-sandbox';
 import { codemodeEgress } from '../../src/codemode-egress';
 
@@ -66,6 +69,36 @@ const stateProvider = {
 
 describe('the execute_tools sandbox under workerd', () => {
   const executor = new KinuSandboxExecutor({ loader: env.LOADER, egress: null });
+
+  test('hosted codemode distinguishes returned data, handled refusal, and unhandled failure', async () => {
+    const outcomes: ToolOutcome[] = [];
+    const program = createCodeTool({
+      executor,
+      tools: [{ name: 'workspace', types: '', tools: {
+        exec: { description: 'Return a branchable command refusal', execute: async () => ({ reason: 'denied', error: 'not run' }) },
+      } }],
+    });
+    const invoke = async (code: string) => {
+      let step = 0;
+      const model = scriptedTurnModel({ doGenerate: () => ({
+        content: ++step === 1
+          ? [{ type: 'tool-call', toolCallId: 'program-1', toolName: 'program', input: JSON.stringify({ code }) }]
+          : [{ type: 'text', text: 'done' }],
+        finishReason: { unified: step === 1 ? 'tool-calls' : 'stop', raw: undefined },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+      }) });
+      return generateText({ model, prompt: 'Run the program', tools: { program }, stopWhen: stepCountIs(2),
+        experimental_onToolCallFinish: (event) => { outcomes.push(event.success ? { success: true } : failedToolOutcome({ cause: event.error })); },
+      });
+    };
+    await invoke('return { reason: "denied", error: "historical incident", exitCode: 7 };');
+    await invoke('const refusal = await workspace.exec("blocked"); return refusal.reason;');
+    const failed = await invoke('console.log("before failure"); throw new Error("denied is just diagnostic text");');
+    expect(outcomes).toEqual([{ success: true }, { success: true }, { success: false, reason: null }]);
+    expect(JSON.stringify(failed.response.messages)).toContain('before failure');
+    expect(JSON.stringify(failed.response.messages)).toContain('denied is just diagnostic text');
+  });
 
   test('require("fs/promises") and require("path") work over the workspace, and console output comes back', async () => {
     const program = [

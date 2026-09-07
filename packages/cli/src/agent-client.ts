@@ -13,7 +13,7 @@ import type {
   EvolutionConfigView,
   EvolutionDebt, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView,
   StagedSkillResult,
-  ReasoningEffort, TierId, Usage, RunEvent, JsonObject,
+  ReasoningEffort, TierId, Usage, RunEvent, JsonObject, ToolOutcome,
   AdmittedInstructionDecision,
   InstructionSourceRow, InstructionSourceView, Page, PageRequest,
 } from '@kinu.run/core';
@@ -46,6 +46,7 @@ export interface AgentToolCallResult {
   name: string;
   args: JsonObject;
   result?: string;
+  outcome?: ToolOutcome;
 }
 
 export interface AgentTurnResult {
@@ -64,7 +65,7 @@ export type AgentClientEvent =
   | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string }
   | { type: 'text-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: JsonObject }
-  | { type: 'tool-result'; toolName: string; toolCallId: string; result: string; success: boolean }
+  | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
   | { type: 'step-finish'; stepIndex: number }
   | { type: 'turn-end'; turn: AgentTurnResult }
   | { type: 'evolution'; event: string; message: string }

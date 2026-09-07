@@ -23,6 +23,7 @@ import { priceCall, type MissionGovernor } from '../mission-budget';
 import { USAGE_FIELDS, addUsage, usageReported, usageTotal, type Usage } from '../usage';
 import * as v from 'valibot';
 import { digestJsonValue, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
+import { ToolOutcomeSchema, type ToolOutcome } from '../tools/outcome';
 
 const UndefinedSchema = v.undefined();
 const StringSchema = v.string();
@@ -48,14 +49,13 @@ export interface StepLike {
 
 /** ai-SDK v6 tool-result hook shape (Think 0.4 renamed args→input, result→output
  *  + added a success discriminator + durationMs). */
-export interface ToolResultLike {
+export type ToolResultLike = ToolOutcome & {
   toolName: string;
   input?: JsonObject;
   durationMs?: number;
-  success: boolean;
   output?: JsonValue;
-  error?: unknown;
-}
+  error?: Parameters<typeof describeToolFailure>[0]['error'];
+};
 
 /** Platform side-effects the accounting fires — both optional so a pure consumer
  *  (tests, a minimal CLI) can omit them. */
@@ -85,7 +85,7 @@ function describeToolFailure(input: { error: unknown }): string {
 }
 
 export class TurnAccumulator {
-  toolCalls: ToolCallRecord[] = [];
+  toolCalls: Array<ToolCallRecord & { outcome: ToolOutcome }> = [];
   stepCount = 0;
   /** The turn's steps summed field by field. `{}` means no step reported
    *  anything — never a row of zeros standing in for a silent provider. */
@@ -206,17 +206,19 @@ export class TurnAccumulator {
       ? describeToolFailure({ error: c.error })
       : null;
     const recorded = failure !== null ? { error: failure } : c.output;
-    if (c.success === false) this.hadError = true;
+    const outcome = v.parse(ToolOutcomeSchema, c);
+    if (!c.success) this.hadError = true;
     // A call that names a spill address is the drop-content-keep-the-path
     // recipe being followed — the counter that says the references are read,
     // not just emitted.
     if (citesSpillAddress(c.input)) this.context.noteFollowUp();
     const dur = c.durationMs != null ? ` (${c.durationMs}ms)` : '';
     this.sinks.logActivity?.('tool_call_end', `${c.toolName}${dur}`);
-    this.toolCalls.push({ name: c.toolName, args: c.input ?? {}, result: recorded });
+    this.toolCalls.push({ name: c.toolName, args: c.input ?? {}, result: recorded, outcome });
     const event: Omit<Extract<RunEventInput, { type: 'tool_call_end' }>, 'type'> = {
       name: c.toolName,
       toolCallId: `tc-${this.toolCalls.length}`,
+      outcome,
     };
     // What the call was ASKED to do, bounded. Without it the durable row names
     // the tool and nothing else, so a ledger of 34 failures could say `file×13`

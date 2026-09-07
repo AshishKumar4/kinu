@@ -15,6 +15,7 @@ import { TOOL_REACH } from './registry';
 import type { ProfileCatalogEnvelope } from '../profiles/catalog';
 import { decodeJsonValue } from '../utils/json';
 import { createTasksDispatcher } from './tasks-tool';
+import { branchableToolCall } from './outcome';
 
 const TitlesSchema = v.array(v.string());
 const ParentSchema = v.optional(v.string());
@@ -56,7 +57,7 @@ export function createTasksCodemodeProvider(
       add: {
         planAllowed: true,
         description: 'Write down the whole plan in one call: one title per task.',
-        execute: async (...args: unknown[]) => {
+        execute: (...args: unknown[]) => branchableToolCall(async () => {
           const titles = v.safeParse(TitlesSchema, args[0]);
           const parent = v.safeParse(ParentSchema, args[1]);
           if (!titles.success || !parent.success) {
@@ -65,12 +66,12 @@ export function createTasksCodemodeProvider(
           return decodeJsonValue({
             value: run({ action: 'add', titles: titles.output, parent: parent.output }),
           });
-        },
+        }),
       },
       update: {
         planAllowed: true,
         description: 'Move one task to active/done/dropped by id.',
-        execute: async (...args: unknown[]) => {
+        execute: (...args: unknown[]) => branchableToolCall(async () => {
           const status = v.safeParse(TaskStatusSchema, args[1]);
           return decodeJsonValue({
             value: run({
@@ -79,23 +80,23 @@ export function createTasksCodemodeProvider(
               status: status.success ? status.output : undefined,
             }),
           });
-        },
+        }),
       },
       list: {
         planAllowed: true,
         description: 'Read the whole task list back, closed items included.',
-        execute: async () => decodeJsonValue({ value: run({ action: 'list' }) }),
+        execute: () => branchableToolCall(async () => decodeJsonValue({ value: run({ action: 'list' }) })),
       },
       mode: {
         planAllowed: true,
         description: 'Switch your durable active role by id (applies from your next turn), or read the current role id with no argument.',
-        execute: async (...args: unknown[]) => {
+        execute: (...args: unknown[]) => branchableToolCall(async () => {
           const parsedRole = v.safeParse(v.string(), args[0]);
           const role = parsedRole.success ? parsedRole.output : undefined;
           return decodeJsonValue({
             value: run({ action: 'mode', role }),
           });
-        },
+        }),
       },
     },
   };

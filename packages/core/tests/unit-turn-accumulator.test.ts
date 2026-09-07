@@ -16,7 +16,7 @@ describe('TurnAccumulator', () => {
     a.recordToolCall({ toolName: 'run', success: true, output: 'ok' });
     // A failed call first, so the hadError assertion below is not vacuous —
     // a reset that forgot the flag would leak the previous turn's failure.
-    a.recordToolCall({ toolName: 'run', success: false, error: 'boom' });
+    a.recordToolCall({ toolName: 'run', success: false, reason: null, error: 'boom' });
     a.onFirstChunk();
     expect(a.hadError).toBe(true);
     a.reset(1000);
@@ -41,7 +41,7 @@ describe('TurnAccumulator', () => {
     const toolEvents: Array<{ name: string; toolCallId: string; args?: unknown }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
     a.recordToolCall({ toolName: 'execute_tools', input: { code: '1+1' }, success: true, output: { result: 2 }, durationMs: 12 });
-    expect(a.toolCalls).toEqual([{ name: 'execute_tools', args: { code: '1+1' }, result: { result: 2 } }]);
+    expect(a.toolCalls).toEqual([{ name: 'execute_tools', args: { code: '1+1' }, result: { result: 2 }, outcome: { success: true } }]);
     expect(a.hadError).toBe(false);
     expect(toolEvents[0]).toMatchObject({ name: 'execute_tools', toolCallId: 'tc-1' });
   });
@@ -75,12 +75,12 @@ describe('TurnAccumulator', () => {
   test('recordToolCall — failure records {error}, flips hadError, passes error to the sink', () => {
     const toolEvents: Array<{ error?: string }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-    a.recordToolCall({ toolName: 'run', success: false, error: new Error('boom') });
+    a.recordToolCall({ toolName: 'run', success: false, reason: null, error: new Error('boom') });
     // ONE description of the failure in both ledgers. They used to disagree —
     // `.message` in the core record against `String(error)` at the sink — so the
     // same call read as `boom` in the evolution signal and `Error: boom` in the
     // run-event log.
-    expect(a.toolCalls[0]).toEqual({ name: 'run', args: {}, result: { error: 'boom' } });
+    expect(a.toolCalls[0]).toEqual({ name: 'run', args: {}, result: { error: 'boom' }, outcome: { success: false, reason: null } });
     expect(a.hadError).toBe(true);
     expect(toolEvents[0].error).toBe('boom');
   });
@@ -95,11 +95,11 @@ describe('TurnAccumulator', () => {
     for (const error of [undefined, null, '']) {
       const toolEvents: Array<{ error?: string }> = [];
       const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-      a.recordToolCall({ toolName: 'execute_tools', success: false, error });
+      a.recordToolCall({ toolName: 'execute_tools', success: false, reason: null, error });
       expect(a.hadError).toBe(true);
       expect(toolEvents[0].error).toBe(FAILURE_WITHOUT_ERROR);
       expect(a.toolCalls[0]).toEqual({
-        name: 'execute_tools', args: {}, result: { error: FAILURE_WITHOUT_ERROR },
+        name: 'execute_tools', args: {}, result: { error: FAILURE_WITHOUT_ERROR }, outcome: { success: false, reason: null },
       });
       // And the census reads it back as its own reason rather than as `threw`.
       expect(classifyToolFailure({

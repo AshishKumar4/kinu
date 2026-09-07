@@ -19,7 +19,6 @@ import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../src/utils/json';
-import type { CommandResult } from '../src/execution/exec-result';
 
 interface RunInput {
   command: string;
@@ -151,13 +150,12 @@ describe('run tool result budget (behavior through the public tool surface)', ()
     };
     const rtWithShell: AgentRuntime = { ...rt, shell };
     const tools = buildBuiltinTools({ rt: rtWithShell });
-    const run = toolExecute<RunInput, CommandResult>(tools.run);
-    const out = await run({ command: 'boom' });
-    if (v.is(v.string(), out)) throw new Error('failed command lost its structural refusal');
-    expect(out.reason).toBe('io');
-    expect(out.error).toStartWith('Error (exit 2)\n--- stderr ---');
-    expect(out.error.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS + 300);
-    expect(out.error).toContain('chars omitted');
+    const run = toolExecute<RunInput, string>(tools.run);
+    const pending = run({ command: 'boom' });
+    await expect(pending).rejects.toMatchObject({ code: 'io', execution: { exitCode: 2 } });
+    await expect(pending).rejects.toThrow('Error (exit 2)\n--- stderr ---');
+    await expect(pending).rejects.toThrow('chars omitted');
+    await expect(pending).rejects.toMatchObject({ message: expect.stringMatching(new RegExp('^[\\s\\S]{0,' + (DEFAULT_TOOL_RESULT_MAX_CHARS + 300) + '}$')) });
   });
 });
 

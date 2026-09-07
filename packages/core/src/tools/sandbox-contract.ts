@@ -30,6 +30,7 @@ import type { ToolSet } from 'ai';
 import { JsonObjectSchema, JsonValueSchema, decodeJsonValue, type JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { hasPlanPermission } from '../execution/work-mode';
+import { branchableToolCall } from './outcome';
 
 /** A provider's host-side result before the executor validates the VM boundary
  *  as JSON. Domain objects are allowed here; functions and symbols are not. */
@@ -198,8 +199,10 @@ export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
         if (!input.success) {
           return { error: `tools.${name}(input): input must be one JSON object, the same shape the native \`${name}\` tool takes` };
         }
-        const result = await execute(input.output, { toolCallId: `codemode-${nanoid()}`, messages: [] });
-        return result === undefined ? undefined : decodeJsonValue({ value: result });
+        return branchableToolCall(async () => {
+          const result = await execute(input.output, { toolCallId: 'codemode-' + nanoid(), messages: [] });
+          return result === undefined ? undefined : decodeJsonValue({ value: result });
+        });
       },
     };
   }

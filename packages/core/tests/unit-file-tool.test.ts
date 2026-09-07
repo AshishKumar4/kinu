@@ -20,6 +20,8 @@ import type { JsonValue } from '../src/utils/json';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { classifyToolFailure } from '../src/read-models/tool-failures';
 import type { RunEvent, RunEventBase } from '../src/events/types';
+import { KinuError } from '../src/obs/index';
+import { failedToolOutcome } from '../src/tools/outcome';
 
 // ── the engine ──────────────────────────────────────────────────────────────
 
@@ -343,12 +345,8 @@ function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
   return { call: toolExecute<FileToolTestInput, JsonValue>(entry), ledger };
 }
 
-const ErrorResultSchema = v.object({ error: v.string() });
 const StringResultSchema = v.string();
 
-function errorResult(value: JsonValue): { error: string } {
-  return v.parse(ErrorResultSchema, value);
-}
 
 describe('file tool', () => {
   test('read returns the content and authorizes the edit that follows', async () => {
@@ -366,11 +364,11 @@ describe('file tool', () => {
   test('an edit without a read is refused, and the refusal names the call to make', async () => {
     const vfs = memoryVfs({ 'a.ts': 'const x = 1;\n' });
     const { call, ledger } = toolFor(vfs);
-    const result = errorResult(await call({
+    const result = call({
       action: 'edit', path: 'a.ts',
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
-    }));
-    expect(result.error).toContain('action=read path=a.ts');
+    });
+    await expect(result).rejects.toThrow('action=read path=a.ts');
     expect(vfs.files.get('a.ts')).toBe('const x = 1;\n');
     expect(ledger.snapshot().failures).toEqual({ unread: 1 });
   });
@@ -380,11 +378,11 @@ describe('file tool', () => {
     const { call, ledger } = toolFor(vfs);
     await call({ action: 'read', path: 'a.ts' });
     vfs.files.set('a.ts', 'const x = 1;\nconst y = 2;\n');
-    const result = errorResult(await call({
+    const result = call({
       action: 'edit', path: 'a.ts',
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 3;' }],
-    }));
-    expect(result.error).toContain('changed since you read it');
+    });
+    await expect(result).rejects.toThrow('changed since you read it');
     expect(vfs.files.get('a.ts')).toBe('const x = 1;\nconst y = 2;\n');
     expect(ledger.snapshot().failures).toEqual({ stale: 1 });
   });
@@ -393,10 +391,10 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'a.ts': 'x\nx\n' });
     const { call, ledger } = toolFor(vfs);
     await call({ action: 'read', path: 'a.ts' });
-    const result = errorResult(await call({
+    const result = call({
       action: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }],
-    }));
-    expect(result.error).toContain('appears 2 times');
+    });
+    await expect(result).rejects.toThrow('appears 2 times');
     expect(vfs.files.get('a.ts')).toBe('x\nx\n');
     expect(ledger.snapshot()).toMatchObject({ attempts: 1, applied: 0, failures: { ambiguous: 1 }, abandonedPaths: 1 });
   });
@@ -405,7 +403,7 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'a.ts': 'x\nx\n' });
     const { call, ledger } = toolFor(vfs);
     await call({ action: 'read', path: 'a.ts' });
-    await call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }] });
+    await expect(call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }] })).rejects.toBeInstanceOf(KinuError);
     await call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'x\nx', new_text: 'y\nx' }] });
     expect(ledger.snapshot()).toMatchObject({ attempts: 2, applied: 1, recoveredPaths: 1, abandonedPaths: 0 });
   });
@@ -415,9 +413,9 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'big.ts': body });
     const { call } = toolFor(vfs);
     await call({ action: 'read', path: 'big.ts', limit: 3 });
-    const refused = errorResult(await call({ action: 'write', path: 'big.ts', content: 'wiped\n' }));
-    expect(refused.error).toContain('read only lines 1-3 of 200');
-    expect(refused.error).toContain('offset=4');
+    const refused = call({ action: 'write', path: 'big.ts', content: 'wiped\n' });
+    await expect(refused).rejects.toThrow('read only lines 1-3 of 200');
+    await expect(refused).rejects.toThrow('offset=4');
     expect(vfs.files.get('big.ts')).toBe(body);
     // …but it does authorize an edit, whose anchor carries its own proof.
     expect(await call({
@@ -450,8 +448,8 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'a.ts': 'alpha\n' });
     const { call } = toolFor(vfs);
     await call({ action: 'read', path: 'a.ts' });
-    const result = errorResult(await call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] }));
-    expect(result.error).toContain('needs both old_text and new_text');
+    const result = call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] });
+    await expect(result).rejects.toThrow('needs both old_text and new_text');
     expect(vfs.files.get('a.ts')).toBe('alpha\n');
     // An explicit empty string still deletes.
     expect(await call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha', new_text: '' }] }))
@@ -502,8 +500,8 @@ describe('file tool', () => {
   test('write over an existing file is refused until it has been read', async () => {
     const vfs = memoryVfs({ 'a.txt': 'original' });
     const { call } = toolFor(vfs);
-    const refused = errorResult(await call({ action: 'write', path: 'a.txt', content: 'replacement' }));
-    expect(refused.error).toContain('has not been read here yet');
+    const refused = call({ action: 'write', path: 'a.txt', content: 'replacement' });
+    await expect(refused).rejects.toThrow('has not been read here yet');
     expect(vfs.files.get('a.txt')).toBe('original');
     await call({ action: 'read', path: 'a.txt' });
     expect(await call({ action: 'write', path: 'a.txt', content: 'replacement' }))
@@ -521,10 +519,10 @@ describe('file tool', () => {
 
   test('a missing file reports the VFS error with the addressing correction', async () => {
     const { call } = toolFor(memoryVfs());
-    const result = errorResult(await call({ action: 'read', path: '/app/main.py' }));
-    expect(result.error).toContain('ENOENT');
-    expect(result.error).toContain('NOT the machine or container');
-    expect(result.error).toContain('roots are: local');
+    const result = call({ action: 'read', path: '/app/main.py' });
+    await expect(result).rejects.toThrow('ENOENT');
+    await expect(result).rejects.toThrow('NOT the machine or container');
+    await expect(result).rejects.toThrow('roots are: local');
   });
 
   test('a read counts against the turn budget like any other bulk result', async () => {
@@ -541,10 +539,7 @@ describe('file tool', () => {
     // `args.path.trim()` was the first statement in the dispatcher, so a
     // non-string path threw a TypeError out of the tool instead of answering.
     const { call } = toolFor(memoryVfs());
-    expect(await call({ action: 'read', path: 7 })).toEqual({
-      reason: 'bad_input',
-      error: 'file requires `path`.',
-    });
+    await expect(call({ action: 'read', path: 7 })).rejects.toMatchObject({ code: 'bad_input', message: 'file requires `path`.' });
   });
 });
 
@@ -566,12 +561,14 @@ describe('a `file` failure is attributable from the durable row alone', () => {
   ) {
     const events: Array<Omit<Extract<RunEvent, { type: 'tool_call_end' }>, keyof RunEventBase | 'type'>> = [];
     const acc = new TurnAccumulator({ onToolCallEvent: (e) => events.push(e) });
-    const output = await call(input);
-    // `input` is an interface union, so it lacks the index signature `JsonObject`
-    // requires even though every value in it IS json — including the
-    // deliberately-bad `path: number` fixture. Parsed at the boundary rather
-    // than asserted: a fixture that ever stops being json fails here loudly.
-    acc.recordToolCall({ toolName: 'file', input: v.parse(JsonObjectSchema, input), success: true, output });
+    let output: JsonValue | undefined;
+    const args = v.parse(JsonObjectSchema, input);
+    try {
+      output = await call(input);
+      acc.recordToolCall({ toolName: 'file', input: args, success: true, output });
+    } catch (error) {
+      acc.recordToolCall({ toolName: 'file', input: args, error, ...failedToolOutcome({ cause: error }) });
+    }
     const emitted = events[0];
     if (!emitted) throw new Error('the accumulator emitted no tool_call_end');
     return {
