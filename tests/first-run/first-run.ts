@@ -172,9 +172,9 @@ export const FIRST_RUN_DEFECTS = {
   'command-refusal': {
     id: 'command-refusal',
     found: 'A production slate binding and workspace executor reported a command that never ran as ordinary exit-one prose, losing the denied or waiting-for-approval class.',
-    missedBecause: 'Tests checked NOT RUN prose and queue state, not the canonical reason-first executor text channel on the deployed product.',
+    missedBecause: 'Tests checked NOT RUN prose and queue state rather than structural producer refusals; generic stdout interpretation also mistakes successful business data for errors.',
     provedRedAt: '53ba25348',
-    redDirection: 'Non-model CLI REST and AgentClient calls compare denied and parked command text with the canonical refusal reader and verify the marker was never written.',
+    redDirection: 'Non-model CLI REST and AgentClient calls require producer-owned refusal metadata and no execution for denied/parked commands. Executed exit-one failures and successful JSON-looking stdout are independent controls. Original 53ba25348 RED receipts remain retained unchanged.',
   },
   'preview-address': {
     id: 'preview-address',
