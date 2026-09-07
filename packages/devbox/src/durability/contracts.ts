@@ -157,6 +157,18 @@ export const PackLedgerSchema = v.pipe(
 );
 export type PackLedger = v.InferOutput<typeof PackLedgerSchema>;
 
+/** A published namespace: where its page map starts, and how long the SQLite
+ *  image it maps is. The length is a whole number of 4096-byte pages. */
+export const NamespaceRefSchema = v.pipe(
+  v.strictObject({
+    root: ObjectRangeRefSchema,
+    byteLength: DecimalSchema,
+  }),
+  v.check((namespace) => BigInt(namespace.byteLength) > 0n && BigInt(namespace.byteLength) % 4096n === 0n,
+    'A namespace image is a whole number of 4096-byte pages'),
+);
+export type NamespaceRef = v.InferOutput<typeof NamespaceRefSchema>;
+
 /**
  * The v2 envelope names what this generation changed and nothing it did not:
  * the packs it PUT, the pack keys it stopped needing, and the ledger of every
@@ -182,6 +194,10 @@ export const RootEnvelopeV2Schema = v.pipe(
     retired: v.array(ObjectKeySchema),
     /** The pack ledger written beside this envelope. */
     ledger: ImmutableObjectRefSchema,
+    /** The namespace this generation publishes: the page-map root and the
+     *  SQLite image length it describes. Null until a daemon that persists a
+     *  namespace has published. */
+    namespace: v.nullable(NamespaceRefSchema),
   }),
   v.check(
     (envelope) => allUnique(envelope.added.map((ref) => ref.key)),
@@ -204,6 +220,16 @@ export const RootEnvelopeV2Schema = v.pipe(
       );
     },
     'The root record must lie inside one of the added packs',
+  ),
+  v.check(
+    (envelope) => {
+      const root = envelope.namespace?.root;
+      if (root === undefined) return true;
+      if (envelope.retired.includes(root.key)) return false;
+      const home = envelope.added.find((ref) => ref.key === root.key);
+      return home === undefined || decimalAtMost(String(BigInt(root.byteOffset) + BigInt(root.byteLength)), home.byteLength);
+    },
+    'The namespace root must lie inside a pack this generation keeps',
   ),
 );
 export type RootEnvelopeV2 = v.InferOutput<typeof RootEnvelopeV2Schema>;

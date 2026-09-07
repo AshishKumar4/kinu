@@ -27,7 +27,7 @@
 
 import { sha256Hex } from '../../cas/hash';
 import { isCanonicalJournalPath } from '../../cas/types';
-import type { ObjectRangeRef, SealWork } from '../../durability/contracts';
+import type { NamespaceRef, ObjectRangeRef, SealWork } from '../../durability/contracts';
 import { publishedParentV2Info } from '../publication';
 import type { PublishedParent } from '../publication';
 
@@ -36,6 +36,7 @@ import type { ChunkParams, EmittedChunk, StagedRange } from './chunk';
 import { chunkWindows, fileBoundaries } from './delta';
 import type { BoundaryRow, DeltaDirtyFile, DeltaManifestV2, DeltaStage, DeltaStagedRange } from './delta';
 import { buildDirTree, knownDirPages } from './dir-tree';
+import type { NamespaceImage, NamespacePageMap } from './namespace-map';
 import type { KnownDirPage } from './dir-tree';
 import { MerklePackError } from './errors';
 import { PackWriter } from './pack-layout';
@@ -99,15 +100,25 @@ export interface DeltaBuildOptions {
   readonly parent?: PublishedMerkleParentV2 | null;
   readonly chunkParams?: ChunkParams;
   readonly maxPackBytes?: number;
+  /** The parent's namespace map and this fence's page delta. Absent when the
+   *  daemon keeps no persisted namespace. */
+  readonly namespace?: {
+    readonly map: NamespacePageMap;
+    readonly image: NamespaceImage;
+  } | null;
 }
 export interface MerkleDeltaBuild {
   readonly packs: readonly BuiltPack[];
   /** The root record, as a range inside one of the packs above. */
   readonly rootObject: ObjectRangeRef;
+  /** The namespace this generation carries: its map root, inside the packs above, and its image length. */
+  readonly namespace: NamespaceRef | null;
   /** What the build measured. The fence owns `bytesStaged`. */
   readonly seal: Omit<SealWork, 'bytesStaged'>;
   /** Directory pages this generation wrote, and pages reused by reference. */
   readonly dirPages: { readonly written: number; readonly reused: number };
+  /** Namespace pages and map nodes this generation wrote. */
+  readonly namespacePages: { readonly pages: number; readonly nodes: number };
   /** The boundaries of the files this generation rewrote, for the daemon. */
   readonly boundaries: readonly BoundaryRow[];
   /** Paths this generation no longer holds, for the daemon's map. */
@@ -948,6 +959,11 @@ export async function buildMerkleDelta(
     }));
   };
   placeDir(root);
+  const namespace = options.namespace ?? null;
+  const stagedNamespace = namespace === null ? null : await namespace.map.stage(writer, namespace.image);
+  for (const ref of stagedNamespace?.replaced ?? []) {
+    countReplacedRecord({ pack: ref.key, length: Number(ref.byteLength) });
+  }
   writer.finish();
 
   const rootRecord = recordSlots.get(root);
@@ -960,8 +976,13 @@ export async function buildMerkleDelta(
       byteLength: String(rootRecord.slot.length),
       sha256: rootRecord.slot.sha256,
     },
+    namespace: stagedNamespace === null ? null : {
+      root: stagedNamespace.root((slot) => writer.keyOf(slot)),
+      byteLength: String(stagedNamespace.byteLength),
+    },
     seal: { bytesChunked, chunksHashed, nodesRewritten, wholeFiles },
     dirPages: { written: dirPagesWritten, reused: dirPagesReused },
+    namespacePages: { pages: stagedNamespace?.pagesWritten ?? 0, nodes: stagedNamespace?.nodesWritten ?? 0 },
     boundaries,
     removed,
     replacedBytes,

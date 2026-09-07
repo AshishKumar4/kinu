@@ -38,6 +38,7 @@ import type {
   DeltaStagedRange,
 } from '../../src/candidates/merkle-pack/delta';
 import { DEFAULT_MAX_PACK_BYTES_V2 } from '../../src/candidates/merkle-pack/build-v2';
+import type { NamespaceImage, NamespaceSource } from '../../src/candidates/merkle-pack/namespace-map';
 import { envelopeV2Bytes, envelopeV2IdOf } from '../../src/candidates/publication';
 import * as v from 'valibot';
 import { RootEnvelopeV2Schema, CandidateRunControlV2Schema } from '../../src/durability/contracts';
@@ -212,6 +213,296 @@ interface BoundaryFile {
   readonly boundaries: readonly number[];
 }
 
+const NAMESPACE_PAGE_BYTES = 4096;
+const NAMESPACE_ROOT_ID = 1;
+
+interface AliasRow {
+  readonly parent: number;
+  readonly name: string;
+  readonly id: number;
+}
+
+function aliasKey(parent: number, name: string): string {
+  return `${parent}\0${name}`;
+}
+
+function splitPath(path: string): { readonly dir: string; readonly name: string } {
+  const slash = path.lastIndexOf('/');
+  return slash < 0 ? { dir: '', name: path } : { dir: path.slice(0, slash), name: path.slice(slash + 1) };
+}
+
+/**
+ * THE NAMESPACE THE DAEMON PERSISTS, as `journal-namespace.c` keeps it: one
+ * alias row per name, `parent id, name, id`, the root being id 1, and the
+ * next id to allot in the first page. Logical ids are the identity every
+ * manifest row and boundary row carries; a backing inode is the tree's own.
+ *
+ * Rows are laid into 4 KiB pages by a hash of `(parent, name)`, so one name
+ * change dirties one page and a rename of a populated directory moves one
+ * row: its children keep their parent id. A fence hands over only the pages
+ * written since the previous fence, as the page-tracking VFS does.
+ *
+ * An attached namespace is the published head's, read a page at a time when
+ * a name needs it. A daemon that replayed an op or exported a page holds a
+ * namespace of its own and keeps it.
+ */
+class ModeledNamespace {
+  #pages = new Map<number, Map<string, AliasRow>>();
+  /** Row pages, numbered from 2. Page 1 holds the id counter alone, so one
+   *  create dirties two pages whatever the namespace holds, as the daemon's
+   *  `sqlite_sequence` page is not an alias leaf. */
+  #rowPages = 1;
+  #next: number | null = NAMESPACE_ROOT_ID + 1;
+  /** Dirty pages by the revision that last wrote them. A capture freezes a
+   *  revision; only the base hand-back for that cut clears pages at or
+   *  below it, as `namespace_pages_acknowledge` does. */
+  #dirty = new Map<number, number>([[1, 1]]);
+  #revision = 1;
+  #captured: { readonly cut: number; readonly revision: number } | null = null;
+  #source: NamespaceSource | null = null;
+  #pristine = true;
+  /** Pages read from the source, and rows resolved through them. */
+  readonly work = { pageReads: 0, lookups: 0 };
+
+  attach(source: NamespaceSource | null): void {
+    if (!this.#pristine) return;
+    if (source === null) return;
+    if (source.byteLength <= 0 || source.byteLength % NAMESPACE_PAGE_BYTES !== 0) {
+      throw new Error(`a namespace image is whole pages, not ${source.byteLength} bytes`);
+    }
+    this.#source = source;
+    this.#rowPages = source.byteLength / NAMESPACE_PAGE_BYTES - 1;
+    if (this.#rowPages < 1) throw new Error('a namespace image holds a counter page and at least one row page');
+    this.#pages = new Map();
+    this.#dirty = new Map();
+    this.#next = null;
+  }
+
+  /** Genesis over a tree that already exists: every name gets an id now, as
+   *  `journal-namespace.c` ingests the backing tree once at open. Nothing
+   *  is fetched, and the namespace stays replaceable by an attach. */
+  ingest(paths: readonly string[]): void {
+    if (this.#source !== null) throw new Error('an attached namespace ingests nothing');
+    for (const path of [...paths].sort()) {
+      const { dir, name } = splitPath(path);
+      let parent = NAMESPACE_ROOT_ID;
+      for (const part of dir.split('/').filter((held) => held !== '')) {
+        const row = this.#localPage(this.#pageOf(parent, part)).get(aliasKey(parent, part));
+        if (row === undefined) throw new Error(`ingest reached ${path} before its parent ${dir}`);
+        parent = row.id;
+      }
+      const id = this.#next ?? NAMESPACE_ROOT_ID + 1;
+      this.#next = id + 1;
+      this.#touch(1);
+      const number = this.#pageOf(parent, name);
+      this.#localPage(number).set(aliasKey(parent, name), { parent, name, id });
+      this.#touch(number);
+      while (this.#encode(number, this.#localPage(number)).byteLength > NAMESPACE_PAGE_BYTES) this.#growLocal();
+    }
+  }
+
+  #localPage(number: number): Map<string, AliasRow> {
+    let held = this.#pages.get(number);
+    if (held === undefined) {
+      held = new Map();
+      this.#pages.set(number, held);
+    }
+    return held;
+  }
+
+  #growLocal(): void {
+    const rows = [...this.#pages.values()].flatMap((held) => [...held.values()]);
+    this.#rowPages *= 2;
+    this.#pages = new Map();
+    for (let number = 1; number <= this.#rowPages + 1; number += 1) this.#touch(number);
+    for (const row of rows) this.#localPage(this.#pageOf(row.parent, row.name)).set(aliasKey(row.parent, row.name), row);
+  }
+
+  /** The id a path resolves to. A name the index lacks was laid beneath the
+   *  root by a restore; it joins the index here with a fresh id, as the
+   *  daemon's lookup admits it (`lookup_node`, `journal_namespace_bind`). */
+  async idOf(path: string): Promise<number> {
+    let id = NAMESPACE_ROOT_ID;
+    for (const name of path.split('/').filter((part) => part !== '')) {
+      const rows = await this.#page(this.#pageOf(id, name));
+      let row = rows.get(aliasKey(id, name));
+      if (row === undefined) {
+        row = { parent: id, name, id: await this.#allot() };
+        await this.#put(row);
+      }
+      id = row.id;
+    }
+    this.work.lookups += 1;
+    return id;
+  }
+
+  /** Replay the fence's ops in sequence: what the daemon did to its index as
+   *  each effect landed. */
+  async replay(ops: readonly DeltaMetadataOp[]): Promise<void> {
+    for (const op of ops) {
+      if (op.result !== 0) continue;
+      this.#pristine = false;
+      const { dir, name } = splitPath(op.path);
+      switch (op.op) {
+        case 'create': case 'mkdir': case 'mknod': case 'symlink': {
+          const parent = await this.idOf(dir);
+          await this.#put({ parent, name, id: await this.#allot() });
+          break;
+        }
+        case 'link': {
+          const id = await this.idOf(op.argument);
+          await this.#put({ parent: await this.idOf(dir), name, id });
+          break;
+        }
+        case 'unlink': case 'rmdir':
+          await this.#drop(await this.idOf(dir), name);
+          break;
+        case 'rename': {
+          // The source is looked up before it moves, so a restored name the
+          // index never saw joins it here, as it would in the daemon.
+          const id = await this.idOf(op.path);
+          const to = splitPath(op.argument);
+          await this.#drop(await this.idOf(dir), name);
+          await this.#put({ parent: await this.idOf(to.dir), name: to.name, id });
+          break;
+        }
+        default:
+          break;
+      }
+    }
+  }
+
+  /** The pages written since the last acknowledged capture, frozen now. */
+  async export(cut: number): Promise<NamespaceImage> {
+    this.#pristine = false;
+    const frozen = new Map<number, Uint8Array>();
+    for (const number of [...this.#dirty.keys()].sort((a, b) => a - b)) {
+      frozen.set(number, this.#encode(number, await this.#page(number)));
+    }
+    this.#captured = { cut, revision: this.#revision };
+    return {
+      byteLength: (this.#rowPages + 1) * NAMESPACE_PAGE_BYTES,
+      pages: [...frozen].map(([number, bytes]) => ({ number, sha256: sha256Hex(bytes) })),
+      readPage: (number) => {
+        const bytes = frozen.get(number);
+        if (bytes === undefined) throw new Error(`the fence exported no namespace page ${number}`);
+        return bytes;
+      },
+      close: () => {},
+    };
+  }
+
+  /** The head that published the capture at `cut` landed: its pages stop
+   *  being dirty unless a later write touched them again. */
+  acknowledge(cut: number): void {
+    const captured = this.#captured;
+    if (captured === null || captured.cut !== cut) return;
+    for (const [number, revision] of this.#dirty) {
+      if (revision <= captured.revision) this.#dirty.delete(number);
+    }
+    this.#captured = null;
+  }
+
+  #touch(number: number): void {
+    this.#revision += 1;
+    this.#dirty.set(number, this.#revision);
+  }
+
+  /** The page a root-level name lays its row in, for a test that needs two
+   *  names on two pages. */
+  pageOfRootName(name: string): number {
+    return this.#pageOf(NAMESPACE_ROOT_ID, name);
+  }
+
+  #pageOf(parent: number, name: string): number {
+    let hash = 0x811c9dc5;
+    for (const byte of new TextEncoder().encode(aliasKey(parent, name))) {
+      hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+    }
+    return (hash % this.#rowPages) + 2;
+  }
+
+  async #page(number: number): Promise<Map<string, AliasRow>> {
+    const held = this.#pages.get(number);
+    if (held !== undefined) return held;
+    const rows = new Map<string, AliasRow>();
+    if (this.#source !== null && number * NAMESPACE_PAGE_BYTES <= this.#source.byteLength) {
+      const bytes = await this.#source.readPage(number);
+      this.work.pageReads += 1;
+      if (bytes.byteLength !== NAMESPACE_PAGE_BYTES) throw new Error(`namespace page ${number} is ${bytes.byteLength} bytes`);
+      const end = bytes.indexOf(0);
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, end < 0 ? bytes.byteLength : end));
+      for (const line of text.split('\n').filter((held) => held !== '')) {
+        const [parent, name, id] = line.split('\t');
+        if (parent === '#next') {
+          if (number !== 1 || name === undefined) throw new Error(`namespace page ${number} carries a misplaced counter`);
+          this.#next = Number(name);
+          continue;
+        }
+        if (parent === undefined || name === undefined || id === undefined) throw new Error(`namespace page ${number} is malformed`);
+        rows.set(aliasKey(Number(parent), name), { parent: Number(parent), name, id: Number(id) });
+      }
+    }
+    this.#pages.set(number, rows);
+    return rows;
+  }
+
+  async #allot(): Promise<number> {
+    if (this.#next === null) {
+      await this.#page(1);
+      if (this.#next === null) throw new Error('the attached namespace carries no id counter');
+    }
+    const id: number = this.#next;
+    this.#next = id + 1;
+    this.#touch(1);
+    return id;
+  }
+
+  async #put(row: AliasRow): Promise<void> {
+    const number = this.#pageOf(row.parent, row.name);
+    const rows = await this.#page(number);
+    rows.set(aliasKey(row.parent, row.name), row);
+    this.#touch(number);
+    if (this.#encode(number, rows).byteLength > NAMESPACE_PAGE_BYTES) await this.#grow();
+  }
+
+  async #drop(parent: number, name: string): Promise<void> {
+    const number = this.#pageOf(parent, name);
+    const rows = await this.#page(number);
+    if (!rows.delete(aliasKey(parent, name))) throw new Error(`the namespace has no alias ${name} under id ${parent}`);
+    this.#touch(number);
+  }
+
+  /** A page overflowed: double the page count and lay every row again. This
+   *  reads every page, as a b-tree split cascade would; it is rare. */
+  async #grow(): Promise<void> {
+    const rows: AliasRow[] = [];
+    for (let number = 2; number <= this.#rowPages + 1; number += 1) rows.push(...(await this.#page(number)).values());
+    this.#rowPages *= 2;
+    this.#pages = new Map();
+    for (let number = 1; number <= this.#rowPages + 1; number += 1) {
+      this.#pages.set(number, new Map());
+      this.#touch(number);
+    }
+    for (const row of rows) this.#pages.get(this.#pageOf(row.parent, row.name))?.set(aliasKey(row.parent, row.name), row);
+    for (const [number, held] of this.#pages) {
+      if (this.#encode(number, held).byteLength > NAMESPACE_PAGE_BYTES) await this.#grow();
+    }
+  }
+
+  #encode(number: number, rows: ReadonlyMap<string, AliasRow>): Uint8Array {
+    const lines = [...rows.values()]
+      .sort((a, b) => a.parent - b.parent || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+      .map((row) => `${row.parent}\t${row.name}\t${row.id}\n`);
+    if (number === 1) lines.unshift(`#next\t${this.#next ?? NAMESPACE_ROOT_ID + 1}\n`);
+    const text = new TextEncoder().encode(lines.join(''));
+    if (text.byteLength > NAMESPACE_PAGE_BYTES) return text;
+    const page = new Uint8Array(NAMESPACE_PAGE_BYTES);
+    page.set(text);
+    return page;
+  }
+}
+
 /**
  * The daemon, modeled: it observes mutations, holds the boundary map the
  * sidecar hands it, and answers a fence with the same windows the deployed
@@ -239,6 +530,9 @@ export class ModeledDaemon implements SidecarDaemon {
   #generation = 0;
   #base: { cut: string; generation: string; root: string } | null = null;
   #manifest: DeltaManifestV2 | null = null;
+  /** The persisted namespace: the identity every row carries. */
+  index = new ModeledNamespace();
+  #namespaceImage: NamespaceImage | null = null;
   #walBytes = 0;
   #tree: LiveTree;
   #params: ChunkParams;
@@ -250,6 +544,7 @@ export class ModeledDaemon implements SidecarDaemon {
    */
   constructor(tree: LiveTree, params: ChunkParams = DEFAULT_CHUNK_PARAMS) {
     this.#tree = tree;
+    this.index.ingest(tree.paths());
     this.#params = params;
   }
 
@@ -268,6 +563,9 @@ export class ModeledDaemon implements SidecarDaemon {
     this.#touched = new Set();
     this.#ops = [];
     this.boundaryMap.clear();
+    this.index = new ModeledNamespace();
+    this.index.ingest(tree.paths());
+    this.#namespaceImage = null;
   }
 
   /** Forget the box: what discard owes the next container. */
@@ -277,6 +575,8 @@ export class ModeledDaemon implements SidecarDaemon {
     this.#touched = new Set();
     this.#ops = [];
     this.boundaryMap.clear();
+    this.index = new ModeledNamespace();
+    this.#namespaceImage = null;
     this.#base = null;
     this.#manifest = null;
     this.#cut = 0;
@@ -350,7 +650,18 @@ export class ModeledDaemon implements SidecarDaemon {
    *  drops the row, as the daemon's map is merged. */
   remove(path: string): void {
     const node = this.tree.node(path);
+    // A directory goes the way rm -r takes it: every descendant first,
+    // deepest names first, then the directory. The kernel admits no other
+    // order, and the namespace drops one alias per op.
+    const descendants = node?.kind === 'dir'
+      ? this.tree.paths().filter((held) => held.startsWith(`${path}/`)).sort((a, b) => b.length - a.length)
+      : [];
     this.tree.remove(path);
+    for (const descendant of descendants) {
+      const kind = this.tree.node(descendant)?.kind;
+      this.#op(kind === 'dir' ? 'rmdir' : 'unlink', descendant, '');
+      this.#touched.delete(descendant);
+    }
     this.#op(node?.kind === 'dir' ? 'rmdir' : 'unlink', path, '');
     this.#touched.delete(path);
     for (const ancestor of ancestorsOfPath(path)) {
@@ -363,6 +674,9 @@ export class ModeledDaemon implements SidecarDaemon {
   async fence(): Promise<JournalFence> {
     this.#cut += 1;
     this.#generation += 1;
+    // THE OPS REACH THE INDEX FIRST, in the order they landed, so every row
+    // below names the id its path has at the cut.
+    await this.index.replay(this.#ops);
     // THE TOUCHED PATHS PLUS THEIR ANCESTORS, which is what makes a delta a
     // consistent partial tree: a rewritten directory needs its own stat, and
     // the sidecar rewrites every ancestor of everything that changed. A
@@ -385,7 +699,7 @@ export class ModeledDaemon implements SidecarDaemon {
       const metadata = cloneMetadata(node.metadata);
       const ino = this.tree.ino(path);
       const row = {
-        ino: String(ino),
+        ino: String(await this.index.idOf(path)),
         path,
         size: 0,
         mode: node.mode,
@@ -420,7 +734,7 @@ export class ModeledDaemon implements SidecarDaemon {
       // from the boundary before it to four chunks past it, and whole again
       // when that one window is the file.
       const written = clampRanges(held.whole ? [{ offset: 0, length: size }] : mergeRanges(held.ranges), size);
-      const known = this.boundaryMap.get(ino);
+      const known = this.boundaryMap.get(Number(row.ino));
       const windows = chunkWindows({ size, ranges: written, boundaries: known?.boundaries ?? null, params: this.#params, whole: false });
       const whole = known === undefined || (windows.length === 1 && windows[0]!.offset === 0 && windows[0]!.length >= size);
       const ranges = await this.#stageWindows(path, windows, content === undefined ? [] : dataRunsOf(content, size));
@@ -439,6 +753,7 @@ export class ModeledDaemon implements SidecarDaemon {
       metadataOps: this.#ops,
       sealWork,
     };
+    this.#namespaceImage = await this.index.export(this.#cut);
     this.#manifest = manifest;
     this.fences.push(manifest);
     this.#dirty = new Map();
@@ -452,6 +767,18 @@ export class ModeledDaemon implements SidecarDaemon {
       base: this.#base,
       sealWork,
     };
+  }
+
+  async attachNamespace(source: NamespaceSource | null): Promise<void> {
+    this.index.attach(source);
+  }
+
+  async namespace(fence: JournalFence): Promise<NamespaceImage> {
+    const held = this.#manifest;
+    if (held === null || held.cut !== fence.cut || held.generation !== fence.generation || this.#namespaceImage === null) {
+      throw new Error(`no namespace for the fence at cut ${fence.cut}`);
+    }
+    return this.#namespaceImage;
   }
 
   /**
@@ -505,8 +832,11 @@ export class ModeledDaemon implements SidecarDaemon {
         if (file.path === removed) this.boundaryMap.delete(ino);
       }
     }
+    // A row lands under the id the NAME resolves to in the index, as the
+    // daemon binds it: the `ino` a restore states is the inode its container
+    // created, which is a backing number and not an identity.
     for (const file of handback.files) {
-      this.boundaryMap.set(Number(file.ino), { path: file.path, size: file.size, boundaries: [...file.boundaries] });
+      this.boundaryMap.set(await this.index.idOf(file.path), { path: file.path, size: file.size, boundaries: [...file.boundaries] });
     }
     this.seed(handback);
     return handback.files.length;
@@ -526,6 +856,7 @@ export class ModeledDaemon implements SidecarDaemon {
       this.#generation = Math.max(this.#generation, Number(base.generation));
     }
     this.#base = { cut: base.cut, generation: base.generation, root: base.root };
+    this.index.acknowledge(Number(base.cut));
   }
 
   /** The stage, as the sidecar reads it: the live bytes at identical offsets. */

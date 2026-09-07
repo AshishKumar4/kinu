@@ -344,6 +344,34 @@ describe('a publish is single PUTs, an ETag-proven body, and one CAS', () => {
     expect(control.operation?.phase === 'failed' ? control.operation.failureCode : '').toBe('receipt-mismatch');
   });
 
+  test('a failed publish leaves its namespace pages for the next fence', async () => {
+    const fixture = openSidecar();
+    // Enough names for several alias pages, and a later name chosen to lay
+    // its row on a page the refused name did not touch, so only an
+    // un-acknowledged capture can carry that page forward.
+    fixture.daemon.plant(generatedTree({ seed: 23, files: 600, bytesPerFile: 8 }));
+    await publish(fixture, 'the base seal');
+    fixture.daemon.plant(textTree({ 'added.txt': 'a new name' }));
+    fixture.payload.corruptNextEtag = true;
+    expect((await fixture.core.seal('quiesce')).kind).toBe('failed');
+    const refused = fixture.daemon.fences[fixture.daemon.fences.length - 1];
+    const addedId = Number(refused?.entries.find((entry) => entry.path === 'added.txt')?.ino);
+    expect(addedId).toBeGreaterThan(1);
+    // The pages that fence exported were never acknowledged: the next fence
+    // exports them again, so the head that lands names the file under the
+    // id the refused fence allotted, and a replacement resolves it from the
+    // head's pages rather than allotting another.
+    const laterName = Array.from({ length: 64 }, (_, at) => `later-${at}.txt`)
+      .find((name) => fixture.daemon.index.pageOfRootName(name) !== fixture.daemon.index.pageOfRootName('added.txt'));
+    if (laterName === undefined) throw new Error('no root name lays its row on another page');
+    fixture.daemon.plant(textTree({ [laterName]: 'after the refusal' }));
+    await publish(fixture, 'the seal after the refusal');
+    const restarted = openSidecar({ share: fixture, bootId: 'after-refusal' });
+    restarted.daemon.adopt(new LiveTree());
+    await restarted.core.attach();
+    expect(await restarted.daemon.index.idOf('added.txt')).toBe(addedId);
+  });
+
   test('a publish against an old parent loses the CAS and records the failure', async () => {
     const boot = openSidecar({ bootId: 'boot-a' });
     boot.daemon.plant(textTree({ 'notes.txt': 'generation one' }));
@@ -541,7 +569,10 @@ describe('a wake serves the head lazily', () => {
 
   test('publication during identity verification cannot switch the payload generation', async () => {
     const fixture = openSidecar({ graceMs: 0 });
-    fixture.daemon.plant(textTree({ 'held.txt': 'old bytes' }));
+    // Larger than the namespace page the same pack carries, so the rewrite
+    // leaves the first pack mostly dead and the compaction heuristic fires.
+    const oldBytes = 'old bytes '.repeat(2048);
+    fixture.daemon.plant(textTree({ 'held.txt': oldBytes }));
     await publish(fixture, 'the original file');
     const container = new LazyContainer(new LiveTree(), () => 1_000);
     container.adopt(fixture.core.restoreLazily(container.ports()));
@@ -559,12 +590,12 @@ describe('a wake serves the head lazily', () => {
     };
     const reading = container.read('held.txt');
     await entered.promise;
-    fixture.daemon.write('held.txt', new TextEncoder().encode('new bytes'));
+    fixture.daemon.write('held.txt', new TextEncoder().encode('new bytes '.repeat(2048)));
     await publish(fixture, 'the newer file');
     await fixture.core.compact();
     expect((await fixture.core.collectGarbage()).deletes).toBe(0);
     release.resolve();
-    expect(new TextDecoder().decode(await reading)).toBe('old bytes');
+    expect(new TextDecoder().decode(await reading)).toBe(oldBytes);
     expect((await fixture.core.collectGarbage()).deletes).toBeGreaterThan(0);
   });
 
@@ -582,6 +613,37 @@ describe('a wake serves the head lazily', () => {
     if (view === null) throw new Error('Missing compacted head');
     expect(await view.readdir('')).toEqual([]);
   });
+
+  test('a replacement resolves names through pages that compaction moved and GC reclaimed', async () => {
+    const fixture = openSidecar({ graceMs: 0, maxPackBytes: 64 * 1024 });
+    const seed = new Seeded(17);
+    // Enough names for several namespace pages, and enough churned bytes for
+    // the packs holding them to become compaction candidates.
+    fixture.daemon.plant(generatedTree({ seed: 17, files: 600, bytesPerFile: 64 }));
+    await publish(fixture, 'the wide base');
+    for (let round = 0; round < 3; round += 1) {
+      fixture.daemon.write('churn.bin', seed.fill(new Uint8Array(48 * 1024)));
+      fixture.daemon.write(`round-${round}.txt`, new TextEncoder().encode(`round ${round}`));
+      await publish(fixture, `churn ${round}`);
+    }
+    expect(await fixture.core.compact()).toBe(true);
+    expect((await fixture.core.collectGarbage()).deletes).toBeGreaterThan(0);
+    const expected = fixture.daemon.tree.snapshot();
+    const replaced = openSidecar({ share: fixture, bootId: 'replacement' });
+    replaced.daemon.adopt(new LiveTree());
+    await replaced.core.attach();
+    // Every name in the tree resolves through the attached pages, and the
+    // ids it resolves to are the ones the head's records carry.
+    const view = replaced.core.view();
+    if (view === null) throw new Error('Missing compacted head');
+    for (const entry of expected) {
+      const record = await view.record(entry.path);
+      const node = record?.node;
+      const ino = node !== undefined && 'ino' in node ? node.ino : -1;
+      expect(ino).toBe(await replaced.daemon.index.idOf(entry.path));
+    }
+    expect(replaced.daemon.index.work.pageReads).toBeGreaterThan(1);
+  }, 60_000);
 });
 
 describe('a wide directory pays for one path, not its width', () => {

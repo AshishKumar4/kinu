@@ -11,19 +11,28 @@
  * now, and the modeled daemon in the tests implements the same port.
  */
 
-import { open, stat } from 'node:fs/promises';
+import { open, rm, stat } from 'node:fs/promises';
 
 import { JournalDaemonClient } from '../../src/capture/journal/client';
 import type { JournalDelta, JournalFence } from '../../src/capture/journal/client';
 import type { BoundaryHandback } from '../../src/candidates/merkle-pack/delta';
 
 import type { SidecarDaemon } from './core';
+import { readNamespaceDelta } from '../../src/capture/journal/namespace';
+import type { NamespaceImage, NamespaceSource } from '../../src/candidates/merkle-pack/namespace-map';
+import { describeThrown } from '../../src/lifecycle';
+import type { UnixSocketListener } from 'bun';
 
 export class SidecarDaemonClient implements SidecarDaemon {
   readonly #client: JournalDaemonClient;
+  readonly #pageSocket: string;
+  #pages: NamespacePageServer | null = null;
+  /** Pages the daemon fetched through this adapter, for the measurements. */
+  pagesServed = 0;
 
   constructor(socketPath: string) {
     this.#client = new JournalDaemonClient(socketPath);
+    this.#pageSocket = `${socketPath}.pages`;
   }
 
   fence(): Promise<JournalFence> {
@@ -36,6 +45,101 @@ export class SidecarDaemonClient implements SidecarDaemon {
 
   async boundaries(handback: BoundaryHandback): Promise<number> {
     return await this.#client.boundaries(handback);
+  }
+
+  async namespace(fence: JournalFence): Promise<NamespaceImage> {
+    const delta = await readNamespaceDelta(fence);
+    return {
+      byteLength: Number(delta.manifest.byteLength),
+      pages: delta.manifest.pages,
+      readPage: (number) => delta.readPage(number),
+      close: () => delta.close(),
+    };
+  }
+
+  /**
+   * The page socket outlives this call: a daemon that adopted the image
+   * fetches pages whenever a name first needs them, and after its own
+   * restart. Each attach points the socket at the newest head, whose retained
+   * pages are the same bytes the daemon adopted.
+   */
+  async attachNamespace(source: NamespaceSource | null): Promise<void> {
+    if (source === null) {
+      await this.#client.attachNamespace(null);
+      return;
+    }
+    if (this.#pages === null) this.#pages = await NamespacePageServer.listen(this.#pageSocket, () => { this.pagesServed += 1; });
+    this.#pages.serve(source);
+    await this.#client.attachNamespace({ socket: this.#pageSocket, byteLength: source.byteLength });
+  }
+
+  close(): void {
+    this.#pages?.close();
+    this.#pages = null;
+  }
+}
+
+/**
+ * One line in, `ok` and one page out. The daemon's VFS speaks this from C
+ * (`namespace-pages.c`, `fetch_page`): `page N` for a 4096-byte page of the
+ * published image, answered with `ok\n` and the bytes, or `error <why>\n`.
+ */
+class NamespacePageServer {
+  #source: NamespaceSource | null = null;
+
+  private constructor(private readonly server: UnixSocketListener<Buffer>) {}
+
+  static async listen(path: string, served: () => void): Promise<NamespacePageServer> {
+    await rm(path, { force: true });
+    let held: NamespacePageServer | null = null;
+    const answer = async (socket: { write(data: string | Uint8Array): number }, line: string): Promise<void> => {
+      const match = /^page ([1-9][0-9]{0,9})$/u.exec(line);
+      const source = held === null ? null : held.#source;
+      if (match === null || source === null) {
+        socket.write(`error ${source === null ? 'no namespace is attached' : 'malformed request'}\n`);
+        return;
+      }
+      const number = Number(match[1]);
+      if (number * 4096 > source.byteLength) {
+        socket.write(`error page ${number} is beyond the image\n`);
+        return;
+      }
+      try {
+        const bytes = await source.readPage(number);
+        socket.write('ok\n');
+        socket.write(bytes);
+        served();
+      } catch (error) {
+        // One line, bounded: the daemon reads it into a fixed buffer.
+        socket.write(`error ${describeThrown({ cause: error }).replaceAll('\n', ' ').slice(0, 400)}\n`);
+      }
+    };
+    const server = Bun.listen<Buffer>({
+      unix: path,
+      socket: {
+        open(socket) { socket.data = Buffer.alloc(0); },
+        async data(socket, chunk) {
+          socket.data = Buffer.concat([socket.data, chunk]);
+          for (;;) {
+            const newline = socket.data.indexOf(0x0a);
+            if (newline < 0) return;
+            const line = socket.data.subarray(0, newline).toString('utf8');
+            socket.data = socket.data.subarray(newline + 1);
+            await answer(socket, line);
+          }
+        },
+      },
+    });
+    held = new NamespacePageServer(server);
+    return held;
+  }
+
+  serve(source: NamespaceSource): void {
+    this.#source = source;
+  }
+
+  close(): void {
+    this.server.stop(true);
   }
 }
 
