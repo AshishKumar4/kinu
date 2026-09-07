@@ -154,6 +154,15 @@ describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
     expect(totals.failures).toEqual(['run: exit 127', 'run_end: provider refused']);
   });
 
+  test('typed outcomes control failure while reported diagnostics stay intact', () => {
+    const totals = ledgerTotalsFromEvents([
+      event({ type: 'tool_call_end', name: 'run', toolCallId: 'success', outcome: { success: true }, error: 'stale error' }),
+      event({ type: 'tool_call_end', name: 'run', toolCallId: 'failed', outcome: { success: false, reason: 'io', execution: { exitCode: 7 } }, error: 'test command failed with useful details' }),
+      event({ type: 'tool_call_end', name: 'run', toolCallId: 'legacy', error: 'legacy diagnostic' }),
+    ]);
+    expect(totals.failures).toEqual(['run: test command failed with useful details', 'run: legacy diagnostic']);
+  });
+
   test('an empty ledger reports zeroes rather than throwing', () => {
     // The zero-denominator case. It must be reachable and readable: a suite
     // decides `inert` from these numbers, and a reducer that threw here would
