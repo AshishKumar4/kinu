@@ -105,10 +105,22 @@ export const PackLedgerRowSchema = v.pipe(
 );
 export type PackLedgerRow = v.InferOutput<typeof PackLedgerRowSchema>;
 
+/** A pack a verified compaction retired, waiting out its grace window. The
+ * row lives in the ledger so a boot that did not retire the pack still
+ * deletes it, and so a crash between delete and the next seal repeats an
+ * idempotent delete rather than leaking the pack. */
+export const RetiredPackRowSchema = v.strictObject({
+  key: ObjectKeySchema,
+  retiredInGeneration: DecimalSchema,
+  /** Milliseconds since the epoch when the retiring generation was staged. */
+  retiredAtMs: DecimalSchema,
+});
+export type RetiredPackRow = v.InferOutput<typeof RetiredPackRowSchema>;
+
 /**
- * Packs retained until verified compaction retires them. The inventory is
- * O(#packs) and is rewritten per publish. Estimated liveness selects work;
- * it does not authorize deletion.
+ * Packs retained until verified compaction retires them, and retired packs
+ * not yet deleted. The inventory is O(#packs) and is rewritten per publish.
+ * Estimated liveness selects work; it does not authorize deletion.
  */
 export const PackLedgerSchema = v.pipe(
   v.strictObject({
@@ -118,7 +130,17 @@ export const PackLedgerSchema = v.pipe(
     generation: DecimalSchema,
     /** Stable pack order, one row per pack. */
     packs: v.pipe(v.array(PackLedgerRowSchema), v.minLength(1)),
+    /** Retired packs awaiting deletion, sorted by key. */
+    retired: v.array(RetiredPackRowSchema),
   }),
+  v.check(
+    (ledger) => strictlyAscending(ledger.retired.map((row) => row.key)),
+    'Expected retired ledger rows sorted by key without repeats',
+  ),
+  v.check(
+    (ledger) => !ledger.retired.some((row) => ledger.packs.some((pack) => pack.key === row.key)),
+    'A ledger cannot both retain and retire one pack',
+  ),
   v.check(
     (ledger) => allUnique(ledger.packs.map((row) => row.key)),
     'A pack ledger cannot repeat a pack key',

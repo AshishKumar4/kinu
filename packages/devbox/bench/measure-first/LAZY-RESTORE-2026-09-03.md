@@ -225,4 +225,25 @@ the two 13 KiB leaf pages that hold the changed entry and the
 intermediate page above it; a compact entry encoding would cut that
 further and is not measured.
 
+## Retirement survives a boot, 2026-09-06
+
+The retirement queue was a private array in the sidecar process. A boot
+that did not retire a pack never deleted it, so a restart after compaction
+leaked every retired pack. A local replay reproduced this: four packs
+retired by boot 1, zero deletes from boot 2 after the grace window.
+
+The ledger now carries a `retired` row per pack awaiting deletion, with
+the generation that retired it and the staging time in milliseconds. GC
+reads the ledger, deletes the rows past grace, and remembers the keys in
+the process. The next seal drops the rows this process deleted. A boot
+that crashes between delete and seal repeats an idempotent delete. Rows
+are sorted by key and disjoint from the retained packs; the schema refuses
+both violations. The same replay now deletes all four packs from boot 2,
+and boot 3 sees an empty queue after its first seal.
+
+GC on a fresh boot reads the ledger once, O(#packs). Attach still reads
+no inventory. The grace clock starts at staging, at most one upload
+earlier than publication; the default window is 600,000 ms. 74 focused
+tests pass.
+
 

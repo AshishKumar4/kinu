@@ -50,7 +50,6 @@ import {
   packLedgerRef,
   parsePackLedger,
 } from '../../src/candidates/merkle-pack/ledger';
-import type { RetiredPack } from '../../src/candidates/merkle-pack/ledger';
 import { openMerkleV2 } from '../../src/candidates/merkle-pack/view-v2';
 import type { KnownPack, MerkleV2View } from '../../src/candidates/merkle-pack/view-v2';
 import type { MerklePackReader } from '../../src/candidates/merkle-pack/read';
@@ -200,7 +199,8 @@ export class SidecarCore {
   #lazyPorts: LazyRestorePorts | null = null;
   #head: CandidateRunControlV2['head'] = null;
   #ledger: { readonly key: string; readonly value: PackLedger } | null = null;
-  #retired: RetiredPack[] = [];
+  /** Retired packs this boot deleted; the next seal drops their ledger rows. */
+  #deleted = new Set<string>();
   #restore: RestoreWork = ZERO_RESTORE;
   #seal: SealWork = ZERO_SEAL;
   #publish: PublishWork = ZERO_PUBLISH;
@@ -619,10 +619,6 @@ export class SidecarCore {
     };
     this.#unpublishedGenerations = 0;
     this.#unpublishedSince = null;
-    const retiredAtMs = this.#ports.now();
-    for (const key of staged.retired) {
-      this.#retired.push({ key, generation: staged.generation, retiredAtMs });
-    }
     this.#ledger = { key: staged.draft.ledger.key, value: staged.ledger };
     return { rootEnvelopeId: pointer.rootEnvelopeId, generation: staged.generation };
   }
@@ -716,21 +712,28 @@ export class SidecarCore {
   }
 
   /**
-   * Delete the retired packs whose grace window has elapsed. Deletion is by
-   * ledger and by grace, never by listing a prefix, and never before the
-   * generation that retired a pack is published.
+   * Delete the retired packs whose grace window has elapsed. The queue is the
+   * ledger's `retired` rows, so a boot that did not retire a pack still
+   * deletes it, and a boot that crashed after deleting repeats an idempotent
+   * delete. Deletion is by ledger and by grace, never by listing a prefix.
+   * With no cached ledger this reads it once, O(#packs), as maintenance.
    *
    * Answers what THIS cycle did. The accumulation across every sweep — this
    * one and {@link evictClean}'s, which is the same decision at a different
-   * distance — is the row `status` reports.
+   * distance — is `status().work.gc`.
    */
   async collectGarbage(): Promise<GcWork> {
+    const head = this.#head;
+    if (head === null) return ZERO_GC;
+    const ledger = await this.#readLedger(head.envelope.ledger, 'gc');
     const grace = this.#ports.graceMs ?? DEFAULT_GRACE_MS;
-    const due = deletableRetiredPacks(this.#retired, this.#ports.now(), grace);
+    const due = deletableRetiredPacks(ledger.retired, this.#ports.now(), grace)
+      .filter((key) => !this.#deleted.has(key));
     if (due.length === 0) return ZERO_GC;
-    const remaining = this.#retired.filter((pack) => !due.includes(pack.key));
-    for (const key of due) await this.#ports.payload.deleteObject?.(key);
-    this.#retired = remaining;
+    for (const key of due) {
+      await this.#ports.payload.deleteObject?.(key);
+      this.#deleted.add(key);
+    }
     this.#gc = { ...this.#gc, deletes: this.#gc.deletes + due.length };
     return { deletes: due.length, markPages: 0, markBytes: 0 };
   }
@@ -848,6 +851,8 @@ export class SidecarCore {
       added: input.build.packs.map((pack) => pack.ref),
       replacedBytes: input.build.replacedBytes,
       compacted: input.compacted,
+      nowMs: this.#ports.now(),
+      deleted: this.#deleted,
     });
     const ledger = packLedgerRef(next.ledger);
     const uploads: CandidatePackUpload[] = input.build.packs.map((pack) => ({

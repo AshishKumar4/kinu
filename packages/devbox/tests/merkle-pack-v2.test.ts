@@ -660,4 +660,41 @@ describe('compaction and retirement preserve the published head', () => {
     expectSameTree(fixture.daemon.tree.snapshot(), await served(fixture), 'the head after GC');
   }, 120_000);
 
+  test('a boot that did not retire a pack still deletes it after grace, and a repeat delete is harmless', async () => {
+    let now = 1_000;
+    const fixture = openSidecar({ graceMs: 10_000, now: () => now, maxPackBytes: 256 * 1024 });
+    const seed = new Seeded(93);
+    fixture.daemon.plant([
+      ...textTree({ 'keep.txt': 'x' }),
+      fileEntry('churn.bin', seed.fill(new Uint8Array(200_000)), 31, metadataOf(seed)),
+    ]);
+    await publish(fixture, 'the base seal');
+    for (let round = 0; round < 4; round += 1) {
+      fixture.daemon.write('churn.bin', seed.fill(new Uint8Array(200_000)));
+      await publish(fixture, `churn ${round}`);
+    }
+    expect(await fixture.core.compact()).toBe(true);
+    const retired = (await fixture.snapshot()).head!.envelope.retired;
+    expect(retired.length).toBeGreaterThan(0);
+
+    // The retiring boot is gone. A new boot attaches the same head.
+    const next = openSidecar({ bootId: 'boot-2', graceMs: 10_000, now: () => now, share: fixture });
+    await next.core.attach();
+    expect((await next.core.collectGarbage()).deletes).toBe(0);
+    now += 10_001;
+    const swept = await next.core.collectGarbage();
+    expect(swept.deletes).toBe(retired.length);
+    const deleted = fixture.payload.ops.filter((op) => op.op === 'delete').map((op) => op.key);
+    expect([...deleted].sort()).toEqual([...retired].sort());
+    // A third boot sees the same durable queue; deleting again is idempotent
+    // and the next seal drops the rows.
+    const third = openSidecar({ bootId: 'boot-3', graceMs: 10_000, now: () => now, share: fixture });
+    await third.core.attach();
+    await third.core.collectGarbage();
+    fixture.daemon.write('keep.txt', new TextEncoder().encode('y'));
+    await publish(third, 'the seal after deletion');
+    expect((await third.core.collectGarbage()).deletes).toBe(0);
+    expectSameTree(fixture.daemon.tree.snapshot(), await served(third), 'the head after a restarted GC');
+  }, 120_000);
+
 });

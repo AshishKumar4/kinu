@@ -402,6 +402,7 @@ const ledger: PackLedger = {
   boxId: 'box-1',
   generation: '9',
   packs: [{ ...pack, estimatedLiveBytes: '3072', addedInGeneration: '9' }],
+  retired: [{ key: 'v2/merkle-pack/pack/' + 'e'.repeat(64), retiredInGeneration: '8', retiredAtMs: '1000' }],
 };
 
 const ZERO_WORK = {
@@ -506,6 +507,14 @@ describe('durability v2 wire contracts', () => {
 
   test('the pack ledger binds immutable rows and preserves generation and packing order', () => {
     expect(v.parse(PackLedgerSchema, ledger)).toEqual(ledger);
+    expect(() => v.parse(PackLedgerSchema, {
+      ...ledger,
+      retired: [{ ...ledger.retired[0], key: ledger.packs[0].key }],
+    })).toThrow(/both retain and retire/u);
+    expect(() => v.parse(PackLedgerSchema, {
+      ...ledger,
+      retired: [ledger.retired[0], ledger.retired[0]],
+    })).toThrow(/retired ledger rows sorted/u);
     expect(() => v.parse(PackLedgerSchema, {
       ...ledger,
       packs: [{ ...ledger.packs[0], estimatedLiveBytes: '4097' }],

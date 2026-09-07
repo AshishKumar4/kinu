@@ -23,7 +23,7 @@ import * as v from 'valibot';
 
 import { sha256Hex } from '../../cas/hash';
 import { PackLedgerSchema } from '../../durability/contracts';
-import type { ImmutableObjectRef, PackLedger, PackLedgerRow } from '../../durability/contracts';
+import type { ImmutableObjectRef, PackLedger, PackLedgerRow, RetiredPackRow } from '../../durability/contracts';
 
 import { MerklePackError } from './errors';
 
@@ -80,6 +80,10 @@ export interface NextLedgerInput {
   readonly replacedBytes: ReadonlyMap<string, number>;
   /** Packs a compaction rewrote, which are retired whatever their live count. */
   readonly compacted?: readonly string[];
+  /** When this generation was staged; stamps the packs it retires. */
+  readonly nowMs: number;
+  /** Retired packs this boot has already deleted; their rows are dropped. */
+  readonly deleted?: ReadonlySet<string>;
 }
 
 export interface NextLedger {
@@ -91,7 +95,8 @@ export interface NextLedger {
 /**
  * Keep each parent pack until verified compaction retires it. Replaced bytes
  * reduce its liveness estimate, including to zero, without authorizing GC.
- * Append the packs this generation added.
+ * Append the packs this generation added. Carry every retired row forward
+ * until the caller reports it deleted, so retirement survives a boot.
  */
 export function nextPackLedger(input: NextLedgerInput): NextLedger {
   const compacted = new Set(input.compacted ?? []);
@@ -115,12 +120,18 @@ export function nextPackLedger(input: NextLedgerInput): NextLedger {
       addedInGeneration: input.generation,
     });
   }
+  const retiredRows: RetiredPackRow[] = (input.parent?.retired ?? []).filter((row) => !input.deleted?.has(row.key));
+  for (const key of retired) {
+    retiredRows.push({ key, retiredInGeneration: input.generation, retiredAtMs: String(input.nowMs) });
+  }
+  retiredRows.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   const ledger = v.parse(PackLedgerSchema, {
     version: 2,
     format: input.format,
     boxId: input.boxId,
     generation: input.generation,
     packs: rows,
+    retired: retiredRows,
   });
   return { ledger, retired: [...retired].sort() };
 }
@@ -146,22 +157,15 @@ export function compactionCandidates(ledger: PackLedger, generation: string): re
   });
 }
 
-/** One pack that left the ledger, and when it did. */
-export interface RetiredPack {
-  readonly key: string;
-  readonly generation: string;
-  readonly retiredAtMs: number;
-}
-
 /**
  * Which retired packs may be deleted now: those whose grace window has
  * elapsed. The window is twice the attach budget, so a container that was
  * told an object exists has already finished attaching before it goes.
  */
 export function deletableRetiredPacks(
-  retired: readonly RetiredPack[],
+  retired: readonly RetiredPackRow[],
   nowMs: number,
   graceMs: number,
 ): readonly string[] {
-  return retired.filter((pack) => nowMs - pack.retiredAtMs >= graceMs).map((pack) => pack.key);
+  return retired.filter((pack) => nowMs - Number(pack.retiredAtMs) >= graceMs).map((pack) => pack.key);
 }
