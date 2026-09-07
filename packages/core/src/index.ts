@@ -941,7 +941,7 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 export {
   DefaultExecutionRouter,
   createInlineExecutor,
-  withApprovalGatedShell, gateProviderExec,
+  withApprovalGatedShell, gateProviderExec, SHELL_COMMAND_MEMBERS,
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
