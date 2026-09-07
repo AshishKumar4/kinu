@@ -240,7 +240,7 @@ describe('inherited approval policy', () => {
     const ran: string[] = [];
     const run = gateExec<string>(
       async (command) => { ran.push(command); return `ran:${command}`; },
-      (message) => message,
+      (error) => error.message,
       'sandbox',
       policy,
     );

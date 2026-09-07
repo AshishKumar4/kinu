@@ -7,7 +7,8 @@
 // named the field crossed by structural accident alone — which `gate:wired`
 // reported as a wire read at one end and connected at neither.
 import { describe, expect, test } from 'bun:test';
-import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
+import * as v from 'valibot';
+import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ADDRESS_MAX, workspaceSlug } from '@kinu.run/core';
 import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { UserCaller } from '../src/user/workspace-capability';
@@ -27,7 +28,7 @@ interface CreateBody {
  *  The whole route is driven rather than `createCloudWorkspaceForUser` alone,
  *  because the request-body-to-input mapping is the thing under test and
  *  calling the create directly would step over it. */
-async function postCreate(body: CreateBody): Promise<{ status: number; calls: string[]; configKeys: string[] }> {
+async function postCreate(body: CreateBody): Promise<{ status: number; calls: string[]; configKeys: string[]; error: string | null }> {
   const calls: string[] = [];
   const configKeys: string[] = [];
   const userDO = {
@@ -83,7 +84,8 @@ async function postCreate(body: CreateBody): Promise<{ status: number; calls: st
       USER_ID,
       typed.UserDO.get(typed.UserDO.idFromName(USER_ID)),
     );
-    return { status: response.status, calls, configKeys };
+    const error = response.ok ? null : v.parse(v.object({ error: v.string() }), await response.json()).error;
+    return { status: response.status, calls, configKeys, error };
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -148,5 +150,22 @@ describe('the model and effort a create request asks for', () => {
 
     expect(created.status).toBe(400);
     expect(created.calls).not.toContain('genesis');
+  });
+});
+
+describe('the name a create request asks for', () => {
+  test('a name no preview hostname can carry is refused with the limit, before a workspace exists', async () => {
+    const name = 'slate-acceptance-' + '0'.repeat(WORKSPACE_ADDRESS_MAX - 16);
+    expect(name.length).toBe(WORKSPACE_ADDRESS_MAX + 1);
+    const created = await postCreate({ name, purpose: 'Review the checkout flow.' });
+
+    expect(created.status).toBe(400);
+    expect(created.error).toContain(`at most ${WORKSPACE_ADDRESS_MAX} characters`);
+    expect(created.calls).toEqual([]);
+  });
+
+  test('a generated address always fits', async () => {
+    const created = await postCreate({ name: workspaceSlug(crypto.randomUUID()), purpose: 'Review the checkout flow.' });
+    expect(created.status).toBe(201);
   });
 });

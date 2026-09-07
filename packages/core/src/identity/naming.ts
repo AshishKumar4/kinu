@@ -158,6 +158,33 @@ export function resolveWorkspaceTitle(opts: {
     || opts.slug;
 }
 
+/**
+ * The longest workspace address a preview hostname carries.
+ *
+ * A DNS label holds 63 characters; the hosted preview label spends 32 of them on
+ * the port, capability handle, token and their separators
+ * (cf-backend `lib/nimbus-preview-host.ts`), so the address is the remaining 31.
+ * Every address {@link workspaceSlug} mints fits (adjective ≤ 11, noun ≤ 8, 8 hex
+ * digits, two hyphens = 29). A chosen one is refused at creation rather than
+ * truncated: a truncated address would name a different workspace.
+ */
+export const WORKSPACE_ADDRESS_MAX = 31;
+
+const WORKSPACE_ADDRESS = /^[a-z0-9](?:[a-z0-9-]{0,29}[a-z0-9])?$/;
+
+/**
+ * Why a name cannot be a workspace address, or null when it can. One grammar
+ * for creation (cloud create, fork) and for the preview host that carries the
+ * address: lowercase letters, digits and hyphens, at most
+ * {@link WORKSPACE_ADDRESS_MAX} characters, no leading or trailing hyphen. DNS
+ * folds case, so an address is lowercase or it is ambiguous.
+ */
+export function workspaceAddressRefusal(name: string): string | null {
+  if (WORKSPACE_ADDRESS.test(name)) return null;
+  return `the workspace name "${name}" cannot be a preview hostname label`
+    + ` (a label holds lowercase letters, digits and hyphens, at most ${WORKSPACE_ADDRESS_MAX} characters, and carries no case)`;
+}
+
 
 /**
  * The workspace's permanent address: a neutral memorable pair and an id

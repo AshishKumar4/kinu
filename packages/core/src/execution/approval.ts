@@ -27,20 +27,17 @@
  */
 
 import { gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
-import { parseRefusal } from './exec-result';
 import * as v from 'valibot';
+import { answeredRefusal } from './exec-result';
 import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
 import type { Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { requireBuild } from './work-mode';
+import { refusalOf } from '../obs/error';
 
 const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
   stdin: v.optional(v.string()),
   signal: v.optional(v.instance(AbortSignal)),
 }));
-
-/** An executor tool's result on its STRING channel — the only shape a
- *  classified refusal can arrive on (`execution/exec-result.ts`). */
-const ResultTextSchema = v.string();
 
 function parseShellExecOptions(input: { value: unknown }): string | ShellExecOptions | undefined {
   const text = v.safeParse(v.string(), input.value);
@@ -52,19 +49,16 @@ function parseShellExecOptions(input: { value: unknown }): string | ShellExecOpt
 /**
  * Gate a `Shell`'s `exec` — the primitive the `run` tool's workspace branch
  * calls directly and `createInlineExecutor`'s `workspace.exec()` calls
- * underneath it. A denial is shaped as a failed command
- * (`exitCode: 1`, the message on stderr) rather than thrown, so it renders
- * through the same `formatExecResult` every caller already applies and reads
- * as a normal (failing) tool result to the model.
+ * underneath it. A refusal is shaped as a command that did not run: exit 1 with
+ * the message on stderr for readers of the process fields, plus the gate's own
+ * classification in `refusal`. Command tools retain that object; display-only
+ * readers may format it. An executed command
+ * that exits 1 carries no `refusal` and stays a command failure, whatever its
+ * stdout says.
  *
- * No `refusalCode` reader is passed, and that is a statement about the shape
- * rather than an omission: `ShellExecResult` is three fields of a process that
- * ran, with no channel for a classification, and no `Shell` in this tree writes
- * a refusal payload onto one. A reader here would have to read PROSE off
- * stderr, which is a command's own output and not a classification. So a
- * deferred grant spent on the workspace shell is consumed whatever happens —
- * which is also the case the refund was never for: the workspace is the agent's
- * own box, always attached, and "the executor was not there" cannot arise.
+ * The `refusalCode` reader reads that classification and nothing else: prose on
+ * stderr is a command's own output. A spent grant is refunded only when the
+ * result proves the command never started.
  */
 export function withApprovalGatedShell(
   shell: Shell,
@@ -76,9 +70,10 @@ export function withApprovalGatedShell(
   // gate through its own ExecutorProvider, under that provider's own name.
   const execute = gateExec<ShellExecResult>(
     (command, ...rest) => shell.exec(command, parseShellExecOptions({ value: rest[0] })),
-    (message) => ({ stdout: '', stderr: message, exitCode: 1 }),
+    (error) => ({ stdout: '', stderr: error.message, exitCode: 1, refusal: refusalOf(error) }),
     'workspace',
     policy,
+    (result) => result.refusal?.reason ?? null,
   );
   return {
     exec: (command, stdinOrOptions) => {
@@ -94,8 +89,10 @@ export function withApprovalGatedShell(
  *  `exec`; Nimbus additionally exposes `startProcess` (the same risk,
  *  backgrounded) — see execution/nimbus.ts. VFS-shaped tools (`readFile`,
  *  `writeFile`, `readdir`, ...) are a different capability and out of scope
- *  for a shell-command reviewer. */
-const GATED_TOOL_NAMES = ['exec', 'startProcess'] as const;
+ *  for a shell-command reviewer.
+ * The names identify shell capabilities for approval, never an output format.
+ */
+export const SHELL_COMMAND_MEMBERS = ['exec', 'startProcess'] as const;
 
 /** Functions this module has already wrapped, keyed by the wrapped
  *  reference itself — not the provider object. A CLI head runtime reuses the
@@ -118,7 +115,7 @@ const GATED_EXECUTES = new WeakSet<ExecutorTool['execute']>();
 export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprovalPolicy): ExecutorProvider {
   let changed = false;
   const tools = { ...provider.tools };
-  for (const name of GATED_TOOL_NAMES) {
+  for (const name of SHELL_COMMAND_MEMBERS) {
     if (provider.kind === 'workspace' && name === 'exec') continue;
     const entry = provider.tools[name];
     if (!entry || GATED_EXECUTES.has(entry.execute)) continue;
@@ -129,20 +126,10 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
     // the grant is spelled with.
     const gated = gateExec<ExecutorToolResult>(
       (command, ...rest) => entry.execute(command, ...rest),
-      (message) => message,
+      (error) => refusalOf(error),
       provider.name,
       policy,
-      // The classification an executor tool already answers with. Every kind of
-      // provider — laptop, sandbox, Nimbus, a hosted workspace's startProcess —
-      // renders a classified failure through the ONE refusal payload
-      // `execution/exec-result.ts` defines, so reading it here covers all of
-      // them at once and no executor has to remember to opt in. A result that
-      // is not that payload carries no classification, which is the honest
-      // answer for a command's own output.
-      (result) => {
-        const text = v.safeParse(ResultTextSchema, result);
-        return text.success ? parseRefusal(text.output)?.reason ?? null : null;
-      },
+      (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null,
     );
     const execute: ExecutorTool['execute'] = (...args) => {
       requireBuild(provider.name + '.' + name);
