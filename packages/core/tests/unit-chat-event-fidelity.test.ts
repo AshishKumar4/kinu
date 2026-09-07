@@ -10,7 +10,7 @@ import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet 
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
-import { runChat, collectStepText, ExtensionHost, type ChatEvent, type KinuExtension, type Usage } from '../src/index';
+import { runChat, collectStepText, ExtensionHost, createAgentsTool, createAgentsCodemodeProvider, type ChatEvent, type KinuExtension, type Usage } from '../src/index';
 import { synthesizeToolFallback } from '../src/prompts/evidence-window';
 import { isFailingToolResult } from '../src/orchestrator/turn-steering';
 import { buildBuiltinTools } from '../src/tools/builtins';
@@ -109,6 +109,19 @@ describe('ChatEvent tool success/error fidelity', () => {
       success: false, reason: 'io', execution: { exitCode: 7 }, result: expect.stringContaining('tests failed'),
     });
   });
+  test.each([
+    { stage: 'resolution', input: { action: 'swarm', preset: 'custom', task: 'inspect', label: 'custom-case' }, reason: 'bad_input', detail: 'config' },
+    { stage: 'validity', input: { action: 'swarm', preset: 'ideate', task: 'inspect', depth: 2 }, reason: 'bad_input', detail: 'depth' },
+    { stage: 'runtime', input: { action: 'swarm', preset: 'ideate', task: 'inspect', models: ['fake/missing'] }, reason: 'unsupported', detail: 'resolver' },
+  ])('native swarm $stage refusal fails the SDK invocation and remains branchable in codemode', async ({ input, reason, detail }) => {
+    const { rt } = createTestRuntime();
+    const deps = { mode: 'build', fork: { rt, model: new MockLanguageModelV3() } } satisfies Parameters<typeof createAgentsTool>[0];
+    const events = await collect(toolThenTextModel({ toolName: 'agents', input: JSON.stringify(input) }), { agents: createAgentsTool(deps) });
+    expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ success: false, reason, result: expect.stringContaining(detail) });
+    const namespace = createAgentsCodemodeProvider(() => deps);
+    expect(await namespace.tools.swarm?.execute(input)).toMatchObject({ reason, error: expect.stringContaining(detail) });
+  });
+
   test('a throwing tool yields a tool-result with success:false and the error text', async () => {
     const seenByExtension: string[] = [];
     const ext: KinuExtension = {
