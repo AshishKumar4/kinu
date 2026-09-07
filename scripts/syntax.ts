@@ -650,6 +650,125 @@ export function moduleSpecifiers(tree: SyntaxNode): readonly string[] {
   return out;
 }
 
+export interface ImportUse {
+  readonly specifier: string;
+  readonly imported: string;
+}
+
+interface ImportScope {
+  readonly parent: ImportScope | undefined;
+  readonly functionScope: boolean;
+  readonly bindings: Map<string, { origin: ImportUse | undefined; dynamic: boolean }>;
+}
+
+/** Resolve import consumers by lexical binding, including awaited module bindings. */
+export function importUses(tree: SyntaxNode): readonly ImportUse[] {
+  const scopes = new Map<SyntaxNode, ImportScope>();
+  const declarations = new Set<Node>();
+  const moduleScope: ImportScope = { parent: undefined, functionScope: true, bindings: new Map() };
+  const bind = (raw: Node, scope: ImportScope, origin?: ImportUse, dynamic = false): void => {
+    if (raw.type === 'Identifier') {
+      declarations.add(raw);
+      scope.bindings.set(raw.name, { origin, dynamic });
+    } else if (raw.type === 'ObjectPattern') {
+      for (const property of raw.properties) {
+        bind(property.type === 'RestElement' ? property.argument : property.value, scope);
+      }
+    } else if (raw.type === 'ArrayPattern') {
+      for (const element of raw.elements) if (element !== null) bind(element, scope);
+    } else if (raw.type === 'AssignmentPattern') bind(raw.left, scope);
+    else if (raw.type === 'RestElement') bind(raw.argument, scope);
+  };
+  const visit = (node: SyntaxNode, enclosing: ImportScope): void => {
+    const { raw } = node;
+    if ((raw.type === 'FunctionDeclaration' || raw.type === 'ClassDeclaration') && raw.id !== null) {
+      bind(raw.id, enclosing);
+    }
+    const functionScope = isFunctionLike(node);
+    const ownScope = functionScope || raw.type === 'BlockStatement' || raw.type === 'CatchClause'
+      || raw.type === 'ForStatement' || raw.type === 'ForOfStatement' || raw.type === 'ForInStatement'
+      || raw.type === 'SwitchStatement' || raw.type === 'ClassExpression' || raw.type === 'ClassDeclaration';
+    const scope: ImportScope = ownScope
+      ? { parent: enclosing, functionScope, bindings: new Map() } : enclosing;
+    scopes.set(node, scope);
+    if (functionScope && 'params' in raw) {
+      for (const parameter of raw.params) bind(parameter, scope);
+      if ('id' in raw && raw.id !== null) bind(raw.id, scope);
+    }
+    if (raw.type === 'ClassExpression' && raw.id !== null) bind(raw.id, scope);
+    if (raw.type === 'CatchClause' && raw.param !== null) bind(raw.param, scope);
+    if (raw.type === 'ImportDeclaration') {
+      for (const specifier of raw.specifiers) {
+        const imported = specifier.type === 'ImportNamespaceSpecifier' ? NAMESPACE
+          : specifier.type === 'ImportDefaultSpecifier' ? 'default'
+          : specifier.imported.type === 'Identifier' ? specifier.imported.name : specifier.imported.value;
+        bind(specifier.local, scope, { specifier: raw.source.value, imported });
+      }
+    }
+    if (raw.type === 'VariableDeclarator') {
+      let target = scope;
+      if (node.parent?.raw.type === 'VariableDeclaration' && node.parent.raw.kind === 'var') {
+        while (!target.functionScope && target.parent !== undefined) target = target.parent;
+      }
+      bind(raw.id, target);
+      const imported = raw.init?.type === 'AwaitExpression' && raw.init.argument.type === 'ImportExpression'
+        ? literalString(raw.init.argument.source) : undefined;
+      if (imported !== undefined) {
+        if (raw.id.type === 'Identifier') bind(raw.id, target, { specifier: imported, imported: NAMESPACE }, true);
+        else if (raw.id.type === 'ObjectPattern') {
+          for (const property of raw.id.properties) {
+            if (property.type !== 'Property' || property.value.type !== 'Identifier') continue;
+            const name = !property.computed && property.key.type === 'Identifier'
+              ? property.key.name : literalString(property.key);
+            if (name !== undefined) bind(property.value, target, { specifier: imported, imported: name }, true);
+          }
+        }
+      }
+    }
+    for (const child of node.children) visit(child, scope);
+  };
+  visit(tree, moduleScope);
+  const resolve = (node: SyntaxNode, name: string) => {
+    let scope = scopes.get(node);
+    while (scope !== undefined) {
+      const binding = scope.bindings.get(name);
+      if (binding !== undefined) return binding;
+      scope = scope.parent;
+    }
+    return undefined;
+  };
+  // Reassigned dynamic bindings no longer prove which module their consumers read.
+  walk(tree, node => {
+    const raw = node.raw;
+    const target = raw.type === 'AssignmentExpression' ? raw.left
+      : raw.type === 'UpdateExpression' ? raw.argument : undefined;
+    if (target?.type !== 'Identifier') return;
+    const binding = resolve(node, target.name);
+    if (binding?.dynamic) binding.origin = undefined;
+  });
+  const uses: ImportUse[] = [];
+  walk(tree, node => {
+    const name = identifierName(node.raw);
+    if (name === undefined || declarations.has(node.raw) || namesAField(node) || declaresItself(node)) return;
+    if (node.parent?.raw.type === 'Property' && node.parent.raw.key === node.raw
+      && node.parent.parent?.raw.type === 'ObjectPattern') return;
+    for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
+      if (parent.raw.type === 'ImportDeclaration' || isReExport(parent)) return;
+    }
+    const binding = resolve(node, name);
+    const origin = binding?.origin;
+    if (binding === undefined || origin === undefined) return;
+    if (binding.dynamic && origin.imported === NAMESPACE) {
+      const parent = node.parent?.raw;
+      if (parent?.type !== 'MemberExpression' || parent.object !== node.raw) return;
+      const name = !parent.computed && parent.property.type === 'Identifier'
+        ? parent.property.name : literalString(parent.property);
+      if (name !== undefined) uses.push({ specifier: origin.specifier, imported: name });
+    } else uses.push(origin);
+  });
+  return uses;
+}
+
 /**
  * Suffixes a module specifier may omit. Relative imports here carry no
  * extension, and the raw-Node closure carries `.ts`, so the literal path is
