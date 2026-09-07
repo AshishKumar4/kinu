@@ -464,6 +464,7 @@ async function main(): Promise<void> {
     //    the writes and the next seal continues the published chain.
     await writeFile(join(mount, 'src', 'after-kill.ts'), 'export const recovered = true;\n');
     const surviving = await open(join(mount, 'src', 'lib', 'a.ts'), 'r');
+    await writeFile(join(mount, 'src/lib/solo.txt'), 'single-link data before ancestor rename\n');
     await rename(join(mount, 'src/lib'), join(mount, 'src/renamed-lib'));
     const ghost = await open(join(mount, 'src', 'ghost.txt'), 'w+');
     await ghost.write('held open, then unlinked\n', 0);

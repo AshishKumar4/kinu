@@ -793,13 +793,9 @@ static int compare_inode(const void *left, const void *right) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/* Resolve changed inode aliases through the daemon-owned reverse index. */
+/* Resolve every written inode. A single-link path can move with an ancestor. */
 static int resolve_link_names(const struct journal_delta_request *request, struct delta *delta) {
-  size_t count = 0;
-  for (size_t index = 0; index < delta->dirty.count; index++) {
-    const struct journal_dirty_file *file = &delta->dirty.files[index];
-    if (file->nlink > 1 || (file->path[0] == '\0' && file->nlink > 0)) count++;
-  }
+  size_t count = delta->dirty.count;
   for (size_t index = 0; index < delta->path_count; index++) {
     const struct touched *entry = &delta->paths[index];
     if (entry->present && S_ISREG(entry->st.st_mode) && entry->st.st_nlink > 1) count++;
@@ -811,8 +807,7 @@ static int resolve_link_names(const struct journal_delta_request *request, struc
   if (inodes == NULL) return -ENOMEM;
   size_t used = 0;
   for (size_t index = 0; index < delta->dirty.count; index++) {
-    const struct journal_dirty_file *file = &delta->dirty.files[index];
-    if (file->nlink > 1 || (file->path[0] == '\0' && file->nlink > 0)) inodes[used++] = file->ino;
+    inodes[used++] = delta->dirty.files[index].ino;
   }
   for (size_t index = 0; index < delta->path_count; index++) {
     const struct touched *entry = &delta->paths[index];

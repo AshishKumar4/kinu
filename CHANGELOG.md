@@ -1039,6 +1039,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - The v2 devbox sidecar runs against the real journal daemon in a privileged test; the 2026-09-06 run fixed a published hidden name, a WAL byte trigger that counted 0, stale hardlink twins, refused bases after compaction, and mixed-generation page-ins.
 - The devbox daemon uses inode-based low-level FUSE operations; a 2026-09-07 real-mount probe preserved an open file renamed to a caller-authored `.fuse_hidden` name that the prior heuristic omitted from its fence.
 - The devbox daemon persists logical inode aliases; on 2026-09-07 a real-mount regression preserved a hardlink update after ancestor rename, daemon restart and unlink of the only observed name.
+- Devbox daemon tests run immutable image IDs; a 2026-09-07 shared-tag collision selected an older binary, and the corrected run also fixed single-link write loss across ancestor rename.
 
 ## [0.2.0] - 2026-08-07
 
