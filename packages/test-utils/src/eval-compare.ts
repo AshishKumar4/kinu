@@ -342,16 +342,9 @@ function pairedMetric(
   };
 }
 
-/**
- * One scorer over the paired tasks.
- *
- * A task's repetitions are summed into one eligible/passed pair per side FIRST —
- * one vote per task — and only tasks with a non-zero denominator on both sides
- * enter the test, because a rate against zero opportunities is not a zero rate.
- */
-function compareScorer(
-  name: string, tasks: readonly TaskPairs[], opts: ComparisonOptions, alpha: number,
-): ScorerComparison {
+/** Collapse repetitions into one rate per task while retaining every observed
+ * opportunity and whether either side lacked outcome attribution. */
+function collectScorerSamples(name: string, tasks: readonly TaskPairs[]) {
   const diffs: number[] = [];
   let baselineEligible = 0;
   let candidateEligible = 0;
@@ -388,19 +381,28 @@ function compareScorer(
     rateSumCandidate += rateB;
     diffs.push(rateB - rateA);
   }
+  return { diffs, baselineEligible, candidateEligible, rateSumBaseline, rateSumCandidate, unmeasuredTasks };
+}
+
+/** Statistical interpretation is separate from repetition/coverage accounting. */
+function compareScorer(
+  name: string, tasks: readonly TaskPairs[], opts: ComparisonOptions, alpha: number,
+): ScorerComparison {
+  const { diffs, baselineEligible, candidateEligible, rateSumBaseline, rateSumCandidate, unmeasuredTasks } = collectScorerSamples(name, tasks);
 
   const pairedTasks = diffs.length;
+  const hasMeasuredPairs = pairedTasks > 0 && unmeasuredTasks === 0;
   const wins = diffs.filter((d) => d > 0).length;
   const losses = diffs.filter((d) => d < 0).length;
   const differingPairs = wins + losses;
-  const boot = pairedTasks === 0 || unmeasuredTasks > 0 ? null : pairedBootstrapCI(diffs, opts);
+  const boot = hasMeasuredPairs ? pairedBootstrapCI(diffs, opts) : null;
   const dispersion = pairedTasks === 0 ? 0 : diffs.reduce((s, d) => s + d * d, 0) / pairedTasks;
   const mde = unmeasuredTasks > 0 ? Number.POSITIVE_INFINITY
     : minimumDetectableEffect({ pairs: pairedTasks, dispersion, alpha, power: opts.power });
   const pValue = binomialTwoSidedP(wins, differingPairs);
   const floor = floorPValue(differingPairs);
-  const canReachSignificance = unmeasuredTasks === 0 && differingPairs > 0 && floor <= alpha;
-  const significant = unmeasuredTasks === 0 && pairedTasks > 0 && pValue < alpha;
+  const canReachSignificance = hasMeasuredPairs && differingPairs > 0 && floor <= alpha;
+  const significant = hasMeasuredPairs && pValue < alpha;
   const effect = boot === null ? null : boot.mean;
   const resolvable = effect !== null && Number.isFinite(mde) && mde > 0 && Math.abs(effect) >= mde;
   const pairsNeeded = effect === null
@@ -453,10 +455,10 @@ function compareScorer(
 
   return {
     name, reach, baselineEligible, candidateEligible, pairedTasks, unmeasuredTasks,
-    baselineRate: pairedTasks === 0 || unmeasuredTasks > 0 ? null : rateSumBaseline / pairedTasks,
-    candidateRate: pairedTasks === 0 || unmeasuredTasks > 0 ? null : rateSumCandidate / pairedTasks,
+    baselineRate: hasMeasuredPairs ? rateSumBaseline / pairedTasks : null,
+    candidateRate: hasMeasuredPairs ? rateSumCandidate / pairedTasks : null,
     effect, ci: boot === null ? null : boot.ci,
-    pValue: pairedTasks === 0 || unmeasuredTasks > 0 ? null : pValue,
+    pValue: hasMeasuredPairs ? pValue : null,
     wins, losses, ties: pairedTasks - differingPairs, dispersion,
     differingPairs, floorPValue: floor, canReachSignificance, significant,
     mde, resolvable, pairsNeeded, verdict,
