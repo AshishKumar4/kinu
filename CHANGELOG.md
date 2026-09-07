@@ -20,6 +20,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   process exit separately from rendered output. Successful JSON-looking data no
   longer creates false failure badges or execution penalties; historical calls
   without outcome evidence remain unmeasured.
+  Native MCP protocol errors now also use the SDK error channel; their full
+  responses remain available to branchable namespace callers.
 
 - **Mechanically enforced Plan authority.** Native and codemode file inspection,
   research records, read-only declared external tools and plan submission remain

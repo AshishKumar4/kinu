@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  DEFAULT_WORKERS_AI_MODEL_SPEC, agentHome, subordinateAgentName,
+  DEFAULT_WORKERS_AI_MODEL_SPEC, agentHome, subordinateAgentName, nativeToolFunctions,
   type JsonValue, type SlateCallResult,
 } from '@kinu.run/core';
 import { hiredSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
@@ -9,7 +9,46 @@ import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/u
 import { resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { toolExecute } from '@kinu.run/test-utils';
 
+test('native MCP protocol failures reject while namespace responses retain their envelope', async () => {
+  resetRecordedMcp();
+  const ownerUserId = '0123456789abcdef0123456789abcdef';
+  const workspace = 'native-mcp';
+  const user = createTestUserDO({ durableObjectId: ownerUserId });
+  try {
+    const capability = await provisionTestWorkspace(user, workspace);
+    const actor = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId });
+    await actor.agent.installWorkspaceCapability(capability);
+    const owner = await testOwner();
+    await user.userDO.userMcp_list(owner);
+    user.sql.exec(`INSERT INTO user_mcp_servers
+      (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
+      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL, 0, 0)`);
+    await user.userDO.userMcp_list(owner);
+    seedMcpTools('connection-id', [{ name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }]);
+    actor.agent.harnessDrivingUserMessage('Read the issue.', { kinuMode: 'build' });
+    const turn = await actor.agent.beforeTurn({ system: 'base', messages: [{ role: 'user', content: 'Read the issue.' }],
+      tools: actor.agent.observeRawTools(), model: 'harness-model', continuation: false, body: {} });
+    const native = turn?.tools?.mcp_github_read_issue;
+    if (native === undefined) throw new Error('the native MCP tool was not admitted');
+    const invoke = toolExecute<Record<string, never>, JsonValue>(native);
+    const data = { isError: false, content: [{ type: 'text', text: '{"error":"data"}' }], structuredContent: { isError: true, reason: 'data-only' }, reason: 'denied', error: 'historical incident' } satisfies Parameters<typeof seedMcpAnswer>[0];
+    seedMcpAnswer(data);
+    expect(await invoke({})).toEqual(data);
+    const protocolFailure = { isError: true, content: [{ type: 'text', text: 'remote execution failed' }], structuredContent: { reason: 'remote-code', error: 'remote evidence' } } satisfies Parameters<typeof seedMcpAnswer>[0];
+    seedMcpAnswer(protocolFailure);
+    const failed = invoke({});
+    await expect(failed).rejects.toThrow('remote execution failed');
+    await expect(failed).rejects.toThrow('remote evidence');
+    await expect(failed).rejects.not.toHaveProperty('execution');
+    seedMcpAnswer(protocolFailure);
+    const namespace = nativeToolFunctions({ mcp_github_read_issue: native });
+    expect(await namespace.mcp_github_read_issue?.execute({})).toEqual(protocolFailure);
+    await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: [] });
+    await expect(invoke({})).rejects.toThrow('not in the allowed_tools list');
+  } finally { user.close(); resetRecordedMcp(); }
+});
 
 test('an MCP binding follows connection identity, binding scope and the owner allowlist', async () => {
   resetRecordedMcp();
@@ -44,6 +83,9 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     const incident = { content: [], isError: false, reason: 'denied', error: 'historical incident' };
     seedMcpAnswer(incident);
     expect(await call('read_issue')).toEqual({ ok: true, value: incident });
+    const protocolFailure = { isError: true, content: [{ type: 'text', text: 'remote execution failed' }] } satisfies Parameters<typeof seedMcpAnswer>[0];
+    seedMcpAnswer(protocolFailure);
+    expect(await call('read_issue')).toEqual({ ok: true, value: protocolFailure });
     // Outside the owner's allowlist the tool is not on this actor's surface at all.
     expect(await call('create_issue')).toMatchObject({ ok: false, reason: 'missing' });
 

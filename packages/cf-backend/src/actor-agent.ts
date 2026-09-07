@@ -231,7 +231,7 @@ import {
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ToolOutcome, renderToolResult,
-  toolsForInvocation, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome,
+  toolsForInvocation, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle,
 } from "@kinu.run/core";
@@ -3455,11 +3455,11 @@ export abstract class ActorAgent extends Think<Env> {
           description: d.description ?? `${d.serverName}/${mcpName}`,
           inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
           execute: async (args) => {
-            try {
-              const rawResult = await this.requireOwnerUserDO()
-                .userMcp_callTool(await this.userCaller(), serverId, mcpName, args);
-              return projectJsonValue({ value: v.parse(JsonValueSchema, JSON.parse(rawResult)) });
-            } catch (err) { return { isError: true, error: renderThrownChain({ cause: err }) }; }
+            const rawResult = await this.requireOwnerUserDO()
+              .userMcp_callTool(await this.userCaller(), serverId, mcpName, args);
+            const response = v.parse(JsonValueSchema, JSON.parse(rawResult));
+            if (v.is(McpProtocolFailureSchema, response)) throw new McpToolError(response);
+            return response;
           },
         });
         tools[d.toolKey] = d.readOnly === true ? permitInPlan(entry) : entry;

@@ -6,8 +6,10 @@ const server = new McpServer({ name: 'echo-server', version: '0.0.1' });
 
 server.registerTool(
   'echo',
-  { description: 'Echo the input text back.', inputSchema: { text: z.string() } },
-  async ({ text }) => ({ content: [{ type: 'text', text: `echo: ${text}` }] }),
+  { description: 'Echo the input text back.', inputSchema: { text: z.string(), fail: z.boolean().optional() } },
+  async ({ text, fail }) => fail
+    ? { isError: true, content: [{ type: 'text', text: 'remote failure: ' + text }], structuredContent: { error: text, reason: 'remote evidence' } }
+    : { content: [{ type: 'text', text: `echo: ${text}` }] },
 );
 
 // Deliberately slower than the connect/list startup budget — proves a tool

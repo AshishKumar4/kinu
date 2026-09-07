@@ -89,6 +89,14 @@ A codemode program that handles such a value and returns normally succeeds;
 an unhandled program exception fails. Neither arbitrary returned JSON nor
 stdout can determine invocation status.
 
+Native MCP invocations use the MCP envelope's declared `isError` flag. A true
+flag raises `McpToolError` with the original protocol response retained;
+transport exceptions also reject. No error class or process exit is inferred
+from remote content. Namespace adapters return the original MCP error envelope
+as a branchable value, and slate MCP bindings keep their protocol unchanged.
+A successful response containing `reason`, `error`, or nested `isError`
+fields remains data.
+
 Slate namespace bindings return `{ ok: true, value }` for successful command
 text and `{ ok: false, reason, error }` for structural failures. File contents,
 process logs and MCP payloads are not interpreted as command failures.

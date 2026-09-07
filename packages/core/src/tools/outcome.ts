@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import { ERROR_CODES, KinuError, renderThrownChain } from '../obs/index';
 import { FileRefusalError, FILE_REFUSAL_REASONS } from './file-edit';
+import { McpToolError } from './mcp-error';
 
 export const ToolOutcomeSchema = v.variant('success', [
   v.object({ success: v.literal(true) }),
@@ -34,6 +35,7 @@ export async function branchableToolCall<Result>(call: () => Promise<Result>) {
   try {
     return await call();
   } catch (cause) {
+    if (cause instanceof McpToolError) return cause.response;
     const outcome = failedToolOutcome({ cause });
     if (outcome.reason === null) throw cause;
     const refusal = { reason: outcome.reason, error: renderThrownChain({ cause }) };
