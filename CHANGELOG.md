@@ -1076,6 +1076,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - Benchmark options use the platform parser. `--arms=merkle-pack` selects that arm; missing values and unknown flags refuse instead of choosing a different run.
 - Added `no-vacuous-type-predicate` for explicit guards whose entire body returns literal true. On 2026-09-06, all 26 prior anti-slop rules remained enabled beside the new rule.
 
+- Owners can page retained subordinate history and nested run events without reopening dismissed agents; 16 SDK lifecycle observations and a production cold-read probe passed on 2026-09-08.
+
 ## [0.2.0] - 2026-08-07
 
 The first versioned release. Kinu sat on a frozen `0.1.0` for four months
