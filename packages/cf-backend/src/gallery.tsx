@@ -180,7 +180,9 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   // "couldn't load" state into every screenshot taken of this gallery.
   "/api/user/workspaces": {
     entries: [
-      { name: "checkout-fixes", displayName: "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
+      { name: "checkout-fixes", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
+        ? "Investigate intermittent checkout failures in the percentage coupon migration and verify the release"
+        : "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
       { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
       { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
       { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
