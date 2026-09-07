@@ -281,7 +281,7 @@ describe('root-cloud title authority', () => {
     const capability = user.installed.get(workspace);
     if (capability === undefined) throw new Error('The workspace has no capability');
     const actor = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId: USER_ID });
-    actor.agent.harnessHoldsCapability(capability);
+    await actor.agent.installWorkspaceCapability(capability);
     try {
       expect(await actor.agent.getAgentStatus()).toMatchObject({ displayName: 'Build the release dashboard' });
     } finally {
