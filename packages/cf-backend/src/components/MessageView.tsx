@@ -291,7 +291,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
           ) : input != null ? (
             <div>
               <div className="p-eyebrow mb-1">Input</div>
-              <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{JSON.stringify(redactPayload(input), null, 2)}</pre>
+              <div className="max-h-40 overflow-auto"><CodeBlock className="language-json">{JSON.stringify(redactPayload(input), null, 2)}</CodeBlock></div>
             </div>
           ) : null}
           {output != null && (

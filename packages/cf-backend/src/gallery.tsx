@@ -112,7 +112,7 @@ import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { LogBlock } from "@/components/surfaces/ActivitySurface";
-import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent } from "@/components/surfaces/shared";
+import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { QualityView } from "@/components/surfaces/evolution-panels";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
@@ -159,7 +159,7 @@ import type { ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api"
 import * as v from "valibot";
 import { serveGalleryRpc } from "@/gallery-agent-stub";
 
-const frame = new URLSearchParams(location.search).get("frame");
+const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 const squareButtonVariant = "square";
 const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 
@@ -180,7 +180,9 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   // "couldn't load" state into every screenshot taken of this gallery.
   "/api/user/workspaces": {
     entries: [
-      { name: "checkout-fixes", displayName: "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
+      { name: "checkout-fixes", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
+        ? "Investigate intermittent checkout failures in the percentage coupon migration and verify the release"
+        : "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
       { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
       { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
       { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
@@ -3130,6 +3132,31 @@ function MarkdownFrame() {
     </div>
   );
 }
+function CodeRenderingFrame() {
+  const [source, setSource] = useState('const pending = "stream');
+  const samples = [
+    ['js', 'export const answer = "ready"; // result'],
+    ['ts', 'interface Result { value: number }\nconst answer: Result = { value: 42 };'],
+    ['json', '{"ready": true, "count": 42, "name": "result"}'],
+    ['shell', '# report\nexport NAME="result"\necho "$NAME"'],
+    ['py', 'def greet(name):\n    return "Hello " + name'],
+    ['css', '.result { color: red; padding: 12px; }'],
+    ['sql', 'SELECT name FROM results WHERE ready = true;'],
+    ['go', 'package main\nfunc main() { println("ready") }'],
+    ['rust', 'fn main() { let ready = true; println!("ready"); }'],
+    ['c', '#include <stdio.h>\nint main(void) { printf("ready"); return 0; }'],
+    ['cpp', '#include <iostream>\nint main() { std::cout << "ready"; return 0; }'],
+    ['unknown-language', '<script>unknown & safe</script>'],
+  ];
+  return <div className="flex h-screen p-bg p-text">
+    <aside className="w-60 shrink-0 border-r p-border"><Sidebar /></aside>
+    <main className="min-w-0 flex-1 overflow-auto p-4">
+      {samples.map(([language, code]) => <section key={language} data-code-sample={language}><CodeBlock className={`language-${language}`}>{code}</CodeBlock></section>)}
+      <label>Streaming source<textarea aria-label="Streaming source" value={source} onChange={(event) => setSource(event.currentTarget.value)} /></label>
+      <section data-code-sample="stream"><CodeBlock className="language-js">{source}</CodeBlock></section>
+    </main>
+  </div>;
+}
 
 function GalleryModal() {
   return (
@@ -3231,7 +3258,7 @@ function Palette() {
 /** The public documents, by frame name. The install command is the production
  *  one rather than this dev server's, so the frame photographs the copy a
  *  visitor reads. */
-function publicDocument(name: string | null): string | null {
+function publicDocument(name: string): string | null {
   const install = `curl -fsSL 'https://kinu.run/install.sh' | bash`;
   if (name === "login") {
     return loginDocument([
@@ -5255,6 +5282,7 @@ async function mount() {
     );
   }
   else if (frame === "markdown") node = <MarkdownFrame />;
+  else if (frame === "coderendering") node = <CodeRenderingFrame />;
   else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "chatsteer") node = <ChatSteerFrame />;
   else if (frame === "chatempty") node = <ChatEmptyFrame />;
@@ -5363,7 +5391,7 @@ async function mount() {
     const { default: HomePage } = await import("@/pages/HomePage");
     node = <div className="h-screen p-bg p-text"><HomePage /></div>;
   } else node = <All />;
-  if (frame !== null && frame in EXPLORATION_FRAMES) {
+  if (frame in EXPLORATION_FRAMES) {
     entries = [`/workspace/${GALLERY_WORKSPACE}`];
     node = <Routes><Route path="/workspace/:agentId" element={node} /></Routes>;
   }

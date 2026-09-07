@@ -1938,3 +1938,99 @@ test('file navigation does not pair a new breadcrumb with the old directory', as
     expect(mismatches).toEqual([]);
   });
 }, 240_000);
+
+test('code retains syntax colors through streaming and sidebar ages share a right edge', async () => {
+  await withGallery(async ({ browser, origin }) => {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1100, height: 1000 });
+    await page.evaluateOnNewDocument(() => {
+      let clipboard = '';
+      Object.defineProperty(navigator, 'clipboard', { value: {
+        writeText: async (text: string) => { clipboard = text; },
+        readText: async () => clipboard,
+      } });
+    });
+    try {
+      for (const mode of ['light', 'dark']) {
+        await page.evaluateOnNewDocument((theme) => localStorage.setItem('theme', theme), mode);
+        await page.goto(`${origin}/gallery.html?frame=coderendering`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-code-sample="js"] code');
+        await page.waitForFunction(() => document.fonts.status === 'loaded');
+        await page.waitForFunction(() => [...document.querySelectorAll('[data-code-sample]')].every((sample) => sample.getAttribute('data-code-sample') === 'unknown-language' || sample.querySelectorAll('code span').length > 1));
+        const colors = await page.evaluate(() => [...document.querySelectorAll('[data-code-sample]')].map((sample) => {
+          const code = sample.querySelector('code');
+          const walker = document.createTreeWalker(code ?? sample, NodeFilter.SHOW_TEXT);
+          const ink = new Set<string>();
+          while (walker.nextNode()) {
+            const parent = walker.currentNode.parentElement;
+            if (parent !== null && walker.currentNode.textContent?.trim()) ink.add(getComputedStyle(parent).color);
+          }
+          return { language: sample.getAttribute('data-code-sample'), colors: [...ink] };
+        }));
+        for (const sample of colors.filter((item) => item.language !== 'unknown-language')) {
+          expect(sample.colors.length, `${mode} ${sample.language} syntax colors`).toBeGreaterThan(1);
+        }
+        const ages = await page.$$eval('aside ul > li', (rows) => rows.flatMap((row) => {
+          const link = row.querySelector('a[href^="/workspace/"]');
+          const age = link?.lastElementChild;
+          if (age === null || age === undefined) return [];
+          const range = document.createRange();
+          range.selectNodeContents(age);
+          return [{ text: age.textContent, right: range.getBoundingClientRect().right, rowRight: row.getBoundingClientRect().right }];
+        }));
+        expect(new Set(ages.map((age) => age.text?.length)).size).toBeGreaterThan(1);
+        for (const age of ages) expect(age.rowRight - age.right).toBeLessThan(28);
+        const firstAge = ages[0];
+        if (firstAge === undefined) throw new Error('no sidebar ages');
+        for (const age of ages) expect(Math.abs(age.right - firstAge.right)).toBeLessThan(1);
+        const firstRow = 'aside ul > li:first-child';
+        expect(await page.$eval(firstRow + ' a[href^="/workspace/"]', (link) => {
+          const title = link.children[1];
+          if (title === undefined) throw new Error('workspace title absent');
+          return title.scrollWidth > title.clientWidth;
+        })).toBeTrue();
+        for (const action of ['a[href^="/settings/"]', 'button[title="Rename"]', 'button[title="Remove"]']) {
+          await page.focus(firstRow + ' ' + action);
+          await page.waitForFunction(() => {
+            const age = document.querySelector('aside ul > li:first-child a[href^="/workspace/"]')?.lastElementChild;
+            return age !== null && age !== undefined && getComputedStyle(age).opacity === '0';
+          });
+          const bounds = await page.$eval(firstRow, (row) => {
+            const title = row.querySelector('a[href^="/workspace/"]')?.children[1];
+            const active = document.activeElement;
+            if (title === undefined || active === null) throw new Error('focused row missing');
+            return { titleRight: title.getBoundingClientRect().right, actionLeft: active.getBoundingClientRect().left };
+          });
+          expect(bounds.titleRight).toBeLessThan(bounds.actionLeft);
+        }
+        const updated = 'export const finished = "' + 'stream complete '.repeat(20) + '";\nconsole.log(finished);';
+        await page.focus('textarea');
+        await page.keyboard.down('Control');
+        await page.keyboard.press('a');
+        await page.keyboard.up('Control');
+        await page.keyboard.sendCharacter(updated);
+        await page.waitForFunction((text) => document.querySelector('[data-code-sample="stream"] .shiki code')?.textContent === text, {}, updated);
+        const streamed = await page.$eval('[data-code-sample="stream"]', (sample) => {
+          const colors = new Set([...sample.querySelectorAll('code span')].map((token) => getComputedStyle(token).color));
+          let scrollable = false;
+          for (const element of sample.querySelectorAll('div, pre')) {
+            element.scrollLeft = 50;
+            if (element.scrollLeft > 0) scrollable = true;
+            element.scrollLeft = 0;
+          }
+          return { colors: colors.size, scrollable };
+        });
+        expect(streamed.colors).toBeGreaterThan(1);
+        expect(streamed.scrollable).toBeTrue();
+        expect(await page.$eval('[data-code-sample="unknown-language"] code', (code) => code.textContent)).toBe('<script>unknown & safe</script>');
+        await page.bringToFront();
+        await page.$eval('[data-code-sample="stream"] button', (button) => button.click());
+        await page.waitForFunction(() => document.querySelector('[data-code-sample="stream"] button')?.textContent?.includes('Copied'));
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(updated);
+      }
+    } finally {
+      await page.close();
+    }
+  });
+}, 120_000);
+
