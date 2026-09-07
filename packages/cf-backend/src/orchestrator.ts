@@ -227,7 +227,7 @@ import {
   type DeferredApprovalNotice, type ApprovalGrant,
   TURN_AUTHOR_METADATA_KEY,
 } from "@kinu.run/core";
-import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu.run/core";
+import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult } from "@kinu.run/core";
 import { classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
@@ -3758,17 +3758,14 @@ export class OrchestratorAgent extends ActorAgent {
     return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
-  /**
-   * A page of recent runs enriched with PROVENANCE (what kicked each off) and
-   * COST (tokens spent) — the cross-run history + budget view for the Supervise
-   * altitude. Folds the per-run run_start (caused_by/userMessage) and the
-   * accumulated turn_end usage out of the durable event log.
-   *
-   * The cap here was load-bearing in the wrong direction: Supervise sums the
-   * usage of exactly the rows it received and prints the total as the
-   * workspace's spend, so a truncated window was a truncated denominator
-   * presented as a figure the owner decides on.
-   */
+  /** Owner-only inspection of retained subordinate paths. */
+  @callable()
+  async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
+    const owner = this.getOwnerUserId();
+    if (!owner) throw new KinuError('denied', 'The workspace has no owner.');
+    return this.inspectSubordinateStorage(request, { owner, workspace: this.name, traversed: [] });
+  }
+
   @callable()
   async getRunSummaries(request?: PageRequest): Promise<Page<RunSummary>> {
     return getRunSummaries(this.eventRecorder, request?.cursor ?? null, request?.limit);

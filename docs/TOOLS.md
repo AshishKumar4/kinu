@@ -179,6 +179,19 @@ eval suites call it. See [MCTS.md](./MCTS.md).
   `ReportToolDeps.report`. Turn answers relay automatically, so it carries
   milestones.
 
+Owners can read retained subordinate history through the workspace RPC
+`inspectSubordinate`. This read is separate from model delegation. It does not
+make a dismissed agent addressable. `CloudAgentClient.inspectSubordinate` uses
+the same interactive owner transport. Scoped access tokens cannot use it.
+
+`path` lists direct subordinate names from the workspace root. An empty path
+reads the root. The `children`, `history`, and `runs` views take `page` with
+`limit` and an optional `cursor`. The `events` view takes `runId` and `query`
+with `limit` and an optional inclusive `since` index. A page reports `more`
+with `next`, or `end`. Missing retained storage reports a classified missing
+result. Inspection does not initialize application identity or start a turn.
+Normal activation still recovers work that the actor owes.
+
 ### Fields and replay
 
 `AGENTS_ACTION_FIELDS`, `v.strictObject`, and `parseAgentsToolInput` enforce

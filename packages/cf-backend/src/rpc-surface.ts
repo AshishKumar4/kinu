@@ -351,6 +351,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
   // a replica — the idempotent retry that heals the stranding.
   'repushWorkspaceCapability',
   'getSubordinateBootstrapIdentity',
+  'inspectSubordinateStorage',
   'headJournalCacheMerge',
   'headJournalInsertSpawn',
   'headJournalRecordReport',
