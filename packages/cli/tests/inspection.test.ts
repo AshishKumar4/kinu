@@ -197,6 +197,10 @@ describe("CLI inspection commands", () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-effort-"));
     tempDirs.push(home);
     await createLocalAgent(home, "localtest");
+    const configured = runCli(home, ["model", "localtest", "fixture-model"], {
+      KINU_BASE_URL: "http://localhost:1/v1", KINU_AUTH: "Bearer fixture",
+    });
+    expect(configured.exitCode, configured.stderr.toString()).toBe(0);
 
     const initial = runCli(home, ["effort", "localtest"]);
     expect(initial.exitCode, initial.stderr.toString()).toBe(0);

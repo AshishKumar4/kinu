@@ -588,6 +588,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 ### Fixed
 
 - The slate first-run gate requires an HTTP preview that answers the authored request. An unavailable preview fails both checks.
+- Model selection loads connected account providers before normalizing their identifiers, so a catalog provider is not stored under the default provider.
 - A head at the recursion limit can finish its own tool work. Exhausted split depth blocks new children, not the current head.
 - Recursive head splits now require the inherited parent budget. The unused three-level fallback and its request override were removed.
 - Cancelling a search stops its hosted swarm nodes. The search's abort now evicts each node's facet through the SDK's own abort, so a node mid-step stops instead of running its whole loop after the operator cancelled; the node settles as `aborted` under the cancel reason, its storage is reclaimed, and a search already cancelled boots no facet.

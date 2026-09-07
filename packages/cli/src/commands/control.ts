@@ -67,8 +67,8 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
         auth: opts.auth,
         agentName: target.localName,
       });
-      resolvedSpec = configured.resolver.normalizeSpecSync(spec);
       const catalog = await loadModelCatalog(() => configured.resolver.listModels());
+      resolvedSpec = configured.resolver.normalizeSpecSync(spec);
       validateModelSelection(catalog, resolvedSpec, spec, name);
     }
   }

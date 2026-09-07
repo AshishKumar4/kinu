@@ -33,7 +33,10 @@ describe('local additional-agent creation', () => {
     `;
     const result = Bun.spawnSync(['bun', '-e', scenario], {
       cwd: join(import.meta.dir, '../../..'),
-      env: { ...process.env, KINU_HOME: HOME },
+      env: {
+        ...process.env, HOME, KINU_HOME: HOME,
+        KINU_BASE_URL: 'http://localhost:1/v1', KINU_AUTH: 'Bearer fixture', KINU_MODEL: 'fixture-model',
+      },
       stdout: 'pipe',
       stderr: 'pipe',
     });

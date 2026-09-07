@@ -140,7 +140,10 @@ describe('local workspace creation publishes or leaves nothing', () => {
   function run(scenario: string) {
     const result = Bun.spawnSync(['bun', '-e', scenario], {
       cwd: join(import.meta.dir, '../../..'),
-      env: { ...process.env, KINU_HOME: HOME },
+      env: {
+        ...process.env, HOME, KINU_HOME: HOME,
+        KINU_BASE_URL: 'http://localhost:1/v1', KINU_AUTH: 'Bearer fixture', KINU_MODEL: 'fixture-model',
+      },
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -183,7 +186,7 @@ describe('local workspace creation publishes or leaves nothing', () => {
   test('a role the catalog refuses leaves no database, no partial and no ref', () => {
     const result = run(`
       ${PRELUDE}
-      let failed = false;
+      let failure = null;
       try {
         await createCliAgent({
           name: 'refused-role', displayName: 'Refused role', nameOrigin: 'user',
@@ -191,15 +194,15 @@ describe('local workspace creation publishes or leaves nothing', () => {
           cwd: ${JSON.stringify(PROJECT)}, workspaceId: 'atomic-workspace',
           role: 'no-such-role-in-any-catalog',
         });
-      } catch {
-        failed = true;
+      } catch (error) {
+        failure = error instanceof Error ? error.message : String(error);
       }
-      console.log(JSON.stringify({ failed }));
+      console.log(JSON.stringify({ failure }));
       report('refused-role');
     `);
     expect(result.exitCode, result.stderr).toBe(0);
-    const { first: attempt, state } = reported(result.stdout, v.object({ failed: v.boolean() }));
-    expect(attempt).toEqual({ failed: true });
+    const { first: attempt, state } = reported(result.stdout, v.object({ failure: v.string() }));
+    expect(attempt.failure).toContain('no-such-role-in-any-catalog');
     // No ghost: nothing on disk claims to be this workspace, and the name is
     // free again — the whole difference from the half-created state.
     expect(state).toEqual({ db: false, partial: false, wal: false, shm: false, ref: false });
