@@ -21,15 +21,15 @@ import {
 import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
 import { usageTotal } from '../src/usage';
 
-describe('budgetExhausted — depth, and a deadline only if one was requested', () => {
+describe('budgetExhausted — a deadline only if one was requested', () => {
   test('a default head is never exhausted by time or spend', () => {
     const b: HeadBudget = { ...DEFAULT_HEAD_BUDGET, spawnedAt: Date.now() - 60 * 60_000 };
     expect(budgetExhausted(b).exhausted).toBe(false);
   });
 
-  test('depth 0 refuses further splits', () => {
+  test('zero split depth does not exhaust an existing head', () => {
     const b: HeadBudget = { maxDepth: 0, spawnedAt: Date.now() };
-    expect(budgetExhausted(b)).toEqual({ exhausted: true, reason: 'max-depth' });
+    expect(budgetExhausted(b)).toEqual({ exhausted: false });
   });
 
   test('a caller-requested deadline is enforced once it passes', () => {
@@ -149,6 +149,18 @@ function loopInput(budget: Partial<HeadBudget> = {}): HeadInput {
 }
 
 describe('runHeadInference — a fork works until the work is done', () => {
+  test('a leaf head finishes its tool work when no split depth remains', async () => {
+    const capture = new HeadCapture();
+    const report = await runHeadInference(loopInput({ maxDepth: 0 }), {
+      model: loopingHeadModel({ promptTokens: 100, outputTokens: 10, text: 'Leaf work complete.', stopAfterSteps: 3 }),
+      tools: buildHeadAccumulatorTools(capture), capture,
+      workspaceLayout: 'shared-workspace', isAborted: () => false,
+    });
+    expect(report.status).toBe('completed');
+    expect(report.stepCount).toBe(4);
+    expect(report.summary).toBe('Leaf work complete.');
+  });
+
   test('runs far past the old 32-step guard and the old fan-out token pool', async () => {
     const capture = new HeadCapture();
     // The old envelope for a 6-wide fork: 19,200 tokens and a 32-step guard.
