@@ -291,9 +291,6 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   The TUI defaults to light, keeps every preset, and uses quieter code and tool wells.
   Approval cards stay centered in the chat pane. The Connect card wraps the device name
   and the access explanation instead of cutting them short.
-  The hero pauses out of view and when the page is hidden. Its static diagram needs no GPU.
-  The web preview opens conversations, files, candidate results, and agent memory.
-  The bug-fix story has chapter controls. Terminal previews open tool output.
 
 - **One deploy path, an immutable container image, and no credential beside
   unreviewed code.** `packages/cf-backend` declared its own `deploy:staging`

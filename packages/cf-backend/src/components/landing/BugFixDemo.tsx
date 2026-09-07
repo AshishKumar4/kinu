@@ -40,12 +40,6 @@ import {
 // web-highlighter) is code-split out of the landing's first paint. The two
 // `import('./BugFixPlanPanel')` calls below reuse this same cached chunk.
 const BugFixPlanPanel = lazy(() => import('./BugFixPlanPanel'));
-const CHAPTERS = [
-  { label: 'Reproduce', at: DEMO_CUES.rootCauseText },
-  { label: 'Review plan', at: DEMO_CUES.annotation },
-  { label: 'Compare patches', at: DEMO_CUES.candidateCPass },
-  { label: 'Green tests', at: DEMO_END },
-];
 
 
 function candidateChip(candidate: DemoCandidate): ReactElement {
@@ -68,13 +62,11 @@ function candidateChip(candidate: DemoCandidate): ReactElement {
 }
 
 export function BugFixDemo(): ReactElement {
-  const [reduced, setReduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const [reduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const tRef = useRef(reduced ? DEMO_END : 0);
   const cueRef = useRef(cueCountAt(tRef.current));
   const [cueCount, setCueCount] = useState(cueRef.current);
   const [playing, setPlaying] = useState(false);
-  const [visible, setVisible] = useState(false);
-  const [foreground, setForeground] = useState(() => !document.hidden);
   const startedRef = useRef(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const cursorRef = useRef<HTMLDivElement | null>(null);
@@ -169,7 +161,7 @@ export function BugFixDemo(): ReactElement {
   };
 
   useEffect(() => {
-    if (!playing || !visible || !foreground || reduced) return;
+    if (!playing) return;
     let raf = 0;
     let last = performance.now();
     const step = (now: number): void => {
@@ -187,7 +179,9 @@ export function BugFixDemo(): ReactElement {
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [playing, visible, foreground, reduced]);
+    // The loop reads only refs; restarting it per beat would stall a frame,
+    // so `playing` is deliberately the only dependency.
+  }, [playing]);
 
   // Re-anchor the cursor whenever a beat re-renders the stage: targets move
   // when surfaces swap, so the pixel position is recomputed after commit.
@@ -195,43 +189,31 @@ export function BugFixDemo(): ReactElement {
     syncFrame();
   });
 
-  // A person can switch reduced motion on while the story plays. The demo
-  // settles to its final state at once and hides its playback controls.
+  // Play once when the stage becomes visible. Replays are deliberate clicks;
+  // scrolling away and back never restarts the story.
   useEffect(() => {
-    const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const preferenceChanged = (): void => {
-      setReduced(preference.matches);
-      if (!preference.matches) return;
-      startedRef.current = true;
-      tRef.current = DEMO_END;
-      setPlaying(false);
-      syncDiscrete();
-      syncFrame();
-    };
-    preference.addEventListener('change', preferenceChanged);
-    return () => preference.removeEventListener('change', preferenceChanged);
-  }, []);
-
-  useEffect(() => {
+    if (reduced) return;
     const stage = stageRef.current;
     if (stage === null) return;
-    const observer = new IntersectionObserver(([entry]) => {
-      const inView = entry !== undefined && entry.intersectionRatio >= 0.1;
-      setVisible(inView);
-      if (inView && !startedRef.current && !reduced) {
-        startedRef.current = true;
-        setPlaying(true);
+    const observer = new IntersectionObserver((entries) => {
+      if (startedRef.current) return;
+      for (const entry of entries) {
+        if (entry.intersectionRatio >= 0.3) {
+          startedRef.current = true;
+          setPlaying(true);
+          observer.disconnect();
+          return;
+        }
       }
-    }, { threshold: [0, 0.1] });
-    const visibilityChanged = () => setForeground(!document.hidden);
+    }, { threshold: [0.3] });
     observer.observe(stage);
-    document.addEventListener('visibilitychange', visibilityChanged);
-    return () => { observer.disconnect(); document.removeEventListener('visibilitychange', visibilityChanged); };
+    return () => observer.disconnect();
   }, [reduced]);
 
-  // Load the plan renderer when this demo enters view, ahead of its plan beat.
+  // The plan surface is its own chunk (marked, katex, dompurify); the resource
+  // owns this independent preload as soon as the demo mounts, so the plan beat
+  // never waits on the network.
   useAsyncResource(useCallback(async () => {
-    if (!visible) return;
     try {
       await import('./BugFixPlanPanel');
     } catch (cause) {
@@ -239,7 +221,7 @@ export function BugFixDemo(): ReactElement {
         doing: 'preload the bug-fix plan demo', cause, otherwise: 'io',
       }));
     }
-  }, [visible]));
+  }, []));
 
   useEffect(() => {
     const handle: BugFixDemoHandle = {
@@ -305,7 +287,6 @@ export function BugFixDemo(): ReactElement {
       ? 'border-b-2 border-[var(--c-accent)] px-3 py-2 text-[11.5px] font-semibold p-text'
       : 'px-3 py-2 text-[11.5px] p-text-4'
   );
-  const activeChapter = CHAPTERS.reduce((active, chapter, index) => tRef.current >= chapter.at ? index : active, 0);
 
   return (
     <div
@@ -370,12 +351,7 @@ export function BugFixDemo(): ReactElement {
           )}
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-2 border-b p-border p-3 sm:grid-cols-4" role="group" aria-label="Inspect demo chapters">
-        {CHAPTERS.map((chapter, index) => <button key={chapter.label} type="button" aria-pressed={activeChapter === index} onClick={() => { startedRef.current = true; setPlaying(false); tRef.current = chapter.at; syncDiscrete(); syncFrame(); }} className={`rounded-lg border p-border px-3 py-2 text-left text-xs transition-colors ${activeChapter === index ? 'p-elevated p-accent' : 'p-text-3 hover:p-text'}`}>
-          <span className="mr-2 font-mono text-[10px] p-text-4">0{index + 1}</span>{chapter.label}
-        </button>)}
-      </div>
-      <div inert className="relative grid h-[560px] sm:h-[600px] md:grid-cols-[minmax(0,1fr)_300px]">
+      <div inert className="grid h-[560px] sm:h-[600px] md:grid-cols-[minmax(0,1fr)_300px]">
         <div className="relative min-w-0 p-border md:border-r">
           <div className="flex h-9 items-end gap-1 border-b p-border p-recessed px-3">
             <span className={tabClass(discrete.surface === 'chat')}>Conversation</span>
@@ -398,14 +374,14 @@ export function BugFixDemo(): ReactElement {
             </div>
             {discrete.plan?.open === true && (
               <div className="absolute inset-0 bg-[var(--c-bg)]">
-                <Suspense fallback={<p role="status" className="p-5 text-sm p-text-3">Loading plan preview…</p>}>
+                <Suspense fallback={null}>
                   <BugFixPlanPanel plan={discrete.plan} />
                 </Suspense>
               </div>
             )}
           </div>
         </div>
-        <aside className={`min-w-0 flex-col gap-3.5 overflow-y-auto p-recessed p-3.5 ${discrete.candidates !== null && !discrete.testsSettled ? 'absolute inset-0 flex md:static' : 'hidden md:flex'}`}>
+        <aside className="hidden min-w-0 flex-col gap-3.5 overflow-hidden p-recessed p-3.5 md:flex">
           <div className="text-[11.5px] font-semibold p-text-4">Work</div>
           {discrete.needsYou !== 'hidden' && (
             <div
@@ -445,7 +421,7 @@ export function BugFixDemo(): ReactElement {
                 >
                   <span className="min-w-0">
                     <span className="block truncate font-mono text-[11px] p-text">{candidate.name}</span>
-                    <span className="block text-[10.5px] leading-relaxed p-text-4">{candidate.approach}</span>
+                    <span className="block truncate text-[10.5px] p-text-4">{candidate.approach}</span>
                   </span>
                   {candidateChip(candidate)}
                 </div>

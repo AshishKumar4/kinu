@@ -1,16 +1,156 @@
-import { Button } from '@cloudflare/kumo';
-import { TUI_ADVERTISED_HINTS, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS } from '@kinu.run/core';
+import { Button, Tabs, type TabsItem } from '@cloudflare/kumo';
+import { CHANGE_KIND_GLYPH, TUI_ADVERTISED_HINTS, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS } from '@kinu.run/core';
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import type { UIMessage } from 'ai';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
+import { MessageView } from '@/components/MessageView';
 
 import { BugFixDemo } from './BugFixDemo';
-import { WorkspacePreview } from './WorkspacePreview';
 
 export function RuleLabel({ children }: { children: ReactNode }): ReactElement {
   return <div className="mb-4 flex items-center gap-3 text-[13px] font-semibold p-accent"><span className="h-px w-[22px] shrink-0 bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />{children}</div>;
 }
 
+const RUN_TABS: TabsItem[] = [{ value: 'run', label: 'Run' }, { value: 'supervise', label: 'Supervise' }];
+
+const WORKSPACE_DEMO_MESSAGES: UIMessage[] = [
+  {
+    id: 'landing-workspace-user',
+    role: 'user',
+    parts: [{ type: 'text', text: 'Audit the checkout flow, find why the SAVE20 coupon 500s, and fix it. Deploy to staging when green.' }],
+  },
+  {
+    id: 'landing-workspace-agent',
+    role: 'assistant',
+    parts: [
+      { type: 'reasoning', text: 'The coupon path goes through /api/cart/apply. I should reproduce first, then inspect the handler and migration.' },
+      { type: 'tool-run', toolCallId: 'landing-run', state: 'output-available', input: { runtime: 'sandbox', command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: 'HTTP 500' },
+      { type: 'tool-execute_tools', toolCallId: 'landing-query', state: 'output-available', input: { code: '// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons`;\nreturn rows;' }, output: '[{"code":"SAVE20","kind":null,"value":20}]' },
+      { type: 'text', text: "Tuesday's migration backfilled `kind` for fixed coupons only. I will patch the migration, add a regression test, and run the focused suite." },
+      { type: 'tool-file', toolCallId: 'landing-read', state: 'output-available', input: { action: 'read', path: 'packages/checkout/migrations/0042_coupon_kind.sql' }, output: '…' },
+      { type: 'tool-file', toolCallId: 'landing-edit', state: 'output-available', input: { action: 'edit', path: 'packages/checkout/migrations/0042_coupon_kind.sql', edits: [{}, {}] }, output: { error: 'old_text not found or not unique' } },
+      { type: 'tool-file', toolCallId: 'landing-write', state: 'output-available', input: { action: 'write', path: 'packages/checkout/tests/coupon-kind.test.ts' }, output: 'ok' },
+      { type: 'tool-tasks', toolCallId: 'landing-task', state: 'output-available', input: { action: 'update', id: 't4', status: 'done' }, output: 'ok' },
+    ],
+  },
+];
+
+function WorkspacePreview(): ReactElement {
+  const [altitude, setAltitude] = useState('run');
+  const [decision, setDecision] = useState<'pending' | 'retried' | 'dismissed'>('pending');
+  return (
+    <div data-workspace-mode={altitude} aria-label="Kinu workspace interface preview" className="relative overflow-hidden rounded-2xl border p-border bg-[var(--c-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
+      <div className="flex min-h-[46px] flex-wrap items-center justify-between gap-3 border-b p-border p-recessed px-4 py-2">
+        <div className="flex min-w-0 items-center gap-3">
+          <KinuLogo compact />
+          <span className="h-4 w-px p-fill" />
+          <span className="text-[13px] font-semibold p-text">Jarvis</span>
+          <span className="inline-flex items-center gap-1.5 text-[11.5px] p-text-4"><span className="size-[5px] rounded-full p-dot-accent" />Live</span>
+          <span className="hidden text-[11.5px] p-text-4 sm:inline">deepseek-v4-pro</span>
+        </div>
+        <Tabs
+          tabs={RUN_TABS}
+          value={altitude}
+          onValueChange={setAltitude}
+          variant="segmented"
+          activateOnFocus
+          className="landing-tabs shrink-0 [&>div:first-child]:!h-9 [&>div:first-child]:!rounded-full [&>div:first-child]:!bg-[var(--c-fill)] [&_[role=tab]]:!my-0 [&_[role=tab]]:!h-[30px] [&_[role=tab]]:!rounded-full"
+          listClassName="!h-9 !rounded-full !border !border-[var(--c-border-strong)] !bg-[var(--c-fill)] !p-[3px] !ring-0"
+          indicatorClassName="!rounded-full !bg-[var(--c-accent)] !shadow-none !ring-0"
+        />
+      </div>
+      <div className="grid min-h-[760px] grid-cols-1 md:grid-cols-[minmax(0,1fr)_280px] lg:grid-cols-[190px_minmax(0,1fr)_330px]">
+        <aside className="hidden border-r p-border p-recessed px-3 py-3.5 lg:block">
+          <div className="px-2 pb-2.5 text-[11px] p-text-4">Workspaces</div>
+          <div className="flex items-center gap-2 rounded-lg bg-[var(--c-elevated)] px-2.5 py-2">
+            <span className="size-[5px] rounded-full p-dot-accent" /><span className="flex-1 text-[12.5px] font-semibold">Jarvis</span><span className="text-[10.5px] p-text-4">4h</span>
+          </div>
+          <div className="ml-[18px] mt-0.5 border-l p-border pl-[9px]">
+            <div className="flex justify-between px-2 py-1.5 text-xs"><span>Scout</span><span className="text-[10px] p-text-4">research</span></div>
+            <div className="flex justify-between px-2 py-1.5 text-xs"><span>Sentry</span><span className="text-[10px] p-text-4">PR review</span></div>
+          </div>
+          <div className="mt-1.5 flex items-center gap-2 px-2.5 py-2 text-[12.5px] p-text-3"><span className="size-[5px] rounded-full p-fill" />checkout-svc</div>
+        </aside>
+        <div className="flex min-w-0 flex-col border-r p-border">
+          <div className="flex h-10 shrink-0 items-end gap-1 border-b p-border p-recessed px-3">
+            <span className="border-b-2 border-[var(--c-accent)] px-3 py-2 text-[11.5px] font-semibold p-text">Main</span>
+            <span className="px-3 py-2 text-[11.5px] p-text-4">Coupon tester</span>
+            <span className="px-3 py-2 text-[11.5px] p-text-4">Migration review</span>
+          </div>
+          <div data-workspace-panel={altitude} className="flex flex-1 flex-col gap-3.5 overflow-hidden px-4 py-5 sm:px-6">
+            {altitude === 'run' ? (
+              <div className="space-y-5">
+                {WORKSPACE_DEMO_MESSAGES.map((message, index) => (
+                  <MessageView
+                    key={message.id}
+                    message={message}
+                    isLast={index === WORKSPACE_DEMO_MESSAGES.length - 1}
+                    isStreaming={false}
+                  />
+                ))}
+              </div>
+            ) : (
+              <>
+                <div className="flex items-start justify-between gap-4"><div><div className="text-[11px] uppercase tracking-[.14em] p-accent">Supervise</div><h3 className="mt-1.5 text-lg font-semibold p-text">Three agents are working</h3></div><span className="rounded-full p-accent-subtle px-3 py-1 text-[11px] p-accent">2 active · 1 waiting</span></div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {[['Scout', 'Researching the hot path', '3 sources', 'active'], ['Builder', 'Editing the one-pass dedupe', 'src/dedupe.ts', 'active'], ['Verifier', 'Waiting for Builder', 'bun test summary', 'waiting']].map(([name, task, detail, state]) => (
+                    <div key={name} className="rounded-xl border p-border p-surface p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3"><strong className="text-[13px] p-text">{name}</strong><span className={`text-[10px] uppercase tracking-[.1em] ${state === 'active' ? 'p-success' : 'p-warning'}`}>{state}</span></div>
+                      <p className="text-[12.5px] leading-[1.55] p-text-2">{task}</p><code className="mt-2 block truncate text-[10.5px] p-text-4">{detail}</code>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-1 rounded-xl border p-border p-recessed p-4"><div className="mb-3 flex justify-between text-[11px] p-text-4"><span>Branch progress</span><span>2 of 3 settled</span></div><div className="h-1.5 overflow-hidden rounded-full p-fill"><span className="block h-full w-2/3 rounded-full p-dot-accent" /></div><p className="mt-3 text-[12.5px] leading-[1.55] p-text-3">Builder's patch will wake Verifier automatically. The best measured result returns to this conversation.</p></div>
+              </>
+            )}
+          </div>
+          <div className="border-t p-border p-recessed px-4 py-3">
+            <div className="flex items-center gap-2.5 rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] px-3.5 py-2.5">
+              <span className="flex-1 text-[13px] p-text-4">Send a message…</span>
+              <span className="rounded-full border p-border px-2.5 py-0.5 text-[11.5px] p-text-4">Auto</span>
+              <span className="rounded-full p-btn px-3 py-1 text-[11.5px] font-semibold">Send</span>
+            </div>
+          </div>
+        </div>
+        <aside className="hidden min-w-0 flex-col p-recessed md:flex">
+          <div className="flex gap-2.5 overflow-hidden border-b p-border px-3.5 pt-3">
+            <span className="border-b-2 border-[var(--c-accent)] pb-2.5 text-[11.5px] font-semibold p-accent">Work</span>
+            {['Exploration', 'Agent', 'Files'].map((tab) => <span key={tab} className="pb-2.5 text-[11.5px] p-text-4">{tab}</span>)}
+          </div>
+          <div className="flex flex-col gap-3.5 overflow-hidden p-3.5">
+            <div data-decision-state={decision} className="overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_30%,transparent)] p-surface">
+              {decision === 'pending' ? (
+                <>
+                  <div className="border-b border-dashed border-[var(--c-dash)] px-3.5 py-2 text-[11.5px] font-semibold p-accent">Needs you · 1</div>
+                  <div className="px-3.5 py-3"><div className="mb-2 text-[12.5px]">Swarm search stopped early</div><div className="flex gap-2 text-[11px]"><button type="button" onClick={() => setDecision('retried')} className="rounded-full border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] px-2.5 py-0.5 p-accent">Retry</button><button type="button" onClick={() => setDecision('dismissed')} className="rounded-full border p-border px-2.5 py-0.5 p-text-4">Dismiss</button></div></div>
+                </>
+              ) : (
+                <div className="flex items-center justify-between gap-3 px-3.5 py-3"><span className={`text-[11.5px] ${decision === 'retried' ? 'p-success' : 'p-text-4'}`}>{decision === 'retried' ? 'Search restarted' : 'Decision dismissed'}</span><button type="button" onClick={() => setDecision('pending')} className="text-[10.5px] p-accent">Reset</button></div>
+              )}
+            </div>
+            <div>
+              <div className="mb-2 text-[11.5px] font-semibold p-text-4">Now · 2 active</div>
+              <div className="overflow-hidden rounded-xl border p-border p-surface">
+                <div className="flex items-start gap-2.5 px-3.5 py-2.5"><span className="mt-1 size-2 rounded-full p-dot-accent" /><span className="flex-1 text-xs p-text-2">Patch the slow dedupe path</span></div>
+                <div className="flex items-start gap-2.5 border-t border-dashed border-[var(--c-dash)] px-3.5 py-2.5"><span className="mt-1 size-2 rounded-full p-dot-success" /><span className="flex-1 text-xs p-text-2">Add the regression case</span></div>
+              </div>
+            </div>
+            <div>
+              <div className="mb-2 text-[11.5px] font-semibold p-text-4">Journal</div>
+              <div className="overflow-hidden rounded-xl border p-border p-surface">
+                {[[CHANGE_KIND_GLYPH.tool, 'Crafted a tool: dedupe-bench', '2m'], [CHANGE_KIND_GLYPH.outcomes, 'Graded 2 turns', '18h'], [CHANGE_KIND_GLYPH.fact, 'Remembered the coupon schema', '19h']].map(([icon, label, age], index) => (
+                  <div key={label} className={`flex items-baseline gap-2 px-3.5 py-2.5 ${index < 2 ? 'border-b border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-[10px] p-accent">{icon}</span><span className="flex-1 text-xs p-text-2">{label}</span><span className="text-[10px] p-text-4">{age}</span></div>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center gap-2.5 text-[11px] p-text-4"><span>612 MB</span><span className="h-1 flex-1 overflow-hidden rounded-full p-fill"><span className="block h-full w-[6%] p-dot-accent" /></span><span>10 GB</span></div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}
 
 function TuiPreview(): ReactElement {
   // `status` carries the real navigator's semantics (tui-shell NavigatorRow):
@@ -24,12 +164,7 @@ function TuiPreview(): ReactElement {
       subordinate: 'reviewer · auditor',
       prompt: 'Audit the checkout flow, fix the coupon failure, and keep the tests green.',
       answer: 'The migration only filled fixed coupons. I patched the backfill, added the percentage case, and started the focused suite.',
-      tools: [
-        ['run · workspace', 'bun test coupon', '7 pass', 'coupon-kind.test.ts\n✓ fixed coupon kind\n✓ percent coupon kind\n✓ missing catalog row refused\n7 pass · 0 fail'],
-        ['file', 'read 0042_coupon_kind.sql', '1.8 KB', 'The old backfill only handles fixed coupons.\nSAVE20 still has kind = NULL.'],
-        ['file', 'edit 0042_coupon_kind.sql', 'saved', 'Backfill kind from coupon_catalog by coupon code.\nRefuse rows with no catalog entry.'],
-        ['agents', 'three independent checks', 'settled', 'The focused suite rejects two candidates.\nThe catalog backfill with a missing-row check passes all seven cases.'],
-      ],
+      tools: [['run · workspace', 'bun test coupon', '7 pass'], ['file', 'read 0042_coupon_kind.sql', '1.8 KB'], ['file', 'edit 0042_coupon_kind.sql', 'saved'], ['agents', 'three independent checks', 'settled']],
     },
     migrations: {
       label: 'migrations',
@@ -38,11 +173,7 @@ function TuiPreview(): ReactElement {
       subordinate: null,
       prompt: 'Review the migration plan and identify any destructive step.',
       answer: 'The plan now ships the backfill first, verifies both coupon kinds, then adds the constraint in a later release.',
-      tools: [
-        ['file', 'read migrations/0042.sql', '2.1 KB', 'Backfill first. Verify both coupon kinds before adding the constraint.'],
-        ['agents', 'audit migration plan', '2 reports', 'Data review: preserve catalog kinds.\nRelease review: add the constraint after the backfill is verified.'],
-        ['file', 'edit MIGRATION.md', 'saved', '1. Backfill from the catalog.\n2. Verify fixed and percent coupons.\n3. Add the constraint in a later release.'],
-      ],
+      tools: [['file', 'read migrations/0042.sql', '2.1 KB'], ['agents', 'audit migration plan', '2 reports'], ['file', 'edit MIGRATION.md', 'saved']],
     },
     jarvis: {
       label: 'Jarvis',
@@ -51,11 +182,7 @@ function TuiPreview(): ReactElement {
       subordinate: null,
       prompt: 'Summarize the overnight research and flag the decision I need to make.',
       answer: 'The evidence supports staged rollout. Decide whether the first cohort should be 5% or 10%; the rest is ready.',
-      tools: [
-        ['web', 'compare three primary sources', '3 sources', 'The source comparison supports a staged rollout rather than a full release.'],
-        ['agents', 'independent risk review', 'settled', 'Keep the initial cohort small. Observe failures before widening it.'],
-        ['report', 'prepare owner decision', 'ready', 'Decision needed: start with 5% or 10%.\nThe remaining rollout steps are ready.'],
-      ],
+      tools: [['web', 'compare three primary sources', '3 sources'], ['agents', 'independent risk review', 'settled'], ['report', 'prepare owner decision', 'ready']],
     },
   } as const;
   type AgentId = keyof typeof agents;
@@ -161,7 +288,6 @@ function TuiPreview(): ReactElement {
                 className="mb-4 w-full border p-border bg-[var(--c-input-bg)] px-2 py-1.5 text-xs p-text outline-none"
               />
               {workspaceGroups(filter !== '', chooseAgent)}
-              {filter !== '' && !LOCAL_AGENTS.some(drawerMatches) && !CLOUD_AGENTS.some(drawerMatches) && <p className="px-2 text-xs p-text-3">No workspaces match this filter.</p>}
             </aside>
           </>
         )}
@@ -172,16 +298,13 @@ function TuiPreview(): ReactElement {
               <p className="p-text">{agent.prompt}</p>
             </div>
             <div className="border-y border-[var(--c-border-strong)]">
-              {agent.tools.map(([tool, action, result, output], index) => (
-                <details key={`${tool}-${action}`} className={index > 0 ? 'group border-t border-dashed border-[var(--c-dash)]' : 'group'}>
-                  <summary className="cursor-pointer list-none">
+              {agent.tools.map(([tool, action, result], index) => (
+                <div key={`${tool}-${action}`} className={index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}>
                   <div className="grid grid-cols-[14px_120px_minmax(0,1fr)] gap-3 px-1 pb-1 pt-2.5 sm:grid-cols-[14px_150px_minmax(0,1fr)]">
-                    <span className="p-accent transition-transform group-open:rotate-90 motion-reduce:transition-none">{TUI_MARKS.toolCall}</span><strong className="font-normal p-text-2">{tool}</strong><span className="truncate p-text-4">{action}</span>
+                    <span className="p-accent">{TUI_MARKS.toolCall}</span><strong className="font-normal p-text-2">{tool}</strong><span className="truncate p-text-4">{action}</span>
                   </div>
                   <div className="pb-2.5 pl-[17px] p-text-4">{TUI_MARKS.toolResult} <span className="p-success">{result}</span></div>
-                  </summary>
-                  <pre className="mb-3 ml-[17px] whitespace-pre-wrap break-words border-l p-border pl-3 text-[11px] leading-relaxed p-text-2">{output}</pre>
-                </details>
+                </div>
               ))}
             </div>
             <div data-tui-role="assistant" className="mt-5 px-1">
@@ -212,7 +335,7 @@ function CliPreview(): ReactElement {
   }, [sequence]);
 
   const lineClass = (visible: boolean): string => (
-    `grid cursor-pointer list-none grid-cols-[16px_minmax(0,1fr)_auto] gap-3 py-2 transition-all duration-300 motion-reduce:transition-none ${visible ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`
+    `grid grid-cols-[16px_minmax(0,1fr)_auto] gap-3 py-2 transition-all duration-300 ${visible ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`
   );
   return (
     <div data-cli-stage={stage} aria-label="Kinu command line preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] font-mono text-xs shadow-[0_30px_90px_-50px_rgba(0,0,0,.8)]">
@@ -228,12 +351,12 @@ function CliPreview(): ReactElement {
       </div>
       <div className="min-h-[360px] p-5 sm:p-7">
         <div className="mb-6 p-text"><span className="mr-2 p-accent">$</span>kinu run checkout “Audit the coupon flow and fix it.”<span className={`ml-1 inline-block h-[1em] w-[7px] bg-[var(--c-accent)] ${stage === 0 ? 'motion-safe:animate-pulse' : 'opacity-0'}`} /></div>
-        <div key={sequence} className="border-y border-[var(--c-border-strong)] px-1">
-          <details inert={stage < 1}><summary className={lineClass(stage >= 1)}><span className="p-accent">›</span><span className="p-text-3">run · workspace &nbsp; reproduce coupon failure</span><span className="p-danger">exit 1</span></summary><pre className="mb-3 ml-7 whitespace-pre-wrap break-words border-l p-border pl-3 text-[11px] p-text-2">{'POST /api/cart/apply · SAVE20\nHTTP 500\nCoupon kind is NULL after migration 0042.'}</pre></details>
-          <details inert={stage < 2} className="border-t border-dashed border-[var(--c-dash)]"><summary className={lineClass(stage >= 2)}><span className="p-accent">›</span><span className="p-text-3">file &nbsp; edit migration and handler</span><span className="p-success">saved</span></summary><pre className="mb-3 ml-7 whitespace-pre-wrap break-words border-l p-border pl-3 text-[11px] p-text-2">{'Read coupon_catalog by code.\nBackfill both coupon kinds.\nRefuse a missing catalog row instead of guessing.'}</pre></details>
-          <details inert={stage < 3} className="border-t border-dashed border-[var(--c-dash)]"><summary className={lineClass(stage >= 3)}><span className="p-accent">›</span><span className="p-text-3">run · workspace &nbsp; bun test coupon</span><span className="p-success">7 pass</span></summary><pre className="mb-3 ml-7 whitespace-pre-wrap break-words border-l p-border pl-3 text-[11px] p-text-2">{'✓ percent kind\n✓ fixed kind\n✓ missing catalog row refused\n7 pass · 0 fail'}</pre></details>
+        <div className="border-y border-[var(--c-border-strong)] px-1">
+          <div className={lineClass(stage >= 1)}><span className="p-accent">›</span><span className="p-text-3">run · workspace &nbsp; reproduce coupon failure</span><span className="p-danger">exit 1</span></div>
+          <div className={`${lineClass(stage >= 2)} border-t border-dashed border-[var(--c-dash)]`}><span className="p-accent">›</span><span className="p-text-3">file &nbsp; edit migration and handler</span><span className="p-success">saved</span></div>
+          <div className={`${lineClass(stage >= 3)} border-t border-dashed border-[var(--c-dash)]`}><span className="p-accent">›</span><span className="p-text-3">run · workspace &nbsp; bun test coupon</span><span className="p-success">7 pass</span></div>
         </div>
-        <div className={`mt-6 grid grid-cols-[52px_minmax(0,1fr)] gap-3 transition-all duration-300 motion-reduce:transition-none ${stage >= 4 ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`}>
+        <div className={`mt-6 grid grid-cols-[52px_minmax(0,1fr)] gap-3 transition-all duration-300 ${stage >= 4 ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`}>
           <span className="text-[10px] uppercase tracking-[.12em] p-accent">result</span>
           <p className="font-sans text-sm leading-[1.65] p-text">The percentage-coupon path is fixed. The migration now fills both coupon kinds, and all seven focused tests pass.</p>
         </div>

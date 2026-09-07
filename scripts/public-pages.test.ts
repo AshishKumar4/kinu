@@ -75,7 +75,7 @@ interface Facts {
   cli?: SurfaceFact;
   interactions?: { workspace: boolean; decision: boolean; tui: boolean; cli: boolean; evolution: boolean };
   demoBeats?: Record<string, DemoBeat>;
-  demoControls?: { replayed: boolean; pausedAfter: boolean; playLabelBefore: string | null; settledOnPreferenceChange: boolean };
+  demoControls?: { replayed: boolean; pausedAfter: boolean; playLabelBefore: string | null };
   command?: string;
   copied?: boolean;
   homeLink?: { visible: boolean; hasGraphic: boolean };
@@ -357,19 +357,7 @@ beforeAll(async () => {
       }, { timeout: 5_000 }).then(() => true);
       await page.click('button[aria-label="Pause the demo"]');
       const pausedAfter = await page.evaluate(() => window.__kinuBugfixDemo?.state().playing === false);
-      // A person can switch reduced motion on while the story is playing. The
-      // demo must settle to its final state at once, with no controls left.
-      await page.click('button[aria-label="Play the demo"]');
-      await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
-      // One rendered frame after the change is enough for a settled demo; the
-      // gate then reads the DOM as a value rather than waiting for a timeout.
-      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      const settledOnPreferenceChange = await page.evaluate(() => (
-        document.querySelector<HTMLElement>('[data-bugfix-demo]')?.dataset.demoSettled === 'true'
-        && document.querySelector('button[aria-label$="the demo"]') === null
-      ));
-      await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'no-preference' }]);
-      facts.demoControls = { replayed, pausedAfter, playLabelBefore, settledOnPreferenceChange };
+      facts.demoControls = { replayed, pausedAfter, playLabelBefore };
       facts.command = await page.$eval(
         '[data-install-command]',
         (element) => element.textContent?.trim() ?? '',
@@ -651,7 +639,6 @@ describe('the bug-fix demo plays one timeline', () => {
     expect(controls.playLabelBefore).not.toBeNull();
     expect(controls.replayed).toBeTrue();
     expect(controls.pausedAfter).toBeTrue();
-    expect(controls.settledOnPreferenceChange).toBeTrue();
   });
 
   test('reduced motion holds the settled final state with no controls', () => {
