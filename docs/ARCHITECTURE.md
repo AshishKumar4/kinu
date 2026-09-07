@@ -76,11 +76,12 @@ graph TB
 `ActorAgent` (`cf-backend/src/actor-agent.ts`) owns once what every full-loop
 actor needs: the CF runtime assembly, the `BackendHost`, the shared
 `AgentOrchestrator`, `ExtensionHost` + compaction, the dynamic-context ledger,
-prompt/model/tool caches, and the Think hook bridge. A subclass supplies ten
-abstract members (`getOwnerUserId`, `actorKind`, `ensureSchema`,
-`actorToolDeps`, `engine`, `notifyOwner`, `delegationBudget`,
-`facetClass`, `ownMission`, `persistAutoTitle`) plus three optional hooks
-(`workspaceName`, `extraCodemodeProviders`, `isClientRpcMethodDenied`).
+prompt/model/tool caches, and the Think hook bridge. A subclass supplies the
+abstract members (`getOwnerUserId`, `actorKind`, `workspaceBox`,
+`ensureSchema`, `actorToolDeps`, `engine`, `notifyOwner`, `delegationBudget`,
+`facetClass`, `facetHomes`, `ownMission`, `persistAutoTitle`,
+`promptIdentity`) plus three optional hooks (`workspaceName`,
+`extraCodemodeProviders`, `isClientRpcMethodDenied`).
 `persistAutoTitle` stores a core-decided workspace name wherever that backend
 keeps state. `facetClass` answers `SubordinateAgent` on both actors: it is the
 one class every facet of an actor runs as.

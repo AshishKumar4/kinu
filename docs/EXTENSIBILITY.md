@@ -62,8 +62,8 @@ credential.
 
 ## Adding a new actor kind
 
-`ActorAgent` (`cf-backend/src/actor-agent.ts:673`) is the base class. Extend
-it and supply twelve abstract members:
+`ActorAgent` (`cf-backend/src/actor-agent.ts`) is the base class. Extend
+it and supply its abstract members:
 
 ```ts
 export class MyAgent extends ActorAgent {
@@ -76,6 +76,7 @@ export class MyAgent extends ActorAgent {
   protected notifyOwner(subject: string, body: string): void { /* … */ }
   protected delegationBudget(): DelegationBudget { /* depth and spend below you */ }
   facetClass(): SubAgentClass<SubordinateAgent> { /* the class every facet runs as */ }
+  facetHomes(): HostedFacetHomes { /* where this actor's facets get their homes */ }
   protected ownMission(): string { /* the mission text titling names you after */ }
   protected persistAutoTitle(displayName: string): Promise<boolean> { /* where a title lands */ }
   protected promptIdentity(): Promise<PromptIdentity> { /* the identity the prompt renders */ }
@@ -87,9 +88,9 @@ runtime assembly, `BackendHost`, the shared `AgentOrchestrator`,
 `ExtensionHost` plus compaction, the dynamic-context ledger, the prompt, model
 and tool caches, and the Think hook bridge.
 
-Three hooks are optional. `workspaceName()` returns `this.name` (line 698).
-`extraCodemodeProviders()` returns `[]` (line 871).
-`isClientRpcMethodDenied(method)` returns `false` (line 895). Override the
+Three hooks are optional. `workspaceName()` returns `this.name`.
+`extraCodemodeProviders()` returns `[]`.
+`isClientRpcMethodDenied(method)` returns `false`. Override the
 first provider hook for extra sandbox namespaces. The orchestrator gets
 `agent.*`, and a subordinate does not. Override the RPC hook for methods a
 browser socket must not reach.
