@@ -433,7 +433,7 @@ describe('route-shaped run events score through the production instruments', () 
       async spend() { return spend; },
     };
     try {
-      await expect(withEpisodeEvidence(reader, { transcripts: root, taskId: 'failure', modelCalls: 'expected' }, async () => {
+      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'failure', modelCalls: 'expected' }, async () => {
         throw new Error('failed after model work');
       })).rejects.toThrow('failed after model work');
       expect(liveModelSpend().calls).toBe(8);
@@ -443,20 +443,43 @@ describe('route-shaped run events score through the production instruments', () 
       expect(readFileSync(join(root, 'failure/failure.json'), 'utf8')).toContain('failed after model work');
 
       resetLiveModelSpend();
-      await expect(withEpisodeEvidence(reader, { transcripts: root, taskId: 'assertion', modelCalls: 'expected' }, async (collect) => {
+      await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'assertion', modelCalls: 'expected' }, async (_reader, collect) => {
         await collect();
         throw new Error('subgoal missed');
       })).rejects.toThrow('subgoal missed');
       expect(liveModelSpend().calls).toBe(8);
 
       resetLiveModelSpend();
-      await expect(withEpisodeEvidence({ ...reader, async spend() { throw new Error('spend endpoint unavailable'); } },
+      await expect(withEpisodeEvidence(async () => ({ ...reader, async spend() { throw new Error('spend endpoint unavailable'); } }),
         { transcripts: root, taskId: 'outage', modelCalls: 'expected' }, async () => 'finished')).rejects.toThrow('spend endpoint unavailable');
       expect(liveModelSpend().episodesUnmeasured).toBe(1);
       expect(readFileSync(join(root, 'outage/history.json'), 'utf8')).toContain('partial answer');
       expect(JSON.parse(readFileSync(join(root, 'outage/collection.json'), 'utf8'))).toContainEqual({
         channel: 'spend', status: 'failed', reason: 'spend endpoint unavailable',
       });
+    } finally {
+      resetLiveModelSpend();
+    }
+  });
+
+  test('an opening failure retains the cause and unavailable channels without inventing measurements', async () => {
+    resetLiveModelSpend();
+    const root = scratchDir('opening-evidence');
+    const failure = new Error('created workspace but connection failed');
+    try {
+      await expect(withEpisodeEvidence(async () => { throw failure; },
+        { transcripts: root, taskId: 'opening', modelCalls: 'expected' },
+        async () => { throw new Error('unreachable operation'); })).rejects.toBe(failure);
+      expect(JSON.parse(readFileSync(join(root, 'opening/failure.json'), 'utf8'))).toMatchObject({ phase: 'open', message: failure.message });
+      expect(JSON.parse(readFileSync(join(root, 'opening/collection.json'), 'utf8'))).toEqual([
+        { channel: 'events', status: 'unavailable', reason: 'session opening failed' },
+        { channel: 'history', status: 'unavailable', reason: 'session opening failed' },
+        { channel: 'spend', status: 'unavailable', reason: 'session opening failed' },
+      ]);
+      expect(existsSync(join(root, 'opening/spend.json'))).toBe(false);
+      expect(existsSync(join(root, 'opening/events.jsonl'))).toBe(false);
+      expect(liveModelSpend().episodesUnmeasured).toBe(1);
+      expect(liveModelSpend().episodesWithoutModel).toBe(0);
     } finally {
       resetLiveModelSpend();
     }
