@@ -409,7 +409,10 @@ describe('route-shaped run events score through the production instruments', () 
     const lines = readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.events), 'utf8').trimEnd().split('\n');
     expect(lines).toHaveLength(LEDGER_EVENTS.length);
     const events = lines.map((line) => v.parse(RunEventSchema, JSON.parse(line)));
-    expect(ledgerTotalsFromEvents(events)).toEqual(ledgerTotalsFromEvents(LEDGER_EVENTS));
+    expect(ledgerTotalsFromEvents(events)).toEqual({
+      turns: 2, toolCalls: 4, toolNames: ['file', 'run', 'file', 'run'],
+      tokensIn: 2700, tokensOut: 520, reasoningOut: 0, steps: 2, failures: ['run: exit_1'],
+    });
     expect(JSON.parse(readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.history), 'utf8'))).toEqual(history);
     expect(JSON.parse(readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.subgoals), 'utf8'))).toEqual(subgoals);
     // An episode with no events leaves an EMPTY file, not a file holding one
