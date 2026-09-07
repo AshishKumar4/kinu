@@ -17,7 +17,7 @@ import {
 import { renderThrownChain } from "@kinu.run/core/obs";
 import type { Rpc } from "@/lib/protocol";
 import { useAsyncResource } from "@/hooks/use-async-resource";
-import { MarkdownContent } from "./shared";
+import { MarkdownContent, CodeBlock } from "./shared";
 import {
   PLANE, FileWriteConflict, fileTextEditable, putFileBytes, sandboxedHtml, textRenderOf, viewerKindOf,
   type FileText, type TextRender,
@@ -214,10 +214,10 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
               className="w-full h-full border-0 bg-white"
             />
           ) : (
-            <pre className="p-3 text-[11px] leading-relaxed font-mono p-text-2 whitespace-pre-wrap break-words">
-              {content}
-              {file.truncated && <span className="p-text-4">{"\n… preview truncated. Download the full file."}</span>}
-            </pre>
+            <div className="px-3">
+              <CodeBlock className={`language-${name.split('.').at(-1) ?? ''}`}>{content}</CodeBlock>
+              {file.truncated && <p className="text-xs p-text-4">… preview truncated. Download the full file.</p>}
+            </div>
           )
         )}
       </div>
