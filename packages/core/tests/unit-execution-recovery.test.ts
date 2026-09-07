@@ -202,7 +202,7 @@ describe('the loop, through the production seams', () => {
           missingCapabilities: [],
         }),
       },
-    }, { stepNumber, messages: [{ role: 'user', content: 'fix the build' }] });
+    }, { stepNumber, messages: [{ role: 'user', content: 'fix the build' }], steps: [] });
 
     orch.beginTurn(Date.now());
     const before = await step(0);

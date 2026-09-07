@@ -726,12 +726,11 @@ export async function assembleActorTurn(
     model: 'harness-model', continuation: false, body: {},
   });
   const turnMessages = turn?.messages ?? [...history];
-  // The step context is CONSTRUCTED here with both fields `beforeStep` reads: it
-  // forwards `stepNumber` and `messages` to `composePrepareStep` and touches no other
-  // member of its context (actor-agent.ts `beforeStep`). Think supplies the remainder
-  // for the SDK's own bookkeeping, which nothing here observes.
-  // SAFETY: constructed literal carrying every member the callee reads.
-  const stepContext = { stepNumber: 0, messages: [...turnMessages] } as PrepareStepContext;
+  // This assembly-only probe starts before any SDK step has completed.
+  const stepContext: PrepareStepContext = {
+    stepNumber: 0, messages: [...turnMessages], steps: [],
+    model: new MockLanguageModelV3(), experimental_context: undefined,
+  };
   const step = v.parse(StepOutputSchema, agent.beforeStep(stepContext) ?? {});
   const carried = readSystemCarriage(step.system ?? turn?.system ?? '');
   return {

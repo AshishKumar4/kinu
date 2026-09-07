@@ -356,7 +356,7 @@ export {
   type StepCachePlan,
   type StepDynamicContext,
   type StepPipeline,
-  type StepPrepareResult,
+  type StepPrepareResult, type StepPrepareContext,
 } from './prompting/prepare-step';
 export {
   pruneStepToolOutputs,
