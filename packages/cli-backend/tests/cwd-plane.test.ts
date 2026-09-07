@@ -359,7 +359,7 @@ test('local Plan file inspection remains useful without granting native project 
   expect(await inspect({ action: 'stat', path: 'inspect.txt' })).toMatchObject({ isDir: false, size: 18 });
   expect(await inspect({ action: 'search', path: 'inspect.txt', query: 'needle' })).toMatchObject({ matches: [{ line: 2, text: 'needle' }] });
   expect(await inspect({ action: 'read', path: 'inspect.txt' })).toEqual(expect.stringContaining('needle'));
-  expect(await inspect({ action: 'write', path: 'inspect.txt', content: 'changed' })).toMatchObject({ reason: 'denied' });
+  await expect(inspect({ action: 'write', path: 'inspect.txt', content: 'changed' })).rejects.toMatchObject({ code: 'denied' });
   expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('alpha\nneedle\nomega');
   const buildFile = buildBuiltinTools({ rt, workMode: 'build' }).file;
   if (buildFile === undefined) throw new Error('No Build file tool');
