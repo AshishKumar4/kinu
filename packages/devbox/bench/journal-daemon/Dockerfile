@@ -22,15 +22,17 @@ COPY journal-delta.c /usr/local/src/journal-delta.c
 COPY journal-delta.h /usr/local/src/journal-delta.h
 COPY journal-namespace.c /usr/local/src/journal-namespace.c
 COPY journal-namespace.h /usr/local/src/journal-namespace.h
+COPY namespace-pages.c /usr/local/src/namespace-pages.c
+COPY namespace-pages.h /usr/local/src/namespace-pages.h
 RUN cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O2 \
       -I/usr/local/src \
-      /usr/local/src/kinu-journal-daemon.c /usr/local/src/journal-delta.c /usr/local/src/journal-namespace.c \
+      /usr/local/src/kinu-journal-daemon.c /usr/local/src/journal-delta.c /usr/local/src/journal-namespace.c /usr/local/src/namespace-pages.c \
       -o /usr/local/bin/kinu-journal-daemon \
       $(pkg-config --cflags --libs fuse3) -lcrypto -lsqlite3 -pthread
 # The shutdown races the matrix asserts on resolve cleanly most of the time, so
 # the matrix reruns the same shutdowns against this build, which reports them.
 RUN cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O1 -g -fsanitize=thread \
       -I/usr/local/src \
-      /usr/local/src/kinu-journal-daemon.c /usr/local/src/journal-delta.c /usr/local/src/journal-namespace.c \
+      /usr/local/src/kinu-journal-daemon.c /usr/local/src/journal-delta.c /usr/local/src/journal-namespace.c /usr/local/src/namespace-pages.c \
       -o /usr/local/bin/kinu-journal-daemon-tsan \
       $(pkg-config --cflags --libs fuse3) -lcrypto -lsqlite3 -pthread

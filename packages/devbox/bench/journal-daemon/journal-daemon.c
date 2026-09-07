@@ -559,7 +559,10 @@ static int lookup_node(fuse_ino_t parent, const char *name, struct fuse_entry_pa
   }
   uint64_t logical = 0;
   int rc = journal_namespace_lookup(inode_namespace, logical_of(parent), name, &logical);
-  if (rc == 0) rc = journal_namespace_bind_existing(inode_namespace, &st, logical);
+  /* A name the index has not seen (a restore laid it beneath the root) joins
+   * the index here, the same way genesis ingestion admitted the tree. */
+  if (rc == -ENOENT) rc = journal_namespace_bind(inode_namespace, logical_of(parent), name, &st, &logical);
+  else if (rc == 0) rc = journal_namespace_bind_existing(inode_namespace, &st, logical);
   if (rc != 0) { close(fd); return rc; }
   pthread_mutex_lock(&nodes.lock);
   struct node *node = node_by_identity(st.st_dev, st.st_ino);
@@ -1691,6 +1694,7 @@ static int run_fence(uint64_t *cut_out, uint64_t *generation_out, char manifest[
   memset(work, 0, sizeof(*work));
   int rc = syncfs(state.root_fd) == 0 ? 0 : neg_errno();
   if (rc == 0) rc = journal_delta_stage(&delta, manifest, work);
+  if (rc == 0) rc = journal_namespace_stage(inode_namespace, state.state_path, manifest, cut, generation);
   if (rc == 0) rc = durable(REC_FENCE, cut, generation, "fence", 0, "", manifest);
   if (rc == 0) {
     pthread_mutex_lock(&state.lock);
@@ -1773,6 +1777,13 @@ static int run_base(uint64_t cut, uint64_t generation, const char *root) {
      * one apart for the rest of the boot. */
     if (generation + 1 > state.generation) state.generation = generation + 1;
     pthread_mutex_unlock(&state.lock);
+    /* The head holds the namespace pages this cut captured, so the next
+     * fence exports only what changes from here. A cut this daemon did not
+     * capture (a replacement's first base) has nothing to acknowledge. */
+    int acknowledged = journal_namespace_acknowledge(inode_namespace, cut);
+    if (acknowledged != 0 && acknowledged != -ESTALE) {
+      fprintf(stderr, "namespace.acknowledge_failed cut=%llu code=%d\n", (counter)cut, acknowledged);
+    }
     int compacted = compact_journal();
     if (compacted != 0) fprintf(stderr, "journal-daemon: compaction failed: %s\n", strerror(-compacted));
   }
@@ -1934,6 +1945,31 @@ static bool handle_control(int fd) {
       journal_json_string(out, strerror(-rc));
       fputs("}\n", out);
     }
+  } else if (strcmp(op, "namespace") == 0) {
+    /* The published namespace, served page by page on `socket`. A daemon
+     * born over this state adopts it; one that changed an alias keeps its
+     * own and says so. */
+    char socket_path[PATH_CAP] = "";
+    char bytes_text[32] = "";
+    uint64_t bytes = 0;
+    int rc = 0;
+    bool adopted = false;
+    if (json_field(request, "socket", socket_path, sizeof(socket_path))) {
+      rc = json_field(request, "byteLength", bytes_text, sizeof(bytes_text)) && journal_parse_counter(bytes_text, &bytes)
+        ? journal_namespace_attach(inode_namespace, socket_path, bytes)
+        : -EINVAL;
+      adopted = rc == 0;
+      if (rc == -EEXIST) rc = 0;
+    }
+    fputs("{\"id\":", out);
+    journal_json_string(out, id);
+    if (rc == 0) {
+      fprintf(out, ",\"ok\":true,\"namespaceAdopted\":%s}\n", adopted ? "true" : "false");
+    } else {
+      fputs(",\"ok\":false,\"error\":", out);
+      journal_json_string(out, strerror(-rc));
+      fputs("}\n", out);
+    }
   } else if (strcmp(op, "fence") == 0) {
     uint64_t cut = 0;
     uint64_t generation = 0;
@@ -2002,13 +2038,13 @@ static bool handle_control(int fd) {
             "\"batches\":%llu,\"journalBytes\":%lld,\"directIoAllowMmap\":%s,\"reads\":%llu,"
             "\"writes\":%llu,\"walBytes\":%llu,\"walFsyncs\":%llu,\"backingFsyncs\":%llu,"
             "\"boundaryFiles\":%zu,\"namespace\":{\"pageReads\":%llu,\"pageWrites\":%llu,\"cacheHits\":%llu,"
-            "\"preparedSteps\":%llu,\"preparedFullscanSteps\":%llu,\"aliasesReturned\":%llu,\"entriesIngested\":%llu}}\n",
+            "\"preparedSteps\":%llu,\"preparedFullscanSteps\":%llu,\"aliasesReturned\":%llu,\"entriesIngested\":%llu,\"pageFetches\":%llu}}\n",
             (counter)sequence, (counter)generation, active, admitted ? "true" : "false", records, batches,
             journal_bytes, mmap_negotiated ? "true" : "false", reads, writes, wal_bytes,
             wal_fsyncs, backing_fsyncs, boundary_files,
             (counter)namespace_work.page_reads, (counter)namespace_work.page_writes, (counter)namespace_work.cache_hits,
             (counter)namespace_work.prepared_steps, (counter)namespace_work.prepared_fullscan_steps,
-            (counter)namespace_work.aliases_returned, (counter)namespace_work.entries_ingested);
+            (counter)namespace_work.aliases_returned, (counter)namespace_work.entries_ingested, (counter)namespace_work.page_fetches);
     }
   } else if (strcmp(op, "stop") == 0) {
     pthread_mutex_lock(&state.lock);

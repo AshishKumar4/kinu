@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "journal-namespace.h"
+#include "namespace-pages.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -14,10 +15,16 @@
 
 struct journal_namespace {
   sqlite3 *db;
+  struct namespace_pages *pages;
   pthread_mutex_t lock;
   dev_t device;
   uint64_t aliases_returned;
   uint64_t entries_ingested;
+  /* No alias changed since open: an attach may still replace this namespace. */
+  bool pristine;
+  char state_path[JOURNAL_PATH_CAP];
+  struct stat root;
+  int root_fd;
   sqlite3_stmt *binding;
   sqlite3_stmt *insert_inode;
   sqlite3_stmt *insert_binding;
@@ -152,6 +159,7 @@ static int bind_inode(struct journal_namespace *space, uint64_t parent, const ch
   reset(space->find_alias);
   if (rc != 0 || previous == *id) return rc;
   rc = put_alias(space, parent, name, *id);
+  space->pristine = false;
   if (rc == 0 && previous != 0) rc = collect_inode(space, previous);
   return rc;
 }
@@ -225,7 +233,7 @@ static int admit_format(struct journal_namespace *space, const char *state_path,
   }
   sqlite3_finalize(read);
   if (rc != 0) return rc;
-  if (version == 1) { *genesis = false; return 0; }
+  if (version == 2) { *genesis = false; return 0; }
   if (version != 0) return -EPROTONOSUPPORT;
   rc = prepare(space, "SELECT name FROM sqlite_schema LIMIT 1", &read);
   if (rc == 0) {
@@ -245,28 +253,44 @@ static int admit_format(struct journal_namespace *space, const char *state_path,
   return 0;
 }
 
-int journal_namespace_open(const char *state_path, int root_fd, struct journal_namespace **out) {
-  struct journal_namespace *space = calloc(1, sizeof(*space));
-  if (space == NULL) return -ENOMEM;
-  pthread_mutex_init(&space->lock, NULL);
-  struct stat root;
-  if (fstat(root_fd, &root) != 0) { int rc = -errno; journal_namespace_close(space); return rc; }
-  space->device = root.st_dev;
+static void finalize_statements(struct journal_namespace *space) {
+  sqlite3_finalize(space->binding);
+  sqlite3_finalize(space->insert_inode);
+  sqlite3_finalize(space->insert_binding);
+  sqlite3_finalize(space->find_alias);
+  sqlite3_finalize(space->put_alias);
+  sqlite3_finalize(space->delete_alias);
+  sqlite3_finalize(space->collect_inode);
+  sqlite3_finalize(space->collect_binding);
+  sqlite3_finalize(space->paths);
+  sqlite3_finalize(space->aliases);
+  space->binding = space->insert_inode = space->insert_binding = space->find_alias = space->put_alias = NULL;
+  space->delete_alias = space->collect_inode = space->collect_binding = space->paths = space->aliases = NULL;
+}
+
+/* Open the namespace database through the page VFS. A genesis creates the
+ * schema, binds the root as id 1 and ingests the backing tree once. An
+ * attached image already carries its schema and its ids; `attached` refuses
+ * a genesis. `wipe_bindings` drops backing bindings that named another
+ * namespace's ids. */
+static int open_database(struct journal_namespace *space, bool attached, bool wipe_bindings, bool *born) {
   char path[JOURNAL_PATH_CAP];
-  int length = snprintf(path, sizeof(path), "%s/namespace.sqlite", state_path);
-  if (length < 0 || (size_t)length >= sizeof(path)) { journal_namespace_close(space); return -ENAMETOOLONG; }
-  int rc = failure(space, sqlite3_open_v2(path, &space->db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, NULL));
+  int length = snprintf(path, sizeof(path), "%s/namespace.sqlite", space->state_path);
+  if (length < 0 || (size_t)length >= sizeof(path)) return -ENAMETOOLONG;
+  int rc = failure(space, sqlite3_open_v2(path, &space->db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, namespace_pages_vfs(space->pages)));
   bool genesis = false;
-  if (rc == 0) rc = admit_format(space, state_path, &genesis);
+  if (rc == 0) rc = admit_format(space, space->state_path, &genesis);
+  *born = genesis;
+  if (rc == 0 && attached && genesis) rc = -EPROTONOSUPPORT;
   sqlite3_stmt *attach = NULL;
-  length = snprintf(path, sizeof(path), "%s/namespace-local.sqlite", state_path);
+  length = snprintf(path, sizeof(path), "%s/namespace-local.sqlite", space->state_path);
   if (length < 0 || (size_t)length >= sizeof(path)) rc = -ENAMETOOLONG;
   if (rc == 0) rc = prepare(space, "ATTACH DATABASE ? AS local", &attach);
   if (rc == 0) rc = text(space, attach, 1, path);
   if (rc == 0) rc = failure(space, sqlite3_step(attach));
   sqlite3_finalize(attach);
   if (rc == 0) rc = execute(space,
-    "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA local.journal_mode=WAL; PRAGMA local.synchronous=NORMAL; PRAGMA foreign_keys=ON;");
+    "PRAGMA page_size=4096; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA local.journal_mode=WAL; PRAGMA local.synchronous=NORMAL; PRAGMA foreign_keys=ON;");
   bool transaction = false;
   if (rc == 0) { rc = execute(space, "BEGIN IMMEDIATE"); transaction = rc == 0; }
   if (rc == 0 && genesis) rc = execute(space,
@@ -274,7 +298,8 @@ int journal_namespace_open(const char *state_path, int root_fd, struct journal_n
     "CREATE TABLE alias(parent INTEGER NOT NULL REFERENCES inode(id),name TEXT NOT NULL,id INTEGER NOT NULL REFERENCES inode(id),PRIMARY KEY(parent,name)) WITHOUT ROWID;"
     "CREATE INDEX alias_by_inode ON alias(id,parent,name);");
   if (rc == 0) rc = execute(space, "CREATE TABLE IF NOT EXISTS local.binding(backing_inode TEXT PRIMARY KEY, id INTEGER NOT NULL) WITHOUT ROWID;");
-  if (rc == 0) rc = verify_filesystem(space, &root);
+  if (rc == 0 && wipe_bindings) rc = execute(space, "DELETE FROM local.binding");
+  if (rc == 0) rc = verify_filesystem(space, &space->root);
   if (rc == 0) rc = prepare(space, "SELECT b.id FROM local.binding b JOIN inode i ON i.id=b.id WHERE b.backing_inode=?", &space->binding);
   if (rc == 0) rc = prepare(space, "INSERT INTO inode DEFAULT VALUES", &space->insert_inode);
   if (rc == 0) rc = prepare(space, "INSERT INTO local.binding VALUES(?,?) ON CONFLICT(backing_inode) DO UPDATE SET id=excluded.id", &space->insert_binding);
@@ -296,32 +321,62 @@ int journal_namespace_open(const char *state_path, int root_fd, struct journal_n
   }
   sqlite3_finalize(root_query);
   if (rc == 0 && root_id == 0 && genesis) {
-    rc = bind_inode(space, 0, "", &root, &root_id);
+    rc = bind_inode(space, 0, "", &space->root, &root_id);
     if (rc == 0 && root_id != 1) rc = -ESTALE;
-    if (rc == 0) rc = ingest(space, root_fd, root_id);
+    if (rc == 0) rc = ingest(space, space->root_fd, root_id);
   }
-  if (rc == 0) rc = store_binding(space, &root, 1);
+  if (rc == 0) rc = store_binding(space, &space->root, 1);
   if (rc == 0 && root_id != 1) rc = -ESTALE;
-  if (rc == 0 && genesis) rc = execute(space, "PRAGMA user_version=1");
+  if (rc == 0 && genesis) rc = execute(space, "PRAGMA user_version=2");
   if (transaction) rc = finish(space, rc);
+  return rc;
+}
+
+int journal_namespace_open(const char *state_path, int root_fd, struct journal_namespace **out) {
+  struct journal_namespace *space = calloc(1, sizeof(*space));
+  if (space == NULL) return -ENOMEM;
+  pthread_mutex_init(&space->lock, NULL);
+  space->root_fd = root_fd;
+  space->pristine = false;
+  if (fstat(root_fd, &space->root) != 0) { int rc = -errno; journal_namespace_close(space); return rc; }
+  space->device = space->root.st_dev;
+  if (strlen(state_path) >= sizeof(space->state_path)) { journal_namespace_close(space); return -ENAMETOOLONG; }
+  memcpy(space->state_path, state_path, strlen(state_path) + 1);
+  char path[JOURNAL_PATH_CAP];
+  int length = snprintf(path, sizeof(path), "%s/namespace.sqlite", state_path);
+  if (length < 0 || (size_t)length >= sizeof(path)) { journal_namespace_close(space); return -ENAMETOOLONG; }
+  int rc = namespace_pages_open(path, state_path, &space->pages);
+  bool genesis = false;
+  if (rc == 0) rc = open_database(space, false, false, &genesis);
   if (rc != 0) { journal_namespace_close(space); return rc; }
+  /* Only a namespace born now, holding nothing but what the backing tree
+   * showed it, may be replaced by the published one at attach. */
+  space->pristine = genesis;
   *out = space;
   return 0;
 }
 
+int journal_namespace_attach(struct journal_namespace *space, const char *socket_path, uint64_t byte_length) {
+  pthread_mutex_lock(&space->lock);
+  int rc = space->pristine ? 0 : -EEXIST;
+  if (rc == 0) {
+    finalize_statements(space);
+    rc = failure(space, sqlite3_close(space->db));
+    space->db = NULL;
+  }
+  if (rc == 0) rc = namespace_pages_attach(space->pages, socket_path, byte_length);
+  bool born = false;
+  if (rc == 0) rc = open_database(space, true, true, &born);
+  if (rc == 0) space->pristine = false;
+  pthread_mutex_unlock(&space->lock);
+  return rc;
+}
+
 void journal_namespace_close(struct journal_namespace *space) {
   if (space == NULL) return;
-  sqlite3_finalize(space->binding);
-  sqlite3_finalize(space->insert_inode);
-  sqlite3_finalize(space->insert_binding);
-  sqlite3_finalize(space->find_alias);
-  sqlite3_finalize(space->put_alias);
-  sqlite3_finalize(space->delete_alias);
-  sqlite3_finalize(space->collect_inode);
-  sqlite3_finalize(space->collect_binding);
-  sqlite3_finalize(space->paths);
-  sqlite3_finalize(space->aliases);
+  finalize_statements(space);
   if (space->db != NULL) sqlite3_close(space->db);
+  namespace_pages_close(space->pages);
   pthread_mutex_destroy(&space->lock);
   free(space);
 }
@@ -338,6 +393,7 @@ int journal_namespace_bind(struct journal_namespace *space, uint64_t parent, con
 int journal_namespace_remove(struct journal_namespace *space, uint64_t parent, const char *name) {
   pthread_mutex_lock(&space->lock);
   int rc = execute(space, "BEGIN IMMEDIATE");
+  space->pristine = false;
   if (rc == 0) {
     uint64_t id = 0;
     rc = alias_id(space, parent, name, &id);
@@ -354,6 +410,7 @@ int journal_namespace_rename(struct journal_namespace *space, uint64_t parent, c
                             uint64_t new_parent, const char *new_name, unsigned flags) {
   pthread_mutex_lock(&space->lock);
   int rc = execute(space, "BEGIN IMMEDIATE");
+  space->pristine = false;
   if (rc == 0) {
     uint64_t source = 0, destination = 0;
     rc = alias_id(space, parent, name, &source);
@@ -451,7 +508,77 @@ int journal_namespace_work(struct journal_namespace *space, struct journal_names
   }
   out->aliases_returned = space->aliases_returned;
   out->entries_ingested = space->entries_ingested;
+  out->page_fetches = namespace_pages_fetches(space->pages);
   pthread_mutex_unlock(&space->lock);
+  return rc;
+}
+
+static int capture_namespace(struct journal_namespace *space, int destination, uint64_t cut,
+                              struct namespace_snapshot *snapshot) {
+  pthread_mutex_lock(&space->lock);
+  int rc = failure(space, sqlite3_wal_checkpoint_v2(space->db, "main", SQLITE_CHECKPOINT_TRUNCATE, NULL, NULL));
+  sqlite3_stmt *count = NULL;
+  uint64_t byte_length = 0;
+  if (rc == 0) rc = prepare(space, "PRAGMA main.page_count", &count);
+  if (rc == 0) {
+    int step = sqlite3_step(count);
+    if (step != SQLITE_ROW) rc = failure(space, step);
+    else {
+      sqlite3_int64 pages = sqlite3_column_int64(count, 0);
+      if (pages <= 0 || (uint64_t)pages > UINT32_MAX) rc = -EOVERFLOW;
+      else byte_length = (uint64_t)pages * NAMESPACE_PAGE_BYTES;
+    }
+  }
+  sqlite3_finalize(count);
+  if (rc == 0) rc = namespace_pages_capture(space->pages, destination, cut, byte_length, snapshot);
+  pthread_mutex_unlock(&space->lock);
+  return rc;
+}
+
+int journal_namespace_stage(struct journal_namespace *space, const char *state_path, const char *manifest_path,
+                            uint64_t cut, uint64_t generation) {
+  char frames[JOURNAL_PATH_CAP], metadata[JOURNAL_PATH_CAP], temporary[JOURNAL_PATH_CAP];
+  int size = snprintf(frames, sizeof(frames), "%s/namespace-c%llu-g%llu-XXXXXX", state_path,
+                      (unsigned long long)cut, (unsigned long long)generation);
+  if (size < 0 || (size_t)size >= sizeof(frames)) return -ENAMETOOLONG;
+  size = snprintf(metadata, sizeof(metadata), "%s.namespace", manifest_path);
+  if (size < 0 || (size_t)size >= sizeof(metadata)) return -ENAMETOOLONG;
+  size = snprintf(temporary, sizeof(temporary), "%s.tmp", metadata);
+  if (size < 0 || (size_t)size >= sizeof(temporary)) return -ENAMETOOLONG;
+  int fd = mkostemp(frames, O_CLOEXEC);
+  if (fd < 0) return -errno;
+  struct namespace_snapshot snapshot = {0};
+  int rc = capture_namespace(space, fd, cut, &snapshot);
+  close(fd);
+  int manifest = rc == 0 ? open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600) : -1;
+  if (rc == 0 && manifest < 0) rc = -errno;
+  FILE *out = manifest < 0 ? NULL : fdopen(manifest, "w");
+  if (manifest >= 0 && out == NULL) { rc = -errno; close(manifest); }
+  if (out != NULL) {
+    fprintf(out, "{\"format\":\"sqlite-inodes/v2\",\"cut\":\"%llu\",\"generation\":\"%llu\",\"revision\":\"%llu\",\"pageBytes\":%u,\"byteLength\":\"%llu\",\"file\":",
+            (unsigned long long)cut, (unsigned long long)generation, (unsigned long long)snapshot.revision,
+            NAMESPACE_PAGE_BYTES, (unsigned long long)snapshot.byte_length);
+    journal_json_string(out, frames);
+    fputs(",\"pages\":[", out);
+    for (size_t index = 0; index < snapshot.count; index++) {
+      const struct namespace_page *page = &snapshot.pages[index];
+      fprintf(out, "%s{\"number\":%u,\"offset\":\"%llu\",\"sha256\":\"%s\"}", index == 0 ? "" : ",",
+              page->number, (unsigned long long)page->offset, page->sha256);
+    }
+    fputs("]}\n", out);
+    if (ferror(out) != 0) rc = -EIO;
+    if (rc == 0 && fflush(out) != 0) rc = -errno;
+    if (rc == 0 && fsync(manifest) != 0) rc = -errno;
+    fclose(out);
+  }
+  if (rc == 0 && rename(temporary, metadata) != 0) rc = -errno;
+  if (rc == 0) {
+    int directory = open(state_path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (directory < 0) rc = -errno;
+    else { if (fsync(directory) != 0) rc = -errno; close(directory); }
+  }
+  namespace_snapshot_release(&snapshot);
+  if (rc != 0) { unlink(temporary); unlink(frames); }
   return rc;
 }
 
@@ -525,9 +652,20 @@ static int reconcile_path(struct journal_namespace *space, int root_fd, const ch
   return rc;
 }
 
+int journal_namespace_acknowledge(struct journal_namespace *space, uint64_t cut) {
+  pthread_mutex_lock(&space->lock);
+  uint64_t captured_cut = 0, revision = 0;
+  int rc = namespace_pages_captured(space->pages, &captured_cut, &revision) && captured_cut == cut
+    ? namespace_pages_acknowledge(space->pages, cut, revision)
+    : -ESTALE;
+  pthread_mutex_unlock(&space->lock);
+  return rc;
+}
+
 int journal_namespace_reconcile(struct journal_namespace *space, int root_fd, const char *path) {
   pthread_mutex_lock(&space->lock);
   int rc = execute(space, "BEGIN IMMEDIATE");
+  space->pristine = false;
   if (rc == 0) rc = finish(space, reconcile_path(space, root_fd, path));
   pthread_mutex_unlock(&space->lock);
   return rc;

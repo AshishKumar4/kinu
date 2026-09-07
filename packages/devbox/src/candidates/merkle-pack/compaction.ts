@@ -21,7 +21,7 @@
  * a general amortized bound.
  */
 
-import type { CompactionWork, ObjectRangeRef } from '../../durability/contracts';
+import type { CompactionWork, NamespaceRef, ObjectRangeRef } from '../../durability/contracts';
 
 import { MerklePackError } from './errors';
 import { PackWriter } from './pack-layout';
@@ -30,17 +30,21 @@ import type { BuiltPack, ResolvePack, Slot } from './pack-layout';
 import type { MerkleV2View, RecordV2 } from './view-v2';
 import { encodeNodeV2, extentPagesV2, hashNodeV2Bytes } from './wire';
 import type { DirEntryV2, ExtentPageRefV2, ExtentV2, NodeV2, RecordRefV2 } from './wire';
+import type { NamespacePageMap } from './namespace-map';
 
 export interface CompactionInput {
   readonly view: MerkleV2View;
   /** Packs selected for relocation from the retained inventory. */
   readonly candidates: ReadonlySet<string>;
   readonly maxPackBytes: number;
+  /** The parent's namespace, whose pages may share candidate packs. */
+  readonly namespace: { readonly map: NamespacePageMap; readonly byteLength: number } | null;
 }
 
 export interface CompactionBuild {
   readonly packs: readonly BuiltPack[];
   readonly rootObject: ObjectRangeRef;
+  readonly namespace: NamespaceRef | null;
   readonly work: CompactionWork;
   /** The candidate packs this build really emptied, sorted. */
   readonly retired: readonly string[];
@@ -197,6 +201,9 @@ export async function compactMerklePacks(input: CompactionInput): Promise<Compac
   };
 
   const root = await walk('');
+  const namespace = input.namespace === null
+    ? null
+    : await input.namespace.map.relocate(writer, input.candidates, input.namespace.byteLength);
   writer.finish();
   const rootRef = root.ref((slot) => writer.keyOf(slot));
   return {
@@ -207,6 +214,7 @@ export async function compactMerklePacks(input: CompactionInput): Promise<Compac
       byteLength: String(rootRef.length),
       sha256: rootRef.sha256,
     },
+    namespace: namespace === null ? null : { root: namespace.root((slot) => writer.keyOf(slot)), byteLength: String(namespace.byteLength) },
     work: { packsRead: touched.size, bytesRewritten, nodesRewritten },
     retired: [...input.candidates].sort(),
   };

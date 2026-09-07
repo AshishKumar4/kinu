@@ -53,6 +53,7 @@ const ControlResponseSchema = v.strictObject({
   baseRoot: v.optional(Digest),
   sealWork: v.optional(SealWorkSchema),
   boundaryFiles: v.optional(SafeNumber),
+  namespaceAdopted: v.optional(v.boolean()),
 });
 
 type ControlResponse = v.InferOutput<typeof ControlResponseSchema>;
@@ -67,13 +68,15 @@ export interface JournalBase {
 /** One line on the daemon's AF_UNIX control socket; `id` must echo back. */
 interface ControlRequest {
   readonly id: string;
-  readonly op: 'base' | 'fence' | 'boundaries';
+  readonly op: 'base' | 'fence' | 'boundaries' | 'namespace';
   readonly cut?: string;
   readonly generation?: string;
   readonly root?: string;
   readonly maxChunkBytes?: number;
   readonly files?: readonly { readonly ino: string; readonly path: string; readonly size: number; readonly boundaries: readonly number[] }[];
   readonly removed?: readonly string[];
+  readonly socket?: string;
+  readonly byteLength?: string;
 }
 
 export interface JournalFence {
@@ -161,6 +164,23 @@ export class JournalDaemonClient {
       throw new Error(`journal merged ${response.boundaryFiles} boundary files, sent ${handback.files.length}`);
     }
     return response.boundaryFiles;
+  }
+
+  /**
+   * Tell the daemon where the published namespace is served, page by page.
+   * Answers whether the daemon adopted it: a daemon that already changed an
+   * alias keeps its own namespace, and the caller decides what that means.
+   */
+  async attachNamespace(source: { readonly socket: string; readonly byteLength: number } | null, signal?: AbortSignal): Promise<boolean> {
+    const id = crypto.randomUUID();
+    const response = await request(this.socket, source === null
+      ? { id, op: 'namespace' }
+      : { id, op: 'namespace', socket: source.socket, byteLength: String(source.byteLength) }, signal);
+    if (response.id !== id) throw new Error('journal control response id mismatch');
+    if (!response.ok || response.namespaceAdopted === undefined) {
+      throw new Error(`journal namespace attach failed: ${response.error ?? 'malformed response'}`);
+    }
+    return response.namespaceAdopted;
   }
 
   async fence(signal?: AbortSignal): Promise<JournalFence> {

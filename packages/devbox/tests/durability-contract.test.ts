@@ -392,6 +392,7 @@ const envelopeV2: RootEnvelopeV2 = {
   parentRootId: null,
   cut: capturedCut,
   rootObject: { key: pack.key, byteOffset: '128', byteLength: '256', sha256: SHA },
+  namespace: { root: { key: pack.key, byteOffset: '512', byteLength: '86', sha256: 'd'.repeat(64) }, byteLength: '8192' },
   added: [pack],
   retired: [],
   ledger: ledgerObject,
@@ -448,6 +449,7 @@ describe('durability v2 wire contracts', () => {
       'added',
       'retired',
       'ledger',
+      'namespace',
     ]);
   });
 

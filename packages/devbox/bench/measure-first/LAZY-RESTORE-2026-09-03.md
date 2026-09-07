@@ -495,12 +495,9 @@ one inactive narrowed-matrix variant. Namespace format genesis is explicit.
 A pre-existing WAL without this namespace format exits 3 with
 `namespace.open_failed code=-116`; it requires an environment reset.
 
-These are local index measurements. Namespace pages are not yet exported
-with the published head or fetched through a lazy SQLite VFS. The earlier
-one-read attach figure opens a Merkle root while the real backing tree
-already exists. It does not prove a cold mount on a replacement container.
-Fence-coupled namespace export and lazy remote page lookup remain admission
-requirements. No cloud pilot or storage promotion follows from this step.
+These were local index measurements. The two sections below record what
+the same day added: namespace pages in every head, and a replacement
+daemon that serves names from those pages without reading them whole.
 
 ## Immutable daemon selection, 2026-09-07
 
@@ -519,7 +516,78 @@ It now resolves every written logical inode through the index. The same
 real-mount scenario covers single-link and hardlink updates, ancestor
 rename and restart. Both daemon suites pass with immutable image IDs.
 
+## Namespace pages in the head, 2026-09-07
 
+The daemon opens `namespace.sqlite` through a SQLite VFS
+(`namespace-pages.c`) that wraps the platform VFS. The VFS records every
+main-database page write in a sealed local journal before the write lands.
+It reads no SQL and no WAL frames. At the fence, after a checkpoint, the
+daemon copies the pages written since the last acknowledged capture into
+an immutable frame file beside the delta manifest, with one SHA-256 per
+page. The sidecar verifies each page against that digest before it packs
+it. A capture that is not acknowledged keeps its pages dirty, so a later
+capture carries them again.
 
+The head names the namespace as `{ root, byteLength }`. `root` is a page
+map (`namespace-map.ts`): a radix tree over page numbers with fanout 64.
+Every node is written at 5,000 bytes whatever its fill, so one update
+costs the same bytes at any fill and a cost change marks a depth change.
+A lookup reads one node per level and then the page. An update writes one
+path. Compaction copies the pages and nodes that live in a candidate pack
+and keeps the rest by reference; the first version of that copy treated
+a level-0 node as a page and left pages behind, which the modeled test
+`a replacement resolves names through pages that compaction moved and GC
+reclaimed` now reproduces and the relocation test in
+`namespace-map.test.ts` pins.
 
+Measured with the modeled store on 2026-09-07, 300,000 pages, one page
+changed: the update writes 1 page and 4 nodes; a cold lookup of the
+changed page reads 5 objects and 24,096 bytes; a second lookup that shares
+the two upper levels reads 3 objects.
+
+The real-mount run reads the first generation's namespace image only
+after later writes, an ancestor rename and a daemon restart. The image
+resolves `src/lib/a.ts` to the inode id the first head's record carries,
+and does not name `src/after-kill.ts`. The first image was 9 pages,
+36,864 bytes, for a 314-entry tree.
+
+## A replacement daemon attaches to the head's namespace, 2026-09-07
+
+A daemon born over a restored tree ingests it once, as before, and stays
+replaceable until it changes an alias. The sidecar's attach then names the
+head's namespace: `{ socket, byteLength }` on the control socket, where
+`socket` is a page server the sidecar keeps for the daemon's lifetime.
+The daemon drops its own database, creates a sparse file of the image's
+length with a page-presence map beside it, and reopens SQLite through the
+same VFS. A read of an absent page fetches it over the socket (`page N`,
+then `ok` and 4,096 bytes), lands it through the inner file, and marks it
+present. A restart continues from the presence map. A daemon that already
+changed an alias answers `namespaceAdopted: false` and keeps its own.
+
+Measured on 2026-09-07 with the compiled daemon modules
+(`namespace-attach-probe.c`, pages served by a thread from a copy of the
+built image):
+
+| Files | Image bytes | Attach fetches | Lookup fetches (3 names) | Lookup prepared steps | Full-scan steps |
+|---:|---:|---:|---:|---:|---:|
+| 1,000 | 69,632 | 3 | 2 | 36 | 0 |
+| 50,000 | 2,580,480 | 3 | 3 | 36 | 0 |
+
+The real-mount run then replaces the container: a blank disk, the head's
+tree laid on it, a daemon born over it, and a sidecar attach. Measured on
+2026-09-07: the attach fetched 2 pages, one `lstat` of a three-component
+path fetched 3 pages, and a write through the one name the replacement
+ever looked up reached its twin name in the next head, with the same
+inode id as the head before the replacement. 41 checks pass, over the
+memory store and over the workerd R2 bucket.
+
+The conformance battery's merkle-pack column is green except cell 6.21,
+which is on the bug list with its measured reason: at 10,000 files the
+page map has two levels and at 1,000 it has one, so a create rewrites one
+more 5,000-byte node per dirty page. That is the cost of a global index
+with a bounded node size; it steps at about 64 and 4,096 pages.
+
+Not measured: a cold attach against R2 from a fresh region, and namespace
+page fetch latency over the real socket under load. No cloud pilot or
+storage promotion follows from this step.
 

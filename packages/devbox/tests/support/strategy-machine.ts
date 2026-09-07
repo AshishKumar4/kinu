@@ -3624,6 +3624,8 @@ function merklePackV2Arm(): ConformanceArm {
           },
           delta: async (fence) => await this.daemon.delta(fence),
           boundaries: async (handback) => await this.daemon.boundaries(handback),
+          namespace: async (fence) => await this.daemon.namespace(fence),
+          attachNamespace: async (source) => await this.daemon.attachNamespace(source),
         },
         now: () => clock,
       });

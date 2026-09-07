@@ -1040,6 +1040,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - The devbox daemon uses inode-based low-level FUSE operations; a 2026-09-07 real-mount probe preserved an open file renamed to a caller-authored `.fuse_hidden` name that the prior heuristic omitted from its fence.
 - The devbox daemon persists logical inode aliases; on 2026-09-07 a real-mount regression preserved a hardlink update after ancestor rename, daemon restart and unlink of the only observed name.
 - Devbox daemon tests run immutable image IDs; a 2026-09-07 shared-tag collision selected an older binary, and the corrected run also fixed single-link write loss across ancestor rename.
+- Every devbox head carries its namespace as a page map over the daemon's SQLite image, exported at the fence through a write-tracking VFS; a replacement daemon attaches to it page by page. Measured 2026-09-07: 3 page fetches to attach and 2 to 3 for one lookup at 1,000 and 50,000 files; on the real mount, a write through the only name a replacement saw reached its twin name with the same inode id.
 
 ## [0.2.0] - 2026-08-07
 

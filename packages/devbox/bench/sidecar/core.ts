@@ -43,6 +43,8 @@ import type { MerkleDeltaBuild } from '../../src/candidates/merkle-pack/build-v2
 import { compactMerklePacks } from '../../src/candidates/merkle-pack/compaction';
 import { mergeSealWork } from '../../src/candidates/merkle-pack/delta';
 import type { BoundaryHandback, BoundaryRow } from '../../src/candidates/merkle-pack/delta';
+import { NamespacePageMap } from '../../src/candidates/merkle-pack/namespace-map';
+import type { NamespaceImage, NamespaceSource } from '../../src/candidates/merkle-pack/namespace-map';
 import {
   compactionCandidates,
   deletableRetiredPacks,
@@ -97,6 +99,13 @@ export interface SidecarDaemon {
   delta(fence: JournalFence): Promise<JournalDelta>;
   /** Merge the boundaries of the files a published generation rewrote. */
   boundaries(handback: BoundaryHandback): Promise<number>;
+  /** The namespace pages the same fence captured, or null for a daemon that
+   *  keeps no persisted namespace. */
+  namespace(fence: JournalFence): Promise<NamespaceImage | null>;
+  /** The published namespace an attaching daemon serves names from, page by
+   *  page; null when the head carries none. A daemon that already holds a
+   *  namespace of its own keeps it. */
+  attachNamespace(source: NamespaceSource | null): Promise<void>;
 }
 
 /**
@@ -270,6 +279,14 @@ export class SidecarCore {
       maxChunkBytes: this.#chunkMax(),
       files: [],
       removed: [],
+    });
+    // The namespace the head carries, page by page: a replacement daemon
+    // serves names from it and never reads it whole.
+    const namespace = envelope.namespace;
+    const pages = namespace === null ? null : this.#namespaceMap(namespace.root, 'attach');
+    await this.#ports.daemon.attachNamespace(namespace === null || pages === null ? null : {
+      byteLength: Number(namespace.byteLength),
+      readPage: (number) => pages.readPage(number),
     });
     // A LAZY RESTORE READS THROUGH THE CURRENT VIEW, resolved per call, so
     // the restore a container adopted before this attach keeps serving the
@@ -509,12 +526,22 @@ export class SidecarCore {
       }));
       parentLedger = await this.#readLedger(head.envelope.ledger, 'seal');
     }
-    const build = await buildMerkleDelta(manifest, {
-      stage: delta.stage,
-      parent,
-      chunkParams: this.#ports.chunkParams,
-      maxPackBytes: this.#ports.maxPackBytes,
-    });
+    const image = await this.#ports.daemon.namespace(fence);
+    let build: MerkleDeltaBuild;
+    try {
+      build = await buildMerkleDelta(manifest, {
+        stage: delta.stage,
+        parent,
+        chunkParams: this.#ports.chunkParams,
+        maxPackBytes: this.#ports.maxPackBytes,
+        namespace: image === null ? null : {
+          map: this.#namespaceMap(head?.envelope.namespace?.root ?? null, 'seal'),
+          image,
+        },
+      });
+    } finally {
+      image?.close();
+    }
     const generation = String(BigInt(head?.envelope.generation ?? '0') + 1n);
     const staged = await this.#stagePayload({
       build,
@@ -642,6 +669,10 @@ export class SidecarCore {
       view,
       candidates: keys,
       maxPackBytes: this.#ports.maxPackBytes ?? 32 * 1024 * 1024,
+      namespace: head.envelope.namespace === null ? null : {
+        map: this.#namespaceMap(head.envelope.namespace.root, 'compaction'),
+        byteLength: Number(head.envelope.namespace.byteLength),
+      },
     });
     if (built === null) return false;
     const authority = this.#ports.head;
@@ -667,8 +698,10 @@ export class SidecarCore {
       build: {
         packs: built.packs,
         rootObject: built.rootObject,
+        namespace: built.namespace,
         seal: { bytesChunked: 0, chunksHashed: 0, nodesRewritten: built.work.nodesRewritten, wholeFiles: 0 },
         dirPages: { written: 0, reused: 0 },
+        namespacePages: { pages: 0, nodes: 0 },
         boundaries: [],
         removed: [],
         replacedBytes: new Map(),
@@ -786,6 +819,11 @@ export class SidecarCore {
     };
   }
 
+  /** The parent's namespace map, read one node at a time through the payload store. */
+  #namespaceMap(root: ObjectRangeRef | null, operationId: string): NamespacePageMap {
+    return new NamespacePageMap(root, (ref) => this.#readRange(ref, operationId));
+  }
+
   async #readRange(ref: ObjectRangeRef, operationId: string): Promise<Uint8Array> {
     const identity = this.#identity(operationId);
     return await readCandidateRange(
@@ -870,6 +908,7 @@ export class SidecarCore {
         capturedCut: input.capturedCut,
         generation: input.generation,
         rootObject: input.build.rootObject,
+        namespace: input.build.namespace,
         packs: uploads,
         ledger: { ref: ledger.ref, bytes: ledger.bytes, md5: md5Of(ledger.bytes) },
         retired: next.retired,

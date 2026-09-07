@@ -73,7 +73,7 @@ export const KNOWN_RED: readonly KnownRed[] = [
   {
     arm: 'merkle-pack',
     cell: '6.21',
-    since: '2026-09-05',
-    reason: "64 KiB backup bytesPut 5139 at 10,000 files against 4505 at 1,000 (12.3% over the 10% bar, byte-identical across reruns): the v2 pack ledger is O(#packs) by design (contracts.ts PackLedgerSchema) and 40 MiB is two 32 MiB packs where 4 MiB is one; restore ops hold at 3 and 3",
+    since: '2026-09-07',
+    reason: "64 KiB backup bytesPut 23629 at 10,000 files against 17985 at 1,000: the namespace page map is a radix tree of fixed 5000-byte nodes with fanout 64, and a create dirties the counter page and one alias page; at 1,000 files the map is one level and at 10,000 it is two, so the create rewrites one more node per dirty page (namespace-map.ts NODE_BYTES); the earlier 12.3% ledger gap sits inside the bar since the namespace pages joined the head",
   },
 ];

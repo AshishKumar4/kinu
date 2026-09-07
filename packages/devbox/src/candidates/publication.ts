@@ -29,6 +29,7 @@ import {
   DURABLE_ROOT_FORMATS,
   HeadPointerV1Schema,
   ImmutableObjectRefSchema,
+  NamespaceRefSchema,
   ObjectRangeRefSchema,
   ObjectReceiptSchema,
   OperationRecordSchema,
@@ -41,6 +42,7 @@ import type {
   CapturedCut,
   HeadPointerV1,
   ImmutableObjectRef,
+  NamespaceRef,
   ObjectRangeRef,
   ObjectReceipt,
   OperationRecord,
@@ -916,6 +918,7 @@ export const CandidatePublicationDraftV2Schema = v.strictObject({
   generation: v.pipe(v.string(), v.regex(/^\d+$/)),
   /** The root record: a range inside one of the packs below. */
   rootObject: ObjectRangeRefSchema,
+  namespace: v.nullable(NamespaceRefSchema),
   /** The packs this generation PUT, in packing order, with their receipts. */
   added: v.array(ImmutableObjectRefSchema),
   addedReceipts: v.array(ObjectReceiptSchema),
@@ -1047,6 +1050,7 @@ export interface CandidateV2PublicationPlan {
   readonly capturedCut: CapturedCut;
   readonly generation: string;
   readonly rootObject: ObjectRangeRef;
+  readonly namespace: NamespaceRef | null;
   readonly packs: readonly CandidatePackUpload[];
   readonly ledger: CandidatePackUpload;
   readonly retired: readonly string[];
@@ -1099,6 +1103,7 @@ export async function stageCandidatePayloadV2(
     capturedCut: plan.capturedCut,
     generation: plan.generation,
     rootObject: plan.rootObject,
+    namespace: plan.namespace,
     added,
     addedReceipts,
     ledger: plan.ledger.ref,
@@ -1199,6 +1204,7 @@ export async function finalizeCandidatePayloadV2(
     parentRootId: draft.expectedParentRootId,
     cut: draft.capturedCut,
     rootObject: draft.rootObject,
+    namespace: draft.namespace,
     added: draft.added,
     retired: draft.retired,
     ledger: draft.ledger,
