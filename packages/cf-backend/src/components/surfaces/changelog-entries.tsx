@@ -27,7 +27,7 @@ import type { Rpc } from "@/lib/protocol";
 import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import { DiffLines, timeAgo } from "./shared";
+import { DiffLines, timeAgo, CodeBlock } from "./shared";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
 export interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
@@ -340,9 +340,7 @@ function StagedSkillDecision(
             </div>
           )}
           {/* The WHOLE file. No clamp, deliberately: see the note above. */}
-          <pre className="max-h-96 overflow-auto px-3 py-2 text-[10.5px] font-mono leading-relaxed whitespace-pre-wrap break-words p-text-2">
-            {staged.value.source}
-          </pre>
+          <div className="max-h-96 overflow-auto px-3"><CodeBlock className={`language-${staged.value.target.split('.').at(-1) ?? ''}`}>{staged.value.source}</CodeBlock></div>
           <div className="flex items-center gap-2 px-3 py-2 border-t p-border">
             <Button size="sm" disabled={busy || !staged.value.intact}
               onClick={() => decide("approve", staged.value.digest)}>

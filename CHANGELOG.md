@@ -592,6 +592,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- Sidebar ages align with the row's right edge. Fenced code and source previews show syntax colors and retain copy and scrolling.
 - The slate first-run gate requires an HTTP preview that answers the authored request. An unavailable preview fails both checks.
 - Model selection loads connected account providers before normalizing their identifiers, so a catalog provider is not stored under the default provider.
 - A head at the recursion limit can finish its own tool work. Exhausted split depth blocks new children, not the current head.
