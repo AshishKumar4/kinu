@@ -1362,11 +1362,11 @@ async function writePathCosts(): Promise<void> {
         written.writes >= rounds && written.walFsyncs === 0 && written.backingFsyncs === 0,
         `writes=${written.writes} walFsyncs=${written.walFsyncs} backingFsyncs=${written.backingFsyncs}`);
 
-      /* One W record per write, carrying the inode, the offset and the length,
-       * and no RESULT for any of them: a write is one record, not two. */
+      /* One W record per write, carrying the inode, the offset, the length and
+       * the link count, and no RESULT for any of them: a write is one record. */
       const records = parseJournal(await readFile(space.journal));
       const writes = records.filter((record) => record.kind === 'W' && record.path === '/hot.bin');
-      const addressed = writes.filter((record) => /^[1-9]\d* \d+ \d+$/.test(record.aux));
+      const addressed = writes.filter((record) => /^[1-9]\d* \d+ \d+ [1-9]\d*$/.test(record.aux));
       const results = records.filter((record) => record.op === 'write' && record.kind === 'RESULT');
       assert(checks, 'one-w-record-per-write',
         writes.length >= rounds && addressed.length === writes.length && results.length === 0,

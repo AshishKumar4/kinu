@@ -40,6 +40,10 @@
 struct journal_dirty_file {
   uint64_t ino;
   uint64_t size;
+  /* The largest link count a write to this inode saw. Above one, a fence
+   * whose touched names no longer hold the inode walks the tree for the
+   * names that do. */
+  uint64_t nlink;
   char *path; /* the path a write named, owned */
   uint64_t *offsets; /* sorted, disjoint, owned */
   uint64_t *lengths; /* parallel to offsets, owned */
@@ -60,7 +64,7 @@ void journal_dirty_release(struct journal_dirty_set *set);
  * absent.  `path` is copied.  Returns 0 or -ENOMEM.  Deterministic: the same
  * multiset of writes yields the same maximal ranges in the same order. */
 int journal_dirty_add(struct journal_dirty_set *set, uint64_t ino, const char *path, uint64_t offset,
-                     uint64_t length);
+                     uint64_t length, uint64_t nlink);
 
 /* The file whose ino matches, or NULL. */
 struct journal_dirty_file *journal_dirty_find(struct journal_dirty_set *set, uint64_t ino);
@@ -179,8 +183,8 @@ bool journal_parse_counter(const char *text, uint64_t *out);
  * escaping is escaped the same way on both. */
 void journal_json_string(FILE *out, const char *text);
 
-/* Formats the aux field of a W record: "<ino> <offset> <length>". */
-int journal_write_record(char *out, size_t cap, uint64_t ino, uint64_t offset, uint64_t length);
+/* Formats the aux field of a W record: "<ino> <offset> <length> <nlink>". */
+int journal_write_record(char *out, size_t cap, uint64_t ino, uint64_t offset, uint64_t length, uint64_t nlink);
 
 /* ----------------------------------------------------------------- fence --- */
 
