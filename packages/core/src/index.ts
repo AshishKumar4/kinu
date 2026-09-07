@@ -1348,6 +1348,9 @@ export {
 // Utils
 export { nanoid } from './utils/nanoid';
 export { hmacSha256Hex, timingSafeEqual } from './utils/crypto';
+// One POSIX quoting rule for every command this system composes, on either
+// backend — the shells the executors talk to are the same shells.
+export { shellQuote } from './utils/shell';
 // Confidence intervals — every score this system reports travels with one.
 export {
   wilsonInterval, scoreInterval, lossInterval, formatScoreInterval, seededRandom,

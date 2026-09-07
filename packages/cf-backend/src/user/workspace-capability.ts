@@ -33,9 +33,9 @@
  * through code that presents a workspace token, and is therefore attenuated
  * no matter which tool gate someone forgets.
  */
-import { nanoid, type SqlExec } from '@kinu.run/core';
+import { hmacSha256Hex, nanoid, timingSafeEqual, type SqlExec } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
-import { hmacSha256Hex, sha256Hex, timingSafeEqual } from '../lib/crypto';
+import { sha256Hex } from '../lib/crypto';
 import * as v from 'valibot';
 
 /** What a capability requires of its caller.

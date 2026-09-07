@@ -40,7 +40,7 @@
  */
 
 import { previewHostSuffix } from './lib/preview-origin';
-import { timingSafeEqual } from './lib/crypto';
+import { timingSafeEqual } from '@kinu.run/core';
 import {
   buildWorkspacePreviewHost, parseWorkspacePreviewLabel, workspacePreviewNameRefusal,
 } from './lib/nimbus-preview-host';
