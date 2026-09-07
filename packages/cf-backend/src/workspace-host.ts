@@ -39,7 +39,6 @@
  * run as resident Fabric processes; npm dev servers use the sandbox container.
  */
 
-import * as v from 'valibot';
 import { createWorkspace, nextWorkspaceGeneration } from '@kinu.run/core/workspace';
 import type { SupervisorOpResult, WorkspaceBundle, WorkspaceSession } from '@kinu.run/core/workspace';
 import { decodeJsonValue } from '@kinu.run/core';
@@ -56,6 +55,7 @@ import type { RouteableFacetTarget } from '@nimbus-sh/core/runtime/os-contracts.
 import {
   HOST_FABRIC_COMPOSITION,
   nimbusProgrammatic,
+  readPortExposure,
   type ProgrammaticHost,
 } from './nimbus-programmatic';
 
@@ -234,18 +234,6 @@ const RECYCLED_PREVIEW = {
   }),
 } as const;
 
-/** The existing Nimbus exposure record. A logical owner scopes embedded apps;
- * ordinary explicitly exposed workspace ports retain null, port-scoped ownership. */
-const WorkspacePortExposureSchema = v.object({
-  capability: v.pipe(v.string(), v.regex(/^[a-f0-9]{24}$/)),
-  owner: v.nullable(v.string()),
-});
-
-async function readWorkspacePortCapability(ctx: DurableObjectState, port: number) {
-  const stored = await ctx.storage.get(`nimbus_preview_capability:${Number(port)}`);
-  const parsed = v.safeParse(WorkspacePortExposureSchema, stored);
-  return parsed.success ? parsed.output : null;
-}
 
 /**
  * Compose the workspace this Durable Object owns.
@@ -330,7 +318,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       if (owner !== undefined) portOwners.set(pid, owner);
       portRegistry.bindFacetStub(pid, target);
       portRegistry.register(port, pid);
-      const retained = await readWorkspacePortCapability(deps.ctx, port);
+      const retained = await readPortExposure(deps.ctx, port);
       if (retained !== null && retained.owner === (owner ?? null) && portRegistry.get(port)?.pid === pid) {
         portRegistry.restoreCapability(port, retained.capability);
       }
@@ -353,7 +341,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // recycled, and the agent has to re-expose the port before this link
         // resolves again. A bare 404 would hide that from both the visitor and
         // the operator; this names it.
-        const persisted = await readWorkspacePortCapability(deps.ctx, port);
+        const persisted = await readPortExposure(deps.ctx, port);
         if (persisted !== null && persisted.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) === handle) {
           return new Response(RECYCLED_PREVIEW.body, {
             status: RECYCLED_PREVIEW.status,

@@ -119,23 +119,39 @@ index e6f176cfa6467893b4d4afa7d1e9fe3f9fefd46c..230d649e4598eeefb49c3b9d99a553f6
          // ── Lazy fetch-proxy ────────────────────────────────────────────
          // The fetch-proxy is a singleton dynamic worker (LOADER.load) that
 diff --git a/dist/session/port-capability.d.ts b/dist/session/port-capability.d.ts
-index 34667e6ef7324ae9c9d9304e0412f3522070192c..0b30cbd27bf59eed179fcdb4b621700e704aab61 100644
+index 34667e6ef7324ae9c9d9304e0412f3522070192c..6eff8cc29c0c7bba774514da6607372a77354be4 100644
 --- a/dist/session/port-capability.d.ts
 +++ b/dist/session/port-capability.d.ts
-@@ -26,6 +26,8 @@ export interface PortCapabilityHost {
+@@ -26,7 +26,15 @@ export interface PortCapabilityHost {
          };
      };
      portRegistry: PortRegistry;
-+    /** Stable logical owner for an embedded process; null retains ordinary port-scoped exposure. */
++    /** Logical owner supplied by an embedder; null retains ordinary port-scoped exposure. */
 +    portCapabilityOwner?(port: number): string | null;
  }
++export interface PortExposure {
++    readonly capability: string;
++    readonly owner: string | null;
++}
++/** Read retained exposure metadata without starting a session or restoring a listener. */
++export declare function readPortExposure(ctx: PortCapabilityHost['ctx'], port: number): Promise<PortExposure | null>;
  export declare function readPortCapability(self: PortCapabilityHost, port: number): Promise<string | null>;
  /**
+  * Re-adopt the persisted capability into whatever the registry holds now.
+diff --git a/dist/session/port-capability.d.ts.map b/dist/session/port-capability.d.ts.map
+index 174faf4f8b8d0bc04bfc1821c66c9e1a80664747..00054e2447a48f2ca76a4445ab18bc31c436e770 100644
+--- a/dist/session/port-capability.d.ts.map
++++ b/dist/session/port-capability.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"port-capability.d.ts","sourceRoot":"","sources":["../../src/session/port-capability.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;GAgBG;AAGH,OAAO,KAAK,EAAE,YAAY,EAAE,MAAM,0CAA0C,CAAC;AAG7E,2DAA2D;AAC3D,MAAM,WAAW,kBAAkB;IACjC,GAAG,EAAE;QACH,OAAO,EAAE;YACP,GAAG,CAAC,GAAG,EAAE,MAAM,GAAG,OAAO,CAAC,OAAO,CAAC,CAAC;YACnC,GAAG,CAAC,GAAG,EAAE,MAAM,EAAE,KAAK,EAAE,OAAO,GAAG,OAAO,CAAC,IAAI,CAAC,CAAC;YAChD,MAAM,CAAC,GAAG,EAAE,MAAM,GAAG,OAAO,CAAC,OAAO,CAAC,CAAC;SACvC,CAAC;KACH,CAAC;IACF,YAAY,EAAE,YAAY,CAAC;CAC5B;AASD,wBAAsB,kBAAkB,CACtC,IAAI,EAAE,kBAAkB,EACxB,IAAI,EAAE,MAAM,GACX,OAAO,CAAC,MAAM,GAAG,IAAI,CAAC,CAGxB;AAED;;;GAGG;AACH,wBAAsB,qBAAqB,CACzC,IAAI,EAAE,kBAAkB,EACxB,IAAI,EAAE,MAAM,GACX,OAAO,CAAC,MAAM,GAAG,IAAI,CAAC,CAIxB;AAED,wBAAsB,qBAAqB,CACzC,IAAI,EAAE,kBAAkB,EACxB,IAAI,EAAE,MAAM,EACZ,UAAU,EAAE,MAAM,GACjB,OAAO,CAAC,IAAI,CAAC,CAEf;AAED;;;;GAIG;AACH,wBAAsB,mBAAmB,CAAC,IAAI,EAAE,kBAAkB,EAAE,IAAI,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC,CAE/F"}
+\ No newline at end of file
++{"version":3,"file":"port-capability.d.ts","sourceRoot":"","sources":["../../src/session/port-capability.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;GAgBG;AAGH,OAAO,KAAK,EAAE,YAAY,EAAE,MAAM,0CAA0C,CAAC;AAG7E,2DAA2D;AAC3D,MAAM,WAAW,kBAAkB;IACjC,GAAG,EAAE;QACH,OAAO,EAAE;YACP,GAAG,CAAC,GAAG,EAAE,MAAM,GAAG,OAAO,CAAC,OAAO,CAAC,CAAC;YACnC,GAAG,CAAC,GAAG,EAAE,MAAM,EAAE,KAAK,EAAE,OAAO,GAAG,OAAO,CAAC,IAAI,CAAC,CAAC;YAChD,MAAM,CAAC,GAAG,EAAE,MAAM,GAAG,OAAO,CAAC,OAAO,CAAC,CAAC;SACvC,CAAC;KACH,CAAC;IACF,YAAY,EAAE,YAAY,CAAC;IAC3B,yFAAyF;IACzF,mBAAmB,CAAC,CAAC,IAAI,EAAE,MAAM,GAAG,MAAM,GAAG,IAAI,CAAC;CACnD;AAKD,MAAM,WAAW,YAAY;IAC3B,QAAQ,CAAC,UAAU,EAAE,MAAM,CAAC;IAC5B,QAAQ,CAAC,KAAK,EAAE,MAAM,GAAG,IAAI,CAAC;CAC/B;AAUD,0FAA0F;AAC1F,wBAAsB,gBAAgB,CAAC,GAAG,EAAE,kBAAkB,CAAC,KAAK,CAAC,EAAE,IAAI,EAAE,MAAM,GAAG,OAAO,CAAC,YAAY,GAAG,IAAI,CAAC,CAGjH;AAED,wBAAsB,kBAAkB,CACtC,IAAI,EAAE,kBAAkB,EACxB,IAAI,EAAE,MAAM,GACX,OAAO,CAAC,MAAM,GAAG,IAAI,CAAC,CAGxB;AAED;;;GAGG;AACH,wBAAsB,qBAAqB,CACzC,IAAI,EAAE,kBAAkB,EACxB,IAAI,EAAE,MAAM,GACX,OAAO,CAAC,MAAM,GAAG,IAAI,CAAC,CAIxB;AAED,wBAAsB,qBAAqB,CACzC,IAAI,EAAE,kBAAkB,EACxB,IAAI,EAAE,MAAM,EACZ,UAAU,EAAE,MAAM,GACjB,OAAO,CAAC,IAAI,CAAC,CAEf;AAED;;;;GAIG;AACH,wBAAsB,mBAAmB,CAAC,IAAI,EAAE,kBAAkB,EAAE,IAAI,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC,CAE/F"}
+\ No newline at end of file
 diff --git a/dist/session/port-capability.js b/dist/session/port-capability.js
-index f50e8d2271012d6a728bafedd42b2d047fd3122d..5c2201d2dc5390fd1d1f774292ae5bdf8cb0b63b 100644
+index f50e8d2271012d6a728bafedd42b2d047fd3122d..6086fc2c87b65ffc0a5b2b6ad5ab06852a956ca8 100644
 --- a/dist/session/port-capability.js
 +++ b/dist/session/port-capability.js
-@@ -19,12 +19,16 @@ import { z } from 'zod/v4';
+@@ -19,13 +19,22 @@ import { z } from 'zod/v4';
  import { PORT_CAPABILITY_KEY_PREFIX } from './keys.js';
  /** The shape `createPortCapability` mints: 12 random bytes, hex. */
  const PortCapabilitySchema = z.string().regex(/^[a-f0-9]{24}$/);
@@ -146,15 +162,21 @@ index f50e8d2271012d6a728bafedd42b2d047fd3122d..5c2201d2dc5390fd1d1f774292ae5bdf
  function key(port) {
      return `${PORT_CAPABILITY_KEY_PREFIX}${Number(port)}`;
  }
- export async function readPortCapability(self, port) {
+-export async function readPortCapability(self, port) {
 -    const stored = PortCapabilitySchema.safeParse(await self.ctx.storage.get(key(port)));
--    return stored.success ? stored.data : null;
-+    const stored = PortExposureSchema.safeParse(await self.ctx.storage.get(key(port)));
-+    return stored.success && stored.data.owner === owner(self, port) ? stored.data.capability : null;
++/** Read retained exposure metadata without starting a session or restoring a listener. */
++export async function readPortExposure(ctx, port) {
++    const stored = PortExposureSchema.safeParse(await ctx.storage.get(key(port)));
+     return stored.success ? stored.data : null;
  }
++export async function readPortCapability(self, port) {
++    const stored = await readPortExposure(self.ctx, port);
++    return stored !== null && stored.owner === owner(self, port) ? stored.capability : null;
++}
  /**
   * Re-adopt the persisted capability into whatever the registry holds now.
-@@ -37,7 +41,7 @@ export async function restorePortCapability(self, port) {
+  * Answers the adopted value, or null when there was nothing to adopt.
+@@ -37,7 +46,7 @@ export async function restorePortCapability(self, port) {
      return self.portRegistry.restoreCapability(Number(port), stored) ? stored : null;
  }
  export async function persistPortCapability(self, port, capability) {
