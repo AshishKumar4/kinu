@@ -121,7 +121,6 @@ zone, and OAuth applications for sign-in.
 
 - Measure evolution's lift on the sealed bench and publish the number.
 - Settle the default container storage strategy from the deployed three-way benchmark.
-- Add `advance:'pareto'` for multi-objective searches.
 - Seed the hosted runtime catalog so a fresh self-host gets Python without a manual step.
 
 ## Packages
