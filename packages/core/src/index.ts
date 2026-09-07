@@ -255,7 +255,7 @@ export { SlateBindingRequestSchema, routeSlateBindingCall, type SlateBindingRequ
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 export {
-  isSlateMethodName, SlateOperationSchema, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult,
+  isSlateMethodName, SlateOperationSchema, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult,
   type SlateSummary, type SlateProblem, type SlatesChangedEvent,
 } from './slates/rpc';
 
@@ -985,6 +985,7 @@ export {
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './execution/index';
+export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
 // Client-safe workspace addressing and VFS contracts. The embedded Nimbus
 // workspace host is exported separately from `@kinu.run/core/workspace` so a

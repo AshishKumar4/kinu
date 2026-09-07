@@ -32,6 +32,8 @@ import {
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC,
 } from '../src/index';
 import { CODE_IS_REFUSAL, ERROR_CODES } from '../src/obs/index';
+import { inWorkMode } from '../src/execution/work-mode';
+import { buildToolSurface } from '../src/tools/builtins';
 
 interface Call { action: string; input: object }
 type AgentsTestResult = object | string | number | boolean | null | undefined;
@@ -578,19 +580,35 @@ describe('agents tool — the swarm refusal seam', () => {
 // ── hire / ask / send — subordinates ────────────────────────────────────────
 
 describe('agents tool — subordinate actions', () => {
-  test('the host-stamped Plan mode reaches hire, ask, and send without a model field', async () => {
+  test('Plan research children cannot acquire Build file authority from a Build-shaped parent provider', async () => {
+    const { rt } = createTestRuntime();
+    const path = '/home/user/project.txt';
+    await rt.storage.vfs.mkdir('/home/user', { recursive: true });
+    await rt.storage.vfs.writeFile(path, 'original');
     const team = makeTeam();
-    const tool = agentsTool({ mode: 'plan', team: team.deps, profile: () => testProfile() });
-
-    await tool.execute({ action: 'hire', role: 'researcher', mission: 'Map without editing' });
-    await tool.execute({ action: 'ask', agent: 'researcher', message: 'Inspect the design' });
-    await tool.execute({ action: 'send', agent: 'researcher', message: 'Stay read-only' });
-
-    expect(team.calls).toMatchObject([
-      { action: 'spawn', input: { mode: 'plan' } },
-      { action: 'assign', input: { mode: 'plan' } },
-      { action: 'message', input: { mode: 'plan' } },
-    ]);
+    const childTransport: TeamToolDeps = {
+      ...team.deps,
+      temporary: {
+        ...temporaryPortStub,
+        run: async (request) => {
+          const tools = buildToolSurface({ rt, workMode: request.mode });
+          const file = tools.file;
+          if (file === undefined) throw new Error('Child has no file tool');
+          const execute = toolExecute(file);
+          await execute({ action: 'read', path });
+          const result = await execute({ action: 'write', path, content: 'changed' });
+          return { ...await temporaryPortStub.run(), answer: JSON.stringify(result) };
+        },
+      },
+    };
+    const parent = agentsTool({ mode: 'build', team: childTransport, profile: () => testProfile() });
+    const planned = await inWorkMode('plan', () => parent.execute({ action: 'ask', role: 'researcher', message: 'Inspect' }));
+    expect(planned).toMatchObject({ status: 'completed', answer: expect.stringContaining('denied') });
+    expect(await rt.storage.vfs.readFile(path, { encoding: 'utf8' })).toBe('original');
+    expect(await inWorkMode('plan', () => parent.execute({ action: 'hire', role: 'researcher', mission: 'Create a permanent worker' })))
+      .toMatchObject({ reason: 'denied' });
+    await parent.execute({ action: 'ask', role: 'researcher', message: 'Implement' });
+    expect(await rt.storage.vfs.readFile(path, { encoding: 'utf8' })).toBe('changed');
   });
 
   test('hire forwards role/mission (+ optional agent name/tier) to team.spawn', async () => {

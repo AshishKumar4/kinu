@@ -60,9 +60,41 @@ ledger.
 | `workspace.slate(operation)` | list or preview authored slates, call a POST route, commit source, inspect history, fork a version, or restore source |
 | `workspace.editFile(path, edits)` | an exact-match edit, with the same gate and, where the backend shares a turn ledger, the same read-before-write state as the native `file` tool `edit` action |
 
+## Plan authority
+
+Plan is enforced in core, not inferred from command text or a model's promise.
+`execution/work-mode.ts` owns the boolean Plan permission check. Safe producers
+declare `planAllowed`; mixed-action dispatchers check their parsed action contract.
+Unclassified operations are unavailable in Plan. Build keeps the existing capabilities.
+
+Native `file` read/list/stat/search and declared provider reads remain usable;
+write/edit, process/package/port operations, releases and authored slate execution
+require Build. Slate list/history are inspection; commit/fork/restore/preview/call
+are not. Existing Build previews retain their independently captured authority.
+Research memory, task/state records, evidence/reports and `submit_plan` remain
+available. Temporary research children inherit Plan; persistent hire/dismiss and
+search configurations that measure, publish or apply project changes require Build.
+
+Hosted `execute_tools` retains isolated analysis through WorkerLoader, with only
+permitted host callbacks and no raw egress. MCP reads also require the producer's
+read-only declaration and the existing role/owner gates; that declaration is a
+remote contract, not proof about a third-party server's implementation. The CLI
+has no equivalent confinement for its in-process Function/native-require and
+subprocess executors: those code paths refuse Plan before evaluation. Structured
+inspection and research tools remain available; no command-string allowlist
+pretends to make native code read-only. Plan uses the standard guarded inference
+loop rather than evaluating a promoted authored scaffold or its initializer.
+
+Mode belongs to an invocation. Nested calls cannot upgrade Plan. New authorized
+turns and durable jobs enter with their own admitted/recorded mode, so a queued
+Build turn is not trapped in an earlier Plan callback, and delayed Plan work does
+not borrow a later Build turn's authority. Role-imposed Plan is captured before
+terminal effects and suppresses automatic project-changing improvement lanes.
+There is no second approval queue or persisted-format migration.
+
 ## file: the file plane
 
-`FILE_TOOL_ACTIONS` names `read`, `write`, and `edit`. `file`, workspace
+`FILE_TOOL_ACTIONS` names `read`, `write`, `edit`, `list`, `stat`, and `search`. `file`, workspace
 `run`, and `workspace.*` address `rt.storage.vfs`: on hosted, the actor DO own
 Nimbus workspace; on CLI, the working directory when set, otherwise its in-SQLite tree. Containers
 and devices keep separate files under `sandbox.*` and `laptop.*`.

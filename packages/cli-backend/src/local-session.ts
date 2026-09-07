@@ -169,7 +169,7 @@ import {
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  stepContextLimit, admitMcpDescriptors, toolSurfaceTokens,
+  stepContextLimit, admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, permitInPlan, runWorkModeInvocation,
 } from '@kinu.run/core';
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
@@ -1649,11 +1649,12 @@ export class LocalAgentSession implements BackendHost {
     });
     const tools: ToolSet = {};
     for (const d of admission.admitted) {
-      tools[d.toolKey] = tool({
+      const entry = tool({
         description: d.description ?? `${d.serverName}/${d.name}`,
         inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
         execute: async (args) => conn.call(d.serverName, d.name, args),
       });
+      tools[d.toolKey] = d.readOnly === true ? permitInPlan(entry) : entry;
     }
     // MCP servers are bulk producers like any other tool — same clamp, same
     // spill path, same turn budget as the builtins.
@@ -2430,7 +2431,7 @@ export class LocalAgentSession implements BackendHost {
       turnIndex: this.orch.sessionTurnIndex,
     });
     try {
-      await this.runTurn(item, event, startedAt);
+      await runWorkModeInvocation(this.turnWorkMode, () => this.runTurn(item, event, startedAt));
     } catch (error) {
       const message = renderThrownChain({ cause: error });
       // Assembly threw before the stream existed, so there is nothing here a
@@ -2555,6 +2556,7 @@ export class LocalAgentSession implements BackendHost {
     this.turnProfile = profile;
     this.turnProfileInputs = profileInputs;
     this.turnWorkMode = profile.workMode;
+    this.orch.restrictTurnWorkMode(this.turnWorkMode);
     this.rt.setTurnProfile?.(profile);
     this.invalidateModelState();
     const model = this.ensureModelState();
@@ -2567,7 +2569,7 @@ export class LocalAgentSession implements BackendHost {
     const filteredExternal = Object.fromEntries(
       Object.entries(this.extraTools).filter(([name]) => toolAllowed(name)),
     );
-    const turnTools = { ...filteredBuiltins, ...filteredExternal };
+    const turnTools = toolsInWorkMode(this.turnWorkMode, { ...filteredBuiltins, ...filteredExternal });
     const availableBuiltins = Object.keys(filteredBuiltins).filter(
       (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),
     );
@@ -2767,6 +2769,7 @@ export class LocalAgentSession implements BackendHost {
       chat: defaultTurn,
       run: {
         rt: this.rt,
+        workMode: this.turnWorkMode,
         task: item.text,
         llmStream: this.makeScaffoldLLMStream(model, turnTools),
         callTool: this.makeScaffoldCallTool(turnTools),
@@ -4880,6 +4883,7 @@ export class LocalAgentSession implements BackendHost {
   private actorToolsetDeps(mode: WorkMode, turnId: () => string): ActorToolsetDeps {
     const deps: ActorToolsetDeps = {
       rt: this.rt,
+      workMode: mode,
       // The once-only boundary for tools whose effects leave this process.
       effectClaims: { sql: this.rt.storage.sql, turnId },
       // No shellApprovalMode/requestShellApproval here — the gate lives at the

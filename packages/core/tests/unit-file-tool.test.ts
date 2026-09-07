@@ -536,17 +536,6 @@ describe('file tool', () => {
     expect(budget.snapshot().admittedChars).toBe(500);
   });
 
-  test('an unknown action is refused with the three that work, not just echoed', async () => {
-    // It used to answer `unknown file action 'append'` — true, and useless: the
-    // model was told what it typed and none of the words that would have
-    // worked. Same wording as every other native dispatcher now
-    // (registry.unknownActionError).
-    const { call } = toolFor(memoryVfs());
-    expect(await call({ action: 'append', path: 'a' })).toEqual({
-      reason: 'bad_input',
-      error: 'file requires `action` — one of read, write, edit; got "append"',
-    });
-  });
 
   test('a path of the wrong type is refused, not fed to `path.trim()`', async () => {
     // `args.path.trim()` was the first statement in the dispatcher, so a

@@ -9,6 +9,11 @@ import { jsonSchema, tool } from 'ai';
 import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu.run/core';
 import { toolExecute } from '@kinu.run/test-utils';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
+import { inWorkMode } from '@kinu.run/core';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 interface ExecuteToolResult {
   result: JsonValue | undefined;
@@ -304,4 +309,19 @@ describe('createNodeExecuteToolFactory — native tools under tools.<name>', () 
     });
     expect(out.result).toBe('undefined');
   });
+});
+
+test('Plan refuses native JavaScript before it can use machine require, while Build stays native', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'kinu-plan-native-'));
+  const path = join(directory, 'native-write');
+  try {
+    const execute = makeTool();
+    const code = 'require("node:fs").writeFileSync(' + JSON.stringify(path) + ', "native effect"); return "done";';
+    await expect(inWorkMode('plan', () => execute({ code }))).rejects.toMatchObject({ code: 'denied' });
+    expect(existsSync(path)).toBe(false);
+    expect(await execute({ code })).toMatchObject({ result: 'done' });
+    expect(await readFile(path, 'utf8')).toBe('native effect');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

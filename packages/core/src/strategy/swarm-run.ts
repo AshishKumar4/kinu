@@ -118,7 +118,7 @@ import type { SwarmProfileSnapshot } from '../profiles';
 import { pruneLowValueBranches } from '../mcts/pruning';
 import { selectFrontierNode } from '../mcts/frontier';
 import { diagnostics, type Logger } from '../obs/index';
-import { renderCauseChain, type Refusal } from '../obs/error';
+import { renderCauseChain, KinuError, refusalOf, type Refusal } from '../obs/error';
 import { usageTotal, type Usage, addUsage } from '../usage';
 import type { NodeLoopHost } from './node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
@@ -142,6 +142,7 @@ import type {
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ModelCallSink } from '../events/model-call';
 import type { WorkMode } from '../prompting/surface';
+import { requireWorkModePermission } from '../execution/work-mode';
 import {
   buildNodeDeps, createRoot, initRunLedgers, prepareMeasurement, prepareParetoMeasurement,
   readCarryIn, refuseContendedRun, regionRefusal, resolveNodeModel, resolveNodeModels,
@@ -369,6 +370,12 @@ export async function runSwarm(
     : PUBLISHING_CARRIES.find(
       (carry): carry is PublishingCarry => carry === resolved.config.carry.kind,
     ) ?? null;
+  try {
+    requireWorkModePermission(deps.mode, resolved.settle === 'merge' && !measures && publishing === null, 'Search measurement, publication or project apply');
+  } catch (cause) {
+    if (!(cause instanceof KinuError)) throw cause;
+    return refusalOf(cause);
+  }
   const archive = resolved.config.advance.kind === 'archive' && resolved.key !== null
     ? { key: resolved.key, novelty: resolved.config.advance.novelty }
     : null;

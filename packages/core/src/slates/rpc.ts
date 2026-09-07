@@ -2,6 +2,8 @@ import * as v from 'valibot';
 import type { Refusal } from '../obs/index';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { SlateDirectoryName } from './files';
+import type { WorkMode } from '../prompting/surface';
+import { requireWorkModePermission } from '../execution/work-mode';
 
 const METHOD_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
 
@@ -26,6 +28,11 @@ export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('restore'), id: SlateDirectoryName, version: VersionId }),
 ]);
 export type SlateOperation = v.InferOutput<typeof SlateOperationSchema>;
+
+/** The parsed operation contract: listing/history inspect; every other operation can change resources or run authored code. */
+export function requireSlateWorkMode(operation: SlateOperation, mode: WorkMode): void {
+  requireWorkModePermission(mode, operation.op === 'list' || operation.op === 'history', 'workspace.slate.' + operation.op);
+}
 
 export interface SlateSummary {
   readonly id: string;

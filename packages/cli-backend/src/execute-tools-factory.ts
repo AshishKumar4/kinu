@@ -21,6 +21,7 @@
  * Durable Object isolate.
  */
 
+import { requireBuild } from '@kinu.run/core';
 import type {
   CodemodeProvider,
   CraftedToolSet,
@@ -107,6 +108,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         required: ['code'],
       }),
       execute: async (args, options) => {
+        requireBuild('Native JavaScript execution without a constrained runtime');
         // `console` is shadowed by a capturing stand-in: this builder runs the
         // model's code in-process, so a real console.* would write straight to
         // the CLI's stdout — which, under `kinu exec --json`, IS the event

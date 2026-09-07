@@ -417,6 +417,7 @@ export function createSandboxExecutor(
       },
     },
     readFile: {
+      planAllowed: true,
       description: 'Read a file from the sandbox.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED_REFUSAL;
@@ -459,6 +460,7 @@ export function createSandboxExecutor(
       },
     },
     listFiles: {
+      planAllowed: true,
       description: 'List files in a directory. Returns newline-separated entries prefixed "d" or "-".',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED_REFUSAL;
@@ -482,6 +484,7 @@ export function createSandboxExecutor(
       },
     },
     readdir: {
+      planAllowed: true,
       description: 'Alias for listFiles — list entries in a directory.',
       // Straight through — `listFiles` already answers with the rendered
       // listing or its own refusal, and re-validating it here could only
@@ -505,6 +508,7 @@ export function createSandboxExecutor(
       },
     },
     exists: {
+      planAllowed: true,
       description: 'Check if a path exists — uses shell test.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED_REFUSAL;

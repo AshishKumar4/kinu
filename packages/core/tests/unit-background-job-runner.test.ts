@@ -20,6 +20,9 @@ import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
 import { recoveryBackoffMs } from '../src/utils/recovery-backoff';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
+import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
+import { buildBuiltinTools } from '../src/tools/builtins';
+import { inWorkMode } from '../src/execution/work-mode';
 
 /** A fiber that runs the body inline + captures each ctx.stash + exposes the
  *  in-flight body promises so a test can await detach completion. */
@@ -1263,4 +1266,29 @@ describe('recoveryBackoffMs sanitizes counts the curve cannot use', () => {
     expect(recoveryBackoffMs(Number.NaN)).toBe(60_000);
     expect(recoveryBackoffMs(Number.POSITIVE_INFINITY)).toBe(60_000);
   });
+});
+
+test('a recovered Plan job cannot mutate project files through a Build-shaped callback', async () => {
+  const { rt } = createTestRuntime();
+  const path = '/home/user/resumed.txt';
+  await rt.storage.vfs.mkdir('/home/user', { recursive: true });
+  await rt.storage.vfs.writeFile(path, 'original');
+  const file = buildBuiltinTools({ rt }).file;
+  if (file === undefined) throw new Error('No file tool');
+  const write = toolExecute<JsonValue, JsonValue>(file);
+  await write({ action: 'read', path });
+  const first = setup();
+  first.store.create({ id: 'plan-write', kind: 'run', workMode: 'plan', input: '{}', now: Date.now() });
+  const recovered = setup({ db: first.db, resume: async () => write({ action: 'write', path, content: 'changed' }) });
+  await recovered.runner.recover({ jobId: 'plan-write', phase: 'running' });
+  await recovered.settled();
+  expect(await rt.storage.vfs.readFile(path, { encoding: 'utf8' })).toBe('original');
+  expect(recovered.store.get('plan-write')).toMatchObject({ status: 'failed' });
+  recovered.store.create({ id: 'build-write', kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
+  await inWorkMode('plan', async () => {
+    await recovered.runner.recover({ jobId: 'build-write', phase: 'running' });
+    await recovered.settled();
+  });
+  expect(await rt.storage.vfs.readFile(path, { encoding: 'utf8' })).toBe('changed');
+  expect(recovered.store.get('build-write')).toMatchObject({ status: 'completed' });
 });
