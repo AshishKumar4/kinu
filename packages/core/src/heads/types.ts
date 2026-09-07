@@ -57,10 +57,8 @@ export type MergeStrategy =
  *     that spawn heads; without a decrementing depth there is no fixed point and
  *     a single fork call can expand without bound. It never stops a running
  *     head — it refuses a NEW split.
- *   • `maxWallClockMs` exists only when a caller explicitly authors one —
- *     `SplitRequest.budget`, the heads strategy's `ctx.budget.wallClockMs`,
- *     or a node's `deps.maxWallClockMs`. Opt-in, never a default; absent
- *     means the head runs to completion. */
+ *   • `maxWallClockMs` exists only when the caller supplies a deadline in
+ *     the inherited HeadBudget or node deps. Absent means run to completion. */
 export interface HeadBudget {
   /** Remaining recursive-split depth; decremented per spawn. 0 rejects splits. */
   readonly maxDepth: number;
@@ -332,10 +330,6 @@ export interface SplitRequest {
     readonly allowedTools?: readonly string[];
   }[];
   readonly mergeStrategy?: MergeStrategy;
-  readonly budget?: Partial<{
-    maxDepth: number;
-    maxWallClockMs: number;
-  }>;
 }
 
 /** Result of split → await → merge. The parent writes mergedNarrative back. */
@@ -402,14 +396,6 @@ export interface HeadScore {
   readonly grounding: EvaluationGrounding;
 }
 
-/**
- * What a fresh root head inherits when the parent names nothing: recursion room
- * and nothing else. No token pool, no clock — a fork works until the work is
- * done, exactly like the turn it forked from.
- */
-export const DEFAULT_HEAD_BUDGET: Omit<HeadBudget, 'spawnedAt'> = {
-  maxDepth: 3,
-};
 
 /** Default merge strategy. */
 export const DEFAULT_MERGE_STRATEGY: MergeStrategy = 'synthesize';

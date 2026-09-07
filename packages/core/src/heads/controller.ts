@@ -28,7 +28,6 @@ import {
   type HeadScore,
   type MergeStrategy,
   type SerializedMessage,
-  DEFAULT_HEAD_BUDGET,
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
 } from './types';
@@ -231,7 +230,7 @@ export class HeadController {
     rootId?: HeadId;
     inheritedContext: SerializedMessage[];
     request: SplitRequest;
-    parentBudget?: HeadBudget;
+    parentBudget: HeadBudget;
     model?: string;
     mode: WorkMode;
     /** Mission-budget labels every head in this split charges. Carried down to
@@ -242,11 +241,7 @@ export class HeadController {
     const rootId = opts.rootId ?? opts.parentHeadId ?? this.resolveTopLevelRun(opts.request.rationale);
     const strategy: MergeStrategy = opts.request.mergeStrategy ?? DEFAULT_MERGE_STRATEGY;
 
-    const parentBudget: HeadBudget = opts.parentBudget ?? {
-      ...DEFAULT_HEAD_BUDGET,
-      ...opts.request.budget,
-      spawnedAt: Date.now(),
-    };
+    const parentBudget = opts.parentBudget;
     if (parentBudget.maxDepth <= 0) {
       throw new Error('Cannot split: max depth reached');
     }

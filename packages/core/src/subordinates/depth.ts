@@ -2,10 +2,8 @@
  * How deep a subordinate tree may go, and how a child's room is DERIVED from
  * its parent's.
  *
- * The shape is `heads/types.ts` — `deriveChildBudget` decrements, and
- * `budgetExhausted` refuses at zero — for the same reason: `hire` lets a
- * subordinate hire subordinates, and without a decrementing depth there is no
- * fixed point, so one call can expand the tree without bound.
+ * The parent derives each child's depth before the child is seeded.
+ * This policy governs creating agents, not work in an existing agent.
  *
  * The load-bearing property is that a child NEVER states its own depth. The
  * parent computes it (`deriveChildDelegationBudget`) and the seeding authority

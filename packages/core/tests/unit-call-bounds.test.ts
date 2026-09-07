@@ -9,7 +9,7 @@ import * as agentOrchestrator from '../src/orchestrator/agent-orchestrator';
 import type { EvaluateBranchOptions } from '../src/mcts/evaluation';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import { DEFAULT_ATTEMPT_BUDGET } from '../src/bench/types';
-import { UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS, DEFAULT_HEAD_BUDGET } from '../src/index';
+import { UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS } from '../src/index';
 
 
 /**
@@ -129,11 +129,6 @@ describe('owned work carries no default elapsed deadline', () => {
     expect(hasSettleTimeout).toBe(false);
   });
 
-  test('heads carry no default wall clock', () => {
-    // maxWallClockMs exists only when a caller explicitly authors one; absent
-    // means a head runs to completion.
-    expect('maxWallClockMs' in DEFAULT_HEAD_BUDGET).toBe(false);
-  });
 });
 
 describe('independent non-chat policies keep their existing values', () => {

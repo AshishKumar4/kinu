@@ -454,15 +454,9 @@ export interface SwarmInput {
    * so unprompted across several vendors.
    */
   readonly branches?: number;
-  /**
-   * How deep the search may go. A RESOURCE CAP, on every preset.
-   *
-   * Distinct from the two other depth counters in this repo and never
-   * interchangeable with them: `DEFAULT_HEAD_BUDGET.maxDepth` (3) bounds recursive
-   * head splitting and `DELEGATION_MAX_DEPTH` (4) bounds the subordinate tree.
-   * This one bounds a search TREE, whose live default of 20 (config.ts:92) is
-   * above every system in the literature (ToT <=3, LATS 7, Koh 5).
-   */
+  /** Requested search depth, overriding the selected preset. This bounds the
+   * search tree, separately from subordinate lineage and a head's inherited
+   * split budget. */
   readonly depth?: number;
   /**
    * THE FIRST LEVEL, NODE BY NODE: what each one is asked, and the brief it is
@@ -739,9 +733,7 @@ export const SWARM_PRESET_POINTS = {
       expand: 'sample',
       score: { kind: 'verify' }, advance: { kind: 'uct' }, carry: { kind: 'elites' },
     },
-    // Deep because it has a verifier — the one value signal the literature says
-    // earns a tree — and still inside the 3-7 band every cited system runs rather
-    // than at the shipped default of 20.
+    // Verifier-backed optimisation follows five levels unless the caller overrides depth.
     depth: 5,
     branches: 3,
     doctrine: 'climbs one number you can measure — a cost, a runtime, a count.',

@@ -16,14 +16,14 @@ import type { LanguageModel } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import {
-  budgetExhausted, deriveChildBudget, DEFAULT_HEAD_BUDGET, type HeadBudget, type HeadInput,
+  budgetExhausted, deriveChildBudget, type HeadBudget, type HeadInput,
 } from '../src/heads/types';
 import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
 import { usageTotal } from '../src/usage';
 
 describe('budgetExhausted — a deadline only if one was requested', () => {
-  test('a default head is never exhausted by time or spend', () => {
-    const b: HeadBudget = { ...DEFAULT_HEAD_BUDGET, spawnedAt: Date.now() - 60 * 60_000 };
+  test('a head without a deadline is not exhausted by time or spend', () => {
+    const b: HeadBudget = { maxDepth: 1, spawnedAt: Date.now() - 60 * 60_000 };
     expect(budgetExhausted(b).exhausted).toBe(false);
   });
 
@@ -40,19 +40,10 @@ describe('budgetExhausted — a deadline only if one was requested', () => {
   });
 });
 
-describe('DEFAULT_HEAD_BUDGET — recursion room and nothing else', () => {
-  test('carries no wall clock', () => {
-    expect(DEFAULT_HEAD_BUDGET.maxWallClockMs).toBeUndefined();
-  });
-
-  test('has no token dimension at all', () => {
-    expect(Object.keys(DEFAULT_HEAD_BUDGET)).toEqual(['maxDepth']);
-  });
-});
 
 describe('deriveChildBudget', () => {
   test('decrements depth and inherits the open envelope', () => {
-    const parent: HeadBudget = { ...DEFAULT_HEAD_BUDGET, spawnedAt: 1_000 };
+    const parent: HeadBudget = { maxDepth: 2, spawnedAt: 1_000 };
     const child = deriveChildBudget(parent, 2_000);
     expect(child.maxDepth).toBe(parent.maxDepth - 1);
     expect(child.maxWallClockMs).toBeUndefined();
@@ -60,7 +51,7 @@ describe('deriveChildBudget', () => {
   });
 
   test('fan-out does not shrink a child — six siblings each get the parent envelope', () => {
-    const parent: HeadBudget = { ...DEFAULT_HEAD_BUDGET, spawnedAt: 1_000 };
+    const parent: HeadBudget = { maxDepth: 2, spawnedAt: 1_000 };
     const children = Array.from({ length: 6 }, () => deriveChildBudget(parent, 1_000));
     for (const c of children) {
       expect(c).toEqual({ maxDepth: parent.maxDepth - 1, spawnedAt: 1_000 });
@@ -143,7 +134,7 @@ function loopInput(budget: Partial<HeadBudget> = {}): HeadInput {
     task: 'keep recording evidence', rationale: 'exercise the envelope',
     mode: 'build',
     inheritedContext: [{ id: 'm1', role: 'user', content: 'go', createdAt: 1 }],
-    budget: { ...DEFAULT_HEAD_BUDGET, spawnedAt: Date.now(), ...budget },
+    budget: { maxDepth: 0, spawnedAt: Date.now(), ...budget },
     mergeStrategy: 'synthesize',
   };
 }

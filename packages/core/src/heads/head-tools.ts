@@ -18,10 +18,9 @@
  *      keeps only these. A builtin added upstream tomorrow does not silently
  *      appear on heads.
  *
- * `split_subheads` therefore stays the only way a head starts anything, and it
- * is depth-gated (HeadController derives each child's budget from its parent's;
- * budgetExhausted refuses once the recursion depth — or a caller-requested
- * deadline — runs out).
+ * `split_subheads` is withheld when the inherited split depth is exhausted.
+ * HeadController checks that depth again at spawn. A caller-requested
+ * deadline is checked when the tool executes.
  *
  * The `allowedTools` filter runs LAST over the head's real vocabulary, so a
  * parent fork request naming `run` / `execute_tools` / `web` maps onto the
