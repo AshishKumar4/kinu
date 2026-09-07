@@ -24,27 +24,6 @@ interface TreeState {
   readonly lastAppear: number;
 }
 
-type Rgb = readonly [red: number, green: number, blue: number];
-
-function cssRgb(name: string): Rgb {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  const hex = /^#([0-9a-f]{6})$/iu.exec(value)?.[1];
-  if (hex !== undefined) {
-    const number = Number.parseInt(hex, 16);
-    return [(number >> 16) & 255, (number >> 8) & 255, number & 255];
-  }
-  const channels = value.match(/[\d.]+/gu)?.slice(0, 3).map(Number);
-  if (channels === undefined) return [224, 164, 88];
-  const [red, green, blue] = channels;
-  return red === undefined || green === undefined || blue === undefined
-    ? [224, 164, 88]
-    : [red, green, blue];
-}
-
-function rgba([red, green, blue]: Rgb, alpha: number): string {
-  return `rgba(${String(red)},${String(green)},${String(blue)},${String(alpha)})`;
-}
-
 
 function pseudoRandom(seed: number): () => number {
   let value = seed;
@@ -127,10 +106,12 @@ function drawTree(
   width: number,
   height: number,
   ratio: number,
-  ink: Rgb,
+  ink: string,
 ): void {
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
+  context.strokeStyle = ink;
+  context.fillStyle = ink;
   const time = Math.min(elapsed, state.lastAppear + 2_000);
   const winningProgress = Math.max(0, Math.min(1, (time - state.lastAppear - 500) / 1_200));
   const sway = (node: TreeNode): number => Math.sin(elapsed / 3_600 + node.phase) * (0.6 + node.depth * 0.35);
@@ -149,7 +130,7 @@ function drawTree(
     context.moveTo(parent.x, startY);
     context.bezierCurveTo(parent.x + distance * 0.55, startY, parent.x + distance * 0.45, endY, node.x, endY);
     context.setLineDash(pruned ? [2, 5] : []);
-    context.strokeStyle = rgba(ink, pruned ? 0.17 : selected ? 0.2 + 0.65 * winningProgress : 0.12 + 0.17 * arrival);
+    context.globalAlpha = pruned ? 0.17 : selected ? 0.2 + 0.65 * winningProgress : 0.12 + 0.17 * arrival;
     context.lineWidth = selected ? 1 + winningProgress : 0.8;
     context.stroke();
     context.setLineDash([]);
@@ -162,7 +143,7 @@ function drawTree(
       const y = (u ** 3 + 3 * u ** 2 * t) * startY + (3 * u * t ** 2 + t ** 3) * endY;
       context.beginPath();
       context.arc(x, y, 2, 0, Math.PI * 2);
-      context.fillStyle = rgba(ink, 0.9);
+      context.globalAlpha = 0.9;
       context.fill();
     }
   }
@@ -178,15 +159,16 @@ function drawTree(
     if (root || (winner && winningProgress > 0.1)) {
       context.beginPath();
       context.arc(node.x, y, radius + 6, 0, Math.PI * 2);
-      context.strokeStyle = rgba(ink, 0.2);
+      context.globalAlpha = 0.2;
       context.lineWidth = 1;
       context.stroke();
     }
     context.beginPath();
     context.arc(node.x, y, radius, 0, Math.PI * 2);
-    context.fillStyle = rgba(ink, node.pruned ? 0.25 : selected ? 0.3 + 0.7 * arrival : 0.15 + 0.25 * arrival);
+    context.globalAlpha = node.pruned ? 0.25 : selected ? 0.3 + 0.7 * arrival : 0.15 + 0.25 * arrival;
     context.fill();
   }
+  context.globalAlpha = 1;
 }
 
 const STATIC_TREE = buildTree(720, 520);
@@ -211,7 +193,8 @@ function SearchCanvas(): ReactElement {
     let elapsed = 180;
     let dimensions = { width: 720, height: 520, ratio: 1 };
     let tree = STATIC_TREE;
-    let ink = cssRgb('--c-accent-fg');
+    // Canvas parses the resolved token itself; `globalAlpha` carries opacity.
+    let ink = getComputedStyle(document.documentElement).getPropertyValue('--c-accent-fg').trim();
 
     const paint = (): void => {
       if (contextLost) return;
@@ -249,7 +232,10 @@ function SearchCanvas(): ReactElement {
       if (reduced.matches) elapsed = tree.lastAppear + 2_000;
       paint();
     };
-    const modeChanged = (): void => { ink = cssRgb('--c-accent-fg'); paint(); };
+    const modeChanged = (): void => {
+      ink = getComputedStyle(document.documentElement).getPropertyValue('--c-accent-fg').trim();
+      paint();
+    };
     const lost = (event: Event): void => { event.preventDefault(); contextLost = true; stop(); setReady(false); };
     const restored = (): void => { contextLost = false; resize(); paint(); setReady(true); syncPlayback(); };
     const sizeObserver = new ResizeObserver(resize);
