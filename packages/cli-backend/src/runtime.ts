@@ -30,7 +30,7 @@ import {
   WORKSPACE_IDENTITY_DDL,
   createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
-  DefaultExecutionRouter, createInlineExecutor, formatExecResult,
+  DefaultExecutionRouter, createInlineExecutor, commandResult, COMMAND_RESULT_TYPE,
   withMountTable, standardMounts,
   withApprovalGatedShell,
   createAgentConfigStore, initActorTables, initAgentConfigTable, initScaffoldTables,
@@ -1017,7 +1017,7 @@ function createLocalLaptopExecutor(
         execute: async (command, context) => {
           const signal = readAbortSignal({ context });
           const result = await shell.exec(coerceText({ value: command }), signal ? { signal } : undefined);
-          return formatExecResult(result);
+          return commandResult(result);
         },
       },
       readFile: {
@@ -1044,7 +1044,7 @@ function createLocalLaptopExecutor(
       },
     },
     types: `declare const laptop: {
-  exec(command: string): Promise<string>;
+  exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;
   readFile(path: string): Promise<string>;
   writeFile(path: string, content: string): Promise<string>;
   listFiles(path?: string): Promise<Array<{name: string; type: "dir" | "file"}>>;

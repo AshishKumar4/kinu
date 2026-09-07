@@ -977,7 +977,7 @@ export {
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
-  formatExecResult, isFailingResultText, parseRefusal, answeredRefusal, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
+  commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, isFailingResultText, parseRefusal, answeredRefusal, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
   createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,

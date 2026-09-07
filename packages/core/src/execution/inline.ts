@@ -22,7 +22,7 @@ import { appendMemoryNote } from '../memory/note';
 import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
-import { formatExecResult, refusalText } from './exec-result';
+import { commandResult, COMMAND_RESULT_TYPE, refusalText } from './exec-result';
 import { KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
@@ -251,10 +251,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (...args: unknown[]) => {
         const command = parseInput(StringSchema, { value: args[0] });
         if (command === undefined) {
-          return refusalText(new KinuError('bad_input', 'workspace.exec: command must be a string'));
+          return refusalOf(new KinuError('bad_input', 'workspace.exec: command must be a string'));
         }
         const signal = readExecSignal({ context: args[1] });
-        return formatExecResult(await shell.exec(command, signal ? { signal } : undefined));
+        return commandResult(await shell.exec(command, signal ? { signal } : undefined));
       },
     },
 
@@ -471,7 +471,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
    * variables, and a working directory that persists across calls. Runtime,
    * process, and port support is declared by this provider's capabilities.
    */
-  function exec(command: string): Promise<string>;
+  function exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;
   function searchMemory(query: string): Promise<string>;
   function saveNote(content: string): Promise<string>;
   /** Returns Array<{name, description, qualityScore}> of crafted tools. */
