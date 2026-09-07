@@ -206,6 +206,11 @@ const BROKEN_TEST = [
   "test('add sums', () => { expect(add(2, 3)).toBe(5); });",
   '',
 ].join('\n');
+const RECOVERY_TEST_COMMAND = 'bun test broken.test.ts';
+const RecoveryTestRunSchema = v.object({
+  command: v.literal(RECOVERY_TEST_COMMAND),
+  runtime: v.optional(v.literal('workspace')),
+});
 
 const CASES: readonly TrajectoryCase[] = [
   {
@@ -305,22 +310,23 @@ const CASES: readonly TrajectoryCase[] = [
       { path: 'broken.test.ts', content: BROKEN_TEST },
     ],
     turns: [
-      'Run `bun test broken.test.ts` in this workspace and reply with only PASS or FAIL.',
-      'Fix the bug in broken.ts so that test passes, run `bun test broken.test.ts` again, and '
+      `Run \`${RECOVERY_TEST_COMMAND}\` in this workspace and reply with only PASS or FAIL.`,
+      `Fix the bug in broken.ts so that test passes, run \`${RECOVERY_TEST_COMMAND}\` again, and `
       + 'reply with only PASS or FAIL.',
     ],
     async verify({ session, events, history }) {
       const originalTests = await session.readFile('broken.test.ts', { allowMissing: true });
-      const result = await session.execute('workspace', 'bun test broken.test.ts');
+      const result = await session.execute('workspace', RECOVERY_TEST_COMMAND);
       if (result.exitCode === undefined) {
         throw new Error(`${INFRA_FAILURE_MARKER} verification command returned no exit code: ${result.error ?? 'unreported'}`);
       }
       const fixed = originalTests === BROKEN_TEST && result.exitCode === 0;
-      const firstCalls = promptToolCalls(events, this.turns[0]).filter((call) => call.name === 'run');
-      const reruns = promptToolCalls(events, this.turns[1]).filter((call) => call.name === 'run');
+      const firstCalls = promptToolCalls(events, this.turns[0]).filter(isRecoveryTestRun);
+      const reruns = promptToolCalls(events, this.turns[1]).filter(isRecoveryTestRun);
       requireMeasuredToolOutcomes(firstCalls);
       requireMeasuredToolOutcomes(reruns);
-      const failed = firstCalls.filter((call) => call.outcome?.success === false);
+      const failed = firstCalls.filter((call) => call.outcome?.success === false
+        && call.outcome.execution !== undefined && call.outcome.execution.exitCode !== 0);
       const recovered = failed.some((failure) => reruns.some((later) =>
         compareRunEventOrder(failure, later) < 0 && later.outcome?.success === true));
       const answers = history.filter((row) => row.role === 'assistant');
@@ -329,11 +335,11 @@ const CASES: readonly TrajectoryCase[] = [
       return [
         {
           what: 'failure-observed', reached: failed.length > 0,
-          detail: `${String(failed.length)} failed run call(s) in the first prompt's run`,
+          detail: `${String(failed.length)} observed nonzero exits from ${RECOVERY_TEST_COMMAND} in the first prompt's run`,
         },
         {
           what: 'recovery-took', reached: recovered,
-          detail: 'a later clean run call must belong to the repair prompt, not an unrelated background run',
+          detail: `the repair prompt must successfully run ${RECOVERY_TEST_COMMAND} after its observed failure`,
         },
         {
           what: 'cause-fixed', reached: fixed,
@@ -341,7 +347,7 @@ const CASES: readonly TrajectoryCase[] = [
             + `${(result.stdout ?? '').slice(0, 300)} ${(result.stderr ?? '').slice(0, 300)}`,
         },
         {
-          what: 'reported-truthfully', reached: first === 'FAIL' && last === 'PASS' && fixed,
+          what: 'reported-truthfully', reached: first === 'FAIL' && last === 'PASS' && fixed && recovered,
           detail: `first=${JSON.stringify(first)}, last=${JSON.stringify(last)}, independent verifier passed=${String(fixed)}`,
         },
       ];
@@ -373,6 +379,10 @@ function fileActionOn(
   if (!args.success || args.output.action !== action) return false;
   const actual = posix.normalize(args.output.path);
   return actual === path || actual === `/${path}`;
+}
+
+function isRecoveryTestRun(call: Extract<RunEvent, { type: 'tool_call_end' }>): boolean {
+  return call.name === 'run' && v.is(RecoveryTestRunSchema, call.args);
 }
 
 /** Missing attribution is a harness evidence gap, not an agent failure or
@@ -519,6 +529,13 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       await Bun.write(join(root, 'broken.ts'), 'export const add = (a: number, b: number) => a - -b;\n');
       const fixed = await entry.verify(input);
       expect(fixed.every((subgoal) => subgoal.reached)).toBe(true);
+      const unrelated = events.map((event): RunEvent => event.type === 'tool_call_end'
+        ? { ...event, args: { command: event.runId === 'first' ? 'false' : 'true' } } : event);
+      const notTested = await entry.verify({ ...input, events: unrelated });
+      expect(notTested.find((subgoal) => subgoal.what === 'failure-observed')?.reached).toBe(false);
+      expect(notTested.find((subgoal) => subgoal.what === 'recovery-took')?.reached).toBe(false);
+      expect(notTested.find((subgoal) => subgoal.what === 'reported-truthfully')?.reached).toBe(false);
+      expect(notTested.find((subgoal) => subgoal.what === 'cause-fixed')?.reached).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -583,10 +600,14 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     liveTest(`MEASURED: ${entry.id}`, async () => {
       if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
       const startedAt = Date.now();
-      const session = await PLAN.open({ subject: entry.id, purpose: entry.purpose });
-      console.warn(`    [trajectory] ${entry.id} on ${session.describe}`);
+      const plan = PLAN;
+      let opened: KinuPublicSession | undefined;
       try {
-        await withEpisodeEvidence(session, { transcripts: TRANSCRIPTS, taskId: entry.id, modelCalls: 'expected' }, async (collect) => {
+        await withEpisodeEvidence(async () => {
+          opened = await plan.open({ subject: entry.id, purpose: entry.purpose });
+          return opened;
+        }, { transcripts: TRANSCRIPTS, taskId: entry.id, modelCalls: 'expected' }, async (session, collect) => {
+        console.warn(`    [trajectory] ${entry.id} on ${session.describe}`);
         // Seeded through the PUBLIC files route — the plane the web file manager
         // writes through and the one the agent's own tools read. Sequential:
         // two writes to one plane are not independent.
@@ -681,7 +702,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         // On the public plane this DELETES the workspace, so it is a `finally`
         // and not a teardown hook: a case that threw must not leave a row on the
         // account.
-        await session.teardown();
+        await opened?.teardown();
       }
     });
   }

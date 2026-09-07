@@ -236,16 +236,33 @@ export interface EpisodeEvidence {
   readonly spend: WorkspaceSpend;
 }
 
-/** Capture each channel independently, even after the operation fails. Collection
- *  is memoized so an assertion failure cannot account for the same spend twice.
- *  Callers retain workspace ownership and tear down only after this returns. */
-export async function withEpisodeEvidence<T>(
-  reader: EpisodeEvidenceReader,
+/** The evidence boundary starts before session opening. Missing sessions leave
+ * unavailable channels, never fabricated empty ledgers or zero spend. */
+export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, T>(
+  open: () => Promise<Reader>,
   options: { readonly transcripts: string; readonly taskId: string; readonly modelCalls: 'expected' | 'none' },
-  operation: (collect: () => Promise<EpisodeEvidence>) => Promise<T>,
+  operation: (reader: Reader, collect: () => Promise<EpisodeEvidence>) => Promise<T>,
 ): Promise<T> {
   const dir = join(options.transcripts, options.taskId);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  let reader: Reader;
+  try {
+    reader = await open();
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    recordUnmeasuredEpisode();
+    try {
+      writeFileSync(join(dir, 'failure.json'), JSON.stringify({
+        taskId: options.taskId, phase: 'open', name: failure.name, message: failure.message,
+      }), { mode: 0o600 });
+      writeFileSync(join(dir, 'collection.json'), JSON.stringify(
+        ['events', 'history', 'spend'].map((channel) => ({ channel, status: 'unavailable', reason: 'session opening failed' })),
+      ), { mode: 0o600 });
+    } catch (retentionError) {
+      throw new AggregateError([failure, retentionError], failure.message, { cause: retentionError });
+    }
+    throw failure;
+  }
   let collection: Promise<EpisodeEvidence> | null = null;
   const collect = (): Promise<EpisodeEvidence> => {
     collection ??= (async () => {
@@ -294,7 +311,7 @@ export async function withEpisodeEvidence<T>(
   };
   let result: { ok: true; value: T } | { ok: false; error: Error };
   try {
-    result = { ok: true, value: await operation(collect) };
+    result = { ok: true, value: await operation(reader, collect) };
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
     result = { ok: false, error: failure };

@@ -17,6 +17,8 @@ from __future__ import annotations
 import importlib.util
 import asyncio
 import json
+import os
+import subprocess
 import shutil
 import sys
 import tempfile
@@ -125,6 +127,8 @@ class RelocatableBuild(unittest.TestCase):
                     "export default JSON.parse(readFileSync(new URL('manifest.json', import.meta.url), 'utf8'));\n"
                 )
             build = asyncio.run(_BUILD.build_kinu_binary(root))
+            self.assertIsNone(build.source_sha)
+            self.assertTrue(build.source_dirty)
             installed = Path(temp) / "installed"
             installed.mkdir()
             binary = installed / "kinu"
@@ -136,6 +140,36 @@ class RelocatableBuild(unittest.TestCase):
             shutil.rmtree(installed / "node_modules")
             with self.assertRaises(RuntimeError):
                 _BUILD.probe_binary(binary, installed / "node_modules")
+
+    def test_untracked_import_cannot_be_reported_as_clean_committed_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            for tracked in (False, True):
+                root = Path(temp) / ("tracked" if tracked else "untracked")
+                entry = root / _BUILD.CLI_ENTRYPOINT
+                entry.parent.mkdir(parents=True)
+                entry.write_text("import value from './source.js'; console.log(value);\n")
+                (root / ".gitignore").write_text("node_modules/\n.harbor-build-*/\n")
+                for name in _BUILD.EXTERNAL_MODULES:
+                    package = root / "node_modules" / name
+                    package.mkdir(parents=True)
+                    (package / "package.json").write_text(json.dumps({"name": name, "type": "module"}))
+                git_env = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+                def git(*args: str) -> None:
+                    subprocess.run(
+                        ["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=fixture",
+                         "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", *args],
+                        cwd=root, env=git_env, check=True, capture_output=True,
+                    )
+                git("init", "-q")
+                git("add", ".gitignore", str(_BUILD.CLI_ENTRYPOINT))
+                imported = entry.parent / "source.js"
+                imported.write_text("export default 'actual imported source';\n")
+                if tracked:
+                    git("add", str(imported.relative_to(root)))
+                git("commit", "-qm", "fixture")
+                build = asyncio.run(_BUILD.build_kinu_binary(root))
+                self.assertIsNotNone(build.source_sha)
+                self.assertEqual(build.source_dirty, not tracked)
 
 
 if __name__ == "__main__":
