@@ -162,7 +162,7 @@ describe('pruneStepToolOutputs', () => {
 describe('composePrepareStep with pruning', () => {
   test('prune applies without extensions or a cache plan', async () => {
     const messages = bigTurn();
-    const result = await composePrepareStep({ prune: budgetFor(WINDOW) }, { stepNumber: 3, messages });
+    const result = await composePrepareStep({ prune: budgetFor(WINDOW) }, { stepNumber: 3, messages, steps: [] });
     expect(result).toBeDefined();
     expect(result!.messages.length).toBe(messages.length);
     expect(outputText(resultPart(result!.messages[2]))).toContain('…[truncated:');
@@ -170,9 +170,9 @@ describe('composePrepareStep with pruning', () => {
 
   test('under budget with no extensions → no step override at all', async () => {
     const messages = bigTurn();
-    expect(await composePrepareStep({ prune: budgetFor(400_000) }, { stepNumber: 3, messages }))
+    expect(await composePrepareStep({ prune: budgetFor(400_000) }, { stepNumber: 3, messages, steps: [] }))
       .toBeUndefined();
-    expect(await composePrepareStep({}, { stepNumber: 3, messages })).toBeUndefined();
+    expect(await composePrepareStep({}, { stepNumber: 3, messages, steps: [] })).toBeUndefined();
   });
 
   // The pipeline prunes BEFORE it weaves — frozen block positions have to be
@@ -188,7 +188,7 @@ describe('composePrepareStep with pruning', () => {
     // The allowance is stated here rather than taken from MAX_OUTPUT because
     // the margin is what this test is about.
     const budget: ModelWindow = { contextWindow: 120_000, modelOutputLimit: 36_000 };
-    expect(await composePrepareStep({ prune: budget }, { stepNumber: 3, messages }))
+    expect(await composePrepareStep({ prune: budget }, { stepNumber: 3, messages, steps: [] }))
       .toBeUndefined();
 
     // A busy turn's worth of frozen blocks — a block is appended whenever live
@@ -202,7 +202,7 @@ describe('composePrepareStep with pruning', () => {
     const result = await composePrepareStep({
       prune: budget,
       dynamic: { ledger, snapshot: () => ({}) },
-    }, { stepNumber: 3, messages });
+    }, { stepNumber: 3, messages, steps: [] });
 
     expect(result).toBeDefined();
     expect(outputText(resultPart(result!.messages[2]))).toContain('…[truncated:');
@@ -215,7 +215,7 @@ describe('composePrepareStep with pruning', () => {
     const messages: ModelMessage[] = [{ role: 'user', content: 'go' }];
     for (let i = 0; i < 6; i++) messages.push(...toolExchange(i, 28_000));
     const callerReserve = { ...budgetFor(WINDOW), reservedTokens: 5_000 };
-    const bare = await composePrepareStep({ prune: callerReserve }, { stepNumber: 1, messages });
+    const bare = await composePrepareStep({ prune: callerReserve }, { stepNumber: 1, messages, steps: [] });
     expect(bare).toBeDefined();
     expect(outputText(resultPart(bare!.messages[2]))).toContain('…[truncated:');
     // An empty ledger (zero overhead) must preserve the caller reserve, not erase it.
@@ -223,17 +223,14 @@ describe('composePrepareStep with pruning', () => {
     const result = await composePrepareStep({
       prune: callerReserve,
       dynamic: { ledger, snapshot: () => ({}) },
-    }, { stepNumber: 1, messages });
+    }, { stepNumber: 1, messages, steps: [] });
     expect(result).toBeDefined();
     expect(outputText(resultPart(result!.messages[2]))).toContain('…[truncated:');
   });
 
   test('cache markers land LAST, on the pruned array', async () => {
     const messages = bigTurn();
-    const result = await composePrepareStep(
-      { cache: { strategy: { kind: 'anthropic' } }, prune: budgetFor(WINDOW) },
-      { stepNumber: 3, messages },
-    );
+    const result = await composePrepareStep({ cache: { strategy: { kind: 'anthropic' } }, prune: budgetFor(WINDOW) }, { stepNumber: 3, messages, steps: [] });
     expect(result).toBeDefined();
     const out = result!.messages;
     // Pruning happened…

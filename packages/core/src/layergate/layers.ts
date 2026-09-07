@@ -566,16 +566,13 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             name: 'test.steer',
             prepareStep: (ctx) => [...ctx.messages, { role: 'user', content: 'steered' }],
           });
-          const out = await s.composePrepareStep(
-            {
-              extensions: host,
-              cache: { strategy: { kind: 'anthropic' } },
-              // Reserve chosen so the admitted limit is the same 140_000 this
-              // probe has always observed: min(60_000, 200_000/2) = 60_000.
-              prune: { contextWindow: 200_000, modelOutputLimit: 60_000 },
-            },
-            { stepNumber: 1, messages: shortHistory() },
-          );
+          const out = await s.composePrepareStep({
+            extensions: host,
+            cache: { strategy: { kind: 'anthropic' } },
+            // Reserve chosen so the admitted limit is the same 140_000 this
+            // probe has always observed: min(60_000, 200_000/2) = 60_000.
+            prune: { contextWindow: 200_000, modelOutputLimit: 60_000 },
+          }, { stepNumber: 1, messages: shortHistory(), steps: [] });
           return out?.messages;
         },
       },
@@ -604,14 +601,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             ledger: new FixedBlockLedger(),
             snapshot: () => ({ factsBlock: `a: ${step++}` }),
           };
-          const first = await s.composePrepareStep(
-            { cache: { strategy: { kind: 'anthropic' } }, dynamic },
-            { stepNumber: 0, messages: shortHistory() },
-          );
-          const second = await s.composePrepareStep(
-            { cache: { strategy: { kind: 'anthropic' } }, dynamic },
-            { stepNumber: 1, messages: [...shortHistory(), { role: 'assistant', content: 'ok' }] },
-          );
+          const first = await s.composePrepareStep({ cache: { strategy: { kind: 'anthropic' } }, dynamic }, { stepNumber: 0, messages: shortHistory(), steps: [] });
+          const second = await s.composePrepareStep({ cache: { strategy: { kind: 'anthropic' } }, dynamic }, { stepNumber: 1, messages: [...shortHistory(), { role: 'assistant', content: 'ok' }], steps: [] });
           return {
             firstLength: first?.messages.length,
             secondLength: second?.messages.length,
@@ -623,7 +614,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       {
         id: 'step-pipeline/compose-noop-is-undefined',
         asserts: 'nothing to change ⇒ no step override at all (the SDK keeps its own array)',
-        observe: async (s) => s.composePrepareStep({}, { stepNumber: 0, messages: shortHistory() }),
+        observe: async (s) => s.composePrepareStep({}, { stepNumber: 0, messages: shortHistory(), steps: [] }),
       },
       {
         id: 'step-pipeline/prune-under-budget-noop',
