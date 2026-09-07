@@ -342,7 +342,7 @@ export function ledgerTotalsFromEvents(events: readonly RunEvent[]): LedgerTotal
       toolCalls += 1;
       toolNames.push(event.name);
       const failure = classifyToolFailure(event);
-      if (failure) failures.push(`${event.name}: ${failure.reason}`);
+      if (failure) failures.push(`${event.name}: ${event.error ?? failure.reason}`);
     } else if (event.type === 'step_finish') {
       steps += 1;
     } else if (event.type === 'error') {
