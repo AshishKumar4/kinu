@@ -186,8 +186,14 @@ if (import.meta.main) {
       replacement: 'node:util.parseArgs tokenizes declared options; benchmark domain validation remains local',
       proof: 'bun test scripts/bench-devbox-decision.test.ts --test-name-pattern "standard option syntax|frozen scope|verify-only wins"' }];
   if (process.argv.includes('--write') && pending.length === 0) writeFileSync(new URL('./pattern-inventory.json', import.meta.url), `${JSON.stringify({
-    measuredOn: '2026-09-06', ...result, sites: result.sites.map(located), candidates: result.candidates.map(located), replacements,
+    candidates: result.candidates.map(({ file, kind, owner, source, decision }) => ({
+      file, kind, owner, sourceSha256: sourceHash(source), decision,
+    })),
   }, null, 2)}\n`);
-  process.stdout.write(`pattern-inventory: ${result.measured.length} measured = ${governed.length} governed files; ${result.sites.length} sites; ${JSON.stringify(result.counts)}; ${result.candidates.length} candidates; ${pending.length} unreviewed; ${replacements.length} parsers replaced. Blind spots: runtime aliases of RegExp, implicit regex coercion, unnamed scanners, other native languages, and vendored agent-core output. Python uses its AST; shell entries identify whole pattern commands, not each embedded language token. Classification is syntactic. A review matches only unchanged source bytes, file, owner and kind; changed dependencies or surrounding semantics need human review. Review decisions in the artifact remain author assertions.\n`);
+  if (process.argv.includes('--json')) {
+    process.stdout.write(`${JSON.stringify({ ...result, sites: result.sites.map(located), candidates: result.candidates.map(located), replacements }, null, 2)}\n`);
+  } else {
+    process.stdout.write(`pattern-inventory: ${result.measured.length} measured = ${governed.length} governed files; ${result.sites.length} sites; ${JSON.stringify(result.counts)}; ${result.candidates.length} candidates; ${pending.length} unreviewed; ${replacements.length} parsers replaced. Blind spots: runtime aliases of RegExp, implicit regex coercion, unnamed scanners, other native languages, and vendored agent-core output. Python uses its AST; shell entries identify whole pattern commands, not each embedded language token. Classification is syntactic. A review matches only unchanged source bytes, file, owner and kind; changed dependencies or surrounding semantics need human review. Review decisions in the artifact remain author assertions. --json emits the complete current inventory.\n`);
+  }
   if (pending.length > 0) process.exitCode = 1;
 }
