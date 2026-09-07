@@ -15,6 +15,7 @@ import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types';
 import type { SqlValue } from '../src/types/primitives';
 import { MAX_LINES_PER_FILE } from '../src/vfs/diff';
 import { collectWorkspaceTextFiles, createTestRuntime, makeAgentDatabase } from './helpers';
+import { commandResult, type CommandResult } from '../src/execution/exec-result';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
 
@@ -237,7 +238,7 @@ describe('workspace diff lifecycle', () => {
   });
 
   test('a failed git subcommand is an Output error, never an empty successful diff', async () => {
-    const responses = ['/repo', 'yes', 'Error (exit 128)\nfatal: index corrupt'];
+    const responses: CommandResult[] = ['/repo', 'yes', { reason: 'io', error: 'Error (exit 128)\nfatal: index corrupt' }];
     const provider: ExecutorProvider = {
       name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']),
       homeDir: async () => '/workspace',
@@ -275,14 +276,11 @@ describe('workspace diff lifecycle', () => {
     // The shell the executor tool stands in for. It runs `git` too, so it needs
     // the same clean environment: under a git hook the inherited GIT_DIR points
     // the diff at the developer's checkout instead of `repo`.
-    const exec = async (command: string): Promise<string> => {
+    const exec = async (command: string): Promise<CommandResult> => {
       const result = Bun.spawnSync(['bash', '-lc', command], {
         cwd: repo, env: gitEnv(), stdout: 'pipe', stderr: 'pipe',
       });
-      const stdout = result.stdout.toString();
-      const stderr = result.stderr.toString();
-      if (result.exitCode === 0) return stdout || (stderr ? stderr : '(no output)');
-      return `Error (exit ${result.exitCode})${stdout ? `\n--- stdout ---\n${stdout}` : ''}${stderr ? `\n--- stderr ---\n${stderr}` : ''}`;
+      return commandResult({ stdout: result.stdout.toString(), stderr: result.stderr.toString(), exitCode: result.exitCode });
     };
     const provider: ExecutorProvider = {
       name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']),
