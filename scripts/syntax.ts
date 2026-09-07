@@ -679,6 +679,27 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
     } else if (raw.type === 'AssignmentPattern') bind(raw.left, scope);
     else if (raw.type === 'RestElement') bind(raw.argument, scope);
   };
+  const bindVariable = (node: SyntaxNode, scope: ImportScope): void => {
+    const { raw } = node;
+    if (raw.type !== 'VariableDeclarator') return;
+    let target = scope;
+    if (node.parent?.raw.type === 'VariableDeclaration' && node.parent.raw.kind === 'var') {
+      while (!target.functionScope && target.parent !== undefined) target = target.parent;
+    }
+    bind(raw.id, target);
+    const imported = raw.init?.type === 'AwaitExpression' && raw.init.argument.type === 'ImportExpression'
+      ? literalString(raw.init.argument.source) : undefined;
+    if (imported === undefined) return;
+    if (raw.id.type === 'Identifier') bind(raw.id, target, { specifier: imported, imported: NAMESPACE }, true);
+    else if (raw.id.type === 'ObjectPattern') {
+      for (const property of raw.id.properties) {
+        if (property.type !== 'Property' || property.value.type !== 'Identifier') continue;
+        const name = !property.computed && property.key.type === 'Identifier'
+          ? property.key.name : literalString(property.key);
+        if (name !== undefined) bind(property.value, target, { specifier: imported, imported: name }, true);
+      }
+    }
+  };
   const visit = (node: SyntaxNode, enclosing: ImportScope): void => {
     const { raw } = node;
     if ((raw.type === 'FunctionDeclaration' || raw.type === 'ClassDeclaration') && raw.id !== null) {
@@ -705,26 +726,7 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
         bind(specifier.local, scope, { specifier: raw.source.value, imported });
       }
     }
-    if (raw.type === 'VariableDeclarator') {
-      let target = scope;
-      if (node.parent?.raw.type === 'VariableDeclaration' && node.parent.raw.kind === 'var') {
-        while (!target.functionScope && target.parent !== undefined) target = target.parent;
-      }
-      bind(raw.id, target);
-      const imported = raw.init?.type === 'AwaitExpression' && raw.init.argument.type === 'ImportExpression'
-        ? literalString(raw.init.argument.source) : undefined;
-      if (imported !== undefined) {
-        if (raw.id.type === 'Identifier') bind(raw.id, target, { specifier: imported, imported: NAMESPACE }, true);
-        else if (raw.id.type === 'ObjectPattern') {
-          for (const property of raw.id.properties) {
-            if (property.type !== 'Property' || property.value.type !== 'Identifier') continue;
-            const name = !property.computed && property.key.type === 'Identifier'
-              ? property.key.name : literalString(property.key);
-            if (name !== undefined) bind(property.value, target, { specifier: imported, imported: name }, true);
-          }
-        }
-      }
-    }
+    bindVariable(node, scope);
     for (const child of node.children) visit(child, scope);
   };
   visit(tree, moduleScope);
