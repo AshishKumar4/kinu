@@ -45,14 +45,17 @@ actors that work inside it.
   registry row all key on the workspace name. The default agent has no separate
   name. It is the workspace's voice.
 - A workspace preview hostname carries the name too, and a hostname label is
-  narrower than the name grammar: lowercase letters, digits and hyphens, at
-  most 31 characters, no case. Every auto-minted slug fits. A name chosen
-  with `kinu create <name>` or the REST `name` field may not (uppercase, a
-  dot, an underscore, more than 31 characters), and because the name is the
-  object's address it cannot be brought into shape later. Such a workspace
-  keeps its shell, files and sandbox previews. Its workspace previews have no
-  URL. The Ports surface and the `expose` refusal say why
-  (`cf-backend/src/lib/nimbus-preview-host.ts`, `workspacePreviewNameRefusal`).
+  narrower than the old name grammar: lowercase letters, digits and hyphens, at
+  most 31 characters, no case. That grammar is now the one workspace address
+  rule (`core/src/identity/naming.ts`, `workspaceAddressRefusal`,
+  `WORKSPACE_ADDRESS_MAX`): every auto-minted slug fits, a generated fork name
+  is a fresh slug rather than `<source>-fork-<id>`, and a name chosen with
+  `kinu create <name>`, the REST `name` field or a fork dialog is refused at
+  creation with the limit, never truncated — a truncated name would address a
+  different workspace. Workspaces created before this rule under a name a label
+  cannot carry keep their shell, files and sandbox previews; their workspace
+  previews have no URL, and the Ports surface and the `expose` refusal say why
+  (`cf-backend/src/lib/nimbus-preview-host.ts`).
 - Ownership is workspace-level. `workspace_identity.owner_user_id` is the
   single ownership root. The UserDO `user_workspaces` table is the user's
   registry of workspaces (source of truth for the sidebar, CLI list, and the

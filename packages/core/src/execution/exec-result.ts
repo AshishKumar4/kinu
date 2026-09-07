@@ -40,7 +40,7 @@
  */
 
 import * as v from 'valibot';
-import { ERROR_CODES, refusalOf, tolerate, type KinuError, type Refusal } from '../obs/index';
+import { ERROR_CODES, refusalOf, tolerate, KinuError, type Refusal } from '../obs/index';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../tools/file-edit';
 
@@ -55,6 +55,7 @@ export interface ExecOutcome {
   readonly stdout?: string;
   readonly stderr?: string;
   readonly exitCode?: number;
+  readonly refusal?: Refusal;
 }
 
 export const STDOUT_LABEL = '--- stdout ---';
@@ -82,8 +83,8 @@ export const NO_OUTPUT = '(no output)';
  * `tools/file-tool.ts` returns its refusals and `run`'s escalation paths return
  * theirs.
  */
-export function refusalText(error: KinuError): string {
-  return JSON.stringify(refusalOf(error));
+export function refusalText(error: KinuError | Refusal): string {
+  return JSON.stringify(error instanceof KinuError ? refusalOf(error) : { reason: error.reason, error: error.error });
 }
 
 /**
@@ -127,6 +128,7 @@ export function answeredRefusal(payload: JsonValue): Refusal | null {
 }
 
 export function formatExecResult(result: ExecOutcome): string {
+  if (result.refusal !== undefined) return refusalText(result.refusal);
   const stdout = result.stdout ?? '';
   const stderr = result.stderr ?? '';
   const exitCode = result.exitCode ?? 0;

@@ -21,6 +21,7 @@ import type { JsonObject, JsonValue } from '../utils/json';
  * portability layer a backend author reads.
  */
 export type { SqlValue, SqlExecutor } from '@kinu.run/agent-utils';
+import type { Refusal } from '../obs/error';
 
 /**
  * Raw SQL execution for DDL statements that don't use parameter binding.
@@ -219,6 +220,8 @@ export interface ShellExecResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  /** The command never ran; this producer-owned classification is not process stdout/stderr. */
+  refusal?: Refusal;
 }
 
 export interface Shell {

@@ -231,7 +231,7 @@ import {
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
-  toolsForInvocation, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission,
+  toolsForInvocation, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, parseRefusal, SHELL_COMMAND_MEMBERS,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle,
 } from "@kinu.run/core";
@@ -4496,6 +4496,12 @@ export abstract class ActorAgent extends Think<Env> {
         const answered = await provider.tools[route.member]?.execute(...route.args);
         const value = v.safeParse(JsonValueSchema, answered === undefined ? null : answered);
         if (!value.success) throw new KinuError('bad_input', `${route.namespace}.${route.member} answered a value that is not JSON`, { cause: new v.ValiError(value.issues) });
+        // A shell-command member of an executor renders on the classified text
+        // channel; a refusal it answered is the gate's decision, not command output.
+        const shellMember = v.is(v.picklist(SHELL_COMMAND_MEMBERS), route.member);
+        const rendered = shellMember && this.rt.executionRouter?.getProvider(route.namespace) !== undefined ? v.safeParse(v.string(), value.output) : undefined;
+        const refused = rendered?.success ? parseRefusal(rendered.output) : null;
+        if (refused !== null && refused !== undefined) throw new KinuError(refused.reason, refused.error);
         return value.output;
       }
       case 'mcp': {
