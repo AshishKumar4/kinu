@@ -170,3 +170,44 @@ source runtime. Operations requiring absent build, process, or deployment
 capabilities explicitly refuse as unsupported rather than invoking provider
 stubs. The working resident preview path above is separate from those optional
 effects. No external deployment or resource provisioning is implied by commit.
+
+## Deployed acceptance, 2026-09-07
+
+Production `kinu.run` at commit `dbc2c5797` (Worker version
+`3a269c61-df4b-47e7-b1a2-06ffb6215d0c`), driven through the stored CLI
+credential, `POST /api/cli/workspaces`, a connect-ticket `AgentClient` session
+held open for the run, `/api/cli/workspaces/:name/rpc`, and a clean headless
+Chromium with no Kinu cookie. Two disposable workspaces were created and
+deleted through the same API; the listing showed neither afterwards. The
+browser-cookie workspace surface (the Work tab's `SlateFrame`) was not driven
+here; the local production-build proof above covers it.
+
+Observed on the deployment:
+
+- Authored TypeScript server, TSX client and CSS: compiled by the resident
+  process, served on the signed preview origin, rendered by React, and a button
+  `POST /api/count` that wrote through the introduced `FILES` binding; the
+  workspace file read back the new count.
+- Source refresh: the same preview URL served a rewritten JavaScript/JSX tree
+  without a new expose.
+- Versions: commit, history (two versions, parent link), fork into a new slate,
+  an `app` binding hop into the fork answering its own marker, restore of a
+  foreign version refused `missing`, restore of the first version removing the
+  JavaScript files and serving the TypeScript UI again with the counter intact.
+- Origin isolation: a window the preview opened on `kinu.run` threw
+  `SecurityError` on `parent.document` access. A hand-built iframe of the
+  preview inside the public landing page was blocked by the landing page's own
+  `frame-src 'none'`; that is the landing CSP, not a slate result.
+- Preview recycle: an idle preview answered `410 RECYCLED_WORKSPACE_PREVIEW`;
+  `previewSlate` restored the same URL for the same owner.
+- Approval ladder: `deny_all` refused `npm publish --dry-run` through the
+  binding; `strict` parked it in `listDeferredApprovals`, which was then
+  decided `denied`. The command never ran. On that deployment the binding
+  answered `ok: true` with the rendered `NOT RUN` text, which is the defect
+  `fix(execution): classify commands the approval ladder stopped before
+  rendering` corrects: the shell producer now carries `denied` / `unavailable`
+  through `formatExecResult`, and a shell-command member of an executor namespace
+  answers a slate binding with that class.
+- Naming: the first disposable name (34 characters) was refused a preview URL
+  with the 31-character label limit; creation now refuses such a name up front
+  (`docs/WORKSPACES.md`).
