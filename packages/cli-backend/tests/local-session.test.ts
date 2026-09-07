@@ -3489,7 +3489,8 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
           model: DEFAULT_WORKERS_AI_MODEL_ID,
         },
         credentials: {},
-        cloud: { origin, token: TOKEN, sessionAffinity: 'kinu-jarvis' },
+        cloud: { origin, token: TOKEN },
+        sessionAffinity: 'kinu-jarvis',
       });
       const { db, session, events } = setupWithResolver(resolver);
       expect(session.getEffectiveModelSpec()).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);

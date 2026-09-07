@@ -602,6 +602,12 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 ### Fixed
 
 - Sidebar ages align with the row's right edge. Fenced code and source previews show syntax colors and retain copy and scrolling.
+- Workers AI SDK requests now carry the configured reasoning effort to both the HTTP endpoint and native binding adapter. The policy defaults and output limits are unchanged.
+- Explicit Workers AI endpoints now receive the agent's replica pin; caller-supplied affinity headers retain precedence regardless of header case. No live cache or latency improvement is claimed.
+- Public-plane eval records retain ledger, history, spend and failed-attempt evidence without duplicate outcome rows. Artifact read-back requires a successful read in the requested prompt's run; recovery executes the unchanged seeded test rather than matching source text. Missing files are misses, while authorization and server failures remain infrastructure errors.
+- Harbor retains interrupted usage and all repetitions without dropping verifier successes, failures or unscored attempts. Complete-usage claims require a per-call census; contradictory cached-input counts cannot become zero-cost complete trials.
+- The compiled Harbor adapter ships Nimbus assets using the CLI's shared runtime manifest. The pi comparator uses isolated file-based credentials and explicit version/model metadata; its stdlib tests no longer import Harbor or mock its agent loop. Live comparison remains unmeasured.
+
 - The slate first-run gate requires an HTTP preview that answers the authored request. An unavailable preview fails both checks.
 - Model selection loads connected account providers before normalizing their identifiers, so a catalog provider is not stored under the default provider.
 - A head at the recursion limit can finish its own tool work. Exhausted split depth blocks new children, not the current head.

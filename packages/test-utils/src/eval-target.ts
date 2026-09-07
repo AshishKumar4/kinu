@@ -68,7 +68,7 @@
  * its target. Every reader a suite needs is expressed over `RunEvent[]` or over
  * a core read-model type, both of which cross the wire intact.
  */
-import { listRuns, RunEventRecorder } from '@kinu.run/core';
+import { classifyToolFailure, listRuns, RunEventRecorder } from '@kinu.run/core';
 import type {
   LLMProviderConfig, RunEvent, SeekCursor, VFS, WorkspaceSpend,
 } from '@kinu.run/core';
@@ -341,7 +341,8 @@ export function ledgerTotalsFromEvents(events: readonly RunEvent[]): LedgerTotal
     } else if (event.type === 'tool_call_end') {
       toolCalls += 1;
       toolNames.push(event.name);
-      if (event.error != null && event.error !== '') failures.push(`${event.name}: ${event.error}`);
+      const failure = classifyToolFailure(event);
+      if (failure) failures.push(`${event.name}: ${failure.reason}`);
     } else if (event.type === 'step_finish') {
       steps += 1;
     } else if (event.type === 'error') {
@@ -351,6 +352,21 @@ export function ledgerTotalsFromEvents(events: readonly RunEvent[]): LedgerTotal
     }
   }
   return { turns, toolCalls, toolNames, tokensIn, tokensOut, reasoningOut, steps, failures };
+}
+
+/**
+ * Time order over a whole ledger: timestamp, then run, then the recorder's own
+ * index within the run.
+ *
+ * One comparator, because every reader that assembles a multi-run episode has
+ * to sort the same way and three of them (the local provenance collector, the
+ * public session, the cloud target) each carried their own copy. A published
+ * trail is read in time order; the walk that produced it is per run.
+ */
+export function compareRunEventOrder(a: RunEvent, b: RunEvent): number {
+  return a.timestamp.localeCompare(b.timestamp)
+    || a.runId.localeCompare(b.runId)
+    || a.eventIndex - b.eventIndex;
 }
 
 /**

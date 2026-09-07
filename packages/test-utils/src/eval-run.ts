@@ -28,14 +28,15 @@ import { execFileSync } from 'node:child_process';
 import * as v from 'valibot';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { LiveModelSpend } from './live-model';
+import { recordNoModelEpisode, recordUnmeasuredEpisode, recordWorkspaceSpend, type LiveModelSpend } from './live-model';
 import {
-  BUILTIN_TOOLS, minimumPairsForSignificance, requiredPairs,
-  type SqlExecutor,
+  BUILTIN_TOOLS, classifyToolFailure, minimumPairsForSignificance, requiredPairs,
+  type RunEvent, type SqlExecutor, type WorkspaceSpend, type ToolOutcome,
 } from '@kinu.run/core';
 import { gitEnv } from './git';
 import { BEHAVIOUR_SCORERS, type BehaviourScorer } from './agent-evals';
-import { TASK_OUTCOME, isCovariateRow } from './eval-outcome';
+import { TASK_OUTCOME, isCovariateRow, type EvalSubgoal } from './eval-outcome';
+import { compareRunEventOrder } from './eval-target';
 
 /**
  * The two DeepSeek arms, verified against the account's own model list rather
@@ -101,15 +102,7 @@ export interface EvalScoreRow {
   readonly passed: number;
   readonly rate: number | null;
   readonly detail: string;
-  /**
-   * Raw measured quantities behind the score, when it came from a measurement
-   * rather than a count — elapsed ms, an operation count, the reference baseline
-   * a ratio was divided by.
-   *
-   * Structured rather than folded into `detail` because a ratio is only
-   * reproducible if what it was divided by survives beside it. Written by
-   * `outcomeRow` (eval-outcome.ts); the mechanism scorers do not set it.
-   */
+  /** Raw measurement inputs and attributed/unmeasured tool counts. */
   readonly measured?: Readonly<Record<string, number>>;
 }
 
@@ -128,6 +121,8 @@ export interface EvalProvenanceEvent {
   /** Why a tool call failed, as the failure's CLASS (`exit_127`, `threw`,
    *  `denied`, …) — never its text. */
   readonly failureClass?: string;
+  /** The actual producer outcome; absent on historical unmeasured records. */
+  readonly outcome?: ToolOutcome;
 }
 
 /** A bounded slice of one observation's raw run-event ledger. `bound` states
@@ -137,6 +132,182 @@ export interface EvalRunProvenance {
   readonly totalEvents: number;
   readonly bound: number;
   readonly events: readonly EvalProvenanceEvent[];
+}
+
+/** How many run events one observation's provenance may carry. A long episode
+ *  can produce thousands of rows; the bound keeps a published record a record
+ *  rather than a second copy of the ledger, and `totalEvents` beside it says
+ *  exactly how much a clipped slice is not showing. */
+export const PROVENANCE_EVENT_BOUND = 500;
+
+/**
+ * An episode's run-event trail, in time order, bounded and stripped of
+ * everything that could quote the prompt or a secret.
+ *
+ * OVER EVENTS, NOT OVER A STORE, for the reason `ledgerTotalsFromEvents` is:
+ * the local harness walks a `bun:sqlite` store and the public-plane families
+ * fetch the same `RunEvent[]` over the run-event routes, and the projection was
+ * only ever the shared half. Until it lived here the behaviour arm was the one
+ * family whose observations carried provenance, and a trajectory record named a
+ * `transcripts` directory holding nothing but itself.
+ *
+ * WHAT IS DROPPED, deliberately: `userMessage` (the prompt), `args`, `result`,
+ * `messages`, `error`/`details` text (an error string can quote file contents),
+ * and the model-authored prose fields. What survives is what happened, never
+ * what was said. A failed tool call keeps its failure CLASS from
+ * `classifyToolFailure` (`exit_127`, `threw`, `denied`, …) so a record can be
+ * triaged without reopening anything.
+ */
+export function projectRunEventProvenance(events: readonly RunEvent[]): EvalRunProvenance {
+  const projected = [...events].sort(compareRunEventOrder).map((event): EvalProvenanceEvent => {
+    const base = {
+      runId: event.runId, timestamp: event.timestamp, eventIndex: event.eventIndex, type: event.type,
+    };
+    if (event.type !== 'tool_call_end') return base;
+    // `undefined` for an unreported duration or a clean call: the interface
+    // admits it, `JSON.stringify` drops it, and the wire copy in the behaviour
+    // harness omits it — so a published row never carries the key.
+    return {
+      ...base, name: event.name, durationMs: event.durationMs,
+      failureClass: classifyToolFailure(event)?.reason,
+      outcome: event.outcome,
+    };
+  });
+  return {
+    totalEvents: projected.length,
+    bound: PROVENANCE_EVENT_BOUND,
+    events: projected.slice(0, PROVENANCE_EVENT_BOUND),
+  };
+}
+
+/**
+ * What a PUBLIC-PLANE episode leaves behind: the ledger the scores were computed
+ * from, the durable transcript the web pane is seeded from, and the verdicts.
+ *
+ * The local families retain the agent's own SQLite store under `transcripts`,
+ * which is the whole trajectory; a deployed workspace's store is inside a
+ * Durable Object and the run-event and message routes are the only copies this
+ * process ever holds. So they are written down, per case, in the directory the
+ * record names — or the record's `transcripts` field points at a directory
+ * holding only the record, which is what every trajectory record published
+ * before this existed did, and why a tool-failure count in one named no call.
+ */
+export interface EpisodeTranscript {
+  readonly events: readonly RunEvent[];
+  readonly history: readonly { readonly role: string; readonly text: string }[];
+  readonly subgoals: readonly EvalSubgoal[];
+}
+
+/** The files one retained episode is: the raw ledger as JSON lines (one event a
+ *  row, so a clipped read is still parseable), and the transcript and verdicts
+ *  as documents. Named here so a reader and the writer agree. */
+export const EPISODE_TRANSCRIPT_FILES = {
+  events: 'events.jsonl', history: 'history.json', subgoals: 'subgoals.json',
+} as const;
+
+/**
+ * Retain one episode's transcript under `<transcripts>/<taskId>/`, and return
+ * that directory. Written BEFORE the case's subgoals are asserted, so a case
+ * that missed one leaves the evidence that says how.
+ */
+export function retainEpisodeTranscript(
+  transcripts: string, taskId: string, transcript: EpisodeTranscript,
+): string {
+  const dir = join(transcripts, taskId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, EPISODE_TRANSCRIPT_FILES.events),
+    transcript.events.map((event) => JSON.stringify(event)).join('\n') + (transcript.events.length > 0 ? '\n' : ''),
+  );
+  writeFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.history), `${JSON.stringify(transcript.history, null, 2)}\n`);
+  writeFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.subgoals), `${JSON.stringify(transcript.subgoals, null, 2)}\n`);
+  return dir;
+}
+
+export interface EpisodeEvidenceReader {
+  runEvents(): Promise<readonly RunEvent[]>;
+  history(): Promise<readonly { readonly role: string; readonly text: string }[]>;
+  spend(): Promise<WorkspaceSpend>;
+}
+
+export interface EpisodeEvidence {
+  readonly events: Awaited<ReturnType<EpisodeEvidenceReader['runEvents']>>;
+  readonly history: Awaited<ReturnType<EpisodeEvidenceReader['history']>>;
+  readonly spend: WorkspaceSpend;
+}
+
+/** Capture each channel independently, even after the operation fails. Collection
+ *  is memoized so an assertion failure cannot account for the same spend twice.
+ *  Callers retain workspace ownership and tear down only after this returns. */
+export async function withEpisodeEvidence<T>(
+  reader: EpisodeEvidenceReader,
+  options: { readonly transcripts: string; readonly taskId: string; readonly modelCalls: 'expected' | 'none' },
+  operation: (collect: () => Promise<EpisodeEvidence>) => Promise<T>,
+): Promise<T> {
+  const dir = join(options.transcripts, options.taskId);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  let collection: Promise<EpisodeEvidence> | null = null;
+  const collect = (): Promise<EpisodeEvidence> => {
+    collection ??= (async () => {
+      const [events, history, spend] = await Promise.allSettled([
+        reader.runEvents(), reader.history(), reader.spend(),
+      ]);
+      const errors: Error[] = [];
+      const status: { channel: string; status: string; reason?: string }[] = [];
+      if (spend.status === 'fulfilled') {
+        if (options.modelCalls === 'none' && spend.value.total.calls === 0) {
+          recordNoModelEpisode(spend.value);
+        } else {
+          recordWorkspaceSpend(spend.value);
+          if (options.modelCalls === 'none' || spend.value.total.calls === 0) {
+            errors.push(new Error(`${options.taskId}: expected model calls ${options.modelCalls}, observed ${spend.value.total.calls}`));
+          }
+        }
+        writeFileSync(join(dir, 'spend.json'), JSON.stringify(spend.value, null, 2), { mode: 0o600 });
+      } else {
+        recordUnmeasuredEpisode();
+      }
+      if (events.status === 'fulfilled') {
+        writeFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.events),
+          events.value.map((event) => JSON.stringify(event)).join('\n'), { mode: 0o600 });
+      }
+      if (history.status === 'fulfilled') {
+        writeFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.history), JSON.stringify(history.value, null, 2), { mode: 0o600 });
+      }
+      for (const [channel, result] of [['events', events], ['history', history], ['spend', spend]] as const) {
+        if (result.status === 'fulfilled') {
+          status.push({ channel, status: 'retained' });
+        } else {
+          const error = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
+          errors.push(error);
+          status.push({ channel, status: 'failed', reason: error.message });
+        }
+      }
+      writeFileSync(join(dir, 'collection.json'), JSON.stringify(status, null, 2), { mode: 0o600 });
+      if (errors.length > 0) throw new AggregateError(errors, errors.map((error) => error.message).join('; '));
+      if (events.status !== 'fulfilled' || history.status !== 'fulfilled' || spend.status !== 'fulfilled') {
+        throw new Error('Incomplete evidence collection');
+      }
+      return { events: events.value, history: history.value, spend: spend.value };
+    })();
+    return collection;
+  };
+  let result: { ok: true; value: T } | { ok: false; error: Error };
+  try {
+    result = { ok: true, value: await operation(collect) };
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    result = { ok: false, error: failure };
+    writeFileSync(join(dir, 'failure.json'), JSON.stringify({ name: failure.name, message: failure.message }), { mode: 0o600 });
+  }
+  try {
+    await collect();
+  } catch (error) {
+    if (!result.ok) throw new AggregateError([result.error, error], result.error.message, { cause: error });
+    throw error;
+  }
+  if (!result.ok) throw result.error;
+  return result.value;
 }
 
 /** One task attempted once. `repetition` plus `taskId` is the pairing identity;
@@ -363,10 +534,7 @@ export function scoreTrajectory(
 ): EvalScoreRow[] {
   return scorers.map((scorer) => {
     const score = scorer.score(sql);
-    return {
-      name: scorer.name, asserts: scorer.asserts,
-      eligible: score.eligible, passed: score.passed, rate: score.rate, detail: score.detail,
-    };
+    return { ...score, name: scorer.name, asserts: scorer.asserts };
   });
 }
 
@@ -624,13 +792,13 @@ export function formatRunRecord(record: EvalRunRecord): string {
     const rows = scoredObs.flatMap((o) => o.scores.filter((s) => s.name === name));
     const eligible = rows.reduce((n, r) => n + r.eligible, 0);
     const passed = rows.reduce((n, r) => n + r.passed, 0);
-    return { eligible, passed };
+    return { eligible, passed, unmeasured: rows.some((row) => row.eligible > 0 && row.rate === null) };
   };
 
   const outcome = totals(TASK_OUTCOME);
   lines.push(`  OUTCOME — did the agent solve the task:`);
-  lines.push(`    ${TASK_OUTCOME.padEnd(20)} ${outcome.eligible === 0
-    ? 'NOT MEASURED — no task declared ground truth'
+  lines.push(`    ${TASK_OUTCOME.padEnd(20)} ${outcome.eligible === 0 || outcome.unmeasured
+    ? 'NOT MEASURED — ground truth or outcome attribution absent'
     : `${String(outcome.passed)}/${String(outcome.eligible)} = `
       + `${(outcome.passed / outcome.eligible).toFixed(3)} over `
       + `${String(a.outcomesScored)} scored attempts`}`);
@@ -639,10 +807,11 @@ export function formatRunRecord(record: EvalRunRecord): string {
   // outcome gets explained. None of it is a score.
   lines.push('  covariates (mechanism telemetry — explanatory, never a score):');
   for (const name of BEHAVIOUR_SCORERS.map((s) => s.name)) {
-    const { eligible, passed } = totals(name);
-    lines.push(`    ${name.padEnd(20)} ${eligible === 0
-      ? 'n/a — no eligible opportunity'
-      : `${String(passed)}/${String(eligible)} = ${(passed / eligible).toFixed(3)}`}`);
+    const { eligible, passed, unmeasured } = totals(name);
+    lines.push(`    ${name.padEnd(20)} ${unmeasured
+      ? `unmeasured — ${String(eligible)} observed opportunities, ${String(passed)} known successes`
+      : eligible === 0 ? 'n/a — no eligible opportunity'
+        : `${String(passed)}/${String(eligible)} = ${(passed / eligible).toFixed(3)}`}`);
   }
   return lines.join('\n');
 }

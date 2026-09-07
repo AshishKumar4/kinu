@@ -28,10 +28,9 @@
  */
 import { afterAll, describe, test } from 'vitest';
 
-import type { EvalObservation } from '@kinu.run/test-utils';
+import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-  type FirstRunSubgoal,
 } from './first-run';
 
 const SUITE = 'First-run · files-outside-tree';
@@ -68,7 +67,7 @@ const PLAN = firstRunCasePlan(SUITE, CASE);
 const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 
-afterAll(() => { publishFirstRunRecord(SUITE, [CASE], observations); });
+afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
@@ -113,7 +112,7 @@ describe(SUITE, () => {
               ? 'the read raised nothing'
               : `the read failed, and its own words were: ${error}`,
           },
-        ] satisfies FirstRunSubgoal[];
+        ] satisfies EvalSubgoal[];
       },
     }, observations);
   });

@@ -38,13 +38,12 @@ import { join } from 'node:path';
 import { afterAll, describe, test } from 'vitest';
 import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
 
-import { scratchDir, workerSession, type EvalObservation } from '@kinu.run/test-utils';
+import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { webHeaders, type PublicSessionPlan } from '../evals/public-session';
 import type { DeviceAccount } from '../evals/device-session';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-  type FirstRunSubgoal,
 } from './first-run';
 
 const SUITE = 'First-run · approve-clears';
@@ -64,7 +63,7 @@ const PLAN = firstRunCasePlan(SUITE, CASE);
 const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 
-afterAll(() => { publishFirstRunRecord(SUITE, [CASE], observations); });
+afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
@@ -182,7 +181,7 @@ describe(SUITE, () => {
                   + `of ${String(clicked.boxesBefore)})`
                 : `the Approve button was never reached: ${clicked.why}`,
             },
-          ] satisfies FirstRunSubgoal[];
+          ] satisfies EvalSubgoal[];
         },
       }, observations);
     } finally {

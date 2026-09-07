@@ -13,8 +13,9 @@ import { join } from 'node:path';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { CloudflareOAuthTokenError, refreshCloudflareCredential } from '../src/lib/cloudflare-oauth';
-import { asFetchFunction } from '@kinu.run/core';
+import { asFetchFunction, createChatModel, reasoningEffortOptions, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
+import { createDirectWorkersAIFetch } from '../src/providers/direct-workers-ai-fetch';
 
 
 /** What a rejected `generateText` hands back: the AI SDK's error, whose
@@ -36,6 +37,22 @@ function chatCompletionResponse(): Response {
     usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
   }), { headers: { 'content-type': 'application/json' } });
 }
+
+test('configured effort reaches the native Workers AI binding through its SDK transport', async () => {
+  const inputs: JsonObject[] = [];
+  const binding = { async run(_model: string, input: JsonObject) {
+    inputs.push(input);
+    return chatCompletionResponse();
+  } };
+  // SAFETY: this constructed fixture provides Ai.run, and the adapter calls no other member of the binding.
+  const fetch = createDirectWorkersAIFetch(binding as Ai);
+  const model = createChatModel({ kind: 'openai-compat', name: 'workers-ai',
+    modelId: '@cf/moonshotai/kimi-k2.6', baseURL: 'https://fixture.invalid/v1', headers: {}, fetch });
+  await generateText({ model, prompt: 'probe', maxRetries: 0, providerOptions: reasoningEffortOptions('high', 'workers-ai') });
+  expect(inputs[0]?.reasoning_effort).toBe('high');
+  expect(inputs[0]?.reasoningEffort).toBeUndefined();
+  expect(inputs[0]?.providerOptions).toBeUndefined();
+});
 
 describe('Workers AI credential refresh', () => {
   test('refresh merges rotated tokens into the stored credential shape', async () => {

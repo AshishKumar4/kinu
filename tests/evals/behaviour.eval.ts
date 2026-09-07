@@ -56,7 +56,7 @@ import type { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 
 import type { EvalCase, JsonValue, LLMProviderConfig, RunEvent } from '../../packages/core/src/index';
-import { JsonValueSchema, minimumPairsForSignificance, parseCorpus } from '../../packages/core/src/index';
+import { JsonValueSchema, minimumPairsForSignificance, parseCorpus, ToolOutcomeSchema } from '../../packages/core/src/index';
 import {
   AdoptedSpendMeter, EVAL_MODELS, FULL_TOOL_SURFACE, caseKey, findResumableEvalDir,
   formatAdoptedSpend, formatCaseCensus, hardTaskCases,
@@ -247,6 +247,7 @@ const ProgressProvenanceEventSchema: v.GenericSchema<
   name: v.optional(v.string()),
   durationMs: v.optional(v.number()),
   failureClass: v.optional(v.string()),
+  outcome: v.optional(ToolOutcomeSchema),
 });
 
 const ProgressProvenanceSchema: v.GenericSchema<BehaviourOutput['provenance']> = v.object({

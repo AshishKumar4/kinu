@@ -49,12 +49,12 @@ export KINU_EVAL_BACKEND=cloud
 # spells it: being driven by this script is the consent.
 export KINU_EVAL_LIVE=1
 
-REPORT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kinu-first-run-XXXXXX")"
+REPORT_DIR="$(bun scripts/bench-retention.ts --family first-run --backend cloud)"
+echo "retained reports: $REPORT_DIR"
 JUNIT="$REPORT_DIR/junit-first-run.xml"
 SPEND="$REPORT_DIR/spend-first-run.jsonl"
 : > "$SPEND"
 export KINU_EVAL_SPEND_FILE="$SPEND"
-trap 'rm -rf "$REPORT_DIR"' EXIT
 
 # Resolve the identity and put it where `resolveLiveModel` looks. MUST be here
 # rather than inside a suite: `scripts/test-scratch-home.ts` strips the
@@ -93,6 +93,8 @@ echo "Operator-only checks need their explicit target and authority; skipped cas
 # `bun --bun` is REQUIRED, not stylistic: the pty case spawns through
 # `Bun.spawnSync` and the public session opens a header-carrying WebSocket,
 # neither of which exists under node-hosted vitest.
+# A failing suite must still report the spend it incurred.
+set +e
 bun --bun vitest run --config vitest.first-run.config.ts \
   --reporter=default --reporter=junit --outputFile="$JUNIT"
 STATUS=$?

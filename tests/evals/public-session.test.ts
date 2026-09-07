@@ -28,13 +28,20 @@
  *                 number incomparable with a local one, silently.
  */
 import { describe, expect, test } from 'bun:test';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import * as v from 'valibot';
 
-import { BEHAVIOUR_SCORERS, ledgerTotalsFromEvents, TASK_OUTCOME } from '@kinu.run/test-utils';
+import {
+  BEHAVIOUR_SCORERS, EPISODE_TRANSCRIPT_FILES, ledgerTotalsFromEvents, projectRunEventProvenance,
+  retainEpisodeTranscript, scratchDir, TASK_OUTCOME, withEpisodeEvidence, liveModelSpend, resetLiveModelSpend,
+} from '@kinu.run/test-utils';
+import { RunEventSchema, type RunEvent, type WorkspaceSpend } from '../../packages/core/src/index';
 import {
   PUBLIC_IDENTITY_ENV, decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity, scorePublicLedger,
   type PublicTurnRecorder,
+  KinuPublicSession,
 } from './public-session';
 import {
   BROADCAST_FRAME, DEGENERATE_EVENTS, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID, LEDGER_EVENTS,
@@ -315,13 +322,11 @@ describe('route-shaped run events score through the production instruments', () 
     // Every declared scorer, over one store: this is the assertion that the
     // bridge did not quietly narrow the panel.
     expect(rows.map((row) => row.name).sort()).toEqual(BEHAVIOUR_SCORERS.map((scorer) => scorer.name).sort());
-    // `tool_outcomes` is the coarse instrument with a denominator on any task,
-    // and the row it must not get wrong is the command that RAN and exited 1 —
-    // an ordinary successful tool result whose text begins `Error (exit 1)`.
+    // The process exit is producer evidence, not a pattern in rendered output.
     const outcomes = byName.get('tool_outcomes');
     expect(outcomes?.eligible).toBe(4);
     expect(outcomes?.passed).toBe(3);
-    expect(outcomes?.detail).toContain('3/4 tool calls returned');
+    expect(outcomes?.measured).toEqual({ succeeded: 3, failed: 1, unmeasured: 0 });
     // `edit_landing` reports attempts against applied, so its rate is below 1
     // here rather than a vacuous 1/1.
     expect(byName.get('edit_landing')?.eligible).toBe(2);
@@ -357,4 +362,122 @@ describe('route-shaped run events score through the production instruments', () 
     // finding is "the turn wrote no row".
     for (const row of scorePublicLedger([])) expect(row.eligible).toBe(0);
   });
+
+  test('the record\'s provenance is the ledger\'s shape with every payload stripped', () => {
+    // Fed in REVERSE so the ordering is proven rather than inherited from the
+    // fixture: a projection that kept route order would publish a trail whose
+    // "later call of the same tool ran clean" reads backwards.
+    const provenance = projectRunEventProvenance([...LEDGER_EVENTS].reverse());
+    expect(provenance.totalEvents).toBe(LEDGER_EVENTS.length);
+    expect(provenance.events.map((event) => event.eventIndex))
+      .toEqual(LEDGER_EVENTS.map((event) => event.eventIndex));
+    // The failing `run` keeps its CLASS and its name; the clean one keeps no class.
+    const calls = provenance.events.filter((event) => event.type === 'tool_call_end');
+    expect(calls.map((event) => event.name)).toEqual(['file', 'run', 'file', 'run']);
+    expect(calls.map((event) => event.failureClass ?? null)).toEqual([null, 'exit_1', null, null]);
+    expect(calls.map((event) => event.durationMs)).toEqual([12, 900, 20, 850]);
+    expect(calls[1]?.outcome).toEqual({ success: false, reason: null, execution: { exitCode: 1 } });
+    // Nothing that was SAID survives: not the command, not the result text.
+    const serialized = JSON.stringify(provenance);
+    expect(serialized).not.toContain('bun test broken.test.ts');
+    expect(serialized).not.toContain('1 fail');
+    expect(serialized).not.toContain('args');
+  });
+
+  test('the bound clips the slice and says so, never the count', () => {
+    const long = Array.from({ length: 1_203 }, (_, index): RunEvent => ({
+      type: 'step_finish', runId: 'run-9', eventIndex: index, timestamp: '2026-08-30T12:00:00.000Z', stepIndex: index,
+      reason: 'tool-calls',
+    }));
+    const provenance = projectRunEventProvenance(long);
+    expect(provenance.totalEvents).toBe(1_203);
+    expect(provenance.events).toHaveLength(provenance.bound);
+    expect(provenance.events.at(-1)?.eventIndex).toBe(provenance.bound - 1);
+  });
+
+  test('a retained episode is readable back as the ledger, the transcript and the verdicts', () => {
+    const root = scratchDir('public-session-retention');
+    const history = [{ role: 'user', text: 'write it' }, { role: 'assistant', text: 'DONE' }];
+    const subgoals = [{ what: 'artifact', reached: false, detail: 'the file was empty' }];
+    const dir = retainEpisodeTranscript(root, 'public-file-artifact', {
+      events: LEDGER_EVENTS, history, subgoals,
+    });
+    expect(dir).toBe(join(root, 'public-file-artifact'));
+    // ONE EVENT A LINE, every one the canonical union: a clipped or concatenated
+    // read is still a parse of what was written, and a foreign shape fails here
+    // rather than in a reader a month later.
+    const lines = readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.events), 'utf8').trimEnd().split('\n');
+    expect(lines).toHaveLength(LEDGER_EVENTS.length);
+    const events = lines.map((line) => v.parse(RunEventSchema, JSON.parse(line)));
+    expect(ledgerTotalsFromEvents(events)).toEqual(ledgerTotalsFromEvents(LEDGER_EVENTS));
+    expect(JSON.parse(readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.history), 'utf8'))).toEqual(history);
+    expect(JSON.parse(readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.subgoals), 'utf8'))).toEqual(subgoals);
+    // An episode with no events leaves an EMPTY file, not a file holding one
+    // blank line that a reader would parse as a malformed event.
+    const empty = retainEpisodeTranscript(root, 'no-events', { events: [], history: [], subgoals: [] });
+    expect(existsSync(join(empty, EPISODE_TRANSCRIPT_FILES.events))).toBe(true);
+    expect(readFileSync(join(empty, EPISODE_TRANSCRIPT_FILES.events), 'utf8')).toBe('');
+  });
+
+  test('an operation failure still retains its ledger and spend exactly once', async () => {
+    resetLiveModelSpend();
+    const root = scratchDir('failed-episode-evidence');
+    const spend: WorkspaceSpend = {
+      total: { calls: 8, callsWithoutUsage: 0, unpricedCalls: 8, usage: { input: 234433, output: 29531 } },
+      producers: [], missions: [], offTurnShare: null,
+      coverage: { calls: 8, measured: 8, reported: 1, silent: [], partial: [] },
+    };
+    const reader = {
+      async runEvents() { return LEDGER_EVENTS; },
+      async history() { return [{ role: 'assistant', text: 'partial answer' }]; },
+      async spend() { return spend; },
+    };
+    try {
+      await expect(withEpisodeEvidence(reader, { transcripts: root, taskId: 'failure', modelCalls: 'expected' }, async () => {
+        throw new Error('failed after model work');
+      })).rejects.toThrow('failed after model work');
+      expect(liveModelSpend().calls).toBe(8);
+      expect(JSON.parse(readFileSync(join(root, 'failure/spend.json'), 'utf8'))).toEqual(spend);
+      const events = readFileSync(join(root, 'failure/events.jsonl'), 'utf8').split('\n').map((line) => v.parse(RunEventSchema, JSON.parse(line)));
+      expect(ledgerTotalsFromEvents(events).turns).toBe(2);
+      expect(readFileSync(join(root, 'failure/failure.json'), 'utf8')).toContain('failed after model work');
+
+      resetLiveModelSpend();
+      await expect(withEpisodeEvidence(reader, { transcripts: root, taskId: 'assertion', modelCalls: 'expected' }, async (collect) => {
+        await collect();
+        throw new Error('subgoal missed');
+      })).rejects.toThrow('subgoal missed');
+      expect(liveModelSpend().calls).toBe(8);
+
+      resetLiveModelSpend();
+      await expect(withEpisodeEvidence({ ...reader, async spend() { throw new Error('spend endpoint unavailable'); } },
+        { transcripts: root, taskId: 'outage', modelCalls: 'expected' }, async () => 'finished')).rejects.toThrow('spend endpoint unavailable');
+      expect(liveModelSpend().episodesUnmeasured).toBe(1);
+      expect(readFileSync(join(root, 'outage/history.json'), 'utf8')).toContain('partial answer');
+      expect(JSON.parse(readFileSync(join(root, 'outage/collection.json'), 'utf8'))).toContainEqual({
+        channel: 'spend', status: 'failed', reason: 'spend endpoint unavailable',
+      });
+    } finally {
+      resetLiveModelSpend();
+    }
+  });
+});
+
+test('an explicitly missing file is an oracle miss; authorization and server failures still throw', async () => {
+  let status = 404;
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('fixture failure', { status }) });
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'file-read oracle probe',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+  try {
+    await expect(session.readFile('missing.txt', { allowMissing: true })).resolves.toBe('');
+    await expect(session.readFile('missing.txt')).rejects.toThrow('404');
+    status = 403;
+    await expect(session.readFile('missing.txt', { allowMissing: true })).rejects.toThrow('403');
+    status = 503;
+    await expect(session.readFile('missing.txt', { allowMissing: true })).rejects.toThrow('503');
+  } finally {
+    await server.stop(true);
+  }
 });

@@ -356,7 +356,8 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       const resolver = createLocalModelResolver({
         llm: proxyLLMConfig(origin),
         credentials: {},
-        cloud: { origin, token: CLOUD_TOKEN, sessionAffinity: 'kinu-jarvis' },
+        cloud: { origin, token: CLOUD_TOKEN },
+        sessionAffinity: 'kinu-jarvis',
         fetch: cloudMenuFetch(origin),
       });
 
@@ -399,6 +400,53 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
     expect(providers.find((p) => p.id === 'workers-ai')?.label).toBe('Cloudflare Workers AI (local gateway)');
     expect(providers.find((p) => p.id === 'my-gateway')?.label).toBe('Your AI Gateway');
     expect(providers.find((p) => p.id === 'my-gateway')?.available).toBe(true);
+  });
+
+  test('the explicit Workers AI endpoint carries the agent replica pin without a signed-in session', async () => {
+    // The benchmark adapters run exactly this way: KINU_BASE_URL + KINU_AUTH in
+    // a container with no `kinu auth`. Measured on the 2026-09-07 pilot: 3
+    // prefix-cache hits in 14 steps when no pin was sent.
+    const seen: Array<{ affinity: string | null; auth: string | null }> = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(request) {
+        await request.json();
+        seen.push({ affinity: request.headers.get('x-session-affinity'), auth: request.headers.get('authorization') });
+        return Response.json({
+          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: 'echo',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        });
+      },
+    });
+    try {
+      const endpoint = (name: 'workers-ai' | 'openai-compat', model: string): LLMProviderConfig => ({
+        name, baseURL: `http://127.0.0.1:${server.port}/v1`, headers: { Authorization: 'Bearer cf-direct' }, model,
+      });
+      const pinned = createLocalModelResolver({
+        llm: endpoint('workers-ai', '@cf/moonshotai/kimi-k2.6'), credentials: {}, sessionAffinity: 'kinu-harbor',
+      });
+      await generateText({ model: pinned.resolveModel(null), prompt: 'ping', maxRetries: 0 });
+      // A third-party endpoint means nothing by the header, so it is not sent there.
+      const elsewhere = createLocalModelResolver({
+        llm: endpoint('openai-compat', 'gpt-4o-mini'), credentials: {}, sessionAffinity: 'kinu-harbor',
+      });
+      await generateText({ model: elsewhere.resolveModel(null), prompt: 'ping', maxRetries: 0 });
+      const explicit = createLocalModelResolver({
+        llm: { ...endpoint('workers-ai', '@cf/moonshotai/kimi-k2.6'),
+          headers: { Authorization: 'Bearer cf-direct', 'X-Session-Affinity': 'caller-pin' } },
+        sessionAffinity: 'kinu-harbor',
+      });
+      await generateText({ model: explicit.resolveModel(null), prompt: 'ping', maxRetries: 0 });
+      expect(seen).toEqual([
+        { affinity: 'kinu-harbor', auth: 'Bearer cf-direct' },
+        { affinity: null, auth: 'Bearer cf-direct' },
+        { affinity: 'caller-pin', auth: 'Bearer cf-direct' },
+      ]);
+    } finally {
+      await server.stop(true);
+    }
   });
 });
 

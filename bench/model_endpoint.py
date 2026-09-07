@@ -25,8 +25,9 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Mapping
-from pathlib import Path
+import shlex
+from collections.abc import Callable, Mapping
+from pathlib import Path, PurePath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -89,13 +90,14 @@ def eval_target_allowed(origin: str, environ: Mapping[str, str] | None = None) -
 def assert_eval_target(base_url: str, environ: Mapping[str, str] | None = None) -> str:
     """Return *base_url* unchanged, having proven a scored run may use it.
 
-    Called by every adapter before a trial starts, so the refusal arrives before
-    the run rather than in a workspace list afterwards.
+    Called by every adapter before a trial starts. Direct Workers AI is a
+    model-only transport, not a Kinu deployment: accept only its existing
+    HTTPS account inference endpoint, without enabling production access.
     """
     raw = (base_url or "").strip()
     if not raw:
         raise ValueError("No endpoint: a scored run must name where it goes.")
-    if eval_target_allowed(raw, environ):
+    if _is_direct_workers_ai(raw) or eval_target_allowed(raw, environ):
         return raw
     parsed = urlsplit(raw)
     raise ValueError(
@@ -118,6 +120,32 @@ def provider_for_base_url(base_url: str) -> str:
     if hostname == "api.anthropic.com":
         return "anthropic"
     return "custom"
+
+
+#: The only environment names a scored trial may take a credential from,
+#: whichever adapter runs it. Every adapter resolves through this list, so the
+#: comparator can reach exactly the credential the product agent can and no
+#: other. ``KINU_HOME`` is here for the BYO-provider config path, not as a key.
+TRIAL_CREDENTIAL_ENVS = (
+    EVAL_TOKEN_ENV,
+    "KINU_HOME",
+    "CLOUDFLARE_API_TOKEN",
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+)
+
+
+def resolve_trial_bearer(base_url: str, get_env: Callable[[str], str | None]) -> str:
+    """The bearer a trial against *base_url* sends, read only from
+    :data:`TRIAL_CREDENTIAL_ENVS` through *get_env* (an adapter's own
+    extra-env-then-os.environ accessor)."""
+    environ = {
+        name: value
+        for name in TRIAL_CREDENTIAL_ENVS
+        if (value := get_env(name)) is not None
+    }
+    return resolve_bearer_token(base_url, provider_for_base_url(base_url), environ=environ)
 
 
 def resolve_bearer_token(
@@ -251,3 +279,29 @@ def _string_at(value: Mapping[str, Any], *path: str) -> str:
             return ""
         current = current.get(key)
     return current.strip() if isinstance(current, str) else ""
+
+
+PI_COMPARATOR_PROVIDER = 'kinu'
+
+
+def pi_provider_config(base_url: str, model_id: str, token_path: PurePath) -> dict[str, Any]:
+    """Render pi's file-based endpoint contract without importing the Harbor runtime.
+
+    The metadata is GLM-5.3-specific; never price another model with these rates.
+    pi 0.73.1's stock output cap is a comparator difference, not a Kinu default.
+    """
+    if model_id != DEFAULT_WORKERS_AI_MODEL_ID:
+        raise ValueError('This comparator declares GLM-5.3 metadata; another model needs its own metadata')
+    return {
+        'providers': {
+            PI_COMPARATOR_PROVIDER: {
+                'baseUrl': base_url, 'api': 'openai-completions', 'authHeader': True,
+                'apiKey': f'!cat {shlex.quote(str(token_path))}',
+                'models': [{
+                    'id': model_id, 'name': model_id, 'reasoning': True, 'input': ['text'],
+                    'contextWindow': 1_048_576, 'maxTokens': 32_000,
+                    'cost': {'input': 1.4, 'output': 4.4, 'cacheRead': 0.26, 'cacheWrite': 1.4},
+                }],
+            }
+        }
+    }

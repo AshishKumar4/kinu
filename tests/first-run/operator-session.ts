@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import * as v from 'valibot';
 import { AgentClient } from 'agents/client';
-import { JsonValueSchema, workspaceSlug, type JsonValue } from '@kinu.run/core';
+import { JsonValueSchema, RunEventSchema, pageSchema, workspaceSlug, type JsonValue, type RunEvent, type SeekCursor } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
+import { compareRunEventOrder } from '@kinu.run/test-utils';
 import {
   ActivitySpendSchema, callAgentRpc, createCloudAgentConnectTicket, deleteCloudAgent, listCloudAgents,
 } from '../../packages/cli/src/cloud-api';
@@ -14,6 +15,9 @@ const StoredSession = v.pipe(v.string(), v.parseJson(), v.object({
 }));
 const Creation = v.object({ name: v.optional(v.string()), error: v.optional(v.string()) });
 const Health = v.object({ build: v.object({ sha: v.string() }) });
+const RunPage = pageSchema(v.object({ runId: v.string() }));
+const HistoryPage = pageSchema(v.object({ role: v.string(), content: v.string() }));
+const RunEvents = v.array(RunEventSchema);
 
 /** Explicit opt-in, separate from the synthetic browser-identity suite. The
  * scratch KINU_HOME remains untouched; only this named config file is read,
@@ -89,6 +93,36 @@ export class OperatorFirstRunSession implements FirstRunSession {
   rpcAt(workspace: string, method: string, args: JsonValue[] = []): Promise<JsonValue> {
     if (!this.owned.has(workspace)) throw new Error('Refusing RPC outside this case\'s created resources');
     return callAgentRpc(this.auth.origin, this.auth.token, workspace, method, JsonValueSchema, args);
+  }
+
+  async runEvents(): Promise<readonly RunEvent[]> {
+    const events: RunEvent[] = [];
+    let cursor: SeekCursor | null = null;
+    for (;;) {
+      const page: v.InferOutput<typeof RunPage> = v.parse(RunPage, await this.rpcAt(this.workspace, 'listRuns', [cursor === null ? {} : { cursor: { after: cursor.after } }]));
+      for (const run of page.items) {
+        let since = 0;
+        for (;;) {
+          const batch = v.parse(RunEvents, await this.rpcAt(this.workspace, 'getRunEvents', [run.runId, { since }]));
+          if (batch.length === 0) break;
+          events.push(...batch);
+          since = batch.reduce((highest, event) => Math.max(highest, event.eventIndex), since) + 1;
+        }
+      }
+      if (page.status === 'end') return events.sort(compareRunEventOrder);
+      cursor = page.next;
+    }
+  }
+
+  async history(): Promise<readonly { role: string; text: string }[]> {
+    const history: { role: string; text: string }[] = [];
+    let cursor: SeekCursor | null = null;
+    for (;;) {
+      const page: v.InferOutput<typeof HistoryPage> = v.parse(HistoryPage, await this.rpc('getChatHistoryPage', [cursor === null ? {} : { cursor: { after: cursor.after } }]));
+      history.unshift(...page.items.map(entry => ({ role: entry.role, text: entry.content })));
+      if (page.status === 'end') return history;
+      cursor = page.next;
+    }
   }
 
   async spend() {

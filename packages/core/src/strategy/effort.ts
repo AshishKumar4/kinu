@@ -1,10 +1,10 @@
 // Adaptive reasoning-effort budgets per inference stage.
 //
-// Workers AI exposes `reasoning_effort: 'low' | 'medium' | 'high'` for the
-// reasoning-capable models (Kimi K2.6, GLM-4, GPT-OSS, DeepSeek R1). The
-// AI SDK forwards `providerOptions['workers-ai'].reasoning_effort` to the
-// binding's `inputs` field, so we can set it per-call without touching the
-// provider construction.
+// All Workers AI model constructors use @ai-sdk/openai-compatible, including
+// the CF binding path (whose fetch adapter forwards the resulting HTTP body
+// to Ai.run). Configure the SDK with reasoningEffort; it serializes the wire
+// field reasoning_effort. Supplying the wire spelling here is overwritten by
+// the SDK and never reaches either transport.
 //
 // The defaults here encode the policy: cheap on fan-out (MCTS rollouts),
 // medium for user-visible work, high for rare-but-important turns (scaffold
@@ -45,14 +45,14 @@ export const REASONING_EFFORT_FOR_STAGE = {
   memory_compress: 'low',
 } satisfies Record<InferenceStage, ReasoningEffort>;
 
-/** Build the `providerOptions` AI-SDK option that carries reasoning_effort
- *  through to Workers AI's underlying `binding.run(model, { reasoning_effort })`.
- *  Returns `{}` when effort is undefined so callers can spread unconditionally. */
+/** SDK options for the Workers AI transport. The SDK owns conversion to the
+ *  native reasoning_effort request field; no duplicate wire-format option is
+ *  carried here. Missing effort leaves provider defaults untouched. */
 export function workersAIEffortOption(
   effort?: ReasoningEffort | undefined,
 ) {
   if (!effort) return {};
-  return { providerOptions: { 'workers-ai': { reasoning_effort: effort } } };
+  return { providerOptions: { 'workers-ai': { reasoningEffort: effort } } };
 }
 
 const ANTHROPIC_THINKING_BUDGET = {

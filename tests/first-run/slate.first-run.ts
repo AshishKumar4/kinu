@@ -6,10 +6,9 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
-import type { EvalObservation } from '@kinu.run/test-utils';
+import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
   firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-  type FirstRunSubgoal,
 } from './first-run';
 
 const SUITE = 'First-run · slate';
@@ -31,7 +30,7 @@ const PLAN = firstRunCasePlan(SUITE, CASE);
 const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 
-afterAll(() => { publishFirstRunRecord(SUITE, [CASE], observations); });
+afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
@@ -63,7 +62,7 @@ describe(SUITE, () => {
         }
         const history = await session.history();
         const reply = history.filter((entry) => entry.role === 'assistant').at(-1)?.text ?? turn.text;
-        const subgoals: FirstRunSubgoal[] = [
+        const subgoals: EvalSubgoal[] = [
           {
             what: 'listed',
             reached: row !== undefined && !before.slates.some((slate) => slate.id === ID),

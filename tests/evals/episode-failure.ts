@@ -141,16 +141,29 @@ export type FailedCaseDisposition =
 /**
  * Classify a thrown episode failure.
  *
- * `DegenerateRunError` is the only type that can be resumable, because it is the
- * only one that consulted the turn's own provider error. Everything else — a
- * harness guard, a schema refusal, a programming error — is the run's own and
- * terminal: retrying it would spend money on a failure that will repeat. The
- * domain is `Error`: a caller holding an unknown throw normalizes it with
- * `new Error(String(thrown))` before asking, so non-Error throwables classify
- * as the terminal failures they are.
+ * Two shapes are the ENVIRONMENT's and resumable. A `DegenerateRunError` that
+ * consulted the turn's own provider error and found an outage, and any error
+ * raised at a declared boundary — `infraBoundary` puts {@link INFRA_FAILURE_MARKER}
+ * in the message of every failure it labels, and it is the code that KNOWS: a
+ * socket that closed mid-turn, a run-event route that answered 503, a
+ * workspace the deployment could not create. `scripts/skip-ratchet.ts` already
+ * counts those as infrastructure off the same marker, and until this read it
+ * too the record filed the same failure as `errored` — the harness's fault,
+ * settled, never retried — so the tier's summary and the record disagreed
+ * about whose failure one outage was.
+ *
+ * Everything else — a harness guard, a schema refusal, a programming error, a
+ * subgoal assertion — is the run's own and terminal: retrying it would spend
+ * money on a failure that will repeat. The domain is `Error`: a caller holding
+ * an unknown throw normalizes it with `new Error(String(thrown))` before
+ * asking, so non-Error throwables classify as the terminal failures they are.
  */
 export function disposeFailedCase(error: Error): FailedCaseDisposition {
-  if (!(error instanceof DegenerateRunError)) return { kind: 'settled', outcome: 'errored' };
-  if (error.environment !== null) return { kind: 'resumable', outcome: 'incomplete' };
-  return { kind: 'settled', outcome: 'inert' };
+  if (error instanceof DegenerateRunError) {
+    return error.environment === null
+      ? { kind: 'settled', outcome: 'inert' }
+      : { kind: 'resumable', outcome: 'incomplete' };
+  }
+  if (error.message.includes(INFRA_FAILURE_MARKER)) return { kind: 'resumable', outcome: 'incomplete' };
+  return { kind: 'settled', outcome: 'errored' };
 }

@@ -36,12 +36,11 @@
  */
 import { afterAll, describe, test } from 'vitest';
 
-import { scratchDir, workerSession, type EvalObservation } from '@kinu.run/test-utils';
+import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
 import type { DeviceAccount } from '../evals/device-session';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-  type FirstRunSubgoal,
 } from './first-run';
 
 const SUITE = 'First-run · two-machines';
@@ -61,7 +60,7 @@ const PLAN = firstRunCasePlan(SUITE, CASE);
 const liveTest = test.skipIf(PLAN === null);
 const observations: EvalObservation[] = [];
 
-afterAll(() => { publishFirstRunRecord(SUITE, [CASE], observations); });
+afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
@@ -169,7 +168,7 @@ describe(SUITE, () => {
                 : `${BETA} RAN THE COMMAND TOO — a call named for ${ALPHA} reached both machines: `
                   + JSON.stringify(betaLog),
             },
-          ] satisfies FirstRunSubgoal[];
+          ] satisfies EvalSubgoal[];
         },
       }, observations);
     } finally {

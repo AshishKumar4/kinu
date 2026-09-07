@@ -6,13 +6,14 @@
         --ak evolve=false \
         --allow-agent-host staging.kinu.run
 
-The adapter defaults to native Workers AI DeepSeek V4 Pro 0813 through the
-STAGING deployment's inference proxy, as the ``eval-service`` account. Export
-``KINU_EVAL_TOKEN`` before launching Harbor; a long-lived token needs the
-``ai.proxy`` scope. No signed-in session is read, and a run aimed at production
-is refused unless ``KINU_EVAL_ALLOW_PROD=1`` names the exception — see
-``bench/model_endpoint.py``. ``-m`` and ``KINU_BASE_URL`` remain explicit
-override surfaces for comparison runs.
+The adapter defaults to Workers AI GLM-5.3 through the staging inference proxy
+as ``eval-service`` (``KINU_EVAL_TOKEN``, ``ai.proxy`` scope). For direct
+Workers AI, explicitly set ``KINU_BASE_URL`` to the account
+``https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1`` endpoint and
+provide ``CLOUDFLARE_API_TOKEN``; allow ``api.cloudflare.com`` in the task
+network policy. No signed-in Kinu session is borrowed. Production Kinu
+targets still require ``KINU_EVAL_ALLOW_PROD=1`` and their own credential.
+See ``bench/model_endpoint.py``; ``-m`` selects the model independently.
 
 ``./terminal-bench-2.1`` is the corpus of record: 2.0 is kept alongside as
 ``./terminal-bench-2.0`` so older scores stay interpretable, but it is not what
@@ -47,20 +48,23 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.env import parse_bool_env_value
 
-from bench.harbor.build import REPO_ROOT, build_kinu_binary
+from bench.harbor.build import REPO_ROOT, KinuBuild, build_kinu_binary
 from bench.harbor.corpus import CorpusIdentity, resolve_for_trial
-from bench.harbor.trajectory import build_trajectory, read_events, read_grading
+from bench.harbor.trajectory import build_trajectory, read_events, read_grading, read_spend
 from bench.isolation import assert_throwaway_home
 from bench.model_endpoint import (
     DEFAULT_KINU_AI_BASE_URL,
     DEFAULT_WORKERS_AI_MODEL_ID,
     assert_eval_target,
-    provider_for_base_url,
-    resolve_bearer_token,
+    resolve_trial_bearer,
 )
 
 INSTALL_ROOT = PurePosixPath("/installed-agent")
 INSTALL_PATH = INSTALL_ROOT / "kinu"
+#: Where the packages the binary cannot embed are uploaded. `NODE_PATH` points
+#: the binary here, because bun resolves an external specifier against the
+#: process's working directory and the turn runs in the task's, not this one.
+RUNTIME_MODULES = INSTALL_ROOT / "node_modules"
 #: The trial's KINU_HOME. One per container, and a container is one trial —
 #: fixed rather than randomized so a resumed trial finds the state it left.
 HOME_PATH = INSTALL_ROOT / "kinu-home"
@@ -73,6 +77,7 @@ CREATE_LOG_NAME = "kinu-create.txt"
 #: whether the turn was any good, so whether the turn was GRADED AT ALL is the
 #: measurement that decides if this trial's arm state means anything.
 ALIGNMENT_NAME = "kinu-alignment.json"
+SPEND_NAME = "kinu-spend.json"
 
 DEFAULT_BASE_URL = DEFAULT_KINU_AI_BASE_URL
 DEFAULT_WORKSPACE = "harbor"
@@ -113,6 +118,7 @@ class KinuAgent(BaseInstalledAgent):
         self._mission = mission
         self._repo_root = Path(kinu_repo).resolve() if kinu_repo else REPO_ROOT
         self._corpus_identity: CorpusIdentity | None = None
+        self._build: KinuBuild | None = None
         # Resolved eagerly so a misconfigured job fails before it builds a
         # container and installs into it.
         self._env = self._resolve_run_env()
@@ -122,17 +128,33 @@ class KinuAgent(BaseInstalledAgent):
     def name() -> str:
         return "kinu"
 
+    #: One spelling of the module path, used by the install-phase probe below
+    #: and by the run environment. The env file is not in place during install,
+    #: so the probe carries it inline rather than sourcing it.
+    _NODE_PATH = f"NODE_PATH={RUNTIME_MODULES}"
+
     @override
     def get_version_command(self) -> str | None:
-        return f"{INSTALL_PATH} --version"
+        return f"{self._NODE_PATH} {INSTALL_PATH} --version"
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
         # `/installed-agent` is created by BaseInstalledAgent.setup() as root.
-        binary = await build_kinu_binary(self._repo_root)
-        await environment.upload_file(binary, str(INSTALL_PATH))
+        build = await build_kinu_binary(self._repo_root)
+        if build.source_sha is None or build.source_dirty:
+            raise RuntimeError("A scored Kinu trial requires a committed source tree")
+        self._build = build
+        await environment.upload_file(build.binary, str(INSTALL_PATH))
+        for specifier, source in build.modules.items():
+            await environment.upload_dir(source, str(RUNTIME_MODULES / specifier))
         await self.exec_as_root(environment, command=f"chmod 0755 {INSTALL_PATH}")
-        await self.exec_as_agent(environment, command=f"{INSTALL_PATH} --version")
+        # Runs the version probe rather than trusting the upload: the two
+        # externalised runtime packages are read in a module-scope initializer,
+        # so a missing one is not a degraded turn later, it is a CLI that cannot
+        # print its own version. Failing here costs no model call.
+        await self.exec_as_agent(
+            environment, command=f"{self._NODE_PATH} {INSTALL_PATH} --version"
+        )
 
     def _resolve_run_env(self) -> dict[str, str]:
         """The environment every Kinu invocation in the container runs under.
@@ -156,27 +178,11 @@ class KinuAgent(BaseInstalledAgent):
         assert_eval_target(env["KINU_BASE_URL"])
         auth = self._get_env("KINU_AUTH")
         if not auth:
-            credential_env = {
-                name: value
-                for name in (
-                    "KINU_EVAL_TOKEN",
-                    "KINU_HOME",
-                    "CLOUDFLARE_API_TOKEN",
-                    "OPENROUTER_API_KEY",
-                    "OPENAI_API_KEY",
-                    "ANTHROPIC_API_KEY",
-                )
-                if (value := self._get_env(name)) is not None
-            }
-            token = resolve_bearer_token(
-                env["KINU_BASE_URL"],
-                provider_for_base_url(env["KINU_BASE_URL"]),
-                environ=credential_env,
-            )
-            auth = f"Bearer {token}"
+            auth = f"Bearer {resolve_trial_bearer(env['KINU_BASE_URL'], self._get_env)}"
         env["KINU_AUTH"] = auth
         env["KINU_MODEL"] = self.model_name
         env["KINU_HOME"] = assert_throwaway_home(str(HOME_PATH))
+        env["NODE_PATH"] = str(RUNTIME_MODULES)
         return env
 
     async def _place_run_env(self, environment: BaseEnvironment) -> None:
@@ -292,27 +298,27 @@ class KinuAgent(BaseInstalledAgent):
             # could say whether its turn had been graded. A `finally` await runs
             # to completion and the TimeoutError still reaches Harbor unchanged,
             # measured on this asyncio version rather than assumed.
-            await self._probe_grading(environment, workspace)
+            await self._probe_evidence(environment, workspace)
 
-    async def _probe_grading(self, environment: BaseEnvironment, workspace: str) -> None:
-        """Ask the workspace how many of its turns were graded.
+    async def _probe_evidence(self, environment: BaseEnvironment, workspace: str) -> None:
+        """Read the existing grading and whole-workspace spend commands on every exit.
 
-        Failures are recorded rather than raised: an unreadable probe becomes
-        `turn_grading: null` downstream, which reports missing evidence. Raising
-        here would replace Harbor's own agent error with this one and lose the
-        reason the trial ended.
+        One missing channel must not prevent the other, or replace the original
+        agent exception. The native spend ledger includes completed model calls
+        even when an interrupted turn never emitted a turn_end.
         """
-        try:
-            await self.exec_as_agent(
-                environment,
-                command=self._with_run_env(
-                    f"{INSTALL_PATH} alignment {workspace} --json "
-                    f"</dev/null 2>>{EnvironmentPaths.agent_dir / STDERR_LOG_NAME} "
-                    f"| tee {EnvironmentPaths.agent_dir / ALIGNMENT_NAME}"
-                ),
-            )
-        except Exception as exc:  # noqa: BLE001 - recorded as missing evidence
-            self.logger.warning(f"grading probe failed, evidence will read as missing: {exc}")
+        for command, filename in (("alignment", ALIGNMENT_NAME), ("spend", SPEND_NAME)):
+            try:
+                await self.exec_as_agent(
+                    environment,
+                    command=self._with_run_env(
+                        f"{INSTALL_PATH} {command} {workspace} --json "
+                        f"</dev/null 2>>{EnvironmentPaths.agent_dir / STDERR_LOG_NAME} "
+                        f"| tee {EnvironmentPaths.agent_dir / filename}"
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001 - keep the agent failure and mark this channel missing
+                self.logger.warning(f"{command} probe failed, evidence will read as missing: {exc}")
 
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:
@@ -333,6 +339,7 @@ class KinuAgent(BaseInstalledAgent):
             agent_version=self.version() or "unknown",
             model_name=self.model_name,
             agent_extra={"evolve": self._evolve, "workspace": self._workspace},
+            workspace_spend=read_spend(self.logs_dir / SPEND_NAME),
         )
 
         try:
@@ -369,9 +376,19 @@ class KinuAgent(BaseInstalledAgent):
         # cost_usd stays unset: Kinu reports tokens, not prices, and an
         # invented number is worse than a missing one.
         context.metadata = {
+            "build": {
+                "source_sha": self._build.source_sha,
+                "source_dirty": self._build.source_dirty,
+                "binary_sha256": self._build.binary_sha256,
+            } if self._build is not None else None,
             "corpus": self._corpus_identity.as_dict() if self._corpus_identity else None,
             "evolve": self._evolve,
+            "usage_complete": summary.usage_complete,
+            "usage_source": summary.usage_source,
+            "model_calls": summary.model_calls,
+            "catalog_usd": summary.catalog_usd,
             "tool_calls": summary.tool_calls,
+            "tool_outcomes": summary.tool_outcomes,
             "turn_steps": summary.turn_steps,
             "duration_ms": summary.duration_ms,
             "had_error": summary.had_error,
