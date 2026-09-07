@@ -127,7 +127,7 @@ function resolveDirEntries(entries: DirEntriesV2, home: string): DirEntriesV2 {
 
 /** The child page whose name range can hold `name`: the last page whose first
  * name is not after it. Names below the first page's first name are absent. */
-export function dirPageFor(pages: readonly DirPageRefV2[], name: string): DirPageRefV2 | null {
+function dirPageFor(pages: readonly DirPageRefV2[], name: string): DirPageRefV2 | null {
   let chosen: DirPageRefV2 | null = null;
   for (const page of pages) {
     if (page.firstName > name) break;

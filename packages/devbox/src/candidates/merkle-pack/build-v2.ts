@@ -959,11 +959,7 @@ export async function buildMerkleDelta(
     }));
   };
   placeDir(root);
-  const namespace = options.namespace ?? null;
-  const stagedNamespace = namespace === null ? null : await namespace.map.stage(writer, namespace.image);
-  for (const ref of stagedNamespace?.replaced ?? []) {
-    countReplacedRecord({ pack: ref.key, length: Number(ref.byteLength) });
-  }
+  const stagedNamespace = await stageNamespace(writer, options.namespace, countReplacedRecord);
   writer.finish();
 
   const rootRecord = recordSlots.get(root);
@@ -976,16 +972,31 @@ export async function buildMerkleDelta(
       byteLength: String(rootRecord.slot.length),
       sha256: rootRecord.slot.sha256,
     },
-    namespace: stagedNamespace === null ? null : {
-      root: stagedNamespace.root((slot) => writer.keyOf(slot)),
-      byteLength: String(stagedNamespace.byteLength),
-    },
+    namespace: stagedNamespace.ref((slot) => writer.keyOf(slot)),
     seal: { bytesChunked, chunksHashed, nodesRewritten, wholeFiles },
     dirPages: { written: dirPagesWritten, reused: dirPagesReused },
-    namespacePages: { pages: stagedNamespace?.pagesWritten ?? 0, nodes: stagedNamespace?.nodesWritten ?? 0 },
+    namespacePages: stagedNamespace.namespacePages,
     boundaries,
     removed,
     replacedBytes,
+  };
+}
+
+/** Stage the fence's namespace pages into the same packs, or nothing for a
+ *  daemon without a persisted namespace. Superseded pages and nodes count
+ *  as replaced bytes, the compaction hint. The ref resolves once the packs
+ *  are sealed. */
+async function stageNamespace(
+  writer: PackWriter,
+  namespace: DeltaBuildOptions['namespace'],
+  countReplaced: (ref: { readonly pack: string; readonly length: number }) => void,
+): Promise<{ readonly ref: (resolve: ResolvePack) => NamespaceRef | null; readonly namespacePages: MerkleDeltaBuild['namespacePages'] }> {
+  if (namespace === null || namespace === undefined) return { ref: () => null, namespacePages: { pages: 0, nodes: 0 } };
+  const staged = await namespace.map.stage(writer, namespace.image);
+  for (const ref of staged.replaced) countReplaced({ pack: ref.key, length: Number(ref.byteLength) });
+  return {
+    ref: (resolve) => ({ root: staged.root(resolve), byteLength: String(staged.byteLength) }),
+    namespacePages: { pages: staged.pagesWritten, nodes: staged.nodesWritten },
   };
 }
 

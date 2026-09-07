@@ -4,8 +4,9 @@ import { NamespacePageMap } from '../src/candidates/merkle-pack/namespace-map';
 import type { NamespaceImage } from '../src/candidates/merkle-pack/namespace-map';
 import { PackWriter } from '../src/candidates/merkle-pack/pack-layout';
 import type { ObjectRangeRef } from '../src/durability/contracts';
+import { NAMESPACE_PAGE_BYTES } from '../src/durability/namespace-page';
 
-const PAGE = 4096;
+const PAGE = NAMESPACE_PAGE_BYTES;
 
 class CountedPacks {
   readonly objects = new Map<string, Uint8Array>();

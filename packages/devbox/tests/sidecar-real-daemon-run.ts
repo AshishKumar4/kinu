@@ -311,6 +311,114 @@ function putOps(stores: Stores, since: number) {
   return { puts: ops.length, bytes: ops.reduce((sum, op) => sum + op.bytes, 0) };
 }
 
+/**
+ * The first generation's namespace image, read only after later writes, an
+ * ancestor rename and a daemon restart: it must still describe the first
+ * data publication and nothing later.
+ */
+async function proveFirstNamespaceImage(space: Workspace, stores: Stores, firstView: MerkleV2View): Promise<void> {
+  const firstFence = stores.fences[0];
+  if (firstFence === undefined) throw new Error('No first fence was recorded');
+  const namespace = await readNamespaceDelta(firstFence);
+  const namespacePath = join(space.state, 'first-namespace.sqlite');
+  try {
+    const image = await open(namespacePath, 'w+');
+    try {
+      await image.truncate(Number(namespace.manifest.byteLength));
+      for (const page of namespace.manifest.pages) {
+        const bytes = namespace.readPage(page.number);
+        const wrote = await image.write(bytes, 0, bytes.byteLength, (page.number - 1) * namespace.manifest.pageBytes);
+        if (wrote.bytesWritten !== bytes.byteLength) throw new Error('Short namespace snapshot write');
+      }
+    } finally { await image.close(); }
+    const database = new Database(namespacePath, { readonly: true });
+    try {
+      const row = database.query<{ id: number }, []>(`
+        SELECT file.id FROM alias top
+        JOIN alias directory ON directory.parent=top.id AND directory.name='lib'
+        JOIN alias file ON file.parent=directory.id AND file.name='a.ts'
+        WHERE top.parent=1 AND top.name='src'`).get();
+      const record = await firstView.record('src/lib/a.ts');
+      assert('namespace-and-content-snapshots-share-the-original-inode-generation',
+        row !== null && record?.node.kind === 'file' && row.id === record.node.ino, `inode=${row?.id}`);
+      const later = database.query<{ id: number }, []>(`
+        SELECT entry.id FROM alias top JOIN alias entry ON entry.parent=top.id
+        WHERE top.parent=1 AND top.name='src' AND entry.name='after-kill.ts'`).get();
+      assert('the-first-namespace-snapshot-excludes-later-writes', later === null, 'after-kill.ts absent');
+    } finally { database.close(); }
+    facts.firstNamespacePages = namespace.manifest.pages.length;
+    facts.firstNamespaceBytes = namespace.manifest.pages.length * namespace.manifest.pageBytes;
+  } finally { namespace.close(); }
+}
+
+/** One new alias after many acknowledged captures: the fence carries the
+ *  pages that alias touched, not every page ever written. */
+async function proveLaterFenceExportsTouchedPages(stores: Stores): Promise<void> {
+  const fence = stores.fences[stores.fences.length - 1];
+  if (fence === undefined) throw new Error('No fence was recorded');
+  const namespace = await readNamespaceDelta(fence);
+  const pages = namespace.manifest.pages.length;
+  namespace.close();
+  facts.twinNamespacePages = pages;
+  assert('a-later-fence-exports-only-the-pages-its-aliases-touched',
+    pages >= 1 && pages < Number(facts.firstNamespacePages), `twin=${pages} first=${facts.firstNamespacePages}`);
+}
+
+/**
+ * A replacement container: a blank disk, the head's tree laid on it by a
+ * restore, a daemon born over that tree. Its attach adopts the published
+ * namespace page by page. One lookup through the mount fetches the pages
+ * that name resolves through and nothing else, and the id it binds is the
+ * head's own, so a write through the one name the daemon ever saw reaches
+ * the twin the head knows.
+ */
+async function proveReplacementAttach(replacement: Workspace, stores: Stores, clock: () => number): Promise<void> {
+  const headBefore = await servedTree(stores, 'g7');
+  const core = openCore(replacement, stores, 'boot-4', clock);
+  const adopted = await core.attach();
+  assert('replacement-attaches', adopted.kind === 'attached', adopted.kind);
+  const afterAttach = await daemonStats(replacement);
+  facts.replacementAttachPageFetches = afterAttach.namespace.pageFetches;
+  facts.replacementAttachEntriesIngested = afterAttach.namespace.entriesIngested;
+  assert('replacement-attach-fetches-a-bounded-page-set',
+    afterAttach.namespace.pageFetches >= 1 && afterAttach.namespace.pageFetches <= 4, `fetched=${afterAttach.namespace.pageFetches}`);
+  await lstat(join(replacement.mount, 'src', 'renamed-lib', 'a-link.ts'));
+  const afterLookup = await daemonStats(replacement);
+  const lookupFetches = afterLookup.namespace.pageFetches - afterAttach.namespace.pageFetches;
+  facts.replacementLookupPageFetches = lookupFetches;
+  assert('one-lookup-fetches-the-pages-its-names-resolve-through',
+    lookupFetches >= 1 && lookupFetches <= 12, `fetched=${lookupFetches}`);
+  const twinBefore = await headBefore.view.record('src/twin.ts');
+  await writeFile(join(replacement.mount, 'src', 'renamed-lib', 'a-link.ts'), 'written on the replacement\n');
+  await publish(core, 'the seal on the replacement');
+  const served = await servedTree(stores, 'g8');
+  const twinAfter = await served.view.record('src/twin.ts');
+  const twinEntry = served.tree.find((entry) => entry.path === 'src/twin.ts');
+  const twinText = twinEntry?.content?.kind === 'dense' ? new TextDecoder().decode(twinEntry.content.bytes) : 'absent';
+  assert('a-write-on-the-replacement-reaches-the-twin-name-it-never-saw', twinText === 'written on the replacement\n', twinText);
+  const inoBefore = twinBefore?.node.kind === 'file' ? twinBefore.node.ino : 'none';
+  const inoAfter = twinAfter?.node.kind === 'file' ? twinAfter.node.ino : 'none';
+  assert('the-replacement-keeps-the-published-inode-identity', inoBefore !== 'none' && inoBefore === inoAfter,
+    `before=${inoBefore} after=${inoAfter}`);
+  expectSameTree('the-replacement-seal-serves-its-disk', await diskTree(replacement.root), served.tree);
+}
+
+/** A caller's own file named like a libfuse hide is ordinary data: it is
+ *  published, and its unlink is published, because the daemon never
+ *  substitutes a name and never reads one back as a signal. */
+async function proveHideLikeNamesAreData(mount: string, core: SidecarCore, stores: Stores): Promise<void> {
+  const callerName = '.fuse_hidden0000abcd0000ef01';
+  await writeFile(join(mount, 'src', callerName), 'mine, not libfuse\'s\n');
+  await publish(core, 'the shaped-name write');
+  const published = (await servedTree(stores, 'g4b')).tree.find((entry) => entry.path === `src/${callerName}`);
+  const text = published?.content?.kind === 'dense' ? new TextDecoder().decode(published.content.bytes) : 'absent';
+  assert('a-caller-file-shaped-like-a-hide-is-published', text === 'mine, not libfuse\'s\n', text);
+  await unlink(join(mount, 'src', callerName));
+  await publish(core, 'the shaped-name unlink');
+  assert('a-caller-unlink-of-a-hide-shaped-name-is-published',
+    (await servedTree(stores, 'g4c')).tree.every((entry) => entry.path !== `src/${callerName}`), callerName);
+}
+
 async function main(): Promise<void> {
   let now = 1_000;
   const clock = (): number => now;
@@ -511,20 +619,7 @@ async function main(): Promise<void> {
     assert('fresh-boot-attaches', attached.kind === 'attached', attached.kind);
     expectSameTree('fresh-boot-serves-the-compacted-tree', disk3, (await servedTree(stores, 'g5')).tree);
 
-    // ── a caller's own file named like a libfuse hide is ordinary data: it
-    //    is published, and its unlink is published, because the daemon never
-    //    substitutes a name and never reads one back as a signal.
-    const callerName = '.fuse_hidden0000abcd0000ef01';
-    await writeFile(join(mount, 'src', callerName), 'mine, not libfuse\'s\n');
-    await publish(first, 'the shaped-name write');
-    const callerHideName = (await servedTree(stores, 'g4b')).tree.find((entry) => entry.path === `src/${callerName}`);
-    assert('a-caller-file-shaped-like-a-hide-is-published',
-      callerHideName?.content?.kind === 'dense' && new TextDecoder().decode(callerHideName.content.bytes) === 'mine, not libfuse\'s\n',
-      callerHideName === undefined ? 'absent' : 'present');
-    await unlink(join(mount, 'src', callerName));
-    await publish(first, 'the shaped-name unlink');
-    assert('a-caller-unlink-of-a-hide-shaped-name-is-published',
-      (await servedTree(stores, 'g4c')).tree.every((entry) => entry.path !== `src/${callerName}`), callerName);
+    await proveHideLikeNamesAreData(mount, first, stores);
 
     // ── the daemon dies with unsealed writes, an open descriptor and an
     //    unlinked-but-open inode outstanding; the restarted daemon recovers
@@ -577,55 +672,13 @@ async function main(): Promise<void> {
     const control = await candidateRunControlV2(stores.control, stores.envelopes);
     assert('published-chain-is-unbroken', control.head !== null
       && control.head.envelope.parentRootId !== null, `head=${control.head?.pointer.rootEnvelopeId}`);
-    // Read the first namespace image only after later writes, rename and
-    // daemon restart. It must still describe the first data publication.
-    const firstFence = stores.fences[0];
-    if (firstFence === undefined) throw new Error('No first fence was recorded');
-    const namespace = await readNamespaceDelta(firstFence);
-    const namespacePath = join(space.state, 'first-namespace.sqlite');
-    try {
-      const image = await open(namespacePath, 'w+');
-      try {
-        await image.truncate(Number(namespace.manifest.byteLength));
-        for (const page of namespace.manifest.pages) {
-          const bytes = namespace.readPage(page.number);
-          const wrote = await image.write(bytes, 0, bytes.byteLength, (page.number - 1) * namespace.manifest.pageBytes);
-          if (wrote.bytesWritten !== bytes.byteLength) throw new Error('Short namespace snapshot write');
-        }
-      } finally { await image.close(); }
-      const database = new Database(namespacePath, { readonly: true });
-      try {
-        const row = database.query<{ id: number }, []>(`
-          SELECT file.id FROM alias top
-          JOIN alias directory ON directory.parent=top.id AND directory.name='lib'
-          JOIN alias file ON file.parent=directory.id AND file.name='a.ts'
-          WHERE top.parent=1 AND top.name='src'`).get();
-        const record = await served1.view.record('src/lib/a.ts');
-        assert('namespace-and-content-snapshots-share-the-original-inode-generation',
-          row !== null && record?.node.kind === 'file' && row.id === record.node.ino, `inode=${row?.id}`);
-        const later = database.query<{ id: number }, []>(`
-          SELECT entry.id FROM alias top JOIN alias entry ON entry.parent=top.id
-          WHERE top.parent=1 AND top.name='src' AND entry.name='after-kill.ts'`).get();
-        assert('the-first-namespace-snapshot-excludes-later-writes', later === null, 'after-kill.ts absent');
-      } finally { database.close(); }
-      facts.firstNamespacePages = namespace.manifest.pages.length;
-      facts.firstNamespaceBytes = namespace.manifest.pages.length * namespace.manifest.pageBytes;
-    } finally { namespace.close(); }
+    await proveFirstNamespaceImage(space, stores, served1.view);
 
     // A twin name for the surviving alias, published before the daemon goes:
     // the replacement below will see one of the two names and never the other.
     await link(join(mount, 'src', 'renamed-lib', 'a-link.ts'), join(mount, 'src', 'twin.ts'));
     await publish(third, 'the twin name');
-    // One new alias after many acknowledged captures: the fence carries the
-    // pages that alias touched, not every page ever written.
-    const twinFence = stores.fences[stores.fences.length - 1];
-    if (twinFence === undefined) throw new Error('No twin fence was recorded');
-    const twinNamespace = await readNamespaceDelta(twinFence);
-    facts.twinNamespacePages = twinNamespace.manifest.pages.length;
-    twinNamespace.close();
-    assert('a-later-fence-exports-only-the-pages-its-aliases-touched',
-      facts.twinNamespacePages >= 1 && facts.twinNamespacePages < Number(facts.firstNamespacePages),
-      `twin=${facts.twinNamespacePages} first=${facts.firstNamespacePages}`);
+    await proveLaterFenceExportsTouchedPages(stores);
     const exit = await stopDaemon(daemon);
     assert('daemon-stops-cleanly', exit === 0, `exit=${exit}`);
 
@@ -636,38 +689,10 @@ async function main(): Promise<void> {
     //    the id it binds is the head's own, so a write through the one name
     //    the daemon ever saw reaches the twin the head knows.
     const replacement = await workspace('replacement');
-    const headBeforeReplacement = await servedTree(stores, 'g7');
-    const headTree = headBeforeReplacement.tree;
-    await restoreTree(replacement.root, headTree);
+    await restoreTree(replacement.root, (await servedTree(stores, 'g7')).tree);
     daemon = await startDaemon(replacement);
     daemonSpace = replacement;
-    const fourth = openCore(replacement, stores, 'boot-4', clock);
-    const adopted = await fourth.attach();
-    assert('replacement-attaches', adopted.kind === 'attached', adopted.kind);
-    const afterAttach = await daemonStats(replacement);
-    facts.replacementAttachPageFetches = afterAttach.namespace.pageFetches;
-    facts.replacementAttachEntriesIngested = afterAttach.namespace.entriesIngested;
-    assert('replacement-attach-fetches-a-bounded-page-set',
-      afterAttach.namespace.pageFetches >= 1 && afterAttach.namespace.pageFetches <= 4, `fetched=${afterAttach.namespace.pageFetches}`);
-    await lstat(join(replacement.mount, 'src', 'renamed-lib', 'a-link.ts'));
-    const afterLookup = await daemonStats(replacement);
-    facts.replacementLookupPageFetches = afterLookup.namespace.pageFetches - afterAttach.namespace.pageFetches;
-    assert('one-lookup-fetches-the-pages-its-names-resolve-through',
-      facts.replacementLookupPageFetches >= 1 && facts.replacementLookupPageFetches <= 12,
-      `fetched=${facts.replacementLookupPageFetches}`);
-    const twinBefore = await headBeforeReplacement.view.record('src/twin.ts');
-    await writeFile(join(replacement.mount, 'src', 'renamed-lib', 'a-link.ts'), 'written on the replacement\n');
-    await publish(fourth, 'the seal on the replacement');
-    const served5 = await servedTree(stores, 'g8');
-    const twinAfter = await served5.view.record('src/twin.ts');
-    const twinEntry = served5.tree.find((entry) => entry.path === 'src/twin.ts');
-    assert('a-write-on-the-replacement-reaches-the-twin-name-it-never-saw',
-      twinEntry?.content?.kind === 'dense' && new TextDecoder().decode(twinEntry.content.bytes) === 'written on the replacement\n',
-      twinEntry?.content?.kind === 'dense' ? new TextDecoder().decode(twinEntry.content.bytes) : 'absent');
-    assert('the-replacement-keeps-the-published-inode-identity',
-      twinBefore?.node.kind === 'file' && twinAfter?.node.kind === 'file' && twinBefore.node.ino === twinAfter.node.ino,
-      `before=${twinBefore?.node.kind === 'file' ? twinBefore.node.ino : 'none'} after=${twinAfter?.node.kind === 'file' ? twinAfter.node.ino : 'none'}`);
-    expectSameTree('the-replacement-seal-serves-its-disk', await diskTree(replacement.root), served5.tree);
+    await proveReplacementAttach(replacement, stores, clock);
     const replacementExit = await stopDaemon(daemon);
     assert('replacement-daemon-stops-cleanly', replacementExit === 0, `exit=${replacementExit}`);
   } finally {

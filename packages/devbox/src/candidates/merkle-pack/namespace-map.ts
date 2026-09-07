@@ -1,3 +1,4 @@
+import { NAMESPACE_PAGE_BYTES } from '../../durability/namespace-page';
 import type { ObjectRangeRef } from '../../durability/contracts';
 import { sha256Hex } from '../../cas/hash';
 import { MerklePackError } from './errors';
@@ -25,7 +26,7 @@ const ENTRY_BYTES = 78;
 /** Every node is written at its full size. One update then costs the same
  *  bytes at any fill, and a change of cost marks a change of depth. */
 const NODE_BYTES = HEADER_BYTES + FANOUT * ENTRY_BYTES;
-const PAGE_BYTES = 4096;
+const PAGE_BYTES = NAMESPACE_PAGE_BYTES;
 const MAX_PAGES = 0xffff_ffff;
 const MAGIC = [78, 80, 77, 1];
 const HEX = /^[0-9a-f]{64}$/u;

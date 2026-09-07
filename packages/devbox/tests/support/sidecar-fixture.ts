@@ -42,6 +42,7 @@ import type { NamespaceImage, NamespaceSource } from '../../src/candidates/merkl
 import { envelopeV2Bytes, envelopeV2IdOf } from '../../src/candidates/publication';
 import * as v from 'valibot';
 import { RootEnvelopeV2Schema, CandidateRunControlV2Schema } from '../../src/durability/contracts';
+import { NAMESPACE_PAGE_BYTES } from '../../src/durability/namespace-page';
 import type { MerkleV2View } from '../../src/candidates/merkle-pack/view-v2';
 import type { PackRun } from '../../src/candidates/merkle-pack/read';
 import type { CandidateEnvelopeStoreV2, CandidateControlStore } from '../../src/candidates/control';
@@ -213,7 +214,6 @@ interface BoundaryFile {
   readonly boundaries: readonly number[];
 }
 
-const NAMESPACE_PAGE_BYTES = 4096;
 const NAMESPACE_ROOT_ID = 1;
 
 interface AliasRow {
