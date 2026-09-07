@@ -168,7 +168,7 @@ export function resolveWorkspaceTitle(opts: {
  * digits, two hyphens = 29). A chosen one is refused at creation rather than
  * truncated: a truncated address would name a different workspace.
  */
-export const WORKSPACE_ADDRESS_MAX = 31;
+const WORKSPACE_ADDRESS_MAX = 31;
 
 const WORKSPACE_ADDRESS = /^[a-z0-9](?:[a-z0-9-]{0,29}[a-z0-9])?$/;
 
