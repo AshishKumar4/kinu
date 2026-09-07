@@ -24,7 +24,7 @@ import { shadowTrialPlan, claimToolEffect } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
   type AgentOrchestrator, type AgentRuntime, type CompletedTurn, type DynamicContext,
-  type IngressDescriptor, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
+  type IngressDescriptor, type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type RunEndReason, type SqlValue, type SubordinateRosterStore,
   projectJsonValue,
   type BackgroundJobStore, type JsonValue,
@@ -734,9 +734,20 @@ export class HarnessSubordinateAgent extends SubordinateAgent {
   }
 
   observeRuntime(): AgentRuntime { return this.rt; }
+  /** The identity this facet stamps on its slate operations — the production
+   *  method, so a suite acts AS the facet on the owner rather than forging one. */
+  observeSlateCaller() { return this.slateCaller(); }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
+  /** The catalog this facet resolves roles from: builtin unless a suite installs one. */
+  private harnessCatalog: ProfileCatalogEnvelope = HARNESS_PROFILE_ENVELOPE;
+  /** Install a role catalog, the way the owner's authority would publish one. */
+  harnessInstallCatalog(catalog: ProfileCatalog): void {
+    this.harnessCatalog = {
+      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+  }
   protected override async profileInputs() {
-    return { envelope: HARNESS_PROFILE_ENVELOPE, provider: HARNESS_PROVIDER_SNAPSHOT };
+    return { envelope: this.harnessCatalog, provider: HARNESS_PROVIDER_SNAPSHOT };
   }
   /** One first-interaction titling pass — the call `onChatResponse` makes on an
    *  owner-driven turn. */

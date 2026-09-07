@@ -93,7 +93,8 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
   if (!isVfsError(err)) {
     return { reason: 'io', error: `${action} ${path} failed: ${renderThrownChain({ cause: err })}` };
   }
-  const reason: FileEditOutcomeReason = err.code === 'ENOENT' ? 'missing' : 'io';
+  const reason: FileEditOutcomeReason = err.code === 'ENOENT' ? 'missing'
+    : err.code === 'EACCES' || err.code === 'EPERM' ? 'denied' : 'io';
   // ENOENT and EISDIR are the model's own addressing mistakes, and the hint
   // names this agent's real roots. Everything else (a reserved mount, an
   // offline device, a read-only plane) already carries its own reason.

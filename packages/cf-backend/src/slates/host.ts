@@ -2,37 +2,43 @@ import { exports } from 'cloudflare:workers';
 import { WorkspaceId } from '@agent-core/core';
 import { SlateId, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
-import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateFiles, SqliteSlateContentStore, SqliteSlateStore, WorkspaceSlates, slateDirectory, parseSlateProject,
   SlateBindingRequestSchema, SlateOperationSchema, routeSlateBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName,
-  type CodemodeProvider, type JsonValue, type JsonObject, type SlateProject,
+  type JsonValue, type SlateProject,
   type SlateBindingRoute, type SlateCallResult, type SlateReadModel, type SlateSummary, type SlateProblem,
 } from '@kinu.run/core';
 import { ERROR_CODES, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
-import type { SlateBinding, SlateBindingProps } from './bindings';
+import { slateCallerKey, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
 
 const Failure = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
 
+/** A binding route the calling actor answers with its own capability set. */
+export type SlateCapabilityRoute = Extract<SlateBindingRoute, { kind: 'namespace' | 'mcp' }>;
+
 export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'content'> {
-  providers(): readonly CodemodeProvider[];
+  /** Run a capability route as the caller: its own providers, its own role reach, its own gates. */
+  dispatch(caller: SlateCaller, route: SlateCapabilityRoute): Promise<JsonValue>;
+  /** The workspace's read models: workspace-scoped, read-only, held to `workspace.read`. */
   data(source: SlateReadModel): Promise<JsonValue>;
-  mcp(server: string, tool: string, args: JsonObject): Promise<JsonValue>;
   expose(port: number): Promise<{ url?: string }>;
 }
 
 interface RunningSlate {
   readonly key: string;
+  readonly caller: SlateCaller;
+  readonly id: string;
   readonly process: ResidentSlateProcess;
 }
 
-/** One isolate-lifetime process per authored tree. No running state is durable. */
+/** One isolate-lifetime process per authored tree PER CALLER. No running state is durable. */
 export class SlateHost {
   private readonly content: SqliteSlateContentStore;
   private readonly resident: ResidentSlateProcesses;
   private readonly store: SqliteSlateStore;
-  private sourceRuntime: WorkspaceSlates | undefined;
+  private readonly sourceRuntimes = new Map<string, WorkspaceSlates>();
   private readonly running = new Map<string, RunningSlate>();
   private readonly starting = new Map<string, Promise<ResidentSlateProcess>>();
   private readonly ports = new Map<string, number>();
@@ -45,37 +51,42 @@ export class SlateHost {
     this.store = new SqliteSlateStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
   }
 
-  async project(id: string): Promise<SlateProject> {
+  private async project(cred: VfsCred, id: string): Promise<SlateProject> {
     const session = await this.deps.session();
     const path = `${slateDirectory(new SlateId(id))}/package.json`;
-    return parseSlateProject(JSON.parse(session.vfs.as(CRED_SESSION_USER).readFileString(path)));
+    return parseSlateProject(JSON.parse(session.vfs.as(cred).readFileString(path)));
   }
 
-  private async sources(): Promise<WorkspaceSlates> {
+  private async sources(cred: VfsCred): Promise<WorkspaceSlates> {
     const session = await this.deps.session();
-    this.sourceRuntime ??= new WorkspaceSlates({
-      workspaceId: new WorkspaceId(this.deps.workspace), store: this.store,
-      files: new SlateFiles(session.vfs.as(CRED_SESSION_USER), this.content),
-      mutations: { mutate: async (request, mutation) => {
-        if (request.workspaceId.value !== this.deps.workspace) throw new KinuError('denied', 'Slate mutation belongs to another workspace');
-        return session.vfs.withTransaction(mutation);
-      } },
-    });
-    return this.sourceRuntime;
+    const key = `${cred.uid}:${cred.gid}`;
+    let runtime = this.sourceRuntimes.get(key);
+    if (runtime === undefined) {
+      runtime = new WorkspaceSlates({
+        workspaceId: new WorkspaceId(this.deps.workspace), store: this.store,
+        files: new SlateFiles(session.vfs.as(cred), this.content),
+        mutations: { mutate: async (request, mutation) => {
+          if (request.workspaceId.value !== this.deps.workspace) throw new KinuError('denied', 'Slate mutation belongs to another workspace');
+          return session.vfs.withTransaction(mutation);
+        } },
+      });
+      this.sourceRuntimes.set(key, runtime);
+    }
+    return runtime;
   }
 
-  async operation<Input>(input: Input): Promise<SlateCallResult> {
+  async operation<Input>(caller: SlateCaller, input: Input): Promise<SlateCallResult> {
     try {
       const parsed = v.safeParse(SlateOperationSchema, input);
       if (!parsed.success) throw new KinuError('bad_input', 'Slate operation does not match its declared fields', { cause: new v.ValiError(parsed.issues) });
       const operation = parsed.output;
       switch (operation.op) {
         case 'list': {
-          const listing = await this.list();
+          const listing = await this.list(caller);
           return { ok: true, value: { slates: listing.slates.map((slate) => ({ ...slate, bindings: [...slate.bindings] })), problems: listing.problems.map((problem) => ({ ...problem })) } };
         }
-        case 'preview': return await this.preview(operation.id);
-        case 'call': return await this.call(operation.id, operation.method, operation.args ?? []);
+        case 'preview': return await this.preview(caller, operation.id);
+        case 'call': return await this.call(caller, operation.id, operation.method, operation.args ?? []);
         case 'history': {
           await this.deps.session();
           const id = new SlateId(operation.id);
@@ -84,25 +95,25 @@ export class SlateHost {
           if (slate.workspaceId.value !== this.deps.workspace) throw new KinuError('denied', 'Slate belongs to another workspace');
           return { ok: true, value: projectJsonValue({ value: { slate: slate.toData(), versions: this.store.listVersions(id).map((version) => version.toData()) } }) };
         }
-        case 'commit': return { ok: true, value: projectJsonValue({ value: (await (await this.sources()).commit(new SlateId(operation.id))).toData() }) };
-        case 'fork': return { ok: true, value: projectJsonValue({ value: (await (await this.sources()).fork(new SlateVersionId(operation.version))).toData() }) };
-        case 'restore': return { ok: true, value: projectJsonValue({ value: (await (await this.sources()).restore(new SlateId(operation.id), new SlateVersionId(operation.version))).toData() }) };
+        case 'commit': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).commit(new SlateId(operation.id))).toData() }) };
+        case 'fork': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).fork(new SlateVersionId(operation.version))).toData() }) };
+        case 'restore': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).restore(new SlateId(operation.id), new SlateVersionId(operation.version))).toData() }) };
       }
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: 'slate operation', cause, otherwise: 'io' })) };
     }
   }
 
-  async list(): Promise<{ slates: SlateSummary[]; problems: SlateProblem[] }> {
+  async list(caller: SlateCaller): Promise<{ slates: SlateSummary[]; problems: SlateProblem[] }> {
     const session = await this.deps.session();
-    const vfs = session.vfs.as(CRED_SESSION_USER);
+    const vfs = session.vfs.as(caller.cred);
     const slates: SlateSummary[] = [];
     const problems: SlateProblem[] = [];
     if (!vfs.exists('/home/user/slates')) return { slates, problems };
     for (const entry of vfs.readdir('/home/user/slates')) {
       if (entry.type !== 'directory') continue;
       try {
-        const project = await this.project(entry.name);
+        const project = await this.project(caller.cred, entry.name);
         slates.push({ id: entry.name, title: project.slate.title ?? project.name ?? entry.name, bindings: Object.keys(project.slate.bindings) });
       } catch (cause) {
         problems.push({ id: entry.name, ...refusalOf(toKinuError({ doing: 'slate ' + entry.name, cause, otherwise: 'io' })) });
@@ -111,9 +122,9 @@ export class SlateHost {
     return { slates, problems };
   }
 
-  async preview(id: string): Promise<SlateCallResult> {
+  async preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
     try {
-      const process = await this.ensure(id);
+      const process = await this.ensure(caller, id);
       const preview = await this.deps.expose(process.port);
       if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL');
       return { ok: true, value: { url: preview.url, port: process.port } };
@@ -123,49 +134,46 @@ export class SlateHost {
   }
 
   async refreshPreview(port: number): Promise<void> {
-    for (const [id, running] of this.running) {
-      if (running.process.port === port) { await this.ensure(id); return; }
+    for (const running of this.running.values()) {
+      if (running.process.port === port) { await this.ensure(running.caller, running.id); return; }
     }
   }
 
   /** Re-read the slate field on every call: a held stub proves its name, not today's reach. */
-  async bindingCall(id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
+  async bindingCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
     try {
       const parsed = v.safeParse(SlateBindingRequestSchema, request);
       if (!parsed.success) throw new KinuError('bad_input', 'A binding call is { member, args: JSON[], depth }', { cause: new v.ValiError(parsed.issues) });
-      const project = await this.project(id);
-      return await this.run(routeSlateBindingCall({ id, project, name, request: parsed.output }));
+      const project = await this.project(caller.cred, id);
+      return await this.run(caller, routeSlateBindingCall({ id, project, name, request: parsed.output }));
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} binding ${name}`, cause, otherwise: 'io' })) };
     }
   }
 
-  private async run(route: SlateBindingRoute): Promise<SlateCallResult> {
+  private async run(caller: SlateCaller, route: SlateBindingRoute): Promise<SlateCallResult> {
     switch (route.kind) {
-      case 'namespace': {
-        const provider = this.deps.providers().find((candidate) => candidate.name === route.namespace);
-        if (!provider) return { ok: false, ...refusalOf(new KinuError('unavailable', `namespace ${route.namespace} is not available in this workspace right now`)) };
-        if (!Object.hasOwn(provider.tools, route.member)) {
-          return { ok: false, ...refusalOf(new KinuError('missing', `${route.namespace} has no member ${route.member}; it offers ${Object.keys(provider.tools).join(', ')}`)) };
-        }
-        const answered = await provider.tools[route.member]?.execute(...route.args);
-        const value = v.safeParse(JsonValueSchema, answered === undefined ? null : answered);
-        if (!value.success) throw new KinuError('bad_input', `${route.namespace}.${route.member} answered a value that is not JSON`, { cause: new v.ValiError(value.issues) });
-        return { ok: true, value: value.output };
+      case 'namespace':
+      case 'mcp': {
+        const value = await this.deps.dispatch(caller, route);
+        // A member that ANSWERS a classified refusal (the file plane's
+        // `{reason, error}`) refused; authored code sees the class, not a value.
+        const refused = v.safeParse(Failure, value);
+        return refused.success ? { ok: false, ...refused.output } : { ok: true, value };
       }
       case 'rpc': return { ok: true, value: await this.deps.data(route.method) };
-      case 'mcp': return { ok: true, value: await this.deps.mcp(route.server, route.tool, route.args) };
-      case 'app': return this.call(route.id, route.method, [...route.args], route.depth + 1);
+      // The hop keeps the CALLER's authority: the callee runs for whoever asked, never as its author.
+      case 'app': return this.call(caller, route.id, route.method, [...route.args], route.depth + 1);
     }
   }
 
   /** App members are POST routes on the same authored fetch handler that serves the preview. */
-  async call(id: string, method: string, args: JsonValue[], depth = 0): Promise<SlateCallResult> {
+  async call(caller: SlateCaller, id: string, method: string, args: JsonValue[], depth = 0): Promise<SlateCallResult> {
     try {
       if (!isSlateMethodName(method)) throw new KinuError('bad_input', `"${method}" is not an app method name`);
       const parsed = v.safeParse(v.array(JsonValueSchema), args);
       if (!parsed.success) throw new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
-      const process = await this.ensure(id);
+      const process = await this.ensure(caller, id);
       const response = await process.request(new Request(`https://slate.invalid/${method}`, {
         method: 'POST', headers: { 'content-type': 'application/json', 'x-slate-depth': String(depth) }, body: JSON.stringify(parsed.output),
       }));
@@ -185,39 +193,40 @@ export class SlateHost {
     }
   }
 
-  ensure(id: string): Promise<ResidentSlateProcess> {
-    const starting = this.starting.get(id);
+  ensure(caller: SlateCaller, id: string): Promise<ResidentSlateProcess> {
+    const held = `${slateCallerKey(caller)}#${id}`;
+    const starting = this.starting.get(held);
     if (starting !== undefined) return starting;
-    const boot = this.boot(id).finally(() => { this.starting.delete(id); });
-    this.starting.set(id, boot);
+    const boot = this.boot(caller, id, held).finally(() => { this.starting.delete(held); });
+    this.starting.set(held, boot);
     return boot;
   }
 
-  private async boot(id: string): Promise<ResidentSlateProcess> {
+  private async boot(caller: SlateCaller, id: string, held: string): Promise<ResidentSlateProcess> {
     const root = slateDirectory(new SlateId(id));
-    const sources = await this.sources();
+    const sources = await this.sources(caller.cred);
     for (;;) {
       const revision = this.revisions.get(id) ?? 0;
-      const project = await this.project(id);
+      const project = await this.project(caller.cred, id);
       if (project.slate.runtime !== 'worker') throw new KinuError('unsupported', 'Resident slate previews require slate.runtime worker; run node projects through the sandbox executor');
       const source = (await sources.synchronize(new SlateId(id))).source;
-      const key = `slate:${this.deps.workspace}:${id}:${source.digest.value}`;
-      const held = this.running.get(id);
-      if (held?.key === key && await held.process.isRunning()) return held.process;
-      if (held !== undefined) {
-        this.running.delete(id);
-        await held.process.stop();
+      const key = `slate:${this.deps.workspace}:${held}:${source.digest.value}`;
+      const running = this.running.get(held);
+      if (running?.key === key && await running.process.isRunning()) return running.process;
+      if (running !== undefined) {
+        this.running.delete(held);
+        await running.process.stop();
       }
       const bindings: Record<string, Fetcher<SlateBinding>> = {};
       for (const name of Object.keys(project.slate.bindings)) {
-        const props: SlateBindingProps = { workspace: this.deps.workspace, id, name };
+        const props: SlateBindingProps = { workspace: this.deps.workspace, id, name, caller };
         bindings[name] = exports.SlateBinding({ props });
       }
-      const port = project.slate.port ?? this.ports.get(id) ?? this.nextPort++;
-      this.ports.set(id, port);
-      const process = await this.resident.start({ key, root, project, port, bindings });
+      const port = project.slate.port ?? this.ports.get(held) ?? this.nextPort++;
+      this.ports.set(held, port);
+      const process = await this.resident.start({ key, root, project, port, cred: caller.cred, bindings });
       if ((this.revisions.get(id) ?? 0) !== revision) { await process.stop(); continue; }
-      this.running.set(id, { key, process });
+      this.running.set(held, { key, caller, id, process });
       return process;
     }
   }
@@ -233,3 +242,4 @@ export class SlateHost {
     return [...ids];
   }
 }
+

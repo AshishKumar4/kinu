@@ -75,17 +75,24 @@ Contract: `packages/core/src/slates/rpc.ts`; hosted dispatch:
 ## Bindings and gates
 
 The server receives introduced capabilities as `env.NAME.member(...args)`.
-Each binding passes one of the workspace's own capabilities, with that
-capability's existing gates. A declaration is not a permission grant, and there
-is no binding-specific approval ladder. The host re-reads `package.json` on
-every binding call, so a held stub cannot retain removed reach.
+Each binding passes one of the CALLING ACTOR's own capabilities, with that
+actor's existing gates: the workspace root acts as the session user with the
+root's providers; a facet (a subordinate, a head, a node) acts as its own
+provisioned uid with its own role-narrowed providers, resolved on every call.
+Source operations run under the same credential, so a facet that cannot write
+a tree directly cannot commit, fork into, or restore it through a slate either.
+Each caller boots its own resident process, and an app hop keeps the caller's
+authority rather than adopting the callee's author. A declaration is not a
+permission grant, and there is no binding-specific approval ladder. The host
+re-reads `package.json` on every binding call, so a held stub cannot retain
+removed reach.
 
 | Kind and fields | Reach and gate |
 |---|---|
 | `namespace`: `namespace`, `members?` | A member of an available codemode provider. Optional `members` narrows reach; executor approvals and device consent remain the provider's own gates. An absent namespace refuses as unavailable. |
 | `rpc`: `methods` | Declared, zero-argument workspace read models from `SLATE_READ_MODELS`, not arbitrary host RPC. The parser rejects methods outside that closed list. |
 | `mcp`: `server`, `tools?` | One owner-configured MCP connection, named by connection id rather than display name. Optional `tools` narrows reach; the owner's MCP capability and allowed-tool policy still apply. Calls take one JSON object, or no arguments for `{}`. |
-| `app`: `id` | A JSON POST route on another slate's authored server. The callee uses its own declared bindings. Calls carry depth through the resident request and its AsyncLocalStorage context; a ninth app hop refuses. |
+| `app`: `id` | A JSON POST route on another slate's authored server. The callee runs for the caller: its declared bindings resolve with the originating actor's authority. Calls carry depth through the resident request and its AsyncLocalStorage context; a ninth app hop refuses. |
 
 A queued approval is not a simulated success. Binding failures preserve their
 refusal class. Neither credentials nor the workspace object's storage are

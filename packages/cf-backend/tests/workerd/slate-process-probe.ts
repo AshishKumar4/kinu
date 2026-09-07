@@ -49,7 +49,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     files.mkdir(root, { recursive: true });
     files.writeFile(`${root}/server.ts`, source);
     this.process = await this.resident.start({
-      key: crypto.randomUUID(), root, port: 8789, bindings: bindDepth ? { PEER: exports.SlateDepthProbe({}) } : {},
+      key: crypto.randomUUID(), root, port: 8789, cred: CRED_SESSION_USER,
+      bindings: bindDepth ? { PEER: exports.SlateDepthProbe({}) } : {},
       project: parseSlateProject({ main: 'server.ts' }),
     });
   }
