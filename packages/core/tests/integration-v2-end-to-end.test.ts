@@ -145,6 +145,9 @@ describe('v2 e2e: branching heads → merge', () => {
       rootId: 'root-1',
       inheritedContext,
       request,
+      // One level of forking is the whole scenario: the three heads report and
+      // the split merges them, so the recursion room they inherit is zero.
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
     expect(result.mergedNarrative).toContain('X pattern');
