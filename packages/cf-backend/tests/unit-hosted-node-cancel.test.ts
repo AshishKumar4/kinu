@@ -3,24 +3,35 @@
  *
  * A node run in a facet is an RPC the search awaits; the search's own abort signal
  * lives on the search's side of that RPC. What this suite pins is the transport's
- * half of cancellation: when the signal fires while the facet is inside a provider
- * step, the host evicts the facet through the SDK's own abort verb — which is what
- * rejects the pending `runAsNode` — the node settles as `aborted` under its own
- * journal row, its storage is reclaimed and its home released, and nothing is left
- * awaiting a facet nobody will answer.
+ * half of cancellation (`hostNodeLoop`): when the signal fires while the facet is
+ * inside a provider step, the host evicts the facet through the SDK's own abort —
+ * which is what rejects the pending `runAsNode` — the node settles as `aborted`
+ * under its own journal row, its storage is reclaimed and its home released, and
+ * nothing is left awaiting a facet nobody will answer.
  *
- * The facet is doubled at the SDK boundary and nowhere above it: `subAgent` hands
+ * The facet is doubled at the SDK boundary and nowhere above it, the way the
+ * spawner's own suite doubles it (unit-facet-spawn-node.test.ts): `subAgent` hands
  * back a stub whose `runAsNode` holds until `abortSubAgent` rejects it, which is the
- * `ctx.facets.abort` contract `facet-spawn.ts` cites (pending RPCs reject, storage is
- * kept). Everything from the search's `runNodeAgent` down to that verb is production.
+ * `ctx.facets.abort` contract `facet-spawn.ts` cites (pending RPCs reject, storage
+ * is kept). Everything from the search's `runNodeAgent` down to that verb is
+ * production.
  */
 
 import { describe, expect, test } from 'bun:test';
 import type { NodeLoopResult, NodeRunSpec } from '@kinu.run/core';
 import { runNodeAgent } from '@kinu.run/core';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
-import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
-import { nodeDeps, nodeInput } from './helpers/three-kinds';
+import type { FacetHost } from '../src/facet-spawn';
+import { mockAgentsSdk } from './helpers/agents-sdk';
+
+mockAgentsSdk();
+// Deferred deliberately: the Agent SDK must be mocked BEFORE the module graph that
+// imports it is evaluated, which a static import would do first.
+const { SubordinateAgent } = await import('../src/subordinate-agent');
+const { hostNodeLoop } = await import('../src/facet-spawn');
+const { nodeDeps, nodeInput } = await import('./helpers/three-kinds');
+
+class FakeExplorationFacet extends SubordinateAgent {}
 
 const NODE_ID = 'node-1';
 const FACET_KEY = `exp:${NODE_ID}`;
@@ -36,13 +47,13 @@ const settledResult: NodeLoopResult = {
   produced: [],
 };
 
-/** A facet transport at the SDK boundary: the stub `subAgent` hands back, and the
+/** A facet host at the SDK boundary: the stub `subAgent` hands back, and the
  *  `abortSubAgent` that rejects its in-flight RPC. Every verb is recorded in order,
  *  because the ORDER — abort before reclaim, reclaim before release — is the claim.
  *
  *  `holdBoot` keeps the bootstrap's last RPC unanswered until `boot()` — the window
  *  in which a facet exists but has not been told to run. */
-function facetTransport(agent: HarnessOrchestratorAgent, options: { holdBoot?: boolean } = {}) {
+function facetTransport(options: { holdBoot?: boolean } = {}) {
   const calls: string[] = [];
   const inFlight = Promise.withResolvers<NodeLoopResult>();
   const started = Promise.withResolvers<void>();
@@ -64,37 +75,35 @@ function facetTransport(agent: HarnessOrchestratorAgent, options: { holdBoot?: b
       return inFlight.promise;
     },
   };
-  type SubAgentArgs = Parameters<HarnessOrchestratorAgent['subAgent']>;
-  const registerSubAgent = agent.subAgent.bind(agent);
-  const forgetSubAgent = agent.deleteSubAgent.bind(agent);
-  Object.defineProperty(agent, 'subAgent', {
-    value: async (cls: SubAgentArgs[0], name: SubAgentArgs[1]): Promise<object> => {
-      // The registry row is the SDK's, so reclamation below deletes something real.
-      await registerSubAgent(cls, name);
+  const host = {
+    subAgent: async (_cls: { name: string }, name: string) => {
       calls.push(`subAgent ${name}`);
       return stub;
     },
-  });
-  Object.defineProperty(agent, 'abortSubAgent', {
-    value: (_cls: SubAgentArgs[0], name: string, reason?: string) => {
+    abortSubAgent: (_cls: { name: string }, name: string, reason?: string) => {
       calls.push(`abortSubAgent ${name}`);
       inFlight.reject(new Error(`facet evicted: ${reason ?? 'no reason'}`));
     },
-  });
-  Object.defineProperty(agent, 'deleteSubAgent', {
-    value: async (cls: SubAgentArgs[0], name: string) => {
+    deleteSubAgent: async (_cls: { name: string }, name: string) => {
       calls.push(`deleteSubAgent ${name}`);
-      await forgetSubAgent(cls, name);
     },
-  });
-  Object.defineProperty(agent, 'facetHomes', {
-    value: () => ({
+    facetClass: () => FakeExplorationFacet,
+    facetHomes: () => ({
       provision: async () => { throw new Error('a node home is provisioned by the search, never by its transport'); },
       release: async (kind: string, id: string) => { calls.push(`releaseFacetHome ${kind}:${id}`); },
     }),
+    listSubAgents: () => [],
+  };
+  // SAFETY: this locally constructed host implements every member FacetHost
+  // owns — the SDK verbs plus `facetClass` and `facetHomes` — and the stub it
+  // returns declares every node-mode method the spawner reaches.
+  const loop = hostNodeLoop(host as FacetHost, {
+    identity: () => ({ ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main' }),
+    registerArbiter: () => () => { calls.push('withdrawArbiter'); },
   });
   return {
     calls,
+    loop,
     /** The facet is inside its bootstrap — `initNode` was sent and has not answered. */
     booting: booting.promise,
     /** Let a held bootstrap answer. */
@@ -112,19 +121,16 @@ const unusedModel = scriptedTurnModel({
   doGenerate: async () => { throw new Error('the search-side model must not run a hosted node'); },
 });
 
-async function hostedNode(signal: AbortSignal, options: { holdBoot?: boolean } = {}) {
-  const harness = orchestratorHarness();
-  const transport = facetTransport(harness.agent, options);
-  const host = harness.agent.harnessNodeHost();
-  if (!host) throw new Error('an owned workspace hosts its nodes');
-  const { deps, journal } = nodeDeps(unusedModel, { host, signal });
+function hostedNode(signal: AbortSignal, options: { holdBoot?: boolean } = {}) {
+  const transport = facetTransport(options);
+  const { deps, journal } = nodeDeps(unusedModel, { host: transport.loop, signal });
   return { transport, journal, running: runNodeAgent(nodeInput({ nodeId: NODE_ID }), deps) };
 }
 
 describe('cancelling a search reaches its hosted nodes', () => {
   test('an abort mid-step evicts the facet, settles the node as aborted, and reclaims it', async () => {
     const controller = new AbortController();
-    const { transport, journal, running } = await hostedNode(controller.signal);
+    const { transport, journal, running } = hostedNode(controller.signal);
     await transport.started;
 
     // The SDK's abort verb is synchronous, so the eviction is observable the moment
@@ -146,7 +152,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
 
   test('a node that finished before the abort is untouched by it', async () => {
     const controller = new AbortController();
-    const { transport, journal, running } = await hostedNode(controller.signal);
+    const { transport, journal, running } = hostedNode(controller.signal);
     await transport.started;
     transport.settle();
     const run = await running;
@@ -160,7 +166,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
   test('a search already cancelled never boots a facet for the node', async () => {
     const controller = new AbortController();
     controller.abort(new Error('cancelled by operator'));
-    const { transport, journal, running } = await hostedNode(controller.signal);
+    const { transport, journal, running } = hostedNode(controller.signal);
 
     const run = await running;
     expect(run.report.status).toBe('aborted');
@@ -172,7 +178,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
     // An evicted facet restarts on its next RPC, so a `runAsNode` sent after the
     // abort would run the node in full. The window is closed by not sending it.
     const controller = new AbortController();
-    const { transport, journal, running } = await hostedNode(controller.signal, { holdBoot: true });
+    const { transport, journal, running } = hostedNode(controller.signal, { holdBoot: true });
     await transport.booting;
     controller.abort(new Error('cancelled by operator'));
     transport.boot();
