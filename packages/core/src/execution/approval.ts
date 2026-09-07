@@ -92,7 +92,7 @@ export function withApprovalGatedShell(
  *  for a shell-command reviewer.
  * The names identify shell capabilities for approval, never an output format.
  */
-export const SHELL_COMMAND_MEMBERS = ['exec', 'startProcess'] as const;
+const SHELL_COMMAND_MEMBERS = ['exec', 'startProcess'] as const;
 
 /** Functions this module has already wrapped, keyed by the wrapped
  *  reference itself — not the provider object. A CLI head runtime reuses the

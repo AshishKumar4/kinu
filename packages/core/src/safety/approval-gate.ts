@@ -512,25 +512,10 @@ export function formatApproval(result: ApprovalResult): string {
   return [`Approval review: ${result.decision}`, ...lines].join('\n');
 }
 
-/**
- * The two markers every approval REFUSAL carries, named here because this file
- * writes them and a reader must not keep a second copy of the strings.
- *
- * A denied command reaches the ledger as an ordinary non-zero exit whose stderr
- * is this message, so the durable row is indistinguishable from a failing build
- * unless something looks for these. Measured on a live run: three attempts at
- * `curl -fsSL https://bun.sh/install | bash` were refused by the `pipe-to-bash`
- * rule and counted as the WORK failing — the safety ladder working correctly,
- * filed as the agent's command being broken.
- */
+/** Human-readable approval diagnostics. Classification and dispatch facts travel structurally. */
 export const APPROVAL_DENIED = 'Denied';
 export const APPROVAL_REVIEW_LABEL = 'Approval review:';
 
-/** Whether `text` is a refusal this gate wrote, rather than output that merely
- *  mentions one of the words. Both markers are required for that reason. */
-export function citesApprovalDenial(text: string): boolean {
-  return text.includes(APPROVAL_DENIED) && text.includes(APPROVAL_REVIEW_LABEL);
-}
 
 /**
  * How the `mode`/`allow_all`/`deny_all` ladder is spelled wherever a policy

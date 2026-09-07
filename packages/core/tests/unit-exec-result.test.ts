@@ -7,11 +7,11 @@
 // `workspace.exec`, an executor's `exec`), not just the renderer.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
-import { formatExecResult, parseRefusal, refusalText, type CommandResult } from '../src/execution/exec-result';
+import { formatExecResult, type CommandResult } from '../src/execution/exec-result';
+import { parseJsonValue } from '../src/utils/json';
 import { createInlineExecutor } from '../src/execution/inline';
 import { createNimbusExecutor } from '../src/execution/nimbus';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
-import { KinuError } from '../src/obs/index';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
@@ -75,24 +75,6 @@ describe('formatExecResult', () => {
   });
 });
 
-describe('parseRefusal', () => {
-  test('a refusal payload reads back as reason and error', () => {
-    expect(parseRefusal(refusalText(new KinuError('unavailable', 'No device connected.')))).toEqual({
-      reason: 'unavailable',
-      error: 'No device connected.',
-    });
-  });
-
-  test('a result that is not JSON is not a refusal', () => {
-    expect(parseRefusal('Error (exit 1)\n--- stdout ---\nfailed')).toBeNull();
-    expect(parseRefusal('plain command output')).toBeNull();
-  });
-
-  test('JSON that is not a refusal shape is not a refusal', () => {
-    expect(parseRefusal('{"ok":true,"result":42}')).toBeNull();
-    expect(parseRefusal('{"error":"no reason field"}')).toBeNull();
-  });
-});
 
 describe('the surfaces the model reads', () => {
   test('the `run` tool surfaces a failing test suite\'s stdout', async () => {
@@ -170,7 +152,7 @@ describe('the surfaces the model reads', () => {
       },
     });
     const out = String(await nimbus.tools.readFile!.execute('/missing.txt'));
-    expect(parseRefusal(out)?.reason).toBe('missing');
+    expect(parseJsonValue(out)).toMatchObject({ reason: 'missing' });
   });
 
   test('nimbus readFile on an empty file stays success — empty content is not a refusal', async () => {
@@ -188,7 +170,6 @@ describe('the surfaces the model reads', () => {
       },
     });
     const out = String(await nimbus.tools.readFile!.execute('/empty.txt'));
-    expect(parseRefusal(out)).toBeNull();
     expect(out).toBe('');
   });
 });
