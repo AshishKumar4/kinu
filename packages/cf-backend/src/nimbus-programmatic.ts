@@ -31,6 +31,10 @@ import type * as programmaticModule from '../../../node_modules/@nimbus-sh/worke
 import type * as routesModule from '../../../node_modules/@nimbus-sh/worker/dist/session/routes.js';
 import type * as gitModule from '../../../node_modules/@nimbus-sh/worker/dist/git/commands.js';
 
+// The persisted exposure codec is a lightweight Nimbus-owned storage read.
+// It must remain usable on a cold route without importing the runtime graph.
+export { readPortExposure } from '../../../node_modules/@nimbus-sh/worker/dist/session/port-capability.js';
+
 export type {
   ProgrammaticExecOptions,
   ProgrammaticHost,

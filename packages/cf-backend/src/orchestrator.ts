@@ -3946,7 +3946,7 @@ export class OrchestratorAgent extends ActorAgent {
     this._slates ??= new SlateHost({
       ctx: this.ctx, env: this.env, workspace: this.name,
       session: () => this.hostedWorkspace().bundle.session(),
-      registerPort: (pid, port, target) => this.hostedWorkspace().registerPort(pid, port, target),
+      registerPort: (pid, port, target, owner) => this.hostedWorkspace().registerPort(pid, port, target, owner),
       unregisterPorts: (pid) => this.hostedWorkspace().unregisterPorts(pid),
       dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route),
       expose: async (port) => {
