@@ -531,6 +531,12 @@ describe('a wake serves the head lazily', () => {
     await expect(container.read('stale.txt')).rejects.toThrow(/changed under its placeholder/u);
     // An untouched sibling still pages in through the current head.
     expect(new TextDecoder().decode(await container.read('other.txt'))).toBe('x');
+    // The recovery a container performs after the refusal: take the placeholder
+    // again from the head that exists now, and the page-in serves that head.
+    const restore = fixture.core.lazyRestore();
+    if (restore === null) throw new Error('the fixture has no lazy restore');
+    expect((await restore.placeholder('stale.txt'))?.kind).toBe('file');
+    expect(new TextDecoder().decode(await container.read('stale.txt'))).toBe('SECOND generation content'.slice(0, 24));
   });
 });
 

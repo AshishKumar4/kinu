@@ -308,4 +308,37 @@ and the next seal published generation 9 on an unbroken chain. An open
 descriptor kept its inode across rename, unlink, replacement and a publish.
 The daemon matrix (14 scenarios), the v2 and conformance suites pass.
 
+## Hide lifecycle and descriptor death, 2026-09-06
+
+The first hide repair matched a `.fuse_hidden` prefix. That would have
+dropped a caller's own file of that name from every head and never
+journaled its unlink. The daemon now recognises a hide by three facts,
+libfuse's exact name `.fuse_hidden` plus 16 lowercase hex digits, the same
+parent directory, and a handle open through this daemon on the source
+inode, and records each hide it performed with a HIDE record. The release
+time unlink of a recorded name is the end of the hide and is journaled as
+UNHIDE; the unlink of any other name is ordinary. Recovery replays HIDE and
+UNHIDE, removes a hidden name whose holder died with the daemon, and WAL
+compaction carries outstanding hides forward.
+
+Measured on the real mount: a caller's file named `.fuse_hidden0000abcd0000ef01`
+was published with its bytes and its unlink was published; a hidden name
+outstanding at SIGKILL was gone from the backing tree after restart.
+
+The one collision left is a caller that renames an open file to a
+same-directory name of exactly libfuse's shape. The high-level API hands
+the daemon the same rename callback for both, so that rename is journaled
+as an unlink. It is not measured.
+
+Descriptor death is the kernel's: a read on a descriptor of the dead mount
+answered EIO, its close answered ok, and a fresh open after restart served
+the bytes the dead daemon had written through. A page-in refused for a
+moved placeholder recovers by taking the placeholder again from the current
+head; the modeled test proves both the refusal and the recovery.
+
+The hardlink walk stays visible. On the 308-entry tree the seal that
+walked measured 10 ms against 8 ms for a plain seal. It is O(tree) and is
+paid only by a generation that wrote through a multi-link inode. A links
+table carried by the head would remove the walk; it is not built.
+
 
