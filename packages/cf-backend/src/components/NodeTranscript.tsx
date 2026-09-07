@@ -34,7 +34,7 @@ import { MessageView } from "@/components/MessageView";
 import {
   deltaAsMessage, stepAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
 } from "@/components/head-chat";
-import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric, timeAgo } from "@/components/surfaces/shared";
+import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric, timeAgo, CodeBlock } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { cleanNodeLabel, findForkNode } from "@/components/swarm-tree-model";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -199,9 +199,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
       {view.codeUsed && (
         <div className="shrink-0 border-b p-border px-4 py-2.5">
           <div className="text-[10px] uppercase tracking-normal p-text-3">Code draft</div>
-          <pre className="mt-1 text-[11px] p-text-2 leading-relaxed whitespace-pre-wrap break-words max-h-40 overflow-y-auto rounded-md p-fill border p-border p-2">
-            {view.codeUsed}
-          </pre>
+          <div className="max-h-40 overflow-auto"><CodeBlock className="language-js">{view.codeUsed}</CodeBlock></div>
         </div>
       )}
     </>

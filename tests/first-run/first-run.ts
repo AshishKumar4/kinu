@@ -28,9 +28,9 @@
  *
  * WHAT EVERY CASE IN THIS TIER HAS TO BE:
  *
- *   FRESH.      One workspace per case, created through the public REST the web
- *               app creates one with, deleted in a `finally`. A case that
- *               inherits another's state is measuring the harness.
+ *   FRESH.      Mutating cases create a fresh workspace and delete it in finally.
+ *               Explicit owned-workspace read-only cases do not use that runner:
+ *               they keep user data intact and record only their actual reads.
  *   DEPLOYED.   `resolveEvalTarget` / `workerSession` resolve the target and
  *               `KinuPublicSession` drives it — the same surfaces the trajectory
  *               arm uses, reused rather than forked.
@@ -78,6 +78,7 @@ export const FIRST_RUN_CASES = [
   'slate',
   'command-refusal',
   'preview-address',
+  'workspace-title',
 ] as const;
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
 
@@ -183,6 +184,13 @@ export const FIRST_RUN_DEFECTS = {
     provedRedAt: '53ba25348',
     redDirection: 'Non-model CLI creation must reject a fresh 32-character address with the 31-character limit, while a fresh 31-character address must serve actual preview HTTP.',
   },
+  'workspace-title': {
+    id: 'workspace-title',
+    found: 'The owned workspace registry held its generated display title, but the loaded actor status returned the workspace ID.',
+    missedBecause: 'Warm or locally initialized status fixtures did not read a generated title from the real owner registry on a cold actor.',
+    provedRedAt: 'b48b9bba4',
+    redDirection: 'Read-only production mismatch retained by the title owner in workspace-title-production-before.json. This case selects an explicitly owned workspace with a distinct registry title, reads its loaded snapshot first, and compares without writes, eviction or model/spend claims.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
@@ -284,6 +292,7 @@ const SHORT_SUBJECT = {
   'slate': 'slate',
   'command-refusal': 'command',
   'preview-address': 'address',
+  'workspace-title': 'title',
 } satisfies Record<FirstRunCase, string>;
 /** What a case's body is handed, and what it hands back. */
 export interface FirstRunSession {
