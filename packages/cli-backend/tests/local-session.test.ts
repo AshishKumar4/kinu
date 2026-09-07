@@ -4447,8 +4447,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
   expect(await rt.storage.vfs.readFile('/home/user/queued-build.txt', { encoding: 'utf8' })).toBe('authorized Build');
   const writes = events.filter((event) => event.type === 'tool-result' && event.toolName === 'file');
   expect(writes).toHaveLength(2);
-  const refused = v.parse(v.object({ result: v.string() }), writes[0]);
-  expect(v.parse(v.pipe(v.string(), v.parseJson(), v.object({ reason: v.string() })), refused.result).reason).toBe('denied');
+  expect(writes[0]).toMatchObject({ success: false, reason: 'denied' });
   expect(writes[1]).toMatchObject({ success: true });
   await session.end();
 });
