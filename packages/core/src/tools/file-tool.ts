@@ -119,11 +119,17 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
 export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput) => Promise<JsonValue> {
   const { vfs, ledger, budget } = deps;
 
-  const inspection = async (output: JsonValue): Promise<JsonValue> => {
+  /** A Plan-safe inspection: the VFS answer, bounded like a read. */
+  const inspect = async (action: 'list' | 'stat' | 'search', path: string, read: () => Promise<JsonValue | null>): Promise<JsonValue> => {
+    let output: JsonValue | null;
+    try { output = await read(); }
+    catch (cause) { return vfsFailure(vfs, { error: cause }, action, path); }
+    if (output === null) return failure('missing', 'No path at ' + path);
     const bounded = await clampSerializedToolResult({ output }, { vfs, budget, producer: 'file_read' });
-    if (bounded === undefined) return failure('io', 'File inspection produced no serializable result');
-    return bounded;
+    return bounded ?? failure('io', 'File inspection produced no serializable result');
   };
+  const searchLines = (content: string, query: string): { line: number; text: string }[] =>
+    content.split('\n').flatMap((text, index) => text.includes(query) ? [{ line: index + 1, text }] : []);
   /** Text of a file. A VFS is free to answer `{encoding:'utf8'}` with bytes;
    *  decoding beats an unchecked cast that would throw out of `execute`. */
   const readText = async (path: string): Promise<string> => {
@@ -196,29 +202,17 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
     const path = parsedPath.output;
     if (parsed.output === 'write' || parsed.output === 'edit') requireBuild('file.' + parsed.output);
     switch (parsed.output) {
-      case 'list': {
-        try { return await inspection({ path, entries: await vfs.readdir(path) }); }
-        catch (cause) { return vfsFailure(vfs, { error: cause }, 'list', path); }
-      }
-      case 'stat': {
-        try {
+      case 'list':
+        return inspect('list', path, async () => ({ path, entries: await vfs.readdir(path) }));
+      case 'stat':
+        return inspect('stat', path, async () => {
           const stat = await vfs.stat(path);
-          return stat === null ? failure('missing', 'No path at ' + path) : await inspection({ path, size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.isDir });
-        } catch (cause) { return vfsFailure(vfs, { error: cause }, 'stat', path); }
-      }
+          return stat === null ? null : { path, size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.isDir };
+        });
       case 'search': {
         const query = v.safeParse(QuerySchema, args.query);
         if (!query.success) return failure('bad_input', 'file search requires a non-empty literal query');
-        try {
-          const content = await readText(path);
-          const matches: { line: number; text: string }[] = [];
-          let line = 0;
-          for (const text of content.split('\n')) {
-            line++;
-            if (text.includes(query.output)) matches.push({ line, text });
-          }
-          return await inspection({ path, matches });
-        } catch (cause) { return vfsFailure(vfs, { error: cause }, 'search', path); }
+        return inspect('search', path, async () => ({ path, matches: searchLines(await readText(path), query.output) }));
       }
       case 'read': {
         let content: string;

@@ -32,7 +32,7 @@
  * "Validity over the resolved configuration" and "Accepted and ignored".
  */
 import { tool, jsonSchema } from 'ai';
-import { currentWorkMode, inWorkMode, permitInPlan, requireBuild } from '../execution/work-mode';
+import { currentWorkMode, inWorkMode, permitInPlan, workModeRefusal } from '../execution/work-mode';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import {
@@ -75,7 +75,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, renderThrownChain, refusalOf, toKinuError } from '../obs/index';
+import { diagnostics, renderThrownChain, refusalOf, toKinuError, type Refusal } from '../obs/index';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -1809,6 +1809,18 @@ function requestedTopic(input: AgentsToolInput): { topic: string } | BadInputRef
     ? badInput(`topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes`)
     : { topic };
 }
+/**
+ * Whether this actor may run the requested action now: absent from its wiring is
+ * `unsupported`, and a durable roster change under Plan is `denied`. A Plan turn
+ * keeps its temporary research rungs.
+ */
+function actionAdmission(actions: readonly AgentsToolInput['action'][], mode: WorkMode, action: AgentsToolInput['action']): Refusal | null {
+  if (!actions.includes(action)) {
+    return { reason: 'unsupported', error: `action "${action}" is not available here. Available: ${actions.join(', ')}` };
+  }
+  return workModeRefusal(mode, action !== 'hire' && action !== 'dismiss', 'agents.' + action);
+}
+
 
 /**
  * The one delegation dispatch. Both surfaces that can delegate — the `agents`
@@ -1830,7 +1842,7 @@ export async function dispatchAgentsAction(
   toolOptions?: AgentsToolCallOptions,
 ): Promise<object> {
   const actions = agentsActionsFor(deps);
-  const mode = deps.mode === 'plan' ? 'plan' : currentWorkMode();
+  const mode = inWorkMode(deps.mode, currentWorkMode);
   const team = deps.team;
   const peers = deps.peers;
   // No catch: a roster this cannot read is not a roster without this name. The
@@ -1849,12 +1861,8 @@ export async function dispatchAgentsAction(
   // correct "not here, here is what is" counted as a tool DEFECT in the ledger
   // (read-models/tool-failures.ts), and this is the response an actor at the
   // delegation depth cap gets — the one place absence would otherwise be silent.
-  if (!actions.includes(input.action)) {
-    return {
-      reason: 'unsupported',
-      error: `action "${input.action}" is not available here. Available: ${actions.join(', ')}`,
-    };
-  }
+  const admission = actionAdmission(actions, mode, input.action);
+  if (admission) return admission;
   // The spawn seam. Launching a helper is what turns one exhausted run into
   // many, so the cap is checked before the launch — for every action that
   // creates or wakes an agent. `list`, `dismiss` and `reply` spend nothing and
@@ -1890,7 +1898,6 @@ export async function dispatchAgentsAction(
         return await runSwarmAction(deps, input, mode, toolOptions, deps.budget);
 
       case 'hire': {
-        inWorkMode(mode, () => requireBuild('agents.hire'));
         const hireDepth = spawnDepthRefusal();
         if (hireDepth) return hireDepth;
         if ((input.scope ?? 'subordinate') === 'workspace') {
@@ -2106,7 +2113,6 @@ export async function dispatchAgentsAction(
       }
 
       case 'dismiss':
-        inWorkMode(mode, () => requireBuild('agents.dismiss'));
         if (!team) {
           return {
             reason: 'denied',

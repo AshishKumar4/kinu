@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import type { WorkMode } from '../prompting/surface';
-import { KinuError, refusalOf } from '../obs/error';
+import { KinuError, refusalOf, type Refusal } from '../obs/error';
 
 import type { CodemodeProvider } from '../tools/sandbox-contract';
 const invocationMode = new AsyncLocalStorage<WorkMode>();
@@ -34,10 +34,17 @@ export function permitInPlan<Operation extends ToolSet[string]>(operation: Opera
   return Object.assign(operation, permission);
 }
 
-export function requireWorkModePermission(mode: WorkMode, planAllowed: boolean, operation: string): void {
+/** The refusal a Plan invocation receives, or null when the operation may proceed. */
+export function workModeRefusal(mode: WorkMode, planAllowed: boolean, operation: string): Refusal | null {
   if ((mode === 'plan' || currentWorkMode() === 'plan') && !planAllowed) {
-    throw new KinuError('denied', operation + ' has no Plan-safe execution capability');
+    return refusalOf(new KinuError('denied', operation + ' has no Plan-safe execution capability'));
   }
+  return null;
+}
+
+export function requireWorkModePermission(mode: WorkMode, planAllowed: boolean, operation: string): void {
+  const refusal = workModeRefusal(mode, planAllowed, operation);
+  if (refusal !== null) throw new KinuError(refusal.reason, refusal.error);
 }
 
 export function requireBuild(operation: string): void {
