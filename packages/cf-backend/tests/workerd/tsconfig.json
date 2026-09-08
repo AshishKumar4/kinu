@@ -8,6 +8,7 @@
       "@cloudflare/vitest-pool-workers/types"
     ]
   },
+  "//exclude": "A probe that imports production `src` drags the whole worker into THIS project's type graph, where the ambient `Env` from packages/cf-backend/env.d.ts is not in scope and every `Env` annotation in src goes unresolved. Those probes are type-checked by the cf-backend project, which owns that declaration; here they are only bundled by esbuild, which needs no types.",
   "include": ["./**/*.ts", "../../vitest.config.ts"],
-  "exclude": ["./decorated-agent.test.ts", "./slate-facet-probe.ts"]
+  "exclude": ["./decorated-agent.test.ts", "./slate-facet-probe.ts", "./plan-announce-probe.ts"]
 }

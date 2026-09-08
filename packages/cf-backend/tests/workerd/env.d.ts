@@ -29,6 +29,12 @@ interface SlateFacetRootRpc extends Rpc.DurableObjectBranded {
   exercise(family: 'subordinate' | 'exploration'): Promise<{ answeredBy: string; method: string; browserCallable: boolean }>;
   code(mode: 'plan' | 'build', code: string): Promise<{ answer: string; file: string }>;
 }
+interface PlanAnnounceRpc extends Rpc.DurableObjectBranded {
+  exercise(): Promise<{
+    hops: Record<string, { ok: boolean; error: string | null }>;
+    published: string[];
+  }>;
+}
 interface SlateEgressRpc extends Rpc.DurableObjectBranded {
   request(mode: 'plan' | 'build', target: string, redirect?: RequestRedirect): Promise<string>;
   publicPlanCall(): Promise<{ ok: boolean; reason?: string }>;
@@ -63,6 +69,7 @@ declare global {
       SLATE_FACET_ROOT: DurableObjectNamespace<SlateFacetRootRpc>;
       RETAINED_FACET_SDK: DurableObjectNamespace<RetainedFacetRpc>;
       RETAINED_FACET_ACTOR: DurableObjectNamespace<RetainedFacetRpc>;
+      PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }

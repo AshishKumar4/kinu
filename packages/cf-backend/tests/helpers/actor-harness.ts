@@ -1261,6 +1261,14 @@ export async function hiredSubordinateHarness(
     lifetime: 'durable',
     role: roleId ?? 'general',
   });
+  // A hire REGISTERS the facet with the SDK, and that registry is the only
+  // thing `getExistingSubAgent` answers from. So the fixture registers the one
+  // hired name exactly once, through the SDK's own registering path and under
+  // the parent's production facet class, rather than writing the row by hand —
+  // a hand-written row is free to drift from the key the registry reads. It is
+  // seeded HERE, before the overrides below are installed, so the row comes
+  // from the un-overridden binding and is the SDK's own.
+  await parent.agent.subAgent(parent.agent.facetClass(), identity.name);
   // The parent addresses its children through `subAgent`, which needs a facet.
   // Resolve that ONE name to the real child instead, so both directions of the
   // handshake — the parent renaming a child, the child recording its title —
@@ -1277,15 +1285,26 @@ export async function hiredSubordinateHarness(
     configurable: true,
   });
   // The owner's authoritative READS go through `getExistingSubAgent`, which by
-  // contract never creates. The one hired name resolves to the real child for
-  // the same reason `subAgent` does; every other name falls through to the
-  // registry's honest answer, which is what keeps an inspection of a rostered
-  // but never-hired child a `missing` instead of a freshly minted empty facet.
+  // contract never creates: it answers out of the SDK's sub-agent registry and
+  // returns null the moment that registry holds no row. So the registry is
+  // consulted FIRST here and its null is FINAL, including after a
+  // `deleteSubAgent` — a fixture that answered for a name the SDK has no
+  // identity for would make a revoked facet indistinguishable from a live one,
+  // which is precisely the thing the surrounding proofs claim to check. Only a
+  // name the registry has admitted, under the parent's own facet class,
+  // resolves to the real child, for the same reason `subAgent` does; every
+  // other name keeps the registry's own answer, which is what keeps an
+  // inspection of a rostered but never-hired child a `missing` instead of a
+  // freshly minted empty facet.
   type ExistingArgs = Parameters<HarnessOrchestratorAgent['getExistingSubAgent']>;
   const parentExisting = parent.agent.getExistingSubAgent.bind(parent.agent);
+  const hiredClassName = parent.agent.facetClass().name;
   Object.defineProperty(parent.agent, 'getExistingSubAgent', {
-    value: async (cls: ExistingArgs[0], name: ExistingArgs[1]): Promise<object | null> =>
-      name === identity.name ? resolveFacet : await parentExisting(cls, name),
+    value: async (cls: ExistingArgs[0], name: ExistingArgs[1]): Promise<object | null> => {
+      const registered = await parentExisting(cls, name);
+      if (!registered) return null;
+      return cls.name === hiredClassName && name === identity.name ? resolveFacet : registered;
+    },
     configurable: true,
   });
   return harness;

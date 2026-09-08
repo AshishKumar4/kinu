@@ -122,6 +122,15 @@ const retainedFacetProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+const planAnnounceProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/plan-announce-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/plan-announce-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
+  alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 const slateEgressProbe = buildSync({
   entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-egress-probe.ts', import.meta.url))],
   outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-egress-probe.js', import.meta.url)),
@@ -175,6 +184,19 @@ export default defineConfig({
             RETAINED_FACET_ACTOR: { className: 'OrchestratorAgent', useSQLite: true },
           },
         }, {
+          // The child resolves its workspace through a binding named exactly
+          // `OrchestratorAgent`, because that is the name the production
+          // `workspaceOwner()` reads off `env`. Same class, same script as the
+          // outer `PLAN_ANNOUNCE_ROOT`, so both address one object.
+          name: 'plan-announce-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: planAnnounceProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          durableObjects: {
+            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          },
+        }, {
           name: 'slate-egress-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
           modules: slateEgressProbe.map((file) => ({
             type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
@@ -222,6 +244,7 @@ export default defineConfig({
           SLATE_FACET_ROOT: { className: 'SlateFacetRootProbe', scriptName: 'slate-facet-probe', useSQLite: true },
           RETAINED_FACET_SDK: { className: 'FacetReadRoot', scriptName: 'retained-facet-probe', useSQLite: true },
           RETAINED_FACET_ACTOR: { className: 'OrchestratorAgent', scriptName: 'retained-facet-probe', useSQLite: true },
+          PLAN_ANNOUNCE_ROOT: { className: 'OrchestratorAgent', scriptName: 'plan-announce-probe', useSQLite: true },
           SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', scriptName: 'slate-egress-probe', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
         },
