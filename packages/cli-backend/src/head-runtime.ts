@@ -25,7 +25,7 @@ import {
   headMergeLLM,
   localMissionScope,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -97,18 +97,14 @@ export interface CLIHeadRuntimeDeps {
   operations?: ModelOperationSink;
 }
 
-/** Per-head abort flag — flipped by SpawnedHead.abort (a caller-requested
- *  deadline, or the parent giving up on the split). */
-interface AbortFlag { aborted: boolean; reason: string | null; }
-
 export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   const runtime: HeadRuntime = {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
-      const flag: AbortFlag = { aborted: false, reason: null };
+      const abort = new AbortController();
       return {
         id: input.id,
-        run: () => runLocalHead(input, deps, flag),
-        async abort(reason: string) { flag.aborted = true; flag.reason = reason; },
+        run: () => runLocalHead(input, deps, abort.signal),
+        async abort(reason: string) { abort.abort(new Error(reason)); },
       };
     },
     mergeLLM: headMergeLLM({
@@ -182,7 +178,7 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
   }
 }
 
-async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: AbortFlag): Promise<HeadReport> {
+async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: AbortSignal): Promise<HeadReport> {
   const scratch = openHeadScratch(input.id);
   const db = scratch.db;
   const agentName = headAgentName(input.id);
@@ -225,8 +221,9 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
       runtime: rt,
       model: headModel(input, deps), tools, capture,
       workspaceLayout: 'private-scratch',
-      isAborted: () => flag.aborted,
-      abortReason: () => flag.reason,
+      signal,
+      isAborted: () => signal.aborted,
+      abortReason: () => signal.aborted ? renderThrownChain({ cause: signal.reason }) : null,
       // Each finished step into the session's journal as it lands — the only
       // thing that can say what a head is doing before it reports.
       reportStep: (seq, step) => journal.appendStep(input.id, seq, step),

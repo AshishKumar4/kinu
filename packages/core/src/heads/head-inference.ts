@@ -752,9 +752,20 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       if (!resumed) break;
       history.push(...resumed);
     }
-    if (settled) deps.reportMessages?.(history.slice(seeded));
   } catch (err) {
     failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: err, otherwise: 'unavailable' });
+  }
+
+  if (settled) {
+    try {
+      deps.reportMessages?.(history.slice(seeded));
+    } catch (cause) {
+      failure = toKinuError({
+        doing: `report agent ${input.id} conversation`,
+        cause: failure === undefined ? cause : new AggregateError([failure, cause], 'execution and conversation reporting failed'),
+        otherwise: 'unavailable',
+      });
+    }
   }
 
   if (refusal) {
