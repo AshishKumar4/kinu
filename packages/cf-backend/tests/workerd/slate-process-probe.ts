@@ -4,16 +4,22 @@ import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import { parseSlateProject, routeSlateBindingCall, type SlateProcess, type JsonValue, type SlateCallResult } from '@kinu.run/core';
+import { parseSlateProject, resolveSlateChain, routeSlateBindingCall, type SlateProcess, type JsonValue, type SlateCallResult, type SlateInvocation } from '@kinu.run/core';
 import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses } from '../../src/slates/resident';
 import { codemodeEgress } from '../../src/codemode-egress';
 
+/**
+ * Stands in for the host's binding entrypoint, using the host's OWN resolution
+ * so this probe cannot pass while `ResidentSlateHost` would refuse: it holds
+ * the same `invocation -> { id, chain }` record and calls `resolveSlateChain`.
+ */
 export class SlateChainProbe extends WorkerEntrypoint {
-  async call(member: string, args: JsonValue[], chain: string[]): Promise<SlateCallResult> {
+  async call(member: string, args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
     const project = parseSlateProject({ main: 'server.ts', slate: { bindings: { PEER: { kind: 'app', id: 'peer' } } } });
     try {
-      const route = routeSlateBindingCall({ id: 'probe', project, name: 'PEER', request: { member, args, chain } });
+      const chain = resolveSlateChain({ invocations: SlateProcessProbeDO.invocations, id: 'probe', invocation });
+      const route = routeSlateBindingCall({ id: 'probe', project, name: 'PEER', request: { member, args, invocation }, chain });
       if (route.kind !== 'app') throw new Error('Expected app route');
       return { ok: true, value: { chain: [...route.chain], args: [...route.args] } };
     } catch (cause) {
@@ -24,6 +30,9 @@ export class SlateChainProbe extends WorkerEntrypoint {
 }
 
 export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
+  /** The live app invocations, exactly as `ResidentSlateHost` keeps them.
+   *  Static because the entrypoint above answers outside this object. */
+  static readonly invocations = new Map<string, SlateInvocation>();
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
   private readonly processes = new SessionProcessSupervisor();
   private readonly ports = new PortRegistry();
@@ -86,13 +95,26 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     return response;
   }
 
+  /**
+   * One request, driven the way `ResidentSlateHost.call` drives one: mint an
+   * invocation for `chain`, send its id, retire it when the request settles.
+   * `chain === undefined` is the preview shape — no invocation at all.
+   */
   async request(path: string, chain?: string[]): Promise<{ status: number; body: string }> {
-    const response = await this.ports.routeRequest(8789, new Request(
-      'https://slate.invalid' + path,
-      chain === undefined ? undefined : { headers: { 'x-slate-chain': encodeURIComponent(JSON.stringify(chain)) } },
-    ), path);
-    if (response === null) return { status: 404, body: 'No listener' };
-    return { status: response.status, body: await response.text() };
+    const invocation = chain === undefined ? null : crypto.randomUUID();
+    if (invocation !== null && chain !== undefined) {
+      SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain });
+    }
+    try {
+      const response = await this.ports.routeRequest(8789, new Request(
+        'https://slate.invalid' + path,
+        invocation === null ? undefined : { headers: { 'x-slate-call': invocation } },
+      ), path);
+      if (response === null) return { status: 404, body: 'No listener' };
+      return { status: response.status, body: await response.text() };
+    } finally {
+      if (invocation !== null) SlateProcessProbeDO.invocations.delete(invocation);
+    }
   }
 
   async stop(): Promise<void> {
