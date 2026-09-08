@@ -3,7 +3,7 @@ import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 import { CODEX_CRED_KEY, createFileCodexAuthStore } from '../src/codex-auth-store';
-import { asFetchFunction, JsonObjectSchema, type AuthResolution, type JsonObject } from '@kinu.run/core';
+import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const savedConfigSchema = v.object({
@@ -79,17 +79,16 @@ describe('createFileCodexAuthStore', () => {
     }, null, 2)}\n`);
 
     const submitted: string[] = [];
-    let second: Promise<AuthResolution | null> | undefined;
+    // Resolved from inside the refresh, so the second caller starts while the
+    // first still holds the lock rather than at a guessed moment.
+    const midFlight = Promise.withResolvers<void>();
     const store = createFileCodexAuthStore(configPath, {
       fetch: asFetchFunction(async (_input, init) => {
-        // Yield before answering, so the refresh is genuinely mid-flight — the
-        // state in which the lock used to be gone already. The second caller
-        // starts HERE rather than at a guessed moment, so its first acquisition
-        // attempt lands inside this refresh: it is refused while the lock covers
-        // the callback, and it succeeds the moment the lock does not.
-        await Promise.resolve();
         submitted.push(String(new URLSearchParams(String(init?.body)).get('refresh_token')));
-        second ??= store.getAuth();
+        midFlight.resolve();
+        // Yield before answering, so the refresh is genuinely mid-flight — the
+        // state in which the lock used to be gone already.
+        await Promise.resolve();
         return Response.json({
           access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
           refresh_token: `refresh-${String(submitted.length)}`,
@@ -98,14 +97,22 @@ describe('createFileCodexAuthStore', () => {
       }),
     });
 
-    const first = await store.getAuth();
-    if (second === undefined) throw new Error('the refresh never reached the provider');
-    const waiter = await second;
+    // TWO INDEPENDENT CALLERS, which is what concurrent means here. The second
+    // used to be created inside the provider callback, i.e. inside the first
+    // caller's own hold: an acquisition nested in the holder's async context is
+    // a deadlock, because the hold is released only when that call returns.
+    // Started from here it is a real contender — its first attempt is
+    // synchronous and lands while the lock is held, and it proceeds when the
+    // first caller releases.
+    const first = store.getAuth();
+    await midFlight.promise;
+    const second = store.getAuth();
+    const [firstAuth, waiter] = await Promise.all([first, second]);
 
     // The provider saw the stored refresh token once, both callers carry what
     // that one rotation produced, and the file agrees with both of them.
     expect(submitted).toEqual(['refresh-old']);
-    expect(waiter?.headers.Authorization).toBe(first?.headers.Authorization);
+    expect(waiter?.headers.Authorization).toBe(firstAuth?.headers.Authorization);
     const saved = v.parse(savedConfigSchema, JSON.parse(readFileSync(configPath, 'utf-8')));
     expect(saved.providers?.codex?.refreshToken).toBe('refresh-1');
     expect(lstatSync(`${configPath}.lock`, { throwIfNoEntry: false })).toBeUndefined();
