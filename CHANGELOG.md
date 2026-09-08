@@ -18,6 +18,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   fetch calls use the existing destination classifier and redirect enforcement,
   while permitted public access remains available. Captured caller mode separates
   restrictive and Build runtimes; independently admitted Build work stays live.
+  The private loader identity also prevents a cached pre-mediation image from
+  satisfying a new mediated start with identical caller and source.
 
 - **Structural tool invocation outcomes.** Native operation failures now use
   the SDK error channel; namespace refusals remain branchable values. New tool

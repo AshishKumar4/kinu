@@ -5,8 +5,10 @@ import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { SlateHost } from '../../src/slates/host';
-import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
+import { ROOT_SLATE_CALLER, slateCallerKey } from '../../src/slates/bindings';
 import { initWorkspaceSchema, type SqlValue, type WorkMode } from '@kinu.run/core';
+import { ContentRef } from '@agent-core/core';
+import { processes } from '@nimbus-sh/fabric/workerd-facet-host.js';
 export { CodemodeEgress } from '../../src/codemode-egress';
 
 export { SlateBinding } from '../../src/slates/bindings';
@@ -35,7 +37,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     expose: async () => { throw new Error('The fixture does not publish preview URLs'); },
   });
 
-  async request(mode: WorkMode, target: string, redirect: RequestRedirect = 'follow'): Promise<string> {
+  private prepare(): void {
     initWorkspaceSchema({
       execRaw: statement => { this.ctx.storage.sql.exec(statement); }, exec: this.ctx.storage.sql,
       // Schema initialization uses scalar bindings; the SDK's tagged handle
@@ -50,6 +52,10 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
       files.writeFile(root + '/package.json', JSON.stringify({ main: 'server.js' }));
       files.writeFile(root + '/server.js', source);
     }
+  }
+
+  async request(mode: WorkMode, target: string, redirect: RequestRedirect = 'follow'): Promise<string> {
+    this.prepare();
     const process = await this.host.ensure({ ...ROOT_SLATE_CALLER, workMode: mode }, 'network');
     return (await process.request(new Request('https://slate.invalid/?target=' + encodeURIComponent(target) + '&redirect=' + redirect))).text();
   }
@@ -57,5 +63,41 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
   async publicPlanCall() {
     const result = await this.host.operation({ ...ROOT_SLATE_CALLER, workMode: 'plan' }, { op: 'call', id: 'network', method: 'example' });
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
+  }
+
+  async legacyThenCurrent(): Promise<{ legacy: string; current: string; reused: string }> {
+    this.prepare();
+    const committed = v.parse(v.object({ ok: v.literal(true), value: v.object({ source: v.string() }) }),
+      await this.host.operation(ROOT_SLATE_CALLER, { op: 'commit', id: 'network' }));
+    const digest = new ContentRef(committed.value.source).digest.value;
+    // Historical loader identity, deliberately fixed here to seed the pre-policy
+    // image. This is a rollout fixture, not a production compatibility reader.
+    const key = 'slate:' + this.ctx.id.toString() + ':' + slateCallerKey(ROOT_SLATE_CALLER) + '#network:' + digest;
+    const writerId = crypto.randomUUID();
+    const legacy = processes(this.ctx, this.env).spawn(
+      () => ({ readFile: async () => { throw new Error('Legacy fixture has inline modules only'); } }),
+      { doId: this.ctx.id.toString(), pid: 900000, writerId },
+      { pid: 900000, writerId, workerKey: key, startArgs: {}, boot: { kind: 'code', code: {
+        compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'], mainModule: 'legacy.js', env: {},
+        modules: { 'legacy.js': `import { DurableObject } from 'cloudflare:workers';
+          export class NimbusProcess extends DurableObject {
+            calls = 0;
+            async startProcess() { return { ok: true }; }
+            async handleHttpRequest(request) {
+              const target = new URL(request.url).searchParams.get('target') || 'https://example.com/control';
+              const response = await fetch(target);
+              return Response.json({ legacy: true, calls: ++this.calls, status: response.status, body: await response.text() });
+            }
+          }` },
+      } } },
+    );
+    try {
+      await legacy.started;
+      const warm = await (await legacy.handleHttpRequest(new Request('https://slate.invalid/'))).text();
+      v.parse(v.object({ legacy: v.literal(true), status: v.literal(200), body: v.literal('public control') }), JSON.parse(warm));
+      const current = await this.request('build', 'http://169.254.169.254/forbidden');
+      const reused = await this.request('build', 'https://example.com/control');
+      return { legacy: warm, current, reused };
+    } finally { await legacy.release(); }
   }
 }

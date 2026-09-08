@@ -217,7 +217,9 @@ export class SlateHost {
       const project = await this.project(caller.cred, id);
       if (project.slate.runtime !== 'worker') throw new KinuError('unsupported', 'Resident slate previews require slate.runtime worker; run node projects through the sandbox executor');
       const source = (await sources.synchronize(new SlateId(id))).source;
-      const key = `slate:${this.deps.workspace}:${held}:${source.digest.value}`;
+      // The loader evaluates boot options only on a cache miss. This identity
+      // must not reuse an image created before outbound mediation was supplied.
+      const key = `slate:mediated:${this.deps.workspace}:${held}:${source.digest.value}`;
       const running = this.running.get(held);
       if (running?.key === key && await running.process.isRunning()) return running.process;
       if (running !== undefined) {
