@@ -188,6 +188,8 @@ export const AGENT_RPC_ACCESS = {
   getRunTimeline: 'workspace.read',
   getSearchTree: 'workspace.read',
   getActivePlanReview: 'workspace.read',
+  listPlanReviews: 'workspace.read',
+  listPlanTasks: 'workspace.read',
   getStoredModelSpec: 'workspace.read',
   getReasoningEffort: 'workspace.read',
   getToolDescriptions: 'workspace.read',

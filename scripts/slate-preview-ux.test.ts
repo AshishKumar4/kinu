@@ -54,13 +54,60 @@ describe('the Slate preview frame', () => {
         await serveSlate(page);
         await page.setViewport({ width: 720, height: 800 });
         await page.goto(`${origin}/gallery.html?frame=workslatefallback`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('button[title="Fallback Probe, written by Kinu"][aria-current="true"]');
+        await page.waitForSelector('button[title="Fallback Probe"][aria-current="true"]');
         await page.evaluate(() => { window.dispatchEvent(new Event('gallery:slate-unpublish')); });
         await page.waitForSelector('button[aria-label="Work"][aria-current="true"]');
-        expect(await page.$('button[title="Fallback Probe, written by Kinu"]')).toBeNull();
+        expect(await page.$('button[title="Fallback Probe"]')).toBeNull();
       } finally {
         await page.close();
       }
     });
   }, 120_000);
 });
+
+
+test('preview tabs deduplicate live slates, fill the surface and keep plans in Work', async () => {
+  await withGallery(async ({ browser, origin }) => {
+    const page = await browser.newPage();
+    try {
+      await serveSlate(page);
+      for (const width of [1100, 390]) {
+        await page.setViewport({ width, height: 850 });
+        await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[aria-label="Dashboard"]');
+        expect(await page.$('[aria-label="Output"]')).toBeNull();
+        expect(await page.$('[aria-label="Duplicate dashboard port"]')).toBeNull();
+        expect(await page.$('[data-work-plans]')).toBeNull();
+        expect(await page.$('[aria-label="Diffs"]')).toBeNull();
+        for (const title of ['Dashboard', 'Sandbox app', 'Device app']) {
+          await page.click(`[aria-label="${title}"]`);
+          const iframe = await page.waitForSelector('iframe');
+          if (!iframe) throw new Error('Preview missing');
+          const frame = await iframe.contentFrame();
+          if (!frame) throw new Error('Preview frame missing');
+          await frame.waitForSelector('[data-slate-preview]');
+          expect(await frame.$eval('[data-slate-preview]', el => el.textContent)).toBe('served by the slate');
+          expect(await iframe.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThan(600);
+        }
+        await page.click('[data-new-plan]');
+        await page.waitForSelector('[data-plan-review-root]');
+        expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-current'))).toBe('true');
+        await page.evaluate(() => {
+          const button = [...document.querySelectorAll('button')].find(el => el.textContent?.includes('Approve & implement'));
+          if (!button) throw new Error('Approval missing');
+          button.click();
+        });
+        await page.waitForFunction(() => document.querySelector('[data-plan-status]')?.textContent === 'Approved');
+        await page.select('[aria-label="Plan history"]', 'plan-dashboard:1');
+        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Earlier'));
+        await page.click('[data-new-preview]');
+        await page.waitForSelector('[aria-label="Report"][aria-current="true"]');
+        await page.click('[aria-label="Work"]');
+        await page.click('[data-refresh-preview]');
+        expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-current'))).toBe('true');
+        await page.click('[data-add-diff]');
+        await page.waitForSelector('[aria-label="Diffs"]');
+      }
+    } finally { await page.close(); }
+  });
+}, 120_000);

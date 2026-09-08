@@ -105,6 +105,7 @@ import { Composer, type ChatMode, type ComposerNotice } from "@/components/Compo
 import { WorkspaceBar, InlineRenameTitle } from "@/components/WorkspaceBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
+import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
 import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
@@ -571,6 +572,8 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     activePlan: null,
     slates: [],
   },
+  listPlanReviews: { status: "end", items: [] },
+  listPlanTasks: [],
   getStoredModelSpec: "anthropic/claude-opus-4",
   getShellApprovalMode: "strict",
   getMctsConfig: { explorationConstant: 1.41, maxIterations: 12, branchBudget: 3 },
@@ -970,6 +973,8 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     } satisfies SubordinateSnapshot).json<T>();
   }
   if (method === "getActivePlanReview") return rpcResult(galleryAgentPlan).json<T>();
+  if (method === "listPlanReviews") return rpcResult({ status: "end", items: [galleryAgentPlan] }).json<T>();
+  if (method === "listPlanTasks") return rpcResult([]).json<T>();
   if (method === "savePlanReviewAnnotations") {
     return rpcResult({ ok: true, plan: galleryAgentPlan }).json<T>();
   }
@@ -5303,6 +5308,8 @@ async function mount() {
   else if (frame === "workslatefallback") node = <SlateFallbackFrame rpc={workRpc} />;
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
+  else if (frame === "previewtabs") node = <PreviewTabsGallery />;
+  else if (frame === "compactpreview") node = <CompactPreviewGallery />;
   else if (frame === "work") node = <WorkFrame />;
   else if (frame === "planreview") node = <PlanReviewFrame />;
   else if (frame === "workempty") node = <WorkEmptyFrame />;

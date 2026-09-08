@@ -38,6 +38,8 @@ export interface SlateSummary {
   readonly id: string;
   readonly title: string;
   readonly bindings: readonly string[];
+  /** Existing caller-scoped resident for exposed-port preview deduplication. */
+  readonly port?: number;
 }
 
 export interface SlateProblem extends Refusal {

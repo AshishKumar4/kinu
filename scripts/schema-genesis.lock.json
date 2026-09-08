@@ -580,6 +580,12 @@
     "updated_at",
     "decided_at"
   ],
+  "plan_task_links@packages/core/src/tasks/store.ts": [
+    "task_id",
+    "plan_id",
+    "revision",
+    "session_id"
+  ],
   "prompt_section_evaluations@packages/core/src/prompting/section-store.ts": [
     "id",
     "section_id",

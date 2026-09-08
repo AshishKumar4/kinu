@@ -777,6 +777,11 @@ export function useKinu(target?: string | KinuActorAddress) {
   // slates_changed broadcast re-lists at once and bumps the remount
   // counter of every open tab among its ids.
   const [slates, setSlates] = useState<SlateSummary[]>([]);
+  const knownSlates = useRef<Set<string> | null>(null);
+  const knownPorts = useRef<Set<string> | null>(null);
+  const [previewFocus, setPreviewFocus] = useState<string | null>(null);
+  const [planFocus, setPlanFocus] = useState<string | null>(null);
+  const knownPlans = useRef(new Set<string>());
   const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
   // Pending device-consent requests — an agent wants to use a connected device;
   // the chat renders a card and the user decides (ask-once-then-remember).
@@ -1070,6 +1075,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   useEffect(() => {
     if (!agent) return;
     const onOpen = async () => {
+      knownPorts.current = null;
       const isFirst = recoveryFirstOpen.current;
       recoveryFirstOpen.current = false;
       sessionRecovery.socketOpened(isFirst);
@@ -1191,7 +1197,13 @@ export function useKinu(target?: string | KinuActorAddress) {
     setTabPresence,
   ), [refreshCurrentLiveResource, rpc]);
 
-  const applySlates = useCallback((listing: SlateSummary[]) => {
+  const applySlates = useCallback((listing: SlateSummary[], announce = false) => {
+    const previous = knownSlates.current;
+    if (announce && previous !== null) {
+      const added = listing.find(slate => !previous.has(slate.id));
+      if (added) setPreviewFocus(`slate:${added.id}`);
+    }
+    knownSlates.current = new Set([...(previous ?? []), ...listing.map(slate => slate.id)]);
     setSlates(listing);
     setSlateReloads((previous) => pruneSlateReloads(previous, listing));
   }, []);
@@ -1199,7 +1211,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const refreshSlates = useCallback(() => refreshCurrentLiveResource(
     "slates",
     () => rpc<{ slates: SlateSummary[]; problems: SlateProblem[] }>("listSlates", []).then((listing) => listing.slates),
-    applySlates,
+    (listing) => applySlates(listing, true),
   ), [applySlates, refreshCurrentLiveResource, rpc]);
 
   // Stable identity: it is an effect dependency in the changelog hook, which
@@ -1385,7 +1397,12 @@ export function useKinu(target?: string | KinuActorAddress) {
           if (card) setSignalCards((current) => applySignalCard(current, card));
         } else if (msg.type === "plan_updated") {
           const plan = parsePlanReview(msg.plan);
-          if (plan) setActivePlan(plan);
+          if (plan) {
+            const key = `${plan.id}:${plan.revision}`;
+            if (!knownPlans.current.has(key) && plan.status === "pending") setPlanFocus(key);
+            knownPlans.current.add(key);
+            setActivePlan(plan);
+          }
         } else if (!isSubordinate && msg.type === "subordinates_changed") {
           const roster = parseSubordinateRoster(msg.subordinates);
           if (roster) {
@@ -1424,7 +1441,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const refreshExposedPorts = useCallback(async () => {
     const generation = ++exposedPortsRefreshGeneration.current;
-    const results = await Promise.all(["workspace", "sandbox"].map(async (executor) => {
+    const results = await Promise.all(["workspace", "sandbox", "laptop"].map(async (executor) => {
       try {
         const result = await rpc<{
           ports: Array<{ port: number; url: string; name?: string }>;
@@ -1438,13 +1455,21 @@ export function useKinu(target?: string | KinuActorAddress) {
         } satisfies ExecutorPortRefresh;
       }
     }));
+    await refreshCurrentLiveResource("slates", () => rpc<{ slates: SlateSummary[] }>("listSlates", []).then(list => list.slates), applySlates);
     if (generation !== exposedPortsRefreshGeneration.current) return;
     setPinnedPorts((previous) => {
       const next = reconcilePreviewPorts(previous, results);
       setPreviewError(next.error);
+      if (next.error === null) {
+        const ids = next.ports.map(port => `${port.executor}:${port.port}`);
+        const previousIds = knownPorts.current;
+        const added = previousIds === null ? undefined : ids.find(id => !previousIds.has(id));
+        if (added) setPreviewFocus(`preview:${added}`);
+        knownPorts.current = new Set([...(previousIds ?? []), ...ids]);
+      }
       return next.ports;
     });
-  }, [rpc]);
+  }, [rpc, refreshCurrentLiveResource, applySlates]);
   // Timer ticks and user/reconnect refreshes may overlap. Each cycle retains
   // its own task through settlement instead of borrowing a global catch sink.
   const liveRefreshTaskId = useRef(0);
@@ -1557,7 +1582,11 @@ export function useKinu(target?: string | KinuActorAddress) {
       for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
       setExecutorOutputs(outputs);
     }
-    if (isSourceCurrent("plan")) setActivePlan(parsePlanReview(snap.activePlan));
+    if (isSourceCurrent("plan")) {
+      const loadedPlan = parsePlanReview(snap.activePlan);
+      if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
+      setActivePlan(loadedPlan);
+    }
     if (isSourceCurrent("presence")) setTabPresence(snap.tabPresence);
     if (isSourceCurrent("slates")) applySlates(snap.slates);
     // REPLACE, never merge. The durable rows are the authority for what is
@@ -1596,7 +1625,9 @@ export function useKinu(target?: string | KinuActorAddress) {
       model: snapshot.model ?? "",
       forkLineage: null,
     });
-    setActivePlan(parseActivePlanReview(snapshot.activePlan));
+    const loadedPlan = parseActivePlanReview(snapshot.activePlan);
+    if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
+    setActivePlan(loadedPlan);
     setSteerRuns(snapshot.pendingSteers);
   }
   // Roster loads may overlap across reconnects; their generation decides which
@@ -1665,6 +1696,11 @@ export function useKinu(target?: string | KinuActorAddress) {
     setPreviewError(null);
     setBackgroundJobs([]);
     setSlates([]);
+    knownSlates.current = null;
+    knownPorts.current = null;
+    knownPlans.current.clear();
+    setPreviewFocus(null);
+    setPlanFocus(null);
     setSlateReloads(new Map());
     setPendingConsents([]);
     setActivePlan(null);
@@ -1901,6 +1937,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     executeInExecutor,
     /** Exposed ports across the canonical Workspace and Sandbox executors. */
     pinnedPorts,
+    previewFocus, planFocus,
     previewError,
     refreshExposedPorts,
     /** Background jobs — the Work surface's Now half and its journal. */

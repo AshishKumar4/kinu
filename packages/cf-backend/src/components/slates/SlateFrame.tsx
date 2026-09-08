@@ -11,11 +11,12 @@ const SlatePreviewSchema = v.object({ url: v.string(), port: v.number() });
  * Loads one Slate on its preview origin. The host only supplies the iframe URL:
  * preview code has no bridge back into the workspace RPC surface.
  */
-export function SlateFrame({ id, rpc, reloadKey = 0 }: {
+export function SlateFrame({ id, rpc, reloadKey = 0, onReady }: {
   id: string;
   rpc: Rpc;
   /** Bumped when the Slate changes, so its preview URL is re-read. */
   reloadKey?: number;
+  onReady?: () => void;
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -39,12 +40,13 @@ export function SlateFrame({ id, rpc, reloadKey = 0 }: {
         return;
       }
       setUrl(preview.output.url);
+      onReady?.();
     }).catch(previewUnreachable);
     return () => { live = false; };
-  }, [id, rpc, reloadKey]);
+  }, [id, rpc, reloadKey, onReady]);
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col h-full min-h-0">
       {refusal !== null && (
         <div className="p-notice-danger rounded-lg px-3 py-2 text-xs">
           <p className="break-words m-0">{refusal}</p>
@@ -54,7 +56,7 @@ export function SlateFrame({ id, rpc, reloadKey = 0 }: {
         <div className="flex justify-center py-16"><Loader /></div>
       )}
       {url !== null && (
-        <div key={reloadKey} className="h-[480px] rounded-lg border p-border overflow-hidden">
+        <div key={reloadKey} className="flex-1 min-h-0 overflow-hidden">
           <PreviewFrame url={url} label={id} />
         </div>
       )}

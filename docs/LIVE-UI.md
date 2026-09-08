@@ -4,6 +4,23 @@ A slate is an authored project under `/home/user/slates/<id>/` in the workspace
 file plane. Source and versions are durable. Compilation, resident processes,
 and preview URLs are derived from that source, not a second source of truth.
 
+## Preview tabs and plans
+
+Each preview has a titled tab at the left of the workspace surface strip. A live
+slate and its exposed workspace port share one tab, derived from the current
+caller/source resident rather than a second preview registry. Previews fill the
+available height and use the same URL/copy/open frame and security policy as
+compact chat cards. New preview identities take focus once; refreshing a source
+or reconnecting does not replay that focus. Diffs have their own conditional tab.
+
+Work contains the selected actor’s complete paginated plan-review history and
+approval controls. Tasks created by a verified approval submission retain that
+plan ID, revision and session in `plan_task_links`; revisions never relabel older
+tasks. Subtasks inherit their parent’s association. Ordinary and pre-existing
+tasks remain unassociated. The new table uses the existing idempotent schema
+initializer, with no ALTER, historical backfill or reset. Task status updates
+change progress, not provenance.
+
 ## Authoring
 
 Write TypeScript and `package.json` through the ordinary file plane. For a

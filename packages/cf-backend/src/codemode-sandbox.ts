@@ -28,7 +28,7 @@
 import { DynamicWorkerExecutor } from '@cloudflare/codemode';
 import {
   filterByEffectiveScore, explainNativeToolReferenceError, parsesAsExpression,
-  NO_TIMER_DEADLINE_MS,
+  NO_TIMER_DEADLINE_MS, bindTaskPlan,
   type CraftStore, type SqlExecutor,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -113,9 +113,10 @@ function attributeProviders(providers: ResolvedProvider[]): ResolvedProvider[] {
   return providers.map((provider) => {
     const fns: ResolvedProvider['fns'] = {};
     for (const [name, fn] of Object.entries(provider.fns)) {
+      const invoke = bindTaskPlan(fn);
       fns[name] = async (...args: unknown[]) => {
         try {
-          return await fn(...args);
+          return await invoke(...args);
         } catch (cause) {
           throw new Error(`${provider.name}.${name}: ${renderThrownChain({ cause })}`, { cause });
         }

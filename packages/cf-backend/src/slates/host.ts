@@ -27,6 +27,7 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'content'> {
 
 interface RunningSlate {
   readonly key: string;
+  readonly revision: number;
   readonly caller: SlateCaller;
   readonly id: string;
   readonly process: ResidentSlateProcess;
@@ -114,7 +115,14 @@ export class SlateHost {
       if (entry.type !== 'directory') continue;
       try {
         const project = await this.project(caller.cred, entry.name);
-        slates.push({ id: entry.name, title: project.slate.title ?? project.name ?? entry.name, bindings: Object.keys(project.slate.bindings) });
+        const running = this.running.get(`${slateCallerKey(caller)}#${entry.name}`);
+        const live = running !== undefined && await running.process.isRunning()
+          && running === this.running.get(`${slateCallerKey(caller)}#${entry.name}`)
+          && running.revision === (this.revisions.get(entry.name) ?? 0);
+        const summary = {
+          id: entry.name, title: project.slate.title ?? project.name ?? entry.name, bindings: Object.keys(project.slate.bindings),
+        };
+        slates.push(live && running !== undefined ? { ...summary, port: running.process.port } : summary);
       } catch (cause) {
         problems.push({ id: entry.name, ...refusalOf(toKinuError({ doing: 'slate ' + entry.name, cause, otherwise: 'io' })) });
       }
@@ -221,7 +229,10 @@ export class SlateHost {
       // must not reuse an image created before outbound mediation was supplied.
       const key = `slate:mediated:${this.deps.workspace}:${held}:${source.digest.value}`;
       const running = this.running.get(held);
-      if (running?.key === key && await running.process.isRunning()) return running.process;
+      if (running?.key === key && await running.process.isRunning()) {
+        this.running.set(held, { ...running, revision });
+        return running.process;
+      }
       if (running !== undefined) {
         this.running.delete(held);
         await running.process.stop();
@@ -236,7 +247,7 @@ export class SlateHost {
       const owner = JSON.stringify([this.deps.workspace, id, slateCallerKey(caller)]);
       const process = await this.resident.start({ key, owner, root, project, port, cred: caller.cred, bindings, globalOutbound });
       if ((this.revisions.get(id) ?? 0) !== revision) { await process.stop(); continue; }
-      this.running.set(held, { key, caller, id, process });
+      this.running.set(held, { key, revision, caller, id, process });
       return process;
     }
   }

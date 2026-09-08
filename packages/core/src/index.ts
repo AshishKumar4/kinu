@@ -1429,6 +1429,8 @@ export {
   type AgentTask, type AgentTaskTree, type TaskStatus,
   type TaskAddResult, type TaskAddRejection,
 } from './tasks/store';
+export { withTaskPlan, bindTaskPlan, type TaskPlan } from './tasks/plan-scope';
+export { approvedTaskPlan } from './tasks/plan-submission';
 
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.
 export {
