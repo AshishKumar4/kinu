@@ -86,6 +86,8 @@ const PENDING_ICON = {
 export interface WorkTabProps {
   plan: PlanReview | null;
   planRpc: Rpc;
+  planOwner?: string;
+  onReviewActor?: (name: string) => void | Promise<void>;
   /** Polled by the hook so the tab badge and this queue are one read. */
   pendingActions: PendingAction[];
   backgroundJobs: BackgroundJob[];
@@ -103,10 +105,11 @@ export interface WorkTabProps {
 }
 
 export function WorkTab({
-  plan, planRpc, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, isStreaming, rpc,
+  plan, planRpc, planOwner, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, isStreaming, rpc,
 }: WorkTabProps) {
   const [filter, setFilter] = useState<JournalFilter>("all");
   const [hasPlans, setHasPlans] = useState(plan !== null);
+  const onNewPlan = useCallback(() => onOpenSurface("Work"), [onOpenSurface]);
 
   const loadTasks = useCallback(() => planRpc<AgentTaskTree[]>("listAgentTasks", []), [planRpc]);
   // The agent writes its plan mid-turn and the server never pushes it, so the
@@ -149,14 +152,14 @@ export function WorkTab({
 
   if (nothingAtAll && !hasPlans && !plan) {
     return (
-      <div className="space-y-6"><WorkPlans active={plan} rpc={planRpc} onPresence={setHasPlans} /><EmptyState title="Nothing has happened yet"
+      <div className="space-y-6"><WorkPlans active={plan} rpc={planRpc} rootRpc={rpc} owner={planOwner} onPresence={setHasPlans} onNewPlan={onNewPlan} onReviewActor={onReviewActor} /><EmptyState title="Nothing has happened yet"
         hint="This tab collects plans, background jobs, agent changes, and anything waiting on you." /></div>
     );
   }
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <WorkPlans active={plan} rpc={planRpc} onPresence={setHasPlans} />
+      <WorkPlans active={plan} rpc={planRpc} rootRpc={rpc} owner={planOwner} onPresence={setHasPlans} onNewPlan={onNewPlan} onReviewActor={onReviewActor} />
       {pendingActions.length > 0 && (
         <div className="rounded-lg border border-[rgba(224,164,88,.32)] bg-[rgba(224,164,88,.06)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
           <Section id="work-needs-you" title="Needs you"

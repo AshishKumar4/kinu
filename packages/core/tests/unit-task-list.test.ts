@@ -10,7 +10,7 @@ import { makeSql, makeExecRaw } from './helpers';
 function newStore(): TaskListStore {
   const db = new Database(':memory:');
   initTaskListTable(makeExecRaw(db));
-  return new TaskListStore(makeSql(db));
+  return new TaskListStore(makeSql(db), write => db.transaction(write)());
 }
 
 describe('TaskListStore', () => {
@@ -156,7 +156,7 @@ describe('TaskListStore', () => {
       updated_at INTEGER NOT NULL
     )`);
     db.exec(`INSERT INTO agent_tasks VALUES('t9',999,NULL,'x','bogus',1,1)`);
-    const s = new TaskListStore(makeSql(db));
+    const s = new TaskListStore(makeSql(db), write => db.transaction(write)());
     expect(() => s.get('t9')).toThrow('bogus');
   });
   // Pinned on the PLAN rather than on a stopwatch: the statement is captured
@@ -172,7 +172,7 @@ describe('TaskListStore', () => {
       statement = strings.join('?');
       return inner<T>(strings, ...values);
     };
-    const s = new TaskListStore(capturing);
+    const s = new TaskListStore(capturing, write => db.transaction(write)());
     s.add(['parent'], null, 1);
     s.add(['a', 'b'], 't1', 2);
     statement = '';

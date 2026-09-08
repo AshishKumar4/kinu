@@ -184,42 +184,7 @@ export interface WorkspaceSnapshot {
   branchRuns: Array<{ branchId: string; task: string; status: "running" }>;
 }
 
-const PlanAnnotationTextPositionSchema = v.object({
-  parentTagName: v.string(),
-  parentIndex: v.number(),
-  textOffset: v.number(),
-});
-const PlanAnnotationMathTargetSchema = v.object({
-  blockId: v.string(),
-  tex: v.string(),
-  displayMode: v.boolean(),
-});
-const PlanReviewSchema = v.object({
-  id: v.string(),
-  sessionId: v.string(),
-  revision: v.pipe(v.number(), v.integer(), v.minValue(1)),
-  content: v.string(),
-  status: v.picklist(["pending", "changes_requested", "approved", "superseded"]),
-  annotations: v.array(v.object({
-    id: v.string(),
-    blockId: v.string(),
-    startOffset: v.number(),
-    endOffset: v.number(),
-    type: v.picklist(["DELETION", "COMMENT", "GLOBAL_COMMENT"]),
-    text: v.optional(v.string()),
-    originalText: v.string(),
-    createdA: v.number(),
-    author: v.optional(v.string()),
-    startMeta: v.optional(PlanAnnotationTextPositionSchema),
-    endMeta: v.optional(PlanAnnotationTextPositionSchema),
-    mathTargets: v.optional(v.array(PlanAnnotationMathTargetSchema)),
-  })),
-  feedback: v.nullable(v.string()),
-  handoffAccepted: v.boolean(),
-  createdAt: v.number(),
-  updatedAt: v.number(),
-  decidedAt: v.nullable(v.number()),
-});
+import { PlanReviewSchema } from "@kinu.run/core";
 
 const MctsRowSchema = v.object({
   id: v.string(),

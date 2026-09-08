@@ -38,6 +38,17 @@ export interface AgentTaskTree extends AgentTask {
   subtasks: AgentTask[];
 }
 
+const AgentTaskSchema = v.object({ id: v.string(), parentId: v.nullable(v.string()), title: v.string(), status: TaskStatusSchema, createdAt: v.number(), updatedAt: v.number() });
+export const AgentTaskTreeSchema = v.object({ ...AgentTaskSchema.entries, subtasks: v.array(AgentTaskSchema) });
+
+/** Read-only plan progress, also usable for retained actors without a write handle. */
+export function readPlanTasks(sql: SqlExecutor, plan: TaskPlan): AgentTaskTree[] {
+  return nest(sql<Row>`SELECT t.id,t.parent_id,t.title,t.status,t.created_at,t.updated_at
+    FROM agent_tasks t INNER JOIN plan_task_links l ON l.task_id=t.id
+    WHERE l.plan_id=${plan.id} AND l.revision=${plan.revision} AND l.session_id=${plan.sessionId}
+    ORDER BY t.seq`.map(toTask));
+}
+
 interface Row {
   id: string; parent_id: string | null; title: string; status: string;
   created_at: number; updated_at: number;
@@ -97,7 +108,7 @@ export interface TaskAddResult {
 export const MAX_TASK_TITLE_CHARS = 200;
 
 export class TaskListStore {
-  constructor(private readonly sql: SqlExecutor) {}
+  constructor(private readonly sql: SqlExecutor, private readonly transactionSync: <T>(write: () => T) => T) {}
 
   /**
    * Append titles to the list, optionally as subtasks of `parentId`.
@@ -109,7 +120,7 @@ export class TaskListStore {
   add(titles: readonly string[], parentId: string | null, now: number): TaskAddResult {
     const scope = taskPlanScope(this.sql);
     const write = () => this.addLinked(titles, parentId, now, scope?.plan ?? null);
-    return scope ? scope.transaction(write) : write();
+    return this.transactionSync(write);
   }
 
   private addLinked(titles: readonly string[], parentId: string | null, now: number, plan: TaskPlan | null): TaskAddResult {
@@ -177,11 +188,6 @@ export class TaskListStore {
   /** The whole list in write order, parents each carrying their subtasks. */
   list(limit = 200): AgentTaskTree[] {
     return nest(this.rows(limit));
-  }
-
-  listForPlan(plan: TaskPlan): AgentTaskTree[] {
-    const ids = new Set(this.sql<{ task_id: string }>`SELECT task_id FROM plan_task_links WHERE plan_id=${plan.id} AND revision=${plan.revision} AND session_id=${plan.sessionId}`.map(row => row.task_id));
-    return nest(this.rows().filter(row => ids.has(row.id)));
   }
 
   /** Only the items still to be done, in write order — the live-context

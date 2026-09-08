@@ -58,6 +58,7 @@ export interface WorkSurfaceProps {
   previewFocus?: string | null;
   planFocus?: string | null;
   planOwner?: string;
+  onReviewActor?: (name: string) => void | Promise<void>;
   onSurface: (s: SurfaceKind) => void;
   // Preview and actor-owned plans
   pinnedPorts: PinnedPort[];
@@ -205,10 +206,12 @@ export function WorkSurface(props: WorkSurfaceProps) {
       </div>
 
       <div className={`flex-1 min-h-0 ${surface === "Diffs" ? "hidden" : previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6"}`}>
-        <ErrorBoundary key={surface} label={surface}>
-          {surface === "Work" && (
+        <div className={surface === "Work" ? "" : "hidden"}>
+          <ErrorBoundary label="Work">
             <WorkTab key={props.planOwner ?? "main"}
               plan={props.plan}
+              planOwner={props.planOwner}
+              onReviewActor={props.onReviewActor}
               planRpc={props.planRpc ?? props.rpc}
               pendingActions={props.pendingActions}
               onRefreshQueue={props.onRefreshQueue}
@@ -219,7 +222,9 @@ export function WorkSurface(props: WorkSurfaceProps) {
               isStreaming={props.isStreaming}
               rpc={props.rpc}
             />
-          )}
+          </ErrorBoundary>
+        </div>
+        <ErrorBoundary key={surface} label={surface}>
           {surface === "Files" && (
             <FilesSurface rpc={props.rpc} executors={props.executors} jump={filesJump} onConnectDevice={openConnect} />
           )}

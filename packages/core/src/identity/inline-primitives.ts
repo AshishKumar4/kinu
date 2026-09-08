@@ -24,7 +24,7 @@ export interface AgentDatabase {
   prepare<T = unknown>(sql: string): { all(...params: unknown[]): T[]; run(...params: unknown[]): void };
   exec(sql: string): void;
   run(sql: string, params?: unknown[]): void;
-  transaction?<T>(fn: () => T): () => T;
+  transaction<T>(fn: () => T): () => T;
 }
 
 /** Wrap a database into our SqlExecutor interface */
@@ -68,7 +68,7 @@ export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
     transactions: {
       storage: {
         transactionSync: <T,>(cb: () => T): T =>
-          db.transaction ? db.transaction(cb)() : cb(),
+          db.transaction(cb)(),
       },
     },
     generation: nextWorkspaceGeneration(sql),

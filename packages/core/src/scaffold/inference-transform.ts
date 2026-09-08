@@ -32,10 +32,12 @@ import {
   runScaffold,
   type ScaffoldDefaultInferenceChunk,
   type ScaffoldRunOptions,
+  type ScaffoldEmitFn,
 } from './executor';
 import { projectJsonValue } from '../utils/json';
 import { scaffoldEventsToUIStream } from './ui-stream';
 import { currentWorkMode } from '../execution/work-mode';
+import { bindTaskPlan } from '../tasks/plan-scope';
 
 /** Structural mirror of Think's StreamableResult — core cannot import the
  *  backend SDK (layering), and the seam only needs this shape. */
@@ -60,26 +62,18 @@ export function scaffoldInferenceTransform(opts: {
   if (currentVersion <= 0 || run.workMode === 'plan' || currentWorkMode() === 'plan') return result;
 
   let delegated = false;
+  // Capture at preparation, not when the lazy generator is finally consumed.
+  const execute = bindTaskPlan((emit: ScaffoldEmitFn) => runScaffold({
+    ...run, emit,
+    defaultInference: () => {
+      delegated = true;
+      return wrapDefaultStream(result.toUIMessageStream());
+    },
+  }).finally(async () => {
+    if (!delegated) await result.toUIMessageStream()[Symbol.asyncIterator]().return?.();
+  }));
   return {
-    toUIMessageStream: () =>
-      scaffoldEventsToUIStream((emit) =>
-        runScaffold({
-          ...run,
-          emit,
-          defaultInference: () => {
-            delegated = true;
-            return wrapDefaultStream(result.toUIMessageStream());
-          },
-        }).finally(async () => {
-          // Returning the iterator cancels the orphaned default stream.
-          // Awaited and unguarded: a cancellation that fails means the model
-          // request is still running and still being billed, which is the one
-          // outcome this seam exists to prevent.
-          if (!delegated) await result.toUIMessageStream()[Symbol.asyncIterator]().return?.();
-        }),
-      ),
-    // Structured output (workflow turns) resolves only if the scaffold
-    // delegated (the promise belongs to the default stream).
+    toUIMessageStream: () => scaffoldEventsToUIStream(execute),
     output: result.output,
   };
 }
