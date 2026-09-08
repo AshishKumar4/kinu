@@ -144,6 +144,7 @@
     "oxc-parser": "0.143.0",
     "oxlint": "1.78.0",
     "oxlint-tsgolint": "7.0.2001",
+    "postcss": "8.5.28",
     "puppeteer": "^24.41.0",
     "typescript": "7.0.2",
     "vitest": "^4.1.10",
