@@ -50,6 +50,7 @@ import { initTaskListTable } from '../tasks/store';
 import { initPromptSectionTables } from '../prompting/section-store';
 import { initExplorationRecordsTable } from '../strategy/records';
 import { initSwarmNodeRecords } from '../strategy/swarm-resume';
+import { initAgentDataTables } from '../tools/db-codemode';
 
 /**
  * The three SQL handles onto one workspace database.
@@ -72,19 +73,28 @@ export interface WorkspaceSchemaSql {
  * index. The tables are read by `@kinu.run/compaction`'s stores; the DDL lives
  * here because a workspace's table set is one list, and that package sits
  * above core in the dependency graph.
+ *
+ * ACTOR-SCOPED, and the column leads the key rather than sitting beside it: a
+ * session key is minted PER ACTOR (an agent name, or `affinity:<sessionId>`),
+ * so two actors of one workspace present the same key — and one shared row per
+ * key would hand one actor another's plan snapshot, another's measured trigger
+ * and another's archive index.
  */
 function initCompactionStateTables(execRaw: RawSqlExec): void {
   execRaw(`
     CREATE TABLE IF NOT EXISTS compaction_state (
-      session_key        TEXT PRIMARY KEY,
+      actor_id           TEXT NOT NULL,
+      session_key        TEXT NOT NULL,
       plan_json          TEXT,
       last_prompt_tokens INTEGER,
       measured_at_length INTEGER,
-      force_compaction   INTEGER
+      force_compaction   INTEGER,
+      PRIMARY KEY (actor_id, session_key)
     )
   `);
   execRaw(`
     CREATE TABLE IF NOT EXISTS compaction_archive (
+      actor_id        TEXT NOT NULL,
       session_key     TEXT NOT NULL,
       range_hash      TEXT NOT NULL,
       path            TEXT NOT NULL,
@@ -93,7 +103,7 @@ function initCompactionStateTables(execRaw: RawSqlExec): void {
       user_turns      INTEGER NOT NULL,
       assistant_turns INTEGER NOT NULL,
       first_user_ask  TEXT NOT NULL,
-      PRIMARY KEY (session_key, range_hash)
+      PRIMARY KEY (actor_id, session_key, range_hash)
     )
   `);
 }
@@ -246,6 +256,15 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initCompactionStateTables(execRaw);
   // Typed key/value config: model spec, reasoning effort, always-active skills.
   initAgentConfigTable(execRaw);
+  // The catalogue of agent data tables — the `db` capability's own authority
+  // record (tools/db-codemode.ts). Created on every root rather than by the
+  // first `db.createTable`, for the reason the takes and records tables above
+  // give: the conformance harness observes `sqlite_master` on a workspace that
+  // has merely never declared a table, and a catalogue only a mutation creates
+  // would make `db.listTables()` a `no such table` on it. The tables it
+  // catalogues are declared BY the agent and so exist only once one does; the
+  // catalogue itself always does.
+  initAgentDataTables(execRaw);
   // memory_chunks + its FTS5 index. Every composition root that builds a
   // MemoryStore also calls ensureSchema(), but a workspace opened by a path
   // that does not (a fork target, an archive restore) still has readers — the

@@ -499,6 +499,15 @@ export {
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
 export { STATE_NAMESPACE, STATE_TYPES, initCodemodeStateTable, createStateCodemodeProvider, type ProgramStateStore } from './tools/state-codemode';
+export {
+  APP_TABLE_PREFIX, AGENT_DATA_CATALOG, APP_COLUMN_TYPES, APP_TABLE_SCOPES,
+  APP_COMPARISONS, APP_MUTATIONS, DB_TYPES,
+  initAgentDataTables, createAppDataStore, createDbCodemodeProvider, AppBatchError,
+  type AppColumn, type AppColumnType, type AppTableScope, type AppMutation,
+  type AppTableSpec, type AppTableRecord, type AppPredicate, type AppWhere,
+  type AppSelect, type AppOp, type AppOpResult, type AppRow,
+  type AppDataStore, type AppDataStoreDeps, type DbOpRecord,
+} from './tools/db-codemode';
 export { ActorReferenceSchema, ActorIdentitySchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './state/actor-handle';
 export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubordinateActorName } from './state/actor-key';
 export { FacetIdentity, type FacetIdentityRow } from './state/facet-identity';
@@ -1116,10 +1125,12 @@ export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType, StepCost,
   CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger, CraftCycleRecord,
   ExecutionRecoveryRecord,
+  ContextEditVia, ContextEditStatus, ContextEditBoundary,
   CacheHitStats, StepTelemetry,
 } from './events/index';
 export {
   FAILURE_WITHOUT_ERROR,
+  CONTEXT_EDIT_VIA, CONTEXT_EDIT_STATUSES, CONTEXT_EDIT_BOUNDARIES,
   initRunEventTables,
   parseStoredRunEvent,
   RunEventSchema,
@@ -1151,6 +1162,7 @@ export {
   type ModelOperationSink,
   type SpendSource,
   type SpendTally,
+  type DeferredRunEvent,
   type RunEventListener,
   type RunEventQuery,
   type BoundedRunEventQuery,

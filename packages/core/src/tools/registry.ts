@@ -101,6 +101,12 @@ export const TOOL_REACH = {
   // turns to earn a standing top-level choice.
   release: { native: false, codemode: 'release', replay: 'claimed' },
   agent: { native: false, codemode: 'agent', replay: 'claimed' },
+  // Structured workspace data. Codemode-only because a table is worked, not
+  // announced: the operations are compiled from arguments by the host store
+  // (tools/db-codemode.ts), and a program that creates a table then fills it
+  // is one call rather than eight. `claimed` because an insert repeated by a
+  // recovery replay is a second row — the same reason `memory` is claimed.
+  db: { native: false, codemode: 'db', replay: 'claimed' },
   slate: { native: false, codemode: 'workspace', replay: 'claimed' },
 } as const satisfies Record<string, ToolReach>;
 

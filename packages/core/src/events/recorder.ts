@@ -15,11 +15,15 @@ import * as v from 'valibot';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../state/actor-handle';
-import type { RunEvent, RunEventInput, RunEventType } from './types';
+import {
+  CONTEXT_EDIT_BOUNDARIES, CONTEXT_EDIT_STATUSES, CONTEXT_EDIT_VIA,
+  type RunEvent, type RunEventInput, type RunEventType,
+} from './types';
 import { JsonValueSchema } from '../utils/json';
 import { boundedInt, boundPageQuery } from '../utils/bounds';
 import { USAGE_FIELDS, UsageSchema, type Usage } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
+import { APP_MUTATIONS, APP_TABLE_SCOPES } from '../tools/db-codemode';
 import {
   SPEND_SOURCES, WORKSPACE_RUN_ID,
   MODEL_OPERATION_KINDS, MODEL_OPERATION_PHASES, MODEL_OPERATION_OUTCOMES,
@@ -104,6 +108,16 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('scaffold_promotion'), fromVersion: v.number(), toVersion: v.number() }),
   v.object({ ...BaseFields, type: v.literal('scaffold_rollback'), fromVersion: v.number(), toVersion: v.number() }),
   v.object({ ...BaseFields, type: v.literal('memory_write'), path: v.string(), bytes: v.number() }),
+  // The picklists ARE the exported vocabularies, so an operation or a status a
+  // producer can write is never one this parser would reject.
+  v.object({ ...BaseFields, type: v.literal('db_op'), op: v.picklist(APP_MUTATIONS),
+    table: v.string(), scope: v.picklist(APP_TABLE_SCOPES), rowsAffected: v.number(),
+    batch: v.nullable(v.number()) }),
+  v.object({ ...BaseFields, type: v.literal('context_edit'), revision: v.number(),
+    baseRevision: v.number(), messageCount: v.number(), author: v.string(),
+    via: v.picklist(CONTEXT_EDIT_VIA), status: v.picklist(CONTEXT_EDIT_STATUSES),
+    effectiveAt: v.picklist(CONTEXT_EDIT_BOUNDARIES),
+    turnId: v.nullable(v.string()), stepIndex: v.nullable(v.number()) }),
   v.object({ ...BaseFields, type: v.literal('context_budget'), admittedChars: v.number(),
     omittedChars: v.number(), trips: v.object({
       run: v.optional(v.number()), file_read: v.optional(v.number()), web_fetch: v.optional(v.number()),
@@ -234,6 +248,17 @@ export interface RunListEntry {
 export type RunEventListener = (event: RunEvent) => void;
 
 /**
+ * A recorded event whose row is written and whose subscribers are not yet
+ * notified. See {@link RunEventRecorder.emitDeferred}.
+ */
+export interface DeferredRunEvent {
+  readonly event: RunEvent;
+  /** Notify the live subscribers. Called once, after the caller's transaction
+   *  has committed. */
+  publish(): void;
+}
+
+/**
  * The durable per-run event log.
  *
  * ACTOR-SCOPED, and the column is in the primary key rather than beside it: a
@@ -309,19 +334,48 @@ export class RunEventRecorder {
 
   /** Record an event for runId. Returns the assigned monotonic event. */
   emit(runId: string, input: RunEventInput): RunEvent {
-    const idx = this.allocateIndex(runId);
-    const ev = stampRunEvent(input, idx, runId);
-    this.persist(ev);
-    for (const l of this.listeners) {
-      try { l(ev); } catch (err) {
-        diagnostics.failure(
-          'event.listener_failed',
-          toKinuError({ doing: 'notify a run-event listener', cause: err, otherwise: 'io' }),
-          { runId, eventType: ev.type },
-        );
-      }
-    }
-    return ev;
+    const deferred = this.emitDeferred(runId, input);
+    deferred.publish();
+    return deferred.event;
+  }
+
+  /**
+   * Record an event whose ROW must live or die with the caller's open SQL
+   * transaction, and whose live fan-out must wait for that transaction to
+   * commit.
+   *
+   * `emit` is this with the two halves back to back, which is right for a
+   * caller that is not inside a transaction. A caller that IS — the `db`
+   * capability's `transactionSync` — needs them apart, because the two halves
+   * fail differently: the INSERT is on the same connection and rolls back with
+   * the data, so a rolled-back mutation leaves no evidence of a mutation and a
+   * failed evidence write takes the data down with it, but a NOTIFIED
+   * subscriber cannot be un-notified. Publishing after the transaction has
+   * returned is what stops an SSE client being told about a write that was
+   * undone.
+   *
+   * The allocated index is spent either way. A rolled-back row therefore leaves
+   * a gap in `event_index`, which every reader already tolerates — the log is
+   * queried by `>= since` and ordered, never counted — and the alternative,
+   * reusing an index after a rollback, is how two events come to share one.
+   */
+  emitDeferred(runId: string, input: RunEventInput): DeferredRunEvent {
+    const event = stampRunEvent(input, this.allocateIndex(runId), runId);
+    this.persist(event);
+    return {
+      event,
+      publish: () => {
+        for (const listener of this.listeners) {
+          try { listener(event); } catch (err) {
+            diagnostics.failure(
+              'event.listener_failed',
+              toKinuError({ doing: 'notify a run-event listener', cause: err, otherwise: 'io' }),
+              { runId, eventType: event.type },
+            );
+          }
+        }
+      },
+    };
   }
 
   private allocateIndex(runId: string): number {
