@@ -20,7 +20,7 @@ import {
 } from '@kinu.run/core';
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_JUDGE_MODEL, MERGE_POLICY_SPEND_SOURCE,
-  mergePolicyProfile, scratchDir, scratchPath, toolExecute,
+  mergePolicyProfile, scratchDir, scratchPath, toolExecute, scriptedTurnModel,
 } from '@kinu.run/test-utils';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, createCLIRuntime, buildCLIHeadRuntime } from '../src/runtime';
@@ -935,4 +935,39 @@ describe("the merge synthesis' operation lifecycle", () => {
     expect(operations[1]!.usage).toEqual({ input: 8, output: 12 });
     expect(reports).toHaveLength(1);
   });
+});
+
+test('the public head abort cancels its in-flight provider request, not a sibling head', async () => {
+  const started = Promise.withResolvers<void>();
+  const pending = Promise.withResolvers<never>();
+  let calls = 0;
+  let providerStopped = false;
+  const model = scriptedTurnModel({ provider: 'fake', modelId: 'cancel-head', doGenerate: options => {
+    if (calls++ > 0) return {
+      content: [{ type: 'text', text: 'sibling finished' }], finishReason: { unified: 'stop', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+    };
+    const signal = options.abortSignal;
+    if (signal !== undefined) signal.addEventListener('abort', () => {
+      providerStopped = true;
+      pending.reject(signal.reason);
+    }, { once: true });
+    started.resolve();
+    return pending.promise;
+  } });
+  const runtime = createCLIHeadRuntime(headDeps(model));
+  const first = await runtime.spawnHead(aHeadInput({ id: 'cancel-first' }));
+  const running = first.run();
+  await started.promise;
+  await first.abort('operator stopped this head');
+  try {
+    expect(providerStopped).toBe(true);
+    expect(await running).toMatchObject({ status: 'aborted', errorMessage: 'operator stopped this head' });
+    const second = await runtime.spawnHead(aHeadInput({ id: 'uncancelled-sibling' }));
+    expect(await second.run()).toMatchObject({ status: 'completed', summary: 'sibling finished' });
+  } finally {
+    pending.reject(new Error('release the test provider'));
+    await running;
+  }
 });

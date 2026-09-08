@@ -73,7 +73,7 @@ import {
   EvolutionEngine, type EvolutionConfig,
   // Scaffold loop closure — the evolved inference loop + its sampled
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
-  scaffoldInferenceTransform, type ScaffoldRunOptions,
+  scaffoldInferenceTransform, prepareActorProgram, type ActorTurnProgram, type ScaffoldRunOptions,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   // Continual refinement — the lane's deps come from four seams this class
@@ -3215,10 +3215,11 @@ export abstract class ActorAgent extends Think<Env> {
    *  reasoning effort. No step cap here — the scaffold's loop runs exactly as
    *  long as the live turn it may replace would (owner ruling, 2026-08-21), so
    *  comparisons between them measure the scaffold, not a handicap. */
-  protected makeScaffoldLLMStream(): ScaffoldRunOptions['llmStream'] {
+  protected makeScaffoldLLMStream(signal?: AbortSignal): ScaffoldRunOptions['llmStream'] {
     return createScaffoldLLMStream({
       model: this.ownedModelServices.resolveModel(this.modelSpecForSource('scaffold')),
       tools: () => this.getRawTools(),
+      signal,
       streamOptions: effortFor('scaffold_mutation'),
       // The bridge already opens an operation and reports `totalUsage` once the
       // loop drains — it just needed a seam to report THROUGH.
@@ -3247,13 +3248,13 @@ export abstract class ActorAgent extends Think<Env> {
    * with no scope keeps the ambient turn: nothing re-drives it, so it has
    * nothing to recognise.
    */
-  protected makeScaffoldCallTool(callScope?: string): NonNullable<ScaffoldRunOptions['callTool']> {
-    if (callScope === undefined) return createScaffoldCallTool(() => this.getRawTools());
+  protected makeScaffoldCallTool(callScope?: string, signal?: AbortSignal): NonNullable<ScaffoldRunOptions['callTool']> {
+    if (callScope === undefined) return createScaffoldCallTool(() => this.getRawTools(), undefined, signal);
     // Built ONCE for the rollout and held: the thunk is asked per dispatch.
     let scoped: ToolSet | undefined;
     return createScaffoldCallTool(
       () => (scoped ??= this.getRawToolsForWorkMode(this.turnWorkMode(), callScope)),
-      callScope,
+      callScope, signal,
     );
   }
 
@@ -3290,20 +3291,21 @@ export abstract class ActorAgent extends Think<Env> {
    * default; a custom scaffold can wrap or replace it.
    */
   protected _transformInferenceResult(result: StreamableResult): StreamableResult {
-    const version = this.sql<{ v: number }>`
-      SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions WHERE status = 'current'`[0]?.v ?? 0;
+    const selected = this._turnProgram;
+    if (selected === null) throw new KinuError('missing', 'the actor turn program was not prepared');
 
     return scaffoldInferenceTransform({
-      currentVersion: version,
+      program: selected.program,
       result,
       run: {
         rt: this.rt,
         workMode: this.turnWorkMode(),
+        signal: selected.signal,
         // beforeTurn stashed this turn's prepared opts just before streamText
         // fired (turns are serialized on the TurnQueue, so it is THIS turn's).
         task: extractLastUserText(this._lastTurnOpts?.messages ?? []),
-        llmStream: this.makeScaffoldLLMStream(),
-        callTool: this.makeScaffoldCallTool(),
+        llmStream: this.makeScaffoldLLMStream(selected.signal),
+        callTool: this.makeScaffoldCallTool(undefined, selected.signal),
         history: this.makeScaffoldHistory(),
       },
     });
@@ -4295,6 +4297,7 @@ export abstract class ActorAgent extends Think<Env> {
   // in the same onChatResponse, so it cannot be overwritten by a later turn;
   // after a DO restart the shadow falls back to the task-only reconstruction.
   protected _lastTurnOpts: Parameters<typeof streamText>[0] | null = null;
+  private _turnProgram: { readonly program: ActorTurnProgram; readonly signal: AbortSignal | undefined } | null = null;
 
   getCliCwdForDevice(): string | null {
     return this._cliCwd;
@@ -5659,6 +5662,8 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
+    this._turnProgram = null;
+    ctx.signal?.throwIfAborted();
     // The scaffold and the soul are both files this turn is about to read, and
     // this is the first place with a promise to await them on.
     await this.ensureOwnedScaffold();
@@ -6036,7 +6041,11 @@ export abstract class ActorAgent extends Think<Env> {
       activeTools: cfg.activeTools,
     };
     if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
+    const runtime = this.rt;
+    const mode = this.turnWorkMode();
+    const program = await prepareActorProgram({ runtime, mode, version: await runtime.identity.scaffold.version(), signal: ctx.signal });
     this._lastTurnOpts = lastTurnOpts;
+    this._turnProgram = { program, signal: ctx.signal };
     // The turn's constants for the per-step context breakdown. Tool schemas
     // ride every request of the turn and are otherwise invisible to anyone
     // asking where the window went.

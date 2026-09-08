@@ -19,7 +19,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import type { HeadInput } from '../src/heads/types';
 import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
 import {
@@ -76,6 +76,7 @@ function headInput(missionLabels?: readonly string[]): HeadInput {
 async function runHead(mission: MissionScope | null, opts: { stopAfter?: number } = {}) {
   const capture = new HeadCapture();
   const deps: Parameters<typeof runHeadInference>[1] = {
+    runtime: createTestRuntime().rt,
     model: steppingModel({ input: 1_000, output: 200, ...opts }),
     tools: buildHeadAccumulatorTools(capture),
     capture,

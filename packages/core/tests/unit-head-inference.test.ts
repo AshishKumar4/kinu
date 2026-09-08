@@ -3,7 +3,7 @@
 // assembly that used to live inside the cf Facet is locked behind a test both
 // backends rely on.
 import { describe, test, expect } from 'bun:test';
-import { scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
 import type { LanguageModel } from 'ai';
 import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,
@@ -56,6 +56,7 @@ const deps = (
   model: LanguageModel,
   over?: Partial<HeadInferenceDeps>,
 ): HeadInferenceDeps => ({
+  runtime: createTestRuntime().rt,
   model, tools: {}, capture: new HeadCapture(), isAborted: () => false, ...over,
   workspaceLayout: over?.workspaceLayout ?? 'shared-workspace',
 });

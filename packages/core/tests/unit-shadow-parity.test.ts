@@ -1,3 +1,4 @@
+import type { ChatEvent } from '../src/chat';
 /**
  * Shadow context parity — a context-dependent task no longer auto-loses in
  * the shadow eval.
@@ -82,7 +83,7 @@ describe('shadow context parity', () => {
       task: TASK,
       currentOutput: CONTEXT_AWARE_ANSWER, // the live answer, produced with full context
       judge: contextJudge,
-      llmStream: async function* () { yield ''; },
+      llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
       // The orchestrator now replays the live turn's full streamText opts —
       // so defaultInference yields the context-aware answer.
       defaultInference: uiStream(CONTEXT_AWARE_ANSWER),
@@ -109,7 +110,7 @@ describe('shadow context parity', () => {
       // Old behavior: a task-text-only reconstruction can't know the codename.
       defaultInference: uiStream(CONTEXT_FREE_ANSWER),
       judge: contextJudge,
-      llmStream: async function* () { yield ''; },
+      llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
       random: () => 0,
     });
     expect(result.skipped).toBe(false);

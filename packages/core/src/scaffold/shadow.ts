@@ -487,6 +487,14 @@ export function readShadowVerdict(sql: SqlExecutor, version: number | null): Sha
   };
 }
 
+/** Read immutable version storage, never the live alias used by activation. */
+export async function readVersionedScaffoldSource(rt: AgentRuntime, version: number): Promise<string | null> {
+  const versioned = `${rt.identity.scaffold.path}.v${version}`;
+  const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
+  if (!await scaffoldVfs.exists(versioned)) return null;
+  return v.parse(v.string(), await scaffoldVfs.readFile(versioned, { encoding: 'utf8' }));
+}
+
 /** Read the scaffold code for a specific version.
  *
  * Prefers the versioned backup file `scaffold/agent.js.v{N}` because it's the
@@ -498,15 +506,9 @@ export function readShadowVerdict(sql: SqlExecutor, version: number | null): Sha
  * MUST read the versioned file to recover the pending code (used by
  * `applyPromotionDecision('promote')` to swap the live file).
  */
-export async function readScaffoldVersion(
-  rt: AgentRuntime,
-  version: number,
-): Promise<string | null> {
-  const versioned = `${rt.identity.scaffold.path}.v${version}`;
-  const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
-  if (await scaffoldVfs.exists(versioned)) {
-    return v.parse(v.string(), await scaffoldVfs.readFile(versioned, { encoding: 'utf8' }));
-  }
+export async function readScaffoldVersion(rt: AgentRuntime, version: number): Promise<string | null> {
+  const versioned = await readVersionedScaffoldSource(rt, version);
+  if (versioned !== null) return versioned;
   // No versioned backup — happens for v0 (the bootstrap writes the live file
   // but not a versioned backup). Fall back to live ONLY for the version the
   // live file actually IS, which is the status='current' row. Asked (`exists`)

@@ -11,8 +11,9 @@ import {
   type StructuredJudgeFn,
 } from '../src/index';
 import { createTestRuntime } from './helpers';
+import type { ChatEvent } from '../src/chat';
 
-const noOpLlmStream = async function* () { yield ''; };
+const noOpLlmStream = async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; };
 
 /** The live scaffold's output in these tests. Distinctive on purpose: the
  *  pending's output under the mock executor is a scaffold error string, and a

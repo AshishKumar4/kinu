@@ -14,8 +14,9 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scriptedTurnModel, type ModelStreamPart } from '@kinu.run/test-utils';
-import type { LanguageModel } from 'ai';
+import { createTestRuntime, scriptedTurnModel, type ModelStreamPart } from '@kinu.run/test-utils';
+import type { LanguageModel, ModelMessage } from 'ai';
+import { jsonSchema, tool } from 'ai';
 import { runHeadInference, HeadCapture, type HeadInferenceDeps } from '../src/heads/head-inference';
 import type { HeadStreamKind } from '../src/heads/head-stream';
 import { makeSql, makeExecRaw } from './helpers';
@@ -116,6 +117,7 @@ function headInput(): HeadInput {
 
 function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): HeadInferenceDeps {
   return {
+    runtime: createTestRuntime().rt,
     model, tools: {}, capture: new HeadCapture(), isAborted: () => false,
     workspaceLayout: 'shared-workspace', ...over,
   };
@@ -227,4 +229,42 @@ describe('a running head publishes what it is producing', () => {
     expect(without.summary).toBe(withSink.summary);
     expect(without.stepCount).toBe(withSink.stepCount);
   });
+});
+
+test('a cancelled head retains its already-settled SDK tool conversation', async () => {
+  const pending = Promise.withResolvers<never>();
+  const secondStarted = Promise.withResolvers<void>();
+  const abort = new AbortController();
+  const produced: ModelMessage[] = [];
+  const value = { retained: 'structured payload' };
+  let calls = 0;
+  const model = scriptedTurnModel({ doGenerate: options => {
+    if (calls++ === 0) return {
+      content: [{ type: 'tool-call', toolCallId: 'kept-call', toolName: 'probe', input: '{}' }],
+      finishReason: { unified: 'tool-calls', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+    };
+    const signal = options.abortSignal;
+    if (signal !== undefined) signal.addEventListener('abort', () => { pending.reject(signal.reason); }, { once: true });
+    secondStarted.resolve();
+    return pending.promise;
+  } });
+  const running = runHeadInference(headInput(), deps(model, {
+    signal: abort.signal, isAborted: () => abort.signal.aborted,
+    tools: { probe: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
+      execute: async () => value,
+    }) },
+    reportMessages: messages => { produced.push(...messages); },
+  }));
+  await secondStarted.promise;
+  abort.abort(new Error('stopped after the evidence step'));
+  try {
+    expect((await running).status).toBe('aborted');
+    expect(produced.flatMap(message => message.role === 'tool' ? message.content : []))
+      .toContainEqual(expect.objectContaining({ type: 'tool-result', toolCallId: 'kept-call', output: { type: 'json', value } }));
+  } finally {
+    pending.reject(new Error('release the test provider'));
+    await running;
+  }
 });

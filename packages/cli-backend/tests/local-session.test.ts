@@ -5,7 +5,7 @@
 // tests; here we verify the loop: turns stream + persist, programmatic turns run
 // serialized (reactor / job wake), broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
-import { createTestSql, scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
+import { createTestSql, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -4450,4 +4450,25 @@ test('an authorized Build turn queued behind Plan regains native file authority'
   expect(writes[0]).toMatchObject({ success: false, reason: 'denied' });
   expect(writes[1]).toMatchObject({ success: true });
   await session.end();
+});
+
+test('the actual local turn executes its selected version instead of the mutable live alias', async () => {
+  const model = scriptedTurnModel({ doGenerate: () => { throw new Error('the custom program must not start the default model'); } });
+  const { db, rt, session, events } = setup('unused', model);
+  const files = rt.agentStateVfs ?? rt.storage.vfs;
+  const selected = 'async function run() { await host.emit({ type: "text_delta", text: "selected version one" }); }';
+  const changed = 'async function run() { await host.emit({ type: "text_delta", text: "wrong live alias" }); }';
+  await files.mkdir('scaffold', { recursive: true });
+  await files.writeFile(rt.identity.scaffold.path + '.v1', selected);
+  db.exec("UPDATE scaffold_versions SET status = 'historical' WHERE status = 'current'");
+  db.query("INSERT INTO scaffold_versions (version, written_at, rationale, status) VALUES (1, 1, 'selected source proof', 'current')").run();
+  rt.identity.scaffold.read = async () => changed;
+  try {
+    await session.send('run the selected program');
+    expect(events.filter(event => event.type === 'text-delta').map(event => event.delta).join('')).toBe('selected version one');
+    expect(model.doStreamCalls).toHaveLength(0);
+  } finally {
+    await session.end();
+    db.close();
+  }
 });
