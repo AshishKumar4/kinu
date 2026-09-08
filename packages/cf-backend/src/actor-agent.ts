@@ -4911,9 +4911,8 @@ export abstract class ActorAgent extends Think<Env> {
       storedParentPath: () => this.ctx.storage.get<JsonValue>('cf_agents_parent_path'),
       storedPhysicalKey: () => this.ctx.storage.get<JsonValue>('cf_agents_facet_name'),
       existing: async (row) => {
-        // Legacy owner inspection reads the SDK-registered key. It mints no identity.
-        const key = row.actorReference === null ? row.name
-          : (await this.actorDirectory({ action: 'validate', name: row.name, reference: row.actorReference })).storageKey;
+        if (row.actorReference === null) return null;
+        const key = (await this.actorDirectory({ action: 'validate', name: row.name, reference: row.actorReference })).storageKey;
         const port = await this.getExistingSubAgent(this.facetClass(), key);
         return port === null ? null : { port, storageKey: key };
       },

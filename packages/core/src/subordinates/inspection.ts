@@ -9,8 +9,7 @@ import { UsageSchema } from '../usage';
 import { JsonObjectSchema } from '../utils/json';
 import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
-import { SubordinateRosterEntrySchema } from './roster';
-import { subordinateInspectionRoster } from './historical-roster';
+import { SubordinateRosterEntrySchema, SubordinateRosterStore } from './roster';
 import { DELEGATION_MAX_DEPTH } from './depth';
 import { PlanReviewStore, PlanReviewSchema } from '../plans/review';
 import { readPlanTasks, AgentTaskTreeSchema } from '../tasks/store';
@@ -81,8 +80,8 @@ export function readSubordinateInspection(
       return { view: 'planTasks', path, tasks: readPlanTasks(sql, plan) };
     }
     case 'children': {
-      const roster = subordinateInspectionRoster(sql, raw);
-      if (!roster) return missingSubordinateHistory(path);
+      if (!tableExists(sql, 'actor_subordinates')) return missingSubordinateHistory(path);
+      const roster = new SubordinateRosterStore(raw);
       return { view: 'children', path, page: roster.listPage(request.page) };
     }
     case 'history':

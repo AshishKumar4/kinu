@@ -105,15 +105,11 @@ Those facets have **separate actor-local SQLite storage**. Their conversations a
 
 This is a real mismatch with the owner's latest shared-SQLite requirement. It must remain visible in the implementation comparison.
 
-The local D0/D1 transition adds one root actor directory. The directory issues immutable actor and parent references. It separates logical aliases from physical storage keys. Live storage uses `actor_config`, `actor_program_state`, `actor_subordinates` and `actor_identity`. The root directory uses `workspace_actors`. Earlier relations remain untouched for explicit historical inspection and later preservation/import. No live store reads or adopts those earlier rows. Hosted and local child runtime storage remains separate until the coordinated cutover.
+One root actor directory issues immutable actor and parent references. It separates logical aliases from physical storage keys. Actor-scoped storage uses `actor_config`, `actor_program_state`, `actor_subordinates` and `actor_identity`. The root directory uses `workspace_actors`. Hosted and local child runtime storage remains separate.
 
-On 2026-09-08, 8 directory cases and 3 admitted-birth cases passed locally. They cover colliding state keys, lost acknowledgements, cross-parent refusal, retirement retries and reused aliases. The native Worker tier passed 3 actor-identity cases and 5 retained-inspection cases. These are local proofs. No deployment or complete preservation/import proof is claimed.
+On 2026-09-08, 8 directory cases and 3 admitted-birth cases passed locally. They cover colliding state keys, lost acknowledgements, cross-parent refusal, retirement retries and reused aliases. The native Worker tier passed 2 actor-identity cases and 5 retained-inspection cases after removal of the obsolete legacy-root contract. These are local proofs. No deployment is claimed.
 
-An existing root without an imported actor identity remains inspection-only. Owner transcript reads and archive export remain available. Actor execution refuses with `missing`. New roots register their main actor before configuration access. Existing transcript and effect IDs remain unchanged.
-
-Retained dismissal keeps the logical name reserved. Successful destructive retirement now removes only the roster row that matches its captured actor reference. This changes the earlier behavior, which left the dismissed roster row behind after physical deletion. Interrupted retirement keeps its intent in the existing directory and roster.
-
-Full preservation/import, shared physical actor storage, conversation scoping and durable consumed-program provenance remain coordinated cutover requirements. Do not deploy this transition before those requirements and normal runtime acceptance pass.
+Retained dismissal keeps the logical name reserved. Successful destructive retirement removes only the roster row that matches its captured actor reference. Interrupted retirement keeps its intent in the directory and roster.
 
 ### 4.2 Required shared-SQLite target
 
