@@ -124,7 +124,7 @@ import type { NodeLoopHost } from './node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { AnnounceHeadActivity } from '../heads/live-journal';
 import { SwarmBudget } from './swarm-budget';
-import type { NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
+import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
 import { missionMeter, type MissionScope } from '../mission-budget';
 import type { WebSearchProvider } from '../web/index';
 import type { ResolvedVerifier } from './verifier-registry';
@@ -252,7 +252,7 @@ export interface SwarmRunDeps {
   readonly provisionHome?: NodeWorkspaceProvisioner;
   /** How a node's own runtime is built once it has a home — see
    *  {@link NodeAgentDeps.runtimeForWorkspace}. */
-  readonly runtimeForWorkspace?: (workspace: NodeWorkspace) => Promise<AgentRuntime>;
+  readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
   /**
    * Where a TOOL-USING node's loop runs.
    *

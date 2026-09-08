@@ -23,7 +23,8 @@
 
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../types/primitives';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
-import { initAllTables } from './schema';
+import { initActorTables, initWorkspaceOwnershipTables } from './schema';
+import { initWorkspaceActorTable } from '../state/workspace-actors';
 import { initEffectTombstoneTable } from './effect-tombstones';
 import { initAgentConfigTable } from '../config/store';
 import { initCurriculumTable } from '../curriculum/proposer';
@@ -40,11 +41,9 @@ import { initToolEffectClaimTable } from '../tools/effect-claim';
 import { initDeferredApprovalsTable } from '../safety/deferred-approval';
 import { initInstructionApprovalsTable } from '../safety/instruction-trust';
 import { initPlanReviewTable } from '../plans/review';
-import { initSearchTables } from '../mcts/schemas';
 import { initAlternateTakesTable } from '../mcts/takes';
 import { initMctsSearchTable } from '../mcts/search-store';
 import { initFactsTable } from '../memory/facts';
-import { initScaffoldTables } from '../scaffold/schemas';
 import { initShadowTables } from '../scaffold/shadow';
 import { initTaskListTable } from '../tasks/store';
 import { initPromptSectionTables } from '../prompting/section-store';
@@ -103,10 +102,57 @@ function initCompactionStateTables(execRaw: RawSqlExec): void {
  * every boot and on every open.
  */
 export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
-  const { execRaw, sql, exec } = db;
+  const { execRaw } = db;
+  initWorkspaceOwnershipTables(execRaw);
+  initWorkspaceActorTable(execRaw);
+  initActorStateSchema(db);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_content (
+    digest TEXT PRIMARY KEY, size INTEGER NOT NULL, hint TEXT
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_content_chunks (
+    digest TEXT NOT NULL REFERENCES slate_content(digest), offset INTEGER NOT NULL, bytes BLOB NOT NULL,
+    PRIMARY KEY (digest, offset)
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS slates (
+    id TEXT NOT NULL, workspace_id TEXT NOT NULL, revision INTEGER NOT NULL, bytes BLOB NOT NULL,
+    PRIMARY KEY (id, revision)
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_versions (
+    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_publications (
+    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_deployments (
+    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_resources (
+    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_previews (
+    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_deployment_reservations (
+    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT UNIQUE, bytes BLOB NOT NULL
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_resource_reservations (
+    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_invocations (
+    id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, request TEXT NOT NULL, attempt INTEGER NOT NULL,
+    owner_epoch TEXT NOT NULL, state TEXT NOT NULL
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_receipts (
+    id TEXT PRIMARY KEY, invocation_id TEXT NOT NULL REFERENCES slate_invocations(id),
+    attempt INTEGER NOT NULL, outcome TEXT NOT NULL, error TEXT, finished_at INTEGER NOT NULL,
+    UNIQUE (invocation_id, attempt)
+  )`);
+}
 
-  initAllTables(execRaw, sql);
-  initSearchTables(execRaw);
+/** Initialize actor state without workspace ownership or root publication tables. */
+export function initActorStateSchema(db: WorkspaceSchemaSql): void {
+  const { execRaw, sql, exec } = db;
+  initActorTables(execRaw, sql);
   // Alternate-Takes sets: durable per-workspace, written by MCTS convergence
   // and by heads settlement, read by /takes and the orchestrator listing.
   // Created here rather than by "the first MCTS run" so a reader that finds no
@@ -122,7 +168,6 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // harness observes `sqlite_master` on a workspace that has never searched, and a
   // table only a search creates would be a declared capability nothing could measure.
   initSwarmNodeRecords(execRaw);
-  initScaffoldTables(execRaw);
   // The R3 outcome ledger.
   // Must run here rather than only in the lazy EvolutionEngine constructor: a
   // freshly-woken actor can serve pickAlternateTake → recordTurnOutcome before
@@ -193,47 +238,6 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // has merely never optimised.
   initPromptSectionTables(execRaw);
   initCompactionStateTables(execRaw);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_content (
-    digest TEXT PRIMARY KEY, size INTEGER NOT NULL, hint TEXT
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_content_chunks (
-    digest TEXT NOT NULL REFERENCES slate_content(digest), offset INTEGER NOT NULL, bytes BLOB NOT NULL,
-    PRIMARY KEY (digest, offset)
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slates (
-    id TEXT NOT NULL, workspace_id TEXT NOT NULL, revision INTEGER NOT NULL, bytes BLOB NOT NULL,
-    PRIMARY KEY (id, revision)
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_versions (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_publications (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_deployments (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_resources (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_previews (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_deployment_reservations (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT UNIQUE, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_resource_reservations (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_invocations (
-    id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, request TEXT NOT NULL, attempt INTEGER NOT NULL,
-    owner_epoch TEXT NOT NULL, state TEXT NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_receipts (
-    id TEXT PRIMARY KEY, invocation_id TEXT NOT NULL REFERENCES slate_invocations(id),
-    attempt INTEGER NOT NULL, outcome TEXT NOT NULL, error TEXT, finished_at INTEGER NOT NULL,
-    UNIQUE (invocation_id, attempt)
-  )`);
   // Typed key/value config: model spec, reasoning effort, always-active skills.
   initAgentConfigTable(execRaw);
   // memory_chunks + its FTS5 index. Every composition root that builds a

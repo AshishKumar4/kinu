@@ -13,9 +13,10 @@ function isRowFrame(frame: ForkFrame): frame is ForkRowFrame {
 function isFileFrame(frame: ForkFrame): frame is ForkFileFrame {
   return frame.kind === 'file';
 }
-
+import { WorkspaceActorDirectory } from '../src/state/workspace-actors';
 async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
   void ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'origin'}, ${100})`;
+  const actor = new WorkspaceActorDirectory(ws.sql, { workspaceId: 'SRC', ownerUserId: '' }).createMain({ name: 'origin' });
   await writeSoul(ws.vfs, ws.sql, 'carry this purpose');
   const messages = [
     { id: 'm1', parent: null, role: 'user', text: 'first' },
@@ -38,8 +39,8 @@ async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
     VALUES (${'tool'}, ${'description'}, ${null}, ${'return 1'}, ${'local'}, ${10}, ${11})`;
   void ws.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
     VALUES (${'chunk'}, ${'memory/MEMORY.md'}, ${1}, ${2}, ${'hash'}, ${'remember this'}, ${12})`;
-  void ws.sql`INSERT INTO agent_config (key, value) VALUES (${'model'}, ${'test-model'})`;
-  void ws.sql`INSERT INTO agent_config (key, value) VALUES (${'shell_approval_mode'}, ${'allow_all'})`;
+  actor.config.setModel('test-model');
+  actor.config.setShellApprovalMode('allow_all');
   await ws.vfs.mkdir('memory', { recursive: true });
   await ws.vfs.writeFile('memory/MEMORY.md', 'remember this');
 }

@@ -1,15 +1,15 @@
 import { describe, test, expect } from 'bun:test';
 import {
-  createAgentConfigStore, initAgentConfigTable, AGENT_CONFIG_KEYS,
+  AGENT_CONFIG_KEYS,
   DEFAULT_AUTO_GEPA_EVERY_N_TURNS, DEFAULT_GEPA_EVAL_BUDGET,
   canonicalConversationId, setReasoningEffort,
 } from '../src/index';
 import { createTestSql } from '@kinu.run/test-utils';
+import { createTestActor } from './helpers';
 
 function setup() {
   const { sql, execRaw } = createTestSql();
-  initAgentConfigTable(execRaw);
-  return createAgentConfigStore(sql);
+  return createTestActor(sql, execRaw, crypto.randomUUID(), 'config-test').config;
 }
 
 describe('AgentConfigStore — generic get/set/delete', () => {
@@ -44,7 +44,7 @@ describe('AgentConfigStore — lastActiveExecutor', () => {
   test('rejects values that are not plausible executor namespaces', () => {
     const c = setup();
     c.setLastActiveExecutor('sandbox');
-    c.setLastActiveExecutor('; DROP TABLE agent_config; --');
+    c.setLastActiveExecutor('; DROP TABLE actor_config; --');
     c.setLastActiveExecutor('');
     c.setLastActiveExecutor('a'.repeat(40));
     expect(c.getLastActiveExecutor()).toBe('sandbox'); // unchanged by the bad writes

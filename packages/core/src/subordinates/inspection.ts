@@ -9,7 +9,8 @@ import { UsageSchema } from '../usage';
 import { JsonObjectSchema } from '../utils/json';
 import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
-import { SubordinateRosterStore, SubordinateRosterEntrySchema } from './roster';
+import { SubordinateRosterEntrySchema } from './roster';
+import { subordinateInspectionRoster } from './historical-roster';
 import { DELEGATION_MAX_DEPTH } from './depth';
 import { PlanReviewStore, PlanReviewSchema } from '../plans/review';
 import { readPlanTasks, AgentTaskTreeSchema } from '../tasks/store';
@@ -79,9 +80,11 @@ export function readSubordinateInspection(
       if (!plan || plan.sessionId !== 'default') return missingSubordinateHistory(path);
       return { view: 'planTasks', path, tasks: readPlanTasks(sql, plan) };
     }
-    case 'children':
-      if (!tableExists(sql, 'workspace_subordinates')) return missingSubordinateHistory(path);
-      return { view: 'children', path, page: new SubordinateRosterStore(raw).listPage(request.page) };
+    case 'children': {
+      const roster = subordinateInspectionRoster(sql, raw);
+      if (!roster) return missingSubordinateHistory(path);
+      return { view: 'children', path, page: roster.listPage(request.page) };
+    }
     case 'history':
       if (!tableExists(sql, 'assistant_messages') && !tableExists(sql, 'messages')) return missingSubordinateHistory(path);
       return { view: 'history', path, page: getChatHistoryPage(sql, request.page) };

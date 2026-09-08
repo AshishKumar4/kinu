@@ -7,14 +7,15 @@
 
 import type { LLMProviderConfig } from '@kinu.run/core';
 import {
-  initWorkspaceBaselineTable, initWorkspaceSchema, readSoul, summarizeSoul,
+  initWorkspaceBaselineTable, initWorkspaceSchema, initActorStateSchema, readSoul, summarizeSoul,
   getCurrentScaffoldVersion, memoryBytes,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from './runtime';
 import type { LocalProviderCredentials } from './model-resolver';
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import type { Database } from 'bun:sqlite';
-
+import type { LocalActorConfig } from './actor-identity';
+import { KinuError } from '@kinu.run/core/obs';
 export interface WorkspaceInfo {
   id: string;
   name: string;
@@ -28,7 +29,7 @@ export interface WorkspaceInfo {
   createdAt: number;
 }
 
-export interface CLIOpenConfig {
+interface CLIOpenOptions {
   /** The default endpoint for bare ids — null when nothing derives one.
    *  Explicit specs resolve through the registry regardless. */
   llm: LLMProviderConfig | null;
@@ -44,10 +45,9 @@ export interface CLIOpenConfig {
   hostRoot?: string | null;
   /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
-  /** The facet this agent is, as an agent name. See CLIRuntimeConfig.facet. */
-  facet?: string;
 }
-
+export type CLIOpenConfig = CLIOpenOptions & LocalActorConfig;
+interface OpenedWorkspaceIdentity { readonly id: string; readonly name: string; readonly created_at: number }
 /**
  * Open an existing workspace using the full CLI backend runtime. It uses:
  * - the workspace plane `config.cwd` names, or the Nimbus filesystem with none
@@ -70,31 +70,18 @@ export async function openWorkspaceCLI(
   // missing, exactly as the schema below does.
   db.exec('PRAGMA journal_mode = WAL');
 
-  // Every table a workspace has, on any backend — one list, in core. Opening
-  // is the only moment a workspace made by an older build (or by another
-  // backend) can gain what it is missing, so the full set runs here.
-  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+  let identity: OpenedWorkspaceIdentity;
+  if (config.facet !== undefined) {
+    initActorStateSchema(makeWorkspaceSchemaSql(db));
+    identity = { id: config.actorBinding.reference.actorId, name: config.actorBinding.name, created_at: config.actorBinding.createdAt };
+  } else {
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    const stored = sql<OpenedWorkspaceIdentity>`SELECT id, name, created_at FROM workspace_identity LIMIT 1`[0];
+    if (!stored) throw new KinuError('missing', 'The workspace has no durable identity.');
+    identity = stored;
+  }
   initWorkspaceBaselineTable((ddl) => db.exec(ddl));
-
-  // Read identity
-  const identity = sql<{ id: string; name: string; created_at: number }>`
-    SELECT id, name, created_at FROM workspace_identity LIMIT 1
-  `[0];
-  if (!identity) throw new Error('No workspace identity found. Use createWorkspace() to create one.');
-
-  // Build the runtime before reading the agent-private SOUL file.
-  const rt = createCLIRuntime(db, {
-    dbPath,
-    llm: config.llm,
-    providerCredentials: config.providerCredentials,
-    codexAuthStore: config.codexAuthStore,
-    codexConfigPath: config.codexConfigPath,
-    checkpointKeep: config.checkpointKeep,
-    hostRoot: config.hostRoot,
-    cwd: config.cwd,
-    agentName: identity.name,
-    facet: config.facet,
-  });
+  const rt = createCLIRuntime(db, { ...config, dbPath, agentName: identity.name });
 
   // SOUL belongs to the agent, not to the shared physical project directory.
   const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs);

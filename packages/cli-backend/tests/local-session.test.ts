@@ -174,14 +174,14 @@ function systemCapturingModel(answer: string, sink: (system: string) => void): T
  *  file is built on, and the only place the bun:sqlite handle is widened to the
  *  runtime factory's parameter. */
 function workspaceRuntime() {
-  const db = new Database(':memory:');
+  const db = new Database(scratchPath('local-session', 'agent.db'));
   // The agent DB carries a messages table in production (created on `kinu
   // create`); the runtime factory doesn't, so provision it for the test.
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-  const rt = createCLIRuntime(db, { dbPath: scratchPath('local-session', 'agent.db'), llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
   return { db, rt };
 }
 
@@ -1138,7 +1138,7 @@ describe('LocalAgentSession — context window', () => {
 });
 
 describe('LocalAgentSession — BackendHost + lifecycle', () => {
-  test('always-active skills round-trip through agent_config', () => {
+  test('always-active skills round-trip through actor_config', () => {
     const { session } = setup();
     expect(session.getAlwaysActiveSkills()).toEqual([]);
     session.setAlwaysActiveSkills(['debugging', 'review']);
@@ -1147,7 +1147,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(session.getAlwaysActiveSkills()).toEqual([]);
   });
 
-  test('shell approval mode round-trips through agent_config', () => {
+  test('shell approval mode round-trips through actor_config', () => {
     const { session } = setup();
     expect(session.getShellApprovalMode()).toEqual({ mode: 'strict' });
     expect(session.setShellApprovalMode('allow_all')).toEqual({ ok: true, mode: 'allow_all' });
@@ -2040,12 +2040,12 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     classifierJson: string,
     opts: { oneShot?: boolean; gate?: Promise<void>; model?: LanguageModel } = {},
   ) {
-    const db = new Database(':memory:');
+    const db = new Database(scratchPath('local-session-review', 'agent.db'));
     db.exec(`CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
       role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-    const rt = createCLIRuntime(db, { dbPath: scratchPath('local-session-review', 'agent.db'), llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
     // The classifier + reflection ride rt.llm.complete — stub it so the review
     const completions: string[] = [];
     const reviewLlm = {
@@ -2245,10 +2245,10 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
 describe('LocalAgentSession — mission-derived auto-titling', () => {
   /** What `kinu list` shows and where the title came from, read from the same
-   *  two `agent_config` rows both backends keep it in. */
+   *  two `actor_config` rows both backends keep it in. */
   const naming = (db: Database) => {
     const rows = db.query<{ key: string; value: string }, []>(
-      `SELECT key, value FROM agent_config WHERE key IN ('display_name', 'name_origin')`,
+      `SELECT key, value FROM actor_config WHERE key IN ('display_name', 'name_origin')`,
     ).all();
     return {
       displayName: rows.find((row) => row.key === 'display_name')?.value ?? null,
@@ -2293,10 +2293,8 @@ describe('LocalAgentSession — mission-derived auto-titling', () => {
   });
 
   test('a title the owner chose is never overwritten', async () => {
-    const { db, session } = setup('done');
-    db.query<unknown, [string]>(
-      `INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ?), ('name_origin', 'user')`,
-    ).run('Keys Rotation');
+    const { db, rt, session } = setup('done');
+    rt.actor.config.setDisplayNameOrigin('Keys Rotation', 'user');
 
     await session.send('Audit the OAuth callback flow');
     await session.end();
@@ -2311,10 +2309,10 @@ describe('LocalAgentSession — mission-derived auto-titling', () => {
 
 describe('LocalAgentSession — the advisor lane joins the exit', () => {
   /** A session whose reviewer is `reply`, with the advisor switched on the way
-   *  an owner switches it on: the durable `agent_config` row both backends read. */
+   *  an owner switches it on: the durable `actor_config` row both backends read. */
   function setupWithAdvisor(reply: () => Promise<string>) {
     const { db, rt, session, events } = setup('rotated the staging keys');
-    db.query(`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('advisor_enabled', 'true')`).run();
+    rt.actor.config.setAdvisorEnabled(true);
     rt.advisorLlm = { stream: async function* () { yield ''; }, complete: reply };
     return { db, rt, session, events };
   }
@@ -2390,7 +2388,7 @@ describe('LocalAgentSession — the advisor lane joins the exit', () => {
       doStream: async () => { throw new Error('upstream is on fire'); },
     });
     const { db, rt, session } = setup('unused', exploding);
-    db.query(`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('advisor_enabled', 'true')`).run();
+    rt.actor.config.setAdvisorEnabled(true);
     rt.advisorLlm = {
       stream: async function* () { yield ''; },
       complete: async () => JSON.stringify({ note: NOTE, severity: 'nit', class: 'wrong-work' }),

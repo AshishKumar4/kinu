@@ -41,6 +41,7 @@ import {
 } from '@kinu.run/core';
 import { scriptedTurnModel, scratchPath, toolExecute } from '@kinu.run/test-utils';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
+import { registerLocalNode } from '../src/actor-identity';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -77,10 +78,10 @@ function answeringModel() {
 /** The production runtime, with no host plane: a search must never be able to
  *  write into the developer's own repository. */
 function cliRuntime(label: string): CLIRuntime {
-  const database = new Database(':memory:');
+  const database = new Database(scratchPath(label, 'agent.db'));
   databases.push(database);
   return createCLIRuntime(database, {
-    dbPath: scratchPath(label, 'agent.db'),
+    dbPath: database.filename,
     llm: DUMMY_LLM,
     hostRoot: null,
   });
@@ -160,20 +161,20 @@ async function runShippedSwarm(fork: AgentsForkDeps): Promise<SettledNode[]> {
 
 describe('a node in a shipped agents.swarm run reports private-home', () => {
   test('a local node keeps its home and private scratch through runtime reset', async () => {
-    const database = new Database(':memory:');
+    const database = new Database(scratchPath('node-reset', 'agent.db'));
     databases.push(database);
-    const config = { dbPath: scratchPath('node-reset', 'agent.db'), llm: DUMMY_LLM, hostRoot: null };
+    const config = { dbPath: database.filename, llm: DUMMY_LLM, hostRoot: null };
     const first = createCLIRuntime(database, config);
     const provision = nodeHomeWiring(first).provisionNodeHome();
     const home = await provision({ nodeId: 'reset', rootId: 'reset', depth: 1 });
     if (home.isolation !== 'private-home' || !first.nodeRuntime) throw new Error('node plane missing');
-    const before = await first.nodeRuntime(home);
+    const before = await first.nodeRuntime(home, registerLocalNode(first.actor, { nodeId: 'reset', rootId: 'reset', depth: 1 }), first);
     if (!before.shell) throw new Error('node shell missing');
     expect(await before.shell.exec('echo private > /tmp/note; echo answer > "$HOME/answer"')).toMatchObject({ exitCode: 0 });
     await first.storage.vfs.writeFile('/home/user/shared', 'shared');
     const second = createCLIRuntime(database, config);
     if (!second.nodeRuntime) throw new Error('reset node plane missing');
-    const after = await second.nodeRuntime(home);
+    const after = await second.nodeRuntime(home, registerLocalNode(second.actor, { nodeId: 'reset', rootId: 'reset', depth: 1 }), second);
     if (!after.shell) throw new Error('reset node shell missing');
     expect(await after.shell.exec('echo $HOME $TMPDIR; cat /tmp/note; cat "$HOME/answer"; cat /home/user/shared'))
       .toMatchObject({ exitCode: 0, stdout: `${home.home} ${home.tmp}\nprivate\nanswer\nshared` });

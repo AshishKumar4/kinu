@@ -74,7 +74,6 @@ import {
 } from './registry';
 import type { ProfileCatalogEnvelope } from '../profiles/catalog';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store';
-import { createAgentConfigStore } from '../config/store';
 import { clampToolResult, withClampedToolResult } from './clamp';
 import { dispatchReport, type ReportToolInput } from './report-tool';
 import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types';
@@ -654,7 +653,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // Dispatch lives in tasks-tool.ts, shared verbatim with the `tasks.*`
   // codemode namespace (tasks-codemode.ts).
   const taskList = new TaskListStore(rt.storage.sql, rt.storage.transactionSync);
-  const runTasksAction = createTasksDispatcher(taskList, createAgentConfigStore(rt.storage.sql), deps.roleAuthority);
+  const runTasksAction = createTasksDispatcher(taskList, rt.actor.config, deps.roleAuthority);
   tools.tasks = permitInPlan(tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.tasks,
     inputSchema: jsonSchema<TasksToolInput>({

@@ -30,13 +30,10 @@ describe('MCTS in Plan mode', () => {
     rt.memory.index = async () => { memoryWrites++; };
     rt.craftStore.create = () => { craftWrites++; };
     rt.craftStore.update = () => { craftWrites++; };
-    rt.spawnBranch = async () => ({
-      explore: async (_history, _tools, _languages, mode) => {
-        branchModes.push(mode);
-        return { text: '```javascript\nexport const answer = 42;\n```' };
-      },
-      generateReflection: async () => ({ text: 'would mutate memory in Build mode' }),
-    });
+    rt.spawnBranch = async () => ({ explore: async (_history, _tools, _languages, mode) => {
+      branchModes.push(mode);
+      return { text: '```javascript\nexport const answer = 42;\n```' };
+    }, generateReflection: async () => ({ text: 'would mutate memory in Build mode' }), release: async () => {} });
 
     const result = await runMCTS(rt, createMockSession(), 'plan a safe implementation', {
       mode: 'plan', budget: 1, branches: 1,
@@ -62,10 +59,7 @@ describe('MCTS in Plan mode', () => {
       executorCalls++;
       return execute(...args);
     };
-    rt.spawnBranch = async () => ({
-      explore: async () => ({ text: '```javascript\nexport const answer = 42;\n```' }),
-      generateReflection: async () => ({ text: '' }),
-    });
+    rt.spawnBranch = async () => ({ explore: async () => ({ text: '```javascript\nexport const answer = 42;\n```' }), generateReflection: async () => ({ text: '' }), release: async () => {} });
 
     await runMCTS(rt, createMockSession(), 'implement the answer', {
       mode: 'build', budget: 1, branches: 1,

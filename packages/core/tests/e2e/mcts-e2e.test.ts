@@ -18,7 +18,7 @@ import type { AgentRuntime, BranchHandle } from '../../src/types/agent-runtime';
 import type { LLM } from '../../src/types/primitives';
 import type { SessionWriter, SessionMessage } from '../../src/mcts/record-node';
 import {
-  makeSql,
+  makeSql, createTestActor,
   makeExecRaw,
   createMemoryVFS,
   createMemoryMemory,
@@ -42,6 +42,7 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
 
   function createRealBranch(branchLLM: LLM): BranchHandle {
     return {
+      release: async () => {},
       async explore(priorHistory) {
         const context = priorHistory.map(m => `${m.role}: ${m.content}`).join('\n');
         const text = await branchLLM.complete(
@@ -61,6 +62,7 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
   }
 
   const rt: AgentRuntime = {
+    actor: createTestActor(sql, execRaw, crypto.randomUUID(), 'e2e-test'),
     storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory, executor, llm, schedule,
     identity: {
@@ -77,7 +79,6 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
     judgeModel: judgeLlm,
     spawnBranch: async () => createRealBranch(llm),
     abortBranch: async () => {},
-    releaseBranch: async () => {},
   };
 
   return { rt, db };

@@ -69,7 +69,7 @@ export interface AutoJudgeConfig {
   /** Auto-apply promotion/rollback when decision is conclusive. The engine
    *  default is false (a bare runAutoShadowEval never mutates state); both
    *  backends pass the agent-level switch, which defaults ON
-   *  (agent_config auto_promote_scaffold, config/store.ts). */
+   *  (actor_config auto_promote_scaffold, config/store.ts). */
   autoApply: boolean;
   /** Forwarded to decidePromotion. Default DEFAULT_SHADOW_CONFIG. */
   shadowConfig: ShadowConfig;

@@ -32,11 +32,12 @@ import {
   BUILTIN_PROFILE_CATALOG,
   profileCatalogDigest,
   resolveTurnProfile,
-  type ModelCallReport,
+  type ModelCallReport, type ActorReference,
   type ModelOperationEvent,
   type ResolvedTurnProfile,
 } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
+import { actorDirectoryFixture } from './helpers/actor-directory';
 import { platformGatewayEnv, stubAiBinding } from './helpers/platform-gateway';
 import * as v from 'valibot';
 
@@ -116,11 +117,17 @@ interface BranchHarness {
 }
 
 async function makeBranch(respond: (text: string) => Response = completion): Promise<BranchHarness> {
+  const directory = actorDirectoryFixture(async () => { throw new Error('This model-route fixture does not retire actors.'); });
+  const actor = await directory.apply({ action: 'register', creationId: 'branch-1', name: 'exp:branch-1', kind: 'branch', lifetime: 'task' });
   const operations: ModelOperationEvent[] = [];
   const modelCalls: ModelCallReport[] = [];
   let profileCalls = 0;
   const ai = stubAiBinding(() => respond(BRANCH_ANSWER));
   const parentStub = {
+    async getSubordinateBootstrapIdentity(input: { name: string; reference: ActorReference }) {
+      const child = await directory.apply({ action: 'validate', ...input });
+      return { ...child, parentWorkspace: 'kinu-main', ownerUserId: 'user-1', model: null, depth: null };
+    },
     async facetTurnProfile(): Promise<ResolvedTurnProfile> {
       profileCalls += 1;
       return profileFixture();
@@ -149,7 +156,8 @@ async function makeBranch(respond: (text: string) => Response = completion): Pro
   // The facet as `spawnBranchFacet` produces it: the production class under the
   // `exp:`-marked key, activated the way the SDK activates it before the first
   // `@callable` is dispatched.
-  const { agent: concrete } = await facetHarness({ name: 'exp:branch-1', env: testEnv });
+  const { agent: concrete } = await facetHarness({ name: actor.storageKey, env: testEnv });
+  Object.defineProperty(concrete, 'parentPath', { value: [{ className: 'OrchestratorAgent', name: 'kinu-main' }] });
 
   const facetRuntimeMember = Object.getOwnPropertyDescriptor(
     SubordinateAgent.prototype,
@@ -163,7 +171,7 @@ async function makeBranch(respond: (text: string) => Response = completion): Pro
     explore: () => concrete.explore([{ role: 'user', content: 'ship a parser' }], [], ['javascript'], 'plan', []),
     reflect: () => concrete.generateReflection('ship a parser', 'the fixture corpus still fails'),
     nodeRuntimeLanes: () => {
-      const rt: unknown = facetRuntimeMember.call(concrete, 'node', 'node-1', {});
+      const rt: unknown = facetRuntimeMember.call(concrete, 'node', {});
       const lanes = v.parse(v.object({
         llm: v.object({ complete: v.function() }),
         judgeModel: v.optional(v.unknown()),
@@ -177,7 +185,11 @@ async function makeBranch(respond: (text: string) => Response = completion): Pro
         advisor: lanes.advisorLlm !== undefined,
       };
     },
-    setSharedParent: concrete.setSharedParent.bind(concrete),
+    setSharedParent: async (name) => {
+      const result = await concrete.setSharedParent(name, { ...actor.reference, name: actor.name, storageKey: actor.storageKey });
+      if ('reason' in result) throw new Error(`${result.reason}: ${result.error}`);
+      return result;
+    },
     operations,
     modelCalls,
     // The model rides the request BODY: `GatewayRunRequest` is
@@ -221,7 +233,7 @@ describe('an MCTS branch runs the turn\'s tier, not the account default', () => 
   test('a branch with no parent refuses rather than silently using the default', async () => {
     const branch = await makeBranch();
 
-    await expect(branch.explore()).rejects.toThrow('This facet was spawned without a parent workspace, so it cannot reach the profile that decides its model; setSharedParent must run before it does any model work.');
+    await expect(branch.explore()).rejects.toMatchObject({ code: 'missing' });
     // Nothing was billed for a call that never chose a model.
     expect(branch.requestedModels()).toEqual([]);
     expect(branch.operations).toEqual([]);

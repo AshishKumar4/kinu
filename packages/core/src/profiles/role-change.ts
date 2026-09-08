@@ -1,6 +1,6 @@
 // Durable role change — how an agent's active role moves at a turn boundary.
 //
-// The active role is durable per-agent state (agent_config), so a change made
+// The active role is durable per-agent state (actor_config), so a change made
 // now applies to the NEXT resolved turn; the running step keeps the profile it
 // already resolved. Policy is the owner's, per agent:
 //

@@ -12,7 +12,7 @@ import {
   type ExplorationFacetRegistry,
 } from '../src/facet-spawn';
 import { orchestratorHarness } from './helpers/actor-harness';
-
+import { actorDirectoryFixture } from './helpers/actor-directory';
 /** The SDK registry as the sweep reads it: exploration workers under the
  *  `exp:`-marked key every spawn hands `subAgent`, and — since one class hosts
  *  both families — subordinates under their bare roster slug beside them. The
@@ -21,8 +21,13 @@ function host(
   facets: string[],
   deleted: string[] = [],
 ): ExplorationFacetRegistry & { deleted: string[] } {
+  const actors = actorDirectoryFixture(async () => { throw new Error('This fixture only tests classification.'); });
+  const entries = facets.map((name) => {
+    const actor = actors.directory.create({ parent: actors.main, name: `exp:${name}`, creationId: name, kind: 'head', lifetime: 'task' });
+    return { name: `exp:${name}`, reference: { actorId: actor.actorId, workspaceId: actor.workspaceId, parentActorId: actor.parentActorId } };
+  });
   return {
-    list: () => facets.map((name) => ({ name: `exp:${name}` })),
+    list: () => entries,
     delete: async (id) => { deleted.push(id); },
     deleted,
   };
@@ -72,8 +77,11 @@ describe('reconcileExplorationFacets', () => {
     // — the exact conditions under which an unmarked exploration facet would be
     // reclaimed — so the marker, and nothing else, is what keeps it.
     const deleted: string[] = [];
+    const actors = actorDirectoryFixture(async () => { throw new Error('This fixture only tests classification.'); });
+    const subordinate = actors.directory.create({ parent: actors.main, name: 'researcher', creationId: 'subordinate', kind: 'subordinate', lifetime: 'durable' });
+    const branch = actors.directory.create({ parent: actors.main, name: 'exp:branch-done', creationId: 'branch-done', kind: 'branch', lifetime: 'task' });
     const registry: ExplorationFacetRegistry = {
-      list: () => [{ name: 'researcher' }, { name: 'exp:branch-done' }],
+      list: () => [{ name: 'researcher', reference: subordinate }, { name: 'exp:branch-done', reference: branch }],
       delete: async (id) => { deleted.push(id); },
     };
     const out = await reconcileExplorationFacets(registry, () => 'unknown' as const, () => false);

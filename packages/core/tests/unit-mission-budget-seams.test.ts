@@ -106,17 +106,11 @@ function searchableDeps(opts: {
       create: async (input) => ({
         name: input.name ?? 'helper',
         displayName: 'Helper',
-        subordinate: {
-          name: input.name ?? 'helper', displayName: 'Helper', role: input.role ?? 'general',
-          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-        },
+        subordinate: { name: input.name ?? 'helper', displayName: 'Helper', role: input.role ?? 'general', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async (input) => ({
         ok: true, name: input.name, displayName: input.displayName,
-        subordinate: {
-          name: input.name, displayName: input.displayName, role: 'general',
-          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-        },
+        subordinate: { name: input.name, displayName: input.displayName, role: 'general', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName, applied: true }),
       spawn: async (input) => { spawns.push(`hire:${input.role}`); return { name: 'helper', displayName: 'Helper' }; },

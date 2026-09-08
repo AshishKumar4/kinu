@@ -147,7 +147,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
     readonly runtime: CLIRuntime,
     private readonly opts: LocalTargetOptions,
   ) {
-    this.stores = createAgentStores(() => this.runtime.storage.sql, this.runtime.storage.transactionSync);
+    this.stores = createAgentStores(() => this.runtime.storage.sql, () => this.runtime.actor, this.runtime.storage.transactionSync);
   }
 
   get describe(): string {
@@ -244,7 +244,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
   /**
    * Additional agents on the roster, or none.
    *
-   * `ensureSchema()` FIRST, and it is not defensive. `workspace_subordinates` is
+   * `ensureSchema()` FIRST, and it is not defensive. `actor_subordinates` is
    * created by this store's own idempotent DDL on first use rather than by
    * `initWorkspaceSchema` — the conformance manifest says so in as many words
    * ("Created by SubordinateRosterStore's own ensureSchema on first read, so it
