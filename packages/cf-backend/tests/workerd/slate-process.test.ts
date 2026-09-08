@@ -77,6 +77,31 @@ it('authored code that keeps an old request\'s bindings cannot replay its call c
   }
 });
 
+it('bindings kept from a PREVIEW request cannot stand in for a hop lineage', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('preview-replay'));
+  // The preview arm of the same escape. A browser GET is a root lineage, so
+  // bindings kept from one used to yield an empty chain when presented from
+  // inside a hop — the ancestors the honest chain would have refused on.
+  await subject.start([
+    'let kept = null;',
+    'export default { async fetch(request, env) {',
+    '  const path = new URL(request.url).pathname;',
+    '  if (path === "/visit") { kept = env; return Response.json({ visited: true }); }',
+    '  try { return Response.json(await kept.PEER.echo("from-preview-bindings")); }',
+    '  catch (cause) { return Response.json({ replayRefused: String(cause.message) }); }',
+    '} };',
+  ].join('\n'), true);
+  try {
+    // A preview visit: no chain argument, which is the browser shape.
+    expect(JSON.parse((await subject.request('/visit')).body)).toEqual({ visited: true });
+    const replayed = JSON.parse((await subject.request('/hop', ['peer', 'mid'])).body);
+    expect(replayed.replayRefused).toContain('which this host is not running');
+    expect(replayed.chain).toBeUndefined();
+  } finally {
+    await subject.stop();
+  }
+});
+
 it('authored fetch failures preserve their cause chain and leave the process callable', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('authored-cause'));
   await subject.start([

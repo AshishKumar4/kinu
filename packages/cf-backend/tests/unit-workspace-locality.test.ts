@@ -366,6 +366,31 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect((await workspace.routePreview(3000, capability.slice(0, 10), new Request('https://preview.test/'), '/')).status).toBe(410);
   });
 
+  test('a preview request runs under an invocation the host names and then releases', async () => {
+    const actor = actorObject();
+    const capability = 'abcdef0123456789abcdef01';
+    Object.assign(actor.ctx.storage, { get: async (key: string) => key === 'nimbus_preview_capability:3000' ? { capability, owner: null } : undefined });
+    const released: string[] = [];
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx, env: strictEnv(WORKSPACE_BINDINGS),
+      previewUrl: async () => ({ url: 'https://preview.test/' }),
+      refreshPreview: async () => undefined,
+      slateInvocation: (port) => ({ value: `minted-${String(port)}`, release: () => { released.push(`minted-${String(port)}`); } }),
+    });
+    await workspace.registerPort(9000, 3000, {
+      handleHttpRequest: async (request) => Response.json({ invocation: request.headers.get('x-slate-call') }),
+    });
+    // The visitor's forged value is dropped and the host's own name replaces it,
+    // so bindings kept from this request stop resolving the moment it settles.
+    const response = await workspace.routePreview(3000, capability.slice(0, 10), new Request('https://preview.test/', {
+      headers: { 'x-slate-call': 'forged-invocation' },
+    }), '/');
+    expect(v.parse(v.object({ invocation: v.nullable(v.string()) }), await response.json()))
+      .toEqual({ invocation: 'minted-3000' });
+    expect(released).toEqual(['minted-3000']);
+    workspace.unregisterPorts(9000);
+  });
+
   test('a recycled slate URL cannot acquire a different logical owner before that owner exposes it', async () => {
     const actor = actorObject();
     const kv = new Map<string, JsonValue>();
