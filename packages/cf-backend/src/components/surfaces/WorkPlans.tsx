@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Loader } from '@cloudflare/kumo';
 import * as v from 'valibot';
-import { SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type PlanReview, type AgentTaskTree, type SeekCursor, type WorkspacePlanReference } from '@kinu.run/core';
+import { SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type PlanReview, type AgentTaskTree, type SeekCursor } from '@kinu.run/core';
+import type { WorkspacePlanArrival } from '@/hooks/use-kinu';
 import type { Rpc } from '@/lib/protocol';
 import { lastValue, useAsyncResource } from '@/hooks/use-async-resource';
 import { LoadFailure } from '@/components/ui/LoadFailure';
@@ -16,9 +17,9 @@ const ownerOf = (path: readonly string[]) => path.length ? path.join(' / ') : 'M
 
 /** Read existing actors, including retained descendants. Each user page permits
  * four sequential inspection reads; the remaining frontier is explicit. */
-export function WorkPlans({ active, rpc, rootRpc, owner = 'main', focus, activeActors = [], onPresence, onNewPlan, onReviewActor }: {
+export function WorkPlans({ active, rpc, rootRpc, owner = 'main', arrival, activeActors = [], onPresence, onNewPlan, onReviewActor }: {
   active: PlanReview | null; rpc: Rpc; rootRpc: Rpc; owner?: string;
-  focus?: WorkspacePlanReference | null; activeActors?: readonly string[];
+  arrival?: WorkspacePlanArrival | null; activeActors?: readonly string[];
   onPresence: (present: boolean) => void;
   onNewPlan: () => void;
   onReviewActor?: (name: string) => void | Promise<void>;
@@ -28,7 +29,7 @@ export function WorkPlans({ active, rpc, rootRpc, owner = 'main', focus, activeA
   const [pages, setPages] = useState(1);
   const known = useRef<Map<string, Set<string>>>(new Map());
   const seenPageCount = useRef(pages);
-  const seenFocus = useRef<string | null>(null);
+  const focus = arrival?.reference ?? null;
   const focusKey = focus ? JSON.stringify([focus.path, focus.id, focus.revision]) : null;
   const load = useCallback(async () => {
     const plans: OwnedPlan[] = [];
@@ -118,24 +119,32 @@ export function WorkPlans({ active, rpc, rootRpc, owner = 'main', focus, activeA
     seenPageCount.current = held.pageCount;
     if (fresh) { setSelected(keyOf(fresh)); onNewPlan(); }
   }, [held, onNewPlan]);
-  useEffect(() => { if (current?.plan.status === 'pending') setSelected(keyOf(current)); }, [active?.id, active?.revision, owner]);
   useEffect(() => {
-    if (focusKey === null || held?.focusKey !== focusKey || seenFocus.current === focusKey) return;
+    if (!current) return;
+    // A conversation's pane opens on ITS actor's plan, decided or not: the row
+    // this pane answers for is the reason the reader is here. The root pane
+    // keeps the pending-only rule, so its "newest plan anywhere" default — and
+    // any older revision the reader picked through it — still stands once its
+    // own plan is decided. Both matter now that an arrival from an unscanned
+    // actor can be the newest plan in the workspace.
+    if (owner === 'main' && current.plan.status !== 'pending') return;
+    setSelected(keyOf(current));
+  }, [active?.id, active?.revision, owner]);
+  useEffect(() => {
+    if (!arrival || focusKey === null || held?.focusKey !== focusKey) return;
     // Only an AUTHORIZED reference reaches here: the exact read has answered
     // and its plan is in the merged history. A hint the workspace cannot
     // resolve never moves the user off whatever they were looking at.
     if (!held.plans.some(item => keyOf(item) === focusKey)) return;
-    // Marked before the guard below, so a hint stays acted-on for this pane
-    // however many times the ambient read runs it past here again — including
-    // the fresh pane a conversation switch mounts.
-    seenFocus.current = focusKey;
-    // A pane holding an undecided plan of its own keeps it in front of the
-    // user: an arrival from somewhere else is news, not a reason to take a
-    // decision off screen.
-    if (current?.plan.status === 'pending') return;
+    // Claimed LAST, and by the connection rather than by this pane. Last,
+    // because a reference the read has not authorized yet must stay claimable.
+    // By the connection, because this pane is remounted on every conversation
+    // switch: a claim that lived here would make an honoured hint arrive all
+    // over again on the fresh mount.
+    if (!arrival.claim(arrival.reference)) return;
     setSelected(focusKey);
     onNewPlan();
-  }, [focusKey, held, onNewPlan, current?.plan.status]);
+  }, [arrival, focusKey, held, onNewPlan]);
   useEffect(() => { onPresence(plans.length > 0); }, [plans.length, onPresence]);
 
   if (plans.length === 0 && resource.status !== 'error' && !held?.more && !held?.warnings.length) return null;
