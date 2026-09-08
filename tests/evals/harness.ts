@@ -77,7 +77,7 @@ import {
 import { createNodeExecuteToolFactory } from '../../packages/cli-backend/src/execute-tools-factory';
 import { createNodeCraftedExecute } from '../../packages/cli-backend/src/craft-executor';
 import {
-  hardTaskFor, ledgerTotalsFromEvents, projectRunEventProvenance, recordLiveModelEpisode,
+  hardTaskFor, ledgerTotalsFromEvents, projectRunEventProvenance, recordLiveModelEpisode, scratchDir,
   scoreTrajectory, seedHardTask, verifyHardTask, walkRunEvents,
   type EvalArmState, type EvalScoreRow, type HardTask, type LedgerTotals,
 } from '@kinu.run/test-utils';
@@ -167,8 +167,8 @@ export interface EvalAgentSurface {
 export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurface {
   const { rt, model, llm } = deps;
   const sql = rt.storage.sql;
-  const facts = createFactsStore(sql);
-  const taskList = new TaskListStore(sql, rt.storage.transactionSync);
+  const facts = createFactsStore(sql, rt.actor);
+  const taskList = new TaskListStore(sql, rt.actor, rt.storage.transactionSync);
   const config = rt.actor.config;
   const webSearch = createDefaultWebSearchProvider({ fetch: globalThis.fetch });
   const fork: AgentsForkDeps = { rt, model };
@@ -865,8 +865,19 @@ export function requireVerifierShell(taskId: string, rt: AgentRuntime): Shell {
 export async function runBehaviourTask(
   task: EvalCase, opts: BehaviourHarnessOptions,
 ): Promise<BehaviourOutput> {
-  const workDir = join(opts.dir, task.id);
-  mkdirSync(workDir, { recursive: true });
+  // A workspace PER EPISODE, never one per task id. `createWorkspace` below
+  // writes a `workspace_identity` row and issues the workspace's main actor
+  // against it, so a second episode of the same task over the same file lands a
+  // SECOND identity row and the actor directory then refuses the workspace
+  // outright ('Workspace ownership does not match the actor directory
+  // authority'). The shared path was already wrong for a quieter reason:
+  // `readLedgerTotals` below would read the previous episode's turns and tool
+  // calls as this one's.
+  mkdirSync(opts.dir, { recursive: true });
+  // Through `scratchDir`, not a hand-rolled mkdtemp under `opts.dir`: the
+  // preload releases every directory minted this way even on a run that threw,
+  // and `gate:scratch-ownership` refuses a mint site that owns no removal.
+  const workDir = scratchDir(`behaviour-${task.id}`);
 
   const dbPath = join(workDir, 'agent.db');
   const db = new Database(dbPath);
@@ -916,7 +927,7 @@ export async function runBehaviourTask(
   // `recordLiveModelEpisode` reads it through the workspace-spend seam, which is
   // why the behavioural tier no longer reports `0 model call(s)` over an episode
   // that spent hundreds of thousands of neurons.
-  recordLiveModelEpisode(makeSql(db));
+  recordLiveModelEpisode(makeSql(db), rt.actor);
 
   const totals = readLedgerTotals(db);
 

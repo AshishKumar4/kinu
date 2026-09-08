@@ -20,16 +20,28 @@ import { HeadJournal } from '../src/heads/journal';
 import { HEAD_USAGE_COLUMNS, initHeadsTables } from '../src/heads/schema';
 import { USAGE_FIELDS } from '../src/usage';
 import type { HeadInput, HeadReport, MergeResult } from '../src/heads/index';
-import { makeSql, makeExecRaw } from './helpers';
+import { makeSql, makeExecRaw, createTestActor } from './helpers';
 
 /** Every usage column of one head, named through the map rather than by hand: a
  *  column added to `HEAD_USAGE_COLUMNS` is asserted below without editing here. */
 
-function storedUsageColumns(db: Database, id: string): Record<string, number | null> {
+function storedUsageColumns(db: Database, actorId: string, id: string): Record<string, number | null> {
   const columns = USAGE_FIELDS.map((field) => HEAD_USAGE_COLUMNS[field]);
-  return db.prepare<Record<string, number | null>, [string]>(
-    `SELECT ${columns.join(', ')} FROM head_journal WHERE id = ?`,
-  ).all(id)[0] ?? {};
+  return db.prepare<Record<string, number | null>, [string, string]>(
+    `SELECT ${columns.join(', ')} FROM head_journal WHERE actor_id = ? AND id = ?`,
+  ).all(actorId, id)[0] ?? {};
+}
+
+/** A journal over a fresh database, bound to that database's own main actor —
+ *  the journal is actor-private, so the owner has to come from the same store
+ *  whose rows it is about to write. */
+function newJournal() {
+  const db = new Database(':memory:');
+  const execRaw = makeExecRaw(db);
+  initHeadsTables(execRaw);
+  const sql = makeSql(db);
+  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'usage-test');
+  return { db, sql, actor, journal: new HeadJournal(sql, actor) };
 }
 
 /** What a head whose provider said nothing looks like in storage: NULL in every
@@ -92,19 +104,16 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
   });
 
   test('a spawned head that has not reported has NULL in every usage column, not 0', () => {
-    const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db));
-    new HeadJournal(makeSql(db)).insertSpawn(spawn('h-live', 'run-live'));
+    const { db, actor, journal } = newJournal();
+    journal.insertSpawn(spawn('h-live', 'run-live'));
 
     // insertSpawn names no usage column, so this is the DDL's own answer: with
     // `DEFAULT 0` it claimed the head had spent nothing.
-    expect(storedUsageColumns(db, 'h-live')).toEqual(NOTHING_REPORTED);
+    expect(storedUsageColumns(db, actor.actorId, 'h-live')).toEqual(NOTHING_REPORTED);
   });
 
   test('a head whose provider reported cache reads and neurons round-trips both', () => {
-    const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db));
-    const journal = new HeadJournal(makeSql(db));
+    const { journal } = newJournal();
     journal.recordSplit('run-cf', 'why', 1);
     journal.insertSpawn(spawn('h-cf', 'run-cf'));
     journal.recordReport(report('h-cf', FULLY_REPORTED));
@@ -117,9 +126,7 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
   });
 
   test('one branch read on its own reports the same usage as the run projection', () => {
-    const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db));
-    const journal = new HeadJournal(makeSql(db));
+    const { journal } = newJournal();
     journal.recordSplit('run-one', 'why', 1);
     journal.insertSpawn(spawn('h-one', 'run-one'));
     journal.recordReport(report('h-one', FULLY_REPORTED));
@@ -140,10 +147,7 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
   });
 
   test('an empty usage writes NULL and reads back as an absent field, a reported zero as 0', () => {
-    const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db));
-    const sql = makeSql(db);
-    const journal = new HeadJournal(sql);
+    const { db, actor, journal } = newJournal();
     journal.recordSplit('run-1', 'why', 1);
     journal.insertSpawn(spawn('h-silent', 'run-1'));
     journal.insertSpawn(spawn('h-zero', 'run-1'));
@@ -151,8 +155,8 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
     journal.recordReport(report('h-silent', {}));
     journal.recordReport(report('h-zero', { input: 0, output: 0 }));
 
-    expect(storedUsageColumns(db, 'h-silent')).toEqual(NOTHING_REPORTED);
-    expect(storedUsageColumns(db, 'h-zero'))
+    expect(storedUsageColumns(db, actor.actorId, 'h-silent')).toEqual(NOTHING_REPORTED);
+    expect(storedUsageColumns(db, actor.actorId, 'h-zero'))
       .toEqual({ ...NOTHING_REPORTED, token_input: 0, token_output: 0 });
 
     // The distinction the columns now carry is the distinction the view serves:
@@ -163,15 +167,13 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
   });
 
   test('an unmeasured merge stores NULL and replays as undefined', () => {
-    const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db));
-    const sql = makeSql(db);
-    const journal = new HeadJournal(sql);
+    const { sql, actor, journal } = newJournal();
     journal.insertSpawn(spawn('h', 'run-1'));
     journal.cacheMerge('run-1', merge(undefined), 'synthesize');
 
     expect(sql<{ cost_total_tokens: number | null }>`
-      SELECT cost_total_tokens FROM head_merge_results WHERE root_id = 'run-1'`)
+      SELECT cost_total_tokens FROM head_merge_results
+      WHERE actor_id = ${actor.actorId} AND root_id = 'run-1'`)
       .toEqual([{ cost_total_tokens: null }]);
     expect(journal.readCachedMerge('run-1')?.costSummary.totalTokens).toBeUndefined();
     expect(journal.readRun('run-1')?.merge?.totalTokens).toBeNull();

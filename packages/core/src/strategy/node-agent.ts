@@ -667,7 +667,7 @@ export async function runNodeLoop(
   // has already opened a workspace.
   initBackgroundJobsTable(deps.rt.storage.execRaw);
   const runnerDeps: BackgroundJobRunnerDeps = {
-    store: new BackgroundJobStore(deps.rt.storage.sql),
+    store: new BackgroundJobStore(deps.rt.storage.sql, deps.rt.actor),
     fiber: deps.rt.schedule.fiber,
     signals: wakes,
     logActivity: (event, detail) => {

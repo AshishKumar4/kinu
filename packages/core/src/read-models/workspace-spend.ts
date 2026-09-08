@@ -55,6 +55,7 @@ import { addUsage, usageReported, usageTotal, type Usage } from '../usage';
 import { storedUsage } from '../heads/journal';
 import type { StoredHeadUsage } from '../heads/schema';
 import { listMissionSpend, type MissionBudgetSnapshot } from '../mission-budget';
+import type { ActorHandle } from '../state/actor-handle';
 
 /**
  * What one producer spent, and what it could not account for.
@@ -175,6 +176,9 @@ function openTally(tally: SpendTally): Tally {
 export interface WorkspaceSpendDeps {
   readonly events: RunEventRecorder;
   readonly sql: SqlExecutor;
+  /** Whose spend. The head journal is actor-private, so a total that read every
+   *  head row would bill this actor for a sibling's branches. */
+  readonly actor: ActorHandle;
 }
 
 /**
@@ -192,7 +196,7 @@ export interface WorkspaceSpendDeps {
 export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
   const tallies: Tallies = new Map();
   for (const [source, tally] of deps.events.spendByProducer()) tallies.set(source, openTally(tally));
-  for (const head of readHeadSpend(deps.sql)) record(tallyFor(tallies, 'head'), head, undefined);
+  for (const head of readHeadSpend(deps.sql, deps.actor)) record(tallyFor(tallies, 'head'), head, undefined);
 
   // Largest measured token total first: the panel's first job is to show where
   // the tokens went. A producer with nothing measured sorts last however many
@@ -267,9 +271,9 @@ function finishTotal(tally: Tally): SpendTally {
  * a broken workspace rather than an empty one and the error belongs at the
  * surface.
  */
-function readHeadSpend(sql: SqlExecutor): Usage[] {
+function readHeadSpend(sql: SqlExecutor, actor: ActorHandle): Usage[] {
   return sql<StoredHeadUsage>`
     SELECT token_input, token_output, token_cache_read, token_cache_write,
            token_cache_write_1h, token_reasoning, neurons
-    FROM head_journal`.map(storedUsage);
+    FROM head_journal WHERE actor_id = ${actor.actorId}`.map(storedUsage);
 }

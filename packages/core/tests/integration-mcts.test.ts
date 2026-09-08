@@ -777,7 +777,7 @@ describe('MCTS below-floor outcome classification', () => {
     });
     initTables(bundle.rt);
     initMctsSearchTable(bundle.rt.storage.execRaw);
-    return { ...bundle, store: new MctsSearchStore(makeSql(bundle.db)) };
+    return { ...bundle, store: new MctsSearchStore(makeSql(bundle.db), bundle.rt.actor) };
   }
 
   test('a search whose every branch sits below the floor classifies its settle', async () => {

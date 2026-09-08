@@ -652,7 +652,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // neither TaskListStore nor ConversationSearchStore holds process state.
   // Dispatch lives in tasks-tool.ts, shared verbatim with the `tasks.*`
   // codemode namespace (tasks-codemode.ts).
-  const taskList = new TaskListStore(rt.storage.sql, rt.storage.transactionSync);
+  const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
   const runTasksAction = createTasksDispatcher(taskList, rt.actor.config, deps.roleAuthority);
   tools.tasks = permitInPlan(tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.tasks,

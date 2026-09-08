@@ -15,6 +15,7 @@ import {
   collectWorkspaceTextFiles, createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
   SDK_SESSION_DDL,
 } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
@@ -47,7 +48,7 @@ function workspace() {
   const exec = makeSqlExec(db);
   initWorkspaceSchema({ execRaw, sql, exec });
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'read-model-test');
-  return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs, config: actor.config };
+  return { db, sql, execRaw, actor, vfs: createWorkspaceBundle(db).vfs, config: actor.config };
 }
 
 interface SeedRow { id: string; role: string; content: string }
@@ -86,8 +87,9 @@ function walkTranscript(sql: SqlExecutor, limit: number): string[] {
 function jobPlane() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initBackgroundJobsTable(makeExecRaw(db));
-  const jobs = new BackgroundJobStore(sql);
+  const execRaw = makeExecRaw(db);
+  initBackgroundJobsTable(execRaw);
+  const jobs = new BackgroundJobStore(sql, createTestActors(sql, execRaw).main);
   const detached: Array<{ jobId: string; kind: string }> = [];
   let created = 0;
   const runner: BackgroundJobControl = {
@@ -192,10 +194,10 @@ describe('run reads', () => {
 
 describe('run timeline', () => {
   test('merges every source into one list ordered by time', () => {
-    const { db, sql, execRaw } = workspace();
+    const { db, sql, execRaw, actor } = workspace();
     initRunEventTables(execRaw);
     const events = new RunEventRecorder(sql);
-    const jobs = new BackgroundJobStore(sql);
+    const jobs = new BackgroundJobStore(sql, actor);
 
     // The run events stamp themselves with the wall clock; the other sources
     // carry their own, so they are placed after it to pin the ordering.
@@ -220,29 +222,32 @@ describe('run timeline', () => {
   });
 
   test('the limit bounds the newest end of the merged list', () => {
-    const { sql, execRaw } = workspace();
+    const { sql, execRaw, actor } = workspace();
     initRunEventTables(execRaw);
     const events = new RunEventRecorder(sql);
     for (let i = 0; i < 5; i++) {
       void sql`INSERT INTO evolution_events (id, type, message, created_at)
         VALUES (${`e${i}`}, 'reflection', ${`m${i}`}, ${i * 100})`;
     }
-    const spans = getRunTimeline({ sql, events, jobs: new BackgroundJobStore(sql), currentRunId: null }, { limit: 2 });
+    const spans = getRunTimeline({ sql, events, jobs: new BackgroundJobStore(sql, actor), currentRunId: null }, { limit: 2 });
     expect(spans.map((s) => s.label)).toEqual(['m3', 'm4']);
   });
 
   test('an idle workspace answers empty; one missing the tables fails the read', () => {
-    const { db, sql } = workspace();
+    const { db, sql, actor } = workspace();
     expect(getRunTimeline({
-      sql, events: new RunEventRecorder(sql), jobs: new BackgroundJobStore(sql), currentRunId: 'r1',
+      sql, events: new RunEventRecorder(sql), jobs: new BackgroundJobStore(sql, actor), currentRunId: 'r1',
     })).toEqual([]);
     db.close();
 
+    // Identity only: the actor a store binds to exists in every workspace, and
+    // what is missing here is the read models' own tables.
     const bare = new Database(':memory:');
     const bareSql = makeSql(bare);
+    const bareActor = createTestActors(bareSql, makeExecRaw(bare)).main;
     expect(() => getRunTimeline({
       sql: bareSql, events: new RunEventRecorder(bareSql),
-      jobs: new BackgroundJobStore(bareSql), currentRunId: 'r1',
+      jobs: new BackgroundJobStore(bareSql, bareActor), currentRunId: 'r1',
     })).toThrow(/no such table/);
     bare.close();
   });
@@ -682,7 +687,8 @@ describe('background-job control plane', () => {
 
   test('a workspace with no background_jobs fails the read instead of reporting no work', () => {
     const db = new Database(':memory:');
-    const jobs = new BackgroundJobStore(makeSql(db));
+    const bareSql = makeSql(db);
+    const jobs = new BackgroundJobStore(bareSql, createTestActors(bareSql, makeExecRaw(db)).main);
     expect(() => listBackgroundJobs(jobs)).toThrow(/no such table: background_jobs/);
     expect(() => jobResult(jobs, 'j1')).toThrow(/no such table: background_jobs/);
     expect(dismissBackgroundJob(jobs, 'j1')).toEqual({
@@ -770,14 +776,14 @@ describe('config plane', () => {
 
 describe('changelog view', () => {
   test('unseen counts against the stored watermark, and marking seen zeroes it', () => {
-    const { db, sql, config } = workspace();
+    const { db, sql, config, actor } = workspace();
     void sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
       VALUES ('summarize', 'sum', NULL, 'x', 'local', ${Date.now()}, ${Date.now()})`;
 
-    expect(getEvolutionChangelog(config, sql).entries).toHaveLength(1);
-    expect(getEvolutionChangelog(config, sql).unseenCount).toBe(1);
+    expect(getEvolutionChangelog(sql, actor).entries).toHaveLength(1);
+    expect(getEvolutionChangelog(sql, actor).unseenCount).toBe(1);
     const { seenAt } = markChangelogSeen(config);
-    const after = getEvolutionChangelog(config, sql);
+    const after = getEvolutionChangelog(sql, actor);
     expect(after.seenAt).toBe(seenAt);
     expect(after.unseenCount).toBe(0);
     db.close();

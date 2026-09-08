@@ -23,15 +23,17 @@ import {
   initHeadsTables,
 } from '../src/index';
 import { createJSONLLM } from '@kinu.run/test-utils';
-import { makeSql, makeExecRaw, captureConsole } from './helpers';
+import { makeSql, makeExecRaw, captureConsole, createTestActor } from './helpers';
 
 // ── fakes ────────────────────────────────────────────────────────────
 
 function newJournal() {
   const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db));
+  const execRaw = makeExecRaw(db);
+  initHeadsTables(execRaw);
   const sql = makeSql(db);
-  return { sql, journal: new HeadJournal(sql), db };
+  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'grounding-test');
+  return { sql, journal: new HeadJournal(sql, actor), db, actor };
 }
 
 /** Executor whose verdict is decided by whether the code mentions "boom". */

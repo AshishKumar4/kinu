@@ -323,7 +323,7 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
       return true;
     }
     case 'fact': {
-      createFactsStore(rt.storage.sql).upsert(row.payload.key, row.payload.value, {
+      createFactsStore(rt.storage.sql, rt.actor).upsert(row.payload.key, row.payload.value, {
         confidence: row.payload.confidence,
         source: `experience:${row.sourceWorkspace}`,
       });

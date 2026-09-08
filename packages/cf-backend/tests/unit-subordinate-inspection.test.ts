@@ -17,7 +17,7 @@ function actor(path: string[], owner = 'owner') {
   const children = new Map<string, SubordinateInspectionPort>();
   const opened: string[] = [];
   const access: SubordinateInspectionAccess = {
-    sql: rt.storage.sql, raw,
+    sql: rt.storage.sql, raw, actor: rt.actor,
     storedParentPath: async () => parentPath,
     storedPhysicalKey: async () => path.at(-1),
     existing: async (child) => { opened.push(child.name); const port = children.get(child.name); return port ? { port, storageKey: child.name } : null; },

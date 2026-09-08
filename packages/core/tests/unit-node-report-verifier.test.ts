@@ -110,7 +110,7 @@ function fixture(over: {
 }) {
   const { rt } = createTestRuntime();
   initHeadsTables(rt.storage.execRaw);
-  const journal = new HeadJournal(rt.storage.sql);
+  const journal = new HeadJournal(rt.storage.sql, rt.actor);
   const input: NodeAgentInput = {
     nodeId: 'n1', rootId: 'r1', parentId: null, depth: 1,
     task: 'Make the reference implementation cheaper.',

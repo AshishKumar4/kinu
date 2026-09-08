@@ -46,7 +46,7 @@ import { join } from 'node:path';
 import puppeteer, { type LaunchOptions, type Page } from 'puppeteer';
 import * as v from 'valibot';
 
-import { initWorkspaceSchema, type LLMProviderConfig } from '../packages/core/src/index';
+import { initWorkspaceSchema, openWorkspaceMainActor, type LLMProviderConfig } from '../packages/core/src/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
 import { LocalAgentSession, type SessionEvent } from '../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
@@ -523,7 +523,8 @@ describe('Live Smoke — one real turn per backend', () => {
         // After the drain, so a background step's tokens are in the total, and
         // only when a session existed: an episode that never started must not
         // read as one that could not be measured.
-        recordLiveModelEpisode(makeSql(db));
+        const sql = makeSql(db);
+        recordLiveModelEpisode(sql, openWorkspaceMainActor(sql));
       }
       db.close();
     }

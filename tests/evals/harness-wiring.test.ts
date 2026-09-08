@@ -44,6 +44,7 @@ import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   AdoptedSpendMeter, HARD_TASKS, INFRA_FAILURE_MARKER, caseKey, findResumableEvalDir,
   formatAdoptedSpend, infraBoundary,
+  createTestActorsOver,
   liveModelSpend, openEvalProgress, recordLiveModelEpisode, resetLiveModelSpend,
   hardTaskCases, toolExecute, type EvalArmState, type EvalObservation,
 } from '@kinu.run/test-utils';
@@ -910,7 +911,10 @@ describe('episode spend — the meter is fed by the session, not by silence', ()
     const empty = new Database(join(dir, 'unaccounted.db'));
     opened.push(empty);
     initWorkspaceSchema(makeWorkspaceSchemaSql(empty));
-    recordLiveModelEpisode(makeSql(empty));
+    // `initWorkspaceSchema` creates the actor tables but issues nobody, and an
+    // unmeasured episode still belongs to an actor. This is that workspace's
+    // real main actor, over the same file.
+    recordLiveModelEpisode(makeSql(empty), createTestActorsOver(empty).main);
     const spent = liveModelSpend();
 
     // The episode did NOT silently add a zero to the call count...
