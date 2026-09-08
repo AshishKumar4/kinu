@@ -178,9 +178,28 @@ describe('branch-worker protocol — no self-rating', () => {
   test('a branch handle releases its exact process after the final read', async () => {
     const { spawn } = createBranchSpawner(dir, { llm: { name: 'workers-ai', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' }, parent: parentRuntime.actor });
     const handle = await spawn('seam-test-branch');
+    // The EXACT process, which is what the title claims and what a
+    // `rejects.toThrow()` alone never checked: the pid this spawn forked, alive
+    // before the release and reaped after it. A branch that left its worker
+    // running would keep a model-capable process and a SQLite handle alive per
+    // abandoned branch, and every assertion here would still have passed.
+    const child = forkedChild();
+    const pid = child.pid;
+    expect(pid).toBeGreaterThan(0);
+    expect(child.exitCode).toBeNull();
     try {
       await handle.release();
-      await expect(handle.generateReflection('after release')).rejects.toThrow();
+      expect(child.exitCode === null && child.signalCode === null).toBe(false);
+      // Reaped, not merely detached — an exited child answers ESRCH, a live one
+      // answers nothing. `kill(pid, 0)` is the only question the OS answers
+      // about a pid this process owns.
+      expect(() => { process.kill(pid ?? -1, 0); }).toThrow(/ESRCH/);
+      // And the refusal is the RELEASE's, carrying the worker's own exit rather
+      // than an unrelated throw: a reflection after release cannot be answered
+      // by a process that is gone.
+      await expect(handle.generateReflection('after release')).rejects.toThrow(
+        /exit|closed|channel|not running|release/i,
+      );
     } finally {
       await handle.release();
     }
