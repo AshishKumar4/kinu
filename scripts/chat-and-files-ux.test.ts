@@ -138,6 +138,11 @@ interface Observed {
     mutationHeight: number;
     ground: string;
     pageGround: string;
+    /** The mode the page actually rendered in, so a colour claim cannot be
+     *  satisfied by the wrong theme. */
+    mode: string | null;
+    /** What the preview card shows while the run is still folded. */
+    collapsedPreview: { text: string | null; height: number; folded: string | null };
   };
 }
 
@@ -305,8 +310,20 @@ async function run(): Promise<Observed> {
 
     const tools = await browser.newPage();
     await tools.setViewport({ width: 1280, height: 1600 });
-    await tools.evaluateOnNewDocument(() => localStorage.setItem('kinu-mode', 'light'));
+    // `theme` is the key the pre-paint script in gallery.html reads (hooks/
+    // use-theme.ts MODE_KEY). Seeding any other name leaves the page in the
+    // default mode, and the light-mode assertion below then photographs dark.
+    await tools.evaluateOnNewDocument(() => { localStorage.setItem('theme', 'light'); });
     await tools.goto(`${origin}/gallery.html?frame=toolrun`, { waitUntil: 'networkidle0' });
+    await tools.reload({ waitUntil: 'networkidle0' });
+    // The run's preview call points at the gallery's preview origin, which no
+    // server here answers. Serve it, so what is asserted below is a frame that
+    // really rendered rather than an element that merely exists.
+    await tools.setRequestInterception(true);
+    tools.on('request', async (request) => {
+      if (!new URL(request.url()).hostname.endsWith('.preview.example.test')) { await request.continue(); return; }
+      await request.respond({ status: 200, contentType: 'text/html', body: '<!doctype html><p data-run-preview>the running app</p>' });
+    });
     await tools.reload({ waitUntil: 'networkidle0' });
     await tools.waitForSelector('[data-tool-group]');
     const collapsedActivity = await tools.$eval('[data-tool-group]', (group) => {
@@ -321,8 +338,21 @@ async function run(): Promise<Observed> {
         mutationHeight: Math.round(mutation?.getBoundingClientRect().height ?? 0),
         ground: getComputedStyle(group).backgroundColor,
         pageGround: getComputedStyle(document.body).backgroundColor,
+        mode: document.documentElement.dataset.mode ?? null,
       };
     });
+    // The preview card, read while the group is still folded: the reader has
+    // clicked nothing, and the app the turn started is on screen.
+    const previewFrameHandle = await tools.waitForSelector('[data-tool-group] iframe');
+    if (previewFrameHandle === null) throw new Error('the collapsed run drew no preview frame');
+    const previewDocument = await previewFrameHandle.contentFrame();
+    if (!previewDocument) throw new Error('the preview frame created no document');
+    await previewDocument.waitForSelector('[data-run-preview]');
+    const collapsedPreview = {
+      text: await previewDocument.$eval('[data-run-preview]', (element) => element.textContent),
+      height: Math.round(await previewFrameHandle.evaluate((element) => element.getBoundingClientRect().height)),
+      folded: await tools.$eval('[data-tool-group-toggle]', (element) => element.getAttribute('aria-expanded')),
+    };
     await tools.click('[data-tool-group-toggle]');
     await tools.waitForFunction(
       () => document.querySelector('[data-tool-group-toggle]')?.getAttribute('aria-expanded') === 'true',
@@ -331,7 +361,7 @@ async function run(): Promise<Observed> {
       '[data-tool-group] [data-tool-state]',
       (rows) => rows.length,
     );
-    const toolActivity = { ...collapsedActivity, expandedRows };
+    const toolActivity = { ...collapsedActivity, expandedRows, collapsedPreview };
     await tools.close();
 
     const files = await browser.newPage();
@@ -610,8 +640,22 @@ describe('large tool runs, as the activity timeline draws them', () => {
     expect(activity.mutationHeight).toBeGreaterThan(activity.compactHeight);
   });
 
+  test('the app a mid-run call started is on screen before any click', () => {
+    // The fold's budget is spent on failures and changes, and this call is
+    // neither — so before this rule it was one of the rows "Show 46 more
+    // calls" hid, and the running app the turn produced was reachable only by
+    // expanding a 54-row list.
+    const { collapsedPreview } = observed.toolActivity;
+    expect(collapsedPreview.folded).toBe('false');
+    expect(collapsedPreview.text).toBe('the running app');
+    expect(collapsedPreview.height).toBeGreaterThan(200);
+  });
+
   test('light mode uses a recessed activity ground instead of white cards', () => {
     const activity = observed.toolActivity;
+    // First: that this page IS light. Without it the two colour assertions
+    // below are satisfied by the default dark theme, where they say nothing.
+    expect(activity.mode).toBe('light');
     expect(activity.ground).not.toBe(activity.pageGround);
     expect(activity.ground).not.toBe('rgb(255, 255, 255)');
   });
