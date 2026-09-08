@@ -12,7 +12,9 @@ import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 
 export function PreviewFrame({ url, label }: {
   url: string;
-  /** Header label, e.g. ":8080 · hello-world". The URL is always shown. */
+  /** The frame's accessible name — a tab title or a port label. The header
+   *  shows the URL only: the tab that opened this frame already names it, and
+   *  a second title beside the URL is the duplication the tabs replaced. */
   label?: string;
 }) {
   // The only gate on what this app frames. Preview URLs reach here out of raw
@@ -30,10 +32,8 @@ export function PreviewFrame({ url, label }: {
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
-
-        <code className="text-[10px] p-text-3 font-mono truncate ml-2 flex-1">{url}</code>
+        <code className="text-[10px] p-text-3 font-mono truncate flex-1">{url}</code>
         <CopyButton value={url} what="the preview URL" size={11} className="p-text-3 hover:p-text p-1 shrink-0" />
-
         <a
           href={url}
           target="_blank"
