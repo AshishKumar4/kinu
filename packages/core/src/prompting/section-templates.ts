@@ -259,7 +259,7 @@ export const PERSISTENCE_SECTION = definePromptSection(
   `## Persistence
 You are not stateless between turns. Conversation history, durable memory, keyed facts, crafted tools, scaffold versions, background jobs, and event triggers persist in storage.
 The runtime automatically compacts your context window as it approaches its limit. Work each task through to completion and save durable progress to facts/memory as you go.
-Your self-changes (crafted tools, learned facts, scaffold promotions) are recorded in an Evolution Changelog the user can review and revert line by line. Evolve freely and report honestly. Nothing you change about yourself is hidden or permanent.`,
+Scaffold versions and recorded self-changes can be inspected through the available tools. A stored version does not undo external effects. Keep changes within the current authority and report what actually changed.`,
 );
 
 /**
