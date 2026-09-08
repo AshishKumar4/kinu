@@ -19,9 +19,10 @@ export function createSandboxReleaseExec(
   return {
     async exec(command, opts) {
       // No `timeout`: an absent one is how `SandboxHandle.exec` spells "this
-      // call carries no work deadline", so the command ends when its process
-      // does and the exit code below is the one it really produced.
-      const res = await withSandboxRetry(() => handle.exec(command, { cwd: opts?.cwd }));
+      // call carries no work deadline". `signal` is what ends it early, and the
+      // adapter contract says it kills the container process and waits for it
+      // to be gone, so a cancelled release command is a stopped one.
+      const res = await withSandboxRetry(() => handle.exec(command, { cwd: opts?.cwd, signal: opts?.signal }));
       return {
         stdout: res.stdout ?? res.output ?? '',
         stderr: res.stderr ?? '',

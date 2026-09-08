@@ -187,17 +187,15 @@ export const RUN_EVENT_LIMIT_DEFAULT = 200;
 /**
  * The ceiling on a read an UNTRUSTED caller asked for — the bound the HTTP route
  * already enforced, applied by {@link boundRunEventQuery} so the route is no
- * longer the only place it holds.
+ * longer the only place it holds. The read it is actually about is the SSE
+ * replay at `cf-backend/src/run-events-routes.ts:202`, which asks for it by
+ * name.
  *
  * It is NOT a ceiling every in-object read-model inherits. One folds an answer
  * out of its whole window — `getRunSummaries` sums a run's usage and prints the
  * total as the workspace's spend, so a window silently narrowed to a stranger's
  * allowance would be a truncated denominator presented as a settled figure.
  * Those state their own window, or none at all.
- *
- * {@link RunEventRecorder.readSince} is the one in-object read that DOES take
- * this number, and by derivation rather than coincidence: it serves a
- * reconnecting browser, which is the untrusted caller this ceiling is about.
  */
 export const RUN_EVENT_LIMIT_MAX = 500;
 
@@ -520,11 +518,11 @@ export class RunEventRecorder {
   }
 
   /**
-   * Replay all events strictly after `afterIndex` — for SSE Last-Event-ID
-   * resume. The default window is {@link RUN_EVENT_LIMIT_MAX}, and this is the
-   * one in-object read that borrows it: a resuming browser is exactly the
-   * untrusted caller that ceiling was written for, reconnecting mid-run, so the
-   * tail it replays is the largest page that caller could have asked for.
+   * Replay all events strictly after `afterIndex` — the SSE Last-Event-ID
+   * resume shape. It has NO live caller: the resuming browser reads through
+   * `getRunEventsWire(runId, { since, limit: RUN_EVENT_LIMIT_MAX })` at
+   * `cf-backend/src/run-events-routes.ts:202`. The default here is the same
+   * constant so the two spellings of one page size cannot drift.
    */
   readSince(runId: string, afterIndex: number, limit = RUN_EVENT_LIMIT_MAX): RunEvent[] {
     // Same invariant as `read`: only a finite positive integer reaches SQL.

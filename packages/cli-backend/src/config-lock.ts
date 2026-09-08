@@ -3,6 +3,22 @@ import { classify, tolerate } from '@kinu.run/core/obs';
 import { lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+/**
+ * The lock acquisitions the CURRENT call already holds, as path → token.
+ *
+ * A second take of the same path from inside the first is a deadlock in both
+ * paths, not just the synchronous one: the holder's `finally` runs when this
+ * call returns, and this call is what is waiting. A DIFFERENT call in the same
+ * process is not that — it will release — so the discrimination is per async
+ * context rather than per pid.
+ *
+ * The token is compared against the record on disk, so a lineage whose outer
+ * hold has already released waits for whoever took it next instead of being
+ * refused for a lock it no longer owns.
+ */
+const heldByCall = new AsyncLocalStorage<ReadonlyMap<string, string>>();
 
 /** How often a blocked acquisition re-reads the lock. Short enough that a
  *  release is picked up as fast as a human notices, long enough that a queue of
@@ -80,9 +96,10 @@ export interface ConfigLock {
 export function createConfigLock(boundary = hostProcessIdentity()): ConfigLock {
   return {
     withSync<T>(configPath: string, fn: () => T, ..._refuseAsync: RefuseAsync<T>): T {
-      const held = acquireSync(lockPathFor(configPath), boundary);
+      const lockPath = lockPathFor(configPath);
+      const held = acquireSync(lockPath, boundary);
       try {
-        const result = fn();
+        const result = holding(lockPath, held.token, fn);
         // The type above cannot be the only refusal: `() => Promise<void>` is
         // assignable to `() => void`, so a callback DECLARED synchronous still
         // reaches here with pending work behind it.
@@ -96,9 +113,10 @@ export function createConfigLock(boundary = hostProcessIdentity()): ConfigLock {
       }
     },
     async withAsync<T>(configPath: string, fn: () => T | Promise<T>): Promise<T> {
-      const held = await acquireAsync(lockPathFor(configPath), boundary);
+      const lockPath = lockPathFor(configPath);
+      const held = await acquireAsync(lockPath, boundary);
       try {
-        return await fn();
+        return await holding(lockPath, held.token, fn);
       } finally {
         release(held);
       }
@@ -121,12 +139,20 @@ function lockPathFor(configPath: string): string {
   return `${configPath}.lock`;
 }
 
+/** Run the callback with this acquisition added to the call's held set, so a
+ *  nested take of the same path is recognised rather than waited on. */
+function holding<T>(lockPath: string, token: string, fn: () => T): T {
+  const held = new Map(heldByCall.getStore() ?? []);
+  held.set(lockPath, token);
+  return heldByCall.run(held, fn);
+}
+
 function acquireSync(lockPath: string, boundary: ProcessIdentityBoundary): Held {
   const self = boundary.self(process.pid);
   for (;;) {
     const held = tryAcquire(lockPath, self, boundary);
     if (held !== null) return held;
-    assertNotSelfHeld(lockPath, self);
+    assertNotSelfHeld(lockPath);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_POLL_MS);
   }
 }
@@ -136,6 +162,7 @@ async function acquireAsync(lockPath: string, boundary: ProcessIdentityBoundary)
   for (;;) {
     const held = tryAcquire(lockPath, self, boundary);
     if (held !== null) return held;
+    assertNotSelfHeld(lockPath);
     const poll = Promise.withResolvers<void>();
     setTimeout(poll.resolve, LOCK_POLL_MS);
     await poll.promise;
@@ -291,17 +318,18 @@ function readDarwinIdentity(pid: number): ProcessIdentityProbe {
  * succeeded, and a config write that gives up part-way through a queue is a
  * lost write.
  *
- * One wait cannot end that way, and it is the one this function refuses: a
- * SYNCHRONOUS acquisition behind a lock THIS process generation already holds.
- * The holder's `finally` runs on this same thread, so the thread blocking for
- * it is the thread that would release it. That is a deadlock the record proves,
- * not a slow holder. The async path has no such problem — its holder's
- * `finally` runs while the waiter awaits — so it waits like any other.
+ * One wait cannot end that way, and it is the one this function refuses: a take
+ * of a path THIS CALL already holds, on either path. The holder's `finally`
+ * runs when this call returns, so the call waiting is the call that would
+ * release. A different call in the same process is not that and is not
+ * refused — {@link heldByCall} is per async context, not per pid — and a
+ * lineage whose own hold has already been released fails the token comparison
+ * and waits for whoever holds it now.
  */
-function assertNotSelfHeld(lockPath: string, self: ProcessIdentity): void {
-  const owner = readOwner(lockPath);
-  if (owner === null || owner.pid !== self.pid || owner.identity !== self.identity) return;
-  throw new Error(`Deadlocked on the config lock: ${lockPath} — this process already holds it, and a `
-    + 'synchronous wait blocks the thread that would release it. Use withConfigLockAsync, or take the '
-    + 'lock once around the whole read-modify-write.');
+function assertNotSelfHeld(lockPath: string): void {
+  const token = heldByCall.getStore()?.get(lockPath);
+  if (token === undefined || readOwner(lockPath)?.token !== token) return;
+  throw new Error(`Deadlocked on the config lock: ${lockPath} — this call already holds it, and the `
+    + 'hold is released only when it returns. Take the lock once around the whole '
+    + 'read-modify-write instead of nesting it.');
 }

@@ -70,10 +70,20 @@ export interface McpConnectionDiagnostic {
  * Connect to each configured stdio MCP server, list its tools, and describe
  * them for the session's admission. A server that fails to start is logged
  * and skipped — the rest still load. Empty config ⇒ a no-op connection.
+ *
+ * `signal` is the OWNER's shutdown, and it is the thing that ends a startup
+ * that would otherwise not end. A stdio child that exits or errors rejects the
+ * pending request through the SDK's transport close; a child that stays alive
+ * and answers nothing does not, and the SDK offers no way to run a request
+ * without a timer (`Protocol._setupTimeout` is private and always arms one), so
+ * cancellation is the honest ending rather than a shorter clock. On abort the
+ * transport is closed in the catch below, which kills that child instead of
+ * leaking it.
  */
 export async function connectMcpServers(
   servers: Record<string, McpServerConfig>,
   onLog?: (msg: string) => void,
+  signal?: AbortSignal,
 ): Promise<McpConnection> {
   const clients = new Map<string, Client>();
   const callTimeoutByServer = new Map<string, number>();
@@ -84,6 +94,7 @@ export async function connectMcpServers(
     const client = new Client({ name: 'kinu-cli', version: '0.1.0' });
     let stderr = '';
     try {
+      signal?.throwIfAborted();
       const transport = new StdioClientTransport({
         command: cfg.command,
         args: cfg.args ?? [],
@@ -93,9 +104,9 @@ export async function connectMcpServers(
       transport.stderr?.on('data', (chunk) => {
         stderr = `${stderr}${String(chunk)}`.slice(-4_000);
       });
-      await client.connect(transport, { timeout: NO_TIMER_DEADLINE_MS });
-      const { tools: mcpTools } = await client.listTools(undefined, { timeout: NO_TIMER_DEADLINE_MS });
-      callTimeoutByServer.set(serverName, cfg.timeoutMs ?? NO_TIMER_DEADLINE_MS);
+      await client.connect(transport, { timeout: NO_TIMER_DEADLINE_MS, signal });
+      const { tools: mcpTools } = await client.listTools(undefined, { timeout: NO_TIMER_DEADLINE_MS, signal });
+      if (cfg.timeoutMs !== undefined) callTimeoutByServer.set(serverName, cfg.timeoutMs);
       for (const t of mcpTools) {
         // One bad tool must not take down its server's good ones: describe the
         // rest and state the loss on the background channel, the way a server
@@ -144,14 +155,14 @@ export async function connectMcpServers(
   return {
     descriptors,
     diagnostics,
-    async call(serverName, toolName, args, signal) {
+    async call(serverName, toolName, args, callSignal) {
       const client = clients.get(serverName);
       if (!client) throw new Error(`Unknown MCP server: ${serverName}`);
       const timeout = callTimeoutByServer.get(serverName) ?? NO_TIMER_DEADLINE_MS;
       const res = await client.callTool(
         { name: toolName, arguments: v.parse(JsonObjectSchema, args ?? {}) },
         undefined,
-        signal === undefined ? { timeout } : { timeout, signal },
+        { timeout, signal: callSignal },
       );
       if (res.isError === true) throw new McpToolError(decodeJsonValue({ value: res }));
       return formatMcpResult(res);

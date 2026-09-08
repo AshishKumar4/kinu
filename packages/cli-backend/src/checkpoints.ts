@@ -97,23 +97,12 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
   }
 
   /**
-   * No wall clock on a git subprocess here. A checkpoint ends when git exits,
-   * and `execFile` reports that exit; a missing binary or a vanished working
+   * No wall clock on a git subprocess. A checkpoint ends when git exits, and
+   * `execFile` reports that exit; a missing binary or a vanished working
    * directory is a definitive failure this function already answers.
    *
-   * The two subcommands that scale with the user's project rather than with the
-   * change are `add -A --ignore-errors` (stage the whole work tree before a
-   * mutation) and `checkout-index -a -f` (write it all back on restore).
-   * Measured 2026-08-19 against this repository — 1,689 tracked files, 22 MB,
-   * node_modules excluded by .gitignore — on a warm page cache: staging 0.24 s,
-   * restoring 0.07 s. The 30_000 ms bound that used to sit here carried about
-   * 125x that tree, so a project two orders of magnitude larger hit it while
-   * staging correctly, and `execFile` answers a fired deadline by SIGTERMing
-   * git part-way through the index it was writing.
-   *
    * `maxBuffer` stays: it bounds THIS process's heap against a git that writes
-   * more output than the checkpoint store can hold, which is a resource bound
-   * rather than a clock.
+   * more output than the checkpoint store can hold.
    */
   function runGit(args: string[], cwd: string, env: GitEnvironment): Promise<GitResult> {
     // A missing cwd makes spawn fail with the same ENOENT a missing binary

@@ -20,17 +20,12 @@ export const PROVIDER_SDK_RETRIES = 2;
  *
  * None of the three bounds attempts. Attempts are unbounded — a rate-limited
  * request ends on success, a definitive failure, or the caller's cancellation.
- * So these choose only how often a waiting request re-asks:
+ * They choose only how often a waiting request re-asks.
  *
- *   BASE 2_000 ms — one order of magnitude above the pacer's request spacing,
- *     so the first retry is a real pause rather than a second request inside
- *     the same window the provider just refused.
- *   FACTOR 2 — the doubling every backoff in this repository uses (peer
- *     ingress, the email outbox, owed terminal effects, cross-DO RPC).
- *   MAX 60_000 ms — the ceiling the growth stops at, so a long outage costs one
- *     probe a minute instead of one an hour. A silent 429 says nothing about
- *     when to come back, and a request that stops asking has given up on work
- *     nobody cancelled.
+ * BASE 2_000 ms and MAX 60_000 ms are NOT MEASURED. Nothing in this tree
+ * records what a provider's silent-429 recovery costs, so no derivation is
+ * offered for either. FACTOR 2 is the doubling the other backoffs here use
+ * (events/ingress/peer.ts:172-178, orchestrator/terminal-effects.ts:151).
  */
 const DEFAULT_BASE_DELAY_MS = 2_000;
 const DEFAULT_BACKOFF_FACTOR = 2;

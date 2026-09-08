@@ -173,30 +173,36 @@ describe('the config lock is held by a process, not by a path', () => {
     expect(ran).toBe(true);
   });
 
-  test('a synchronous wait behind this process generation refuses instead of deadlocking', () => {
+  test('a nested take of a lock this call already holds refuses, sync and async', async () => {
     const { configPath, lockPath } = scratchConfig();
-    // A nested synchronous take: the holder's `finally` runs on this thread, so
-    // the thread waiting for it is the thread that would release it. Nothing
-    // ends that wait, which is why it is refused rather than polled.
+    // The holder's `finally` runs when this call returns, so the call waiting
+    // is the call that would release. Nothing ends that wait, on either path.
     expect(() => withConfigLock(configPath, () => withConfigLock(configPath, () => undefined)))
-      .toThrow('this process already holds it');
-    // The refusal never removes a lock it did not take; the outer hold released
-    // it on the way out.
+      .toThrow('this call already holds it');
+    await expect(withConfigLockAsync(configPath, async () => withConfigLockAsync(configPath, async () => 'inner')))
+      .rejects.toThrow('this call already holds it');
+    // A refusal never removes a lock; both outer holds released on the way out.
     expect(lockHeld(lockPath)).toBe(false);
   });
 
-  test('an ASYNC wait behind this process generation still waits, because the holder can release', async () => {
-    const { configPath, lockPath } = scratchConfig();
-    forgeLock(lockPath, process.pid, selfStartTicks());
-    let ran = false;
-    const blocked = withConfigLockAsync(configPath, async () => {
-      await Promise.resolve();
-      ran = true;
+  test('a concurrent independent caller in the same process waits, it is not refused', async () => {
+    const { configPath } = scratchConfig();
+    const order: string[] = [];
+    const gate = Promise.withResolvers<void>();
+    const first = withConfigLockAsync(configPath, async () => {
+      order.push('first in');
+      await gate.promise;
+      order.push('first out');
     });
-    expect(ran).toBe(false);
-    unlinkSync(lockPath);
-    await blocked;
-    expect(ran).toBe(true);
+    await Promise.resolve();
+    // Started outside the holder's async context: same pid, different call, so
+    // the holder WILL release and this one has to wait rather than refuse. Its
+    // first attempt is synchronous, so it has already been refused once here.
+    const second = withConfigLockAsync(configPath, async () => { order.push('second in'); });
+    expect(order).toEqual(['first in']);
+    gate.resolve();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['first in', 'first out', 'second in']);
   });
 
   test('a lock this program did not write is waited out, never stolen', async () => {

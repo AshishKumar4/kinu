@@ -74,9 +74,7 @@ export async function fetchServedVersion(
   try {
     let res: Response;
     try {
-      res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, controller === undefined
-        ? { cache: 'no-store' }
-        : { cache: 'no-store', signal: controller.signal });
+      res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, { cache: 'no-store', signal: controller?.signal });
     } catch (error) {
       // Could not ask: unreachable origin, or a caller-set bound firing. A malformed origin is
       // OURS — swallowed here, the update check would silently never fire again.
