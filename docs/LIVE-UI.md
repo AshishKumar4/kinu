@@ -144,7 +144,7 @@ removed reach.
 | `namespace`: `namespace`, `members?` | A member of an available codemode provider. Optional `members` narrows reach; executor approvals and device consent remain the provider's own gates. An absent namespace refuses as unavailable. |
 | `rpc`: `methods` | Declared, zero-argument workspace read models from `SLATE_READ_MODELS`, not arbitrary host RPC. The parser rejects methods outside that closed list, and the list is the workspace ROOT's own `@callable` reads: a facet holds none of them natively, so a facet-held `rpc` binding is `denied`. |
 | `mcp`: `server`, `tools?` | One owner-configured MCP connection, named by connection id rather than display name. Optional `tools` narrows reach; the owner's allowed-tool policy shapes the actor's descriptor surface, and the caller's ROLE must admit the tool's key (`mcp_<server>_<tool>`) exactly as the native turn admits it. Calls take one JSON object, or no arguments for `{}`. |
-| `app`: `id` | A JSON POST route on another slate's authored server. The callee runs for the caller: its declared bindings resolve with the originating actor's authority. Calls carry the id of the app invocation the host issued for that request; the host holds the chain of slate ids already running and looks it up. A hop into a slate already on that chain refuses as a cycle and names it. A retired or foreign invocation id is refused by reason, so retained bindings cannot replay an older lineage. No hop count bounds the chain: each hop must name a slate that is not on it, and a workspace holds a finite number of slates. |
+| `app`: `id` | A JSON POST route on another slate's authored server. The callee runs for the caller: its declared bindings resolve with the originating actor's authority. Calls carry the id of the app invocation the host issued for that request; the host holds the chain of slate ids already running and looks it up. A hop into a slate already on that chain refuses as a cycle and names it. A preview visit is named the same way and released when it settles. A retired or foreign invocation id is refused by reason, so retained bindings cannot replay an older lineage. No hop count bounds the chain: each hop must name a slate that is not on it, and a workspace holds a finite number of slates. |
 
 A queued approval is not a simulated success. Namespace refusal results keep
 their failure class. MCP results retain their own `isError` protocol and read
@@ -224,7 +224,7 @@ even when no listener remains; no user/authentication reset is necessary.
 so an empty list does not establish that every old persisted key was removed.
 
 Visitor-supplied `x-slate-call` is stripped before routing, so a preview visitor
-cannot name an internal app invocation.
+cannot name an internal app invocation: the host drops the visitor's header and sets its own.
 
 Implementation: `packages/cf-backend/src/slates/resident.ts`,
 `packages/cf-backend/src/workspace-host.ts`, and

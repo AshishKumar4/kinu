@@ -16,8 +16,12 @@ export const SlateBindingRequestSchema = v.strictObject({
    * start a shorter lineage; an id names an invocation the host is running, so
    * the chain comes out of {@link resolveSlateChain} instead of off the wire.
    *
-   * `null` is a request the host issued no invocation for — a browser hitting
-   * the preview. Its lineage is the root, which is what an empty chain means.
+   * EVERY request a guest can reach carries one. A hop is named by
+   * `ResidentSlateHost.call`, a browser hitting the preview by
+   * `ResidentSlateHost.previewInvocation` through `routePreview`, and both are
+   * released when their request settles — so bindings kept from an earlier
+   * request are refused rather than resolving to a root lineage. `null` is left
+   * for the actor's own direct call, which is not a guest.
    */
   invocation: v.nullable(v.pipe(v.string(), v.minLength(1))),
 });

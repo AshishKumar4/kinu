@@ -407,6 +407,7 @@ export class OrchestratorAgent extends ActorAgent {
         if (ids.length !== 0) this.broadcast(JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
       },
       refreshPreview: (port) => this.slates.refreshPreview(port),
+      slateInvocation: (port) => this.slates.previewInvocation(port),
     });
     return this._workspace;
   }

@@ -168,6 +168,9 @@ export interface HostedWorkspaceDeps {
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   onFilesChanged?(paths: readonly string[]): void;
   refreshPreview?(port: number): Promise<void>;
+  /** Mint the app invocation a preview request runs under, so a slate cannot
+   *  keep its bindings and replay them as an unnamed root lineage. */
+  slateInvocation?(port: number): { readonly value: string; release: () => void } | null;
 }
 
 export interface HostedWorkspace {
@@ -357,15 +360,24 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       if (refreshed === undefined) return new Response(RECYCLED_PREVIEW.body, { status: RECYCLED_PREVIEW.status, headers: { 'cache-control': 'no-store', 'content-type': 'application/json' } });
       if (refreshed.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) return new Response('Not found', { status: 404 });
       const publicRequest = new Request(request);
+      // The visitor's own header is dropped first, then the host names this
+      // request's invocation. A preview entry is a root lineage, and naming it
+      // is what stops retained preview bindings standing in for a deeper one.
       publicRequest.headers.delete('x-slate-call');
+      const invocation = deps.slateInvocation?.(port) ?? null;
+      if (invocation !== null) publicRequest.headers.set('x-slate-call', invocation.value);
       const self = await host();
       // An upgrade cannot cross a Durable Object RPC boundary as a 101, which is
       // why Nimbus keeps a fetch route for exactly this case. This method is
       // reached through the orchestrator's own `fetch`, so it can hand one back.
-      if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
-        return await (await nimbusProgrammatic()).routeCapabilityPort(self, port, refreshed, publicRequest, pathname);
+      try {
+        if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+          return await (await nimbusProgrammatic()).routeCapabilityPort(self, port, refreshed, publicRequest, pathname);
+        }
+        return await (await nimbusProgrammatic()).rpcRouteCapabilityPort(self, port, refreshed, publicRequest, pathname);
+      } finally {
+        invocation?.release();
       }
-      return await (await nimbusProgrammatic()).rpcRouteCapabilityPort(self, port, refreshed, publicRequest, pathname);
     },
     destroy: () => bundle.destroy(),
   };
