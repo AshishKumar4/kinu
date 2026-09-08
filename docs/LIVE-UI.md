@@ -6,11 +6,21 @@ and preview URLs are derived from that source, not a second source of truth.
 
 ## Authoring
 
-Write TypeScript and `package.json` through the ordinary file plane. For a
+Write JavaScript/TypeScript and `package.json` through the ordinary file plane. For a
 Worker project, `main` names a module whose default export implements
 `fetch(request, env)`. The handler serves the UI and any JSON POST routes that
 other slates or the agent call. There is no separate publish tool or host-rendered
 UI vocabulary.
+
+Prefer a slate for a workspace dashboard, live-data view or dynamic UI. A
+standalone, ship-ready Node/Vite application belongs in an available executor
+that supports its toolchain, not the hosted Worker runtime.
+
+For a Worker slate, call `workspace.slate({op: 'preview', id})` directly. That
+operation compiles and boots the authored module; no workspace `node -e`
+import check or source commit is required first. Success returns
+`{ok: true, value: {url, port}}`. Use `value.url`; a refusal carries
+`reason` and `error`, not an alternative URL field to guess.
 
 ```json
 {

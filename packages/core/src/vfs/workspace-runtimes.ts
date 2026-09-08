@@ -268,7 +268,8 @@ const WORKSPACE_NODE_UNAVAILABLE =
 
 const WORKSPACE_NODE_SANDBOX_HINT =
   `node: ${WORKSPACE_NODE_UNAVAILABLE} ("Code generation from strings disallowed"). `
-  + `Use the 'sandbox' executor for any server you want to preview.`;
+  + `Run Node/Vite programs in an available capable executor, such as sandbox. `
+  + `Worker slates compile separately; use the declared slate preview operation when available, without a node precheck.`;
 
 /**
  * Whether this host compiles a program from a string at request time.
