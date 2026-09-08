@@ -167,7 +167,7 @@ function SwarmSection(): ReactElement {
       <SectionTitle>Try competing approaches. <span className="p-accent">Let the verifier decide.</span></SectionTitle>
       <p className="mb-10 mt-3.5 max-w-[780px] text-[17px] leading-[1.6] p-text-3">A swarm is a tree search whose nodes are agents, not just a group of specialists. Parallel candidates tackle the same objective. Forked context preserves the parent conversation; fresh context starts from the task and parent report.</p>
       <SwarmSearch />
-      <p className="mt-6 max-w-[780px] text-sm leading-[1.7] p-text-3">With an objective and executable verifier, raw measurements guide the search. Without an objective, the standard presets use a judged sweep instead: useful comparisons, not measured gains. <a className="p-accent underline underline-offset-4" href={REPOSITORY + '/blob/main/docs/EXPLORATION.md'} target="_blank" rel="noreferrer">How exploration works</a></p>
+      <p className="mt-6 max-w-[780px] text-sm leading-[1.7] p-text-3">With an objective and executable verifier, raw measurements guide the search. Without an objective, verification presets use a judged sweep: useful comparisons, not measured gains. Ideation produces unranked ideas. <a className="p-accent underline underline-offset-4" href={REPOSITORY + '/blob/main/docs/EXPLORATION.md'} target="_blank" rel="noreferrer">How exploration works</a></p>
     </section>
   );
 }
