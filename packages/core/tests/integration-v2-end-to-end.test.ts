@@ -38,7 +38,8 @@ import {
   // Approval
   reviewCommand, gateExec,
 } from '../src/index';
-import { makeSql, makeExecRaw, createTestRuntime } from './helpers';
+import { testActorHandle } from '@kinu.run/test-utils';
+import { makeSql, makeExecRaw, createTestRuntime, createTestActor } from './helpers';
 
 interface HeadReportIndex {
   [headId: string]: HeadReport;
@@ -72,9 +73,11 @@ describe('v2 e2e: workspace executor via createInlineExecutor', () => {
 describe('v2 e2e: branching heads → merge', () => {
   test('split 3 heads, await all, merge with deterministic mock LLM', async () => {
     const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db));
+    const execRaw = makeExecRaw(db);
+    initHeadsTables(execRaw);
     const sql = makeSql(db);
-    const journal = new HeadJournal(sql);
+    const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'e2e-heads');
+    const journal = new HeadJournal(sql, actor);
 
     const headReports: HeadReportIndex = {
       'survey': {
@@ -160,7 +163,8 @@ describe('v2 e2e: branching heads → merge', () => {
     expect(result.headIds.length).toBe(3);
     expect(result.headIds.every((id) => id.length > 0)).toBe(true);
 
-    const rows = sql<{ status: string; summary: string | null }>`SELECT status, summary FROM head_journal`;
+    const rows = sql<{ status: string; summary: string | null }>`
+      SELECT status, summary FROM head_journal WHERE actor_id = ${actor.actorId}`;
     expect(rows.length).toBe(3);
     for (const r of rows) {
       expect(r.status).toBe('completed');
@@ -181,8 +185,8 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
     await rt.identity.scaffold.write('async function* run(rt, task) { yield task; }');
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (0, ${Date.now()}, 'initial', 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
 
     const validCode = `async function* run(rt, task) {
       yield { type: "chunk", data: "v1: " + task };
@@ -195,14 +199,15 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     expect(result.ok).toBe(true);
     expect(result.version).toBe(1);
 
-    const pending = getPendingScaffold(rt.storage.sql);
+    const pending = getPendingScaffold(rt.storage.sql, rt.actor);
     expect(pending).not.toBeNull();
     expect(pending!.version).toBe(1);
     expect(pending!.trialsSoFar).toBe(0);
 
     // Verify v0 is still current; v1 is pending.
     const statuses = rt.storage.sql<{ version: number; status: string }>`
-      SELECT version, status FROM scaffold_versions ORDER BY version`;
+      SELECT version, status FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
     const map = new Map(statuses.map((s) => [s.version, s.status]));
     expect(map.get(0)).toBe('current');
     expect(map.get(1)).toBe('pending');
@@ -212,10 +217,10 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (0, ${Date.now()}, 'initial bootstrap', 'current')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (1, ${Date.now()}, 'try alternate loop with retry', 'pending')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial bootstrap', 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'try alternate loop with retry', 'pending')`;
 
     // The files those rows are rows ABOUT. `modifyScaffold` gate 4 archives the
     // outgoing current at `.v0` and writes the proposal at `.v1`, never into the
@@ -238,14 +243,14 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     // A clean 5-0 win: past minTrials/minDecisiveTrials with no losses beyond
     // the regression tolerance — promotable.
     for (let i = 0; i < 5; i++) {
-      recordShadowEvaluation(rt.storage.sql, {
+      recordShadowEvaluation(rt.storage.sql, rt.actor, {
         currentVersion: 0, pendingVersion: 1,
         task: `t${i}`, currentOutput: 'c', pendingOutput: 'p',
         judgeResult: judge('pending'),
       });
     }
 
-    const pending = getPendingScaffold(rt.storage.sql);
+    const pending = getPendingScaffold(rt.storage.sql, rt.actor);
     expect(pending).not.toBeNull();
     expect(pending!.trialsSoFar).toBe(5);
     expect(pending!.pendingWins).toBe(5);
@@ -260,7 +265,8 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     expect(applied.newCurrentVersion).toBe(1);
 
     const statuses = rt.storage.sql<{ version: number; status: string }>`
-      SELECT version, status FROM scaffold_versions ORDER BY version`;
+      SELECT version, status FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
     const byVersion = new Map(statuses.map((s) => [s.version, s.status]));
     expect(byVersion.get(1)).toBe('current');
     expect(byVersion.get(0)).toBe('historical');
@@ -281,7 +287,8 @@ describe('v2 e2e: durable event log', () => {
   test('emit through a turn lifecycle; replay via readSince', () => {
     const db = new Database(':memory:');
     initRunEventTables(makeExecRaw(db));
-    const recorder = new RunEventRecorder(makeSql(db));
+    const sql = makeSql(db);
+    const recorder = new RunEventRecorder(sql, testActorHandle(sql));
 
     const runId = 'run-test';
     recorder.emit(runId, { type: 'run_start', agentId: 'agent-1' });

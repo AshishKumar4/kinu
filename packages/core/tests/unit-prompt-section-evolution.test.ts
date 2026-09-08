@@ -66,7 +66,7 @@ function setup(): Harness {
   initFactsTable(execRaw);
   initGepaTables(execRaw);
   initRefinementTables(execRaw);
-  return { rt, facts: createFactsStore(rt.storage.sql) };
+  return { rt, facts: createFactsStore(rt.storage.sql, rt.actor) };
 }
 
 const EVAL_SET: EvalInstance<string>[] = [
@@ -412,7 +412,7 @@ describe('the changelog reports it, and the operator can take it back', () => {
     });
     applyPromptSectionDecision(rt.storage.sql, pending, 'promote');
 
-    const entry = buildChangelog(rt.storage.sql).find((e) => e.kind === 'prompt_section');
+    const entry = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'prompt_section');
     expect(entry).toBeDefined();
     expect(entry?.summary).toContain(TARGET_ID);
     expect(entry?.evidence).toContain(`Promoted ${TARGET_ID} v1`);

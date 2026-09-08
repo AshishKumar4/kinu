@@ -258,7 +258,7 @@ interface NodeFixture {
 
 function nodeFixture(over?: { readonly host?: NodeAgentDeps['host'] }): NodeFixture {
   const { rt } = createTestRuntime();
-  const journal = new HeadJournal(rt.storage.sql);
+  const journal = new HeadJournal(rt.storage.sql, rt.actor);
   const input: NodeAgentInput = {
     nodeId: 'n1',
     rootId: 'r1',
@@ -369,7 +369,7 @@ async function runWith(
            completed_at, token_input, token_output, token_cache_read, token_cache_write,
            token_cache_write_1h, token_reasoning, neurons, wall_clock_ms, summary,
            error_message, merge_strategy
-    FROM head_journal ORDER BY spawned_at`;
+    FROM head_journal WHERE actor_id = ${rt.actor.actorId} ORDER BY spawned_at`;
   const tree = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
   return { result, rows, tree };

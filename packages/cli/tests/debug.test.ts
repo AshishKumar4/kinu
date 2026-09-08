@@ -17,6 +17,7 @@ import {
   type ExplorationWrite, type ObjectiveIdentity,
 } from '@kinu.run/core';
 import { makeSql } from '@kinu.run/cli-backend';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];
@@ -69,10 +70,17 @@ function seedInvestigationWorkspace(dbPath: string): void {
   initMctsSearchTable(execRaw);
   initBackgroundJobsTable(execRaw);
   const sql = makeSql(db);
+  // The actor every private store below belongs to, and the one `kinu debug`
+  // resolves when it reopens this file: the workspace's MAIN actor, issued
+  // through the production directory. The local read models resolve it with
+  // `openWorkspaceMainActor`, so the seed has to register a real workspace
+  // identity rather than only create tables — rows under any other id would
+  // leave the bundle reading an empty workspace.
+  const actor = createTestActorsOver(db, { name: 'invest' }).main;
 
   // ── Runs: an older plain run, then the latest — which backgrounds a call
   // and is polled anyway (agent.jobResult right after the detach handle). ──
-  const recorder = new RunEventRecorder(sql);
+  const recorder = new RunEventRecorder(sql, actor);
   recorder.emit('run-old', { type: 'run_start', agentId: 'w', caused_by: 'chat', userMessage: 'first' });
   recorder.emit('run-old', { type: 'turn_end', turnIndex: 0, usage: { input: 10, output: 5 } });
   // A second turn on the same run whose provider reported nothing at all — the
@@ -93,20 +101,20 @@ function seedInvestigationWorkspace(dbPath: string): void {
   recorder.emit('run-new', { type: 'run_end', reason: 'completed' });
 
   // ── Head runs: older (failed) then newer (completed) — proves ordering. ──
-  db.exec(`INSERT INTO head_runs (root_id, rationale, spawned_at) VALUES ('head-old', 'first attempt', 1000)`);
-  db.exec(`INSERT INTO head_journal (id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
-    VALUES ('head-old', NULL, 'head-old', 0, 'investigate', 'first attempt', 'failed', 1000, 'synthesize')`);
-  db.exec(`INSERT INTO head_runs (root_id, rationale, spawned_at) VALUES ('head-new', 'second attempt', 9000)`);
-  db.exec(`INSERT INTO head_journal (id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
-    VALUES ('head-new', NULL, 'head-new', 0, 'investigate', 'second attempt', 'completed', 9000, 'synthesize')`);
+  db.exec(`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES ('${actor.actorId}', 'head-old', 'first attempt', 1000)`);
+  db.exec(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+    VALUES ('${actor.actorId}', 'head-old', NULL, 'head-old', 0, 'investigate', 'first attempt', 'failed', 1000, 'synthesize')`);
+  db.exec(`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES ('${actor.actorId}', 'head-new', 'second attempt', 9000)`);
+  db.exec(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+    VALUES ('${actor.actorId}', 'head-new', NULL, 'head-new', 0, 'investigate', 'second attempt', 'completed', 9000, 'synthesize')`);
   // A THIRD, real split with two actual child heads (id != root_id, unlike
   // the synthetic self-referencing rows above) — one settled, one still
   // running — the shape the new "N/M settled" progress readout is for.
-  db.exec(`INSERT INTO head_runs (root_id, rationale, spawned_at) VALUES ('head-live', 'third attempt', 12000)`);
-  db.exec(`INSERT INTO head_journal (id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
-    VALUES ('head-live-a', NULL, 'head-live', 0, 'investigate A', 'branch a', 'completed', 12000, 'synthesize')`);
-  db.exec(`INSERT INTO head_journal (id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
-    VALUES ('head-live-b', NULL, 'head-live', 0, 'investigate B', 'branch b', 'running', 12100, 'synthesize')`);
+  db.exec(`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES ('${actor.actorId}', 'head-live', 'third attempt', 12000)`);
+  db.exec(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+    VALUES ('${actor.actorId}', 'head-live-a', NULL, 'head-live', 0, 'investigate A', 'branch a', 'completed', 12000, 'synthesize')`);
+  db.exec(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+    VALUES ('${actor.actorId}', 'head-live-b', NULL, 'head-live', 0, 'investigate B', 'branch b', 'running', 12100, 'synthesize')`);
 
   // ── MCTS: the OLDER search's root sorts FIRST (lower created_at, same
   // depth 0) — exactly what the unscoped client buildTree() would return,
@@ -119,7 +127,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
   insertNode.run('search-new-c1', 'search-new-root', 'search-new', 'branch a', 1, 5100);
   insertNode.run('search-new-c2', 'search-new-c1', 'search-new', 'branch a.1', 2, 5200);
 
-  const mcts = new MctsSearchStore(sql);
+  const mcts = new MctsSearchStore(sql, actor);
   mcts.begin({ rootId: 'search-old', task: 'investigate', engine: 'mcts', rootMsgId: 'm1', config: { budget: 1, branches: 1 }, budget: 1, now: 1000 });
   mcts.converge('search-old', 0, 1500);
   // budget=10, checkpointed at iteration=6/budget-remaining=4 — the SAME
@@ -137,7 +145,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
   // `action:'swarm'`: its label is the form jobs/runner.ts wrote back then,
   // `fork(settle=<policy>): <task>`. The bundle reads history, so it has to
   // keep printing rows naming a settle no current call can produce.
-  const jobs = new BackgroundJobStore(sql);
+  const jobs = new BackgroundJobStore(sql, actor);
   jobs.create({
     id: 'job-1', kind: 'agents', workMode: 'build',
     label: 'fork(settle=mcts): pick a migration-backfill approach',

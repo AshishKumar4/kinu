@@ -135,7 +135,8 @@ test('a prose-wrapped typescript fence stores only the scaffold source', async (
   for (let index = 0; index < 3; index++) await engine.onSessionComplete(window);
 
   const pending = rt.storage.sql<{ version: number }>`
-    SELECT version FROM scaffold_versions WHERE status = 'pending'`;
+    SELECT version FROM scaffold_versions
+    WHERE actor_id = ${rt.actor.actorId} AND status = 'pending'`;
   expect(pending).toHaveLength(1);
   const pendingVersion = pending[0]?.version;
   if (pendingVersion === undefined) throw new Error('expected one pending scaffold version');

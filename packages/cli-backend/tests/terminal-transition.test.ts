@@ -80,7 +80,8 @@ function workspace(): { db: Database; rt: CLIRuntime } {
 const completedTurns = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM completed_turns`[0]?.n ?? 0;
 const queuedTrials = (rt: CLIRuntime) =>
-  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM scaffold_trial_queue`[0]?.n ?? 0;
+  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM scaffold_trial_queue
+    WHERE actor_id = ${rt.actor.actorId}`[0]?.n ?? 0;
 const claimedTakes = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM alternate_takes WHERE turn_id IS NOT NULL`[0]?.n ?? 0;
 /** Every row the transition is still waiting on. Empty means it closed. */

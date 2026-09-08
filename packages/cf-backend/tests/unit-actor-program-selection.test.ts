@@ -19,8 +19,10 @@ test.each(['orchestrator', 'subordinate'])('the real %s Think turn uses preselec
   const files = rt.agentStateVfs ?? rt.storage.vfs;
   await files.mkdir('scaffold', { recursive: true });
   await files.writeFile(rt.identity.scaffold.path + '.v1', 'async function run() { await host.emit({ type: "text_delta", text: "selected-root-v1" }); }');
-  db.exec("UPDATE scaffold_versions SET status = 'historical' WHERE status = 'current'");
-  db.query("INSERT INTO scaffold_versions (version, written_at, rationale, status) VALUES (1, 1, 'selected program proof', 'current')").run();
+  db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'")
+    .run(rt.actor.actorId);
+  db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 1, 1, 'selected program proof', 'current')")
+    .run(rt.actor.actorId);
   rt.identity.scaffold.read = async () => 'async function run() { await host.emit({ type: "text_delta", text: "wrong-live-alias" }); }';
   const result = await agent.runTurn({ input: 'Run the selected program.' });
   expect(result.status).toBe('completed');
@@ -53,8 +55,10 @@ test.each(['orchestrator', 'subordinate'])('the real %s cancelAllChats stops new
   const files = rt.agentStateVfs ?? rt.storage.vfs;
   await files.mkdir('scaffold', { recursive: true });
   await files.writeFile(rt.identity.scaffold.path + '.v1', 'async function run() { await host.appendMemory("probe", "first"); await host.appendMemory("probe", "second"); }');
-  db.exec("UPDATE scaffold_versions SET status = 'historical' WHERE status = 'current'");
-  db.query("INSERT INTO scaffold_versions (version, written_at, rationale, status) VALUES (1, 1, 'cancel selected program', 'current')").run();
+  db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'")
+    .run(rt.actor.actorId);
+  db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 1, 1, 'cancel selected program', 'current')")
+    .run(rt.actor.actorId);
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const effects: string[] = [];

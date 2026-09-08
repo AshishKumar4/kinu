@@ -147,12 +147,15 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return shadowTrialPlan(this.scaffoldControl, messageId);
   }
 
-  /** A candidate under trial, so sampling has something to sample against. */
+  /** A candidate under trial, so sampling has something to sample against.
+   *  Seeded under `rt.actor` — the pointer is per-actor and that is the handle
+   *  every reader under test scopes by, so a row filed anywhere else is
+   *  invisible to the gate this is arming. */
   harnessDeclareShadowCandidate(): void {
     this.config.setShadowSampleRate(0.5);
     void this.sql`INSERT OR REPLACE INTO scaffold_versions
-      (version, written_at, rationale, status)
-      VALUES (1, ${Date.now()}, 'a harness candidate', 'pending')`;
+      (actor_id, version, written_at, rationale, status)
+      VALUES (${this.rt.actor.actorId}, 1, ${Date.now()}, 'a harness candidate', 'pending')`;
   }
   /** The activation's wake-row reconcile, AWAITED. Production detaches it —
    *  `onStart` runs inside the init gate and arming a row is I/O — so a test
@@ -254,10 +257,14 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   /** The persisted identity a fresh activation uses to stop old device work. */
   harnessPersistActiveTurn(turnId: string): void {
-    this.ctx.storage.sql.exec(
-      'INSERT INTO active_durable_turn (id, turn_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET turn_id = excluded.turn_id',
-      turnId,
-    );
+    // A durable CLAIM, which is what a real `beforeTurn` writes: the single
+    // `active_durable_turn` row this used to insert no longer exists, and a
+    // fresh activation identifies old device work through the claim ledger.
+    this.claims.admit({
+      runId: `harness-${turnId}`, turnId, workMode: 'build',
+      program: { kind: 'builtin', version: 0, digest: null, build: null },
+      context: [],
+    });
   }
 
   harnessClearTurnCheckpoint(): void { this._turnCheckpoint = null; }

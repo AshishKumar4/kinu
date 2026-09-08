@@ -116,7 +116,7 @@ describe('node proposal merges after the execute_tools finish', () => {
   test('the function never sees propose_branch, and propose still grants', async () => {
     const { rt } = createTestRuntime();
     initHeadsTables(rt.storage.execRaw);
-    const journal = new HeadJournal(rt.storage.sql);
+    const journal = new HeadJournal(rt.storage.sql, rt.actor);
     let seen: readonly string[] | null = null;
     const executeTool = (finished: ToolSet) => {
       seen = Object.keys(finished);

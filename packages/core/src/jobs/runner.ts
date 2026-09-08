@@ -408,10 +408,10 @@ export class BackgroundJobRunner {
    * deferral), and their rows are therefore always counted.
    */
   private liveDetachedCount(): number {
-    const owed = this.deps.store.resumeOwedIds(Date.now());
+    const owed = this.deps.store.resumeOwedIdsInWorkspace(Date.now());
     let idle = 0;
     for (const jobId of owed) if (!this.controllers.has(jobId)) idle++;
-    return this.deps.store.countRunning() - idle;
+    return this.deps.store.countRunningInWorkspace() - idle;
   }
 
   /**
@@ -949,7 +949,7 @@ export class BackgroundJobRunner {
    * next wake through {@link BackgroundJobRunnerDeps.scheduleResume}.
    */
   async recoverDueResumes(): Promise<void> {
-    const next = this.deps.store.nextResumeAt();
+    const next = this.deps.store.nextResumeAtInWorkspace();
     if (next === null || next > Date.now()) return;
     await this.recoverOrphans();
   }

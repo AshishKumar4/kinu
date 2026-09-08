@@ -651,7 +651,7 @@ export class OrchestratorAgent extends ActorAgent {
     return this.eventLog.hasOpenDrainLease()
       || this.terminal.nextRetryAt() !== null || this.terminal.hasIncomplete()
       || this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms()
-      || this.jobs.hasLiveJobs() || this.workspaceActors().hasRetirements()
+      || this.jobs.hasLiveJobsInWorkspace() || this.workspaceActors().hasRetirements()
       || this.subordinateRoster.hasPendingBirths() || this.subordinateRoster.hasPendingDeletions();
   }
 
@@ -2628,24 +2628,14 @@ export class OrchestratorAgent extends ActorAgent {
    * while exploration is live, and a value nobody wrote is the same question.
    */
   private explorationFacetLedgerStatus(id: string): ExplorationFacetLedgerStatus {
-    const head = this.sql<{ status: string }>`
-      SELECT status FROM head_journal WHERE id = ${id} LIMIT 1
-    `[0];
+    const head = this.headJournal.readHead(id);
     if (!head) return 'unknown';
     if (headStatusUnsettled(head.status)) return 'resumable';
     return storedHeadReportStatus(head.status) === null ? 'unknown' : 'terminal';
   }
 
   private hasLiveExploration(): boolean {
-    const heads = this.sql<{ x: number }>`
-      SELECT 1 AS x FROM head_journal
-      WHERE status IN ('running', 'interrupted')
-      LIMIT 1
-    `;
-    if (heads.length > 0) return true;
-    return this.sql<{ x: number }>`
-      SELECT 1 AS x FROM mcts_search_runs WHERE status = 'running' LIMIT 1
-    `.length > 0;
+    return this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSearches();
   }
 
   // ── Timer ingress ──────────────────────────────────────────────
@@ -2804,6 +2794,7 @@ export class OrchestratorAgent extends ActorAgent {
   async getAgentStatus() {
     const status = await getAgentStatus({
       sql: this.boundSql,
+      actor: this.rt.actor,
       vfs: this.rt.storage.vfs,
       config: this.config,
       name: this.name,
@@ -2842,7 +2833,7 @@ export class OrchestratorAgent extends ActorAgent {
    * twenty, and the twenty-first was then reachable only by permalink.
    */
   @callable() async listForkRuns(request?: PageRequest): Promise<Page<ForkRunSummary>> {
-    return listForkRuns(this.boundSql, request?.cursor ?? null, request?.limit);
+    return listForkRuns(this.boundSql, this.actorHandle(), request?.cursor ?? null, request?.limit);
   }
 
   /**
@@ -2856,7 +2847,7 @@ export class OrchestratorAgent extends ActorAgent {
    * thirty runs and their trees to render one is not the answer.
    */
   @callable() async getForkRun(rootId: string): Promise<ExplorationCanvasRun | null> {
-    return readExplorationRun(this.boundSql, rootId);
+    return readExplorationRun(this.boundSql, this.actorHandle(), rootId);
   }
 
   /**
@@ -2868,7 +2859,7 @@ export class OrchestratorAgent extends ActorAgent {
    * rather than three collections a client re-associates by id.
    */
   @callable() async getExplorationCanvas(request?: PageRequest): Promise<Page<ExplorationCanvasRun>> {
-    return readExplorationCanvas(this.boundSql, request?.cursor ?? null, request?.limit);
+    return readExplorationCanvas(this.boundSql, this.actorHandle(), request?.cursor ?? null, request?.limit);
   }
 
   /**
@@ -2928,11 +2919,11 @@ export class OrchestratorAgent extends ActorAgent {
     // The unseen window itself, not the whole digest: the queue row needs the
     // count, the newest entry's time, and how many of those entries actually
     // offer keep/revert rather than being measurements to read.
-    const unseen = getUnseenChangelog(this.config, this.boundSql);
+    const unseen = getUnseenChangelog(this.boundSql, this.rt.actor);
     return buildPendingActions({
       approvals: board?.approvals ?? [],
       changes: board?.changes ?? [],
-      scaffoldVersions: listScaffoldVersions(this.boundSql, 20),
+      scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
       jobs: listBackgroundJobs(this.jobs, 50),
       deferredActions: this.deferrals.list(),
       unseenChanges: {
@@ -2967,7 +2958,7 @@ export class OrchestratorAgent extends ActorAgent {
   async getEvolutionChangelog(opts?: { limit?: number }): Promise<{
     entries: ChangelogEntry[]; unseenCount: number; seenAt: number;
   }> {
-    return getEvolutionChangelog(this.config, this.boundSql, opts?.limit);
+    return getEvolutionChangelog(this.boundSql, this.actorHandle(), opts?.limit);
   }
 
   /** The operator viewed the changelog — zero the unseen badge. */
@@ -3064,7 +3055,8 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     const outcome = await pickAlternateTake(
-      { sql: this.boundSql, engine: this.engine, signals: this.orch.signals }, takeId, nodeId);
+      { sql: this.boundSql, actor: this.rt.actor, engine: this.engine, signals: this.orch.signals },
+      takeId, nodeId);
     this.logActivity('take_pick', `${outcome.outcome} (${nodeId})`);
     return outcome;
   }
@@ -3124,7 +3116,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Return the current shadow-rollout status: pending version, win counts, decision. */
   async getShadowStatus(): Promise<ShadowStatus> {
-    return getShadowStatus(this.boundSql);
+    return getShadowStatus(this.boundSql, this.rt.actor);
   }
 
   /**
@@ -3167,8 +3159,8 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable()
   async getShadowVerdict(version?: number): Promise<ShadowVerdict> {
-    const pendingVersion = version ?? getPendingScaffold(this.boundSql)?.version ?? null;
-    return readShadowVerdict(this.boundSql, pendingVersion);
+    const pendingVersion = version ?? getPendingScaffold(this.boundSql, this.rt.actor)?.version ?? null;
+    return readShadowVerdict(this.boundSql, this.rt.actor, pendingVersion);
   }
 
   /**
@@ -3185,7 +3177,9 @@ export class OrchestratorAgent extends ActorAgent {
   }> {
     const after = (await readScaffoldVersion(this.rt, version)) ?? "";
     const prevRow = this.sql<{ version: number }>`
-      SELECT version FROM scaffold_versions WHERE version < ${version} ORDER BY version DESC LIMIT 1`;
+      SELECT version FROM scaffold_versions
+      WHERE actor_id = ${this.rt.actor.actorId} AND version < ${version}
+      ORDER BY version DESC LIMIT 1`;
     const previousVersion = prevRow[0]?.version ?? null;
     const before = previousVersion != null ? (await readScaffoldVersion(this.rt, previousVersion)) ?? "" : "";
     const d = diffLines(before, after);
@@ -3421,7 +3415,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  wire shape predates the archive (ScaffoldLineage.tsx reads written_at). */
   @callable()
   async listScaffoldVersions(limit: number = 20): Promise<ScaffoldVersionView[]> {
-    return listScaffoldVersions(this.boundSql, limit);
+    return listScaffoldVersions(this.boundSql, this.rt.actor, limit);
   }
 
   // ── GEPA offline scaffold optimisation ─────────────────────────
@@ -3632,7 +3626,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable()
   async getNodeTranscript(runId: string, nodeId: string, request?: PageRequest): Promise<NodeTranscriptView | null> {
-    return readNodeTranscript(this.boundSql, runId, nodeId, request ?? {});
+    return readNodeTranscript(this.boundSql, this.actorHandle(), runId, nodeId, request ?? {});
   }
 
   /**
@@ -3953,7 +3947,7 @@ export class OrchestratorAgent extends ActorAgent {
       // panel is how a reader learns to distrust both. No window: the producer
       // rows are summed over the whole log, so this is the total rather than the
       // newest slice of it.
-      spend: workspaceSpend({ events: this.eventRecorder, sql: this.boundSql }),
+      spend: workspaceSpend({ events: this.eventRecorder, sql: this.boundSql, actor: this.actorHandle() }),
       log: readActivityLog(this.boundSql, logLimit),
     };
   }
@@ -4341,7 +4335,7 @@ export class OrchestratorAgent extends ActorAgent {
     const board = this.getOwnerUserId() ? await this.getReleaseBoard(1) : null;
     return {
       releases: (board?.changes.length ?? 0) > 0,
-      explorations: listForkRuns(this.boundSql, null, 1).items.length > 0,
+      explorations: listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
     };
   }
 
@@ -4746,6 +4740,7 @@ export class OrchestratorAgent extends ActorAgent {
     this.requireOwnerForFork();
     const fork = await forkWorkspace({
       sql: this.boundSql,
+      actor: this.rt.actor,
       // The workspace plane's own walk, with each inherited file streamed
       // through a native ranged read: a fork holds one frame of one file, never
       // the file.

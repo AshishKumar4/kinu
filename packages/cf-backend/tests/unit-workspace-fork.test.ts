@@ -2,16 +2,18 @@ import { describe, expect, test } from 'bun:test';
 import { writeSoul } from '@kinu.run/core';
 import { deliverCloudFork, type CloudForkRegistry, type CloudForkTarget } from '../src/user/workspace-fork';
 import type { UserCaller } from '../src/user/workspace-capability';
-import { createTestWorkspace } from '../../core/tests/helpers';
+import { createTestWorkspace, createTestActor } from '../../core/tests/helpers';
 
 const caller = { workspaceToken: 'source-token' } satisfies UserCaller;
 
 async function source() {
   const ws = createTestWorkspace();
-  void ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'source'}, ${1})`;
+  // The conversation store is actor-private, so the source transcript is
+  // seeded under the actor the fork reads it as — its workspace's main.
+  const actor = createTestActor(ws.sql, ws.execRaw, 'SRC', 'source');
   await writeSoul(ws.vfs, ws.sql, 'p');
-  void ws.sql`INSERT INTO messages (id, session_id, role, content, created_at)
-    VALUES (${'m1'}, ${'default'}, ${'user'}, ${'hello'}, ${1})`;
+  void ws.sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+    VALUES (${actor.actorId}, ${'m1'}, ${'default'}, ${'user'}, ${'hello'}, ${1})`;
   return ws;
 }
 

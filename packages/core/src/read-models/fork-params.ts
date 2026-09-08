@@ -21,6 +21,7 @@
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 
 /**
  * A search's dispatch parameters. `budget` is the expansion budget it was given;
@@ -129,8 +130,10 @@ function searchParams(configJson: string, realised: number | null): SearchRunPar
  */
 export function readForkRunParams(
   sql: SqlExecutor,
+  actor: ActorHandle,
   rootIds: readonly string[],
 ): ForkRunParams[] {
+  actor.assertCurrent();
   if (rootIds.length === 0) return [];
   const wanted = new Set(rootIds);
   const search = new Map<string, SearchRunParams>();
@@ -138,7 +141,8 @@ export function readForkRunParams(
 
   const searches = sql<{
     root_id: string; config_json: string; judge_samples_realised: number | null;
-  }>`SELECT root_id, config_json, judge_samples_realised FROM mcts_search_runs`;
+  }>`SELECT root_id, config_json, judge_samples_realised FROM mcts_search_runs
+     WHERE actor_id = ${actor.actorId}`;
   for (const row of searches) {
     if (!wanted.has(row.root_id)) continue;
     const params = searchParams(row.config_json, row.judge_samples_realised);
@@ -152,7 +156,7 @@ export function readForkRunParams(
     SELECT root_id,
            MAX(merge_strategy)                             AS merge_strategy,
            SUM(CASE WHEN id != root_id THEN 1 ELSE 0 END)  AS heads
-    FROM head_journal GROUP BY root_id`;
+    FROM head_journal WHERE actor_id = ${actor.actorId} GROUP BY root_id`;
   for (const row of journals) {
     if (!wanted.has(row.root_id)) continue;
     transcripts.set(row.root_id, { mergeStrategy: row.merge_strategy, branches: row.heads });

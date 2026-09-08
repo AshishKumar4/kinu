@@ -635,7 +635,7 @@ export class EvolutionEngine {
           userMessage: turn.userMessage,
           assistantResponse: turn.assistantResponse,
           followup,
-          scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql),
+          scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
           // The classifier's one-sentence reason, or the execution verdict's
           // observation — stored so the ledger can say WHY, not just count.
           evidence,
@@ -845,7 +845,7 @@ export class EvolutionEngine {
     // empty texts — a ledger row that reads as a graded turn whose request and
     // response were blank, which is what every downstream eval then trained
     // against.
-    const pair = conversationTurnPair(this.rt.storage.sql, messageId);
+    const pair = conversationTurnPair(this.rt.storage.sql, this.rt.actor, messageId);
     recordTurnOutcome(this.rt.storage.sql, {
       turnId: messageId,
       sessionId: pair?.sessionId ?? 'default',
@@ -855,7 +855,7 @@ export class EvolutionEngine {
       userMessage: pair?.request ?? '',
       assistantResponse: pair?.response ?? '',
       followup: null,
-      scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql),
+      scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
     });
     if (feedback === 'negative') this.corroborateLessons(messageId);
   }
@@ -1008,7 +1008,7 @@ export class EvolutionEngine {
 
   /** Emit one "what I changed about myself" line for the closed window. */
   private emitChangelogDigest(since: number): void {
-    const entries = buildChangelog(this.rt.storage.sql, { since, limit: 20 });
+    const entries = buildChangelog(this.rt.storage.sql, this.rt.actor, { since, limit: 20 });
     if (entries.length === 0) return;
     const counts = new Map<string, number>();
     for (const e of entries) counts.set(e.kind, (counts.get(e.kind) ?? 0) + 1);
@@ -1082,7 +1082,8 @@ export class EvolutionEngine {
     // would otherwise orphan earlier pending versions. The current proposal
     // must settle before another begins.
     const pending = this.rt.storage.sql<{ version: number }>`
-      SELECT version FROM scaffold_versions WHERE status = 'pending' LIMIT 1
+      SELECT version FROM scaffold_versions
+      WHERE actor_id = ${this.rt.actor.actorId} AND status = 'pending' LIMIT 1
     `;
     if (pending.length > 0) {
       this.emit({
@@ -1102,7 +1103,7 @@ export class EvolutionEngine {
     // turns ACTUALLY landed with the user (turn_outcomes) — the real-outcome
     // prior the shadow judge alone can't supply — and are then aggregated
     // over each candidate's descendant lineage (clade-metaproductivity).
-    const archive = listScaffoldArchive(this.rt.storage.sql, 12);
+    const archive = listScaffoldArchive(this.rt.storage.sql, this.rt.actor, 12);
     const realRates = realOutcomeScaffoldRates(this.rt.storage.sql);
     const base = selectEvolutionBase(blendRealOutcomeRates(archive, realRates), {
       exploreShare: this.agentConfig.getScaffoldExploreShare(),
@@ -1120,7 +1121,7 @@ export class EvolutionEngine {
       listTurnOutcomes(this.rt.storage.sql, { limit: 60, outcomes: NEGATIVE_TURN_OUTCOMES }),
     ));
     const rejections = new Map(
-      listRejectedProposals(this.rt.storage.sql, 12)
+      listRejectedProposals(this.rt.storage.sql, this.rt.actor, 12)
         .flatMap((r) => (r.version === null ? [] : [[r.version, r.reason] as const])),
     );
 
@@ -1189,7 +1190,7 @@ export class EvolutionEngine {
     // No writer supplied → the DURABLE one. An in-memory mirror lost a branch's
     // ancestry the moment the process exited or the Durable Object was evicted,
     // which is exactly what a resumed search re-enters needing.
-    const writer = session ?? createDurableMctsSession(this.rt.storage.sql);
+    const writer = session ?? createDurableMctsSession(this.rt.storage.sql, this.rt.actor);
 
     const task = `Given my purpose: "${purpose}", identify one specific improvement ` +
       `to be more effective. Consider: new tools, knowledge gaps, workflow improvements.`;
@@ -1243,7 +1244,7 @@ export class EvolutionEngine {
         judge: this.rt.judgeModel ?? this.rt.llm,
         runTask,
         sampleSize,
-        scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql),
+        scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
       });
       if (summary) {
         this.emit({

@@ -9,6 +9,7 @@ import type { Memory, SqlExecutor } from '../types/primitives';
 import * as v from 'valibot';
 import type { FactsStore } from '../memory/facts';
 import type { VectorStore } from '../memory/vector-store';
+import type { ActorHandle } from '../state/actor-handle';
 import { appendMemoryNote } from '../memory/note';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search';
 import { ConversationSearchStore } from '../memory/conversation-search';
@@ -32,6 +33,10 @@ export interface MemoryToolDeps {
   facts?: FactsStore;
   /** Backs the `conversations` action's zero-LLM transcript recall. */
   sql: SqlExecutor;
+  /** Whose transcript that recall reads. The conversation store is bound to
+   *  one actor, so a dispatcher built for this runtime can only ever read the
+   *  rows this runtime owns. */
+  readonly actor: ActorHandle;
 }
 
 /** The durable-state tool's one input shape. `key` names a fact, `content` /
@@ -51,8 +56,9 @@ export interface MemoryToolInput {
 }
 
 /** Build a memory dispatcher over one runtime's stores. Constructed once.
- * ConversationSearchStore holds no state of its own, so the dispatcher is
- * reused by every call the returned function serves. */
+ * ConversationSearchStore is bound to `deps.actor` and holds no other state, so
+ * the dispatcher is reused by every call the returned function serves — a
+ * runtime's actor does not change under it. */
 export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryToolInput) => Promise<JsonValue> {
   const { memory, vectorStore: vs, facts } = deps;
 
@@ -87,7 +93,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
   // `conversations` action: zero-LLM FTS5 transcript recall over the canonical
   // messages table. Mode is inferred from the input:
   // around_message_id -> scroll, query -> search, neither -> browse.
-  const conversationSearch = new ConversationSearchStore(deps.sql);
+  const conversationSearch = new ConversationSearchStore(deps.sql, deps.actor);
   const runConversationsAction = (args: MemoryToolInput): JsonValue => {
     try {
       if (args.around_message_id) {

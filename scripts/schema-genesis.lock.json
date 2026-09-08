@@ -1,8 +1,4 @@
 {
-  "active_durable_turn@packages/cf-backend/src/actor-agent.ts": [
-    "id",
-    "turn_id"
-  ],
   "activity_log@packages/core/src/identity/schema.ts": [
     "id",
     "event",
@@ -14,6 +10,18 @@
     "actor_id",
     "key",
     "value"
+  ],
+  "actor_context_revisions@packages/core/src/orchestrator/actor-claims.ts": [
+    "actor_id",
+    "turn_id",
+    "revision",
+    "epoch",
+    "base_revision",
+    "digest",
+    "message_count",
+    "messages",
+    "step_index",
+    "recorded_at"
   ],
   "actor_identity@packages/core/src/state/facet-identity.ts": [
     "id",
@@ -43,11 +51,24 @@
     "birth_request",
     "delete_requested"
   ],
-  "agent_config@packages/core/src/config/store.ts": [
-    "key",
-    "value"
+  "actor_turn_claims@packages/core/src/orchestrator/actor-claims.ts": [
+    "actor_id",
+    "turn_id",
+    "run_id",
+    "epoch",
+    "work_mode",
+    "program_kind",
+    "program_version",
+    "program_digest",
+    "program_build",
+    "status",
+    "outcome",
+    "consumed_revision",
+    "claimed_at",
+    "settled_at"
   ],
   "agent_facts@packages/core/src/memory/facts.ts": [
+    "actor_id",
     "key",
     "value_json",
     "confidence",
@@ -73,6 +94,7 @@
     "consumed_at"
   ],
   "agent_tasks@packages/core/src/tasks/store.ts": [
+    "actor_id",
     "id",
     "seq",
     "parent_id",
@@ -103,6 +125,7 @@
     "created_at"
   ],
   "background_jobs@packages/core/src/jobs/store.ts": [
+    "actor_id",
     "id",
     "kind",
     "label",
@@ -130,11 +153,6 @@
     "created_at",
     "expires_at",
     "used_at"
-  ],
-  "codemode_state@packages/core/src/tools/state-codemode.ts": [
-    "key",
-    "value",
-    "updated_at"
   ],
   "codex_device_flow@packages/cf-backend/src/user/schema.ts": [
     "id",
@@ -173,6 +191,7 @@
   ],
   "conversation_fts_state@packages/core/src/memory/conversation-search.ts": [
     "id",
+    "actor_id",
     "regime",
     "rev",
     "synced_rev"
@@ -333,16 +352,6 @@
     "id",
     "payload"
   ],
-  "facet_identity@packages/cf-backend/src/facet-identity.ts": [
-    "id",
-    "user_id",
-    "capability_token",
-    "parent_workspace"
-  ],
-  "facet_model_operation_outbox@packages/cf-backend/src/exploration.ts": [
-    "id",
-    "event_json"
-  ],
   "facet_model_operation_outbox@packages/cf-backend/src/subordinate-agent.ts": [
     "id",
     "event_json"
@@ -425,6 +434,7 @@
     "budget_json"
   ],
   "head_evidence@packages/core/src/heads/schema.ts": [
+    "actor_id",
     "id",
     "head_id",
     "kind",
@@ -434,6 +444,7 @@
     "created_at"
   ],
   "head_journal@packages/core/src/heads/schema.ts": [
+    "actor_id",
     "id",
     "parent_id",
     "root_id",
@@ -461,6 +472,7 @@
     "merge_strategy"
   ],
   "head_merge_results@packages/core/src/heads/schema.ts": [
+    "actor_id",
     "root_id",
     "merged_narrative",
     "selected_decisions_json",
@@ -475,11 +487,13 @@
     "blind_spots_json"
   ],
   "head_runs@packages/core/src/heads/schema.ts": [
+    "actor_id",
     "root_id",
     "rationale",
     "spawned_at"
   ],
   "head_steps@packages/core/src/heads/schema.ts": [
+    "actor_id",
     "id",
     "head_id",
     "seq",
@@ -521,6 +535,7 @@
     "corroborated_at"
   ],
   "mcts_search_runs@packages/core/src/mcts/search-store.ts": [
+    "actor_id",
     "root_id",
     "task",
     "engine",
@@ -544,6 +559,7 @@
     "updated_at"
   ],
   "messages@packages/core/src/identity/schema.ts": [
+    "actor_id",
     "id",
     "session_id",
     "parent_id",
@@ -614,6 +630,7 @@
     "decided_at"
   ],
   "plan_task_links@packages/core/src/tasks/store.ts": [
+    "actor_id",
     "task_id",
     "plan_id",
     "revision",
@@ -746,6 +763,7 @@
     "updated_at"
   ],
   "run_events@packages/core/src/events/recorder.ts": [
+    "actor_id",
     "run_id",
     "event_index",
     "type",
@@ -759,6 +777,7 @@
     "outcome"
   ],
   "scaffold_evaluations@packages/core/src/scaffold/shadow.ts": [
+    "actor_id",
     "id",
     "current_version",
     "pending_version",
@@ -772,12 +791,14 @@
     "evaluated_at"
   ],
   "scaffold_regression_fixtures@packages/core/src/scaffold/schemas.ts": [
+    "actor_id",
     "id",
     "task",
     "expected_keywords",
     "created_at"
   ],
   "scaffold_trial_queue@packages/core/src/scaffold/shadow.ts": [
+    "actor_id",
     "id",
     "pending_version",
     "task",
@@ -786,6 +807,7 @@
     "queued_at"
   ],
   "scaffold_versions@packages/core/src/scaffold/schemas.ts": [
+    "actor_id",
     "version",
     "written_at",
     "rationale",
@@ -918,6 +940,7 @@
     "created_at"
   ],
   "task_history@packages/core/src/scaffold/schemas.ts": [
+    "actor_id",
     "id",
     "task",
     "scaffold_version",
@@ -951,11 +974,6 @@
     "normalized_call_id",
     "call_digest",
     "result_json"
-  ],
-  "traces@packages/cf-backend/src/exploration.ts": [
-    "id",
-    "step",
-    "text"
   ],
   "traces@packages/cf-backend/src/subordinate-agent.ts": [
     "id",
@@ -1191,15 +1209,5 @@
     "owner_user_id",
     "mission",
     "created_at"
-  ],
-  "workspace_subordinates@packages/core/src/subordinates/roster.ts": [
-    "name",
-    "created_by",
-    "status",
-    "current_task",
-    "created_at",
-    "dismissed_at",
-    "lifetime",
-    "task_event_id"
   ]
 }

@@ -766,6 +766,40 @@ export async function restoreWorkspaceArchive(
 }
 
 /**
+ * Which actor owns an imported conversation: the workspace's MAIN actor, read
+ * back out of the directory this restore has just landed.
+ *
+ * `kind = 'main'` is unique per workspace by schema — `workspace_actors` carries
+ * a partial unique index on it (`state/workspace-actors.ts`) — so this is
+ * exactly one row or none. None means an archive that carries a chat pane but
+ * no actor directory to file it under, which cannot be attributed at all.
+ *
+ * Read here rather than taken as a parameter because the caller has nothing to
+ * pass: `restoreWorkspaceArchive` is handed an EMPTY database and the identity
+ * only exists once its rows have landed, which is the moment this runs.
+ */
+function importedConversationActorId(sql: SqlExec): string {
+  const directory = sql.exec(
+    `SELECT name FROM sqlite_master
+     WHERE type = 'table' AND name IN ('workspace_identity', 'workspace_actors')`,
+  ).toArray();
+  const rows = directory.length === 2
+    ? sql.exec(
+      `SELECT a.actor_id AS actor_id FROM workspace_actors a
+       JOIN workspace_identity w ON w.id = a.workspace_id
+       WHERE a.kind = 'main'`,
+    ).toArray()
+    : [];
+  if (rows.length !== 1) {
+    throw new Error(
+      'This archive carries a chat pane but no single main actor to attribute it to, '
+      + 'so the imported conversation cannot be filed.',
+    );
+  }
+  return v.parse(v.object({ actor_id: v.pipe(v.string(), v.nonEmpty()) }), rows[0]).actor_id;
+}
+
+/**
  * A cloud export carries the SDK's pane store (`assistant_messages`); the
  * workspace this archive was restored into may be LOCAL, where `messages` is
  * the only default-chat store. Normalize once, here — project every pane row
@@ -778,6 +812,11 @@ function normalizeImportedPaneRows(sql: SqlExec): void {
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'assistant_messages'`,
   ).toArray();
   if (pane.length === 0) return;
+  // The destination is ACTOR-SCOPED and the pane store is not: the SDK writes
+  // `assistant_messages` itself and gives it no actor column, so the owning
+  // actor is read from the directory this restore has just landed rather than
+  // guessed.
+  const actorId = importedConversationActorId(sql);
   const rows = sql.exec(
     `SELECT id, parent_id, role, content, created_at FROM assistant_messages ORDER BY rowid ASC`,
   ).toArray();
@@ -790,9 +829,9 @@ function normalizeImportedPaneRows(sql: SqlExec): void {
     const ms = Date.parse(`${row.created_at.replace(' ', 'T')}Z`);
     if (!Number.isFinite(ms)) throw new Error(`imported pane row ${row.id} has an unreadable stamp`);
     sql.exec(
-      `INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      row.id, 'default', row.parent_id, row.role, text, ms,
+      `INSERT OR IGNORE INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      actorId, row.id, 'default', row.parent_id, row.role, text, ms,
     );
   }
   sql.exec(`DROP TABLE assistant_messages`);

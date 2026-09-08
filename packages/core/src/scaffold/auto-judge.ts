@@ -155,7 +155,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   const config: AutoJudgeConfig = { ...DEFAULT_AUTO_JUDGE_CONFIG, ...opts.config };
   const rng = opts.random ?? Math.random;
 
-  const pending = getPendingScaffold(opts.rt.storage.sql);
+  const pending = getPendingScaffold(opts.rt.storage.sql, opts.rt.actor);
   if (!pending) return { skipped: true, reason: 'no_pending' };
 
   // ALREADY SCORED. The rollout below drives the pending scaffold through the
@@ -166,7 +166,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   // every later proposal.
   const scored = opts.trialId === undefined
     ? null
-    : scoredShadowTrial(opts.rt.storage.sql, opts.trialId);
+    : scoredShadowTrial(opts.rt.storage.sql, opts.rt.actor, opts.trialId);
   if (scored) {
     const settled = await settlePromotion(opts, config, pending);
     return { skipped: false, evaluation: { ...scored }, ...settled };
@@ -234,13 +234,14 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   const evaluation = {
     // Derived from status — after rollback cycles the live version is NOT
     // pending - 1 (the numbering is non-contiguous).
-    currentVersion: getCurrentScaffoldVersion(opts.rt.storage.sql) ?? pending.version - 1,
+    currentVersion: getCurrentScaffoldVersion(opts.rt.storage.sql, opts.rt.actor) ?? pending.version - 1,
     pendingVersion: pending.version,
     ...evidence,
     judgeResult,
   };
   recordShadowEvaluation(
     opts.rt.storage.sql,
+    opts.rt.actor,
     opts.trialId === undefined ? evaluation : { ...evaluation, trialId: opts.trialId },
   );
 
@@ -270,7 +271,7 @@ async function settlePromotion(
   config: AutoJudgeConfig,
   pending: { version: number },
 ): Promise<{ decision: 'promote' | 'rollback' | 'continue'; applied: 'promote' | 'rollback' | null }> {
-  const fresh = getPendingScaffold(opts.rt.storage.sql);
+  const fresh = getPendingScaffold(opts.rt.storage.sql, opts.rt.actor);
   // A candidate that moved on is one this trial can no longer decide about.
   if (!fresh || fresh.version !== pending.version) return { decision: 'continue', applied: null };
   const decision = decidePromotion(fresh, config.shadowConfig).decision;

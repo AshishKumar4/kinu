@@ -171,7 +171,7 @@ function fixture(opts?: {
   readonly model?: MockLanguageModelV3;
 }): Fixture {
   const { rt } = createTestRuntime();
-  const journal = new HeadJournal(rt.storage.sql);
+  const journal = new HeadJournal(rt.storage.sql, rt.actor);
   const input: NodeAgentInput = {
     nodeId: opts?.nodeId ?? 'n1',
     rootId: 'r1',

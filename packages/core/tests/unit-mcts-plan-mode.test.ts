@@ -44,7 +44,8 @@ describe('MCTS in Plan mode', () => {
     expect(executorCalls).toBe(0);
     expect(memoryWrites).toBe(0);
     expect(craftWrites).toBe(0);
-    expect(rt.storage.sql<{ count: number }>`SELECT COUNT(*) AS count FROM task_history`[0]?.count).toBe(0);
+    expect(rt.storage.sql<{ count: number }>`SELECT COUNT(*) AS count FROM task_history
+      WHERE actor_id = ${rt.actor.actorId}`[0]?.count).toBe(0);
     expect(rt.storage.sql<{ code: string | null }>`
       SELECT code_used AS code FROM search_nodes WHERE parent_id IS NOT NULL
     `[0]?.code).toBeNull();
@@ -70,7 +71,7 @@ describe('MCTS in Plan mode', () => {
   test('never resumes a same-task search from the other work mode', async () => {
     const { rt } = createTestRuntime();
     initTables(rt);
-    const search = new MctsSearchStore(rt.storage.sql);
+    const search = new MctsSearchStore(rt.storage.sql, rt.actor);
     const abort = new AbortController();
     await expect(runMCTS(rt, createMockSession(), 'same task', {
       mode: 'build', budget: 2, branches: 1, search, signal: abort.signal,

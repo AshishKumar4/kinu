@@ -213,7 +213,8 @@ export async function snapshotWorkspaceForFork(
   // the pane rows already carry it. The chat pane hydrates from the SDK's store,
   // so a fork without those rows shows an empty pane despite a populated
   // `messages` table.
-  const { chain: messages, pane: assistantMessages } = forkAncestry(source, untilMessageId);
+  const actor = openWorkspaceMainActor(source);
+  const { chain: messages, pane: assistantMessages } = forkAncestry(source, actor, untilMessageId);
   const lastMessage = messages[messages.length - 1];
   if (lastMessage === undefined) {
     throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
@@ -234,7 +235,6 @@ export async function snapshotWorkspaceForFork(
   // run matching commands without ever asking. Withheld at the SNAPSHOT rather
   // than at the write, so the authority never enters the value that crosses
   // between workspaces at all.
-  const actor = openWorkspaceMainActor(source);
   const agentConfig = source<ForkSnapshot['agentConfig'][number]>`SELECT key, value FROM actor_config WHERE actor_id = ${actor.actorId}`
     .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key));
 
@@ -348,6 +348,18 @@ export class ForkTargetWriter {
   }
 
   /**
+   * The target's own main actor.
+   *
+   * Resolved on demand rather than captured in the constructor: {@link begin}
+   * is what CREATES this actor on a target that had no identity yet, so a field
+   * read at construction would name an actor that does not exist. Every
+   * `messages` statement below asks for it after `begin` has run.
+   */
+  private get actorId(): string {
+    return openWorkspaceMainActor(this.target).actorId;
+  }
+
+  /**
    * Record which fork this is, and reset what this write has taken.
    *
    * One row, one statement. The destructive half is {@link clearStagedRows},
@@ -380,11 +392,11 @@ export class ForkTargetWriter {
    * fork.
    */
   clearStagedRows(): void {
-    void this.target`DELETE FROM messages`;
+    const actorId = this.actorId;
+    void this.target`DELETE FROM messages WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM crafted_tools`;
     void this.target`DELETE FROM memory_chunks`;
-    const actor = openWorkspaceMainActor(this.target);
-    void this.target`DELETE FROM actor_config WHERE actor_id = ${actor.actorId}`;
+    void this.target`DELETE FROM actor_config WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM fork_lineage`;
     if (hasPaneStore(this.target)) void this.target`DELETE FROM assistant_messages`;
   }
@@ -464,11 +476,15 @@ export class ForkTargetWriter {
       return;
     }
     // Plain destination: PKs and parent edges preserved — the chain IS the
-    // tree, carried verbatim.
+    // tree, carried verbatim, under THIS target's actor. The parent edges are
+    // re-keyed by that actor too: `messages` keys on (actor_id, id), so the
+    // inherited chain is a tree of this actor's rows and nothing else.
+    const actorId = this.actorId;
     for (const m of rows) {
       void this.target`
-        INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${m.id}, ${CHAT_SESSION_ID}, ${m.parent_id}, ${m.role}, ${this.carriedText(m)}, ${m.created_at})
+        INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${actorId}, ${m.id}, ${CHAT_SESSION_ID}, ${m.parent_id}, ${m.role},
+                ${this.carriedText(m)}, ${m.created_at})
       `;
     }
   }
@@ -619,8 +635,8 @@ export class ForkTargetWriter {
       `;
     } else {
       void this.target`
-        INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${markerId}, ${CHAT_SESSION_ID}, ${head.cut.messageId}, ${'system'},
+        INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${this.actorId}, ${markerId}, ${CHAT_SESSION_ID}, ${head.cut.messageId}, ${'system'},
                 ${syntheticText}, ${forkPointMs + 1})
       `;
       // The pane table existed only to resolve elided text on a plain target.

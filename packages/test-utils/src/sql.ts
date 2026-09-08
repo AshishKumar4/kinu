@@ -5,7 +5,7 @@
 // lines of duplication across unit-facts / unit-curriculum / unit-sleep-time /
 // unit-eval / etc.
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import type { SqlExecutor, SqlValue } from '@kinu.run/core';
+import { bindActorHandle, type ActorHandle, type SqlExecutor, type SqlValue } from '@kinu.run/core';
 
 export interface TestSql {
   /** Tagged-template SQL — matches `SqlExecutor` shape from @kinu.run/core. */
@@ -53,4 +53,31 @@ export function createTestSql(): TestSql {
     db,
     close: () => db.close(),
   };
+}
+
+/**
+ * A real {@link ActorHandle} over a test database.
+ *
+ * Bound through `bindActorHandle` — the production binder, with a real
+ * validation callback — because the actor-scoped stores call `assertCurrent()`
+ * before every statement, and an object literal standing in for the handle
+ * would be a fixture that cannot fail the check those stores rely on. Pass
+ * `live` to make the binding revocable, which is how a test observes that
+ * refusal; the handle is returned as-is (never spread) so its lazy store
+ * getters stay lazy.
+ */
+export function testActorHandle(
+  sql: SqlExecutor,
+  opts: { readonly actorId?: string; readonly live?: () => boolean } = {},
+): ActorHandle {
+  const actorId = opts.actorId ?? 'actor-test';
+  return bindActorHandle(sql, {
+    actorId,
+    workspaceId: 'ws-test',
+    parentActorId: null,
+    name: actorId,
+    storageKey: `agent:${actorId}`,
+  }, () => {
+    if (opts.live?.() === false) throw new Error(`actor ${actorId} is no longer bound`);
+  });
 }

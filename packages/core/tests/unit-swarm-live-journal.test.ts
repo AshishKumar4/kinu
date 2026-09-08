@@ -125,7 +125,7 @@ interface Announcement {
 
 async function run(announce?: AnnounceHeadActivity) {
   const { rt } = createTestRuntime();
-  const reader = new HeadJournal(rt.storage.sql);
+  const reader = new HeadJournal(rt.storage.sql, rt.actor);
   const seen: Announcement[] = [];
   const deps: SwarmRunDeps = {
     rt,

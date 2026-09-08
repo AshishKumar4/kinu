@@ -4,7 +4,8 @@
 // (SubordinateAgent.runAsHead), the CLI's in-process head-worker, and both
 // transports of a swarm node (strategy/node-agent.ts).
 //
-// prepareActorTurn selects and pins the runtime's program. Its builtin branch
+// prepareActorProgram selects and pins the runtime's program, and
+// startActorTurn runs it. Its builtin branch
 // uses the shared chat loop; a promoted program uses the same host bridges as
 // an actor chat. This module owns how many turns the reporting agent gets,
 // the record_evidence / record_decision accumulator tools, the head system
@@ -25,7 +26,8 @@ import {
 } from 'ai';
 import type { ChatOptions } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
-import { prepareActorTurn } from '../orchestrator/actor-turn';
+import { startActorTurn } from '../orchestrator/actor-turn';
+import { prepareActorProgram } from '../orchestrator/actor-program';
 import type { PromptModelContext } from '../prompting/model-profile';
 import { ExtensionHost } from '../extension';
 import {
@@ -567,7 +569,7 @@ const ConstructedModelSchema = v.object({ modelId: v.string(), provider: v.strin
  * RUN ONE AGENT — every kind that is not an actor's own chat — AND ASSEMBLE ITS
  * REPORT.
  *
- * The turn body is selected by {@link prepareActorTurn}; report collection
+ * The turn body is selected by {@link prepareActorProgram}; report collection
  * does not reimplement the native loop or reload a promoted program's live alias.
  *
  * WHAT IS LEFT HERE is what a turn body cannot know: how many turns this agent
@@ -724,13 +726,23 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         extensions: new ExtensionHost().register({ name: 'kinu.head-lifetime', prepareStep: prepareModelStep }),
       };
       if (deps.signal !== undefined) turn.signal = deps.signal;
-      const prepared = await prepareActorTurn({
-        runtime: deps.runtime, mode: input.mode, task: input.task, chat: turn,
-        loopVersion: await deps.runtime.identity.scaffold.version(),
+      // A head's inference is not a claimed actor turn: it runs the same two
+      // phases (select the program, then start it) and writes no claim, because
+      // the head's own settlement ledger owns its lifetime.
+      const selected = deps.runtime.identity.scaffold.version();
+      const selection = {
+        runtime: deps.runtime, mode: input.mode, assertActive,
+        version: await selected,
+        signal: deps.signal,
+      };
+      const program = await prepareActorProgram(selection);
+      const events = startActorTurn({
+        runtime: deps.runtime, mode: input.mode, task: input.task, chat: turn, program,
+        loopVersion: program.version,
         assertActive,
         scaffoldStreamOptions: { onStep, stopWhen: turn.stopWhen, prepareStep: prepareModelStep },
       });
-      for await (const event of prepared.events) {
+      for await (const event of events) {
         // Forwarded as the provider drew them: one frame per delta, in order,
         // never held. Nothing survives the step boundary, so the durable row that
         // lands next supersedes the paint without a tail to reconcile.
@@ -742,7 +754,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         }
         if (event.type !== 'done') continue;
         settled = true;
-        if (prepared.program.kind === 'scaffold') lastText = event.text;
+        if (program.kind === 'scaffold') lastText = event.text;
         // The turn's own response messages, tool calls already paired by the
         // turn body. Appended, never accumulated per step: every step's
         // `response.messages` is CUMULATIVE (ai 6 builds one array and clones it

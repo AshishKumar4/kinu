@@ -12,7 +12,7 @@ import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LLMProviderConfig, RunEvent } from '@kinu.run/core';
 import { CRAFT_NEUTRAL_PRIOR } from '@kinu.run/core';
-import { createCLIRuntime } from '../src/runtime';
+import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { scratchPath } from '@kinu.run/test-utils';
 
@@ -58,13 +58,18 @@ function scriptedEpisode(blocks: readonly string[]): LanguageModel {
 }
 
 function episode(blocks: readonly string[]) {
-  const db = new Database(':memory:');
+  // The declared path, not `:memory:`: `createCLIRuntime` binds this actor by
+  // reading the database's own filename back, and refuses a runtime whose path
+  // does not match it (`requireLocalDatabasePath`).
+  const db = new Database(scratchPath('in-episode-craft', 'agent.db'), { create: true });
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+    actor_id TEXT NOT NULL, id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    PRIMARY KEY (actor_id, id))`);
   const rt = createCLIRuntime(db, {
-    dbPath: scratchPath('in-episode-craft', 'agent.db'), llm: DUMMY_LLM,
+    dbPath: db.filename, llm: DUMMY_LLM,
   });
   const events: SessionEvent[] = [];
   const session = new LocalAgentSession({
@@ -82,8 +87,12 @@ function craftScore(db: Database, name: string): { score: number; uses: number }
 /** The turn's craft record, read back the way an analysis would: through the
  *  session's own run-event reader. The run id is not on the session event
  *  stream, so it comes from the durable log the reader indexes. */
-function craftCycleRow(session: LocalAgentSession, db: Database) {
-  const row = db.query<{ run_id: string }, []>('SELECT run_id FROM run_events LIMIT 1').get();
+function craftCycleRow(session: LocalAgentSession, rt: CLIRuntime, db: Database) {
+  // `run_events` is actor-scoped, so the run id comes from this session's own
+  // actor rather than from whatever row the table happens to hold first.
+  const row = db.query<{ run_id: string }, [string]>(
+    'SELECT run_id FROM run_events WHERE actor_id = ? LIMIT 1',
+  ).get(rt.actor.actorId);
   if (!row) throw new Error('craft run-event row is missing');
   const runId = row.run_id;
   return session.getRunEvents(runId)
@@ -95,7 +104,7 @@ const CREATE_DOUBLE =
 
 describe('in-episode craft loop — one turn, no user, no turn boundary', () => {
   test('crafted at one step, called at the next, scored on the call — inside one turn', async () => {
-    const { db, session, events } = episode([
+    const { db, rt, session, events } = episode([
       CREATE_DOUBLE,
       'return await tools.doubleIt(21);',
     ]);
@@ -116,7 +125,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     expect(score.score).toBeGreaterThan(CRAFT_NEUTRAL_PRIOR);
 
     // And the whole loop is legible to a benchmark from the durable log.
-    const row = craftCycleRow(session, db)!;
+    const row = craftCycleRow(session, rt, db)!;
     expect(row.crafted).toEqual(['doubleIt']);
     expect(row.reused).toEqual(['doubleIt']);
     expect(row.returned).toBe(1);
@@ -130,7 +139,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     const create =
       'await workspace.createTool("brokenIt", "always throws", "async () => { throw new Error(\\"nope\\"); }"); return "made";';
     const call = 'return await tools.brokenIt();';
-    const { db, session, events } = episode([
+    const { db, rt, session, events } = episode([
       create, call, call, call, call,
       // By now the tool is under the injection floor: the sandbox no longer
       // binds it at all, which is a DIFFERENT failure from the tool throwing.
@@ -152,7 +161,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     expect(score.uses).toBe(4);
     expect(score.score).toBeLessThan(0.2);
 
-    const row = craftCycleRow(session, db)!;
+    const row = craftCycleRow(session, rt, db)!;
     expect(row.raised).toBe(4);
     expect(row.returned).toBe(0);
     expect(row.dropped).toEqual(['brokenIt']);
@@ -165,13 +174,15 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     await session.end();
 
     const off = (() => {
-      const dbOff = new Database(':memory:');
+      const dbOff = new Database(scratchPath('in-episode-craft-off', 'agent.db'), { create: true });
       dbOff.exec(`CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+        actor_id TEXT NOT NULL, id TEXT NOT NULL,
+        session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
         role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-        created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+        created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+        PRIMARY KEY (actor_id, id))`);
       const rt = createCLIRuntime(dbOff, {
-        dbPath: scratchPath('in-episode-craft-off', 'agent.db'), llm: DUMMY_LLM,
+        dbPath: dbOff.filename, llm: DUMMY_LLM,
       });
       const evs: SessionEvent[] = [];
       return {

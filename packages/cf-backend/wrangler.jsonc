@@ -343,6 +343,14 @@
   // docs/EMAIL-INGRESS.md. Until then the binding is inert: inbound mail
   // never arrives and outbound sends skip quietly.
   "send_email": [{ "name": "EMAIL" }],
+  // The deployed Worker version, as Cloudflare itself names it: the ONE real
+  // installed-build identity reachable from inside a Durable Object. A durable
+  // turn claim records which build ran a turn on the BUILTIN loop
+  // (packages/core/src/orchestrator/actor-claims.ts), and without this binding
+  // that claim records the build as unknown rather than naming the placeholder
+  // package version. Costs nothing — Cloudflare fills `id`/`tag`/`timestamp` at
+  // deploy time — and is inert until the next deploy carries it.
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // Workers AI binding. Serves platform-side work billed to THIS account:
   // embeddings, HTML→markdown, and the `ai-gateway` provider's chat transport
   // (providers/gateway-binding-fetch.ts) — binding calls are pre-authenticated

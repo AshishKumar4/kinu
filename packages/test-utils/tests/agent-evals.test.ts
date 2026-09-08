@@ -13,9 +13,10 @@
 import { describe, test, expect } from 'bun:test';
 import {
   initAlternateTakesTable, initHeadsTables, initMctsSearchTable, initRunEventTables,
-  initSearchTables, listForkRuns, type JsonObject, type SqlExecutor,
+  initSearchTables, listForkRuns, type ActorHandle, type JsonObject, type SqlExecutor,
 } from '@kinu.run/core';
-import { createTestSql, type TestSql } from '../src/sql';
+import { createTestSql, testActorHandle, type TestSql } from '../src/sql';
+import { createTestActors } from '../src/actors';
 import {
   BEHAVIOUR_SCORERS, completionHonesty, craftReuse, editLanding, parseFailureMix,
   recoveryDurability, scoreExploration, scoreSettleVisibility,
@@ -23,18 +24,27 @@ import {
 } from '../src/agent-evals';
 
 /**
- * Every table the Exploration reader touches. Note that `initSearchTables`
- * alone is not enough: `queryCompetedRuns` LEFT JOINs `mcts_search_runs`, which
- * a different initialiser owns, so a fixture that seeds only `search_nodes`
- * makes the reader throw rather than return an empty list.
+ * Every table the Exploration reader touches, and the actor that owns the
+ * actor-private half of them. Note that `initSearchTables` alone is not
+ * enough: `queryCompetedRuns` LEFT JOINs `mcts_search_runs`, which a different
+ * initialiser owns, so a fixture that seeds only `search_nodes` makes the
+ * reader throw rather than return an empty list.
+ *
+ * The actor is REAL — the head journal is actor-private, so every row seeded
+ * below is stamped with this handle's id and every scorer reads as this
+ * handle. A literal id would seed rows the scorers' own reads filter out.
  */
-function forkStore(): TestSql {
+interface ForkStore extends TestSql {
+  readonly actor: ActorHandle;
+}
+
+function forkStore(): ForkStore {
   const store = createTestSql();
   initSearchTables(store.execRaw);
   initMctsSearchTable(store.execRaw);
   initAlternateTakesTable(store.execRaw);
   initHeadsTables(store.execRaw);
-  return store;
+  return { ...store, actor: createTestActors(store.sql, store.execRaw).main };
 }
 
 /** A search the way runMCTS writes one: a root, `branches` children, and — when
@@ -65,14 +75,16 @@ function seedSearch(sql: SqlExecutor, opts: {
 }
 
 /** A merged fork the way HeadController writes one: a run label plus one
- *  head_journal row per head. */
-function seedHeads(sql: SqlExecutor, opts: { root: string; heads: number }): void {
-  void sql`INSERT INTO head_runs (root_id, rationale, spawned_at)
-    VALUES (${opts.root}, ${'why ' + opts.root}, ${2_000})`;
+ *  head_journal row per head, both private to the store's own actor. */
+function seedHeads(store: ForkStore, opts: { root: string; heads: number }): void {
+  const { sql } = store;
+  const actorId = store.actor.actorId;
+  void sql`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at)
+    VALUES (${actorId}, ${opts.root}, ${'why ' + opts.root}, ${2_000})`;
   for (let i = 0; i < opts.heads; i++) {
     void sql`INSERT INTO head_journal
-      (id, parent_id, root_id, depth, task, status, spawned_at, completed_at)
-      VALUES (${`${opts.root}-h${String(i)}`}, ${null}, ${opts.root}, ${1},
+      (actor_id, id, parent_id, root_id, depth, task, status, spawned_at, completed_at)
+      VALUES (${actorId}, ${`${opts.root}-h${String(i)}`}, ${null}, ${opts.root}, ${1},
               ${'head task'}, ${'completed'}, ${2_001 + i}, ${2_100})`;
   }
 }
@@ -82,7 +94,7 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-a', branches: 3, winner: 1, value: 0.91 });
 
-    const score = scoreExploration(store.sql);
+    const score = scoreExploration(store.sql, store.actor);
 
     expect(score.searchRuns).toBe(1);
     expect(score.branchedRuns).toBe(1);
@@ -100,7 +112,7 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-b', branches: 3, winner: null });
 
-    const score = scoreExploration(store.sql);
+    const score = scoreExploration(store.sql, store.actor);
 
     expect(score.searchRuns).toBe(1);
     expect(score.branchedRuns).toBe(1);
@@ -113,7 +125,7 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-c', branches: 1, winner: 0 });
 
-    const score = scoreExploration(store.sql);
+    const score = scoreExploration(store.sql, store.actor);
 
     expect(score.searchRuns).toBe(1);
     expect(score.branchedRuns).toBe(0);
@@ -122,7 +134,7 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
 
   test('an empty store reports a ZERO denominator, not a pass', () => {
     const store = forkStore();
-    const score = scoreExploration(store.sql);
+    const score = scoreExploration(store.sql, store.actor);
     expect(score.searchRuns).toBe(0);
     expect(score.branchedRuns).toBe(0);
     expect(score.runs).toEqual([]);
@@ -131,8 +143,8 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
 
   test('a journal-only run is not counted as a run with a search tree', () => {
     const store = forkStore();
-    seedHeads(store.sql, { root: 'merge-a', heads: 2 });
-    expect(scoreExploration(store.sql).searchRuns).toBe(0);
+    seedHeads(store, { root: 'merge-a', heads: 2 });
+    expect(scoreExploration(store.sql, store.actor).searchRuns).toBe(0);
     store.close();
   });
 });
@@ -141,9 +153,9 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
   test('both stores populated: every written root is visible', () => {
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-a', branches: 2, winner: 0 });
-    seedHeads(store.sql, { root: 'merge-a', heads: 2 });
+    seedHeads(store, { root: 'merge-a', heads: 2 });
 
-    const score = scoreSettleVisibility(store.sql);
+    const score = scoreSettleVisibility(store.sql, store.actor);
 
     expect(score.rootsWritten).toBe(2);
     expect(score.invisibleRoots).toEqual([]);
@@ -159,10 +171,10 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
     // journalled runs, a real search would read as invisible — the scorer must not
     // be able to blame the reader's limit.
     const store = forkStore();
-    for (let i = 0; i < 25; i++) seedHeads(store.sql, { root: `merge-${String(i)}`, heads: 1 });
+    for (let i = 0; i < 25; i++) seedHeads(store, { root: `merge-${String(i)}`, heads: 1 });
     seedSearch(store.sql, { root: 'search-late', branches: 2, winner: 0 });
 
-    const score = scoreSettleVisibility(store.sql);
+    const score = scoreSettleVisibility(store.sql, store.actor);
 
     expect(score.rootsWritten).toBe(26);
     expect(score.invisibleRoots).toEqual([]);
@@ -176,11 +188,11 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
     // it happened in.
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-a', branches: 2, winner: 0 });
-    seedHeads(store.sql, { root: 'merge-a', heads: 2 });
+    seedHeads(store, { root: 'merge-a', heads: 2 });
 
     const transcriptsOnly = (sql: SqlExecutor, limit: number) =>
-      listForkRuns(sql, null, limit).items.filter((run) => !run.hasSearchTree);
-    const score = scoreSettleVisibility(store.sql, transcriptsOnly);
+      listForkRuns(sql, store.actor, null, limit).items.filter((run) => !run.hasSearchTree);
+    const score = scoreSettleVisibility(store.sql, store.actor, transcriptsOnly);
 
     expect(score.rootsWritten).toBe(2);
     expect(score.invisibleRoots).toEqual(['search-a']);
@@ -197,11 +209,11 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
     // time. Both directions must fail, or the scorer only guards one of them.
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-a', branches: 2, winner: 0 });
-    seedHeads(store.sql, { root: 'merge-a', heads: 2 });
+    seedHeads(store, { root: 'merge-a', heads: 2 });
 
     const treeOnly = (sql: SqlExecutor, limit: number) =>
-      listForkRuns(sql, null, limit).items.filter((run) => run.hasSearchTree);
-    const score = scoreSettleVisibility(store.sql, treeOnly);
+      listForkRuns(sql, store.actor, null, limit).items.filter((run) => run.hasSearchTree);
+    const score = scoreSettleVisibility(store.sql, store.actor, treeOnly);
 
     expect(score.invisibleRoots).toEqual(['merge-a']);
     store.close();
@@ -212,9 +224,9 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
     // root present in a write store that the reader has no query for: the shape any
     // future third store would take.
     const store = forkStore();
-    seedHeads(store.sql, { root: 'merge-a', heads: 1 });
+    seedHeads(store, { root: 'merge-a', heads: 1 });
     const noReader = () => [];
-    const score = scoreSettleVisibility(store.sql, noReader);
+    const score = scoreSettleVisibility(store.sql, store.actor, noReader);
 
     expect(score.rootsWritten).toBe(1);
     expect(score.invisibleRoots).toEqual(['merge-a']);
@@ -224,10 +236,10 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
   test('steer-branch roots are excluded, so a correct reader does not look broken', () => {
     const store = forkStore();
     void store.sql`INSERT INTO head_journal
-      (id, parent_id, root_id, depth, task, status, spawned_at)
-      VALUES (${'branch-abc-h0'}, ${null}, ${'branch-abc'}, ${0}, ${'steer'}, ${'completed'}, ${5_000})`;
+      (actor_id, id, parent_id, root_id, depth, task, status, spawned_at)
+      VALUES (${store.actor.actorId}, ${'branch-abc-h0'}, ${null}, ${'branch-abc'}, ${0}, ${'steer'}, ${'completed'}, ${5_000})`;
 
-    const score = scoreSettleVisibility(store.sql);
+    const score = scoreSettleVisibility(store.sql, store.actor);
 
     expect(score.rootsWritten).toBe(0);
     expect(score.invisibleRoots).toEqual([]);
@@ -236,17 +248,20 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
 
   test('an empty store reports a ZERO denominator, not a pass', () => {
     const store = forkStore();
-    const score = scoreSettleVisibility(store.sql);
+    const score = scoreSettleVisibility(store.sql, store.actor);
     expect(score.rootsWritten).toBe(0);
     expect(score.invisibleRoots).toEqual([]);
     store.close();
   });
 });
 
-function eventStore(): TestSql {
+/** A run-event store plus the actor its rows belong to. `run_events` is
+ *  actor-scoped, so a fixture that writes rows and a scorer that reads them
+ *  have to agree on one identity — this is where that identity is minted. */
+function eventStore(): TestSql & { actor: ActorHandle } {
   const store = createTestSql();
   initRunEventTables(store.execRaw);
-  return store;
+  return { ...store, actor: testActorHandle(store.sql) };
 }
 
 let eventIndex = 0;
@@ -262,13 +277,16 @@ let eventIndex = 0;
  * warns about, reproduced inside its tests: a fixture that agrees with the
  * hand-rolled query and not with the real writer certifies nothing.
  */
-function emit(sql: SqlExecutor, runId: string, type: string, payload: JsonObject): void {
+function emit(
+  sql: SqlExecutor, actor: ActorHandle, runId: string, type: string, payload: JsonObject,
+): void {
   eventIndex += 1;
   const event = {
     ...payload, type, runId, eventIndex, timestamp: new Date().toISOString(),
   };
-  void sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
-    VALUES (${runId}, ${eventIndex}, ${type}, ${JSON.stringify(event)}, ${event.timestamp})`;
+  void sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+    VALUES (${actor.actorId}, ${runId}, ${eventIndex}, ${type},
+            ${JSON.stringify(event)}, ${event.timestamp})`;
 }
 
 /**
@@ -286,7 +304,7 @@ describe('BEHAVIOUR_SCORERS — the panel contract', () => {
     expect(new Set(names).size).toBe(names.length);
     expect(BEHAVIOUR_SCORERS.length).toBeGreaterThanOrEqual(6);
     for (const scorer of BEHAVIOUR_SCORERS) {
-      const score = scorer.score(store.sql);
+      const score = scorer.score(store.sql, store.actor);
       expect(score.eligible, `${scorer.name} denominator`).toBe(0);
       expect(score.passed, `${scorer.name} numerator`).toBe(0);
       // The whole point of the panel: absent is not zero.
@@ -299,11 +317,11 @@ describe('BEHAVIOUR_SCORERS — the panel contract', () => {
   test('a rate is never reported above 1, so paired statistics stay well-formed', () => {
     const store = eventStore();
     // followUps deliberately exceeds referenced: one spill address cited twice.
-    emit(store.sql, 'run-a', 'context_budget', {
+    emit(store.sql, store.actor, 'run-a', 'context_budget', {
       admittedChars: 10, omittedChars: 900, trips: { run: 1 },
       referenced: 1, tightened: 0, followUps: 3,
     });
-    const score = spillRetrieval.score(store.sql);
+    const score = spillRetrieval.score(store.sql, store.actor);
     expect(score.eligible).toBe(1);
     expect(score.rate).toBe(1);
     store.close();
@@ -313,23 +331,23 @@ describe('BEHAVIOUR_SCORERS — the panel contract', () => {
 describe('steeringConversion — every mechanical trigger', () => {
   test('a repeat-breaker steer that converted is counted', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'turn_steering', { trigger: 'repeated_call', step: 3, tool: 'run', converted: true });
-    emit(store.sql, 'run-a', 'turn_steering', { trigger: 'no_progress', step: 9, converted: true });
+    emit(store.sql, store.actor, 'run-a', 'turn_steering', { trigger: 'repeated_call', step: 3, tool: 'run', converted: true });
+    emit(store.sql, store.actor, 'run-a', 'turn_steering', { trigger: 'no_progress', step: 9, converted: true });
 
-    expect(steeringConversion.score(store.sql).rate).toBe(1);
+    expect(steeringConversion.score(store.sql, store.actor).rate).toBe(1);
     store.close();
   });
 
   test('RED: steers that fired and did not convert score below 1', () => {
     const store = eventStore();
     for (let i = 0; i < 3; i++) {
-      emit(store.sql, `run-${String(i)}`, 'turn_steering', {
+      emit(store.sql, store.actor, `run-${String(i)}`, 'turn_steering', {
         trigger: 'repeated_failure', step: 5, tool: 'run', converted: false,
       });
     }
-    emit(store.sql, 'run-x', 'turn_steering', { trigger: 'repeated_failure', step: 5, tool: 'run', converted: true });
+    emit(store.sql, store.actor, 'run-x', 'turn_steering', { trigger: 'repeated_failure', step: 5, tool: 'run', converted: true });
 
-    const score = steeringConversion.score(store.sql);
+    const score = steeringConversion.score(store.sql, store.actor);
     expect(score.eligible).toBe(4);
     expect(score.passed).toBe(1);
     expect(score.rate).toBe(0.25);
@@ -343,8 +361,8 @@ describe('steeringConversion — every mechanical trigger', () => {
     // denominator and read as a steer that never fired. Loud beats silent for a
     // signal something is being trained against.
     const store = eventStore();
-    emit(store.sql, 'run-a', 'turn_steering', { trigger: 'some_future_trigger', step: 1, converted: false });
-    expect(() => steeringConversion.score(store.sql))
+    emit(store.sql, store.actor, 'run-a', 'turn_steering', { trigger: 'some_future_trigger', step: 1, converted: false });
+    expect(() => steeringConversion.score(store.sql, store.actor))
       .toThrow(/Invalid type: Expected \("repeated_call" \| "repeated_failure" \| "no_progress"\) but received "some_future_trigger"/);
     store.close();
   });
@@ -354,16 +372,17 @@ describe('steeringConversion — every mechanical trigger', () => {
     // type, so one bad row throws for every caller. These scorers narrow in SQL
     // first, so a corrupt `step_finish` costs one number and not eight.
     const store = eventStore();
-    emit(store.sql, 'run-a', 'turn_steering', { trigger: 'no_progress', step: 2, converted: true });
-    void store.sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
-      VALUES (${'run-a'}, ${9_999}, ${'step_finish'}, ${'{"type":"step_finish","nonsense":true}'}, ${'t'})`;
+    emit(store.sql, store.actor, 'run-a', 'turn_steering', { trigger: 'no_progress', step: 2, converted: true });
+    void store.sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+      VALUES (${store.actor.actorId}, ${'run-a'}, ${9_999}, ${'step_finish'},
+              ${'{"type":"step_finish","nonsense":true}'}, ${'t'})`;
 
-    const score = steeringConversion.score(store.sql);
+    const score = steeringConversion.score(store.sql, store.actor);
 
     expect(score.eligible).toBe(1);
     expect(score.passed).toBe(1);
     // And the panel's other scorers are equally unaffected.
-    expect(toolOutcomes.score(store.sql).eligible).toBe(0);
+    expect(toolOutcomes.score(store.sql, store.actor).eligible).toBe(0);
     store.close();
   });
 });
@@ -371,11 +390,11 @@ describe('steeringConversion — every mechanical trigger', () => {
 describe('craftReuse — the in-episode loop closing', () => {
   test('crafted then reused scores over the tools crafted, not the turns', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'craft_cycle', {
+    emit(store.sql, store.actor, 'run-a', 'craft_cycle', {
       crafted: ['grep_imports', 'count_todos'], invoked: ['grep_imports'],
       reused: ['grep_imports'], returned: 1, raised: 0, dropped: [],
     });
-    const score = craftReuse.score(store.sql);
+    const score = craftReuse.score(store.sql, store.actor);
     expect(score.eligible).toBe(2);
     expect(score.passed).toBe(1);
     expect(score.rate).toBe(0.5);
@@ -384,10 +403,10 @@ describe('craftReuse — the in-episode loop closing', () => {
 
   test('RED: a tool crafted and never reached for again scores zero over a real denominator', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'craft_cycle', {
+    emit(store.sql, store.actor, 'run-a', 'craft_cycle', {
       crafted: ['write_only'], invoked: [], reused: [], returned: 0, raised: 0, dropped: [],
     });
-    const score = craftReuse.score(store.sql);
+    const score = craftReuse.score(store.sql, store.actor);
     expect(score.eligible).toBe(1);
     expect(score.passed).toBe(0);
     expect(score.rate).toBe(0);
@@ -396,10 +415,10 @@ describe('craftReuse — the in-episode loop closing', () => {
 
   test('a turn that only invoked a previously-crafted tool crafts no new denominator', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'craft_cycle', {
+    emit(store.sql, store.actor, 'run-a', 'craft_cycle', {
       crafted: [], invoked: ['from_last_turn'], reused: [], returned: 1, raised: 0, dropped: [],
     });
-    const score = craftReuse.score(store.sql);
+    const score = craftReuse.score(store.sql, store.actor);
     expect(score.eligible).toBe(0);
     expect(score.rate).toBeNull();
     expect(score.detail).toContain('1 crafted-tool invocations');
@@ -410,11 +429,11 @@ describe('craftReuse — the in-episode loop closing', () => {
 describe('editLanding — did the edit actually land', () => {
   test('applied over attempted, with the dominant failure mode named', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'file_edit', {
+    emit(store.sql, store.actor, 'run-a', 'file_edit', {
       attempts: 4, applied: 3, failures: { not_found: 1 },
       recoveredPaths: 1, abandonedPaths: 0,
     });
-    const score = editLanding.score(store.sql);
+    const score = editLanding.score(store.sql, store.actor);
     expect(score.eligible).toBe(4);
     expect(score.passed).toBe(3);
     expect(score.detail).toContain('not_found×1');
@@ -423,11 +442,11 @@ describe('editLanding — did the edit actually land', () => {
 
   test('RED: a turn that attempted edits and landed none scores zero, not null', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'file_edit', {
+    emit(store.sql, store.actor, 'run-a', 'file_edit', {
       attempts: 5, applied: 0, failures: { stale: 3, ambiguous: 2 },
       recoveredPaths: 0, abandonedPaths: 2,
     });
-    const score = editLanding.score(store.sql);
+    const score = editLanding.score(store.sql, store.actor);
     expect(score.eligible).toBe(5);
     expect(score.passed).toBe(0);
     expect(score.rate).toBe(0);
@@ -441,10 +460,10 @@ describe('editLanding — did the edit actually land', () => {
 describe('recoveryDurability — the recovery that TOOK', () => {
   test('a finding whose signature never recurs holds', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'execution_recovery', {
+    emit(store.sql, store.actor, 'run-a', 'execution_recovery', {
       recoveries: [{ tool: 'run', failures: 3, failedSignature: 'run:bun test x' }],
     });
-    const score = recoveryDurability.score(store.sql);
+    const score = recoveryDurability.score(store.sql, store.actor);
     expect(score.eligible).toBe(1);
     expect(score.passed).toBe(1);
     expect(score.detail).toContain('3 consecutive failures absorbed');
@@ -456,13 +475,13 @@ describe('recoveryDurability — the recovery that TOOK', () => {
     // tautology: the event only exists when a streak was already broken, so
     // recoveries-over-recoveries is 1.00 on every run forever.
     const store = eventStore();
-    emit(store.sql, 'run-a', 'execution_recovery', {
+    emit(store.sql, store.actor, 'run-a', 'execution_recovery', {
       recoveries: [{ tool: 'run', failures: 2, failedSignature: 'run:pytest -q' }],
     });
-    emit(store.sql, 'run-a', 'execution_recovery', {
+    emit(store.sql, store.actor, 'run-a', 'execution_recovery', {
       recoveries: [{ tool: 'run', failures: 4, failedSignature: 'run:pytest -q' }],
     });
-    const score = recoveryDurability.score(store.sql);
+    const score = recoveryDurability.score(store.sql, store.actor);
     expect(score.eligible).toBe(1);
     expect(score.passed).toBe(0);
     expect(score.rate).toBe(0);
@@ -472,13 +491,13 @@ describe('recoveryDurability — the recovery that TOOK', () => {
 
   test('the same signature under a DIFFERENT tool is a different finding', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'execution_recovery', {
+    emit(store.sql, store.actor, 'run-a', 'execution_recovery', {
       recoveries: [
         { tool: 'run', failures: 1, failedSignature: 'same' },
         { tool: 'file', failures: 1, failedSignature: 'same' },
       ],
     });
-    const score = recoveryDurability.score(store.sql);
+    const score = recoveryDurability.score(store.sql, store.actor);
     expect(score.eligible).toBe(2);
     expect(score.passed).toBe(2);
     store.close();
@@ -488,8 +507,8 @@ describe('recoveryDurability — the recovery that TOOK', () => {
 describe('completionHonesty — polarity is the reverse of every other scorer', () => {
   test('a gate that found no work left is the PASS', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'completion_gate', { converted: false });
-    const score = completionHonesty.score(store.sql);
+    emit(store.sql, store.actor, 'run-a', 'completion_gate', { converted: false });
+    const score = completionHonesty.score(store.sql, store.actor);
     expect(score.eligible).toBe(1);
     expect(score.passed).toBe(1);
     expect(score.detail).toContain('0 were forced back to work');
@@ -500,10 +519,10 @@ describe('completionHonesty — polarity is the reverse of every other scorer', 
     // Scoring this the obvious way round — converted as the numerator — would
     // reward a model that habitually declares victory early.
     const store = eventStore();
-    emit(store.sql, 'run-a', 'completion_gate', { converted: true });
-    emit(store.sql, 'run-b', 'completion_gate', { converted: true });
-    emit(store.sql, 'run-c', 'completion_gate', { converted: false });
-    const score = completionHonesty.score(store.sql);
+    emit(store.sql, store.actor, 'run-a', 'completion_gate', { converted: true });
+    emit(store.sql, store.actor, 'run-b', 'completion_gate', { converted: true });
+    emit(store.sql, store.actor, 'run-c', 'completion_gate', { converted: false });
+    const score = completionHonesty.score(store.sql, store.actor);
     expect(score.eligible).toBe(3);
     expect(score.passed).toBe(1);
     expect(score.rate).toBeCloseTo(1 / 3);
@@ -515,11 +534,11 @@ describe('completionHonesty — polarity is the reverse of every other scorer', 
 describe('spillRetrieval — spilled context read back', () => {
   test('a follow-up against a readable spill passes', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'context_budget', {
+    emit(store.sql, store.actor, 'run-a', 'context_budget', {
       admittedChars: 1_000, omittedChars: 40_000, trips: { run: 2 },
       referenced: 2, tightened: 1, followUps: 2,
     });
-    const score = spillRetrieval.score(store.sql);
+    const score = spillRetrieval.score(store.sql, store.actor);
     expect(score.eligible).toBe(2);
     expect(score.passed).toBe(2);
     expect(score.detail).toContain('40000 chars withheld');
@@ -528,11 +547,11 @@ describe('spillRetrieval — spilled context read back', () => {
 
   test('RED: a readable spill the agent never fetched scores zero', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'context_budget', {
+    emit(store.sql, store.actor, 'run-a', 'context_budget', {
       admittedChars: 500, omittedChars: 80_000, trips: { run: 3 },
       referenced: 3, tightened: 0, followUps: 0,
     });
-    const score = spillRetrieval.score(store.sql);
+    const score = spillRetrieval.score(store.sql, store.actor);
     expect(score.eligible).toBe(3);
     expect(score.passed).toBe(0);
     expect(score.rate).toBe(0);
@@ -543,11 +562,11 @@ describe('spillRetrieval — spilled context read back', () => {
     // There was nothing to read back, so this is the harness failing, not the
     // model. Charging it here would score our own defect against the agent.
     const store = eventStore();
-    emit(store.sql, 'run-a', 'context_budget', {
+    emit(store.sql, store.actor, 'run-a', 'context_budget', {
       admittedChars: 0, omittedChars: 9_000, trips: { attachment: 1 },
       referenced: 0, tightened: 0, followUps: 0,
     });
-    const score = spillRetrieval.score(store.sql);
+    const score = spillRetrieval.score(store.sql, store.actor);
     expect(score.eligible).toBe(0);
     expect(score.rate).toBeNull();
     store.close();
@@ -557,16 +576,16 @@ describe('spillRetrieval — spilled context read back', () => {
 describe('toolOutcomes — structural attribution with an observed denominator', () => {
   test('producer outcomes win over error-looking data and clean-looking failures', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'tool_call_end', {
+    emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
       name: 'file', toolCallId: 't1', outcome: { success: true }, result: { error: 'ordinary document data' },
     });
-    emit(store.sql, 'run-a', 'tool_call_end', {
+    emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
       name: 'run', toolCallId: 't2', outcome: { success: true }, result: 'Error (exit 3)',
     });
-    emit(store.sql, 'run-a', 'tool_call_end', {
+    emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
       name: 'run', toolCallId: 't3', outcome: { success: false, reason: null, execution: { exitCode: 3 } }, result: 'ok',
     });
-    const result = toolOutcomes.score(store.sql);
+    const result = toolOutcomes.score(store.sql, store.actor);
     expect(result.eligible).toBe(3);
     expect(result.passed).toBe(2);
     expect(result.rate).toBeCloseTo(2 / 3);
@@ -576,10 +595,10 @@ describe('toolOutcomes — structural attribution with an observed denominator',
 
   test('missing legacy outcomes remain observed but cannot supply a success rate', () => {
     const store = eventStore();
-    emit(store.sql, 'run-a', 'tool_call_end', { name: 'run', toolCallId: 't1', result: 'Error (exit 3)' });
-    emit(store.sql, 'run-a', 'tool_call_end', { name: 'run', toolCallId: 't2', error: 'legacy explicit error' });
-    emit(store.sql, 'run-a', 'tool_call_end', { name: 'file', toolCallId: 't3', error: '', result: 'ok' });
-    const result = toolOutcomes.score(store.sql);
+    emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'run', toolCallId: 't1', result: 'Error (exit 3)' });
+    emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'run', toolCallId: 't2', error: 'legacy explicit error' });
+    emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'file', toolCallId: 't3', error: '', result: 'ok' });
+    const result = toolOutcomes.score(store.sql, store.actor);
     expect(result.eligible).toBe(3);
     expect(result.passed).toBe(0);
     expect(result.rate).toBeNull();
@@ -589,13 +608,13 @@ describe('toolOutcomes — structural attribution with an observed denominator',
 
   test('failure attribution uses recorded refusal reasons and process exits', () => {
     const store = eventStore();
-    for (const id of ['t1', 't2']) emit(store.sql, 'run-a', 'tool_call_end', {
+    for (const id of ['t1', 't2']) emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
       name: 'file', toolCallId: id, args: { action: 'edit' }, outcome: { success: false, reason: 'not_found' }, result: 'no details',
     });
-    emit(store.sql, 'run-a', 'tool_call_end', {
+    emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
       name: 'run', toolCallId: 't3', outcome: { success: false, reason: null, execution: { exitCode: 1 } }, result: 'no details',
     });
-    const result = toolOutcomes.score(store.sql);
+    const result = toolOutcomes.score(store.sql, store.actor);
     expect(result.eligible).toBe(3);
     expect(result.passed).toBe(0);
     expect(result.rate).toBe(0);

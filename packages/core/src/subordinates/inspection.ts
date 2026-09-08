@@ -9,6 +9,7 @@ import { UsageSchema } from '../usage';
 import { JsonObjectSchema } from '../utils/json';
 import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { SubordinateRosterEntrySchema, SubordinateRosterStore } from './roster';
 import { DELEGATION_MAX_DEPTH } from './depth';
 import { PlanReviewStore, PlanReviewSchema } from '../plans/review';
@@ -73,6 +74,7 @@ export function missingSubordinateHistory(path: string[]): SubordinateInspection
 /** Reads existing actor tables. No schema initialization or live actor state. */
 export function readSubordinateInspection(
   sql: SqlExecutor,
+  actor: ActorHandle,
   raw: SqlExec,
   request: SubordinateInspectionRequest,
 ): SubordinateInspectionResult {
@@ -88,7 +90,7 @@ export function readSubordinateInspection(
       if (!plan || plan.sessionId !== 'default') return missingSubordinateHistory(path);
       if (request.view === 'plan') return { view: 'plan', path, plan };
       if (!tableExists(sql, 'plan_task_links')) return missingSubordinateHistory(path);
-      return { view: 'planTasks', path, tasks: readPlanTasks(sql, plan) };
+      return { view: 'planTasks', path, tasks: readPlanTasks(sql, actor, plan) };
     }
     case 'children': {
       if (!tableExists(sql, 'actor_subordinates')) return missingSubordinateHistory(path);
@@ -97,13 +99,13 @@ export function readSubordinateInspection(
     }
     case 'history':
       if (!tableExists(sql, 'assistant_messages') && !tableExists(sql, 'messages')) return missingSubordinateHistory(path);
-      return { view: 'history', path, page: getChatHistoryPage(sql, request.page) };
+      return { view: 'history', path, page: getChatHistoryPage(sql, actor, request.page) };
     case 'runs':
       if (!tableExists(sql, 'run_events')) return missingSubordinateHistory(path);
-      return { view: 'runs', path, page: getRunSummaries(new RunEventRecorder(sql), request.page.cursor, request.page.limit) };
+      return { view: 'runs', path, page: getRunSummaries(new RunEventRecorder(sql, actor), request.page.cursor, request.page.limit) };
     case 'events': {
       if (!tableExists(sql, 'run_events')) return missingSubordinateHistory(path);
-      const recorder = new RunEventRecorder(sql);
+      const recorder = new RunEventRecorder(sql, actor);
       if (recorder.runSeq(request.runId) === null) return missingSubordinateHistory(path);
       const limit = request.query.limit ?? 200;
       const fetched = recorder.read(request.runId, { since: request.query.since, limit: limit + 1 });

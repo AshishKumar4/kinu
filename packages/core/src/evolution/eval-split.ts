@@ -8,6 +8,7 @@
 import * as v from 'valibot';
 import type { ModelMessage } from 'ai';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { ToolCallRecord } from './types';
 import {
   ADVISOR_CLASS_LABEL, ADVISOR_EVENT_TYPE, AdvisorRowDataSchema,
@@ -85,18 +86,25 @@ function toolCallsFromTranscript(messages: readonly ModelMessage[]): ToolCallRec
  *  ledgers. Both tables are created by `initWorkspaceSchema` on every backend,
  *  so a failed read here is a real fault and is not reported as "this turn ran
  *  no tools" — the shape a blanket catch used to give it. */
-function turnProcessEvidence(sql: SqlExecutor, turnId: string | null): string | undefined {
+function turnProcessEvidence(
+  sql: SqlExecutor, actor: ActorHandle, turnId: string | null,
+): string | undefined {
   if (!turnId) return undefined;
   // INNER-join semantics preserved: a turn with no user row behind it has no
   // window and no evidence.
-  const pair = conversationTurnPair(sql, turnId);
+  const pair = conversationTurnPair(sql, actor, turnId);
   if (!pair || pair.request === null || pair.startedAtMs === null) return undefined;
 
   const from = new Date(pair.startedAtMs).toISOString();
   const to = new Date(pair.endedAtMs).toISOString();
+  // One check for both raw reads below. `run_events` is actor-scoped and this is
+  // a free function rather than a store, so nothing else re-verifies the binding
+  // before the statements run.
+  actor.assertCurrent();
   const starts = sql<{ runId: string; payload: string }>`
     SELECT run_id AS runId, payload FROM run_events
-    WHERE type = 'run_start' AND ts >= ${from} AND ts <= ${to}
+    WHERE actor_id = ${actor.actorId} AND type = 'run_start'
+      AND ts >= ${from} AND ts <= ${to}
     ORDER BY ts DESC LIMIT 20`;
   const expectedUserMessage = pair.request.slice(0, 500);
   const runId = starts.find(({ payload }) => {
@@ -106,13 +114,15 @@ function turnProcessEvidence(sql: SqlExecutor, turnId: string | null): string | 
   if (!runId) return undefined;
 
   const rows = sql<{ payload: string; ts: string }>`
-    SELECT payload, ts FROM run_events WHERE run_id = ${runId} ORDER BY event_index`;
+    SELECT payload, ts FROM run_events
+    WHERE actor_id = ${actor.actorId} AND run_id = ${runId}
+    ORDER BY event_index`;
   const events = rows.map((row) => ({ event: parseRunEvent(row.payload), at: Date.parse(row.ts) }))
     .filter((row): row is { event: StoredRunEvent; at: number } => row.event !== null && Number.isFinite(row.at));
   if (events.length === 0) return undefined;
 
   // The turn's real trajectory, from the rows written as each step finished.
-  const toolCalls = toolCallsFromTranscript(new RunEventRecorder(sql).transcript(runId));
+  const toolCalls = toolCallsFromTranscript(new RunEventRecorder(sql, actor).transcript(runId));
   const steps = events.filter(({ event }) => event.type === 'step_finish').length;
   const startAt = events.find(({ event }) => event.type === 'run_start')?.at ?? events[0].at;
   const endAt = [...events].reverse().find(({ event }) => event.type === 'run_end')?.at ??
@@ -181,11 +191,16 @@ function flattenAdvisorTexts(row: RawAdvisorRow): RawAdvisorRow {
  * before the payload carried a turn id cannot reach the parse at all — the join
  * drops it first.
  */
-function advisorNegatives(sql: SqlExecutor, limit: number): AdvisorNegativeRow[] {
+function advisorNegatives(sql: SqlExecutor, actor: ActorHandle, limit: number): AdvisorNegativeRow[] {
   if (limit <= 0) return [];
+  actor.assertCurrent();
   // The conversation comes from the canonical store: the pane's serialized UI
   // rows where the backend keeps one, plain `messages` otherwise — the same
   // authority every other conversational reader answers from.
+  //
+  // Only the `messages` arm carries the actor predicate. The pane store is
+  // created and written by the agents SDK and has no `actor_id` column, so a
+  // predicate there would match nothing.
   const rows = hasPaneStore(sql)
     ? sql<RawAdvisorRow>`
         SELECT e.id AS id, e.message AS note, e.data AS data, e.created_at AS createdAt,
@@ -200,8 +215,9 @@ function advisorNegatives(sql: SqlExecutor, limit: number): AdvisorNegativeRow[]
         SELECT e.id AS id, e.message AS note, e.data AS data, e.created_at AS createdAt,
                turn.id AS turnId, turn.content AS assistantResponse, ask.content AS userMessage
         FROM evolution_events e
-        JOIN messages turn ON turn.id = json_extract(e.data, '$.turnId')
-        JOIN messages ask ON ask.id = turn.parent_id
+        JOIN messages turn ON turn.actor_id = ${actor.actorId}
+          AND turn.id = json_extract(e.data, '$.turnId')
+        JOIN messages ask ON ask.actor_id = turn.actor_id AND ask.id = turn.parent_id
         WHERE e.type = ${ADVISOR_EVENT_TYPE}
           AND NOT EXISTS (SELECT 1 FROM turn_outcomes o WHERE o.turn_id = turn.id)
         ORDER BY e.created_at DESC, e.id DESC LIMIT ${limit}`;
@@ -295,13 +311,13 @@ function advisorDraw(row: AdvisorNegativeRow): EvalDraw {
  *  No instance is ever in both sets: a winner selected on `val` was never
  *  reflected on during training. When the evidence is too thin to hold anything
  *  out, the split says so via `degeneracy` instead of quietly overlapping. */
-export function buildOutcomeEvalSplit(sql: SqlExecutor, budget: number): OutcomeEvalSplit {
+export function buildOutcomeEvalSplit(sql: SqlExecutor, actor: ActorHandle, budget: number): OutcomeEvalSplit {
   const size = Math.max(2, Math.floor(budget));
   const ledgerNegatives = listTurnOutcomes(sql, { limit: size, outcomes: NEGATIVE_TURN_OUTCOMES });
   const accepted = listTurnOutcomes(sql, { limit: size, outcomes: ['accepted'] });
   // Enough to fill every negative slot the ledger cannot, before the clamps
   // below decide how many of those slots the final draw actually has.
-  const advisorRows = advisorNegatives(sql, size - ledgerNegatives.length);
+  const advisorRows = advisorNegatives(sql, actor, size - ledgerNegatives.length);
 
   // Array.sort is stable, so rows of equal age keep the `created_at DESC, id
   // DESC` order their own query already imposed.
@@ -319,7 +335,7 @@ export function buildOutcomeEvalSplit(sql: SqlExecutor, budget: number): Outcome
     evidence: [
       `Outcome: ${draw.outcome}`,
       ...draw.extraEvidence,
-      turnProcessEvidence(sql, draw.turnId),
+      turnProcessEvidence(sql, actor, draw.turnId),
     ].filter((line): line is string => line !== undefined).join('\n'),
     expected: {
       outcome: draw.outcome,
