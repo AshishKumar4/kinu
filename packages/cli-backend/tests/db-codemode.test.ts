@@ -17,7 +17,7 @@ import {
 } from '@kinu.run/core';
 import { createTestActors, toolExecute, type TestActors } from '@kinu.run/test-utils';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
-import { makeWorkspaceSchemaSql } from '../src/runtime';
+import { localTransactions, makeWorkspaceSchemaSql } from '../src/runtime';
 
 interface ExecuteToolResult {
   result: JsonValue | undefined;
@@ -42,6 +42,16 @@ function sandbox(): Sandbox {
   // backend (runtime.ts documents that exact hazard), and `db.*` counts rows
   // affected through `RETURNING`.
   const schemaSql = makeWorkspaceSchemaSql(db);
+  // The atomicity primitive is the workspace's OWN (`localTransactions`), not a
+  // one-liner retyped here: `db.batch`'s all-or-nothing guarantee and the
+  // rollback of its evidence are properties of that seam, so a test carrying
+  // its own copy would agree with production by construction and could not
+  // catch it being wrong. Absent, this suite must not run at all rather than
+  // measure a torn write that reports success.
+  const transactionSync = localTransactions(db).storage?.transactionSync;
+  if (transactionSync === undefined) {
+    throw new Error('the local workspace exposes no synchronous transaction, so batch atomicity cannot be measured');
+  }
   const sql = schemaSql.sql;
   initWorkspaceSchema(schemaSql);
   const actors = createTestActors(sql, schemaSql.execRaw);
@@ -50,7 +60,7 @@ function sandbox(): Sandbox {
     run: (code, actor = actors.main) => {
       const store = createAppDataStore({
         sql, actor,
-        transactionSync: (write) => db.transaction(write)(),
+        transactionSync,
         events: () => new RunEventRecorder(sql, actor),
         runId: () => WORKSPACE_RUN_ID,
       });
