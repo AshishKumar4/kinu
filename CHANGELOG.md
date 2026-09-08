@@ -614,6 +614,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- Unavailable GEPA judges no longer produce neutral quality scores. Failed
+  measurements abort scaffold and section optimization with actual attempt
+  counts; they cannot create a pending section or count as a promotion win.
+
 - The Terminal-Bench seeded-sample regression uses a recorded selection-only population and the original sealed expected draw, so it always runs regardless of an optional corpus download. Real-corpus validation and historical seals are unchanged.
 
 - Recovery eval credit requires the authored seeded-test command on the workspace, an observed nonzero process exit, and its later successful rerun; unrelated failed/successful commands cannot substitute.

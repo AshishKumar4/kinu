@@ -34,7 +34,8 @@ export interface EvalInstance<I = unknown, E = unknown> {
   expected?: E;
 }
 
-/** Per-instance evaluation outcome — what the metric returns. */
+/** A measured per-instance outcome. Unavailable/failed measurement rejects the
+ * metric promise; it must never be represented by a neutral numeric score. */
 export interface MetricOutcome {
   /** 0..1 numeric score; higher is better. */
   score: number;
