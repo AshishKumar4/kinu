@@ -30,6 +30,7 @@ import { initAgentConfigTable } from '../config/store';
 import { initCurriculumTable } from '../curriculum/proposer';
 import { initEventsHubTables } from '../events/hub/schema';
 import { initRunEventTables } from '../events/recorder';
+import { initActorClaimTables } from '../orchestrator/actor-claims';
 import { initGepaTables } from '../evolution/gepa/persistence';
 import { initTurnOutcomeTables } from '../evolution/outcomes';
 import { initReplayTables } from '../evolution/replay';
@@ -191,6 +192,11 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initShadowTables(execRaw);
   // The durable per-run event log the frontends replay.
   initRunEventTables(execRaw);
+  // The durable admission ledger: one claim per (actor, turn) written before
+  // that turn's first effect, and the context revisions its steps consume.
+  // Created on every root because the turn path writes one on every turn
+  // everywhere — a workspace whose table were missing could not admit a turn.
+  initActorClaimTables(execRaw);
   // agent_facts world model — keyed JSON facts with confidence and recency.
   initFactsTable(execRaw);
   // Voyager curriculum proposed-tasks queue.

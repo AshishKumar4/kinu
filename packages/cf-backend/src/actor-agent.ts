@@ -74,6 +74,10 @@ import {
   // Scaffold loop closure — the evolved inference loop + its sampled
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
   scaffoldInferenceTransform, prepareActorProgram, type ActorTurnProgram, type ScaffoldRunOptions,
+  // Durable admission — the claim a turn is issued under, and the per-step
+  // context plane its revisions are recorded on.
+  initActorClaimTables, programIdentityOf, ActorClaimStore,
+  type ActorTurnClaim, type ClaimOutcome, type StepContextPlane,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   // Continual refinement — the lane's deps come from four seams this class
@@ -790,12 +794,16 @@ export abstract class ActorAgent extends Think<Env> {
       mode    TEXT NOT NULL CHECK (mode IN ('plan','build')),
       text    TEXT NOT NULL
     )`);
-    // This survives the reset window between an in-flight turn's eviction and
-    // its fiber recovery. Stop must still identify that turn's device work.
-    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS active_durable_turn (
-      id      INTEGER PRIMARY KEY CHECK (id = 1),
-      turn_id TEXT NOT NULL
-    )`);
+    // The durable admission ledger: the claim a turn is issued under, with its
+    // actor, run, epoch, selected program identity and admitted context. It
+    // replaces the single `active_durable_turn` row this table list used to
+    // carry — one row keyed `id = 1` could hold ONE turn id for the whole
+    // database, so it could neither name which issued actor owned the turn nor
+    // tell an evicted activation apart from the one that replaced it. Created
+    // here rather than in `ensureSchema` for the reason the row below it is:
+    // the recovery sweep reads it from `onStart`, which is not guaranteed to
+    // follow a root's `ensureSchema`.
+    initActorClaimTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
     // Here for the same reason as the row above it, and one more: the recovery
     // sweep reads it from `onStart`, which is not guaranteed to follow a root's
     // `ensureSchema`. Idempotent DDL, so a re-activation costs nothing.
@@ -1547,10 +1555,14 @@ export abstract class ActorAgent extends Think<Env> {
     // runs fire-and-forget and does NOT extend the busy window.
     this._inFlight = false;
     this._cliCwd = null;
-    const activeTurnId = this._turnCheckpoint?.turnId;
-    if (activeTurnId) {
-      void this.sql`DELETE FROM active_durable_turn WHERE turn_id = ${activeTurnId}`;
-    }
+    // The turn's durable claim closes here, named by what the response did.
+    // This is where the single `active_durable_turn` row used to be deleted;
+    // the claim carries an OUTCOME instead of vanishing, so a later reader can
+    // tell a turn that completed from one an eviction left open — which a
+    // deleted row could not say, and which is what recovery has to know.
+    this.settleTurnClaim(result.status === 'completed'
+      ? 'completed'
+      : result.status === 'aborted' ? 'aborted' : 'error');
     // Order matters: the flag is already clear, so the leftover steer enqueues
     // as a turn of its own instead of buffering for a turn that is over.
     this.rerunLeftoverSteers();
@@ -2137,7 +2149,7 @@ export abstract class ActorAgent extends Think<Env> {
    * `_inFlight` answers only for THIS activation, and the state that matters
    * most is the one it cannot see: an isolate that died while an
    * auto-continuation was executing a claimed tool leaves a FRESH actor with
-   * `_inFlight === false` while `active_durable_turn` still names that turn. So
+   * `_inFlight === false` while its durable turn claim still names that turn. So
    * closing the earlier response released the continuation's tool claims before
    * chat recovery had replayed it, and the external call ran a second time.
    * `durableTurnId` cannot be the witness on its own either — it deliberately
@@ -2323,13 +2335,72 @@ export abstract class ActorAgent extends Think<Env> {
   protected durableTurnId(): string | null {
     const live = this._turnCheckpoint?.turnId;
     if (live !== undefined) return live;
-    // A cold activation has no checkpoint in RAM yet. The one-row handoff
-    // lets a Stop sweep the original turn's device requests before recovery
-    // re-enters beforeTurn and rebuilds the live checkpoint.
-    return this.sql<{ turn_id: string }>`SELECT turn_id FROM active_durable_turn WHERE id = 1`[0]?.turn_id ?? null;
+    // A cold activation has no checkpoint in RAM yet. The claim ledger is the
+    // handoff: the newest claim this ACTOR admitted and never settled is the
+    // turn a Stop sweep must identify, and being actor-scoped it cannot answer
+    // with a sibling actor's turn the way the old single `id = 1` row could.
+    return this.stores.claims.unsettled(1)[0]?.turnId ?? null;
   }
 
+  /** The claim the in-flight turn is issued under. Written in `beforeTurn`
+   *  before Think can start inference, read by `beforeStep` to record the exact
+   *  context each step consumes, and settled once the response is named. */
+  private _turnClaim: ActorTurnClaim | null = null;
 
+  /**
+   * The installed build this host publishes for its BUILTIN loop.
+   *
+   * Cloudflare's own version metadata, which is the only real build identity
+   * reachable from inside a Durable Object. Absent binding — a deployment older
+   * than the binding, or a local `wrangler dev` without it — answers null, and
+   * the claim then records the build as unknown. It is never substituted with
+   * the package version (a placeholder in this repo), a descriptor digest, or
+   * anything else that would read back as a verified build.
+   */
+  private installedBuildIdentity(): string | null {
+    return this.env.CF_VERSION_METADATA?.id ?? null;
+  }
+
+  /** Name the outcome of the in-flight turn's claim. Idempotent per turn: a
+   *  second settle for one claim is refused by the ledger's own guard, so this
+   *  drops the reference first. */
+  private settleTurnClaim(outcome: ClaimOutcome): void {
+    const claim = this._turnClaim;
+    if (claim === null) return;
+    this._turnClaim = null;
+    this.stores.claims.settle(claim, outcome);
+  }
+
+  /**
+   * The claim's step plane, which is how a hosted step's exact input becomes
+   * durable: `beforeStep` composes the FINAL array through the shared pipeline
+   * and this records it as the revision that step ran on, before the request is
+   * issued. Absent when no claim is held, which is every inference path that is
+   * not a claimed actor turn.
+   */
+  private claimContextPlane(): StepContextPlane | undefined {
+    const claim = this._turnClaim;
+    if (claim === null) return undefined;
+    const claims = this.stores.claims;
+    return {
+      staged: () => {
+        const staged = claims.stagedContext(claim);
+        if (staged === null) return null;
+        const base = staged.baseRevision === null
+          ? null
+          : claims.consumedContext(claim.turnId, staged.baseRevision);
+        return {
+          revision: staged.revision,
+          messages: staged.messages,
+          baseMessageCount: base?.messageCount ?? staged.messageCount,
+        };
+      },
+      consume: ({ stepNumber, messages, stagedRevision }) => {
+        if (stagedRevision === null) claims.consume(claim, { index: stepNumber, messages });
+        else claims.consumeStaged(claim, stagedRevision, { index: stepNumber, messages });
+      },
+    };
+  }
 
   /**
    * The terminal sequence this actor started most recently, resolved once its
@@ -3610,6 +3681,13 @@ export abstract class ActorAgent extends Think<Env> {
     return this.stores.eventRecorder;
   }
 
+  /** The actor's durable claim ledger — the identity a turn's effects are
+   *  issued under. Exposed at the same visibility as the event log above
+   *  because a subclass settles and recovers claims it did not admit. */
+  protected get claims(): ActorClaimStore {
+    return this.stores.claims;
+  }
+
   /**
    * Record one non-turn model call in the durable run-event log.
    *
@@ -3684,7 +3762,14 @@ export abstract class ActorAgent extends Think<Env> {
    * the platform destroyed mid-call; nothing here reads a clock.
    */
   protected readonly modelOperations: ModelOperationSink = recordModelOperations(
-    this.eventRecorder,
+    // The recorder is reached PER EMIT, not once here. A field initializer runs
+    // inside the Durable Object constructor, and the actor-scoped store bundle
+    // resolves the actor handle on first access — which needs the workspace
+    // actor directory, and that does not exist until `onStart`. Forcing the
+    // getter here therefore threw in the constructor of a cold actor. This is
+    // the same rule `state/agent-stores.ts` states for its own laziness: a
+    // Durable Object must not reach storage while field initializers run.
+    { emit: (runId, input) => { this.eventRecorder.emit(runId, input); } },
     () => this._currentRunId || WORKSPACE_RUN_ID,
   );
 
@@ -4629,7 +4714,7 @@ export abstract class ActorAgent extends Think<Env> {
     return [
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, vectorStore: this.rt.vectorStore,
-        facts: this.facts, sql: this.rt.storage.sql,
+        facts: this.facts, sql: this.rt.storage.sql, actor: this.actorHandle(),
       })),
       createTasksCodemodeProvider(this.taskList, this.config),
     ];
@@ -4907,7 +4992,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** Native owner inspection. Does not initialize the SDK or application tables. */
   async inspectSubordinateStorage(request: SubordinateInspectionRequest, authority: SubordinateInspectionAuthority): Promise<SubordinateInspectionResult> {
     return inspectSubordinateStorage({
-      sql: this.boundSql, raw: this.ctx.storage.sql,
+      sql: this.boundSql, actor: this.actorHandle(), raw: this.ctx.storage.sql,
       storedParentPath: () => this.ctx.storage.get<JsonValue>('cf_agents_parent_path'),
       storedPhysicalKey: () => this.ctx.storage.get<JsonValue>('cf_agents_facet_name'),
       existing: async (row) => {
@@ -4922,7 +5007,7 @@ export abstract class ActorAgent extends Think<Env> {
   @callable()
   async getChatHistoryPage(request?: PageRequest): Promise<Page<ChatHistoryEntry>> {
     this.ensureSchema();
-    return getChatHistoryPage(this.boundSql, request ?? {});
+    return getChatHistoryPage(this.boundSql, this.actorHandle(), request ?? {});
   }
 
   /** The agent's stored model spec. The UI preselects a menu entry with it; the
@@ -5727,8 +5812,10 @@ export abstract class ActorAgent extends Think<Env> {
       break;
     }
     this._turnCheckpoint = { turnId: lastUserId ?? this._currentRunId, sessionId: 'default' };
-    void this.sql`INSERT INTO active_durable_turn (id, turn_id) VALUES (1, ${this._turnCheckpoint.turnId})
-      ON CONFLICT(id) DO UPDATE SET turn_id = excluded.turn_id`;
+    // No handoff row is written here any more. The durable claim written later
+    // in `beforeTurn` is the handoff, and it carries what this row could not:
+    // which issued actor owns the turn, which execution epoch owns it, and the
+    // program identity the turn was admitted on.
     const pending = this.sql<{ id: string; text: string }>`
       SELECT id, text FROM pending_steers WHERE turn_id = ${this._turnCheckpoint.turnId} ORDER BY seq ASC`;
     if (pending.length > 0) this.userSteer.restorePending(pending);
@@ -6117,6 +6204,21 @@ export abstract class ActorAgent extends Think<Env> {
     const program = await prepareActorProgram({ runtime, mode, version: await runtime.identity.scaffold.version(), signal: ctx.signal });
     this._lastTurnOpts = lastTurnOpts;
     this._turnProgram = { program, signal: ctx.signal };
+    // THE DURABLE CLAIM, and this is the last statement before Think starts
+    // inference — everything above it is preparation that has issued nothing.
+    // It persists the issued actor, this activation's run, the turn, the next
+    // execution epoch, the immutable work mode, the SELECTED program's identity
+    // (version + the digest of the source that version retains, or the builtin
+    // loop and the build this host publishes for it) and the exact context the
+    // turn was admitted against. A crash after this leaves a claim a recovery
+    // can verify; a crash before it leaves a turn that provably did nothing.
+    this._turnClaim = this.stores.claims.admit({
+      runId: this._currentRunId,
+      turnId: this.durableTurnId() ?? this._currentRunId,
+      workMode: mode,
+      program: programIdentityOf(program, this.installedBuildIdentity()),
+      context: cfg.messages ?? ctx.messages,
+    });
     // The turn's constants for the per-step context breakdown. Tool schemas
     // ride every request of the turn and are otherwise invisible to anyone
     // asking where the window went.
@@ -6196,6 +6298,10 @@ export abstract class ActorAgent extends Think<Env> {
       budget: this.budget,
       dynamic: { ledger: this.dynamicLedger, snapshot: () => this.dynamicContextSnapshot() },
       meter: this.acc.composition,
+      // The claim's context plane: the array this step consumes becomes the
+      // revision it ran on, recorded here — the one place holding the FINAL
+      // composed request — and before the request leaves.
+      context: this.claimContextPlane(),
     }, { stepNumber: ctx.stepNumber, messages: ctx.messages, steps: ctx.steps });
   }
 

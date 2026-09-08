@@ -9,18 +9,38 @@ import { ExtensionHost } from '../extension';
 import { KinuError, renderThrownChain } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
 import { describeLandedSteers, UserSteerDrain, type LandedSteerRow, type UserSteer } from './user-steer';
-import { prepareActorTurn } from './actor-turn';
-import type { ActorTurnProgram } from './actor-program';
+import { startActorTurn } from './actor-turn';
+import { prepareActorProgram, type ActorTurnProgram } from './actor-program';
+import {
+  programIdentityOf, type ActorClaimStore, type ActorTurnClaim, type ClaimOutcome,
+} from './actor-claims';
+import type { StepContextPlane } from '../prompting/prepare-step';
 import type { ModelCallSpend } from '../events/model-call';
 
 export interface ActorSessionOptions {
   readonly runtime: AgentRuntime;
   readonly orchestration: AgentOrchestratorDeps;
+  /** The actor's durable claim ledger. REQUIRED: a turn that cannot write its
+   *  claim cannot issue an effect, so there is no arm of this class that runs
+   *  without one and no host that may decline to wire it. */
+  readonly claims: ActorClaimStore;
+  /**
+   * The installed build the host publishes for its BUILTIN loop, or null when
+   * it publishes none.
+   *
+   * Null is recorded as unknown and read back as unknown. It is not filled in
+   * from a package version that ships as a placeholder, from a descriptor, or
+   * from a digest of the words that name the builtin arm: a claim that says
+   * "this ran under build X" when nobody knows X is worse than one that says
+   * the build is unknown.
+   */
+  readonly installedBuild: string | null;
 }
 
 /** Live-instance execution token, not a replacement for a durable turn/run claim. */
 export interface ActorTurnLease {
   readonly actorId: string;
+  readonly runId: string;
   readonly turnId: string;
   readonly signal: AbortSignal;
 }
@@ -40,6 +60,10 @@ export interface ActorExecutionResult {
   readonly interrupted: boolean;
   /** Null when preparation failed before any program was selected. */
   readonly program: ActorTurnProgram | null;
+  /** The durable claim this execution ran under — written before the first
+   *  effect, and the identity every revision of the turn is keyed to. Null
+   *  only when preparation failed before the claim was admitted. */
+  readonly claim: ActorTurnClaim | null;
 }
 
 interface ActiveTurn {
@@ -48,6 +72,10 @@ interface ActiveTurn {
   phase: 'preparing' | 'running' | 'settling';
   profile: ResolvedTurnProfile | null;
   profileInputs: ProfileAuthorityInputs | null;
+  /** Set the moment the durable claim is admitted, cleared never: a settled
+   *  turn's claim is still the identity its late work is attributed to. */
+  claim: ActorTurnClaim | null;
+  claimSettled: boolean;
 }
 
 /** A logical actor's mutable execution state, independent of its physical host.
@@ -85,12 +113,36 @@ export class ActorSession {
   get profileInputs(): ProfileAuthorityInputs | null { return this.active?.profileInputs ?? null; }
   get landedSteers(): readonly LandedSteerRow[] { return this.landed; }
   get inFlight(): boolean { return this.active !== null && this.active.phase !== 'settling'; }
+  /** The admitted turn's durable claim, or null before it is written. A host
+   *  reads it to settle the claim under the outcome IT named. */
+  get turnClaim(): ActorTurnClaim | null { return this.active?.claim ?? null; }
 
-  /** Hydration is not a working-context edit. Active edits belong to the store's
-   * staged revision path, not to a host replacing an in-flight array. */
-  restoreHistory(messages: readonly ModelMessage[]): void {
-    if (this.active !== null) throw new KinuError('denied', 'cannot hydrate actor history during an admitted turn');
-    this.messages.splice(0, this.messages.length, ...messages);
+  /**
+   * Replace this actor's working context.
+   *
+   * Two arms, because a hydration and a mid-turn edit are different acts. With
+   * no admitted turn this is cold-start hydration and the array is simply the
+   * actor's history. DURING an admitted turn it is a context edit, and it
+   * cannot be applied in place: work already issued keeps the context it was
+   * issued with. So it stages a later revision against the claim's newest one
+   * (compare-and-set — see `ActorClaimStore.stage`), and that revision becomes
+   * the request at the next SAFE step boundary, with the turn's protected tail
+   * and any ingress that landed since preserved (`prompting/staged-context.ts`).
+   *
+   * Returns the staged revision when it staged one, null when it hydrated.
+   */
+  restoreHistory(messages: readonly ModelMessage[]): number | null {
+    const active = this.active;
+    if (active === null) {
+      this.messages.splice(0, this.messages.length, ...messages);
+      return null;
+    }
+    const claim = active.claim;
+    if (claim === null) {
+      throw new KinuError('denied', 'cannot edit actor context before its turn holds a durable claim');
+    }
+    const latest = this.options.claims.read(claim.turnId)?.consumedRevision;
+    return this.options.claims.stage(claim, { base: latest ?? claim.baseRevision, messages });
   }
 
   appendInput(lease: ActorTurnLease, message: ModelMessage): void {
@@ -98,11 +150,28 @@ export class ActorSession {
     this.messages.push(message);
   }
 
-  beginTurn<Metadata>(turnId: string, mode: WorkMode, startedAt: number, metadata?: Metadata): ActorTurnLease {
+  /**
+   * Admit one turn on this live instance, under the ids the host issued for it.
+   *
+   * The run id rides the lease because the durable claim binds it: a turn's
+   * effects are attributed to the activation's run, and a recovered activation
+   * that re-admits the same turn writes its own run id under a new epoch.
+   */
+  beginTurn<Metadata>(
+    ids: { readonly runId: string; readonly turnId: string },
+    mode: WorkMode,
+    startedAt: number,
+    metadata?: Metadata,
+  ): ActorTurnLease {
     if (this.active !== null) throw new KinuError('denied', 'this actor already has an admitted turn');
     const abort = new AbortController();
-    const lease: ActorTurnLease = Object.freeze({ actorId: this.actorId, turnId, signal: abort.signal });
-    this.active = { lease, abort, phase: 'preparing', profile: null, profileInputs: null };
+    const lease: ActorTurnLease = Object.freeze({
+      actorId: this.actorId, runId: ids.runId, turnId: ids.turnId, signal: abort.signal,
+    });
+    this.active = {
+      lease, abort, phase: 'preparing', profile: null, profileInputs: null,
+      claim: null, claimSettled: false,
+    };
     this.mode = mode;
     this.landed.length = 0;
     this.userSteer.beginTurn();
@@ -138,12 +207,78 @@ export class ActorSession {
 
   takeLeftoverSteers(): readonly UserSteer[] { return this.userSteer.takeLeftover(); }
 
+  /**
+   * Release the lease.
+   *
+   * A claim the host never named an outcome for is settled `indeterminate` —
+   * the same word the tool-effect claim uses — because that is what is known:
+   * the turn was admitted, the lease is being released, and nothing states how
+   * it ended. Naming it `completed` here would be the host's silence read as
+   * success.
+   */
   finishTurn(lease: ActorTurnLease): void {
     const active = this.requireTurn(lease);
     if (active.phase === 'running') throw new KinuError('denied', 'cannot release an actor while its program is running');
+    if (active.claim !== null && !active.claimSettled) this.settleClaim(active, 'indeterminate');
     this.active = null;
   }
 
+  /** Name the outcome of the admitted turn's durable claim. Called by the host
+   *  once the turn's answer is durable — the claim outlives this instance, so
+   *  what closes it is a fact about the turn, not about the activation. */
+  settleTurnClaim(lease: ActorTurnLease, outcome: ClaimOutcome): void {
+    const active = this.requireTurn(lease);
+    if (active.claim === null) throw new KinuError('denied', 'this actor turn holds no durable claim to settle');
+    this.settleClaim(active, outcome);
+  }
+
+  private settleClaim(active: ActiveTurn, outcome: ClaimOutcome): void {
+    if (active.claim === null || active.claimSettled) return;
+    this.options.claims.settle(active.claim, outcome);
+    active.claimSettled = true;
+  }
+
+  /**
+   * The claim's step plane: where a staged edit lands and where the exact array
+   * a step consumed is recorded. Built per turn, closed over ONE claim, so a
+   * revision cannot be attributed to a turn that did not consume it.
+   */
+  private contextPlane(claim: ActorTurnClaim): StepContextPlane {
+    return {
+      staged: () => {
+        const staged = this.options.claims.stagedContext(claim);
+        if (staged === null) return null;
+        // The protected tail starts where the revision this edit was staged
+        // FROM ended: everything after it is work the turn has since done.
+        const base = staged.baseRevision === null
+          ? null
+          : this.options.claims.consumedContext(claim.turnId, staged.baseRevision);
+        return {
+          revision: staged.revision,
+          messages: staged.messages,
+          baseMessageCount: base?.messageCount ?? staged.messageCount,
+        };
+      },
+      consume: ({ stepNumber, messages, stagedRevision }) => {
+        if (stagedRevision === null) this.options.claims.consume(claim, { index: stepNumber, messages });
+        else this.options.claims.consumeStaged(claim, stagedRevision, { index: stepNumber, messages });
+      },
+    };
+  }
+
+  /**
+   * Run the admitted turn: PREPARE the program, CLAIM it durably, then consume
+   * the events — in that order, and the order is the contract.
+   *
+   * Preparation pins the selected version's immutable bytes and their digest.
+   * The claim writes that identity, the issued actor/run/turn/epoch, the turn's
+   * work mode and the context the turn was admitted against — all of it durable
+   * BEFORE the event stream is started, which is before any model, tool or
+   * provider work exists. `startActorTurn` builds the stream but runs nothing:
+   * an async generator's body begins at its first `next()`, which is the loop
+   * below. So a crash between the claim and the first token leaves a claim, and
+   * a crash before the claim leaves a turn that provably did nothing.
+   */
   async execute(lease: ActorTurnLease, input: ActorExecutionInput, emit: (event: ChatEvent) => void): Promise<ActorExecutionResult> {
     const active = this.requireTurn(lease);
     if (active.phase !== 'preparing' || active.profile === null) throw new KinuError('denied', 'a profiled actor turn executes once');
@@ -159,14 +294,26 @@ export class ActorSession {
     try {
       active.phase = 'running';
       active.abort.signal.throwIfAborted();
-      const prepared = await prepareActorTurn({
-        runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
-        scaffoldSpend: input.scaffoldSpend,
-        chat: { ...input.chat, history: this.messages, signal: active.abort.signal, extensions,
-          meter: this.orchestrator.acc.composition, dynamicContext: { ledger: this.dynamic, snapshot: input.dynamic } },
+      const control = { signal: active.abort.signal };
+      program = await prepareActorProgram({
+        ...control, runtime: this.runtime, mode: this.mode, version: input.loopVersion,
       });
-      program = prepared.program;
-      for await (const event of prepared.events) {
+      const claim = this.options.claims.admit({
+        runId: lease.runId,
+        turnId: lease.turnId,
+        workMode: this.mode,
+        program: programIdentityOf(program, this.options.installedBuild),
+        context: this.messages,
+      });
+      active.claim = claim;
+      const events = startActorTurn({
+        runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
+        program, scaffoldSpend: input.scaffoldSpend,
+        chat: { ...input.chat, history: this.messages, signal: active.abort.signal, extensions,
+          meter: this.orchestrator.acc.composition, dynamicContext: { ledger: this.dynamic, snapshot: input.dynamic },
+          stepContext: this.contextPlane(claim) },
+      });
+      for await (const event of events) {
         this.requireTurn(lease);
         switch (event.type) {
           case 'text-delta': this.orchestrator.acc.onFirstChunk(); text += event.delta; break;
@@ -199,7 +346,10 @@ export class ActorSession {
     } finally {
       active.phase = 'settling';
     }
-    return { text, failure, interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN, program };
+    return {
+      text, failure, program, claim: active.claim,
+      interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
+    };
   }
 
   private requireTurn(lease: ActorTurnLease): ActiveTurn {

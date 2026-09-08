@@ -46,17 +46,26 @@ const ACTOR_DDL = [
 
 
   // ── Conversation messages (simplified session tree) ────────────
+  // ACTOR-SCOPED, in the primary key. A shared host holds several issued
+  // actors in one database and a message id is minted per actor, so without the
+  // actor in the key one actor's transcript is another's ancestry: the
+  // recursive walks in identity/conversation-store.ts climb `parent_id` to
+  // `id`, and an id that resolved in the wrong actor's rows would splice two
+  // conversations into one chain. Both indexes lead with the actor for the same
+  // reason — a session listing and a parent walk are per-actor questions.
   `CREATE TABLE IF NOT EXISTS messages (
-    id         TEXT PRIMARY KEY,
+    actor_id   TEXT NOT NULL,
+    id         TEXT NOT NULL,
     session_id TEXT NOT NULL DEFAULT 'default',
     parent_id  TEXT,
     role       TEXT NOT NULL,
     content    TEXT NOT NULL,
     metadata   TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    PRIMARY KEY (actor_id, id)
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_msg_parent ON messages(parent_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(actor_id, session_id, created_at, id)`,
+  `CREATE INDEX IF NOT EXISTS idx_msg_parent ON messages(actor_id, parent_id)`,
 
   // ── Memory chunks — schema owned by MemoryStore (agent-utils) ──
   // NOT created here. MemoryStore.ensureSchema() creates the table
