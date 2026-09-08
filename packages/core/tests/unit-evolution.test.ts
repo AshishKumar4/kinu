@@ -328,8 +328,10 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   test('applyExplicitFeedback (late thumbs) upserts the ledger and corroborates lessons', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
-    void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES ('u1', 'default', 'user', 'the task')`;
-    void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES ('a1', 'default', 'u1', 'assistant', 'the answer')`;
+    void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, role, content)
+      VALUES (${rt.actor.actorId}, 'u1', 'default', 'user', 'the task')`;
+    void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+      VALUES (${rt.actor.actorId}, 'a1', 'default', 'u1', 'assistant', 'the answer')`;
     recordLesson(rt.storage.sql, {
       turnIds: ['a1'], text: 'late-corroborated lesson', source: 'turn_reflection', status: 'provisional',
     });

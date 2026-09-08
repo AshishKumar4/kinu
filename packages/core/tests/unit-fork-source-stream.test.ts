@@ -13,7 +13,7 @@ function isRowFrame(frame: ForkFrame): frame is ForkRowFrame {
 function isFileFrame(frame: ForkFrame): frame is ForkFileFrame {
   return frame.kind === 'file';
 }
-import { WorkspaceActorDirectory } from '../src/state/workspace-actors';
+import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../src/state/workspace-actors';
 async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
   void ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'origin'}, ${100})`;
   const actor = new WorkspaceActorDirectory(ws.sql, { workspaceId: 'SRC', ownerUserId: '' }).createMain({ name: 'origin' });
@@ -24,8 +24,9 @@ async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
     { id: 'm3', parent: 'm2', role: 'user', text: 'third' },
   ] as const;
   for (const [index, message] of messages.entries()) {
-    void ws.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${message.id}, ${'default'}, ${message.parent}, ${message.role}, ${message.text}, ${1000 + index})`;
+    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${actor.actorId}, ${message.id}, ${'default'}, ${message.parent}, ${message.role},
+              ${message.text}, ${1000 + index})`;
   }
   if (pane) {
     ws.execRaw(SDK_SESSION_DDL);
@@ -187,8 +188,9 @@ describe('forkTransferFrames source streamer', () => {
 
     const cycle = createTestWorkspace();
     await seedSource(cycle);
-    void cycle.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'loop'}, ${'default'}, ${'loop'}, ${'user'}, ${'self-parented'}, ${9})`;
+    void cycle.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${openWorkspaceMainActor(cycle.sql).actorId}, ${'loop'}, ${'default'}, ${'loop'}, ${'user'},
+              ${'self-parented'}, ${9})`;
     const frames = await Array.fromAsync(forkTransferFrames({
       sql: cycle.sql, vfs: cycle.vfs, untilMessageId: 'loop', transferId: 'cycle', targetAuthority: 'plain', frameBytes: 2048,
     }));
