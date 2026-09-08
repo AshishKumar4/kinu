@@ -3,13 +3,26 @@ import { jsonSchema, tool, uiMessageChunkSchema } from 'ai';
 import type { ModelMessage, UIMessageChunk } from 'ai';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import {
-  prepareActorTurn, prepareActorProgram, scaffoldChatTransform, scaffoldInferenceTransform,
+  startActorTurn, prepareActorProgram, scaffoldChatTransform, scaffoldInferenceTransform,
   createScaffoldLLMStream, runHeadInference, HeadCapture, withHeadCaptureRecording,
 } from '@kinu.run/core';
 import type { ChatEvent, HeadInput, InferenceStreamResult } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createSandboxedExecutor } from '../src/executor';
 import { initScaffoldTables } from '../../core/src/scaffold/schemas';
+
+/** The two real phases a claim owner runs, as one call: pin the selected
+ *  version's bytes, then start the turn on them. Production splits these at the
+ *  durable claim write (ActorSession.execute); a test with no claim to write
+ *  still has to run them in that order. */
+async function admitActorTurn(input: Parameters<typeof startActorTurn>[0] extends infer _T
+  ? Omit<Parameters<typeof startActorTurn>[0], 'program'> : never) {
+  const program = await prepareActorProgram({
+    runtime: input.runtime, mode: input.mode, version: input.loopVersion,
+    signal: input.chat.signal, assertActive: input.assertActive,
+  });
+  return { program, events: startActorTurn({ ...input, program }) };
+}
 
 async function collectUI(result: InferenceStreamResult, sendReasoning = true): Promise<UIMessageChunk[]> {
   const schema = uiMessageChunkSchema();
@@ -55,7 +68,7 @@ test('abort after preparation refuses program entry before memory or text effect
   let effects = 0;
   rt.memory.append = async () => { effects++; };
   const abort = new AbortController();
-  const prepared = await prepareActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
     chat: { model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
   const reason = new Error('cancelled before first next');
   abort.abort(reason);
@@ -70,7 +83,7 @@ test('cancellation retains an admitted memory effect but refuses subsequent effe
   const effects: string[] = [];
   rt.memory.append = async (_path, content) => { effects.push(content); started.resolve(); await release.promise; };
   const abort = new AbortController();
-  const prepared = await prepareActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
     chat: { model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
   const running = collect(prepared.events);
   await started.promise;
@@ -101,7 +114,7 @@ test('a native refusal keeps the same failed outcome at capture and scaffold bou
   const tools = withHeadCaptureRecording({ fail: tool({ inputSchema, execute: async (): Promise<string> => {
     throw new KinuError('denied', 'fixture permission refused');
   } }) }, capture);
-  const prepared = await prepareActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
     chat: { model: unusedModel(), system: 'sys', history: [], tools } });
   const events = await collect(prepared.events);
   expect(events.find(event => event.type === 'tool-result')).toMatchObject({ success: false, reason: 'denied' });
@@ -220,7 +233,8 @@ test('a custom model call preserves completed tool messages when its next reques
 test('a missing selected version never falls back to the current live alias', async () => {
   const { rt } = await runtime('async function run() {}');
   initScaffoldTables(rt.storage.execRaw);
-  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status) VALUES (2, 1, 'missing selected source', 'current')`;
+  void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, 2, 1, 'missing selected source', 'current')`;
   let liveReads = 0;
   rt.identity.scaffold.read = async () => { liveReads++; return 'async function run() {}'; };
   await expect(prepareActorProgram({ runtime: rt, mode: 'build', version: 2 })).rejects.toMatchObject({ code: 'missing' });
@@ -230,7 +244,7 @@ test('a missing selected version never falls back to the current live alias', as
 test('invalid native argument containers cannot become an empty successful call', async () => {
   const { rt } = await runtime('async function run() { await host.callTool("mutate", []); }');
   let effects = 0;
-  const prepared = await prepareActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
     chat: { model: unusedModel(), system: 'sys', history: [],
       tools: { mutate: tool({ inputSchema, execute: async () => ++effects }) },
     },
@@ -255,7 +269,7 @@ test('router namespace effects use the same lifetime admission as host effects',
     },
   } } }];
   const abort = new AbortController();
-  const prepared = await prepareActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
     chat: { model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
   const running = collect(prepared.events);
   await started.promise;

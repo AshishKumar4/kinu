@@ -72,13 +72,15 @@ function seedInvestigationWorkspace(dbPath: string): void {
   const sql = makeSql(db);
   // The actor every private store below belongs to, and the one `kinu debug`
   // resolves when it reopens this file: the workspace's MAIN actor, issued
-  // through the production directory. Seeding rows under any other id would
+  // through the production directory. The local read models resolve it with
+  // `openWorkspaceMainActor`, so the seed has to register a real workspace
+  // identity rather than only create tables — rows under any other id would
   // leave the bundle reading an empty workspace.
   const actor = createTestActorsOver(db, { name: 'invest' }).main;
 
   // ── Runs: an older plain run, then the latest — which backgrounds a call
   // and is polled anyway (agent.jobResult right after the detach handle). ──
-  const recorder = new RunEventRecorder(sql);
+  const recorder = new RunEventRecorder(sql, actor);
   recorder.emit('run-old', { type: 'run_start', agentId: 'w', caused_by: 'chat', userMessage: 'first' });
   recorder.emit('run-old', { type: 'turn_end', turnIndex: 0, usage: { input: 10, output: 5 } });
   // A second turn on the same run whose provider reported nothing at all — the

@@ -36,6 +36,8 @@ export async function modifyScaffold(
   code: string,
   opts?: ModifyScaffoldOpts,
 ): Promise<ModifyResult> {
+  rt.actor.assertCurrent();
+  const actorId = rt.actor.actorId;
   const minRationaleLength = DEFAULT_CONFIG.scaffold.minRationaleLength;
 
   // Gate 1: structural validation
@@ -78,7 +80,9 @@ export async function modifyScaffold(
   // stack a second pending — doing so would back up the live content over the
   // first pending's versioned file and corrupt it.
   const pendingRows = rt.storage.sql<{ version: number }>`
-    SELECT version FROM scaffold_versions WHERE status = 'pending' ORDER BY version DESC LIMIT 1`;
+    SELECT version FROM scaffold_versions
+    WHERE actor_id = ${actorId} AND status = 'pending'
+    ORDER BY version DESC LIMIT 1`;
   if (pendingRows.length > 0) {
     return {
       ok: false, stage: 3,
@@ -90,9 +94,10 @@ export async function modifyScaffold(
   // can point at a higher-numbered rolled_back/historical row after a rollback
   // cycle. Number the new pending above any existing row so its PK never
   // collides with a stale row.
-  const currentVersion = getCurrentScaffoldVersion(rt.storage.sql) ?? 0;
+  const currentVersion = getCurrentScaffoldVersion(rt.storage.sql, rt.actor) ?? 0;
   const maxRows = rt.storage.sql<{ v: number }>`
-    SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions`;
+    SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions
+    WHERE actor_id = ${actorId}`;
   const newVersion = (maxRows[0]?.v ?? 0) + 1;
 
   // Lineage: a proposal may branch from ANY archived version (DGM stepping
@@ -100,7 +105,8 @@ export async function modifyScaffold(
   const baseVersion = opts?.baseVersion ?? currentVersion;
   if (baseVersion !== currentVersion) {
     const baseRows = rt.storage.sql<{ version: number }>`
-      SELECT version FROM scaffold_versions WHERE version = ${baseVersion} LIMIT 1`;
+      SELECT version FROM scaffold_versions
+      WHERE actor_id = ${actorId} AND version = ${baseVersion} LIMIT 1`;
     if (baseRows.length === 0) {
       return { ok: false, stage: 3, error: `base version v${baseVersion} not found in the scaffold archive` };
     }
@@ -124,8 +130,10 @@ export async function modifyScaffold(
   // every proposal path — session evolution, agent.proposeScaffold, a GEPA
   // scaffold winner — stamps it the same way or not at all.
   void rt.storage.sql`
-INSERT INTO scaffold_versions (version, written_at, rationale, status, parent_version, pathology)
-    VALUES (${newVersion}, ${nowMs()}, ${rationale}, 'pending', ${baseVersion}, ${parsePathologyTag(code)})
+    INSERT INTO scaffold_versions
+      (actor_id, version, written_at, rationale, status, parent_version, pathology)
+    VALUES (${actorId}, ${newVersion}, ${nowMs()}, ${rationale}, 'pending', ${baseVersion},
+            ${parsePathologyTag(code)})
   `;
 
   await rt.memory.append(

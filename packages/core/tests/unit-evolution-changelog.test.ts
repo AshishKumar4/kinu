@@ -47,8 +47,8 @@ function setup() {
 
 async function seedScaffoldPending(rt: AgentRuntime): Promise<number> {
   await rt.identity.scaffold.write(V0_CODE);
-  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                 VALUES (0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
+  void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                 VALUES (${rt.actor.actorId}, 0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
   const result = await modifyScaffold(rt, RATIONALE, V1_CODE);
   expect(result.ok).toBe(true);
   return result.version!;
@@ -58,12 +58,12 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('scaffold proposal entry carries the shadow record as evidence', async () => {
     const { rt } = setup();
     const version = await seedScaffoldPending(rt);
-    recordShadowEvaluation(rt.storage.sql, {
+    recordShadowEvaluation(rt.storage.sql, rt.actor, {
       currentVersion: 0, pendingVersion: version, task: 'task A',
       currentOutput: 'a', pendingOutput: 'b',
       judgeResult: { winner: 'pending', rationale: 'clearer', currentScore: 0.4, pendingScore: 0.8 },
     });
-    recordShadowEvaluation(rt.storage.sql, {
+    recordShadowEvaluation(rt.storage.sql, rt.actor, {
       currentVersion: 0, pendingVersion: version, task: 'task B',
       currentOutput: 'a', pendingOutput: 'b',
       judgeResult: { winner: 'current', rationale: 'regressed', currentScore: 0.7, pendingScore: 0.5 },
@@ -88,8 +88,8 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('a scaffold entry says which failure the version was written for', async () => {
     const { rt } = setup();
     await rt.identity.scaffold.write(V0_CODE);
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
     const result = await modifyScaffold(rt, RATIONALE, `// pathology: no_action/prose\n${V1_CODE}`);
     expect(result.ok).toBe(true);
 
@@ -185,6 +185,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('GEPA, replay, and outcome entries are informational (no revert)', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
+    const actor = rt.actor;
     const runId = startGepaRun(sql, { target: 'scaffold', budget: {} });
     finishGepaRun(sql, {
       runId, status: 'completed', stopReason: 'metric_budget_exhausted', winnerId: 'cand-1',
@@ -207,7 +208,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       userMessage: 'fix it', assistantResponse: 'wrong', followup: 'no, the other one',
     });
 
-    const entries = buildChangelog(sql, rt.actor);
+    const entries = buildChangelog(sql, actor);
     const gepa = entries.filter((e) => e.kind === 'gepa');
     expect(gepa).toHaveLength(1);
     expect(gepa[0].summary).toBe('Tuned my own instructions');
@@ -232,6 +233,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('the digest attributes each verdict to the source that produced it', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
+    const actor = rt.actor;
     // `execution` is the runtime's own verdict on a headless turn: no user saw
     // it, let alone followed up. The digest used to report the whole batch as
     // "from real user follow-ups", which invented a person for these two.
@@ -248,7 +250,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       userMessage: 'fix it', assistantResponse: 'fixed', followup: 'thanks',
     });
 
-    const outcomes = buildChangelog(sql, rt.actor).find((e) => e.kind === 'outcomes')!;
+    const outcomes = buildChangelog(sql, actor).find((e) => e.kind === 'outcomes')!;
     expect(outcomes.summary).toContain('Graded 3 turns');
     expect(outcomes.summary).toContain('2 by whether their tool calls ran');
     expect(outcomes.summary).toContain('1 from how the user replied');
@@ -261,6 +263,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('each graded turn expands to the reason behind its verdict', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
+    const actor = rt.actor;
     recordTurnOutcome(sql, {
       outcome: 'corrected', confidence: 0.75, source: 'classifier',
       userMessage: 'add pagination to the chat list', assistantResponse: 'done',
@@ -274,7 +277,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       userMessage: 'ship it', assistantResponse: 'shipped', now: 200,
     });
 
-    const items = buildChangelog(sql, rt.actor).find((e) => e.kind === 'outcomes')!.items!;
+    const items = buildChangelog(sql, actor).find((e) => e.kind === 'outcomes')!.items!;
     expect(items.map((i) => i.summary)).toEqual([
       'accepted — "ship it"',
       'corrected — "add pagination to the chat list"',
@@ -314,13 +317,13 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const { rt } = setup();
     const version = await seedScaffoldPending(rt);
     for (const [index, winner] of (['pending', 'pending', 'pending', 'current'] as const).entries()) {
-      recordShadowEvaluation(rt.storage.sql, {
+      recordShadowEvaluation(rt.storage.sql, rt.actor, {
         currentVersion: 0, pendingVersion: version, task: `trial-${index}`,
         currentOutput: 'current', pendingOutput: 'pending',
         judgeResult: { winner, rationale: 'evidence', currentScore: 0.5, pendingScore: 0.8 },
       });
     }
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'promote');
+    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote');
     const now = Date.now();
     const replayRow = (id: string, at: number, n: number, mean: number, scaffoldVersion: number) => {
       void rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
@@ -370,6 +373,7 @@ describe('unseen-count logic (the badge)', () => {
   test('the turn-outcome aggregate only counts outcomes inside the window', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
+    const actor = rt.actor;
     const now = Date.now();
     recordTurnOutcome(sql, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
@@ -380,7 +384,7 @@ describe('unseen-count logic (the badge)', () => {
       userMessage: 'new', assistantResponse: 'new', now,
     });
 
-    const windowed = buildChangelog(sql, rt.actor, { since: now - 30_000 });
+    const windowed = buildChangelog(sql, actor, { since: now - 30_000 });
     const agg = windowed.find((e) => e.kind === 'outcomes');
     expect(agg!.summary).toContain('Graded 1 turn');
     expect(agg!.evidence).toBe('1 corrected');
@@ -396,17 +400,18 @@ describe('unseen-count logic (the badge)', () => {
   test('every unseen entry is one the digest itself renders', () => {
     const { rt, facts } = setup();
     const sql = rt.storage.sql;
+    const actor = rt.actor;
     recordTurnOutcome(sql, {
       outcome: 'accepted', confidence: 1, source: 'execution',
       userMessage: 'hi', assistantResponse: 'hello',
     });
     facts.upsert('sandbox.node_version', 'v22');
 
-    const unseen = listUnseenChangelog(sql, rt.actor, 0);
-    const rendered = new Set(buildChangelog(sql, rt.actor, { limit: 30 }).map((entry) => entry.id));
+    const unseen = listUnseenChangelog(sql, actor, 0);
+    const rendered = new Set(buildChangelog(sql, actor, { limit: 30 }).map((entry) => entry.id));
     expect(unseen.length).toBeGreaterThan(0);
     expect(unseen.filter((entry) => !rendered.has(entry.id))).toEqual([]);
-    expect(countUnseenChangelog(sql, rt.actor, 0)).toBe(unseen.length);
+    expect(countUnseenChangelog(sql, actor, 0)).toBe(unseen.length);
   });
 
   /**
@@ -514,17 +519,18 @@ describe('reverts — real paths only', () => {
     });
     expect(result.ok).toBe(true);
     expect(result.detail).toContain(`discarded pending v${version}`);
-    expect(getPendingScaffold(rt.storage.sql)).toBeNull();
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
     expect(await rt.identity.scaffold.read()).toBe(V0_CODE); // live file untouched
     const status = rt.storage.sql<{ status: string }>`
-      SELECT status FROM scaffold_versions WHERE version = ${version}`[0];
+      SELECT status FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId} AND version = ${version}`[0];
     expect(status.status).toBe('rolled_back');
   });
 
   test('promoted scaffold revert round-trips back to the predecessor', async () => {
     const { rt, facts } = setup();
     const version = await seedScaffoldPending(rt);
-    const pending = getPendingScaffold(rt.storage.sql)!;
+    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
     await applyPromotionDecision(rt, pending, 'promote');
     expect(await rt.identity.scaffold.read()).toBe(V1_CODE);
 
@@ -540,7 +546,8 @@ describe('reverts — real paths only', () => {
     expect(result.detail).toContain('rolled back to v0');
     expect(await rt.identity.scaffold.read()).toBe(V0_CODE);
     const rows = rt.storage.sql<{ version: number; status: string }>`
-      SELECT version, status FROM scaffold_versions ORDER BY version`;
+      SELECT version, status FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
     expect(rows.find((r) => r.version === 0)!.status).toBe('current');
     expect(rows.find((r) => r.version === version)!.status).toBe('rolled_back');
 
@@ -704,13 +711,13 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     const { rt } = setup();
     initRunEventTables(rt.storage.execRaw);
     const written = Date.now() - 3_600_000;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (1, ${written}, 'earlier way of working', 'superseded')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (2, ${written}, ${RATIONALE}, 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 1, ${written}, 'earlier way of working', 'superseded')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 2, ${written}, ${RATIONALE}, 'current')`;
     const promotedAt = Date.now() - 1_000;
-    void rt.storage.sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
-      VALUES ('run-1', 0, 'scaffold_promotion',
+    void rt.storage.sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+      VALUES (${rt.actor.actorId}, 'run-1', 0, 'scaffold_promotion',
               ${JSON.stringify({ fromVersion: 1, toVersion: 2 })},
               ${new Date(promotedAt).toISOString()})`;
 
@@ -728,8 +735,8 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     const written = Date.now() - 10_000;
     const statuses = ['current', 'pending', 'rolled_back', 'superseded'] as const;
     statuses.forEach((status, i) => {
-      void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                     VALUES (${i + 1}, ${written + i}, 'r', ${status})`;
+      void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                     VALUES (${rt.actor.actorId}, ${i + 1}, ${written + i}, 'r', ${status})`;
     });
 
     const revertable = new Map(
@@ -856,11 +863,11 @@ describe('renderChangelogText + revert guards', () => {
     // Discarding the stale one through it would restore the wrong file.
     const { rt, facts } = setup();
     const written = Date.now() - 10_000;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (1, ${written}, 'stale proposal', 'pending')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (2, ${written + 1}, 'live proposal', 'pending')`;
-    expect(getPendingScaffold(rt.storage.sql)!.version).toBe(2);
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 1, ${written}, 'stale proposal', 'pending')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 2, ${written + 1}, 'live proposal', 'pending')`;
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)!.version).toBe(2);
 
     const result = await executeChangelogRevert({ rt, facts }, { type: 'scaffold_rollback', target: '1' });
     expect(result.ok).toBe(false);

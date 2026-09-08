@@ -100,6 +100,7 @@ export async function runExperienceAction<Input>(
     sql: deps.rt.storage.sql,
     craftStore: deps.rt.craftStore,
     facts: deps.facts,
+    actor: deps.rt.actor,
     readScaffoldVersion: (version: number) => readScaffoldVersion(deps.rt, version),
   };
   try {

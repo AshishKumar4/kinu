@@ -22,7 +22,7 @@ import {
 } from '../src/index';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { getPendingPromptSection, listPromptSectionVersions, proposePromptSection, recordPromptSectionTrial } from '../src/prompting/section-store';
-import { createEvalExecutor, createTestRuntime, createTestWorkspace } from './helpers';
+import { createEvalExecutor, createTestActor, createTestRuntime, createTestWorkspace } from './helpers';
 import { scoreInterval } from '../src/utils/stats';
 
 /** Small enough to keep the pass cheap, above `clampGepaEvalBudget`'s floor of
@@ -200,7 +200,7 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     seedLedger(rt, { failures: 6, guards: 4 });
     const { control, reflectionPrompts, judgePrompts } = runnableControl(rt);
 
-    const split = buildOutcomeEvalSplit(rt.storage.sql, EVAL_SIZE);
+    const split = buildOutcomeEvalSplit(rt.storage.sql, rt.actor, EVAL_SIZE);
     expect(split.degeneracy).toBeNull();
     expect(split.train.length).toBeGreaterThan(0);
     expect(split.heldOutNegatives).toBeGreaterThan(0);
@@ -244,7 +244,7 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     seedLedger(rt, { failures: 1, guards: 4 });
     const { control } = runnableControl(rt);
 
-    const split = buildOutcomeEvalSplit(rt.storage.sql, EVAL_SIZE);
+    const split = buildOutcomeEvalSplit(rt.storage.sql, rt.actor, EVAL_SIZE);
     expect(split.degeneracy).toBe('no_held_out_negatives');
 
     const result = await runScaffoldGepaOptimization(control, {
@@ -258,7 +258,8 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
   }, 30_000);
 
   test('the split it consumes really is disjoint on the ledger it reads', () => {
-    const { sql } = createTestWorkspace();
+    const { sql, execRaw } = createTestWorkspace();
+    const actor = createTestActor(sql, execRaw, 'ws-gepa-split', 'gepa-split');
     for (let i = 0; i < 6; i++) {
       recordTurnOutcome(sql, {
         turnId: `n${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',
@@ -269,7 +270,7 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
         userMessage: `good ${i}`, assistantResponse: 'ok', now: 2000 + i,
       });
     }
-    const split = buildOutcomeEvalSplit(sql, 24);
+    const split = buildOutcomeEvalSplit(sql, actor, 24);
     const trainInputs = new Set(split.train.map((i) => i.input));
     expect(split.val.some((i) => trainInputs.has(i.input))).toBe(false);
     expect(split.heldOutNegatives).toBeGreaterThan(0);
@@ -287,14 +288,14 @@ test('an unavailable judge aborts scaffold optimization without a numeric candid
   if (result.runId === undefined) throw new Error('the attempted optimization has no run identity');
   expect(listGepaRuns(rt.storage.sql)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', winnerId: null }));
   expect(loadGepaCandidates(rt.storage.sql, result.runId)).toEqual([]);
-  expect(getPendingScaffold(rt.storage.sql)).toBeNull();
+  expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
 });
 
 test('a judge failure during reflection evaluation aborts instead of rejecting a proposal and selecting a winner', async () => {
   const rt = await evolvableRuntime();
   seedLedger(rt, { failures: 8, guards: 4 });
   const { control: base, reflectionPrompts } = runnableControl(rt);
-  const seedCalls = buildOutcomeEvalSplit(rt.storage.sql, EVAL_SIZE).val.length;
+  const seedCalls = buildOutcomeEvalSplit(rt.storage.sql, rt.actor, EVAL_SIZE).val.length;
   let calls = 0;
   const control: ScaffoldControl = { ...base, judge: async ({ schema }) => {
     if (++calls > seedCalls) throw new Error('judge failed on reflection evidence');
@@ -306,7 +307,7 @@ test('a judge failure during reflection evaluation aborts instead of rejecting a
   expect(listGepaRuns(rt.storage.sql)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', winnerId: null }));
   expect(loadGepaCandidates(rt.storage.sql, result.runId).map(candidate => ({ source: candidate.source, score: candidate.aggregateScore })))
     .toEqual([{ source: SEED_SCAFFOLD, score: 0.2 }]);
-  expect(getPendingScaffold(rt.storage.sql)).toBeNull();
+  expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
   expect(reflectionPrompts).toEqual([]);
 });
 
@@ -324,7 +325,7 @@ test('a mixed measured and unavailable seed reports the actual attempts without 
   if (result.runId === undefined) throw new Error('the attempted optimization has no run identity');
   expect(listGepaRuns(rt.storage.sql)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', metricCalls: 2, winnerId: null }));
   expect(loadGepaCandidates(rt.storage.sql, result.runId)).toEqual([]);
-  expect(getPendingScaffold(rt.storage.sql)).toBeNull();
+  expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
 });
 
 test('section GEPA reports mixed scored and unavailable measurements as an aborted run', async () => {
@@ -390,7 +391,7 @@ test('a later unavailable judge leaves valid earlier measurements but no selecte
   const rt = await evolvableRuntime();
   seedLedger(rt, { failures: 8, guards: 4 });
   const { control: base } = runnableControl(rt);
-  const split = buildOutcomeEvalSplit(rt.storage.sql, EVAL_SIZE);
+  const split = buildOutcomeEvalSplit(rt.storage.sql, rt.actor, EVAL_SIZE);
   const completedCalls = split.val.length * 2 + Math.min(3, split.train.length);
   let calls = 0;
   const control: ScaffoldControl = { ...base, judge: async ({ prompt, schema }) => {
@@ -406,5 +407,5 @@ test('a later unavailable judge leaves valid earlier measurements but no selecte
   const candidates = loadGepaCandidates(rt.storage.sql, result.runId);
   expect(candidates.map(candidate => candidate.aggregateScore)).toEqual([0.2, 0.9]);
   expect(candidates.every(candidate => candidate.scores.size === split.val.length)).toBe(true);
-  expect(getPendingScaffold(rt.storage.sql)).toBeNull();
+  expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
 });

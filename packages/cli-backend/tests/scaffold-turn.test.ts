@@ -57,14 +57,18 @@ function fakeModel(answer: string): LanguageModel {
 }
 
 async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean } = {}) {
-  const db = new Database(':memory:');
+  // The declared path IS the database: `createCLIRuntime` calls
+  // `requireLocalDatabasePath`, which refuses a runtime whose `dbPath` names a
+  // file its handle is not open on. `scratchPath` is mkdtemp-backed, so each
+  // setup gets its own directory. Same convention as local-session.test.ts.
+  const db = new Database(scratchPath('scaffold-turn', 'agent.db'), { create: true });
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+    actor_id TEXT NOT NULL, id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-  const rt = createCLIRuntime(db, {
-    dbPath: scratchPath('scaffold-turn', 'agent.db'), llm: DUMMY_LLM,
-  });
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    PRIMARY KEY (actor_id, id))`);
+  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
   // What `kinu create` provisions (identity/create.ts): the scaffold
   // tables, actor_config, and the v0 scaffold file + archive row — so the
   // session's cold-start heal is a deterministic no-op here. The
@@ -74,8 +78,8 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   initAgentConfigTable(rt.storage.execRaw);
   if (opts.provisionScaffold !== false) {
     await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
-    void rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale)
-      VALUES (0, ${Date.now()}, ${'initial bootstrap'})`;
+    void rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
+      VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'initial bootstrap'})`;
   }
   const events: SessionEvent[] = [];
   // Auto-evolution ON, exactly as a real session has it. The promotion gate IS
@@ -96,8 +100,8 @@ async function installScaffold(
   await rt.storage.vfs.writeFile(`scaffold/agent.js.v${opts.version}`, opts.code);
   if (opts.status === 'current') await rt.identity.scaffold.write(opts.code);
   void rt.storage.sql`
-    INSERT OR REPLACE INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (${opts.version}, ${Date.now()}, ${`v${opts.version}`}, ${opts.status})`;
+    INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, ${opts.version}, ${Date.now()}, ${`v${opts.version}`}, ${opts.status})`;
 }
 
 const streamed = (events: SessionEvent[]) =>
@@ -213,7 +217,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     config.setShadowSampleRate(1);      // evaluate every turn — no flaky sampling
     config.setAutoPromoteScaffold(true);
 
-    expect(getPendingScaffold(rt.storage.sql)?.version).toBe(2);
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)?.version).toBe(2);
 
     // DEFAULT_SHADOW_CONFIG needs 5 decisive trials before it will promote.
     // Each turn only QUEUES one — the rollout is cadence-lane work, so no turn
@@ -227,9 +231,9 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     // Resolved: nothing is pending, so maybeEvolveScaffold's guard
     // (evolution/engine.ts — "skip while a pending is in flight") is clear and
     // the agent can propose again.
-    expect(getPendingScaffold(rt.storage.sql)).toBeNull();
-    expect(getCurrentScaffoldVersion(rt.storage.sql)).toBe(2);
-    expect(listScaffoldArchive(rt.storage.sql, 10).find((e) => e.version === 2)?.status).toBe('current');
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
+    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(2);
+    expect(listScaffoldArchive(rt.storage.sql, rt.actor, 10).find((e) => e.version === 2)?.status).toBe('current');
     expect(events.some((e) => e.type === 'evolution' && e.event === 'scaffold_promotion')).toBe(true);
   }, 30_000);
 
@@ -254,9 +258,9 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     await session.runDueEvolution();
     await session.end();
 
-    expect(getPendingScaffold(rt.storage.sql)).toBeNull();
-    expect(getCurrentScaffoldVersion(rt.storage.sql)).toBe(1);
-    expect(listScaffoldArchive(rt.storage.sql, 10).find((e) => e.version === 2)?.status).toBe('rolled_back');
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
+    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(1);
+    expect(listScaffoldArchive(rt.storage.sql, rt.actor, 10).find((e) => e.version === 2)?.status).toBe('rolled_back');
   }, 30_000);
 
   test('opening a session heals a scaffold-less workspace (DO onStart parity)', async () => {
@@ -274,7 +278,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     expect((await rt.identity.scaffold.read()).length).toBeGreaterThan(0);
     // The v0 archive row exists, and the agent is still un-evolved: the live
     // version is 0, so the turn seam stays a pass-through.
-    expect(getCurrentScaffoldVersion(rt.storage.sql)).toBe(0);
+    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
   });
 
   test('applyScaffoldDecision resolves a pending by hand', async () => {
@@ -291,7 +295,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     expect(await session.applyScaffoldDecision('auto')).toMatchObject({ ok: false });
 
     expect(await session.applyScaffoldDecision('promote')).toMatchObject({ ok: true, newCurrentVersion: 2 });
-    expect(getPendingScaffold(rt.storage.sql)).toBeNull();
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
     expect(session.getShadowStatus().hasPending).toBe(false);
   });
 
@@ -314,7 +318,8 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     rt.actor.config.setShadowSampleRate(1);
 
     await session.send('queue one trial');
-    const queued = rt.storage.sql<{ id: string }>`SELECT id FROM scaffold_trial_queue`;
+    const queued = rt.storage.sql<{ id: string }>`SELECT id FROM scaffold_trial_queue
+      WHERE actor_id = ${rt.actor.actorId}`;
     expect(queued).toHaveLength(1);
     const trialId = queued[0]?.id ?? '';
 

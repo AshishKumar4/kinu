@@ -36,6 +36,7 @@ import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../config/store';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import type { SqlExecutor, VFS } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { VfsNativeReads } from '../vfs/mounts';
 import type { ForkFileSink } from './fork-sink';
 import { renderIssues } from '../utils/json';
@@ -348,9 +349,9 @@ async function* paneRows(sql: SqlExecutor, ids: string[]): AsyncGenerator<ForkPa
   }
 }
 
-async function* messageRows(sql: SqlExecutor, ids: string[]): AsyncGenerator<ForkMessageRow> {
+async function* messageRows(sql: SqlExecutor, actor: ActorHandle, ids: string[]): AsyncGenerator<ForkMessageRow> {
   for (const id of ids) {
-    const row = messageRowById(sql, id);
+    const row = messageRowById(sql, actor, id);
     if (row !== undefined) yield row;
   }
 }
@@ -370,7 +371,8 @@ export async function* forkTransferFrames(
     throw new RangeError('fork frameBytes must be a positive finite number');
   }
 
-  const ancestry = ancestryIds(source.sql, source.untilMessageId);
+  const actor = openWorkspaceMainActor(source.sql);
+  const ancestry = ancestryIds(source.sql, actor, source.untilMessageId);
   if (ancestry.ids.length === 0) {
     throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
   }
@@ -378,7 +380,7 @@ export async function* forkTransferFrames(
   for await (const path of forkFilePaths(source.vfs)) filePaths.push(path);
 
   const counts: ForkSectionCounts = {
-    agentConfig: source.sql<{ key: string }>`SELECT key FROM actor_config WHERE actor_id = ${openWorkspaceMainActor(source.sql).actorId}`
+    agentConfig: source.sql<{ key: string }>`SELECT key FROM actor_config WHERE actor_id = ${actor.actorId}`
       .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)).length,
     craftedTools: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`[0]?.count ?? 0,
     memoryChunks: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`[0]?.count ?? 0,
@@ -401,7 +403,7 @@ export async function* forkTransferFrames(
     }
     createdAtMs = paneStampMs(row.created_at);
   } else {
-    const row = messageRowById(source.sql, lastId);
+    const row = messageRowById(source.sql, actor, lastId);
     if (row === undefined) {
       throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
     }
@@ -483,7 +485,7 @@ export async function* forkTransferFrames(
             kind: 'messages', rows,
           }));
         } else {
-          yield* yieldRows(messageRows(source.sql, ancestry.ids), messagePayloadBytes, (rows) => seal({
+          yield* yieldRows(messageRows(source.sql, actor, ancestry.ids), messagePayloadBytes, (rows) => seal({
             version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
             kind: 'messages', rows,
           }));

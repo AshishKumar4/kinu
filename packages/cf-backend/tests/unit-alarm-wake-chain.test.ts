@@ -316,16 +316,19 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
+    // An orchestrator binds the workspace main actor, so these rows are written
+    // and read under the id the agent's own recorder uses.
+    const actorId = harnessActorId(db);
     const start = (run: string, ts: number): void => {
       db.prepare(
-        `INSERT INTO run_events (run_id, event_index, type, ts, payload)
-         VALUES (?, 1, 'run_start', ?, '{}')`,
-      ).run(run, new Date(ts).toISOString());
+        `INSERT INTO run_events (actor_id, run_id, event_index, type, ts, payload)
+         VALUES (?, ?, 1, 'run_start', ?, '{}')`,
+      ).run(actorId, run, new Date(ts).toISOString());
     };
     // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
     const ended = (run: string): boolean => (db
-      .prepare(`SELECT COUNT(*) AS held FROM run_events WHERE run_id = '${run}' AND type = 'run_end'`)
-      .values()[0]?.[0] as number) > 0;
+      .prepare('SELECT COUNT(*) AS held FROM run_events WHERE actor_id = ? AND run_id = ? AND type = \'run_end\'')
+      .values(actorId, run)[0]?.[0] as number) > 0;
 
     start('stale-run', Date.now() - 60_000);
     start('live-run', Date.now() + 5);

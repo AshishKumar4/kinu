@@ -103,7 +103,9 @@ describe('MCTS search isolation', () => {
     expect(secondRoot).not.toBe(rootIdOfNode(db, first.winnerId));
     expect(nodesOf(db, secondRoot).every(n => n.task === 'TASK TWO')).toBe(true);
 
-    const history = db.query<{ task: string }, []>('SELECT task FROM task_history ORDER BY rowid').all();
+    const history = db.query<{ task: string }, [string]>(
+      'SELECT task FROM task_history WHERE actor_id = ? ORDER BY rowid',
+    ).all(rt.actor.actorId);
     expect(history.map(h => h.task)).toEqual(['TASK ONE', 'TASK TWO']);
   });
 

@@ -12,6 +12,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { SearchNode } from '../types/mcts';
 import { recordTurnOutcome } from '../evolution/outcomes';
 import {
@@ -358,6 +359,7 @@ export function latestAlternateTakeSet(sql: SqlExecutor): AlternateTakeSet | nul
  */
 export function recordTakePick(
   sql: SqlExecutor,
+  actor: ActorHandle,
   input: { takeId: string; nodeId: string; scaffoldVersion?: number | null; now?: number },
 ): TakePickRecord {
   const row = sql<RawTakeRow>`SELECT * FROM alternate_takes WHERE id = ${input.takeId}`[0];
@@ -388,7 +390,7 @@ export function recordTakePick(
   let userMessage = set.task;
   let assistantResponse = '';
   if (set.turnId) {
-    const pair = conversationTurnPair(sql, set.turnId);
+    const pair = conversationTurnPair(sql, actor, set.turnId);
     if (pair) {
       assistantResponse = pair.response ?? '';
       if (pair.request !== null) userMessage = pair.request;

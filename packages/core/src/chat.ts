@@ -25,7 +25,7 @@ import {
 } from './prompting/model-profile';
 import { applyCacheBreakpoints, hasCacheMarkers, type CacheRetention } from './prompting/cache-breakpoints';
 import type { TurnContextMeter } from './context-meter';
-import { composePrepareStep, type StepDynamicContext } from './prompting/prepare-step';
+import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import type { MissionGovernor } from './mission-budget';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer';
 import { assembleTurnMessages } from './orchestrator/turn-context';
@@ -102,6 +102,11 @@ export interface ChatOptions {
   /** Per-step context measurement. runChat opens the turn on it with this
    *  turn's system + tools; the step pipeline then measures each request. */
   meter?: TurnContextMeter;
+  /** The claim's durable context plane. The step pipeline records the exact
+   *  array each step consumes on it, and lands a staged mid-turn edit at the
+   *  first safe boundary. Absent for unclaimed work — a head's own inference,
+   *  a shadow-eval replay. */
+  stepContext?: StepContextPlane;
   /** Turn-local context (skill activation reasons, device notice) — spliced
    *  at the tail of the turn's initial array for THIS turn only; never visible
    *  to a transform and never treated as durable history. */
@@ -475,6 +480,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           dynamic: opts.dynamicContext,
           destinationProviderId: opts.cache?.providerId,
           meter: opts.meter,
+          context: opts.stepContext,
         }, { stepNumber: stepOffset + stepNumber, messages, steps }),
       onStepFinish: async (step) => {
         stepCount++;

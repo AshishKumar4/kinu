@@ -1633,7 +1633,7 @@ describe('the refiner never sees the set its proposal is scored on', () => {
     await advanceRefinementLane(deps);
     const brief = requests[0]!.task;
 
-    const split = buildOutcomeEvalSplit(fx.rt.storage.sql, EVAL_SIZE);
+    const split = buildOutcomeEvalSplit(fx.rt.storage.sql, fx.rt.actor, EVAL_SIZE);
     expect(split.heldOutNegatives).toBeGreaterThan(0);
     // Every val instance is a turn the section metric will score a candidate
     // against. None of them may appear in the brief.

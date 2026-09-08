@@ -5,7 +5,7 @@
  * chosen text as the correction follow-up).
  */
 import { describe, test, expect } from 'bun:test';
-import { createTestWorkspace, createTestActor } from './helpers';
+import { createTestActor, createTestWorkspace } from './helpers';
 import {
   recordBranchTakeSet, claimAlternateTakesForTurn,
   latestAlternateTakeSet, listAlternateTakeSets, recordTakePick, buildTakeContinuationPrompt,
@@ -26,9 +26,10 @@ function setup() {
   // never reaches for one — an UPDATE matching no row is indistinguishable
   // from an UPDATE that was never issued.
   ws.execRaw('DROP TABLE search_nodes');
-  // The journal is actor-private, so the workspace issues the actor that owns
-  // the branch heads written below.
-  return { ...ws, actor: createTestActor(ws.sql, ws.execRaw, crypto.randomUUID(), 'branch-test') };
+  // The journal is actor-private and the pick reads its turn pair from the
+  // actor-scoped conversation store, so the workspace issues the one actor that
+  // owns the branch heads written below and that the production readers resolve.
+  return { ...ws, actor: createTestActor(ws.sql, ws.execRaw, 'ws-steer', 'steer') };
 }
 
 function completedReport(id: string, summary: string, status: HeadReport['status'] = 'completed'): HeadReport {
@@ -238,13 +239,13 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
 describe('recordTakePick over a branch-sourced set — the pipeline unchanged', () => {
   test('picking the branch records corrected + the branch text as the follow-up, without search_nodes', () => {
     // The re-point only applies to mcts-sourced sets (see setup()).
-    const { sql } = setup();
+    const { sql, actor } = setup();
     const set = recordBranchTakeSet(sql, {
       task: 'use approach B instead', turnId: 'turn-9', sessionId: 'default',
       liveText: 'A-style answer', branchText: 'B-style answer',
     })!;
 
-    const record = recordTakePick(sql, { takeId: set.id, nodeId: set.candidates[1]!.nodeId });
+    const record = recordTakePick(sql, actor, { takeId: set.id, nodeId: set.candidates[1]!.nodeId });
     expect(record.outcome).toBe('corrected');
     expect(record.changedAnswer).toBe(true);
     expect(record.chosen.text).toBe('B-style answer');
@@ -261,12 +262,12 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
   });
 
   test('confirming the live answer records acceptance', () => {
-    const { sql } = setup();
+    const { sql, actor } = setup();
     const set = recordBranchTakeSet(sql, {
       task: 't', turnId: 'turn-9', sessionId: 'default',
       liveText: 'live answer', branchText: 'branch answer',
     })!;
-    const record = recordTakePick(sql, { takeId: set.id, nodeId: set.candidates[0]!.nodeId });
+    const record = recordTakePick(sql, actor, { takeId: set.id, nodeId: set.candidates[0]!.nodeId });
     expect(record.outcome).toBe('accepted');
     expect(record.changedAnswer).toBe(false);
   });

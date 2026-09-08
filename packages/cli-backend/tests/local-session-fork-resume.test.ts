@@ -60,14 +60,17 @@ const RATIONALE = 'four angles on the research question';
  *  exactly what `kinu stop` / the repair path writes, from another process,
  *  with nothing left to settle the heads. */
 function interruptedWorkspace() {
-  // A FILE, not `:memory:`: `createCLIRuntime` requires the runtime's declared
-  // `dbPath` to be the database's own path (actor-identity.ts
-  // `requireLocalDatabasePath`), which an in-memory handle can never satisfy.
-  const db = new Database(scratchPath('local-session-fork-resume', 'agent.db'));
+  // A FILE, not `:memory:`: `createCLIRuntime` binds this actor by reading the
+  // database's own filename back, and refuses a runtime whose declared `dbPath`
+  // is not that one (actor-identity.ts `requireLocalDatabasePath`) — which an
+  // in-memory handle can never satisfy.
+  const db = new Database(scratchPath('local-session-fork-resume', 'agent.db'), { create: true });
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+    actor_id TEXT NOT NULL, id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    PRIMARY KEY (actor_id, id))`);
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
   const execRaw = makeExecRaw(db);
   initHeadsTables(execRaw);
@@ -130,11 +133,13 @@ describe('resuming a workspace whose fork was interrupted', () => {
   });
 
   test('a clean workspace resumes silently', async () => {
-    const db = new Database(scratchPath('local-session-fork-clean', 'agent.db'));
+    const db = new Database(scratchPath('local-session-fork-clean', 'agent.db'), { create: true });
     db.exec(`CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+      actor_id TEXT NOT NULL, id TEXT NOT NULL,
+      session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
       role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      PRIMARY KEY (actor_id, id))`);
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
     const events: SessionEvent[] = [];
     const session = new LocalAgentSession({

@@ -40,14 +40,13 @@
 import {
   addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
   RunEventRecorder, USER_AI_PROXY_PATH, usageReported, workspaceSpend, WORKSPACE_RUN_ID,
-  type LLMProviderConfig, type ModelCallSink, type SqlExecutor, type Usage,
+  type ActorHandle, type LLMProviderConfig, type ModelCallSink, type SqlExecutor, type Usage,
   type WorkspaceSpend,
 } from '@kinu.run/core';
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import { appendFileSync } from 'node:fs';
 import { LIVE_MODEL_ENV } from './ambient-env';
 import { EVAL_STAGING_ORIGIN, evalTargetVerdict } from './eval-identity';
-import type { ActorHandle } from '@kinu.run/core';
 
 /** Which of the two resolution paths produced a target. */
 export type LiveModelPath = 'worker-proxy' | 'ai-gateway';
@@ -428,8 +427,8 @@ export function recordLiveModelSpend(usage?: LanguageModelUsage): void {
  * It lives beside the reader instead of in each suite, so the writer and the
  * `workspaceSpend` query that unions it cannot drift apart.
  */
-export function liveModelCallSink(sql: SqlExecutor): ModelCallSink {
-  const events = new RunEventRecorder(sql);
+export function liveModelCallSink(sql: SqlExecutor, actor: ActorHandle): ModelCallSink {
+  const events = new RunEventRecorder(sql, actor);
   return (report) => {
     events.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: report.source, usage: report.usage,
@@ -453,7 +452,7 @@ export function liveModelCallSink(sql: SqlExecutor): ModelCallSink {
  * definition of what a workspace spent.
  */
 export function recordLiveModelEpisode(sql: SqlExecutor, actor: ActorHandle): void {
-  recordWorkspaceSpend(workspaceSpend({ events: new RunEventRecorder(sql), sql, actor }));
+  recordWorkspaceSpend(workspaceSpend({ events: new RunEventRecorder(sql, actor), sql, actor }));
 }
 
 /**

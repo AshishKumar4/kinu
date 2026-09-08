@@ -34,6 +34,7 @@ import { MissionBudgetExhausted, type MissionGovernor } from '../mission-budget'
 import { markCacheTail, type PromptCacheStrategy } from './cache-breakpoints';
 import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune';
 import { normalizeReplayForDestination } from './replay-normalization';
+import { applyStagedContext, type StagedContextEdit } from './staged-context';
 import type { DynamicContext, DynamicContextLedger } from './volatile-context';
 import { projectToolErrorFeedback, type ToolErrorStep } from './tool-error-feedback';
 
@@ -64,6 +65,37 @@ export interface StepDynamicContext {
   readonly snapshot: () => DynamicContext;
 }
 
+/**
+ * The durable context plane of the claim this turn runs under.
+ *
+ * Two obligations, both at this seam because this is the only place that holds
+ * the FINAL array a step is issued with:
+ *
+ *  • a staged mid-turn edit is asked for at each boundary and lands at the
+ *    first safe one (`staged-context.ts` decides which), so already-issued work
+ *    keeps the context it was issued with;
+ *  • the array the step actually consumes is recorded as the revision that step
+ *    ran on — after error projection, steering, pruning, the dynamic-context
+ *    weave and the destination re-key, and before the request goes out.
+ *
+ * Both backends wire this: the CLI through `ActorSession.execute`, the hosted
+ * root through its `beforeStep` hook. A pipeline with no claim — a shadow-eval
+ * replay, a head's own inference — leaves it absent and records nothing, which
+ * is correct: that work is not a claimed actor turn.
+ */
+export interface StepContextPlane {
+  /** The staged edit waiting for a step boundary, with the revision it will be
+   *  recorded as, or null when nothing is staged. */
+  staged(): (StagedContextEdit & { readonly revision: number }) | null;
+  /** Record the exact array this step consumes. `stagedRevision` names the
+   *  staged revision that landed here, when one did. */
+  consume(step: {
+    readonly stepNumber: number;
+    readonly messages: readonly ModelMessage[];
+    readonly stagedRevision: number | null;
+  }): void;
+}
+
 /** Everything the step pipeline composes, wired once per turn by the backend. */
 export interface StepPipeline {
   /** Registered extensions — mid-turn steering, plugin rewrites. */
@@ -85,6 +117,9 @@ export interface StepPipeline {
    *  against what the request actually was rather than what it was going to be
    *  before the rewrites, the pruning and the weave. Absent = not measured. */
   readonly meter?: TurnContextMeter | undefined;
+  /** The claim's durable context plane: where a staged mid-turn edit lands and
+   *  where the consumed revision is recorded. Absent = unclaimed work. */
+  readonly context?: StepContextPlane | undefined;
 }
 
 export type StepPrepareResult =
@@ -128,7 +163,15 @@ function finishPrepareStep(
   ctx: StepPrepareContext,
   steered: ModelMessage[] | undefined,
 ): StepPrepareResult {
-  const base = steered ?? ctx.messages;
+  const steeredBase = steered ?? ctx.messages;
+  // A staged context edit lands HERE — after steering, so a steer that landed
+  // mid-turn is part of the tail the edit preserves, and before pruning, so the
+  // edited array is what the window budget is applied to. `applyStagedContext`
+  // returns null when this step is not a safe boundary, and the revision stays
+  // staged for the next one.
+  const staged = pipeline.context?.staged() ?? null;
+  const landed = staged === null ? null : applyStagedContext(steeredBase, staged);
+  const base = landed ?? steeredBase;
   // The weave runs AFTER pruning: frozen block positions refer to the final
   // message array. Reserve its overhead before pruning, or the request would
   // be priced smaller than the one actually sent.
@@ -150,6 +193,13 @@ function finishPrepareStep(
   // changed nothing and returns undefined below, which is still a priced
   // request and still occupies the window.
   pipeline.meter?.measure(messages);
-  if (!plan) return steered || pruned || woven || replayed ? { messages } : undefined;
+  // Recorded on that same final array, and BEFORE this request is issued: the
+  // revision a step ran on is durable by the time the step can have an effect.
+  pipeline.context?.consume({
+    stepNumber: ctx.stepNumber,
+    messages,
+    stagedRevision: landed === null ? null : staged?.revision ?? null,
+  });
+  if (!plan) return steered || landed || pruned || woven || replayed ? { messages } : undefined;
   return plan.system !== undefined ? { system: plan.system, messages } : { messages };
 }

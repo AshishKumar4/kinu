@@ -205,7 +205,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
             + `executor runs ${event.canRun.join(', ') || '(nothing)'}`);
         }
       },
-      reportModelCall: liveModelCallSink(rt.storage.sql),
+      reportModelCall: liveModelCallSink(rt.storage.sql, rt.actor),
     });
     for (const line of progress) console.log(`    ${line}`);
 

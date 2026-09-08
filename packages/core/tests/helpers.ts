@@ -426,7 +426,7 @@ export function createTestRuntime(opts?: {
   const identity: Identity = {
     id: 'test-agent-id',
     name: 'test-agent',
-    scaffold: createScaffoldSurface({ vfs, sql, path: 'scaffold/agent.js' }),
+    scaffold: createScaffoldSurface({ vfs, sql, actor, path: 'scaffold/agent.js' }),
   };
 
   const mockBranch: BranchHandle = {

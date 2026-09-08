@@ -27,7 +27,7 @@
 // fail naming the missing step.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scratchPath } from '@kinu.run/test-utils';
+import { scratchPath, testActorHandle } from '@kinu.run/test-utils';
 import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { runChat, INTERRUPTED_TURN, type ChatEvent } from '../src/chat';
@@ -182,7 +182,7 @@ describe('a completed step is durable at the moment it completes', () => {
     ]);
     const { db, sql } = workspaceOnDisk();
     try {
-      const recorder = new RunEventRecorder(sql);
+      const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-1');
 
       // Requests observed at each step boundary, against the rows already
@@ -218,7 +218,7 @@ describe('a completed step is durable at the moment it completes', () => {
     ]);
     const { db, sql } = workspaceOnDisk();
     try {
-      const recorder = new RunEventRecorder(sql);
+      const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-cut');
       const run = await drive({ model: provider.model, acc, cutAfterSteps: 2 });
 
@@ -255,7 +255,7 @@ describe('a completed step is durable at the moment it completes', () => {
     ]);
     const { path, db, sql } = workspaceOnDisk();
     try {
-      const acc = backendWiring(new RunEventRecorder(sql), 'run-killed');
+      const acc = backendWiring(new RunEventRecorder(sql, testActorHandle(sql)), 'run-killed');
       await drive({ model: provider.model, acc, cutAfterSteps: 2 });
       // The process ends here: nothing in memory carries over, and nothing ever
       // wrote the turn's messages to the backend's message store.
@@ -263,7 +263,8 @@ describe('a completed step is durable at the moment it completes', () => {
 
       const reopened = new Database(path);
       try {
-        const after = new RunEventRecorder(makeSql(reopened));
+        const reopenedSql = makeSql(reopened);
+        const after = new RunEventRecorder(reopenedSql, testActorHandle(reopenedSql));
         const transcript = after.transcript('run-killed');
         expect(pairing(transcript).map((c) => c.id)).toEqual(['call_a', 'call_b']);
         expect(pairing(transcript).every((c) => c.settled)).toBe(true);
@@ -283,7 +284,7 @@ describe('a completed step is durable at the moment it completes', () => {
     ]);
     const { db, sql } = workspaceOnDisk();
     try {
-      const recorder = new RunEventRecorder(sql);
+      const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-threw');
       const run = await drive({ model: provider.model, acc });
 
@@ -309,7 +310,7 @@ describe('the durable record and the history the caller persists are one constru
     ]);
     const { db, sql } = workspaceOnDisk();
     try {
-      const recorder = new RunEventRecorder(sql);
+      const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-same');
       const run = await drive({ model: provider.model, acc });
 
@@ -330,7 +331,7 @@ describe('the durable record and the history the caller persists are one constru
     ]);
     const { db, sql } = workspaceOnDisk();
     try {
-      const recorder = new RunEventRecorder(sql);
+      const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-cut-tail');
       // Cut once the SECOND tool call is announced: step 2 has not finished, so
       // the SDK will never report it and it can never be a durable step row.
@@ -375,7 +376,7 @@ describe('ordering and idempotency', () => {
     ]);
     const { db, sql } = workspaceOnDisk();
     try {
-      const recorder = new RunEventRecorder(sql);
+      const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-dedupe');
       const run = await drive({ model: provider.model, acc });
 
@@ -399,7 +400,7 @@ describe('ordering and idempotency', () => {
     const second = scriptedProvider(script);
     const { db, sql } = workspaceOnDisk();
     try {
-      const recorder = new RunEventRecorder(sql);
+      const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const one = await drive({ model: first.model, acc: backendWiring(recorder, 'run-x') });
       const two = await drive({ model: second.model, acc: backendWiring(recorder, 'run-y') });
 

@@ -29,6 +29,7 @@ import { HeadJournal } from '../heads/journal';
 import { RunEventRecorder } from '../events/recorder';
 import { BackgroundJobStore } from '../jobs/store';
 import { MctsSearchStore } from '../mcts/search-store';
+import { ActorClaimStore } from '../orchestrator/actor-claims';
 
 /** Field names match what both backends already called these, so a backend
  *  reads its stores through one object without renaming any call site. */
@@ -40,6 +41,9 @@ export interface AgentStores {
    *  roster the per-step dynamic context reads. */
   readonly headJournal: HeadJournal;
   readonly eventRecorder: RunEventRecorder;
+  /** The durable admission ledger: the claim a turn is issued under, and the
+   *  context revisions its steps consume. */
+  readonly claims: ActorClaimStore;
   readonly jobs: BackgroundJobStore;
   readonly mctsSearchStore: MctsSearchStore;
 }
@@ -59,6 +63,7 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
   let headJournal: HeadJournal | undefined;
   let eventRecorder: RunEventRecorder | undefined;
   let jobs: BackgroundJobStore | undefined;
+  let claims: ActorClaimStore | undefined;
   let mctsSearchStore: MctsSearchStore | undefined;
 
   return {
@@ -75,7 +80,10 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
       return (headJournal ??= new HeadJournal(sql(), actor()));
     },
     get eventRecorder(): RunEventRecorder {
-      return (eventRecorder ??= new RunEventRecorder(sql()));
+      return (eventRecorder ??= new RunEventRecorder(sql(), actor()));
+    },
+    get claims(): ActorClaimStore {
+      return (claims ??= new ActorClaimStore(sql(), actor(), transactionSync));
     },
     get jobs(): BackgroundJobStore {
       return (jobs ??= new BackgroundJobStore(sql(), actor()));

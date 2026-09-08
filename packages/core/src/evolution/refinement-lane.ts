@@ -451,7 +451,9 @@ async function askRefiner(
  */
 function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest, contextRefs: readonly string[]): string {
   const sql = deps.control.sql;
-  const split = buildOutcomeEvalSplit(sql, clampGepaEvalBudget(deps.control.config.getGepaEvalBudget()));
+  const split = buildOutcomeEvalSplit(
+    sql, deps.control.rt.actor, clampGepaEvalBudget(deps.control.config.getGepaEvalBudget()),
+  );
   // The split's instances carry the turn's user message as `input`; that is the
   // only handle they share with the ledger rows, and it is what the section
   // metric is scored on, so it is the right thing to withhold by.

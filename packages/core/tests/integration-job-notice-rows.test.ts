@@ -111,13 +111,19 @@ function evictedWorkspace() {
   const ws = createTestWorkspace();
   initBackgroundJobsTable(ws.execRaw);
   initEventsHubTables(makeSqlExec(ws.db));
-  const store = new BackgroundJobStore(ws.sql, createTestActors(ws.sql, ws.execRaw).main);
+  // One actor for both halves: the registry write and the paged read are
+  // actor-scoped, and a fixture that issued two would file the rows under one
+  // and read them back under the other.
+  const actor = createTestActors(ws.sql, ws.execRaw).main;
+  const store = new BackgroundJobStore(ws.sql, actor);
   const now = Date.now();
   store.create({
     id: JOB, kind: 'agents', workMode: 'build', now,
     label: 'fork: design the generation algorithm',
   });
-  return { db: ws.db, store, now };
+  // The paged read is actor-scoped even where the pane is the authority, so the
+  // fixture hands back the actor its rows belong to.
+  return { db: ws.db, store, now, actor };
 }
 
 function noticeRows(sql: SqlExecutor) {
@@ -175,7 +181,7 @@ describe('a settled background job announces itself once, and not as the owner',
     const { runner } = activation(ws.db);
     await runner.wake(JOB);
 
-    const history = getChatHistoryPage(makeSql(ws.db)).items;
+    const history = getChatHistoryPage(makeSql(ws.db), ws.actor).items;
     expect(history).toHaveLength(1);
     expect(history[0]!.role).toBe('system');
     // The stored row is untouched: the model still reads its turn input as the
@@ -199,7 +205,7 @@ describe('a settled background job announces itself once, and not as the owner',
 
     // forkCandidates' predicate, which is `role === 'user'` and nothing else —
     // the reason the owner's picker showed ten copies of one notice.
-    const pivots = getChatHistoryPage(makeSql(ws.db)).items
+    const pivots = getChatHistoryPage(makeSql(ws.db), ws.actor).items
       .filter((row) => row.role === 'user')
       .map((row) => row.content);
     expect(pivots).toEqual(['find me a domain']);
@@ -236,7 +242,7 @@ describe('a settled background job announces itself once, and not as the owner',
       text: '23 head(s) across 6 fork run(s) were still marked running…',
     });
 
-    const history = getChatHistoryPage(makeSql(ws.db)).items;
+    const history = getChatHistoryPage(makeSql(ws.db), ws.actor).items;
     expect(history.map((row) => row.role)).toEqual(['system']);
   });
 
@@ -280,8 +286,9 @@ describe('a settled background job announces itself once, and not as the owner',
     const ws = evictedWorkspace();
     const sql = makeSql(ws.db);
     void sql`
-      INSERT INTO messages (id, session_id, role, content, metadata)
-      VALUES (${`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${backgroundJobWakeTrigger(JOB)}`},
+      INSERT INTO messages (actor_id, id, session_id, role, content, metadata)
+      VALUES (${ws.actor.actorId},
+              ${`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${backgroundJobWakeTrigger(JOB)}`},
               ${'default'}, ${'user'},
               ${`Background agents job ${JOB} completed. Read the full result with agent.jobResult.`},
               ${JSON.stringify({
@@ -290,7 +297,7 @@ describe('a settled background job announces itself once, and not as the owner',
               })})
     `;
 
-    const history = getChatHistoryPage(sql).items;
+    const history = getChatHistoryPage(sql, ws.actor).items;
     expect(history).toHaveLength(1);
     expect(history[0]!.role).toBe('system');
     expect(history[0]!.metadata).toMatchObject({ kinuEvent: 'background_job', jobId: JOB });

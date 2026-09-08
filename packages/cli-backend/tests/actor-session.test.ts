@@ -4,7 +4,7 @@ import type { ModelMessage, ToolSet } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, WorkspaceActorDirectory, profileCatalogDigest,
-  resolveTurnProfile, requireBuild,
+  resolveTurnProfile, requireBuild, createAgentStores,
 } from '@kinu.run/core';
 import type { AgentRuntime, BroadcastEvent, ChatEvent, ProfileAuthorityInputs, WorkMode } from '@kinu.run/core';
 import { initEventsHubTables, EventLog } from '../../core/src/events/hub/index';
@@ -35,7 +35,10 @@ function sessions() {
     const handle = directory.create({ parent, name, kind: 'subordinate', lifetime: 'durable', creationId: 'admitted-' + name });
     const runtime: AgentRuntime = { ...rt, actor: handle, identity: { ...rt.identity, id: handle.actorId, name: handle.name } };
     const broadcasts: BroadcastEvent[] = [];
-    const actor: ActorSession = new ActorSession({ runtime, orchestration: {
+    // The REAL store bundle, so a turn's claim is written through the same
+    // memoized ledger production uses rather than a fixture beside it.
+    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync);
+    const actor: ActorSession = new ActorSession({ runtime, claims: stores.claims, installedBuild: null, orchestration: {
       engine: new EvolutionEngine(runtime, { enabled: false }), eventLog: new EventLog(eventSql),
       host: {
         broadcast: event => { broadcasts.push(event); },
@@ -44,13 +47,13 @@ function sessions() {
         setTimer: () => { throw new Error('this bounded actor fixture must not schedule background work'); },
       },
     } });
-    return { actor, broadcasts };
+    return { actor, broadcasts, claims: stores.claims, handle };
   };
   return { left: create('left'), right: create('right'), db };
 }
 
 function bind(actor: ActorSession, turnId: string, mode: WorkMode, message: ModelMessage, tools: ToolSet = {}) {
-  const lease = actor.beginTurn(turnId, mode, Date.now());
+  const lease = actor.beginTurn({ runId: `run-${turnId}`, turnId }, mode, Date.now());
   actor.bindProfile(lease, resolveTurnProfile({ ...profiles, roleId: 'general', workMode: mode,
     availableTools: Object.keys(tools), activeSkills: [] }), profiles);
   actor.appendInput(lease, message);
@@ -134,9 +137,9 @@ test('logical actors in one store keep live context, mode and structured tool da
 
 test('a released lease cannot mutate or execute a newer turn of the same actor', async () => {
   const { left: { actor }, db } = sessions();
-  const old = actor.beginTurn('old-turn', 'plan', Date.now());
+  const old = actor.beginTurn({ runId: 'run-old', turnId: 'old-turn' }, 'plan', Date.now());
   actor.finishTurn(old);
-  const current = actor.beginTurn('new-turn', 'build', Date.now());
+  const current = actor.beginTurn({ runId: 'run-new', turnId: 'new-turn' }, 'build', Date.now());
   const profile = resolveTurnProfile({ ...profiles, roleId: 'general', workMode: 'build', availableTools: [], activeSkills: [] });
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: () => ({
     content: [{ type: 'text', text: 'new answer' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
@@ -196,7 +199,7 @@ test.each(['dispatch', 'published'])('interrupting one actor at %s preserves its
   try {
     await started.promise;
     if (boundary === 'published') await callSeen.promise;
-    expect(() => left.actor.beginTurn('overlap', 'build', Date.now())).toThrow(KinuError);
+    expect(() => left.actor.beginTurn({ runId: 'run-overlap', turnId: 'overlap' }, 'build', Date.now())).toThrow(KinuError);
     expect(() => left.actor.finishTurn(first)).toThrow(KinuError);
     left.actor.interrupt();
     releaseRight.resolve();
