@@ -14,7 +14,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
-- **Slate authoring guidance matches its Worker host.** Preview is the compile-and-boot check, with a precise URL result; ordinary Node/Vite servers remain separate. The first-run check now requires the agent to start its preview rather than letting the harness do it. Advisor records retain typed tool outcomes, and compaction guidance no longer advertises unavailable capabilities.
+- **Slate authoring guidance matches its Worker host.** Preview is the compile-and-boot check, with a precise URL result; absent hosts advertise no slate operation. Ordinary Node/Vite servers remain separate. The first-run check requires the named slate to own its live preview rather than letting the harness start it or accepting an unrelated server. Advisor records retain typed tool outcomes, and compaction guidance no longer advertises unavailable capabilities.
 
 - **Resident slate egress follows the shared network policy.** Authored server
   fetch calls use the existing destination classifier and redirect enforcement,

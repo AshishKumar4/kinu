@@ -23,7 +23,7 @@ import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
 import { commandResult, COMMAND_RESULT_TYPE, refusalText } from './exec-result';
-import { KinuError, refusalOf, toKinuError } from '../obs/index';
+import { ERROR_CODES, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
@@ -419,8 +419,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         }
       },
     },
-
-    slate: {
+  };
+  const slate = deps.slate;
+  if (slate !== undefined) {
+    tools.slate = {
       planAllowed: true,
       description: 'Manage an authored slate: list, preview, call a POST route, commit source, history, fork a version, or restore source.',
       execute: async <Input>(input: Input): Promise<JsonValue> => {
@@ -428,26 +430,22 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         if (!parsed.success) return { ok: false, ...refusalOf(new KinuError('bad_input',
           'workspace.slate expects a named op and its declared fields', { cause: new v.ValiError(parsed.issues) })) };
         requireSlateWorkMode(parsed.output, currentWorkMode());
-        if (deps.slate === undefined) return { ok: false, ...refusalOf(new KinuError('unsupported',
-          'This backend has no slate host')) };
-        const result = await deps.slate(parsed.output);
+        const result = await slate(parsed.output);
         return result.ok ? { ok: true, value: result.value } : { ok: false, reason: result.reason, error: result.error };
       },
-    },
-  };
+    };
+  }
 
   const types = `declare namespace workspace {
   /**
    * A refused call, CLASS first: branch on \`reason\`, never on the prose.
    * \`empty_anchor\`/\`not_found\`/\`ambiguous\`/\`overlap\`/\`no_change\`/\`unread\`/
    * \`stale\` are the file plane's verdicts about an anchor or a read;
-   * \`bad_input\`/\`missing\`/\`io\`/\`denied\`/\`unsupported\` are the classes every
-   * tool in this runtime shares. This is exactly the vocabulary the durable
-   * failure ledger reads, so anything you branch on here is what gets counted.
+   * the remaining reasons are the shared runtime failure codes.
    */
   type Refusal = {
     reason: 'empty_anchor' | 'not_found' | 'ambiguous' | 'overlap' | 'no_change'
-      | 'unread' | 'stale' | 'missing' | 'io' | 'bad_input' | 'denied' | 'unsupported';
+      | 'unread' | 'stale' | ${ERROR_CODES.map((code) => JSON.stringify(code)).join(' | ')};
     error: string;
   };
   function readFile(path: string): Promise<string>;
@@ -487,7 +485,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   function createTool(
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | ({ ok: false } & Refusal)>;
-  /**
+  ${slate === undefined ? '' : `/**
    * Prefer a slate for dashboards, live-data views and workspace UI; use a full app
    * toolchain when the user asks for a standalone, ship-ready web application.
    * A slate is /home/user/slates/<id>/package.json and an authored JS/TS tree.
@@ -515,6 +513,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     | { op: 'fork'; version: string }
     | { op: 'restore'; id: string; version: string }
   ): Promise<{ ok: true; value: SlateValue } | ({ ok: false } & Refusal)>;
+`}
 }`;
 
   const provider: ExecutorProvider = {

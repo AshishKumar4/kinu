@@ -47,7 +47,7 @@ describe(SUITE, () => {
         const row = listing.slates.find((slate) => slate.id === ID);
         // Inspect only: the harness must not start the preview the agent was asked to start.
         const ports = await session.exposedPorts('workspace');
-        const preview = row === undefined ? undefined : ports.find((port) => port.port === 8787);
+        const preview = row?.port === 8787 ? ports.find((port) => port.port === row.port) : undefined;
         let answered = false;
         let responseDetail = 'No HTTP request was made because the preview did not start.';
         if (preview !== undefined) {
@@ -76,7 +76,7 @@ describe(SUITE, () => {
           {
             what: 'previewed',
             reached: preview !== undefined && !beforePorts.some((port) => port.port === 8787),
-            detail: preview === undefined ? 'The agent left no workspace preview on the requested port.' : JSON.stringify(preview),
+            detail: preview === undefined ? 'The named slate owns no current live preview on the requested port.' : JSON.stringify(preview),
           },
           {
             what: 'answered',
