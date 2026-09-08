@@ -4,7 +4,7 @@
  *
  * THE MECHANISM. The pinned AI SDK reads its provider stream in a loop and
  * checks `abortSignal.aborted` AFTER `await reader.read()` resolves
- * (ai@6.0.196). So an abort and the final `finish` part racing in the same
+ * (ai@6.0.214). So an abort and the final `finish` part racing in the same
  * region have two different terminal outcomes, and which one happens is
  * decided by whether the flag is already set when that read resolves:
  *

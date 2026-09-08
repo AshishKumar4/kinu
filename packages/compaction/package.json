@@ -10,7 +10,7 @@
   "dependencies": {
     "@better-compact/core": "^0.1.0",
     "@kinu.run/core": "workspace:*",
-    "ai": "^6.0.182"
+    "ai": "6.0.214"
   },
   "scripts": {
     "check": "tsc --noEmit"
