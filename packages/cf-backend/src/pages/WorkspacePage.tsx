@@ -1293,7 +1293,7 @@ export default function WorkspacePage() {
             previewFocus={state.previewFocus}
             planFocus={subName === undefined ? state.planFocus : subordinateReview?.focus}
             planOwner={subName ?? "main"}
-            workspacePlanFocus={state.workspacePlanFocus}
+            workspacePlanArrival={state.workspacePlanArrival}
             activePlanActors={state.subordinates.filter(actor => actor.status !== "dismissed").map(actor => actor.name)}
             onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${encodeURIComponent(name)}`); }}
             onSurface={setSurface}
