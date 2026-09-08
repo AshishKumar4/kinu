@@ -19,8 +19,16 @@ protocol, with an explicit “Older plans / more actors” frontier rather than 
 eager recursive scan. Actor-qualified selection keeps identical plan IDs separate.
 Root/current-actor decisions stay inline; reviewing another active direct agent
 explicitly opens its conversation. Nested and dismissed history is read-only.
-A new plan in an already observed actor opens Work without switching the chat;
-loading older history does not steal focus. Failed refreshes retain the last
+Any new plan opens Work without switching the chat, including one from an actor
+no page of the walk has ever named. The workspace broadcasts only a
+path/id/revision reference; the browser resolves that exact reference through the
+same read-only inspection, which verifies every stored ownership hop, before
+anything is shown or focused. A reference the workspace cannot resolve is
+reported beside the other unreadable actors and focuses nothing; a repeated one
+is not a second arrival; a pane holding an undecided plan keeps it in front of
+the reader. Whether a plan reads as live or retained derives once from the
+workspace roster, so the history label and the read-only banner cannot disagree.
+Loading older history does not steal focus. Failed refreshes retain the last
 usable history and progress beside the failure. Inspection never starts an actor.
 
 Tasks created by a verified approval submission retain that

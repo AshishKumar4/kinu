@@ -861,7 +861,7 @@ export abstract class ActorAgent extends Think<Env> {
     return this._planReviews;
   }
 
-  protected submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult {
+  protected submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult | Promise<PlanReviewResult> {
     const result = this.planReviews.submit('default', edits);
     if (result.ok) this.broadcastPlanUpdate(result.plan);
     return result;

@@ -184,7 +184,7 @@ export interface WorkspaceSnapshot {
   branchRuns: Array<{ branchId: string; task: string; status: "running" }>;
 }
 
-import { PlanReviewSchema } from "@kinu.run/core";
+import { PlanReviewSchema, WorkspacePlanReferenceSchema, type WorkspacePlanReference } from "@kinu.run/core";
 
 const MctsRowSchema = v.object({
   id: v.string(),
@@ -332,6 +332,7 @@ const SocketMessageSchema = v.variant("type", [
   }),
   v.looseObject({ type: v.literal("signal_card") }),
   v.object({ type: v.literal("plan_updated"), plan: PlanReviewSchema }),
+  v.strictObject({ type: v.literal("workspace_plan_updated"), reference: WorkspacePlanReferenceSchema }),
   v.object({ type: v.literal("subordinates_changed"), subordinates: v.array(SubordinateRosterEntrySchema) }),
   SubordinateActivityEventSchema,
   v.object({
@@ -746,6 +747,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   const knownPorts = useRef<Set<string> | null>(null);
   const [previewFocus, setPreviewFocus] = useState<string | null>(null);
   const [planFocus, setPlanFocus] = useState<string | null>(null);
+  const [workspacePlanFocus, setWorkspacePlanFocus] = useState<WorkspacePlanReference | null>(null);
+  const knownWorkspacePlans = useRef(new Set<string>());
   const knownPlans = useRef(new Set<string>());
   const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
   // Pending device-consent requests — an agent wants to use a connected device;
@@ -1368,6 +1371,12 @@ export function useKinu(target?: string | KinuActorAddress) {
             knownPlans.current.add(key);
             setActivePlan(plan);
           }
+        } else if (!isSubordinate && msg.type === 'workspace_plan_updated') {
+          const key = JSON.stringify(msg.reference);
+          if (!knownWorkspacePlans.current.has(key)) {
+            knownWorkspacePlans.current.add(key);
+            setWorkspacePlanFocus(msg.reference);
+          }
         } else if (!isSubordinate && msg.type === "subordinates_changed") {
           const roster = parseSubordinateRoster(msg.subordinates);
           if (roster) {
@@ -1664,6 +1673,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     knownSlates.current = null;
     knownPorts.current = null;
     knownPlans.current.clear();
+    knownWorkspacePlans.current.clear();
+    setWorkspacePlanFocus(null);
     setPreviewFocus(null);
     setPlanFocus(null);
     setSlateReloads(new Map());
@@ -1902,7 +1913,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     executeInExecutor,
     /** Exposed ports across the canonical Workspace and Sandbox executors. */
     pinnedPorts,
-    previewFocus, planFocus,
+    previewFocus, planFocus, workspacePlanFocus,
     previewError,
     refreshExposedPorts,
     /** Background jobs — the Work surface's Now half and its journal. */

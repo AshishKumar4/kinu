@@ -20,7 +20,7 @@ import {
   // report.* — codemode projection of the native `report` tool.
   createReportCodemodeProvider, type CodemodeProvider,
   type DelegationBudget,
-  type PlanReview,
+  type PlanReview, type PlanEdit, type PlanReviewResult, WorkspacePlanReferenceSchema,
   planReviewAwaitingDecision,
   subordinateDescriptorSource,
   type InlineSteer,
@@ -53,7 +53,7 @@ import {
   type SubordinateReportOrigin, type SubordinateLiveStatus,
   type TerminalTurnParts,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import { MODEL_OPERATION_LANE_FIBER, TERMINAL_LANE_FIBER } from './fiber-recovery';
 import { generateText, type ToolSet } from 'ai';
 import {
@@ -497,6 +497,32 @@ export class SubordinateAgent extends ActorAgent {
    */
   private async workspaceOwner(): Promise<DurableObjectStub<OrchestratorAgent>> {
     return await getAgentByName<Env, OrchestratorAgent>(this.env[WORKSPACE_ACTOR_CLASS], this.workspaceName());
+  }
+
+  protected override async submitPlanEdits(edits: readonly PlanEdit[]): Promise<PlanReviewResult> {
+    const identity = this.identity.read();
+    const root = this.parentPath[0];
+    if (!identity || root?.className !== WORKSPACE_ACTOR_CLASS
+      || root.name !== identity.parentWorkspace || identity.name !== this.name
+      || identity.depth !== this.parentPath.length
+      || this.parentPath.slice(1).some(parent => parent.className !== SubordinateAgent.name)) {
+      throw new KinuError('denied', 'The actor has no valid workspace plan lineage');
+    }
+    const workspace = await this.workspaceOwner();
+    const authority = await workspace.getSubordinateBootstrapIdentity();
+    if (authority.parentWorkspace !== identity.parentWorkspace || authority.ownerUserId !== identity.ownerUserId) {
+      throw new KinuError('denied', 'The workspace no longer owns this plan actor');
+    }
+    const result = await super.submitPlanEdits(edits);
+    if (!result.ok) return result;
+    const reference = v.parse(WorkspacePlanReferenceSchema, {
+      path: [...this.parentPath.slice(1).map(parent => parent.name), this.name],
+      id: result.plan.id, revision: result.plan.revision,
+    });
+    // This is only a hint. The recipient must read the exact reference through
+    // the root's existing-only lineage inspection before displaying or focusing it.
+    await workspace.broadcast(JSON.stringify({ type: 'workspace_plan_updated', reference }));
+    return result;
   }
 
   /** Homes for this actor's own facets — its nested hires and its searches'

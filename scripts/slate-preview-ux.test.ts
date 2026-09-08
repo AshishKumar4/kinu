@@ -137,6 +137,49 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await selectPlan(page, 'Nested delivery');
         await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Nested'));
         expect(await page.$('[data-plan-decisions]')).toBeNull();
+
+        // ── A plan arrives from an actor this walk has never named ──────
+        // `courier` is on the workspace roster but on no `children` page, so no
+        // amount of "Older plans / more actors" reaches it. Only the hint does,
+        // and the hint is worth nothing until the exact authorized read answers.
+        expect(await page.$eval('[aria-label="Plan history"]', el => el.textContent)).not.toContain('Courier');
+        await page.click('[aria-label="Device app"]');
+        await page.waitForSelector('[aria-label="Device app"][aria-current="true"]');
+        // Neither a malformed reference nor one the workspace never issued may
+        // move the user. The stale one is reported where every unreadable actor
+        // is; the malformed one never becomes a reference at all, so if it had
+        // leaked past the schema the read would have failed instead of warned.
+        await page.click('[data-notify-malformed]');
+        await page.click('[data-notify-stale]');
+        await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('courier: The requested subordinate or retained history is unavailable.'));
+        expect(await page.$eval('[aria-label="Device app"]', el => el.getAttribute('aria-current'))).toBe('true');
+        expect(await page.$eval('[data-work-plans]', el => el.textContent)).not.toContain('Could not load workspace plan history');
+        expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Nested');
+        // The real reference: Work takes the user, the exact plan is on screen.
+        await page.click('[data-notify-plan]');
+        await page.waitForSelector('[aria-label="Work"][aria-current="true"]');
+        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Courier rollout'));
+        expect(await page.$eval('[data-work-plans]', el => el.textContent)).toContain('Deliver courier');
+        // Focused, never decided, and the chat is still the one the user chose.
+        expect(await page.$('[data-plan-decisions]')).toBeNull();
+        expect(await page.$eval('[data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
+        // One presentation policy: a live actor's arrival is neither labelled
+        // nor described as retained, and its review is an explicit navigation.
+        expect(await page.$eval('[aria-label="Plan history"] option:checked', el => el.textContent)).not.toContain('retained');
+        expect(await page.$eval('[data-work-plans]', el => el.textContent)).not.toContain('Retained actor history');
+        expect(await page.$eval('[data-work-plans]', el => el.textContent)).toContain('Review in courier conversation');
+        // A repeat of a reference already seen is not an arrival: the selection
+        // the user has since made stands. The history failure is the barrier —
+        // it only appears once a whole read cycle has run past the repeat.
+        await selectPlan(page, 'Nested delivery');
+        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Nested'));
+        await page.click('[data-notify-plan]');
+        await page.click('[data-break-plans]');
+        await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Plan history temporarily unavailable'));
+        expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Nested');
+        await page.click('[data-break-plans]');
+        await page.waitForFunction(() => !document.querySelector('[data-work-plans]')?.textContent?.includes('Plan history temporarily unavailable'));
+        expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Nested');
         await page.click('[aria-label="Sandbox app"]');
         await page.click('[data-worker-plan]');
         await page.waitForSelector('[aria-label="Work"][aria-current="true"]');

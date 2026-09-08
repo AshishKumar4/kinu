@@ -142,6 +142,7 @@ import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
   BUILTIN_PROFILE_CATALOG, BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   CHARS_PER_TOKEN, DEVICE_TIERS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript,
+  missingSubordinateHistory,
   parseDeviceTier, profileCatalogDigest, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
   type ProfileCatalogEnvelope,
@@ -779,6 +780,16 @@ function galleryPlanInspection<Input>(input: Input, plans: readonly PlanReview[]
   if (request.view === 'plans') return { view: 'plans', path: request.path, page: { status: 'end', items: plans } };
   if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
   if (request.view === 'planTasks') return { view: 'planTasks', path: request.path, tasks: [] };
+  // The exact read a plan-arrival hint is resolved through. It answers the ONE
+  // reference it was asked for or nothing at all: a reference to a revision this
+  // fixture never issued is `missing`, the same refusal the real existing-only
+  // inspection returns, so a stale hint cannot paint a neighbouring plan.
+  if (request.view === 'plan') {
+    const plan = plans.find(item => item.id === request.id && item.revision === request.revision);
+    return plan
+      ? { view: 'plan', path: request.path, plan }
+      : missingSubordinateHistory(request.path);
+  }
   throw new Error('Unexpected gallery plan inspection');
 }
 const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
@@ -5313,7 +5324,9 @@ async function mount() {
   else if (frame === "workslatefallback") node = <SlateFallbackFrame rpc={workRpc} />;
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
-  else if (frame === "previewtabs") node = <PreviewTabsGallery />;
+  // Owns a real root connection for the plan-arrival hint, so its reads need a
+  // server; the surfaces themselves still read the frame's own fixture props.
+  else if (frame === "previewtabs") { serveGalleryRpc(stubRpc); node = <PreviewTabsGallery />; }
   else if (frame === "compactpreview") node = <CompactPreviewGallery />;
   else if (frame === "work") node = <WorkFrame />;
   else if (frame === "planreview") node = <PlanReviewFrame />;

@@ -2,7 +2,7 @@
 
 // Identity system
 export { initActorTables, initAllTables, tableExists } from './identity/schema';
-export { SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './subordinates/inspection';
+export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './subordinates/inspection';
 export { inspectSubordinateStorage, type SubordinateInspectionAuthority, type SubordinateInspectionAccess, type SubordinateInspectionPort } from './subordinates/inspection-path';
 // The once-only lifecycle of one settled response, and the per-effect ledger it
 // wraps. Backend-neutral: the Durable Object and the CLI drive the same state
