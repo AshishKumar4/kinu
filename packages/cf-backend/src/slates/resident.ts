@@ -31,6 +31,8 @@ export interface ResidentSlateBoot {
   /** Whose file plane compiles the authored tree: the caller's, never the origin's on its behalf. */
   readonly cred: VfsCred;
   readonly bindings: Readonly<Record<string, Fetcher>>;
+  /** The caller's explicitly selected network capability; never implicit inheritance. */
+  readonly globalOutbound: Fetcher | null;
 }
 
 function runner(assets: readonly { readonly path: string; readonly contents: string }[]): string {
@@ -138,6 +140,7 @@ export class ResidentSlateProcesses {
         compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'], mainModule: 'runner.js', modules: {},
         vfsTextModules: { 'runner.js': facetImagePath(runnerRef.digest.value), 'application.js': facetImagePath(applicationRef.digest.value) },
         env: input.bindings,
+        globalOutbound: input.globalOutbound,
       },
     };
     const process = processes(this.deps.ctx, this.deps.env).spawn(

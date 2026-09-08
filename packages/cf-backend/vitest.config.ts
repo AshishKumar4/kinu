@@ -122,6 +122,16 @@ const retainedFacetProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+const slateEgressProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-egress-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-egress-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
+  alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+let forbiddenEgressHits = 0;
+
 export default defineConfig({
   plugins: [
     standardDecorators(),
@@ -164,6 +174,28 @@ export default defineConfig({
             RETAINED_FACET_SDK: { className: 'FacetReadRoot', useSQLite: true },
             RETAINED_FACET_ACTOR: { className: 'OrchestratorAgent', useSQLite: true },
           },
+        }, {
+          name: 'slate-egress-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: slateEgressProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          durableObjects: { SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', useSQLite: true } },
+          // Final transport only: the actual CodemodeEgress policy and resident
+          // global fetch run above this mock. No unmatched request reaches a network.
+          outboundService: async (request) => {
+            const url = new URL(request.url);
+            if (url.origin === 'http://169.254.169.254') {
+              forbiddenEgressHits += 1;
+              return new Response('forbidden transport reached');
+            }
+            if (url.origin === 'https://example.com') {
+              if (url.pathname === '/control') return new Response('public control');
+              if (url.pathname === '/redirect') return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/forbidden' } });
+              if (url.pathname === '/seen') return Response.json({ forbiddenEgressHits });
+            }
+            throw new Error('Unmatched test egress is disabled: ' + request.url);
+          },
         }],
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
@@ -190,6 +222,7 @@ export default defineConfig({
           SLATE_FACET_ROOT: { className: 'SlateFacetRootProbe', scriptName: 'slate-facet-probe', useSQLite: true },
           RETAINED_FACET_SDK: { className: 'FacetReadRoot', scriptName: 'retained-facet-probe', useSQLite: true },
           RETAINED_FACET_ACTOR: { className: 'OrchestratorAgent', scriptName: 'retained-facet-probe', useSQLite: true },
+          SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', scriptName: 'slate-egress-probe', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
         },
       },

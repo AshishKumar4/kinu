@@ -12,6 +12,7 @@ import {
 import { ERROR_CODES, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateCallerKey, slateCredentialKey, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
+import { codemodeEgress } from '../codemode-egress';
 
 const Failure = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
 
@@ -205,6 +206,10 @@ export class SlateHost {
   }
 
   private async boot(caller: SlateCaller, id: string, held: string): Promise<ResidentSlateProcess> {
+    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress();
+    if (caller.workMode === 'build' && globalOutbound === null) {
+      throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');
+    }
     const root = slateDirectory(new SlateId(id));
     const sources = await this.sources(caller.cred);
     for (;;) {
@@ -227,7 +232,7 @@ export class SlateHost {
       const port = project.slate.port ?? this.ports.get(held) ?? this.nextPort++;
       this.ports.set(held, port);
       const owner = JSON.stringify([this.deps.workspace, id, slateCallerKey(caller)]);
-      const process = await this.resident.start({ key, owner, root, project, port, cred: caller.cred, bindings });
+      const process = await this.resident.start({ key, owner, root, project, port, cred: caller.cred, bindings, globalOutbound });
       if ((this.revisions.get(id) ?? 0) !== revision) { await process.stop(); continue; }
       this.running.set(held, { key, caller, id, process });
       return process;

@@ -7,6 +7,7 @@ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { parseSlateProject, routeSlateBindingCall, type SlateProcess, type JsonValue, type SlateCallResult } from '@kinu.run/core';
 import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses } from '../../src/slates/resident';
+import { codemodeEgress } from '../../src/codemode-egress';
 
 export class SlateDepthProbe extends WorkerEntrypoint {
   async call(member: string, args: JsonValue[], depth: number): Promise<SlateCallResult> {
@@ -51,6 +52,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     this.process = await this.resident.start({
       key: crypto.randomUUID(), owner: JSON.stringify([this.ctx.id.toString(), root, cred]), root, port: 8789, cred,
       bindings: bindDepth ? { PEER: exports.SlateDepthProbe({}) } : {},
+      globalOutbound: codemodeEgress(),
       project: parseSlateProject({ main: 'server.ts' }),
     });
   }
