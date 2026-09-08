@@ -146,9 +146,9 @@
     "oxlint": "1.78.0",
     "oxlint-tsgolint": "7.0.2001",
     "postcss": "8.5.28",
-    "puppeteer": "^24.41.0",
+    "puppeteer": "^25.10.0",
     "typescript": "7.0.2",
-    "vitest": "^4.1.10",
+    "vitest": "^4.1.11",
     "vitest-evals": "0.16.1",
     "wrangler": "^4.129.0"
   },

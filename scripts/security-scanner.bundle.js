@@ -485,10 +485,6 @@ var REVIEWED_ADVISORIES = {
     reason: "transitive: @opentui/core pins 8.0.2 exactly and just-bash requires ^8.0.2. " + "parsePatch/applyPatch DoS on a crafted patch. The fix is 8.0.3, which @opentui's exact " + "pin blocks until it moves.",
     ids: [1112706]
   },
-  "extract-zip": {
-    reason: "transitive: @puppeteer/browsers <- puppeteer (dev). Unvalidated symlink path " + "traversal while unpacking; the only archive it unpacks is the Chrome build puppeteer " + "downloads. No fixed release exists \u2014 the advisory covers <=2.0.1, the latest publish.",
-    ids: [1139346]
-  },
   "file-type": {
     reason: "transitive: @jimp/core requires ^16.0.0 <- jimp <- @opentui/core, the CLI's TUI " + "image path. Infinite loop in the ASF parser on malformed input. 16.5.4 is the last of " + "that major line, so the fix (21.3.1) needs a @jimp bump.",
     ids: [1114301]
@@ -513,10 +509,6 @@ var REVIEWED_ADVISORIES = {
   "ip-address": {
     reason: "transitive: express-rate-limit 8.5.2 <- @modelcontextprotocol/sdk. Leading-zero " + "octet and IPv4-mapped misclassification that can bypass an SSRF check \u2014 in the rate " + "limiter, which nothing here mounts.",
     ids: [1130722, 1130723, 1130724]
-  },
-  "js-yaml": {
-    reason: "transitive: cosmiconfig 9.0.1 <- puppeteer (dev). Quadratic CPU on merge-key chains " + "and !!omap; the only YAML it loads is a puppeteer config in this repository. Fixed in " + "4.3.0/4.3.1, inside cosmiconfig's ^4.1.0.",
-    ids: [1123911, 1138115]
   },
   nanoid: {
     reason: "transitive: postcss requires ^3.3.12 <- vite <- vitest. The non-secure generator " + "loops forever on a negative or zero size; postcss calls it with a fixed size. Build " + "and test only.",
