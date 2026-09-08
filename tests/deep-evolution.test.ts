@@ -89,8 +89,10 @@ async function solveProblem(
 
   // Store in DB
   const id = crypto.randomUUID();
-  void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${'deep'}, ${'user'}, ${problem.question})`;
-  void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${'deep'}, ${id}, ${'assistant'}, ${response})`;
+  void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, role, content)
+    VALUES (${rt.actor.actorId}, ${id}, ${'deep'}, ${'user'}, ${problem.question})`;
+  void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+    VALUES (${rt.actor.actorId}, ${crypto.randomUUID()}, ${'deep'}, ${id}, ${'assistant'}, ${response})`;
 
   const turn: CompletedTurn = {
     userMessage: problem.question,

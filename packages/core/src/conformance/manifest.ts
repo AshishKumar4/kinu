@@ -197,6 +197,16 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
   table: {
     // ── the shared actor substrate (core initAllTables) ──
     workspace_identity: EVERYWHERE,
+    // The workspace's actor DIRECTORY — one row per actor the workspace issued,
+    // and the authority `openWorkspaceMainActor` reads to bind a handle. It sits
+    // where a workspace is ROOTED, so a subordinate has none: its own database
+    // holds a single `actor_identity` row that `FacetIdentity` writes and its
+    // handle is bound from that, never from a directory it could enumerate.
+    workspace_actors: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: 'a subordinate is not a workspace root: it binds its one actor from the single `actor_identity` row its facet identity writes, and a directory it could enumerate would let it name actors outside its own subtree' },
+      cli: WIRED,
+    },
     messages: EVERYWHERE,
     crafted_tools: EVERYWHERE,
     search_nodes: EVERYWHERE,
@@ -606,11 +616,17 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: { absent: 'a local session holds its steer queue in the driver that owns the turn; an eviction cannot separate the two' },
     },
-    active_durable_turn: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: 'the turn identity lives in the driving process; a local session does not outlive its own turn' },
-    },
+    // The durable admission ledger that REPLACED the single `active_durable_turn`
+    // row: one row keyed `id = 1` could hold one turn id for a whole database, so
+    // it could name neither which issued actor owned the turn nor tell an evicted
+    // activation from the one that replaced it. EVERYWHERE, unlike the row it
+    // replaces, because the lifecycle is core's now: `initWorkspaceSchema` creates
+    // both tables for the CLI and the shared `ActorAgent` constructor creates them
+    // for both Durable Object roots, ahead of the `onStart` recovery sweep that
+    // reads them. A resumed turn reads the context revision it was interrupted at
+    // rather than the newest one, so the revisions travel with the claims.
+    actor_turn_claims: EVERYWHERE,
+    actor_context_revisions: EVERYWHERE,
     // The terminal ledger is EVERYWHERE now. It was cf-only while the CLI
     // released its claims at transcript persist and had no recovery at all —
     // KINU-021 hoisted the lifecycle into core and the CLI drives the same

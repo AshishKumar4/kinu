@@ -40,8 +40,9 @@ async function seedSource(src: TestWorkspace) {
     { id: 'm3', parent: 'm2', role: 'user', text: 'post-fork-point', at: '1970-01-01 00:00:03' },
   ] as const;
   for (const m of chain) {
-    void src.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
-      VALUES (${m.id}, ${m.parent}, ${m.role}, ${m.text}, ${Date.parse(`${m.at.replace(' ', 'T')}Z`)})`;
+    void src.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+      VALUES (${actor.actorId}, ${m.id}, ${m.parent}, ${m.role}, ${m.text},
+              ${Date.parse(`${m.at.replace(' ', 'T')}Z`)})`;
     void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
       VALUES (${m.id}, ${''}, ${m.parent}, ${m.role},
               ${JSON.stringify({ id: m.id, role: m.role, parts: [{ type: 'text', text: m.text }] })},
@@ -125,9 +126,10 @@ describe('fork pipeline (end-to-end)', () => {
     const src = fresh();
     const tgt = fresh();
     void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'S'}, ${'s'}, ${100})`;
-    new WorkspaceActorDirectory(src.sql, { workspaceId: 'S', ownerUserId: '' }).createMain({ name: 's' });
+    const actor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'S', ownerUserId: '' }).createMain({ name: 's' });
     await writeSoul(src.vfs, src.sql, 'p');
-    void src.sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
+    void src.sql`INSERT INTO messages (actor_id, id, role, content, created_at)
+      VALUES (${actor.actorId}, ${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
 
     const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm1'));
 

@@ -149,8 +149,10 @@ async function chatTurn(
   history.push(...result.response.messages);
   const responseText = collectStepText(result);
   const id = crypto.randomUUID();
-  void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${'e2e'}, ${'user'}, ${userMessage})`;
-  void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${'e2e'}, ${id}, ${'assistant'}, ${responseText})`;
+  void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, role, content)
+    VALUES (${rt.actor.actorId}, ${id}, ${'e2e'}, ${'user'}, ${userMessage})`;
+  void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+    VALUES (${rt.actor.actorId}, ${crypto.randomUUID()}, ${'e2e'}, ${id}, ${'assistant'}, ${responseText})`;
 
   return {
     sent,
