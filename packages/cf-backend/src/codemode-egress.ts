@@ -1,12 +1,11 @@
 /**
- * Outbound network for programs run by `execute_tools`.
+ * Outbound network policy for execute_tools and resident slate code.
  *
- * `@cloudflare/codemode`'s DynamicWorkerExecutor takes `globalOutbound`: a
- * Fetcher every `fetch()` / `connect()` inside the sandbox rides, or `null` for
- * no network at all. There is no "inherit the parent's network" option, so the
- * Worker exports this entrypoint and hands the sandbox its own loopback stub —
- * workerd's `enable_ctx_exports` (compatibility date ≥ 2025-11-17; this Worker
- * is at 2025-12-01) populates `exports` from the module's exports, the same way
+ * Both WorkerLoader paths explicitly select this loopback capability as
+ * globalOutbound, rather than inherit unclassified network access. Null disables
+ * outbound for restricted execution. Workerd's enable_ctx_exports
+ * (compatibility date >= 2025-11-17; this Worker is at 2025-12-01) populates
+ * exports from the module's exports, the same way
  * Nimbus reaches `NimbusDOStub` and the Sandbox SDK reaches `ContainerProxy`.
  * `env.d.ts` declares this one export in `Cloudflare.GlobalProps`, which is
  * what types `exports.CodemodeEgress` as the loopback stub.
@@ -22,12 +21,11 @@
  * approval gate. One judgment for the whole project means this seam asks it
  * too.
  *
- * A REDIRECT IS A DESTINATION. `redirect: 'manual'` for the same reason
- * `egress/outbound.ts` forces it: a hop the runtime follows never re-enters
- * this handler, so a public host that answers 302 to 169.254.169.254 would
- * reach it unjudged. The 3xx is handed back to the program, which is a real
- * behaviour difference — a program that wants the redirect target reads
- * `Location` and fetches it, and that fetch is judged like the first.
+ * A REDIRECT IS A DESTINATION. The forwarding fetch uses redirect:manual,
+ * like egress/outbound.ts, so that it never follows an unjudged destination.
+ * The handler returns the 3xx. A manual caller sees that response; native
+ * global fetch may follow it outside the binding, in which case the next
+ * destination re-enters this policy.
  *
  * What this is NOT: a policy about what a program MAY do with a public
  * destination. The programs are the owner's own code, run against the owner's

@@ -117,6 +117,25 @@ matching process. Changed source or a stopped process requires a new boot.
 File-change events invalidate affected slates and refresh the UI; requests to a
 live preview also refresh its resident on demand.
 
+Resident Build code uses the existing CodemodeEgress capability as its explicit
+WorkerLoader outbound route. The shared destination classifier refuses private
+literal addresses and reserved names. Upstream redirects are manual; an authored
+manual fetch receives the 3xx, while native follow requests re-enter the same
+policy for the next destination. Public destinations remain usable.
+
+The caller's captured mode remains part of the process/cache identity. Restricted
+materialization selects no outbound capability, and cannot reuse a Build process;
+an independently admitted Build process retains its own authority. This does not
+add public Plan slate execution: preview and app calls still require Build.
+Nimbus only transports an optional outbound capability; its default remains
+unchanged for unrelated consumers. Kinu always chooses explicitly.
+
+Local workerd proof uses the actual resident and shared policy with only the final
+transport mocked, unmatched network disabled. It proves literal destination and
+redirect enforcement and mode/cache separation, not DNS rebinding or the platform's
+ability to reach a private address behind a public hostname. No real private-network
+probe was performed. Browser-side fetch is separate from this server-side policy.
+
 `SlateFrame` delegates the returned URL to the existing `PreviewFrame`. That
 pipeline rejects non-preview URLs and uses the shared `PREVIEW_SANDBOX` policy,
 including `allow-same-origin` on the distinct preview hostname so browser code

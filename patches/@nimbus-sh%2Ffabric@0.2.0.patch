@@ -1,8 +1,3 @@
-# Vendored Nimbus change: feat(fabric) a resident code boot may carry an explicit env.
-# Nimbus main 5de10e56 layered over the committed composition patch below. ResidentCodeSpec
-# gains an optional env; an explicit env skips the SUPERVISOR injection. npm publish is not
-# authenticated on this machine, so this patch carries the change until the owner releases
-# it and the patch can drop.
 diff --git a/dist/composition.d.ts b/dist/composition.d.ts
 index 35b98685c2411191f96ffe9e3654462d906eb84d..8b553d56e01f685d3c01295ed7711ec5bb8c823e 100644
 --- a/dist/composition.d.ts
@@ -208,26 +203,36 @@ index d9705cf59345eb3eaed06adc83929800ca543d5e..e661f28dd3c821b28496ee8ecc43ad3b
 -}
 +export { adoptCtxExports, composeFabric, getCtxExports, stagedBootAssembler, supervisorEntrypoint, supervisorEntrypointName, } from '@nimbus-sh/platform/composition.js';
 diff --git a/dist/process-fabric.d.ts b/dist/process-fabric.d.ts
-index 4cf8df0ee5a8db5676dbf6c62b2f0bf98dacb8a3..c7b2e01d90edf8e5a27c2fe606a3a1fc1a4984bd 100644
+index 4cf8df0ee5a8db5676dbf6c62b2f0bf98dacb8a3..33cf3ccf10f89b4c58aa4c36db8298e55a94a111 100644
 --- a/dist/process-fabric.d.ts
 +++ b/dist/process-fabric.d.ts
-@@ -107,6 +107,7 @@ export declare const ResidentCodeSpecSchema: z.ZodObject<{
+@@ -75,6 +75,7 @@
+  */
+ import { z } from 'zod/v4';
+ import type { RouteableFacetTarget } from '@nimbus-sh/core/runtime/os-contracts.js';
++import type { ServiceStub } from './vendor/types.js';
+ /**
+  * The class every generated resident runner exports. One name for every
+  * runtime: the fabric names it unconditionally, so nothing about which program
+@@ -107,6 +108,8 @@ export declare const ResidentCodeSpecSchema: z.ZodObject<{
      }, z.core.$strip>]>>;
      vfsWasmModules: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
      vfsTextModules: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
 +    env: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
++    globalOutbound: z.ZodOptional<z.ZodNullable<z.ZodCustom<ServiceStub, ServiceStub>>>;
  }, z.core.$strip>;
  export type ResidentCodeSpec = z.infer<typeof ResidentCodeSpecSchema>;
  /**
-@@ -132,6 +133,7 @@ export declare function residentBootSpecSchema<Stage extends z.ZodType>(stageSch
+@@ -132,6 +135,8 @@ export declare function residentBootSpecSchema<Stage extends z.ZodType>(stageSch
          }, z.core.$strip>]>>;
          vfsWasmModules: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
          vfsTextModules: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
 +        env: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
++        globalOutbound: z.ZodOptional<z.ZodNullable<z.ZodCustom<ServiceStub, ServiceStub>>>;
      }, z.core.$strip>;
  }, z.core.$strip>], "kind">;
  export type ResidentBootSpec = {
-@@ -201,6 +203,11 @@ export interface ResidentDiskReader {
+@@ -201,6 +206,11 @@ export interface ResidentDiskReader {
   * path, verifying each generated image against the digest its own path claims.
   * Runs inside the loader's cache-miss callback, so the bytes exist only for
   * the duration of the load.
@@ -240,19 +245,19 @@ index 4cf8df0ee5a8db5676dbf6c62b2f0bf98dacb8a3..c7b2e01d90edf8e5a27c2fe606a3a1fc
  export declare function residentLoaderConfig(spec: ResidentCodeSpec, disk: ResidentDiskReader): Promise<Record<string, unknown>>;
  /**
 diff --git a/dist/process-fabric.d.ts.map b/dist/process-fabric.d.ts.map
-index 7a550e278206afd3399167459e66b8d61b353a4a..20eb1d3a75cf5b249539f933fcb28c18c7c67a6f 100644
+index 7a550e278206afd3399167459e66b8d61b353a4a..cf4a583a5c99cec944e26a0396f48cc930abdaad 100644
 --- a/dist/process-fabric.d.ts.map
 +++ b/dist/process-fabric.d.ts.map
 @@ -1 +1 @@
 -{"version":3,"file":"process-fabric.d.ts","sourceRoot":"","sources":["../src/process-fabric.ts"],"names":[],"mappings":"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"}
 \ No newline at end of file
-+{"version":3,"file":"process-fabric.d.ts","sourceRoot":"","sources":["../src/process-fabric.ts"],"names":[],"mappings":"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"}
++{"version":3,"file":"process-fabric.d.ts","sourceRoot":"","sources":["../src/process-fabric.ts"],"names":[],"mappings":"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"}
 \ No newline at end of file
 diff --git a/dist/process-fabric.js b/dist/process-fabric.js
-index 971ff9ffc6e4982297fc19ea12301825b0d33a30..b7e0eac00d024965374c47b5d7193b96b8d1ac04 100644
+index 971ff9ffc6e4982297fc19ea12301825b0d33a30..6cbb758c41d89842270958902227b50200179bf5 100644
 --- a/dist/process-fabric.js
 +++ b/dist/process-fabric.js
-@@ -115,6 +115,14 @@ export const ResidentCodeSpecSchema = z.object({
+@@ -115,6 +115,19 @@ export const ResidentCodeSpecSchema = z.object({
       * image store below and the spec names it.
       */
      vfsTextModules: z.record(z.string(), z.string()).optional(),
@@ -264,10 +269,15 @@ index 971ff9ffc6e4982297fc19ea12301825b0d33a30..b7e0eac00d024965374c47b5d7193b96
 +     * minted from the composed supervisor entrypoint).
 +     */
 +    env: z.record(z.string(), z.unknown()).optional(),
++    /** The embedder's outbound capability: absent inherits the parent, null blocks
++     * outbound, and a service stub mediates fetch/connect. Keep the capability
++     * itself, not a structural copy of its methods. */
++    globalOutbound: z.custom((value) => value !== null && (typeof value === 'object' || typeof value === 'function')
++        && 'fetch' in value && typeof value.fetch === 'function').nullable().optional(),
  });
  /**
   * The boot-spec union, with the staged arm's payload validated by the
-@@ -191,6 +199,11 @@ export function facetImagePathDigest(path) {
+@@ -191,6 +204,11 @@ export function facetImagePathDigest(path) {
   * path, verifying each generated image against the digest its own path claims.
   * Runs inside the loader's cache-miss callback, so the bytes exist only for
   * the duration of the load.
@@ -279,11 +289,12 @@ index 971ff9ffc6e4982297fc19ea12301825b0d33a30..b7e0eac00d024965374c47b5d7193b96
   */
  export async function residentLoaderConfig(spec, disk) {
      const resolved = {};
-@@ -208,6 +221,7 @@ export async function residentLoaderConfig(spec, disk) {
+@@ -208,6 +226,8 @@ export async function residentLoaderConfig(spec, disk) {
          compatibilityFlags: spec.compatibilityFlags,
          mainModule: spec.mainModule,
          modules: { ...spec.modules, ...resolved },
 +        ...(spec.env !== undefined ? { env: spec.env } : {}),
++        ...(spec.globalOutbound !== undefined ? { globalOutbound: spec.globalOutbound } : {}),
      };
  }
  /**
@@ -549,10 +560,18 @@ index 7242f397d94f8d044b48745924d72e954eecef22..b99d0cd20bbdd14142d276a2427d7bc1
 +  StagedBootAssembler,
 +} from '@nimbus-sh/platform/composition.js';
 diff --git a/src/process-fabric.ts b/src/process-fabric.ts
-index 1a886841f7e4e4619ae592fa3336e0e4ec0b5cff..2c56df390c32a856d08306d0471f2d991a23a6c9 100644
+index 1a886841f7e4e4619ae592fa3336e0e4ec0b5cff..8f8f17a5be7c7d58e58ae748996d2e91b7a24436 100644
 --- a/src/process-fabric.ts
 +++ b/src/process-fabric.ts
-@@ -131,6 +131,14 @@ export const ResidentCodeSpecSchema = z.object({
+@@ -76,6 +76,7 @@
+ 
+ import { z } from 'zod/v4';
+ import type { RouteableFacetTarget } from '@nimbus-sh/core/runtime/os-contracts.js';
++import type { ServiceStub } from './vendor/types.js';
+ 
+ /**
+  * The class every generated resident runner exports. One name for every
+@@ -131,6 +132,21 @@ export const ResidentCodeSpecSchema = z.object({
     * image store below and the spec names it.
     */
    vfsTextModules: z.record(z.string(), z.string()).optional(),
@@ -564,10 +583,17 @@ index 1a886841f7e4e4619ae592fa3336e0e4ec0b5cff..2c56df390c32a856d08306d0471f2d99
 +   * minted from the composed supervisor entrypoint).
 +   */
 +  env: z.record(z.string(), z.unknown()).optional(),
++  /** The embedder's outbound capability: absent inherits the parent, null blocks
++   * outbound, and a service stub mediates fetch/connect. Keep the capability
++   * itself, not a structural copy of its methods. */
++  globalOutbound: z.custom<ServiceStub>((value) =>
++    value !== null && (typeof value === 'object' || typeof value === 'function')
++    && 'fetch' in value && typeof value.fetch === 'function',
++  ).nullable().optional(),
  });
  
  export type ResidentCodeSpec = z.infer<typeof ResidentCodeSpecSchema>;
-@@ -238,6 +246,11 @@ export interface ResidentDiskReader {
+@@ -238,6 +254,11 @@ export interface ResidentDiskReader {
   * path, verifying each generated image against the digest its own path claims.
   * Runs inside the loader's cache-miss callback, so the bytes exist only for
   * the duration of the load.
@@ -579,11 +605,12 @@ index 1a886841f7e4e4619ae592fa3336e0e4ec0b5cff..2c56df390c32a856d08306d0471f2d99
   */
  export async function residentLoaderConfig(
    spec: ResidentCodeSpec,
-@@ -258,6 +271,7 @@ export async function residentLoaderConfig(
+@@ -258,6 +279,8 @@ export async function residentLoaderConfig(
      compatibilityFlags: spec.compatibilityFlags,
      mainModule: spec.mainModule,
      modules: { ...spec.modules, ...resolved },
 +    ...(spec.env !== undefined ? { env: spec.env } : {}),
++    ...(spec.globalOutbound !== undefined ? { globalOutbound: spec.globalOutbound } : {}),
    };
  }
  

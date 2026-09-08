@@ -20,13 +20,19 @@ import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { SlateProcessProbeDO, SlateDepthProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
+import type { SlateBinding } from '../../src/slates/bindings';
 interface SlateFacetRootRpc extends Rpc.DurableObjectBranded {
   exercise(family: 'subordinate' | 'exploration'): Promise<{ answeredBy: string; method: string; browserCallable: boolean }>;
   code(mode: 'plan' | 'build', code: string): Promise<{ answer: string; file: string }>;
 }
+interface SlateEgressRpc extends Rpc.DurableObjectBranded {
+  request(mode: 'plan' | 'build', target: string, redirect?: RequestRedirect): Promise<string>;
+  publicPlanCall(): Promise<{ ok: boolean; reason?: string }>;
+}
 declare global {
   namespace Cloudflare {
     interface Env {
+      SLATE_EGRESS_PROBE: DurableObjectNamespace<SlateEgressRpc>;
       RETENTION: DurableObjectNamespace<RetentionDO>;
       NEIGHBOUR: DurableObjectNamespace<NeighbourDO>;
       GATED: DurableObjectNamespace<GatedDO>;
@@ -57,6 +63,7 @@ declare global {
      *  `exports.CodemodeEgress` is a loopback stub here as it is in production. */
     interface GlobalProps {
       mainModule: {
+        SlateBinding: typeof SlateBinding;
         CodemodeEgress: typeof CodemodeEgress;
         SlateDepthProbe: typeof SlateDepthProbe;
       };

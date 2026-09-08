@@ -14,6 +14,11 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
+- **Resident slate egress follows the shared network policy.** Authored server
+  fetch calls use the existing destination classifier and redirect enforcement,
+  while permitted public access remains available. Captured caller mode separates
+  restrictive and Build runtimes; independently admitted Build work stays live.
+
 - **Structural tool invocation outcomes.** Native operation failures now use
   the SDK error channel; namespace refusals remain branchable values. New tool
   records retain the invocation outcome, producer classification and observed
