@@ -284,6 +284,8 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
     const page = await browser.newPage();
     const sent: Sent[] = [];
     const pageErrors: string[] = [];
+    const startupFailures: { path: string; error: string | undefined }[] = [];
+    page.on('requestfailed', request => startupFailures.push({ path: new URL(request.url()).pathname, error: request.failure()?.errorText }));
     const stamp = { sha: LOADED_SHA };
     // Rendered through the cause chain rather than read off `.message`: the
     // handler's argument is untyped at this seam, and a page error's own cause is
@@ -304,7 +306,13 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
     await page.goto(`${origin}/gallery.html?frame=errorboundary${query}`, {
       waitUntil: 'networkidle0',
     });
-    await page.waitForSelector('[data-break]');
+    try {
+      await page.waitForSelector('[data-break]');
+    } catch (cause) {
+      const [snapshot] = await Promise.allSettled([page.evaluate(() => ({ title: document.title, text: document.body.textContent?.slice(0, 1500) }))]);
+      const startup = snapshot.status === 'fulfilled' ? snapshot.value : { readError: renderThrownChain({ cause: snapshot.reason }) };
+      throw new Error('Gallery startup: ' + JSON.stringify({ url: page.url(), pageErrors, startupFailures, startup }), { cause });
+    }
     if (options.moveStampAfterLoad === true) stamp.sha = LATER_SHA;
 
     await page.click('[data-break]');
