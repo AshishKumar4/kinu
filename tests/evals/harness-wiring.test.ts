@@ -39,6 +39,7 @@ import {
 } from '../../packages/core/src/index';
 import { DIGEST_LIMIT, JsonObjectSchema, JsonValueSchema } from '../../packages/core/src/utils/json';
 import { createWorkspace } from '../../packages/core/src/identity/index';
+import { openWorkspaceMainActor } from '../../packages/core/src/state/workspace-actors';
 import { makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
@@ -673,7 +674,8 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
  * `tool_call_start`, the type every earlier counter read, is emitted by nothing.
  */
 function toolCallRows(db: Database): Extract<RunEvent, { type: 'tool_call_end' }>[] {
-  const recorder = new RunEventRecorder(makeSql(db));
+  const sql = makeSql(db);
+  const recorder = new RunEventRecorder(sql, openWorkspaceMainActor(sql));
   // A walk, for the same reason readLedgerTotals walks: an episode's rows are
   // the whole assertion, and a window over them would make a missing `args`
   // indistinguishable from a row the read never reached.

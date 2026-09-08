@@ -23,6 +23,7 @@ import {
   type RunEvent,
 } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
+import { openWorkspaceMainActor } from '@kinu.run/core';
 import { orchestratorHarness } from './helpers/actor-harness';
 import type { AgentProviderRegistry } from '../src/providers/agent-registry';
 
@@ -147,7 +148,7 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
     expect(result.run?.judged.map((j) => j.stored)).toEqual([3, 3]);
     expect(result.gap).toBeNull();
 
-    const recorder = new RunEventRecorder(sql);
+    const recorder = new RunEventRecorder(sql, openWorkspaceMainActor(sql));
     const operations = operationsOf(recorder);
     expect(operations).toHaveLength(12); // 6 calls × (start + end)
 
@@ -223,7 +224,8 @@ describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
     // `fast` routes to `tiny`, and the effort is the tier's own.
     expect(resolved).toEqual([{ spec: TINY_MODEL, effort: TINY_EFFORT }]);
 
-    const operations = operationsOf(new RunEventRecorder(sqlOver(harness.db)));
+    const ensembleSql = sqlOver(harness.db);
+    const operations = operationsOf(new RunEventRecorder(ensembleSql, openWorkspaceMainActor(ensembleSql)));
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
     expect(operations[0]!.operationId).toBe(operations[1]!.operationId);
     expect(operations.every((e) => e.source === 'fast' && e.op === 'complete')).toBe(true);

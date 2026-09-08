@@ -43,6 +43,7 @@ import type {
 } from '@kinu.run/core';
 import {
   ActorSession, type ActorTurnLease, type ActorExecutionInput,
+  verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
   type TurnSteering,
   createAgentStores, type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
@@ -844,6 +845,12 @@ export class LocalAgentSession implements BackendHost {
 
     this.actorSession = new ActorSession({
       runtime: this.rt,
+      claims: this.stores.claims,
+      // The local host publishes NO installed build identity for its builtin
+      // loop: there is no build stamp on a `bun`-run checkout and the package
+      // version in this repo is a placeholder, so a claim for a builtin turn
+      // records the build as unknown rather than naming one nobody can verify.
+      installedBuild: null,
       orchestration: {
         host: this,
         engine: this.engine,
@@ -1300,7 +1307,8 @@ export class LocalAgentSession implements BackendHost {
    *  asking the agent to continue with the chosen approach. */
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     return pickAlternateTake(
-      { sql: this.rt.storage.sql, engine: this.engine, signals: this.actorSession.orchestrator.signals }, takeId, nodeId);
+      { sql: this.rt.storage.sql, actor: this.rt.actor, engine: this.engine, signals: this.actorSession.orchestrator.signals },
+      takeId, nodeId);
   }
 
   async proposeCurriculumTasks(count?: number) {
@@ -1423,7 +1431,8 @@ export class LocalAgentSession implements BackendHost {
   private announcementOnDisk(identity: string): boolean {
     const id = `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`;
     return this.rt.storage.sql<{ id: string }>`
-      SELECT id FROM messages WHERE id = ${id} AND session_id = ${this.sessionId}
+      SELECT id FROM messages
+      WHERE actor_id = ${this.rt.actor.actorId} AND id = ${id} AND session_id = ${this.sessionId}
     `.length > 0;
   }
 
@@ -1907,7 +1916,56 @@ export class LocalAgentSession implements BackendHost {
           + (overBudget > 0 ? `, ${overBudget} left queued: the mission is over its budget` : ''),
       });
     }
+    await this.recoverActorClaims();
     await this.recoverTerminalTransitions(advisorOrphans);
+  }
+
+  /**
+   * Dispose of the turn claims a dead activation left behind.
+   *
+   * A start-of-life read, for the reason `unterminatedRuns` gives: this process
+   * is running none of these, so every one it finds was admitted by an earlier
+   * one. Each is loaded, its PROGRAM re-verified against the source its version
+   * still retains — the immutable `.vN` bytes, never the live alias a promotion
+   * moves — and then settled `indeterminate`.
+   *
+   * Indeterminate and not resumed, deliberately. The claim proves the turn was
+   * admitted; the effect ledgers (`tool_effect_claims`, `terminal_effects`)
+   * prove what it managed to do, and those are recovered by their own paths
+   * below and above. Re-running the turn under its own identity would repeat
+   * whatever the dead activation had already issued, and naming it `completed`
+   * would report an answer nobody has. So the honest disposition is the one
+   * word that says the work was claimed and its fate is unknown, and the
+   * verification result is stated on the claim's own run in the durable log.
+   */
+  private async recoverActorClaims(): Promise<void> {
+    for (const claim of this.stores.claims.unsettled()) {
+      const recovery = await verifyClaimedProgram(
+        claim,
+        (version) => readVersionedScaffoldSource(this.rt, version),
+        sha256Hex,
+        () => this.stores.claims.consumedContext(claim.turnId),
+      );
+      const note = recovery.kind === 'source_changed'
+        ? `the source of program v${claim.program.version} no longer digests to what this turn was admitted on`
+        + ` (claimed ${claim.program.digest ?? 'nothing'}, found ${recovery.found ?? 'no source'})`
+        : recovery.kind === 'build_unknown'
+          ? 'this turn ran the builtin loop under a build identity the host never published'
+          : `program v${claim.program.version} still retains the source this turn was admitted on`;
+      this.recordRunEvent({
+        type: 'error',
+        message: `recovered an unsettled turn claim (epoch ${claim.epoch}): ${note}`,
+        details: {
+          turnId: claim.turnId, epoch: claim.epoch, verification: recovery.kind,
+          consumedRevision: claim.consumedRevision,
+        },
+      }, claim.runId);
+      this.stores.claims.settleRecovered(claim.turnId, claim.epoch, 'indeterminate');
+      this.emit({
+        type: 'background', event: 'turn_claim_recovered',
+        message: `turn ${claim.turnId} was admitted and never settled — ${note}`,
+      });
+    }
   }
 
   /**
@@ -2262,8 +2320,13 @@ export class LocalAgentSession implements BackendHost {
    * backend and a choice on the other. `classifyRunEnd` owns the vocabulary now;
    * this method reports what it saw and returns the reason it was given.
    */
-  private closeRun(facts: RunEndFacts): RunEndReason {
+  private closeRun(facts: RunEndFacts, lease: ActorTurnLease): RunEndReason {
     const end = classifyRunEnd(facts);
+    // The durable claim closes under the SAME name the run does. It is settled
+    // before the early return below, because a second `closeRun` for one run is
+    // a no-op on the run row and must not leave the claim open either — and the
+    // claim's own settle is idempotent per turn.
+    if (this.actorSession.turnClaim !== null) this.actorSession.settleTurnClaim(lease, end.reason);
     if (!this.currentRunId) return end.reason;
     const outcome: Parameters<typeof closeTurnRun>[2] = {
       turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
@@ -2324,7 +2387,9 @@ export class LocalAgentSession implements BackendHost {
     this.currentTurnId = item.kind === 'programmatic'
       ? `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${item.idempotencyKey ?? crypto.randomUUID()}`
       : crypto.randomUUID();
-    const lease = this.actorSession.beginTurn(this.currentTurnId, mode, startedAt, item.metadata);
+    const lease = this.actorSession.beginTurn(
+      { runId: this.currentRunId, turnId: this.currentTurnId }, mode, startedAt, item.metadata,
+    );
     openTurnRun(this.eventRecorder, this.currentRunId, {
       agentId: lease.actorId,
       causedBy: event ?? 'chat',
@@ -2337,7 +2402,7 @@ export class LocalAgentSession implements BackendHost {
       const message = renderThrownChain({ cause: error });
       const interrupted = lease.signal.aborted;
       if (!interrupted) this.actorSession.orchestrator.acc.hadError = true;
-      this.closeRun({ completed: false, interrupted, errorText: message.slice(0, 500) });
+      this.closeRun({ completed: false, interrupted, errorText: message.slice(0, 500) }, lease);
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
     } finally {
@@ -2676,7 +2741,7 @@ export class LocalAgentSession implements BackendHost {
         completed: false,
         interrupted: false,
         errorText: runError ?? message.slice(0, 500),
-      });
+      }, lease);
       diagnostics.failure('turn.persist_failed', commit.failure);
       // The answer is not durable, so it is not published as one. The stream's
       // deltas already went out — they are what the operator watched happen —
@@ -2707,7 +2772,7 @@ export class LocalAgentSession implements BackendHost {
         });
       }
 
-      this.closeRun(facts);
+      this.closeRun(facts, lease);
       // Core drives everything the settled turn causes from here: the in-process
       // guard, the durable claim, the roster, the run and the close are ONE
       // state machine, and this backend supplies only what it owns — the effect
@@ -2739,7 +2804,7 @@ export class LocalAgentSession implements BackendHost {
         completed: false,
         interrupted: false,
         errorText: runError ?? message.slice(0, 500),
-      });
+      }, lease);
       diagnostics.failure(
         'turn.finalization_failed',
         toKinuError({ doing: 'finalizing the turn', cause: err, otherwise: 'io' }),
@@ -4002,7 +4067,7 @@ export class LocalAgentSession implements BackendHost {
   /** The pending scaffold's rollout state — trials so far and what the
    *  promotion gate currently says. */
   getShadowStatus(): ShadowStatus {
-    return getShadowStatus(this.rt.storage.sql);
+    return getShadowStatus(this.rt.storage.sql, this.rt.actor);
   }
 
   /** Resolve the pending scaffold by hand. 'auto' acts only on a conclusive
@@ -4021,7 +4086,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Read-only scaffold archive: versions with status, lineage and shadow record. */
   listScaffoldVersions(limit = 20): ScaffoldVersionView[] {
-    return listScaffoldVersions(this.rt.storage.sql, limit);
+    return listScaffoldVersions(this.rt.storage.sql, this.rt.actor, limit);
   }
 
   /**
@@ -4316,20 +4381,21 @@ export class LocalAgentSession implements BackendHost {
     metadata?: JsonObject,
   ): void {
     const stamp = metadata === undefined ? null : JSON.stringify(stampTurnAuthor(metadata));
-    void this.rt.storage.sql`INSERT OR IGNORE INTO messages (id, session_id, role, content, metadata)
-      VALUES (${turnId}, ${this.sessionId}, ${'user'}, ${userText}, ${stamp})`;
+    const actorId = this.rt.actor.actorId;
+    void this.rt.storage.sql`INSERT OR IGNORE INTO messages (actor_id, id, session_id, role, content, metadata)
+      VALUES (${actorId}, ${turnId}, ${this.sessionId}, ${'user'}, ${userText}, ${stamp})`;
     let parentId = turnId;
     for (const steer of steers) {
       const steerStamp = JSON.stringify({
         [STEER_METADATA_KEY]: true,
         [STEER_STEP_METADATA_KEY]: steer.atStep,
       });
-      void this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content, metadata)
-        VALUES (${steer.id}, ${this.sessionId}, ${parentId}, ${'user'}, ${steer.text}, ${steerStamp})`;
+      void this.rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, metadata)
+        VALUES (${actorId}, ${steer.id}, ${this.sessionId}, ${parentId}, ${'user'}, ${steer.text}, ${steerStamp})`;
       parentId = steer.id;
     }
-    void this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
-      VALUES (${assistantId}, ${this.sessionId}, ${parentId}, ${'assistant'}, ${assistantText})`;
+    void this.rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+      VALUES (${actorId}, ${assistantId}, ${this.sessionId}, ${parentId}, ${'assistant'}, ${assistantText})`;
   }
   /** One routed non-turn lane as an {@link LLM}: the tier's model, its effort,
    *  and its spend filed under the lane's own source name.
@@ -4420,7 +4486,8 @@ export class LocalAgentSession implements BackendHost {
     const rows = this.rt.storage.sql<{ role: string; content: string }>`
       SELECT role, content
       FROM messages
-      WHERE session_id = ${this.sessionId} AND role IN ('user', 'assistant')
+      WHERE actor_id = ${this.rt.actor.actorId}
+        AND session_id = ${this.sessionId} AND role IN ('user', 'assistant')
       ORDER BY created_at DESC, rowid DESC`;
     const budget = stepContextLimit({
       contextWindow: this.sessionContextWindow(),
@@ -4573,6 +4640,7 @@ export class LocalAgentSession implements BackendHost {
       // native `memory` tool's wiring below (search stays FTS5-only here).
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
+        actor: this.rt.actor,
       })),
       createTasksCodemodeProvider(
         this.taskList,

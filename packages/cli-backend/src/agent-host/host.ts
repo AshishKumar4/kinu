@@ -1325,7 +1325,8 @@ function childRef(parent: HostEntry, childName: string): HostedAgentRef {
 function readConversationTail(entry: HostEntry): ModelMessage[] {
   const rows = makeSql(entry.db)<{ role: string; content: string }>`
     SELECT role, content FROM messages
-    WHERE session_id = ${entry.sessionId} AND role IN ('user', 'assistant')
+    WHERE actor_id = ${entry.ws.rt.actor.actorId} AND session_id = ${entry.sessionId}
+      AND role IN ('user', 'assistant')
     ORDER BY created_at DESC, rowid DESC LIMIT 16`;
   return rows.reverse().map((row): ModelMessage => ({
     role: row.role === 'assistant' ? 'assistant' : 'user',

@@ -33,9 +33,10 @@ const RUN_LIST_LIMIT = 50;
 function rig() {
   const ws = createTestWorkspace();
   // The head journal half of this total is actor-private, so the aggregate is
-  // asked on behalf of a REAL owner rather than of the whole database.
+  // asked on behalf of a REAL owner rather than of the whole database — and the
+  // run-event half is written by a recorder bound to that same owner.
   const actor = createTestActors(ws.sql, ws.execRaw).main;
-  return { ws, actor, events: new RunEventRecorder(ws.sql) };
+  return { ws, actor, events: new RunEventRecorder(ws.sql, actor) };
 }
 
 /** One turn step, as the turn accumulator writes it. A step with no `usage` is a
@@ -243,7 +244,7 @@ describe('workspaceSpend', () => {
   });
 
   test('the stored payload really carries the fields the aggregate reads', () => {
-    const { ws, events, actor } = rig();
+    const { ws, actor, events } = rig();
     const every: Required<Usage> = {
       input: 11, output: 7, cacheRead: 5, cacheWrite: 3, cacheWrite1h: 2, reasoning: 1,
       neurons: 0.5,
@@ -260,7 +261,8 @@ describe('workspaceSpend', () => {
     // Move either and this fails here rather than as a silently absent count on
     // the owner's panel.
     const [row] = ws.sql<{ payload: string }>`
-      SELECT payload FROM run_events WHERE type = 'step_finish'`;
+      SELECT payload FROM run_events
+      WHERE actor_id = ${actor.actorId} AND type = 'step_finish'`;
     const payload = v.parse(
       v.object({ usage: UsageSchema, usd: v.number() }),
       JSON.parse(row!.payload),

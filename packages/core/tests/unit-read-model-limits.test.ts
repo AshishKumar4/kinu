@@ -30,9 +30,11 @@ function seededRuns(count: number) {
   initAllTables(execRaw, sql);
   initRunEventTables(execRaw);
   initBackgroundJobsTable(execRaw);
-  // The job store is actor-private, so the timeline's jobs spine needs a real owner.
+  // The job store is actor-private, so the timeline's jobs spine needs a real
+  // owner — and the run-event log is scoped by the same actor, so the recorder
+  // writes under the one the spine reads.
   const actor = createTestActors(sql, execRaw).main;
-  const recorder = new RunEventRecorder(sql);
+  const recorder = new RunEventRecorder(sql, actor);
   for (let i = 0; i < count; i++) {
     recorder.emit(`run-${String(i).padStart(4, '0')}`, { type: 'run_start', agentId: 'a' });
   }

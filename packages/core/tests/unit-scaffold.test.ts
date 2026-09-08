@@ -140,8 +140,8 @@ describe('Scaffold rollback', () => {
     // Write initial version — source file plus its metadata row, since a
     // version without a row cannot be the current pointer.
     await rt.storage.vfs.writeFile('scaffold/agent.js.v0', 'original code');
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale)
-                   VALUES (0, ${Date.now()}, ${'original'})`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale)
+                   VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'original'})`;
 
     const result = await rollbackScaffold(rt, 0);
     expect(result.ok).toBe(true);

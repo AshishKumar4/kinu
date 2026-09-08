@@ -131,7 +131,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
   const identity: Identity = {
     id: components.actor.actorId,
     name: components.actor.name,
-    scaffold: createScaffoldSurface({ vfs: agentStateVfs, sql, path: 'scaffold/agent.js' }),
+    scaffold: createScaffoldSurface({ vfs: agentStateVfs, sql, actor: components.actor, path: 'scaffold/agent.js' }),
   };
   const lanes = components.modelLanes;
   const pinned: PinnedLanes = {};

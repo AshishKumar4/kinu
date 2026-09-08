@@ -2793,6 +2793,7 @@ export class OrchestratorAgent extends ActorAgent {
   async getAgentStatus() {
     const status = await getAgentStatus({
       sql: this.boundSql,
+      actor: this.rt.actor,
       vfs: this.rt.storage.vfs,
       config: this.config,
       name: this.name,
@@ -2917,11 +2918,11 @@ export class OrchestratorAgent extends ActorAgent {
     // The unseen window itself, not the whole digest: the queue row needs the
     // count, the newest entry's time, and how many of those entries actually
     // offer keep/revert rather than being measurements to read.
-    const unseen = getUnseenChangelog(this.boundSql, this.actorHandle());
+    const unseen = getUnseenChangelog(this.boundSql, this.rt.actor);
     return buildPendingActions({
       approvals: board?.approvals ?? [],
       changes: board?.changes ?? [],
-      scaffoldVersions: listScaffoldVersions(this.boundSql, 20),
+      scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
       jobs: listBackgroundJobs(this.jobs, 50),
       deferredActions: this.deferrals.list(),
       unseenChanges: {
@@ -3053,7 +3054,8 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     const outcome = await pickAlternateTake(
-      { sql: this.boundSql, engine: this.engine, signals: this.orch.signals }, takeId, nodeId);
+      { sql: this.boundSql, actor: this.rt.actor, engine: this.engine, signals: this.orch.signals },
+      takeId, nodeId);
     this.logActivity('take_pick', `${outcome.outcome} (${nodeId})`);
     return outcome;
   }
@@ -3113,7 +3115,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Return the current shadow-rollout status: pending version, win counts, decision. */
   async getShadowStatus(): Promise<ShadowStatus> {
-    return getShadowStatus(this.boundSql);
+    return getShadowStatus(this.boundSql, this.rt.actor);
   }
 
   /**
@@ -3156,8 +3158,8 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable()
   async getShadowVerdict(version?: number): Promise<ShadowVerdict> {
-    const pendingVersion = version ?? getPendingScaffold(this.boundSql)?.version ?? null;
-    return readShadowVerdict(this.boundSql, pendingVersion);
+    const pendingVersion = version ?? getPendingScaffold(this.boundSql, this.rt.actor)?.version ?? null;
+    return readShadowVerdict(this.boundSql, this.rt.actor, pendingVersion);
   }
 
   /**
@@ -3174,7 +3176,9 @@ export class OrchestratorAgent extends ActorAgent {
   }> {
     const after = (await readScaffoldVersion(this.rt, version)) ?? "";
     const prevRow = this.sql<{ version: number }>`
-      SELECT version FROM scaffold_versions WHERE version < ${version} ORDER BY version DESC LIMIT 1`;
+      SELECT version FROM scaffold_versions
+      WHERE actor_id = ${this.rt.actor.actorId} AND version < ${version}
+      ORDER BY version DESC LIMIT 1`;
     const previousVersion = prevRow[0]?.version ?? null;
     const before = previousVersion != null ? (await readScaffoldVersion(this.rt, previousVersion)) ?? "" : "";
     const d = diffLines(before, after);
@@ -3410,7 +3414,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  wire shape predates the archive (ScaffoldLineage.tsx reads written_at). */
   @callable()
   async listScaffoldVersions(limit: number = 20): Promise<ScaffoldVersionView[]> {
-    return listScaffoldVersions(this.boundSql, limit);
+    return listScaffoldVersions(this.boundSql, this.rt.actor, limit);
   }
 
   // ── GEPA offline scaffold optimisation ─────────────────────────
@@ -4698,6 +4702,7 @@ export class OrchestratorAgent extends ActorAgent {
     this.requireOwnerForFork();
     const fork = await forkWorkspace({
       sql: this.boundSql,
+      actor: this.rt.actor,
       // The workspace plane's own walk, with each inherited file streamed
       // through a native ranged read: a fork holds one frame of one file, never
       // the file.

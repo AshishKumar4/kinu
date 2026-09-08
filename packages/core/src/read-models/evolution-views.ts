@@ -11,6 +11,7 @@
  */
 
 import type { AgentConfigStore } from '../config/store';
+import type { ActorHandle } from '../state/actor-handle';
 import {
   buildChangelog, countUnseenChangelog, listUnseenChangelog, type ChangelogEntry,
 } from '../evolution/changelog';
@@ -25,7 +26,6 @@ import type { SignalDeliverer } from '../types/signals';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
 import { diagnostics, toKinuError } from '../obs/index';
-import type { ActorHandle } from '../state/actor-handle';
 
 export interface EvolutionChangelogView {
   entries: ChangelogEntry[];
@@ -49,6 +49,10 @@ export function getEvolutionChangelog(
   actor: ActorHandle,
   limit = DEFAULT_CHANGELOG_LIMIT,
 ): EvolutionChangelogView {
+  // The seen marker is a key on this actor's own config store, so the handle is
+  // the only thing either read needs. Taking a separate `AgentConfigStore`
+  // beside the scoped `sql` let a caller pair one actor's marker with another
+  // actor's ledgers, and nothing in the types could catch it.
   const seenAt = actor.config.getChangelogSeenAt();
   const page = boundedInt(limit, DEFAULT_CHANGELOG_LIMIT, 1, MAX_CHANGELOG_LIMIT);
   return {
@@ -75,6 +79,8 @@ export function markChangelogSeen(config: AgentConfigStore) {
 
 export interface TakePickDeps {
   readonly sql: SqlExecutor;
+  /** The actor whose scaffold lineage and take ledger this pick answers for. */
+  readonly actor: ActorHandle;
   readonly engine: EvolutionEngine;
   readonly signals: SignalDeliverer;
 }
@@ -94,9 +100,9 @@ export async function pickAlternateTake(
   if (!takeId || !nodeId) {
     throw new Error('pickAlternateTake requires takeId and nodeId');
   }
-  const record = recordTakePick(deps.sql, {
+  const record = recordTakePick(deps.sql, deps.actor, {
     takeId, nodeId,
-    scaffoldVersion: getCurrentScaffoldVersion(deps.sql),
+    scaffoldVersion: getCurrentScaffoldVersion(deps.sql, deps.actor),
   });
   try {
     await deps.engine.applyTakePick(record.set.turnId, record.outcome);

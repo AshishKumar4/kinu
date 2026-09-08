@@ -1,8 +1,4 @@
 {
-  "active_durable_turn@packages/cf-backend/src/actor-agent.ts": [
-    "id",
-    "turn_id"
-  ],
   "activity_log@packages/core/src/identity/schema.ts": [
     "id",
     "event",
@@ -14,6 +10,18 @@
     "actor_id",
     "key",
     "value"
+  ],
+  "actor_context_revisions@packages/core/src/orchestrator/actor-claims.ts": [
+    "actor_id",
+    "turn_id",
+    "revision",
+    "epoch",
+    "base_revision",
+    "digest",
+    "message_count",
+    "messages",
+    "step_index",
+    "recorded_at"
   ],
   "actor_identity@packages/core/src/state/facet-identity.ts": [
     "id",
@@ -42,6 +50,22 @@
     "actor_reference",
     "birth_request",
     "delete_requested"
+  ],
+  "actor_turn_claims@packages/core/src/orchestrator/actor-claims.ts": [
+    "actor_id",
+    "turn_id",
+    "run_id",
+    "epoch",
+    "work_mode",
+    "program_kind",
+    "program_version",
+    "program_digest",
+    "program_build",
+    "status",
+    "outcome",
+    "consumed_revision",
+    "claimed_at",
+    "settled_at"
   ],
   "agent_facts@packages/core/src/memory/facts.ts": [
     "actor_id",
@@ -167,6 +191,7 @@
   ],
   "conversation_fts_state@packages/core/src/memory/conversation-search.ts": [
     "id",
+    "actor_id",
     "regime",
     "rev",
     "synced_rev"
@@ -534,6 +559,7 @@
     "updated_at"
   ],
   "messages@packages/core/src/identity/schema.ts": [
+    "actor_id",
     "id",
     "session_id",
     "parent_id",
@@ -737,6 +763,7 @@
     "updated_at"
   ],
   "run_events@packages/core/src/events/recorder.ts": [
+    "actor_id",
     "run_id",
     "event_index",
     "type",
@@ -750,6 +777,7 @@
     "outcome"
   ],
   "scaffold_evaluations@packages/core/src/scaffold/shadow.ts": [
+    "actor_id",
     "id",
     "current_version",
     "pending_version",
@@ -763,12 +791,14 @@
     "evaluated_at"
   ],
   "scaffold_regression_fixtures@packages/core/src/scaffold/schemas.ts": [
+    "actor_id",
     "id",
     "task",
     "expected_keywords",
     "created_at"
   ],
   "scaffold_trial_queue@packages/core/src/scaffold/shadow.ts": [
+    "actor_id",
     "id",
     "pending_version",
     "task",
@@ -777,6 +807,7 @@
     "queued_at"
   ],
   "scaffold_versions@packages/core/src/scaffold/schemas.ts": [
+    "actor_id",
     "version",
     "written_at",
     "rationale",
@@ -909,6 +940,7 @@
     "created_at"
   ],
   "task_history@packages/core/src/scaffold/schemas.ts": [
+    "actor_id",
     "id",
     "task",
     "scaffold_version",

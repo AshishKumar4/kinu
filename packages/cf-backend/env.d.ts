@@ -24,6 +24,12 @@ declare global {
     /** Workers AI binding. Absent ⇒ the `ai-gateway` provider and semantic
      *  memory's embedder report unavailable; nothing silently degrades. */
     AI?: Ai;
+    /** The deployed Worker version — Cloudflare's own build identity for this
+     *  code. A durable turn claim records it for a turn that ran the BUILTIN
+     *  loop; OPTIONAL because a deployment made before the binding existed (and
+     *  every `wrangler dev` without it) has none, and the claim then records the
+     *  build as unknown rather than naming one nobody can verify. */
+    CF_VERSION_METADATA?: { id: string; tag: string; timestamp: string };
     /** Optional semantic-memory index. Without it, memory remains FTS-only. */
     MEMORY_VECTORS?: KinuVectorizeIndex;
     /** The Nimbus runtime artifact store a HOSTED workspace installs its

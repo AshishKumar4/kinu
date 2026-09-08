@@ -79,13 +79,18 @@ function risingJudge(seedCalls: number): () => Promise<string> {
 }
 
 async function setup(judge: () => Promise<string>) {
-  const db = new Database(':memory:');
+  // The declared path, not `:memory:`: `createCLIRuntime` binds this actor by
+  // reading the database's own filename back, and refuses a runtime whose path
+  // does not match it (`requireLocalDatabasePath`).
+  const db = new Database(scratchPath('gepa-local', 'agent.db'), { create: true });
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+    actor_id TEXT NOT NULL, id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    PRIMARY KEY (actor_id, id))`);
   const rt = createCLIRuntime(db, {
-    dbPath: scratchPath('gepa-local', 'agent.db'),
+    dbPath: db.filename,
     llm: DUMMY_LLM,
   });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));

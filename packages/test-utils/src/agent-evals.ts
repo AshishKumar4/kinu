@@ -23,9 +23,8 @@
 import {
   censusToolFailures, listForkRuns, parseStoredRunEvent, STEER_BRANCH_RUN_ID_PREFIX,
   tableExists,
-  type ForkRunSummary, type RunEvent, type SqlExecutor,
+  type ActorHandle, type ForkRunSummary, type RunEvent, type SqlExecutor,
 } from '@kinu.run/core';
-import type { ActorHandle } from '@kinu.run/core';
 
 // ── (a) A search tree reached, branched, and ranked ──────────────
 
@@ -261,7 +260,7 @@ export interface BehaviourScore {
 export interface BehaviourScorer {
   readonly name: string;
   readonly asserts: string;
-  readonly score: (sql: SqlExecutor) => BehaviourScore;
+  readonly score: (sql: SqlExecutor, actor: ActorHandle) => BehaviourScore;
 }
 
 function verdict(eligible: number, passed: number, detail: string): BehaviourScore {
@@ -293,10 +292,12 @@ function verdict(eligible: number, passed: number, detail: string): BehaviourSco
  * lowering a denominator.
  */
 function eventsOfType<K extends RunEvent['type']>(
-  sql: SqlExecutor, type: K,
+  sql: SqlExecutor, actor: ActorHandle, type: K,
 ): Extract<RunEvent, { type: K }>[] {
+  actor.assertCurrent();
   const rows = sql<{ payload: string }>`
-    SELECT payload FROM run_events WHERE type = ${type}
+    SELECT payload FROM run_events
+    WHERE actor_id = ${actor.actorId} AND type = ${type}
     ORDER BY run_id ASC, event_index ASC`;
   return rows.map((row) => parseStoredRunEvent(row.payload))
     .filter((event): event is Extract<RunEvent, { type: K }> => event.type === type);
@@ -329,8 +330,8 @@ export const STEERING_TRIGGERS = [
 export const steeringConversion: BehaviourScorer = {
   name: 'steering_conversion',
   asserts: 'a mechanical steer converted: the model did what the steer asked',
-  score(sql) {
-    const rows = eventsOfType(sql, 'turn_steering');
+  score(sql, actor) {
+    const rows = eventsOfType(sql, actor, 'turn_steering');
     const converted = rows.filter((row) => row.converted === true).length;
     const byTrigger = STEERING_TRIGGERS
       .map((trigger) => ({ trigger, n: rows.filter((r) => r.trigger === trigger).length }))
@@ -359,8 +360,8 @@ export const steeringConversion: BehaviourScorer = {
 export const craftReuse: BehaviourScorer = {
   name: 'craft_reuse',
   asserts: 'the agent crafted a tool mid-episode and then reused it',
-  score(sql) {
-    const rows = eventsOfType(sql, 'craft_cycle');
+  score(sql, actor) {
+    const rows = eventsOfType(sql, actor, 'craft_cycle');
     const crafted = rows.reduce((n, row) => n + row.crafted.length, 0);
     const reused = rows.reduce((n, row) => n + row.reused.length, 0);
     const invoked = rows.reduce((n, row) => n + row.invoked.length, 0);
@@ -388,8 +389,8 @@ export const craftReuse: BehaviourScorer = {
 export const editLanding: BehaviourScorer = {
   name: 'edit_landing',
   asserts: 'attempted file edits applied rather than failing to match',
-  score(sql) {
-    const rows = eventsOfType(sql, 'file_edit');
+  score(sql, actor) {
+    const rows = eventsOfType(sql, actor, 'file_edit');
     const attempts = rows.reduce((n, row) => n + row.attempts, 0);
     const applied = rows.reduce((n, row) => n + row.applied, 0);
     const abandoned = rows.reduce((n, row) => n + row.abandonedPaths, 0);
@@ -428,8 +429,8 @@ export const editLanding: BehaviourScorer = {
 export const recoveryDurability: BehaviourScorer = {
   name: 'recovery_durability',
   asserts: 'a broken failure streak stayed broken — the finding took',
-  score(sql) {
-    const findings = eventsOfType(sql, 'execution_recovery')
+  score(sql, actor) {
+    const findings = eventsOfType(sql, actor, 'execution_recovery')
       .flatMap((row) => row.recoveries);
     // Counted, not ordered. A signature recorded as recovered more than once
     // necessarily failed again after the first recovery, so multiplicity alone
@@ -469,8 +470,8 @@ export const recoveryDurability: BehaviourScorer = {
 export const completionHonesty: BehaviourScorer = {
   name: 'completion_honesty',
   asserts: 'the run finished on an honest claim — the gate found no work left',
-  score(sql) {
-    const rows = eventsOfType(sql, 'completion_gate');
+  score(sql, actor) {
+    const rows = eventsOfType(sql, actor, 'completion_gate');
     const forced = rows.filter((row) => row.converted === true).length;
     return verdict(rows.length, rows.length - forced,
       `${String(rows.length - forced)}/${String(rows.length)} gated runs ended on an honest ` +
@@ -497,8 +498,8 @@ export const completionHonesty: BehaviourScorer = {
 export const spillRetrieval: BehaviourScorer = {
   name: 'spill_retrieval',
   asserts: 'the agent read back bulk output the budget spilled to an address',
-  score(sql) {
-    const rows = eventsOfType(sql, 'context_budget');
+  score(sql, actor) {
+    const rows = eventsOfType(sql, actor, 'context_budget');
     const referenced = rows.reduce((n, row) => n + row.referenced, 0);
     const followUps = rows.reduce((n, row) => n + row.followUps, 0);
     const omitted = rows.reduce((n, row) => n + row.omittedChars, 0);
@@ -555,8 +556,8 @@ export function parseFailureMix(detail: string): readonly (readonly [string, num
 export const toolOutcomes: BehaviourScorer = {
   name: 'tool_outcomes',
   asserts: 'producer-attributed tool outcomes, with complete attribution required for a rate',
-  score(sql) {
-    const rows = eventsOfType(sql, 'tool_call_end');
+  score(sql, actor) {
+    const rows = eventsOfType(sql, actor, 'tool_call_end');
     const census = censusToolFailures(rows);
     const succeeded = rows.filter((row) => row.outcome?.success === true).length;
     const failed = census.failures.length;

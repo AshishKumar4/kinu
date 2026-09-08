@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
-import { prepareActorTurn, inWorkMode, runHeadInference, HeadCapture, MissionGovernor, localMissionScope } from '@kinu.run/core';
+import { startActorTurn, prepareActorProgram, inWorkMode, runHeadInference, HeadCapture, MissionGovernor, localMissionScope } from '@kinu.run/core';
 import { createSandboxedExecutor } from '../src/executor';
 import type { ChatEvent } from '@kinu.run/core';
 import type { ModelMessage } from 'ai';
@@ -9,6 +9,19 @@ import { jsonSchema, tool } from 'ai';
 
 const OLD = 'async function run() { await host.emit({ type: "text_delta", text: "version one" }); }';
 const NEW = 'async function run() { await host.emit({ type: "text_delta", text: "version two" }); }';
+
+/** The two real phases a claim owner runs, as one call: pin the selected
+ *  version's bytes, then start the turn on them. Production splits these at the
+ *  durable claim write (ActorSession.execute); a test with no claim to write
+ *  still has to run them in that order. */
+async function admitActorTurn(input: Parameters<typeof startActorTurn>[0] extends infer _T
+  ? Omit<Parameters<typeof startActorTurn>[0], 'program'> : never) {
+  const program = await prepareActorProgram({
+    runtime: input.runtime, mode: input.mode, version: input.loopVersion,
+    signal: input.chat.signal, assertActive: input.assertActive,
+  });
+  return { program, events: startActorTurn({ ...input, program }) };
+}
 
 async function fixture() {
   const { rt } = createTestRuntime();
@@ -36,13 +49,13 @@ test('an admitted version keeps its actual bytes across live-alias and later ver
   const { rt, files, chat, chatModel } = await fixture();
   let aliasReads = 0;
   rt.identity.scaffold.read = async () => { aliasReads++; return NEW; };
-  const admitted = await prepareActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 1, chat });
+  const admitted = await admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 1, chat });
   Reflect.set(admitted.program, 'source', NEW);
   expect(admitted.program).toEqual({ kind: 'scaffold', version: 1, source: OLD,
     digest: createHash('sha256').update(OLD).digest('hex') });
   await files.writeFile(rt.identity.scaffold.path + '.v1', NEW);
   expect(await text(admitted.events)).toBe('version one');
-  const next = await prepareActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 2, chat });
+  const next = await admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 2, chat });
   expect(await text(next.events)).toBe('version two');
   expect(aliasReads).toBe(0);
   expect(chatModel.doStreamCalls).toHaveLength(0);
@@ -50,14 +63,14 @@ test('an admitted version keeps its actual bytes across live-alias and later ver
 
 test('an actor Build turn does not inherit another actor\'s ambient Plan mode', async () => {
   const { rt, chat } = await fixture();
-  const admitted = await inWorkMode('plan', () => prepareActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 1, chat }));
+  const admitted = await inWorkMode('plan', () => admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 1, chat }));
   expect(await inWorkMode('plan', () => text(admitted.events))).toBe('version one');
 });
 
 test('Plan uses the builtin loop without reading or evaluating a promoted initializer', async () => {
   const { rt, files, chat } = await fixture();
   await files.writeFile(rt.identity.scaffold.path + '.v1', 'throw new Error("promoted initializer ran");');
-  const admitted = await prepareActorTurn({ runtime: rt, mode: 'plan', task: 'go', loopVersion: 1, chat });
+  const admitted = await admitActorTurn({ runtime: rt, mode: 'plan', task: 'go', loopVersion: 1, chat });
   expect(admitted.program).toEqual({ kind: 'builtin', version: 0 });
   expect(await text(admitted.events)).toBe('builtin answer');
 });
@@ -74,7 +87,7 @@ test('cancellation while the selected source is being read prevents a later prog
     return bytes;
   };
   const abort = new AbortController();
-  const admission = prepareActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 1,
+  const admission = admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 1,
     chat: { ...chat, signal: abort.signal } });
   await reading.promise;
   const stopped = new Error('actor stopped during source admission');
@@ -134,7 +147,7 @@ test('cancelling one actor interrupts its cooperative tool without cancelling th
   const firstAbort = new AbortController();
   const secondAbort = new AbortController();
   const inputSchema = jsonSchema<Record<string, never>>({ type: 'object', properties: {}, additionalProperties: false });
-  const firstTurn = await prepareActorTurn({
+  const firstTurn = await admitActorTurn({
     runtime: first.rt, mode: 'build', task: 'first', loopVersion: 1,
     chat: { ...first.chat, signal: firstAbort.signal, tools: { hold: tool({ inputSchema,
       execute: (_input, { abortSignal }) => {
@@ -146,7 +159,7 @@ test('cancelling one actor interrupts its cooperative tool without cancelling th
       },
     }) } },
   });
-  const secondTurn = await prepareActorTurn({
+  const secondTurn = await admitActorTurn({
     runtime: second.rt, mode: 'build', task: 'second', loopVersion: 1,
     chat: { ...second.chat, signal: secondAbort.signal, tools: { hold: tool({ inputSchema,
       execute: async (_input, { abortSignal }) => {
@@ -187,7 +200,7 @@ test('the selected loop cancels its cooperative model request with the actor', a
     return request.promise;
   } });
   const abort = new AbortController();
-  const admitted = await prepareActorTurn({ runtime: rt, mode: 'build', task: 'wait', loopVersion: 1,
+  const admitted = await admitActorTurn({ runtime: rt, mode: 'build', task: 'wait', loopVersion: 1,
     chat: { ...chat, model: waitingModel, signal: abort.signal } });
   const done = text(admitted.events);
   await started.promise;

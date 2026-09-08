@@ -869,9 +869,14 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     };
     // The QUEUE, not the ledger row: a completed effect is pruned once its
     // sequence closes, and what the gate is about is whether the candidate got
-    // scored against this turn at all.
-    const queued = (harness: ActorHarness<HarnessOrchestratorAgent>): number =>
-      rowCount(harness, 'scaffold_trial_queue');
+    // scored against this turn at all. Counted under this harness's own actor:
+    // the queue is per-actor, and `rowCount` is the unscoped oracle the
+    // non-actor-keyed ledgers above use.
+    const queued = (harness: ActorHarness<HarnessOrchestratorAgent>): number => v.parse(
+      v.object({ n: v.number() }),
+      harness.db.query('SELECT COUNT(*) AS n FROM scaffold_trial_queue WHERE actor_id = ?')
+        .get(harness.agent.observeRuntime().actor.actorId),
+    ).n;
 
     // The completed build turn: the trial IS owed, which is what makes the three
     // refusals below a gate rather than a broken declaration.
