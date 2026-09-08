@@ -26,7 +26,7 @@ import { nowMs } from '../../utils/date';
 import {
   computeParetoFront, sampleParentByWeight, bestAggregate,
 } from './pareto';
-import { proposeMutation } from './mutate';
+import { proposeMutation, rolloutMinibatch } from './mutate';
 import { findComplementaryPair, proposeMerge } from './merge';
 import {
   DEFAULT_GEPA_BUDGET,
@@ -36,7 +36,7 @@ import {
 import { diagnostics, renderThrownChain, toKinuError } from '../../obs/index';
 
 type ProposalOutcome =
-  | { ok: true; source: string; operator: 'mutate' | 'merge'; metricCallsCharged: number; parentSource?: string }
+  | { ok: true; source: string; operator: 'mutate' | 'merge'; parentSource?: string }
   | { ok: false; reason: string };
 
 
@@ -86,14 +86,17 @@ export async function runGepa<I = unknown, E = unknown>(
         ? bestAggregate(pool)
         : sampleParentByWeight(pool, instanceIds, random);
     const minibatch = sampleWithoutReplacement(trainSet, minibatchSize, random);
+    // Measurement failures invalidate the run; only proposal-generation failures
+    // belong to the recoverable rejection path below.
+    const rollout = await rolloutMinibatch(parent.source, minibatch, config.metric);
+    charge(rollout.metricCalls);
     try {
       const m = await proposeMutation(
-        { parent, minibatch, metric: config.metric, reflectionLm: config.reflectionLm },
+        { parent, minibatch, rollout, reflectionLm: config.reflectionLm },
         'scaffold source',
       );
       return {
         ok: true, source: m.source, operator: 'mutate',
-        metricCallsCharged: minibatch.length,
         parentSource: parent.source,
       };
     } catch (err) {
@@ -114,7 +117,6 @@ export async function runGepa<I = unknown, E = unknown>(
       // Merge has no rollout cost; only the eval-set scoring will charge.
       return {
         ok: true, source: merged, operator: 'merge',
-        metricCallsCharged: 0,
       };
     } catch (err) {
       return { ok: false, reason: `merge_failed: ${renderThrownChain({ cause: err })}` };
@@ -156,7 +158,6 @@ export async function runGepa<I = unknown, E = unknown>(
       if (await recordRejection(iter, proposal.reason)) { stopReason = 'no_improvement_possible'; break; }
       continue;
     }
-    charge(proposal.metricCallsCharged);
 
     // No-change check: a proposal identical to its parent wastes eval-set scoring.
     if (proposal.operator === 'mutate' && proposal.source === proposal.parentSource) {

@@ -18,7 +18,8 @@ export interface MutationContext<I = unknown, E = unknown> {
   parent: GepaCandidate;
   /** The minibatch the parent will be rolled out on. */
   minibatch: ReadonlyArray<EvalInstance<I, E>>;
-  metric: GepaMetric<I, E>;
+  /** Completed measurements. Missing judge evidence must fail before reflection. */
+  rollout: MutationRollout;
   reflectionLm: ReflectionLM;
 }
 
@@ -103,12 +104,12 @@ ${traceLines.join('\n')}
 Return ONLY the revised ${desc} source — no commentary, no markdown fences. If you cannot improve on the current version, return the source unchanged.`;
 }
 
-/** Roll out + reflect + extract — produces the next candidate's source. */
+/** Reflect on measured evidence and extract the next candidate's source. */
 export async function proposeMutation<I, E>(
   ctx: MutationContext<I, E>,
   artifactDescription?: string,
 ): Promise<{ source: string; rollout: MutationRollout }> {
-  const rollout = await rolloutMinibatch(ctx.parent.source, ctx.minibatch, ctx.metric);
+  const { rollout } = ctx;
   const prompt = renderReflectionPrompt({
     parent: ctx.parent, minibatch: ctx.minibatch, rollout, artifactDescription,
   });

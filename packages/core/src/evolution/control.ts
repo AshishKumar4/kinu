@@ -556,21 +556,14 @@ const GepaScoreSchema = v.object({
   feedback: v.pipe(v.string(), v.minLength(1)),
 });
 
-/**
- * One judge call for every GEPA metric, with the one answer an unavailable
- * judge gets: a neutral 0.5. A 0 would read as "this candidate is bad" on
- * evidence nobody gathered.
- */
+/** A metric exists only when the judge answers. Failure aborts the measurement
+ * through the caller's existing failed-run path, never as a numeric quality. */
 async function judgeScore(control: ScaffoldControl, prompt: string): Promise<MetricOutcome> {
-  try {
-    const scored = await control.judge({
-      schema: GepaScoreSchema,
-      prompt: `${prompt}\n\nJSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
-    });
-    return { score: scored.score, feedback: scored.feedback };
-  } catch (err) {
-    return { score: 0.5, feedback: `judge unavailable: ${renderThrownChain({ cause: err })}` };
-  }
+  const scored = await control.judge({
+    schema: GepaScoreSchema,
+    prompt: `${prompt}\n\nJSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
+  });
+  return { score: scored.score, feedback: scored.feedback };
 }
 
 export interface GepaOptimizationResult {
@@ -641,9 +634,11 @@ export async function runScaffoldGepaOptimization(
   // the recorded outcome — accepted turns are regression checks against the
   // response the user approved; negatives are scored on whether the candidate
   // already addresses the complaint, whoever made it.
+  let metricCalls = 0;
   const metric = async (
     candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
   ): Promise<MetricOutcome> => {
+    metricCalls++;
     let output: string;
     try {
       output = await runScaffoldCaptureText(control, instance.input, candidate);
@@ -666,6 +661,8 @@ export async function runScaffoldGepaOptimization(
   // 4. Run GEPA, persisting every candidate + Pareto snapshot.
   const runId = startGepaRun(control.sql, { target: 'scaffold', budget });
   const persisted = new Set<string>();
+  const persist = makePersistingHook({ sql: control.sql, runId, persisted });
+  let iterations = 0;
   let result;
   try {
     result = await runScaffoldGepa({
@@ -675,12 +672,12 @@ export async function runScaffoldGepaOptimization(
       metric,
       reflectionLm,
       budget,
-      onIteration: makePersistingHook({ sql: control.sql, runId, persisted }),
+      onIteration: state => { iterations = state.iteration + 1; return persist(state); },
     });
   } catch (err) {
     const message = renderThrownChain({ cause: err });
     finishGepaRun(control.sql, {
-      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls: 0, iterations: 0,
+      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls, iterations,
     });
     return { ok: false, error: message, runId };
   }
@@ -807,6 +804,10 @@ async function runPromptSectionGepaOptimization(
     target: 'prompt_section', targetRef: opts.sectionId, budget,
   });
   const persisted = new Set<string>();
+  const persist = makePersistingHook({ sql: control.sql, runId, persisted });
+  const metric = sectionMetric(control, opts.sectionId);
+  let metricCalls = 0;
+  let iterations = 0;
   let result;
   try {
     result = await runSectionGepa({
@@ -814,14 +815,14 @@ async function runPromptSectionGepaOptimization(
       sectionId: opts.sectionId,
       evalSet: split.val,
       trainSet: split.train,
-      metric: sectionMetric(control, opts.sectionId),
+      metric: (candidate, instance) => { metricCalls++; return metric(candidate, instance); },
       reflectionLm,
       budget,
-      onIteration: makePersistingHook({ sql: control.sql, runId, persisted }),
+      onIteration: state => { iterations = state.iteration + 1; return persist(state); },
     });
   } catch (err) {
     finishGepaRun(control.sql, {
-      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls: 0, iterations: 0,
+      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls, iterations,
     });
     return { ok: false, error: renderThrownChain({ cause: err }), runId };
   }
