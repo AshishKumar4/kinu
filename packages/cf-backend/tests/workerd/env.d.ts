@@ -32,6 +32,7 @@ interface SlateFacetRootRpc extends Rpc.DurableObjectBranded {
 interface SlateEgressRpc extends Rpc.DurableObjectBranded {
   request(mode: 'plan' | 'build', target: string, redirect?: RequestRedirect): Promise<string>;
   publicPlanCall(): Promise<{ ok: boolean; reason?: string }>;
+  legacyThenCurrent(): Promise<{ legacy: string; current: string; reused: string }>;
 }
 declare global {
   namespace Cloudflare {
