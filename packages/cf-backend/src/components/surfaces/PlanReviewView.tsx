@@ -51,7 +51,7 @@ function looksLikeFileTree(content: string): boolean {
 
 /** Images and raw HTML are inert in plan review. The approved source remains
  * byte-for-byte in the durable plan; only the browser renderer is narrowed. */
-export function planReviewBlocks(markdown: string): Block[] {
+function planReviewBlocks(markdown: string): Block[] {
   return parseMarkdownToBlocks(markdown).map((block) => {
     if (block.type === "html") return { ...block, type: "code", language: "html" };
     if (block.type === "code") {
