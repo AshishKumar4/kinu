@@ -220,9 +220,12 @@ The archive keeps every version: a read model over `scaffold_versions` joined to
 A failed judge call is unavailable evidence, not a neutral score. Failure during
 seed scoring, reflection evaluation, or candidate scoring aborts the GEPA run;
 the run retains its attempted-call count and completed iterations but selects no
-winner. Previously completed candidate measurements remain readable. An incomplete
-candidate gets no numeric aggregate. Section proposal and paired promotion trials
-propagate judge failures before writing the unmeasured proposal or trial.
+winner. Every complete candidate, including the seed, is retained before later
+evaluation starts. An incomplete candidate gets no numeric aggregate. The shared
+metric boundary refuses non-finite scores and scores outside 0..1. Iteration counts
+include rejected proposals, independently of the accepted-candidate history.
+Section proposal and paired promotion trials propagate judge failures before
+writing the unmeasured proposal or trial.
 
 **Full MCTS exploration** runs smaller than the tool's default, at budget 2 and branches 2 (`DEFAULT_EVOLUTION_CONFIG`, `core/src/evolution/types.ts:152-157`, called at `core/src/evolution/engine.ts:1088`). An operator MCTS override replaces the branch count; the budget stays the lifetime cadence cap. See [MCTS.md](./MCTS.md).
 

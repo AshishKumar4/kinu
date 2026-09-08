@@ -304,6 +304,8 @@ test('a judge failure during reflection evaluation aborts instead of rejecting a
   expect(result).toMatchObject({ ok: false, error: expect.stringContaining('judge failed on reflection evidence') });
   if (result.runId === undefined) throw new Error('the attempted optimization has no run identity');
   expect(listGepaRuns(rt.storage.sql)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', winnerId: null }));
+  expect(loadGepaCandidates(rt.storage.sql, result.runId).map(candidate => ({ source: candidate.source, score: candidate.aggregateScore })))
+    .toEqual([{ source: SEED_SCAFFOLD, score: 0.2 }]);
   expect(getPendingScaffold(rt.storage.sql)).toBeNull();
   expect(reflectionPrompts).toEqual([]);
 });
