@@ -62,6 +62,12 @@ const MAX_SESSIONS = 8;
  * The window, bounded. The kernel carries each axis as an `unsigned short`, and
  * a thousand cells on a side is past any real display, so anything larger is a
  * malformed frame rather than a window.
+ *
+ * The hub declares the same bound as `DEVICE_PTY_MAX_AXIS` in
+ * `packages/core/src/execution/device-tunnel.ts`, and this daemon spells it
+ * again rather than importing it: this package ships to the user's machine as
+ * standalone CommonJS with no workspace dependency. The two ends of the wire
+ * must agree, so `tests/pty.test.js` reads the hub's constant and compares.
  */
 const MAX_AXIS = 1000;
 

@@ -64,11 +64,11 @@ test('Plan blocks slate source restoration and authored calls without converting
   const planCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' } satisfies typeof ROOT_SLATE_CALLER;
   expect(await agent.slateAs(planCaller, { op: 'restore', id: 'app', version: version.id })).toMatchObject({ ok: false, reason: 'denied' });
   expect(await agent.slateAs(planCaller, { op: 'call', id: 'app', method: 'run' })).toMatchObject({ ok: false, reason: 'denied' });
-  expect(await agent.slateBindingCallAs(planCaller, 'app', 'PEER', { member: 'run', args: [], depth: 0 })).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await agent.slateBindingCallAs(planCaller, 'app', 'PEER', { member: 'run', args: [], chain: [] })).toMatchObject({ ok: false, reason: 'denied' });
   expect(await files.readFile(path, { encoding: 'utf8' })).toBe('second');
   // The retained Build app has separate invocation authority from this Plan turn.
-  expect(await agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'app', 'FILES', { member: 'readFile', args: [path], depth: 0 })).toEqual({ ok: true, value: 'second' });
-  expect(await agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'app', 'FILES', { member: 'writeFile', args: [path, 'build app wrote'], depth: 0 })).toMatchObject({ ok: true });
+  expect(await agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'app', 'FILES', { member: 'readFile', args: [path], chain: [] })).toEqual({ ok: true, value: 'second' });
+  expect(await agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'app', 'FILES', { member: 'writeFile', args: [path, 'build app wrote'], chain: [] })).toMatchObject({ ok: true });
   expect(await files.readFile(path, { encoding: 'utf8' })).toBe('build app wrote');
   await agent.onChatResponse({ message: { id: 'done', role: 'assistant', parts: [{ type: 'text', text: 'Plan ready.' }] }, requestId: 'done', continuation: false, status: 'completed' });
   expect(await agent.slateAs(planCaller, { op: 'restore', id: 'app', version: version.id })).toMatchObject({ ok: false, reason: 'denied' });

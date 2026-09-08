@@ -371,6 +371,17 @@ describe('web provider — fetch', () => {
     await expect(provider.fetch('https://example.com/slow')).rejects.toThrow(/timed out after 40ms/);
   });
 
+  test('with no caller budget a fetch carries no abort signal, so no clock can end it', async () => {
+    // The 15s default that used to sit here armed one on every request, and its
+    // refusal read as an origin that failed. A page the agent asked for is work
+    // the agent still wants at second sixteen.
+    const { fetch, calls } = stubFetch(() => ({ body: '<html><body><p>slow but fine</p></body></html>' }));
+    const provider = createDefaultWebSearchProvider({ fetch });
+    const res = await provider.fetch('https://example.com/page');
+    expect(res.markdown).toContain('slow but fine');
+    expect(calls[0].init?.signal).toBeUndefined();
+  });
+
   test('a short bare data URI keeps its trailing prose', () => {
     const short = 'data:image/png;base64,AAAA trailing prose after short uri stays visible';
     expect(stripBase64Images(short)).toContain('trailing prose after short uri stays visible');

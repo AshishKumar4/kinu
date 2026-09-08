@@ -33,20 +33,6 @@ import { classify, tolerate, tolerateAsync } from '@kinu.run/core/obs';
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
 /**
- * Wall clock on ONE git subprocess in the shadow-checkpoint store.
- *
- * The two subcommands that scale with the user's project rather than with the
- * change are `add -A --ignore-errors` (stage the whole work tree before a
- * mutation) and `checkout-index -a -f` (write it all back on restore).
- * Measured 2026-08-19 against this repository — 1,689 tracked files, 22 MB,
- * node_modules excluded by .gitignore — on a warm page cache: staging 0.24 s,
- * restoring 0.07 s. So 30_000
- * carries roughly 125x that tree, which is the number to re-measure against
- * rather than re-reason about when someone reports a checkpoint timing out on a
- * project two orders of magnitude larger.
- */
-const GIT_TIMEOUT_MS = 30_000; // Coincides with device-tunnel.ts DEFAULT_RPC_TIMEOUT_MS; separate policies — a local git op and a device round trip drift independently.
-/**
  * Directories that are not a work tree, so a whole-tree snapshot of one is
  * never what the caller meant. The filesystem root and the user's home were
  * always here; the SHARED TEMP ROOTS are here because `workdirForPath` resolves
@@ -110,6 +96,14 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     return { ...isolatedEnv(), GIT_DIR: gitDir, GIT_WORK_TREE: workdir };
   }
 
+  /**
+   * No wall clock on a git subprocess. A checkpoint ends when git exits, and
+   * `execFile` reports that exit; a missing binary or a vanished working
+   * directory is a definitive failure this function already answers.
+   *
+   * `maxBuffer` stays: it bounds THIS process's heap against a git that writes
+   * more output than the checkpoint store can hold.
+   */
   function runGit(args: string[], cwd: string, env: GitEnvironment): Promise<GitResult> {
     // A missing cwd makes spawn fail with the same ENOENT a missing binary
     // produces — check it here so a vanished workdir can never flip the
@@ -118,7 +112,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       return Promise.resolve({ code: 1, stdout: '', stderr: `working directory not found: ${cwd}` });
     }
     return new Promise((resolveRun, rejectRun) => {
-      execFile(gitBin, args, { cwd, env, timeout: GIT_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
+      execFile(gitBin, args, { cwd, env, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
         if (classify({ cause: err }) === 'enoent') {
           gitAvailable = false;
           rejectRun(new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT));

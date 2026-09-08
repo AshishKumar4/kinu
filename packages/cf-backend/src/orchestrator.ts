@@ -1381,6 +1381,7 @@ export class OrchestratorAgent extends ActorAgent {
     const hub = () => this.userHub();
     this._releaseEngine = new ReleaseEngine({
       exec: handle && provider ? createSandboxReleaseExec(handle, provider) : null,
+      signal: () => this.currentTurnSignal(),
       ledger: {
         detail: async (changeId) => { const { stub, caller } = await hub(); return stub.getReleaseDetail(caller, changeId); },
         update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateReleaseChange(caller, changeId, patch); },
