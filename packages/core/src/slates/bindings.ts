@@ -5,12 +5,15 @@ import { isSlateMethodName } from './rpc';
 import type { SlateReadModel } from './read-models';
 import type { SlateProject } from './project';
 
-const APP_DEPTH_LIMIT = 8;
-
 export const SlateBindingRequestSchema = v.strictObject({
   member: v.pipe(v.string(), v.minLength(1)),
   args: v.array(JsonValueSchema),
-  depth: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  /**
+   * The slate ids already running above this call, outermost first. The caller's
+   * own id is not in it: the router appends that from the binding stub's
+   * host-set props, so a slate cannot rename itself out of its own chain.
+   */
+  chain: v.array(v.pipe(v.string(), v.minLength(1))),
 });
 export type SlateBindingRequest = v.InferOutput<typeof SlateBindingRequestSchema>;
 export type SlateBindingRoute =
@@ -22,8 +25,8 @@ export type SlateBindingRoute =
     readonly id: string;
     readonly method: string;
     readonly args: readonly JsonValue[];
-    /** The caller's depth; the hop into `id` is one more. */
-    readonly depth: number;
+    /** The chain the callee runs under: the caller's chain plus the caller. */
+    readonly chain: readonly string[];
   };
 
 export function routeSlateBindingCall(input: {
@@ -57,14 +60,20 @@ export function routeSlateBindingCall(input: {
       if (args.length > 1 || !isJsonObject(argumentsObject)) throw new KinuError('bad_input', `${name}.${member} takes one JSON object of arguments`);
       return { kind: 'mcp', server: binding.server, tool: member, args: argumentsObject };
     }
-    case 'app':
+    case 'app': {
       if (!isSlateMethodName(member)) {
         throw new KinuError('bad_input', `"${member}" is not a method name the bridge forwards`);
       }
-      if (request.depth >= APP_DEPTH_LIMIT) {
+      // An app hop ends because it must name a slate that is not already
+      // running above it. A workspace holds finitely many slates, so a chain of
+      // distinct ones is finite and no hop count has to bound it. A repeat is a
+      // cycle: the callee is waiting on its own caller and cannot answer.
+      const chain = [...request.chain, id];
+      if (chain.includes(binding.id)) {
         throw new KinuError('denied',
-          `${name}.${member} would be app hop ${request.depth + 1}; the bound is ${APP_DEPTH_LIMIT}, so this is a cycle or a chain too deep`);
+          `${name}.${member} re-enters slate ${binding.id}, which is already running in this call chain: ${[...chain, binding.id].join(' -> ')}`);
       }
-      return { kind: 'app', id: binding.id, method: member, args, depth: request.depth };
+      return { kind: 'app', id: binding.id, method: member, args, chain };
+    }
   }
 }

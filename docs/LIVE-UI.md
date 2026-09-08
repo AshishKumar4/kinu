@@ -136,7 +136,7 @@ removed reach.
 | `namespace`: `namespace`, `members?` | A member of an available codemode provider. Optional `members` narrows reach; executor approvals and device consent remain the provider's own gates. An absent namespace refuses as unavailable. |
 | `rpc`: `methods` | Declared, zero-argument workspace read models from `SLATE_READ_MODELS`, not arbitrary host RPC. The parser rejects methods outside that closed list, and the list is the workspace ROOT's own `@callable` reads: a facet holds none of them natively, so a facet-held `rpc` binding is `denied`. |
 | `mcp`: `server`, `tools?` | One owner-configured MCP connection, named by connection id rather than display name. Optional `tools` narrows reach; the owner's allowed-tool policy shapes the actor's descriptor surface, and the caller's ROLE must admit the tool's key (`mcp_<server>_<tool>`) exactly as the native turn admits it. Calls take one JSON object, or no arguments for `{}`. |
-| `app`: `id` | A JSON POST route on another slate's authored server. The callee runs for the caller: its declared bindings resolve with the originating actor's authority. Calls carry depth through the resident request and its AsyncLocalStorage context; a ninth app hop refuses. |
+| `app`: `id` | A JSON POST route on another slate's authored server. The callee runs for the caller: its declared bindings resolve with the originating actor's authority. Calls carry the chain of slate ids already running, through the resident request and its AsyncLocalStorage context. A hop into a slate already on that chain refuses as a cycle and names it. No hop count bounds the chain: each hop must name a slate that is not on it, and a workspace holds a finite number of slates. |
 
 A queued approval is not a simulated success. Namespace refusal results keep
 their failure class. MCP results retain their own `isError` protocol and read
@@ -215,8 +215,8 @@ even when no listener remains; no user/authentication reset is necessary.
 `getExposedPorts("workspace")` lists live listeners, not orphaned exposure keys,
 so an empty list does not establish that every old persisted key was removed.
 
-Visitor-supplied `x-slate-depth` is stripped before routing, so a preview visitor
-cannot choose the internal app-call depth.
+Visitor-supplied `x-slate-chain` is stripped before routing, so a preview visitor
+cannot choose the internal app-call chain.
 
 Implementation: `packages/cf-backend/src/slates/resident.ts`,
 `packages/cf-backend/src/workspace-host.ts`, and

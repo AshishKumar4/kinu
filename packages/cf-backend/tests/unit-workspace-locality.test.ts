@@ -344,7 +344,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(forged.status).toBe(404);
   });
 
-  test('a live slate preview refreshes authored code without accepting a visitor hop count', async () => {
+  test('a live slate preview refreshes authored code without accepting a visitor call chain', async () => {
     const actor = actorObject();
     const capability = 'abcdef0123456789abcdef01';
     Object.assign(actor.ctx.storage, { get: async (key: string) => key === 'nimbus_preview_capability:3000' ? { capability, owner: null } : undefined });
@@ -355,13 +355,13 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       refreshPreview: async () => { source = 'edited'; },
     });
     await workspace.registerPort(9000, 3000, {
-      handleHttpRequest: async (request) => Response.json({ source, depth: request.headers.get('x-slate-depth') }),
+      handleHttpRequest: async (request) => Response.json({ source, chain: request.headers.get('x-slate-chain') }),
     });
     const response = await workspace.routePreview(3000, capability.slice(0, 10), new Request('https://preview.test/', {
-      headers: { 'x-slate-depth': '-9' },
+      headers: { 'x-slate-chain': '%5B%22forged%22%5D' },
     }), '/');
-    expect(v.parse(v.object({ source: v.string(), depth: v.nullable(v.string()) }), await response.json()))
-      .toEqual({ source: 'edited', depth: null });
+    expect(v.parse(v.object({ source: v.string(), chain: v.nullable(v.string()) }), await response.json()))
+      .toEqual({ source: 'edited', chain: null });
     workspace.unregisterPorts(9000);
     expect((await workspace.routePreview(3000, capability.slice(0, 10), new Request('https://preview.test/'), '/')).status).toBe(410);
   });
