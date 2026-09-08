@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1336" viewBox="0 0 640 1336" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="turn-title turn-desc">
+<title id="turn-title">CURRENT: A turn and its model steps</title>
+<desc id="turn-desc">Current simplified turn flow. A user message or durable wake is admitted with actor identity, role and trusted Plan or Build mode. Context is assembled, then step preparation handles signals, pruning and dynamic context. The model requests tools or produces output. Allowed tool calls record outcomes and loop to the next model step; a finished or stopped turn records completed, aborted or error and owed terminal effects. Cloud conversational actors use Think; local agents and swarm nodes use Core runChat.</desc>
+<!-- Sources: docs/ARCHITECTURE.md#the-turn-pipeline; packages/core/src/orchestrator/turn-lifecycle.ts; packages/core/src/prompting/prepare-step.ts. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
+<defs>
+<marker id="turn-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M1 1 L9 5 L1 9 Z" fill="#8A7B66"/>
+</marker>
+</defs>
+<rect width="640" height="1336" rx="14" fill="#F7F3E9"/>
+<text x="32" y="35" font-size="18" font-weight="700" fill="#35633A" text-anchor="start">
+<tspan x="32" dy="0">CURRENT</tspan>
+</text>
+<text x="32" y="78" font-size="28" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="32" dy="0">A turn and its model steps</tspan>
+</text>
+<text x="32" y="111" font-size="21" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">One turn can contain many model and tool steps.</tspan>
+</text>
+<g>
+<rect x="48" y="160" width="544" height="138" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="195" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Admit a turn</tspan>
+</text>
+<text x="68" y="229" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">User message or durable wake</tspan>
+<tspan x="68" dy="30">Resolve identity, role and trusted mode.</tspan>
+</text>
+</g>
+<path d="M320 298 V334" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#turn-arrow)" />
+<g>
+<rect x="48" y="336" width="544" height="138" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="371" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Assemble model context</tspan>
+</text>
+<text x="68" y="405" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Load actor history and working inputs.</tspan>
+<tspan x="68" dy="30">Apply the context transform.</tspan>
+</text>
+</g>
+<path d="M320 474 V510" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#turn-arrow)" />
+<g>
+<rect x="48" y="512" width="544" height="138" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="547" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Prepare the next model step</tspan>
+</text>
+<text x="68" y="581" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Deliver compatible signals.</tspan>
+<tspan x="68" dy="30">Prune output; weave dynamic context.</tspan>
+</text>
+</g>
+<path d="M320 650 V686" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#turn-arrow)" />
+<g>
+<rect x="48" y="688" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="723" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Call the model</tspan>
+</text>
+<text x="68" y="757" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Receive text and requested tool calls.</tspan>
+<tspan x="68" dy="30">Cloud actors: Think driver</tspan>
+<tspan x="68" dy="30">Local and swarm nodes: Core driver</tspan>
+</text>
+</g>
+<path d="M320 856 V892" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#turn-arrow)" />
+<g>
+<rect x="48" y="894" width="544" height="138" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="929" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Tools, when requested</tspan>
+</text>
+<text x="68" y="963" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Apply capability and execution gates.</tspan>
+<tspan x="68" dy="30">Record actual outcomes and references.</tspan>
+</text>
+</g>
+<path d="M320 1032 V1068" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#turn-arrow)" />
+<g>
+<rect x="48" y="1070" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="1105" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Settle the turn</tspan>
+</text>
+<text x="68" y="1139" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">completed / aborted / error</tspan>
+<tspan x="68" dy="30">Record state and owed terminal effects.</tspan>
+<tspan x="68" dy="30">Evolution work does not block the queue.</tspan>
+</text>
+</g>
+<path d="M592 1015 H618 V555 H595" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#turn-arrow)" />
+<path d="M32 1278 H608" stroke="#CBBFA9"/>
+<text x="32" y="1308" font-size="18" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Arrows show the labeled flow, not unrestricted access.</tspan>
+</text>
+</svg>

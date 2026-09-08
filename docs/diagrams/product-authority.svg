@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1047" viewBox="0 0 640 1047" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="authority-title authority-desc">
+<title id="authority-title">TARGET / DESIGN PROPOSAL: Authority around editable agents</title>
+<desc id="authority-desc">Design proposal for the requested editable agent surfaces. Admitted identity, role and mode constrain capability-scoped operations, which may edit only permitted working data after scope and revision checks. Editable loop and working-context revisions are separate from protected policy, credentials, permission grants, effect claims and raw audit. Those records have no path from the agent write capability. This diagram does not claim that the full shared-database edit protocol is implemented.</desc>
+<!-- Sources: user-messages.jsonl:975 / 7e1ad485; docs/TOOLS.md#plan-authority; docs/PRODUCT-SPEC.md:proposed-editable-agent-boundary. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
+<defs>
+<marker id="authority-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M1 1 L9 5 L1 9 Z" fill="#8A7B66"/>
+</marker>
+</defs>
+<rect width="640" height="1047" rx="14" fill="#F7F3E9"/>
+<text x="32" y="35" font-size="18" font-weight="700" fill="#7A5514" text-anchor="start">
+<tspan x="32" dy="0">TARGET / DESIGN PROPOSAL</tspan>
+</text>
+<text x="32" y="78" font-size="28" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="32" dy="0">Authority around editable agents</tspan>
+</text>
+<text x="32" y="111" font-size="21" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">One shared database does not imply unrestricted writes.</tspan>
+</text>
+<g>
+<rect x="48" y="160" width="544" height="138" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" stroke-dasharray="7 5"/>
+<text x="68" y="195" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Admitted actor authority</tspan>
+</text>
+<text x="68" y="229" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Owner identity, role and invocation mode</tspan>
+<tspan x="68" dy="30">Grants are not created by prompt text.</tspan>
+</text>
+</g>
+<path d="M320 298 V334" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#authority-arrow)" />
+<g>
+<rect x="48" y="336" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" stroke-dasharray="7 5"/>
+<text x="68" y="371" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Capability-scoped operations</tspan>
+</text>
+<text x="68" y="405" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Read or edit permitted data only.</tspan>
+<tspan x="68" dy="30">Check actor, operation and revision.</tspan>
+<tspan x="68" dy="30">No unrestricted internal-table SQL.</tspan>
+</text>
+</g>
+<path d="M320 504 V540" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#authority-arrow)" />
+<g>
+<rect x="48" y="542" width="544" height="168" rx="10" fill="#EEE0C2" stroke="#8A7B66" stroke-width="1.5" stroke-dasharray="7 5"/>
+<text x="68" y="577" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Editable working surfaces</tspan>
+</text>
+<text x="68" y="611" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Loop revisions and working context</tspan>
+<tspan x="68" dy="30">Authorized own or subordinate views</tspan>
+<tspan x="68" dy="30">Accepted writes publish a new revision.</tspan>
+</text>
+</g>
+<text x="48" y="760" font-size="20" font-weight="650" fill="#355B6A" text-anchor="start">
+<tspan x="48" dy="0">Outside that agent write capability</tspan>
+</text>
+<g>
+<rect x="48" y="780" width="544" height="174" rx="10" fill="#E5EDF0" stroke="#8A7B66" stroke-width="1.5" stroke-dasharray="7 5"/>
+<text x="68" y="815" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Protected host records</tspan>
+</text>
+<text x="68" y="849" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Policy, credentials and grants</tspan>
+<tspan x="68" dy="30">Effect claims and raw audit</tspan>
+<tspan x="68" dy="30">Editable logic cannot widen its authority.</tspan>
+</text>
+</g>
+<path d="M32 989 H608" stroke="#CBBFA9"/>
+<text x="32" y="1019" font-size="18" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Dashed boundaries: design proposal, not implemented.</tspan>
+</text>
+</svg>

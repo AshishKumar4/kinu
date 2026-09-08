@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1234" viewBox="0 0 640 1234" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="context-title context-desc">
+<title id="context-title">CURRENT + TARGET: Context, history and editable views</title>
+<desc id="context-desc">Current actor history and compaction state are held in actor SQLite. Memory, scaffold source and compaction recall ranges live in the workspace file plane. Both feed the model-facing working context. Conversational actors have editable scaffold hooks, but a facet scaffold path does not prove that every exploration actor executes a promoted editable loop. The target adds readable and editable VFS views of working context, history and loop revisions under a proposed revision-checked protocol. Raw audit and policy stay protected.</desc>
+<!-- Sources: packages/compaction/src/stores.ts; packages/core/src/prompting/volatile-context.ts; packages/cf-backend/src/actor-agent.ts:_transformInferenceResult; packages/core/src/heads/head-inference.ts; user-messages.jsonl:975 / 7e1ad485. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
+<defs>
+<marker id="context-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M1 1 L9 5 L1 9 Z" fill="#8A7B66"/>
+</marker>
+</defs>
+<rect width="640" height="1234" rx="14" fill="#F7F3E9"/>
+<text x="32" y="35" font-size="18" font-weight="700" fill="#35633A" text-anchor="start">
+<tspan x="32" dy="0">CURRENT + TARGET</tspan>
+</text>
+<text x="32" y="78" font-size="28" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="32" dy="0">Context, history and editable views</tspan>
+</text>
+<text x="32" y="111" font-size="21" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Recall archives are not writable live-context views.</tspan>
+</text>
+<text x="40" y="169" font-size="20" font-weight="700" fill="#35633A" text-anchor="start">
+<tspan x="40" dy="0">CURRENT / readable sources</tspan>
+</text>
+<g>
+<rect x="40" y="189" width="268" height="156" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="60" y="224" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="60" dy="0">Actor history</tspan>
+</text>
+<text x="60" y="258" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="60" dy="0">Conversation SQL</tspan>
+<tspan x="60" dy="30">Compaction state</tspan>
+</text>
+</g>
+<g>
+<rect x="332" y="189" width="268" height="156" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="352" y="224" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="352" dy="0">Workspace files</tspan>
+</text>
+<text x="352" y="258" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="352" dy="0">Memory + scaffold</tspan>
+<tspan x="352" dy="30">Recall archives</tspan>
+</text>
+</g>
+<path d="M174 345 V380 H320 V412" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#context-arrow)" />
+<path d="M466 345 V380 H320" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#context-arrow)" />
+<g>
+<rect x="48" y="414" width="544" height="170" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="449" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Model working context</tspan>
+</text>
+<text x="68" y="483" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Transform history; retain recall paths.</tspan>
+<tspan x="68" dy="30">Weave fresh dynamic context per step.</tspan>
+<tspan x="68" dy="30">The projection is not raw audit state.</tspan>
+</text>
+</g>
+<g>
+<rect x="48" y="610" width="544" height="154" rx="10" fill="#E5EDF0" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="645" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Current editable-loop limit</tspan>
+</text>
+<text x="68" y="679" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Conversational scaffold hooks exist.</tspan>
+<tspan x="68" dy="30">They do not prove that every exploration</tspan>
+<tspan x="68" dy="30">actor runs a promoted editable loop.</tspan>
+</text>
+</g>
+<text x="48" y="784" font-size="20" font-weight="700" fill="#7A5514" text-anchor="start">
+<tspan x="48" dy="0">TARGET / design proposal</tspan>
+</text>
+<g>
+<rect x="48" y="806" width="544" height="134" rx="10" fill="#EEE0C2" stroke="#8A7B66" stroke-width="1.5" stroke-dasharray="7 5"/>
+<text x="68" y="841" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Writable VFS working views</tspan>
+</text>
+<text x="68" y="875" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Context, history and loop revisions</tspan>
+<tspan x="68" dy="30">Main and authorized subordinate views</tspan>
+</text>
+</g>
+<path d="M320 940 V974" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#context-arrow)" />
+<g>
+<rect x="48" y="976" width="544" height="166" rx="10" fill="#E5EDF0" stroke="#8A7B66" stroke-width="1.5" stroke-dasharray="7 5"/>
+<text x="68" y="1011" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Controlled edit protocol</tspan>
+</text>
+<text x="68" y="1045" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Check scope and expected revision.</tspan>
+<tspan x="68" dy="30">Apply edits to a defined working view.</tspan>
+<tspan x="68" dy="30">Keep raw audit and policy protected.</tspan>
+</text>
+</g>
+<path d="M32 1176 H608" stroke="#CBBFA9"/>
+<text x="32" y="1206" font-size="18" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Arrows show the labeled flow, not unrestricted access.</tspan>
+</text>
+</svg>
