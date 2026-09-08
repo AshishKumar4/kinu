@@ -4,7 +4,9 @@ import { lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSy
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 
-const LOCK_TIMEOUT_MS = 30_000;
+/** How often a blocked acquisition re-reads the lock. Short enough that a
+ *  release is picked up as fast as a human notices, long enough that a queue of
+ *  waiters costs a handful of `lstat` calls per second between them. */
 const LOCK_POLL_MS = 50;
 const LOCK_RECORD_VERSION = 'v1';
 
@@ -121,22 +123,19 @@ function lockPathFor(configPath: string): string {
 
 function acquireSync(lockPath: string, boundary: ProcessIdentityBoundary): Held {
   const self = boundary.self(process.pid);
-  const startedMs = Date.now();
   for (;;) {
     const held = tryAcquire(lockPath, self, boundary);
     if (held !== null) return held;
-    assertWaiting(lockPath, startedMs, boundary);
+    assertNotSelfHeld(lockPath, self);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_POLL_MS);
   }
 }
 
 async function acquireAsync(lockPath: string, boundary: ProcessIdentityBoundary): Promise<Held> {
   const self = boundary.self(process.pid);
-  const startedMs = Date.now();
   for (;;) {
     const held = tryAcquire(lockPath, self, boundary);
     if (held !== null) return held;
-    assertWaiting(lockPath, startedMs, boundary);
     const poll = Promise.withResolvers<void>();
     setTimeout(poll.resolve, LOCK_POLL_MS);
     await poll.promise;
@@ -282,24 +281,27 @@ function readDarwinIdentity(pid: number): ProcessIdentityProbe {
   }
 }
 
-function assertWaiting(lockPath: string, startedMs: number, boundary: ProcessIdentityBoundary): void {
-  if (Date.now() - startedMs <= LOCK_TIMEOUT_MS) return;
-  throw new Error(`Timed out waiting for the config lock: ${lockPath} — ${ownerDescription(lockPath, boundary)}`);
-}
-
-function ownerDescription(lockPath: string, boundary: ProcessIdentityBoundary): string {
+/**
+ * A wait ends when the holder does, never when a clock does.
+ *
+ * `breakAbandonedLock` reclaims a lock whose owner the kernel proves gone, and
+ * every other holder is one that will release. So a blocked acquisition polls
+ * until it gets the lock, and the operator ends it by stopping this process.
+ * The 30_000 ms that used to end it refused a config write that would have
+ * succeeded, and a config write that gives up part-way through a queue is a
+ * lost write.
+ *
+ * One wait cannot end that way, and it is the one this function refuses: a
+ * SYNCHRONOUS acquisition behind a lock THIS process generation already holds.
+ * The holder's `finally` runs on this same thread, so the thread blocking for
+ * it is the thread that would release it. That is a deadlock the record proves,
+ * not a slow holder. The async path has no such problem — its holder's
+ * `finally` runs while the waiter awaits — so it waits like any other.
+ */
+function assertNotSelfHeld(lockPath: string, self: ProcessIdentity): void {
   const owner = readOwner(lockPath);
-  if (owner === null) {
-    return 'it carries no versioned owner record this program wrote, so no process can be proven '
-      + 'to hold or to have abandoned it. Remove that path if no kinu is running';
-  }
-  switch (boundary.liveness(owner)) {
-    case 'live':
-      return `${owner.platform} pid ${String(owner.pid)} is running and still holds it. Wait for that process, or stop it`;
-    case 'unknown':
-      return `${owner.platform} pid ${String(owner.pid)} could not be read, so it cannot be proven abandoned. `
-        + 'Remove that path if that process is not running';
-    case 'gone':
-      return `${owner.platform} pid ${String(owner.pid)} is gone and the lock outlived it. Remove that path`;
-  }
+  if (owner === null || owner.pid !== self.pid || owner.identity !== self.identity) return;
+  throw new Error(`Deadlocked on the config lock: ${lockPath} — this process already holds it, and a `
+    + 'synchronous wait blocks the thread that would release it. Use withConfigLockAsync, or take the '
+    + 'lock once around the whole read-modify-write.');
 }

@@ -173,11 +173,37 @@ describe('the config lock is held by a process, not by a path', () => {
     expect(ran).toBe(true);
   });
 
+  test('a synchronous wait behind this process generation refuses instead of deadlocking', () => {
+    const { configPath, lockPath } = scratchConfig();
+    // A nested synchronous take: the holder's `finally` runs on this thread, so
+    // the thread waiting for it is the thread that would release it. Nothing
+    // ends that wait, which is why it is refused rather than polled.
+    expect(() => withConfigLock(configPath, () => withConfigLock(configPath, () => undefined)))
+      .toThrow('this process already holds it');
+    // The refusal never removes a lock it did not take; the outer hold released
+    // it on the way out.
+    expect(lockHeld(lockPath)).toBe(false);
+  });
+
+  test('an ASYNC wait behind this process generation still waits, because the holder can release', async () => {
+    const { configPath, lockPath } = scratchConfig();
+    forgeLock(lockPath, process.pid, selfStartTicks());
+    let ran = false;
+    const blocked = withConfigLockAsync(configPath, async () => {
+      await Promise.resolve();
+      ran = true;
+    });
+    expect(ran).toBe(false);
+    unlinkSync(lockPath);
+    await blocked;
+    expect(ran).toBe(true);
+  });
+
   test('a lock this program did not write is waited out, never stolen', async () => {
     const { configPath, lockPath } = scratchConfig();
     // A regular file at the lock path carries no owner record, so no process can
     // be proven to hold it or to have abandoned it. Breaking it is how two
-    // processes both proceed; acquisition waits, and the timeout names the path.
+    // processes both proceed; acquisition waits for it to go away instead.
     writeFileSync(lockPath, 'not a record\n');
 
     let ran = false;

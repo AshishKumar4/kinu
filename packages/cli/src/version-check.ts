@@ -16,7 +16,22 @@ import * as v from 'valibot';
 import { classify, classifyErrorCode, renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
 
 const CLI_VERSION_PATH = '/downloads/kinu-version.json';
-const FETCH_TIMEOUT_MS = 1_500;
+/**
+ * The bound on the STARTUP notice's probe, and on nothing else.
+ *
+ * That probe is a UX non-blocking one: nobody asked for it, it runs once a day
+ * on a TTY after the command has already parsed, and a slow answer is worth
+ * less than the prompt it delays. 1_500 ms is not measured, and it does not
+ * have to be — missing it costs one day's notice and says nothing to the user.
+ *
+ * `kinu update` and `kinu doctor` pass no bound, because the user ASKED. Under
+ * this bound `doctor` printed `served: unreachable` for an origin that answered
+ * in 1.6 s, which is a diagnostic reporting a fault it never observed.
+ */
+const STARTUP_PROBE_TIMEOUT_MS = 1_500;
+/** How long a startup notice stays quiet after one probe. Once a day: the
+ *  published build changes at most that often in practice, and the notice is
+ *  an interruption whether or not it has news. */
 const CHECK_INTERVAL_MS = 24 * 60 * 60_000;
 const ServedVersionSchema = v.object({
   version: v.pipe(v.string(), v.trim(), v.nonEmpty()),
@@ -38,24 +53,32 @@ export function isSameBuild(installed: string, served: string): boolean {
   return installed.trim() === served.trim();
 }
 
-/** Fetch the served build's version, or null when the origin could not be asked (unreachable,
- *  past the timeout, no such endpoint, or a payload that is not a served version). */
+/**
+ * Fetch the served build's version, or null when the origin could not be asked
+ * (unreachable, no such endpoint, a payload that is not a served version, or a
+ * `timeoutMs` the caller set and the origin missed).
+ *
+ * `timeoutMs` is CALLER-REQUESTED ONLY. Absent means the probe ends on the
+ * origin's answer or on a network failure — a user who ran `kinu update` wants
+ * the real answer, not a null a clock produced.
+ */
 export async function fetchServedVersion(
   origin: string,
   fetchImpl: FetchVersion = fetch,
-  timeoutMs = FETCH_TIMEOUT_MS,
+  timeoutMs?: number,
 ): Promise<ServedVersion | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // No bound asked for means no controller and no signal: nothing local can end
+  // this probe, so it ends on the origin's answer or on a network failure.
+  const controller = timeoutMs === undefined ? undefined : new AbortController();
+  const timer = controller === undefined ? undefined : setTimeout(() => controller.abort(), timeoutMs);
   try {
     let res: Response;
     try {
-      res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, {
-        cache: 'no-store',
-        signal: controller.signal,
-      });
+      res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, controller === undefined
+        ? { cache: 'no-store' }
+        : { cache: 'no-store', signal: controller.signal });
     } catch (error) {
-      // Could not ask: unreachable origin, or this probe's own cap firing. A malformed origin is
+      // Could not ask: unreachable origin, or a caller-set bound firing. A malformed origin is
       // OURS — swallowed here, the update check would silently never fire again.
       if (classify({ cause: error }) === 'malformed-input') throw error;
       return null;
@@ -97,7 +120,8 @@ function updateNotice(installed: string, served: ServedVersion | null): string |
 
 /**
  * Fire-and-forget startup check. Resolves to the notice line (already printed
- * by the caller's `log`) or null. Never throws, never blocks past the timeout.
+ * by the caller's `log`) or null. Never throws. This is the one caller that
+ * bounds its probe, and {@link STARTUP_PROBE_TIMEOUT_MS} says why.
  */
 export async function runStartupUpdateCheck(opts: {
   log: (line: string) => void;
@@ -114,7 +138,7 @@ export async function runStartupUpdateCheck(opts: {
     };
     if (!shouldCheckForUpdate(ctx)) return null;
 
-    const served = await fetchServedVersion(config.origin!, opts.fetchImpl ?? fetch);
+    const served = await fetchServedVersion(config.origin!, opts.fetchImpl ?? fetch, STARTUP_PROBE_TIMEOUT_MS);
     // Record the attempt either way so a persistently unreachable origin does
     // not retry on every single invocation.
     updateConfigFile((c) => {
