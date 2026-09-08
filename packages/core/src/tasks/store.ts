@@ -15,6 +15,7 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import * as v from 'valibot';
 import type { ActiveRoster } from '../prompting/volatile-context';
 import { sqlCheckList } from '../identity/schema';
+import { taskPlanScope, type TaskPlan } from './plan-scope';
 
 export const TASK_STATUSES = ['open', 'active', 'done', 'dropped'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
@@ -75,6 +76,8 @@ export function initTaskListTable(execRaw: RawSqlExec): void {
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent ON agent_tasks(parent_id)`);
+  execRaw(`CREATE TABLE IF NOT EXISTS plan_task_links (task_id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, revision INTEGER NOT NULL, session_id TEXT NOT NULL)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_plan_task_revision ON plan_task_links(session_id,plan_id,revision)`);
 }
 
 /** What `add` refused, and why — the model gets the reason, never a silent drop. */
@@ -104,6 +107,13 @@ export class TaskListStore {
    * in mind.
    */
   add(titles: readonly string[], parentId: string | null, now: number): TaskAddResult {
+    const scope = taskPlanScope(this.sql);
+    const write = () => this.addLinked(titles, parentId, now, scope?.plan ?? null);
+    return scope ? scope.transaction(write) : write();
+  }
+
+  private addLinked(titles: readonly string[], parentId: string | null, now: number, plan: TaskPlan | null): TaskAddResult {
+    if (parentId !== null) plan = this.sql<TaskPlan>`SELECT plan_id AS id, revision, session_id AS sessionId FROM plan_task_links WHERE task_id=${parentId}`[0] ?? null;
     const parent = parentId === null ? null : this.get(parentId);
     if (parentId !== null && !parent) {
       return { added: [], rejected: titles.map((title) => ({ title, reason: `no task ${parentId}` })) };
@@ -136,6 +146,7 @@ export class TaskListStore {
       const id = `t${seq}`;
       void this.sql`INSERT INTO agent_tasks (id, seq, parent_id, title, status, created_at, updated_at)
         VALUES (${id}, ${seq}, ${parentId}, ${title}, 'open', ${now}, ${now})`;
+      if (plan) void this.sql`INSERT INTO plan_task_links(task_id,plan_id,revision,session_id) VALUES (${id},${plan.id},${plan.revision},${plan.sessionId})`;
       added.push({ id, parentId, title, status: 'open', createdAt: now, updatedAt: now });
       seq++;
     }
@@ -166,6 +177,11 @@ export class TaskListStore {
   /** The whole list in write order, parents each carrying their subtasks. */
   list(limit = 200): AgentTaskTree[] {
     return nest(this.rows(limit));
+  }
+
+  listForPlan(plan: TaskPlan): AgentTaskTree[] {
+    const ids = new Set(this.sql<{ task_id: string }>`SELECT task_id FROM plan_task_links WHERE plan_id=${plan.id} AND revision=${plan.revision} AND session_id=${plan.sessionId}`.map(row => row.task_id));
+    return nest(this.rows().filter(row => ids.has(row.id)));
   }
 
   /** Only the items still to be done, in write order — the live-context

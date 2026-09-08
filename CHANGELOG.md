@@ -14,6 +14,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
+- Preview applications have one titled, full-height tab each, without a duplicate Output surface. Plans and revision history live in Work; new approval-driven tasks retain their plan revision and progress. Existing unassociated tasks are not retroactively assigned.
+
 - **Resident slate egress follows the shared network policy.** Authored server
   fetch calls use the existing destination classifier and redirect enforcement,
   while permitted public access remains available. Captured caller mode separates

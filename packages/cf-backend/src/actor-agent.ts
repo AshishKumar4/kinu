@@ -26,6 +26,7 @@ import {
 // its own subclass. The VALUE comes from `facetClass()`, which each
 // concrete actor supplies.
 import type { SubordinateAgent } from './subordinate-agent';
+import { approvedTaskPlan } from "@kinu.run/core";
 import { inspectSubordinateStorage, type SubordinateInspectionAuthority } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type {
@@ -233,7 +234,7 @@ import {
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ToolOutcome, renderToolResult,
-  toolsForInvocation, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, McpProtocolFailureSchema, McpToolError,
+  toolsForInvocation, withTaskPlan, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle,
 } from "@kinu.run/core";
@@ -841,6 +842,18 @@ export abstract class ActorAgent extends Think<Env> {
 
   private broadcastPlanUpdate(plan: PlanReview): void {
     this.host.broadcast({ type: 'plan_updated', plan });
+  }
+
+  @callable()
+  async listPlanTasks(id: string, revision: number) {
+    const plan = this.planReviews.get(id, revision);
+    if (!plan || plan.sessionId !== "default") throw new KinuError("missing", "Plan revision is unavailable");
+    return this.taskList.listForPlan({ id, revision, sessionId: plan.sessionId });
+  }
+
+  @callable()
+  async listPlanReviews(request?: PageRequest): Promise<Page<PlanReview>> {
+    return this.planReviews.listPage("default", request);
   }
 
   @callable()
@@ -5971,7 +5984,9 @@ export abstract class ActorAgent extends Think<Env> {
     };
     cfg.messages = await assembleTurnMessages(assembly);
 
-    cfg.tools = toolsForInvocation(workMode, { ...modeTools, ...effectiveTools });
+    const taskPlan = approvedTaskPlan(this.boundSql, this.durableTurnId());
+    cfg.tools = withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }),
+      [this.boundSql, this.rt.storage.sql], taskPlan, write => this.ctx.storage.transactionSync(write));
     cfg.activeTools = effectiveActiveTools;
 
     // Prompt-cache plan for this turn — the same core derivation `runChat`
