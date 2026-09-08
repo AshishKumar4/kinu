@@ -14,6 +14,7 @@ import type { ContextBudgetSnapshot } from '../context-budget';
 import type { JsonValue } from '../utils/json';
 import type { ContextComposition } from '../context-meter';
 import type { FileEditSnapshot } from '../tools/file-ledger';
+import type { DbOpRecord } from '../tools/db-codemode';
 import type { EscalationSnapshot } from '../execution/escalation';
 import type { MissionBudgetRefusal } from '../mission-budget';
 import type { HeadFileChangeSet } from '../heads/types';
@@ -54,6 +55,8 @@ export type RunEventType =
   | 'scaffold_promotion'
   | 'scaffold_rollback'
   | 'memory_write'
+  | 'db_op'
+  | 'context_edit'
   | 'context_budget'
   | 'file_edit'
   | 'turn_steering'
@@ -68,6 +71,23 @@ export type RunEventType =
   | 'error'
   | 'turn_end'
   | 'run_end';
+
+/**
+ * The three closed vocabularies of a `context_edit`, as constants rather than
+ * bare literal unions: the durable schema in `events/recorder.ts` builds its
+ * picklists from these, so the parser and the type cannot disagree about which
+ * words are admissible.
+ */
+/** Which surface authored the edit. `owner` is a human editing through the UI,
+ *  which is a different authority from the agent editing its own history. */
+export const CONTEXT_EDIT_VIA = ['file', 'session', 'owner'] as const;
+export type ContextEditVia = (typeof CONTEXT_EDIT_VIA)[number];
+/** Accepted and numbered, or actually consumed by a boundary. */
+export const CONTEXT_EDIT_STATUSES = ['staged', 'activated'] as const;
+export type ContextEditStatus = (typeof CONTEXT_EDIT_STATUSES)[number];
+/** Which boundary takes it: the next step of the live turn, or the next turn. */
+export const CONTEXT_EDIT_BOUNDARIES = ['step', 'turn'] as const;
+export type ContextEditBoundary = (typeof CONTEXT_EDIT_BOUNDARIES)[number];
 
 export interface RunEventBase {
   /** Unique within a single run; monotonically increasing. */
@@ -235,6 +255,33 @@ export type RunEvent =
   | (RunEventBase & { type: 'scaffold_promotion'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'scaffold_rollback'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'memory_write'; path: string; bytes: number })
+  /** One committed `db` operation: which table, whose rows, and how many of
+   *  them changed.
+   *
+   *  Written INSIDE the mutation's own transaction (tools/db-codemode.ts), so a
+   *  batch that rolled back leaves none of these rows and a row that exists
+   *  proves the write it describes committed. `batch` is what tells one
+   *  transaction from several: every operation of one `db.batch` records the
+   *  same batch size, and a single operation records null. */
+  | (RunEventBase & { type: 'db_op' } & DbOpRecord)
+  /** A working-context edit: the revision it produced, the revision it was
+   *  authored against, and who authored it.
+   *
+   *  TWO of these per landed edit, and they are not redundant: `staged` when
+   *  the edit is accepted and numbered (`effectiveAt` says which boundary will
+   *  take it, `stepIndex` is null because none has), `activated` when a
+   *  boundary actually consumes it (`turnId`/`stepIndex` name that boundary).
+   *  A refused edit writes neither, so an activation row is never a claim about
+   *  an edit that never landed.
+   *
+   *  `revision` is numbered PER ACTOR and not per turn: the raw working history
+   *  and a turn's rendered requests are different coordinate spaces, and an
+   *  edit authored between turns — or before the actor's first turn — has no
+   *  turn at all, which is why `turnId` is nullable. */
+  | (RunEventBase & { type: 'context_edit'; revision: number; baseRevision: number;
+      messageCount: number; author: string;
+      via: ContextEditVia; status: ContextEditStatus; effectiveAt: ContextEditBoundary;
+      turnId: string | null; stepIndex: number | null })
   /** The turn's bulk-ingestion ledger — how much tool output the root actually
    *  admitted, what every producer spilled instead, and whether the agent read
    *  any of it back. Written once per turn by the settle spine (M1 trip

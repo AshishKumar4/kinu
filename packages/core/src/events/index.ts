@@ -14,9 +14,15 @@ export type {
   ApprovalConsumedRecord,
   ExecutionRecoveryRecord,
   StepCost,
+  ContextEditVia,
+  ContextEditStatus,
+  ContextEditBoundary,
 } from './types';
 
-export { FAILURE_WITHOUT_ERROR } from './types';
+export {
+  FAILURE_WITHOUT_ERROR,
+  CONTEXT_EDIT_VIA, CONTEXT_EDIT_STATUSES, CONTEXT_EDIT_BOUNDARIES,
+} from './types';
 
 export {
   initRunEventTables,
@@ -27,6 +33,7 @@ export {
   boundRunEventQuery,
   RUN_EVENT_LIMIT_DEFAULT,
   RUN_EVENT_LIMIT_MAX,
+  type DeferredRunEvent,
   type RunEventListener,
   type RunEventQuery,
   type BoundedRunEventQuery,

@@ -186,6 +186,7 @@
     "settled_at"
   ],
   "compaction_archive@packages/core/src/identity/workspace-schema.ts": [
+    "actor_id",
     "session_key",
     "range_hash",
     "path",
@@ -196,6 +197,7 @@
     "first_user_ask"
   ],
   "compaction_state@packages/core/src/identity/workspace-schema.ts": [
+    "actor_id",
     "session_key",
     "plan_json",
     "last_prompt_tokens",
