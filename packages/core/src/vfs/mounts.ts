@@ -456,7 +456,20 @@ export function withMountTable(
 		unlink(path) {
 			return mutate(path, 'unlinked', (files, native) => files.unlink(native));
 		},
-		mkdir(path, opts) {
+		async mkdir(path, opts) {
+			// `mkdir -p` on a directory that already exists is success, and a live
+			// mount point IS a directory of this plane — the same answer `stat`
+			// gives it. Refusing it as "a mount point cannot be created" broke
+			// every write to a file at the ROOT of a mount, because the one write
+			// path in the file surface calls `ensureDir` on the parent first
+			// (`tools/file-tool.ts`), and an unrecognised refusal there is
+			// re-thrown. A non-recursive mkdir of a mount point is still EPERM:
+			// nothing may create one.
+			const routed = routeOf(path);
+			if ('mount' in routed && routed.native === '/' && opts?.recursive === true) {
+				if (routed.mount.files() !== null) return;
+				throw absentError(routed.mount, path);
+			}
 			return mutate(path, 'created', (files, native) => files.mkdir(native, opts));
 		},
 		async exists(path) {

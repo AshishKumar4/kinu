@@ -361,7 +361,28 @@ export {
   type StepPipeline,
   type StepPrepareResult, type StepPrepareContext,
 } from './prompting/prepare-step';
-export { applyStagedContext, type StagedContextEdit } from './prompting/staged-context';
+export {
+  applyStagedContext, unpairedToolCallIds, STAGED_CONTEXT_DEFERRALS,
+  type StagedContextEdit, type StagedContextDeferral, type StagedContextOutcome,
+} from './prompting/staged-context';
+
+// The actor's editable working history, and the `/context` projection of it.
+export {
+  ActorWorkingContextStore, initActorWorkingContextTables,
+  WORKING_SOURCES, WORKING_STATUSES, WORKING_VIAS, WORKING_CLOSED_REASONS,
+  type WorkingRevision, type WorkingRevisionContent, type WorkingSource,
+  type WorkingStatus, type WorkingVia, type WorkingClosedReason,
+} from './orchestrator/working-context';
+export {
+  createActorContextPlane,
+  type ActorContextPlane, type ActorContextPlaneDeps, type AdmittedContext,
+  type SettledContext, type ContextEditReceipt, type ContextEditEffect, type ContextPlaneState,
+} from './orchestrator/context-plane';
+export {
+  contextMount, createContextPlane, encodeWorkingFile, decodeWorkingFile,
+  CONTEXT_MOUNT, CONTEXT_MOUNT_NAME, WORKING_FILE,
+  type ActorContextStores, type ChildContextResolver, type ContextMountDeps, type ContextFileHeader,
+} from './vfs/context-plane';
 export { encodeModelMessages, decodeModelMessages, modelMessagesDigest } from './prompting/message-codec';
 export {
   pruneStepToolOutputs,

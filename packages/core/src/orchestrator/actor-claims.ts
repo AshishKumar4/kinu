@@ -29,6 +29,16 @@
  * on recovery. Copying the program source per step would store the same bytes
  * as many times as the turn takes steps.
  *
+ * WHY A RENDERED REVISION IS NOT AN EDITABLE ONE. The array above is the array
+ * a PROVIDER received. The array a human or an agent edits is the working
+ * history before any of those passes, and it lives in its own per-actor ledger
+ * (`working-context.ts`) with its own numbering; each row here points at the
+ * working revision it was rendered from. The two are not one sequence with two
+ * names: taking a count from this table and slicing the raw array with it — the
+ * shape the staged-edit path used to have — moves the protected tail by exactly
+ * the number of woven dynamic-context blocks and pruned tool outputs, which
+ * either re-sends the turn's own tool call or drops it.
+ *
  * WHAT THIS IS NOT. Not a scheduler, not a second outcome ledger, and not a
  * replacement for the durable run-event log: `openTurnRun`/`closeTurnRun` still
  * own the run's timeline, `terminal-effects.ts` still owns terminal effects, and
@@ -46,6 +56,7 @@ import { KinuError } from '../obs/error';
 import { nowMs } from '../utils/date';
 import { RUN_END_REASONS } from './turn-lifecycle';
 import { decodeModelMessages, encodeModelMessages, modelMessagesDigest } from '../prompting/message-codec';
+import { ActorWorkingContextStore, initActorWorkingContextTables } from './working-context';
 import { sqlCheckList } from '../identity/schema';
 import type { ActorTurnProgram } from './actor-program';
 
@@ -87,9 +98,11 @@ export interface ActorTurnClaim {
   readonly epoch: number;
   readonly workMode: WorkMode;
   readonly program: ActorProgramIdentity;
-  /** The revision the turn was admitted against — what its first step starts
-   *  from, and what a mid-turn edit stages a successor to. */
-  readonly baseRevision: number;
+  /** The working revision the turn was admitted with — the raw editable array
+   *  its first step renders from, and the array a mid-turn edit is a successor
+   *  to. Named in the working ledger's coordinate space, never in the rendered
+   *  one. */
+  readonly workingRevision: number;
 }
 
 /** A claim as it was stored, for recovery and for status reads. */
@@ -106,16 +119,34 @@ export interface StoredActorClaim {
   readonly claimedAt: number;
 }
 
-/** One stored context revision. */
+/**
+ * One RENDERED request a step consumed — evidence, and append-only.
+ *
+ * `workingRevision` is the pointer into the other coordinate space: the
+ * editable working history this request was rendered FROM
+ * (`orchestrator/working-context.ts`). The two counts are not interchangeable,
+ * which is why the pointer exists instead of a second count: `messageCount`
+ * here is the length after pruning and the dynamic-context weave, and slicing a
+ * raw array at it is the defect that made an edit re-send or drop a turn's own
+ * tail.
+ */
 export interface ContextRevision {
   readonly revision: number;
   readonly epoch: number;
-  readonly baseRevision: number | null;
   readonly digest: string;
   readonly messageCount: number;
-  /** The step that consumed it, or null while it is only staged. */
+  /** The working revision this request was rendered from. */
+  readonly workingRevision: number;
+  /** The step that consumed it; null for the admitted revision 0. */
   readonly stepIndex: number | null;
   readonly messages: ModelMessage[];
+}
+
+/** One rendered request as a listing reports it: everything on
+ *  {@link ContextRevision} except the array itself, plus when it was recorded —
+ *  which is what a projection of it uses as an mtime. */
+export interface RenderedRequest extends Omit<ContextRevision, 'messages'> {
+  readonly recordedAt: number;
 }
 
 /** What a consumed step recorded. */
@@ -144,20 +175,24 @@ export function initActorClaimTables(execRaw: RawSqlExec): void {
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_actor_claims_status ON actor_turn_claims(actor_id, status, claimed_at DESC)`);
   execRaw(`CREATE TABLE IF NOT EXISTS actor_context_revisions (
-    actor_id      TEXT NOT NULL,
-    turn_id       TEXT NOT NULL,
-    revision      INTEGER NOT NULL,
-    epoch         INTEGER NOT NULL,
-    base_revision INTEGER,
-    digest        TEXT NOT NULL,
-    message_count INTEGER NOT NULL,
-    messages      TEXT NOT NULL,
-    step_index    INTEGER,
-    recorded_at   INTEGER NOT NULL,
+    actor_id         TEXT NOT NULL,
+    turn_id          TEXT NOT NULL,
+    revision         INTEGER NOT NULL,
+    epoch            INTEGER NOT NULL,
+    working_revision INTEGER NOT NULL,
+    digest           TEXT NOT NULL,
+    message_count    INTEGER NOT NULL,
+    messages         TEXT NOT NULL,
+    step_index       INTEGER,
+    recorded_at      INTEGER NOT NULL,
     PRIMARY KEY (actor_id, turn_id, revision)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_actor_context_step
     ON actor_context_revisions(actor_id, turn_id, step_index)`);
+  // The editable side of the same subject, created here so one call wires both
+  // ledgers: a host that admits turns can always read and edit the working
+  // history, and the conformance walk observes the table on any booted root.
+  initActorWorkingContextTables(execRaw);
 }
 
 /** The program identity a claim binds, from the prepared program and the build
@@ -187,7 +222,7 @@ interface ClaimRow {
 interface RevisionRow {
   revision: number;
   epoch: number;
-  base_revision: number | null;
+  working_revision: number;
   digest: string;
   message_count: number;
   messages: string;
@@ -195,15 +230,27 @@ interface RevisionRow {
 }
 
 /**
- * One actor's durable claim ledger.
+ * One actor's durable claim ledger, and the door to its working history.
  *
  * Bound to an {@link ActorHandle} rather than an id string, for the reason every
  * actor-scoped store in this bundle is: the handle carries the validation the
  * binding captured, so a store cannot outlive the identity it was bound to, and
  * no caller has to remember to pass an actor id that matches.
+ *
+ * The two ledgers hang together on purpose. A claim names the turn and the
+ * program its effects are issued under; its rendered revisions are what each
+ * step consumed; its {@link working} history is the editable array those
+ * requests were rendered FROM. One store reaches all three, so a host that has
+ * `stores.claims` can never be wired for admission but not for editing —
+ * which is how the edit surface came to be unreachable in the first place.
  */
 export class ActorClaimStore {
-  private readonly actorId: string;
+  /** The issued actor every row of this store is keyed to. Public because the
+   *  surfaces built over it — the `/context` projection, a parent managing a
+   *  child — report whose context they are serving, and must report the id the
+   *  store actually writes under rather than one a caller passed alongside. */
+  readonly actorId: string;
+  private workingStore: ActorWorkingContextStore | undefined;
 
   constructor(
     private readonly sql: SqlExecutor,
@@ -211,6 +258,17 @@ export class ActorClaimStore {
     private readonly transactionSync: <T>(write: () => T) => T,
   ) {
     this.actorId = actor.actorId;
+  }
+
+  /**
+   * This actor's editable working history.
+   *
+   * Lazy for the reason the store bundle is: a Durable Object must not touch
+   * storage while field initializers run, and this is reached from the file
+   * plane rather than from every turn.
+   */
+  get working(): ActorWorkingContextStore {
+    return this.workingStore ??= new ActorWorkingContextStore(this.sql, this.actor, this.transactionSync);
   }
 
   /**
@@ -228,6 +286,11 @@ export class ActorClaimStore {
     readonly workMode: WorkMode;
     readonly program: ActorProgramIdentity;
     readonly context: readonly ModelMessage[];
+    /** The working revision `context` IS — resolved by the context plane at the
+     *  turn boundary, where a staged edit is taken and the array re-anchored.
+     *  Required: a rendered request whose editable origin is unknown cannot be
+     *  rolled back to it or explained by it. */
+    readonly workingRevision: number;
   }): ActorTurnClaim {
     this.actor.assertCurrent();
     const encoded = encodeModelMessages(input.context);
@@ -256,12 +319,13 @@ export class ActorClaimStore {
       // a claim whose admitted context is absent.
       void this.sql`
         INSERT INTO actor_context_revisions (
-          actor_id, turn_id, revision, epoch, base_revision, digest, message_count, messages, step_index, recorded_at)
-        VALUES (${this.actorId}, ${input.turnId}, 0, ${next}, NULL, ${digest},
+          actor_id, turn_id, revision, epoch, working_revision, digest, message_count, messages, step_index, recorded_at)
+        VALUES (${this.actorId}, ${input.turnId}, 0, ${next}, ${input.workingRevision}, ${digest},
           ${input.context.length}, ${encoded}, NULL, ${at})
         ON CONFLICT(actor_id, turn_id, revision) DO UPDATE SET
-          epoch = excluded.epoch, digest = excluded.digest, message_count = excluded.message_count,
-          messages = excluded.messages, step_index = NULL, recorded_at = excluded.recorded_at`;
+          epoch = excluded.epoch, working_revision = excluded.working_revision, digest = excluded.digest,
+          message_count = excluded.message_count, messages = excluded.messages,
+          step_index = NULL, recorded_at = excluded.recorded_at`;
       return next;
     });
     return Object.freeze({
@@ -271,7 +335,7 @@ export class ActorClaimStore {
       epoch,
       workMode: input.workMode,
       program: input.program,
-      baseRevision: 0,
+      workingRevision: input.workingRevision,
     });
   }
 
@@ -283,7 +347,13 @@ export class ActorClaimStore {
    * inside a turn a newer epoch has since admitted — cannot append a revision to
    * the newer claim, and a settled claim takes no further steps.
    */
-  consume(claim: ActorTurnClaim, step: { readonly index: number; readonly messages: readonly ModelMessage[] }): ConsumedContext {
+  consume(claim: ActorTurnClaim, step: {
+    readonly index: number;
+    readonly messages: readonly ModelMessage[];
+    /** The working revision this rendered array came from — the claim's own
+     *  unless a staged edit landed at this boundary. */
+    readonly workingRevision: number;
+  }): ConsumedContext {
     const encoded = encodeModelMessages(step.messages);
     const digest = modelMessagesDigest(encoded);
     return this.transactionSync(() => {
@@ -291,9 +361,9 @@ export class ActorClaimStore {
       const revision = this.nextRevision(claim.turnId);
       void this.sql`
         INSERT INTO actor_context_revisions (
-          actor_id, turn_id, revision, epoch, base_revision, digest, message_count, messages, step_index, recorded_at)
-        VALUES (${this.actorId}, ${claim.turnId}, ${revision}, ${claim.epoch}, NULL, ${digest},
-          ${step.messages.length}, ${encoded}, ${step.index}, ${nowMs()})`;
+          actor_id, turn_id, revision, epoch, working_revision, digest, message_count, messages, step_index, recorded_at)
+        VALUES (${this.actorId}, ${claim.turnId}, ${revision}, ${claim.epoch}, ${step.workingRevision},
+          ${digest}, ${step.messages.length}, ${encoded}, ${step.index}, ${nowMs()})`;
       void this.sql`
         UPDATE actor_turn_claims SET consumed_revision = ${revision}, run_id = ${claim.runId}
         WHERE actor_id = ${this.actorId} AND turn_id = ${claim.turnId} AND epoch = ${claim.epoch}`;
@@ -302,73 +372,45 @@ export class ActorClaimStore {
   }
 
   /**
-   * Stage a mid-turn context edit as a LATER revision, against the revision the
-   * editor read. The compare-and-set is what makes two concurrent edits fail
-   * loudly instead of one silently overwriting the other's base, and staging —
-   * rather than writing into the live array — is what keeps the work already
-   * issued on its original context.
+   * The claims of this actor's turns, newest first.
    *
-   * A staged revision becomes visible at the next real step boundary
-   * ({@link stagedContext} + `applyStagedContext`), never mid-step.
+   * What the `/context` projection lists, and how it decides whether an edit
+   * becomes effective at the next STEP or the next TURN: a claim still
+   * `admitted` is a turn in flight.
    */
-  stage(claim: ActorTurnClaim, edit: { readonly base: number; readonly messages: readonly ModelMessage[] }): number {
-    const encoded = encodeModelMessages(edit.messages);
-    const digest = modelMessagesDigest(encoded);
-    return this.transactionSync(() => {
-      this.assertLive(claim);
-      const latest = this.sql<{ revision: number }>`
-        SELECT MAX(revision) AS revision FROM actor_context_revisions
-        WHERE actor_id = ${this.actorId} AND turn_id = ${claim.turnId}`[0]?.revision ?? 0;
-      if (latest !== edit.base) {
-        // `denied`, not `io`: the store established that applying this edit
-        // would overwrite a revision the editor never read, and declined.
-        throw new KinuError('denied',
-          `this context edit was written against revision ${edit.base}, and revision ${latest} is current`);
-      }
-      const revision = latest + 1;
-      void this.sql`
-        INSERT INTO actor_context_revisions (
-          actor_id, turn_id, revision, epoch, base_revision, digest, message_count, messages, step_index, recorded_at)
-        VALUES (${this.actorId}, ${claim.turnId}, ${revision}, ${claim.epoch}, ${edit.base}, ${digest},
-          ${edit.messages.length}, ${encoded}, NULL, ${nowMs()})`;
-      return revision;
-    });
+  turns(limit = 50): readonly StoredActorClaim[] {
+    this.actor.assertCurrent();
+    const rows = this.sql<ClaimRow & { turn_id: string }>`
+      SELECT turn_id, run_id, epoch, work_mode, program_kind, program_version, program_digest,
+             program_build, status, outcome, consumed_revision, claimed_at
+      FROM actor_turn_claims WHERE actor_id = ${this.actorId}
+      ORDER BY claimed_at DESC, turn_id DESC LIMIT ${limit}`;
+    return rows.map((row) => this.claimOf(row.turn_id, row));
   }
 
-  /** The staged edit waiting for a step boundary, or null. Staged means a
-   *  revision that no step has consumed and that was written as an edit of an
-   *  earlier one — the admitted revision 0 is not an edit. */
-  stagedContext(claim: ActorTurnClaim): ContextRevision | null {
-    const row = this.sql<RevisionRow>`
-      SELECT revision, epoch, base_revision, digest, message_count, messages, step_index
+  /** The turn this actor last admitted, or null. The live one when its status
+   *  is `admitted`. */
+  latestTurn(): StoredActorClaim | null {
+    return this.turns(1)[0] ?? null;
+  }
+
+  /** One turn's rendered requests, in order — metadata only, because a listing
+   *  of every step's array is a listing of the whole turn's context. */
+  revisions(turnId: string): readonly RenderedRequest[] {
+    this.actor.assertCurrent();
+    return this.sql<Omit<RevisionRow, 'messages'> & { recorded_at: number }>`
+      SELECT revision, epoch, working_revision, digest, message_count, step_index, recorded_at
       FROM actor_context_revisions
-      WHERE actor_id = ${this.actorId} AND turn_id = ${claim.turnId}
-        AND step_index IS NULL AND base_revision IS NOT NULL
-      ORDER BY revision ASC LIMIT 1`[0];
-    return row === undefined ? null : revisionOf(row);
-  }
-
-  /** Mark a staged revision as the one a step consumed, with the array that
-   *  step actually received — which is the staged edit PLUS whatever the live
-   *  tail held, so the row is the request and not the proposal. */
-  consumeStaged(claim: ActorTurnClaim, revision: number, step: {
-    readonly index: number; readonly messages: readonly ModelMessage[];
-  }): ConsumedContext {
-    const encoded = encodeModelMessages(step.messages);
-    const digest = modelMessagesDigest(encoded);
-    return this.transactionSync(() => {
-      this.assertLive(claim);
-      void this.sql`
-        UPDATE actor_context_revisions
-        SET step_index = ${step.index}, digest = ${digest}, messages = ${encoded},
-            message_count = ${step.messages.length}, epoch = ${claim.epoch}, recorded_at = ${nowMs()}
-        WHERE actor_id = ${this.actorId} AND turn_id = ${claim.turnId} AND revision = ${revision}
-          AND step_index IS NULL`;
-      void this.sql`
-        UPDATE actor_turn_claims SET consumed_revision = ${revision}, run_id = ${claim.runId}
-        WHERE actor_id = ${this.actorId} AND turn_id = ${claim.turnId} AND epoch = ${claim.epoch}`;
-      return { revision, digest };
-    });
+      WHERE actor_id = ${this.actorId} AND turn_id = ${turnId}
+      ORDER BY revision ASC`.map((row) => Object.freeze({
+        revision: row.revision,
+        epoch: row.epoch,
+        workingRevision: row.working_revision,
+        digest: row.digest,
+        messageCount: row.message_count,
+        stepIndex: row.step_index,
+        recordedAt: row.recorded_at,
+      }));
   }
 
   /** Seal the claim. Refused from a stale epoch for the same reason a step is:
@@ -424,12 +466,12 @@ export class ActorClaimStore {
     this.actor.assertCurrent();
     const rows = revision === undefined
       ? this.sql<RevisionRow>`
-        SELECT revision, epoch, base_revision, digest, message_count, messages, step_index
+        SELECT revision, epoch, working_revision, digest, message_count, messages, step_index
         FROM actor_context_revisions
         WHERE actor_id = ${this.actorId} AND turn_id = ${turnId} AND step_index IS NOT NULL
         ORDER BY revision DESC LIMIT 1`
       : this.sql<RevisionRow>`
-        SELECT revision, epoch, base_revision, digest, message_count, messages, step_index
+        SELECT revision, epoch, working_revision, digest, message_count, messages, step_index
         FROM actor_context_revisions
         WHERE actor_id = ${this.actorId} AND turn_id = ${turnId} AND revision = ${revision} LIMIT 1`;
     const row = rows[0];
@@ -514,7 +556,7 @@ function revisionOf(row: RevisionRow): ContextRevision {
   return {
     revision: row.revision,
     epoch: row.epoch,
-    baseRevision: row.base_revision,
+    workingRevision: row.working_revision,
     digest: row.digest,
     messageCount: row.message_count,
     stepIndex: row.step_index,

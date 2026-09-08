@@ -86,12 +86,32 @@ function failure(reason: FileToolFailureReason, error: string): never {
   throw new KinuError(reason, error);
 }
 
-/** A VFS failure, rendered for the model and classified for the ledger. */
+/**
+ * A file-plane failure, rendered for the model and classified for the ledger.
+ *
+ * A plane may answer in the file surface's OWN refusal vocabulary rather than
+ * with an errno — the `/context` projection refuses a write against a
+ * superseded revision as `stale`, the same word the read ledger uses for the
+ * same fact, and refuses a malformed working history as `bad_input`. Those
+ * verdicts are carried through rather than flattened: classifying a
+ * compare-and-set refusal as `io` would tell the model the filesystem broke,
+ * when what happened is that its base moved and it needs to read again.
+ */
 async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, path: string): Promise<{
   reason: FileEditOutcomeReason;
   error: string;
 }> {
   const err = input.error;
+  if (err instanceof FileRefusalError) return { reason: err.verdict, error: err.message };
+  if (err instanceof KinuError) {
+    if (err.code === 'denied' || err.code === 'missing' || err.code === 'io') {
+      return { reason: err.code, error: err.message };
+    }
+    // `bad_input` is rethrown rather than classified: like a malformed tool
+    // argument, content this file cannot be never became an edit attempt, and
+    // counting it among them would inflate the ledger's attempt count.
+    throw err;
+  }
   if (!isVfsError(err)) {
     return { reason: 'io', error: `${action} ${path} failed: ${renderThrownChain({ cause: err })}` };
   }

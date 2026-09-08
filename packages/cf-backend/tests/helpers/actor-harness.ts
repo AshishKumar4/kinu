@@ -264,6 +264,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       runId: `harness-${turnId}`, turnId, workMode: 'build',
       program: { kind: 'builtin', version: 0, digest: null, build: null },
       context: [],
+      workingRevision: 0,
     });
   }
 
