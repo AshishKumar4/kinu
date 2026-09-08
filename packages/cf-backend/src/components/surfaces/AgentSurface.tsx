@@ -2,8 +2,9 @@
  * Agent — what this agent is, and whether it is getting better.
  *
  * Identity · Memory · World model · Tools · Evolution. Everything the agent IS,
- * as opposed to what it made (Output), what it is working through (Work), how
- * it explored (Exploration), or where it can act (Environment).
+ * as opposed to what it made (a titled preview tab per running app, and Diffs
+ * for the file changes behind them), what it is working through (Work), how it
+ * explored (Exploration), or where it can act (Environment).
  *
  * Evolution is the whole trajectory in one place: the scaffold lineage with its
  * shadow verdict and promote/rollback, the GEPA passes that generate candidates
