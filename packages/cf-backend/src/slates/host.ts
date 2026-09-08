@@ -5,9 +5,9 @@ import * as v from 'valibot';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateFiles, SqliteSlateContentStore, SqliteSlateStore, WorkspaceSlates, slateDirectory, parseSlateProject,
-  SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal,
+  SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, resolveSlateChain, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal,
   type JsonValue, type SlateProject,
-  type SlateBindingRoute, type SlateCallResult, type SlateSummary, type SlateProblem,
+  type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateSummary, type SlateProblem,
 } from '@kinu.run/core';
 import { ERROR_CODES, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
@@ -148,13 +148,24 @@ export class SlateHost {
     }
   }
 
+  /**
+   * The app invocations this host is running right now, by the id it issued.
+   *
+   * A guest never sends a chain: it sends the id of the invocation it is
+   * serving, and this map is what turns that into a lineage. An entry lives
+   * exactly as long as the call it names, so a slate that keeps an older
+   * request's bindings and replays them holds an id that has been retired.
+   */
+  private readonly invocations = new Map<string, SlateInvocation>();
+
   /** Re-read the slate field on every call: a held stub proves its name, not today's reach. */
   async bindingCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
     try {
       const parsed = v.safeParse(SlateBindingRequestSchema, request);
-      if (!parsed.success) throw new KinuError('bad_input', 'A binding call is { member, args: JSON[], chain: string[] }', { cause: new v.ValiError(parsed.issues) });
+      if (!parsed.success) throw new KinuError('bad_input', 'A binding call is { member, args: JSON[], invocation: string | null }', { cause: new v.ValiError(parsed.issues) });
+      const chain = resolveSlateChain({ invocations: this.invocations, id, invocation: parsed.output.invocation });
       const project = await this.project(caller.cred, id);
-      return await this.run(caller, routeSlateBindingCall({ id, project, name, request: parsed.output }));
+      return await this.run(caller, routeSlateBindingCall({ id, project, name, request: parsed.output, chain }));
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} binding ${name}`, cause, otherwise: 'io' })) };
     }
@@ -179,6 +190,10 @@ export class SlateHost {
 
   /** App members are POST routes on the same authored fetch handler that serves the preview. */
   async call(caller: SlateCaller, id: string, method: string, args: JsonValue[], chain: readonly string[] = []): Promise<SlateCallResult> {
+    // Issued before the request leaves and retired when it settles, so the id
+    // the callee carries names a live call and nothing else.
+    const invocation = crypto.randomUUID();
+    this.invocations.set(invocation, { id, chain });
     try {
       requireWorkModePermission(caller.workMode, false, 'Calling authored slate code');
       if (!isSlateMethodName(method)) throw new KinuError('bad_input', `"${method}" is not an app method name`);
@@ -186,8 +201,7 @@ export class SlateHost {
       if (!parsed.success) throw new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
       const process = await this.ensure(caller, id);
       const response = await process.request(new Request(`https://slate.invalid/${method}`, {
-        // Percent-encoded so a slate id outside ASCII still rides an HTTP header.
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-slate-chain': encodeURIComponent(JSON.stringify(chain)) },
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-slate-call': invocation },
         body: JSON.stringify(parsed.output),
       }));
       if (!response.ok) {
@@ -203,6 +217,8 @@ export class SlateHost {
       return { ok: true, value: value.output };
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id}.${method}`, cause, otherwise: 'io' })) };
+    } finally {
+      this.invocations.delete(invocation);
     }
   }
 

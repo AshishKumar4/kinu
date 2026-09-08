@@ -49,18 +49,19 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
     '  return parts.join(": ");',
     '}',
     `const assets = Object.freeze(${JSON.stringify(files)});`,
-    // The chain is a parameter of the binding map, not ambient async state. It
-    // was an AsyncLocalStorage store, and a continuation created outside the
-    // `run` — a `.then()` built at authored-module top level — read an EMPTY
-    // store, so authored code reset its own lineage by accident on any hop that
-    // crossed that boundary. A map built per request cannot be read from the
-    // wrong request.
-    'function bindings(env, chain) {',
+    // The invocation id is a parameter of the binding map, not ambient async
+    // state and not a lineage the guest composes. It was a chain in an
+    // AsyncLocalStorage store, and a continuation created outside the `run` —
+    // a `.then()` built at authored-module top level — read an EMPTY store, so
+    // authored code reset its own lineage by accident. A map built per request
+    // cannot be read from the wrong request, and the id it carries is one the
+    // host retires when that request settles.
+    'function bindings(env, invocation) {',
     '  return Object.freeze(Object.fromEntries(Object.entries(env).map(([name, stub]) => [name, new Proxy(Object.create(null), {',
     '    get(_target, member) {',
     '      if (typeof member !== "string" || member === "then") return undefined;',
     '      return async (...args) => {',
-    '        const result = await stub.call(member, args, chain);',
+    '        const result = await stub.call(member, args, invocation);',
     '        if (!result.ok) throw new BindingRefusal(result);',
     '        return result.value;',
     '      };',
@@ -76,9 +77,8 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
     '  async fetch(request) { return this.handleHttpRequest(request); }',
     '  async handleHttpRequest(request) {',
     '    try {',
-    '      const carried = request.headers.get("x-slate-chain");',
-    '      const chain = carried === null ? [] : JSON.parse(decodeURIComponent(carried));',
-    '      return await this.respond(request, bindings(this.env, chain));',
+    '      const invocation = request.headers.get("x-slate-call");',
+    '      return await this.respond(request, bindings(this.env, invocation));',
     '    }',
     '    catch (cause) { return Response.json({ reason: cause instanceof BindingRefusal ? cause.reason : "io", error: errorText(cause) }, { status: 500 }); }',
     '  }',
