@@ -102,7 +102,8 @@ import {
 } from './sources';
 import {
   classMembers, collapsePath, declarationOf, declaredName, identifierText,
-  importedNames, IMPORT_CANDIDATES, isFunctionLike, isOptionalMember, isReExport, literalText,
+  importBindings, importedNames, IMPORT_CANDIDATES, isFunctionLike, isOptionalMember, isReExport,
+  literalText,
   importUses, methodKind, moduleSpecifiers,
   NAMESPACE, parse, type Parsed, reExportBindings, referencedNames, returnTypeOf, superClassName,
   type SyntaxNode, walk,
@@ -408,7 +409,19 @@ export type EntrypointKind =
    *  directly. Both are process roots; requiring a shebang missed Bun scripts
    *  such as the devbox candidate runner, whose imports are shipped runtime
    *  calls rather than test-only references. */
-  | 'process-entry';
+  | 'process-entry'
+  /** A file this tree HANDS TO THE OS as a program: the path argument of a
+   *  `fork`/`spawn`/`execFile`, resolved back into the corpus. The child
+   *  process is a second root — nothing IMPORTS the script, so the module graph
+   *  ends at the spawn call and everything the child consumes reads as
+   *  unreached. `cli-backend/src/branch-worker.ts` is the live instance: it is
+   *  `fork(workerPath, [dbPath])`-ed from `branch-process.ts`, `package.json`'s
+   *  knip block already has to declare `src/branch-worker.ts!` for the same
+   *  reason, and without this kind its three production imports
+   *  (`exploreRollout`, `reflectRollout`, `LocalActorProcessBootstrapSchema`)
+   *  were reported as reached by nothing. That is the false-positive direction,
+   *  which is the one that gets a gate switched off. */
+  | 'spawned-script';
 
 export interface Entrypoint {
   readonly file: string;
@@ -501,6 +514,67 @@ const TOOL_FACTORY = /Tool(s)?(\b|$)|^with[A-Z]/;
  *  repository's browser bundles use one. */
 const MOUNTS: ReadonlySet<string> = new Set(['createRoot', 'hydrateRoot']);
 
+/**
+ * The calls that hand a path to the operating system as a program.
+ *
+ * Matched by name, like {@link TOOL_FACTORY} and commander's `command`, because
+ * the primitive IS the declaration: a spawn is the one construct that says
+ * "another process starts at this path". Read off a member expression too, so
+ * `Bun.spawn` and `child_process.spawn` are the same fact.
+ */
+const SPAWNS = /^(?:fork|spawn|spawnSync|execFile|execFileSync)$/;
+
+/**
+ * The corpus files a spawn call names, resolved the way the code resolves them.
+ *
+ * Path strings reach a spawn three ways here and all three are followed: the
+ * literal itself, inside the argv array beside it, and — the live case — bound
+ * to a name first, because `branch-process.ts` writes
+ * `const workerPath = join(dirname(fileURLToPath(import.meta.url)),
+ * 'branch-worker.ts')` and passes the NAME. So every string literal reachable
+ * from an argument is a candidate, and the CORPUS decides: a candidate the tree
+ * does not hold is not a resolution. That is what keeps this from rooting files
+ * at random — `spawn(process.execPath, [entry, 'daemon', 'run'])`,
+ * `Bun.spawn([...argv, tmpFile])` and `spawn(runtime, [SCRIPT_PATH])` name no
+ * tracked file and root nothing. Measured on this tree: one match.
+ */
+function spawnedScripts(
+  call: SyntaxNode,
+  from: string,
+  literals: ReadonlyMap<string, SyntaxNode>,
+  corpus: ReadonlySet<string>,
+): string[] {
+  const directory = from.slice(0, from.lastIndexOf('/'));
+  // A path can reach one spawn twice — `spawnSync('bun', ['run', cliEntry, …])`
+  // resolves `cliEntry` from two arguments — and one root twice is noise.
+  const found = new Set<string>();
+  const frontier = call.children.slice(1);
+  const seen = new Set<SyntaxNode>();
+  while (frontier.length > 0) {
+    const node = frontier.pop();
+    if (node === undefined || seen.has(node)) continue;
+    seen.add(node);
+    // A bare name: follow it to what it was bound to, once. Deeper chains are
+    // not followed, and an unfollowed chain costs a root rather than inventing
+    // one.
+    const name = node.raw.type === 'Identifier' ? identifierText(node) : undefined;
+    const bound = name === undefined ? undefined : literals.get(name);
+    if (bound !== undefined) { frontier.push(bound); continue; }
+    const text = literalText(node);
+    if (text !== undefined) {
+      // Relative to the spawning file first — a bare `branch-worker.ts` is a
+      // sibling — then as a repository path, which is how a script names
+      // another script.
+      for (const candidate of [collapsePath(`${directory}/${text}`), collapsePath(text)]) {
+        if (corpus.has(candidate) && candidate !== from) found.add(candidate);
+      }
+      continue;
+    }
+    frontier.push(...node.children);
+  }
+  return [...found];
+}
+
 /** The exported declaration a node sits inside, so an entrypoint written inline
  *  is attributed to the symbol that owns it. */
 function enclosingExport(node: SyntaxNode, module: Module): string | undefined {
@@ -571,6 +645,7 @@ export function findEntrypoints(
   const invoked = new Set<string>();
   for (const [file, text] of reachers) for (const name of invokedNames(file, text)) invoked.add(name);
   const rooted = foreignRooted(reachers);
+  const corpus = new Set(reachers.keys());
   const found: Entrypoint[] = [];
 
   for (const [file, text] of reachers) {
@@ -597,6 +672,16 @@ export function findEntrypoints(
       });
     }
 
+    /** `name -> what it was bound to`, so a path assembled into a const and
+     *  spawned by name is still a path. */
+    const bindings = new Map<string, SyntaxNode>();
+    walk(tree, (node) => {
+      if (node.raw.type !== 'VariableDeclarator') return;
+      const bound = identifierText(node.children[0] ?? node);
+      const init = node.children[1];
+      if (bound !== undefined && init !== undefined) bindings.set(bound, init);
+    });
+
     walk(tree, (node) => {
       const { raw } = node;
 
@@ -610,6 +695,24 @@ export function findEntrypoints(
         && MOUNTS.has(raw.callee.name)) {
         add(node, 'browser-bundle', raw.callee.name);
         return;
+      }
+      // `fork(workerPath, [dbPath])` — a path this tree hands to the OS. The
+      // spawned file is a root: nothing imports it, so without this every
+      // symbol the child consumes reads as reached by nothing.
+      if (raw.type === 'CallExpression') {
+        const callee = raw.callee.type === 'MemberExpression' && !raw.callee.computed
+          && raw.callee.property.type === 'Identifier'
+          ? raw.callee.property.name
+          : raw.callee.type === 'Identifier' ? raw.callee.name : undefined;
+        if (callee !== undefined && SPAWNS.test(callee)) {
+          for (const script of spawnedScripts(node, file, bindings, corpus)) {
+            found.push({
+              file: script, line: 1, kind: 'spawned-script',
+              at: `${collapsePath(file)}:${String(lineAt(node.start))} ${callee}`,
+              symbol: undefined,
+            });
+          }
+        }
       }
       // `tools.run = tool({…})` and `{ run: tool({…}) }` — a handler bound under
       // a name the model sends. The VALUE has to be a built tool: `run` and
@@ -859,8 +962,18 @@ interface Typed {
  * as a construction site of every type named anywhere in that annotation, so two
  * fields of `OAuthProviderConfig` were reported unsupplied by a literal that was
  * never one of its instances.
+ *
+ * `member` resolves `I['k']` to whatever `I` declares for `k`. Without it an
+ * indexed access yielded the OWNER — `ActorExecutionInput['chat']` read as an
+ * `ActorExecutionInput`, which is not merely unresolved but wrong in both
+ * directions at once: it credited supply to the owner and withheld it from the
+ * type the key actually names. The CLI's `liveTurn` binding is annotated
+ * exactly that way, and `ChatOptions.countInputTokens` is supplied on it.
  */
-function annotatedTypes(annotation: SyntaxNode | undefined): readonly string[] {
+function annotatedTypes(
+  annotation: SyntaxNode | undefined,
+  member?: (owner: string, key: string) => readonly string[],
+): readonly string[] {
   if (annotation === undefined) return [];
   const names: string[] = [];
   const descend = (node: SyntaxNode): void => {
@@ -884,6 +997,15 @@ function annotatedTypes(annotation: SyntaxNode | undefined): readonly string[] {
       }
       names.push(name);
       return;
+    }
+    if (node.raw.type === 'TSIndexedAccessType' && member !== undefined) {
+      const [owner, index] = node.children;
+      const declaring = owner === undefined ? undefined : identifierText(owner.children[0] ?? owner);
+      const key = index === undefined ? undefined : literalText(index.children[0] ?? index);
+      if (declaring !== undefined && key !== undefined) {
+        names.push(...member(declaring, key));
+        return;
+      }
     }
     if (node.raw.type === 'TSTypeLiteral' || node.raw.type === 'TSFunctionType') return;
     for (const child of node.children) descend(child);
@@ -960,6 +1082,10 @@ export interface FieldFacts {
   readonly supplies: ReadonlySet<string>;
   /** Interfaces with at least one visible construction site. */
   readonly constructed: ReadonlySet<string>;
+  /** Names some file imports from OUTSIDE the corpus. Everything above is keyed
+   *  by a bare type name, so a name shared with a dependency cannot be
+   *  attributed to the interface this tree declares under it. */
+  readonly foreignNames: ReadonlySet<string>;
 }
 
 /**
@@ -967,12 +1093,20 @@ export interface FieldFacts {
  *
  * A construction site is one this gate can SEE syntactically: an annotated
  * declarator, a `satisfies` or `as`, a literal returned from a function whose
- * return type names the interface, or an object literal handed to a locally
- * declared function at a parameter position that names it. Anything else — a
- * literal passed to a dependency, a cast through `unknown` — makes the interface
+ * return type names the interface, or an object literal handed to a declared
+ * function at a parameter position that names it. Anything else — a literal
+ * passed to a dependency, a cast through `unknown` — makes the interface
  * unconstructed here, and an unconstructed interface produces no finding at all.
+ *
+ * `modules` is what makes the last of those exact rather than a guess: a bare
+ * call is attributed to the declaration the CALLING FILE imported, resolved
+ * through however many barrels stand in the way, never to whatever else in the
+ * tree shares the name. See {@link parameters}.
  */
-export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts {
+export function measureFields(
+  reachers: ReadonlyMap<string, string>,
+  modules: ReadonlyMap<string, Module>,
+): FieldFacts {
   const reads = new Set<string>();
   const supplies = new Set<string>();
   const constructed = new Set<string>();
@@ -982,10 +1116,62 @@ export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts
   // `BuiltinToolDeps` were reported unsupplied while the object that fills them
   // is written one interface down.
   const bases = new Map<string, readonly string[]>();
-  // `name -> parameter type names, by position`, keyed by function name only.
-  // A collision merges both signatures, which widens supply and can only remove
-  // findings.
+  /**
+   * `declaring-file#name -> the type names an object literal handed to each
+   * parameter position constructs`.
+   *
+   * Keyed by the file that DECLARES the function, because a bare name is only
+   * an attribution key while it means one thing, and across a whole tree it
+   * does not. The previous table was keyed by name alone and called that
+   * harmless — "a collision merges both signatures, which widens supply and can
+   * only remove findings". It cannot: `constructed` is written by the SAME arm,
+   * and an interface this gate believes is built somewhere is the PRECONDITION
+   * for a finding. So a collision does not only hide findings, it INVENTS them.
+   *
+   * Measured on this tree, twice, in both directions:
+   *
+   *   - 19 invented. `file-tool.ts`, `builtins.ts` and `agents-tool.ts` all
+   *     write `execute: async (args: XToolInput) => …`, so a global `execute`
+   *     carried `FileToolInput`, `MemoryToolInput`, `TasksToolInput` and three
+   *     more at position 0. The one bare `execute(…)` call in the tree is
+   *     `scaffold/inference-transform.ts:79`, `(emit) => execute({ emit,
+   *     options })` — an unrelated local — and it marked all six interfaces
+   *     CONSTRUCTED while supplying two keys none of them declares. Every
+   *     optional field the three dispatchers read then reported as connected at
+   *     neither end, in a tree where the MODEL is the only thing that ever
+   *     builds one of these.
+   *   - 1 hidden, in the other direction: this tree declares TWO production
+   *     `createWorkspace` functions (`vfs/nimbus-workspace.ts` over
+   *     `WorkspaceOptions`, `identity/create.ts` over something else), and
+   *     `cf-backend/src/workspace-host.ts` imports the first and supplies
+   *     `fabric` to it. Refusing an ambiguous NAME loses that supply;
+   *     resolving the IMPORT keeps it, because the importing file has already
+   *     said which one it means.
+   *
+   * Within one file the merge stays a union: same file, same name is one
+   * callable with overloads, which is the case the old comment described.
+   */
   const parameters = new Map<string, string[][]>();
+  /** `alias -> the type names each parameter of the function it names carries`.
+   *  A callback seam is declared by its type, not by a function anywhere. */
+  const signatures = new Map<string, string[][]>();
+  /**
+   * Type names this tree also imports from OUTSIDE it.
+   *
+   * Everything here is keyed by a bare type NAME, and a name the tree shares
+   * with a dependency is not attributable: `packages/devbox` imports
+   * `ExecOptions` from `@cloudflare/sandbox` and writes
+   * `const options: ExecOptions = {}`, which this gate read as a construction
+   * site of `packages/cli/src/commands/run.ts`'s own `ExecOptions` interface
+   * supplying none of its fields — three findings against an interface
+   * commander fills. Refusing the name is the honest answer; judging it is a
+   * coin toss.
+   */
+  const foreignNames = new Set<string>();
+  /** `Interface#key -> the type names that member's annotation writes`, for
+   *  `I['k']`. Direct members only: a nested type literal's keys belong to the
+   *  literal, not to the interface around it. */
+  const members = new Map<string, readonly string[]>();
   for (const [file, text] of reachers) {
     walk(parseOnce(file, text).root, (node) => {
       if (node.type === 'TSInterfaceDeclaration') {
@@ -994,7 +1180,14 @@ export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts
           .filter((child) => child.raw.type === 'TSInterfaceHeritage')
           .map((child) => identifierText(child.children[0] ?? child))
           .filter((base): base is string => base !== undefined);
-        if (name !== undefined && extended.length > 0) bases.set(name, extended);
+        if (name === undefined) return;
+        if (extended.length > 0) bases.set(name, extended);
+        const body = node.children.find((child) => child.raw.type === 'TSInterfaceBody');
+        for (const member of body?.children ?? []) {
+          const key = declaredName(member);
+          if (key === undefined) continue;
+          members.set(`${name}#${key}`, annotatedTypes(annotationOf(member)));
+        }
         return;
       }
       // `type CFRuntime = AgentRuntime & { … }` is `extends` spelled as an
@@ -1004,12 +1197,40 @@ export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts
       // annotated `CFRuntime` — an alias this walk never resolved.
       if (node.type === 'TSTypeAliasDeclaration') {
         const name = declaredName(node);
-        const body = node.children.find((child) => child.raw.type === 'TSIntersectionType');
-        if (name === undefined || body === undefined) return;
-        const members = body.children
-          .map((child) => (child.raw.type === 'TSTypeReference' ? identifierText(child.children[0] ?? child) : undefined))
-          .filter((member): member is string => member !== undefined);
-        if (members.length > 0) bases.set(name, members);
+        if (name === undefined) return;
+        const intersection = node.children.find((child) => child.raw.type === 'TSIntersectionType');
+        if (intersection !== undefined) {
+          const members = intersection.children
+            .map((child) => (child.raw.type === 'TSTypeReference' ? identifierText(child.children[0] ?? child) : undefined))
+            .filter((member): member is string => member !== undefined);
+          if (members.length > 0) bases.set(name, members);
+          return;
+        }
+        // `type ModelCallSink = (report: ModelCallReport) => void` — a callback
+        // SEAM. Nothing declares a function of the callback's name, so the
+        // table above holds nothing for `reportModelCall?.({ … })`; the
+        // annotation on the binding is the whole declaration of what that call
+        // receives. Without this, `ModelCallReport.modelId` read as supplied by
+        // nothing while `cf-backend/src/lib/web-provider.ts:47` supplies it.
+        const signature = node.children.find((child) => child.raw.type === 'TSFunctionType');
+        if (signature !== undefined) {
+          const declared = 'params' in signature.raw ? signature.raw.params : [];
+          signatures.set(name, signature.children
+            .filter((child) => declared.some((param) => param === child.raw))
+            .map((child) => [...annotatedTypes(annotationOf(child))]));
+          return;
+        }
+        // `type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>` —
+        // one reference, and `annotatedTypes` already unwraps the utilities
+        // whose instances carry the shape whole. A UNION is deliberately not
+        // followed: a value of `A | B` need not have B's keys, so counting both
+        // would credit supply nothing wrote. Without this, four fields of
+        // `ChatOptions` read as supplied by nothing while the CLI's own
+        // `liveTurnOpts` literal — the one complete construction site in the
+        // tree — filled them, because the alias hid the interface behind it.
+        const reference = node.children.find((child) => child.raw.type === 'TSTypeReference');
+        const aliased = annotatedTypes(reference);
+        if (aliased.length > 0) bases.set(name, aliased);
         return;
       }
       if (!isFunctionLike(node)) return;
@@ -1023,13 +1244,18 @@ export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts
       const positions = node.children
         .filter((child) => declared.some((param) => param === child.raw))
         .map((child) => [...annotatedTypes(annotationOf(child))]);
-      const seen = parameters.get(name) ?? [];
+      const seen = parameters.get(`${file}#${name}`) ?? [];
       positions.forEach((types, index) => {
         seen[index] = [...(seen[index] ?? []), ...types];
       });
-      parameters.set(name, seen);
+      parameters.set(`${file}#${name}`, seen);
     });
   }
+
+  /** What an interface declares for one key, for `I['k']`. Read only in the
+   *  second pass, so the table it reads is complete. */
+  const memberTypes = (owner: string, key: string): readonly string[] =>
+    members.get(`${owner}#${key}`) ?? [];
 
   /** A type and everything it inherits from, so a subtype's supply counts. */
   const withBases = (types: readonly string[]): readonly string[] => {
@@ -1053,8 +1279,48 @@ export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts
     }
   };
 
+  const resolve = createResolver(new Set(reachers.keys()), new Set(trackedFiles()));
+
+  /**
+   * `local name -> the declaration it is bound to`, for one file.
+   *
+   * The importing file has already said which `createWorkspace` it means, so
+   * this reads that answer instead of guessing from the name. Resolved back
+   * through however many barrels stand in the way, for the same reason
+   * reachability is: `@kinu.run/core` publishes everything through `index.ts`.
+   * A namespace import is skipped — `ns.f(…)` is a member call, and the arm
+   * that reads this resolves bare identifiers only.
+   */
+  const calleeOrigins = (file: string, tree: SyntaxNode): Map<string, string> => {
+    const origins = new Map<string, string>();
+    for (const statement of tree.children) {
+      const [specifier] = moduleSpecifiers(statement);
+      if (specifier === undefined) continue;
+      const { file: target } = resolve(file, specifier);
+      if (target === undefined) continue;
+      for (const bound of importBindings(statement)) {
+        if (bound.imported === NAMESPACE) continue;
+        const declaration = declarationSite(target, bound.imported, modules, new Set());
+        const at = declaration === undefined
+          ? `${target}#${bound.imported}`
+          : declaration;
+        origins.set(bound.local, at);
+      }
+    }
+    return origins;
+  };
+
   for (const [file, text] of reachers) {
     const { root: tree } = parseOnce(file, text);
+    const origins = calleeOrigins(file, tree);
+    // Names this file takes from outside the corpus, so a type it shares with a
+    // dependency stops being attributable everywhere.
+    for (const statement of tree.children) {
+      const [specifier] = moduleSpecifiers(statement);
+      if (specifier === undefined) continue;
+      if (resolve(file, specifier).file !== undefined) continue;
+      for (const name of importedNames(statement)) foreignNames.add(name);
+    }
     // BY NAME, not a flat list: every member access was compared against every
     // annotated binding in the file, which is quadratic in the largest files and
     // was most of a 3.6 s run.
@@ -1077,7 +1343,7 @@ export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts
       const scope = owningScope(node);
       const bound = identifierText(node.children[0] ?? node) ?? identifierText(node);
       if (annotation === undefined || bound === undefined) return;
-      for (const type of annotatedTypes(annotation)) {
+      for (const type of annotatedTypes(annotation, memberTypes)) {
         typed.set(bound, [...(typed.get(bound) ?? []), { type, from: scope.from, to: scope.to }]);
       }
     });
@@ -1093,11 +1359,18 @@ export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts
             reads.add(`${binding.type}#${raw.property.name}`);
           }
         }
-        // `deps.field = …` supplies it.
+        // `deps.field = …` supplies it — and on the BASE too, exactly as a
+        // literal annotated with a subtype supplies the base's fields. The CLI
+        // finishes its turn options that way: `liveTurnOpts` is annotated
+        // `Omit<ChatOptions, …>` through an alias, and
+        // `liveTurnOpts.providerReportedTokens = …` is the only supply of that
+        // field anywhere.
         if (node.parent?.raw.type === 'AssignmentExpression'
           && node.parent.raw.left === raw && receiver !== undefined) {
           for (const binding of typed.get(receiver) ?? []) {
-            supplies.add(`${binding.type}#${raw.property.name}`);
+            for (const type of withBases([binding.type])) {
+              supplies.add(`${type}#${raw.property.name}`);
+            }
           }
         }
         return;
@@ -1105,18 +1378,18 @@ export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts
 
       if (raw.type === 'VariableDeclarator') {
         const init = node.children.find((child) => child.raw.type === 'ObjectExpression');
-        if (init !== undefined) site(annotatedTypes(annotationOf(node.children[0] ?? node)), init);
+        if (init !== undefined) site(annotatedTypes(annotationOf(node.children[0] ?? node), memberTypes), init);
         return;
       }
       if (raw.type === 'TSSatisfiesExpression' || raw.type === 'TSAsExpression') {
         const literal = node.children.find((child) => child.raw.type === 'ObjectExpression');
         if (literal !== undefined) {
-          site(annotatedTypes(node.children[1] ?? node), literal);
+          site(annotatedTypes(node.children[1] ?? node, memberTypes), literal);
         }
         return;
       }
       if (isFunctionLike(node)) {
-        const returned = annotatedTypes(returnTypeOf(node));
+        const returned = annotatedTypes(returnTypeOf(node), memberTypes);
         if (returned.length === 0) return;
         walk(node, (inner) => {
           if (inner.raw.type !== 'ReturnStatement') return;
@@ -1144,7 +1417,14 @@ export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts
       }
       if (raw.type !== 'CallExpression') return;
       const callee = identifierText(node.children[0] ?? node);
-      const positions = callee === undefined ? undefined : parameters.get(callee);
+      if (callee === undefined) return;
+      // The declaration THIS file's `callee` names: what it imported, or its
+      // own when it imported nothing under that name. Failing that, the callee
+      // is a BINDING and its annotation names a callback seam.
+      const positions = parameters.get(origins.get(callee) ?? `${file}#${callee}`)
+        ?? (typed.get(callee) ?? [])
+          .map((binding) => signatures.get(binding.type))
+          .find((found) => found !== undefined);
       if (positions === undefined) return;
       node.children.slice(1).forEach((argument, index) => {
         const literal = argument.raw.type === 'ObjectExpression'
@@ -1154,7 +1434,7 @@ export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts
       });
     });
   }
-  return { reads, supplies, constructed };
+  return { reads, supplies, constructed, foreignNames };
 }
 
 /** A source range, in byte offsets. */
@@ -1198,6 +1478,9 @@ export function findUnsupplied(
       const owner = declaredName(node);
       if (owner === undefined || !module.exports.has(owner)) return;
       if (!facts.constructed.has(owner)) return;
+      // A name this tree shares with a dependency: see
+      // {@link FieldFacts.foreignNames}.
+      if (facts.foreignNames.has(owner)) return;
       if (facts.supplies.has(`${owner}#${NAMESPACE}`)) return;
       walk(node, (member) => {
         if (!isOptionalMember(member)) return;
@@ -1276,6 +1559,32 @@ export const BLIND_SPOTS: readonly string[] = [
   + 'for a test is reported, because the EXPORT has no production consumer — but the logic is '
   + 'live, so the fix is to unexport it rather than to wire it. The census does not separate '
   + 'the two; the reason line says which files reference it, which is what tells them apart.',
+  'AN INTERFACE ASSEMBLED ACROSS A SPREAD — ITS FIELDS ARE NOT DETECTED, by the same rule that keeps '
+  + 'a spread from being read as a partial supply. Confirmed live instance: `ChatOptions`. The CLI '
+  + 'writes eleven of its fields in `local-session.ts` under an alias '
+  + '(`Omit<ChatOptions, …>`), assigns two more onto that binding, re-wraps the whole thing as '
+  + '`{ ...liveTurnOpts }` for `ActorExecutionInput[\'chat\']`, and core\'s `actor-session.ts` '
+  + 'spreads it a third time to add `meter`, `dynamicContext` and `stepContext`. The re-wrap is a '
+  + 'construction site whose keys no parser here can read, so the interface counts as supplied '
+  + 'WHOLE and a genuinely unwired 26th field would not be reported. Eight of its fields were '
+  + 'false positives before the alias and the indexed access resolved; the price of removing them '
+  + 'is that this interface is now judged only through its other, readable sites.',
+  'A TYPE NAME THIS TREE SHARES WITH A DEPENDENCY — OUT OF SCOPE, refused rather than judged. Field supply is keyed by '
+  + 'a bare type name, so `ExecOptions` (the CLI\'s own interface, and `@cloudflare/sandbox`\'s, '
+  + 'which `packages/devbox` imports and builds) is one key for two shapes. Any name some file '
+  + 'imports from outside the corpus is dropped from the field census entirely — including the '
+  + 'local interface that shares it, whose real unwired field would be missed.',
+  'AN INDEXED ACCESS DEEPER THAN ONE HOP, OR THROUGH A TYPE ALIAS — NOT DETECTED. `I[\'k\']` is '
+  + 'resolved to whatever the INTERFACE `I` declares for `k`, direct members only; '
+  + '`type X = { k: T }`, `I[\'a\'][\'b\']` and `Parameters<typeof f>[0]` are not. The last of those '
+  + 'is live in `actor-agent.ts` and is reached instead by following the bound NAME to its '
+  + 'literal, which is why those eleven `BuiltinToolDeps` fields are not findings.',
+  'A SPAWNED SCRIPT WHOSE PATH THIS TREE DOES NOT WRITE — NOT DETECTED, so it is not rooted. `spawned-script` roots the '
+  + 'file a `fork`/`spawn`/`execFile` names, following one binding hop to the string literal; a '
+  + 'path assembled from a variable this gate cannot fold, read out of config, or handed in by a '
+  + 'caller roots nothing, and every symbol that child consumes then reads as unreached. That is '
+  + 'the FALSE POSITIVE direction, and it cost five findings against `branch-worker.ts` before '
+  + 'this kind existed.',
 ];
 
 if (import.meta.main) {
@@ -1295,7 +1604,7 @@ if (import.meta.main) {
   const builtins = builtinToolNames(graph.modules, read);
   const entrypoints = findEntrypoints(reachers, graph.modules, builtins);
   const reach = measureReach(graph, entrypoints);
-  const facts = measureFields(reachers);
+  const facts = measureFields(reachers, graph.modules);
 
   const governed = [...graph.modules.keys()].filter(inScope);
   const exports = governed.reduce(

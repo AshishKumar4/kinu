@@ -68,8 +68,13 @@ import type { ActorTurnProgram } from './actor-program';
  * and whether its effects landed is not knowable from this row. It is the same
  * word `claimToolEffect` answers with, deliberately: both mean "work was
  * claimed, its disposition is unknown, and re-running it is refused".
+ *
+ * The ARRAY is module-local; {@link ClaimOutcome} is the contract. The only
+ * reader of the values is the CHECK list below, in the same file, and an export
+ * nothing outside consumes makes core's surface bigger for no caller — which is
+ * what `gate:wired` reported it as.
  */
-export const CLAIM_OUTCOMES = [...RUN_END_REASONS, 'indeterminate'] as const;
+const CLAIM_OUTCOMES = [...RUN_END_REASONS, 'indeterminate'] as const;
 export type ClaimOutcome = (typeof CLAIM_OUTCOMES)[number];
 
 const CLAIM_STATUSES = ['admitted', 'settled'] as const;

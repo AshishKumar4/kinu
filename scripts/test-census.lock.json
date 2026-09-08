@@ -1,5 +1,5 @@
 {
-  "measured": "7600fba03: 909 test files, 827 runnable suites, 11984 tests, 34 runners, 62 non-public product members",
+  "measured": "13d800895: 962 test files, 867 runnable suites, 12218 tests, 36 runners, 64 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -179,7 +179,7 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-device-turn-stop.test.ts :: (file scope) :: harness bridge to a non-public member",
-      "count": 3
+      "count": 2
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: a lease whose turn never answered is left open for the sweep to re-ask :: harness bridge to a non-public member",
@@ -199,7 +199,7 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: the hook classifies and arms; the replay happens off the gate :: harness bridge to a non-public member",
-      "count": 3
+      "count": 2
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: (file scope) :: harness bridge to a non-public member",
@@ -223,11 +223,11 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a claimed sequence that never finishes stays legible as unfinished :: harness bridge to a non-public member",
-      "count": 2
+      "count": 1
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a completed turn retains its terminal disposition so a duplicate callback is done :: harness bridge to a non-public member",
-      "count": 3
+      "count": 2
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a cut around the turn recording leaves exactly one owed review :: harness bridge to a non-public member",
@@ -235,7 +235,7 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a cut at the first effect still leaves every later effect owed :: harness bridge to a non-public member",
-      "count": 3
+      "count": 2
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a cut on either side of the recording leaves exactly one of every append :: harness bridge to a non-public member",
@@ -259,7 +259,7 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a message the conversion cannot read costs that effect and no others :: harness bridge to a non-public member",
-      "count": 3
+      "count": 2
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a review re-run after a refusal grades the turn once :: harness bridge to a non-public member",
@@ -267,11 +267,11 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a settled response with nothing else running releases them :: harness bridge to a non-public member",
-      "count": 2
+      "count": 1
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a turn with no durable identity is unclaimed rather than invented :: harness bridge to a non-public member",
-      "count": 2
+      "count": 1
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: an announcing effect cut after its side effect is replayed, never doubled :: harness bridge to a non-public member",
@@ -287,7 +287,7 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: an undelivered retry stays owed and replays with the same identity :: harness bridge to a non-public member",
-      "count": 6
+      "count": 5
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: cold recovery keeps the claims of a continuation it has not replayed yet :: harness bridge to a non-public member",
@@ -296,10 +296,6 @@
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: cold recovery releases them when no response survived the isolate :: harness bridge to a non-public member",
       "count": 4
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: each response of one durable turn settles its own sequence :: harness bridge to a non-public member",
-      "count": 1
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: each steer branch is claimed under its own key :: harness bridge to a non-public member",
@@ -323,7 +319,7 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: the settling response is not mistaken for another one still running :: harness bridge to a non-public member",
-      "count": 2
+      "count": 1
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: the tick marker says entered, not armed :: harness bridge to a non-public member",
@@ -342,10 +338,6 @@
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: a review that had already landed is NOT re-run, so recovery cannot double it :: harness bridge to a non-public member",
-      "count": 2
-    },
-    {
       "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: a running detached job counts, because it may hold the container :: harness bridge to a non-public member",
       "count": 1
     },
@@ -362,36 +354,20 @@
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: the advisor review runs DETACHED and still lands exactly one note :: harness bridge to a non-public member",
-      "count": 4
-    },
-    {
       "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: the evolution lane leaves a durable row and hands the re-entry to a carrier :: harness bridge to a non-public member",
-      "count": 2
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: the recovery hands the re-drive to a carrier and terminalizes the old fiber :: harness bridge to a non-public member",
-      "count": 4
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: the scan releases the row it recovered, and the carrier retires its own :: harness bridge to a non-public member",
-      "count": 4
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-facet-reconciliation.test.ts :: every terminal head loses its facet; only the executing ones keep theirs :: harness bridge to a non-public member",
-      "count": 7
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-files-route-authority.test.ts :: (file scope) :: harness bridge to a non-public member",
-      "count": 2
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-ingress-forgery.test.ts :: (file scope) :: harness bridge to a non-public member",
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: the recovery hands the re-drive to a carrier and terminalizes the old fiber :: harness bridge to a non-public member",
       "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-facet-reconciliation.test.ts :: every terminal head loses its facet; only the executing ones keep theirs :: harness bridge to a non-public member",
+      "count": 8
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-files-route-authority.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 1
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: a claimed owner with no capability token yet asks nothing, and reports nothing :: harness bridge to a non-public member",
@@ -431,7 +407,7 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-mid-turn-steer.test.ts :: recovers the active durable turn id after a reset before a device sweep :: harness bridge to a non-public member",
-      "count": 2
+      "count": 3
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-mid-turn-steer.test.ts :: restores a reset-lost steer from SQL before the resumed turn reaches its next step :: harness bridge to a non-public member",
@@ -447,6 +423,14 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-output-limit-continuation.test.ts :: a turn that finished on its own owes no continuation :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-plan-mode-backend.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-plan-mode-backend.test.ts :: a roster row whose facet the SDK no longer holds resolves missing, and the read does not re-register it :: harness bridge to a non-public member",
       "count": 1
     },
     {
@@ -471,35 +455,31 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: a cold replay is answered from the first attempt row :: harness bridge to a non-public member",
-      "count": 5
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: a completed build turn earns its review :: harness bridge to a non-public member",
-      "count": 2
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: a completed PLAN turn feeds no lane :: harness bridge to a non-public member",
-      "count": 2
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: a FAILED build turn feeds no lane :: harness bridge to a non-public member",
-      "count": 2
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: an ABORTED build turn feeds no lane :: harness bridge to a non-public member",
-      "count": 2
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: an unscoped rollout still claims against the live turn :: harness bridge to a non-public member",
-      "count": 2
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the scope is the claim identity, not whatever turn is ambient :: harness bridge to a non-public member",
       "count": 4
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-user-authority-races.test.ts :: (file scope) :: harness bridge to a non-public member",
-      "count": 2
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: a completed build turn earns its review :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: a completed PLAN turn feeds no lane :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: a FAILED build turn feeds no lane :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: an ABORTED build turn feeds no lane :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: an unscoped rollout still claims against the live turn :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the scope is the claim identity, not whatever turn is ambient :: harness bridge to a non-public member",
+      "count": 1
     },
     {
       "key": "source_text :: packages/cf-backend/tests/unit-chat-error-surface.test.ts :: catches the on-connect terminal-error replay frame in the raw onMessage handler :: between() over source text",
@@ -626,22 +606,6 @@
       "count": 1
     },
     {
-      "key": "source_text :: packages/cf-backend/tests/unit-think-inference-seam-contract.test.ts :: (file scope) :: reads a source file",
-      "count": 3
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-think-inference-seam-contract.test.ts :: every actor inherits the seam, so a subordinate runs the scaffold it evolves :: expect(<source text>).not.toContain",
-      "count": 2
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-think-inference-seam-contract.test.ts :: every actor inherits the seam, so a subordinate runs the scaffold it evolves :: expect(<source text>).toContain",
-      "count": 2
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-think-inference-seam-contract.test.ts :: the override is declared and routes through the shared transform :: expect(<source text>).toContain",
-      "count": 2
-    },
-    {
       "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: activation classifies owed deliveries; only the durable wake dispatches :: expect(<source text>).not.toContain",
       "count": 4
     },
@@ -664,10 +628,6 @@
     {
       "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: beforeTurn merges profile reasoning effort with cache provider options :: expect(<source text>).toContain",
       "count": 6
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: cloud admission counts precisely the active tool surface Think submits :: expect(<source text>).toContain",
-      "count": 4
     },
     {
       "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: facet-spawned heads inherit the registered parent workspace identity :: expect(<source text>).not.toContain",
