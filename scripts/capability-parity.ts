@@ -49,18 +49,39 @@
  * `team`, `facts`, `engine` and `mode` are ordinary words that appear as keys in
  * unrelated object literals all over both trees, so "the name occurs in this
  * package" would mark almost everything as supplied and the gate would report
- * nothing. A construction site is therefore recognised by SHAPE: an object
- * literal whose keys overlap one contract's member set by at least two. That is
- * a claim about the literal being that contract, not about a word appearing.
- * Attribution goes to the contract with the largest overlap, so a small contract
- * whose members are a subset of a larger one does not steal the larger one's
- * literals.
+ * nothing. A construction site is therefore recognised by SHAPE, and by BOTH
+ * halves of the rule `tsc` applies to a fresh literal: every key it sets is a
+ * member of the contract, and every member the contract REQUIRES is a key it
+ * sets. That is a claim about the literal being that contract, not about a word
+ * appearing, and it takes at least two keys before it is more than coincidence.
+ * Among the contracts that survive, attribution goes to the tightest fit, so a
+ * small contract whose members are a subset of a larger one does not steal the
+ * larger one's literals.
  *
  * A construction site containing a spread makes the field set unknowable without
  * types, and a gate that guesses there would report a capability missing when it
  * is merely inherited. Those contracts are skipped, and the count of skipped
  * contracts is printed with the verdict rather than swallowed — an unreadable
  * contract is a gap in coverage, not a pass.
+ *
+ * ## What a literal scan cannot see, and why it still cannot lie
+ *
+ * Two wirings are invisible here. A spread carries fields this reads no names
+ * for, and a field assigned AFTER construction (`deps.team = actorDeps.team`,
+ * which is how both backends attach a conditional collaborator) never appears in
+ * an object literal at all. Both are blind spots in the NUMERATOR and both are
+ * blind in BOTH closures by the same rule, so neither can manufacture an
+ * asymmetry out of a difference in writing style; what they can do is hide a
+ * real one. That is the trade this gate takes over the alternative — inferring
+ * the type of every expression — and the spread half is at least counted, in
+ * the skipped list printed with the verdict.
+ *
+ * What is NOT a blind spot is a literal that omits a member the contract
+ * requires. Such an object is not the contract at all, so treating it as a
+ * construction site does not under-count a wiring — it invents a site, and one
+ * invented site in an otherwise-empty closure is enough to make an unbuilt
+ * contract look built by both and turn the other closure's every switch into a
+ * finding. See `attribute`.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -101,6 +122,12 @@ export interface Contract {
   /** Every declared member, optional or not — the overlap alphabet a
    *  construction site is recognised by. */
   readonly members: ReadonlySet<string>;
+  /** The members no literal of this contract may omit — the half of
+   *  assignability an overlap alphabet cannot express. Parsed from the
+   *  declaration, never derived as `members` minus `optional`: `optional` holds
+   *  only the BEHAVIOUR-typed optional members, so that subtraction would call
+   *  every data-shaped optional field required and attribute nothing at all. */
+  readonly required: ReadonlySet<string>;
   /** The subset that can silently differ between two implementations. */
   readonly optional: readonly string[];
   /** Interfaces this one `extends`, by name. Resolved in `findAsymmetries`:
@@ -247,12 +274,18 @@ export function behaviourTypes(sources: ReadonlyMap<string, string>): ReadonlySe
 }
 
 /**
- * Every exported interface in `text`, as its declared member set, the subset of
- * BEHAVIOUR-typed optional members, and what it `extends`.
+ * Every exported interface in `text`, as its declared member set, the members it
+ * requires, the subset of BEHAVIOUR-typed optional members, and what it
+ * `extends`.
  *
  * Exported because a contract a backend cannot import is not one it implements.
  * Required-only interfaces remain candidates for literal attribution. Otherwise
  * their values can look like a wider contract with missing optional behavior.
+ *
+ * The required set is read off the declaration here rather than reconstructed
+ * downstream: `optional` is deliberately narrowed to BEHAVIOUR-typed members, so
+ * it is not the complement of the required set and subtracting it would mark
+ * every data-shaped optional field as mandatory.
  */
 export function declaredContracts(
   file: string,
@@ -267,6 +300,7 @@ export function declaredContracts(
     const name = declaredName(declaration);
     if (name === undefined) continue;
     const members = new Set<string>();
+    const required = new Set<string>();
     const optional: string[] = [];
     const heritage: string[] = [];
     walk(declaration, (node) => {
@@ -279,14 +313,16 @@ export function declaredContracts(
       const member = declaredName(node);
       if (member === undefined) return;
       members.add(member);
-      if (!isOptionalMember(node)) return;
+      if (!isOptionalMember(node)) { required.add(member); return; }
       const type = node.children.find((child) => child.raw.type === 'TSTypeAnnotation')?.children[0];
       const behaviour = node.raw.type === 'TSMethodSignature'
         || type?.raw.type === 'TSFunctionType'
         || behaviours.has(referencedTypeName(type) ?? '');
       if (behaviour) optional.push(member);
     });
-    out.push({ name, file, line: lineAt(declaration.start), members, optional, heritage });
+    out.push({
+      name, file, line: lineAt(declaration.start), members, required, optional, heritage,
+    });
   }
   return out;
 }
@@ -294,11 +330,18 @@ export function declaredContracts(
 /**
  * Fold inherited members into each contract before literal attribution.
  * Keep required-only contracts so the narrowest declared shape can win.
+ *
+ * A base's REQUIRED members are inherited exactly as its optional ones are — a
+ * literal of the derived contract must set them — so they close over here too.
+ * Folding only the alphabet would leave a derived contract's required set
+ * stopping at its own body, and every base field it cannot omit would go
+ * unenforced the moment anyone writes `extends`.
  */
 function resolveHeritage(declared: readonly Contract[]): Contract[] {
   const byName = new Map(declared.map((contract) => [contract.name, contract]));
   const closeOver = (contract: Contract, seen: Set<string>): Contract => {
     const members = new Set(contract.members);
+    const required = new Set(contract.required);
     const optional = new Set(contract.optional);
     for (const base of contract.heritage) {
       if (seen.has(base)) continue;
@@ -307,9 +350,10 @@ function resolveHeritage(declared: readonly Contract[]): Contract[] {
       if (resolved === undefined) continue;
       const full = closeOver(resolved, seen);
       for (const member of full.members) members.add(member);
+      for (const member of full.required) required.add(member);
       for (const member of full.optional) optional.add(member);
     }
-    return { ...contract, members, optional: [...optional] };
+    return { ...contract, members, required, optional: [...optional] };
   };
   return declared.map((contract) => closeOver(contract, new Set([contract.name])));
 }
@@ -336,19 +380,34 @@ function objectLiterals(file: string, text: string): Site[] {
 
 /**
  * The contract a literal CONSTRUCTS, decided by TypeScript's own rule rather
- * than by resemblance: a fresh object literal assigned to a contract type cannot
- * carry a key the contract does not declare — excess-property checking rejects
- * it. So a literal is a construction site only when EVERY key it sets is a
- * member of the contract, and it names at least two of them (one shared key
- * between unrelated shapes is a coincidence).
+ * than by resemblance. That rule has two halves and the gate applies both.
  *
- * Overlap alone was not enough and the failure was concrete: the
+ * A fresh object literal assigned to a contract type cannot carry a key the
+ * contract does not declare — excess-property checking rejects it — and it
+ * cannot omit a key the contract requires. So a literal is a construction site
+ * only when EVERY key it sets is a member of the contract, EVERY member the
+ * contract requires is a key it sets, and it names at least two of them (one
+ * shared key between unrelated shapes is a coincidence).
+ *
+ * Each half is here because dropping it produced a concrete false finding.
+ *
+ * Without the excess half, overlap alone matched the CLI's
  * `applyOverflowRecovery({ error, lastPromptTokens, contextWindow,
- * turnWasOverflowRetry, state, sessionKey, signals })` call in the CLI shares
- * exactly `contextWindow` and `sessionKey` with `TurnContextInput`, and got read
- * as the CLI building a turn context that omits `extensions` — i.e. as the CLI
- * having no compaction. Five of `contextWindow`'s siblings are not
- * `TurnContextInput` members, so the excess-property rule drops it.
+ * turnWasOverflowRetry, state, sessionKey, signals })`, which shares exactly
+ * `contextWindow` and `sessionKey` with `TurnContextInput`, and read it as the
+ * CLI building a turn context that omits `extensions` — i.e. as the CLI having
+ * no compaction. Five of `contextWindow`'s siblings are not `TurnContextInput`
+ * members, so the excess-property rule drops it.
+ *
+ * Without the required half, `const cfg: TurnConfig = { system, model }` in the
+ * Cloudflare agent matched core's `ChatOptions`, whose `history` and `tools` are
+ * REQUIRED and absent there. An object of a foreign type became the only `cf`
+ * site for `ChatOptions`, which made the contract look built by both closures
+ * and reported every optional behaviour the CLI wires as a Cloudflare capability
+ * gap. The CLI's version probe, `fetchImpl(url, { cache, signal })`, is the same
+ * mistake in the other closure: two optional `ChatOptions` names and none of its
+ * four required ones. A literal missing a required member is not that contract
+ * under-wired — it is not that contract, and no field of it is measurable there.
  *
  * Among the contracts that survive, the tightest fit wins: the one the literal
  * covers the largest fraction of, so a wide contract cannot absorb a small
@@ -363,6 +422,13 @@ function attribute(site: Site, contracts: readonly Contract[]): Contract | undef
   for (const contract of contracts) {
     let every = true;
     for (const key of site.supplied) if (!contract.members.has(key)) { every = false; break; }
+    // A spread makes `supplied` a lower bound, so a required member absent from
+    // the written keys may still arrive through it and the omission is not
+    // observable here. Only an explicit literal proves the shape it is not —
+    // and the contract is skipped as unreadable further down regardless.
+    if (every && !site.opaque) {
+      for (const key of contract.required) if (!site.supplied.has(key)) { every = false; break; }
+    }
     if (!every) continue;
     const fit = site.supplied.size / contract.members.size;
     if (fit > bestFit || (fit === bestFit && best !== undefined && contract.name < best.name)) {
