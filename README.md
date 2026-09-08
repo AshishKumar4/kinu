@@ -34,10 +34,10 @@
 ## Demo
 
 <p align="center">
-  <img alt="Recorded bug-fix flow: plan approval, three candidate patches, and a focused suite." src="docs/assets/kinu-bugfix-demo.webp" width="976" height="648">
+  <img alt="Illustrative interface demo: plan review, candidate patches, and focused checks. Not measured benchmark results." src="docs/assets/kinu-bugfix-demo.webp" width="976" height="648">
 </p>
 
-<p align="center"><em>Recorded bug-fix flow: plan approval, three candidate patches, and a focused suite.</em></p>
+<p align="center"><em>Illustrative interface demo, not measured benchmark results. Explore the current interactive examples at <a href="https://kinu.run">kinu.run</a>.</em></p>
 
 ## What you get
 

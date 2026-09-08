@@ -1,6 +1,5 @@
 [
   "packages/cf-backend/src/codemode-egress.ts#CodemodeEgress (unreached-export)",
-  "packages/cf-backend/src/components/landing/BugFixPlanPanel.tsx#BugFixPlanPanel (unreached-export)",
   "packages/cf-backend/src/components/surfaces/EnvironmentSurface.tsx#statusOf (unreached-export)",
   "packages/cf-backend/src/components/surfaces/WorkTab.tsx#ParkedCommands (unreached-export)",
   "packages/cf-backend/src/components/surfaces/WorkTab.tsx#ParkedDecisionFlow (unreached-export)",
