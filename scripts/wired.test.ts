@@ -103,7 +103,7 @@ function census(
   const builtinNames = builtinToolNames(graph.modules, read);
   const entrypoints = findEntrypoints(reachers, graph.modules, builtinNames);
   const reach = measureReach(graph, entrypoints);
-  const facts = measureFields(reachers);
+  const facts = measureFields(reachers, graph.modules);
   return [
     ...findUnreached(graph, reach, tests, read),
     ...findUnsupplied(graph, reach, facts, read),
@@ -352,13 +352,111 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     const body = '  runIt(fromSomewhereElse());';
     expect(census(fixture(body))).toEqual([PROVISION_HOME]);
   });
+
+  test('is NOT reported when a literal annotated with an `Omit<…>` ALIAS supplies it', () => {
+    // `type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>` in
+    // `cli-backend/src/local-session.ts` annotates the one COMPLETE ChatOptions
+    // literal in the tree. The alias hid the interface behind it and four of
+    // its fields read as supplied by nothing. `runIt` supplies `rt` only, so
+    // the interface is judged and the alias is the only route to the rest.
+    const alias = `${BASE}strategy/opts.ts`;
+    const body = "  const opts: TurnOpts = { mission: 'm', logger: 'l' };\n  void opts;\n"
+      + "  runIt({ rt: 'r' });";
+    const corpus = fixture(body, [[alias, "import type { RunDeps } from './run';\nexport type TurnOpts = Omit<RunDeps, 'rt'>;\n"]]);
+    expect(census(corpus)).toEqual([PROVISION_HOME]);
+  });
+
+  test('a UNION alias supplies nothing of the interface', () => {
+    // The failing direction of the arm above. A value of `A | B` need not carry
+    // B's keys, so an alias to a union must not credit either member — only an
+    // intersection and a single reference can.
+    const alias = `${BASE}strategy/opts.ts`;
+    const body = "  const opts: TurnOpts = { mission: 'm', logger: 'l' };\n  void opts;\n"
+      + "  runIt({ rt: 'r' });";
+    const corpus = fixture(body, [[alias, "import type { RunDeps } from './run';\nexport type TurnOpts = RunDeps | { extra: number };\n"]]);
+    expect(census(corpus)).toEqual([PROVISION_HOME, LOGGER, MISSION]);
+  });
+
+  test('is NOT reported when a field is ASSIGNED onto a binding of an alias', () => {
+    // `liveTurnOpts.providerReportedTokens = …` is the only supply of that
+    // ChatOptions field anywhere, and the binding is annotated through the
+    // `Omit<…>` alias — so the assignment has to credit the BASE, exactly as a
+    // literal annotated with a subtype does.
+    const alias = `${BASE}strategy/opts.ts`;
+    const body = "  const opts: TurnOpts = { mission: 'm' };\n  opts.logger = 'l';\n"
+      + "  runIt({ rt: 'r' });";
+    const corpus = fixture(body, [[alias, "import type { RunDeps } from './run';\nexport type TurnOpts = Omit<RunDeps, 'rt'>;\n"]]);
+    expect(census(corpus)).toEqual([PROVISION_HOME]);
+  });
+
+  test("is NOT reported when a binding annotated `I['k']` supplies it", () => {
+    // `const liveTurn: ActorExecutionInput['chat'] = { ...liveTurnOpts }`. The
+    // indexed access used to yield the OWNER, which is wrong in both directions
+    // at once: it credited `ActorExecutionInput` and withheld the credit from
+    // the interface the key actually names.
+    const holder = `${BASE}strategy/holder.ts`;
+    const body = "  const chat: Holder['deps'] = { rt: 'x', mission: 'm', logger: 'l' };\n  void chat;\n"
+      + "  runIt({ rt: 'r' });";
+    const corpus = fixture(body, [[holder, "import type { RunDeps } from './run';\nexport interface Holder { readonly deps: RunDeps }\n"]]);
+    expect(census(corpus)).toEqual([PROVISION_HOME]);
+  });
+
+  test('an indexed access naming a key the interface does not declare credits nothing', () => {
+    const holder = `${BASE}strategy/holder.ts`;
+    const body = "  const chat: Holder['missing'] = { rt: 'x', mission: 'm', logger: 'l' };\n  void chat;\n"
+      + "  runIt({ rt: 'r' });";
+    const corpus = fixture(body, [[holder, "import type { RunDeps } from './run';\nexport interface Holder { readonly deps: RunDeps }\n"]]);
+    expect(census(corpus)).toEqual([PROVISION_HOME, LOGGER, MISSION]);
+  });
+
+  test('is NOT reported when a callback seam declared by its TYPE receives it', () => {
+    // `type ModelCallSink = (report: ModelCallReport) => void`. NOTHING declares
+    // a function of the callback's name, so `reportModelCall?.({ … modelId })`
+    // in `cf-backend/src/lib/web-provider.ts` supplies that field through the
+    // binding's annotation and nowhere else.
+    const body = "  type RunSink = (deps: RunDeps) => void;\n"
+      + "  function emitTo(report: RunSink): void { report({ rt: 'x', mission: 'm', logger: 'l' }); }\n"
+      + "  void emitTo;\n  runIt({ rt: 'r' });";
+    expect(census(fixture(body))).toEqual([PROVISION_HOME]);
+  });
+
+  test('a callback seam over a DIFFERENT shape credits nothing of the interface', () => {
+    const body = "  type OtherSink = (row: { emit: string }) => void;\n"
+      + "  function emitTo(report: OtherSink): void { report({ rt: 'x', mission: 'm', logger: 'l' }); }\n"
+      + "  void emitTo;\n  runIt({ rt: 'r' });";
+    expect(census(fixture(body))).toEqual([PROVISION_HOME, LOGGER, MISSION]);
+  });
+
+  test('a same-named function in ANOTHER file neither builds the interface nor judges it', () => {
+    // The 19-finding shape. `execute: async (args: XToolInput) => …` is written
+    // in three tool files, and one unrelated local `execute({ emit, options })`
+    // marked all three interfaces CONSTRUCTED while supplying keys none of them
+    // declares — in a tree where the MODEL is the only thing that builds one.
+    // Here nothing visibly builds `RunDeps`: the only object literal goes to a
+    // `dispatch` this file never imported.
+    const other = `${BASE}other.ts`;
+    const body = "  runIt(fromSomewhereElse());\n  dispatch({ emit: 'e', options: 'o' });";
+    const corpus = fixture(body, [[other, "import type { RunDeps } from './strategy/run';\nexport function dispatch(deps: RunDeps): string { return deps.rt; }\n"]]);
+    expect(census(corpus)).toEqual([`${other}#dispatch (unreached-export)`, PROVISION_HOME]);
+  });
+
+  test('a type name this tree also imports from a DEPENDENCY is refused, not judged', () => {
+    // `ExecOptions` is both `packages/cli`'s own interface and
+    // `@cloudflare/sandbox`'s, which `packages/devbox` imports and BUILDS: one
+    // key, two shapes, three findings against an interface commander fills.
+    const foreign = `${BASE}foreign.ts`;
+    const corpus = fixture(SUPPLY(`{ rt: 'x' }`), [
+      [foreign, "import type { RunDeps } from 'some-dependency';\nexport function useIt(deps: RunDeps): string { return deps.rt; }\n"],
+    ]);
+    expect(census(corpus)).toEqual([`${foreign}#useIt (unreached-export)`, PROVISION_HOME]);
+  });
 });
 
 /* ── Entrypoints are discovered, never listed ──────────────────────────── */
 
 const KINDS: readonly EntrypointKind[] = [
   'builtin-tool', 'callable-rpc', 'cli-command', 'platform-hook', 'module-default',
-  'browser-bundle', 'process-entry',
+  'browser-bundle', 'process-entry', 'spawned-script',
 ];
 
 function kindsOf(reachers: ReadonlyMap<string, string>): Set<EntrypointKind> {
@@ -392,6 +490,13 @@ describe('entrypoint discovery', () => {
         import { createRoot } from 'react-dom/client';
         createRoot(document.getElementById('root')!).render(null);`],
       [`${BASE}bin.ts`, '#!/usr/bin/env bun\nrun();'],
+      [`${BASE}spawner.ts`, `
+        import { fork } from 'node:child_process';
+        export function start(): void {
+          const workerPath = join(dirname(import.meta.url), 'worker.ts');
+          fork(workerPath, ['db']);
+        }`],
+      [`${BASE}worker.ts`, 'process.stdout.write("ready");'],
     ]))).toEqual(new Set(KINDS));
   });
 
@@ -403,6 +508,47 @@ describe('entrypoint discovery', () => {
     expect(census(fixture(SUPPLY(`{ rt: 'x', mission: 'm', logger: 'l' }`), [
       [`${BASE}runner.ts`, runner],
     ]))).not.toContain(PROVISION_HOME);
+  });
+
+  describe('a forked script', () => {
+    // `cli-backend/src/branch-worker.ts` is `fork(workerPath, [dbPath])`-ed from
+    // `branch-process.ts` and imported by nothing, so the module graph ended at
+    // the spawn call: `exploreRollout`, `reflectRollout`,
+    // `LocalActorProcessBootstrapSchema`, `BranchCallSchema` and
+    // `BranchCallAttributionSchema` all read as reached by nothing. Five false
+    // positives, which is the direction that gets a gate switched off.
+    const worker = `
+      import { provisionHome } from './strategy/provisioner';
+      export function unusedInTheChild(): string { return 'nobody calls this'; }
+      process.stdout.write(provisionHome());`;
+    const forking = (call: string): string => `${SUPPLY(`{ rt: 'x', mission: 'm', logger: 'l' }`)}
+  ${call}`;
+    const orphan = `${BASE}worker.ts#unusedInTheChild (unreached-export)`;
+
+    test('is a process root, so what it imports and calls is production reach', () => {
+      const body = forking("fork(join(dirname(import.meta.url), '../worker.ts'), ['db']);");
+      expect(census(fixture(body, [[`${BASE}worker.ts`, worker]]))).toEqual([orphan]);
+    });
+
+    test('confers nothing once nothing spawns it: the same symbol is reported again', () => {
+      const body = forking("void 'nothing spawns the worker';");
+      expect(census(fixture(body, [[`${BASE}worker.ts`, worker]])))
+        .toEqual([PROVISION_HOME, orphan]);
+    });
+
+    test('still reports its OWN export that nothing references', () => {
+      // The red direction of the new root. A file the OS enters is reachable;
+      // that says nothing about a symbol inside it nobody calls, and rooting a
+      // file must not launder its neighbours.
+      const body = forking("fork(join(dirname(import.meta.url), '../worker.ts'), ['db']);");
+      expect(census(fixture(body, [[`${BASE}worker.ts`, worker]]))).toContain(orphan);
+    });
+
+    test('a spawn naming a path this tree does not hold roots nothing', () => {
+      const body = forking("fork(join(dirname(import.meta.url), '../absent-worker.ts'), ['db']);");
+      expect(census(fixture(body, [[`${BASE}worker.ts`, worker]])))
+        .toEqual([PROVISION_HOME, orphan]);
+    });
   });
 
   test('a `run` property that is not a built tool is not a tool handler', () => {
@@ -489,7 +635,7 @@ describe('over the live tree', () => {
   });
 
   test('every finding sits in the set the gate governs', () => {
-    const facts = measureFields(reachers);
+    const facts = measureFields(reachers, graph.modules);
     const findings = [
       ...findUnreached(graph, reach, readTests(), read),
       ...findUnsupplied(graph, reach, facts, read),

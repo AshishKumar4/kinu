@@ -1454,7 +1454,6 @@ export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type Actor
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
 export {
   ActorClaimStore, initActorClaimTables, programIdentityOf, verifyClaimedProgram,
-  CLAIM_OUTCOMES,
   type ActorProgramIdentity, type ActorTurnClaim, type StoredActorClaim,
   type ContextRevision, type ConsumedContext, type ClaimOutcome, type ClaimRecovery,
 } from './orchestrator/actor-claims';
