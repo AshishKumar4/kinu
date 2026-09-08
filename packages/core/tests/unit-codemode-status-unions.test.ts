@@ -22,9 +22,10 @@ describe('codemode declared status unions come from the shared constants', () =>
 
   test('tasks.update declares every TASK_STATUS', () => {
     const ws = createTestWorkspace();
+    const actor = createTestActor(ws.sql, ws.execRaw, crypto.randomUUID(), 'status-test');
     const provider = createTasksCodemodeProvider(
-      new TaskListStore(ws.sql, write => ws.db.transaction(write)()),
-      createTestActor(ws.sql, ws.execRaw, crypto.randomUUID(), 'status-test').config,
+      new TaskListStore(ws.sql, actor, write => ws.db.transaction(write)()),
+      actor.config,
     );
     const types = provider.types ?? '';
     expect(types).toContain(`update(id: string, status: ${unionOf(TASK_STATUSES)})`);

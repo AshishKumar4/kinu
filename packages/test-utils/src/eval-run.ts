@@ -31,7 +31,7 @@ import { dirname, join } from 'node:path';
 import { recordNoModelEpisode, recordUnmeasuredEpisode, recordWorkspaceSpend, type LiveModelSpend } from './live-model';
 import {
   BUILTIN_TOOLS, classifyToolFailure, minimumPairsForSignificance, requiredPairs,
-  type RunEvent, type SqlExecutor, type WorkspaceSpend, type ToolOutcome,
+  type ActorHandle, type RunEvent, type SqlExecutor, type WorkspaceSpend, type ToolOutcome,
 } from '@kinu.run/core';
 import { gitEnv } from './git';
 import { BEHAVIOUR_SCORERS, type BehaviourScorer } from './agent-evals';
@@ -547,10 +547,10 @@ export function preRegister(
  * mechanism.
  */
 export function scoreTrajectory(
-  sql: SqlExecutor, scorers: readonly BehaviourScorer[] = BEHAVIOUR_SCORERS,
+  sql: SqlExecutor, actor: ActorHandle, scorers: readonly BehaviourScorer[] = BEHAVIOUR_SCORERS,
 ): EvalScoreRow[] {
   return scorers.map((scorer) => {
-    const score = scorer.score(sql);
+    const score = scorer.score(sql, actor);
     return { ...score, name: scorer.name, asserts: scorer.asserts };
   });
 }

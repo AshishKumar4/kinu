@@ -25,6 +25,7 @@ import {
   type PendingScaffold,
   type ShadowConfig,
 } from '../src/index';
+import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestRuntime } from './helpers';
 
@@ -33,7 +34,11 @@ function setup() {
   const execRaw = makeExecRaw(db);
   initScaffoldTables(execRaw);
   initShadowTables(execRaw);
-  return { sql: makeSql(db), execRaw, db };
+  const sql = makeSql(db);
+  // A REAL handle over this database: every reader below is actor-scoped, so a
+  // fixture that seeded rows under one id and read under another would pass
+  // vacuously on empty results.
+  return { sql, actor: testActorHandle(sql), execRaw, db };
 }
 
 describe('initShadowTables', () => {
@@ -56,15 +61,15 @@ describe('initShadowTables', () => {
 
 describe('getPendingScaffold', () => {
   test('returns null when no pending version exists', () => {
-    const { sql } = setup();
-    expect(getPendingScaffold(sql)).toBeNull();
+    const { sql, actor } = setup();
+    expect(getPendingScaffold(sql, actor)).toBeNull();
   });
 
   test('returns the pending version with zero counts initially', () => {
-    const { sql } = setup();
-    void sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-        VALUES (3, ${Date.now()}, 'try new loop', 'pending')`;
-    const p = getPendingScaffold(sql);
+    const { sql, actor } = setup();
+    void sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+        VALUES (${actor.actorId}, 3, ${Date.now()}, 'try new loop', 'pending')`;
+    const p = getPendingScaffold(sql, actor);
     expect(p).not.toBeNull();
     expect(p!.version).toBe(3);
     expect(p!.trialsSoFar).toBe(0);
@@ -73,30 +78,30 @@ describe('getPendingScaffold', () => {
   });
 
   test('aggregates evaluation counts correctly', () => {
-    const { sql } = setup();
-    void sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-        VALUES (4, ${Date.now()}, 'try new loop', 'pending')`;
+    const { sql, actor } = setup();
+    void sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+        VALUES (${actor.actorId}, 4, ${Date.now()}, 'try new loop', 'pending')`;
 
     const judge = { winner: 'pending' as const, rationale: '', currentScore: 0.5, pendingScore: 0.8 };
     for (let i = 0; i < 3; i++) {
-      recordShadowEvaluation(sql, {
+      recordShadowEvaluation(sql, actor, {
         currentVersion: 3, pendingVersion: 4,
         task: `task-${i}`, currentOutput: 'c', pendingOutput: 'p',
         judgeResult: judge,
       });
     }
-    recordShadowEvaluation(sql, {
+    recordShadowEvaluation(sql, actor, {
       currentVersion: 3, pendingVersion: 4,
       task: 'task-4', currentOutput: 'c', pendingOutput: 'p',
       judgeResult: { winner: 'current', rationale: '', currentScore: 0.7, pendingScore: 0.5 },
     });
-    recordShadowEvaluation(sql, {
+    recordShadowEvaluation(sql, actor, {
       currentVersion: 3, pendingVersion: 4,
       task: 'task-5', currentOutput: 'c', pendingOutput: 'p',
       judgeResult: { winner: 'tie', rationale: '', currentScore: 0.6, pendingScore: 0.6 },
     });
 
-    const p = getPendingScaffold(sql)!;
+    const p = getPendingScaffold(sql, actor)!;
     expect(p.trialsSoFar).toBe(5);
     expect(p.pendingWins).toBe(3);
     expect(p.currentWins).toBe(1);
@@ -106,24 +111,24 @@ describe('getPendingScaffold', () => {
 
 describe('readShadowVerdict — the promote/rollback decision grid', () => {
   test('empty verdict when no pending version', () => {
-    const { sql } = setup();
-    const v = readShadowVerdict(sql, null);
+    const { sql, actor } = setup();
+    const v = readShadowVerdict(sql, actor, null);
     expect(v.version).toBeNull();
     expect(v.trials).toEqual([]);
     expect(v.summary).toEqual({ trials: 0, pendingWins: 0, currentWins: 0, ties: 0, winRate: 0 });
   });
 
   test('reads scaffold_evaluations, orders regressions-first, aggregates win-rate', () => {
-    const { sql } = setup();
+    const { sql, actor } = setup();
     // Seed a mix: 2 pending wins, 1 current win (regression), 1 tie — all for v4.
-    recordShadowEvaluation(sql, { currentVersion: 3, pendingVersion: 4, task: 'pw1', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'pending', rationale: 'better', currentScore: 0.5, pendingScore: 0.8 } });
-    recordShadowEvaluation(sql, { currentVersion: 3, pendingVersion: 4, task: 'cw1', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'current', rationale: 'regressed', currentScore: 0.9, pendingScore: 0.4 } });
-    recordShadowEvaluation(sql, { currentVersion: 3, pendingVersion: 4, task: 'pw2', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'pending', rationale: 'better', currentScore: 0.5, pendingScore: 0.7 } });
-    recordShadowEvaluation(sql, { currentVersion: 3, pendingVersion: 4, task: 'tie1', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'tie', rationale: 'same', currentScore: 0.6, pendingScore: 0.6 } });
+    recordShadowEvaluation(sql, actor, { currentVersion: 3, pendingVersion: 4, task: 'pw1', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'pending', rationale: 'better', currentScore: 0.5, pendingScore: 0.8 } });
+    recordShadowEvaluation(sql, actor, { currentVersion: 3, pendingVersion: 4, task: 'cw1', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'current', rationale: 'regressed', currentScore: 0.9, pendingScore: 0.4 } });
+    recordShadowEvaluation(sql, actor, { currentVersion: 3, pendingVersion: 4, task: 'pw2', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'pending', rationale: 'better', currentScore: 0.5, pendingScore: 0.7 } });
+    recordShadowEvaluation(sql, actor, { currentVersion: 3, pendingVersion: 4, task: 'tie1', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'tie', rationale: 'same', currentScore: 0.6, pendingScore: 0.6 } });
     // A row for a DIFFERENT version must be excluded.
-    recordShadowEvaluation(sql, { currentVersion: 4, pendingVersion: 5, task: 'other', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'pending', rationale: '', currentScore: 0.1, pendingScore: 0.9 } });
+    recordShadowEvaluation(sql, actor, { currentVersion: 4, pendingVersion: 5, task: 'other', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'pending', rationale: '', currentScore: 0.1, pendingScore: 0.9 } });
 
-    const v = readShadowVerdict(sql, 4);
+    const v = readShadowVerdict(sql, actor, 4);
     expect(v.version).toBe(4);
     expect(v.trials.length).toBe(4);
     // Regressions first: the first row is the 'current' winner.
@@ -254,8 +259,8 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
 
     const v0Code = 'async function* run(rt, task) { yield "v0"; }';
     await rt.identity.scaffold.write(v0Code);
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (0, ${Date.now()}, ${'bootstrap'}, 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'bootstrap'}, 'current')`;
 
     const pendingCode = 'async function* run(rt, task) { yield "v1-pending"; }';
     const modResult = await modifyScaffold(
@@ -269,7 +274,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     expect(await rt.identity.scaffold.read()).toBe(v0Code);
 
     // Promote: live file now holds the pending code.
-    const pending = getPendingScaffold(rt.storage.sql);
+    const pending = getPendingScaffold(rt.storage.sql, rt.actor);
     expect(pending).not.toBeNull();
     if (!pending) return;
     const promo = await applyPromotionDecision(rt, pending, 'promote');
@@ -285,15 +290,15 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
 
     const v0Code = 'async function* run(rt, task) { yield "v0"; }';
     await rt.identity.scaffold.write(v0Code);
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (0, ${Date.now()}, ${'bootstrap'}, 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'bootstrap'}, 'current')`;
 
     await modifyScaffold(
       rt,
       'Pending scaffold version 1 — proves rollback returns to v0 cleanly.',
       'async function* run(rt, task) { yield "v1-pending"; }',
     );
-    const pending = getPendingScaffold(rt.storage.sql);
+    const pending = getPendingScaffold(rt.storage.sql, rt.actor);
     expect(pending).not.toBeNull();
     if (!pending) return;
 
@@ -303,7 +308,8 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     expect(await rt.identity.scaffold.read()).toBe(v0Code);
 
     const statuses = rt.storage.sql<{ version: number; status: string }>`
-      SELECT version, status FROM scaffold_versions ORDER BY version`;
+      SELECT version, status FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
     expect(statuses.find(s => s.version === 0)?.status).toBe('current');
     expect(statuses.find(s => s.version === 1)?.status).toBe('rolled_back');
   });
@@ -313,8 +319,8 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
     await rt.identity.scaffold.write('async function* run(rt, task) { yield "v0"; }');
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (0, ${Date.now()}, ${'bootstrap'}, 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'bootstrap'}, 'current')`;
 
     const first = await modifyScaffold(
       rt, 'First pending proposal — should be accepted as v1.',
@@ -344,13 +350,13 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     initShadowTables(rt.storage.execRaw);
     const v0 = 'async function* run(rt, task) { yield "v0"; }';
     await rt.identity.scaffold.write(v0);
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (0, ${Date.now()}, ${'bootstrap'}, 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'bootstrap'}, 'current')`;
 
     // Propose + promote v1.
     const v1 = 'async function* run(rt, task) { yield "v1-promoted"; }';
     await modifyScaffold(rt, 'Propose v1 for promotion in the version-cycle regression test.', v1);
-    let pending = getPendingScaffold(rt.storage.sql)!;
+    let pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
     await applyPromotionDecision(rt, pending, 'promote');
     expect(await rt.identity.scaffold.read()).toBe(v1);
 
@@ -358,14 +364,15 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     const v2 = 'async function* run(rt, task) { yield "v2-rejected"; }';
     const mod = await modifyScaffold(rt, 'Propose v2, which the judge rejects in the cycle regression test.', v2);
     expect(mod.ok).toBe(true);
-    pending = getPendingScaffold(rt.storage.sql)!;
+    pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
     expect(pending.version).toBe(2); // monotonic above the promoted v1
     const rb = await applyPromotionDecision(rt, pending, 'rollback');
     expect(rb.action).toBe('rollback');
     expect(rb.newCurrentVersion).toBe(1); // back to the promoted v1, not pending-1=1 by luck
     expect(await rt.identity.scaffold.read()).toBe(v1);
     const cur = rt.storage.sql<{ version: number }>`
-      SELECT version FROM scaffold_versions WHERE status='current' ORDER BY version DESC LIMIT 1`;
+      SELECT version FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId} AND status='current' ORDER BY version DESC LIMIT 1`;
     expect(cur[0]?.version).toBe(1);
   });
 });

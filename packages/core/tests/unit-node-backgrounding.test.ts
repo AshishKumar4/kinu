@@ -186,7 +186,7 @@ function fixture(over: {
 }): Fixture {
   const { rt } = createTestRuntime();
   initHeadsTables(rt.storage.execRaw);
-  const journal = new HeadJournal(rt.storage.sql);
+  const journal = new HeadJournal(rt.storage.sql, rt.actor);
   const input: NodeAgentInput = {
     nodeId: 'n1', rootId: 'r1', parentId: null, depth: 1,
     task: 'Make the reference implementation cheaper.',
@@ -211,7 +211,8 @@ function fixture(over: {
   if (over.executeTool !== undefined) deps.executeTool = over.executeTool;
   const detached = (): number => {
     const rows = rt.storage.sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM background_jobs WHERE status='running'`;
+      SELECT COUNT(*) AS n FROM background_jobs
+      WHERE actor_id = ${rt.actor.actorId} AND status='running'`;
     return rows[0]?.n ?? 0;
   };
   return { input, deps, journal, detached };

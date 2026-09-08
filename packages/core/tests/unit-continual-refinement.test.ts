@@ -217,7 +217,7 @@ function fixture(): Fixture {
   initPromptSectionTables(rt.storage.execRaw);
   initInstructionApprovalsTable(rt.storage.execRaw);
   initRefinementTables(rt.storage.execRaw);
-  const facts = createFactsStore(rt.storage.sql);
+  const facts = createFactsStore(rt.storage.sql, rt.actor);
   const approvals = new InstructionApprovalStore(
     rt.storage.sql, 'test-workspace', (body) => body(),
   );
@@ -1566,7 +1566,7 @@ describe('the quote gate — substantive, the user\'s own, and carried into the 
       createRefinementStore(fx.rt.storage.sql).get(opened.id)!.routes, 'fact',
     );
     expect(route.reason).toContain('always answer in one line');
-    const card = buildChangelog(fx.rt.storage.sql, { limit: 50 })
+    const card = buildChangelog(fx.rt.storage.sql, fx.rt.actor, { limit: 50 })
       .find((entry) => entry.id.startsWith(`refinement:${opened.id}`));
     expect(card?.items?.[0]?.evidence).toContain('always answer in one line');
     // The child carries the OWNER's revert, not a refinement-shaped one.
@@ -1633,7 +1633,7 @@ describe('the refiner never sees the set its proposal is scored on', () => {
     await advanceRefinementLane(deps);
     const brief = requests[0]!.task;
 
-    const split = buildOutcomeEvalSplit(fx.rt.storage.sql, EVAL_SIZE);
+    const split = buildOutcomeEvalSplit(fx.rt.storage.sql, fx.rt.actor, EVAL_SIZE);
     expect(split.heldOutNegatives).toBeGreaterThan(0);
     // Every val instance is a turn the section metric will score a candidate
     // against. None of them may appear in the brief.
@@ -2110,7 +2110,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
       expect(shown.view.target).toBe(BREVITY_PATH);
     }
     // The CARD is bounded — it is for scanning, not for deciding.
-    const card = buildChangelog(fx.rt.storage.sql, { limit: 50 })
+    const card = buildChangelog(fx.rt.storage.sql, fx.rt.actor, { limit: 50 })
       .find((entry) => entry.id.startsWith(`refinement:${opened.id}`));
     expect(card?.items?.[0]?.evidence.length).toBeLessThan(long.length);
     expect(card?.items?.[0]?.evidence).toContain('chars');

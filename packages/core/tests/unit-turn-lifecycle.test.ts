@@ -12,6 +12,7 @@ import {
   SPILL_DIRS,
   type CompactionTriggerState,
 } from '../src/index';
+import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 import type { TurnRunRecorder } from '../src/orchestrator/turn-lifecycle';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
@@ -19,7 +20,8 @@ import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 function recorder(): RunEventRecorder {
   const db = new Database(':memory:');
   initRunEventTables(makeExecRaw(db));
-  return new RunEventRecorder(makeSql(db));
+  const sql = makeSql(db);
+  return new RunEventRecorder(sql, testActorHandle(sql));
 }
 
 function recordingState(): CompactionTriggerState & {

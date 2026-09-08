@@ -197,6 +197,16 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
   table: {
     // ── the shared actor substrate (core initAllTables) ──
     workspace_identity: EVERYWHERE,
+    // The workspace's actor DIRECTORY — one row per actor the workspace issued,
+    // and the authority `openWorkspaceMainActor` reads to bind a handle. It sits
+    // where a workspace is ROOTED, so a subordinate has none: its own database
+    // holds a single `actor_identity` row that `FacetIdentity` writes and its
+    // handle is bound from that, never from a directory it could enumerate.
+    workspace_actors: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: 'a subordinate is not a workspace root: it binds its one actor from the single `actor_identity` row its facet identity writes, and a directory it could enumerate would let it name actors outside its own subtree' },
+      cli: WIRED,
+    },
     messages: EVERYWHERE,
     crafted_tools: EVERYWHERE,
     search_nodes: EVERYWHERE,
@@ -226,6 +236,16 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     proposed_tasks: EVERYWHERE,
 
     // ── heads / exploration ──
+    // ACTOR-PRIVATE, all six. A run belongs to the actor that split it: its live
+    // roster is carried into that actor's model steps, its reconciliation
+    // settles the heads it spawned, and the reclaim in `findResumableRun` /
+    // `findResumable` / `findRunningSwarms` keys on TASK TEXT — so two actors
+    // handed the same instruction present the same key, and without an owner
+    // predicate one would take over the other's tree. Every one of these
+    // carries `actor_id` and has it in its primary key, because none of their
+    // ids is minted globally either: a fork re-drive DERIVES a head id from its
+    // branch point and slot, a step id is `${headId}-s${seq}`, and evidence ids
+    // come from the report.
     head_runs: EVERYWHERE,
     head_journal: EVERYWHERE,
     head_evidence: EVERYWHERE,
@@ -274,17 +294,33 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     run_events: EVERYWHERE,
 
     // ── durable state ──
+    // ACTOR-PRIVATE: the world model is the agent's own key space. `remember`,
+    // `recall` and `forget` are this actor's tool, the top-K goes into THIS
+    // actor's prompt, and sleep-time compression rewrites its own model — so a
+    // sibling that learns "deploy target" must not overwrite what this one
+    // observed under the same words. Adoption still lands here and is still a
+    // copy INTO a target: an experience import upserts the imported fact into
+    // the importing actor's own set under `source: experience:<workspace>`.
     agent_facts: EVERYWHERE,
     actor_config: EVERYWHERE,
     // The agent's own task list. A subordinate keeps its own rather than
     // writing into its parent's: it is given its own assignment, and one plan
-    // per actor is what makes the list mean anything.
+    // per actor is what makes the list mean anything. `t{seq}` is minted from
+    // the owner's own sequence, so two actors both hold a `t1` and the
+    // uniqueness that makes the id referable is UNIQUE (actor_id, seq).
     agent_tasks: EVERYWHERE,
-    // Which approved plan revision a task came from, written in the same
-    // synchronous transaction as the task itself (tasks/store.ts). Alongside
-    // `agent_tasks` and for the same reason: every root that can hold a task
-    // list can hold one whose provenance a plan review reads back.
+    // The plan revision a task was added under, owned alongside the task.
     plan_task_links: EVERYWHERE,
+    // SPLIT OWNERSHIP, and the store interface is where the split is stated.
+    // The ROW is actor-private — its roster feeds one actor's context block, an
+    // id alone is not authority to settle a sibling's work, and `clearSettled`
+    // is one actor's history. The AGGREGATES are not: `countRunningInWorkspace`,
+    // `resumeOwedIdsInWorkspace`, `nextResumeAtInWorkspace` and
+    // `hasLiveJobsInWorkspace` answer questions about the machine, because
+    // every detached job is a live process tree whichever agent launched it
+    // (jobs/runner.ts). Narrowing the cap would multiply the machine ceiling by
+    // the actor count; widening the roster would put a sibling's work in this
+    // actor's prompt.
     background_jobs: EVERYWHERE,
     // The once-only boundary in front of a tool whose effects leave the process:
     // one row per claimed call, `PRIMARY KEY (turn_id, normalized_call_id,
@@ -580,11 +616,17 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: { absent: 'a local session holds its steer queue in the driver that owns the turn; an eviction cannot separate the two' },
     },
-    active_durable_turn: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: 'the turn identity lives in the driving process; a local session does not outlive its own turn' },
-    },
+    // The durable admission ledger that REPLACED the single `active_durable_turn`
+    // row: one row keyed `id = 1` could hold one turn id for a whole database, so
+    // it could name neither which issued actor owned the turn nor tell an evicted
+    // activation from the one that replaced it. EVERYWHERE, unlike the row it
+    // replaces, because the lifecycle is core's now: `initWorkspaceSchema` creates
+    // both tables for the CLI and the shared `ActorAgent` constructor creates them
+    // for both Durable Object roots, ahead of the `onStart` recovery sweep that
+    // reads them. A resumed turn reads the context revision it was interrupted at
+    // rather than the newest one, so the revisions travel with the claims.
+    actor_turn_claims: EVERYWHERE,
+    actor_context_revisions: EVERYWHERE,
     // The terminal ledger is EVERYWHERE now. It was cf-only while the CLI
     // released its claims at transcript persist and had no recovery at all —
     // KINU-021 hoisted the lifecycle into core and the CLI drives the same

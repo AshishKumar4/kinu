@@ -61,8 +61,9 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
     };
   }
 
+  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'e2e-test');
   const rt: AgentRuntime = {
-    actor: createTestActor(sql, execRaw, crypto.randomUUID(), 'e2e-test'),
+    actor,
     storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory, executor, llm, schedule,
     identity: {
@@ -72,7 +73,8 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
         exists: () => vfs.exists('scaffold/agent.js'),
         read: async () => v.parse(v.string(), await vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })),
         write: (code) => vfs.writeFile('scaffold/agent.js', code),
-        version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
+        version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v
+          FROM scaffold_versions WHERE actor_id = ${actor.actorId}`)[0]?.v ?? 0,
       },
     },
     craftStore,

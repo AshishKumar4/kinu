@@ -109,9 +109,9 @@ describe('the reach declaration', () => {
         mode: 'build',
         fork: { rt, model: new MockLanguageModelV3() },
       })),
-      memory: () => createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql })),
+      memory: () => createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, actor: rt.actor })),
       tasks: () => createTasksCodemodeProvider(
-        new TaskListStore(rt.storage.sql, rt.storage.transactionSync),
+        new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync),
         rt.actor.config,
       ),
       web: () => createWebCodemodeProvider({

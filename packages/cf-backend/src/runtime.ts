@@ -1014,7 +1014,7 @@ function createIdentity(
     // canonical source, `scaffold_versions.status='current'` is the single
     // current pointer, and exists()/read() resolve POINTER-FIRST so a stale
     // live view is healed by the next activation instead of served.
-    scaffold: createScaffoldSurface({ vfs, sql, path: scaffoldPath }),
+    scaffold: createScaffoldSurface({ vfs, sql, actor, path: scaffoldPath }),
   };
 }
 

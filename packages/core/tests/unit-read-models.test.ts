@@ -11,10 +11,13 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 
+import { testActorHandle } from '@kinu.run/test-utils';
 import {
   collectWorkspaceTextFiles, createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
   SDK_SESSION_DDL,
 } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
+import type { ActorHandle } from '../src/state/actor-handle';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
@@ -47,7 +50,7 @@ function workspace() {
   const exec = makeSqlExec(db);
   initWorkspaceSchema({ execRaw, sql, exec });
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'read-model-test');
-  return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs, config: actor.config };
+  return { db, sql, execRaw, actor, vfs: createWorkspaceBundle(db).vfs, config: actor.config };
 }
 
 interface SeedRow { id: string; role: string; content: string }
@@ -69,11 +72,11 @@ function seedTranscript(sql: SqlExecutor, rows: readonly SeedRow[]): void {
 
 /** Every page, oldest first — the walk a caller performs, and the only way to
  *  observe that the pages join up without overlapping. */
-function walkTranscript(sql: SqlExecutor, limit: number): string[] {
+function walkTranscript(sql: SqlExecutor, actor: ActorHandle, limit: number): string[] {
   const ids: string[] = [];
   let cursor: SeekCursor | undefined;
   for (;;) {
-    const page = getChatHistoryPage(sql, { limit, cursor });
+    const page = getChatHistoryPage(sql, actor, { limit, cursor });
     ids.unshift(...page.items.map((m) => m.id));
     if (page.status === 'end') return ids;
     cursor = page.next;
@@ -86,8 +89,9 @@ function walkTranscript(sql: SqlExecutor, limit: number): string[] {
 function jobPlane() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initBackgroundJobsTable(makeExecRaw(db));
-  const jobs = new BackgroundJobStore(sql);
+  const execRaw = makeExecRaw(db);
+  initBackgroundJobsTable(execRaw);
+  const jobs = new BackgroundJobStore(sql, createTestActors(sql, execRaw).main);
   const detached: Array<{ jobId: string; kind: string }> = [];
   let created = 0;
   const runner: BackgroundJobControl = {
@@ -109,7 +113,8 @@ describe('run reads', () => {
   function eventLog(): RunEventRecorder {
     const db = new Database(':memory:');
     initRunEventTables(makeExecRaw(db));
-    return new RunEventRecorder(makeSql(db));
+    const sql = makeSql(db);
+    return new RunEventRecorder(sql, testActorHandle(sql));
   }
 
   test('summaries fold provenance and cost out of the event log', () => {
@@ -182,7 +187,8 @@ describe('run reads', () => {
 
   test('a workspace with no run_events fails the read instead of reporting no history', () => {
     const db = new Database(':memory:');
-    const events = new RunEventRecorder(makeSql(db));
+    const sql = makeSql(db);
+    const events = new RunEventRecorder(sql, testActorHandle(sql));
     expect(() => listRuns(events)).toThrow(/no such table: run_events/);
     expect(() => getRunEvents(events, 'nope')).toThrow(/no such table: run_events/);
     expect(() => getRunSummaries(events)).toThrow(/no such table: run_events/);
@@ -192,10 +198,13 @@ describe('run reads', () => {
 
 describe('run timeline', () => {
   test('merges every source into one list ordered by time', () => {
-    const { db, sql, execRaw } = workspace();
+    const { db, sql, execRaw, actor } = workspace();
     initRunEventTables(execRaw);
-    const events = new RunEventRecorder(sql);
-    const jobs = new BackgroundJobStore(sql);
+    // Both halves of the merge under ONE actor: the event log and the job
+    // registry are each actor-private, so a fixture that bound them to two
+    // would assert over a timeline no single actor can see.
+    const events = new RunEventRecorder(sql, actor);
+    const jobs = new BackgroundJobStore(sql, actor);
 
     // The run events stamp themselves with the wall clock; the other sources
     // carry their own, so they are placed after it to pin the ordering.
@@ -220,29 +229,33 @@ describe('run timeline', () => {
   });
 
   test('the limit bounds the newest end of the merged list', () => {
-    const { sql, execRaw } = workspace();
+    const { sql, execRaw, actor } = workspace();
     initRunEventTables(execRaw);
-    const events = new RunEventRecorder(sql);
+    const events = new RunEventRecorder(sql, actor);
     for (let i = 0; i < 5; i++) {
       void sql`INSERT INTO evolution_events (id, type, message, created_at)
         VALUES (${`e${i}`}, 'reflection', ${`m${i}`}, ${i * 100})`;
     }
-    const spans = getRunTimeline({ sql, events, jobs: new BackgroundJobStore(sql), currentRunId: null }, { limit: 2 });
+    const spans = getRunTimeline({ sql, events, jobs: new BackgroundJobStore(sql, actor), currentRunId: null }, { limit: 2 });
     expect(spans.map((s) => s.label)).toEqual(['m3', 'm4']);
   });
 
   test('an idle workspace answers empty; one missing the tables fails the read', () => {
-    const { db, sql } = workspace();
+    const { db, sql, actor } = workspace();
     expect(getRunTimeline({
-      sql, events: new RunEventRecorder(sql), jobs: new BackgroundJobStore(sql), currentRunId: 'r1',
+      sql, events: new RunEventRecorder(sql, actor),
+      jobs: new BackgroundJobStore(sql, actor), currentRunId: 'r1',
     })).toEqual([]);
     db.close();
 
+    // Identity only: the actor a store binds to exists in every workspace, and
+    // what is missing here is the read models' own tables.
     const bare = new Database(':memory:');
     const bareSql = makeSql(bare);
+    const bareActor = createTestActors(bareSql, makeExecRaw(bare)).main;
     expect(() => getRunTimeline({
-      sql: bareSql, events: new RunEventRecorder(bareSql),
-      jobs: new BackgroundJobStore(bareSql), currentRunId: 'r1',
+      sql: bareSql, events: new RunEventRecorder(bareSql, bareActor),
+      jobs: new BackgroundJobStore(bareSql, bareActor), currentRunId: 'r1',
     })).toThrow(/no such table/);
     bare.close();
   });
@@ -250,13 +263,14 @@ describe('run timeline', () => {
 
 describe('agent status', () => {
   test('identity, counts and config in one shape', async () => {
-    const { db, sql, config, vfs } = workspace();
+    const { db, sql, actor, config, vfs } = workspace();
     void sql`UPDATE workspace_identity SET name = 'jarvis', created_at = 42`;
-    void sql`INSERT INTO messages (id, session_id, role, content, created_at) VALUES ('m1', 'default', 'user', 'hi', 1)`;
+    void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+      VALUES (${actor.actorId}, 'm1', 'default', 'user', 'hi', 1)`;
     config.setReasoningEffort('high');
 
     expect(await getAgentStatus({
-      sql, vfs, config, name: 'fallback-name',
+      sql, vfs, actor, config, name: 'fallback-name',
       displayName: 'Jarvis',
     })).toMatchObject({
       name: 'jarvis', displayName: 'Jarvis', createdAt: 42,
@@ -268,22 +282,23 @@ describe('agent status', () => {
   test('a workspace with no tables fails the read instead of inventing an identity', async () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
+    const other = workspace();
     await expect(getAgentStatus({
       sql, vfs: createWorkspaceBundle(db).vfs,
-      config: workspace().config, name: 'agent-7',
+      actor: other.actor, config: other.config, name: 'agent-7',
       displayName: 'ignored',
     })).rejects.toThrow(/no such table/);
   });
 
   test('chat history flattens UI-message parts and drops non-chat roles', () => {
-    const { db, sql, execRaw } = workspace();
+    const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
     seedTranscript(sql, [
       { id: 'a', role: 'user', content: JSON.stringify({ parts: [{ type: 'text', text: 'hello' }] }) },
       { id: 'b', role: 'tool', content: 'not a chat role' },
     ]);
 
-    expect(getChatHistoryPage(sql)).toEqual({
+    expect(getChatHistoryPage(sql, actor)).toEqual({
       status: 'end',
       items: [{ id: 'a', role: 'user', content: 'hello', createdAt: '2026-01-01 00:00:00' }],
     });
@@ -291,9 +306,10 @@ describe('agent status', () => {
   });
 
   test('chat history falls back to the plain mirror when there is no rich table', () => {
-    const { db, sql } = workspace();
-    void sql`INSERT INTO messages (id, session_id, role, content, created_at) VALUES ('m1', 'default', 'assistant', 'plain', 5)`;
-    expect(getChatHistoryPage(sql, { limit: 1 })).toEqual({
+    const { db, sql, actor } = workspace();
+    void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+      VALUES (${actor.actorId}, 'm1', 'default', 'assistant', 'plain', 5)`;
+    expect(getChatHistoryPage(sql, actor, { limit: 1 })).toEqual({
       status: 'end',
       items: [{ id: 'm1', role: 'assistant', content: 'plain', createdAt: 5 }],
     });
@@ -306,7 +322,7 @@ describe('agent status', () => {
     // chat draws the CARD from `kinuEvent`, and a page that reports the role
     // and drops the marker leaves the renderer with a system row it can say
     // nothing about.
-    const { db, sql, execRaw } = workspace();
+    const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
     seedTranscript(sql, [{
       id: 'f8798675-5e9a-4d13-aac2-293f4557f1c1', role: 'user',
@@ -316,7 +332,7 @@ describe('agent status', () => {
       }),
     }]);
 
-    expect(getChatHistoryPage(sql).items).toEqual([{
+    expect(getChatHistoryPage(sql, actor).items).toEqual([{
       id: 'f8798675-5e9a-4d13-aac2-293f4557f1c1', role: 'system',
       content: '9 head(s) across 1 fork run(s)…', createdAt: '2026-01-01 00:00:00',
       metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
@@ -335,13 +351,13 @@ describe('agent status', () => {
    * that compares lengths reports `more` here and then serves an empty page.
    */
   test('a short page is exhaustion, a full page is not, and an exactly-full page is', () => {
-    const { db, sql, execRaw } = workspace();
+    const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
     seedTranscript(sql, transcriptOf(4));
 
-    expect(getChatHistoryPage(sql, { limit: 9 }).status).toBe('end');
-    expect(getChatHistoryPage(sql, { limit: 2 })).toMatchObject({ status: 'more', next: { after: 'm3' } });
-    expect(getChatHistoryPage(sql, { limit: 4 }).status).toBe('end');
+    expect(getChatHistoryPage(sql, actor, { limit: 9 }).status).toBe('end');
+    expect(getChatHistoryPage(sql, actor, { limit: 2 })).toMatchObject({ status: 'more', next: { after: 'm3' } });
+    expect(getChatHistoryPage(sql, actor, { limit: 4 }).status).toBe('end');
     db.close();
   });
 
@@ -357,11 +373,11 @@ describe('agent status', () => {
    * an offset names a position in a sequence that changed.
    */
   test('a message arriving mid-pagination causes neither a duplicate nor a gap', () => {
-    const { db, sql, execRaw } = workspace();
+    const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
     seedTranscript(sql, transcriptOf(10));
 
-    const first = getChatHistoryPage(sql, { limit: 4 });
+    const first = getChatHistoryPage(sql, actor, { limit: 4 });
     expect(first).toMatchObject({ status: 'more' });
     if (first.status !== 'more') throw new Error('unreachable');
     expect(first.items.map((m) => m.id)).toEqual(['m7', 'm8', 'm9', 'm10']);
@@ -369,7 +385,7 @@ describe('agent status', () => {
     // The live turn lands while the reader is scrolling up.
     seedTranscript(sql, [{ id: 'm11', role: 'assistant', content: 'live arrival' }]);
 
-    const second = getChatHistoryPage(sql, { limit: 4, cursor: first.next });
+    const second = getChatHistoryPage(sql, actor, { limit: 4, cursor: first.next });
     expect(second.items.map((m) => m.id)).toEqual(['m3', 'm4', 'm5', 'm6']);
 
     // No duplicate: nothing from page 1 reappears. No gap: m6 is the row
@@ -377,7 +393,7 @@ describe('agent status', () => {
     // page walking away from it.
     expect(second.items.map((m) => m.id)).not.toContain('m11');
 
-    const walked = walkTranscript(sql, 4);
+    const walked = walkTranscript(sql, actor, 4);
     expect(walked).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11']);
     expect(new Set(walked).size).toBe(walked.length);
     db.close();
@@ -390,13 +406,13 @@ describe('agent status', () => {
    * on at all and a `created_at` ORDER BY has no defined membership.
    */
   test('messages sharing one whole second still page without loss', () => {
-    const { db, sql, execRaw } = workspace();
+    const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
     for (const row of transcriptOf(6)) {
       void sql`INSERT INTO assistant_messages (id, session_id, role, content, created_at)
         VALUES (${row.id}, ${''}, ${row.role}, ${row.content}, ${'2026-03-04 05:06:07'})`;
     }
-    expect(walkTranscript(sql, 2)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']);
+    expect(walkTranscript(sql, actor, 2)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']);
     db.close();
   });
 
@@ -406,13 +422,13 @@ describe('agent status', () => {
    * conversation it never finished reading.
    */
   test('a cursor whose anchor has vanished is refused, not reported as exhausted', () => {
-    const { db, sql, execRaw } = workspace();
+    const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
     seedTranscript(sql, transcriptOf(3));
 
-    expect(() => getChatHistoryPage(sql, { cursor: { after: 'never-existed' } }))
+    expect(() => getChatHistoryPage(sql, actor, { cursor: { after: 'never-existed' } }))
       .toThrow(StaleCursorError);
-    expect(() => getChatHistoryPage(sql, { cursor: { after: 'never-existed' } }))
+    expect(() => getChatHistoryPage(sql, actor, { cursor: { after: 'never-existed' } }))
       .toThrow(/no longer in it/);
     db.close();
   });
@@ -682,7 +698,8 @@ describe('background-job control plane', () => {
 
   test('a workspace with no background_jobs fails the read instead of reporting no work', () => {
     const db = new Database(':memory:');
-    const jobs = new BackgroundJobStore(makeSql(db));
+    const bareSql = makeSql(db);
+    const jobs = new BackgroundJobStore(bareSql, createTestActors(bareSql, makeExecRaw(db)).main);
     expect(() => listBackgroundJobs(jobs)).toThrow(/no such table: background_jobs/);
     expect(() => jobResult(jobs, 'j1')).toThrow(/no such table: background_jobs/);
     expect(dismissBackgroundJob(jobs, 'j1')).toEqual({
@@ -770,14 +787,14 @@ describe('config plane', () => {
 
 describe('changelog view', () => {
   test('unseen counts against the stored watermark, and marking seen zeroes it', () => {
-    const { db, sql, config } = workspace();
+    const { db, sql, actor, config } = workspace();
     void sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
       VALUES ('summarize', 'sum', NULL, 'x', 'local', ${Date.now()}, ${Date.now()})`;
 
-    expect(getEvolutionChangelog(config, sql).entries).toHaveLength(1);
-    expect(getEvolutionChangelog(config, sql).unseenCount).toBe(1);
+    expect(getEvolutionChangelog(sql, actor).entries).toHaveLength(1);
+    expect(getEvolutionChangelog(sql, actor).unseenCount).toBe(1);
     const { seenAt } = markChangelogSeen(config);
-    const after = getEvolutionChangelog(config, sql);
+    const after = getEvolutionChangelog(sql, actor);
     expect(after.seenAt).toBe(seenAt);
     expect(after.unseenCount).toBe(0);
     db.close();

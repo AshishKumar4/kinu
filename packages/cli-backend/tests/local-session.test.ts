@@ -178,9 +178,11 @@ function workspaceRuntime() {
   // The agent DB carries a messages table in production (created on `kinu
   // create`); the runtime factory doesn't, so provision it for the test.
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+    actor_id TEXT NOT NULL, id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    PRIMARY KEY (actor_id, id))`);
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
   return { db, rt };
 }
@@ -593,7 +595,7 @@ describe('LocalAgentSession.send — a user turn', () => {
         return systemModel.doStream(options);
       },
     });
-    const { db, session } = setup('ok', combinedModel);
+    const { db, rt, session } = setup('ok', combinedModel);
 
     await session.send('hi');
     const factsBefore = observed.map(messageText).join('\n');
@@ -604,8 +606,8 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     // Seed a fact, then run another turn — the state fingerprint changed, so
     // a NEW block appends at the tail while turn 1's block stays frozen.
-    db.exec(`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
-             VALUES ('test.marker', '"FACT-MARKER"', 1.0, 'tool', ${Date.now()})`);
+    db.exec(`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
+             VALUES ('${rt.actor.actorId}', 'test.marker', '"FACT-MARKER"', 1.0, 'tool', ${Date.now()})`);
     await session.send('and now?');
 
     expect(system).not.toContain('FACT-MARKER');
@@ -711,11 +713,18 @@ describe('LocalAgentSession.send — a user turn', () => {
     const alternatingRole = (index: number): 'user' | 'assistant' =>
       index % 2 === 0 ? 'user' : 'assistant';
 
-    function seed(db: Database, messages: Array<{ role: 'user' | 'assistant'; content: string }>): void {
+    /** The transcript a resume restores, under the runtime's OWN actor — the
+     *  restore reads this actor's rows, so a seed written under any other is a
+     *  transcript no session can resume. */
+    function seed(
+      db: Database, actorId: string,
+      messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+    ): void {
       messages.forEach((m, i) => {
         db.query(
-          `INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, 'default', ?, ?, ?)`,
-        ).run(`m-${i}`, m.role, m.content, 1_000 + i);
+          `INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+           VALUES (?, ?, 'default', ?, ?, ?)`,
+        ).run(actorId, `m-${i}`, m.role, m.content, 1_000 + i);
       });
     }
 
@@ -735,7 +744,7 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     test('a transcript far past the old 40-message cap is restored whole', async () => {
       const { db, rt } = setup();
-      seed(db, Array.from({ length: 120 }, (_, i) => ({
+      seed(db, rt.actor.actorId, Array.from({ length: 120 }, (_, i) => ({
         role: alternatingRole(i),
         content: `turn-${i}`,
       })));
@@ -754,7 +763,7 @@ describe('LocalAgentSession.send — a user turn', () => {
       const { db, rt } = setup();
       // The static fallback window is 128k tokens ≈ 512k characters, so 80
       // messages of 10k characters cannot be restored whole.
-      seed(db, Array.from({ length: 80 }, (_, i) => ({
+      seed(db, rt.actor.actorId, Array.from({ length: 80 }, (_, i) => ({
         role: alternatingRole(i),
         content: `turn-${i} ${'z'.repeat(10_000)}`,
       })));
@@ -968,10 +977,10 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     // authorship stamp and the event name), because the CLI transcript has no
     // rich twin to recover provenance from — a row that leans on its
     // `programmatic:` id prefix is one reader away from the owner's bubble.
-    const { db, session } = setup('ack');
+    const { db, rt, session } = setup('ack');
     const sql = makeSql(db);
     initBackgroundJobsTable(makeExecRaw(db));
-    const store = new BackgroundJobStore(sql);
+    const store = new BackgroundJobStore(sql, rt.actor);
     const now = Date.now();
     store.create({ id: JOB, kind: 'agents', workMode: 'build', now, label: 'fork: design the algorithm' });
     store.settle(JOB, 0, JSON.stringify({ strategy: 'mcts', score: 0 }), now + 1_000);
@@ -1000,7 +1009,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     // may read as one. The one-shot surface's completion gate adds its own
     // programmatic turn after the wake — a producer whose queue item names
     // only its event — and the write seam stamps that one too.
-    const page = getChatHistoryPage(sql);
+    const page = getChatHistoryPage(sql, rt.actor);
     expect(page.items.some((entry) => entry.role === 'user')).toBe(false);
     const wake = page.items.find((entry) => entry.id === expectedId)!;
     expect(wake.role).toBe('system');
@@ -1618,11 +1627,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(result.error).toContain('changed');
   });
   test('recoverBackgroundJobs fails + wakes an orphaned job of a non-resumable kind, clears stale fibers', async () => {
-    const { db, session, events } = setup();
+    const { db, rt, session, events } = setup();
     // Simulate a previous CLI exit mid-background-job: a running job + its
     // interrupted bg:* fiber row (stashed phase 'running'). `run` has partial
     // side effects, so it declines the resume and fails as before.
-    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, created_at) VALUES ('bgjob-x', 'run', 'build', 'running', 1)`);
+    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-x', 'run', 'build', 'running', 1)`);
     db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f1', 'bg:run', '{"phase":"running","jobId":"bgjob-x","kind":"run"}', 1)`);
 
     await session.recoverBackgroundJobs();
@@ -1637,7 +1646,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('recoverBackgroundJobs re-drives an orphaned agents fork job (the post-unification kind)', async () => {
-    const { db, session } = setup('resumed fork answer');
+    const { db, rt, session } = setup('resumed fork answer');
     // A row written by a surface that no longer exists. It is HISTORY rather
     // than a prompt: `action:'fork'` names a rung this tool dropped, so the row
     // is TRANSLATED onto the action that runs ephemeral nodes today instead of
@@ -1650,7 +1659,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         { task: 'test it', rationale: 'check it' },
       ],
     });
-    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-a', 'agents', 'build', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-a', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f4', 'bg:agents', '{"phase":"running","jobId":"bgjob-a","kind":"agents"}', 1)`);
 
     const stderrLines: string[] = [];
@@ -1694,9 +1703,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       },
     });
 
-    const { db, session } = setup('unused', model);
+    const { db, rt, session } = setup('unused', model);
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'finish the interrupted exploration' });
-    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-s', 'agents', 'build', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-s', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f3', 'bg:agents', '{"phase":"running","jobId":"bgjob-s","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
@@ -1712,9 +1721,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // user turn, cutting off the wake turn a backgrounded job triggers (its
     // turn-start streamed, its turn-end never did). settleBackgroundWork drains
     // the fiber AND the wake turn it enqueues before the caller closes.
-    const { db, session, events } = setup('synthesized the background result');
+    const { db, rt, session, events } = setup('synthesized the background result');
     // A non-resumable orphaned job: recover fails it, then wakes the agent.
-    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, created_at) VALUES ('bgjob-w', 'run', 'build', 'running', 1)`);
+    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-w', 'run', 'build', 'running', 1)`);
     db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fw', 'bg:run', '{"phase":"running","jobId":"bgjob-w","kind":"run"}', 1)`);
 
     await session.recoverBackgroundJobs();
@@ -1737,11 +1746,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // turn, and the process then blocked on Promise.allSettled over a fiber
     // that never settles — 6.4 of 16.2 agent-hours of dead idle across a
     // benchmark run, every trial of it ended by the harness SIGKILL.
-    const { db, session, events } = setup('unused', hangingModel(), {
+    const { db, rt, session, events } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true },
     });
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
-    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-hang', 'agents', 'build', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-hang', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fh', 'bg:agents', '{"phase":"running","jobId":"bgjob-hang","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
@@ -1769,12 +1778,12 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // the host. Nothing said that would happen. The old notice claimed the work
     // was "left running" and that its "results are not part of this run", both
     // of which are false: the process is exiting, and the work comes back.
-    const { db, session, events } = setup('unused', hangingModel(), {
+    const { db, rt, session, events } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 50, wakesAfterTurn: true },
     });
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'edit the target file' });
-    db.exec(`INSERT INTO background_jobs (id, kind, label, work_mode, status, input_json, created_at)
-      VALUES ('bgjob-quiet', 'agents', 'mcts: edit the target file', 'build', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, label, work_mode, status, input_json, created_at)
+      VALUES ('${rt.actor.actorId}', 'bgjob-quiet', 'agents', 'mcts: edit the target file', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fq', 'bg:agents', '{"phase":"running","jobId":"bgjob-quiet","kind":"agents"}', 1)`);
     await session.recoverBackgroundJobs();
 
@@ -1801,11 +1810,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('end() releases the session when a fiber will never settle', async () => {
-    const { db, session } = setup('unused', hangingModel(), {
+    const { db, rt, session } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true },
     });
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
-    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-e', 'agents', 'build', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-e', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fe', 'bg:agents', '{"phase":"running","jobId":"bgjob-e","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
@@ -1819,11 +1828,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // runOneShot calls settleBackgroundWork() and then close() → end(), back to
     // back, on the same never-settling job. Two independent graces would double
     // the idle tail this whole change exists to remove.
-    const { db, session } = setup('unused', hangingModel(), {
+    const { db, rt, session } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 200, wakesAfterTurn: true },
     });
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
-    db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-2x', 'agents', 'build', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-2x', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f2x', 'bg:agents', '{"phase":"running","jobId":"bgjob-2x","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
@@ -1883,13 +1892,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('past the concurrent-job cap a crossing call stays foreground and settles', async () => {
-    const { db, session, events } = setup(
+    const { db, rt, session, events } = setup(
       'unused',
       executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"never detached"'),
       { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 500, wakesAfterTurn: true } },
     );
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
-      db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, created_at) VALUES ('busy-${i}', 'run', 'build', 'running', 1)`);
+      db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'busy-${i}', 'run', 'build', 'running', 1)`);
     }
 
     await session.send('start another one');
@@ -2042,9 +2051,11 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
   ) {
     const db = new Database(scratchPath('local-session-review', 'agent.db'));
     db.exec(`CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+      actor_id TEXT NOT NULL, id TEXT NOT NULL,
+      session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
       role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      PRIMARY KEY (actor_id, id))`);
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
     // The classifier + reflection ride rt.llm.complete — stub it so the review
     const completions: string[] = [];
@@ -2527,7 +2538,7 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     await session.send('how did we deploy to staging?');
 
     // Same seam the memory tool's `conversations` action uses: rt.storage.sql.
-    const store = new ConversationSearchStore(rt.storage.sql);
+    const store = new ConversationSearchStore(rt.storage.sql, rt.actor);
     const hits = store.search('wrangler staging');
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0]!.conversationId).toBe('default');
@@ -3034,8 +3045,8 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
       name: 'local_helper', description: 'a locally crafted helper',
       code: 'async () => 1', params: null, scope: 'local',
     });
-    void rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
-                        VALUES ('editor', '"helix"', 0.8, 'sleep_time_compute', ${Date.now()})`;
+    void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
+                        VALUES (${rt.actor.actorId}, 'editor', '"helix"', 0.8, 'sleep_time_compute', ${Date.now()})`;
 
     const view = session.getEvolutionChangelog();
     const tool = view.entries.find((entry) => entry.kind === 'tool')!;
@@ -3055,8 +3066,8 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
     rt.craftStore.create({
       name: 'kept_tool', description: 'stays', code: 'async () => 2', params: null, scope: 'local',
     });
-    void rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
-                        VALUES ('stale', '"value"', 1.0, NULL, ${Date.now()})`;
+    void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
+                        VALUES (${rt.actor.actorId}, 'stale', '"value"', 1.0, NULL, ${Date.now()})`;
 
     const view = session.getEvolutionChangelog();
     const tool = view.entries.find((e) => e.kind === 'tool')!;
@@ -4458,8 +4469,10 @@ test('the actual local turn executes its selected version instead of the mutable
   const changed = 'async function run() { await host.emit({ type: "text_delta", text: "wrong live alias" }); }';
   await files.mkdir('scaffold', { recursive: true });
   await files.writeFile(rt.identity.scaffold.path + '.v1', selected);
-  db.exec("UPDATE scaffold_versions SET status = 'historical' WHERE status = 'current'");
-  db.query("INSERT INTO scaffold_versions (version, written_at, rationale, status) VALUES (1, 1, 'selected source proof', 'current')").run();
+  db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'")
+    .run(rt.actor.actorId);
+  db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 1, 1, 'selected source proof', 'current')")
+    .run(rt.actor.actorId);
   rt.identity.scaffold.read = async () => changed;
   try {
     await session.send('run the selected program');

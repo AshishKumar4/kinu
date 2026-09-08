@@ -250,7 +250,8 @@ describe('Convergence', () => {
     await converge(rt, session, 'r');
 
     const rows = rt.storage.sql<{ task: string; outcome: string; score: number }>`
-        SELECT task, outcome, score FROM task_history`;
+        SELECT task, outcome, score FROM task_history
+        WHERE actor_id = ${rt.actor.actorId}`;
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ task: 'ship the feature', outcome: 'success', score: 0.8 });
   });

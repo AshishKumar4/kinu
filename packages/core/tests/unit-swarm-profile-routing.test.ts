@@ -223,7 +223,7 @@ function seedInterruptedRun(input: {
   initMctsSearchTable(execRaw);
   initSearchTables(execRaw);
   const rootId = `root-${input.roleId}`;
-  new MctsSearchStore(sql).begin({
+  new MctsSearchStore(sql, input.rt.actor).begin({
     rootId,
     task: input.task,
     engine: 'swarm',
@@ -265,10 +265,11 @@ describe('a delegated tier routes the model its nodes run', () => {
     expect(result.profile.profile.tier).toEqual({ id: 'deep', model: 'm-deep-v1' });
     expect(result.profile.sources.tierSource).toBe('explicit');
     const [row] = h.rt.storage.sql<{ root_id: string }>`
-      SELECT root_id FROM mcts_search_runs WHERE engine = 'swarm' LIMIT 1`;
+      SELECT root_id FROM mcts_search_runs
+      WHERE actor_id = ${h.rt.actor.actorId} AND engine = 'swarm' LIMIT 1`;
     expect(row).toBeDefined();
     if (!row) return;
-    const stored = new MctsSearchStore(h.rt.storage.sql).readSwarmProfile(row.root_id);
+    const stored = new MctsSearchStore(h.rt.storage.sql, h.rt.actor).readSwarmProfile(row.root_id);
     expect(stored?.profile.tier.model).toBe('m-deep-v1');
   }, 30_000);
 
@@ -366,16 +367,16 @@ describe('a re-drive continues under the profile it started under', () => {
     // tree re-entered from another.
     const { rt } = createTestRuntime();
     initMctsSearchTable(rt.storage.execRaw);
-    expect(readStartedSwarmProfile(rt.storage, task)).toBeNull();
+    expect(readStartedSwarmProfile(rt.storage, rt.actor, task)).toBeNull();
 
     seedInterruptedRun({ rt, task, roleId: 'auditor' });
-    expect(readStartedSwarmProfile(rt.storage, task)?.profile.defaultPreset).toBe('audit');
+    expect(readStartedSwarmProfile(rt.storage, rt.actor, task)?.profile.defaultPreset).toBe('audit');
     // Task-keyed, like the claim itself: another task's re-drive sees nothing.
-    expect(readStartedSwarmProfile(rt.storage, 'some other task')).toBeNull();
+    expect(readStartedSwarmProfile(rt.storage, rt.actor, 'some other task')).toBeNull();
 
     // Settled rows are not re-entered, so their profile is not offered either.
-    new MctsSearchStore(rt.storage.sql).converge('root-auditor', 0, Date.now());
-    expect(readStartedSwarmProfile(rt.storage, task)).toBeNull();
+    new MctsSearchStore(rt.storage.sql, rt.actor).converge('root-auditor', 0, Date.now());
+    expect(readStartedSwarmProfile(rt.storage, rt.actor, task)).toBeNull();
   });
 });
 

@@ -99,7 +99,7 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
   db.exec(`CREATE TABLE IF NOT EXISTS turn_feedback (
     message_id TEXT PRIMARY KEY, feedback TEXT NOT NULL, created_at INTEGER NOT NULL)`);
 
-  const facts = createFactsStore(rt.storage.sql);
+  const facts = createFactsStore(rt.storage.sql, rt.actor);
   // The seam the cloud backend implements over the UserDO capability gate: a
   // workspace publishes under its own name and never sees its own entries back.
   const deps = {
@@ -132,6 +132,7 @@ function proveCraft(ws: Workspace, input: { name: string; description: string; c
 function publishSources(ws: Workspace): PublishSources {
   return {
     sql: ws.rt.storage.sql,
+    actor: ws.rt.actor,
     craftStore: ws.rt.craftStore,
     facts: ws.facts,
     readScaffoldVersion: (version: number) => readScaffoldVersion(ws.rt, version),
@@ -148,14 +149,14 @@ function scaffoldSrc(tag: string): string {
 /** The bootstrap loop, live and unjudged — what every workspace starts from. */
 async function seedLiveScaffold(ws: Workspace): Promise<void> {
   await ws.rt.identity.scaffold.write(scaffoldSrc('v0'));
-  void ws.rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (0, ${Date.now()}, 'bootstrap', 'current')`;
+  void ws.rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${ws.rt.actor.actorId}, 0, ${Date.now()}, 'bootstrap', 'current')`;
 }
 
 /** Win a pending version its shadow trials, through the real judge record. */
 function winShadowTrials(ws: Workspace, version: number): void {
   for (let i = 0; i < DEFAULT_SHADOW_CONFIG.minDecisiveTrials; i++) {
-    recordShadowEvaluation(ws.rt.storage.sql, {
+    recordShadowEvaluation(ws.rt.storage.sql, ws.rt.actor, {
       currentVersion: 0, pendingVersion: version, task: `task ${i}`,
       currentOutput: 'the incumbent answer', pendingOutput: 'the better answer',
       judgeResult: { winner: 'pending', rationale: 'clearer plan', currentScore: 0.4, pendingScore: 0.9 },
@@ -170,7 +171,7 @@ async function promoteScaffold(ws: Workspace, code: string): Promise<number> {
     throw new Error(`proposal refused: ${proposed.error ?? 'no version'}`);
   }
   winShadowTrials(ws, proposed.version);
-  const pending = getPendingScaffold(ws.rt.storage.sql);
+  const pending = getPendingScaffold(ws.rt.storage.sql, ws.rt.actor);
   if (!pending) throw new Error('the proposal did not land as pending');
   await applyPromotionDecision(ws.rt, pending, 'promote');
   return proposed.version;
@@ -705,7 +706,7 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     expect(v.parse(ImportSchema, await beta.call({ action: 'import', id: entry.id })).status)
       .toBe('provisional');
 
-    expect(listScaffoldArchive(beta.rt.storage.sql).map((e) => [e.version, e.status]))
+    expect(listScaffoldArchive(beta.rt.storage.sql, beta.rt.actor).map((e) => [e.version, e.status]))
       .toEqual([[0, 'current']]);
     expect(await beta.rt.identity.scaffold.read()).toBe(scaffoldSrc('v0'));
   });
@@ -719,7 +720,7 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
 
     await gradeTurn(beta, 'turn-1', 'positive');
 
-    const pending = getPendingScaffold(beta.rt.storage.sql);
+    const pending = getPendingScaffold(beta.rt.storage.sql, beta.rt.actor);
     expect(pending?.version).toBe(1);
     expect(pending?.rationale).toContain('Imported scaffold, imported from workspace "alpha"');
     // The import's own marker, written in the same insert as the version. It is
@@ -731,7 +732,7 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     // The candidate's source is in the version store; the loop that RUNS is not it.
     expect(await readScaffoldVersion(beta.rt, 1)).toBe(scaffoldSrc('v1'));
     expect(await beta.rt.identity.scaffold.read()).toBe(scaffoldSrc('v0'));
-    expect(getCurrentScaffoldVersion(beta.rt.storage.sql)).toBe(0);
+    expect(getCurrentScaffoldVersion(beta.rt.storage.sql, beta.rt.actor)).toBe(0);
   });
 
   test('only this workspace\'s own shadow trial can make it live', async () => {
@@ -742,14 +743,14 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     await beta.call({ action: 'import', id: entry.id });
     await gradeTurn(beta, 'turn-1', 'positive');
 
-    const pending = getPendingScaffold(beta.rt.storage.sql);
+    const pending = getPendingScaffold(beta.rt.storage.sql, beta.rt.actor);
     if (!pending) throw new Error('the import did not land as a pending version');
     winShadowTrials(beta, pending.version);
     const applied = await applyPromotionDecision(beta.rt, pending, 'promote');
 
     expect(applied.action).toBe('promote');
     expect(await beta.rt.identity.scaffold.read()).toBe(scaffoldSrc('v1'));
-    expect(getCurrentScaffoldVersion(beta.rt.storage.sql)).toBe(1);
+    expect(getCurrentScaffoldVersion(beta.rt.storage.sql, beta.rt.actor)).toBe(1);
   });
 
   test('a rollout already in flight declines the import rather than stacking on it', async () => {
@@ -766,7 +767,7 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     // the library entry stays importable once the slot frees.
     expect(await readScaffoldVersion(beta.rt, 1)).toBe(scaffoldSrc('local'));
     expect(await importedRows(beta)).toEqual([]);
-    expect(listScaffoldArchive(beta.rt.storage.sql).map((e) => e.version)).toEqual([1, 0]);
+    expect(listScaffoldArchive(beta.rt.storage.sql, beta.rt.actor).map((e) => e.version)).toEqual([1, 0]);
   });
 
   test('no action in the experience surface can make a scaffold live', async () => {
@@ -783,7 +784,7 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     await beta.call({ action: 'import', id: entry.id });
 
     expect(await beta.rt.identity.scaffold.read()).toBe(scaffoldSrc('v0'));
-    expect(getCurrentScaffoldVersion(beta.rt.storage.sql)).toBe(0);
+    expect(getCurrentScaffoldVersion(beta.rt.storage.sql, beta.rt.actor)).toBe(0);
   });
 });
 
@@ -834,8 +835,9 @@ describe('the library answers from an untouched workspace', () => {
     initFactsTable(rt.storage.execRaw);
     expect(await listPublishable({
       sql: rt.storage.sql,
+      actor: rt.actor,
       craftStore: rt.craftStore,
-      facts: createFactsStore(rt.storage.sql),
+      facts: createFactsStore(rt.storage.sql, rt.actor),
       readScaffoldVersion: (version: number) => readScaffoldVersion(rt, version),
     })).toEqual([]);
   });

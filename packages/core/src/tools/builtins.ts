@@ -602,7 +602,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // codemode namespace (memory-codemode.ts) — one implementation, two callers.
   const facts = deps.facts;
   const runMemoryAction = createMemoryDispatcher({
-    memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql,
+    memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql, actor: rt.actor,
   });
   tools.memory = permitInPlan(tool({
     description: renderToolSchemaDescription(memoryToolSpec(!!facts)),
@@ -652,7 +652,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // neither TaskListStore nor ConversationSearchStore holds process state.
   // Dispatch lives in tasks-tool.ts, shared verbatim with the `tasks.*`
   // codemode namespace (tasks-codemode.ts).
-  const taskList = new TaskListStore(rt.storage.sql, rt.storage.transactionSync);
+  const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
   const runTasksAction = createTasksDispatcher(taskList, rt.actor.config, deps.roleAuthority);
   tools.tasks = permitInPlan(tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.tasks,

@@ -42,6 +42,7 @@ import type { SqlExecutor } from '../types/primitives';
 import { boundedInt } from '../utils/bounds';
 import { seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
 import { STEER_BRANCH_RUN_ID_PREFIX } from '../steer-branch';
+import type { ActorHandle } from '../state/actor-handle';
 
 /** One vocabulary across both halves, so a list row can be read without knowing
  *  which stores it wrote. `partial` is "it stopped without a settled answer" —
@@ -107,21 +108,24 @@ const MAX_FORK_PAGE = 200;
  */
 export function listForkRuns(
   sql: SqlExecutor,
+  actor: ActorHandle,
   cursor: SeekCursor | null = null,
   limit = DEFAULT_FORK_PAGE,
 ): Page<ForkRunSummary> {
+  actor.assertCurrent();
   // Closed here: a negative limit reaches SQL as `LIMIT 0` and `seekPage` as a
   // negative page, and an unparseable one fails the query. Same ceiling as the
   // run list.
   const page = boundedInt(limit, DEFAULT_FORK_PAGE, 1, MAX_FORK_PAGE);
   const after = cursor === null ? null : parseForkAnchor(cursor.after);
   const over = page + 1;
-  return seekPage(readRuns(sql, null, queryPositions(sql, over, null, after)), page, forkAnchor);
+  return seekPage(readRuns(sql, actor.actorId, null, queryPositions(sql, actor.actorId, over, null, after)), page, forkAnchor);
 }
 
 /** One exact run, including runs older than the current page. */
-export function readForkRun(sql: SqlExecutor, rootId: string): ForkRunSummary | null {
-  return readRuns(sql, rootId, queryPositions(sql, 1, rootId, null))[0] ?? null;
+export function readForkRun(sql: SqlExecutor, actor: ActorHandle, rootId: string): ForkRunSummary | null {
+  actor.assertCurrent();
+  return readRuns(sql, actor.actorId, rootId, queryPositions(sql, actor.actorId, 1, rootId, null))[0] ?? null;
 }
 
 /**
@@ -170,6 +174,7 @@ interface RunPosition {
  */
 function queryPositions(
   sql: SqlExecutor,
+  actorId: string,
   limit: number,
   rootId: string | null,
   after: ForkAnchor | null,
@@ -186,7 +191,8 @@ function queryPositions(
       UNION ALL
       SELECT root_id AS root_id, MIN(spawned_at) AS started_at
       FROM head_journal
-      WHERE root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
+      WHERE actor_id = ${actorId}
+        AND root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
         AND (${rootId} IS NULL OR root_id = ${rootId})
       GROUP BY root_id
     )
@@ -209,13 +215,14 @@ function queryPositions(
  */
 function readRuns(
   sql: SqlExecutor,
+  actorId: string,
   rootId: string | null,
   positions: readonly RunPosition[],
 ): ForkRunSummary[] {
   if (positions.length === 0) return [];
   const wanted = new Set(positions.map((position) => position.rootId));
-  const trees = queryTreeHalves(sql, rootId, wanted);
-  const journals = queryTranscriptHalves(sql, rootId, wanted);
+  const trees = queryTreeHalves(sql, actorId, rootId, wanted);
+  const journals = queryTranscriptHalves(sql, actorId, rootId, wanted);
   return positions.flatMap((position) => {
     const tree = trees.get(position.rootId);
     const transcripts = journals.get(position.rootId);
@@ -299,6 +306,7 @@ interface TreeHalf {
  */
 function queryTreeHalves(
   sql: SqlExecutor,
+  actorId: string,
   rootId: string | null,
   wanted: ReadonlySet<string>,
 ): Map<string, TreeHalf> {
@@ -317,7 +325,7 @@ function queryTreeHalves(
            SUM(CASE WHEN n.status = 'terminal' THEN 1 ELSE 0 END)   AS terminal,
            MAX(CASE WHEN n.status = 'terminal' THEN n.value END)    AS best_terminal
     FROM search_nodes n
-    LEFT JOIN mcts_search_runs r ON r.root_id = n.root_id
+    LEFT JOIN mcts_search_runs r ON r.actor_id = ${actorId} AND r.root_id = n.root_id
     WHERE (${rootId} IS NULL OR n.root_id = ${rootId})
     GROUP BY n.root_id`;
   const halves = new Map<string, TreeHalf>();
@@ -428,6 +436,7 @@ interface TranscriptHalf {
  */
 function queryTranscriptHalves(
   sql: SqlExecutor,
+  actorId: string,
   rootId: string | null,
   wanted: ReadonlySet<string>,
 ): Map<string, TranscriptHalf> {
@@ -445,9 +454,10 @@ function queryTranscriptHalves(
            MAX(r.rationale)                                   AS rationale,
            MAX(CASE WHEN m.root_id IS NOT NULL THEN 1 ELSE 0 END) AS settled
     FROM head_journal j
-    LEFT JOIN head_runs r ON r.root_id = j.root_id
-    LEFT JOIN head_merge_results m ON m.root_id = j.root_id
-    WHERE j.root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
+    LEFT JOIN head_runs r ON r.actor_id = j.actor_id AND r.root_id = j.root_id
+    LEFT JOIN head_merge_results m ON m.actor_id = j.actor_id AND m.root_id = j.root_id
+    WHERE j.actor_id = ${actorId}
+      AND j.root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
       AND (${rootId} IS NULL OR j.root_id = ${rootId})
     GROUP BY j.root_id`;
   const halves = new Map<string, TranscriptHalf>();

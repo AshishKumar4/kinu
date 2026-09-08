@@ -20,7 +20,7 @@ import {
 } from '@kinu.run/core';
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_JUDGE_MODEL, MERGE_POLICY_SPEND_SOURCE,
-  mergePolicyProfile, scratchDir, scratchPath, toolExecute, scriptedTurnModel,
+  mergePolicyProfile, scratchDir, scratchPath, toolExecute, scriptedTurnModel, createTestActorsOver,
 } from '@kinu.run/test-utils';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, createCLIRuntime } from '../src/runtime';
@@ -71,7 +71,7 @@ function makeGovernor(): MissionGovernor {
 function makeJournal(): HeadJournal {
   const db = new Database(':memory:');
   initHeadsTables(makeExecRaw(db));
-  return new HeadJournal(makeSql(db));
+  return new HeadJournal(makeSql(db), createTestActorsOver(db).main);
 }
 
 /** What the merge asked its binder for — the route it actually took. Shared by
@@ -173,7 +173,7 @@ function fakeHeadsModel(capture?: (options: {
 function controllerWithCLIRuntime(model: LanguageModel, probe?: RouteProbe) {
   const db = new Database(':memory:');
   initHeadsTables(makeExecRaw(db));
-  const journal = new HeadJournal(makeSql(db));
+  const journal = new HeadJournal(makeSql(db), createTestActorsOver(db).main);
   const overrides: Partial<CLIHeadRuntimeDeps> = { journal: () => journal };
   return {
     journal,
@@ -212,8 +212,8 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   test('the merge reports its own spend as judge, and the heads report none', async () => {
     const reports: ModelCallReport[] = [];
     const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db));
-    const journal = new HeadJournal(makeSql(db));
+    initHeadsTables(makeExecRaw(db));
+    const journal = new HeadJournal(makeSql(db), createTestActorsOver(db).main);
     const controller = new HeadController(
       createCLIHeadRuntime(headDeps(fakeHeadsModel(), {
         journal: () => journal,

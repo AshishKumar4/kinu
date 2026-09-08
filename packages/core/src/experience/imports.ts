@@ -323,7 +323,7 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
       return true;
     }
     case 'fact': {
-      createFactsStore(rt.storage.sql).upsert(row.payload.key, row.payload.value, {
+      createFactsStore(rt.storage.sql, rt.actor).upsert(row.payload.key, row.payload.value, {
         confidence: row.payload.confidence,
         source: `experience:${row.sourceWorkspace}`,
       });
@@ -343,7 +343,7 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
       // tombstone written after the await, it cannot be missing while the
       // scaffold exists. That is the whole reason this link is prose.
       const marker = importedScaffoldMarker(row.id);
-      const pending = getPendingScaffold(rt.storage.sql);
+      const pending = getPendingScaffold(rt.storage.sql, rt.actor);
       if (pending?.rationale.includes(marker)) return true;
       const proposed = await modifyScaffold(
         rt,

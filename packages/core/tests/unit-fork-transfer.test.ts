@@ -67,8 +67,8 @@ async function source(opts: { files?: Array<{ path: string; content: string }> }
     { id: 'm3', parent: 'm2', role: 'user', text: 'third' },
   ] as const;
   for (const [i, m] of chain.entries()) {
-    void src.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${m.id}, ${'default'}, ${m.parent}, ${m.role}, ${m.text}, ${1000 + i})`;
+    void src.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${actor.actorId}, ${m.id}, ${'default'}, ${m.parent}, ${m.role}, ${m.text}, ${1000 + i})`;
   }
   void src.sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
     VALUES (${'helper'}, ${'utility'}, ${null}, ${'async (x) => x'}, ${'local'}, ${500}, ${500})`;
@@ -501,9 +501,9 @@ describe('fork transfer receiver', () => {
 
     const src = fresh();
     void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'BIG'}, ${'big'}, ${1})`;
-    new WorkspaceActorDirectory(src.sql, { workspaceId: 'BIG', ownerUserId: '' }).createMain({ name: 'big' });
-    void src.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'m1'}, ${'default'}, ${null}, ${'user'}, ${'only'}, ${1000})`;
+    const bigActor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'BIG', ownerUserId: '' }).createMain({ name: 'big' });
+    void src.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${bigActor.actorId}, ${'m1'}, ${'default'}, ${null}, ${'user'}, ${'only'}, ${1000})`;
     const tgt = fresh();
     const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, { ...OWNER, targetAuthority: 'plain' });
     const receiver = new ForkTransferReceiver(writer, sink);
@@ -868,12 +868,13 @@ describe('fork transfer receiver', () => {
   test('a 100 MiB transcript and a large file keep target staging bounded to one file', async () => {
     const src = fresh();
     void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'BIG'}, ${'big'}, ${1})`;
-    new WorkspaceActorDirectory(src.sql, { workspaceId: 'BIG', ownerUserId: '' }).createMain({ name: 'big' });
+    const bigActor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'BIG', ownerUserId: '' }).createMain({ name: 'big' });
     await writeSoul(src.vfs, src.sql, 'p');
     const megabyte = 'x'.repeat(1024 * 1024);
     for (let i = 0; i < 100; i += 1) {
-      void src.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${`m${i}`}, ${'default'}, ${i === 0 ? null : `m${i - 1}`}, ${'user'}, ${megabyte}, ${1000 + i})`;
+      void src.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${bigActor.actorId}, ${`m${i}`}, ${'default'}, ${i === 0 ? null : `m${i - 1}`}, ${'user'},
+                ${megabyte}, ${1000 + i})`;
     }
     await src.vfs.mkdir('memory', { recursive: true });
     await src.vfs.writeFile('memory/large.md', 'f'.repeat(8 * 1024 * 1024));

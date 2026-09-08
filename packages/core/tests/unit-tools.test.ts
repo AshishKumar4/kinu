@@ -455,7 +455,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('memory.* dispatches through the SAME store the native `memory` tool reads/writes', async () => {
     const { rt } = createTestRuntime();
-    const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql }));
+    const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, actor: rt.actor }));
     // No facts wired: remember/recall/forget are absent, matching the native
     // tool's own action-enum gating.
     expect(Object.keys(provider.tools).sort()).toEqual(['conversations', 'save', 'search']);
@@ -477,7 +477,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       forget: (key: string) => { store.delete(key); },
       recentTopK: () => [], all: () => [],
     };
-    const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, facts }));
+    const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, actor: rt.actor, facts }));
     expect(Object.keys(provider.tools)).toContain('remember');
     await codemodeExecute(provider, 'remember')('user.tz', 'UTC', 0.9);
     expect(store.get('user.tz')?.value).toBe('UTC');

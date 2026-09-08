@@ -61,6 +61,8 @@ import {
   initHeadsTables,
   isBackgroundHandle,
   keepBuiltins,
+  FacetIdentity,
+  openWorkspaceMainActor,
   runNodeAgent,
   runNodeLoop,
   NODE_BUILTIN_TOOLS,
@@ -71,7 +73,8 @@ import {
   type Usage,
 } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestRuntime, sqlOver } from '@kinu.run/test-utils';
+import { makeSqlExec } from '../../../core/tests/helpers';
 import type { Database } from 'bun:sqlite';
 // Harness FIRST: its module body installs the SDK mocks, and the provider
 // registry's graph reaches the whole `../src/server` barrel — evaluated before
@@ -455,7 +458,7 @@ export function nodeDeps(model: LanguageModel, opts?: NodeDepsOptions): NodeSeam
   // before it dispatches and closes one whatever happens, so a fixture missing a
   // column measures a store no swarm ever has.
   initHeadsTables(rt.storage.execRaw);
-  const journal = new HeadJournal(rt.storage.sql);
+  const journal = new HeadJournal(rt.storage.sql, rt.actor);
   const deps: NodeAgentDeps = {
     rt, model, journal,
     logger: createRecordingLogger(),
@@ -1078,6 +1081,21 @@ function hasJobRunner(agent: ActorTurnSurface): boolean {
 }
 
 const RunEventRowSchema = v.object({ type: v.string(), payload: v.string() });
+
+/**
+ * The actor whose rows the two raw reads below answer for.
+ *
+ * `run_events` is actor-scoped, and the three kinds bind their handle
+ * differently: an orchestrator takes the workspace main actor, a facet kind
+ * takes the identity its own `actor_identity` row registered. Resolving it from
+ * the store keeps a raw read on exactly the rows that store's recorder wrote,
+ * whichever kind wrote them — a fixed literal would silently read nothing for
+ * two of the three.
+ */
+function storeActorId(db: Database): string {
+  const facet = new FacetIdentity(makeSqlExec(db)).read();
+  return facet.actor?.actorId ?? openWorkspaceMainActor(sqlOver(db)).actorId;
+}
 const RunEndPayloadSchema = v.looseObject({
   reason: v.optional(v.string()),
   error: v.optional(v.string()),
@@ -1087,8 +1105,8 @@ const RunEndPayloadSchema = v.looseObject({
 function readRunEnd(db: Database, acceptsError: boolean): TerminalRecord {
   const rows = v.parse(
     v.array(RunEventRowSchema),
-    db.prepare('SELECT type, payload FROM run_events WHERE type = ? ORDER BY event_index DESC')
-      .all('run_end'),
+    db.prepare('SELECT type, payload FROM run_events WHERE actor_id = ? AND type = ? ORDER BY event_index DESC')
+      .all(storeActorId(db), 'run_end'),
   );
   const latest = rows[0];
   if (!latest) return { status: 'no-record', errorMessage: null, acceptsError };
@@ -1110,8 +1128,8 @@ const ToolCallEndPayloadSchema = v.looseObject({
 function readToolCallEnd(db: Database): string {
   const rows = v.parse(
     v.array(RunEventRowSchema),
-    db.prepare('SELECT type, payload FROM run_events WHERE type = ? ORDER BY event_index DESC')
-      .all('tool_call_end'),
+    db.prepare('SELECT type, payload FROM run_events WHERE actor_id = ? AND type = ? ORDER BY event_index DESC')
+      .all(storeActorId(db), 'tool_call_end'),
   );
   const latest = rows[0];
   if (!latest) return '';

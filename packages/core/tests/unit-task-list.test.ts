@@ -6,11 +6,12 @@ import { Database } from 'bun:sqlite';
 import { TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS } from '../src/tasks/store';
 import type { SqlValue } from '../src/types/primitives';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 
 function newStore(): TaskListStore {
   const db = new Database(':memory:');
   initTaskListTable(makeExecRaw(db));
-  return new TaskListStore(makeSql(db), write => db.transaction(write)());
+  return new TaskListStore(makeSql(db), createTestActorsOver(db).main, write => db.transaction(write)());
 }
 
 describe('TaskListStore', () => {
@@ -146,17 +147,24 @@ describe('TaskListStore', () => {
   // reads skip the same row.
   test('a stored status outside the vocabulary is refused naming the value', () => {
     const db = new Database(':memory:');
+    const actor = createTestActorsOver(db).main;
+    const sql = makeSql(db);
+    // No status CHECK, and the row is this actor's — the shape a workspace
+    // whose table predates the vocabulary still holds.
     db.exec(`CREATE TABLE agent_tasks (
-      id TEXT PRIMARY KEY,
+      actor_id TEXT NOT NULL,
+      id TEXT NOT NULL,
       seq INTEGER NOT NULL,
       parent_id TEXT,
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open',
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (actor_id, id)
     )`);
-    db.exec(`INSERT INTO agent_tasks VALUES('t9',999,NULL,'x','bogus',1,1)`);
-    const s = new TaskListStore(makeSql(db), write => db.transaction(write)());
+    void sql`INSERT INTO agent_tasks (actor_id, id, seq, parent_id, title, status, created_at, updated_at)
+      VALUES (${actor.actorId}, 't9', 999, NULL, 'x', 'bogus', 1, 1)`;
+    const s = new TaskListStore(sql, actor, write => db.transaction(write)());
     expect(() => s.get('t9')).toThrow('bogus');
   });
   // Pinned on the PLAN rather than on a stopwatch: the statement is captured
@@ -166,20 +174,21 @@ describe('TaskListStore', () => {
   test('countOpenSubtasks seeks the parent index', () => {
     const db = new Database(':memory:');
     initTaskListTable(makeExecRaw(db));
+    const actor = createTestActorsOver(db).main;
     const inner = makeSql(db);
     let statement = '';
     const capturing: typeof inner = <T,>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
       statement = strings.join('?');
       return inner<T>(strings, ...values);
     };
-    const s = new TaskListStore(capturing, write => db.transaction(write)());
+    const s = new TaskListStore(capturing, actor, write => db.transaction(write)());
     s.add(['parent'], null, 1);
     s.add(['a', 'b'], 't1', 2);
     statement = '';
     expect(s.countOpenSubtasks('t1')).toBe(2);
-    const plan = db.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN ${statement}`).all('t1');
+    const plan = db.query<{ detail: string }, [string, string]>(`EXPLAIN QUERY PLAN ${statement}`).all(actor.actorId, 't1');
     const details = plan.map((row) => row.detail).join('\n');
-    expect(details).toContain('idx_agent_tasks_parent');
+    expect(details).toContain('idx_agent_tasks_parent (actor_id=? AND parent_id=?)');
     expect(details).not.toMatch(/\bSCAN\b/);
   });
 });

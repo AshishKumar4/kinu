@@ -35,8 +35,8 @@ async function seedSource(
   let previousId: string | null = null;
   for (const m of opts.messages) {
     const parent = m.parent_id !== undefined ? m.parent_id : previousId;
-    void sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${m.id}, ${'default'}, ${parent}, ${m.role}, ${m.content}, ${m.created_at})`;
+    void sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${actor.actorId}, ${m.id}, ${'default'}, ${parent}, ${m.role}, ${m.content}, ${m.created_at})`;
     previousId = m.id;
   }
   for (const t of opts.craftedTools ?? []) {
@@ -224,11 +224,14 @@ describe('forkWorkspaceStorage', () => {
 
     // Fork A → B
     await forkWorkspaceStorage(a.sql, a.vfs, b.sql, b.vfs, { untilMessageId: 'a2', targetWorkspaceId: 'B-ID', targetWorkspaceName: 'agent-B', now: 5000 });
-    // Add a turn in B to differentiate it
-    void b.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
-          VALUES (${'b3'}, ${'a2'}, ${'user'}, ${'in B'}, ${1200})`;
-    void b.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
-          VALUES (${'b4'}, ${'b3'}, ${'assistant'}, ${'from B'}, ${1300})`;
+    // Add a turn in B to differentiate it, under B's OWN actor — the fork
+    // re-keyed the inherited chain to it, so a continuation written under any
+    // other actor would not be part of the tree B just received.
+    const bActor = openWorkspaceMainActor(b.sql).actorId;
+    void b.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+          VALUES (${bActor}, ${'b3'}, ${'a2'}, ${'user'}, ${'in B'}, ${1200})`;
+    void b.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+          VALUES (${bActor}, ${'b4'}, ${'b3'}, ${'assistant'}, ${'from B'}, ${1300})`;
 
     // Fork B → C
     await forkWorkspaceStorage(b.sql, b.vfs, c.sql, c.vfs, { untilMessageId: 'b4', targetWorkspaceId: 'C-ID', targetWorkspaceName: 'agent-C', now: 7000 });
@@ -352,7 +355,7 @@ describe('forkWorkspaceStorage', () => {
     expect(marker.content).toContain('forked from workspace');
     expect(marker.content).toContain('alpha');
     // The marker is the fork's leaf, so the whole inherited chain hangs off it.
-    expect(sessionTreeAncestry(tgt.sql, marker.id).map((n) => n.id))
+    expect(sessionTreeAncestry(tgt.sql, openWorkspaceMainActor(tgt.sql), marker.id).map((n) => n.id))
       .toEqual(['m1', 'm2', marker.id]);
   });
 

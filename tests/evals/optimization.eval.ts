@@ -48,6 +48,7 @@ import { afterAll, describe, expect, test } from 'vitest';
 import { Database } from 'bun:sqlite';
 
 import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index';
+import { openWorkspaceMainActor } from '../../packages/core/src/index';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { makeSql } from '../../packages/cli-backend/src/runtime';
 import { cliWorkspaceDbPath, createCliWorkspace, execCliTask } from './cli-driver';
@@ -250,7 +251,8 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
     // in the workspace, so the liveness assertion works over a subprocess.
     const db = new Database(dbPath);
     opened.push(db);
-    recordLiveModelEpisode(makeSql(db));
+    const sql = makeSql(db);
+    recordLiveModelEpisode(sql, openWorkspaceMainActor(sql));
     const totals = readLedgerTotals(db);
     const agentsCalls = totals.toolNames.filter((name) => name === 'agents').length;
     const swarmRow = swarmTelemetry(db, agentsCalls);
