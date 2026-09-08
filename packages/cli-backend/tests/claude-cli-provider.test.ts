@@ -431,12 +431,12 @@ describe('claude-cli provider — tool loop composition', () => {
       claudeCli: { spawn },
     });
 
-    const db = new Database(':memory:');
+    const db = new Database(scratchPath('claude-cli-provider', 'agent.db'), { create: true });
     db.exec(`CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
       role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-    const rt = createCLIRuntime(db, { dbPath: scratchPath('claude-cli-provider', 'agent.db'), llm: openaiLlm });
+    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: openaiLlm });
     const events: SessionEvent[] = [];
     const session = new LocalAgentSession({
       rt, db,
