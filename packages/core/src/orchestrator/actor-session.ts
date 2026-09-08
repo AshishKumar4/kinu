@@ -14,7 +14,8 @@ import { prepareActorProgram, type ActorTurnProgram } from './actor-program';
 import {
   programIdentityOf, type ActorClaimStore, type ActorTurnClaim, type ClaimOutcome,
 } from './actor-claims';
-import type { StepContextPlane } from '../prompting/prepare-step';
+import { createActorContextPlane, type ActorContextPlane, type ContextEventRecorder } from './context-plane';
+import type { ScaffoldBridgeOpts } from './scaffold-host';
 import type { ModelCallSpend } from '../events/model-call';
 
 export interface ActorSessionOptions {
@@ -35,6 +36,15 @@ export interface ActorSessionOptions {
    * the build is unknown.
    */
   readonly installedBuild: string | null;
+  /**
+   * The actor's run-event recorder, for the context-edit evidence the working
+   * history writes.
+   *
+   * Optional and null-tolerant on purpose: the revision rows are the durable
+   * record either way, and a host with no recorder gets no event rather than a
+   * fabricated one.
+   */
+  readonly events?: ContextEventRecorder | null;
 }
 
 /** Live-instance execution token, not a replacement for a durable turn/run claim. */
@@ -52,6 +62,12 @@ export interface ActorExecutionInput {
   readonly extensions: readonly KinuExtension[];
   readonly dynamic: () => DynamicContext;
   readonly scaffoldSpend?: ModelCallSpend;
+  /** Re-checked by the runner before each model call, for a kind whose
+   *  liveness is owned outside this session (a head or a swarm node whose
+   *  controller may have finished with it). */
+  readonly assertActive?: () => void;
+  /** Stream options the scaffold bridge passes through, for the same kinds. */
+  readonly scaffoldStreamOptions?: ScaffoldBridgeOpts['streamOptions'];
 }
 
 export interface ActorExecutionResult {
@@ -91,11 +107,16 @@ export class ActorSession {
   private readonly userSteer: UserSteerDrain;
   private active: ActiveTurn | null = null;
   private mode: WorkMode = 'build';
+  /** The actor's context plane: the working history its requests are built
+   *  from, and where an edit of it lands. One per session, over the claim
+   *  store's own ledgers. */
+  private readonly context: ActorContextPlane;
 
   constructor(private readonly options: ActorSessionOptions) {
     this.actorId = options.runtime.actor.actorId;
     this.runtime = options.runtime;
     this.orchestrator = new AgentOrchestrator(options.orchestration);
+    this.context = createActorContextPlane({ claims: options.claims, events: options.events ?? null });
     this.userSteer = new UserSteerDrain({
       turnInFlight: () => this.inFlight,
       onDrain: (steers, atStep) => {
@@ -120,29 +141,35 @@ export class ActorSession {
   /**
    * Replace this actor's working context.
    *
-   * Two arms, because a hydration and a mid-turn edit are different acts. With
-   * no admitted turn this is cold-start hydration and the array is simply the
-   * actor's history. DURING an admitted turn it is a context edit, and it
-   * cannot be applied in place: work already issued keeps the context it was
-   * issued with. So it stages a later revision against the claim's newest one
-   * (compare-and-set — see `ActorClaimStore.stage`), and that revision becomes
-   * the request at the next SAFE step boundary, with the turn's protected tail
-   * and any ingress that landed since preserved (`prompting/staged-context.ts`).
+   * Two arms, because a hydration and an edit are different acts. With no
+   * admitted turn this is cold-start hydration: the array becomes the actor's
+   * history AND is recorded as a working revision, so the `/context` projection
+   * of a just-restarted actor serves what it will really build its next request
+   * from rather than an empty answer an edit could then overwrite the history
+   * with.
+   *
+   * DURING an admitted turn it is an edit, and it cannot be applied in place:
+   * work already issued keeps the context it was issued with. So it is staged
+   * as a later working revision (compare-and-set against the head — see
+   * `ActorWorkingContextStore.stage`), and that revision becomes the request at
+   * the next SAFE step boundary with the turn's protected tail and any ingress
+   * that landed since preserved (`prompting/staged-context.ts`).
    *
    * Returns the staged revision when it staged one, null when it hydrated.
    */
   restoreHistory(messages: readonly ModelMessage[]): number | null {
-    const active = this.active;
-    if (active === null) {
+    if (this.active === null) {
       this.messages.splice(0, this.messages.length, ...messages);
+      this.context.hydrate(this.messages);
       return null;
     }
-    const claim = active.claim;
-    if (claim === null) {
-      throw new KinuError('denied', 'cannot edit actor context before its turn holds a durable claim');
-    }
-    const latest = this.options.claims.read(claim.turnId)?.consumedRevision;
-    return this.options.claims.stage(claim, { base: latest ?? claim.baseRevision, messages });
+    const state = this.context.read();
+    return this.context.edit({
+      base: state.head?.revision ?? 0,
+      messages,
+      author: this.actorId,
+      via: 'session',
+    }).revision;
   }
 
   appendInput(lease: ActorTurnLease, message: ModelMessage): void {
@@ -239,34 +266,6 @@ export class ActorSession {
   }
 
   /**
-   * The claim's step plane: where a staged edit lands and where the exact array
-   * a step consumed is recorded. Built per turn, closed over ONE claim, so a
-   * revision cannot be attributed to a turn that did not consume it.
-   */
-  private contextPlane(claim: ActorTurnClaim): StepContextPlane {
-    return {
-      staged: () => {
-        const staged = this.options.claims.stagedContext(claim);
-        if (staged === null) return null;
-        // The protected tail starts where the revision this edit was staged
-        // FROM ended: everything after it is work the turn has since done.
-        const base = staged.baseRevision === null
-          ? null
-          : this.options.claims.consumedContext(claim.turnId, staged.baseRevision);
-        return {
-          revision: staged.revision,
-          messages: staged.messages,
-          baseMessageCount: base?.messageCount ?? staged.messageCount,
-        };
-      },
-      consume: ({ stepNumber, messages, stagedRevision }) => {
-        if (stagedRevision === null) this.options.claims.consume(claim, { index: stepNumber, messages });
-        else this.options.claims.consumeStaged(claim, stagedRevision, { index: stepNumber, messages });
-      },
-    };
-  }
-
-  /**
    * Run the admitted turn: PREPARE the program, CLAIM it durably, then consume
    * the events — in that order, and the order is the contract.
    *
@@ -298,20 +297,30 @@ export class ActorSession {
       program = await prepareActorProgram({
         ...control, runtime: this.runtime, mode: this.mode, version: input.loopVersion,
       });
+      // The turn's history is what the CONTEXT PLANE resolves, not simply what
+      // this instance accumulated: an edit authored between turns lands here,
+      // at the turn boundary, with the input delivered since preserved after it
+      // exactly once. The array it returns is the array the claim names, so a
+      // recovery reads back what the first step actually started from.
+      const admitted = this.context.startTurn({ turnId: lease.turnId, history: this.messages });
+      this.messages.splice(0, this.messages.length, ...admitted.messages);
       const claim = this.options.claims.admit({
         runId: lease.runId,
         turnId: lease.turnId,
         workMode: this.mode,
         program: programIdentityOf(program, this.options.installedBuild),
         context: this.messages,
+        workingRevision: admitted.workingRevision,
       });
       active.claim = claim;
       const events = startActorTurn({
         runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
         program, scaffoldSpend: input.scaffoldSpend,
+        assertActive: input.assertActive,
+        scaffoldStreamOptions: input.scaffoldStreamOptions,
         chat: { ...input.chat, history: this.messages, signal: active.abort.signal, extensions,
           meter: this.orchestrator.acc.composition, dynamicContext: { ledger: this.dynamic, snapshot: input.dynamic },
-          stepContext: this.contextPlane(claim) },
+          stepContext: this.context.steps(claim) },
       });
       for await (const event of events) {
         this.requireTurn(lease);
@@ -345,6 +354,16 @@ export class ActorSession {
       emit({ type: 'error', message: renderThrownChain({ cause }) });
     } finally {
       active.phase = 'settling';
+      // The working history the turn leaves behind, recorded once the turn's
+      // messages are final — including a failed or interrupted turn, whose
+      // partial tail is just as much the history the next request builds on.
+      // The plane's array replaces this instance's, because an edit that landed
+      // mid-turn is in the LANDED revision and not in the array the SDK rebuilt
+      // each step from; keeping the latter would drop the edit at the boundary.
+      if (active.claim !== null) {
+        const settled = this.context.endTurn({ turnId: lease.turnId, history: this.messages });
+        this.messages.splice(0, this.messages.length, ...settled.messages);
+      }
     }
     return {
       text, failure, program, claim: active.claim,
