@@ -14,7 +14,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { scaffoldInferenceTransform, type InferenceStreamResult } from '../src/index';
+import { scaffoldInferenceTransform, prepareActorProgram, type InferenceStreamResult } from '../src/index';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { JsonObjectSchema, type JsonObject } from '../src/utils/json';
 import { createEvalExecutor, createTestRuntime } from './helpers';
@@ -33,12 +33,16 @@ function runtime(): AgentRuntime {
   return rt;
 }
 
-function runOpts(rt: AgentRuntime, scaffoldCode: string) {
+async function selected(version: number, scaffoldCode: string) {
+  const rt = runtime();
+  const files = rt.agentStateVfs ?? rt.storage.vfs;
+  await files.mkdir('scaffold', { recursive: true });
+  await files.writeFile(rt.identity.scaffold.path + '.v' + version, scaffoldCode);
   return {
-    rt,
-    task: 'the task',
-    llmStream: async function* () { yield ''; },
-    scaffoldCodeOverride: scaffoldCode,
+    program: await prepareActorProgram({ runtime: rt, mode: 'build', version }),
+    run: { rt, task: 'the task',
+      llmStream: () => { throw new Error('this fixture must not start a model'); },
+    },
   };
 }
 
@@ -53,11 +57,11 @@ async function collect(stream: ReturnType<InferenceStreamResult['toUIMessageStre
 const chunkType = (chunk: JsonObject): string => v.parse(v.string(), chunk.type);
 
 describe('scaffoldInferenceTransform', () => {
-  test('version <= 0 → the default result passes through untouched (same object)', () => {
+  test('version <= 0 → the default result passes through untouched (same object)', async () => {
     const result: InferenceStreamResult = {
       toUIMessageStream: () => (async function* () { yield { type: 'finish' }; })(),
     };
-    expect(scaffoldInferenceTransform({ currentVersion: 0, result, run: runOpts(runtime(), DELEGATING_SCAFFOLD) }))
+    expect(scaffoldInferenceTransform({ result, ...await selected(0, DELEGATING_SCAFFOLD) }))
       .toBe(result);
   });
 
@@ -80,9 +84,7 @@ describe('scaffoldInferenceTransform', () => {
       },
     };
 
-    const out = scaffoldInferenceTransform({
-      currentVersion: 3, result, run: runOpts(runtime(), DELEGATING_SCAFFOLD),
-    });
+    const out = scaffoldInferenceTransform({ result, ...await selected(3, DELEGATING_SCAFFOLD) });
     expect(out).not.toBe(result);
     const chunks = await collect(out.toUIMessageStream());
 
@@ -113,9 +115,7 @@ describe('scaffoldInferenceTransform', () => {
       }),
     };
 
-    const out = scaffoldInferenceTransform({
-      currentVersion: 2, result, run: runOpts(runtime(), CUSTOM_SCAFFOLD),
-    });
+    const out = scaffoldInferenceTransform({ result, ...await selected(2, CUSTOM_SCAFFOLD) });
     const chunks = await collect(out.toUIMessageStream());
 
     const text = chunks

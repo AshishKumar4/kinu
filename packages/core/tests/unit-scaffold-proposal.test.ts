@@ -1,3 +1,4 @@
+import type { ChatEvent } from '../src/chat';
 // Regression tests for the scaffold-proposal contract.
 //
 // The proposal prompt used to instruct "Use only rt.* methods (rt.llm,
@@ -80,7 +81,7 @@ describe('a proposal written against the documented API', () => {
       rt,
       task: 'summarize the release notes',
       emit: (e) => { events.push(e); },
-      llmStream: async function* () { yield 'the answer'; },
+      llmStream: async function* () { yield { type: 'text-delta', delta: 'the answer' } satisfies ChatEvent; },
       scaffoldCodeOverride: pendingCode,
     });
 

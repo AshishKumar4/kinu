@@ -4,6 +4,7 @@
 // long turn reaches the judge. Every one of these readers used to keep only the
 // first n characters, which made a win that lands at step 9 of 12 invisible to
 // the thing that is supposed to select for it.
+import type { ChatEvent } from '../src/chat';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -96,7 +97,7 @@ describe('the readers can see the end of a long turn', () => {
       task: trajectory(20_000, `ASK-${ending}`),
       currentOutput: trajectory(40_000, `CURRENT-${ending}`),
       judge,
-      llmStream: async function* () { yield ''; },
+      llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
       random: () => 0,
     });
 
@@ -139,7 +140,7 @@ describe('the readers can see the end of a long turn', () => {
         getGepaEvalBudget: () => 1,
       },
       surface: () => ({
-        llmStream: async function* () { yield ''; },
+        llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
         callTool: async () => ({}),
         history: async () => ({ total: 0, offset: 0, entries: [], clipped: false }),
         defaultInference: async function* () { yield { value: '' }; },
