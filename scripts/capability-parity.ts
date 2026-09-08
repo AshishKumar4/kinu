@@ -64,24 +64,11 @@
  * contracts is printed with the verdict rather than swallowed — an unreadable
  * contract is a gap in coverage, not a pass.
  *
- * ## What a literal scan cannot see, and why it still cannot lie
- *
- * Two wirings are invisible here. A spread carries fields this reads no names
- * for, and a field assigned AFTER construction (`deps.team = actorDeps.team`,
- * which is how both backends attach a conditional collaborator) never appears in
- * an object literal at all. Both are blind spots in the NUMERATOR and both are
- * blind in BOTH closures by the same rule, so neither can manufacture an
- * asymmetry out of a difference in writing style; what they can do is hide a
- * real one. That is the trade this gate takes over the alternative — inferring
- * the type of every expression — and the spread half is at least counted, in
- * the skipped list printed with the verdict.
- *
- * What is NOT a blind spot is a literal that omits a member the contract
- * requires. Such an object is not the contract at all, so treating it as a
- * construction site does not under-count a wiring — it invents a site, and one
- * invented site in an otherwise-empty closure is enough to make an unbuilt
- * contract look built by both and turn the other closure's every switch into a
- * finding. See `attribute`.
+ * Fields assigned after construction are not measured. Mixing literal fields
+ * in one backend with later assignments in another can produce false findings;
+ * missing assignments can also go undetected. Inspect the reported sites.
+ * This is a structural literal comparison, not TypeScript type resolution or
+ * proof of runtime capability parity. Spread-based exclusions are reported.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
