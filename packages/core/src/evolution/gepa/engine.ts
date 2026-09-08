@@ -21,22 +21,23 @@
  * when either iterations OR metric calls are exhausted, whichever first.
  */
 
+import * as v from 'valibot';
 import { nanoid } from '../../utils/nanoid';
 import { nowMs } from '../../utils/date';
 import {
   computeParetoFront, sampleParentByWeight, bestAggregate,
 } from './pareto';
-import { proposeMutation } from './mutate';
+import { proposeMutation, rolloutMinibatch } from './mutate';
 import { findComplementaryPair, proposeMerge } from './merge';
 import {
-  DEFAULT_GEPA_BUDGET,
+  DEFAULT_GEPA_BUDGET, MetricOutcomeSchema,
   type EvalInstance, type GepaCandidate, type GepaConfig, type GepaConstraints,
   type GepaResult, type GepaIterationState, type GepaMetric,
 } from './types';
 import { diagnostics, renderThrownChain, toKinuError } from '../../obs/index';
 
 type ProposalOutcome =
-  | { ok: true; source: string; operator: 'mutate' | 'merge'; metricCallsCharged: number; parentSource?: string }
+  | { ok: true; source: string; operator: 'mutate' | 'merge'; parentSource?: string }
   | { ok: false; reason: string };
 
 
@@ -70,6 +71,7 @@ export async function runGepa<I = unknown, E = unknown>(
     source: config.seed, parentId: null, evalSet: config.evalSet, metric: config.metric,
   });
   charge(config.evalSet.length);
+  await config.onCandidate?.({ candidate: seed, iteration: 0 });
   const pool: GepaCandidate[] = [seed];
   const history: GepaCandidate[] = [seed];
 
@@ -86,14 +88,17 @@ export async function runGepa<I = unknown, E = unknown>(
         ? bestAggregate(pool)
         : sampleParentByWeight(pool, instanceIds, random);
     const minibatch = sampleWithoutReplacement(trainSet, minibatchSize, random);
+    // Measurement failures invalidate the run; only proposal-generation failures
+    // belong to the recoverable rejection path below.
+    const rollout = await rolloutMinibatch(parent.source, minibatch, config.metric);
+    charge(rollout.metricCalls);
     try {
       const m = await proposeMutation(
-        { parent, minibatch, metric: config.metric, reflectionLm: config.reflectionLm },
+        { parent, minibatch, rollout, reflectionLm: config.reflectionLm },
         'scaffold source',
       );
       return {
         ok: true, source: m.source, operator: 'mutate',
-        metricCallsCharged: minibatch.length,
         parentSource: parent.source,
       };
     } catch (err) {
@@ -114,7 +119,6 @@ export async function runGepa<I = unknown, E = unknown>(
       // Merge has no rollout cost; only the eval-set scoring will charge.
       return {
         ok: true, source: merged, operator: 'merge',
-        metricCallsCharged: 0,
       };
     } catch (err) {
       return { ok: false, reason: `merge_failed: ${renderThrownChain({ cause: err })}` };
@@ -136,6 +140,7 @@ export async function runGepa<I = unknown, E = unknown>(
 
   // ── main loop ──
 
+  let iterationsRun = 0;
   for (let iter = 0; iter < budget.maxIterations; iter++) {
     // Worst-case cost of this iteration: minibatchSize (rollout) + evalSet (score).
     // Merge costs 0 for rollout, so worst-case still applies for Mutate.
@@ -143,6 +148,7 @@ export async function runGepa<I = unknown, E = unknown>(
       stopReason = 'metric_budget_exhausted';
       break;
     }
+    iterationsRun++;
 
     // Pick operator.
     const tryMerge =
@@ -156,7 +162,6 @@ export async function runGepa<I = unknown, E = unknown>(
       if (await recordRejection(iter, proposal.reason)) { stopReason = 'no_improvement_possible'; break; }
       continue;
     }
-    charge(proposal.metricCallsCharged);
 
     // No-change check: a proposal identical to its parent wastes eval-set scoring.
     if (proposal.operator === 'mutate' && proposal.source === proposal.parentSource) {
@@ -183,6 +188,7 @@ export async function runGepa<I = unknown, E = unknown>(
       evalSet: config.evalSet, metric: config.metric,
     });
     charge(config.evalSet.length);
+    await config.onCandidate?.({ candidate: cand, iteration: iter + 1 });
 
     // Add to pool + history.
     pool.push(cand);
@@ -206,7 +212,7 @@ export async function runGepa<I = unknown, E = unknown>(
     paretoFront: front,
     history,
     metricCallsUsed,
-    iterationsRun: history.length - 1, // history includes seed
+    iterationsRun,
     stopReason,
   };
 }
@@ -223,7 +229,7 @@ async function scoreCandidate<I, E>(args: {
   const feedback = new Map<string, string>();
   let total = 0;
   for (const inst of args.evalSet) {
-    const o = await args.metric(args.source, inst);
+    const o = v.parse(MetricOutcomeSchema, await args.metric(args.source, inst));
     scores.set(inst.id, o.score);
     feedback.set(inst.id, o.feedback);
     total += o.score;
