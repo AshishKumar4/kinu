@@ -5,8 +5,6 @@
   "asymmetry AgentsForkDeps.nodeHost#absent-in-cli",
   "asymmetry AgentsForkDeps.reportNodeDelta#absent-in-cli",
   "asymmetry AgentsForkDeps.runtimeForNodeWorkspace#absent-in-cf",
-  "asymmetry AgentsToolDeps.peers#absent-in-cli",
-  "asymmetry AgentsToolDeps.team#absent-in-cli",
   "asymmetry ArchiveExportOptions.files#absent-in-cli",
   "asymmetry BackgroundJobRunnerDeps.onCancelled#absent-in-cli",
   "asymmetry BackgroundJobRunnerDeps.onDetached#absent-in-cli",
