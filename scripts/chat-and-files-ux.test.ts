@@ -2034,3 +2034,24 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
   });
 }, 120_000);
 
+test('workspace tabs keep scrolling horizontal and suppress the scrollbar', async () => {
+  await withGallery(async ({ browser, origin }) => {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 390, height: 844 });
+    await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[aria-label="Work"]');
+    const strip = await page.$eval('.p-tabstrip', (element) => {
+      const style = getComputedStyle(element);
+      element.scrollLeft = 50;
+      return {
+        names: [...element.querySelectorAll('button[aria-label]')].map((button) => button.getAttribute('aria-label')),
+        overflowY: style.overflowY, scrollbarWidth: style.scrollbarWidth, scrollLeft: element.scrollLeft,
+      };
+    });
+    expect(strip.names).toContain('Files');
+    expect(['hidden', 'clip']).toContain(strip.overflowY);
+    expect(strip.scrollbarWidth).toBe('none');
+    expect(strip.scrollLeft).toBeGreaterThan(0);
+    await page.close();
+  });
+}, 240_000);
