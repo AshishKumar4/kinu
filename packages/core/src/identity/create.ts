@@ -24,6 +24,8 @@ import { nowMs } from '../utils/date';
 import { createVercelAILLM } from '../llm';
 import { buildRuntime } from '../runtime-builder';
 import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from '../read-models/workspace-diff';
+import type { ActorHandle } from '../state/actor-handle';
+import { initWorkspaceActorTable, WorkspaceActorDirectory } from '../state/workspace-actors';
 
 export { wrapDatabase, type AgentDatabase } from './inline-primitives';
 
@@ -49,7 +51,8 @@ function buildComponents(
   sql: SqlExecutor,
   execRaw: RawSqlExec,
   workspace: ReturnType<typeof createInlineWorkspace>,
-  config: { llm: LLMProviderConfig; agentId: string; agentName: string },
+  actor: ActorHandle,
+  config: { llm: LLMProviderConfig },
 ) {
   const vfs = workspace.vfs;
   const memory = createInlineMemory(db, vfs);
@@ -59,8 +62,8 @@ function buildComponents(
   const schedule = createInlineSchedule(sql);
 
   return buildRuntime({
+    actor,
     sql, execRaw, vfs, llm, executor, schedule, shell: workspace.shell,
-    agentId: config.agentId, agentName: config.agentName,
     memory, craftStore,
     /**
      * This runtime does not implement branch spawning, and says so instead of
@@ -88,11 +91,7 @@ function buildComponents(
         + 'indistinguishable from a real exploration to every consumer.',
       );
     },
-    // No branch can exist on this runtime, since spawning throws. These stay
-    // no-ops rather than throwing because they return nothing and so fabricate
-    // nothing, and an unconditional teardown path must stay safe to call.
     abortBranch: async () => {},
-    releaseBranch: async () => {},
   });
 }
 
@@ -114,6 +113,8 @@ export async function createWorkspace(
 
   const workspaceId = nanoid();
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${config.name}, ${nowMs()})`;
+  initWorkspaceActorTable(execRaw);
+  const actor = new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' }).createMain({ name: config.name });
 
   // The two documents a model reads open under the name a PERSON uses, and
   // under the product's name while the workspace has none. `config.name` heads
@@ -135,8 +136,8 @@ export async function createWorkspace(
   await workspace.vfs.mkdir('memory', { recursive: true });
   await workspace.vfs.writeFile('memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
 
-  const runtime = buildComponents(db, sql, execRaw, workspace, {
-    llm: config.llm, agentId: workspaceId, agentName: config.name,
+  const runtime = buildComponents(db, sql, execRaw, workspace, actor, {
+    llm: config.llm,
   });
   await resetWorkspaceBaseline(runtime);
   return runtime;

@@ -6,18 +6,19 @@ import { mkdtempSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
-import { JsonValueSchema } from '@kinu.run/core';
+import { JsonValueSchema, WorkspaceActorDirectory } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createBranchSpawner } from '../src/branch-process';
-
+import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from '../src/runtime';
+import { initActorStateSchema } from '@kinu.run/core';
 const dir = mkdtempSync(join(tmpdir(), 'kinu-branch-cleanup-'));
 const parentDbPath = `${dir}.db`;
 const parentDb = new Database(parentDbPath, { create: true });
-parentDb.exec('CREATE TABLE crafted_tools (name TEXT PRIMARY KEY, description TEXT NOT NULL)');
-parentDb.exec('CREATE TABLE agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-parentDb.close();
+const parentRuntime = createCLIRuntime(parentDb, { dbPath: parentDbPath, llm: null, hostRoot: null, agentName: 'branch-parent' });
+initActorStateSchema(makeWorkspaceSchemaSql(parentDb));
 
 afterAll(() => {
+  parentDb.close();
   rmSync(dir, { recursive: true, force: true });
   rmSync(parentDbPath, { force: true });
 });
@@ -68,21 +69,20 @@ function startModelEndpoint(status: number) {
 function branchFiles(branchId: string, basePath = dir): string[] {
   const root = join(basePath, 'branches');
   if (!existsSync(root)) return [];
-  return readdirSync(root).filter((name) => name.startsWith(`${branchId}.db`));
+  const directory = new WorkspaceActorDirectory(makeSql(parentDb), { workspaceId: parentRuntime.actor.workspaceId, ownerUserId: '' });
+  const actor = directory.apply(parentRuntime.actor, [], { action: 'resolveCreation', creationId: branchId });
+  return readdirSync(root).filter((name) => name.startsWith(`${actor.storageKey}.db`));
 }
 
-test('an aborted successful branch leaves no trace database behind', async () => {
+test('terminal release removes an aborted branch and its trace sidecars', async () => {
   const endpoint = startModelEndpoint(200);
   try {
-    const spawner = createBranchSpawner(dir, { llm: endpoint.llm });
+    const spawner = createBranchSpawner(dir, { llm: endpoint.llm, parent: parentRuntime.actor });
     const handle = await spawner.spawn('cleanup-success');
     await handle.explore(HISTORY, [], LANGUAGES, 'build');
     expect(branchFiles('cleanup-success').length).toBeGreaterThan(0);
     await spawner.abort('cleanup-success');
-    // The exit hook runs asynchronously after SIGTERM lands.
-    for (let i = 0; i < 100 && branchFiles('cleanup-success').length > 0; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    await handle.release();
     expect(branchFiles('cleanup-success')).toEqual([]);
   } finally {
     await endpoint.stop();
@@ -91,7 +91,7 @@ test('an aborted successful branch leaves no trace database behind', async () =>
 
 test('a branch that crashes during startup leaves no trace database behind', async () => {
   const missingParent = join(dir, 'missing-parent');
-  const spawner = createBranchSpawner(missingParent, { llm: null });
+  const spawner = createBranchSpawner(missingParent, { llm: null, parent: parentRuntime.actor });
   await expect(spawner.spawn('cleanup-crash')).rejects.toThrow();
   for (let i = 0; i < 100 && branchFiles('cleanup-crash', missingParent).length > 0; i++) {
     await new Promise((resolve) => setTimeout(resolve, 50));

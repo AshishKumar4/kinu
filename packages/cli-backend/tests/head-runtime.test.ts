@@ -13,7 +13,7 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture, MergeOutputSchema,
-  MissionGovernor, CRAFT_NEUTRAL_PRIOR, reasoningEffortOptions,
+  MissionGovernor, CRAFT_NEUTRAL_PRIOR, reasoningEffortOptions, explorationActorKey,
   type ReasoningEffort,
   type HeadInput, type WebSearchProvider, type AgentRuntime, type JsonObject,
   type ModelCallReport, type ModelOperationEvent,
@@ -23,7 +23,9 @@ import {
   mergePolicyProfile, scratchDir, scratchPath, toolExecute, scriptedTurnModel,
 } from '@kinu.run/test-utils';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
-import { makeSql, makeExecRaw, createCLIRuntime, buildCLIHeadRuntime } from '../src/runtime';
+import { makeSql, makeExecRaw, createCLIRuntime } from '../src/runtime';
+import { createHeadRuntime } from './actor-fixture';
+import { openLocalActor } from '../src/actor-identity';
 
 // A local head's scratch is a real store under KINU_HOME (home.ts is the
 // isolation boundary), so point that boundary at a temp dir before anything
@@ -50,8 +52,9 @@ const stubWeb: WebSearchProvider = {
 
 /** A parent CLI runtime — the real execution surface every head forks. */
 function makeParent(): AgentRuntime {
-  return createCLIRuntime(new Database(':memory:'), {
-    dbPath: scratchPath('head-runtime-parent', 'parent.db'),
+  const dbPath = scratchPath('head-runtime-parent', 'parent.db');
+  return createCLIRuntime(new Database(dbPath), {
+    dbPath,
     llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' },
   });
 }
@@ -311,7 +314,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     ]));
   });
 
-  test('the prompt names private scratch and the parent workspace exactly as the CLI exposes them', async () => {
+  test('the prompt identifies the canonical workspace reached by its file tools', async () => {
     let prompt = '';
     let runSchema = '';
     const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel(
@@ -322,10 +325,8 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     )));
     await (await runtime.spawnHead(aHeadInput())).run();
 
-    expect(prompt).toContain('workspace.*` is your private scratch');
-    expect(prompt).toContain('parent.*` is the canonical parent workspace');
-    expect(prompt).toContain('runtime `parent`');
-    expect(prompt).not.toContain('`workspace.*` is the canonical workspace you were forked from');
+    expect(prompt).toContain('`workspace.*` is the canonical workspace you were forked from');
+    expect(prompt).not.toContain('workspace.*` is your private scratch');
     expect(runSchema).toContain('"parent"');
   });
 
@@ -442,9 +443,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     const parent = makeParent();
     await parent.storage.vfs.writeFile('hello.txt', 'from the parent workspace');
     const headDb = new Database(':memory:');
-    const rt = buildCLIHeadRuntime(headDb, {
-      parentRuntime: parent, agentId: 'h', agentName: 'head-h',
-    });
+    const rt = await createHeadRuntime(headDb, parent, 'h');
 
     // The parent's workspace, through the parent EXECUTOR — the exact thing the
     // old :memory:-backed fork could not see.
@@ -460,7 +459,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     expect(String(out)).toContain('from the real machine');
 
     // Its own filesystem is PRIVATE scratch — not the host, not the parent.
-    await rt.storage.vfs.writeFile('scratch.txt', 'private');
+    await rt.storage.vfs.writeFile(`/home/head-${rt.actor.storageKey}/scratch.txt`, 'head-only');
     expect(existsSync(join(dir, 'scratch.txt'))).toBe(false);
     expect(await parent.storage.vfs.exists('scratch.txt')).toBe(false);
     headDb.close();
@@ -472,9 +471,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
   test('the head run tool reaches the real host with runtime=laptop', async () => {
     const dir = scratchDir('head-runtime-cwd');
     writeFileSync(join(dir, 'note.txt'), 'real file content');
-    const rt = buildCLIHeadRuntime(new Database(':memory:'), {
-      parentRuntime: makeParent(), agentId: 'h2', agentName: 'head-h2',
-    });
+    const rt = await createHeadRuntime(new Database(':memory:'), makeParent(), 'h2');
     const capture = new HeadCapture();
     const tools = buildHeadToolSet({
       input: aHeadInput(), capture, rt,
@@ -501,9 +498,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
    * seed threw and the model was told its tool had failed.
    */
   test('its own workspace plane scores the tools it crafts', async () => {
-    const rt = buildCLIHeadRuntime(new Database(':memory:'), {
-      parentRuntime: makeParent(), agentId: 'h3', agentName: 'head-h3',
-    });
+    const rt = await createHeadRuntime(new Database(':memory:'), makeParent(), 'h3');
     const workspace = rt.executionRouter!.getProvider('workspace')!;
 
     expect(await workspace.tools.listTools!.execute()).toEqual([]);
@@ -535,7 +530,7 @@ function barrier(n: number, onRelease: () => void): () => Promise<void> {
  * have written before either reads, so a SHARED scratch would hand one of them
  * the other's marker.
  */
-function scratchProbeModel(arrive: () => Promise<void>): LanguageModel {
+function scratchProbeModel(arrive: () => Promise<void>, scratchPathFor: (name: string) => string): LanguageModel {
   const stepsByHead = new Map<string, number>();
   const envelope = (
     content: Awaited<ReturnType<LanguageModelV2['doGenerate']>>['content'],
@@ -559,8 +554,8 @@ function scratchProbeModel(arrive: () => Promise<void>): LanguageModel {
         type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'file',
         input: JSON.stringify(input),
       }], 'tool-calls');
-      if (step === 1) return fileCall({ action: 'write', path: 'note.txt', content: `scratch-of-${marker}` });
-      if (step === 2) { await arrive(); return fileCall({ action: 'read', path: 'note.txt' }); }
+      if (step === 1) return fileCall({ action: 'write', path: scratchPathFor(marker), content: `scratch-of-${marker}` });
+      if (step === 2) { await arrive(); return fileCall({ action: 'read', path: scratchPathFor(marker) }); }
       return envelope([{ type: 'text' as const, text: 'done' }], 'stop');
     },
   });
@@ -586,10 +581,13 @@ describe("a local head's scratch is a real store, private to it, and swept when 
   test('two concurrent heads each get their own durable scratch, and neither sees the other', async () => {
     const before = scratchStores();
     let midRun: string[] = [];
+    let expectedFiles: string[] = [];
+    const parent = makeParent();
+    const binding = (id: string) => openLocalActor(parent.actor, explorationActorKey(id), (key) => join(HEAD_SCRATCH_DIR, `${key}.db`));
     const journal = makeJournal();
     const runtime = createCLIHeadRuntime(headDeps(
-      scratchProbeModel(barrier(2, () => { midRun = scratchStores(); })),
-      { journal: () => journal },
+      scratchProbeModel(barrier(2, () => { midRun = scratchStores(); expectedFiles = [binding('alpha').storageKey, binding('beta').storageKey].map((key) => `${key}.db`); }), (id) => `/home/head-${binding(id).storageKey}/note.txt`),
+      { journal: () => journal, parentRuntime: parent },
     ));
 
     const inputs = [
@@ -601,7 +599,7 @@ describe("a local head's scratch is a real store, private to it, and swept when 
 
     // Durable: while both heads were running, each had a real store on disk —
     // not a `new Database(':memory:')` living in this process's heap.
-    expect(midRun.sort()).toEqual(['alpha.db', 'beta.db']);
+    expect(midRun.sort()).toEqual(expectedFiles.sort());
 
     // Private: each head read back its OWN marker, and the sibling's is absent.
     // Read through the journal, so this also proves the trace arrived there.

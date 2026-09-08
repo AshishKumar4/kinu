@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DEPS_GATED_TOOLS, REPORT_TOOL } from '@kinu.run/core';
+import { DEPS_GATED_TOOLS, REPORT_TOOL, TASK_TURN_ENDINGS, terminalTaskReport } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { orchestratorHarness, subordinateHarness } from './helpers/actor-harness';
 
@@ -32,49 +32,17 @@ describe('subordinate wiring', () => {
    * has to produce one — and the endings that previously produced none are
    * exactly the ones the durable policy withholds.
    */
-  test('a task child is seeded with its lifetime and reports on every terminal ending', () => {
-    const actor = source('actor-agent.ts');
-    const subordinate = source('subordinate-agent.ts');
-
-    // Threaded at the SEED, because the child reads it back off its own
-    // immutable identity row and must still know it after an eviction.
-    expect(actor).toContain('lifetime: input.lifetime,');
-    expect(subordinate).toContain('lifetime: input.lifetime,');
-    expect(subordinate).toContain("return this.identity.read()?.lifetime ?? 'durable';");
-
-    // EVERY ending is classified in one place and reported through the claimed
-    // effect. The branch that used to return without reporting is gone, and so
-    // is the second detached path an errored turn used to take — a failing turn
-    // emits both an error and a turn-end, which is how one question got two
-    // answers.
-    expect(subordinate).toContain("const ending: TaskTurnEnding = completed\n"
-      + "      ? 'answered'\n"
-      + "      : result.status === 'aborted' ? 'interrupted' : 'errored';");
-    // A task child reports even with nothing to say, which the durable relay
-    // withholds — and the durable relay is still what runs for a hire.
-    expect(subordinate).toContain('this.taskTerminalReport(ending, assistantText)');
-    expect(subordinate).toContain('subordinateRelaysTurnEnd({');
-    // The DECISION is core's closed map, never worded here — so the cloud child
-    // and the local one cannot describe the same ending differently.
-    expect(subordinate).toContain('return terminalTaskReport({ lifetime: this.ownLifetime(), ending, assistantText });');
-    // The two facts stay SEPARATE. A mid-task `progress` note means the child
-    // SPOKE without ANSWERING, so gating the answer on "spoke" parked the caller
-    // forever; and only a run-settling report is the answer.
-    expect(subordinate).toContain("this.settledRunThisTurn ||= temporaryRunSettles({ status: input.status, origin: 'report_tool' });");
-    // Reset together at the top of the next settle, so neither leaks into it.
-    expect(subordinate).toContain('    this.reportedThisTurn = false;\n    this.settledRunThisTurn = false;');
-    // The completed branch is gated on the same bit, which is also what stops a
-    // healthy report-tool answer emitting a second turn_end report the parent's
-    // ingress can only refuse with a throw.
-    expect(subordinate).toContain('const taskReport = this.settledRunThisTurn ? null : this.taskTerminalReport(');
-    // The DURABLE policy still reads "spoke this turn", untouched.
-    expect(subordinate).toContain('reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText,');
-    // The ending an interrupted turn earns is now carried by its own CLAIMED
-    // row rather than re-derived by a recovery hook: the roster declares a
-    // parent report for every ending, so a replay sends the report the turn
-    // actually owed instead of a generic 'recovered' one invented afterwards.
-    expect(subordinate).toContain('status: parentReport.status,');
-    expect(subordinate).not.toContain('relayTaskTerminal');
+  test('registered task lifetime supplies a terminal report for each non-answer ending', async () => {
+    const { agent } = orchestratorHarness();
+    const actor = await agent.actorDirectory({ action: 'register', creationId: 'temporary-proof', name: 'temporary-child', kind: 'subordinate', lifetime: 'task' });
+    const identity = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: actor.reference });
+    if ('reason' in identity) throw new Error(identity.error);
+    expect(identity.lifetime).toBe('task');
+    for (const ending of TASK_TURN_ENDINGS) {
+      const report = terminalTaskReport({ lifetime: identity.lifetime, ending, assistantText: ending === 'answered' ? 'The evidence is complete.' : '' });
+      expect(report?.status).toBe(ending === 'answered' ? 'completed' : 'blocked');
+      expect(report?.content).toBeString();
+    }
   });
 
   /** NO DEADLINES. A delegation is never cut off by a clock in this engine, so
@@ -144,56 +112,22 @@ describe('subordinate wiring', () => {
     expect(execTools).not.toContain('modelSpec');
   });
 
-  test('all user-level gates present the parent workspace name, never the facet name', () => {
-    const actor = source('actor-agent.ts');
-    const runtime = source('runtime.ts');
-    const orchestrator = source('orchestrator.ts');
-    const subordinate = source('subordinate-agent.ts');
-    // MCP now identifies its caller by the workspace capability token rather
-    // than by a name argument, so a facet dispatches as its parent workspace
-    // and there is no name left to spoof.
-    expect(actor).toContain('.userMcp_callTool(await this.userCaller(), serverId, mcpName, args)');
-    expect(actor).not.toContain('callerAgentName');
-    expect(runtime).toContain('agentName: actor.workspaceName');
-    expect(subordinate).toContain('const bootstrap = await parent.getSubordinateBootstrapIdentity();');
-    expect(subordinate).toContain('parentWorkspace: bootstrap.parentWorkspace');
-    expect(subordinate).toContain('ownerUserId: bootstrap.ownerUserId');
-    // The depth comes from the same answer, and from nowhere else: the child
-    // supplies no depth to be trusted with.
-    expect(subordinate).toContain('depth: bootstrap.depth');
-    // The team runtime is ActorAgent's now — a subordinate tree is recursive, so
-    // an actor that can hold a roster is every actor with depth left, not a kind.
-    expect(actor).toContain('inheritedContext: () => this.readInheritedContext()');
-    expect(orchestrator).not.toContain('createTeamToolDeps({');
+  test('a child bootstrap retains root ownership and refuses a foreign parent reference', async () => {
+    const { agent } = orchestratorHarness();
+    const actor = await agent.actorDirectory({ action: 'register', creationId: 'lineage-proof', name: 'lineage-child', kind: 'subordinate', lifetime: 'durable' });
+    const identity = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: actor.reference });
+    expect(identity).toMatchObject({ parentWorkspace: agent.name, ownerUserId: 'harness-owner', depth: 1, name: 'lineage-child' });
+    const refused = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: { ...actor.reference, parentActorId: 'foreign-parent' } });
+    expect(refused).toMatchObject({ reason: 'denied' });
   });
 
-  test('a subordinate holds the parent workspace capability token, pushed never pulled', async () => {
-    const actor = source('actor-agent.ts');
-    const subordinate = source('subordinate-agent.ts');
-
-    // One store, inherited by both actor classes: a facet's token IS the
-    // parent's, so §B6 taint inheritance needs no per-facet bookkeeping.
-    expect(actor).toContain('protected workspaceCapabilityToken(): string | null');
-    expect(actor).toContain('async installWorkspaceCapability(token: string)');
-
-    // Push, both at spawn and whenever the parent's token is (re)issued.
-    expect(actor).toContain('const capabilityToken = this.workspaceCapabilityToken();');
-    expect(actor).toContain('await stub.installWorkspaceCapability(token);');
-    expect(subordinate).toContain('if (input.capabilityToken) await this.installWorkspaceCapability(input.capabilityToken);');
-
-    // Never pull: the bootstrap RPC any stub-holder can reach must not carry a
-    // secret. Driven rather than read, because the earlier source slice was
-    // anchored on two members that had moved and passed over an empty string.
-    // The harness root holds `harness-capability`, so a leak would be in the
-    // answer itself.
+  test('native bootstrap reads disclose lineage without disclosing the capability token', async () => {
     const { agent } = orchestratorHarness();
-    const bootstrap = await agent.getSubordinateBootstrapIdentity();
-    expect(Object.keys(bootstrap).sort()).toEqual(['depth', 'model', 'ownerUserId', 'parentWorkspace']);
+    const actor = await agent.actorDirectory({ action: 'register', creationId: 'bootstrap-contract', name: 'bootstrap-child', kind: 'subordinate', lifetime: 'durable' });
+    const bootstrap = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: actor.reference });
+    expect(bootstrap).toMatchObject({ name: 'bootstrap-child', depth: 1, ownerUserId: 'harness-owner' });
     expect(JSON.stringify(bootstrap)).not.toContain('harness-capability');
-    expect(actor).not.toMatch(/@callable\(\)\s*\n\s*(async )?(installWorkspaceCapability|workspaceCapabilityToken)/);
-    for (const file of ['actor-agent.ts', 'orchestrator.ts', 'subordinate-agent.ts']) {
-      expect(source(file)).not.toMatch(/get\w*CapabilityToken\w*\(\)/);
-    }
+    expect(bootstrap).not.toHaveProperty('capabilityToken');
   });
 
   test('a subordinate shares workspace bytes without overwriting workspace identity or duplicating the executor', () => {

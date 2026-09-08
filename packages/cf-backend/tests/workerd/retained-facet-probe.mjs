@@ -75,7 +75,7 @@ export class OrchestratorAgent extends Agent {
     if (operation === 'abort') { this.abortSubAgent(SubordinateAgent, 'child', 'cold production probe'); return { aborted: true }; }
     const child = await this.getExistingSubAgent(SubordinateAgent, 'child');
     if (!child) throw new Error('Missing registered child');
-    if (operation === 'inspect') return child.inspectSubordinateStorage({ path: ['child'], view: 'events', runId: 'retained-run', query: { limit: 1 } }, { owner: 'owner', workspace: 'workspace', traversed: ['child'] });
+    if (operation === 'inspect') return child.inspectSubordinateStorage({ path: ['child'], view: 'events', runId: 'retained-run', query: { limit: 1 } }, { owner: 'owner', workspace: 'workspace', traversed: ['child'], storagePath: ['child'] });
     if (operation === 'counts') return child.counts();
     throw new Error('Invalid operation');
   }

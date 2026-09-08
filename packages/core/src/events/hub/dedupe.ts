@@ -75,14 +75,13 @@ function dedupeReadableEvent(
       // work on that side, so its sequence is the key that recognises a replay.
       return subordinateReportDedupeKey(event.payload.sequence_id);
 
+    case 'subordinate_task':
+      return event.payload.creation_id === undefined ? null : `subordinate-birth:${event.payload.creation_id}`;
+
     case 'chat':
     case 'internal':
     case 'file_changed':
     case 'reply_request':
-    case 'subordinate_task':
-      // No natural idempotency. An assignment DOWN to a subordinate is a
-      // one-shot same-machine facet RPC with no redelivery loop to dedupe
-      // against.
       return null;
   }
 }

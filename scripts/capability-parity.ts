@@ -251,9 +251,8 @@ export function behaviourTypes(sources: ReadonlyMap<string, string>): ReadonlySe
  * BEHAVIOUR-typed optional members, and what it `extends`.
  *
  * Exported because a contract a backend cannot import is not one it implements.
- * Interfaces with NO optional behaviour member are returned too, and dropped by
- * `findAsymmetries` after heritage is resolved: a base can be a plain record and
- * still own the members a derived switchboard's construction site sets.
+ * Required-only interfaces remain candidates for literal attribution. Otherwise
+ * their values can look like a wider contract with missing optional behavior.
  */
 export function declaredContracts(
   file: string,
@@ -293,16 +292,8 @@ export function declaredContracts(
 }
 
 /**
- * Contracts with their `extends` chains folded in, then narrowed to the ones
- * that actually carry a capability switch.
- *
- * Both halves matter. Members must be inherited or a derived contract's literal
- * matches nothing (attribution demands EVERY supplied key be declared), and the
- * base's own switches then go unmeasured wherever the derived form is the one
- * built — which is how `ActorToolsetDeps extends BuiltinToolDeps` silently
- * retired three recorded asymmetries. Optional members are inherited for the
- * same reason: an inherited switch is still a switch the two closures can
- * disagree about.
+ * Fold inherited members into each contract before literal attribution.
+ * Keep required-only contracts so the narrowest declared shape can win.
  */
 function resolveHeritage(declared: readonly Contract[]): Contract[] {
   const byName = new Map(declared.map((contract) => [contract.name, contract]));
@@ -320,9 +311,7 @@ function resolveHeritage(declared: readonly Contract[]): Contract[] {
     }
     return { ...contract, members, optional: [...optional] };
   };
-  return declared
-    .map((contract) => closeOver(contract, new Set([contract.name])))
-    .filter((contract) => contract.optional.length > 0);
+  return declared.map((contract) => closeOver(contract, new Set([contract.name])));
 }
 
 /** Object literals in `text`, each as the key set it sets plus whether it
@@ -628,7 +617,8 @@ export function findAsymmetries(sources: ReadonlyMap<string, string>): Parity {
     if (!isShared(file)) continue;
     declared.push(...declaredContracts(file, text, behaviours));
   }
-  const contracts = resolveHeritage(declared);
+  const allContracts = resolveHeritage(declared);
+  const contracts = allContracts.filter((contract) => contract.optional.length > 0);
 
   const sites = new Map<string, Map<Closure, Site[]>>();
   const opaque = new Set<string>();
@@ -637,7 +627,7 @@ export function findAsymmetries(sources: ReadonlyMap<string, string>): Parity {
     const closure = closureOf(file);
     if (closure === undefined) continue;
     for (const site of objectLiterals(file, text)) {
-      const contract = attribute(site, contracts);
+      const contract = attribute(site, allContracts);
       if (contract === undefined) continue;
       if (site.opaque) opaque.add(contract.name);
       const byClosure = sites.get(contract.name) ?? new Map<Closure, Site[]>();

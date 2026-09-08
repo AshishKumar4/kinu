@@ -105,6 +105,16 @@ Those facets have **separate actor-local SQLite storage**. Their conversations a
 
 This is a real mismatch with the owner's latest shared-SQLite requirement. It must remain visible in the implementation comparison.
 
+The local D0/D1 transition adds one root actor directory. The directory issues immutable actor and parent references. It separates logical aliases from physical storage keys. Live storage uses `actor_config`, `actor_program_state`, `actor_subordinates` and `actor_identity`. The root directory uses `workspace_actors`. Earlier relations remain untouched for explicit historical inspection and later preservation/import. No live store reads or adopts those earlier rows. Hosted and local child runtime storage remains separate until the coordinated cutover.
+
+On 2026-09-08, 8 directory cases and 3 admitted-birth cases passed locally. They cover colliding state keys, lost acknowledgements, cross-parent refusal, retirement retries and reused aliases. The native Worker tier passed 3 actor-identity cases and 5 retained-inspection cases. These are local proofs. No deployment or complete preservation/import proof is claimed.
+
+An existing root without an imported actor identity remains inspection-only. Owner transcript reads and archive export remain available. Actor execution refuses with `missing`. New roots register their main actor before configuration access. Existing transcript and effect IDs remain unchanged.
+
+Retained dismissal keeps the logical name reserved. Successful destructive retirement now removes only the roster row that matches its captured actor reference. This changes the earlier behavior, which left the dismissed roster row behind after physical deletion. Interrupted retirement keeps its intent in the existing directory and roster.
+
+Full preservation/import, shared physical actor storage, conversation scoping and durable consumed-program provenance remain coordinated cutover requirements. Do not deploy this transition before those requirements and normal runtime acceptance pass.
+
 ### 4.2 Required shared-SQLite target
 
 For the cloud product, one workspace Durable Object owns:
@@ -308,8 +318,8 @@ These are not all one serializable prompt file. Consolidating storage requires a
 | `SOUL.md` | Owner-editable workspace identity/purpose prose. | Permission for an agent to rewrite owner policy. |
 | `memory/MEMORY.md`, `memory/*` | Durable notes and indexed memory. | The exact active conversation. |
 | `scaffold/agent.js`, `scaffold/agent.js.vN` | Main scaffold view and version source. SQL selects the current/promoted version. | That any arbitrary file overwrite automatically changes an in-flight loop. |
-| `.kinu/agents/<encoded-name>/scaffold/agent.js[.vN]` | Subordinate scaffold source in shared files, with version metadata in that actor's SQL. | Shared physical agent SQLite. |
-| `.kinu/heads/<id>/scaffold/agent.js`, `.kinu/nodes/<id>/scaffold/agent.js` | Exploration runtime identity paths. | That the head/node inference path executes the promoted Think scaffold transform. It currently does not. |
+| `.kinu/agents/<storage-key>/scaffold/agent.js[.vN]` | Subordinate scaffold source in shared files, with version metadata in that actor's SQL. The physical key is distinct from the logical alias. | Shared physical agent SQLite. |
+| `.kinu/heads/<storage-key>/scaffold/agent.js`, `.kinu/nodes/<storage-key>/scaffold/agent.js` | Exploration runtime paths use the issued physical actor key. Graph IDs remain logical search identities. | Complete common-loop or consumed-version provenance acceptance. |
 | Actor homes and temporary roots | Credentialed homes/shell identities within the canonical workspace. | Unrestricted access to every actor's private state. |
 | `.kinu/compaction/<session>/<range>.md` | Recall text for a compacted range, cited by SQL archive records. | A writable projection of the current working conversation. |
 | Tool-output, attachment and event-content spill areas | Large content retained outside a prompt-sized response. | Permission to replace canonical event outcomes or claim every byte was included in the prompt. |

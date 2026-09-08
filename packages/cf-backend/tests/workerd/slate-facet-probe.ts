@@ -7,7 +7,7 @@ import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createExecuteToolsFactory } from '../../src/execute-tools';
 import { bindAgentSql } from '../../src/runtime';
-import { createDefaultWebSearchProvider, initCodemodeStateTable, toolsInWorkMode, type WorkMode } from '@kinu.run/core';
+import { createDefaultWebSearchProvider, initCodemodeStateTable, initAgentConfigTable, initWorkspaceActorTable, WorkspaceActorDirectory, WORKSPACE_IDENTITY_DDL, toolsInWorkMode, type WorkMode } from '@kinu.run/core';
 import { CodemodeEgress as ProductionEgress, codemodeEgress } from '../../src/codemode-egress';
 
 /** The external network boundary is deterministic; real WorkerLoader egress still selects it. */
@@ -51,12 +51,18 @@ export class SlateFacetRootProbe extends Agent<ActorEnv> {
     if (!files.exists('/home/user/plan-data.txt')) files.writeFile('/home/user/plan-data.txt', 'original');
     const sql = bindAgentSql(this);
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS crafted_tools(name TEXT, score REAL, last_used_at INTEGER)');
-    initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
+    const execRaw = (statement: string) => { this.ctx.storage.sql.exec(statement); };
+    initCodemodeStateTable(execRaw);
+    initAgentConfigTable(execRaw);
+    execRaw(WORKSPACE_IDENTITY_DDL);
+    initWorkspaceActorTable(execRaw);
+    if (sql`SELECT id FROM workspace_identity LIMIT 1`.length === 0) void sql`INSERT INTO workspace_identity(id,name) VALUES ('mode-probe','mode-probe')`;
+    const actor = new WorkspaceActorDirectory(sql, { workspaceId: 'mode-probe', ownerUserId: '' }).createMain({ name: 'mode-probe' });
     const factory = createExecuteToolsFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), sql, workspace: 'mode-probe',
       webSearch: createDefaultWebSearchProvider({ fetch }),
       rt: {
-        craftStore: { list: () => [] },
+        actor, craftStore: { list: () => [] },
         executionRouter: { getProviders: () => [{
           name: 'workspace', positionalArgs: true,
           tools: {

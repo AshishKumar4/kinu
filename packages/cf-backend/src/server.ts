@@ -41,7 +41,7 @@ import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs"
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
-  isForeignAgentNamespacePath,
+  isForeignAgentNamespacePath, directSubordinateRoute,
 } from "./agent-routing";
 import { handlePcRequest } from "./pc-handler";
 import { servePreviewRequest } from "./preview-proxy";
@@ -650,7 +650,17 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // 1 MiB frame ceiling, and PTY bytes are neither.
     const terminalResp = await handleTerminalRequest(reqWithId, env, agentName, ctx);
     if (terminalResp) return terminalResp;
-    const agentResp = await routeAgentRequest(reqWithId, env);
+    let routedRequest = reqWithId;
+    const subordinate = directSubordinateRoute(url.pathname);
+    if (subordinate) {
+      const root = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(agentName));
+      const target = await root.resolveSubordinateClientKey(subordinate.name);
+      if ('reason' in target) return Response.json(target, { status: target.reason === 'missing' ? 404 : target.reason === 'denied' ? 403 : 500 });
+      const targetUrl = new URL(reqWithId.url);
+      targetUrl.pathname = `${subordinate.prefix}${encodeURIComponent(target.storageKey)}${subordinate.suffix}`;
+      routedRequest = new Request(targetUrl, reqWithId);
+    }
+    const agentResp = await routeAgentRequest(routedRequest, env);
     if (agentResp) return agentResp;
   }
 

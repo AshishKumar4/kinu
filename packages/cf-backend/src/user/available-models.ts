@@ -13,7 +13,7 @@ import { retryTransientDO } from '../lib/do-rpc';
 import type { UserCaller } from './workspace-capability';
 
 export interface ModelMenuEntry {
-  /** Full spec — `<provider>/<modelId>`, used as the agent_config.model value. */
+  /** Full spec — `<provider>/<modelId>`, used as the actor_config.model value. */
   spec: string;
   /** Display label for the picker. */
   label: string;
@@ -52,7 +52,7 @@ export async function listAvailableModels(env: Env, userId: string, caller: User
   }));
 
   // openai-compat: user-named — we surface each as a single generic entry.
-  // The agent_config.model can be set to `openai-compat:<name>/<modelId>`.
+  // The actor_config.model can be set to `openai-compat:<name>/<modelId>`.
   // Retried: a dropped read here renders a user's connected accounts as none at
   // all, which sends them to re-authorise a provider they never lost.
   const creds = await retryTransientDO('listCredentials', () => stub.listCredentials(caller));

@@ -122,11 +122,7 @@ function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
   return { rt, model, resolveModel: () => model, ...overrides };
 }
 
-const rosterEntry: SubordinateRosterEntry = {
-  name: 'researcher',
-  createdBy: 'orchestrator', status: 'idle', currentTask: null,
-  createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-};
+const rosterEntry: SubordinateRosterEntry = { name: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'idle', currentTask: null, createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null };
 
 const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHandoff => ({
   eventId: `evt-${delivery}`,
@@ -157,10 +153,7 @@ function makeTeam() {
       create: async (input) => ({
         name: input.name ?? 'researcher',
         displayName: 'Researcher',
-        subordinate: {
-          name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'general',
-          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-        },
+        subordinate: { name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'general', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async (input) => {
         recordCall(calls, 'rename', input);

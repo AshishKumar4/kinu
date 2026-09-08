@@ -16,7 +16,7 @@
  */
 
 import { headAgentName, nodeAgentName, subordinateAgentName } from '@kinu.run/core';
-import type { NimbusSandboxHandle } from '@kinu.run/core';
+import type { ActorReference, NimbusSandboxHandle } from '@kinu.run/core';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
 /**
@@ -57,8 +57,7 @@ export function hostedFacetAgentName(kind: HostedFacetKind, id: string): string 
  * release reclaims the bytes and the `/tmp` rewrite while the uid row stays.
  */
 export interface HostedFacetHomes {
-  provision(kind: HostedFacetKind, id: string): Promise<HostedNodeHome>;
-  release(kind: HostedFacetKind, id: string): Promise<void>;
+  provision(reference: ActorReference): Promise<HostedNodeHome>;
 }
 
 /**

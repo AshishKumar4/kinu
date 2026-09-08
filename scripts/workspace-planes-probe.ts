@@ -1,10 +1,11 @@
 import { Database } from 'bun:sqlite';
-import { agentHomeNodeProvisioner, facetHomeProvisioner, type AgentRuntime } from '@kinu.run/core';
+import { facetHomeProvisioner, nodeAgentName, headAgentName, subordinateAgentName, type AgentRuntime } from '@kinu.run/core';
 import { createCLIRuntime } from '../packages/cli-backend/src/runtime';
+import { registerLocalActorState } from '../packages/cli-backend/src/actor-identity';
 
 const database = new Database(':memory:');
 const config = {
-  dbPath: '/tmp/workspace-planes-probe.db',
+  dbPath: database.filename,
   llm: { name: 'probe', baseURL: 'http://localhost:0', headers: {}, model: 'unused' },
   hostRoot: null,
 };
@@ -15,15 +16,17 @@ try {
     const nodeRuntime = runtime.nodeRuntime;
     if (!host || !nodeRuntime) throw new Error('local workspace has no node plane');
     const provision = facetHomeProvisioner(host());
-    const node = await agentHomeNodeProvisioner(host())({ nodeId: 'probe', rootId: 'probe', depth: 1 });
+    const node = registerLocalActorState(runtime.actor, { name: 'exp:node-probe', creationId: 'node-probe', kind: 'node', lifetime: 'task' });
+    const head = registerLocalActorState(runtime.actor, { name: 'exp:head-probe', creationId: 'head-probe', kind: 'head', lifetime: 'task' });
+    const subordinate = registerLocalActorState(runtime.actor, { name: 'sub-probe', creationId: 'sub-probe', kind: 'subordinate', lifetime: 'durable' });
     const identities = [
-      { name: 'node', workspace: node },
-      { name: 'head', workspace: await provision('head-probe') },
-      { name: 'subordinate', workspace: await provision('sub-probe') },
+      { name: 'node', actor: node, workspace: await provision(nodeAgentName(node.storageKey)) },
+      { name: 'head', actor: head, workspace: await provision(headAgentName(head.storageKey)) },
+      { name: 'subordinate', actor: subordinate, workspace: await provision(subordinateAgentName(subordinate.storageKey)) },
     ];
     if (generation === 1) await runtime.storage.vfs.writeFile('/home/user/shared.txt', 'one workspace');
     const planes: { name: string; runtime: AgentRuntime }[] = [{ name: 'main', runtime }];
-    for (const identity of identities) planes.push({ name: identity.name, runtime: await nodeRuntime(identity.workspace) });
+    for (const identity of identities) planes.push({ name: identity.name, runtime: await nodeRuntime(identity.workspace, identity.actor, runtime) });
     for (const plane of planes) {
       const shell = plane.runtime.shell;
       if (!shell) throw new Error(`${plane.name} has no shell`);

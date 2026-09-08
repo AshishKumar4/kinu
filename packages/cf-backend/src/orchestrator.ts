@@ -28,7 +28,7 @@ import { SlateHost } from "./slates/host";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import { applyWorkspaceBoxOp, type WorkspaceBoxOp, type WorkspaceBoxResult } from "./workspace-box-rpc";
 import {
-  hostedFacetAgentName, type HostedFacetHomes, type HostedFacetKind, type HostedNodeHome,
+  hostedFacetAgentName, type HostedFacetHomes, type HostedNodeHome,
 } from "./node-home";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
@@ -45,7 +45,7 @@ import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from "./lib/cron";
 import type { ChatResponseResult } from "@cloudflare/think";
 import {
-  EvolutionEngine,
+  EvolutionEngine, parseActorKey, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
   readActivityLog,
   summarizeSteps,
   usageReported,
@@ -228,7 +228,7 @@ import {
   TURN_AUTHOR_METADATA_KEY,
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult } from "@kinu.run/core";
-import { classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, toKinuError, type Refusal } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { deleteExplorationFacet, reconcileExplorationFacets, type ExplorationFacetLedgerStatus } from "./facet-spawn";
@@ -523,8 +523,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   facetHomes(): HostedFacetHomes {
     return {
-      provision: (kind, id) => this.provisionFacetHome(kind, id),
-      release: (kind, id) => this.releaseFacetHome(kind, id),
+      provision: (reference) => this.provisionFacetHome(reference),
     };
   }
 
@@ -538,19 +537,15 @@ export class OrchestratorAgent extends ActorAgent {
    * directory: the name is derived here, so a facet cannot ask for the
    * workspace agent's home or another kind's.
    */
-  async provisionFacetHome(kind: HostedFacetKind, id: string): Promise<HostedNodeHome> {
-    const provisioned = await facetHomeProvisioner(this.facetHomeHost())(hostedFacetAgentName(kind, id));
-    if (provisioned.isolation !== 'private-home') {
-      throw new Error(`${kind} ${id} was provisioned without a credential; a hosted facet cannot run on the shared plane`);
-    }
-    return { home: provisioned.home, tmp: provisioned.tmp, cred: provisioned.cred };
-  }
-
-  /** The terminal half of {@link provisionFacetHome}: the bytes and the `/tmp`
-   *  rewrite go, the uid row stays. Same caller set, same reason it is not
-   *  `@callable`. */
-  async releaseFacetHome(kind: HostedFacetKind, id: string): Promise<void> {
-    await facetHomeReleaser(this.facetHomeHost())(hostedFacetAgentName(kind, id));
+  async provisionFacetHome(reference: ActorReference): Promise<HostedNodeHome> {
+    const directory = this.workspaceActors();
+    const path = directory.storagePath(reference);
+    const actor = directory.describe(directory.validate(reference, path));
+    if (actor.kind === 'main' || actor.kind === 'branch') throw new KinuError('denied', 'This actor kind does not own a facet home.');
+    const provision = facetHomeProvisioner(this.facetHomeHost(), () => { directory.validate(reference, path); });
+    const home = await provision(hostedFacetAgentName(actor.kind, parseActorKey(actor.storageKey).id));
+    if (home.isolation !== 'private-home') throw new KinuError('denied', 'A hosted facet requires its own credential.');
+    return { home: home.home, tmp: home.tmp, cred: home.cred };
   }
 
   /**
@@ -655,7 +650,8 @@ export class OrchestratorAgent extends ActorAgent {
     return this.eventLog.hasOpenDrainLease()
       || this.terminal.nextRetryAt() !== null || this.terminal.hasIncomplete()
       || this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms()
-      || this.jobs.hasLiveJobs();
+      || this.jobs.hasLiveJobs() || this.workspaceActors().hasRetirements()
+      || this.subordinateRoster.hasPendingBirths() || this.subordinateRoster.hasPendingDeletions();
   }
 
   /**
@@ -1194,6 +1190,100 @@ export class OrchestratorAgent extends ActorAgent {
     return owner && owner !== '' ? owner : null;
   }
 
+  private _actorDirectory: WorkspaceActorDirectory | null = null;
+  private _rootActor: ActorHandle | null = null;
+
+  private workspaceActors(): WorkspaceActorDirectory {
+    if (this._actorDirectory) return this._actorDirectory;
+    const owner = () => this.getOwnerUserId() ?? '';
+    this._actorDirectory = new WorkspaceActorDirectory(this.boundSql, {
+      workspaceId: this.ctx.id.toString(),
+      get ownerUserId() { return owner(); },
+    });
+    return this._actorDirectory;
+  }
+
+  protected actorHandle(): ActorHandle {
+    return this._rootActor ??= this.workspaceActors().main();
+  }
+
+  private readonly actorRetirementsInFlight = new Map<string, Promise<ActorDirectoryResult>>();
+
+  async actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult> {
+    const { actorId, workspaceId, parentActorId } = this.actorHandle();
+    return this.runActorDirectory({ actorId, workspaceId, parentActorId }, [], operation);
+  }
+
+  async applyActorDirectory(caller: ActorReference, path: readonly string[], operation: ChildActorOperation): Promise<ActorDirectoryResult | Refusal> {
+    try {
+      return await this.runActorDirectory(caller, path, operation);
+    } catch (cause) {
+      return refusalOf(toKinuError({ doing: 'applying a root actor directory operation', cause, otherwise: 'io' }));
+    }
+  }
+
+  private async runActorDirectory(caller: ActorReference, path: readonly string[], operation: ChildActorOperation): Promise<ActorDirectoryResult> {
+    if (!this.getOwnerUserId()) throw new KinuError('missing', 'The workspace has no owner.');
+    const parsed = v.safeParse(ChildActorOperationSchema, operation);
+    if (!parsed.success) throw new KinuError('bad_input', 'Invalid child actor operation.');
+    const input = parsed.output;
+    const directory = this.workspaceActors();
+    directory.validate(caller, path);
+    if (input.action === 'release') throw new KinuError('denied', 'Only completed physical retirement can release an actor name.');
+    if (input.action === 'cancelCreation') {
+      const entry = directory.apply(caller, path, input);
+      return this.runActorDirectory(caller, path, { action: 'retire', name: entry.name, reference: entry.reference });
+    }
+    if (input.action !== 'retire') return directory.apply(caller, path, input);
+    const pending = this.actorRetirementsInFlight.get(input.reference.actorId);
+    if (pending) {
+      directory.apply(caller, path, input);
+      return await pending;
+    }
+    const retirement = (async (): Promise<ActorDirectoryResult> => {
+      const entry = directory.apply(caller, path, input);
+      await this.scheduleTerminalRetry(Date.now());
+      const descendants = [...path, entry.storageKey].map((name) => ({ className: this.facetClass().name, name }));
+      await this._cf_destroyDescendantFacet([...this.selfPath, ...descendants]);
+      if (entry.kind !== 'main' && entry.kind !== 'branch') {
+        await facetHomeReleaser(this.facetHomeHost())(hostedFacetAgentName(entry.kind, parseActorKey(entry.storageKey).id));
+      }
+      return entry.state === 'deleted' ? entry : directory.apply(caller, path, { action: 'release', name: input.name, reference: input.reference });
+    })();
+    this.actorRetirementsInFlight.set(input.reference.actorId, retirement);
+    try {
+      return await retirement;
+    } catch (cause) {
+      throw toKinuError({ doing: 'retiring an actor and its physical storage', cause, otherwise: 'io' });
+    } finally {
+      if (this.actorRetirementsInFlight.get(input.reference.actorId) === retirement) this.actorRetirementsInFlight.delete(input.reference.actorId);
+    }
+  }
+
+  private bootstrapWorkspaceActor(): boolean {
+    const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
+    if (identity.length === 0) {
+      void this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
+      this.workspaceActors().createMain({ name: this.name });
+    }
+    const registered = this.sql`SELECT actor_id FROM workspace_actors WHERE kind = 'main' LIMIT 1`;
+    if (registered.length === 0) return false;
+    this.actorHandle();
+    return true;
+  }
+
+  async resolveSubordinateClientKey(name: string): Promise<{ storageKey: string } | Refusal> {
+    try {
+      if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
+      const row = this.subordinateRoster.get(name);
+      if (!row || row.status === 'dismissed' || !row.actorReference) throw new KinuError('missing', 'The subordinate is not available for client execution.');
+      const actor = this.workspaceActors().apply(this.actorHandle(), [], { action: 'validate', name, reference: row.actorReference });
+      if (actor.kind !== 'subordinate' || !this.hasSubAgent(this.facetClass(), actor.storageKey)) throw new KinuError('missing', 'The subordinate physical actor is absent.');
+      return { storageKey: actor.storageKey };
+    } catch (cause) {
+      return refusalOf(toKinuError({ doing: 'resolving a logical subordinate client path', cause, otherwise: 'io' }));
+    }
+  }
   /** The agents tool's peer deps over the cross-workspace transport. Owner
    *  resolution is lazy inside each action (the toolset is cached across
    *  turns — including a pre-claim build — so deps must not capture owner
@@ -1382,7 +1472,9 @@ export class OrchestratorAgent extends ActorAgent {
           INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
           VALUES (${this.ctx.id.toString()}, ${this.name}, ${userId}, ${Date.now()})
         `;
+        this.workspaceActors().createMain({ name: this.name });
       } else {
+        this.actorHandle();
         void this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
       }
       this._ownerUserId = userId;
@@ -1874,7 +1966,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /**
    * The workspace title, cached PER ACTIVATION from the root registry. UserDO
-   * owns the row; this actor holds no `agent_config` mirror — a mirror would
+   * owns the row; this actor holds no `actor_config` mirror — a mirror would
    * drift the moment another writer (the owner rename route, the generated-title
    * scheduler) commits to the root. Sync readers use whatever is hydrated;
    * every mutation path hydrates BEFORE deciding.
@@ -2130,7 +2222,7 @@ export class OrchestratorAgent extends ActorAgent {
         // Read through `this.orch` at DELIVERY time, never captured: this
         // getter is reachable from the runtime's own construction path.
         signals: { deliver: (signal) => this.orch.signals.deliver(signal) },
-        // Where an 'always' answer lands: the same agent_config the approval
+        // Where an 'always' answer lands: the same actor_config the approval
         // MODE lives in, read live by the gate on the very next command.
         remember: (grants) => { this.config.grantShellApproval(grants); },
         // A spent grant's row is DELETED, so this run event is the only
@@ -2216,6 +2308,7 @@ export class OrchestratorAgent extends ActorAgent {
     // Every table a workspace has, on any backend — one list, in core.
     initWorkspaceSchema({ execRaw, sql: this.boundSql, exec: this.ctx.storage.sql });
     initWorkspaceBaselineTable(execRaw);
+    initWorkspaceActorTable(execRaw);
 
     // ── planes this root alone carries (declared per-root in
     //    core/conformance/manifest.ts, observed against sqlite_master) ──
@@ -2278,7 +2371,10 @@ export class OrchestratorAgent extends ActorAgent {
    *  it is visible in the diff; `scripts/do-init-gate.ts` is what refuses the
    *  widening. */
   async onStart(): Promise<void> {
+    this.installClientMessageGate();
     this.ensureSchema();
+    // Existing unimported state stays available to owner inspection, without an actor runtime.
+    if (!this.bootstrapWorkspaceActor()) return;
     // EVERY budgeted sweep this actor owns, through the seam the alarm frame
     // runs — one list, not a hand-folded copy of it, so a sweep added to the
     // seam cannot be missing from the gate. They run inside `Agent.alarm()`'s
@@ -2322,18 +2418,6 @@ export class OrchestratorAgent extends ActorAgent {
       });
     }
 
-    try {
-      const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
-      if (identity.length === 0) {
-        void this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
-      }
-    } catch (err) {
-      diagnostics.failure('workspace.identity_init_failed', toKinuError({
-        doing: 'writing the workspace identity row on activation',
-        cause: err,
-        otherwise: 'io',
-      }), { workspace: this.name });
-    }
     // A cold activation is the moment the fork journal's `running` heads become
     // provably stale: nothing in this isolate is executing one, and
     // `head_journal.status` had no writer for that — so `listLive()` kept
@@ -2439,6 +2523,9 @@ export class OrchestratorAgent extends ActorAgent {
    *  already drives is skipped. */
 
   protected override async maintenanceWork(): Promise<boolean> {
+    for (const pending of this.workspaceActors().retirements()) {
+      await this.runActorDirectory(pending.caller, pending.parentPath, { action: 'retire', name: pending.name, reference: pending.reference });
+    }
     if (!this.activationRecoveryPending) return super.maintenanceWork();
     // AFTER the branch seal has drained, and the seal's own remainder is what
     // says so: a branch head still `running` from before the cutoff is a row
@@ -2505,8 +2592,12 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       const { reclaimed } = await reconcileExplorationFacets(
         {
-          list: () => this.listSubAgents(this.facetClass()),
-          delete: async (id) => deleteExplorationFacet(this, id),
+          list: () => this.listSubAgents(this.facetClass()).map((facet) => {
+            const actor = this.workspaceActors().storageEntry(this.actorHandle(), facet.name);
+            if (!actor) throw new KinuError('missing', 'The facet has no registered actor identity.');
+            return { name: actor.name, reference: actor.reference };
+          }),
+          delete: async (id, reference) => deleteExplorationFacet(this, id, reference),
         },
         (id) => this.explorationFacetLedgerStatus(id),
         () => this.hasLiveExploration(),
@@ -3119,7 +3210,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /**
    * Change how the `run` builtin handles 'gate' decisions from the
-   * approval-gate review. Stored in agent_config; effective on the NEXT
+   * approval-gate review. Stored in actor_config; effective on the NEXT
    * turn (the tool cache rebuilds when CraftStore changes — and on cold-
    * start any value here is read).
    *
@@ -3763,7 +3854,7 @@ export class OrchestratorAgent extends ActorAgent {
   async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
     const owner = this.getOwnerUserId();
     if (!owner) throw new KinuError('denied', 'The workspace has no owner.');
-    return this.inspectSubordinateStorage(request, { owner, workspace: this.name, traversed: [] });
+    return this.inspectSubordinateStorage(request, { owner, workspace: this.name, traversed: [], storagePath: [] });
   }
 
   @callable()
@@ -4599,7 +4690,7 @@ export class OrchestratorAgent extends ActorAgent {
   /**
    * Fork this agent at a specific message, producing a new agent DO with:
    *   - SOUL.md copied, messages 0..N copied, crafted tools snapshotted,
-   *     memory copied, agent_config copied (display_name overwritten)
+   *     memory copied, actor_config copied (display_name overwritten)
    *   - search tree, evolution events, scaffold, crafted-tool quality RESET
    *
    * The driver is core's (identity/fork-driver.ts); what a Durable Object

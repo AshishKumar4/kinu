@@ -39,6 +39,7 @@ import type { SqlExecutor, VFS } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
 import type { ForkFileSink } from './fork-sink';
 import { renderIssues } from '../utils/json';
+import { openWorkspaceMainActor } from '../state/workspace-actors';
 import {
   ancestryIds,
   messageRowById,
@@ -293,11 +294,12 @@ function messagePayloadBytes(row: ForkMessageRow): number {
 
 
 async function* configRows(sql: SqlExecutor): AsyncGenerator<ForkConfigRow> {
+  const actor = openWorkspaceMainActor(sql);
   let rowid = 0;
   for (;;) {
     const row = sql<ForkConfigRow & { rowid: number }>`
-      SELECT rowid, key, value FROM agent_config
-      WHERE rowid > ${rowid}
+      SELECT rowid, key, value FROM actor_config
+      WHERE actor_id = ${actor.actorId} AND rowid > ${rowid}
       ORDER BY rowid ASC LIMIT 1
     `[0];
     if (row === undefined) return;
@@ -376,7 +378,7 @@ export async function* forkTransferFrames(
   for await (const path of forkFilePaths(source.vfs)) filePaths.push(path);
 
   const counts: ForkSectionCounts = {
-    agentConfig: source.sql<{ key: string }>`SELECT key FROM agent_config`
+    agentConfig: source.sql<{ key: string }>`SELECT key FROM actor_config WHERE actor_id = ${openWorkspaceMainActor(source.sql).actorId}`
       .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)).length,
     craftedTools: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`[0]?.count ?? 0,
     memoryChunks: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`[0]?.count ?? 0,

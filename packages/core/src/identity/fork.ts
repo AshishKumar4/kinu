@@ -5,7 +5,7 @@
  * a NEW workspace by a new name). The semantics are "clean-slate messages-only":
  *
  *   Copy:   SOUL.md, the cut message's ancestry in the session tree,
- *           memory/* VFS rows + memory_chunks, crafted_tools, agent_config
+ *           memory/* VFS rows + memory_chunks, crafted_tools, actor_config
  *           EXCEPT the shell-approval authority rows — see the snapshot below
  *   Reset:  search_nodes, scaffold_versions, task_history, craft quality,
  *           fibers, evolution_events, executor_output, activity_log,
@@ -53,6 +53,8 @@ import { CHAT_SESSION_ID, forkAncestry, hasPaneStore } from './conversation-stor
 import { ForkStagingState } from './fork-staging';
 import { invalidateConversationSearchIndex } from '../memory/conversation-search';
 import { uiMessageText } from '../utils/ui-message';
+import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../state/workspace-actors';
+import { KinuError } from '../obs/error';
 
 /** The serialized UI message form of one stored row — what the SDK's pane
  *  store renders and therefore what a pane-shaped write must land. */
@@ -139,7 +141,7 @@ export const ForkCraftedToolRowSchema = v.object({
   updated_at: v.number(),
 });
 
-/** One agent_config row. The shell-approval authority keys never appear here:
+/** One actor_config row. The shell-approval authority keys never appear here:
  *  they are withheld at the READ, in {@link snapshotWorkspaceForFork}. */
 export const ForkConfigRowSchema = v.object({ key: v.string(), value: v.string() });
 
@@ -232,7 +234,8 @@ export async function snapshotWorkspaceForFork(
   // run matching commands without ever asking. Withheld at the SNAPSHOT rather
   // than at the write, so the authority never enters the value that crosses
   // between workspaces at all.
-  const agentConfig = source<ForkSnapshot['agentConfig'][number]>`SELECT key, value FROM agent_config`
+  const actor = openWorkspaceMainActor(source);
+  const agentConfig = source<ForkSnapshot['agentConfig'][number]>`SELECT key, value FROM actor_config WHERE actor_id = ${actor.actorId}`
     .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key));
 
   // The FTS content table (agent-utils MemoryStore), created for every
@@ -354,6 +357,14 @@ export class ForkTargetWriter {
    * still roll the deletion back.
    */
   begin(head: ForkSnapshotHead): void {
+    const current = this.target<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`[0];
+    if (!current) {
+      void this.target`INSERT INTO workspace_identity(id,name,owner_user_id,created_at) VALUES (${this.opts.workspaceId},${this.opts.workspaceName},${this.opts.ownerUserId ?? ''},${this.now})`;
+      new WorkspaceActorDirectory(this.target, { workspaceId: this.opts.workspaceId, ownerUserId: this.opts.ownerUserId ?? '' }).createMain({ name: this.opts.workspaceName });
+    } else {
+      if (current.id !== this.opts.workspaceId) throw new KinuError('denied', 'The fork target does not match its durable workspace identity.');
+      openWorkspaceMainActor(this.target);
+    }
     this.staging.begin(head);
   }
 
@@ -372,15 +383,15 @@ export class ForkTargetWriter {
     void this.target`DELETE FROM messages`;
     void this.target`DELETE FROM crafted_tools`;
     void this.target`DELETE FROM memory_chunks`;
-    void this.target`DELETE FROM agent_config`;
+    const actor = openWorkspaceMainActor(this.target);
+    void this.target`DELETE FROM actor_config WHERE actor_id = ${actor.actorId}`;
     void this.target`DELETE FROM fork_lineage`;
     if (hasPaneStore(this.target)) void this.target`DELETE FROM assistant_messages`;
   }
 
   stageAgentConfig(rows: readonly ForkConfigRow[]): void {
-    for (const row of rows) {
-      void this.target`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${row.key}, ${row.value})`;
-    }
+    const config = openWorkspaceMainActor(this.target).config;
+    for (const row of rows) config.set(row.key, row.value);
     this.staging.count({ agentConfig: rows.length });
   }
 
@@ -578,8 +589,7 @@ export class ForkTargetWriter {
     invalidateConversationSearchIndex(this.target);
 
     // 3. display_name, so the UI shows the fork rather than the bootstrap.
-    void this.target`
-      INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${this.opts.workspaceName})`;
+    openWorkspaceMainActor(this.target).config.setDisplayName(this.opts.workspaceName);
 
     // 4. Lineage — single row, and the thing that makes this workspace a fork.
     void this.target`
