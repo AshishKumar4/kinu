@@ -12,7 +12,7 @@ import type { SqlExec, SqlExecutor } from '../types/primitives';
 import { SubordinateRosterStore, SubordinateRosterEntrySchema } from './roster';
 import { DELEGATION_MAX_DEPTH } from './depth';
 
-const PathSchema = v.pipe(v.array(v.pipe(v.string(), v.nonEmpty(), v.maxLength(128), v.regex(/^[^/\0]+$/))), v.maxLength(DELEGATION_MAX_DEPTH));
+const PathSchema = v.pipe(v.array(v.pipe(v.string(), v.nonEmpty(), v.regex(/^[^/\0]+$/))), v.maxLength(DELEGATION_MAX_DEPTH));
 const PageRequestSchema: v.GenericSchema<PageRequest> = v.strictObject({
   cursor: v.optional(SeekCursorSchema),
   limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(200))),
