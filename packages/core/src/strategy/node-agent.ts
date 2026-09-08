@@ -262,7 +262,7 @@ export interface NodeAgentDeps {
    * a hosted node's facet rebuilds its own runtime from the same workspace on
    * the other side of the wire.
    */
-  runtimeForWorkspace?: (workspace: NodeWorkspace) => Promise<AgentRuntime>;
+  runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
   /**
    * Where this node's loop RUNS, when somewhere other than here.
    *
@@ -846,7 +846,7 @@ export async function runNodeAgent(
     if (deps.host !== undefined) {
       run = await deps.host(spec, input.arbitrate, deps.signal);
     } else {
-      const rt = deps.runtimeForWorkspace ? await deps.runtimeForWorkspace(home) : deps.rt;
+      const rt = deps.runtimeForWorkspace ? await deps.runtimeForWorkspace(home, input) : deps.rt;
       run = await runNodeLoop(spec, nodeLoopDeps(input, deps, rt));
     }
   } catch (cause) {

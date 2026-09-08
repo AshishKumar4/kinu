@@ -47,7 +47,7 @@ import type { ModelCallSink } from '../events/model-call';
 import type { WebSearchProvider } from '../web/index';
 import type { NodeAgentDeps, NodeLoopHost } from './node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
-import type { NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
+import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
 import type { MissionScope } from '../mission-budget';
 import type { SwarmCandidate } from './swarm';
 import type { PublicationState } from './objective';
@@ -1053,7 +1053,7 @@ export function buildNodeDeps(input: {
   readonly maxWallClockMs?: number;
   readonly mission?: MissionScope;
   readonly provisionHome?: NodeWorkspaceProvisioner;
-  readonly runtimeForWorkspace?: (workspace: NodeWorkspace) => Promise<AgentRuntime>;
+  readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
   readonly host?: NodeLoopHost;
   readonly executeTool?: unknown;
   readonly webSearch?: WebSearchProvider;

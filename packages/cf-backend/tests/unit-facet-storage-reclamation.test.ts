@@ -23,10 +23,10 @@ import { describe, expect, test } from 'bun:test';
 import type { HeadInput, HeadReport } from '@kinu.run/core';
 import type { FacetHost } from '../src/facet-spawn';
 import { mockAgentsSdk } from './helpers/agents-sdk';
-
+import { actorDirectoryFixture } from './helpers/actor-directory';
 mockAgentsSdk();
 const { SubordinateAgent } = await import('../src/subordinate-agent');
-const { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet, spawnHeadFacet } =
+const { abortActorFacet, deleteExplorationFacet, spawnBranchFacet, spawnHeadFacet } =
   await import('../src/facet-spawn');
 
 function headReportFor(id: string): HeadReport {
@@ -87,7 +87,7 @@ function storageModelingHost(options: { runAsHeadRejects?: boolean } = {}) {
   /** One facet's stub, keyed by the registry key `subAgent` was handed. The
    *  head id is the one `initHead` seeds, as the production facet reads it —
    *  a facet knows its key and its work spec, and reports under the latter. */
-  const stubFor = (key: string) => {
+  const stubFor = (key: string): Awaited<ReturnType<FacetHost['subAgent']>> => {
     let headId = key;
     return {
       setOwner: async () => ({ ok: true }),
@@ -109,7 +109,12 @@ function storageModelingHost(options: { runAsHeadRejects?: boolean } = {}) {
     };
   };
 
-  const host = {
+  const directory = actorDirectoryFixture(async (entry) => {
+    liveFacets.delete(entry.storageKey);
+    liveHomes.delete(`head-${entry.creationId}`);
+  });
+  const host: FacetHost = {
+    actorDirectory: (operation) => directory.apply(operation),
     subAgent: async (_cls: { name: string }, id: string) => {
       if (!liveFacets.has(id)) {
         liveFacets.set(id, { evicted: false });
@@ -129,22 +134,12 @@ function storageModelingHost(options: { runAsHeadRejects?: boolean } = {}) {
     facetClass: () => FakeExplorationFacet,
     // A head's home is reclaimed with its storage: a facet whose storage went
     // and whose home stayed would be a second leak the quota never shows.
-    facetHomes: () => ({
-      provision: async (kind: string, id: string) => {
-        liveHomes.add(`${kind}-${id}`);
-        return { home: `/home/${kind}-${id}`, tmp: `/tmp/${kind}-${id}`, cred: { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 } };
-      },
-      release: async (kind: string, id: string) => {
-        liveHomes.delete(`${kind}-${id}`);
-      },
-    }),
+    facetHomes: () => ({ provision: async () => { throw new Error('The run owns fixture home allocation.'); } }),
   };
 
-  // SAFETY: this locally constructed host implements every member FacetHost
-  // owns — the three SDK verbs, `facetClass` and `facetHomes` — and every stub method
-  // spawnBranchFacet/spawnHeadFacet invokes.
   return {
-    host: host as FacetHost,
+    host,
+    keyFor: async (id: string) => (await host.actorDirectory({ action: 'resolveCreation', creationId: id })).storageKey,
     liveCount: () => liveFacets.size,
     everCreated: () => everCreated,
     liveIds: () => [...liveFacets.keys()].sort(),
@@ -156,7 +151,8 @@ function storageModelingHost(options: { runAsHeadRejects?: boolean } = {}) {
  *  id the iteration spawned is released once reflection has read its traces,
  *  and `allSettled` means one failing release cannot strand the rest. */
 async function releaseSweep(host: FacetHost, branchIds: readonly string[]): Promise<void> {
-  await Promise.allSettled(branchIds.map((id) => deleteExplorationFacet(host, id)));
+  const actors = await Promise.all(branchIds.map((id) => host.actorDirectory({ action: 'resolveCreation', creationId: id })));
+  await Promise.allSettled(actors.map((entry) => deleteExplorationFacet(host, entry.creationId, entry.reference)));
 }
 
 describe('C3 — exploration facet storage is reclaimed', () => {
@@ -249,7 +245,7 @@ describe('C3 — exploration facet storage is reclaimed', () => {
 
     await Promise.all(branchIds.map((id) => spawnBranchFacet(facets.host, id, identity)));
     // Exactly what the code did before C3 was fixed.
-    for (const id of branchIds) abortExplorationFacet(facets.host, id);
+    for (const id of branchIds) abortActorFacet(facets.host, await facets.keyFor(id));
 
     // Pins the sensitivity of every assertion above: if `abortSubAgent` also
     // reclaimed storage, the zeros elsewhere in this file would be vacuous.
@@ -258,7 +254,7 @@ describe('C3 — exploration facet storage is reclaimed', () => {
     // Registry keys carry the exploration marker; the sweep takes domain ids
     // and the spawner marks them, so an unmarked key here would be a leak past
     // the marker.
-    expect(facets.liveIds()).toEqual(branchIds.map((id) => `exp:${id}`));
+    expect(facets.liveIds()).toEqual((await Promise.all(branchIds.map((id) => facets.keyFor(id)))).sort());
 
     // And the terminal verb still collects them afterwards — an evicted facet
     // is reclaimable, it was simply never being reclaimed.

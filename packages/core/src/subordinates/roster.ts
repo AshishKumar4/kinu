@@ -1,7 +1,7 @@
 /**
  * THE SUBORDINATE ROSTER — the parent's own record of who works for it.
  *
- * ONE table, `workspace_subordinates`, and one place its status policy lives, so
+ * ONE table, `actor_subordinates`, and one place its status policy lives, so
  * the tools, the report ingress, the per-step snapshot and the operator surfaces
  * cannot drift from each other. Split out of `support.ts` because it is the
  * STORE and that module is the POLICY over it: an actor's orchestration reads
@@ -21,13 +21,16 @@ import type { SubordinateReportStatus } from '../events/hub/types';
 import type { SubordinateReportOrigin } from './support';
 import type { SubordinateRosterEntry, SubordinateStatus } from '../tools/agents-tool';
 import { SUBORDINATE_LIFETIMES, TEMPORARY_LIFETIME, temporaryRunSettles } from './temporary';
-
+import { ActorReferenceSchema, sameActorReference, type ActorReference } from '../state/actor-handle';
+import { SubordinateBirthSchema } from './birth';
+import { parseJsonValue } from '../utils/json';
+import { KinuError } from '../obs/error';
 const ROSTER_COLUMNS =
-  'name, created_by, status, current_task, created_at, dismissed_at, lifetime, task_event_id';
+  'name, created_by, status, current_task, created_at, dismissed_at, lifetime, task_event_id, actor_reference, birth_request, delete_requested';
 const ROSTER_PROJECTION =
   'name, created_by AS createdBy, status, current_task AS currentTask, '
   + 'created_at AS createdAt, dismissed_at AS dismissedAt, '
-  + 'lifetime, task_event_id AS taskEventId';
+  + 'lifetime, task_event_id AS taskEventId, actor_reference AS actorReference, birth_request AS birth, delete_requested AS deleteRequested';
 
 /** The two roster columns nothing else can derive.
  *
@@ -36,16 +39,19 @@ const ROSTER_PROJECTION =
  *  shape, and only one of them is released when it answers.
  *
  *  `task_event_id` is the EventLog's own id for the assignment this row is
- *  working on — issued by admission, so it cannot be computed here — and it is
+ *  working on. Admission supplies this identity.
  *  what correlates the eventual report with the thing that was asked. It is the
  *  same id the sender is handed as `SubordinateHandoff.eventId`, which is what
  *  makes the correlation the one already documented on this surface rather than
  *  a second scheme beside it. */
 
 /** Lifecycle and task facts only — the title and role a subordinate presents
- *  live in ITS agent_config ({@link SubordinateDescriptorSource}), never here. */
-export const SubordinateRosterEntrySchema: v.GenericSchema<SubordinateRosterEntry> = v.object({
+ *  live in ITS actor_config ({@link SubordinateDescriptorSource}), never here. */
+export const SubordinateRosterEntrySchema = v.object({
   name: v.string(),
+  actorReference: v.nullable(ActorReferenceSchema),
+  birth: v.nullable(SubordinateBirthSchema),
+  deleteRequested: v.boolean(),
   createdBy: v.picklist(['orchestrator', 'user']),
   status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
   currentTask: v.nullable(v.string()),
@@ -53,12 +59,22 @@ export const SubordinateRosterEntrySchema: v.GenericSchema<SubordinateRosterEntr
   dismissedAt: v.nullable(v.number()),
   lifetime: v.picklist(SUBORDINATE_LIFETIMES),
   taskEventId: v.nullable(v.string()),
+}) satisfies v.GenericSchema<SubordinateRosterEntry>;
+const StoredRosterEntrySchema = v.object({
+  ...SubordinateRosterEntrySchema.entries, actorReference: v.nullable(v.string()), birth: v.nullable(v.string()),
+  deleteRequested: v.pipe(v.union([v.literal(0), v.literal(1)]), v.transform((value) => value === 1)),
 });
 
 function parseStoredRosterRow<T>(row: T): SubordinateRosterEntry {
-  const parsed = v.safeParse(SubordinateRosterEntrySchema, row);
-  if (!parsed.success) throw new Error('Stored subordinate roster row is malformed.');
-  return parsed.output;
+  try {
+    const stored = v.parse(StoredRosterEntrySchema, row);
+    return v.parse(SubordinateRosterEntrySchema, {
+      ...stored, actorReference: stored.actorReference === null ? null : parseJsonValue(stored.actorReference),
+      birth: stored.birth === null ? null : parseJsonValue(stored.birth),
+    });
+  } catch (cause) {
+    throw new KinuError('io', 'Stored subordinate roster data is malformed.', { cause });
+  }
 }
 
 /** Parent-DO product roster. All status policy lives here so tools, report
@@ -67,7 +83,7 @@ export class SubordinateRosterStore {
   constructor(private readonly sql: SqlExec) {}
 
   ensureSchema(): void {
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_subordinates (
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS actor_subordinates (
       name          TEXT PRIMARY KEY,
       created_by    TEXT NOT NULL CHECK (created_by IN ('orchestrator','user')),
       status        TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed')),
@@ -75,13 +91,15 @@ export class SubordinateRosterStore {
       created_at    INTEGER NOT NULL,
       dismissed_at INTEGER,
       lifetime      TEXT NOT NULL DEFAULT 'durable' CHECK (lifetime IN ('durable','task')),
-      task_event_id TEXT
+      task_event_id TEXT,
+      actor_reference TEXT,
+      birth_request TEXT, delete_requested INTEGER NOT NULL DEFAULT 0 CHECK (delete_requested IN (0,1))
     )`);
   }
 
   create(entry: SubordinateRosterEntry): void {
     this.sql.exec(
-      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       entry.name,
       entry.createdBy,
       entry.status,
@@ -90,13 +108,15 @@ export class SubordinateRosterStore {
       entry.dismissedAt,
       entry.lifetime,
       entry.taskEventId,
+      entry.actorReference === null ? null : JSON.stringify(entry.actorReference),
+      entry.birth === null ? null : JSON.stringify(entry.birth), entry.deleteRequested ? 1 : 0,
     );
   }
 
   /** Exact upsert used only for compensating a failed facet operation. */
   restore(entry: SubordinateRosterEntry): void {
     this.sql.exec(
-      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET
          created_by = excluded.created_by,
          status = excluded.status,
@@ -104,7 +124,8 @@ export class SubordinateRosterStore {
          created_at = excluded.created_at,
          dismissed_at = excluded.dismissed_at,
          lifetime = excluded.lifetime,
-         task_event_id = excluded.task_event_id`,
+         task_event_id = excluded.task_event_id,
+         actor_reference = excluded.actor_reference, birth_request = excluded.birth_request, delete_requested = excluded.delete_requested`,
       entry.name,
       entry.createdBy,
       entry.status,
@@ -113,16 +134,67 @@ export class SubordinateRosterStore {
       entry.dismissedAt,
       entry.lifetime,
       entry.taskEventId,
+      entry.actorReference === null ? null : JSON.stringify(entry.actorReference),
+      entry.birth === null ? null : JSON.stringify(entry.birth), entry.deleteRequested ? 1 : 0,
     );
   }
 
+  attachActor(name: string, creationId: string, reference: ActorReference): void {
+    const row = this.requireExisting(name);
+    if (row.birth?.creationId !== creationId) throw new KinuError('denied', 'The birth admission no longer owns this roster name.');
+    if (row.actorReference !== null && !sameActorReference(row.actorReference, reference)) throw new KinuError('denied', 'The roster actor reference is immutable.');
+    const actor = v.parse(ActorReferenceSchema, reference);
+    this.sql.exec('UPDATE actor_subordinates SET actor_reference = ? WHERE name = ?', JSON.stringify(actor), name);
+  }
+
+  finishBirth(name: string, creationId: string): void {
+    const row = this.requireExisting(name);
+    if (row.birth?.creationId !== creationId || row.actorReference === null) throw new KinuError('denied', 'The birth admission cannot complete this roster row.');
+    this.sql.exec('UPDATE actor_subordinates SET birth_request = NULL WHERE name = ?', name);
+  }
+
+  pendingBirths(): SubordinateRosterEntry[] {
+    return this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE birth_request IS NOT NULL ORDER BY created_at, name`).toArray().map(parseStoredRosterRow);
+  }
+
+  hasPendingBirths(): boolean {
+    return this.sql.exec('SELECT name FROM actor_subordinates WHERE birth_request IS NOT NULL LIMIT 1').toArray().length > 0;
+  }
+
+  requestDeletion(name: string, reference: ActorReference, now: number): void {
+    const row = this.requireExisting(name);
+    if (!row.actorReference || !sameActorReference(row.actorReference, reference)) throw new KinuError('denied', 'The deletion request does not own this roster row.');
+    this.sql.exec(`UPDATE actor_subordinates SET status = 'dismissed', dismissed_at = ?, delete_requested = 1 WHERE name = ?`, now, name);
+  }
+
+  removeActor(name: string, reference: ActorReference): void {
+    const row = this.get(name);
+    if (!row) return;
+    if (!row.actorReference || !sameActorReference(row.actorReference, reference)) throw new KinuError('denied', 'The deletion cannot remove a replacement actor.');
+    this.sql.exec(`DELETE FROM actor_subordinates WHERE name = ?
+      AND json_extract(actor_reference, '$.actorId') = ? AND json_extract(actor_reference, '$.workspaceId') = ?
+      AND json_extract(actor_reference, '$.parentActorId') IS ?`, name, reference.actorId, reference.workspaceId, reference.parentActorId);
+  }
+
+  cancelBirth(name: string, creationId: string): void {
+    this.sql.exec(`UPDATE actor_subordinates SET status = 'dismissed', delete_requested = 1
+      WHERE name = ? AND json_extract(birth_request, '$.creationId') = ?`, name, creationId);
+  }
+
+  pendingDeletions(): SubordinateRosterEntry[] {
+    return this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE delete_requested = 1 ORDER BY created_at, name`).toArray().map(parseStoredRosterRow);
+  }
+
+  hasPendingDeletions(): boolean {
+    return this.sql.exec('SELECT name FROM actor_subordinates WHERE delete_requested = 1 LIMIT 1').toArray().length > 0;
+  }
   remove(name: string): void {
-    this.sql.exec(`DELETE FROM workspace_subordinates WHERE name = ?`, name);
+    this.sql.exec(`DELETE FROM actor_subordinates WHERE name = ?`, name);
   }
 
   get(name: string): SubordinateRosterEntry | null {
     const rows = this.sql.exec(
-      `SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates WHERE name = ?`,
+      `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE name = ?`,
       name,
     ).toArray();
     return rows.length === 0 ? null : parseStoredRosterRow(rows[0]);
@@ -142,14 +214,14 @@ export class SubordinateRosterStore {
 
   list(): SubordinateRosterEntry[] {
     return this.sql.exec(
-      `SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates
+      `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
        WHERE status != 'dismissed' ORDER BY created_at, name`,
     ).toArray().map(parseStoredRosterRow);
   }
 
   listAll(): SubordinateRosterEntry[] {
     return this.sql.exec(
-      `SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates ORDER BY created_at, name`,
+      `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates ORDER BY created_at, name`,
     ).toArray().map(parseStoredRosterRow);
   }
 
@@ -160,10 +232,10 @@ export class SubordinateRosterStore {
     const anchor = after === undefined ? null : this.get(after);
     if (after !== undefined && anchor === null) throw new StaleCursorError('subordinate roster', after);
     const rows = anchor
-      ? this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates
+      ? this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
           WHERE created_at > ? OR (created_at = ? AND name > ?)
           ORDER BY created_at, name LIMIT ?`, anchor.createdAt, anchor.createdAt, anchor.name, limit + 1)
-      : this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates ORDER BY created_at, name LIMIT ?`, limit + 1);
+      : this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates ORDER BY created_at, name LIMIT ?`, limit + 1);
     return seekPage(rows.toArray().map(parseStoredRosterRow), limit, (row) => row.name);
   }
 
@@ -173,7 +245,7 @@ export class SubordinateRosterStore {
   assign(name: string, task: string): void {
     this.requireActive(name);
     this.sql.exec(
-      `UPDATE workspace_subordinates
+      `UPDATE actor_subordinates
        SET status = 'working', current_task = ?, task_event_id = NULL, dismissed_at = NULL
        WHERE name = ?`,
       task,
@@ -184,7 +256,7 @@ export class SubordinateRosterStore {
   /** Record which admitted event this row's open assignment IS. */
   recordAssignmentEvent(name: string, eventId: string): void {
     this.sql.exec(
-      `UPDATE workspace_subordinates SET task_event_id = ? WHERE name = ?`,
+      `UPDATE actor_subordinates SET task_event_id = ? WHERE name = ?`,
       eventId,
       name,
     );
@@ -194,7 +266,7 @@ export class SubordinateRosterStore {
     const entry = this.requireActive(name);
     if (entry.status !== 'awaiting_input') return;
     this.sql.exec(
-      `UPDATE workspace_subordinates SET status = 'working' WHERE name = ?`,
+      `UPDATE actor_subordinates SET status = 'working' WHERE name = ?`,
       name,
     );
   }
@@ -234,7 +306,7 @@ export class SubordinateRosterStore {
           ? 'working'
           : 'idle';
     this.sql.exec(
-      `UPDATE workspace_subordinates
+      `UPDATE actor_subordinates
        SET status = ?,
            current_task = CASE WHEN ? = 'completed' THEN NULL ELSE current_task END,
            task_event_id = CASE WHEN ? = 'completed' THEN NULL ELSE task_event_id END
@@ -249,7 +321,7 @@ export class SubordinateRosterStore {
   dismiss(name: string, now: number): void {
     this.requireExisting(name);
     this.sql.exec(
-      `UPDATE workspace_subordinates
+      `UPDATE actor_subordinates
        SET status = 'dismissed', current_task = NULL, task_event_id = NULL,
            dismissed_at = COALESCE(dismissed_at, ?)
        WHERE name = ?`,

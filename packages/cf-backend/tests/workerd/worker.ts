@@ -215,12 +215,12 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
   private ensureSchema(): void {
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS event_log (id TEXT PRIMARY KEY)');
     this.ctx.storage.sql.exec(
-      `CREATE TABLE IF NOT EXISTS workspace_subordinates (
+      `CREATE TABLE IF NOT EXISTS actor_subordinates (
          name TEXT PRIMARY KEY, status TEXT NOT NULL
        )`,
     );
     this.ctx.storage.sql.exec(
-      "INSERT OR IGNORE INTO workspace_subordinates (name, status) VALUES ('relay', 'working')",
+      "INSERT OR IGNORE INTO actor_subordinates (name, status) VALUES ('relay', 'working')",
     );
   }
 
@@ -237,7 +237,7 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
     this.ctx.storage.sql.exec('INSERT INTO event_log (id) VALUES (?)', id);
     if (failRoster) throw new Error('unknown subordinate "relay"');
     this.ctx.storage.sql.exec(
-      "UPDATE workspace_subordinates SET status = 'idle' WHERE name = 'relay'",
+      "UPDATE actor_subordinates SET status = 'idle' WHERE name = 'relay'",
     );
   }
 
@@ -278,7 +278,7 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
         'SELECT COUNT(*) AS n FROM event_log',
       ).one().n,
       rosterStatus: this.ctx.storage.sql.exec<{ status: string }>(
-        "SELECT status FROM workspace_subordinates WHERE name = 'relay'",
+        "SELECT status FROM actor_subordinates WHERE name = 'relay'",
       ).one().status,
     };
   }

@@ -29,7 +29,6 @@ import {
   createReportCodemodeProvider,
   createTasksCodemodeProvider,
   createWebCodemodeProvider,
-  createAgentConfigStore,
   MissionGovernor,
   TaskListStore,
   type AgentSelfHost,
@@ -113,7 +112,7 @@ describe('the reach declaration', () => {
       memory: () => createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql })),
       tasks: () => createTasksCodemodeProvider(
         new TaskListStore(rt.storage.sql),
-        createAgentConfigStore(rt.storage.sql),
+        rt.actor.config,
       ),
       web: () => createWebCodemodeProvider({
         search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),

@@ -78,16 +78,13 @@ function branchingRuntime() {
   rt.judgeModel = judge;
   let rollouts = 0;
   let reflections = 0;
-  rt.spawnBranch = async () => ({
-    explore: async () => {
-      rollouts++;
-      return { text: 'an approach', usage: PER_ROLLOUT };
-    },
-    generateReflection: async () => {
-      reflections++;
-      return { text: 'it did not work', usage: PER_REFLECTION };
-    },
-  });
+  rt.spawnBranch = async () => ({ explore: async () => {
+    rollouts++;
+    return { text: 'an approach', usage: PER_ROLLOUT };
+  }, generateReflection: async () => {
+    reflections++;
+    return { text: 'it did not work', usage: PER_REFLECTION };
+  }, release: async () => {} });
   initSearchTables(rt.storage.execRaw);
   initScaffoldTables(rt.storage.execRaw);
   initCraftedToolsTables(rt.storage.sql);
@@ -273,10 +270,7 @@ describe('a declared budget reaches the search between expansions', () => {
     governor.declare('mission', { tokens: 10_000_000 }, {});
 
     const { rt } = branchingRuntime();
-    rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'an approach' }),
-      generateReflection: async () => ({ text: 'no lesson' }),
-    });
+    rt.spawnBranch = async () => ({ explore: async () => ({ text: 'an approach' }), generateReflection: async () => ({ text: 'no lesson' }), release: async () => {} });
 
     await search(rt, localMissionScope(governor, ['mission']));
 
@@ -297,10 +291,7 @@ describe('a declared budget reaches the search between expansions', () => {
 
     const { rt } = branchingRuntime();
     let explores = 0;
-    rt.spawnBranch = async () => ({
-      explore: async () => { explores++; return { text: 'an approach', usage: {} }; },
-      generateReflection: async () => ({ text: 'no lesson', usage: {} }),
-    });
+    rt.spawnBranch = async () => ({ explore: async () => { explores++; return { text: 'an approach', usage: {} }; }, generateReflection: async () => ({ text: 'no lesson', usage: {} }), release: async () => {} });
 
     await search(rt, localMissionScope(governor, ['mission']));
 
@@ -344,10 +335,7 @@ describe('every rollout is reported, labelled or not', () => {
     const reports: ModelCallReport[] = [];
     const { rt } = branchingRuntime();
     let explores = 0;
-    rt.spawnBranch = async () => ({
-      explore: async () => { explores++; return { text: 'an approach', usage: {} }; },
-      generateReflection: async () => ({ text: 'no lesson', usage: {} }),
-    });
+    rt.spawnBranch = async () => ({ explore: async () => { explores++; return { text: 'an approach', usage: {} }; }, generateReflection: async () => ({ text: 'no lesson', usage: {} }), release: async () => {} });
 
     await search(rt, localMissionScope(governor, ['mission']), 3, 2, (r) => reports.push(r));
 
@@ -363,10 +351,7 @@ describe('every rollout is reported, labelled or not', () => {
     const reports: ModelCallReport[] = [];
     const { rt } = branchingRuntime();
     let reflections = 0;
-    rt.spawnBranch = async () => ({
-      explore: async () => { throw new Error('branch down'); },
-      generateReflection: async () => { reflections++; return { text: 'it died', usage: PER_REFLECTION }; },
-    });
+    rt.spawnBranch = async () => ({ explore: async () => { throw new Error('branch down'); }, generateReflection: async () => { reflections++; return { text: 'it died', usage: PER_REFLECTION }; }, release: async () => {} });
 
     await search(rt, null, 3, 2, (report) => reports.push(report));
 

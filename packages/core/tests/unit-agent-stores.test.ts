@@ -9,7 +9,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
 import { initRunEventTables } from '../src/events/recorder';
-import { makeSql, makeExecRaw } from './helpers';
+import { makeSql, makeExecRaw, createTestActor } from './helpers';
 
 /** Every store on the bundle, so a store added to the interface without being
  *  named here fails the count assertion below rather than going untested. */
@@ -21,13 +21,15 @@ function countingProvider() {
   const db = new Database(':memory:');
   initRunEventTables(makeExecRaw(db));
   const handle = makeSql(db);
+  const actor = createTestActor(handle, makeExecRaw(db), crypto.randomUUID(), 'stores-test');
   let calls = 0;
-  return { sql: () => { calls += 1; return handle; }, calls: () => calls };
+  return { sql: () => { calls += 1; return handle; }, actor: () => actor, calls: () => calls };
 }
 
 describe('createAgentStores', () => {
   test('exposes exactly the seven stores an agent has', () => {
-    const stores = createAgentStores(countingProvider().sql);
+    const provider = countingProvider();
+    const stores = createAgentStores(provider.sql, provider.actor);
     for (const key of STORE_KEYS) expect(stores[key]).toBeDefined();
     // A store reachable on the bundle but absent from STORE_KEYS would be a
     // capability one backend silently gained and this test never covered.
@@ -38,8 +40,8 @@ describe('createAgentStores', () => {
     // Load-bearing for CF: the bundle is a Durable Object field initializer, and
     // a DO must not reach storage while those run. Eager construction here would
     // resolve `boundSql` before its memo exists.
-    const { sql, calls } = countingProvider();
-    createAgentStores(sql);
+    const { sql, actor, calls } = countingProvider();
+    createAgentStores(sql, actor);
     expect(calls()).toBe(0);
   });
 
@@ -47,20 +49,22 @@ describe('createAgentStores', () => {
     // Both backends document that the store they hand to a tool is the SAME
     // instance the per-step dynamic context reads. Rebuilding per access would
     // also silently drop RunEventRecorder's listeners and its per-run index.
-    const stores = createAgentStores(countingProvider().sql);
+    const provider = countingProvider();
+    const stores = createAgentStores(provider.sql, provider.actor);
     for (const key of STORE_KEYS) expect(stores[key]).toBe(stores[key]);
   });
 
   test('resolves the SQL handle at most once per store', () => {
-    const { sql, calls } = countingProvider();
-    const stores = createAgentStores(sql);
+    const { sql, actor, calls } = countingProvider();
+    const stores = createAgentStores(sql, actor);
     for (const key of STORE_KEYS) { void stores[key]; void stores[key]; }
-    expect(calls()).toBe(STORE_KEYS.length);
+    expect(calls()).toBe(STORE_KEYS.length - 1);
   });
 
   test('a run-event listener survives re-reading the recorder', () => {
     // The memoization above, stated as the behaviour that depends on it.
-    const stores = createAgentStores(countingProvider().sql);
+    const provider = countingProvider();
+    const stores = createAgentStores(provider.sql, provider.actor);
     let seen = 0;
     stores.eventRecorder.observe(() => { seen += 1; });
     stores.eventRecorder.emit('run-1', { type: 'run_start', agentId: 'a' });

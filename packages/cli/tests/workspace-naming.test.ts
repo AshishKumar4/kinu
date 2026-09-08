@@ -25,7 +25,6 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
-  createAgentConfigStore,
   initWorkspaceSchema,
   workspaceSlug,
   type HostedAgentRef,
@@ -155,7 +154,7 @@ async function seedUntitledWorkspace(project: string): Promise<string> {
   try {
     const rt = await createWorkspace(db, { name: SLUG, purpose: PLACEHOLDER_MISSION, llm: DUMMY_LLM });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    createAgentConfigStore(rt.storage.sql).setDisplayNameOrigin('', 'auto');
+    rt.actor.config.setDisplayNameOrigin('', 'auto');
   } finally {
     db.close();
   }

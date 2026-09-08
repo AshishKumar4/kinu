@@ -8,6 +8,7 @@ import type {
   CraftStore, BranchHandle, FiberCtx,
 } from '@kinu.run/core';
 import { createTestSql, type TestSql } from './sql';
+import { WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, WorkspaceActorDirectory, initAgentConfigTable, initCodemodeStateTable } from '@kinu.run/core';
 import { createEchoLLM } from './llm';
 import { createMemoryVfs } from './vfs';
 
@@ -97,6 +98,7 @@ function emptyBranchHandle(): BranchHandle {
   return {
     explore: async () => ({ text: '' }),
     generateReflection: async () => ({ text: '' }),
+    release: async () => {},
   };
 }
 
@@ -106,7 +108,15 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
   const testSql = createTestSql();
   const llm = opts.llm ?? createEchoLLM();
   const workspace = createMemoryVfs();
+  const workspaceId = crypto.randomUUID();
+  testSql.execRaw(WORKSPACE_IDENTITY_DDL);
+  void testSql.sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, 'test')`;
+  initWorkspaceActorTable(testSql.execRaw);
+  initAgentConfigTable(testSql.execRaw);
+  initCodemodeStateTable(testSql.execRaw);
+  const actor = new WorkspaceActorDirectory(testSql.sql, { workspaceId, ownerUserId: '' }).createMain({ name: 'test' });
   const rt: AgentRuntime = {
+    actor,
     storage: {
       vfs: workspace.vfs,
       sql: testSql.sql,
@@ -120,7 +130,6 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
     craftStore: opts.craftStore ?? emptyCraftStore(),
     spawnBranch: async () => emptyBranchHandle(),
     abortBranch: async () => {},
-    releaseBranch: async () => {},
     executionRouter: opts.executionRouter ?? emptyRouter(),
   };
   return { rt, testSql, llm };

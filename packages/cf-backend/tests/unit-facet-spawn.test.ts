@@ -8,10 +8,10 @@ import { describe, expect, test } from 'bun:test';
 import type { HeadInput, HeadReport } from '@kinu.run/core';
 import type { FacetHost } from '../src/facet-spawn';
 import { mockAgentsSdk } from './helpers/agents-sdk';
-
+import { actorDirectoryFixture } from './helpers/actor-directory';
 mockAgentsSdk();
 const { SubordinateAgent } = await import('../src/subordinate-agent');
-const { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet, spawnHeadFacet } =
+const { abortActorFacet, deleteExplorationFacet, spawnBranchFacet, spawnHeadFacet } =
   await import('../src/facet-spawn');
 
 interface Call { method: string; args: unknown[] }
@@ -69,7 +69,7 @@ function makeHost(
   } = {},
 ) {
   const calls: Call[] = [];
-  const record = (method: string, args: unknown[]) => {
+  const record = (method: string, args: object[] | string[] | (string | null)[]): Promise<{ ok: true }> => {
     calls.push({ method, args });
     if (options.failing === method) return Promise.reject(new Error(`${method} exploded`));
     return Promise.resolve({ ok: true });
@@ -77,7 +77,7 @@ function makeHost(
   const stub = {
     setOwner: (userId: string, capabilityToken: string | null) => record('setOwner', [userId, capabilityToken]),
     setSharedParent: (name: string) => record('setSharedParent', [name]),
-    initHead: (input: HeadInput) => record('initHead', [input]),
+    initHead: async (input: HeadInput): Promise<{ ok: true; id: string }> => { await record('initHead', [input]); return { ok: true, id: input.id }; },
     abortHead: (reason: string) => record('abortHead', [reason]),
     runAsHead: async () => {
       calls.push({ method: 'runAsHead', args: [] });
@@ -93,7 +93,12 @@ function makeHost(
       return { text: 'went wrong' };
     },
   };
-  const host = {
+  const directory = actorDirectoryFixture(async (entry) => {
+    await host.deleteSubAgent(host.facetClass(), entry.storageKey);
+    if (entry.kind === 'head') calls.push({ method: 'releaseFacetHome', args: ['head', entry.creationId] });
+  });
+  const host: FacetHost = {
+    actorDirectory: (operation) => directory.apply(operation),
     subAgent: async (cls: { name: string }, name: string) => {
       calls.push({ method: 'subAgent', args: [cls, name] });
       return stub;
@@ -108,21 +113,10 @@ function makeHost(
     },
     facetClass: () => FakeExplorationFacet,
     facetHomes: () => ({
-      provision: async (kind: string, id: string) => {
-        calls.push({ method: 'provisionFacetHome', args: [kind, id] });
-        return { home: `/home/${kind}-${id}`, tmp: `/tmp/${kind}-${id}`, cred: { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 } };
-      },
-      release: async (kind: string, id: string) => {
-        calls.push({ method: 'releaseFacetHome', args: [kind, id] });
-      },
+      provision: async () => { throw new Error('This transport fixture does not provision homes.'); },
     }),
-    listSubAgents: () => [],
   };
-  // SAFETY: this locally constructed host implements every member FacetHost
-  // owns — the four SDK verbs plus `facetClass` and `facetHomes` — and every returned
-  // exploration stub method is present and records its exact argument list
-  // before returning the owner-shaped result above.
-  return { host: host as FacetHost, calls };
+  return { host, calls };
 }
 
 const methods = (calls: Call[]) => calls.map((call) => call.method);
@@ -138,16 +132,16 @@ describe('exploration-facet spawn seam', () => {
       sharedParent: 'kinu-main',
     });
 
-    expect(methods(calls)).toEqual(['subAgent', 'setOwner', 'setSharedParent', 'initHead']);
+    expect(methods(calls)).toEqual(['subAgent', 'setSharedParent', 'setOwner', 'initHead']);
     // The class comes from the HOST, keyed by the worker's exploration address —
     // the spawner has none of its own to hardcode, and the `exp:` marker keeps
     // the key disjoint from subordinate roster slugs sharing the one class.
-    expect(calls[0]?.args).toEqual([FakeExplorationFacet, 'exp:head-1']);
+    expect(calls[0]?.args).toEqual([FakeExplorationFacet, (await host.actorDirectory({ action: 'resolveCreation', creationId: 'head-1' })).storageKey]);
     // The spawner's workspace capability token rides down with the owner, so
     // the head reaches the user's credentials AS the parent workspace and is
     // attenuated with it — no per-head identity to taint separately.
-    expect(calls[1]?.args).toEqual(['user-1', 'pwc_parent']);
-    expect(calls[2]?.args).toEqual(['kinu-main']);
+    expect(calls[1]?.args).toEqual(['kinu-main']);
+    expect(calls[2]?.args).toEqual(['user-1', 'pwc_parent']);
     // The budget the caller derived reaches the facet untouched.
     expect(calls[3]?.args).toEqual([input]);
     expect(head.id).toBe('head-1');
@@ -168,10 +162,10 @@ describe('exploration-facet spawn seam', () => {
     // must only evict the instance. Collapsing either into the other is a leak
     // one way and data loss the other.
     expect(methods(calls)).toEqual(['runAsHead', 'deleteSubAgent', 'releaseFacetHome', 'abortHead', 'abortSubAgent']);
-    expect(calls[1]?.args).toEqual([FakeExplorationFacet, 'exp:head-1']);
+    expect(calls[1]?.args).toEqual([FakeExplorationFacet, (await host.actorDirectory({ action: 'resolveCreation', creationId: 'head-1' })).storageKey]);
     expect(calls[2]?.args).toEqual(['head', 'head-1']);
     expect(calls[3]?.args).toEqual(['wall-clock timeout']);
-    expect(calls[4]?.args).toEqual([FakeExplorationFacet, 'exp:head-1']);
+    expect(calls[4]?.args).toEqual(calls[1]?.args);
   });
 
   test('run() reclaims the facet even when runAsHead rejects, and the original error propagates', async () => {
@@ -186,7 +180,7 @@ describe('exploration-facet spawn seam', () => {
     await expect(head.run()).rejects.toThrow('the head crashed mid-run');
 
     expect(methods(calls)).toEqual(['runAsHead', 'deleteSubAgent', 'releaseFacetHome']);
-    expect(calls[1]?.args).toEqual([FakeExplorationFacet, 'exp:head-1']);
+    expect(calls[1]?.args).toEqual([FakeExplorationFacet, (await host.actorDirectory({ action: 'resolveCreation', creationId: 'head-1' })).storageKey]);
     expect(calls[2]?.args).toEqual(['head', 'head-1']);
   });
 
@@ -229,46 +223,44 @@ describe('exploration-facet spawn seam', () => {
     // The half-seeded facet is WIPED, not merely evicted: nothing will ever
     // read it, so leaving it behind is a pure leak into the root's quota.
     expect(methods(calls)).toEqual([
-      'subAgent', 'setOwner', 'setSharedParent', 'initHead', 'deleteSubAgent',
+      'subAgent', 'setSharedParent', 'setOwner', 'initHead', 'deleteSubAgent', 'releaseFacetHome',
     ]);
-    expect(calls.at(-1)?.args).toEqual([FakeExplorationFacet, 'exp:head-1']);
+    expect(calls.at(-2)?.args).toEqual([FakeExplorationFacet, (await host.actorDirectory({ action: 'resolveCreation', creationId: 'head-1' })).storageKey]);
   });
 
   test('a branch seeds only its owner and exposes the MCTS rollout calls', async () => {
     const { host, calls } = makeHost();
 
     const branch = await spawnBranchFacet(host, 'branch-7', {
-      ownerUserId: 'user-1', capabilityToken: 'pwc_parent',
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main',
     });
 
-    expect(methods(calls)).toEqual(['subAgent', 'setOwner']);
-    expect(calls[0]?.args).toEqual([FakeExplorationFacet, 'exp:branch-7']);
-    expect(calls[1]?.args).toEqual(['user-1', 'pwc_parent']);
+    expect(methods(calls)).toEqual(['subAgent', 'setSharedParent', 'setOwner']);
+    expect(calls[0]?.args).toEqual([FakeExplorationFacet, (await host.actorDirectory({ action: 'resolveCreation', creationId: 'branch-7' })).storageKey]);
+    expect(calls[2]?.args).toEqual(['user-1', 'pwc_parent']);
 
     expect(await branch.explore([{ role: 'user', content: 'hi' }], [], ['javascript'], 'plan')).toEqual({
       text: 'an approach',
     });
     // Siblings are always sent, so the facet's diversity directive is not
     // left to an RPC-side default.
-    expect(calls[2]?.args).toEqual([[{ role: 'user', content: 'hi' }], [], ['javascript'], 'plan', []]);
+    expect(calls[3]?.args).toEqual([[{ role: 'user', content: 'hi' }], [], ['javascript'], 'plan', []]);
     expect(await branch.generateReflection('the task')).toEqual({ text: 'went wrong' });
   });
 
-  test('an unclaimed workspace spawns a branch without seeding an owner', async () => {
+  test('an unclaimed workspace refuses before allocating a branch', async () => {
     const { host, calls } = makeHost();
-
-    await spawnBranchFacet(host, 'branch-7', { ownerUserId: null, capabilityToken: null });
-
-    expect(methods(calls)).toEqual(['subAgent']);
+    await expect(spawnBranchFacet(host, 'branch-7', { ownerUserId: null, capabilityToken: null })).rejects.toMatchObject({ code: 'missing' });
+    expect(methods(calls)).toEqual([]);
   });
 
   test('a branch whose owner seeding fails is discarded and the error propagates', async () => {
     const { host, calls } = makeHost({ failing: 'setOwner' });
 
-    await expect(spawnBranchFacet(host, 'branch-7', { ownerUserId: 'user-1', capabilityToken: 'pwc_parent' }))
+    await expect(spawnBranchFacet(host, 'branch-7', { ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main' }))
       .rejects.toThrow('setOwner exploded');
 
-    expect(methods(calls)).toEqual(['subAgent', 'setOwner', 'deleteSubAgent']);
+    expect(methods(calls)).toEqual(['subAgent', 'setSharedParent', 'setOwner', 'deleteSubAgent']);
   });
 
   test('aborting a facet that is already gone is not an error', () => {
@@ -276,7 +268,7 @@ describe('exploration-facet spawn seam', () => {
 
     // `ctx.facets.abort` shuts down a facet if it is running and is otherwise a
     // no-op, so "already gone" needs no tolerance at all.
-    expect(() => abortExplorationFacet(host, 'branch-7')).not.toThrow();
+    expect(() => abortActorFacet(host, 'branch-7')).not.toThrow();
     expect(methods(calls)).toEqual(['abortSubAgent']);
 
     // What abortSubAgent DOES throw for is a runtime with no facet registry at
@@ -284,16 +276,17 @@ describe('exploration-facet spawn seam', () => {
     // would report every discarded facet as evicted while all of them stayed
     // live, so it has to surface.
     const unsupported = makeHost({ abortSubAgentThrows: true });
-    expect(() => abortExplorationFacet(unsupported.host, 'branch-7')).toThrow('facet registry gone');
+    expect(() => abortActorFacet(unsupported.host, 'branch-7')).toThrow('facet registry gone');
   });
 
   test("deleting a facet targets the host's exploration class and that id", async () => {
     const { host, calls } = makeHost();
 
-    await deleteExplorationFacet(host, 'branch-7');
+    const actor = await host.actorDirectory({ action: 'register', name: 'exp:branch-7', creationId: 'branch-7', kind: 'branch', lifetime: 'task' });
+    await deleteExplorationFacet(host, 'branch-7', actor.reference);
 
     expect(methods(calls)).toEqual(['deleteSubAgent']);
-    expect(calls[0]?.args).toEqual([FakeExplorationFacet, 'exp:branch-7']);
+    expect(calls[0]?.args).toEqual([FakeExplorationFacet, actor.storageKey]);
   });
 
   test('a bootstrap failure whose cleanup also fails names the leak and keeps the original cause', async () => {
@@ -304,7 +297,7 @@ describe('exploration-facet spawn seam', () => {
     let thrown: Error | null = null;
     try {
       await spawnBranchFacet(host, 'branch-7', {
-        ownerUserId: 'user-1', capabilityToken: 'pwc_parent',
+        ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main',
       });
     } catch (cause) {
       if (!(cause instanceof Error)) throw cause;
@@ -317,7 +310,7 @@ describe('exploration-facet spawn seam', () => {
     expect(thrown?.message).toContain('facet storage is unreachable');
     // The bootstrap error survives as the cause rather than being replaced.
     expect(thrown?.cause).toMatchObject({ message: 'setOwner exploded' });
-    expect(methods(calls)).toEqual(['subAgent', 'setOwner', 'deleteSubAgent']);
+    expect(methods(calls)).toEqual(['subAgent', 'setSharedParent', 'setOwner', 'deleteSubAgent']);
   });
   test('a run failure whose reclaim also fails names both instead of masking the run', async () => {
     const { host, calls } = makeHost({ runAsHeadRejects: true, deleteSubAgentThrows: true });

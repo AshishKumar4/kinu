@@ -30,11 +30,16 @@ const completed: NodeLoopResult = {
   reported: { status: 'completed', content: 'the parser is generated' },
   granted: null, produced: [],
 };
-
+import { actorDirectoryFixture } from './helpers/actor-directory';
 function transport(fault: { run?: Error; reclaim?: Error }) {
   const allocated = new Set<string>();
   let homeHeld = true;
+  const directory = actorDirectoryFixture(async (entry) => {
+    await host.deleteSubAgent(host.facetClass(), entry.storageKey);
+    homeHeld = false;
+  });
   const host: NodeFacetHost = {
+    actorDirectory: (operation) => directory.apply(operation),
     subAgent: async (_cls, name) => {
       allocated.add(name);
       return {
@@ -55,14 +60,13 @@ function transport(fault: { run?: Error; reclaim?: Error }) {
     facetClass: () => SubordinateAgent,
     facetHomes: () => ({
       provision: async () => { throw new Error('the search already provisioned this home'); },
-      release: async () => { homeHeld = false; },
     }),
   };
   const run = hostNodeLoop(host, {
     identity: () => ({ ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main' }),
     registerArbiter: () => { throw new Error('this leaf has no arbiter'); },
   });
-  return { run, allocated, homeHeld: () => homeHeld };
+  return { run, allocated, homeHeld: () => homeHeld, key: async () => (await host.actorDirectory({ action: 'resolveCreation', creationId: 'node-1' })).storageKey };
 }
 
 describe('hosted node failure cleanup', () => {
@@ -70,7 +74,7 @@ describe('hosted node failure cleanup', () => {
     const failure = new Error('the provider connection broke', { cause: new Error('socket reset') });
     const fixture = transport({ run: failure });
     await expect(fixture.run(spec, null, undefined)).rejects.toBe(failure);
-    expect(fixture.allocated.has('exp:node-1')).toBe(false);
+    expect(fixture.allocated.has(await fixture.key())).toBe(false);
     expect(fixture.homeHeld()).toBe(false);
   });
 
@@ -78,7 +82,7 @@ describe('hosted node failure cleanup', () => {
     const failure = new Error('facet storage is unreachable');
     const fixture = transport({ reclaim: failure });
     await expect(fixture.run(spec, null, undefined)).rejects.toMatchObject({ cause: failure });
-    expect(fixture.allocated.has('exp:node-1')).toBe(true);
-    expect(fixture.homeHeld()).toBe(false);
+    expect(fixture.allocated.has(await fixture.key())).toBe(true);
+    expect(fixture.homeHeld()).toBe(true);
   });
 });

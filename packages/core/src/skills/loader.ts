@@ -7,7 +7,7 @@
  *     `/skill-name` literally. Highest precedence.
  *   - **keyword** — a skill has `auto_activate: true` and one of its
  *     `keywords` matches the user message (whole-word, case-insensitive).
- *   - **always_active** — `agent_config.always_active_skills` lists the
+ *   - **always_active** — `actor_config.always_active_skills` lists the
  *     name. For background workflows the operator always wants on.
  *
  * No fuzzy/embedding matching by design — that's surprising and hard to
@@ -55,7 +55,7 @@ export interface LoadActiveSkillsOpts {
   explicit: ReadonlyArray<string>;
   /** The user's plain-text message for keyword matching. */
   userMessage: string;
-  /** Skills the operator has pinned via `agent_config.always_active_skills`. */
+  /** Skills the operator has pinned via `actor_config.always_active_skills`. */
   alwaysActive: ReadonlyArray<string>;
 }
 

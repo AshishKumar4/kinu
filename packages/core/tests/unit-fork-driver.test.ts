@@ -15,9 +15,12 @@ import {
 } from '../src/index';
 import { createTestWorkspace } from './helpers';
 
+import { WorkspaceActorDirectory } from '../src/state/workspace-actors';
+
 async function sourceWorkspace() {
   const { db, sql, vfs } = createTestWorkspace();
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'atlas'}, ${100})`;
+  new WorkspaceActorDirectory(sql, { workspaceId: 'SRC', ownerUserId: '' }).createMain({ name: 'atlas' });
   await writeSoul(vfs, sql, 'help with testing');
   void sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hello'}, ${1000})`;
   void sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m2'}, ${'assistant'}, ${'hi'}, ${1100})`;

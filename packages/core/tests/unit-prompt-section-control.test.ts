@@ -324,7 +324,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
  *
  * It used to be a Durable Object field. Measured on the real actor: the cursor
  * advanced on ticks 25, 50 and 75 of one activation and appeared in no durable
- * table — `agent_config` held one key, the cadence — so every activation
+ * table — `actor_config` held one key, the cadence — so every activation
  * restarted at the first section. Against a joint idle-eviction window measured
  * at 2-5 minutes, `guidance/operating` received every pass and the other eight
  * needed 225 consecutive turns without a pause.

@@ -32,7 +32,7 @@ import type {
   SubordinateActivityEvent,
   SubordinateRosterEntry as SubordinateView,
 } from './lib/protocol';
-import { parseProtocolMessage } from "agents/chat";
+import { MessageType, parseProtocolMessage } from "agents/chat";
 import {
   CLI_BEARER_HEADER,
   CLI_SCOPES_HEADER,
@@ -42,11 +42,11 @@ import {
   cliScopesConnectionTag,
   sessionBearerConnectionTag,
   sessionBearerFromTags,
-  rejectOutOfScopeRpc,
+  rejectOutOfScopeRpc, requiredRpcAccess,
   type CliSocketBearer,
 } from "./cli/rpc-gate";
 import { retryTransientDO } from "./lib/do-rpc";
-import { isExplorationFacetKey } from "./facet-spawn";
+import { deleteActorFacet } from "./facet-spawn";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
 import {
@@ -70,7 +70,7 @@ import type {
   StreamableResult,
 } from "@cloudflare/think";
 import {
-  EvolutionEngine, type EvolutionConfig,
+  EvolutionEngine, sameActorReference, recoverSubordinateLifecycles, explorationActorKey, isExplorationActorKey, type EvolutionConfig, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
   // Scaffold loop closure — the evolved inference loop + its sampled
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
   scaffoldInferenceTransform, prepareActorProgram, type ActorTurnProgram, type ScaffoldRunOptions,
@@ -195,7 +195,6 @@ import {
   // One minting rule for every subordinate, on either backend
   mintSubordinateName,
   // The subordinate tree's depth cap — derived per child, never stated by one
-  DELEGATION_MAX_DEPTH,
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   // Automatic titling — one policy for every root that can be talked to
@@ -282,7 +281,7 @@ import type { CodemodeProvider, DeferredApprovalChannel, SlateBindingRoute, Slat
 import { workspaceOwner } from "./workspace-box-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
-import { diagnostics, KinuError, toKinuError, tolerate, type ErrorCode } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, refusalOf, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserDoRpcMethod } from "./rpc-surface";
 import type { UserCaller } from "./user/workspace-capability";
@@ -602,7 +601,24 @@ export abstract class ActorAgent extends Think<Env> {
    *  The orchestrator reads workspace_identity; a facet actor reads the
    *  owner row its parent seeded. */
   protected abstract getOwnerUserId(): string | null;
+  protected abstract actorHandle(): ActorHandle;
+  abstract actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult>;
 
+  private actorRuntimeRefusal(): Refusal | null {
+    try {
+      this.actorHandle();
+      return null;
+    } catch (cause) {
+      if (cause instanceof KinuError && cause.code === 'missing') return refusalOf(cause);
+      throw cause;
+    }
+  }
+
+  override async alarm(): Promise<void> {
+    const refusal = this.actorRuntimeRefusal();
+    if (refusal) throw new KinuError(refusal.reason, refusal.error);
+    await super.alarm();
+  }
   /**
    * Which kind of actor this class is, for the operational dataset's `agentKind`
    * dimension.
@@ -645,7 +661,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  attenuated exactly as the workspace is, with no per-facet bookkeeping to
    *  forget. Null before the Worker has claimed the workspace and issued one.
    *
-   *  Stored in its own table rather than agent_config: it is identity, not
+   *  Stored in its own table rather than actor_config: it is identity, not
    *  configuration, and must not be reachable through any config or snapshot
    *  surface. There is deliberately no RPC that reads it back out — the token
    *  only ever travels parent -> facet, so nothing name-addressable can be
@@ -691,7 +707,7 @@ export abstract class ActorAgent extends Think<Env> {
     const facet = this.facetClass();
     for (const entry of this.subordinateRoster.list()) {
       try {
-        const stub = await this.subAgent(facet, entry.name);
+        const stub = await this.existingSubordinate(entry.name);
         await stub.installWorkspaceCapability(token);
       } catch (err) {
         missed += 1;
@@ -712,7 +728,7 @@ export abstract class ActorAgent extends Think<Env> {
     const ownerUserId = this.getOwnerUserId();
     if (ownerUserId !== null) {
       for (const entry of this.listSubAgents(facet)) {
-        if (!isExplorationFacetKey(entry.name)) continue;
+        if (!isExplorationActorKey(entry.name)) continue;
         try {
           const stub = await this.subAgent(facet, entry.name);
           await stub.setOwner(ownerUserId, token);
@@ -1028,7 +1044,7 @@ export abstract class ActorAgent extends Think<Env> {
     const entry = this.subordinateRoster.get(name);
     if (entry === null) throw new Error(`Subordinate "${name}" is not in the roster`);
     try {
-      const snapshot = await (await this.subAgent(this.facetClass(), name)).getSubordinateSnapshot();
+      const snapshot = await (await this.existingSubordinate(name)).getSubordinateSnapshot();
       const role = snapshot.role;
       return { ...entry, displayName: snapshot.displayName, role };
     } catch (error) {
@@ -1100,14 +1116,29 @@ export abstract class ActorAgent extends Think<Env> {
     if (child.className !== this.facetClass().name) {
       return new Response('Not found', { status: 404 });
     }
-    const rosterEntry = this.subordinateRoster.get(child.name);
-    if (!rosterEntry || rosterEntry.status === 'dismissed'
-      || !this.hasSubAgent(child.className, child.name)) {
-      return new Response('Not found', { status: 404 });
+    let actor: ActorDirectoryResult;
+    try {
+      actor = await this.actorDirectory({ action: 'resolveStorage', storageKey: child.name });
+    } catch (cause) {
+      if (cause instanceof KinuError && cause.code === 'missing') return new Response('Not found', { status: 404 });
+      throw cause;
     }
+    const rosterEntry = this.subordinateRoster.get(actor.name);
+    if (actor.kind !== 'subordinate' || actor.state !== 'active' || !rosterEntry?.actorReference
+      || !sameActorReference(rosterEntry.actorReference, actor.reference) || rosterEntry.status === 'dismissed'
+      || !this.hasSubAgent(child.className, child.name)) return new Response('Not found', { status: 404 });
     return request;
   }
 
+  private async existingSubordinate(name: string) {
+    const roster = this.subordinateRoster.get(name);
+    if (!roster?.actorReference) throw new KinuError('missing', 'The subordinate has no registered actor reference.');
+    const actor = await this.actorDirectory({ action: 'validate', name, reference: roster.actorReference });
+    if (actor.kind !== 'subordinate') throw new KinuError('denied', 'The roster name does not identify a subordinate.');
+    const stub = await this.getExistingSubAgent(this.facetClass(), actor.storageKey);
+    if (!stub) throw new KinuError('missing', 'The subordinate physical actor is absent.');
+    return stub;
+  }
   private _subordinateRuntime: SubordinateRuntime | null = null;
 
   /**
@@ -1125,11 +1156,14 @@ export abstract class ActorAgent extends Think<Env> {
       spawn: async (input) => {
         const ownerUserId = this.getOwnerUserId();
         if (!ownerUserId) throw new Error('Agent has no owner yet — subordinate creation needs an owned workspace.');
-        const stub = await this.subAgent(facet, input.name);
+        await this.scheduleTerminalRetry(Date.now());
+        const entry = await this.actorDirectory({ action: 'register', creationId: input.creationId, name: input.name, kind: 'subordinate', lifetime: input.lifetime });
         const capabilityToken = this.workspaceCapabilityToken();
         try {
+          const stub = await this.subAgent(facet, entry.storageKey);
           const identity = {
-            name: input.name,
+            name: input.name, creationId: input.creationId,
+            actor: entry.reference,
             displayName: input.displayName,
             nameOrigin: input.nameOrigin,
             role: input.role,
@@ -1140,7 +1174,9 @@ export abstract class ActorAgent extends Think<Env> {
             lifetime: input.lifetime,
             capabilityToken: capabilityToken ?? undefined,
           };
-          await stub.setSubordinateIdentity(identity);
+          const seeded = await stub.setSubordinateIdentity(identity);
+          if ('reason' in seeded) throw new KinuError(seeded.reason, seeded.error);
+          return entry.reference;
         } catch (error) {
           // A cleanup path that discards its own failure cannot be trusted to
           // have cleaned up. `deleteSubAgent` is what WIPES the half-seeded
@@ -1149,7 +1185,7 @@ export abstract class ActorAgent extends Think<Env> {
           // shares — reported with the seeding failure as its cause, never
           // hidden behind it.
           try {
-            await this.deleteSubAgent(facet, input.name);
+            await deleteActorFacet(this, input.name, entry.reference);
           } catch (cleanupError) {
             throw new Error(
               `Subordinate ${input.name} failed to seed and its storage could not be reclaimed: `
@@ -1160,32 +1196,35 @@ export abstract class ActorAgent extends Think<Env> {
           throw error;
         }
       },
+      cancelBirth: async (input) => {
+        const entry = await this.actorDirectory({ action: 'cancelCreation', creationId: input.creationId, name: input.name, kind: 'subordinate', lifetime: input.lifetime });
+        return entry.reference;
+      },
       assign: async (name, input) => {
-        const stub = await this.subAgent(facet, name);
+        const stub = await this.existingSubordinate(name);
         const task = {
           kind: 'task',
           body: input.body,
           mode: input.mode,
           deliverable: input.deliverable,
           deadlineHint: input.deadlineHint,
-          inheritedContext: input.inheritedContext,
+          inheritedContext: input.inheritedContext, creationId: input.creationId,
         } as const;
         return stub.enqueueSubordinateTask(task);
       },
-      status: async (name) => (await this.subAgent(facet, name)).getSubordinateStatus(),
+      status: async (name) => (await this.existingSubordinate(name)).getSubordinateStatus(),
       message: async (name, content, mode) => {
-        return (await this.subAgent(facet, name))
+        return (await this.existingSubordinate(name))
           .enqueueSubordinateTask({ kind: 'message', body: content, mode });
       },
       rename: async (name, displayName, nameOrigin) => {
-        await (await this.subAgent(facet, name)).setSubordinateNaming(displayName, nameOrigin);
+        await (await this.existingSubordinate(name)).setSubordinateNaming(displayName, nameOrigin);
       },
       // A wipe takes the home with the storage; an archive keeps both, because
       // an archived subordinate's rows stay readable and so does its tree.
-      dismiss: async (name, keepHistory) => {
+      dismiss: async (name, keepHistory, reference) => {
         if (keepHistory) return;
-        await this.deleteSubAgent(facet, name);
-        await this.facetHomes().release('subordinate', name);
+        await deleteActorFacet(this, name, reference);
       },
     };
     return this._subordinateRuntime;
@@ -1272,32 +1311,35 @@ export abstract class ActorAgent extends Think<Env> {
    * the cap too, so even a stale ToolSet that offered `hire` cannot produce a
    * child past it.
    */
-  async getSubordinateBootstrapIdentity(): Promise<{
+  async getSubordinateBootstrapIdentity(input: { name: string; reference: ActorReference }): Promise<{
     parentWorkspace: string;
     ownerUserId: string;
     model: string | null;
-    depth: number;
-  }> {
-    // Deliberately carries no capability token: this method is reachable by any
-    // holder of a stub to this workspace, so it must never hand out a secret.
-    // The token reaches subordinates by push (setSubordinateIdentity +
-    // installWorkspaceCapability), never by read-back.
-    this.ensureSchema();
-    const ownerUserId = this.getOwnerUserId();
-    if (!ownerUserId) throw new Error('Workspace must be owned before creating subordinates.');
-    const own = this.delegationBudget();
-    if (delegationExhausted(own)) {
-      throw new Error(
-        `Delegation depth cap reached: this agent is at depth ${own.depth} of ${DELEGATION_MAX_DEPTH} `
-        + 'and cannot seed a subordinate below it.',
-      );
+    depth: number | null;
+    kind: ActorDirectoryResult['kind'];
+    lifetime: ActorDirectoryResult['lifetime'];
+    name: string;
+    storageKey: string;
+    creationId: string;
+  } | Refusal> {
+    try {
+      this.ensureSchema();
+      const child = await this.actorDirectory({ action: 'validate', name: input.name, reference: input.reference });
+      const ownerUserId = this.getOwnerUserId();
+      if (!ownerUserId) throw new KinuError('missing', 'The workspace has no owner.');
+      let depth: number | null = null;
+      if (child.kind === 'subordinate') {
+        const own = this.delegationBudget();
+        if (delegationExhausted(own)) throw new KinuError('denied', 'The parent cannot create a subordinate below its delegation depth.');
+        depth = deriveChildDelegationBudget(own).depth;
+      }
+      return {
+        parentWorkspace: this.workspaceName(), ownerUserId, model: this.config.getModel(),
+        depth, kind: child.kind, lifetime: child.lifetime, name: child.name, storageKey: child.storageKey, creationId: child.creationId,
+      };
+    } catch (cause) {
+      return refusalOf(toKinuError({ doing: 'reading a registered child bootstrap', cause, otherwise: 'io' }));
     }
-    return {
-      parentWorkspace: this.workspaceName(),
-      ownerUserId,
-      model: this.config.getModel(),
-      depth: deriveChildDelegationBudget(own).depth,
-    };
   }
 
   /** Subordinate progress ingress. Worker-side DO RPC only: the method is not
@@ -1332,10 +1374,9 @@ export abstract class ActorAgent extends Think<Env> {
     }, input, Date.now());
   }
 
-
   private readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
-    agentName: () => this.name,
+    agentName: () => this.actorHandle().name,
     appTitle: 'Kinu',
     ownerRequired: true,
     getOwnerUserId: () => this.getOwnerUserId(),
@@ -1373,58 +1414,6 @@ export abstract class ActorAgent extends Think<Env> {
     // its workspace says so, as a `workspace` field; the rest are honestly
     // unattributed. See `analytics/install.ts`.
     installAnalyticsDiagnostics(this.env);
-    // Scoped `pta_…` access tokens reach this DO over ticket-authenticated
-    // websockets, and the REST scope gate never sees websocket frames — so
-    // out-of-scope @callable requests are rejected here, ahead of the
-    // agents-SDK rpc dispatcher (installed as an own-property onMessage
-    // wrapper by the Agent constructor, hence the re-wrap instead of an
-    // onMessage override). Chat frames pass through untouched.
-    //
-    // WHETHER the connection's authority may still act is asked FIRST — its
-    // CLI bearer, or the browser session behind its cookie — because the scope
-    // gate answers a different question: it pins a connection to what its token
-    // was granted, and says nothing about whether that token still exists. The
-    // upgrade verifies each once, so without the check below a revoked CLI token
-    // or a logged-out cookie kept this workspace's whole surface for as long as
-    // it held the socket — across every await, and across hibernation, which
-    // restored the connection from its tags with its scopes intact.
-    const dispatchMessage = this.onMessage;
-    this.onMessage = async (connection, message) => {
-      if (await this.refuseRevokedSocketAuthority(connection, message)) return;
-      const rejection = rejectOutOfScopeRpc(connection.tags, message);
-      if (rejection) {
-        connection.send(rejection);
-        return;
-      }
-      const rpc = parseClientRpcFrame(message);
-      if (rpc && this.isClientRpcMethodDenied(rpc.method)) {
-        connection.send(JSON.stringify({
-          type: 'rpc',
-          id: rpc.id,
-          success: false,
-          error: `${rpc.method} is not available from client connections.`,
-        }));
-        return;
-      }
-      const event = v.is(v.string(), message) ? parseProtocolMessage(message) : null;
-      try {
-        return await dispatchMessage.call(this, connection, message);
-      } finally {
-        if (event?.type === 'clear') {
-          this.dynamicLedger.reset();
-          this._pendingDrainReplyTurns.clear();
-          try {
-            await this.compactionState.plans.save(this.name, null);
-          } catch (err) {
-            diagnostics.failure('compaction.reset_failed', toKinuError({
-              doing: 'clearing the persisted compaction plan after clear-history',
-              cause: err,
-              otherwise: 'io',
-            }), { workspace: this.name });
-          }
-        }
-      }
-    };
     // Constructor body (not a field initializer): boundSql's memo field must
     // be initialized before the getter caches its closure.
     this.compactionState = createCompactionStateStore(this.boundSql);
@@ -1448,7 +1437,55 @@ export abstract class ActorAgent extends Think<Env> {
       prepareStep: (ctx) => this.orch.turnExtension.prepareStep?.(ctx),
     });
   }
-
+  /** Think installs protocol dispatch before the actor onStart callback. */
+  protected installClientMessageGate(): void {
+    const dispatchMessage = this.onMessage;
+    this.onMessage = async (connection, message) => {
+      if (await this.refuseRevokedSocketAuthority(connection, message)) return;
+      const rejection = rejectOutOfScopeRpc(connection.tags, message);
+      if (rejection) {
+        connection.send(rejection);
+        return;
+      }
+      const rpc = parseClientRpcFrame(message);
+      if (rpc && this.isClientRpcMethodDenied(rpc.method)) {
+        connection.send(JSON.stringify({
+          type: 'rpc',
+          id: rpc.id,
+          success: false,
+          error: `${rpc.method} is not available from client connections.`,
+        }));
+        return;
+      }
+      const event = v.is(v.string(), message) ? parseProtocolMessage(message) : null;
+      const unavailable = this.actorRuntimeRefusal();
+      const inspection = rpc && (requiredRpcAccess(rpc.method) === 'workspace.read' || rpc.method === 'inspectSubordinate' || rpc.method === 'exportWorkspaceArchive');
+      if (unavailable && !inspection) {
+        if (rpc) connection.send(JSON.stringify({ ...unavailable, type: 'rpc', id: rpc.id, success: false }));
+        else if (event?.type === 'chat-request' || event?.type === 'stream-resume-ack') {
+          connection.send(JSON.stringify({ reason: unavailable.reason, type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: event.id, body: unavailable.error, done: true, error: true }));
+        } else connection.send(JSON.stringify({ ...unavailable, type: 'error' }));
+        return;
+      }
+      try {
+        return await dispatchMessage.call(this, connection, message);
+      } finally {
+        if (event?.type === 'clear') {
+          this.dynamicLedger.reset();
+          this._pendingDrainReplyTurns.clear();
+          try {
+            await this.compactionState.plans.save(this.name, null);
+          } catch (err) {
+            diagnostics.failure('compaction.reset_failed', toKinuError({
+              doing: 'clearing the persisted compaction plan after clear-history',
+              cause: err,
+              otherwise: 'io',
+            }), { workspace: this.name });
+          }
+        }
+      }
+    };
+  }
   /** The settled turn's actor-generic front half — every actor's
    *  onChatResponse calls this FIRST (before anything that can throw or
    *  return early). Resolves the drain identity, clears in-flight turn
@@ -2655,7 +2692,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** Scoped access-token connections may chat but never write agent state. */
   override shouldConnectionBeReadonly(connection: Connection, ctx: ConnectionContext): boolean {
-    return super.shouldConnectionBeReadonly(connection, ctx)
+    return this.actorRuntimeRefusal() !== null || super.shouldConnectionBeReadonly(connection, ctx)
       || !!ctx.request.headers.get(CLI_SCOPES_HEADER);
   }
 
@@ -3488,7 +3525,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  so a store added there exists for this actor too. Lazy inside: the bundle
    *  never touches `boundSql` until a store is first read, which is what lets
    *  it be built here rather than in the constructor body. */
-  private readonly stores = createAgentStores(() => this.boundSql);
+  private readonly stores = createAgentStores(() => this.boundSql, () => this.actorHandle());
 
   private _liveHeadJournal: LiveHeadJournal | null = null;
 
@@ -3909,10 +3946,9 @@ export abstract class ActorAgent extends Think<Env> {
   /** The recursive half, split out so the local answer above reads as one list
    *  of sources rather than one list plus a fan-out. */
   private async subtreeHasSandboxBackgroundWork(): Promise<boolean> {
-    const facet = this.facetClass();
     for (const entry of this.subordinateRoster.list()) {
       try {
-        const stub = await this.subAgent(facet, entry.name);
+        const stub = await this.existingSubordinate(entry.name);
         if (await stub.hasSandboxBackgroundWork()) return true;
       } catch (err) {
         diagnostics.failure('sandbox.subordinate_work_probe_failed', toKinuError({
@@ -3929,7 +3965,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  threshold. Once detached, BackgroundJobRunner owns cancellation. */
   protected readonly _activeToolControllers = new Set<AbortController>();
 
-  // Typed accessors over the `agent_config` key/value table — replaces
+  // Typed accessors over the `actor_config` key/value table — replaces
   // scattered raw SQL with a single deep module.
   protected get config(): AgentConfigStore {
     return this.stores.config;
@@ -4416,6 +4452,7 @@ export abstract class ActorAgent extends Think<Env> {
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
         getCheckpointMetaForDevice: () => this.getCheckpointMetaForDevice(),
       }, {
+        actor: this.actorHandle(),
         ownerUserId: () => this.getOwnerUserId(),
         workspaceName: this.workspaceName(),
         shellId: this.shellId(),
@@ -4844,7 +4881,14 @@ export abstract class ActorAgent extends Think<Env> {
     return inspectSubordinateStorage({
       sql: this.boundSql, raw: this.ctx.storage.sql,
       storedParentPath: () => this.ctx.storage.get<JsonValue>('cf_agents_parent_path'),
-      existing: (name) => this.getExistingSubAgent(this.facetClass(), name),
+      storedPhysicalKey: () => this.ctx.storage.get<JsonValue>('cf_agents_facet_name'),
+      existing: async (row) => {
+        // Legacy owner inspection reads the SDK-registered key. It mints no identity.
+        const key = row.actorReference === null ? row.name
+          : (await this.actorDirectory({ action: 'validate', name: row.name, reference: row.actorReference })).storageKey;
+        const port = await this.getExistingSubAgent(this.facetClass(), key);
+        return port === null ? null : { port, storageKey: key };
+      },
     }, request, authority);
   }
 
@@ -4960,6 +5004,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** Think asks for a model before beforeTurn. The prior resolved profile is
    * a warm hint; beforeTurn always overrides this turn with its fresh profile. */
   getModel(): LanguageModel {
+    this.actorHandle();
     const spec = this._turnProfile?.tier.model ?? this.getStoredModelId();
     return this.ownedModelServices.resolveModel(spec);
   }
@@ -5036,13 +5081,10 @@ export abstract class ActorAgent extends Think<Env> {
    * a manual rename that claimed the title first still wins.
    */
   protected async applyAutoTitle(mission: string): Promise<string | null> {
-    // Authoritative state FIRST. `titleInputs` is synchronous, so an actor whose
-    // naming lives elsewhere answers it from an activation cache that a cold
-    // start has not filled — and a replayed title would then plan over a title
-    // its own first attempt had already persisted.
+    // Read stored naming state before a cold activation plans a title.
     await this.hydrateTitleInputs();
     const title = await applyWorkspaceTitle({
-      slug: this.name,
+      slug: this.actorHandle().name,
       ...this.titleInputs(),
       mission,
     }, {
@@ -5083,7 +5125,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** The naming state the title policy decides against. The base reads the
    *  actor's own config — which IS the authority for a subordinate's
    *  descriptor — while the workspace root overrides it with its activation
-   *  cache of the ROOT registry row (UserDO), where an agent_config mirror
+   *  cache of the ROOT registry row (UserDO), where an actor_config mirror
    *  would drift against every other writer of that row. */
   protected titleInputs(): WorkspaceTitleInputs {
     return { displayName: this.config.getDisplayName(), nameOrigin: this.config.getNameOrigin() };
@@ -5196,6 +5238,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  getTools, which adds the background wrap) and by internal eval side-streams
    *  that must run tools to completion inline (never auto-background). */
   protected getRawTools(): ToolSet {
+    this.actorHandle();
     return this.getRawToolsForWorkMode(this.turnWorkMode());
   }
 
@@ -5373,7 +5416,10 @@ export abstract class ActorAgent extends Think<Env> {
    *  plane rather than inventing a home. */
   protected hostedNodeHomeProvisioner(): NodeWorkspaceProvisioner | undefined {
     if (!this.getOwnerUserId()) return undefined;
-    return async (node) => ({ ...await this.facetHomes().provision('node', node.nodeId), isolation: 'private-home' });
+    return async (node) => {
+      const actor = await this.actorDirectory({ action: 'register', creationId: node.nodeId, name: explorationActorKey(node.nodeId), kind: 'node', lifetime: 'task' });
+      return { ...await this.facetHomes().provision(actor.reference), isolation: 'private-home' };
+    };
   }
 
   /**
@@ -5723,15 +5769,11 @@ export abstract class ActorAgent extends Think<Env> {
     // (Supervise altitude) can show what kicked each run off. This is the chat
     // path → caused_by:'chat'; event-triggered runs set ingress_kind/trigger_id.
     this._currentRunId = `run-${nanoid()}`;
-    // A new analytics write window. The platform caps writes per INVOCATION,
-    // which is not a thing this code can observe from inside a Durable Object; a
-    // TURN is, and it is the unit whose row count can actually run away (a turn
-    // with two hundred tool calls writes four hundred rows). Opening it here
-    // makes the cap bound the thing that can exceed it.
+    // Each run opens a new analytics write window.
     openAnalyticsWindow(this.env);
     this.restoreTurnCheckpoint();
     openTurnRun(this.eventRecorder, this._currentRunId, {
-      agentId: this.name,
+      agentId: this.actorHandle().actorId,
       causedBy: 'chat',
       userMessage: extractLastUserText(ctx.messages),
       turnIndex: this.orch.sessionTurnIndex,
@@ -6481,7 +6523,9 @@ export abstract class ActorAgent extends Think<Env> {
    *  or cross objects, which is why it lives in the alarm frame and never in
    *  an activation. Idempotent by contract; the base owns none. Answers
    *  whether the pass filled a budget and must continue on the next tick. */
-  protected async maintenanceWork(): Promise<boolean> { return false; }
+  protected async maintenanceWork(): Promise<boolean> {
+    return recoverSubordinateLifecycles(this.subordinateRoster, this.subordinateRuntime());
+  }
 
   /** Detached work this actor owns until its lexical error boundary settles. */
   protected readonly _backgroundTasks = new Set<AsyncTaskOwner>();
@@ -6584,6 +6628,7 @@ export abstract class ActorAgent extends Think<Env> {
    * day; this override only supplies what a fresh activation can re-resolve.
    */
   override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
+    this.actorHandle();
     return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));
   }
 

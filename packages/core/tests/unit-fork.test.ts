@@ -15,7 +15,7 @@ import {
 import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers';
 import { forkFilePaths } from '../src/identity/fork';
 import type { VFS } from '../src/types/primitives';
-
+import { WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/state/workspace-actors';
 /** Seed a source DB with identity, SOUL.md, N messages, and some crafted tools.
  *  A message with no explicit `parent_id` is linked to the previous one, which
  *  is what the SDK's session provider does (`parentId ?? latestLeaf`) — a
@@ -30,6 +30,7 @@ async function seedSource(
   },
 ) {
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${opts.identity.id}, ${opts.identity.name}, ${100})`;
+  const actor = new WorkspaceActorDirectory(sql, { workspaceId: opts.identity.id, ownerUserId: '' }).createMain({ name: opts.identity.name });
   await writeSoul(vfs, sql, opts.purpose);
   let previousId: string | null = null;
   for (const m of opts.messages) {
@@ -42,14 +43,13 @@ async function seedSource(
     void sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
         VALUES (${t.name}, ${t.description}, ${null}, ${t.code}, ${t.scope}, ${t.created_at}, ${t.updated_at})`;
   }
-  void sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'@cf/moonshotai/kimi-k2.6'})`;
-  void sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'display_name'}, ${opts.identity.name})`;
+  actor.config.setModel('@cf/moonshotai/kimi-k2.6');
+  actor.config.setDisplayName(opts.identity.name);
 }
 
-async function seedTargetBootstrap({ sql, vfs }: TestWorkspace) {
-  // Simulate what the fork DO's onStart path inserts: default SOUL.md + identity.
-  // forkWorkspaceStorage should purge these before writing the real fork rows.
-  void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'TARGET-BOOTSTRAP-ID'}, ${'target-bootstrap'}, ${200})`;
+async function seedTargetBootstrap({ sql, vfs }: TestWorkspace, targetId = 'T') {
+  void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${targetId}, ${'target-bootstrap'}, ${200})`;
+  new WorkspaceActorDirectory(sql, { workspaceId: targetId, ownerUserId: '' }).createMain({ name: 'target-bootstrap' });
   await writeSoul(vfs, sql, 'default bootstrap purpose');
 }
 
@@ -57,7 +57,7 @@ describe('forkWorkspaceStorage', () => {
   test('1. preserves messages 0..N with identical PKs and parent_ids', async () => {
     const src = fresh();
     const tgt = fresh();
-    await seedTargetBootstrap(tgt);
+    await seedTargetBootstrap(tgt, 'TGT-ID');
     await seedSource(src, {
       identity: { id: 'SRC-ID', name: 'source-agent' },
       purpose: 'original purpose',
@@ -187,7 +187,7 @@ describe('forkWorkspaceStorage', () => {
   test('6. writes fork_lineage row with correct fields', async () => {
     const src = fresh();
     const tgt = fresh();
-    await seedTargetBootstrap(tgt);
+    await seedTargetBootstrap(tgt, 'TGT');
     await seedSource(src, {
       identity: { id: 'SRC-UUID-123', name: 'source-alpha' },
       purpose: 'p',
@@ -212,8 +212,8 @@ describe('forkWorkspaceStorage', () => {
     const a = fresh();
     const b = fresh();
     const c = fresh();
-    await seedTargetBootstrap(b);
-    await seedTargetBootstrap(c);
+    await seedTargetBootstrap(b, 'B-ID');
+    await seedTargetBootstrap(c, 'C-ID');
     await seedSource(a, {
       identity: { id: 'A-ID', name: 'agent-A' }, purpose: 'p',
       messages: [
@@ -307,7 +307,7 @@ describe('forkWorkspaceStorage', () => {
   test('10. workspace_identity rewritten with new UUID + name + fresh created_at', async () => {
     const src = fresh();
     const tgt = fresh();
-    await seedTargetBootstrap(tgt);
+    await seedTargetBootstrap(tgt, 'NEW-UUID');
     await seedSource(src, {
       identity: { id: 'SRC-UUID', name: 'src-name' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
@@ -356,7 +356,7 @@ describe('forkWorkspaceStorage', () => {
       .toEqual(['m1', 'm2', marker.id]);
   });
 
-  test('12. agent_config copied but display_name overwritten', async () => {
+  test('12. actor_config copied but display_name overwritten', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -368,7 +368,7 @@ describe('forkWorkspaceStorage', () => {
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked-display' });
 
     const cfg = tgt.sql<{ key: string; value: string }>`
-      SELECT key, value FROM agent_config ORDER BY key
+      SELECT key, value FROM actor_config ORDER BY key
     `;
     const map = new Map(cfg.map(r => [r.key, r.value]));
     expect(map.get('model')).toBe('@cf/moonshotai/kimi-k2.6');
@@ -530,7 +530,7 @@ describe('forkWorkspaceStorage', () => {
     })).rejects.toThrow(/memory_chunks/);
   });
 
-  test('19. a fork that cannot write agent_config FAILS instead of keeping the bootstrap name', async () => {
+  test('19. a fork that cannot write actor_config FAILS instead of keeping the bootstrap name', async () => {
     // display_name is written here. Swallowed, the fork kept the target's
     // bootstrap identity and the UI showed the wrong workspace name.
     const src = fresh();
@@ -540,11 +540,11 @@ describe('forkWorkspaceStorage', () => {
       identity: { id: 'S', name: 'src' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    tgt.execRaw('DROP TABLE agent_config');
+    tgt.execRaw('DROP TABLE actor_config');
 
     await expect(forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
-    })).rejects.toThrow(/agent_config/);
+    })).rejects.toThrow(/actor_config/);
   });
 });
 
@@ -621,10 +621,8 @@ describe('fork snapshot payload', () => {
     // What the owner said "always" to in THIS workspace, and how much the gate
     // asks here. Both are read live by `ShellApprovalPolicy` before it decides
     // whether to put a command in front of the owner at all.
-    void src.sql`INSERT OR REPLACE INTO agent_config (key, value)
-      VALUES (${'shell_approval_mode'}, ${'allow_all'})`;
-    void src.sql`INSERT OR REPLACE INTO agent_config (key, value)
-      VALUES (${'shell_approval_grants'}, ${'rm -rf *@sandbox,curl *@sandbox'})`;
+    openWorkspaceMainActor(src.sql).config.setShellApprovalMode('allow_all');
+    openWorkspaceMainActor(src.sql).config.set('shell_approval_grants', 'rm -rf *@sandbox,curl *@sandbox');
 
     const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm1');
 
@@ -634,7 +632,7 @@ describe('fork snapshot payload', () => {
 
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
     const landed = Object.fromEntries(
-      tgt.sql<{ key: string; value: string }>`SELECT key, value FROM agent_config`
+      tgt.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config`
         .map((row) => [row.key, row.value]),
     );
     // The child asks the owner from scratch, and the preference it may inherit

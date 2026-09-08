@@ -12,12 +12,11 @@ import { Database } from 'bun:sqlite';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 
 import {
-  collectWorkspaceTextFiles, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
+  collectWorkspaceTextFiles, createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
   SDK_SESSION_DDL,
 } from './helpers';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
-import { createAgentConfigStore } from '../src/config/store';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
 import { getRunTimeline } from '../src/read-models/timeline';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs';
@@ -47,7 +46,8 @@ function workspace() {
   const execRaw = makeExecRaw(db);
   const exec = makeSqlExec(db);
   initWorkspaceSchema({ execRaw, sql, exec });
-  return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs, config: createAgentConfigStore(sql) };
+  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'read-model-test');
+  return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs, config: actor.config };
 }
 
 interface SeedRow { id: string; role: string; content: string }
@@ -251,7 +251,7 @@ describe('run timeline', () => {
 describe('agent status', () => {
   test('identity, counts and config in one shape', async () => {
     const { db, sql, config, vfs } = workspace();
-    void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES ('id-1', 'jarvis', 42)`;
+    void sql`UPDATE workspace_identity SET name = 'jarvis', created_at = 42`;
     void sql`INSERT INTO messages (id, session_id, role, content, created_at) VALUES ('m1', 'default', 'user', 'hi', 1)`;
     config.setReasoningEffort('high');
 
@@ -270,7 +270,7 @@ describe('agent status', () => {
     const sql = makeSql(db);
     await expect(getAgentStatus({
       sql, vfs: createWorkspaceBundle(db).vfs,
-      config: createAgentConfigStore(sql), name: 'agent-7',
+      config: workspace().config, name: 'agent-7',
       displayName: 'ignored',
     })).rejects.toThrow(/no such table/);
   });

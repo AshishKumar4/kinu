@@ -603,7 +603,7 @@ export interface GepaOptimizationResult {
  * the winner to modifyScaffold so it enters the normal shadow-eval → promote
  * pipeline. Persisted to gepa_runs/gepa_candidates for lineage.
  *
- * Cost-bounded: the instance budget comes from agent_config gepa_eval_budget
+ * Cost-bounded: the instance budget comes from actor_config gepa_eval_budget
  * unless `evalSize` overrides it, and each metric call is a full scaffold run
  * plus a judge call. Scores come back as intervals — with a val set this size,
  * a winner inside the seed's interval is not evidence of anything.
