@@ -76,19 +76,25 @@ export function createSpinner(initialMessage: string) {
   let i = 0;
   let message = initialMessage;
   let timer: ReturnType<typeof setInterval> | null = null;
+  const paint = () => {
+    process.stdout.write(`\r\x1b[K${ACCENT(SPINNER_FRAMES[i % SPINNER_FRAMES.length])} ${message}`);
+    i++;
+  };
   return {
     start() {
       if (!isTTY) return;
-      timer = setInterval(() => {
-        const frame = ACCENT(SPINNER_FRAMES[i % SPINNER_FRAMES.length]);
-        process.stdout.write(`\r\x1b[K${frame} ${message}`);
-        i++;
-      }, 80);
+      timer = setInterval(paint, 80);
     },
-    /** Replace the live status. Piped output gets one plain line instead. */
+    /** Replace the live status. Piped output gets one plain line instead.
+     *
+     *  A terminal is painted HERE as well as by the interval, because the
+     *  interval alone showed a state only if it outlived a frame: a phase that
+     *  began and ended inside 80 ms reached a pipe and never a terminal, which
+     *  is the wrong way round for the mode a person actually watches. */
     update(next: string) {
       message = next;
-      if (!isTTY) console.log(`${DIM('·')} ${next}`);
+      if (isTTY) paint();
+      else console.log(`${DIM('·')} ${next}`);
     },
     /** Print a line that stays in the scrollback, above the live status. */
     note(line: string) {
