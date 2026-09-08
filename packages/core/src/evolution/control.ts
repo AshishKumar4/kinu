@@ -37,6 +37,7 @@ import {
   type ScaffoldRunOptions, type ScaffoldRunResult,
 } from '../scaffold/executor';
 import { modifyScaffold } from '../scaffold/modify';
+import type { ActorHandle } from '../state/actor-handle';
 import { listScaffoldArchive, type ScaffoldArchiveEntry } from '../scaffold/archive';
 import {
   DEFAULT_SHADOW_CONFIG, MAX_QUEUED_SHADOW_TRIALS, applyPromotionDecision, countQueuedShadowTrials,
@@ -204,7 +205,7 @@ export async function runScaffoldOnce(
   task: string,
   opts?: { useShadowOverride?: boolean },
 ): Promise<ScaffoldRunResult> {
-  const pending = opts?.useShadowOverride ? getPendingScaffold(control.sql) : null;
+  const pending = opts?.useShadowOverride ? getPendingScaffold(control.sql, control.rt.actor) : null;
   const codeOverride = pending ? await readScaffoldVersion(control.rt, pending.version) : null;
   return runScaffold(scaffoldRunOptions(control, task, {
     scaffoldCodeOverride: codeOverride ?? undefined,
@@ -247,7 +248,7 @@ export function shadowTrialPlan(control: ScaffoldControl, turnKey: string): numb
   if (turnKey === '') return null;
   const sampleRate = control.config.getShadowSampleRate();
   if (sampleRate <= 0) return null;
-  const pending = getPendingScaffold(control.sql);
+  const pending = getPendingScaffold(control.sql, control.rt.actor);
   if (!pending) return null;
   if (sampleFraction(turnKey) >= sampleRate) return null;
   return pending.version;
@@ -301,6 +302,7 @@ export function queueTurnShadowTrial(
     };
     return queueShadowTrial(
       control.sql,
+      control.rt.actor,
       plan.id === undefined ? trial : { ...trial, id: plan.id },
     );
   } catch (err) {
@@ -328,8 +330,8 @@ export function queueTurnShadowTrial(
  * The same reason stops the loop the moment a decision is applied.
  */
 export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<ShadowTrialDrain> {
-  const pending = getPendingScaffold(control.sql);
-  purgeQueuedShadowTrials(control.sql, pending?.version ?? null);
+  const pending = getPendingScaffold(control.sql, control.rt.actor);
+  purgeQueuedShadowTrials(control.sql, control.rt.actor, pending?.version ?? null);
   if (!pending) return { trials: 0, applied: null };
 
   let trials = 0;
@@ -340,7 +342,7 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
   // nothing ends the drain; the ceiling bounds the pathological case, and past
   // it one drain has already run more trials than the gate can consume.
   while (processed < MAX_QUEUED_SHADOW_TRIALS) {
-    const batch = listQueuedShadowTrials(control.sql, pending.version);
+    const batch = listQueuedShadowTrials(control.sql, control.rt.actor, pending.version);
     if (batch.length === 0) break;
     for (const trial of batch) {
       if (processed >= MAX_QUEUED_SHADOW_TRIALS) break;
@@ -377,9 +379,9 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
           { trialId: trial.id },
         );
       }
-      dropQueuedShadowTrial(control.sql, trial.id);
+      dropQueuedShadowTrial(control.sql, control.rt.actor, trial.id);
       if (applied) {
-        purgeQueuedShadowTrials(control.sql, null);
+        purgeQueuedShadowTrials(control.sql, control.rt.actor, null);
         return { trials, applied };
       }
     }
@@ -447,8 +449,10 @@ export interface ScaffoldVersionView {
   win_rate: number | null;
 }
 
-export function listScaffoldVersions(sql: SqlExecutor, limit = 20): ScaffoldVersionView[] {
-  return listScaffoldArchive(sql, limit).map((e) => ({
+export function listScaffoldVersions(
+  sql: SqlExecutor, actor: ActorHandle, limit = 20,
+): ScaffoldVersionView[] {
+  return listScaffoldArchive(sql, actor, limit).map((e) => ({
     version: e.version,
     written_at: e.writtenAt,
     rationale: e.rationale,
@@ -477,15 +481,15 @@ export type ShadowStatus =
 
 /** The pending scaffold's rollout state — trials so far and what the promotion
  *  gate currently says. With nothing pending, the recent archive instead. */
-export function getShadowStatus(sql: SqlExecutor): ShadowStatus {
-  const pending = getPendingScaffold(sql);
-  if (!pending) return { hasPending: false, versions: listScaffoldVersions(sql, 10) };
+export function getShadowStatus(sql: SqlExecutor, actor: ActorHandle): ShadowStatus {
+  const pending = getPendingScaffold(sql, actor);
+  if (!pending) return { hasPending: false, versions: listScaffoldVersions(sql, actor, 10) };
   return {
     hasPending: true,
     pending,
     decision: decidePromotion(pending, DEFAULT_SHADOW_CONFIG),
     config: DEFAULT_SHADOW_CONFIG,
-    queuedTrials: countQueuedShadowTrials(sql, pending.version),
+    queuedTrials: countQueuedShadowTrials(sql, actor, pending.version),
   };
 }
 
@@ -504,7 +508,7 @@ export async function applyScaffoldDecision(
   control: ScaffoldControl,
   mode: 'auto' | 'promote' | 'rollback',
 ): Promise<ScaffoldDecisionResult> {
-  const pending = getPendingScaffold(control.sql);
+  const pending = getPendingScaffold(control.sql, control.rt.actor);
   if (!pending) return { ok: false, error: 'no pending scaffold' };
   let decision: 'promote' | 'rollback';
   if (mode === 'auto') {
@@ -608,7 +612,7 @@ export async function runScaffoldGepaOptimization(
   const evalSize = clampGepaEvalBudget(opts?.evalSize ?? control.config.getGepaEvalBudget());
 
   // 1. Train/val split from outcome-labeled turns (the turn_outcomes ledger).
-  const split = buildOutcomeEvalSplit(control.sql, evalSize);
+  const split = buildOutcomeEvalSplit(control.sql, control.rt.actor, evalSize);
   const { train: trainSet, val: evalSet } = split;
   // Without a failure to optimise toward there is nothing to select on but
   // judge noise over already-accepted turns — and an empty train set would
@@ -786,7 +790,7 @@ async function runPromptSectionGepaOptimization(
   opts: { sectionId: string; maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
 ): Promise<PromptSectionOptimizationResult> {
   const evalSize = clampGepaEvalBudget(opts.evalSize ?? control.config.getGepaEvalBudget());
-  const split = buildOutcomeEvalSplit(control.sql, evalSize);
+  const split = buildOutcomeEvalSplit(control.sql, control.rt.actor, evalSize);
   if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
     return { ok: false, error: describeSplitDegeneracy(split.degeneracy) };
   }
@@ -891,7 +895,7 @@ async function runPromptSectionTrials(
   // Drawn fresh each pass, so consecutive passes see the turns that happened in
   // between: the newest failures plus the accepted-turn guards, and never the
   // train half the candidate was written against.
-  const split = buildOutcomeEvalSplit(control.sql, control.config.getGepaEvalBudget());
+  const split = buildOutcomeEvalSplit(control.sql, control.rt.actor, control.config.getGepaEvalBudget());
   const instances = split.val.slice(0, Math.max(1, opts?.trials ?? 3));
 
   let trialsRun = 0;
@@ -975,7 +979,9 @@ export async function proposeMeasuredPromptSection(
       error: `"${input.sectionId}" is not a registered prompt section`,
     };
   }
-  const split = buildOutcomeEvalSplit(control.sql, clampGepaEvalBudget(control.config.getGepaEvalBudget()));
+  const split = buildOutcomeEvalSplit(
+    control.sql, control.rt.actor, clampGepaEvalBudget(control.config.getGepaEvalBudget()),
+  );
   if (split.degeneracy !== null) {
     return {
       ok: false, sectionId: section.id, code: 'degenerate_split',

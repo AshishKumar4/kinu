@@ -30,6 +30,7 @@ import {
   initRunEventTables, RunEventRecorder, TurnAccumulator, closeTurnRun,
   getRunSummaries, normalizeUsage, type RunEventInput, type Usage,
 } from '../src/index';
+import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 
 function jsonReply(serialized: string): FetchFunction {
@@ -101,7 +102,7 @@ function setup() {
   const db = new Database(':memory:');
   initRunEventTables(makeExecRaw(db));
   const sql = makeSql(db);
-  const recorder = new RunEventRecorder(sql);
+  const recorder = new RunEventRecorder(sql, testActorHandle(sql));
   return { recorder };
 }
 

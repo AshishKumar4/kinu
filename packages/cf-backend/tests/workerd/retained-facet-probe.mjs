@@ -2,7 +2,7 @@ import { Agent } from 'agents';
 import { Think } from '@cloudflare/think';
 import { SubordinateAgent as ProductionSubordinate } from '../../src/subordinate-agent';
 import { sealRpcSurface, SUBORDINATE_RPC_SURFACE } from '../../src/rpc-surface';
-import { SubordinateIdentityStore, RunEventRecorder, FacetIdentity, WorkspaceActorDirectory, initWorkspaceActorTable } from '@kinu.run/core';
+import { SubordinateIdentityStore, RunEventRecorder, FacetIdentity, WorkspaceActorDirectory, initWorkspaceActorTable, bindActorHandle } from '@kinu.run/core';
 import { initWorkspaceOwnershipTables } from '../../../core/src/identity/schema';
 import { bindAgentSql } from '../../src/runtime';
 
@@ -58,14 +58,18 @@ export class SubordinateAgent extends ProductionSubordinate {
     new FacetIdentity(this.ctx.storage.sql).seed({ actor, ownerUserId: 'owner', parentWorkspace: 'workspace', capabilityToken: null });
     const identity = new SubordinateIdentityStore(this.ctx.storage.sql);
     identity.seed({ name: 'child', mission: 'read only', parentWorkspace: 'workspace', ownerUserId: 'owner', depth: 1, lifetime: 'task' });
-    const events = new RunEventRecorder(bindAgentSql(this));
+    this._seededActorId = actor.actorId;
+    const sql = bindAgentSql(this);
+    const events = new RunEventRecorder(sql, bindActorHandle(sql, actor, () => {}));
     events.emit('retained-run', { type: 'run_start', agentId: 'child' });
     events.emit('retained-run', { type: 'tool_call_end', name: 'agents', toolCallId: 'nested-ask', args: { action: 'ask', role: 'general' }, outcome: { success: true } });
     return this.counts();
   }
   counts() {
     return {
-      events: this.ctx.storage.sql.exec('SELECT COUNT(*) AS n FROM run_events').one().n,
+      events: this.ctx.storage.sql.exec(
+        'SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ?', this._seededActorId,
+      ).one().n,
       fibers: this.ctx.storage.sql.exec('SELECT COUNT(*) AS n FROM cf_agents_runs').one().n,
       callable: this.getCallableMethods().has('inspectSubordinateStorage'),
     };

@@ -69,6 +69,7 @@ import {
   createDefaultWebSearchProvider, createWebCodemodeProvider,
 } from '../../packages/core/src/web/index';
 import { createWorkspace } from '../../packages/core/src/identity/index';
+import { openWorkspaceMainActor } from '../../packages/core/src/state/workspace-actors';
 import { LocalAgentSession, type SessionEvent } from '../../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
@@ -180,7 +181,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
       extraProviders: [
         createAgentsCodemodeProvider(() => agents),
         createWebCodemodeProvider(webSearch),
-        createMemoryCodemodeProvider(() => ({ memory: rt.memory, facts, sql })),
+        createMemoryCodemodeProvider(() => ({ memory: rt.memory, facts, sql, actor: rt.actor })),
         createTasksCodemodeProvider(taskList, config),
       ],
     }),
@@ -575,7 +576,8 @@ export async function seedWorkspaceTree(rt: AgentRuntime): Promise<void> {
  * optimization families import it from this module.
  */
 export function readLedgerTotals(db: Database): LedgerTotals {
-  return ledgerTotalsFromEvents(walkRunEvents(new RunEventRecorder(makeSql(db))));
+  const sql = makeSql(db);
+  return ledgerTotalsFromEvents(walkRunEvents(new RunEventRecorder(sql, openWorkspaceMainActor(sql))));
 }
 
 /**
@@ -595,8 +597,9 @@ export function readLedgerTotals(db: Database): LedgerTotals {
  * projection: every field is the shared one's.
  */
 export function collectRunEventProvenance(db: Database): BehaviourProvenanceJson {
+  const sql = makeSql(db);
   const { totalEvents, bound, events } = projectRunEventProvenance(
-    walkRunEvents(new RunEventRecorder(makeSql(db))),
+    walkRunEvents(new RunEventRecorder(sql, openWorkspaceMainActor(sql))),
   );
   return {
     totalEvents,
@@ -916,7 +919,7 @@ export async function runBehaviourTask(
   // `recordLiveModelEpisode` reads it through the workspace-spend seam, which is
   // why the behavioural tier no longer reports `0 model call(s)` over an episode
   // that spent hundreds of thousands of neurons.
-  recordLiveModelEpisode(makeSql(db));
+  recordLiveModelEpisode(makeSql(db), rt.actor);
 
   const totals = readLedgerTotals(db);
 
@@ -947,7 +950,7 @@ export async function runBehaviourTask(
     turns: totals.turns,
     toolCalls: totals.toolCalls,
     toolNames: totals.toolNames,
-    scores: toScoreJson([...outcome, ...scoreTrajectory(makeSql(db))]),
+    scores: toScoreJson([...outcome, ...scoreTrajectory(makeSql(db), rt.actor)]),
     tokensIn: totals.tokensIn,
     tokensOut: totals.tokensOut,
     reasoningOut: totals.reasoningOut,

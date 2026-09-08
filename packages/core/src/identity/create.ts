@@ -130,7 +130,8 @@ export async function createWorkspace(
   // from birth, and agent.js is only its rebuildable view.
   const scaffoldSource = config.scaffold ?? INITIAL_SCAFFOLD_SOURCE;
   await workspace.vfs.writeFile('scaffold/agent.js.v0', scaffoldSource);
-  void sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale) VALUES (0, ${nowMs()}, ${'initial bootstrap'})`;
+  void sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
+    VALUES (${actor.actorId}, 0, ${nowMs()}, ${'initial bootstrap'})`;
   await workspace.vfs.writeFile('scaffold/agent.js', scaffoldSource);
 
   await workspace.vfs.mkdir('memory', { recursive: true });

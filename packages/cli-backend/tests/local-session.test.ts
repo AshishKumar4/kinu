@@ -178,9 +178,11 @@ function workspaceRuntime() {
   // The agent DB carries a messages table in production (created on `kinu
   // create`); the runtime factory doesn't, so provision it for the test.
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+    actor_id TEXT NOT NULL, id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    PRIMARY KEY (actor_id, id))`);
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
   return { db, rt };
 }
@@ -711,11 +713,18 @@ describe('LocalAgentSession.send — a user turn', () => {
     const alternatingRole = (index: number): 'user' | 'assistant' =>
       index % 2 === 0 ? 'user' : 'assistant';
 
-    function seed(db: Database, messages: Array<{ role: 'user' | 'assistant'; content: string }>): void {
+    /** The transcript a resume restores, under the runtime's OWN actor — the
+     *  restore reads this actor's rows, so a seed written under any other is a
+     *  transcript no session can resume. */
+    function seed(
+      db: Database, actorId: string,
+      messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+    ): void {
       messages.forEach((m, i) => {
         db.query(
-          `INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, 'default', ?, ?, ?)`,
-        ).run(`m-${i}`, m.role, m.content, 1_000 + i);
+          `INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+           VALUES (?, ?, 'default', ?, ?, ?)`,
+        ).run(actorId, `m-${i}`, m.role, m.content, 1_000 + i);
       });
     }
 
@@ -735,7 +744,7 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     test('a transcript far past the old 40-message cap is restored whole', async () => {
       const { db, rt } = setup();
-      seed(db, Array.from({ length: 120 }, (_, i) => ({
+      seed(db, rt.actor.actorId, Array.from({ length: 120 }, (_, i) => ({
         role: alternatingRole(i),
         content: `turn-${i}`,
       })));
@@ -754,7 +763,7 @@ describe('LocalAgentSession.send — a user turn', () => {
       const { db, rt } = setup();
       // The static fallback window is 128k tokens ≈ 512k characters, so 80
       // messages of 10k characters cannot be restored whole.
-      seed(db, Array.from({ length: 80 }, (_, i) => ({
+      seed(db, rt.actor.actorId, Array.from({ length: 80 }, (_, i) => ({
         role: alternatingRole(i),
         content: `turn-${i} ${'z'.repeat(10_000)}`,
       })));
@@ -968,7 +977,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     // authorship stamp and the event name), because the CLI transcript has no
     // rich twin to recover provenance from — a row that leans on its
     // `programmatic:` id prefix is one reader away from the owner's bubble.
-    const { db, session } = setup('ack');
+    const { db, rt, session } = setup('ack');
     const sql = makeSql(db);
     initBackgroundJobsTable(makeExecRaw(db));
     const store = new BackgroundJobStore(sql);
@@ -1000,7 +1009,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     // may read as one. The one-shot surface's completion gate adds its own
     // programmatic turn after the wake — a producer whose queue item names
     // only its event — and the write seam stamps that one too.
-    const page = getChatHistoryPage(sql);
+    const page = getChatHistoryPage(sql, rt.actor);
     expect(page.items.some((entry) => entry.role === 'user')).toBe(false);
     const wake = page.items.find((entry) => entry.id === expectedId)!;
     expect(wake.role).toBe('system');
@@ -2042,9 +2051,11 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
   ) {
     const db = new Database(scratchPath('local-session-review', 'agent.db'));
     db.exec(`CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+      actor_id TEXT NOT NULL, id TEXT NOT NULL,
+      session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
       role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      PRIMARY KEY (actor_id, id))`);
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
     // The classifier + reflection ride rt.llm.complete — stub it so the review
     const completions: string[] = [];
@@ -2527,7 +2538,7 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     await session.send('how did we deploy to staging?');
 
     // Same seam the memory tool's `conversations` action uses: rt.storage.sql.
-    const store = new ConversationSearchStore(rt.storage.sql);
+    const store = new ConversationSearchStore(rt.storage.sql, rt.actor);
     const hits = store.search('wrangler staging');
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0]!.conversationId).toBe('default');
@@ -4458,8 +4469,10 @@ test('the actual local turn executes its selected version instead of the mutable
   const changed = 'async function run() { await host.emit({ type: "text_delta", text: "wrong live alias" }); }';
   await files.mkdir('scaffold', { recursive: true });
   await files.writeFile(rt.identity.scaffold.path + '.v1', selected);
-  db.exec("UPDATE scaffold_versions SET status = 'historical' WHERE status = 'current'");
-  db.query("INSERT INTO scaffold_versions (version, written_at, rationale, status) VALUES (1, 1, 'selected source proof', 'current')").run();
+  db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'")
+    .run(rt.actor.actorId);
+  db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 1, 1, 'selected source proof', 'current')")
+    .run(rt.actor.actorId);
   rt.identity.scaffold.read = async () => changed;
   try {
     await session.send('run the selected program');

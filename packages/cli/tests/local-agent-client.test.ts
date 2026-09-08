@@ -98,11 +98,16 @@ function setup(model: LanguageModel) {
   tempDirs.push(home);
   const dbPath = join(home, 'agent.db');
   writeFileSync(dbPath, '');
-  const db = new Database(':memory:');
+  // The declared path, not `:memory:`: `createCLIRuntime` binds the actor by
+  // reading the database's own filename back and refuses a runtime whose path
+  // does not match it (`requireLocalDatabasePath`).
+  const db = new Database(dbPath, { create: true });
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+    actor_id TEXT NOT NULL, id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    PRIMARY KEY (actor_id, id))`);
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
@@ -134,9 +139,11 @@ function openPersistentClient(
   const dbPath = join(home, 'agent.db');
   const db = new Database(dbPath);
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+    actor_id TEXT NOT NULL, id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    PRIMARY KEY (actor_id, id))`);
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,

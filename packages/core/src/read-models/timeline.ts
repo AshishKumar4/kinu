@@ -178,8 +178,12 @@ export function getRunTimeline(
   // datatype mismatches on a fraction; a negative also inverts `slice(-limit)`
   // into dropping spans from the front.
   const limit = boundedInt(opts?.limit, RUN_TIMELINE_DEFAULT, 1, RUN_TIMELINE_MAX);
-  const recent = deps.sql<{ run_id: string }>`
-    SELECT run_id FROM run_events ORDER BY ts DESC LIMIT 1`[0]?.run_id;
+  // Through the recorder, not a raw read: `run_events` is actor-scoped, and a
+  // bare `ORDER BY ts DESC` would let a sibling actor sharing the database
+  // decide which run this timeline focuses. `listRunsBefore` also excludes
+  // WORKSPACE_RUN_ID, so the fallback can no longer land on the pseudo-run a
+  // between-turn model call is filed under.
+  const recent = deps.events.listRunsBefore(null, 1)[0]?.runId;
   const runId = opts?.runId || deps.currentRunId || recent;
   const spans: TimelineSpan[] = [];
 

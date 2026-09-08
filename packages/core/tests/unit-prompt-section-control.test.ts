@@ -156,10 +156,10 @@ function seedAdvisorNotes(rt: AgentRuntime, count: number): void {
   const engine = new EvolutionEngine(rt);
   for (let i = 0; i < count; i++) {
     const turnId = `adv-${String(i)}`;
-    void rt.storage.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
-      VALUES (${`ask-${String(i)}`}, ${null}, ${'user'}, ${failureTask(i)}, ${3_000 + i})`;
-    void rt.storage.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
-      VALUES (${turnId}, ${`ask-${String(i)}`}, ${'assistant'}, ${'{"files":["a.txt"]}'}, ${3_100 + i})`;
+    void rt.storage.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+      VALUES (${rt.actor.actorId}, ${`ask-${String(i)}`}, ${null}, ${'user'}, ${failureTask(i)}, ${3_000 + i})`;
+    void rt.storage.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+      VALUES (${rt.actor.actorId}, ${turnId}, ${`ask-${String(i)}`}, ${'assistant'}, ${'{"files":["a.txt"]}'}, ${3_100 + i})`;
     engine.recordAdvisorNote({
       note: `you answered this alone; agents was reachable and the work had ${String(i + 2)} angles`,
       severity: 'concern',
@@ -270,7 +270,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
       followup: 'just tell me in prose', now: 4_000,
     });
 
-    const split = buildOutcomeEvalSplit(rt.storage.sql, EVAL_SIZE);
+    const split = buildOutcomeEvalSplit(rt.storage.sql, rt.actor, EVAL_SIZE);
     const negatives = [...split.train, ...split.val.slice(0, split.heldOutNegatives)];
     expect(negatives).toHaveLength(3);
     expect(new Set(negatives.map((i) => i.input)).size).toBe(3);

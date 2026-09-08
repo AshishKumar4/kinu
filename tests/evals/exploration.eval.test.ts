@@ -205,7 +205,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
             + `executor runs ${event.canRun.join(', ') || '(nothing)'}`);
         }
       },
-      reportModelCall: liveModelCallSink(rt.storage.sql),
+      reportModelCall: liveModelCallSink(rt.storage.sql, rt.actor),
     });
     for (const line of progress) console.log(`    ${line}`);
 
@@ -215,7 +215,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // that spent real tokens — and if the sink ever stops being wired, this
     // records an UNMEASURED EPISODE rather than a silent zero, which the tier's
     // liveness verdict then refuses.
-    recordLiveModelEpisode(rt.storage.sql);
+    recordLiveModelEpisode(rt.storage.sql, rt.actor);
 
     const score = scoreExploration(rt.storage.sql);
     console.log(`    searches: ${String(score.searchRuns)}, branched: ${String(score.branchedRuns)}, `

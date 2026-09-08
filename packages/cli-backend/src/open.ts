@@ -90,10 +90,14 @@ export async function openWorkspaceCLI(
   // Gather stats for WorkspaceInfo display
   // The LIVE version — the one that actually drives a turn. MAX(version)
   // reported an unresolved pending proposal as though it were already running.
-  const scaffoldVersion = getCurrentScaffoldVersion(sql) ?? 0;
+  // Scoped to `rt.actor`, NOT the workspace main: the branch above opens a
+  // facet as its OWN actor, and the scaffold pointer and task ledger are
+  // per-actor — reading the main's would report the parent's program here.
+  const scaffoldVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? 0;
   const craftedToolCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`[0]?.c ?? 0;
   const searchNodeCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`[0]?.c ?? 0;
-  const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history`[0]?.c ?? 0;
+  const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history
+    WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
 
   // Memory is the agent's own, so it is measured on the agent's own plane —
   // never on a shared project directory, where `memory/` does not belong.

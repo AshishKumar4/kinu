@@ -602,7 +602,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // codemode namespace (memory-codemode.ts) — one implementation, two callers.
   const facts = deps.facts;
   const runMemoryAction = createMemoryDispatcher({
-    memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql,
+    memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql, actor: rt.actor,
   });
   tools.memory = permitInPlan(tool({
     description: renderToolSchemaDescription(memoryToolSpec(!!facts)),

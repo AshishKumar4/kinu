@@ -6,7 +6,7 @@ import { tableExists } from '../identity/schema';
 import type { JsonValue } from '../utils/json';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { SubordinateRosterEntry } from '../tools/agents-tool';
-import { sameActorReference } from '../state/actor-handle';
+import { sameActorReference, type ActorHandle } from '../state/actor-handle';
 
 export interface SubordinateInspectionAuthority {
   readonly owner: string;
@@ -19,6 +19,10 @@ export interface SubordinateInspectionPort {
 }
 export interface SubordinateInspectionAccess {
   readonly sql: SqlExecutor;
+  /** The actor whose storage tree `sql`/`raw` address. Every scoped read below
+   *  this hop answers for that actor and no other — a hop reads the storage it
+   *  is standing in, never a sibling's rows in the same database. */
+  readonly actor: ActorHandle;
   readonly raw: SqlExec;
   storedParentPath(): Promise<JsonValue | undefined>;
   storedPhysicalKey(): Promise<JsonValue | undefined>;
@@ -52,7 +56,7 @@ export async function inspectSubordinateStorage(
       if (parent?.className !== 'SubordinateAgent' || parent.name !== authority.storagePath[index - 1]) return missing();
     }
   }
-  if (depth === input.path.length) return readSubordinateInspection(sql, raw, input);
+  if (depth === input.path.length) return readSubordinateInspection(sql, access.actor, raw, input);
   const name = input.path[depth];
   if (!name) return missing();
   if (!tableExists(sql, 'actor_subordinates')) return missing();

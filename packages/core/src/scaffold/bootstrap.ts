@@ -37,9 +37,10 @@ async function* run(rt, task) {
 const V0_RATIONALE = 'initial bootstrap';
 
 function insertV0Row(rt: AgentRuntime): void {
+  rt.actor.assertCurrent();
   void rt.storage.sql`
-    INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale)
-    VALUES (0, ${nowMs()}, ${V0_RATIONALE})
+    INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
+    VALUES (${rt.actor.actorId}, 0, ${nowMs()}, ${V0_RATIONALE})
   `;
 }
 
@@ -50,7 +51,7 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
   const path = rt.identity.scaffold.path;
   const versionedPath = (version: number) => `${path}.v${version}`;
 
-  let current = getCurrentScaffoldVersion(sql);
+  let current = getCurrentScaffoldVersion(sql, rt.actor);
   const liveExists = await vfs.exists(path);
 
   if (current === null && !liveExists) {
@@ -70,7 +71,7 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
   }
   if (current === null) {
     insertV0Row(rt);
-    current = getCurrentScaffoldVersion(sql);
+    current = getCurrentScaffoldVersion(sql, rt.actor);
   }
 
   // Activation refresh: converge the live view onto the current pointer.

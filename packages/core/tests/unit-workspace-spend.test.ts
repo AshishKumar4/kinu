@@ -23,6 +23,7 @@ import { HeadJournal } from '../src/heads/journal';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
 import { MissionGovernor } from '../src/mission-budget';
 import { usageTotal, USAGE_FIELDS, UsageSchema, type Usage } from '../src/usage';
+import { testActorHandle } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';
 
 /** Big enough for the run-list read below, and deliberately NOT a bound on any
@@ -31,7 +32,8 @@ const RUN_LIST_LIMIT = 50;
 
 function rig() {
   const ws = createTestWorkspace();
-  return { ws, events: new RunEventRecorder(ws.sql) };
+  const actor = testActorHandle(ws.sql);
+  return { ws, actor, events: new RunEventRecorder(ws.sql, actor) };
 }
 
 /** One turn step, as the turn accumulator writes it. A step with no `usage` is a
@@ -239,7 +241,7 @@ describe('workspaceSpend', () => {
   });
 
   test('the stored payload really carries the fields the aggregate reads', () => {
-    const { ws, events } = rig();
+    const { ws, actor, events } = rig();
     const every: Required<Usage> = {
       input: 11, output: 7, cacheRead: 5, cacheWrite: 3, cacheWrite1h: 2, reasoning: 1,
       neurons: 0.5,
@@ -256,7 +258,8 @@ describe('workspaceSpend', () => {
     // Move either and this fails here rather than as a silently absent count on
     // the owner's panel.
     const [row] = ws.sql<{ payload: string }>`
-      SELECT payload FROM run_events WHERE type = 'step_finish'`;
+      SELECT payload FROM run_events
+      WHERE actor_id = ${actor.actorId} AND type = 'step_finish'`;
     const payload = v.parse(
       v.object({ usage: UsageSchema, usd: v.number() }),
       JSON.parse(row!.payload),

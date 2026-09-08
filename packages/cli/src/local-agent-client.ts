@@ -456,10 +456,12 @@ export class LocalAgentClient implements AgentClient {
    *  this process records — the fork reads the durable store, never JSONL. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.pending) throw new Error('Cannot fork while a turn is running.');
+    const { actorId } = this.deps.rt.actor;
     const rows = this.deps.rt.storage.sql<{ id: string; parent_id: string | null; role: string; content: string; created_at: number }>`
       SELECT id, parent_id, role, content, created_at
       FROM messages
-      WHERE session_id = ${this.canonicalConversation} AND role IN ('user', 'assistant')
+      WHERE actor_id = ${actorId} AND session_id = ${this.canonicalConversation}
+        AND role IN ('user', 'assistant')
       ORDER BY created_at ASC, rowid ASC`;
     const pivot = findForkPivot(rows, point);
     if (pivot < 0) {
@@ -469,7 +471,8 @@ export class LocalAgentClient implements AgentClient {
     const archivedConversation = `archive-${crypto.randomUUID()}`;
     for (const row of rows.slice(pivot)) {
       void this.deps.rt.storage.sql`
-        UPDATE messages SET session_id = ${archivedConversation} WHERE id = ${row.id}`;
+        UPDATE messages SET session_id = ${archivedConversation}
+        WHERE actor_id = ${actorId} AND id = ${row.id}`;
     }
     // Session reassignment is invisible to the search index's rowid watermark;
     // its entries now name conversations the rows left.

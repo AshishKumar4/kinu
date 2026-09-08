@@ -20,6 +20,7 @@ import * as v from 'valibot';
 import { CHAT_SESSION_ID, hasPaneStore, paneStampMs } from '../identity/conversation-store';
 import { boundedInt } from '../utils/bounds';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { uiMessageText } from '../utils/ui-message';
 
 // session_id 'mcts' holds MCTS tree nodes, not conversation — excluded from
@@ -121,8 +122,11 @@ type IndexRegime = 'pane' | 'plain';
 
 export class ConversationSearchStore {
   private ensured = false;
+  private readonly actorId: string;
 
-  constructor(private readonly sql: SqlExecutor) {}
+  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {
+    this.actorId = actor.actorId;
+  }
 
   /**
    * Ranked FTS5 hits, best first: the strict all-term page, then ranked partial
@@ -134,6 +138,7 @@ export class ConversationSearchStore {
    * underfull and silently dropped every relevant partial.
    */
   search(query: string, limit = 5): ConversationSearchHit[] {
+    this.actor.assertCurrent();
     this.ensure();
     this.refreshIndex();
     if (!query.trim()) return [];
@@ -150,6 +155,7 @@ export class ConversationSearchStore {
   /** A window of ±`window` messages around the anchor message, in transcript
    *  order. Returns null when the anchor id doesn't exist. */
   scroll(aroundMessageId: string, window = 5, maxChars?: number): ConversationScrollResult | null {
+    this.actor.assertCurrent();
     this.ensure();
     this.refreshIndex();
     // The anchor resolves in whichever store owns it: the pane for default-chat
@@ -173,10 +179,11 @@ export class ConversationSearchStore {
         ? this.sql<PlainRaw>`
             SELECT id, session_id, role, content, created_at, rowid AS rid
             FROM messages
-            WHERE id = ${aroundMessageId} AND session_id <> ${CHAT_SESSION_ID}`[0]
+            WHERE actor_id = ${this.actorId} AND id = ${aroundMessageId}
+              AND session_id <> ${CHAT_SESSION_ID}`[0]
         : this.sql<PlainRaw>`
             SELECT id, session_id, role, content, created_at, rowid AS rid
-            FROM messages WHERE id = ${aroundMessageId}`[0]);
+            FROM messages WHERE actor_id = ${this.actorId} AND id = ${aroundMessageId}`[0]);
       if (plainAnchor === undefined) return null;
       anchor = withPlainStamp(plainAnchor);
     }
@@ -196,7 +203,7 @@ export class ConversationSearchStore {
           ORDER BY rowid DESC LIMIT ${w}`.map(withPaneStamp)
       : this.sql<PlainRaw>`
           SELECT id, role, content, created_at, rowid AS rid FROM messages
-          WHERE session_id = ${row.session_id} AND rowid < ${row.rid}
+          WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}
           ORDER BY rowid DESC LIMIT ${w}`.map(withPlainStamp)).reverse();
     const after = paneSide
       ? this.sql<PaneRaw>`
@@ -205,7 +212,7 @@ export class ConversationSearchStore {
           ORDER BY rowid ASC LIMIT ${w}`.map(withPaneStamp)
       : this.sql<PlainRaw>`
           SELECT id, role, content, created_at, rowid AS rid FROM messages
-          WHERE session_id = ${row.session_id} AND rowid > ${row.rid}
+          WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid > ${row.rid}
           ORDER BY rowid ASC LIMIT ${w}`.map(withPlainStamp);
     const totalBefore = (paneSide
       ? this.sql<{ c: number }>`
@@ -213,14 +220,14 @@ export class ConversationSearchStore {
           WHERE session_id = ${row.session_id} AND rowid < ${row.rid}`
       : this.sql<{ c: number }>`
           SELECT COUNT(*) AS c FROM messages
-          WHERE session_id = ${row.session_id} AND rowid < ${row.rid}`)[0]!.c;
+          WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}`)[0]!.c;
     const totalAfter = (paneSide
       ? this.sql<{ c: number }>`
           SELECT COUNT(*) AS c FROM assistant_messages
           WHERE session_id = ${row.session_id} AND rowid > ${row.rid}`
       : this.sql<{ c: number }>`
           SELECT COUNT(*) AS c FROM messages
-          WHERE session_id = ${row.session_id} AND rowid > ${row.rid}`)[0]!.c;
+          WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid > ${row.rid}`)[0]!.c;
 
     const parsedMaxChars = v.safeParse(MaxCharsSchema, maxChars);
     const perMessage = parsedMaxChars.success && parsedMaxChars.output !== undefined
@@ -243,6 +250,7 @@ export class ConversationSearchStore {
 
   /** Recent conversation roots, most recently active first. */
   browse(limit = 10): ConversationSummary[] {
+    this.actor.assertCurrent();
     this.ensure();
     this.refreshIndex();
     const lim = boundedInt(limit, 1, 1, 20);
@@ -273,14 +281,14 @@ export class ConversationSearchStore {
         ...this.sql<PlainGroup>`
           SELECT session_id, COUNT(*) AS n, MIN(created_at) AS started_at, MAX(created_at) AS last_active
           FROM messages
-          WHERE session_id NOT IN (${CHAT_SESSION_ID}, 'mcts')
+          WHERE actor_id = ${this.actorId} AND session_id NOT IN (${CHAT_SESSION_ID}, 'mcts')
           GROUP BY session_id`.map(withPlainStamps),
       ];
     } else {
       groups = this.sql<PlainGroup>`
         SELECT session_id, COUNT(*) AS n, MIN(created_at) AS started_at, MAX(created_at) AS last_active
         FROM messages
-        WHERE session_id NOT IN ('mcts')
+        WHERE actor_id = ${this.actorId} AND session_id NOT IN ('mcts')
         GROUP BY session_id`.map(withPlainStamps);
     }
 
@@ -295,7 +303,8 @@ export class ConversationSearchStore {
           : this.sql<PlainRaw>`
               SELECT id, session_id, role, content, created_at, rowid AS rid
               FROM messages
-              WHERE session_id = ${conversation.session_id} AND role = 'user'
+              WHERE actor_id = ${this.actorId} AND session_id = ${conversation.session_id}
+                AND role = 'user'
               ORDER BY rowid ASC LIMIT 1`.map(withPlainStamp)[0];
         return {
           conversationId: sessionIdOf(conversation.session_id),
@@ -329,23 +338,32 @@ export class ConversationSearchStore {
       CREATE VIRTUAL TABLE IF NOT EXISTS conversation_fts USING fts5(
         content, msg_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, created_at UNINDEXED
       )`;
+    // `actor_id` names WHOSE rows the index currently holds. The index is a
+    // single-actor cache over an actor-scoped source: a shared host keeps
+    // several issued actors in one database, so without it a reader would be
+    // served the PREVIOUS actor's hits whenever the revision happened to match.
+    // A mismatch rebuilds — the same answer this table already gives a regime
+    // flip, and for the same reason.
     void this.sql`
       CREATE TABLE IF NOT EXISTS conversation_fts_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
+        actor_id TEXT NOT NULL,
         regime TEXT NOT NULL,
         rev INTEGER NOT NULL DEFAULT 0,
         synced_rev INTEGER NOT NULL DEFAULT -1
       )`;
     void this.sql`
-      INSERT OR IGNORE INTO conversation_fts_state (id, regime, rev, synced_rev)
-      VALUES (1, 'uninitialized', 0, -1)`;
+      INSERT OR IGNORE INTO conversation_fts_state (id, actor_id, regime, rev, synced_rev)
+      VALUES (1, ${''}, 'uninitialized', 0, -1)`;
     this.ensured = true;
     this.refreshIndex();
   }
 
   /** Install source-table revision triggers. They observe direct SDK pane
    * writes as well as local SQL writes; the index never has to guess whether a
-   * same-count mutation happened. */
+   * same-count mutation happened. Table-wide rather than per-actor: a trigger
+   * cannot carry a bound actor, and a bump from a sibling actor only costs a
+   * rebuild of disposable state — over-invalidating is the safe direction. */
   private ensureRevisionTriggers(pane: boolean): void {
     void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_messages_ai AFTER INSERT ON messages BEGIN
       UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
@@ -362,16 +380,17 @@ export class ConversationSearchStore {
       UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
   }
 
-  /** Rebuild deterministically when SOURCE revision changes. Rebuilding an
-   * index is cheaper than serving one stale row; it runs only after a real
+  /** Rebuild deterministically when the SOURCE revision, the store regime or
+   * the ACTOR the index was built for changes. Rebuilding an index is cheaper
+   * than serving one stale — or one foreign — row; it runs only after a real
    * INSERT/UPDATE/DELETE, not every read. */
   private refreshIndex(): void {
     const pane = hasPaneStore(this.sql);
     this.ensureRevisionTriggers(pane);
     const regime: IndexRegime = pane ? 'pane' : 'plain';
-    const state = this.sql<{ regime: string; rev: number; synced_rev: number }>`
-      SELECT regime, rev, synced_rev FROM conversation_fts_state WHERE id = 1`[0]!;
-    if (state.regime === regime && state.rev === state.synced_rev) return;
+    const state = this.sql<{ actor_id: string; regime: string; rev: number; synced_rev: number }>`
+      SELECT actor_id, regime, rev, synced_rev FROM conversation_fts_state WHERE id = 1`[0]!;
+    if (state.actor_id === this.actorId && state.regime === regime && state.rev === state.synced_rev) return;
 
     void this.sql`DELETE FROM conversation_fts`;
     const paneRows = pane
@@ -382,14 +401,16 @@ export class ConversationSearchStore {
     const plainRows = pane
       ? this.sql<PlainRaw>`
           SELECT id, session_id, role, content, created_at, rowid AS rid FROM messages
-          WHERE session_id <> ${CHAT_SESSION_ID} AND session_id <> 'mcts' ORDER BY rowid ASC`.map(withPlainStamp)
+          WHERE actor_id = ${this.actorId}
+            AND session_id <> ${CHAT_SESSION_ID} AND session_id <> 'mcts' ORDER BY rowid ASC`.map(withPlainStamp)
       : this.sql<PlainRaw>`
           SELECT id, session_id, role, content, created_at, rowid AS rid FROM messages
-          WHERE session_id <> 'mcts' ORDER BY rowid ASC`.map(withPlainStamp);
+          WHERE actor_id = ${this.actorId} AND session_id <> 'mcts' ORDER BY rowid ASC`.map(withPlainStamp);
     this.indexRows(paneRows, true);
     this.indexRows(plainRows, false);
     void this.sql`
-      UPDATE conversation_fts_state SET regime = ${regime}, synced_rev = rev WHERE id = 1`;
+      UPDATE conversation_fts_state
+      SET actor_id = ${this.actorId}, regime = ${regime}, synced_rev = rev WHERE id = 1`;
   }
 
   /** Index a source snapshot. The caller has already proved the source revision
@@ -441,12 +462,13 @@ export function invalidateConversationSearchIndex(sql: SqlExecutor): void {
   void sql`
     CREATE TABLE IF NOT EXISTS conversation_fts_state (
       id INTEGER PRIMARY KEY CHECK (id = 1),
+      actor_id TEXT NOT NULL,
       regime TEXT NOT NULL,
       rev INTEGER NOT NULL DEFAULT 0,
       synced_rev INTEGER NOT NULL DEFAULT -1
     )`;
   void sql`
-    INSERT INTO conversation_fts_state (id, regime, rev, synced_rev)
-    VALUES (1, 'invalidated', 0, -1)
+    INSERT INTO conversation_fts_state (id, actor_id, regime, rev, synced_rev)
+    VALUES (1, ${''}, 'invalidated', 0, -1)
     ON CONFLICT(id) DO UPDATE SET regime = 'invalidated', synced_rev = -1`;
 }

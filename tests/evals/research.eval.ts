@@ -59,6 +59,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 
 import type { LLMProviderConfig } from '../../packages/core/src/index';
+import { openWorkspaceMainActor } from '../../packages/core/src/state/workspace-actors';
 import { connectMcpServers } from '../../packages/cli-backend/src/mcp';
 import { makeSql } from '../../packages/cli-backend/src/runtime';
 import { cliWorkspaceDbPath, createCliWorkspace, execCliTask } from './cli-driver';
@@ -303,7 +304,8 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
     // because the usage lives in the workspace, not in this process.
     const db = new Database(cliWorkspaceDbPath(home, WORKSPACE));
     opened.push(db);
-    recordLiveModelEpisode(makeSql(db));
+    const sql = makeSql(db);
+    recordLiveModelEpisode(sql, openWorkspaceMainActor(sql));
     const totals = readLedgerTotals(db);
     const sourceCalls = totals.toolNames.filter((name) => name.startsWith(`mcp_${SERVER_NAME}_`));
 
