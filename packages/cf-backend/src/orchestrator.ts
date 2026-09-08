@@ -1260,16 +1260,15 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
-  private bootstrapWorkspaceActor(): boolean {
-    const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
-    if (identity.length === 0) {
-      void this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
+  private bootstrapWorkspaceActor(): void {
+    this.ctx.storage.transactionSync(() => {
+      const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
+      if (identity.length === 0) {
+        void this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
+      }
       this.workspaceActors().createMain({ name: this.name });
-    }
-    const registered = this.sql`SELECT actor_id FROM workspace_actors WHERE kind = 'main' LIMIT 1`;
-    if (registered.length === 0) return false;
-    this.actorHandle();
-    return true;
+      this.actorHandle();
+    });
   }
 
   async resolveSubordinateClientKey(name: string): Promise<{ storageKey: string } | Refusal> {
@@ -2373,8 +2372,7 @@ export class OrchestratorAgent extends ActorAgent {
   async onStart(): Promise<void> {
     this.installClientMessageGate();
     this.ensureSchema();
-    // Existing unimported state stays available to owner inspection, without an actor runtime.
-    if (!this.bootstrapWorkspaceActor()) return;
+    this.bootstrapWorkspaceActor();
     // EVERY budgeted sweep this actor owns, through the seam the alarm frame
     // runs — one list, not a hand-folded copy of it, so a sweep added to the
     // seam cannot be missing from the gate. They run inside `Agent.alarm()`'s

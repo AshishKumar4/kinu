@@ -2,7 +2,8 @@ import { Agent } from 'agents';
 import { Think } from '@cloudflare/think';
 import { SubordinateAgent as ProductionSubordinate } from '../../src/subordinate-agent';
 import { sealRpcSurface, SUBORDINATE_RPC_SURFACE } from '../../src/rpc-surface';
-import { SubordinateIdentityStore, RunEventRecorder } from '@kinu.run/core';
+import { SubordinateIdentityStore, RunEventRecorder, FacetIdentity, WorkspaceActorDirectory, initWorkspaceActorTable } from '@kinu.run/core';
+import { initWorkspaceOwnershipTables } from '../../../core/src/identity/schema';
 import { bindAgentSql } from '../../src/runtime';
 
 export class FacetReadChild extends Think {
@@ -53,7 +54,8 @@ export class SubordinateAgent extends ProductionSubordinate {
     Reflect.deleteProperty(this, 'counts');
     sealRpcSurface(this, [...SUBORDINATE_RPC_SURFACE, 'seedArchive', 'counts']);
   }
-  seedArchive() {
+  seedArchive(actor) {
+    new FacetIdentity(this.ctx.storage.sql).seed({ actor, ownerUserId: 'owner', parentWorkspace: 'workspace', capabilityToken: null });
     const identity = new SubordinateIdentityStore(this.ctx.storage.sql);
     identity.seed({ name: 'child', mission: 'read only', parentWorkspace: 'workspace', ownerUserId: 'owner', depth: 1, lifetime: 'task' });
     const events = new RunEventRecorder(bindAgentSql(this));
@@ -71,11 +73,25 @@ export class SubordinateAgent extends ProductionSubordinate {
 }
 export class OrchestratorAgent extends Agent {
   async exercise(operation) {
-    if (operation === 'seed') return (await this.subAgent(SubordinateAgent, 'child')).seedArchive();
-    if (operation === 'abort') { this.abortSubAgent(SubordinateAgent, 'child', 'cold production probe'); return { aborted: true }; }
-    const child = await this.getExistingSubAgent(SubordinateAgent, 'child');
+    const raw = (sql) => this.ctx.storage.sql.exec(sql);
+    initWorkspaceOwnershipTables(raw);
+    initWorkspaceActorTable(raw);
+    const sql = bindAgentSql(this);
+    if (sql`SELECT id FROM workspace_identity`.length === 0) {
+      void sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at) VALUES (${this.ctx.id.toString()}, ${'workspace'}, ${'owner'}, ${1})`;
+    }
+    const directory = new WorkspaceActorDirectory(sql, { workspaceId: this.ctx.id.toString(), ownerUserId: 'owner' });
+    const main = directory.createMain({ name: 'workspace' });
+    if (operation === 'seed') {
+      const entry = directory.apply(main, [], { action: 'register', name: 'child', creationId: 'retained-child', kind: 'subordinate', lifetime: 'task' });
+      return (await this.subAgent(SubordinateAgent, entry.storageKey)).seedArchive({ ...entry.reference, name: entry.name, storageKey: entry.storageKey });
+    }
+    const actor = directory.resolveChild(main, 'child');
+    const key = directory.describe(actor).storageKey;
+    if (operation === 'abort') { this.abortSubAgent(SubordinateAgent, key, 'cold production probe'); return { aborted: true }; }
+    const child = await this.getExistingSubAgent(SubordinateAgent, key);
     if (!child) throw new Error('Missing registered child');
-    if (operation === 'inspect') return child.inspectSubordinateStorage({ path: ['child'], view: 'events', runId: 'retained-run', query: { limit: 1 } }, { owner: 'owner', workspace: 'workspace', traversed: ['child'], storagePath: ['child'] });
+    if (operation === 'inspect') return child.inspectSubordinateStorage({ path: ['child'], view: 'events', runId: 'retained-run', query: { limit: 1 } }, { owner: 'owner', workspace: 'workspace', traversed: ['child'], storagePath: [key] });
     if (operation === 'counts') return child.counts();
     throw new Error('Invalid operation');
   }

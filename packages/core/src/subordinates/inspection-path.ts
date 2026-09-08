@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import { missingSubordinateHistory, readSubordinateInspection, SubordinateInspectionRequestSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './inspection';
 import { SubordinateIdentityStore } from './support';
-import { subordinateInspectionRoster } from './historical-roster';
+import { SubordinateRosterStore } from './roster';
 import { tableExists } from '../identity/schema';
 import type { JsonValue } from '../utils/json';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
@@ -55,8 +55,8 @@ export async function inspectSubordinateStorage(
   if (depth === input.path.length) return readSubordinateInspection(sql, raw, input);
   const name = input.path[depth];
   if (!name) return missing();
-  const roster = subordinateInspectionRoster(sql, raw);
-  if (!roster) return missing();
+  if (!tableExists(sql, 'actor_subordinates')) return missing();
+  const roster = new SubordinateRosterStore(raw);
   const row = roster.get(name);
   if (!row) return missing();
   const child = await access.existing(row);
