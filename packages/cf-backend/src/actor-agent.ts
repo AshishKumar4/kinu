@@ -77,6 +77,8 @@ import {
   // Durable admission — the claim a turn is issued under, and the per-step
   // context plane its revisions are recorded on.
   initActorClaimTables, programIdentityOf, ActorClaimStore,
+  createActorContextPlane,
+  type ActorContextPlane,
   type ActorTurnClaim, type ClaimOutcome, type StepContextPlane,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
@@ -2377,29 +2379,23 @@ export abstract class ActorAgent extends Think<Env> {
    * and this records it as the revision that step ran on, before the request is
    * issued. Absent when no claim is held, which is every inference path that is
    * not a claimed actor turn.
+   *
+   * The plane itself is `core`'s, not a second copy: it owns the working
+   * history the request is rendered FROM as well as the rendered revision, and
+   * the two live in different coordinate spaces that must not be derived from
+   * each other (`core/src/orchestrator/context-plane.ts`).
    */
+  private _context: ActorContextPlane | undefined;
+
+  /** Lazy for the reason every store here is: a Durable Object must not reach
+   *  storage while field initializers run. */
+  private get context(): ActorContextPlane {
+    return this._context ??= createActorContextPlane({ claims: this.stores.claims, events: null });
+  }
+
   private claimContextPlane(): StepContextPlane | undefined {
     const claim = this._turnClaim;
-    if (claim === null) return undefined;
-    const claims = this.stores.claims;
-    return {
-      staged: () => {
-        const staged = claims.stagedContext(claim);
-        if (staged === null) return null;
-        const base = staged.baseRevision === null
-          ? null
-          : claims.consumedContext(claim.turnId, staged.baseRevision);
-        return {
-          revision: staged.revision,
-          messages: staged.messages,
-          baseMessageCount: base?.messageCount ?? staged.messageCount,
-        };
-      },
-      consume: ({ stepNumber, messages, stagedRevision }) => {
-        if (stagedRevision === null) claims.consume(claim, { index: stepNumber, messages });
-        else claims.consumeStaged(claim, stagedRevision, { index: stepNumber, messages });
-      },
-    };
+    return claim === null ? undefined : this.context.steps(claim);
   }
 
   /**
@@ -6220,12 +6216,21 @@ export abstract class ActorAgent extends Think<Env> {
     // loop and the build this host publishes for it) and the exact context the
     // turn was admitted against. A crash after this leaves a claim a recovery
     // can verify; a crash before it leaves a turn that provably did nothing.
+    // The array the turn is admitted with is what the CONTEXT PLANE resolves,
+    // not simply what Think assembled: an edit authored between turns lands at
+    // this boundary, with input delivered since preserved after it exactly
+    // once, and the working revision it resolves to is what the claim names.
+    const admitted = this.context.startTurn({
+      turnId: this.durableTurnId() ?? this._currentRunId,
+      history: cfg.messages ?? ctx.messages,
+    });
     this._turnClaim = this.stores.claims.admit({
       runId: this._currentRunId,
       turnId: this.durableTurnId() ?? this._currentRunId,
       workMode: mode,
       program: programIdentityOf(program, this.installedBuildIdentity()),
-      context: cfg.messages ?? ctx.messages,
+      context: admitted.messages,
+      workingRevision: admitted.workingRevision,
     });
     // The turn's constants for the per-step context breakdown. Tool schemas
     // ride every request of the turn and are otherwise invisible to anyone
