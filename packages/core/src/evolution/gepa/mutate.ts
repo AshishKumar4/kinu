@@ -6,6 +6,8 @@
  * trajectories as evidence. One LM call per mutation; cost is bounded.
  */
 
+import * as v from 'valibot';
+import { MetricOutcomeSchema } from './types';
 import type {
   EvalInstance, GepaCandidate, GepaMetric, MetricOutcome, ReflectionLM,
 } from './types';
@@ -38,7 +40,7 @@ export async function rolloutMinibatch<I, E>(
 ): Promise<MutationRollout> {
   const outcomes: MutationRollout['outcomes'] = [];
   for (const inst of minibatch) {
-    const o = await metric(candidate, inst);
+    const o = v.parse(MetricOutcomeSchema, await metric(candidate, inst));
     outcomes.push({ instanceId: inst.id, outcome: o });
   }
   return { outcomes, metricCalls: minibatch.length };

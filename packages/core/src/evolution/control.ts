@@ -65,9 +65,9 @@ import {
 } from '../prompting/section-store';
 import type { PromptSection } from '../prompting/template';
 import {
-  finishGepaRun, lastGepaRunPerTarget, makePersistingHook, startGepaRun,
+  finishGepaRun, lastGepaRunPerTarget, makePersistingHooks, startGepaRun,
 } from './gepa/persistence';
-import type { EvalInstance, MetricOutcome, ReflectionLM } from './gepa/types';
+import { MetricScoreSchema, type EvalInstance, type MetricOutcome, type ReflectionLM } from './gepa/types';
 import { scoreInterval, type ScoreInterval } from '../utils/stats';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
@@ -552,7 +552,7 @@ function reflectionLmFor(control: ScaffoldControl, model: LanguageModel): Reflec
 // ── GEPA offline scaffold optimisation ──────────────────────────────────────
 
 const GepaScoreSchema = v.object({
-  score: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
+  score: MetricScoreSchema,
   feedback: v.pipe(v.string(), v.minLength(1)),
 });
 
@@ -660,8 +660,7 @@ export async function runScaffoldGepaOptimization(
 
   // 4. Run GEPA, persisting every candidate + Pareto snapshot.
   const runId = startGepaRun(control.sql, { target: 'scaffold', budget });
-  const persisted = new Set<string>();
-  const persist = makePersistingHook({ sql: control.sql, runId, persisted });
+  const persist = makePersistingHooks({ sql: control.sql, runId });
   let iterations = 0;
   let result;
   try {
@@ -672,7 +671,8 @@ export async function runScaffoldGepaOptimization(
       metric,
       reflectionLm,
       budget,
-      onIteration: state => { iterations = state.iteration + 1; return persist(state); },
+      onCandidate: persist.onCandidate,
+      onIteration: state => { iterations = state.iteration + 1; return persist.onIteration(state); },
     });
   } catch (err) {
     const message = renderThrownChain({ cause: err });
@@ -803,8 +803,7 @@ async function runPromptSectionGepaOptimization(
   const runId = startGepaRun(control.sql, {
     target: 'prompt_section', targetRef: opts.sectionId, budget,
   });
-  const persisted = new Set<string>();
-  const persist = makePersistingHook({ sql: control.sql, runId, persisted });
+  const persist = makePersistingHooks({ sql: control.sql, runId });
   const metric = sectionMetric(control, opts.sectionId);
   let metricCalls = 0;
   let iterations = 0;
@@ -818,7 +817,8 @@ async function runPromptSectionGepaOptimization(
       metric: (candidate, instance) => { metricCalls++; return metric(candidate, instance); },
       reflectionLm,
       budget,
-      onIteration: state => { iterations = state.iteration + 1; return persist(state); },
+      onCandidate: persist.onCandidate,
+      onIteration: state => { iterations = state.iteration + 1; return persist.onIteration(state); },
     });
   } catch (err) {
     finishGepaRun(control.sql, {

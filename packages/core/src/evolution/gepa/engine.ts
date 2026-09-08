@@ -21,6 +21,7 @@
  * when either iterations OR metric calls are exhausted, whichever first.
  */
 
+import * as v from 'valibot';
 import { nanoid } from '../../utils/nanoid';
 import { nowMs } from '../../utils/date';
 import {
@@ -29,7 +30,7 @@ import {
 import { proposeMutation, rolloutMinibatch } from './mutate';
 import { findComplementaryPair, proposeMerge } from './merge';
 import {
-  DEFAULT_GEPA_BUDGET,
+  DEFAULT_GEPA_BUDGET, MetricOutcomeSchema,
   type EvalInstance, type GepaCandidate, type GepaConfig, type GepaConstraints,
   type GepaResult, type GepaIterationState, type GepaMetric,
 } from './types';
@@ -70,6 +71,7 @@ export async function runGepa<I = unknown, E = unknown>(
     source: config.seed, parentId: null, evalSet: config.evalSet, metric: config.metric,
   });
   charge(config.evalSet.length);
+  await config.onCandidate?.({ candidate: seed, iteration: 0 });
   const pool: GepaCandidate[] = [seed];
   const history: GepaCandidate[] = [seed];
 
@@ -138,6 +140,7 @@ export async function runGepa<I = unknown, E = unknown>(
 
   // ── main loop ──
 
+  let iterationsRun = 0;
   for (let iter = 0; iter < budget.maxIterations; iter++) {
     // Worst-case cost of this iteration: minibatchSize (rollout) + evalSet (score).
     // Merge costs 0 for rollout, so worst-case still applies for Mutate.
@@ -145,6 +148,7 @@ export async function runGepa<I = unknown, E = unknown>(
       stopReason = 'metric_budget_exhausted';
       break;
     }
+    iterationsRun++;
 
     // Pick operator.
     const tryMerge =
@@ -184,6 +188,7 @@ export async function runGepa<I = unknown, E = unknown>(
       evalSet: config.evalSet, metric: config.metric,
     });
     charge(config.evalSet.length);
+    await config.onCandidate?.({ candidate: cand, iteration: iter + 1 });
 
     // Add to pool + history.
     pool.push(cand);
@@ -207,7 +212,7 @@ export async function runGepa<I = unknown, E = unknown>(
     paretoFront: front,
     history,
     metricCallsUsed,
-    iterationsRun: history.length - 1, // history includes seed
+    iterationsRun,
     stopReason,
   };
 }
@@ -224,7 +229,7 @@ async function scoreCandidate<I, E>(args: {
   const feedback = new Map<string, string>();
   let total = 0;
   for (const inst of args.evalSet) {
-    const o = await args.metric(args.source, inst);
+    const o = v.parse(MetricOutcomeSchema, await args.metric(args.source, inst));
     scores.set(inst.id, o.score);
     feedback.set(inst.id, o.feedback);
     total += o.score;

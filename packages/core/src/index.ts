@@ -1569,12 +1569,12 @@ export {
   DEFAULT_GEPA_BUDGET,
   // SQL persistence — needed by the orchestrator to create tables + run.
   initGepaTables, startGepaRun, finishGepaRun,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHook,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks,
 } from './evolution/gepa/index';
 export type {
   EvalInstance, MetricOutcome, GepaMetric, ReflectionLM,
   GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
-  GepaIterationState, GepaResult,
+  GepaIterationState, GepaProgressHooks, GepaResult,
   RunScaffoldGepaOpts, RunScaffoldGepaResult,
   RunSectionGepaOpts, RunSectionGepaResult,
   GepaRunSummary,
