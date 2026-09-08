@@ -53,13 +53,13 @@ function capturingModel(sink: (toolNames: string[]) => void): LanguageModel {
 }
 
 function sessionWithModel(model: LanguageModel) {
-  const db = new Database(':memory:');
+  const db = new Database(scratchPath('mcp', 'agent.db'), { create: true });
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, {
-    dbPath: scratchPath('mcp', 'agent.db'),
+    dbPath: db.filename,
     llm: DUMMY_LLM,
   });
   const events: SessionEvent[] = [];

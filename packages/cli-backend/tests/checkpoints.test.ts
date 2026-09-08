@@ -336,13 +336,13 @@ describe('createHostCheckpoints', () => {
 describe('checkpointed runtime shell', () => {
   test('any shell exec snapshots the cwd before running (first mutation per turn)', async () => {
     const { root, work, cleanup } = setup();
-    const db = new Database(':memory:');
+    const db = new Database(join(root, 'agent.db'), { create: true });
     try {
       writeFileSync(join(work, 'precious.txt'), 'original');
       // Checkpoint storage is global per agent name, so this fixture mints a
       // unique one. A stable test name would read valid stores from prior runs.
       const rt = createCLIRuntime(db, {
-        dbPath: join(root, 'agent.db'),
+        dbPath: db.filename,
         cwd: work,
         agentName: `ckpt-shell-test-${String(Date.now())}-${String(process.pid)}`,
         llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
