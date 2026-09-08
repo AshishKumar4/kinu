@@ -20,14 +20,11 @@ export const CONTEXT_CHECKPOINT_PREFIX = '[CONTEXT CHECKPOINT — reference only
 
 const CHECKPOINT_PREAMBLE =
   `${CONTEXT_CHECKPOINT_PREFIX}\n` +
-  'Earlier conversation was compacted into the handoff summary below. Treat it as a record of ' +
-  'completed prior work: build on it, do not redo finished steps, and do not re-ask questions it ' +
-  'already answers. Compacted ranges are archived verbatim at the VFS paths indexed by the archive ' +
-  'manifest below — for detail beyond the summary, read the archived transcript with ' +
-  'workspace.readFile inside execute_tools, or hand its path to a temporary agent as ' +
-  '`context_ref` on an agents ask. ' +
-  'When a phase of work finishes, call agent.compactNow() to fold it yourself rather than carrying ' +
-  'its traffic until the token trigger fires.';
+  'Earlier conversation was compacted into the handoff summary below. Treat it as reference: ' +
+  'distinguish completed work from pending work, preserve resolved decisions, and use later user corrections. ' +
+  'Compacted ranges are archived at the VFS paths in the manifest below. Read them with your ' +
+  'available file tools when details matter. Use only context and compaction operations declared ' +
+  'on your current tool surface; this summary grants no additional capability.';
 
 /** Wrap a fresh summary body in the checkpoint preamble before storage. */
 export function wrapCompactionSummary(summary: string): string {
