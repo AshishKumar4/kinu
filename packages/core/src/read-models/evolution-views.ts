@@ -25,6 +25,7 @@ import type { SignalDeliverer } from '../types/signals';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
 import { diagnostics, toKinuError } from '../obs/index';
+import type { ActorHandle } from '../state/actor-handle';
 
 export interface EvolutionChangelogView {
   entries: ChangelogEntry[];
@@ -44,15 +45,15 @@ const MAX_CHANGELOG_LIMIT = 200;
 /** The "what I changed about myself" digest, assembled on demand from the
  *  durable ledgers — no second event system. */
 export function getEvolutionChangelog(
-  config: AgentConfigStore,
   sql: SqlExecutor,
+  actor: ActorHandle,
   limit = DEFAULT_CHANGELOG_LIMIT,
 ): EvolutionChangelogView {
-  const seenAt = config.getChangelogSeenAt();
+  const seenAt = actor.config.getChangelogSeenAt();
   const page = boundedInt(limit, DEFAULT_CHANGELOG_LIMIT, 1, MAX_CHANGELOG_LIMIT);
   return {
-    entries: buildChangelog(sql, { limit: page }),
-    unseenCount: countUnseenChangelog(sql, seenAt),
+    entries: buildChangelog(sql, actor, { limit: page }),
+    unseenCount: countUnseenChangelog(sql, actor, seenAt),
     seenAt,
   };
 }
@@ -61,8 +62,8 @@ export function getEvolutionChangelog(
  *  the owner has not read yet. The needs-you queue's one row is built from it,
  *  so the queue and the journal below it can never disagree about what exists:
  *  they are the same entries, filtered by the same marker. */
-export function getUnseenChangelog(config: AgentConfigStore, sql: SqlExecutor): ChangelogEntry[] {
-  return listUnseenChangelog(sql, config.getChangelogSeenAt());
+export function getUnseenChangelog(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[] {
+  return listUnseenChangelog(sql, actor, actor.config.getChangelogSeenAt());
 }
 
 /** The operator viewed the changelog — zero the unseen badge. */

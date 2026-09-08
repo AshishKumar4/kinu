@@ -13,9 +13,10 @@
 import { describe, test, expect } from 'bun:test';
 import {
   initAlternateTakesTable, initHeadsTables, initMctsSearchTable, initRunEventTables,
-  initSearchTables, listForkRuns, type JsonObject, type SqlExecutor,
+  initSearchTables, listForkRuns, type ActorHandle, type JsonObject, type SqlExecutor,
 } from '@kinu.run/core';
 import { createTestSql, type TestSql } from '../src/sql';
+import { createTestActors } from '../src/actors';
 import {
   BEHAVIOUR_SCORERS, completionHonesty, craftReuse, editLanding, parseFailureMix,
   recoveryDurability, scoreExploration, scoreSettleVisibility,
@@ -23,18 +24,27 @@ import {
 } from '../src/agent-evals';
 
 /**
- * Every table the Exploration reader touches. Note that `initSearchTables`
- * alone is not enough: `queryCompetedRuns` LEFT JOINs `mcts_search_runs`, which
- * a different initialiser owns, so a fixture that seeds only `search_nodes`
- * makes the reader throw rather than return an empty list.
+ * Every table the Exploration reader touches, and the actor that owns the
+ * actor-private half of them. Note that `initSearchTables` alone is not
+ * enough: `queryCompetedRuns` LEFT JOINs `mcts_search_runs`, which a different
+ * initialiser owns, so a fixture that seeds only `search_nodes` makes the
+ * reader throw rather than return an empty list.
+ *
+ * The actor is REAL — the head journal is actor-private, so every row seeded
+ * below is stamped with this handle's id and every scorer reads as this
+ * handle. A literal id would seed rows the scorers' own reads filter out.
  */
-function forkStore(): TestSql {
+interface ForkStore extends TestSql {
+  readonly actor: ActorHandle;
+}
+
+function forkStore(): ForkStore {
   const store = createTestSql();
   initSearchTables(store.execRaw);
   initMctsSearchTable(store.execRaw);
   initAlternateTakesTable(store.execRaw);
   initHeadsTables(store.execRaw);
-  return store;
+  return { ...store, actor: createTestActors(store.sql, store.execRaw).main };
 }
 
 /** A search the way runMCTS writes one: a root, `branches` children, and — when
@@ -65,14 +75,16 @@ function seedSearch(sql: SqlExecutor, opts: {
 }
 
 /** A merged fork the way HeadController writes one: a run label plus one
- *  head_journal row per head. */
-function seedHeads(sql: SqlExecutor, opts: { root: string; heads: number }): void {
-  void sql`INSERT INTO head_runs (root_id, rationale, spawned_at)
-    VALUES (${opts.root}, ${'why ' + opts.root}, ${2_000})`;
+ *  head_journal row per head, both private to the store's own actor. */
+function seedHeads(store: ForkStore, opts: { root: string; heads: number }): void {
+  const { sql } = store;
+  const actorId = store.actor.actorId;
+  void sql`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at)
+    VALUES (${actorId}, ${opts.root}, ${'why ' + opts.root}, ${2_000})`;
   for (let i = 0; i < opts.heads; i++) {
     void sql`INSERT INTO head_journal
-      (id, parent_id, root_id, depth, task, status, spawned_at, completed_at)
-      VALUES (${`${opts.root}-h${String(i)}`}, ${null}, ${opts.root}, ${1},
+      (actor_id, id, parent_id, root_id, depth, task, status, spawned_at, completed_at)
+      VALUES (${actorId}, ${`${opts.root}-h${String(i)}`}, ${null}, ${opts.root}, ${1},
               ${'head task'}, ${'completed'}, ${2_001 + i}, ${2_100})`;
   }
 }
@@ -82,7 +94,7 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-a', branches: 3, winner: 1, value: 0.91 });
 
-    const score = scoreExploration(store.sql);
+    const score = scoreExploration(store.sql, store.actor);
 
     expect(score.searchRuns).toBe(1);
     expect(score.branchedRuns).toBe(1);
@@ -100,7 +112,7 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-b', branches: 3, winner: null });
 
-    const score = scoreExploration(store.sql);
+    const score = scoreExploration(store.sql, store.actor);
 
     expect(score.searchRuns).toBe(1);
     expect(score.branchedRuns).toBe(1);
@@ -113,7 +125,7 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-c', branches: 1, winner: 0 });
 
-    const score = scoreExploration(store.sql);
+    const score = scoreExploration(store.sql, store.actor);
 
     expect(score.searchRuns).toBe(1);
     expect(score.branchedRuns).toBe(0);
@@ -122,7 +134,7 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
 
   test('an empty store reports a ZERO denominator, not a pass', () => {
     const store = forkStore();
-    const score = scoreExploration(store.sql);
+    const score = scoreExploration(store.sql, store.actor);
     expect(score.searchRuns).toBe(0);
     expect(score.branchedRuns).toBe(0);
     expect(score.runs).toEqual([]);
@@ -131,8 +143,8 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
 
   test('a journal-only run is not counted as a run with a search tree', () => {
     const store = forkStore();
-    seedHeads(store.sql, { root: 'merge-a', heads: 2 });
-    expect(scoreExploration(store.sql).searchRuns).toBe(0);
+    seedHeads(store, { root: 'merge-a', heads: 2 });
+    expect(scoreExploration(store.sql, store.actor).searchRuns).toBe(0);
     store.close();
   });
 });
@@ -141,9 +153,9 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
   test('both stores populated: every written root is visible', () => {
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-a', branches: 2, winner: 0 });
-    seedHeads(store.sql, { root: 'merge-a', heads: 2 });
+    seedHeads(store, { root: 'merge-a', heads: 2 });
 
-    const score = scoreSettleVisibility(store.sql);
+    const score = scoreSettleVisibility(store.sql, store.actor);
 
     expect(score.rootsWritten).toBe(2);
     expect(score.invisibleRoots).toEqual([]);
@@ -159,10 +171,10 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
     // journalled runs, a real search would read as invisible — the scorer must not
     // be able to blame the reader's limit.
     const store = forkStore();
-    for (let i = 0; i < 25; i++) seedHeads(store.sql, { root: `merge-${String(i)}`, heads: 1 });
+    for (let i = 0; i < 25; i++) seedHeads(store, { root: `merge-${String(i)}`, heads: 1 });
     seedSearch(store.sql, { root: 'search-late', branches: 2, winner: 0 });
 
-    const score = scoreSettleVisibility(store.sql);
+    const score = scoreSettleVisibility(store.sql, store.actor);
 
     expect(score.rootsWritten).toBe(26);
     expect(score.invisibleRoots).toEqual([]);
@@ -176,11 +188,11 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
     // it happened in.
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-a', branches: 2, winner: 0 });
-    seedHeads(store.sql, { root: 'merge-a', heads: 2 });
+    seedHeads(store, { root: 'merge-a', heads: 2 });
 
     const transcriptsOnly = (sql: SqlExecutor, limit: number) =>
-      listForkRuns(sql, null, limit).items.filter((run) => !run.hasSearchTree);
-    const score = scoreSettleVisibility(store.sql, transcriptsOnly);
+      listForkRuns(sql, store.actor, null, limit).items.filter((run) => !run.hasSearchTree);
+    const score = scoreSettleVisibility(store.sql, store.actor, transcriptsOnly);
 
     expect(score.rootsWritten).toBe(2);
     expect(score.invisibleRoots).toEqual(['search-a']);
@@ -197,11 +209,11 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
     // time. Both directions must fail, or the scorer only guards one of them.
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-a', branches: 2, winner: 0 });
-    seedHeads(store.sql, { root: 'merge-a', heads: 2 });
+    seedHeads(store, { root: 'merge-a', heads: 2 });
 
     const treeOnly = (sql: SqlExecutor, limit: number) =>
-      listForkRuns(sql, null, limit).items.filter((run) => run.hasSearchTree);
-    const score = scoreSettleVisibility(store.sql, treeOnly);
+      listForkRuns(sql, store.actor, null, limit).items.filter((run) => run.hasSearchTree);
+    const score = scoreSettleVisibility(store.sql, store.actor, treeOnly);
 
     expect(score.invisibleRoots).toEqual(['merge-a']);
     store.close();
@@ -212,9 +224,9 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
     // root present in a write store that the reader has no query for: the shape any
     // future third store would take.
     const store = forkStore();
-    seedHeads(store.sql, { root: 'merge-a', heads: 1 });
+    seedHeads(store, { root: 'merge-a', heads: 1 });
     const noReader = () => [];
-    const score = scoreSettleVisibility(store.sql, noReader);
+    const score = scoreSettleVisibility(store.sql, store.actor, noReader);
 
     expect(score.rootsWritten).toBe(1);
     expect(score.invisibleRoots).toEqual(['merge-a']);
@@ -224,10 +236,10 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
   test('steer-branch roots are excluded, so a correct reader does not look broken', () => {
     const store = forkStore();
     void store.sql`INSERT INTO head_journal
-      (id, parent_id, root_id, depth, task, status, spawned_at)
-      VALUES (${'branch-abc-h0'}, ${null}, ${'branch-abc'}, ${0}, ${'steer'}, ${'completed'}, ${5_000})`;
+      (actor_id, id, parent_id, root_id, depth, task, status, spawned_at)
+      VALUES (${store.actor.actorId}, ${'branch-abc-h0'}, ${null}, ${'branch-abc'}, ${0}, ${'steer'}, ${'completed'}, ${5_000})`;
 
-    const score = scoreSettleVisibility(store.sql);
+    const score = scoreSettleVisibility(store.sql, store.actor);
 
     expect(score.rootsWritten).toBe(0);
     expect(score.invisibleRoots).toEqual([]);
@@ -236,7 +248,7 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
 
   test('an empty store reports a ZERO denominator, not a pass', () => {
     const store = forkStore();
-    const score = scoreSettleVisibility(store.sql);
+    const score = scoreSettleVisibility(store.sql, store.actor);
     expect(score.rootsWritten).toBe(0);
     expect(score.invisibleRoots).toEqual([]);
     store.close();

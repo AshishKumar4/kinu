@@ -53,7 +53,7 @@ async function nodeUnderDeadline(
   maxWallClockMs?: number,
 ): Promise<{ readonly run: NodeRun; readonly steps: number }> {
   const { rt } = createTestRuntime();
-  const journal = new HeadJournal(rt.storage.sql);
+  const journal = new HeadJournal(rt.storage.sql, rt.actor);
   let steps = 0;
   let now = Date.now();
   const clock = spyOn(Date, 'now').mockImplementation(() => now);

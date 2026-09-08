@@ -9,6 +9,7 @@ import { UsageSchema } from '../usage';
 import { JsonObjectSchema } from '../utils/json';
 import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { SubordinateRosterEntrySchema, SubordinateRosterStore } from './roster';
 import { DELEGATION_MAX_DEPTH } from './depth';
 import { PlanReviewStore, PlanReviewSchema } from '../plans/review';
@@ -66,6 +67,7 @@ export function missingSubordinateHistory(path: string[]): SubordinateInspection
 export function readSubordinateInspection(
   sql: SqlExecutor,
   raw: SqlExec,
+  actor: ActorHandle,
   request: SubordinateInspectionRequest,
 ): SubordinateInspectionResult {
   const path = request.path;
@@ -77,7 +79,7 @@ export function readSubordinateInspection(
       if (!tableExists(sql, 'plan_reviews') || !tableExists(sql, 'plan_task_links')) return missingSubordinateHistory(path);
       const plan = new PlanReviewStore(sql).get(request.id, request.revision);
       if (!plan || plan.sessionId !== 'default') return missingSubordinateHistory(path);
-      return { view: 'planTasks', path, tasks: readPlanTasks(sql, plan) };
+      return { view: 'planTasks', path, tasks: readPlanTasks(sql, actor, plan) };
     }
     case 'children': {
       if (!tableExists(sql, 'actor_subordinates')) return missingSubordinateHistory(path);

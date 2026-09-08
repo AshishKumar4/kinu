@@ -5,7 +5,7 @@
  * chosen text as the correction follow-up).
  */
 import { describe, test, expect } from 'bun:test';
-import { createTestWorkspace } from './helpers';
+import { createTestWorkspace, createTestActor } from './helpers';
 import {
   recordBranchTakeSet, claimAlternateTakesForTurn,
   latestAlternateTakeSet, listAlternateTakeSets, recordTakePick, buildTakeContinuationPrompt,
@@ -26,7 +26,9 @@ function setup() {
   // never reaches for one — an UPDATE matching no row is indistinguishable
   // from an UPDATE that was never issued.
   ws.execRaw('DROP TABLE search_nodes');
-  return ws;
+  // The journal is actor-private, so the workspace issues the actor that owns
+  // the branch heads written below.
+  return { ...ws, actor: createTestActor(ws.sql, ws.execRaw, crypto.randomUUID(), 'branch-test') };
 }
 
 function completedReport(id: string, summary: string, status: HeadReport['status'] = 'completed'): HeadReport {
@@ -59,8 +61,8 @@ function fakeRuntime(run: (input: HeadInput) => Promise<HeadReport>) {
 
 describe('startBranchHead — one budgeted head over the HeadRuntime seam', () => {
   test('runs the redirect as a journaled single head and resolves its report', async () => {
-    const { sql } = setup();
-    const journal = new HeadJournal(sql);
+    const { sql, actor } = setup();
+    const journal = new HeadJournal(sql, actor);
     const { runtime, spawns } = fakeRuntime(async (input) => completedReport(input.id, 'branch answer'));
 
     const handle = await startBranchHead(runtime, journal, {
@@ -89,8 +91,8 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
   });
 
   test('abort delegates to the spawned head', async () => {
-    const { sql } = setup();
-    const journal = new HeadJournal(sql);
+    const { sql, actor } = setup();
+    const journal = new HeadJournal(sql, actor);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const { runtime, aborts } = fakeRuntime(async (input) => {
@@ -120,8 +122,8 @@ describe('branchOutcomeFromJournal — the journal read a cold settle makes', ()
   async function journalled(
     status: HeadReport['status'] | null, summary = 'the branch answer', errorMessage?: string,
   ) {
-    const { sql } = setup();
-    const journal = new HeadJournal(sql);
+    const { sql, actor } = setup();
+    const journal = new HeadJournal(sql, actor);
     const { runtime } = fakeRuntime(async (input) => {
       if (status === null) return new Promise<HeadReport>(() => { /* spawned, never reports */ });
       const reported = completedReport(input.id, summary, status);
@@ -324,8 +326,8 @@ describe('recordBranchTakeSet — the settlement key', () => {
 describe('settlePendingBranch — the keyed settle both backends run at turn end', () => {
   /** One pending branch whose head resolves with the given answer. */
   async function pendingBranch(answer: string, task = 'try the other way') {
-    const { sql } = setup();
-    const journal = new HeadJournal(sql);
+    const { sql, actor } = setup();
+    const journal = new HeadJournal(sql, actor);
     const { runtime } = fakeRuntime(async (input) => completedReport(input.id, answer));
     const handle = await startBranchHead(runtime, journal, {
       task,

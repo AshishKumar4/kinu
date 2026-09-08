@@ -18,6 +18,7 @@ import {
   BUILTIN_TOOLS,
   collectStepText,
   createFactsStore,
+  openWorkspaceMainActor,
   readSoul,
   type AgentRuntime,
   type LLMProviderConfig,
@@ -77,7 +78,12 @@ const MEMORY_FACT = 'the project uses bun:sqlite for its database layer';
  */
 function storedMemoryFact(db: Database, memoryFile: string | null): string | null {
   if (memoryFile?.includes(MEMORY_FACT)) return 'memory/MEMORY.md';
-  const fact = createFactsStore(makeSql(db)).all()
+  // The workspace is reopened from disk here, so the actor whose facts these
+  // are has to be named the way an operator names it: the workspace's MAIN
+  // actor, issued through the production directory. That is the actor the
+  // session above drove.
+  const sql = makeSql(db);
+  const fact = createFactsStore(sql, openWorkspaceMainActor(sql)).all()
     .find((row) => JSON.stringify(row.value).includes(MEMORY_FACT));
   return fact ? `agent_facts[${fact.key}]` : null;
 }

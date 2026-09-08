@@ -2,7 +2,7 @@
 // driven by the authentic createCLIRuntime and a fake streaming model (no
 // network LLM). Verifies the unified seam: event stream, turn results, JSONL
 // recording, history hydration, walk-back fork, and stop() reaching the abort.
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -97,8 +97,10 @@ function setup(model: LanguageModel) {
   const home = mkdtempSync(join(tmpdir(), 'kinu-client-'));
   tempDirs.push(home);
   const dbPath = join(home, 'agent.db');
-  writeFileSync(dbPath, '');
-  const db = new Database(':memory:');
+  // The database IS `dbPath`: `createCLIRuntime` refuses a runtime whose
+  // declared path is not its database's own (actor-identity.ts
+  // `requireLocalDatabasePath`), which no in-memory handle can satisfy.
+  const db = new Database(dbPath, { create: true });
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
@@ -359,10 +361,10 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
 
     // Seed real ledgers: one crafted tool + two learned facts in one aggregate.
     rt.craftStore.create({ params: null, name: 'csv_summarizer', description: 'summarize CSVs', code: 'async () => 1', scope: 'local' });
-    void rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
-                   VALUES ('favorite_shell', '"fish"', 1.0, NULL, ${Date.now() - 1000})`;
-    void rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
-                   VALUES ('editor', '"helix"', 1.0, NULL, ${Date.now() - 500})`;
+    void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
+                   VALUES (${rt.actor.actorId}, 'favorite_shell', '"fish"', 1.0, NULL, ${Date.now() - 1000})`;
+    void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
+                   VALUES (${rt.actor.actorId}, 'editor', '"helix"', 1.0, NULL, ${Date.now() - 500})`;
 
     const listed = await executeSlashCommand(client, '/changelog');
     if (listed.kind !== 'changelog') throw new Error(`expected changelog outcome, got ${listed.kind}`);

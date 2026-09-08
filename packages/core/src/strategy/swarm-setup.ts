@@ -59,6 +59,7 @@ import { insertSearchNode } from '../mcts/record-node';
 import { reenterSwarm, type SwarmReentry } from './swarm-resume';
 import type { SwarmProfileSnapshot } from '../profiles';
 import { readArtifact, type TreeNode } from './swarm-tree';
+import type { ActorHandle } from '../state/actor-handle';
 import type {
   ExplorationRecord, MeasuredObjective, ObjectiveIdentity, PublishingCarry,
 } from './objective';
@@ -512,15 +513,15 @@ export function initRunLedgers(
   // `head_journal`.
   initHeadsTables(rt.storage.execRaw);
   const journal = announce === undefined
-    ? new HeadJournal(sql)
-    : new LiveHeadJournal(sql, announce);
+    ? new HeadJournal(sql, rt.actor)
+    : new LiveHeadJournal(sql, rt.actor, announce);
   // The run-level ledger every search in this workspace has a row in. Initialised for
   // the same reason the two above are, and written for the reason *Accepted and
   // ignored* gives: a swarm wrote a tree and no ledger row, so the surface could read
   // its structure and not one knob it ran under, and the judge clamp it computes and
   // discloses was persisted nowhere at all.
   initMctsSearchTable(rt.storage.execRaw);
-  const searchLedger = new MctsSearchStore(sql);
+  const searchLedger = new MctsSearchStore(sql, rt.actor);
   // The leaderboard *The records store* governs, initialised for the same reason the two
   // above are: a workspace that has never run a search has no `exploration_records`, and
   // the carry-in read immediately below would be a query against a table that does not
@@ -625,15 +626,16 @@ export function resolveReentry(input: {
   readonly sql: SqlExecutor;
   readonly searchLedger: MctsSearchStore;
   readonly journal: HeadJournal;
+  readonly actor: ActorHandle;
   readonly redrive: boolean | undefined;
   readonly task: string;
   readonly preset: string;
   readonly profile: SwarmProfileSnapshot | null;
   readonly log: Logger;
 }): ReentryResolution {
-  const { sql, searchLedger, journal, redrive, task, preset, profile, log } = input;
+  const { sql, searchLedger, journal, actor, redrive, task, preset, profile, log } = input;
   const reentry = redrive === true
-    ? reenterSwarm({ sql, ledger: searchLedger, journal }, {
+    ? reenterSwarm({ sql, ledger: searchLedger, journal, actor }, {
       task: task, now: Date.now(),
     })
     : null;

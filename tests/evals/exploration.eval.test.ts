@@ -215,9 +215,9 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // that spent real tokens — and if the sink ever stops being wired, this
     // records an UNMEASURED EPISODE rather than a silent zero, which the tier's
     // liveness verdict then refuses.
-    recordLiveModelEpisode(rt.storage.sql);
+    recordLiveModelEpisode(rt.storage.sql, rt.actor);
 
-    const score = scoreExploration(rt.storage.sql);
+    const score = scoreExploration(rt.storage.sql, rt.actor);
     console.log(`    searches: ${String(score.searchRuns)}, branched: ${String(score.branchedRuns)}, `
       + `ranked: ${String(score.rankedRuns)}, durably ranked: ${String(score.durablyRankedRuns)}`);
     for (const run of score.runs) {
@@ -259,7 +259,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
   }, 0);
 
   liveTest('VISIBLE: every settle mode wrote where the Exploration reader reads', () => {
-    const score = scoreSettleVisibility(rt.storage.sql);
+    const score = scoreSettleVisibility(rt.storage.sql, rt.actor);
 
     // PRECONDITION, before any visibility number is printed or asserted: both
     // write stores must EXIST. Measured live — a workspace built here had

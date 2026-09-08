@@ -1423,7 +1423,7 @@ async function runSwarmAction(
   // off the SAME record the role, tier and model do: read here, before the axes
   // resolve, because `resolveSwarm` needs it and the claim happens later.
   const started = redrive && input.preset === undefined
-    ? readStartedSwarmProfile(fork.rt.storage, input.task)
+    ? readStartedSwarmProfile(fork.rt.storage, fork.rt.actor, input.task)
     : null;
   const preset: SwarmPreset = input.preset
     ?? delegated?.resolved.defaultPreset

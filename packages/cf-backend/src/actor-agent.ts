@@ -3572,7 +3572,8 @@ export abstract class ActorAgent extends Think<Env> {
   protected get headJournal(): HeadJournal {
     return (this._liveHeadJournal ??= new LiveHeadJournal(
       this.boundSql,
-      (headId) => this.announceHeadActivity(headId),
+      this.actorHandle(),
+      (headId: HeadId) => this.announceHeadActivity(headId),
     ));
   }
 
@@ -3963,7 +3964,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   async hasSandboxBackgroundWork(): Promise<boolean> {
     if (this._inFlight) return true;
-    if (this.jobs.countRunning() > 0) return true;
+    if (this.jobs.countRunningInWorkspace() > 0) return true;
     const submissions = await this.listSubmissions({ status: ['pending', 'running'] });
     if (submissions.length > 0) return true;
     const fibers = await this.listFibers({ status: ['pending', 'running', 'interrupted'] });
@@ -4907,7 +4908,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** Native owner inspection. Does not initialize the SDK or application tables. */
   async inspectSubordinateStorage(request: SubordinateInspectionRequest, authority: SubordinateInspectionAuthority): Promise<SubordinateInspectionResult> {
     return inspectSubordinateStorage({
-      sql: this.boundSql, raw: this.ctx.storage.sql,
+      sql: this.boundSql, raw: this.ctx.storage.sql, actor: this.actorHandle(),
       storedParentPath: () => this.ctx.storage.get<JsonValue>('cf_agents_parent_path'),
       storedPhysicalKey: () => this.ctx.storage.get<JsonValue>('cf_agents_facet_name'),
       existing: async (row) => {

@@ -19,7 +19,7 @@ import type { LanguageModel, ModelMessage } from 'ai';
 import { jsonSchema, tool } from 'ai';
 import { runHeadInference, HeadCapture, type HeadInferenceDeps } from '../src/heads/head-inference';
 import type { HeadStreamKind } from '../src/heads/head-stream';
-import { makeSql, makeExecRaw } from './helpers';
+import { makeSql, makeExecRaw, createTestActor } from './helpers';
 import { LiveHeadJournal } from '../src/heads/live-journal';
 import { initHeadsTables } from '../src/heads/schema';
 import type { HeadInput, HeadStep } from '../src/heads/types';
@@ -194,9 +194,11 @@ describe('a running head publishes what it is producing', () => {
     // screen forever.
     const database = new Database(':memory:');
     const sql = makeSql(database);
-    initHeadsTables(makeExecRaw(database));
+    const execRaw = makeExecRaw(database);
+    initHeadsTables(execRaw);
+    const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'head-stream-test');
     const announced: string[] = [];
-    const journal = new LiveHeadJournal(sql, (headId) => { announced.push(headId); });
+    const journal = new LiveHeadJournal(sql, actor, (headId) => { announced.push(headId); });
     const frames: Frame[] = [];
 
     const input = headInput();

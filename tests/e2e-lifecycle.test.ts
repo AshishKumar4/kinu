@@ -366,7 +366,7 @@ describe('E2E Lifecycle', () => {
       // liveness verdict refuses.
       reportModelCall: liveModelCallSink(rt.storage.sql),
     });
-    recordLiveModelEpisode(rt.storage.sql);
+    recordLiveModelEpisode(rt.storage.sql, rt.actor);
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
     console.log(`  Nodes: ${nodes.length}`);
     expect(nodes.length).toBe(3);

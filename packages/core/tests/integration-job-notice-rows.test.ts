@@ -46,6 +46,8 @@ import { PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, uiMessageText
 import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor } from '../src/types/primitives';
 import { createTestWorkspace, makeSql, makeExecRaw, makeSqlExec, SDK_SESSION_DDL } from './helpers';
+import { openWorkspaceMainActor } from '../src/state/workspace-actors';
+import { createTestActors } from '@kinu.run/test-utils';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
 
@@ -93,7 +95,7 @@ function activation(db: Database) {
   const { host } = chatStore(db);
   const fiber: Schedule['fiber'] = async (_name, fn) => fn({ stash: () => {}, snapshot: null });
   const runner = new BackgroundJobRunner({
-    store: new BackgroundJobStore(sql),
+    store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
     fiber,
     signals: new SignalDelivery(host),
     eventLog: new EventLog(makeSqlExec(db)),
@@ -109,7 +111,7 @@ function evictedWorkspace() {
   const ws = createTestWorkspace();
   initBackgroundJobsTable(ws.execRaw);
   initEventsHubTables(makeSqlExec(ws.db));
-  const store = new BackgroundJobStore(ws.sql);
+  const store = new BackgroundJobStore(ws.sql, createTestActors(ws.sql, ws.execRaw).main);
   const now = Date.now();
   store.create({
     id: JOB, kind: 'agents', workMode: 'build', now,
@@ -253,7 +255,7 @@ describe('a settled background job announces itself once, and not as the owner',
     };
     const fiber: Schedule['fiber'] = async (_name, fn) => fn({ stash: () => {}, snapshot: null });
     const runner = new BackgroundJobRunner({
-      store: new BackgroundJobStore(sql),
+      store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
       fiber,
       signals: new SignalDelivery(preempting),
       eventLog: new EventLog(makeSqlExec(ws.db)),

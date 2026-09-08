@@ -226,6 +226,16 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     proposed_tasks: EVERYWHERE,
 
     // ── heads / exploration ──
+    // ACTOR-PRIVATE, all six. A run belongs to the actor that split it: its live
+    // roster is carried into that actor's model steps, its reconciliation
+    // settles the heads it spawned, and the reclaim in `findResumableRun` /
+    // `findResumable` / `findRunningSwarms` keys on TASK TEXT — so two actors
+    // handed the same instruction present the same key, and without an owner
+    // predicate one would take over the other's tree. Every one of these
+    // carries `actor_id` and has it in its primary key, because none of their
+    // ids is minted globally either: a fork re-drive DERIVES a head id from its
+    // branch point and slot, a step id is `${headId}-s${seq}`, and evidence ids
+    // come from the report.
     head_runs: EVERYWHERE,
     head_journal: EVERYWHERE,
     head_evidence: EVERYWHERE,
@@ -274,12 +284,33 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     run_events: EVERYWHERE,
 
     // ── durable state ──
+    // ACTOR-PRIVATE: the world model is the agent's own key space. `remember`,
+    // `recall` and `forget` are this actor's tool, the top-K goes into THIS
+    // actor's prompt, and sleep-time compression rewrites its own model — so a
+    // sibling that learns "deploy target" must not overwrite what this one
+    // observed under the same words. Adoption still lands here and is still a
+    // copy INTO a target: an experience import upserts the imported fact into
+    // the importing actor's own set under `source: experience:<workspace>`.
     agent_facts: EVERYWHERE,
     actor_config: EVERYWHERE,
     // The agent's own task list. A subordinate keeps its own rather than
     // writing into its parent's: it is given its own assignment, and one plan
-    // per actor is what makes the list mean anything.
+    // per actor is what makes the list mean anything. `t{seq}` is minted from
+    // the owner's own sequence, so two actors both hold a `t1` and the
+    // uniqueness that makes the id referable is UNIQUE (actor_id, seq).
     agent_tasks: EVERYWHERE,
+    // The plan revision a task was added under, owned alongside the task.
+    plan_task_links: EVERYWHERE,
+    // SPLIT OWNERSHIP, and the store interface is where the split is stated.
+    // The ROW is actor-private — its roster feeds one actor's context block, an
+    // id alone is not authority to settle a sibling's work, and `clearSettled`
+    // is one actor's history. The AGGREGATES are not: `countRunningInWorkspace`,
+    // `resumeOwedIdsInWorkspace`, `nextResumeAtInWorkspace` and
+    // `hasLiveJobsInWorkspace` answer questions about the machine, because
+    // every detached job is a live process tree whichever agent launched it
+    // (jobs/runner.ts). Narrowing the cap would multiply the machine ceiling by
+    // the actor count; widening the roster would put a sibling's work in this
+    // actor's prompt.
     background_jobs: EVERYWHERE,
     // The once-only boundary in front of a tool whose effects leave the process:
     // one row per claimed call, `PRIMARY KEY (turn_id, normalized_call_id,

@@ -25,6 +25,7 @@ import {
   tableExists,
   type ForkRunSummary, type RunEvent, type SqlExecutor,
 } from '@kinu.run/core';
+import type { ActorHandle } from '@kinu.run/core';
 
 // ── (a) A search tree reached, branched, and ranked ──────────────
 
@@ -75,8 +76,8 @@ export interface ExplorationScore {
  * burst of transcript-only runs can push a tree-bearing run out of a 20-row list and
  * make a real search read as absent.
  */
-export function scoreExploration(sql: SqlExecutor, limit = 1000): ExplorationScore {
-  const searched = listForkRuns(sql, null, limit).items.filter((run) => run.hasSearchTree);
+export function scoreExploration(sql: SqlExecutor, actor: ActorHandle, limit = 1000): ExplorationScore {
+  const searched = listForkRuns(sql, actor, null, limit).items.filter((run) => run.hasSearchTree);
   const runs = searched.map<SearchRunScore>((run) => {
     const terminal = sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM search_nodes
@@ -164,8 +165,9 @@ export interface SettleVisibilityScore {
  */
 export function scoreSettleVisibility(
   sql: SqlExecutor,
+  actor: ActorHandle,
   read: (sql: SqlExecutor, limit: number) => readonly ForkRunSummary[] =
-    (readSql, limit) => listForkRuns(readSql, null, limit).items,
+    (readSql, limit) => listForkRuns(readSql, actor, null, limit).items,
 ): SettleVisibilityScore {
   const notSteerBranch = `${STEER_BRANCH_RUN_ID_PREFIX}%`;
   const transcriptsPresent = tableExists(sql, 'head_journal');
@@ -177,7 +179,8 @@ export function scoreSettleVisibility(
       present: transcriptsPresent,
       roots: !transcriptsPresent ? [] : sql<{ root: string }>`
         SELECT DISTINCT root_id AS root FROM head_journal
-        WHERE root_id IS NOT NULL AND root_id NOT LIKE ${notSteerBranch}`.map((r) => r.root),
+        WHERE actor_id = ${actor.actorId}
+          AND root_id IS NOT NULL AND root_id NOT LIKE ${notSteerBranch}`.map((r) => r.root),
     },
     {
       half: 'tree' as const,

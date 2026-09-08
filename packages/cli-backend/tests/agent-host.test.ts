@@ -504,7 +504,7 @@ describe('LocalAgentHost', () => {
     const jobId = 'bgjob-restart';
     const db = new Database(dbPath);
     const sql = makeSql(db);
-    const store = new BackgroundJobStore(sql);
+    const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
     const now = Date.now();
     store.create({ id: jobId, kind: 'agents', workMode: 'build', now, label: 'restart proof' });
     store.settle(jobId, 0, JSON.stringify({ done: true }), now + 1);

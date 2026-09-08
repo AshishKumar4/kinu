@@ -5,6 +5,7 @@ import { SubordinateRosterStore } from './roster';
 import { tableExists } from '../identity/schema';
 import type { JsonValue } from '../utils/json';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { SubordinateRosterEntry } from '../tools/agents-tool';
 import { sameActorReference } from '../state/actor-handle';
 
@@ -20,6 +21,10 @@ export interface SubordinateInspectionPort {
 export interface SubordinateInspectionAccess {
   readonly sql: SqlExecutor;
   readonly raw: SqlExec;
+  /** The actor whose storage THIS hop is: every actor-private read below is
+   *  taken as this actor, and a hop that could not name one has no history to
+   *  show. */
+  readonly actor: ActorHandle;
   storedParentPath(): Promise<JsonValue | undefined>;
   storedPhysicalKey(): Promise<JsonValue | undefined>;
   existing(row: SubordinateRosterEntry): Promise<{ port: SubordinateInspectionPort; storageKey: string } | null>;
@@ -34,7 +39,7 @@ export async function inspectSubordinateStorage(
 ): Promise<SubordinateInspectionResult> {
   const input = v.parse(SubordinateInspectionRequestSchema, request);
   const missing = () => missingSubordinateHistory(input.path);
-  const { sql, raw } = access;
+  const { sql, raw, actor } = access;
   const depth = authority.traversed.length;
   if (authority.storagePath.length !== depth) return missing();
   if (depth > 0) {
@@ -52,7 +57,7 @@ export async function inspectSubordinateStorage(
       if (parent?.className !== 'SubordinateAgent' || parent.name !== authority.storagePath[index - 1]) return missing();
     }
   }
-  if (depth === input.path.length) return readSubordinateInspection(sql, raw, input);
+  if (depth === input.path.length) return readSubordinateInspection(sql, raw, actor, input);
   const name = input.path[depth];
   if (!name) return missing();
   if (!tableExists(sql, 'actor_subordinates')) return missing();

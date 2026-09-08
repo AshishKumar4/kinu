@@ -130,7 +130,9 @@ async function main(): Promise<void> {
 
   // One journal for both: the controller writes each head's spawn and report to
   // it, and the runtime writes each head's steps to it as they land.
-  const journal = new HeadJournal(makeSql(db));
+  // Bound to the runtime's own actor: the journal is actor-private, and the
+  // head runtime below writes each head's steps through the same owner.
+  const journal = new HeadJournal(makeSql(db), rt.actor);
   const headRuntime = createCLIHeadRuntime({
     model: () => benchChatModel(analyst),
     parentRuntime: rt,

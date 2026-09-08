@@ -11,7 +11,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createTestRuntime, createTestSql, memberBody, toolExecute } from '@kinu.run/test-utils';
+import { createTestActorsOver, createTestRuntime, createTestSql, memberBody, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import {
   hiredSubordinateHarness,
@@ -416,6 +416,7 @@ describe('facet containment is seed-built', () => {
 describe('recursive split budget', () => {
   test('the controller decrements maxDepth for spawned subheads', async () => {
     const { db, sql } = createTestSql();
+    const actor = createTestActorsOver(db).main;
     initHeadsTables((ddl) => db.exec(ddl));
     const spawned: HeadInput[] = [];
     const runtime: HeadRuntime = {
@@ -429,7 +430,7 @@ describe('recursive split budget', () => {
       },
       async mergeLLM() { return mergeOutput; },
     };
-    const controller = new HeadController(runtime, new HeadJournal(sql));
+    const controller = new HeadController(runtime, new HeadJournal(sql, actor));
 
     await controller.run({
       parentHeadId: 'parent-head',

@@ -1008,7 +1008,7 @@ export class EvolutionEngine {
 
   /** Emit one "what I changed about myself" line for the closed window. */
   private emitChangelogDigest(since: number): void {
-    const entries = buildChangelog(this.rt.storage.sql, { since, limit: 20 });
+    const entries = buildChangelog(this.rt.storage.sql, this.rt.actor, { since, limit: 20 });
     if (entries.length === 0) return;
     const counts = new Map<string, number>();
     for (const e of entries) counts.set(e.kind, (counts.get(e.kind) ?? 0) + 1);

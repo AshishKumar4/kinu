@@ -455,7 +455,7 @@ export function nodeDeps(model: LanguageModel, opts?: NodeDepsOptions): NodeSeam
   // before it dispatches and closes one whatever happens, so a fixture missing a
   // column measures a store no swarm ever has.
   initHeadsTables(rt.storage.execRaw);
-  const journal = new HeadJournal(rt.storage.sql);
+  const journal = new HeadJournal(rt.storage.sql, rt.actor);
   const deps: NodeAgentDeps = {
     rt, model, journal,
     logger: createRecordingLogger(),

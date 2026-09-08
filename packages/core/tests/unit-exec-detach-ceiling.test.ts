@@ -23,7 +23,7 @@
 // always was — a detach trigger, never a kill.
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
-import { toolExecute } from '@kinu.run/test-utils';
+import { toolExecute, createTestActorsOver } from '@kinu.run/test-utils';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
@@ -218,7 +218,7 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
     initBackgroundJobsTable(makeExecRaw(db));
     const hubSql = makeSqlExec(db);
     initEventsHubTables(hubSql);
-    const store = new BackgroundJobStore(makeSql(db));
+    const store = new BackgroundJobStore(makeSql(db), createTestActorsOver(db).main);
 
     const bodies: Array<Promise<unknown>> = [];
     const fiber: Schedule['fiber'] = async (_name, fn) => {

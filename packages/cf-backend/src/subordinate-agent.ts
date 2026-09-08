@@ -866,7 +866,7 @@ export class SubordinateAgent extends ActorAgent {
       // and re-arms every waiting instant. This actor's tick has no sweep and
       // serves a deferred job only once its instant is due, so the activation
       // arms that instant itself.
-      const resumeAt = this.jobs.nextResumeAt();
+      const resumeAt = this.jobs.nextResumeAtInWorkspace();
       if (resumeAt !== null) await this.scheduleTerminalRetry(resumeAt);
       if (this.subordinateRoster.hasPendingBirths() || this.subordinateRoster.hasPendingDeletions()) await this.scheduleTerminalRetry(Date.now());
     });
