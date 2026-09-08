@@ -47,6 +47,7 @@ import type { LanguageModel, LanguageModelUsage } from 'ai';
 import { appendFileSync } from 'node:fs';
 import { LIVE_MODEL_ENV } from './ambient-env';
 import { EVAL_STAGING_ORIGIN, evalTargetVerdict } from './eval-identity';
+import type { ActorHandle } from '@kinu.run/core';
 
 /** Which of the two resolution paths produced a target. */
 export type LiveModelPath = 'worker-proxy' | 'ai-gateway';
@@ -451,8 +452,8 @@ export function liveModelCallSink(sql: SqlExecutor): ModelCallSink {
  * plus the head journal, so it is what this reads. No second meter, no second
  * definition of what a workspace spent.
  */
-export function recordLiveModelEpisode(sql: SqlExecutor): void {
-  recordWorkspaceSpend(workspaceSpend({ events: new RunEventRecorder(sql), sql }));
+export function recordLiveModelEpisode(sql: SqlExecutor, actor: ActorHandle): void {
+  recordWorkspaceSpend(workspaceSpend({ events: new RunEventRecorder(sql), sql, actor }));
 }
 
 /**

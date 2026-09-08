@@ -66,22 +66,22 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
       return actor().config;
     },
     get facts(): FactsStore {
-      return (facts ??= createFactsStore(sql()));
+      return (facts ??= createFactsStore(sql(), actor()));
     },
     get taskList(): TaskListStore {
-      return (taskList ??= new TaskListStore(sql(), transactionSync));
+      return (taskList ??= new TaskListStore(sql(), actor(), transactionSync));
     },
     get headJournal(): HeadJournal {
-      return (headJournal ??= new HeadJournal(sql()));
+      return (headJournal ??= new HeadJournal(sql(), actor()));
     },
     get eventRecorder(): RunEventRecorder {
       return (eventRecorder ??= new RunEventRecorder(sql()));
     },
     get jobs(): BackgroundJobStore {
-      return (jobs ??= new BackgroundJobStore(sql()));
+      return (jobs ??= new BackgroundJobStore(sql(), actor()));
     },
     get mctsSearchStore(): MctsSearchStore {
-      return (mctsSearchStore ??= new MctsSearchStore(sql()));
+      return (mctsSearchStore ??= new MctsSearchStore(sql(), actor()));
     },
   };
 }

@@ -13,7 +13,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
   HeadController,
   HeadJournal,
@@ -28,15 +28,17 @@ import {
   initHeadsTables,
 } from '../src/heads/index';
 import type { SqlValue } from '../src/types/primitives';
-import { makeSql, makeExecRaw } from './helpers';
+import { makeSql, makeExecRaw, createTestActor } from './helpers';
 
 // ── Test runtime wiring ──────────────────────────────────────────────
 
 function newJournal() {
   const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db));
+  const execRaw = makeExecRaw(db);
+  initHeadsTables(execRaw);
   const sql = makeSql(db);
-  return { sql, journal: new HeadJournal(sql), db };
+  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'heads-test');
+  return { sql, journal: new HeadJournal(sql, actor), db, actor };
 }
 
 function fakeReport(id: string, overrides: Partial<HeadReport> = {}): HeadReport {
@@ -712,14 +714,19 @@ describe('HeadJournal.listLive — the live fork roster', () => {
   // previous `GROUP BY … HAVING running > 0` with "SCAN j USING INDEX …".
   test('the roster does not read the settled journal', () => {
     const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db));
+    const execRaw = makeExecRaw(db);
+    initHeadsTables(execRaw);
     const inner = makeSql(db);
-    const statements: string[] = [];
+    // The actor binds over the UNDERLYING executor: the directory's own rows
+    // belong in this same database, and the capture then holds only the
+    // journal's statements.
+    const actor = createTestActor(inner, execRaw, crypto.randomUUID(), 'roster-test');
+    const statements: Array<{ text: string; values: SqlValue[] }> = [];
     const capturing: typeof inner = <T,>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
-      statements.push(strings.join('?'));
+      statements.push({ text: strings.join('?'), values });
       return inner<T>(strings, ...values);
     };
-    const journal = new HeadJournal(capturing);
+    const journal = new HeadJournal(capturing, actor);
 
     journal.recordSplit('root-live', 'still going', Date.now());
     spawn(journal, 'root-live', 'live-1');
@@ -737,8 +744,13 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     // Two statements: the count and the page. BOTH are bounded by the status
     // index — neither may scan the settled journal.
     expect(statements).toHaveLength(2);
-    for (const statement of statements) {
-      const plan = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN ${statement}`).all(8);
+    for (const { text, values } of statements) {
+      // Bound with the statement's OWN values — the owner predicate is one of
+      // them, and the plan is only honest against the parameters the journal
+      // actually passed.
+      const bound: SQLQueryBindings[] = values.map((value) =>
+        value instanceof ArrayBuffer ? new Uint8Array(value) : value);
+      const plan = db.query<{ detail: string }, SQLQueryBindings[]>(`EXPLAIN QUERY PLAN ${text}`).all(...bound);
       const details = plan.map((row) => row.detail).join('\n');
       expect(details).not.toMatch(/\bSCAN\b/);
       expect(details).toContain('idx_head_journal_status');

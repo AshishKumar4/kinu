@@ -34,6 +34,7 @@ import { HeadJournal } from '../heads/journal';
 import { readSearchTree } from './search-tree';
 import { runName } from './fork-runs';
 import type { Page, PageRequest } from './page';
+import type { ActorHandle } from '../state/actor-handle';
 
 /** Which store recorded this node, and therefore how much there is to show. */
 export type NodeTranscriptOrigin = 'head' | 'rollout';
@@ -102,11 +103,12 @@ export interface NodeTranscriptView {
  */
 export function readNodeTranscript(
   sql: SqlExecutor,
+  actor: ActorHandle,
   runId: string,
   nodeId: string,
   request: PageRequest = {},
 ): NodeTranscriptView | null {
-  return readHeadTranscript(sql, runId, nodeId, request) ?? readRolloutTranscript(sql, runId, nodeId);
+  return readHeadTranscript(sql, actor, runId, nodeId, request) ?? readRolloutTranscript(sql, runId, nodeId);
 }
 
 /** A row either store can be walked by: both key their parent the same way. */
@@ -146,11 +148,12 @@ function ancestorCrumbs<Row extends Branchy>(
 
 function readHeadTranscript(
   sql: SqlExecutor,
+  actor: ActorHandle,
   runId: string,
   nodeId: string,
   request: PageRequest,
 ): NodeTranscriptView | null {
-  const journal = new HeadJournal(sql);
+  const journal = new HeadJournal(sql, actor);
   // The run's head rows carry the parent chain; the trace is its own read. Three
   // reads rather than one because only one of them is per-head, and a reader who
   // opened one branch must not pay for its siblings' steps — which is also why

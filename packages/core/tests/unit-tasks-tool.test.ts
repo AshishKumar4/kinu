@@ -195,7 +195,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
     const { rt, testSql } = createTestRuntime();
     initAllTables(testSql.execRaw, testSql.sql);
     initTaskListTable(testSql.execRaw);
-    const taskList = new TaskListStore(rt.storage.sql, rt.storage.transactionSync);
+    const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
     const provider = createTasksCodemodeProvider(taskList, rt.actor.config);
 
     const added = v.parse(
@@ -220,7 +220,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
     const { rt, testSql } = createTestRuntime();
     initAllTables(testSql.execRaw, testSql.sql);
     initTaskListTable(testSql.execRaw);
-    const taskList = new TaskListStore(rt.storage.sql, rt.storage.transactionSync);
+    const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
     const provider = createTasksCodemodeProvider(taskList, rt.actor.config);
     await codemodeExecute(provider, 'add')(['Parent task']);
     await codemodeExecute(provider, 'add')(['Child task'], 't1');

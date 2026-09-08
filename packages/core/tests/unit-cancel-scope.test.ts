@@ -27,6 +27,7 @@ import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 
 /** A fiber that runs its body inline and exposes the in-flight promises, so a
  *  test can decide WHEN the settlement completes. */
@@ -55,7 +56,7 @@ function scene() {
   const hubSql = makeSqlExec(db);
   initEventsHubTables(hubSql);
   const { fiber, settled } = inlineFiber();
-  const store = new BackgroundJobStore(makeSql(db));
+  const store = new BackgroundJobStore(makeSql(db), createTestActorsOver(db).main);
   const runner = new BackgroundJobRunner({
     store,
     fiber,

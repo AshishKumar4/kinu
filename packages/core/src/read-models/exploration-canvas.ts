@@ -34,6 +34,7 @@ import { readSearchTree } from './search-tree';
 import { paretoFront, type ParetoAxis, type ParetoEvidence } from '../strategy/objective';
 import { readSwarmNodeRecords } from '../strategy/swarm-resume';
 import { mapPage, type Page, type SeekCursor } from './page';
+import type { ActorHandle } from '../state/actor-handle';
 
 /** One run on the canvas, with everything the canvas draws for it. */
 export interface ExplorationCanvasRun {
@@ -71,10 +72,11 @@ const DEFAULT_CANVAS_PAGE = 30;
  */
 export function readExplorationCanvas(
   sql: SqlExecutor,
+  actor: ActorHandle,
   cursor: SeekCursor | null = null,
   limit = DEFAULT_CANVAS_PAGE,
 ): Page<ExplorationCanvasRun> {
-  return mapPage(listForkRuns(sql, cursor, limit), (runs) => composeRuns(sql, runs));
+  return mapPage(listForkRuns(sql, actor, cursor, limit), (runs) => composeRuns(sql, actor, runs));
 }
 
 /**
@@ -86,20 +88,21 @@ export function readExplorationCanvas(
  * clamp meant fetching thirty runs and their trees to render one. Through the same
  * composer, so the two reads cannot come to disagree about one run.
  */
-export function readExplorationRun(sql: SqlExecutor, rootId: string): ExplorationCanvasRun | null {
-  const run = readForkRun(sql, rootId);
-  return run === null ? null : composeRuns(sql, [run])[0] ?? null;
+export function readExplorationRun(sql: SqlExecutor, actor: ActorHandle, rootId: string): ExplorationCanvasRun | null {
+  const run = readForkRun(sql, actor, rootId);
+  return run === null ? null : composeRuns(sql, actor, [run])[0] ?? null;
 }
 
 /** Both halves and the parameters of each named run, in one read per store. */
 function composeRuns(
   sql: SqlExecutor,
+  actor: ActorHandle,
   runs: readonly ForkRunSummary[],
 ): ExplorationCanvasRun[] {
   const params = new Map(
-    readForkRunParams(sql, runs.map((run) => run.id)).map((entry) => [entry.rootId, entry]),
+    readForkRunParams(sql, actor, runs.map((run) => run.id)).map((entry) => [entry.rootId, entry]),
   );
-  const journal = new HeadJournal(sql);
+  const journal = new HeadJournal(sql, actor);
   return runs.map((run) => ({
     run,
     params: params.get(run.id) ?? null,

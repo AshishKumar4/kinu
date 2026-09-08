@@ -15,7 +15,36 @@
  * the re-arm now depends on.
  */
 import { describe, expect, test } from 'bun:test';
+import type { Database } from 'bun:sqlite';
+import * as v from 'valibot';
+import { ActorReferenceSchema, openWorkspaceMainActor, tableExists } from '@kinu.run/core';
+import { makeSql } from '../../core/tests/helpers';
 import { orchestratorHarness, subordinateHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+
+/**
+ * The actor these rows belong to.
+ *
+ * The journal, the job registry and the search ledger are actor-private, so a
+ * seed the activation is meant to sweep has to carry the owner the AGENT
+ * resolves — read back the way that agent resolves it rather than assumed.
+ *
+ * Two arms because the two harnesses are two kinds of storage. A root holds the
+ * workspace identity and its actor comes from the production directory. A
+ * SUBORDINATE's own database holds no workspace identity at all: its handle is
+ * bound from the single `actor_identity` row `FacetIdentity` writes, which is
+ * exactly what `SubordinateAgent.actorHandle()` reads.
+ */
+function harnessActorId(db: Database): string {
+  const sql = makeSql(db);
+  if (tableExists(sql, 'workspace_identity')
+    && sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`.length === 1) {
+    return openWorkspaceMainActor(sql).actorId;
+  }
+  const row = sql<{ actor_reference: string }>`
+    SELECT actor_reference FROM actor_identity WHERE id = 1`[0];
+  if (!row) throw new Error('the harness database carries neither a workspace nor a facet identity');
+  return v.parse(ActorReferenceSchema, JSON.parse(row.actor_reference)).actorId;
+}
 
 const KINU_TIMER_CALLBACK = '_kinuTimerTick';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -184,9 +213,9 @@ describe('the workspace keeps exactly one wake row', () => {
     const now = Date.now();
     const resumeAt = now + 60_000;
     harness.db.prepare(
-      `INSERT INTO background_jobs (id, kind, work_mode, status, input_json, resume_after, created_at)
-       VALUES ('job-waiting', 'agents', 'build', 'running', '{}', ?, ?)`,
-    ).run(resumeAt, now);
+      `INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, resume_after, created_at)
+       VALUES (?, 'job-waiting', 'agents', 'build', 'running', '{}', ?, ?)`,
+    ).run(harnessActorId(harness.db), resumeAt, now);
 
     await harness.agent.activateActor();
     await harness.agent.harnessSettleBackgroundTasks();
@@ -224,16 +253,17 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
+    const actorId = harnessActorId(db);
     const insertBranch = (id: string, spawnedAt: number): void => {
       db.prepare(
-        `INSERT INTO head_journal (id, root_id, depth, task, status, spawned_at)
-         VALUES (?, ?, 0, 'take a branch', 'running', ?)`,
-      ).run(id, `branch-${id}`, spawnedAt);
+        `INSERT INTO head_journal (actor_id, id, root_id, depth, task, status, spawned_at)
+         VALUES (?, ?, ?, 0, 'take a branch', 'running', ?)`,
+      ).run(actorId, id, `branch-${id}`, spawnedAt);
     };
     // SAFETY: the SELECT answers one text cell by the schema's NOT NULL.
     const status = (id: string): string => db
-      .prepare(`SELECT status FROM head_journal WHERE id = '${id}'`)
-      .values()[0]?.[0] as string;
+      .prepare(`SELECT status FROM head_journal WHERE actor_id = ? AND id = ?`)
+      .values(actorId, id)[0]?.[0] as string;
 
     insertBranch('stale-head', Date.now() - 60_000);
     insertBranch('live-head', Date.now() + 5);
@@ -260,17 +290,18 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
+    const actorId = harnessActorId(db);
     const insertRun = (root: string, createdAt: number): void => {
       db.prepare(
         `INSERT INTO mcts_search_runs
-           (root_id, root_msg_id, task, engine, status, config_json, budget, created_at, updated_at)
-         VALUES (?, ?, 'search the space', 'swarm', 'running', '{}', 4, ?, ?)`,
-      ).run(root, `msg-${root}`, createdAt, createdAt);
+           (actor_id, root_id, root_msg_id, task, engine, status, config_json, budget, created_at, updated_at)
+         VALUES (?, ?, ?, 'search the space', 'swarm', 'running', '{}', 4, ?, ?)`,
+      ).run(actorId, root, `msg-${root}`, createdAt, createdAt);
     };
     // SAFETY: the SELECT answers one text cell by the schema's NOT NULL.
     const status = (root: string): string => db
-      .prepare(`SELECT status FROM mcts_search_runs WHERE root_id = '${root}'`)
-      .values()[0]?.[0] as string;
+      .prepare(`SELECT status FROM mcts_search_runs WHERE actor_id = ? AND root_id = ?`)
+      .values(actorId, root)[0]?.[0] as string;
 
     insertRun('stale-swarm', Date.now() - 60_000);
     insertRun('live-swarm', Date.now() + 5);
@@ -319,11 +350,12 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
     const insert = db.prepare(
-      `INSERT INTO head_journal (id, root_id, depth, task, status, spawned_at)
-       VALUES (?, ?, 0, 'take a branch', 'running', ?)`,
+      `INSERT INTO head_journal (actor_id, id, root_id, depth, task, status, spawned_at)
+       VALUES (?, ?, ?, 0, 'take a branch', 'running', ?)`,
     );
+    const actorId = harnessActorId(db);
     const stale = Date.now() - 60_000;
-    for (let i = 0; i < 769; i++) insert.run(`floor-head-${i}`, `branch-floor-${i}`, stale);
+    for (let i = 0; i < 769; i++) insert.run(actorId, `floor-head-${i}`, `branch-floor-${i}`, stale);
     // ONE alarm, as the platform delivers it: the SDK deletes its own one-shot
     // row once the callback returns, so the next tick starts with no armed row
     // — and the delay the tick chose is what the platform waited. Modelled

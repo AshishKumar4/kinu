@@ -321,7 +321,7 @@ async function run(input: {
   const wallClockMs = Date.now() - startedAt;
   const nodes = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
-  return { rt, logger, nodes, result, script, journal: new HeadJournal(rt.storage.sql), wallClockMs };
+  return { rt, logger, nodes, result, script, journal: new HeadJournal(rt.storage.sql, rt.actor), wallClockMs };
 }
 
 describe('a depth-2 swarm of tool-using agents, end to end', () => {
@@ -526,10 +526,10 @@ describe('the run a reader gets back', () => {
     // passes for the wrong reason, which is the defect this repository keeps finding.
     expect(nodes.length).toBeGreaterThan(0);
     const journalled = rt.storage.sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM head_journal`[0]?.n ?? 0;
+      SELECT COUNT(*) AS n FROM head_journal WHERE actor_id = ${rt.actor.actorId}`[0]?.n ?? 0;
     expect(journalled).toBeGreaterThan(0);
 
-    const page = readExplorationCanvas(rt.storage.sql);
+    const page = readExplorationCanvas(rt.storage.sql, rt.actor);
     expect(page.items).toHaveLength(1);
     const entry = page.items[0]!;
     expect(entry.run.hasSearchTree).toBe(true);
@@ -551,14 +551,14 @@ describe('the run a reader gets back', () => {
     expect(entry.params?.search?.judgeSamplesRequested).toBeNull();
     expect(entry.params?.search?.judgeSamplesRealised).toBeNull();
     // And the permalink read says the same thing about the same run.
-    expect(readExplorationRun(rt.storage.sql, entry.run.id)).toEqual(entry);
+    expect(readExplorationRun(rt.storage.sql, rt.actor, entry.run.id)).toEqual(entry);
   }, 180_000);
 
   test('the ledger row says the run settled, with what it actually spent', async () => {
     const { rt, result } = await run({ depth: 1, branches: 2, proposeAtDepth1: true });
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
-    const ledger = new MctsSearchStore(rt.storage.sql).list(10);
+    const ledger = new MctsSearchStore(rt.storage.sql, rt.actor).list(10);
     expect(ledger).toHaveLength(1);
     expect(ledger[0]).toMatchObject({
       engine: 'swarm',

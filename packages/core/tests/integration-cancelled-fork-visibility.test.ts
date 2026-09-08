@@ -27,6 +27,7 @@ import {
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { ModelMessage } from 'ai';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 
 const HEADS = 4;
 const ROOT = 'root-research';
@@ -55,8 +56,9 @@ function workspace() {
   const execRaw = makeExecRaw(db);
   initHeadsTables(execRaw);
   initBackgroundJobsTable(execRaw);
-  const journal = new HeadJournal(sql);
-  const jobs = new BackgroundJobStore(sql);
+  const actor = createTestActorsOver(db).main;
+  const journal = new HeadJournal(sql, actor);
+  const jobs = new BackgroundJobStore(sql, actor);
 
   const now = Date.now() - SPAWNED_A_MINUTE_EARLIER_MS;
   jobs.create({

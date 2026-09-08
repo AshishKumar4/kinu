@@ -461,7 +461,7 @@ export async function runSwarm(
    * recover.
    */
   const { reentry, runProfile } = resolveReentry({
-    sql, searchLedger, journal, redrive: deps.redrive,
+    sql, searchLedger, journal, actor: deps.rt.actor, redrive: deps.redrive,
     task: resolved.task, preset: resolved.preset,
     profile: deps.profile ?? null, log,
   });
