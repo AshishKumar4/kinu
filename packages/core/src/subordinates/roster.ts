@@ -15,6 +15,8 @@
 
 import * as v from 'valibot';
 import type { SqlExec } from '../types/primitives';
+import { seekPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
+import { boundedInt } from '../utils/bounds';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import type { SubordinateReportOrigin } from './support';
 import type { SubordinateRosterEntry, SubordinateStatus } from '../tools/agents-tool';
@@ -42,7 +44,7 @@ const ROSTER_PROJECTION =
 
 /** Lifecycle and task facts only — the title and role a subordinate presents
  *  live in ITS agent_config ({@link SubordinateDescriptorSource}), never here. */
-const RosterEntrySchema: v.GenericSchema<SubordinateRosterEntry> = v.object({
+export const SubordinateRosterEntrySchema: v.GenericSchema<SubordinateRosterEntry> = v.object({
   name: v.string(),
   createdBy: v.picklist(['orchestrator', 'user']),
   status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
@@ -54,7 +56,7 @@ const RosterEntrySchema: v.GenericSchema<SubordinateRosterEntry> = v.object({
 });
 
 function parseStoredRosterRow<T>(row: T): SubordinateRosterEntry {
-  const parsed = v.safeParse(RosterEntrySchema, row);
+  const parsed = v.safeParse(SubordinateRosterEntrySchema, row);
   if (!parsed.success) throw new Error('Stored subordinate roster row is malformed.');
   return parsed.output;
 }
@@ -149,6 +151,20 @@ export class SubordinateRosterStore {
     return this.sql.exec(
       `SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates ORDER BY created_at, name`,
     ).toArray().map(parseStoredRosterRow);
+  }
+
+  /** Owner history includes archived children without reopening them. */
+  listPage(request: PageRequest): Page<SubordinateRosterEntry> {
+    const limit = boundedInt(request.limit, 50, 1, 200);
+    const after = request.cursor?.after;
+    const anchor = after === undefined ? null : this.get(after);
+    if (after !== undefined && anchor === null) throw new StaleCursorError('subordinate roster', after);
+    const rows = anchor
+      ? this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates
+          WHERE created_at > ? OR (created_at = ? AND name > ?)
+          ORDER BY created_at, name LIMIT ?`, anchor.createdAt, anchor.createdAt, anchor.name, limit + 1)
+      : this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates ORDER BY created_at, name LIMIT ?`, limit + 1);
+    return seekPage(rows.toArray().map(parseStoredRosterRow), limit, (row) => row.name);
   }
 
   /** Open an assignment on this row. `eventId` is the EventLog id the eventual

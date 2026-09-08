@@ -36,7 +36,7 @@ import {
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import { normalizeModelMenu, type AgentModelMenu } from './model-catalog';
-import { pageSchema, type Page, type SeekCursor } from '@kinu.run/core';
+import { pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult, type Page, type SeekCursor } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   createUserUiMessage,
@@ -703,6 +703,10 @@ export class CloudAgentClient implements AgentClient {
       StagedSkillResultSchema,
       await this.callRpc('showRefinement', [requestId, routeIndex]),
     );
+  }
+  async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
+    const input = v.parse(SubordinateInspectionRequestSchema, request);
+    return this.callParentHttp('inspectSubordinate', SubordinateInspectionResultSchema, [decodeJsonValue({ value: input })]);
   }
 
   async latestTakes(): Promise<AlternateTakeSet | null> {
