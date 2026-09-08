@@ -1068,11 +1068,11 @@ function mocks(
  * that reads its own `config.json`, which was 59 findings and no truth.
  *
  * The destination is read from EVERY literal in the file rather than from the
- * `writeFileSync` argument, because the argument is usually a variable:
- * `scripts/prompt-golden.ts` builds its target with `join(here, '..',
- * 'packages', 'core', 'tests', 'fixtures', 'prompt-golden.json')` and passes the
- * binding, so an argument-only reader found nothing and reported zero goldens on
- * a tree that has one.
+ * `writeFileSync` argument, because the argument is usually a variable: a
+ * generator that builds its target with `join(here, '..', 'packages', '<pkg>',
+ * 'tests', 'fixtures', '<name>.json')` and passes the binding is invisible to an
+ * argument-only reader, which is how this reported zero goldens on a tree that
+ * had one.
  */
 export function fixtureGenerators(tracked: readonly string[]): Map<string, string> {
   const generators = new Map<string, string>();
