@@ -122,9 +122,7 @@ test('an MCP binding follows connection identity, binding scope and the owner al
       roles: { scribe: { description: 'Writes prose only.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
       tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
     });
-    await child.agent.setSubordinateIdentity({
-      name: 'issue-reader', displayName: 'Issue reader', nameOrigin: 'user', role: 'scribe', mission: 'Read issues', lifetime: 'durable',
-    });
+    child.agent.observeRuntime().actor.config.setRoleSelection('scribe');
     expect(await childCall('read_issue')).toMatchObject({ ok: false, reason: 'denied' });
   } finally {
     await user.joinFibers();
@@ -249,19 +247,16 @@ test('a binding held by a facet reaches the facet\'s own files and role, never t
     roles: { scribe: { description: 'Writes prose only.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
     tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
   } as const;
-  const reseed = (role: string) => child.agent.setSubordinateIdentity({
-    name: 'reader-1', displayName: 'Reader', nameOrigin: 'user', role,
-    mission: 'Read what you may', lifetime: 'durable',
-  });
+  const changeRole = async (role: string) => { child.agent.observeRuntime().actor.config.setRoleSelection(role); };
   child.agent.harnessInstallCatalog(scribe);
-  await reseed('scribe');
+  await changeRole('scribe');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
 
   // A COMPLETED turn leaves its resolved profile cached until the next one
   // opens. A role revoked in that window must not keep the old reach alive.
   // The turn is the real one: `beforeTurn` resolves and holds the profile,
   // `onChatResponse` settles it.
-  await reseed('general');
+  await changeRole('general');
   const openTurn = async (content: string) => {
     const message = { id: `u-${content}`, role: 'user' as const, parts: [{ type: 'text' as const, text: content }] };
     Object.defineProperty(child.agent, 'messages', { value: [message], configurable: true });
@@ -277,7 +272,7 @@ test('a binding held by a facet reaches the facet\'s own files and role, never t
   await openTurn('read the file');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root wrote' });
   await settleTurn('a-1');
-  await reseed('scribe');
+  await changeRole('scribe');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
   // While a turn IS live, its own resolved profile governs, as it does natively.
   await openTurn('read it again');

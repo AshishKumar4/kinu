@@ -16,7 +16,7 @@ import { initScaffoldTables } from '../../src/scaffold/schemas';
 import type { AgentRuntime } from '../../src/types/agent-runtime';
 import type { LLM } from '../../src/types/primitives';
 import {
-  makeSql, makeExecRaw, createMemoryVFS, createMemoryMemory,
+  makeSql, makeExecRaw, createTestActor, createMemoryVFS, createMemoryMemory,
   createMemoryCraftStore, createMockExecutor, createMemorySchedule,
 } from '../helpers';
 
@@ -27,6 +27,7 @@ function createScaffoldTestRuntime(llm: LLM) {
   const vfs = createMemoryVFS(db);
 
   const rt: AgentRuntime = {
+    actor: createTestActor(sql, execRaw, crypto.randomUUID(), 'scaffold-test'),
     storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory: createMemoryMemory(db, vfs),
     executor: createMockExecutor(),
@@ -42,9 +43,8 @@ function createScaffoldTestRuntime(llm: LLM) {
       },
     },
     craftStore: createMemoryCraftStore(db),
-    spawnBranch: async () => ({ explore: async () => ({ text: '' }), generateReflection: async () => ({ text: '' }) }),
+    spawnBranch: async () => ({ explore: async () => ({ text: '' }), generateReflection: async () => ({ text: '' }), release: async () => {} }),
     abortBranch: async () => {},
-    releaseBranch: async () => {},
   };
   return { rt };
 }

@@ -377,7 +377,7 @@ export interface AgentClient {
   /** Durably select one owner-configured role for the next turn. */
   setRole(roleId: string): Promise<{ role: string }>;
   getModelSpec(): Promise<string | null>;
-  /** Set the agent's model. Local: the session/agent_config spec; cloud: the
+  /** Set the agent's model. Local: the session/actor_config spec; cloud: the
    *  durable agent model (same semantics as the web UI). */
   setModel(spec: string): Promise<{ spec: string }>;
   getReasoningEffort(): Promise<ReasoningEffort | null>;

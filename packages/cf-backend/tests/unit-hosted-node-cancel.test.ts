@@ -34,7 +34,6 @@ const { nodeDeps, nodeInput } = await import('./helpers/three-kinds');
 class FakeExplorationFacet extends SubordinateAgent {}
 
 const NODE_ID = 'node-1';
-const FACET_KEY = `exp:${NODE_ID}`;
 
 const settledResult: NodeLoopResult = {
   report: {
@@ -46,7 +45,7 @@ const settledResult: NodeLoopResult = {
   granted: null,
   produced: [],
 };
-
+import { actorDirectoryFixture } from './helpers/actor-directory';
 /** A facet host at the SDK boundary: the stub `subAgent` hands back, and the
  *  `abortSubAgent` that rejects its in-flight RPC. Every verb is recorded in order,
  *  because the ORDER — abort before reclaim, reclaim before release — is the claim.
@@ -75,8 +74,15 @@ function facetTransport(options: { holdBoot?: boolean } = {}) {
       return inFlight.promise;
     },
   };
+  let storageKey = '';
+  const directory = actorDirectoryFixture(async (entry) => {
+    await host.deleteSubAgent(host.facetClass(), entry.storageKey);
+    calls.push(`releaseFacetHome node:${entry.creationId}`);
+  });
   const host: NodeFacetHost = {
+    actorDirectory: (operation) => directory.apply(operation),
     subAgent: async (_cls, name) => {
+      storageKey = name;
       calls.push(`subAgent ${name}`);
       return stub;
     },
@@ -90,7 +96,6 @@ function facetTransport(options: { holdBoot?: boolean } = {}) {
     facetClass: () => FakeExplorationFacet,
     facetHomes: () => ({
       provision: async () => { throw new Error('a node home is provisioned by the search, never by its transport'); },
-      release: async (kind, id) => { calls.push(`releaseFacetHome ${kind}:${id}`); },
     }),
   };
   const loop = hostNodeLoop(host, {
@@ -98,7 +103,7 @@ function facetTransport(options: { holdBoot?: boolean } = {}) {
     registerArbiter: () => () => { calls.push('withdrawArbiter'); },
   });
   return {
-    calls,
+    calls, key: () => storageKey,
     loop,
     /** The facet is inside its bootstrap — `initNode` was sent and has not answered. */
     booting: booting.promise,
@@ -132,7 +137,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
     // The SDK's abort verb is synchronous, so the eviction is observable the moment
     // the signal fires — or it never is, which is the defect this pins.
     controller.abort(new Error('cancelled by operator'));
-    expect(transport.calls).toContain(`abortSubAgent ${FACET_KEY}`);
+    expect(transport.calls).toContain(`abortSubAgent ${transport.key()}`);
 
     const run = await running;
     expect(run.report.status).toBe('aborted');
@@ -140,8 +145,8 @@ describe('cancelling a search reaches its hosted nodes', () => {
     expect(journal.readHeadView(NODE_ID)).toMatchObject({ status: 'aborted' });
     expect(transport.calls.slice(transport.calls.indexOf('runAsNode'))).toEqual([
       'runAsNode',
-      `abortSubAgent ${FACET_KEY}`,
-      `deleteSubAgent ${FACET_KEY}`,
+      `abortSubAgent ${transport.key()}`,
+      `deleteSubAgent ${transport.key()}`,
       `releaseFacetHome node:${NODE_ID}`,
     ]);
   });
@@ -185,7 +190,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
     expect(transport.calls).not.toContain('runAsNode');
     expect(transport.calls.slice(transport.calls.indexOf('initNode'))).toEqual([
       'initNode',
-      `deleteSubAgent ${FACET_KEY}`,
+      `deleteSubAgent ${transport.key()}`,
       `releaseFacetHome node:${NODE_ID}`,
     ]);
   });

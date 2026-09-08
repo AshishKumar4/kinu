@@ -905,7 +905,7 @@ describe('routing — every typed edit lands in the store that already owns it',
 
     expect(added).toEqual(['refinement_requests']);
     // The names that would betray a second authority for an artifact.
-    for (const forbidden of ['skill', 'prompt_section', 'fact', 'subordinate', 'agent_config']) {
+    for (const forbidden of ['skill', 'prompt_section', 'fact', 'subordinate', 'actor_config']) {
       expect(added.some((name) => name.includes(forbidden))).toBe(false);
     }
     // The whole row, pinned. `claim` is part of the shipped CREATE rather than

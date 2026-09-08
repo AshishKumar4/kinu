@@ -110,7 +110,7 @@ const GeneralizedToolSchema = v.object({
 });
 import { runMCTS } from '../mcts/engine';
 import { createDurableMctsSession } from '../orchestrator/mcts-session';
-import { createAgentConfigStore, initAgentConfigTable, type AgentConfigStore } from '../config/store';
+import type { AgentConfigStore } from '../config/store';
 import { diagnostics, toKinuError } from '../obs/index';
 
 /** The archive context handed to the proposal prompt: which version the
@@ -274,7 +274,7 @@ export class EvolutionEngine {
   private rt: AgentRuntime;
   private config: EvolutionConfig;
   private listeners: EvolutionListener[] = [];
-  /** Operator-tuned agent_config (MCTS overrides for lifetime evolution) —
+  /** Operator-tuned actor_config (MCTS overrides for lifetime evolution) —
    *  also the home of the durable closed-window count the lifetime timescale
    *  paces itself by. */
   private agentConfig: AgentConfigStore;
@@ -296,13 +296,11 @@ export class EvolutionEngine {
     this.craftLedger = createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql });
 
     // The engine owns the outcome + lessons + replay + completed-turn +
-    // refinement ledgers, and the config table it paces the lifetime timescale
-    // in — created here so both backends (and tests) get them without
-    // per-backend schema wiring.
+    // refinement ledgers — created here so both backends (and tests) get them
+    // without per-backend schema wiring.
     initTurnOutcomeTables(rt.storage.execRaw);
     initReplayTables(rt.storage.execRaw);
-    initAgentConfigTable(rt.storage.execRaw);
-    this.agentConfig = createAgentConfigStore(rt.storage.sql);
+    this.agentConfig = rt.actor.config;
     initCompletedTurnTable(rt.storage.execRaw);
     this.sessionWindow = createCompletedTurnStore(rt.storage.sql);
     initRefinementTables(rt.storage.execRaw);

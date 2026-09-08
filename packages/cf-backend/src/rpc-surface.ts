@@ -449,7 +449,8 @@ const ORCHESTRATOR_METHODS = [
   // answer carries the credential the session runs the facet's commands as,
   // and the registry it is provisioned in exists only on this object.
   'provisionFacetHome',
-  'releaseFacetHome',
+  'applyActorDirectory',
+  'resolveSubordinateClientKey',
   // Introduced bindings and facet actors return through the stub transport,
   // each stamping the actor it acts as. A browser cannot mint a caller.
   'slateAs',

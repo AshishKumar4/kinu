@@ -4,10 +4,9 @@
 import { describe, test, expect } from 'bun:test';
 import { SUBORDINATE_REPORT_STATUSES } from '../src/events/hub/types';
 import { TASK_STATUSES, TaskListStore } from '../src/tasks/store';
-import { createAgentConfigStore } from '../src/config/store';
 import { createReportCodemodeProvider } from '../src/tools/report-codemode';
 import { createTasksCodemodeProvider } from '../src/tools/tasks-codemode';
-import { createTestWorkspace } from './helpers';
+import { createTestWorkspace, createTestActor } from './helpers';
 
 const unionOf = (statuses: readonly string[]): string =>
   statuses.map((s) => `"${s}"`).join(' | ');
@@ -25,7 +24,7 @@ describe('codemode declared status unions come from the shared constants', () =>
     const ws = createTestWorkspace();
     const provider = createTasksCodemodeProvider(
       new TaskListStore(ws.sql, write => ws.db.transaction(write)()),
-      createAgentConfigStore(ws.sql),
+      createTestActor(ws.sql, ws.execRaw, crypto.randomUUID(), 'status-test').config,
     );
     const types = provider.types ?? '';
     expect(types).toContain(`update(id: string, status: ${unionOf(TASK_STATUSES)})`);

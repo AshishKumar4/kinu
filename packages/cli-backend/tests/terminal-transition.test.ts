@@ -413,10 +413,10 @@ describe('a recovery reads the record, not the session that finds it', () => {
   const NOTE = 'the staging cluster was never named';
 
   /** The advisor switched on the way an owner switches it on — the durable
-   *  `agent_config` row — with a reviewer whose prompts this array collects. */
-  function withAdvisor(rt: CLIRuntime, db: Database): string[] {
+   *  `actor_config` row — with a reviewer whose prompts this array collects. */
+  function withAdvisor(rt: CLIRuntime): string[] {
     const asked: string[] = [];
-    db.query(`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('advisor_enabled', 'true')`).run();
+    rt.actor.config.setAdvisorEnabled(true);
     rt.advisorLlm = {
       stream: async function* () { yield ''; },
       complete: async (prompt: string) => {
@@ -453,7 +453,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
   test('an orphaned advisor review waits for the process that holds the driver lease', async () => {
     const { db, rt } = workspace();
-    const asked = withAdvisor(rt, db);
+    const asked = withAdvisor(rt);
     stashAdvisorLane(db, { turnId: 'turn-orphan', gateOpen: true });
     const { model } = scriptedModel('unused');
     const events: SessionEvent[] = [];
@@ -487,7 +487,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
   test('a checkpointed review keeps the completion-gate verdict it was judged under', async () => {
     for (const gateOpen of [true, false]) {
       const { db, rt } = workspace();
-      const asked = withAdvisor(rt, db);
+      const asked = withAdvisor(rt);
       stashAdvisorLane(db, { turnId: `turn-gate-${String(gateOpen)}`, gateOpen });
       const { model } = scriptedModel('acknowledged');
       const events: SessionEvent[] = [];
@@ -644,7 +644,7 @@ const assistantRows = (rt: CLIRuntime) =>
 const recordedIntents = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM terminal_intents`[0]?.n ?? 0;
 const displayName = (rt: CLIRuntime) =>
-  rt.storage.sql<{ value: string }>`SELECT value FROM agent_config WHERE key = 'display_name'`[0]?.value ?? null;
+  rt.storage.sql<{ value: string }>`SELECT value FROM actor_config WHERE key = 'display_name'`[0]?.value ?? null;
 /** The transition's own effect claims — the outer ones, keyed apart from any
  *  tool claim the turn itself made. `open` counts the ones with no disposition:
  *  a sequence that has not been closed. */

@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import {
   BackgroundJobStore,
   backgroundJobWakeTrigger,
-  createAgentConfigStore,
+  openWorkspaceMainActor, SubordinateRosterStore,
   createTimerTrigger,
   initWorkspaceSchema,
   DELEGATION_MAX_DEPTH,
@@ -489,7 +489,7 @@ describe('LocalAgentHost', () => {
     const rows = db.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM messages WHERE role IN ('user','assistant')",
     ).get();
-    const config = createAgentConfigStore(makeSql(db));
+    const config = openWorkspaceMainActor(makeSql(db)).config;
     expect(sessions).toEqual([{ session_id: 'default' }]);
     expect(rows?.n).toBe(4);
     expect(config.get('conversation.id')).toBe('default');
@@ -574,7 +574,9 @@ describe('LocalAgentHost', () => {
     });
     const childTeam = await host.team('root/researcher');
     expect(childTeam.delegation.depth).toBe(1);
-    const childPath = join(dirname(dbPath), 'subordinates', 'researcher', 'agent.db');
+    const reference = created.subordinate.actorReference;
+    if (!reference) throw new Error('The created subordinate has no actor reference.');
+    const childPath = join(dirname(dbPath), 'subordinates', reference.actorId, 'agent.db');
     expect(created.subordinate.status).toBe('idle');
     expect(existsSync(childPath)).toBe(true);
 
@@ -609,12 +611,14 @@ describe('LocalAgentHost', () => {
     await expect(team.assign({ name: 'researcher', task: 'again', mode: 'build' }))
       .rejects.toThrow('subordinate "researcher" is dismissed');
 
-    await team.create({
+    const temporary = await team.create({
       name: 'temporary',
       role: 'auditor',
       mission: 'Inspect one isolated case.',
     });
-    const temporaryPath = join(dirname(dbPath), 'subordinates', 'temporary', 'agent.db');
+    const temporaryReference = temporary.subordinate.actorReference;
+    if (!temporaryReference) throw new Error('The created temporary-named subordinate has no actor reference.');
+    const temporaryPath = join(dirname(dbPath), 'subordinates', temporaryReference.actorId, 'agent.db');
     expect(existsSync(temporaryPath)).toBe(true);
     await team.dismiss({ name: 'temporary', requestedBy: 'user', keepHistory: false });
     expect(existsSync(dirname(temporaryPath))).toBe(false);
@@ -667,7 +671,7 @@ describe('LocalAgentHost', () => {
 
     // It was a REAL actor: its own database exists under this root's children,
     // and a release keeps it — that file IS the transcript the outcome claims.
-    const childDb = join(dirname(dbPath), 'subordinates', agent, 'agent.db');
+    const childDb = childDatabase(dbPath, agent);
     expect(existsSync(childDb)).toBe(true);
 
     // ONE roster. Released from the working set...
@@ -677,7 +681,7 @@ describe('LocalAgentHost', () => {
     const archived = new Database(dbPath, { readonly: true });
     const rows = archived.query<{
       name: string; status: string; lifetime: string; task_event_id: string | null;
-    }, []>('SELECT name, status, lifetime, task_event_id FROM workspace_subordinates').all();
+    }, []>('SELECT name, status, lifetime, task_event_id FROM actor_subordinates').all();
     archived.close();
     expect(rows).toEqual([
       { name: agent, status: 'dismissed', lifetime: 'task', task_event_id: null },
@@ -775,7 +779,7 @@ describe('LocalAgentHost', () => {
       await host.close();
       const view = new Database(dbPath, { readonly: true });
       const rows = view.query<{ name: string; status: string; lifetime: string }, []>(
-        'SELECT name, status, lifetime FROM workspace_subordinates',
+        'SELECT name, status, lifetime FROM actor_subordinates',
       ).all();
       // EXACTLY ONE result: the waiting call consumed the report, so it never
       // also became an event that would wake the parent for a second reading.
@@ -823,7 +827,7 @@ describe('LocalAgentHost', () => {
       await host.close();
       const view = new Database(dbPath, { readonly: true });
       const rows = view.query<{ status: string; lifetime: string }, []>(
-        'SELECT status, lifetime FROM workspace_subordinates',
+        'SELECT status, lifetime FROM actor_subordinates',
       ).all();
       // The PROGRESS note is the one thing that legitimately reaches the rail:
       // it is not the answer, so it wakes the parent like any mid-work note.
@@ -862,13 +866,9 @@ describe('LocalAgentHost', () => {
       mission: 'Work at the cap.',
     });
     // Put the child AT the cap, the way its parent's seed would at depth 4.
-    const childPath = join(dirname(dbPath), 'subordinates', 'deep', 'agent.db');
+    const childPath = childDatabase(dbPath, 'deep');
     const childDb = new Database(childPath);
-    childDb.run(
-      "INSERT INTO agent_config (key, value) VALUES ('subordinate.depth', ?)"
-      + ' ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-      [String(DELEGATION_MAX_DEPTH)],
-    );
+    childDb.query(`UPDATE actor_config SET value = ? WHERE key = 'subordinate.depth'`).run(String(DELEGATION_MAX_DEPTH));
     childDb.close();
     await host.close();
 
@@ -957,7 +957,7 @@ describe('LocalAgentHost', () => {
     });
     await team.assign({ name: 'ask-researcher-late', task: 'Report it.', mode: 'build' });
     const roster = new Database(dbPath);
-    roster.run("UPDATE workspace_subordinates SET lifetime='task' WHERE name='ask-researcher-late'");
+    roster.run("UPDATE actor_subordinates SET lifetime='task' WHERE name='ask-researcher-late'");
     roster.close();
     await reported.promise;
     await host.close();
@@ -967,7 +967,7 @@ describe('LocalAgentHost', () => {
       "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
     ).get()?.n ?? 0;
     const rows = view.query<{ status: string; lifetime: string }, []>(
-      "SELECT status, lifetime FROM workspace_subordinates WHERE name='ask-researcher-late'",
+      "SELECT status, lifetime FROM actor_subordinates WHERE name='ask-researcher-late'",
     ).all();
     view.close();
     // ONE event — not zero (it would be lost) and not two (a duplicate report).
@@ -1146,8 +1146,8 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       await (await host.team('beta')).create({
         name: 'auditor', role: 'auditor', mission: 'Check the parser.',
       });
-      expect(existsSync(join(dirname(alphaDb), 'subordinates', 'scout', 'agent.db'))).toBe(true);
-      expect(existsSync(join(dirname(betaDb), 'subordinates', 'auditor', 'agent.db'))).toBe(true);
+      expect(existsSync(childDatabase(alphaDb, 'scout'))).toBe(true);
+      expect(existsSync(childDatabase(betaDb, 'auditor'))).toBe(true);
       expect((await host.team('alpha/scout')).delegation.depth).toBe(1);
 
       // A subordinate holds no peer transport at all, so there is no action for
@@ -1277,7 +1277,7 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       await (await host.acquire('alpha')).send('only alpha said this');
       expect(userMessages(join(state, 'alpha', 'agent.db'))).toContain('only alpha said this');
       expect(userMessages(join(state, 'beta', 'agent.db'))).not.toContain('only alpha said this');
-      expect(userMessages(join(state, 'alpha', 'subordinates', 'scout', 'agent.db')))
+      expect(userMessages(childDatabase(join(state, 'alpha', 'agent.db'), 'scout')))
         .not.toContain('only alpha said this');
     } finally {
       await host.close();
@@ -1290,6 +1290,15 @@ function renderPromptText(prompt: LanguageModelV2CallOptions['prompt']): string 
     ? [message.content]
     : message.content.flatMap((part) => (part.type === 'text' ? [part.text] : []))
   )).join('\n');
+}
+
+function childDatabase(parent: string, name: string): string {
+  const db = new Database(parent, { readonly: true });
+  try {
+    const reference = new SubordinateRosterStore(makeSqlExec(db)).get(name)?.actorReference;
+    if (!reference) throw new Error('The child has no recorded actor identity.');
+    return join(dirname(parent), 'subordinates', reference.actorId, 'agent.db');
+  } finally { db.close(); }
 }
 
 function userMessages(dbPath: string): string[] {

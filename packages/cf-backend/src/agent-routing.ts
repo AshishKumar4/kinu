@@ -74,3 +74,13 @@ export function extractTicketOrchestratorAgentName(pathname: string): string | n
 export function isForeignAgentNamespacePath(pathname: string): boolean {
   return pathname.startsWith('/agents/') && !ORCHESTRATOR_AGENT_PATH_RE.test(pathname);
 }
+
+const DIRECT_SUBORDINATE_PATH = new RegExp(`^(${ROOT_AGENT_PATH}/[^/]+/sub/${SUBORDINATE_AGENT_SLUG}/)([^/]+)(.*)$`);
+
+/** The public address stays logical. Only the worker rewrites its SDK hop. */
+export function directSubordinateRoute(pathname: string): { name: string; prefix: string; suffix: string } | null {
+  if (isForeignAgentNamespacePath(pathname)) return null;
+  const match = pathname.match(DIRECT_SUBORDINATE_PATH);
+  if (!match || match[1] === undefined || match[2] === undefined || match[3] === undefined) return null;
+  return { name: decodeURIComponent(match[2]), prefix: match[1], suffix: match[3] };
+}

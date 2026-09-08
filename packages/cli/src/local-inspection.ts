@@ -11,7 +11,7 @@ import {
   RunEventRecorder,
   TriggerRegistry,
   type AlarmScheduler,
-  createAgentConfigStore,
+  openWorkspaceMainActor,
   createFactsStore,
   initEventsHubTables,
   initAgentConfigTable,
@@ -231,10 +231,10 @@ export interface LocalProfileCoordinates {
 
 export function getLocalProfileCoordinates(name: string): LocalProfileCoordinates {
   return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'agent_config')) {
+    if (!tableExists(db, 'actor_config')) {
       return { roleId: 'general', assignedTier: null };
     }
-    const config = createAgentConfigStore(makeSql(db));
+    const config = openWorkspaceMainActor(makeSql(db)).config;
     return {
       roleId: config.getRoleSelection(),
       assignedTier: config.getAssignedTier(),
@@ -510,8 +510,8 @@ export async function getLocalChatHistory(name: string, limit = 100): Promise<Ch
 /** Local peer of the cloud `getEvolutionChangelog` RPC. */
 export function getLocalChangelog(name: string, limit = 50): EvolutionChangelogView {
   return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'agent_config')) initAgentConfigTable((ddl) => { db.exec(ddl); });
-    return getEvolutionChangelog(createAgentConfigStore(makeSql(db)), makeSql(db), limit);
+    if (!tableExists(db, 'actor_config')) initAgentConfigTable((ddl) => { db.exec(ddl); });
+    return getEvolutionChangelog(openWorkspaceMainActor(makeSql(db)).config, makeSql(db), limit);
   });
 }
 
@@ -608,7 +608,7 @@ export async function runLocalOutcomeEnsemble(
     return await runEnsemble(sql, {
       specs: async () => (await selectEnsembleJudges({
         specs,
-        chatSpec: () => resolver.normalizeSpecSync(createAgentConfigStore(sql).getModel()),
+        chatSpec: () => resolver.normalizeSpecSync(openWorkspaceMainActor(sql).config.getModel()),
         candidates: () => resolver.judgeCandidates(),
       })).specs,
       judge: (named) => localJudge(resolver, named),
@@ -635,7 +635,7 @@ export async function runLocalCorpusEval(name: string, input: {
   ensureLocalAgent(name);
   const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
   const chatSpec = resolver.normalizeSpecSync(
-    withLocalDb(name, (db) => createAgentConfigStore(makeSql(db)).getModel()),
+    withLocalDb(name, (db) => openWorkspaceMainActor(makeSql(db)).config.getModel()),
   );
   const selection = await selectEnsembleJudges({
     specs: input.specs,
@@ -874,11 +874,11 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
     messageCount: tableExists(db, 'messages')
       ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM messages`)?.c ?? 0
       : 0,
-    model: tableExists(db, 'agent_config')
-      ? get<{ value: string | null }>(db, `SELECT value FROM agent_config WHERE key = 'model' LIMIT 1`)?.value ?? null
+    model: tableExists(db, 'actor_config')
+      ? openWorkspaceMainActor(makeSql(db)).config.getModel()
       : null,
-    reasoningEffort: tableExists(db, 'agent_config')
-      ? createAgentConfigStore(makeSql(db)).getReasoningEffort()
+    reasoningEffort: tableExists(db, 'actor_config')
+      ? openWorkspaceMainActor(makeSql(db)).config.getReasoningEffort()
       : null,
   };
 }

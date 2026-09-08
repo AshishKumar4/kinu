@@ -6,6 +6,7 @@ import { Database } from 'bun:sqlite';
 import { agentWorkspaceKey, groupAgentWorkspaces, reconcileAgentRefs, type ListedAgent } from '../src/agent-list';
 import * as v from 'valibot';
 
+import { createCLIRuntime } from '@kinu.run/cli-backend';
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -294,8 +295,7 @@ describe('the sidebar roster for one directory', () => {
     // source for a local agent. The other fixtures carry no title row, so
     // they list under their directory names.
     const oldbotDb = new Database(join(home, 'oldbot', 'agent.db'));
-    oldbotDb.exec('CREATE TABLE agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-    oldbotDb.exec(`INSERT INTO agent_config VALUES ('display_name', 'Old Bot')`);
+    createCLIRuntime(oldbotDb, { dbPath: oldbotDb.filename, llm: null, hostRoot: null, agentName: 'oldbot' }).actor.config.setDisplayName('Old Bot');
     oldbotDb.close();
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       agents: {

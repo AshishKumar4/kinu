@@ -13,7 +13,7 @@
  */
 
 import type {
-  AgentRuntime, CraftStore as CoreCraftStore, LLM, ModelRouteResolution,
+  AgentRuntime, ActorHandle, CraftStore as CoreCraftStore, LLM, ModelRouteResolution,
   ResolvedTurnProfile, Shell,
 } from '@kinu.run/core';
 import type {
@@ -25,7 +25,7 @@ import { spawn } from 'node:child_process';
 import { promises as fs, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve as resolvePath } from 'node:path';
 import {
-  type LLMProviderConfig, buildRuntime, agentHome, facetHomeProvisioner,
+  type LLMProviderConfig, buildRuntime, agentHome, headAgentName, facetHomeProvisioner,
   observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL,
   createParentExecutor, createParentWorkspaceVfs,
@@ -33,7 +33,7 @@ import {
   DefaultExecutionRouter, createInlineExecutor, commandResult, COMMAND_RESULT_TYPE,
   withMountTable, standardMounts,
   withApprovalGatedShell,
-  createAgentConfigStore, initActorTables, initAgentConfigTable, initScaffoldTables,
+  initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   resolveModelRoute,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
 } from '@kinu.run/core';
@@ -71,8 +71,9 @@ import type { FileCheckpoints } from '@kinu.run/core';
 import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
+import { bindLocalActor, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
 
-export interface CLIRuntimeConfig {
+interface CLIRuntimeOptions {
   dbPath: string;
   /**
    * The physical directory this workspace's file and shell plane binds to —
@@ -88,7 +89,7 @@ export interface CLIRuntimeConfig {
   cwd?: string | null;
   /** The workspace's default endpoint for bare ids — null when nothing
    *  derives one. Explicit specs resolve through the registry regardless;
-   *  the stored chat model (agent_config) drives the seams instead. */
+   *  the stored chat model (actor_config) drives the seams instead. */
   llm: LLMProviderConfig | null;
   agentName?: string;
   providerCredentials?: LocalProviderCredentials;
@@ -110,14 +111,8 @@ export interface CLIRuntimeConfig {
   hostRoot?: string | null;
   /** Shadow-git checkpoints kept per working directory (the one retention knob). */
   checkpointKeep?: number;
-  /**
-   * The facet this runtime is, as an agent name (`sub-<slug>`, `head-<id>`), for
-   * a workspace bound to a directory: its commands run with `HOME` and `TMPDIR`
-   * in that facet's own scratch ({@link facetCwdScratch}). Absent is the
-   * workspace's own agent.
-   */
-  facet?: string;
 }
+export type CLIRuntimeConfig = CLIRuntimeOptions & LocalActorConfig;
 
 /**
  * The local runtime plus the one channel a session installs after the fact.
@@ -198,7 +193,7 @@ export interface CLIRuntime extends AgentRuntime {
    * — `node-runtime.ts`. Present exactly where {@link nodeHome} is, because a
    * home owned by the node is a home the ORIGIN's plane cannot write.
    */
-  nodeRuntime?: (node: NodeWorkspace) => Promise<AgentRuntime>;
+  nodeRuntime?: (node: NodeWorkspace, actor: ActorHandle, source: AgentRuntime, observer?: WriteObserver) => Promise<AgentRuntime>;
   /**
    * A directory-bound workspace's shell for one facet: the same gated,
    * checkpointed host shell, with that facet's own `HOME` and `TMPDIR`. Present
@@ -378,6 +373,7 @@ export function createCLIRuntime(
 ): CLIRuntime {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
+  requireLocalDatabasePath(db, config.dbPath);
 
   initFiberTable(execRaw);
   const orphans = detectOrphanedFibers(sql);
@@ -389,19 +385,29 @@ export function createCLIRuntime(
     );
   }
 
-  // Stable identity — core's DDL, not a second spelling of it. The hand-rolled
-  // copy that used to be here silently lacked columns core had added.
-  execRaw(WORKSPACE_IDENTITY_DDL);
-  const existing = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`;
+  let actor: ActorHandle;
   let agentId: string;
   let agentName: string;
-  if (existing.length > 0 && existing[0]) {
-    agentId = existing[0].id;
-    agentName = existing[0].name;
+  if (config.facet !== undefined) {
+    if (!config.actorBinding) throw new KinuError('missing', 'A local facet requires its root-issued actor binding.');
+    initActorStateSchema(makeWorkspaceSchemaSql(db));
+    actor = bindLocalActor(db, sql, makeSqlExec(db), config.actorBinding);
+    agentId = actor.actorId;
+    agentName = config.actorBinding.name;
   } else {
-    agentId = crypto.randomUUID();
-    agentName = config.agentName ?? 'agent';
-    void sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
+    execRaw(WORKSPACE_IDENTITY_DDL);
+    const existing = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`[0];
+    if (existing) {
+      agentId = existing.id;
+      agentName = existing.name;
+    } else {
+      agentId = crypto.randomUUID();
+      agentName = config.agentName ?? 'agent';
+      void sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
+      initWorkspaceActorTable(execRaw);
+      new WorkspaceActorDirectory(sql, { workspaceId: agentId, ownerUserId: '' }).createMain({ name: agentName });
+    }
+    actor = openLocalRootActor(db, sql);
   }
 
   // The three model seams below are built here, before a session exists, so each
@@ -419,17 +425,18 @@ export function createCLIRuntime(
   // in-flight work, never work that never started.
   let modelOperations: ModelOperationSink | null = null;
   const operations: ModelOperationSink = (event) => modelOperations?.(event);
-  // Shared by every typed agent_config read this runtime does — at
+  // Shared by every typed actor_config read this runtime does — at
   // construction, and at exec time for the live shell-approval mode the gate
   // consults on every command. Its DDL runs here because a runtime built
   // WITHOUT `initWorkspaceSchema` (a branch worker, `kinu evolve`, a fixture)
   // still reads the table on its first gated command.
   initAgentConfigTable(execRaw);
+  initCodemodeStateTable(execRaw);
   // Same reason the agent-config DDL runs here: a runtime built without
   // `initWorkspaceSchema` (a branch worker, `kinu evolve`, a fixture) still
   // reads and writes scaffold tables on its first identity.scaffold touch.
   initScaffoldTables(execRaw);
-  const agentConfig = createAgentConfigStore(sql);
+  const agentConfig = actor.config;
   let turnProfile: ResolvedTurnProfile | null = null;
   // The model plane a PROFILE resolves against: how a stored spec is spelled in
   // full, and what the account can reach. Built from the same endpoint and
@@ -508,7 +515,7 @@ export function createCLIRuntime(
   // compute one from a value that is not a filename.
   const basePath = config.dbPath === ':memory:' ? null : config.dbPath.replace(/\.db$/, '');
   const { spawn: spawnBranch, abort: abortBranch } = createBranchSpawner(basePath, {
-    llm: config.llm,
+    parent: actor, llm: config.llm,
     providerCredentials: config.providerCredentials,
     codexConfigPath: config.codexConfigPath,
   });
@@ -593,28 +600,18 @@ export function createCLIRuntime(
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
     transactionSync: write => db.transaction(write)(),
-    sql,
+    actor, sql,
     execRaw,
     vfs: agentVfs,
     agentStateVfs,
     llm,
     executor: createSandboxedExecutor(),
     schedule,
-    agentId,
-    agentName,
     memory,
     craftStore,
     modelLanes,
     spawnBranch,
     abortBranch,
-    // A CLI branch is a forked child process with its own SQLite FILE, not a
-    // facet inside a shared durable object. `abort` already does the whole
-    // reap — SIGTERM the child and drop it from `activeBranches` — so there is
-    // no further resource for a terminal release to hand back and the two
-    // verbs are genuinely the same operation here. The distinction is real on
-    // CF, where release additionally WIPES the facet's SQLite out of the root
-    // DO's shared quota; it is degenerate on this backend, not overlooked.
-    releaseBranch: abortBranch,
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
@@ -645,12 +642,10 @@ export function createCLIRuntime(
     runtime.facetShell = facetShell;
   } else {
     runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: workspaceSql });
-    // And the runtime that home is only real through — see `node-runtime.ts`,
-    // which owns the whole of what a second runtime over one workspace means.
-    runtime.nodeRuntime = localNodeRuntime({
-      workspace, origin: runtime, approvalPolicy, inline: inlineOptions, laptop,
-    });
   }
+  runtime.nodeRuntime = localNodeRuntime({
+    workspace, origin: runtime, approvalPolicy, inline: inlineOptions, laptop,
+  });
   return runtime;
 }
 
@@ -670,26 +665,18 @@ export function createCLIRuntime(
  * as itself: a home of its own in the one tree, a private `/tmp`, and both
  * planes credentialed as its uid, the way a swarm node is.
  */
-export async function shareLocalWorkspacePlane(
-  actor: CLIRuntime,
-  workspace: CLIRuntime,
-  facet: string,
-): Promise<CLIRuntime> {
+export async function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLIRuntime, facet: string): Promise<CLIRuntime> {
+  requireLocalActorWorkspace(workspace.actor, actor.actor);
   if (workspace.cwd && actor.cwd === workspace.cwd) {
-    return Object.assign(actor, { checkpoints: workspace.checkpoints });
+    return Object.assign(actor, { checkpoints: workspace.checkpoints, nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell });
   }
-  if (!workspace.nodeHome || !workspace.nodeRuntime) {
-    throw new Error(`workspace runtime for ${facet} has no principal registry, so it cannot host a facet`);
-  }
-  const plane = await workspace.nodeRuntime(await facetHomeProvisioner(workspace.nodeHome())(facet));
+  if (!workspace.nodeHome || !workspace.nodeRuntime) throw new KinuError('missing', 'The workspace has no actor file-plane owner.');
+  const home = await facetHomeProvisioner(workspace.nodeHome(), () => requireLocalActorWorkspace(workspace.actor, actor.actor))(facet);
+  const plane = await workspace.nodeRuntime(home, actor.actor, actor);
   return Object.assign(actor, {
-    storage: { ...actor.storage, vfs: plane.storage.vfs },
-    memory: workspace.memory,
-    craftStore: workspace.craftStore,
-    executionRouter: plane.executionRouter,
-    shell: plane.shell,
-    checkpoints: workspace.checkpoints,
-    cwd: workspace.cwd ?? null,
+    storage: { ...actor.storage, vfs: plane.storage.vfs }, memory: workspace.memory, craftStore: workspace.craftStore,
+    executionRouter: plane.executionRouter, shell: plane.shell, checkpoints: workspace.checkpoints, cwd: workspace.cwd ?? null,
+    nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell,
   });
 }
 
@@ -748,20 +735,22 @@ export function cleanupFacetCwdScratch(cwd: string, facet: string): void {
  * laptop` and `laptop.*` reach the real machine at the parent's cwd — the fork's
  * real execution, and what the doctrine promises a fork.
  */
-export function buildCLIHeadRuntime(
+export async function buildCLIHeadRuntime(
   db: Database,
   opts: {
-    parentRuntime: CLIRuntime; agentId: string; agentName: string;
+    parentRuntime: CLIRuntime; actorBinding: LocalActorBinding;
     /** Watches every write this head makes to the PARENT workspace, so the
      *  split can report which files this head changed. Its own view is what
      *  makes the answer exact under concurrency. */
     writeObserver?: WriteObserver;
   },
-): AgentRuntime {
+): Promise<AgentRuntime> {
   const { parentRuntime: parent } = opts;
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-
+  if (opts.actorBinding.kind !== 'head') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
+  const actor = bindLocalActor(db, sql, makeSqlExec(db), opts.actorBinding);
+  const physicalName = headAgentName(actor.storageKey);
   // The scratch is a full-loop actor's storage, and this function is the only
   // thing that provisions it: no `initWorkspaceSchema` runs over a head's
   // database, and none should — a head has no workspace identity and no fork
@@ -773,7 +762,7 @@ export function buildCLIHeadRuntime(
   // with only the VFS, memory and craft schemas below, a head raised
   // `no such table: crafted_tools` on its first `workspace.listTools()` and a
   // tool it crafted was written and then reported as a failure.
-  initActorTables(execRaw, sql);
+  initActorStateSchema(makeWorkspaceSchemaSql(db));
   // A head's scaffold is private to it ("its own scaffold" below), so its
   // tables live in the same scratch database — without them, the first
   // `identity.scaffold` touch on a fresh head raised `no such table:
@@ -812,7 +801,7 @@ export function buildCLIHeadRuntime(
   // scratch as HOME and TMPDIR, rather than an in-SQLite shell that cannot see
   // the files it is reading.
   const shell = parent.cwd && parent.facetShell
-    ? parent.facetShell(opts.agentName)
+    ? parent.facetShell(physicalName)
     : withApprovalGatedShell(workspace.shell);
   const executionRouter = new DefaultExecutionRouter();
   executionRouter.register(createInlineExecutor({
@@ -860,7 +849,7 @@ export function buildCLIHeadRuntime(
   executionRouter.register(createParentExecutor({
     handle: parentHandle,
     vfs: opts.writeObserver ? observeWrites(parentFiles, opts.writeObserver) : parentFiles,
-    workspaceName: opts.agentName,
+    workspaceName: actor.name,
   }));
 
   // The parent's REAL host executor, shared unchanged: `run laptop` / `laptop.*`
@@ -874,11 +863,10 @@ export function buildCLIHeadRuntime(
 
   const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
     transactionSync: write => db.transaction(write)(),
-    sql, execRaw, vfs: agentVfs, agentStateVfs,
+    actor, sql, execRaw, vfs: agentVfs, agentStateVfs,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
-    agentId: opts.agentId, agentName: opts.agentName, memory, craftStore,
+    memory, craftStore,
     spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
-    releaseBranch: parent.releaseBranch,
     executionRouter, shell,
   };
   if (checkpoints) runtimeOptions.checkpoints = checkpoints;
@@ -890,7 +878,11 @@ export function buildCLIHeadRuntime(
       llm: parentModelForRoute,
     };
   }
-  return buildRuntime(runtimeOptions);
+  const runtime = buildRuntime(runtimeOptions);
+  if (parent.cwd) return runtime;
+  if (!parent.nodeHome || !parent.nodeRuntime) throw new KinuError('missing', 'The head has no canonical workspace file-plane owner.');
+  const home = await facetHomeProvisioner(parent.nodeHome(), () => requireLocalActorWorkspace(parent.actor, actor))(physicalName);
+  return parent.nodeRuntime(home, actor, runtime, opts.writeObserver);
 }
 
 /** How long after the command's own exit we keep reading its pipes. A pipe

@@ -774,7 +774,7 @@ function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null
 /**
  * The full `provider/model` spec a configured endpoint stands for.
  *
- * What `agent_config.model` is seeded with when the operator named no model, and
+ * What `actor_config.model` is seeded with when the operator named no model, and
  * what a bare id falls to. Null when no endpoint derives one, which is the
  * caller's cue to say `noDefaultModelMessage()` — the same shape core's
  * `defaultSpecFor` uses for the half it owns.

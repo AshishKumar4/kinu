@@ -11,7 +11,7 @@ import { git } from '@kinu.run/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
-import { createAgentConfigStore, summarizeRestorePlan } from '@kinu.run/core';
+import { summarizeRestorePlan } from '@kinu.run/core';
 import { createHostCheckpoints } from '../src/checkpoints';
 import { createCLIRuntime } from '../src/runtime';
 
@@ -348,7 +348,7 @@ describe('checkpointed runtime shell', () => {
         llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
       });
       // The default is 'strict', which asks a channel this runtime has none of.
-      createAgentConfigStore(rt.storage.sql).setShellApprovalMode('allow_all');
+      rt.actor.config.setShellApprovalMode('allow_all');
       const shell = rt.shell;
       if (!shell) throw new Error('a bound runtime must have a shell');
       const checkpoints = rt.checkpoints;

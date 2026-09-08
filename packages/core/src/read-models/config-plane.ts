@@ -1,7 +1,7 @@
 /**
  * The agent's settable knobs, as one plane.
  *
- * Each pair is a read and a write over `agent_config`, and each write is a
+ * Each pair is a read and a write over `actor_config`, and each write is a
  * trust boundary: the value arrives from an operator surface, so the
  * validation belongs with the store, not with whichever transport happened to
  * carry it. It used to live in the transports, which is why the same setter

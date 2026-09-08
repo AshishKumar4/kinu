@@ -19,7 +19,8 @@ function actor(path: string[], owner = 'owner') {
   const access: SubordinateInspectionAccess = {
     sql: rt.storage.sql, raw,
     storedParentPath: async () => parentPath,
-    existing: async (child) => { opened.push(child); return children.get(child) ?? null; },
+    storedPhysicalKey: async () => path.at(-1),
+    existing: async (child) => { opened.push(child.name); const port = children.get(child.name); return port ? { port, storageKey: child.name } : null; },
   };
   const port: SubordinateInspectionPort = {
     inspectSubordinateStorage: (request, authority) => inspectSubordinateStorage(access, request, authority),
@@ -28,14 +29,14 @@ function actor(path: string[], owner = 'owner') {
     rt, db, raw, roster, identity, access, port, opened,
     parentPath: (value: JsonValue) => { parentPath = value; },
     add: (child: string, target: SubordinateInspectionPort) => {
-      roster.create({ name: child, createdBy: 'orchestrator', status: 'idle', currentTask: null, createdAt: children.size + 1, dismissedAt: null, lifetime: 'task', taskEventId: null });
+      roster.create({ name: child, actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'idle', currentTask: null, createdAt: children.size + 1, dismissedAt: null, lifetime: 'task', taskEventId: null });
       roster.dismiss(child, 5);
       children.set(child, target);
     },
   };
 }
 function read(root: { port: SubordinateInspectionPort }, request: SubordinateInspectionRequest) {
-  return root.port.inspectSubordinateStorage(request, { owner: 'owner', workspace: 'workspace', traversed: [] });
+  return root.port.inspectSubordinateStorage(request, { owner: 'owner', workspace: 'workspace', traversed: [], storagePath: [] });
 }
 
 describe('owner reads of retained subordinate paths', () => {

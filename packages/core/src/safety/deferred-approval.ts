@@ -102,7 +102,7 @@ export type DeferredApprovalAnswer = Extract<DeferredApprovalStatus, 'approved' 
  *
  * A denial answers the re-issue an agent makes minutes after the refusal,
  * which is the noise device consent's doctrine names. It is not a standing
- * policy: `deny_all` and the rule grants are, and they live in agent_config.
+ * policy: `deny_all` and the rule grants are, and they live in actor_config.
  * So a denied row expires, for two reasons. A refusal from last week must not
  * answer for a command the owner would decide differently today, and a row
  * per refused command must not accumulate for the life of the workspace,
@@ -391,7 +391,7 @@ export interface DeferredApprovalQueueDeps {
    *  turn's next step, or started as its own turn when the agent is idle. */
   readonly signals: SignalDeliverer;
   /** Record a standing grant the owner just gave by answering 'always'. The
-   *  host owns where that lives (agent_config, alongside the approval mode),
+   *  host owns where that lives (actor_config, alongside the approval mode),
    *  so the queue only says WHAT was granted. Required, not optional: an
    *  'always' button whose grant went nowhere is the worst of both. */
   remember(grants: readonly ApprovalGrant[]): void;

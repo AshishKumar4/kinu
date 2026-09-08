@@ -57,7 +57,7 @@ import type {
 } from '../../packages/core/src/index';
 import {
   RunEventRecorder, activePromptSectionOverrides, agentsActionsFor, buildActorTools,
-  buildSystemPromptSync, createAgentConfigStore, createFactsStore,
+  buildSystemPromptSync, createFactsStore,
   createAgentsCodemodeProvider, createMemoryCodemodeProvider, createTasksCodemodeProvider,
   currentDateForPrompt, initWorkspaceSchema, isBuiltinToolName, JsonObjectSchema,
   projectJsonValue, failedToolOutcome, TaskListStore,
@@ -169,7 +169,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const sql = rt.storage.sql;
   const facts = createFactsStore(sql);
   const taskList = new TaskListStore(sql, rt.storage.transactionSync);
-  const config = createAgentConfigStore(sql);
+  const config = rt.actor.config;
   const webSearch = createDefaultWebSearchProvider({ fetch: globalThis.fetch });
   const fork: AgentsForkDeps = { rt, model };
   const agents: AgentsToolDeps = { mode: 'build', fork };
@@ -750,7 +750,7 @@ export function requireSandboxedExecutors(taskId: string, rt: AgentRuntime): voi
  * WHY THE OVERRIDE SURVIVES ANYWAY: the cost basis has to be the model the run
  * NAMED. Each live suite announces exactly one model through `liveModelTarget`
  * and prints it as what the run is billed as. The runtime's own default derives
- * its tier from the workspace's `agent_config` — which `createWorkspace` does not
+ * its tier from the workspace's `actor_config` — which `createWorkspace` does not
  * seed — and normalizes the spec through the local resolver, so it spells the
  * same model differently (`workers-ai/@cf/...` rather than `@cf/...`). This pin
  * makes the announced string the tier's string, and makes substitution impossible
@@ -789,7 +789,7 @@ export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): v
     revision: `eval-pinned:${llm.model}`,
     availableModels: [llm.model],
   };
-  const config = createAgentConfigStore(rt.storage.sql);
+  const config = rt.actor.config;
   const role = config.getRoleSelection();
   if (!rt.setProfileResolver) {
     throw new Error('this runtime exposes no setProfileResolver, so its model lanes cannot be '

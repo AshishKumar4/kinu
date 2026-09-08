@@ -7,7 +7,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  makeSql,
+  makeSql, createTestActor,
   makeExecRaw,
   createMemoryVFS,
   createMemoryMemory,
@@ -56,6 +56,7 @@ function createFullCLIRuntime() {
   };
 
   const rt: AgentRuntime = {
+    actor: createTestActor(sql, execRaw, crypto.randomUUID(), 'cli-agent'),
     storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory,
     executor,
@@ -64,12 +65,8 @@ function createFullCLIRuntime() {
     identity,
     craftStore,
     judgeModel: llm,
-    spawnBranch: async () => ({
-      explore: async () => ({ text: 'cli branch explored' }),
-      generateReflection: async () => ({ text: 'cli branch reflection' }),
-    }),
+    spawnBranch: async () => ({ explore: async () => ({ text: 'cli branch explored' }), generateReflection: async () => ({ text: 'cli branch reflection' }), release: async () => {} }),
     abortBranch: async () => {},
-    releaseBranch: async () => {},
   };
 
   return { rt, db };

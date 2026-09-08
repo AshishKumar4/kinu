@@ -91,7 +91,7 @@ export function isActiveExecutionDevice(exec: ExecutorInfo): boolean {
 
 /**
  * Choose the executor the file-manager / diff should default to. Prefers where
- * the agent last actually worked (sticky, from agent_config.last_active_executor)
+ * the agent last actually worked (sticky, from actor_config.last_active_executor)
  * when that executor is still available; otherwise a static priority that favors
  * a real shell, falling back to the always-present VFS.
  */

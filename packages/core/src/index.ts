@@ -35,7 +35,7 @@ export {
 export { readActivityLog, type ActivityLogEntry } from './identity/activity-log';
 // The one answer to "which tables a workspace has" — every composition root
 // calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
-export { initWorkspaceSchema, type WorkspaceSchemaSql } from './identity/workspace-schema';
+export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './identity/workspace-schema';
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
@@ -227,7 +227,7 @@ export {
 export { DEFAULT_CONFIG } from './config';
 export { UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS } from './chat';
 
-// Typed accessors over the `agent_config` key/value table — collapses ~23
+// Typed accessors over the `actor_config` key/value table — collapses ~23
 // raw-SQL sites into a deep module with known-key getters/setters.
 export {
   createAgentConfigStore, initAgentConfigTable,
@@ -495,7 +495,12 @@ export {
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
-export { STATE_NAMESPACE, STATE_TYPES, initCodemodeStateTable, createStateCodemodeProvider } from './tools/state-codemode';
+export { STATE_NAMESPACE, STATE_TYPES, initCodemodeStateTable, createStateCodemodeProvider, type ProgramStateStore } from './tools/state-codemode';
+export { ActorReferenceSchema, ActorIdentitySchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './state/actor-handle';
+export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubordinateActorName } from './state/actor-key';
+export { FacetIdentity, type FacetIdentityRow } from './state/facet-identity';
+export { finishSubordinateBirth, recoverSubordinateLifecycles, SubordinateBirthSchema, SubordinateSeedSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './state/workspace-actors';
 export { admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } from './craft/source';
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export {
@@ -1441,6 +1446,7 @@ export {
   AgentOrchestrator, type AgentOrchestratorDeps,
   type TurnContinuity,
 } from './orchestrator/agent-orchestrator';
+export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 export { prepareActorTurn, type ActorTurnInput, type PreparedActorTurn } from './orchestrator/actor-turn';
 export { prepareActorProgram, type ActorTurnProgram } from './orchestrator/actor-program';
 export { SignalDelivery } from './orchestrator/signals';

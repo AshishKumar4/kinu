@@ -21,7 +21,8 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
-import { createAgentConfigStore, type AgentConfigStore } from '../config/store';
+import type { AgentConfigStore } from '../config/store';
+import type { ActorHandle } from './actor-handle';
 import { createFactsStore, type FactsStore } from '../memory/facts';
 import { TaskListStore } from '../tasks/store';
 import { HeadJournal } from '../heads/journal';
@@ -50,10 +51,9 @@ export interface AgentStores {
  * not yet resolvable at construction time can still build the bundle up front;
  * the provider is called at most once per store, on first access.
  */
-export function createAgentStores(sql: () => SqlExecutor, transactionSync: <T>(write: () => T) => T): AgentStores {
+export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHandle, transactionSync: <T>(write: () => T) => T): AgentStores {
   // One memo per store: the provider is only invoked when a store is first
   // reached, and each store is constructed exactly once thereafter.
-  let config: AgentConfigStore | undefined;
   let facts: FactsStore | undefined;
   let taskList: TaskListStore | undefined;
   let headJournal: HeadJournal | undefined;
@@ -63,7 +63,7 @@ export function createAgentStores(sql: () => SqlExecutor, transactionSync: <T>(w
 
   return {
     get config(): AgentConfigStore {
-      return (config ??= createAgentConfigStore(sql()));
+      return actor().config;
     },
     get facts(): FactsStore {
       return (facts ??= createFactsStore(sql()));

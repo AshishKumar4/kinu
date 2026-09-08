@@ -22,7 +22,7 @@
  * facets per DO lifetime (workerd's FacetTreeIndex). Both are reached on the
  * ordinary default path, so a finished worker must give its storage back.
  *
- *   abort   (abortExplorationFacet)  — MID-FLIGHT eviction. The instance stops
+ *   abort (abortActorFacet) stops the captured physical actor and keeps its storage.
  *           and pending RPCs reject; storage is KEPT. For a worker that may
  *           still be read, or that is being cut short while something else
  *           still owns the terminal release.
@@ -63,16 +63,17 @@
 
 import type { Agent, SubAgentClass, SubAgentStub } from "agents";
 import type {
-  BranchHandle, HeadId, HeadInput, NodeArbiter, NodeLoopHost, NodeLoopResult, NodeRunSpec, SpawnedHead,
+  ActorReference, ActorDirectoryResult, ChildActorOperation, BranchHandle, HeadId, HeadInput, NodeArbiter, NodeLoopHost, NodeLoopResult, NodeRunSpec, SpawnedHead,
 } from "@kinu.run/core";
-import { abortCause } from "@kinu.run/core";
+import { abortCause, explorationActorKey, isExplorationActorKey, parseActorKey } from "@kinu.run/core";
 import type { SubordinateAgent } from "./subordinate-agent";
 import type { HostedFacetHomes } from "./node-home";
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 
 /** The facet substrate a spawner rides. Both the workspace DO and a head
  *  splitting further expose it, so both can spawn — and both must reclaim. */
-export interface FacetHost extends Pick<Agent<Env>, "subAgent" | "abortSubAgent" | "deleteSubAgent"> {
+export interface FacetHost extends Pick<Agent<Env>, "abortSubAgent" | "deleteSubAgent"> {
+  subAgent(cls: SubAgentClass<SubordinateAgent>, name: string): Promise<ExplorationStub>;
   /** The one class every facet of this host runs as. Type-only above, so this
    *  module carries no runtime import of the class it spawns; the VALUE comes
    *  from the host, as `ActorAgent.facetClass()` states. */
@@ -81,12 +82,13 @@ export interface FacetHost extends Pick<Agent<Env>, "subAgent" | "abortSubAgent"
    *  owner's registry, reached directly or over one hop. A head provisions
    *  its own when it runs; its spawner releases it when the run settles. */
   facetHomes(): HostedFacetHomes;
+  actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult>;
 }
 
 
 /** The stub `subAgent` hands back, named once so the bootstrap seam can take a
  *  mode's own init RPC as an argument. */
-type ExplorationStub = SubAgentStub<SubordinateAgent>;
+type ExplorationStub = Pick<SubAgentStub<SubordinateAgent>, 'setOwner' | 'setSharedParent' | 'initHead' | 'runAsHead' | 'abortHead' | 'explore' | 'generateReflection'>;
 
 /** Preserve each mode's stub width through the shared bootstrap. */
 interface FacetTransport<Stub> extends Omit<FacetHost, 'subAgent'> {
@@ -94,9 +96,9 @@ interface FacetTransport<Stub> extends Omit<FacetHost, 'subAgent'> {
 }
 
 /** The node transport only seeds and runs nodes; it needs no chat or head RPCs. */
-export type NodeFacetHost = FacetTransport<Pick<ExplorationStub, 'setOwner' | 'setSharedParent' | 'initNode' | 'runAsNode'>>;
+export type NodeFacetHost = FacetTransport<Pick<SubAgentStub<SubordinateAgent>, 'setOwner' | 'setSharedParent' | 'initNode' | 'runAsNode'>>;
 
-type FacetLifecycle = Pick<FacetHost, 'facetClass' | 'abortSubAgent' | 'deleteSubAgent'>;
+type FacetLifecycle = Pick<FacetHost, 'facetClass' | 'abortSubAgent' | 'deleteSubAgent' | 'actorDirectory' | 'facetHomes'>;
 
 /** What an exploration facet must know before it runs. Both values are
  *  persisted by the facet itself, so a cold activation recovers them. */
@@ -120,46 +122,6 @@ export interface ExplorationFacetIdentity {
   readonly sharedParent?: string | null;
 }
 
-/**
- * The marker that makes an exploration facet key unambiguous beside a
- * subordinate's bare roster slug. A slug outside `[a-z0-9-]` is refused at
- * hire time, so no subordinate key can ever carry this marker — the family
- * reads off the key alone, with no registry lookup.
- */
-const EXPLORATION_FACET_KEY_PREFIX = 'exp:';
-
-/**
- * The facet key for an exploration worker id (head, node, branch). Handles
- * keep the plain domain id; only the key handed to `subAgent` is marked.
- * `encodeURIComponent` keeps generated ids byte-identical while failing no
- * future alphabet: the split below is on the FIRST marker, so a marked id
- * that somehow contains one still round-trips.
- */
-function explorationFacetKey(id: string): string {
-  return `${EXPLORATION_FACET_KEY_PREFIX}${encodeURIComponent(id)}`;
-}
-
-/** Which family a facet key addresses, and the domain id beneath the marker. */
-interface ParsedFacetKey {
-  readonly family: 'exploration' | 'subordinate';
-  readonly id: string;
-}
-function parseFacetKey(key: string): ParsedFacetKey {
-  if (key.startsWith(EXPLORATION_FACET_KEY_PREFIX)) {
-    return { family: 'exploration', id: decodeURIComponent(key.slice(EXPLORATION_FACET_KEY_PREFIX.length)) };
-  }
-  return { family: 'subordinate', id: key };
-}
-
-/**
- * True for an exploration worker's key. Exported for the two callers that
- * list a mixed registry: the capability fan-out (exploration facets only)
- * and the settled-facet sweep (subordinates are rostered actors, never its
- * to judge).
- */
-export function isExplorationFacetKey(key: string): boolean {
-  return key.startsWith(EXPLORATION_FACET_KEY_PREFIX);
-}
 
 
 /**
@@ -174,8 +136,8 @@ export function isExplorationFacetKey(key: string): boolean {
  * `reason` is that call's own reason channel, for a caller with no graceful-stop
  * RPC to carry it: a node's loop has none, so eviction is the whole of its abort.
  */
-export function abortExplorationFacet(host: FacetLifecycle, id: string, reason?: string): void {
-  host.abortSubAgent(host.facetClass(), explorationFacetKey(id), reason);
+export function abortActorFacet(host: FacetLifecycle, storageKey: string, reason?: string): void {
+  host.abortSubAgent(host.facetClass(), storageKey, reason);
 }
 
 /**
@@ -192,8 +154,12 @@ export function abortExplorationFacet(host: FacetLifecycle, id: string, reason?:
  * Idempotent: the SDK swallows `ctx.facets.delete` for an already-gone facet,
  * so a raced abort and settle both landing here is safe.
  */
-export async function deleteExplorationFacet(host: FacetLifecycle, id: string): Promise<void> {
-  await host.deleteSubAgent(host.facetClass(), explorationFacetKey(id));
+export async function deleteExplorationFacet(host: FacetLifecycle, id: string, reference: ActorReference): Promise<void> {
+  await deleteActorFacet(host, explorationActorKey(id), reference);
+}
+
+export async function deleteActorFacet(host: Pick<FacetHost, 'actorDirectory'>, name: string, reference: ActorReference): Promise<void> {
+  await host.actorDirectory({ action: 'retire', name, reference });
 }
 
 /** Where a facet stands in the ledgers that own its lifecycle. Derived by the
@@ -201,8 +167,8 @@ export async function deleteExplorationFacet(host: FacetLifecycle, id: string): 
  *  owns no registry of its own. */
 export type ExplorationFacetLedgerStatus = 'resumable' | 'terminal' | 'unknown';
 export interface ExplorationFacetRegistry {
-  list(): readonly { name: string }[];
-  delete(id: string): Promise<void>;
+  list(): readonly { name: string; reference: ActorReference }[];
+  delete(id: string, reference: ActorReference): Promise<void>;
 }
 
 
@@ -229,14 +195,14 @@ export async function reconcileExplorationFacets(
     // One class hosts both families now, so the registry lists subordinates
     // beside exploration workers. A subordinate is a rostered, durable actor;
     // its storage is never this sweep's to judge, so it is retained unread.
-    if (!isExplorationFacetKey(facet.name)) {
+    if (!isExplorationActorKey(facet.name)) {
       retained += 1;
       continue;
     }
-    const id = parseFacetKey(facet.name).id;
+    const id = parseActorKey(facet.name).id;
     const status = ledgerStatus(id);
     if (status === 'terminal' || (status === 'unknown' && !live)) {
-      await registry.delete(id);
+      await registry.delete(id, facet.reference);
       reclaimed += 1;
     } else {
       retained += 1;
@@ -253,9 +219,9 @@ export async function reconcileExplorationFacets(
  * so it is reported together with the bootstrap error instead of hidden behind
  * it.
  */
-async function discardHalfSeededFacet<Cause>(host: FacetLifecycle, id: string, cause: Cause): Promise<never> {
+async function discardHalfSeededFacet<Cause>(host: FacetLifecycle, id: string, reference: ActorReference, cause: Cause): Promise<never> {
   try {
-    await deleteExplorationFacet(host, id);
+    await deleteActorFacet(host, explorationActorKey(id), reference);
   } catch (cleanupError) {
     throw new Error(
       `Exploration facet ${id} failed to bootstrap and its storage could not be reclaimed `
@@ -284,18 +250,22 @@ interface FacetInitAck {
 async function bootstrapFacet<Stub extends Pick<ExplorationStub, 'setOwner' | 'setSharedParent'>>(
   host: FacetTransport<Stub>,
   id: string,
+  kind: 'head' | 'node' | 'branch',
   identity: ExplorationFacetIdentity,
   init?: (stub: Stub) => Promise<FacetInitAck>,
-): Promise<Stub> {
-  const stub = await host.subAgent(host.facetClass(), explorationFacetKey(id));
+): Promise<{ stub: Stub; reference: ActorReference; storageKey: string }> {
+  if (!identity.ownerUserId || !identity.sharedParent) throw new KinuError('missing', 'An exploration actor needs an owned workspace.');
+  const entry = await host.actorDirectory({ action: 'register', creationId: id, name: explorationActorKey(id), kind, lifetime: 'task' });
   try {
-    if (identity.ownerUserId) await stub.setOwner(identity.ownerUserId, identity.capabilityToken);
-    if (identity.sharedParent) await stub.setSharedParent(identity.sharedParent);
+    const stub = await host.subAgent(host.facetClass(), entry.storageKey);
+    const seeded = await stub.setSharedParent(identity.sharedParent, { ...entry.reference, name: entry.name, storageKey: entry.storageKey });
+    if ('reason' in seeded) throw new KinuError(seeded.reason, seeded.error);
+    await stub.setOwner(identity.ownerUserId, identity.capabilityToken);
     if (init) await init(stub);
+    return { stub, reference: entry.reference, storageKey: entry.storageKey };
   } catch (err) {
-    await discardHalfSeededFacet(host, id, err);
+    return await discardHalfSeededFacet(host, id, entry.reference, err);
   }
-  return stub;
 }
 
 /**
@@ -364,11 +334,12 @@ export async function spawnBranchFacet(
   branchId: string,
   identity: ExplorationFacetIdentity,
 ): Promise<BranchHandle> {
-  const stub = await bootstrapFacet<ExplorationStub>(host, branchId, identity);
+  const { stub, reference } = await bootstrapFacet<ExplorationStub>(host, branchId, 'branch', identity);
   return {
     explore: (history, tools, languages, mode, siblings) =>
       stub.explore(history, tools, languages, mode, siblings ?? []),
     generateReflection: (task, outcome) => stub.generateReflection(task, outcome),
+    release: () => deleteExplorationFacet(host, branchId, reference),
   };
 }
 
@@ -389,12 +360,11 @@ export async function spawnHeadFacet(
   input: HeadInput,
   identity: ExplorationFacetIdentity,
 ): Promise<SpawnedHead> {
-  const stub = await bootstrapFacet<ExplorationStub>(host, input.id, identity, (facet) => facet.initHead(input));
+  const { stub, reference, storageKey } = await bootstrapFacet<ExplorationStub>(host, input.id, 'head', identity, (facet) => facet.initHead(input));
   return {
     id: input.id,
     run: () => runOnceAndReclaim(input.id, 'Head', () => stub.runAsHead(), async () => {
-      await deleteExplorationFacet(host, input.id);
-      await host.facetHomes().release('head', input.id);
+      await deleteExplorationFacet(host, input.id, reference);
     }),
     /** Cut a head short — a caller-requested deadline blew. Deliberately an
      *  ABORT and not a release: `run()` is still in flight and owns the
@@ -409,7 +379,7 @@ export async function spawnHeadFacet(
       try {
         await stub.abortHead(reason);
       } finally {
-        abortExplorationFacet(host, input.id);
+        abortActorFacet(host, storageKey);
       }
     },
   };
@@ -424,6 +394,7 @@ interface SpawnedNode {
   run(): Promise<NodeLoopResult>;
   /** Best-effort abort — used when the search stops wanting this node. */
   abort(reason: string): void;
+  release(): Promise<void>;
 }
 
 /** Swarm node: the same facet hosting core's node loop over `spec`.
@@ -442,10 +413,11 @@ async function spawnNodeFacet(
   identity: ExplorationFacetIdentity,
 ): Promise<SpawnedNode> {
   const id = spec.headInput.id;
-  const stub = await bootstrapFacet(host, id, identity, (facet) => facet.initNode(spec));
+  const { stub, reference, storageKey } = await bootstrapFacet(host, id, 'node', identity, (facet) => facet.initNode(spec));
+  const release = () => deleteExplorationFacet(host, id, reference);
   return {
-    id,
-    run: () => runOnceAndReclaim(id, 'Node', () => stub.runAsNode(), () => deleteExplorationFacet(host, id)),
+    id, release,
+    run: () => runOnceAndReclaim(id, 'Node', () => stub.runAsNode(), release),
     /** Cut a node short. An ABORT and not a release, for the reason a head's is:
      *  `run()` is still in flight and owns the terminal release, and evicting the
      *  instance is what makes its pending `runAsNode` RPC reject so that release
@@ -453,7 +425,7 @@ async function spawnNodeFacet(
      *  in-loop stopping seam is `NodeLoopDeps.signal`, which lives on the search's
      *  side of this RPC — so eviction is the whole of the abort. */
     abort: (reason) => {
-      abortExplorationFacet(host, id, reason);
+      abortActorFacet(host, storageKey, reason);
     },
   };
 }
@@ -491,13 +463,17 @@ export interface HostedNodeSeams {
  */
 export function hostNodeLoop(host: NodeFacetHost, seams: HostedNodeSeams): NodeLoopHost {
   return async (spec, arbitrate, signal) => {
-    if (signal?.aborted) throw abortCause(signal);
     const nodeId = spec.headInput.id;
+    if (signal?.aborted) {
+      const entry = await host.actorDirectory({ action: 'resolveCreation', creationId: nodeId });
+      await deleteExplorationFacet(host, nodeId, entry.reference);
+      throw abortCause(signal);
+    }
     const withdraw = arbitrate ? seams.registerArbiter(nodeId, arbitrate) : null;
     try {
       const node = await spawnNodeFacet(host, spec, seams.identity());
       if (signal?.aborted) {
-        await deleteExplorationFacet(host, nodeId);
+        await node.release();
         throw abortCause(signal);
       }
       const evict = () => { node.abort(abortCause(signal).message); };
@@ -508,11 +484,7 @@ export function hostNodeLoop(host: NodeFacetHost, seams: HostedNodeSeams): NodeL
         signal?.removeEventListener('abort', evict);
       }
     } finally {
-      try {
-        await host.facetHomes().release('node', nodeId);
-      } finally {
-        withdraw?.();
-      }
+      withdraw?.();
     }
   };
 }

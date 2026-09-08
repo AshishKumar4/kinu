@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createTestRuntime } from '../../core/tests/helpers';
-import { PlanReviewStore, TaskListStore, withTaskPlan, bindTaskPlan, initPlanReviewTable, createAgentConfigStore } from '@kinu.run/core';
+import { PlanReviewStore, TaskListStore, withTaskPlan, bindTaskPlan, initPlanReviewTable } from '@kinu.run/core';
 import { readPlanTasks } from '../../core/src/tasks/store';
 import { createTasksDispatcher } from '../../core/src/tools/tasks-tool';
 import { createTasksCodemodeProvider } from '../../core/src/tools/tasks-codemode';
@@ -24,8 +24,8 @@ test('native and asynchronous codemode tasks retain their approved revision with
   const f = fixture(); const other = fixture();
   try {
     f.taskList.add(['old standalone'], null, 1);
-    const native = createTasksDispatcher(f.taskList, createAgentConfigStore(f.rt.storage.sql));
-    const codemode = createTasksCodemodeProvider(f.taskList, createAgentConfigStore(f.rt.storage.sql));
+    const native = createTasksDispatcher(f.taskList, f.rt.actor.config);
+    const codemode = createTasksCodemodeProvider(f.taskList, f.rt.actor.config);
     let resumed: (() => Promise<void>) | undefined;
     const entry = withTaskPlan({ tasks: tool({ inputSchema: jsonSchema<object>({ type: 'object' }), execute: async () => {
       native({ action: 'add', titles: ['native task'] });

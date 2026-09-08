@@ -151,19 +151,13 @@ function fullDeps(): AgentsToolDeps {
       create: async () => ({
         name: 'n',
         displayName: 'N',
-        subordinate: {
-          name: 'n', displayName: 'N', role: 'researcher', createdBy: 'user', status: 'idle',
-          currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-        },
+        subordinate: { name: 'n', displayName: 'N', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async () => ({
         ok: true as const,
         name: 'n',
         displayName: 'N',
-        subordinate: {
-          name: 'n', displayName: 'N', role: 'researcher', createdBy: 'user', status: 'idle',
-          currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-        },
+        subordinate: { name: 'n', displayName: 'N', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       recordTitle: async () => ({ ok: true as const, name: 'n', displayName: 'N', applied: true }),
       spawn: async () => ({ name: 'n', displayName: 'N' }),

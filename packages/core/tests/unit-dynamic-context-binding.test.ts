@@ -29,7 +29,7 @@ function setup(): Fixture {
   initWorkspaceSchema({
     execRaw: testSql.execRaw, sql: testSql.sql, exec: makeSqlExec(testSql.db),
   });
-  return { rt, stores: createAgentStores(() => testSql.sql, rt.storage.transactionSync) };
+  return { rt, stores: createAgentStores(() => testSql.sql, () => rt.actor, rt.storage.transactionSync) };
 }
 
 interface Overrides {

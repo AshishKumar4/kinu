@@ -42,13 +42,12 @@ import {
   type SubordinatesChangedEvent,
   type SubordinateRuntime,
   type KinuEvent,
-  createAgentConfigStore,
-  initAgentConfigTable,
+  WorkspaceActorDirectory, actorReferenceOf, recoverSubordinateLifecycles, type ActorReference,
   type AgentConfigStore,
 } from '../src/index';
 import { CODE_IS_REFUSAL, KinuError } from '../src/obs/index';
 import { createMemoryVfs } from '@kinu.run/test-utils';
-import { makeSql as makeTagged, makeSqlExec, makeExecRaw } from './helpers';
+import { makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor } from './helpers';
 
 /** One fixed clock for every roster write these scenes make. */
 const NOW = 1_700_000_000_000;
@@ -160,14 +159,13 @@ describe('subordinate identity', () => {
 
 describe('the child descriptor authority', () => {
   // S2: displayName, nameOrigin, role selection and tier live ONLY in the
-  // child's agent_config. A rename or role switch must be visible on a COLD
+  // child's actor_config. A rename or role switch must be visible on a COLD
   // reopen of the config store — no parent-side mirror involved anywhere.
   function makeConfig(db: Database): AgentConfigStore {
-    initAgentConfigTable(makeExecRaw(db));
-    return createAgentConfigStore(makeTagged(db));
+    return createTestActor(makeTagged(db), makeExecRaw(db), crypto.randomUUID(), 'descriptor-test').config;
   }
 
-  test('rename and role switch read back from agent_config after a cold reopen', () => {
+  test('rename and role switch read back from actor_config after a cold reopen', () => {
     const db = new Database(':memory:');
     const config = makeConfig(db);
     config.setDisplayNameOrigin('Jarvis', 'user');
@@ -259,16 +257,7 @@ describe('the delegation depth cap', () => {
     expect(delegationBudgetAtDepth(-2)).toEqual({ depth: 0, maxDepth: DELEGATION_MAX_DEPTH });
   });
 });
-const initialRosterEntry: SubordinateRosterEntry = {
-  name: 'researcher',
-  createdBy: 'orchestrator',
-  status: 'working',
-  currentTask: 'Map the market.',
-  createdAt: 100,
-  dismissedAt: null,
-  lifetime: 'durable',
-  taskEventId: null,
-};
+const initialRosterEntry: SubordinateRosterEntry = { name: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'Map the market.', createdAt: 100, dismissedAt: null, lifetime: 'durable', taskEventId: null };
 
 describe('workspace subordinate roster', () => {
   test('owns closed status transitions and can restore an exact snapshot', () => {
@@ -355,6 +344,8 @@ const fakeHandoff = (delivery: SubordinateDelivery): SubordinateHandoff => ({
 
 interface TeamHarness {
   roster: SubordinateRosterStore;
+  runtime: SubordinateRuntime;
+  actorReference(): ActorReference;
   team: ReturnType<typeof createTeamToolDeps>;
   calls: string[];
   assignments: Array<{ body: string; inheritedContext?: string }>;
@@ -382,13 +373,23 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
   const tasks: Array<{ subordinate: string; content: string; timestamp: number }> = [];
   const failures = new Set<keyof SubordinateRuntime>();
   const fail = (operation: keyof SubordinateRuntime) => {
-    if (failures.has(operation)) throw new Error(`${operation} failed`);
+    if (failures.has(operation)) throw new KinuError('unavailable', `${operation} failed`);
   };
+  const actorDb = new Database(':memory:');
+  const actorSql = makeTagged(actorDb);
+  createTestActor(actorSql, makeExecRaw(actorDb), 'team-workspace', 'main');
+  const directory = new WorkspaceActorDirectory(actorSql, { workspaceId: 'team-workspace', ownerUserId: '' });
   const runtime: SubordinateRuntime = {
     async spawn(input) {
       seeds.push(input);
       calls.push(`spawn:${input.name}:${input.mission}`);
       fail('spawn');
+      return directory.apply(directory.main(), [], { action: 'register', creationId: input.creationId, name: input.name, kind: 'subordinate', lifetime: input.lifetime }).reference;
+    },
+    async cancelBirth(input) {
+      const entry = directory.apply(directory.main(), [], { action: 'cancelCreation', creationId: input.creationId, name: input.name, kind: 'subordinate', lifetime: input.lifetime });
+      if (entry.state !== 'deleted') directory.apply(directory.main(), [], { action: 'release', name: input.name, reference: entry.reference });
+      return entry.reference;
     },
     async assign(name, input) {
       calls.push(`assign:${name}:${input.body}`);
@@ -412,7 +413,13 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
       calls.push(`rename:${name}:${displayName}:${nameOrigin}`);
       fail('rename');
     },
-    async dismiss(name, keepHistory) { calls.push(`dismiss:${name}:${keepHistory}`); fail('dismiss'); },
+    async dismiss(name, keepHistory, reference) {
+      calls.push(`dismiss:${name}:${keepHistory}`); fail('dismiss');
+      if (!keepHistory) {
+        directory.apply(directory.main(), [], { action: 'retire', name, reference });
+        directory.apply(directory.main(), [], { action: 'release', name, reference });
+      }
+    },
   };
   const team = createTeamToolDeps({
     delegation: ROOT_DELEGATION_BUDGET,
@@ -425,7 +432,8 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
     broadcast: (event) => { broadcasts.push(Date.now()); events.push(event); },
     broadcastTask: (event) => { tasks.push(event); },
   });
-  return { roster, team, calls, seeds, assignments, broadcasts, events, tasks, failures };
+  return { roster, runtime, team, calls, seeds, assignments, broadcasts, events, tasks, failures,
+    actorReference: () => { const actor = directory.resolveChild(directory.main(), 'researcher-a1b2c3'); if (!actor) throw new Error('The admitted actor is missing.'); return actorReferenceOf(actor); } };
 }
 
 describe('team action routing', () => {
@@ -434,11 +442,7 @@ describe('team action routing', () => {
 
     expect(await h.team.create({ role: 'researcher', mission: 'Understand the domain.' })).toEqual({
       name: 'researcher-a1b2c3', displayName: 'Researcher',
-      subordinate: {
-        name: 'researcher-a1b2c3',
-        createdBy: 'user', status: 'idle', currentTask: null,
-        createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-      },
+      subordinate: { name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null },
     });
     expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
       createdBy: 'user', status: 'idle', currentTask: null,
@@ -466,20 +470,11 @@ describe('team action routing', () => {
 
     const created = await h.team.create({});
 
-    expect(created.subordinate).toEqual({
-      name: 'researcher-a1b2c3',
-      createdBy: 'user',
-      status: 'idle',
-      currentTask: null,
-      createdAt: 1_700_000_000_000,
-      dismissedAt: null,
-      lifetime: 'durable',
-      taskEventId: null,
-    });
+    expect(created.subordinate).toEqual({ name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null });
     expect(created.displayName).toBe('');
     // The mission is the workspace's, read at create time.
     expect(h.seeds).toEqual([{
-      name: 'researcher-a1b2c3',
+      creationId: expect.any(String), name: 'researcher-a1b2c3',
       displayName: '',
       nameOrigin: 'auto',
       mission: HARNESS_OWN_MISSION,
@@ -637,7 +632,7 @@ describe('team action routing', () => {
       name: 'researcher-a1b2c3', displayName: 'Researcher',
     });
     expect(await h.team.list()).toEqual([{
-      name: 'researcher-a1b2c3',
+      name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false,
       createdBy: 'orchestrator', status: 'working', currentTask: 'Map the market.',
       createdAt: 1_700_000_000_000, dismissedAt: null,
       // A hire is DURABLE, and its mission is its first assignment — so the row
@@ -671,7 +666,7 @@ describe('team action routing', () => {
 
     await h.team.dismiss({ name: 'researcher-a1b2c3', keepHistory: false });
     expect(await h.team.list()).toEqual([]);
-    expect(h.roster.requireExisting('researcher-a1b2c3').status).toBe('dismissed');
+    expect(h.roster.get('researcher-a1b2c3')).toBeNull();
     expect(h.broadcasts).toHaveLength(4);
   });
 
@@ -696,8 +691,9 @@ describe('team action routing', () => {
             ? h.team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Continue' })
             : h.team.dismiss({ name: 'researcher-a1b2c3' });
 
-      await expect(action).rejects.toThrow(`${operation} failed`);
-      expect(h.roster.get('researcher-a1b2c3')).toEqual(before);
+      await expect(action).rejects.toMatchObject({ code: 'unavailable' });
+      if (operation === 'spawn') expect(h.roster.requireExisting('researcher-a1b2c3').birth?.seed.mission).toBe('Mission');
+      else expect(h.roster.get('researcher-a1b2c3')).toEqual(before);
       expect(h.broadcasts).toHaveLength(broadcastsBefore);
       expect(h.tasks).toHaveLength(operation === 'spawn' ? 0 : 1);
     }
@@ -728,11 +724,7 @@ describe('team action routing', () => {
     const h = makeTeamHarness();
     // A temporary run in flight: its report resolves the port's waiter on this
     // id, so a durable verb that retargeted the row would orphan that waiter.
-    h.roster.create({
-      name: 'ask-auditor-a1b2c3', createdBy: 'orchestrator', status: 'working',
-      currentTask: 'Is the migration reversible?', createdAt: 1_700_000_000_000,
-      dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1',
-    });
+    h.roster.create({ name: 'ask-auditor-a1b2c3', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'Is the migration reversible?', createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
     const before = h.roster.get('ask-auditor-a1b2c3');
     const attempts: Array<() => Promise<object>> = [
       () => h.team.assign({ mode: 'build', name: 'ask-auditor-a1b2c3', task: 'Other work' }),
@@ -751,41 +743,42 @@ describe('team action routing', () => {
     expect(h.tasks).toEqual([]);
   });
 
-  test('a rejected initial mission deletes the new facet and leaves no roster row', async () => {
+  test('a lost initial admission remains recoverable under the same actor identity', async () => {
     const h = makeTeamHarness();
     h.failures.add('assign');
-
-    await expect(h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' }))
-      .rejects.toThrow('assign failed');
-    expect(h.roster.get('researcher-a1b2c3')).toBeNull();
-    expect(h.calls).toEqual([
-      'spawn:researcher-a1b2c3:Mission',
-      'assign:researcher-a1b2c3:Mission',
-      'dismiss:researcher-a1b2c3:false',
-    ]);
-    expect(h.broadcasts).toEqual([]);
+    await expect(h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' })).rejects.toMatchObject({ code: 'unavailable' });
+    const before = h.roster.requireExisting('researcher-a1b2c3');
+    expect(before.birth?.assignment?.body).toBe('Mission');
+    h.failures.clear();
+    await recoverSubordinateLifecycles(h.roster, h.runtime);
+    const after = h.roster.requireExisting('researcher-a1b2c3');
+    expect(after.actorReference).toEqual(before.actorReference);
+    expect(after.birth).toBeNull();
+    expect(after.taskEventId).toBe('evt-starts_now');
   });
 
-  test('a failed facet cleanup preserves the roster handle needed to retry retirement', async () => {
+  test('a failed physical deletion retains the exact row for retry', async () => {
     const h = makeTeamHarness();
-    h.failures.add('assign');
+    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' });
+    const reference = h.actorReference();
     h.failures.add('dismiss');
-
-    await expect(h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' }))
-      .rejects.toThrow('facet cleanup also failed');
-    expect(h.roster.get('researcher-a1b2c3')).toMatchObject({
-      status: 'working',
-      currentTask: 'Mission',
-    });
-    expect(h.broadcasts).toEqual([]);
+    await expect(h.team.dismiss({ name: 'researcher-a1b2c3', keepHistory: false })).rejects.toMatchObject({ code: 'unavailable' });
+    expect(h.roster.requireExisting('researcher-a1b2c3').actorReference).toEqual(reference);
+    expect(h.roster.requireExisting('researcher-a1b2c3').deleteRequested).toBe(true);
+    h.failures.clear();
+    await recoverSubordinateLifecycles(h.roster, h.runtime);
+    expect(h.roster.get('researcher-a1b2c3')).toBeNull();
   });
 
   test('publishes roster transitions before invoking the corresponding facet action', async () => {
     const roster = makeRosterStore();
     roster.ensureSchema();
     const observed: Array<{ operation: string; roster: SubordinateRosterEntry | null }> = [];
+    const actorDb = new Database(':memory:');
+    const actor = createTestActor(makeTagged(actorDb), makeExecRaw(actorDb), 'transition-workspace', 'main');
     const runtime: SubordinateRuntime = {
-      async spawn() {},
+      async spawn() { return actorReferenceOf(actor); },
+      async cancelBirth() { return actorReferenceOf(actor); },
       async assign(name) {
         observed.push({ operation: 'assign', roster: roster.get(name) });
         return fakeHandoff('starts_now');

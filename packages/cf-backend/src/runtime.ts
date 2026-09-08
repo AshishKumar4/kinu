@@ -20,7 +20,7 @@
  */
 
 import type {
-  AgentRuntime, BranchHandle,
+  AgentRuntime, ActorHandle, BranchHandle,
   VFS as CoreVFS, Executor, LLM, Schedule, Identity,
   SqlExecutor, RawSqlExec,
   ExecuteResult, ResolvedProvider,
@@ -45,8 +45,8 @@ import {
   type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   decodeJsonValue,
-  createAgentConfigStore, initAgentConfigTable, initActorTables,
-  parseModelSpec, reasoningEffortOptions, resolveModelRoute, REASONING_EFFORT_FOR_STAGE,
+  initAgentConfigTable, initActorTables,
+  parseModelSpec, reasoningEffortOptions, resolveModelRoute,
   createScaffoldSurface,
   type FixedTierSource,
   type VectorStore,
@@ -66,7 +66,7 @@ import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores
 import { generateText, type LanguageModelUsage } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
-import { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet, type FacetHost } from "./facet-spawn";
+import { abortActorFacet, spawnBranchFacet, type FacetHost } from "./facet-spawn";
 import {
   createHubDeviceTransport,
   type DeviceHubClient,
@@ -81,7 +81,7 @@ import {
 import { ownerCaller, type UserCaller } from "./user/workspace-capability";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
 import {
-  agentAffinityKey, exploreRollout, formatInheritedContext, normalizeUsage, reflectRollout, type BranchRoute,
+  agentAffinityKey, normalizeUsage,
 } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 
@@ -153,6 +153,7 @@ export function bindAgentSql(agent: Pick<Agent<Env>, 'sql'>): SqlExecutor {
  * the sandbox and the device are.
  */
 export interface ActorRuntimeIdentity {
+  actor: ActorHandle;
   /** Owner userId, or null while unclaimed. Resolved per call — never cached
    *  here, so a first use before owner claim can't bake in null. */
   ownerUserId(): string | null;
@@ -405,12 +406,12 @@ export function createCFRuntime(
   // craft stores above do — and it reads config during construction, not only
   // on demand. An exploration facet builds its whole head runtime on its OWN
   // storage, which no `initWorkspaceSchema` touches, so without this every head
-  // dies on `no such table: agent_config` before its first step. These are that
+  // dies on `no such table: actor_config` before its first step. These are that
   // facet's own settings, as a subordinate facet's are its own; a head's MODEL
   // is not read here — it arrives with the HeadInput the spawner built.
   initAgentConfigTable(execRaw);
   // The rest of what a runtime's own storage carries, for the same reason and
-  // by the same measurement: `agent_config` was the first table an exploration
+  // by the same measurement: `actor_config` was the first table an exploration
   // facet was found to be missing, not the only one. The workspace executor
   // registered below is handed this same `sql`, and its `listTools` quotes the
   // crafted-tool quality columns ON `crafted_tools`, and its `createTool` seeds
@@ -422,7 +423,7 @@ export function createCFRuntime(
   // identity or fork lineage of its own, which is exactly a facet's; on a root
   // it is the idempotent prefix of the `initWorkspaceSchema` its attach runs.
   initActorTables(execRaw, sql);
-  const memoryConfig = createAgentConfigStore(sql);
+  const memoryConfig = actor.actor.config;
 
   // CraftStore from agent-utils — FTS5-indexed tool storage
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
@@ -459,12 +460,12 @@ export function createCFRuntime(
   const schedule = createRealSchedule(agent);
   // The scaffold is workspace state: written by the session user, read by
   // whichever actor this runtime belongs to.
-  const identity = createIdentity(agent, access.ctx, originVfs, sql, actor.scaffoldPath);
+  const identity = createIdentity(actor.actor, originVfs, sql, actor.scaffoldPath);
 
   // Execution router — manages workspace plus the separate sandbox and laptop.
   // Live shell-approval policy every gated exec boundary consults (`run`'s
   // workspace/router dispatch and every ExecutorProvider's exec — see
-  // execution/approval.ts). `mode` reads agent_config directly off the SAME
+  // execution/approval.ts). `mode` reads actor_config directly off the SAME
   // store the memory backfill above already opened, so a setShellApprovalMode
   // RPC takes effect on the very next command with no toolset rebuild needed.
   // `deferrals` is what stops an unattended run dying on its first `sudo`: with
@@ -477,7 +478,7 @@ export function createCFRuntime(
   // ROOT vs FACET. `agent.name === actor.workspaceName` is the same test the
   // sandbox handle uses below to decide who owns the container. A facet — a
   // head, a subordinate — is a different Durable Object with its own empty
-  // `agent_config`, and grants are only ever written to the ROOT's, so a facet
+  // `actor_config`, and grants are only ever written to the ROOT's, so a facet
   // reading its own store found no grants and no mode and re-asked for consent
   // the owner had already given on the workspace. Every agent in a workspace
   // shares one container, so it must share that container's granted
@@ -620,7 +621,7 @@ export function createCFRuntime(
       // container's own affair and happens in KinuSandbox.onStart, inside the
       // blockConcurrencyWhile that no exec can jump ahead of. The predicate this
       // replaced ("only the container's owner may decide a restore") existed to
-      // stop a facet reading its own empty `agent_config` and latching the
+      // stop a facet reading its own empty `actor_config` and latching the
       // container as restored; with the state on the container's own object
       // there is one reader, one writer, and nothing to arbitrate.
       // The executor carries its own file view over this same handle, for the
@@ -745,6 +746,7 @@ export function createCFRuntime(
   }));
 
   const runtime: CFRuntime = {
+    actor: actor.actor,
     storage: { vfs: agentFileVfs, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
     agentStateVfs: originVfs,
     startupWork,
@@ -752,9 +754,8 @@ export function createCFRuntime(
     get judgeModel() { return profileLane('judge'); },
     get fastLlm() { return profileLane('fast'); },
     get advisorLlm() { return profileLane('advisor'); },
-    spawnBranch: createFacetSpawner(agent, env, actor),
+    spawnBranch: createFacetSpawner(agent, actor),
     abortBranch: createFacetAborter(agent),
-    releaseBranch: createFacetReleaser(agent),
     executionRouter,
     shell,
     localVfs: baseWorkspaceVfs,
@@ -1001,15 +1002,14 @@ function createRealSchedule(agent: AgentHost): Schedule {
 // ── Identity ─────────────────────────────────────────────────────
 
 function createIdentity(
-  agent: AgentHost,
-  ctx: DurableObjectState,
+  actor: ActorHandle,
   vfs: CoreVFS,
   sql: SqlExecutor,
   scaffoldPath: string,
 ): Identity {
   return {
-    id: ctx.id.toString(),
-    name: agent.name,
+    id: actor.actorId,
+    name: actor.name,
     // Core's ONE scaffold surface (scaffold/surface.ts): `.vN` files are the
     // canonical source, `scaffold_versions.status='current'` is the single
     // current pointer, and exists()/read() resolve POINTER-FIRST so a stale
@@ -1020,112 +1020,16 @@ function createIdentity(
 
 // ── MCTS branches via real Facets (spawn seam: facet-spawn.ts) ───
 
-function createFacetSpawner(agent: AgentHost, env: Env, actor: ActorRuntimeIdentity): (branchId: string) => Promise<BranchHandle> {
-  return async (branchId: string): Promise<BranchHandle> => {
-    try {
-      return await spawnBranchFacet(agent, branchId, {
-        ownerUserId: actor.ownerUserId(),
-        capabilityToken: actor.capabilityToken(),
-        // Without this a branch has no parent stub, so it cannot reach the
-        // profile that decides its tier — and `mcts` is `invocation`-routed, so
-        // every branch ran the account default at an effort nothing chose while
-        // the turn it belongs to may be on any tier its role selected. It grants
-        // no runtime: containment stays with the branch never calling
-        // `facetRuntime()`, which unit-exploration-containment.test.ts pins.
-        sharedParent: actor.workspaceName,
-      });
-    } catch (err) {
-      diagnostics.failure('mcts.branch_facet_spawn_failed', toKinuError({
-        doing: 'spawning a branch facet',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { branchId });
-      return createInlineBranch(agent, env);
-    }
-  };
+function createFacetSpawner(agent: AgentHost, actor: ActorRuntimeIdentity): (branchId: string) => Promise<BranchHandle> {
+  return async (branchId: string): Promise<BranchHandle> => spawnBranchFacet(agent, branchId, {
+    ownerUserId: actor.ownerUserId(), capabilityToken: actor.capabilityToken(), sharedParent: actor.workspaceName,
+  });
 }
 
 function createFacetAborter(agent: AgentHost): (branchId: string) => Promise<void> {
-  return async (branchId: string) => { abortExplorationFacet(agent, branchId); };
-}
-
-/**
- * TERMINAL release, and the reason this is a separate factory from the aborter
- * above rather than a rename of it: `deleteSubAgent` WIPES the facet's SQLite,
- * which is charged to the ROOT DO's shared ~10 GB quota whose overflow is an
- * uncatchable reset. Merely aborting a branch leaves that database behind
- * forever, because branch ids are never reused.
- *
- * Safe to wipe only because the MCTS engine calls this in the terminal
- * `finally` of an iteration — strictly after that iteration's reflection has
- * already read the branch's own `traces` table. Anything earlier is data loss,
- * which is why mid-flight cancellation still goes through `createFacetAborter`.
- *
- * A branch that fell back to `createInlineBranch` has no facet at all, so
- * releasing one must be harmless: `ctx.facets.delete` does not raise for an
- * absent facet, and the catch below covers the remaining case anyway.
- *
- * Reported rather than thrown, and this is the one place in the module where
- * that is the LOUDER choice: `mcts/engine.ts` releases through
- * `Promise.allSettled`, which discards rejections, so throwing here would
- * produce silence at exactly the moment a database was stranded. A leaked facet
- * database spends the quota whose overflow resets the whole workspace.
- */
-function createFacetReleaser(agent: AgentHost): (branchId: string) => Promise<void> {
   return async (branchId: string) => {
-    try {
-      await deleteExplorationFacet(agent, branchId);
-    } catch (err) {
-      diagnostics.failure('mcts.branch_facet_storage_leaked', toKinuError({
-        doing: "reclaiming a branch facet's storage",
-        cause: err,
-        otherwise: 'io',
-      }), { branchId });
-    }
+    const actor = await agent.actorDirectory({ action: 'resolveCreation', creationId: branchId });
+    if (actor.state !== 'deleted') abortActorFacet(agent, actor.storageKey);
   };
 }
 
-/**
- * Inline branch fallback — used when Facets are unavailable.
- *
- * Storage isolation (lean/Kinu/MCTS/StorageIsolation.lean: branch storage
- * disjoint from the orchestrator's) is enforced STRUCTURALLY by capturing only
- * the LLM config, never the agent reference or its storage. The closure has
- * no path to agent.sql or agent.ctx.storage.
- */
-function createInlineBranch(agent: AgentHost, env: Env): BranchHandle {
-  // Capture only env (not agent.sql / agent.ctx.storage) so the branch
-  // closure satisfies StorageIsolation. Stored credentials are not available
-  // here — with a null UserDO stub the registry's sync default skips the
-  // credential-gated workers-ai and uses the env-bound ai-gateway, which
-  // needs no credential reads.
-  const reg = createAgentProviderRegistry({
-    env,
-    userDO: null,
-    appTitle: 'Kinu (inline branch)',
-    workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
-  });
-  const spec = reg.normalizeSpecSync(null);
-  // The same rollout every facet runs, at the rollout stage's effort for this
-  // model's own provider family; a fallback branch is scored beside a facet one.
-  const route = (): BranchRoute => {
-    const providerOptions = reasoningEffortOptions(
-      REASONING_EFFORT_FOR_STAGE.mcts_rollout, parseModelSpec(spec).provider,
-    );
-    const model = reg.resolveModel(spec);
-    return providerOptions ? { model, providerOptions } : { model };
-  };
-
-  return {
-    explore: (history, craftedTools, languages, mode, siblings = []) => exploreRollout(route(), {
-      mode,
-      context: formatInheritedContext(history),
-      craftedTools,
-      languages,
-      siblings,
-    }),
-    // No trace table on this path, so the attempt is empty and the shared
-    // prompt drops its heading.
-    generateReflection: (task, outcome) => reflectRollout(route(), { task, attempt: '', outcome }),
-  };
-}

@@ -9,19 +9,16 @@
 // the reply envelope it actually sent are both observable.
 import { describe, test, expect, afterAll, mock } from 'bun:test';
 import * as childProcess from 'node:child_process';
-import { fork, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createBranchSpawner } from '../src/branch-process';
 
 const dir = mkdtempSync(join(tmpdir(), 'kinu-branch-test-'));
-const workerPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'branch-worker.ts');
-let child: ChildProcess | null = null;
 
 // The spawner keeps its ChildProcess private (`activeBranches`), so the
 // parent-side reply policy cannot be reached without the handle. This wraps
@@ -48,14 +45,15 @@ function forkedChild(): ChildProcess {
 // database, already carrying every table createCLIRuntime provisions. A worker
 // that cannot open it is a broken workspace, so the fixture provisions the two
 // tables it reads rather than leaving the path absent.
+import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
+import { initActorStateSchema } from '@kinu.run/core';
 const parentDbPath = `${dir}.db`;
 const parentDb = new Database(parentDbPath, { create: true });
-parentDb.exec('CREATE TABLE crafted_tools (name TEXT PRIMARY KEY, description TEXT NOT NULL)');
-parentDb.exec('CREATE TABLE agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-parentDb.close();
+const parentRuntime = createCLIRuntime(parentDb, { dbPath: parentDbPath, llm: null, hostRoot: null, agentName: 'branch-parent' });
+initActorStateSchema(makeWorkspaceSchemaSql(parentDb));
 
 afterAll(() => {
-  child?.kill('SIGTERM');
+  parentDb.close();
   rmSync(dir, { recursive: true, force: true });
   rmSync(parentDbPath, { force: true });
 });
@@ -117,17 +115,10 @@ function startModelEndpoint() {
   };
 }
 
-async function spawnWorker(): Promise<ChildProcess> {
-  if (child) return child;
-  child = fork(workerPath, [join(dir, 'branch.db')], { stdio: 'pipe' });
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('worker startup timeout')), 30_000);
-    child!.on('message', (msg: { method: string }) => {
-      if (msg.method === 'ready') { clearTimeout(timeout); resolve(); }
-    });
-    child!.on('error', reject);
-  });
-  return child;
+async function spawnWorker() {
+  const spawner = createBranchSpawner(dir, { llm: null, parent: parentRuntime.actor });
+  const handle = await spawner.spawn('protocol-only');
+  return { proc: forkedChild(), release: () => handle.release() };
 }
 
 // The worker answers only what BranchCallSchema parses. A method outside the
@@ -137,7 +128,7 @@ async function spawnWorker(): Promise<ChildProcess> {
 describe('branch-worker protocol — no self-rating', () => {
   test('neither exploration nor reflection caps the branch model output', async () => {
     const endpoint = startModelEndpoint();
-    const { spawn, abort } = createBranchSpawner(dir, { llm: endpoint.llm });
+    const { spawn, abort } = createBranchSpawner(dir, { llm: endpoint.llm, parent: parentRuntime.actor });
     const handle = await spawn('uncapped-branch');
     try {
       const exploration = await handle.explore(HISTORY, [], LANGUAGES, 'plan', []);
@@ -164,7 +155,7 @@ describe('branch-worker protocol — no self-rating', () => {
   });
 
   test("'evaluate' is not part of the protocol anymore", async () => {
-    const proc = await spawnWorker();
+    const { proc, release } = await spawnWorker();
     const seen: Array<JsonValue> = [];
     const listener = (message: JsonValue): void => {
       seen.push(message);
@@ -180,18 +171,18 @@ describe('branch-worker protocol — no self-rating', () => {
       expect(seen).toEqual([]);
     } finally {
       proc.off('message', listener);
+      await release();
     }
   });
 
-  test('the BranchHandle the spawner builds exposes only explore + generateReflection', async () => {
-    const { spawn, abort } = createBranchSpawner(dir, {
-      llm: { name: 'workers-ai', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' },
-    });
+  test('a branch handle releases its exact process after the final read', async () => {
+    const { spawn } = createBranchSpawner(dir, { llm: { name: 'workers-ai', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' }, parent: parentRuntime.actor });
     const handle = await spawn('seam-test-branch');
     try {
-      expect(Object.keys(handle).sort()).toEqual(['explore', 'generateReflection']);
+      await handle.release();
+      await expect(handle.generateReflection('after release')).rejects.toThrow();
     } finally {
-      await abort('seam-test-branch');
+      await handle.release();
     }
   });
 });
@@ -203,7 +194,7 @@ describe('branch-worker protocol — no self-rating', () => {
 describe('branch worker failure replies', () => {
   test("an error reply always carries a message, and it is the provider's", async () => {
     const endpoint = startModelEndpoint();
-    const { spawn, abort } = createBranchSpawner(dir, { llm: endpoint.llm });
+    const { spawn, abort } = createBranchSpawner(dir, { llm: endpoint.llm, parent: parentRuntime.actor });
     const handle = await spawn('failing-branch');
     // The worker's own reply envelopes, read off the real IPC channel: the
     // spawner's promise only ever shows what the PARENT made of them.
@@ -240,7 +231,7 @@ describe('branch worker failure replies', () => {
 
   test('the parent rejects on error PRESENCE, not truthiness, and on a missing result', async () => {
     const endpoint = startModelEndpoint();
-    const { spawn, abort } = createBranchSpawner(dir, { llm: endpoint.llm });
+    const { spawn, abort } = createBranchSpawner(dir, { llm: endpoint.llm, parent: parentRuntime.actor });
     const handle = await spawn('policy-branch');
     const proc = forkedChild();
     // The parent tags every call on a child with ascending ids from 1, and a

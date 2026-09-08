@@ -262,7 +262,7 @@ describe('local workspace creation publishes or leaves nothing', () => {
       });
       const db = new Database(agentDbPath('published-ws'), { readonly: true });
       const identity = db.query('SELECT name FROM workspace_identity LIMIT 1').get();
-      const model = db.query("SELECT value FROM agent_config WHERE key = 'model'").get();
+      const model = db.query("SELECT value FROM actor_config WHERE key = 'model'").get();
       db.close();
       console.log(JSON.stringify({ identity: identity?.name, model: Boolean(model?.value) }));
       report('published-ws');
