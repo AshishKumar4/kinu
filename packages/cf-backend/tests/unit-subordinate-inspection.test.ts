@@ -109,4 +109,12 @@ describe('owner reads of retained subordinate paths', () => {
     expect(v.safeParse(SubordinateInspectionRequestSchema, { path: [], view: 'events', query: {} }).success).toBe(false);
     expect(v.safeParse(SubordinateInspectionRequestSchema, { path: ['foreign/path'], view: 'children', page: {} }).success).toBe(false);
   });
+  test('retained history uses the exact roster name without an inspection-only cap', async () => {
+    const name = 'reader'.repeat(30);
+    const root = actor([]); const child = actor([name]); root.add(name, child.port);
+    void child.rt.storage.sql`INSERT INTO messages (id,role,content,created_at) VALUES ('message', 'user', 'retained answer', 1)`;
+    expect(await read(root, { path: [name], view: 'history', page: {} })).toMatchObject({
+      view: 'history', path: [name], page: { status: 'end', items: [{ content: 'retained answer' }] },
+    });
+  });
 });
