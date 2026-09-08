@@ -113,6 +113,15 @@ const slateFacetProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+const retainedFacetProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/retained-facet-probe.mjs', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/retained-facet-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
+  alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 export default defineConfig({
   plugins: [
     standardDecorators(),
@@ -145,6 +154,16 @@ export default defineConfig({
             path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
           })),
           durableObjects: { SLATE_FACET_ROOT: { className: 'SlateFacetRootProbe', useSQLite: true } },
+        }, {
+          name: 'retained-facet-probe', ...workerCompatibility,
+          modules: retainedFacetProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          durableObjects: {
+            RETAINED_FACET_SDK: { className: 'FacetReadRoot', useSQLite: true },
+            RETAINED_FACET_ACTOR: { className: 'OrchestratorAgent', useSQLite: true },
+          },
         }],
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
@@ -169,6 +188,8 @@ export default defineConfig({
           PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', scriptName: 'hosted-preview-probe', useSQLite: true },
           SLATE_PROCESS_PROBE: { className: 'SlateProcessProbeDO', useSQLite: true },
           SLATE_FACET_ROOT: { className: 'SlateFacetRootProbe', scriptName: 'slate-facet-probe', useSQLite: true },
+          RETAINED_FACET_SDK: { className: 'FacetReadRoot', scriptName: 'retained-facet-probe', useSQLite: true },
+          RETAINED_FACET_ACTOR: { className: 'OrchestratorAgent', scriptName: 'retained-facet-probe', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
         },
       },
