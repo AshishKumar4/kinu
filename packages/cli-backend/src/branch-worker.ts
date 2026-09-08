@@ -15,7 +15,7 @@
 
 import { Database } from 'bun:sqlite';
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID,
+  DEFAULT_WORKERS_AI_MODEL_ID, FacetIdentity, WorkspaceActorDirectory,
   exploreRollout,
   formatInheritedContext,
   parseModelSpec,
@@ -35,7 +35,8 @@ import {
 } from './branch-protocol';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver';
 import { createFileCodexAuthStore } from './codex-auth-store';
-
+import { LocalActorProcessBootstrapSchema } from './actor-identity';
+import { makeSql, makeSqlExec } from './runtime';
 const dbPath = process.argv[2];
 if (!dbPath) {
   diagnostics.failure(
@@ -87,9 +88,23 @@ const modelResolver = createLocalModelResolver({
     : undefined,
 });
 
-// Open the branch's SQLite DB for trace storage
+const encodedBootstrap = process.env.KINU_ACTOR_BOOTSTRAP;
+if (!encodedBootstrap) throw new KinuError('missing', 'The branch has no root-issued actor bootstrap.');
+const bootstrap = v.parse(LocalActorProcessBootstrapSchema, JSON.parse(encodedBootstrap));
+const rootDb = new Database(bootstrap.rootDbPath, { readonly: true });
+const rootSql = makeSql(rootDb);
+const owner = rootSql<{ id: string; name: string; owner_user_id: string }>`SELECT id, name, owner_user_id FROM workspace_identity`[0];
+if (!owner || owner.id !== bootstrap.reference.workspaceId) throw new KinuError('denied', 'The branch belongs to a different workspace.');
+const directory = new WorkspaceActorDirectory(rootSql, { workspaceId: owner.id, ownerUserId: owner.owner_user_id });
+const validateActor = () => {
+  const entry = directory.apply(bootstrap.parent, bootstrap.parentStoragePath, { action: 'validate', name: bootstrap.name, reference: bootstrap.reference });
+  if (entry.storageKey !== bootstrap.storageKey || entry.kind !== 'branch') throw new KinuError('denied', 'The branch physical identity does not match its directory record.');
+};
+validateActor();
 const db = new Database(dbPath);
 db.exec('PRAGMA journal_mode = WAL');
+new FacetIdentity(makeSqlExec(db)).seed({ actor: { ...bootstrap.reference, name: bootstrap.name, storageKey: bootstrap.storageKey },
+  ownerUserId: owner.owner_user_id, parentWorkspace: owner.name, capabilityToken: null });
 db.exec(`CREATE TABLE IF NOT EXISTS traces (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   step INTEGER NOT NULL, text TEXT NOT NULL
@@ -107,6 +122,7 @@ if (parentDbPath) {
 }
 
 process.on('message', async (rawMessage: JsonValue) => {
+  validateActor();
   const parsed = v.safeParse(BranchCallSchema, rawMessage);
   if (!parsed.success) {
     const attributed = v.safeParse(BranchCallAttributionSchema, rawMessage);
@@ -182,11 +198,13 @@ send({ method: BRANCH_READY });
 
 process.once('exit', () => {
   parentDb?.close();
+  rootDb.close();
   db.close();
 });
 
 function readStoredModelSpec(): string | null {
-  const row = parentDb?.query<{ value: string }, []>("SELECT value FROM agent_config WHERE key = 'model' LIMIT 1").get();
+  validateActor();
+  const row = parentDb?.query<{ value: string }, [string]>("SELECT value FROM actor_config WHERE actor_id = ? AND key = 'model' LIMIT 1").get(bootstrap.parent.actorId);
   return row?.value ?? null;
 }
 

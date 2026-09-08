@@ -6,7 +6,7 @@
  * On Linux: child_process.fork(branch-worker.ts) with its own SQLite DB
  */
 
-import type { BranchExploration, BranchHandle, JsonValue, SpawnBranch, AbortBranch, LLMProviderConfig } from '@kinu.run/core';
+import { explorationActorKey, type ActorHandle, type BranchExploration, type BranchHandle, type JsonValue, type SpawnBranch, type AbortBranch, type LLMProviderConfig } from '@kinu.run/core';
 import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -18,8 +18,8 @@ import {
   type BranchCall, type BranchCallReply, type BranchMethod,
 } from './branch-protocol';
 import type { LocalProviderCredentials } from './model-resolver';
+import { registerLocalActor, localActorProcessBootstrap, retireLocalActor } from './actor-identity';
 
-const activeBranches = new Map<string, ChildProcess>();
 
 /**
  * A branch RPC carries NO wall clock any more.
@@ -53,9 +53,7 @@ interface PendingCall {
 }
 
 export interface BranchSpawnerConfig {
-  /** The parent's default endpoint for bare ids — null when nothing derives
-   *  one. The child then resolves explicit specs through its own registry and
-   *  has no default, exactly like the parent. */
+  readonly parent: ActorHandle;
   llm: LLMProviderConfig | null;
   providerCredentials?: LocalProviderCredentials;
   codexConfigPath?: string;
@@ -80,6 +78,7 @@ export function createBranchSpawner(
   config: BranchSpawnerConfig,
 ): BranchSpawner {
   const branchRoot = basePath === null ? null : `${basePath}/branches`;
+  const activeBranches = new Map<string, ChildProcess>();
 
   const spawn: SpawnBranch = async (branchId: string): Promise<BranchHandle> => {
     if (branchRoot === null || basePath === null) {
@@ -96,7 +95,8 @@ export function createBranchSpawner(
     // from one `bun test packages/cli-backend/` run, none of them ever used and
     // none of them removed.
     mkdirSync(branchRoot, { recursive: true });
-    const dbPath = `${branchRoot}/${branchId}.db`;
+    const binding = registerLocalActor(config.parent, { name: explorationActorKey(branchId), creationId: branchId, kind: 'branch', lifetime: 'task', dbPathForKey: (key) => `${branchRoot}/${key}.db` });
+    const dbPath = binding.dbPath;
 
     // Locate the worker script relative to this file
     const workerPath = join(dirname(fileURLToPath(import.meta.url)), 'branch-worker.ts');
@@ -110,6 +110,7 @@ export function createBranchSpawner(
       KINU_LLM_HEADERS: JSON.stringify(config.llm?.headers ?? {}),
       KINU_PROVIDER_CREDENTIALS: JSON.stringify(config.providerCredentials ?? {}),
       KINU_PARENT_DB: `${basePath}.db`,
+      KINU_ACTOR_BOOTSTRAP: JSON.stringify(localActorProcessBootstrap(config.parent, binding)),
     };
     if (config.codexConfigPath) env.KINU_CONFIG_PATH = config.codexConfigPath;
 
@@ -120,6 +121,7 @@ export function createBranchSpawner(
       // No execArgv needed — when running under bun, fork() inherits bun's runtime
     });
     activeBranches.set(branchId, child);
+    const exited = Promise.withResolvers<void>();
     let nextId = 1;
     const pending = new Map<number, PendingCall>();
     const startup = Promise.withResolvers<void>();
@@ -169,8 +171,8 @@ export function createBranchSpawner(
     // cause, not timekeeping.
     child.once('exit', (code) => {
       child.off('message', onMessage);
-      activeBranches.delete(branchId);
-      disposeBranchFiles(dbPath);
+      if (activeBranches.get(branchId) === child) activeBranches.delete(branchId);
+      exited.resolve();
       startup.reject(code === 0 || code === null
         ? new Error('Branch worker exited before sending ready')
         : new Error(`Branch worker exited with code ${code}`));
@@ -195,11 +197,20 @@ export function createBranchSpawner(
       await startup.promise;
     } catch (error) {
       child.kill('SIGTERM');
+      await exited.promise;
+      await retireLocalActor(config.parent, binding.name, binding.reference, async () => { disposeBranchFiles(dbPath); });
       throw error;
     }
 
     return {
-      // The handle still takes tools because BranchHandle names them. They
+      release: async () => {
+        await retireLocalActor(config.parent, binding.name, binding.reference, async () => {
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+          await exited.promise;
+          disposeBranchFiles(dbPath);
+        });
+      },
+      // The handle retains the parent-defined tools contract.
       // never reach the wire: the worker reads crafted tools from the parent
       // database.
       explore: (history, _tools, languages, mode, siblings = []) =>
@@ -215,7 +226,7 @@ export function createBranchSpawner(
     const child = activeBranches.get(branchId);
     if (child) {
       child.kill('SIGTERM');
-      activeBranches.delete(branchId);
+      if (activeBranches.get(branchId) === child) activeBranches.delete(branchId);
     }
   };
 

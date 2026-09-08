@@ -95,7 +95,7 @@ async function addedAgent(seed: {
   if (seed.roleId) identity.roleId = seed.roleId;
   const child = await hiredSubordinateHarness(parent, identity);
   parent.agent.harnessRoster().create({
-    name,
+    name, actorReference: { actorId: child.agent.observeRuntime().actor.actorId, workspaceId: child.agent.observeRuntime().actor.workspaceId, parentActorId: child.agent.observeRuntime().actor.parentActorId }, birth: null, deleteRequested: false,
     createdBy: 'user',
     status: 'idle',
     currentTask: null,

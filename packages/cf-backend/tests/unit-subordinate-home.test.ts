@@ -10,7 +10,7 @@
  * with the storage on a wipe, and keeps both on an archive.
  */
 import { describe, expect, test } from 'bun:test';
-import { agentHome, agentTmpRoot, subordinateAgentName } from '@kinu.run/core';
+import { agentHome, agentTmpRoot, actorReferenceOf, subordinateAgentName } from '@kinu.run/core';
 import { hiredSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
 const hire = {
@@ -24,7 +24,7 @@ describe('a hosted subordinate runs as its own home', () => {
   test('seeding provisions the home on the workspace and the runtime acts as that uid', async () => {
     const parent = orchestratorHarness();
     const child = await hiredSubordinateHarness(parent, { ...hire, name: 'builder-1' });
-    const agentName = subordinateAgentName('builder-1');
+    const agentName = subordinateAgentName(child.agent.observeRuntime().actor.storageKey);
 
     const home = await parent.agent.statWorkspaceFile(agentHome(agentName));
     expect(home).toMatchObject({ ok: true, value: expect.objectContaining({ isDir: true }) });
@@ -48,17 +48,18 @@ describe('a hosted subordinate runs as its own home', () => {
 
   test('a wipe releases the home with the storage; an archive keeps both', async () => {
     const parent = orchestratorHarness();
-    await hiredSubordinateHarness(parent, { ...hire, name: 'builder-2' });
-    const agentName = subordinateAgentName('builder-2');
+    const child = await hiredSubordinateHarness(parent, { ...hire, name: 'builder-2' });
+    const actor = child.agent.observeRuntime().actor;
+    const agentName = subordinateAgentName(actor.storageKey);
     const directory = { ok: true, value: expect.objectContaining({ isDir: true }) };
     expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject(directory);
 
     // An archive keeps the rows readable, and the tree with them.
-    await parent.agent.observeSubordinateRuntime().dismiss('builder-2', true);
+    await parent.agent.observeSubordinateRuntime().dismiss('builder-2', true, actorReferenceOf(actor));
     expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject(directory);
 
     // A wipe takes the home and the scratch with the storage.
-    await parent.agent.observeSubordinateRuntime().dismiss('builder-2', false);
+    await parent.agent.observeSubordinateRuntime().dismiss('builder-2', false, actorReferenceOf(actor));
     expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject({ ok: true, value: null });
     expect(await parent.agent.statWorkspaceFile(agentTmpRoot(agentName))).toMatchObject({ ok: true, value: null });
   });

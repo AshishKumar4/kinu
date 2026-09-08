@@ -19,16 +19,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
 
   test('a hired subordinate renders as a delegate ahead of any search roster', () => {
     const agent = harness().agent;
-    agent.harnessRoster().create({
-      name: 'scout',
-      createdBy: 'orchestrator',
-      status: 'working',
-      currentTask: 'map the failure surface',
-      createdAt: Date.now(),
-      dismissedAt: null,
-      lifetime: 'durable',
-      taskEventId: null,
-    });
+    agent.harnessRoster().create({ name: 'scout', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'map the failure surface', createdAt: Date.now(), dismissedAt: null, lifetime: 'durable', taskEventId: null });
 
     const delegates = agent.observeDynamicContext().delegates;
     expect(delegates?.items).toContainEqual({

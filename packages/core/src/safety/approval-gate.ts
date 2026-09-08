@@ -532,7 +532,7 @@ export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
  * with no toolset rebuild required.
  */
 export interface ShellApprovalPolicy {
-  /** Current standing mode. A live read (e.g. straight off agent_config). */
+  /** Current standing mode. A live read (e.g. straight off actor_config). */
   mode(): ShellApprovalMode;
   /** Has the owner already said yes to this rule on this executor, for good?
    *  A live read of the stored grants, consulted BEFORE anyone is asked — the
@@ -559,7 +559,7 @@ export interface ShellApprovalPolicy {
    * caller's own storage, and wrong for a facet — a head, a subordinate —
    * whose grants live in the ROOT workspace's storage, one DO away and
    * reachable only by RPC. Without this, a facet reads its own empty
-   * `agent_config` and re-asks for consent the owner already gave.
+   * `actor_config` and re-asks for consent the owner already gave.
    *
    * Called once per decision, before anything is read, and only where the
    * answers are not local. Omitted for a root actor: its storage IS the
@@ -846,7 +846,7 @@ export function grantsAreSubset(
  * — the ones the owner granted — or a SUBSET. Two failure modes this rules
  * out, and both were live:
  *
- *   Too few. A facet's `agent_config` is its own and nobody writes grants to
+ *   Too few. A facet's `actor_config` is its own and nobody writes grants to
  *   it, so a head read an empty list and re-asked for consent the owner had
  *   already given on the workspace. `own === null` means "this facet has said
  *   nothing about its own reach", which is not the same as "it has none" —

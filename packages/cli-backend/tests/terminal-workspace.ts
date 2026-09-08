@@ -9,7 +9,7 @@
 import { Database } from 'bun:sqlite';
 import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
-  captureAlternateTakes, createAgentConfigStore, initAgentConfigTable,
+  captureAlternateTakes, initAgentConfigTable,
   initAlternateTakesTable, initScaffoldTables, initSearchTables,
   INITIAL_SCAFFOLD_SOURCE,
   type LLMProviderConfig,
@@ -52,7 +52,7 @@ export async function armShadowTrials(rt: CLIRuntime): Promise<void> {
     VALUES (0, ${Date.now()}, ${'initial bootstrap'})`;
   void rt.storage.sql`INSERT OR REPLACE INTO scaffold_versions (version, written_at, rationale, status)
     VALUES (1, ${Date.now()}, ${'candidate'}, ${'pending'})`;
-  createAgentConfigStore(rt.storage.sql).setShadowSampleRate(1);
+  rt.actor.config.setShadowSampleRate(1);
 }
 
 /** One competing take set, captured mid-turn the way a real search converge

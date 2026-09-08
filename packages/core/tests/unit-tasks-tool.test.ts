@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import {
   buildBuiltinTools, initAllTables, initTaskListTable, BUILTIN_TOOL_SPECS,
   createTasksCodemodeProvider, TaskListStore, initAgentConfigTable,
-  buildSystemPromptSync, createAgentConfigStore,
+  buildSystemPromptSync,
   BUILTIN_PROFILE_CATALOG, BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel, profileCatalogDigest,
   type AgentRuntime, type CodemodeProvider, type JsonValue, type ProfileCatalogEnvelope,
 } from '../src/index';
@@ -196,7 +196,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
     initAllTables(testSql.execRaw, testSql.sql);
     initTaskListTable(testSql.execRaw);
     const taskList = new TaskListStore(rt.storage.sql);
-    const provider = createTasksCodemodeProvider(taskList, createAgentConfigStore(rt.storage.sql));
+    const provider = createTasksCodemodeProvider(taskList, rt.actor.config);
 
     const added = v.parse(
       AddedSchema,
@@ -221,7 +221,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
     initAllTables(testSql.execRaw, testSql.sql);
     initTaskListTable(testSql.execRaw);
     const taskList = new TaskListStore(rt.storage.sql);
-    const provider = createTasksCodemodeProvider(taskList, createAgentConfigStore(rt.storage.sql));
+    const provider = createTasksCodemodeProvider(taskList, rt.actor.config);
     await codemodeExecute(provider, 'add')(['Parent task']);
     await codemodeExecute(provider, 'add')(['Child task'], 't1');
     await codemodeExecute(provider, 'update')('t2', 'dropped');
@@ -239,7 +239,7 @@ describe('tasks action=mode — the agent\'s durable role', () => {
     initAllTables(testSql.execRaw, rt.storage.sql);
     initTaskListTable(testSql.execRaw);
     initAgentConfigTable(testSql.execRaw);
-    return { tasks: nativeTasks(rt), rt, config: createAgentConfigStore(rt.storage.sql) };
+    return { tasks: nativeTasks(rt), rt, config: rt.actor.config };
   }
 
   function roleSection(roleId: keyof typeof BUILTIN_ROLE_DEFINITIONS) {

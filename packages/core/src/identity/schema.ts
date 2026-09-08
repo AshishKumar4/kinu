@@ -170,13 +170,17 @@ export function initActorTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   initCodemodeStateTable(execRaw);
 }
 
-/** Initialize all workspace tables. Idempotent — safe to call on every startup. */
-export function initAllTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
+export function initWorkspaceOwnershipTables(execRaw: RawSqlExec): void {
   execRaw(WORKSPACE_IDENTITY_DDL);
-  initActorTables(execRaw, sql);
   execRaw(FORK_LINEAGE_DDL);
   execRaw(FORK_TRANSFER_DDL);
   execRaw(FORK_STAGED_FILES_DDL);
+}
+
+/** Initialize a workspace ownership root and its actor state. */
+export function initAllTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
+  initWorkspaceOwnershipTables(execRaw);
+  initActorTables(execRaw, sql);
 }
 
 /**

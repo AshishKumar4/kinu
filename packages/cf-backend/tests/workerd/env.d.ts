@@ -21,7 +21,7 @@ import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { SlateProcessProbeDO, SlateDepthProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { SlateBinding } from '../../src/slates/bindings';
-
+interface ActorIdentityRpc extends Rpc.DurableObjectBranded { legacy(): Promise<object>; fresh(): Promise<object>; lifecycle(): Promise<object>; }
 interface RetainedFacetRpc extends Rpc.DurableObjectBranded {
   exercise(operation: string): Promise<object>;
 }
@@ -63,6 +63,7 @@ declare global {
       SLATE_FACET_ROOT: DurableObjectNamespace<SlateFacetRootRpc>;
       RETAINED_FACET_SDK: DurableObjectNamespace<RetainedFacetRpc>;
       RETAINED_FACET_ACTOR: DurableObjectNamespace<RetainedFacetRpc>;
+      ACTOR_IDENTITY: DurableObjectNamespace<ActorIdentityRpc>;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }

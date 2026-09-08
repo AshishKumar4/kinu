@@ -20,16 +20,17 @@ import {
   type HeadSplitRequest, type HeadSplitResult,
   type HeadMergeModelBinder, type ResolvedTurnProfile,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
-  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, type HeadJournal, headAgentName,
+  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, type HeadJournal, headAgentName, explorationActorKey, facetHomeReleaser,
   createStateCodemodeProvider,
   headMergeLLM,
   localMissionScope,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildCLIHeadRuntime, cleanupFacetCwdScratch, type CLIRuntime } from './runtime';
+import { buildCLIHeadRuntime, makeSqlExec, cleanupFacetCwdScratch, type CLIRuntime } from './runtime';
+import { registerLocalActor, seedLocalActor, retireLocalActor } from './actor-identity';
 import { createNodeExecuteToolFactory } from './execute-tools-factory';
 import { kinuHome } from './home';
 
@@ -144,14 +145,18 @@ interface HeadScratch {
   dispose(): void;
 }
 
-function openHeadScratch(headId: string): HeadScratch {
+function openHeadScratch(storageKey: string): HeadScratch {
+  if (!/^[A-Za-z0-9_-]+$/.test(storageKey)) throw new KinuError('bad_input', 'The head storage key is not a file component.');
   const dir = join(kinuHome(), 'heads');
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${headId.replace(/[^A-Za-z0-9_-]/g, '_')}.db`);
+  const path = join(dir, `${storageKey}.db`);
   const db = new Database(path, { create: true });
+  let disposed = false;
   return {
     db,
     dispose() {
+      if (disposed) return;
+      disposed = true;
       db.close();
       // The sidecars exist only under WAL/hot journals; `force` covers absence.
       for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(path + suffix, { force: true });
@@ -183,15 +188,15 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
 }
 
 async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: AbortFlag): Promise<HeadReport> {
-  const scratch = openHeadScratch(input.id);
+  const binding = registerLocalActor(deps.parentRuntime.actor, { name: explorationActorKey(input.id), creationId: input.id, kind: 'head', lifetime: 'task', dbPathForKey: (key) => join(kinuHome(), 'heads', `${key}.db`) });
+  const scratch = openHeadScratch(binding.storageKey);
   const db = scratch.db;
-  const agentName = headAgentName(input.id);
+  const agentName = headAgentName(binding.storageKey);
   try {
+    seedLocalActor(db, makeSqlExec(db), binding);
     const capture = new HeadCapture();
-    const rt = buildCLIHeadRuntime(db, {
-      parentRuntime: deps.parentRuntime,
-      agentId: input.id,
-      agentName,
+    const rt = await buildCLIHeadRuntime(db, {
+      parentRuntime: deps.parentRuntime, actorBinding: binding,
       writeObserver: capture.files,
     });
     // execute_tools over the head's OWN router providers (private `workspace.*`
@@ -203,7 +208,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
     // resolves after its own filtering, so `tools.<name>` declares and binds
     // exactly the tools this head holds.
     const sandbox = createNodeExecuteToolFactory({
-      extraProviders: [...deps.codemodeExtras(), createStateCodemodeProvider(rt.storage.sql)],
+      extraProviders: [...deps.codemodeExtras(), createStateCodemodeProvider(rt.actor.programState)],
     });
     const executeTool = (finished: ToolSet) => sandbox({
       native: finished,
@@ -223,7 +228,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
     const journal = deps.journal();
     const inferenceOptions: Parameters<typeof runHeadInference>[1] = {
       model: headModel(input, deps), tools, capture,
-      workspaceLayout: 'private-scratch',
+      workspaceLayout: 'shared-workspace',
       isAborted: () => flag.aborted,
       abortReason: () => flag.reason,
       // Each finished step into the session's journal as it lands — the only
@@ -233,8 +238,15 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
     if (mission) inferenceOptions.mission = mission;
     return await runHeadInference(input, inferenceOptions);
   } finally {
-    scratch.dispose();
-    if (deps.parentRuntime.cwd) cleanupFacetCwdScratch(deps.parentRuntime.cwd, agentName);
+    try {
+      await retireLocalActor(deps.parentRuntime.actor, binding.name, binding.reference, async () => {
+        scratch.dispose();
+        if (deps.parentRuntime.cwd) cleanupFacetCwdScratch(deps.parentRuntime.cwd, agentName);
+        else if (deps.parentRuntime.nodeHome) await facetHomeReleaser(deps.parentRuntime.nodeHome())(agentName);
+      });
+    } finally {
+      scratch.dispose();
+    }
   }
 }
 

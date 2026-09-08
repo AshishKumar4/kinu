@@ -10,6 +10,39 @@
     "elapsed_ms",
     "created_at"
   ],
+  "actor_config@packages/core/src/config/store.ts": [
+    "actor_id",
+    "key",
+    "value"
+  ],
+  "actor_identity@packages/core/src/state/facet-identity.ts": [
+    "id",
+    "user_id",
+    "capability_token",
+    "parent_workspace",
+    "actor_reference",
+    "logical_name",
+    "storage_key"
+  ],
+  "actor_program_state@packages/core/src/tools/state-codemode.ts": [
+    "actor_id",
+    "key",
+    "value",
+    "updated_at"
+  ],
+  "actor_subordinates@packages/core/src/subordinates/roster.ts": [
+    "name",
+    "created_by",
+    "status",
+    "current_task",
+    "created_at",
+    "dismissed_at",
+    "lifetime",
+    "task_event_id",
+    "actor_reference",
+    "birth_request",
+    "delete_requested"
+  ],
   "agent_config@packages/core/src/config/store.ts": [
     "key",
     "value"
@@ -1116,6 +1149,19 @@
     "trigger_id",
     "secret",
     "created_at"
+  ],
+  "workspace_actors@packages/core/src/state/workspace-actors.ts": [
+    "actor_id",
+    "workspace_id",
+    "parent_actor_id",
+    "name",
+    "storage_key",
+    "kind",
+    "lifetime",
+    "created_at",
+    "creation_id",
+    "retiring_at",
+    "deleted_at"
   ],
   "workspace_capability_reconcile@packages/cf-backend/src/user/workspace-capability.ts": [
     "workspace_name",

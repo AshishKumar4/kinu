@@ -2,7 +2,7 @@
  * The `tasks` tool's dispatch logic — add / update / list over one
  * TaskListStore, plus `mode`, the agent's durable active role.
  *
- * The role lives in `agent_config`: one key per agent, resolved fresh at every
+ * The role lives in `actor_config`: one key per agent, resolved fresh at every
  * turn boundary (profiles/resolve.ts), so a switch made here lands on the NEXT
  * turn while the running step keeps the profile it already resolved. Switching
  * goes through profiles/role-change.ts — the owner's allow/approval/locked

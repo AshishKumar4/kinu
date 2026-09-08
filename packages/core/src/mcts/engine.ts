@@ -527,7 +527,7 @@ export async function runMCTS(
           iteration: phase.iteration, remainingBudget: phase.budget, scores,
         });
       } finally {
-        await Promise.allSettled(branchIds.map((id) => rt.releaseBranch(id)));
+        await Promise.allSettled(branchHandles.map((handle) => handle.release()));
       }
     }
 

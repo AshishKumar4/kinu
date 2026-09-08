@@ -22,7 +22,7 @@ import {
   ReplyChannelStore,
   SubordinateRosterStore,
   admitSubordinateTask,
-  createAgentConfigStore,
+  actorReferenceOf, FacetIdentity, SubordinateIdentityStore, SOUL_PATH, bootstrapScaffold, recoverSubordinateLifecycles,
   canonicalConversationId,
   createLocalPeerEndpoint,
   samePeerGroup,
@@ -33,10 +33,10 @@ import {
   delegationExhausted,
   describeSubordinateHandoff,
   inheritedContextFromHistory,
-  initWorkspaceSchema,
+  initActorStateSchema,
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
-  readMission,
+  readSoul,
   renderSoulMarkdown,
   mintSubordinateName,
   subordinateDescriptorSource,
@@ -44,20 +44,18 @@ import {
   TEMPORARY_LIFETIME,
   temporaryRunSettles,
   terminalTaskReport,
-  writeSoul,
   InstructionApprovalStore,
   type AdmittedSubordinateReport,
   type ReportToolDeps,
   type SubordinateReportOrigin,
   type SubordinateEventResult,
   type SubordinateReportStatus,
-  type AgentConfigStore,
+  type AgentConfigStore, type ActorReference,
   type JsonObject,
   type HostedAgentRef,
   type LocalPeerEndpoint,
   type PeerMessage,
   type ReceiveResult,
-  type RoleId,
   subordinateAgentName,
   type SqlExec,
   type SubordinateHandoff,
@@ -65,18 +63,17 @@ import {
   type SubordinateRuntime,
   type TeamToolDeps,
   type TemporaryAgentPort,
-  type TierId,
   type SerializedMessage,
   type WorkMode,
 } from '@kinu.run/core';
-import { createWorkspace } from '@kinu.run/core/identity';
 import { KinuError, diagnostics, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import {
-  makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
+  createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
   cleanupFacetCwdScratch,
   type CLIRuntime,
 } from '../runtime';
 import { openWorkspaceCLI, type CLIOpenConfig } from '../open';
+import { registerLocalActor, openLocalActor, seedLocalActor, bindLocalActor, retireLocalActor, cancelLocalActor, recoverLocalActorRetirements, requireLocalActorWorkspace, localActorMission, type LocalActorBinding } from '../actor-identity';
 import {
   DriverLeaseHold,
   type DriverKind, type DriverLeaseHolder,
@@ -465,7 +462,7 @@ export class LocalAgentHost {
     ws: LocalHostedAgent;
     instructionApprovals?: InstructionApprovalStore;
   }): Promise<HostEntry> {
-    const config = createAgentConfigStore(input.ws.rt.storage.sql);
+    const config = input.ws.rt.actor.config;
     const hubSql = makeSqlExec(input.db);
     const roster = new SubordinateRosterStore(hubSql);
     roster.ensureSchema();
@@ -620,7 +617,7 @@ export class LocalAgentHost {
 
   private async recoverChildren(parent: HostEntry): Promise<void> {
     for (const roster of parent.roster.list()) {
-      if (parent.children.has(roster.name) || this.opening.has(`${parent.key}/${roster.name}`)) continue;
+      if (roster.birth !== null || roster.deleteRequested || parent.children.has(roster.name)) continue;
       try {
         await this.openChildEntry(parent, roster.name);
       } catch (error) {
@@ -636,32 +633,38 @@ export class LocalAgentHost {
   private async openChildEntry(parent: HostEntry, childName: string): Promise<HostEntry> {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
     const key = `${parent.key}/${childName}`;
-    const pending = this.opening.get(key);
+    const binding = openLocalActor(parent.ws.rt.actor, childName, (physicalKey) => this.opts.childDbPath(parent.dbPath, physicalKey));
+    const openingKey = `${parent.key}/${binding.storageKey}`;
+    const pending = this.opening.get(openingKey);
     if (pending) return await pending;
     const existing = parent.children.get(childName);
-    if (existing) return existing;
-
-    const opening = this.openExistingChild(parent, childName, key);
-    this.opening.set(key, opening);
+    if (existing) {
+      if (existing.ws.rt.actor.actorId !== binding.reference.actorId) throw new KinuError('denied', 'The cached actor is a different creation.');
+      requireLocalActorWorkspace(parent.ws.rt.actor, existing.ws.rt.actor);
+      return existing;
+    }
+    const opening = this.openExistingChild(parent, binding, key);
+    this.opening.set(openingKey, opening);
     try {
       return await opening;
     } finally {
-      if (this.opening.get(key) === opening) this.opening.delete(key);
+      if (this.opening.get(openingKey) === opening) this.opening.delete(openingKey);
     }
   }
 
   private async openExistingChild(
     parent: HostEntry,
-    childName: string,
+    binding: LocalActorBinding,
     key: string,
   ): Promise<HostEntry> {
-    const dbPath = this.opts.childDbPath(parent.dbPath, childName);
+    const childName = binding.name;
+    const dbPath = binding.dbPath;
     if (!existsSync(dbPath)) {
       throw new Error(`subordinate "${childName}" has a roster row but no actor state at ${dbPath}`);
     }
     const db = new Database(dbPath);
     try {
-      const openConfig = this.childOpenConfig(parent, childName);
+      const openConfig = this.childOpenConfig(parent, binding);
       const opened = await openWorkspaceCLI(db, dbPath, openConfig);
       const rt = await shareLocalWorkspacePlane(opened.rt, parent.ws.rt, openConfig.facet);
       const ws: LocalHostedAgent = { rt, openConfig };
@@ -700,8 +703,9 @@ export class LocalAgentHost {
    * root's bytes" then holds by construction: whatever the caller put in the
    * root's `openConfig`, a child cannot be opened against a different plane.
    */
-  private childOpenConfig(parent: HostEntry, childName: string): CLIOpenConfig & { facet: string } {
-    return { ...parent.ws.openConfig, cwd: parent.ref.cwd, facet: subordinateAgentName(childName) };
+  private childOpenConfig(parent: HostEntry, binding: LocalActorBinding): CLIOpenConfig & { facet: string } {
+    if (binding.kind !== 'subordinate') throw new KinuError('denied', 'The roster path is not a subordinate actor.');
+    return { ...parent.ws.openConfig, cwd: parent.ref.cwd, facet: subordinateAgentName(binding.storageKey), actorBinding: binding };
   }
 
   /** One agent's peer endpoint, over the same `outbox_peer`/`reply_channels`
@@ -793,6 +797,16 @@ export class LocalAgentHost {
    */
   private async runPass(entry: HostEntry, now: number): Promise<number | null> {
     const hold = this.driverHold(entry);
+    const lifecyclePending = await recoverSubordinateLifecycles(entry.roster, this.childRuntime(entry.key));
+    if (!hold.held()) return nextTriggerAt(entry.db);
+    if (entry.parentKey === null) {
+      await recoverLocalActorRetirements(entry.ws.rt.actor, async (path) => {
+        let dbPath = entry.dbPath;
+        for (const key of path) dbPath = this.opts.childDbPath(dbPath, key);
+        removeChildState(dbPath);
+      });
+      if (!hold.held()) return nextTriggerAt(entry.db);
+    }
     await entry.session.fireDueTriggers(now);
     if (!hold.held()) return nextTriggerAt(entry.db);
     await entry.session.flushPendingDrains();
@@ -800,6 +814,7 @@ export class LocalAgentHost {
     await entry.session.runDueEvolution();
 
     let next = nextTriggerAt(entry.db);
+    if (lifecyclePending) next = next === null ? now : Math.min(next, now);
     // Pending peer mail is durable, so a process that died mid-delivery has
     // rows waiting. Draining here is what re-drives them after a restart, and
     // the soonest retry rides back out so the driver's next sleep covers it.
@@ -1003,7 +1018,7 @@ export class LocalAgentHost {
         inheritedContextFromHistory(readConversationTail(parent)),
       // What this agent is FOR, as its own workspace records it — inherited by
       // an additional agent the owner adds beneath it without saying anything.
-      ownMission: () => readMission(parent.ws.rt.storage.sql) ?? '',
+      ownMission: () => localActorMission(parent.ws.rt, makeSqlExec(parent.db)) ?? '',
       createName: mintSubordinateName,
       broadcast: (event) => parent.session.broadcast(event),
       broadcastTask: (event) => parent.session.broadcast({
@@ -1049,7 +1064,14 @@ export class LocalAgentHost {
   private childRuntime(parentKey: string): SubordinateRuntime {
     const parentOf = () => this.requireEntry(parentKey);
     return {
-      spawn: async (input) => { await this.birthChild(parentOf(), input); },
+      spawn: async (input) => { const child = await this.birthChild(parentOf(), input); return actorReferenceOf(child.ws.rt.actor); },
+      cancelBirth: async (input) => {
+        const parent = parentOf();
+        return cancelLocalActor(parent.ws.rt.actor, { name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime }, async (key) => {
+          removeChildState(this.opts.childDbPath(parent.dbPath, key));
+          cleanupFacetCwdScratch(parent.ref.cwd, subordinateAgentName(key));
+        });
+      },
       assign: async (name, input) => {
         const parent = parentOf();
         const child = await this.openChildEntry(parent, name);
@@ -1069,8 +1091,8 @@ export class LocalAgentHost {
         child.config.setDisplayNameOrigin(displayName, nameOrigin);
         child.session.broadcast({ type: 'workspace_renamed', displayName });
       },
-      dismiss: async (name, keepHistory) => {
-        await this.removeChild(parentOf(), name, keepHistory);
+      dismiss: async (name, keepHistory, reference) => {
+        await this.removeChild(parentOf(), name, keepHistory, reference);
       },
     };
   }
@@ -1097,78 +1119,74 @@ export class LocalAgentHost {
   ): Promise<HostEntry> {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
     const key = `${parent.key}/${input.name}`;
-    if (this.opening.has(key) || this.entries.has(key)) {
-      throw new Error(`subordinate "${input.name}" is already being created`);
+    const binding = registerLocalActor(parent.ws.rt.actor, { name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime, dbPathForKey: (physicalKey) => this.opts.childDbPath(parent.dbPath, physicalKey) });
+    const openingKey = `${parent.key}/${binding.storageKey}`;
+    const pending = this.opening.get(openingKey);
+    if (pending) return await pending;
+    const existing = this.entries.get(key);
+    if (existing) {
+      if (existing.ws.rt.actor.actorId !== binding.reference.actorId) throw new KinuError('denied', 'The actor alias is held by a different creation.');
+      return existing;
     }
-    const opening = this.birthChildEntry(parent, input, key);
-    this.opening.set(key, opening);
+    const opening = this.birthChildEntry(parent, input, key, binding);
+    this.opening.set(openingKey, opening);
     try {
       return await opening;
     } finally {
-      if (this.opening.get(key) === opening) this.opening.delete(key);
+      if (this.opening.get(openingKey) === opening) this.opening.delete(openingKey);
     }
   }
 
   private async birthChildEntry(
     parent: HostEntry,
-    input: {
-      name: string;
-      /** Empty when nothing the caller said can name this agent yet. */
-      displayName: string;
-      nameOrigin: 'user' | 'auto';
-      role: RoleId;
-      tier?: TierId;
-      mission: string;
-      lifetime: SubordinateLifetime;
-    },
+    input: Parameters<SubordinateRuntime['spawn']>[0],
     key: string,
+    binding: LocalActorBinding,
   ): Promise<HostEntry> {
     const llm = parent.ws.openConfig.llm;
     if (!llm) {
       throw new Error('No provider configured for this host — subordinate creation needs a connected provider.');
     }
-    const dbPath = this.opts.childDbPath(parent.dbPath, input.name);
-    if (existsSync(dbPath)) {
-      throw new Error(`subordinate "${input.name}" already has actor state at ${dbPath}`);
-    }
+    const dbPath = binding.dbPath;
     mkdirSync(dirname(dbPath), { recursive: true });
     const db = new Database(dbPath);
     db.exec('PRAGMA journal_mode = WAL');
     try {
-      await createWorkspace(db, {
-        // Address and title, separately. `input.name` is the slug the tree
-        // addresses this subagent by; the title is what a person calls it, and
-        // a one-click hire has none until its first message names it.
-        name: input.name,
-        title: input.displayName,
-        purpose: input.mission,
-        llm,
-      });
-      initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-      const openConfig = this.childOpenConfig(parent, input.name);
-      const opened = await openWorkspaceCLI(db, dbPath, openConfig);
-      const rt = await shareLocalWorkspacePlane(opened.rt, parent.ws.rt, openConfig.facet);
-      const config = createAgentConfigStore(rt.storage.sql);
-      config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
-      config.setRoleSelection(input.role);
-      config.setAssignedTier(input.tier ?? null);
+      initActorStateSchema(makeWorkspaceSchemaSql(db));
+      const sql = makeSql(db);
+      const exec = makeSqlExec(db);
+      const initialized = new FacetIdentity(exec).read().actor !== null;
+      const subordinateIdentity = new SubordinateIdentityStore(exec);
+      subordinateIdentity.ensureSchema();
+      db.transaction(() => {
+        seedLocalActor(db, exec, binding);
+        const identity = new FacetIdentity(exec).read();
+        if (identity.ownerUserId === null || identity.parentWorkspace === null) throw new KinuError('missing', 'The local facet identity is incomplete.');
+        subordinateIdentity.seed({ name: input.name, mission: input.mission, ownerUserId: identity.ownerUserId, parentWorkspace: identity.parentWorkspace, depth: treeDepthOf(parent.config) + 1, lifetime: input.lifetime });
+        if (initialized) return;
+        const actor = bindLocalActor(db, sql, exec, binding);
+        actor.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
+        actor.config.setRoleSelection(input.role);
+        actor.config.setAssignedTier(input.tier ?? null);
+        const inheritedModel = parent.config.getModel();
+        if (inheritedModel) actor.config.setModel(inheritedModel);
+        actor.config.set(CHILD_DEPTH_KEY, String(treeDepthOf(parent.config) + 1));
+        actor.config.set(CHILD_LIFETIME_KEY, input.lifetime);
+      })();
+      const openConfig = this.childOpenConfig(parent, binding);
+      const built = createCLIRuntime(db, { ...openConfig, dbPath, agentName: input.name });
+      const rt = await shareLocalWorkspacePlane(built, parent.ws.rt, openConfig.facet);
+      const config = rt.actor.config;
+      await bootstrapScaffold(rt);
       const descriptor = subordinateDescriptorSource(config).read();
       if (!descriptor) throw new Error(`subordinate "${input.name}" has no readable descriptor after creation`);
-      // The child keeps the parent's model only as its STARTING point; its
-      // tier (when it has one) resolves at its own turn boundary. No model
-      // spec travels with a hire — tier is the one routing input.
-      const inheritedModel = parent.config.getModel();
-      if (inheritedModel) config.setModel(inheritedModel);
-      config.set(CHILD_DEPTH_KEY, String(treeDepthOf(parent.config) + 1));
-      config.set(CHILD_LIFETIME_KEY, input.lifetime);
       // SOUL belongs to the AGENT, never to the shared directory. With a bound
       // cwd, `storage.vfs` IS the user's project, so writing there would drop a
       // SOUL.md into their repo and every peer's hire would overwrite the last
       // one. `agentStateVfs` is this agent's own tree; the `??` is the spelling
       // for backends where the two coincide.
-      await writeSoul(
-        rt.agentStateVfs ?? rt.storage.vfs,
-        rt.storage.sql,
+      const actorFiles = rt.agentStateVfs ?? rt.storage.vfs;
+      if (!(await readSoul(actorFiles))) await actorFiles.writeFile(SOUL_PATH,
         [
           renderSoulMarkdown({ name: descriptor.displayName, mission: input.mission }),
           '',
@@ -1192,11 +1210,13 @@ export class LocalAgentHost {
         ws,
         instructionApprovals: parent.session.instructionApprovalAuthority(),
       });
+      requireLocalActorWorkspace(parent.ws.rt.actor, rt.actor);
       parent.children.set(input.name, entry);
       return entry;
     } catch (error) {
       db.close();
-      removeChildState(dbPath);
+      const installed = this.entries.get(key);
+      if (installed?.ws.rt.actor.actorId === binding.reference.actorId) this.entries.delete(key);
       throw error;
     }
   }
@@ -1233,18 +1253,27 @@ export class LocalAgentHost {
     return handoff;
   }
 
-  private async removeChild(parent: HostEntry, name: string, keepHistory: boolean): Promise<void> {
+  private async removeChild(parent: HostEntry, name: string, keepHistory: boolean, reference: ActorReference): Promise<void> {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
-    const child = parent.children.get(name);
-    const dbPath = child?.dbPath ?? this.opts.childDbPath(parent.dbPath, name);
-    if (child) {
-      await child.session.end();
-      child.db.close();
-      parent.children.delete(name);
-      this.entries.delete(child.key);
+    const candidate = parent.children.get(name) ?? this.entries.get(`${parent.key}/${name}`);
+    const child = candidate?.ws.rt.actor.actorId === reference.actorId ? candidate : undefined;
+    const cleanup = async (storageKey: string) => {
+      if (child) {
+        await child.session.end();
+        child.db.close();
+        if (parent.children.get(name)?.ws.rt.actor.actorId === reference.actorId) parent.children.delete(name);
+        if (this.entries.get(child.key)?.ws.rt.actor.actorId === reference.actorId) this.entries.delete(child.key);
+      }
+      cleanupFacetCwdScratch(parent.ref.cwd, subordinateAgentName(storageKey));
+      if (!keepHistory) removeChildState(this.opts.childDbPath(parent.dbPath, storageKey));
+    };
+    if (keepHistory) {
+      const binding = openLocalActor(parent.ws.rt.actor, name, (key) => this.opts.childDbPath(parent.dbPath, key));
+      if (binding.reference.actorId !== reference.actorId) throw new KinuError('denied', 'The retained dismissal addresses an old creation.');
+      await cleanup(binding.storageKey);
+    } else {
+      await retireLocalActor(parent.ws.rt.actor, name, reference, cleanup);
     }
-    cleanupFacetCwdScratch(parent.ref.cwd, subordinateAgentName(name));
-    if (!keepHistory) removeChildState(dbPath);
   }
 
   /** Drain now because something landed in this agent's inbox. Bracketed like

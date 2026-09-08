@@ -19,7 +19,7 @@ import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { AgentRuntime, LLM, LLMProviderConfig } from '@kinu.run/core';
 import {
-  initScaffoldTables, createAgentConfigStore, initAgentConfigTable,
+  initScaffoldTables, initAgentConfigTable,
   getPendingScaffold, getCurrentScaffoldVersion, listScaffoldArchive,
   INITIAL_SCAFFOLD_SOURCE,
 } from '@kinu.run/core';
@@ -66,7 +66,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
     dbPath: scratchPath('scaffold-turn', 'agent.db'), llm: DUMMY_LLM,
   });
   // What `kinu create` provisions (identity/create.ts): the scaffold
-  // tables, agent_config, and the v0 scaffold file + archive row — so the
+  // tables, actor_config, and the v0 scaffold file + archive row — so the
   // session's cold-start heal is a deterministic no-op here. The
   // shadow-rollout ledger is deliberately NOT created — LocalAgentSession
   // must provision it, the way the DO does, or no trial can ever be recorded.
@@ -209,7 +209,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     });
     rt.judgeModel = markerJudge('PENDING-SCAFFOLD');
 
-    const config = createAgentConfigStore(rt.storage.sql);
+    const config = rt.actor.config;
     config.setShadowSampleRate(1);      // evaluate every turn — no flaky sampling
     config.setAutoPromoteScaffold(true);
 
@@ -246,7 +246,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     // The judge prefers whatever the LIVE turn produced.
     rt.judgeModel = markerJudge('CURRENT-SCAFFOLD');
 
-    const config = createAgentConfigStore(rt.storage.sql);
+    const config = rt.actor.config;
     config.setShadowSampleRate(1);
     config.setAutoPromoteScaffold(true);
 
@@ -311,7 +311,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
       }`,
     });
     rt.judgeModel = markerJudge('PENDING-SCAFFOLD');
-    createAgentConfigStore(rt.storage.sql).setShadowSampleRate(1);
+    rt.actor.config.setShadowSampleRate(1);
 
     await session.send('queue one trial');
     const queued = rt.storage.sql<{ id: string }>`SELECT id FROM scaffold_trial_queue`;

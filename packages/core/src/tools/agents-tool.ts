@@ -47,6 +47,8 @@ import {
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from './swarm-input';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { NodeLoopHost } from '../strategy/node-agent';
+import type { ActorReference } from '../state/actor-handle';
+import type { SubordinateBirth } from '../subordinates/birth';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { AnnounceHeadActivity } from '../heads/live-journal';
 import { readStartedSwarmProfile } from '../strategy/swarm-resume';
@@ -70,7 +72,7 @@ import {
   localMissionScope, readMissionLimits, MissionBudgetExhausted,
   type MissionGovernor, type MissionScope,
 } from '../mission-budget';
-import type { NodeWorkspace, NodeWorkspaceProvisioner } from '../strategy/node-workspace';
+import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from '../strategy/node-workspace';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
@@ -101,12 +103,15 @@ import {
 
 export type SubordinateStatus = 'idle' | 'working' | 'awaiting_input' | 'dismissed';
 
-/** One row of the workspace_subordinates roster: lifecycle and task facts
+/** One row of the actor_subordinates roster: lifecycle and task facts
  *  ONLY. The title and role a subordinate presents live in its own
- *  agent_config (subordinates/support.ts SubordinateDescriptorSource) — the
+ *  actor_config (subordinates/support.ts SubordinateDescriptorSource) — the
  *  parent never mirrors them. */
 export interface SubordinateRosterEntry {
   name: string;
+  actorReference: ActorReference | null;
+  birth: SubordinateBirth | null;
+  deleteRequested: boolean;
   createdBy: 'orchestrator' | 'user';
   status: SubordinateStatus;
   currentTask: string | null;
@@ -405,7 +410,7 @@ export interface AgentsForkDeps {
    * then the loop runs as the origin — see
    * {@link NodeAgentDeps.runtimeForWorkspace}.
    */
-  runtimeForNodeWorkspace?: () => (workspace: NodeWorkspace) => Promise<AgentRuntime>;
+  runtimeForNodeWorkspace?: () => (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
   /**
    * Where a node's transient output frames go while a step is still being
    * produced — the backend's own broadcast channel, resolved per call for the
@@ -1498,7 +1503,7 @@ async function runSwarmAction(
   // And the runtime the node's loop uses once it has that home. Wired only
   // beside the provisioner, because re-credentialing a runtime with no
   // credential to use is nothing.
-  const runtimeForWorkspace = provisionHome ? fork.runtimeForNodeWorkspace?.() : undefined;
+  const runtimeForWorkspace = fork.runtimeForNodeWorkspace?.();
   /**
    * ONE TYPED LITERAL, for the reason `call` above gives about itself, and it
    * applies harder here: every field is checked against `SwarmRunDeps`, where

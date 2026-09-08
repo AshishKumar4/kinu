@@ -38,8 +38,8 @@ async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
     VALUES (${'tool'}, ${'description'}, ${null}, ${'return 1'}, ${'local'}, ${10}, ${11})`;
   void ws.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
     VALUES (${'chunk'}, ${'memory/MEMORY.md'}, ${1}, ${2}, ${'hash'}, ${'remember this'}, ${12})`;
-  void ws.sql`INSERT INTO agent_config (key, value) VALUES (${'model'}, ${'test-model'})`;
-  void ws.sql`INSERT INTO agent_config (key, value) VALUES (${'shell_approval_mode'}, ${'allow_all'})`;
+  void ws.sql`INSERT INTO actor_config (key, value) VALUES (${'model'}, ${'test-model'})`;
+  void ws.sql`INSERT INTO actor_config (key, value) VALUES (${'shell_approval_mode'}, ${'allow_all'})`;
   await ws.vfs.mkdir('memory', { recursive: true });
   await ws.vfs.writeFile('memory/MEMORY.md', 'remember this');
 }

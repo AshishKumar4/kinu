@@ -121,21 +121,14 @@ describe('actor substrate — facet feasibility contract', () => {
     const reach = (className: string, name: string) =>
       agent.onBeforeSubAgent(request, { className, name });
     const roster = agent.harnessRoster();
-    const hire = (name: string) => roster.create({
-      name,
-      createdBy: 'orchestrator',
-      status: 'idle',
-      currentTask: null,
-      createdAt: 1,
-      dismissedAt: null,
-      lifetime: 'durable',
-      taskEventId: null,
-    });
-
-    // Rostered, hired as a facet: the one combination that passes through.
-    hire('aria');
-    await agent.subAgent(SubordinateAgent, 'aria');
-    expect(await reach('SubordinateAgent', 'aria')).toBe(request);
+    const hire = async (name: string) => {
+      const actor = await agent.actorDirectory({ action: 'register', name, creationId: name, kind: 'subordinate', lifetime: 'durable' });
+      roster.create({ name, actorReference: actor.reference, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null });
+      return actor.storageKey;
+    };
+    const aria = await hire('aria');
+    await agent.subAgent(SubordinateAgent, aria);
+    expect(await reach('SubordinateAgent', aria)).toBe(request);
 
     // A class that is not this actor's subordinate facet. Registered under
     // that class name AND rostered under that facet name, so nothing but the
@@ -157,20 +150,20 @@ describe('actor substrate — facet feasibility contract', () => {
     // registered: each half alone must be refused.
     await agent.subAgent(SubordinateAgent, 'ghost');
     expect(await reach('SubordinateAgent', 'ghost')).toMatchObject({ status: 404 });
-    hire('paper');
-    expect(await reach('SubordinateAgent', 'paper')).toMatchObject({ status: 404 });
+    const paper = await hire('paper');
+    expect(await reach('SubordinateAgent', paper)).toMatchObject({ status: 404 });
 
     // Dismissal revokes reachability while both the roster row and the facet
     // registration survive — the case a "does it exist?" gate would admit.
-    await agent.subAgent(SubordinateAgent, 'dismissed-one');
-    hire('dismissed-one');
-    expect(await reach('SubordinateAgent', 'dismissed-one')).toBe(request);
+    const dismissed = await hire('dismissed-one');
+    await agent.subAgent(SubordinateAgent, dismissed);
+    expect(await reach('SubordinateAgent', dismissed)).toBe(request);
     roster.dismiss('dismissed-one', 2);
     expect(roster.get('dismissed-one')?.status).toBe('dismissed');
-    expect(agent.hasSubAgent(SubordinateAgent.name, 'dismissed-one')).toBe(true);
-    expect(await reach('SubordinateAgent', 'dismissed-one')).toMatchObject({ status: 404 });
+    expect(agent.hasSubAgent(SubordinateAgent.name, dismissed)).toBe(true);
+    expect(await reach('SubordinateAgent', dismissed)).toMatchObject({ status: 404 });
 
     // Still reachable is still reachable: dismissing one facet revokes one.
-    expect(await reach('SubordinateAgent', 'aria')).toBe(request);
+    expect(await reach('SubordinateAgent', aria)).toBe(request);
   });
 });

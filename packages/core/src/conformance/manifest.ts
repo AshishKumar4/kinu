@@ -275,7 +275,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
 
     // ── durable state ──
     agent_facts: EVERYWHERE,
-    agent_config: EVERYWHERE,
+    actor_config: EVERYWHERE,
     // The agent's own task list. A subordinate keeps its own rather than
     // writing into its parent's: it is given its own assignment, and one plan
     // per actor is what makes the list mean anything.
@@ -433,7 +433,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // The `state.*` sandbox namespace: what one program saved for the next.
     // In `initActorTables`, because every root that can run a program can keep
     // something between two of them.
-    codemode_state: EVERYWHERE,
+    actor_program_state: EVERYWHERE,
 
     // ── release change ──
     // The board's home differs by backend and nothing recorded that until this
@@ -463,7 +463,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     vfs_append_pid_revocations: NIMBUS_BASE,
     vfs_append_acked_gaps: NIMBUS_BASE,
     // ── the roster plane, held by every actor that can hire ──
-    workspace_subordinates: {
+    actor_subordinates: {
       'cf-orchestrator': WIRED,
       // Created by SubordinateRosterStore's own ensureSchema on first read, so
       // it exists on a subordinate that has hired and on one that has not.

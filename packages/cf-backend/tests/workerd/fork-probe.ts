@@ -349,8 +349,8 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
     void this.sql`DELETE FROM workspace_identity`;
     void this.sql`INSERT INTO workspace_identity (id, name, created_at)
       VALUES (${'source-workspace'}, ${PROBE_SOURCE_NAME}, ${1_760_000_000_000})`;
-    void this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'probe/model-1'})`;
-    void this.sql`INSERT OR REPLACE INTO agent_config (key, value)
+    void this.sql`INSERT OR REPLACE INTO actor_config (key, value) VALUES (${'model'}, ${'probe/model-1'})`;
+    void this.sql`INSERT OR REPLACE INTO actor_config (key, value)
       VALUES (${'reasoning_effort'}, ${'high — long enough that this row needs a frame of its own'})`;
     void this.sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
       VALUES (${'probe_tool'}, ${'Counts what a fork carried.'}, ${null},
@@ -566,13 +566,13 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
       identity: this.sql<{ id: string; name: string; mission: string | null }>`
         SELECT id, name, mission FROM workspace_identity LIMIT 1`[0] ?? null,
       displayName: this.sql<{ value: string }>`
-        SELECT value FROM agent_config WHERE key = ${'display_name'}`[0]?.value ?? null,
+        SELECT value FROM actor_config WHERE key = ${'display_name'}`[0]?.value ?? null,
       paneRows: !pane ? 0 : tally(this.sql<{ count: number }>`
         SELECT COUNT(*) AS count FROM assistant_messages WHERE role <> ${'system'}`),
       markers: !pane ? 0 : tally(this.sql<{ count: number }>`
         SELECT COUNT(*) AS count FROM assistant_messages WHERE role = ${'system'}`),
       plainRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM messages`),
-      configRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM agent_config`),
+      configRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM actor_config`),
       craftedTools: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`),
       memoryChunks: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`),
       files: await this.plane.digests(),
