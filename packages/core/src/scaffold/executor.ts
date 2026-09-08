@@ -486,7 +486,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
 
   // 4. Execute through the platform executor (codemode/DynamicWorkerExecutor on CF).
   const exec: Executor = rt.executor;
-  const providers = await assembleProviders(rt, hostProvider);
+  const providers = assembleProviders(rt, hostProvider, opts, mode);
 
   assertScaffoldActive(opts);
   const result = await runWorkModeInvocation(mode, () => exec.execute(wrapperCode, providers));
@@ -583,10 +583,12 @@ return __result;
  *   • host          — the bridge to LLM stream / tool calls / emits
  *   • workspace/etc — every sandbox the parent's ExecutionRouter knows about
  */
-async function assembleProviders(
+function assembleProviders(
   rt: AgentRuntime,
   hostProvider: { name: string; fns: SandboxFunctions; types?: string },
-): Promise<Array<{ name: string; fns: SandboxFunctions; types?: string }>> {
+  control: ScaffoldRunControl,
+  mode: WorkMode,
+): Array<{ name: string; fns: SandboxFunctions; types?: string }> {
   const out: Array<{ name: string; fns: SandboxFunctions; types?: string }> = [
     hostProvider,
   ];
@@ -594,10 +596,11 @@ async function assembleProviders(
   for (const p of routerProviders) {
     const fns: SandboxFunctions = {};
     for (const [name, descriptor] of Object.entries(p.tools)) {
-      fns[name] = async (...args: JsonValue[]) => {
+      fns[name] = (...args: JsonValue[]) => runWorkModeInvocation(mode, async () => {
+        assertScaffoldActive(control);
         const result = await descriptor.execute(...args);
         return result === undefined ? undefined : decodeJsonValue({ value: result });
-      };
+      });
     }
     out.push({ name: p.name, fns, types: p.types });
   }
