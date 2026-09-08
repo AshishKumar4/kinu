@@ -77,13 +77,10 @@ const root = new URL('..', import.meta.url).pathname;
  * nothing declaring them and no report anyone read. The same false green this
  * file exists for, one directory over.
  *
- * `./scripts/bench-external.test.ts` holds the Terminal-Bench corpus check,
- * whose `test.skipIf(!existsSync(corpus))` is a proper declared skip that no
- * ratchet could see: `scripts/` is not a target and the ci-tier bench row runs
- * plain `bun test` with no `--reporter=junit`, so the corpus-absent skip — which
- * is the ORDINARY state of a worktree, the corpus being 60 MB and gitignored —
- * lived only in stdout. A skip nobody has to justify is the thing this lock is
- * for, and a declared skip outside every report is indistinguishable from one.
+ * `./scripts/bench-external.test.ts` holds the Terminal-Bench selection
+ * regression. Its pinned population fixture makes the test unconditional;
+ * the optional downloaded corpus cannot change the skip set. Keep this target
+ * in the reports so an accidental skip or missing sampler check remains visible.
  */
 export const SKIP_RATCHET_TARGETS: readonly string[] = [
   './tests/', './packages/core/tests/e2e/', './scripts/bench-external.test.ts',

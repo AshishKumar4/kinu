@@ -9,7 +9,7 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import {
-  copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync,
+  copyFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
@@ -27,6 +27,9 @@ const REPO_ROOT = join(import.meta.dir, '..');
 const TbenchPrereg = v.looseObject({
   family: v.literal('external:terminal-bench'),
   kind: v.literal('preregistration'),
+  ordinal: v.number(),
+  manifestHash: v.string(),
+  corpus: v.object({ nTasks: v.number() }),
   sample: v.object({
     seed: v.number(), size: v.number(), tasks: v.array(v.string()),
   }),
@@ -439,30 +442,31 @@ describe('the Terminal-Bench arm before it spends anything', () => {
     expect(run.stderr).not.toContain('eval-service credential');
   });
 
-  /**
-   * The corpus on disk is the corpus the design was registered against.
-   *
-   * Nothing else asserts this, and it is the assumption every number from
-   * ordinals 6 to 8 rests on. Both sides are DERIVED — the expected list from the
-   * pre-registration, the actual from the one sampler in `bench/harbor/corpus.py`
-   * — so a corpus that was re-fetched, edited or swapped shows up as a
-   * disagreement instead of as a quiet difference in what got measured.
-   *
-   * Skipped without a corpus, which is the ordinary state of a worktree: the
-   * 89 task directories are 60 MB and gitignored. `TBENCH_CORPUS` points at a
-   * shared copy, and it is the same variable the arm reads.
-   */
-  const corpus = process.env.TBENCH_CORPUS ?? join(REPO_ROOT, 'terminal-bench-2.1');
-  const withCorpus = test.skipIf(!existsSync(corpus));
-
-  withCorpus('the seeded sample reproduces the pre-registered task list', () => {
+  // The real sampler needs task-directory names and task.toml presence, not
+  // the optional 60 MB corpus. This pinned population is selection-only; the
+  // expected draw comes from the original seal, never the sampler under test.
+  test('the seeded sample reproduces the pre-registered task list', () => {
+    const population = v.parse(v.object({
+      provenance: v.object({ expectedSampleOrdinal: v.number() }),
+      sourceCorpus: v.object({ content_hash: v.string() }),
+      taskIds: v.array(v.string()),
+    }), JSON.parse(readFileSync(join(REPO_ROOT, 'tests/bench/terminal-bench-2.1-population.json'), 'utf8')));
     const registered = readFileSync(join(REPO_ROOT, 'tests/bench/seal-ledger.jsonl'), 'utf8')
       .split('\n')
       .filter((line) => line.trim() !== '' && !line.startsWith('#'))
       .map((line) => v.safeParse(TbenchPrereg, JSON.parse(line)))
-      .find((parsed) => parsed.success);
-    expect(registered, 'no Terminal-Bench pre-registration carries a sample').toBeDefined();
-    const { seed, size, tasks } = registered!.output!.sample;
+      .find((parsed) => parsed.success && parsed.output.ordinal === population.provenance.expectedSampleOrdinal);
+    if (!registered?.success) throw new Error('the pinned Terminal-Bench pre-registration is missing');
+    const { seed, size, tasks } = registered.output.sample;
+    expect(population.sourceCorpus.content_hash).toBe(registered.output.manifestHash);
+    expect(population.taskIds).toHaveLength(registered.output.corpus.nTasks);
+    expect(new Set(population.taskIds).size).toBe(population.taskIds.length);
+    const corpus = scratchDir('tbench-selection-population');
+    for (const taskId of population.taskIds) {
+      const task = join(corpus, taskId);
+      mkdirSync(task);
+      writeFileSync(join(task, 'task.toml'), '# Selection-only population marker; not a runnable task.\n');
+    }
 
     const drawn = spawnSync('python3', ['-m', 'bench.harbor.corpus', 'sample', corpus,
       '--size', String(size), '--seed', String(seed)],
