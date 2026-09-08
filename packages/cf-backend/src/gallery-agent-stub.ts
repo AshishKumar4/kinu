@@ -9,15 +9,6 @@
 
 import { useEffect, useMemo, useRef } from "react";
 
-/** The gate-to-server channel, declared so its payload has a contract at the
- *  point it is dispatched rather than a shape the receiver has to interrogate.
- *  `detail` is one raw socket frame, exactly as a server would have sent it. */
-declare global {
-	interface WindowEventMap {
-		"gallery-broadcast": CustomEvent<string>;
-	}
-}
-
 interface GalleryConnectionError {
 	readonly code: number;
 	readonly reason: string;
@@ -68,6 +59,31 @@ let served: GalleryRpc | null = null;
 
 export function serveGalleryRpc(rpc: GalleryRpc): void {
 	served = rpc;
+}
+
+/** Every gallery connection currently open. A push has no client call to
+ *  answer, so it cannot be served through `served`: it has to reach the
+ *  connections themselves. */
+const live = new Set<GalleryAgent>();
+
+/**
+ * Make the SERVER speak: deliver one raw frame to every open connection.
+ *
+ * The fixture stand-in for a frame the server started, which is the only shape
+ * a push notification can take — every other message on this transport answers
+ * a call the client made. Raw, because handing `useKinu` a parsed value would
+ * be the fixture testing itself: the hook's own schema parse, its root-only
+ * gate and its de-duplication all live on this edge, and a gate that pushes a
+ * frame exercises all three rather than fabricating their result.
+ *
+ * This edge therefore parses NOTHING. A socket carries bytes, and a fixture
+ * that vetted them here could not push the malformed frame the hook's parse
+ * exists to reject. The caller is where the shape is established: the gallery
+ * builds its announcement through `WorkspacePlanUpdatedFrameSchema`, the same
+ * schema the hook parses it back with.
+ */
+export function galleryServerPush(raw: string): void {
+	for (const agent of live) agent.deliver(raw);
 }
 
 /**
@@ -121,15 +137,12 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 		handlers.current.onOpen?.(new Event("open"));
 		const reconnect = () => { agent.reopen(); };
 		window.addEventListener("gallery-reconnect", reconnect);
-		// `gallery-broadcast` is the gate's only way to make the SERVER say
-		// something, which is what a push notification is. Its payload is a raw
-		// frame by declaration, so this edge hands the hook exactly what a socket
-		// would and never inspects a representation to find out what it holds.
-		const broadcast = (event: WindowEventMap["gallery-broadcast"]) => { agent.deliver(event.detail); };
-		window.addEventListener("gallery-broadcast", broadcast);
+		// Only an OPEN connection is reachable by a push: the terminal fixture
+		// returned above never opens, so it never joins the registry.
+		live.add(agent);
 		return () => {
+			live.delete(agent);
 			window.removeEventListener("gallery-reconnect", reconnect);
-			window.removeEventListener("gallery-broadcast", broadcast);
 		};
 	}, [agent]);
 	return agent;

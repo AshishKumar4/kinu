@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   GaugeIcon, SparkleIcon,
 } from "@phosphor-icons/react";
-import type { SlateSummary, PendingAction, PlanReview, WorkspacePlanReference } from "@kinu.run/core";
+import type { SlateSummary, PendingAction, PlanReview } from "@kinu.run/core";
+import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { HeadDeltas } from "@/components/head-chat";
 import { tabCls } from "@/components/ui/form";
@@ -58,7 +59,7 @@ export interface WorkSurfaceProps {
   previewFocus?: string | null;
   planFocus?: string | null;
   planOwner?: string;
-  workspacePlanFocus?: WorkspacePlanReference | null;
+  workspacePlanArrival?: WorkspacePlanArrival | null;
   activePlanActors?: readonly string[];
   onReviewActor?: (name: string) => void | Promise<void>;
   onSurface: (s: SurfaceKind) => void;
@@ -213,7 +214,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             <WorkTab key={props.planOwner ?? "main"}
               plan={props.plan}
               planOwner={props.planOwner}
-              workspacePlanFocus={props.workspacePlanFocus}
+              workspacePlanArrival={props.workspacePlanArrival}
               activePlanActors={props.activePlanActors}
               onReviewActor={props.onReviewActor}
               planRpc={props.planRpc ?? props.rpc}
