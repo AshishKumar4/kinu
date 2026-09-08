@@ -239,3 +239,29 @@ test('invalid native argument containers cannot become an empty successful call'
   expect(effects).toBe(0);
   expect(events).toContainEqual(expect.objectContaining({ type: 'error', message: expect.stringContaining('arguments must be a JSON object') }));
 });
+
+test('router namespace effects use the same lifetime admission as host effects', async () => {
+  const { rt } = await runtime('async function run() { await workspace.writeFile(); await workspace.writeFile(); }');
+  if (rt.executionRouter === undefined) throw new Error('the runtime fixture has no execution router');
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let effects = 0;
+  rt.executionRouter.getProviders = () => [{ name: 'workspace', tools: { writeFile: {
+    description: 'record an admitted effect', execute: async () => {
+      effects++;
+      started.resolve();
+      await release.promise;
+      return 'completed';
+    },
+  } } }];
+  const abort = new AbortController();
+  const prepared = await prepareActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+    chat: { model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
+  const running = collect(prepared.events);
+  await started.promise;
+  abort.abort(new Error('stop namespace work'));
+  release.resolve();
+  const events = await running;
+  expect(effects).toBe(1);
+  expect(events).toContainEqual(expect.objectContaining({ type: 'error', message: expect.stringContaining('stop namespace work') }));
+});
