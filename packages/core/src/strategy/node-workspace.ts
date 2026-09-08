@@ -166,9 +166,11 @@ export interface NodeHomeHost {
  */
 export function facetHomeProvisioner(
   host: NodeHomeHost | Promise<NodeHomeHost>,
+  authorize?: () => void,
 ): (agentName: string) => Promise<NodeWorkspace> {
   return async (agentName) => {
     const { root, confiner, sql } = await host;
+    authorize?.();
     const identity = agentIdentity(sql, agentName);
     const home = provisionAgentHome(root, agentName, identity);
     // The bare `/tmp` rewrite as well as the directory, because a command that

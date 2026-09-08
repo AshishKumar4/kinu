@@ -215,6 +215,7 @@ export interface SubordinateTaskPayload {
   deadline_hint?: string;
   inherited_context?: string;
   kinu_mode: WorkMode;
+  creation_id?: string;
 }
 
 /** The three things a subordinate can report. One declaration: the event

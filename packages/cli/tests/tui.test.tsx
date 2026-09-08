@@ -1302,8 +1302,8 @@ function runHomeScreen(options: {
     // directory name — that name is the address `kinu chat <name>` takes.
     const db = new Database(resolve(home, name, 'agent.db'), { create: true });
     try {
-      db.exec('CREATE TABLE agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-      db.query('INSERT INTO agent_config (key, value) VALUES (?, ?)').run('display_name', workspaceTitle(name));
+      db.exec('CREATE TABLE actor_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+      db.query('INSERT INTO actor_config (key, value) VALUES (?, ?)').run('display_name', workspaceTitle(name));
     } finally {
       db.close();
     }

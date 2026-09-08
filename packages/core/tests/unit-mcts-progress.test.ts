@@ -24,10 +24,7 @@ import { createTestRuntime, createMockSession } from './helpers';
 describe('runMCTS reports progress while the search runs', () => {
   test('events arrive per iteration, and the tree has already grown when they do', async () => {
     const { rt } = createTestRuntime();
-    rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'a candidate approach' }),
-      generateReflection: async () => ({ text: 'n/a' }),
-    });
+    rt.spawnBranch = async () => ({ explore: async () => ({ text: 'a candidate approach' }), generateReflection: async () => ({ text: 'n/a' }), release: async () => {} });
     initTables(rt);
 
     const events: MCTSProgressEvent[] = [];
@@ -63,10 +60,7 @@ describe('runMCTS reports progress while the search runs', () => {
 
   test('a call with no sink runs identically — the option is optional', async () => {
     const { rt } = createTestRuntime();
-    rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'a candidate approach' }),
-      generateReflection: async () => ({ text: 'n/a' }),
-    });
+    rt.spawnBranch = async () => ({ explore: async () => ({ text: 'a candidate approach' }), generateReflection: async () => ({ text: 'n/a' }), release: async () => {} });
     initTables(rt);
 
     const result = await runMCTS(rt, createMockSession(), 'pick an approach', {

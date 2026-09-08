@@ -31,9 +31,12 @@ import {
   type HeadId,
   type HeadInput,
   type HeadReport,
-  type ParentRpcWrite,
+  FacetIdentity, type ParentRpcWrite, type ActorReference,
 } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
+import { actorDirectoryFixture } from './helpers/actor-directory';
+import { KinuError } from '@kinu.run/core/obs';
+import { makeSqlExec } from '../../core/tests/helpers';
 import { platformGatewayEnv } from './helpers/platform-gateway';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
 import * as v from 'valibot';
@@ -212,7 +215,7 @@ function makeParentWorkspace(files: Record<string, string>) {
   const calls: ParentCall[] = [];
   const stub = {
     // A facet's approval policy is its ROOT's — it reads these two off the
-    // parent rather than its own empty agent_config, which is what stops a head
+    // parent rather than its own empty actor_config, which is what stops a head
     // re-asking for consent the owner already gave on the workspace. Both are
     // reachable through AGENT_RPC_ACCESS on ORCHESTRATOR_RPC_SURFACE.
     async getShellApprovalMode() {
@@ -286,7 +289,7 @@ const HeadRuntimeProbeSchema = v.object({
     listExecutors: v.function(),
   }),
 });
-
+const facetDirectories = new WeakMap<Database, ReturnType<typeof actorDirectoryFixture>>();
 /** A facet over its own fresh storage, or, with `existingDb`, a SECOND facet
  *  instance over storage a first one already wrote. That second form is a COLD
  *  ACTIVATION: no instance fields, the same durable rows, which is exactly what
@@ -296,6 +299,10 @@ async function makeFacet(
   existingDb?: Database,
   parentProfiles: Readonly<Record<string, ResolvedTurnProfile>> = {},
 ) {
+  const directory = existingDb ? facetDirectories.get(existingDb) : actorDirectoryFixture(async () => { throw new Error('This file-plane fixture does not retire actors.'); });
+  if (!directory) throw new Error('The cold facet fixture has no retained root directory.');
+  const registered = await directory.apply({ action: 'register', name: 'exp:head-1', creationId: 'head-1', kind: 'head', lifetime: 'task' });
+  const workspaceName = Object.keys(parentProfiles)[0] ?? 'kinu-main';
   const parent = makeParentWorkspace(parentFiles);
   const nimbus = makeNimbusNamespace(parentFiles);
   const profileCalls: string[] = [];
@@ -308,13 +315,17 @@ async function makeFacet(
       idFromName: (name: string) => name,
       get: (name: string) => ({
         ...parent.stub,
-        // The workspace's byte plane, which after the one-DO cutover is reached
+        async getSubordinateBootstrapIdentity(input: { name: string; reference: ActorReference }) {
+          const child = await directory.apply({ action: 'validate', ...input });
+          return { ...child, parentWorkspace: workspaceName, ownerUserId: 'user-1', model: null, depth: null };
+        },
+        // The canonical workspace plane is supplied at this external boundary.
         // here and nowhere else.
         workspaceBoxOp: (shellId: string, op: WorkspaceBoxOp) => nimbus.boxOp(shellId, op),
         facetTurnProfile: async (): Promise<ResolvedTurnProfile> => {
           profileCalls.push(name);
           const profile = parentProfiles[name];
-          if (!profile) throw new Error(`no profile fixture for ${name}`);
+          if (!profile) throw new KinuError('unavailable', 'The fixture supplies no model profile.');
           return profile;
         },
       }),
@@ -330,8 +341,10 @@ async function makeFacet(
   // under the `exp:`-marked key `spawnHeadFacet` hands the SDK, activated the
   // way the SDK activates it before the first `@callable` is dispatched.
   const { agent: concrete, db } = await facetHarness({
-    name: 'exp:head-1', env: testEnv, db: existingDb,
+    name: registered.storageKey, env: testEnv, db: existingDb,
   });
+  facetDirectories.set(db, directory);
+  Object.defineProperty(concrete, 'parentPath', { value: [{ className: 'OrchestratorAgent', name: workspaceName }] });
   const headRuntimeMember = Object.getOwnPropertyDescriptor(
     SubordinateAgent.prototype,
     'headFacetRuntime',
@@ -344,7 +357,11 @@ async function makeFacet(
   if (!v.is(v.function(), facetProfileMember)) throw new Error('SubordinateAgent facetProfile seam is missing');
   const facet: Facet = {
     setOwner: concrete.setOwner.bind(concrete),
-    setSharedParent: concrete.setSharedParent.bind(concrete),
+    setSharedParent: async (name) => {
+      const result = await concrete.setSharedParent(name, { ...registered.reference, name: registered.name, storageKey: registered.storageKey });
+      if ('reason' in result) throw new KinuError(result.reason, result.error);
+      return result;
+    },
     facetProfile: (): Promise<ResolvedTurnProfile> => {
       const profile = facetProfileMember.call(concrete);
       if (!(profile instanceof Promise)) throw new Error('facetProfile returned a non-promise');
@@ -356,14 +373,14 @@ async function makeFacet(
     headRuntime: (capture): ReturnType<Facet['headRuntime']> => {
       // The head's own id, as `runAsHead` hands it: the shell and scaffold it
       // keys are the journal's id, not the facet key.
-      const runtime = headRuntimeMember.call(concrete, 'head-1', capture);
+      const runtime = headRuntimeMember.call(concrete, capture);
       if (!v.is(HeadRuntimeProbeSchema, runtime)) throw new Error('headRuntime returned an invalid runtime');
       // SAFETY: HeadRuntimeProbeSchema validated the runtime returned by the
       // private method from the concrete SubordinateAgent instance above.
       return runtime as ReturnType<Facet['headRuntime']>;
     },
   };
-  return { facet, parent, nimbus, db, profileCalls };
+  return { facet, parent, nimbus, db, profileCalls, actor: registered };
 }
 
 function headInput(): HeadInput {
@@ -379,8 +396,8 @@ function headInput(): HeadInput {
 describe('a head forks its parent workspace', () => {
   test("the canonical workspace's files are readable without a parent executor", async () => {
     const { facet, parent } = await makeFacet({ 'repo/README.md': '# cloned project' });
-    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
+    await facet.setOwner('user-1', 'pwc_parent');
 
     const rt = facet.headRuntime(new HeadCapture());
     const workspace = rt.executionRouter!.getProvider('workspace')!;
@@ -393,8 +410,8 @@ describe('a head forks its parent workspace', () => {
 
   test('the canonical workspace directory listing reaches the head', async () => {
     const { facet } = await makeFacet({ 'repo/src/index.ts': 'x', 'repo/package.json': '{}' });
-    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
+    await facet.setOwner('user-1', 'pwc_parent');
 
     const workspace = facet.headRuntime(new HeadCapture()).executionRouter!.getProvider('workspace')!;
     const names = v.parse(v.array(v.string()), await workspace.tools.readdir.execute('repo'));
@@ -402,9 +419,9 @@ describe('a head forks its parent workspace', () => {
   });
 
   test("searching the workspace is one real shell call, not an RPC file walk", async () => {
-    const { facet, parent, nimbus } = await makeFacet({ 'repo/a.ts': 'needle here', 'repo/b.ts': 'nothing' });
-    await facet.setOwner('user-1', 'pwc_parent');
+    const { facet, parent, nimbus, actor } = await makeFacet({ 'repo/a.ts': 'needle here', 'repo/b.ts': 'nothing' });
     await facet.setSharedParent('kinu-main');
+    await facet.setOwner('user-1', 'pwc_parent');
 
     const workspace = facet.headRuntime(new HeadCapture()).executionRouter!.getProvider('workspace')!;
     const found = await workspace.tools.exec.execute('grep -rl needle .');
@@ -414,14 +431,14 @@ describe('a head forks its parent workspace', () => {
     // The head's OWN durable shell, named in the RPC argument. `shellRoot` is
     // gone with the remote sandbox that used to stamp it: a named shell over a
     // library-held workspace starts in that workspace's own root.
-    expect(nimbus.execOptions).toContainEqual({ shellId: 'head:head-1' });
+    expect(nimbus.execOptions).toContainEqual({ shellId: `head:${actor.storageKey}` });
   });
 
   test('exec planes are keyed to the PARENT workspace, not the head facet', async () => {
     requestedSandboxId = null;
     const { facet } = await makeFacet();
-    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
+    await facet.setOwner('user-1', 'pwc_parent');
 
     facet.headRuntime(new HeadCapture());
 
@@ -433,17 +450,18 @@ describe('a head forks its parent workspace', () => {
   test('a head never decides the restore of the container it only rides', async () => {
     restoresPerformed = 0;
     const { facet, db } = await makeFacet();
-    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
+    await facet.setOwner('user-1', 'pwc_parent');
 
     const rt = facet.headRuntime(new HeadCapture());
-    // A backup handle on the FACET's own storage — `agent_config` is created by
+    // A backup handle on the FACET's own storage — `actor_config` is created by
     // the runtime above, and the restore is read at first touch, not at build.
     // It is not the shared container's history: `kinu-kinu-main` belongs to
     // the parent, so acting on it would roll that container back to whatever
     // this head last happened to record.
-    db.prepare("INSERT INTO agent_config (key, value) VALUES ('workspace_backup', ?)")
-      .run(JSON.stringify({ id: 'bk-1', dir: '/workspace' }));
+    const config = new FacetIdentity(makeSqlExec(db)).read().actor;
+    if (!config) throw new Error('The facet has no stored actor identity.');
+    db.prepare("INSERT INTO actor_config (actor_id,key,value) VALUES (?,'workspace_backup',?)").run(config.actorId, JSON.stringify({ id: 'bk-1', dir: '/workspace' }));
 
     await rt.sandboxHandle!.exec('true');
     await rt.sandboxHandle!.exec('true');
@@ -458,8 +476,8 @@ describe('a head forks its parent workspace', () => {
 
   test("a head writes the canonical workspace rather than private duplicate bytes", async () => {
     const { facet, parent, nimbus } = await makeFacet();
-    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
+    await facet.setOwner('user-1', 'pwc_parent');
     const rt = facet.headRuntime(new HeadCapture());
 
     await rt.storage.vfs.writeFile('shared/notes.md', 'visible');
@@ -470,8 +488,8 @@ describe('a head forks its parent workspace', () => {
 
   test("the head's direct workspace writes are attributed to that head", async () => {
     const { facet } = await makeFacet({ 'repo/parser.ts': 'one\ntwo\n' });
-    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
+    await facet.setOwner('user-1', 'pwc_parent');
     const capture = new HeadCapture();
     const rt = facet.headRuntime(capture);
 
@@ -495,8 +513,8 @@ describe('a head forks its parent workspace', () => {
    */
   test("the head's own workspace plane scores the tools it crafts", async () => {
     const { facet } = await makeFacet();
-    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('kinu-main');
+    await facet.setOwner('user-1', 'pwc_parent');
 
     const workspace = facet.headRuntime(new HeadCapture()).executionRouter!.getProvider('workspace')!;
 
@@ -509,7 +527,7 @@ describe('a head forks its parent workspace', () => {
     ]);
   });
 
-  test('a reseeded parent never reuses the former root profile', async () => {
+  test('a facet cannot change its registered parent workspace', async () => {
     const firstProfile = profileFixture('root-first');
     const secondProfile = profileFixture('root-second');
     const { facet, profileCalls } = await makeFacet({}, undefined, {
@@ -520,18 +538,18 @@ describe('a head forks its parent workspace', () => {
     await facet.setSharedParent('root-first');
     expect(await facet.facetProfile()).toBe(firstProfile);
 
-    await facet.setSharedParent('root-second');
-    expect(await facet.facetProfile()).toBe(secondProfile);
-    expect(profileCalls).toEqual(['root-first', 'root-second']);
+    await expect(facet.setSharedParent('root-second')).rejects.toMatchObject({ code: 'denied' });
+    expect(await facet.facetProfile()).toBe(firstProfile);
+    expect(profileCalls).toEqual(['root-first']);
   });
   test('an MCTS branch — seeded without a parent workspace — cannot fork at all', async () => {
     // spawnBranchFacet seeds setOwner and nothing else (unit-facet-spawn), so a
     // branch reaches this state and can never acquire the head runtime.
     const { facet } = await makeFacet();
-    await facet.setOwner('user-1', 'pwc_parent');
+    await expect(facet.setOwner('user-1', 'pwc_parent')).rejects.toMatchObject({ code: 'missing' });
     await facet.initHead(headInput());
 
-    await expect(facet.runAsHead()).rejects.toThrow('without a parent workspace');
+    await expect(facet.runAsHead()).rejects.toMatchObject({ code: 'missing' });
   });
 
   test('a facet evicted between initHead and runAsHead activates from its stored row', async () => {
@@ -544,6 +562,7 @@ describe('a head forks its parent workspace', () => {
     // awaits its heads together, so one such throw rejected the whole split,
     // discarding siblings that had already spent their tokens.
     const first = await makeFacet();
+    await first.facet.setSharedParent('kinu-main');
     await first.facet.setOwner('user-1', 'pwc_parent');
     await first.facet.initHead(headInput());
 
@@ -554,7 +573,7 @@ describe('a head forks its parent workspace', () => {
     // Past the guard is the whole assertion. It still refuses, but for the
     // reason the case above establishes for a head with no shared parent — not
     // for a bootstrap it has no memory of.
-    await expect(cold.facet.runAsHead()).rejects.toThrow('without a parent workspace');
+    await expect(cold.facet.runAsHead()).rejects.toMatchObject({ code: 'unavailable' });
   });
 
   test('a stored activation that no longer matches its schema refuses by name', async () => {
@@ -563,6 +582,7 @@ describe('a head forks its parent workspace', () => {
     // has to fail here, naming the mismatch, instead of reaching the run loop
     // with a half-formed work spec.
     const first = await makeFacet();
+    await first.facet.setSharedParent('kinu-main');
     await first.facet.setOwner('user-1', 'pwc_parent');
     await first.facet.initHead(headInput());
     first.db.prepare(`UPDATE facet_activation SET payload = ? WHERE id = 1`)

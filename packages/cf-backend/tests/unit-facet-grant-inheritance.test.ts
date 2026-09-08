@@ -2,7 +2,7 @@
 // container's granted capabilities — or a SUBSET, never a superset.
 //
 // The owner's newest invariant, and the fix for a live defect: grants are only
-// ever written to the ROOT workspace DO's `agent_config`, while a facet — a
+// ever written to the ROOT workspace DO's `actor_config`, while a facet — a
 // head, a subordinate — is a different Durable Object with its own empty one.
 // So a facet read no grants and no mode and re-asked for consent the owner had
 // already given on the workspace, one concrete mechanism behind unattended runs

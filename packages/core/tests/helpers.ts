@@ -30,6 +30,20 @@ import { initWorkspaceSchema } from '../src/identity/workspace-schema';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff';
+import { WORKSPACE_IDENTITY_DDL, tableExists } from '../src/identity/schema';
+import { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/state/workspace-actors';
+import { initAgentConfigTable } from '../src/config/store';
+import { initCodemodeStateTable } from '../src/tools/state-codemode';
+
+export function createTestActor(sql: SqlExecutor, execRaw: RawSqlExec, workspaceId: string, name: string) {
+  if (tableExists(sql, 'workspace_identity') && sql`SELECT id FROM workspace_identity LIMIT 1`.length > 0) return openWorkspaceMainActor(sql);
+  execRaw(WORKSPACE_IDENTITY_DDL);
+  void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, ${name})`;
+  initWorkspaceActorTable(execRaw);
+  initAgentConfigTable(execRaw);
+  initCodemodeStateTable(execRaw);
+  return new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' }).createMain({ name });
+}
 
 /** One in-memory workspace database with the three SQL handles onto it. */
 export interface TestWorkspace {
@@ -408,7 +422,7 @@ export function createTestRuntime(opts?: {
   // a hand-picked subset tests a shape no workspace ever has, and the code
   // under test is then forced to tolerate absences only this harness produces.
   initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
-
+  const actor = createTestActor(sql, execRaw, 'test-agent-id', 'test-agent');
   const identity: Identity = {
     id: 'test-agent-id',
     name: 'test-agent',
@@ -418,9 +432,11 @@ export function createTestRuntime(opts?: {
   const mockBranch: BranchHandle = {
     explore: async () => ({ text: 'explored approach A' }),
     generateReflection: async () => ({ text: 'reflection: approach was suboptimal' }),
+    release: async () => {},
   };
 
   const rt: AgentRuntime = {
+    actor,
     storage: { vfs, sql, execRaw },
     memory,
     executor,
@@ -432,7 +448,6 @@ export function createTestRuntime(opts?: {
     shell: workspace.shell,
     spawnBranch: async () => mockBranch,
     abortBranch: async () => {},
-    releaseBranch: async () => {},
   };
 
   return { rt, db };

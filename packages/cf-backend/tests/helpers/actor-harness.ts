@@ -14,13 +14,13 @@
  * here (env.LOADER throws). The SDK base and DO storage remain platform doubles.
  */
 import { Database } from 'bun:sqlite';
-import { makeSqlExec } from '../../../core/tests/helpers';
+import { makeSql, makeSqlExec } from '../../../core/tests/helpers';
 import type { AgentContext, FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import type { LanguageModel, ToolSet, UIMessage } from 'ai';
 import type { ChatResponseResult, TurnConfig, TurnContext } from '@cloudflare/think';
 import type { UserCaller } from '../../src/user/workspace-capability';
 import type { UserDO } from '../../src/user/user-do';
-import { shadowTrialPlan, claimToolEffect } from '@kinu.run/core';
+import { shadowTrialPlan, claimToolEffect, WorkspaceActorDirectory, FacetIdentity, bindActorHandle } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
   type AgentOrchestrator, type AgentRuntime, type CompletedTurn, type DynamicContext,
@@ -405,7 +405,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       spawnHead: async (input: HeadInput) => {
         // The `exp:`-marked key `spawnHeadFacet` registers, pinned as the
         // literal the spawner's own suite asserts (unit-facet-spawn.test.ts).
-        await this.subAgent(this.facetClass(), `exp:${input.id}`);
+        const actor = await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, kind: 'head', lifetime: 'task' });
+        await this.subAgent(this.facetClass(), actor.storageKey);
         return {
           id: input.id,
           run: async () => {
@@ -469,7 +470,14 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** The exploration facets this workspace still holds storage for, by name.
    *  Read through the SDK's own registry, which is what the sweep deletes from. */
   harnessExplorationFacets(): string[] {
-    return this.listSubAgents(this.facetClass()).map((facet) => facet.name);
+    const actor = this.actorHandle();
+    const directory = new WorkspaceActorDirectory(this.boundSql, { workspaceId: actor.workspaceId, ownerUserId: this.getOwnerUserId() ?? '' });
+    const parent = directory.open(actor.actorId);
+    return this.listSubAgents(this.facetClass()).map((facet) => {
+      const entry = directory.storageEntry(parent, facet.name);
+      if (!entry) throw new Error('The registered facet has no actor directory row.');
+      return entry.name;
+    });
   }
 
   /** Forget the live handles, leaving only the durable journal — the state a
@@ -968,9 +976,7 @@ function instantiate<T extends object>(
   env?: Env,
 ): ActorHarness<T> {
   const agent = new Actor(makeCtx(db), env ?? makeEnv(parent, userPlane, world, parentNamespace));
-  if (world?.workspace !== undefined) {
-    Object.defineProperty(agent, 'name', { value: world.workspace, configurable: true });
-  }
+  Object.defineProperty(agent, 'name', { value: world?.workspace ?? 'harness-parent', configurable: true });
   return {
     agent,
     db,
@@ -1099,6 +1105,10 @@ export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
       get: (target, prop) => {
         if (prop === 'then') return undefined;
         if (prop === 'getWorkspaceInstructionApprovals') return target.getWorkspaceInstructionApprovals;
+        if (prop === 'applyActorDirectory' || prop === 'getSubordinateBootstrapIdentity') {
+          boxParent ??= orchestratorHarness();
+          return prop === 'applyActorDirectory' ? boxParent.agent.applyActorDirectory.bind(boxParent.agent) : boxParent.agent.getSubordinateBootstrapIdentity.bind(boxParent.agent);
+        }
         if (prop === 'workspaceBoxOp') {
           return async (shellId: string, op: Parameters<HarnessOrchestratorAgent['workspaceBoxOp']>[1]) => {
             boxParent ??= orchestratorHarness();
@@ -1128,20 +1138,16 @@ export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
     configurable: true,
   });
   ensureActorSchema(harness.agent);
-  harness.db.prepare(
-    "UPDATE workspace_identity SET owner_user_id = 'harness-owner' WHERE id = 'harness-actor'",
-  ).run();
-  harness.db.prepare(
-    `INSERT OR REPLACE INTO subordinate_identity
-       (id, name, mission, parent_workspace, owner_user_id, depth)
-     VALUES (1, 'harness-sub', 'observe conformance', 'harness-parent', 'harness-owner', 1)`,
-  ).run();
-  harness.db.prepare(
-    `INSERT OR REPLACE INTO agent_config (key, value) VALUES
-      ('display_name', 'Harness Sub'),
-      ('name_origin', 'user'),
-      ('role_selection', 'general')`,
-  ).run();
+  boxParent ??= orchestratorHarness();
+  const directory = new WorkspaceActorDirectory(makeSql(boxParent.db), { workspaceId: 'harness-actor', ownerUserId: 'harness-owner' });
+  const actor = directory.create({ parent: directory.main(), name: 'harness-sub', creationId: crypto.randomUUID(), kind: 'subordinate', lifetime: 'durable' });
+  Object.defineProperty(harness.agent, 'name', { value: actor.storageKey, configurable: true });
+  new FacetIdentity(makeSqlExec(harness.db)).seed({ actor: { actorId: actor.actorId, workspaceId: actor.workspaceId, parentActorId: actor.parentActorId, name: actor.name, storageKey: actor.storageKey }, ownerUserId: 'harness-owner', parentWorkspace: 'harness-parent', capabilityToken: null });
+  harness.db.prepare(`INSERT OR REPLACE INTO subordinate_identity
+    (id, name, mission, parent_workspace, owner_user_id, depth) VALUES (1, 'harness-sub', 'observe conformance', 'harness-parent', 'harness-owner', 1)`).run();
+  const stores = bindActorHandle(makeSql(harness.db), { actorId: actor.actorId, workspaceId: actor.workspaceId, parentActorId: actor.parentActorId, name: actor.name, storageKey: actor.storageKey }, () => { directory.open(actor.actorId); });
+  stores.config.setDisplayNameOrigin('Harness Sub', 'user');
+  stores.config.setRoleSelection('general');
   harness.agent.declareScaffoldPresent();
   return harness;
 }
@@ -1208,10 +1214,13 @@ export async function hiredSubordinateHarness(
    *  was placed in, when a suite drives the owner plane for real. */
   world?: HarnessActorWorld,
 ): Promise<ActorHarness<HarnessSubordinateAgent>> {
+  const directory = new WorkspaceActorDirectory(makeSql(parent.db), { workspaceId: 'harness-actor', ownerUserId: world?.ownerUserId ?? 'harness-owner' });
+  const creationId = crypto.randomUUID();
+  const actor = directory.create({ parent: directory.main(), name: identity.name, creationId, kind: 'subordinate', lifetime: 'durable' });
   const harness = instantiate(HarnessSubordinateAgent, new Database(':memory:'), parent.agent, undefined, world);
-  Object.defineProperty(harness.agent, 'name', { value: identity.name, configurable: true });
+  Object.defineProperty(harness.agent, 'name', { value: actor.storageKey, configurable: true });
   Object.defineProperty(harness.agent, 'parentPath', {
-    value: [{ className: 'OrchestratorAgent', name: 'harness-parent' }],
+    value: [{ className: 'OrchestratorAgent', name: parent.agent.name }],
     configurable: true,
   });
   Object.defineProperty(harness.agent, 'messages', { value: [], configurable: true });
@@ -1219,7 +1228,7 @@ export async function hiredSubordinateHarness(
   harness.agent.declareScaffoldPresent();
   const { roleId, ...seed } = identity;
   await harness.agent.setSubordinateIdentity({
-    ...seed,
+    ...seed, creationId, actor: { actorId: actor.actorId, workspaceId: actor.workspaceId, parentActorId: actor.parentActorId },
     // Durable unless a scenario says otherwise: the harness stands in for a
     // HIRE, and the temporary rung has its own tests.
     lifetime: 'durable',
@@ -1236,9 +1245,10 @@ export async function hiredSubordinateHarness(
   Object.defineProperty(parent.agent, 'subAgent', {
     value: async (cls: SubAgentArgs[0], name: SubAgentArgs[1]): Promise<object> => {
       const stub = await parentSubAgent(cls, name);
-      return name === identity.name ? resolveFacet : stub;
+      return name === actor.storageKey ? resolveFacet : stub;
     },
     configurable: true,
   });
+  await parent.agent.subAgent(parent.agent.facetClass(), actor.storageKey);
   return harness;
 }

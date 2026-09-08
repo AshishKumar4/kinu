@@ -59,7 +59,7 @@ import {
   readMemoryTail,
   listProposedTasks, updateProposedTaskStatus,
   agentsActionsFor,
-  agentHomeNodeProvisioner,
+  facetHomeProvisioner, nodeAgentName,
   type HeadJournal, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
@@ -151,7 +151,7 @@ import {
   resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, planWorkspaceTitle, suggestWorkspaceTitle,
-  isPlaceholderMission, readMission, type WorkspaceTitleState,
+  isPlaceholderMission, type WorkspaceTitleState,
   type PromptIdentity,
   roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
   readSoul,
@@ -175,6 +175,7 @@ import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
 import { makeSqlExec, type CLIRuntime } from './runtime';
+import { registerLocalNode, requireLocalActorWorkspace, localActorMission } from './actor-identity';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeExecuteToolFactory } from './execute-tools-factory';
@@ -821,7 +822,7 @@ export class LocalAgentSession implements BackendHost {
     // The stores every agent has, from core — one list both backends inherit.
     // Background-job lifecycle rides the durable local fiber (createLinuxFiber)
     // with this session as the BackendHost (enqueueTurn wakes the agent).
-    this.stores = createAgentStores(() => this.rt.storage.sql);
+    this.stores = createAgentStores(() => this.rt.storage.sql, () => this.rt.actor);
     const stores = this.stores;
     this.jobs = stores.jobs;
     this.taskList = stores.taskList;
@@ -3152,7 +3153,7 @@ export class LocalAgentSession implements BackendHost {
     readonly reachableTools: readonly string[];
     readonly overflowRetry: boolean;
   }): OwedEffect[] {
-    const mission = readMission(this.rt.storage.sql);
+    const mission = localActorMission(this.rt, makeSqlExec(this.db));
     // WHICH candidate this turn is sampled against, decided ONCE, here. The
     // plan re-reads the pending version on every call, so a replay that asked
     // again would score this turn against a candidate that was not under trial
@@ -4411,14 +4412,17 @@ export class LocalAgentSession implements BackendHost {
       // then its nodes report `shared-origin-plane` rather than a home they lack.
       provisionNodeHome: nodeHome === undefined
         ? undefined
-        : () => agentHomeNodeProvisioner(nodeHome()),
+        : () => async (node) => {
+          const actor = registerLocalNode(this.rt.actor, node);
+          return facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(this.rt.actor, actor))(nodeAgentName(actor.storageKey));
+        },
       // The home is only real through a runtime that USES the credential: the
       // node's shell runs as its uid and its file tools write as the same uid,
       // over this same filesystem. Wired from the same runtime that supplied the
       // host, so the two halves cannot come from different workspaces.
       runtimeForNodeWorkspace: nodeRuntime === undefined
         ? undefined
-        : () => nodeRuntime,
+        : () => (home, node) => nodeRuntime(home, registerLocalNode(this.rt.actor, node), this.rt),
     };
   }
   /** Team transport, injected by the owning LocalAgentHost. Present, the
@@ -4779,7 +4783,7 @@ export class LocalAgentSession implements BackendHost {
       // `state.*` — the provider the shared execute_tools description promises.
       // Absent, a CLI program calling `state.set` answered a bare ReferenceError;
       // the hosted backend already binds this same provider over the same SQL.
-      createStateCodemodeProvider(this.rt.storage.sql),
+      createStateCodemodeProvider(this.rt.actor.programState),
       createWebCodemodeProvider(this.getWebSearchProvider()),
       // `memory.*` / `tasks.*` — unconditional codemode projections of
       // the same-named native tools (tools/memory-tool.ts, tools/tasks-
@@ -4888,7 +4892,7 @@ export class LocalAgentSession implements BackendHost {
       effectClaims: { sql: this.rt.storage.sql, turnId },
       // No shellApprovalMode/requestShellApproval here — the gate lives at the
       // execution seam now (rt.shell / rt.executionRouter, wired once in
-      // runtime.ts off agent_config live and the channel
+      // runtime.ts off actor_config live and the channel
       // `setShellApprovalHandler` installs below), not re-derived per toolset
       // build. See execution/approval.ts.
       //

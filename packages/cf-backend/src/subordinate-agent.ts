@@ -4,7 +4,7 @@ import { SUBORDINATE_AGENT_BOOT_SURFACE, EXPLORATION_RPC_SURFACE, SUBORDINATE_RP
 import type { ChatResponseResult } from '@cloudflare/think';
 import {
   EvolutionEngine,
-  initWorkspaceSchema,
+  initActorStateSchema,
   renderSoulMarkdown,
   snapshotCompletedTurn,
   projectJsonValue, nanoid,
@@ -45,7 +45,7 @@ import { createWorkspaceBoxClient, workspaceBoxOwner } from './workspace-box-rpc
 import type { HostedFacetHomes } from './node-home';
 import { agentCred, agentHome, agentTmpRoot, subordinateAgentName, type NimbusSandboxHandle } from '@kinu.run/core';
 import {
-  SubordinateIdentityStore,
+  FacetIdentity, ActorIdentitySchema, ActorReferenceSchema, actorReferenceOf, parseActorKey, SubordinateSeedSchema, sameActorReference, SubordinateIdentityStore, bindActorHandle, type ActorIdentity, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
   admitSubordinateTask,
   describeSubordinateHandoff,
   readSubordinateLiveStatus,
@@ -53,7 +53,7 @@ import {
   type SubordinateReportOrigin, type SubordinateLiveStatus,
   type TerminalTurnParts,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { MODEL_OPERATION_LANE_FIBER, TERMINAL_LANE_FIBER } from './fiber-recovery';
 import { generateText, type ToolSet } from 'ai';
 import {
@@ -94,7 +94,6 @@ import {
 } from '@kinu.run/core';
 import { createConsoleLogger, renderThrownChain } from '@kinu.run/core/obs';
 import { OwnedModelServices } from './owned-model-services';
-import { FacetIdentity } from './facet-identity';
 import { FacetActivation } from './facet-activation';
 import { createHeadRuntime } from './head-runtime';
 import {
@@ -112,31 +111,11 @@ import type { UserCaller } from './user/workspace-capability';
  *  parent as `env[cls.name]`. `satisfies keyof Env` keeps it tied to the binding. */
 const WORKSPACE_ACTOR_CLASS = 'OrchestratorAgent' satisfies keyof Env;
 
-export interface SetSubordinateIdentityInput {
-  name: string;
-  /** The title to seed. EMPTY is legal and meaningful: the owner added this
-   *  agent without naming it, so it has no honest title yet and the
-   *  first-interaction policy will give it one. */
-  displayName: string;
-  /** Whose title `displayName` is — `auto` for anything derived or blank,
-   *  `user` for one the owner typed. `user` is what makes auto-titling
-   *  refuse for good (`planWorkspaceTitle`). */
-  nameOrigin: 'user' | 'auto';
-  /** Current role id. The child's agent_config row is authoritative. */
-  role: RoleId;
-  /** Optional tier override for this child. */
-  tier?: TierId | null;
-  mission: string;
-  /** How long this child is meant to live. It rides the SEED because only the
-   *  child sees its own turn end, and a `task` child owes its blocked caller one
-   *  terminal report for every way that turn can end. */
-  lifetime: SubordinateLifetime;
-  /** The PARENT workspace's capability token, pushed down at spawn so this
-   *  facet reaches the owner's UserDO as its workspace — and is attenuated
-   *  with it. Refreshed by the parent's installWorkspaceCapability fan-out if
-   *  it is ever reissued. */
-  capabilityToken?: string;
-}
+const SetSubordinateIdentitySchema = v.strictObject({
+  ...SubordinateSeedSchema.entries, actor: ActorReferenceSchema, creationId: v.pipe(v.string(), v.nonEmpty()),
+  tier: v.optional(v.nullable(v.picklist(TIER_IDS))), capabilityToken: v.optional(v.string()),
+});
+export type SetSubordinateIdentityInput = v.InferOutput<typeof SetSubordinateIdentitySchema>;
 
 /** Both report lanes are fire-and-forget, so a rejection has nowhere to go but
  *  a log line. `lane` names which one — the event name stays literal. */
@@ -451,18 +430,60 @@ export class SubordinateAgent extends ActorAgent {
 
 
   protected getOwnerUserId(): string | null {
-    return this.identity.ownerUserId();
+    return this.facetIdentity.ownerUserId();
   }
 
-  /** A subordinate's workspace is its parent's, so its exec planes, MCP
-   *  dispatch, and credential reads all present the parent's identity — taint
-   *  inheritance by construction rather than by bookkeeping. */
   protected workspaceName(): string {
-    const parentWorkspace = this.identity.workspaceName();
-    if (!parentWorkspace) throw new Error('Subordinate identity has not been seeded by its parent workspace.');
-    return parentWorkspace;
+    const workspace = this.facetIdentity.parentWorkspace();
+    if (!workspace) throw new KinuError('missing', 'The facet identity has not been seeded.');
+    return workspace;
   }
 
+  private _actorHandle: ActorHandle | null = null;
+
+  private actorPath(): string[] {
+    const root = this.parentPath[0];
+    if (root?.className !== WORKSPACE_ACTOR_CLASS || root.name !== this.workspaceName()
+      || this.parentPath.slice(1).some((parent) => parent.className !== SubordinateAgent.name)) {
+      throw new KinuError('denied', 'The facet path does not belong to its workspace.');
+    }
+    return [...this.parentPath.slice(1).map((parent) => parent.name), this.name];
+  }
+
+  protected actorHandle(): ActorHandle {
+    const seed = this.facetIdentity.read();
+    const reference = seed.actor;
+    if (!reference || !seed.ownerUserId || !seed.parentWorkspace || !seed.name || !seed.storageKey) throw new KinuError('missing', 'The facet has no registered actor identity.');
+    this.actorPath();
+    if (this.name !== seed.storageKey) throw new KinuError('denied', 'The facet storage key does not match its native address.');
+    return this._actorHandle ??= bindActorHandle(this.boundSql, { ...reference, name: seed.name, storageKey: seed.storageKey }, () => {
+      const current = this.facetIdentity.read();
+      if (!current.actor) throw new KinuError('missing', 'The facet actor identity is absent.');
+      if (!sameActorReference(current.actor, reference) || current.name !== seed.name || current.storageKey !== seed.storageKey
+        || current.ownerUserId !== seed.ownerUserId || current.parentWorkspace !== seed.parentWorkspace) {
+        throw new KinuError('denied', 'The actor store binding no longer matches the facet identity.');
+      }
+    });
+  }
+
+  async actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult> {
+    const { actorId, workspaceId, parentActorId } = this.actorHandle();
+    const result = await (await this.workspaceOwner()).applyActorDirectory({ actorId, workspaceId, parentActorId }, this.actorPath(), operation);
+    if ('reason' in result) throw new KinuError(result.reason, result.error);
+    return result;
+  }
+
+  private async validateOwnActor() {
+    const identity = this.facetIdentity.read();
+    if (!identity.actor || !identity.name) throw new KinuError('missing', 'The facet has no registered actor reference.');
+    return this.parentBootstrap(identity.name, identity.actor);
+  }
+
+  private async parentBootstrap(name: string, reference: ActorReference) {
+    const result = await (await this.parentActor()).getSubordinateBootstrapIdentity({ name, reference });
+    if ('reason' in result) throw new KinuError(result.reason, result.error);
+    return result;
+  }
   protected scaffoldPath(): string {
     return `.kinu/agents/${encodeURIComponent(this.name)}/scaffold/agent.js`;
   }
@@ -504,8 +525,7 @@ export class SubordinateAgent extends ActorAgent {
    *  owner's. */
   facetHomes(): HostedFacetHomes {
     return {
-      provision: async (kind, id) => (await this.workspaceOwner()).provisionFacetHome(kind, id),
-      release: async (kind, id) => (await this.workspaceOwner()).releaseFacetHome(kind, id),
+      provision: async (reference) => (await this.workspaceOwner()).provisionFacetHome(reference),
     };
   }
 
@@ -519,7 +539,7 @@ export class SubordinateAgent extends ActorAgent {
   protected override facetHome(): HostedNodeHome | undefined {
     const identity = this.identity.read();
     if (!identity?.cred) return undefined;
-    const agentName = subordinateAgentName(identity.name);
+    const agentName = subordinateAgentName(this.actorHandle().storageKey);
     return { home: agentHome(agentName), tmp: agentTmpRoot(agentName), cred: agentCred(identity.cred) };
   }
 
@@ -669,8 +689,8 @@ export class SubordinateAgent extends ActorAgent {
 
   protected ensureSchema(): void {
     if (this._schemaReady) return;
-    // Every table a workspace has, on any backend — one list, in core.
-    initWorkspaceSchema({
+    // Actor state has no workspace ownership row or root publication tables.
+    initActorStateSchema({
       execRaw: (ddl: string) => this.ctx.storage.sql.exec(ddl),
       sql: this.boundSql,
       exec: this.ctx.storage.sql,
@@ -679,7 +699,7 @@ export class SubordinateAgent extends ActorAgent {
     // setSubordinateIdentity (declared per-root in core/conformance/manifest.ts).
     this.identity.ensureSchema();
     // The roster of this subordinate's OWN hires. Declared per-root in
-    // core/conformance/manifest.ts (workspace_subordinates, wired on both cf
+    // core/conformance/manifest.ts (actor_subordinates, wired on both cf
     // roots) and created here for the same reason the orchestrator creates it in
     // its own ensureSchema: a root's tables exist before anything reads them.
     this.subordinateRoster.ensureSchema();
@@ -687,70 +707,52 @@ export class SubordinateAgent extends ActorAgent {
   }
 
   @callable()
-  async setSubordinateIdentity(input: SetSubordinateIdentityInput): Promise<{ ok: true }> {
-    // `displayName` is deliberately NOT required: blank is the honest state of
-    // an agent the owner added without naming, and the title policy fills it
-    // on the first interaction.
-    if (!input.name || !input.mission) {
-      throw new Error('complete subordinate identity is required');
+  async setSubordinateIdentity(input: SetSubordinateIdentityInput): Promise<{ ok: true } | Refusal> {
+    try {
+    const parsed = v.safeParse(SetSubordinateIdentitySchema, input);
+    if (!parsed.success) throw new KinuError('bad_input', 'The subordinate seed is malformed.');
+    const seed = parsed.output;
+    const bootstrap = await this.parentBootstrap(seed.name, seed.actor);
+    if (bootstrap.kind !== 'subordinate' || bootstrap.depth === null || bootstrap.lifetime !== seed.lifetime
+      || bootstrap.creationId !== seed.creationId || bootstrap.storageKey !== this.name) {
+      throw new KinuError('denied', 'The subordinate seed does not match its registered identity.');
     }
+    const depth = bootstrap.depth;
     this.ensureSchema();
-    if (input.name !== this.name) throw new Error('subordinate identity name must match its facet name');
-    const parent = await this.parentActor();
-    const bootstrap = await parent.getSubordinateBootstrapIdentity();
     const existing = this.identity.read();
-    if (existing && (existing.name !== input.name
-      || existing.parentWorkspace !== bootstrap.parentWorkspace
-      || existing.ownerUserId !== bootstrap.ownerUserId
-      || existing.depth !== bootstrap.depth)) {
-      throw new Error('subordinate identity is immutable');
+    if (existing && (existing.name !== seed.name || existing.parentWorkspace !== bootstrap.parentWorkspace
+      || existing.ownerUserId !== bootstrap.ownerUserId || existing.depth !== bootstrap.depth || existing.lifetime !== seed.lifetime)) {
+      throw new KinuError('denied', 'The subordinate identity is immutable.');
     }
-    // The home before the row: the uid the owner allocates is part of who this
-    // facet is, and every runtime built from the row runs as it. Provisioned
-    // on the WORKSPACE, not the parent — a nested hire's parent is a
-    // subordinate, and the registry is the workspace's. Idempotent, so a
-    // parent retrying the seed after an interrupted RPC gets the same uid.
-    const workspace = await getAgentByName<Env, OrchestratorAgent>(
-      this.env[WORKSPACE_ACTOR_CLASS], bootstrap.parentWorkspace,
-    );
-    const home = await workspace.provisionFacetHome('subordinate', input.name);
-    // Every other field here comes from the PARENT's answer, `depth` included.
-    // The input carries no depth to ignore, and the parent refuses at the cap,
-    // so a subordinate cannot be seeded past it however it was asked for.
-    this.identity.seed({
-      name: input.name,
-      mission: input.mission,
-      parentWorkspace: bootstrap.parentWorkspace,
-      ownerUserId: bootstrap.ownerUserId,
-      depth: bootstrap.depth,
-      lifetime: input.lifetime,
-      cred: { uid: home.cred.uid, gid: home.cred.gid },
-    });
-    // Both rows together: the shown title and WHOSE it is. Seeding the title
-    // alone left `name_origin` unset, which the title policy reads as "never
-    // titled" — so a role-derived name a parent chose was eligible to be
-    // replaced by a model call the owner never asked for.
-    this.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
-    // The child config is the one current presentation authority.
-    this.config.setRoleSelection(input.role);
-    // An absent or unrecognised tier CLEARS the pin, which is the instruction to
-    // derive from the role rather than a tier of its own. PARSED, not asserted:
-    // `tier` arrives over RPC from the hiring actor, so this is its I/O boundary
-    // and a bad value must never become a stored row a later read has to
-    // tolerate. Same schema the turn resolver uses (profiles/resolve.ts).
-    const pinnedTier = v.safeParse(v.picklist(TIER_IDS), input.tier);
-    this.config.setAssignedTier(pinnedTier.success ? pinnedTier.output : null);
-    if (input.capabilityToken) await this.installWorkspaceCapability(input.capabilityToken);
-    // No concrete model is pinned from the caller: the child's own turn
-    // resolution maps its tier (or the default) onto a model at its next turn.
+    const workspace = await getAgentByName<Env, OrchestratorAgent>(this.env[WORKSPACE_ACTOR_CLASS], bootstrap.parentWorkspace);
+    const home = await workspace.provisionFacetHome(seed.actor);
+    try {
+      this.ctx.storage.transactionSync(() => {
+        this.facetIdentity.seed({
+          actor: { ...seed.actor, name: bootstrap.name, storageKey: bootstrap.storageKey },
+          parentWorkspace: bootstrap.parentWorkspace, ownerUserId: bootstrap.ownerUserId, capabilityToken: seed.capabilityToken ?? null,
+        });
+        if (existing) return;
+        this.identity.seed({ name: seed.name, mission: seed.mission, parentWorkspace: bootstrap.parentWorkspace,
+          ownerUserId: bootstrap.ownerUserId, depth, lifetime: seed.lifetime, cred: { uid: home.cred.uid, gid: home.cred.gid } });
+        this.config.setDisplayNameOrigin(seed.displayName, seed.nameOrigin);
+        this.config.setRoleSelection(seed.role);
+        this.config.setAssignedTier(seed.tier ?? null);
+      });
+    } catch (cause) {
+      this.facetIdentity.invalidate();
+      this._actorHandle = null;
+      throw cause;
+    }
+    if (seed.capabilityToken) await this.installWorkspaceCapability(seed.capabilityToken);
     this._cachedSoulText = null;
     this.invalidateModelCaches();
     await this.ensureOwnedScaffold();
-    // The seed decides the family: a hired facet answers the subordinate
-    // surface from here on, and exploration seeds stop resolving across
-    // a stub — the same boundary two classes used to draw.
     this.sealSubordinateSurface();
     return { ok: true };
+    } catch (cause) {
+      return refusalOf(toKinuError({ doing: 'seeding a registered subordinate actor', cause, otherwise: 'io' }));
+    }
   }
 
   /**
@@ -802,7 +804,7 @@ export class SubordinateAgent extends ActorAgent {
     const displayName = this.config.getDisplayName();
     if (displayName === null) return;
     const parent = await this.parentActor();
-    await parent.recordSubordinateTitle(this.name, displayName);
+    await parent.recordSubordinateTitle(this.actorHandle().name, displayName);
   }
 
   /**
@@ -831,6 +833,7 @@ export class SubordinateAgent extends ActorAgent {
    *  subordinate runs is bootstrapped where it is needed: at identity seeding
    *  above, and on the turn path (`ActorAgent.beforeTurn`). */
   onStart(): void {
+    this.installClientMessageGate();
     this.ensureSchema();
     this.ensureFacetTables();
     // The same budget-first prune the root runs: every mode of this facet runs
@@ -865,6 +868,7 @@ export class SubordinateAgent extends ActorAgent {
       // arms that instant itself.
       const resumeAt = this.jobs.nextResumeAt();
       if (resumeAt !== null) await this.scheduleTerminalRetry(resumeAt);
+      if (this.subordinateRoster.hasPendingBirths() || this.subordinateRoster.hasPendingDeletions()) await this.scheduleTerminalRetry(Date.now());
     });
   }
 
@@ -883,7 +887,10 @@ export class SubordinateAgent extends ActorAgent {
     deliverable?: string;
     deadlineHint?: string;
     inheritedContext?: string;
+    creationId?: string;
   }): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> {
+    const actor = await this.validateOwnActor();
+    if (input.creationId !== undefined && input.creationId !== actor.creationId) throw new KinuError('denied', 'The birth assignment belongs to a different actor creation.');
     this.ensureSchema();
     const busy = this._inFlight;
     const admission: Parameters<typeof admitSubordinateTask>[1] = {
@@ -896,6 +903,7 @@ export class SubordinateAgent extends ActorAgent {
     if (input.deliverable) admission.deliverable = input.deliverable;
     if (input.deadlineHint) admission.deadlineHint = input.deadlineHint;
     if (input.inheritedContext) admission.inheritedContext = input.inheritedContext;
+    if (input.creationId !== undefined) admission.creationId = input.creationId;
     const result = admitSubordinateTask(this.eventLog, admission);
     if (result.admitted) this.orch.scheduleDrain();
     return {
@@ -1252,13 +1260,10 @@ export class SubordinateAgent extends ActorAgent {
    *  SECOND, EMPTY filesystem — the empty-workspace regression pinned by
    *  tests/unit-head-fork.test.ts.
    *
-   *  `id` is the worker's own id, the head or node id its seed named. It keys
-   *  the durable shell and the scaffold path, so `head:<id>` and
-   *  `.kinu/heads/<id>/…` read the id the journal carries rather than the
-   *  `exp:`-marked facet key `this.name` holds. */
+   * The immutable physical key selects shell and scaffold state. Logical IDs
+   * stay in the search journal and the model-visible brief. */
   private facetRuntime(
     scope: 'head' | 'node',
-    id: string,
     hooks: CFRuntimeHooks,
     workspaceExecution?: HostedNodeHome,
   ): CFRuntime {
@@ -1267,6 +1272,7 @@ export class SubordinateAgent extends ActorAgent {
     if (!parent || !workspaceName) {
       throw new Error(`This ${scope} was spawned without a parent workspace; setSharedParent must run before it can run.`);
     }
+    const physicalId = parseActorKey(this.actorHandle().storageKey).id;
     const runtimeHooks: CFRuntimeHooks = {
       ...hooks,
       resolveProfile: () => this.facetProfile(),
@@ -1280,10 +1286,11 @@ export class SubordinateAgent extends ActorAgent {
         shellId,
       }),
     }, {
+      actor: this.actorHandle(),
       ownerUserId: () => this.facetIdentity.ownerUserId(),
       workspaceName,
-      shellId: `${scope}:${id}`,
-      scaffoldPath: `.kinu/${scope}s/${encodeURIComponent(id)}/scaffold/agent.js`,
+      shellId: `${scope}:${physicalId}`,
+      scaffoldPath: `.kinu/${scope}s/${encodeURIComponent(physicalId)}/scaffold/agent.js`,
       capabilityToken: () => this.facetIdentity.capabilityToken(),
     }, runtimeHooks);
   }
@@ -1291,8 +1298,8 @@ export class SubordinateAgent extends ActorAgent {
   /** A head's runtime: the shared plane above wrapped with this run's observer
    *  before tools are built, so writes are attributable without another executor
    *  or VFS. */
-  private headFacetRuntime(id: HeadId, capture: HeadCapture, home: HostedNodeHome): CFRuntime {
-    return this.facetRuntime('head', id, { workspaceObserver: capture.files }, home);
+  private headFacetRuntime(capture: HeadCapture, home: HostedNodeHome): CFRuntime {
+    return this.facetRuntime('head', { workspaceObserver: capture.files }, home);
   }
 
   /** Exploration facets inherit ownership from the orchestrator that spawned
@@ -1304,6 +1311,7 @@ export class SubordinateAgent extends ActorAgent {
   @callable()
   async setOwner(userId: string, capabilityToken: string | null): Promise<{ ok: true }> {
     if (!userId) throw new Error('userId required');
+    await this.validateOwnActor();
     this.facetIdentity.setOwner(userId, capabilityToken);
     this.facetModelServices.invalidate();
     this._facetProfile = null;
@@ -1317,11 +1325,20 @@ export class SubordinateAgent extends ActorAgent {
    *  sub-heads, so an intermediate head never becomes the tree's workspace.
    *  Persisted for hibernation. */
   @callable()
-  async setSharedParent(agentName: string): Promise<{ ok: true }> {
-    if (!agentName) throw new Error('agentName required');
-    this.facetIdentity.setParentWorkspace(agentName);
+  async setSharedParent(agentName: string, input: ActorIdentity): Promise<{ ok: true } | Refusal> {
+    try {
+    const actor = v.parse(ActorIdentitySchema, input);
+    const root = this.parentPath[0];
+    if (!agentName || root?.className !== WORKSPACE_ACTOR_CLASS || root.name !== agentName || actor.storageKey !== this.name) throw new KinuError('denied', 'The shared identity must match the native facet path.');
+    const reference = { actorId: actor.actorId, workspaceId: actor.workspaceId, parentActorId: actor.parentActorId };
+    const bootstrap = await this.parentBootstrap(actor.name, reference);
+    if (bootstrap.parentWorkspace !== agentName || bootstrap.name !== actor.name || bootstrap.storageKey !== actor.storageKey || bootstrap.kind === 'subordinate') throw new KinuError('denied', 'The exploration identity does not match its registered actor.');
+    this.facetIdentity.seed({ actor, parentWorkspace: agentName, ownerUserId: bootstrap.ownerUserId, capabilityToken: null });
     this._facetProfile = null;
     return { ok: true };
+    } catch (cause) {
+      return refusalOf(toKinuError({ doing: 'seeding a registered exploration actor', cause, otherwise: 'io' }));
+    }
   }
 
   /** Stub to the root workspace orchestrator — the head's parent — or null if
@@ -1515,14 +1532,14 @@ export class SubordinateAgent extends ActorAgent {
       // Its home first, from the owner: the runtime below is built as that
       // uid on both planes, the way a node's is, so the head's writes land in
       // `/home/head-<id>` and never in a sibling's or the origin's tree.
-      const home = await invocation.span('head.home', () => parent.provisionFacetHome('head', input.id));
+      const home = await invocation.span('head.home', () => parent.provisionFacetHome(actorReferenceOf(this.actorHandle())));
       const headOptions = invocation.span('head.deps', (): Parameters<typeof runHeadInference>[1] => {
         const mission = this.missionScope(input);
         const options: Parameters<typeof runHeadInference>[1] = {
           model: this.facetModelServices.resolveModel(modelSpec),
           tools: this.buildHeadTools(input, capture, home),
           capture,
-          workspaceLayout: 'private-scratch',
+          workspaceLayout: 'shared-workspace',
           isAborted: () => this.headAborted,
           abortReason: () => this.headAbortReason,
           reportStep: this.stepSink(parent, input.id),
@@ -1576,13 +1593,13 @@ export class SubordinateAgent extends ActorAgent {
       const nodeId = spec.headInput.id;
       const workspaceExecution = await invocation.span(
         'swarm.node.home',
-        () => parent.provisionFacetHome('node', nodeId),
+        () => parent.provisionFacetHome(actorReferenceOf(this.actorHandle())),
       );
       if (workspaceExecution.home !== spec.home) {
         throw new Error(`Node ${nodeId} home differs from the provisioned node spec`);
       }
       const deps = invocation.span('swarm.node.deps', (): NodeLoopDeps => {
-        const rt = this.facetRuntime('node', nodeId, {}, workspaceExecution);
+        const rt = this.facetRuntime('node', {}, workspaceExecution);
         const webSearch = this.facetModelServices.getWebSearchProvider();
         const built: NodeLoopDeps = {
           rt,
@@ -1700,7 +1717,7 @@ export class SubordinateAgent extends ActorAgent {
   // ── Head-mode tool builders ─────────────────────────────────────
 
   private buildHeadTools(input: HeadInput, capture: HeadCapture, home: HostedNodeHome) {
-    const rt = this.headFacetRuntime(input.id, capture, home);
+    const rt = this.headFacetRuntime(capture, home);
     const webSearch = this.facetModelServices.getWebSearchProvider();
     return buildHeadToolSet({
       input,

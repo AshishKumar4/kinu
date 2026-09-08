@@ -219,7 +219,7 @@ describe('LocalAgentClient', () => {
       'SELECT DISTINCT session_id FROM messages ORDER BY session_id',
     ).all();
     const conversation = db.query<{ value: string }, []>(
-      "SELECT value FROM agent_config WHERE key = 'conversation.id'",
+      "SELECT value FROM actor_config WHERE key = 'conversation.id'",
     ).get();
     expect(sessions).toEqual([{ session_id: 'default' }]);
     expect(conversation?.value).toBe('default');

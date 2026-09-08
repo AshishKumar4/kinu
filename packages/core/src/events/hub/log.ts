@@ -246,6 +246,7 @@ const SubordinateTaskPayloadSchema = v.object({
   deadline_hint: v.optional(v.string()),
   inherited_context: v.optional(v.string()),
   kinu_mode: WorkModeSchema,
+  creation_id: v.optional(v.string()),
 });
 const SubordinateReportPayloadSchema = v.object({
   from_subordinate: v.string(),

@@ -637,11 +637,7 @@ describe('whether the container may be disturbed', () => {
 
   test('an unreachable subordinate counts, because unknown is not idle', async () => {
     const { agent } = orchestratorHarness();
-    agent.harnessRoster().create({
-      name: 'helper',
-      createdBy: 'orchestrator', status: 'working', currentTask: 'building in the container',
-      createdAt: Date.now(), dismissedAt: null, lifetime: 'durable', taskEventId: null,
-    });
+    agent.harnessRoster().create({ name: 'helper', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'building in the container', createdAt: Date.now(), dismissedAt: null, lifetime: 'durable', taskEventId: null });
 
     // The harness `subAgent` stub refuses every call, which is exactly the
     // shape of a facet that cannot be reached. A root that read that as "idle"

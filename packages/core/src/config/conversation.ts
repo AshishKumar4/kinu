@@ -2,7 +2,7 @@
  * Canonical conversation identity.
  *
  * One local workspace has ONE durable conversation per agent. The id lives in
- * the workspace's own `agent_config` table, so every process that opens the
+ * the workspace's own `actor_config` table, so every process that opens the
  * workspace — an interactive CLI, a one-shot `kinu exec`, the scheduler
  * daemon's LocalAgentHost — resolves the same key and drives the same
  * conversation, instead of each JSONL recording session minting its own.

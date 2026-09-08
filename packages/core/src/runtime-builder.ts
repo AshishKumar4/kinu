@@ -18,7 +18,7 @@ import type {
   Schedule,
   Shell,
 } from './types/primitives';
-import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch, ReleaseBranch, RequestShellApproval } from './types/agent-runtime';
+import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch, RequestShellApproval } from './types/agent-runtime';
 import type { ExecutionRouter } from './execution/types';
 import type { FileCheckpoints } from './checkpoints/types';
 import type { TurnFileLedger } from './tools/file-ledger';
@@ -27,6 +27,7 @@ import { createScaffoldSurface } from './scaffold/surface';
 import type { ModelRouteResolution } from './profiles/model-route';
 import type { ResolvedTurnProfile } from './profiles/resolve';
 import type { SpendSource } from './events/model-call';
+import type { ActorHandle } from './state/actor-handle';
 /**
  * Where the fixed-tier producer lanes come from. The route POLICY is core's
  * (profiles/model-route.ts); this component supplies what only a backend
@@ -47,6 +48,7 @@ export interface ModelLaneComponents {
 }
 
 export interface RuntimeComponents {
+  actor: ActorHandle;
   sql: SqlExecutor;
   execRaw: RawSqlExec;
   vfs: VFS;
@@ -57,9 +59,6 @@ export interface RuntimeComponents {
   llm: LLM;
   executor: Executor;
   schedule: Schedule;
-  /** Agent stable identity */
-  agentId: string;
-  agentName: string;
   /** Platform-specific CraftStore */
   craftStore: CraftStore;
   /** Platform-specific memory (wraps VFS + FTS5) */
@@ -72,7 +71,6 @@ export interface RuntimeComponents {
   /** Branch lifecycle callbacks */
   spawnBranch: SpawnBranch;
   abortBranch: AbortBranch;
-  releaseBranch: ReleaseBranch;
   /**
    * Optional router for the runtime's registered execution environments. When
    * provided, the canonical `run` and `execute_tools` factories in core will
@@ -130,14 +128,15 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
   const agentStateVfs = components.agentStateVfs ?? vfs;
 
   const identity: Identity = {
-    id: components.agentId,
-    name: components.agentName,
+    id: components.actor.actorId,
+    name: components.actor.name,
     scaffold: createScaffoldSurface({ vfs: agentStateVfs, sql, path: 'scaffold/agent.js' }),
   };
   const lanes = components.modelLanes;
   const pinned: PinnedLanes = {};
 
   return {
+    actor: components.actor,
     storage: { vfs, sql, execRaw },
     agentStateVfs,
     memory,
@@ -154,7 +153,6 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     set advisorLlm(llm: LLM | undefined) { pinned.advisor = llm; },
     spawnBranch: components.spawnBranch,
     abortBranch: components.abortBranch,
-    releaseBranch: components.releaseBranch,
     executionRouter: components.executionRouter,
     shell: components.shell,
     checkpoints: components.checkpoints,

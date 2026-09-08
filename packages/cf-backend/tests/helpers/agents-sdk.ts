@@ -582,6 +582,10 @@ export function mockAgentsSdk(): void {
           },
         });
       }
+      async getExistingSubAgent(cls: { name: string }, name: string): Promise<object | null> {
+        if (!this.hasSubAgent(cls.name, name)) return null;
+        return this.subAgent(cls, name);
+      }
       listSubAgents(cls: { name: string }): Array<{ className: string; name: string; createdAt: number }> {
         return this.#subAgentRegistry().exec(
           `SELECT class, name, created_at FROM cf_agents_sub_agents
@@ -609,6 +613,13 @@ export function mockAgentsSdk(): void {
           `DELETE FROM cf_agents_sub_agents WHERE class = ? AND name = ?`,
           cls.name, name,
         );
+      }
+      async _cf_destroyDescendantFacet(path: readonly { className: string; name: string }[]): Promise<void> {
+        const parent = this.selfPath;
+        if (path.length !== parent.length + 1 || parent.some((step, index) => path[index]?.className !== step.className || path[index]?.name !== step.name)) throw new Error('The fixture can delete only a direct descendant.');
+        const child = path.at(-1);
+        if (!child) throw new Error('The descendant path is empty.');
+        await this.deleteSubAgent({ name: child.className }, child.name);
       }
       /** The SDK declares a second overload taking the class, and reduces it
        *  to `cls.name` (:5868); the registry key is the class NAME either way.

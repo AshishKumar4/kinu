@@ -27,7 +27,7 @@
  *   scaffold_trial_queue         — one row per trial awaiting execution
  *   scaffold_versions.status     — 'current' | 'pending' | 'rolled_back' | 'historical'
  *
- * Auto-promotion is ON by default at the agent level (agent_config
+ * Auto-promotion is ON by default at the agent level (actor_config
  * auto_promote_scaffold, config/store.ts): the misevolution gate + shadow
  * veto + archive are the safety net, and every promotion lands in the
  * Evolution Changelog where the operator can revert it. Set the key to

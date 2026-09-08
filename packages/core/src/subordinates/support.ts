@@ -23,6 +23,9 @@ import {
 } from './depth';
 import type { AgentIdentity } from '../vfs/agent-home';
 import { SubordinateRosterStore } from './roster';
+import { requireSubordinateActorName } from '../state/actor-key';
+import type { ActorReference } from '../state/actor-handle';
+import { finishSubordinateBirth, type SubordinateBirth, type SubordinateSeed } from './birth';
 import type { WorkMode } from '../prompting/surface';
 import type { AgentConfigStore } from '../config/store';
 import type { RoleId, TierId } from '../profiles/catalog';
@@ -77,7 +80,7 @@ export function readSubordinateLiveStatus(sql: SqlExec): SubordinateLiveStatus {
 /**
  * The immutable lineage of one subordinate — the facts nothing may retarget
  * after the facet exists. Everything MUTABLE about how the agent presents
- * (title, role selection, tier) lives only in its own `agent_config`, read
+ * (title, role selection, tier) lives only in its own `actor_config`, read
  * through {@link SubordinateDescriptorSource}; this row never mirrors it.
  */
 export interface SubordinateIdentity {
@@ -243,7 +246,7 @@ export class SubordinateIdentityStore {
 
 /**
  * Everything MUTABLE about how one subordinate presents, read from ITS OWN
- * `agent_config` — the single authority. Nothing here is persisted anywhere
+ * `actor_config` — the single authority. Nothing here is persisted anywhere
  * else; a parent that needs to show or prompt with this data asks the child
  * (or its local config store) through {@link SubordinateDescriptorSource}.
  */
@@ -355,6 +358,7 @@ export function admitSubordinateTask(log: EventLog, input: {
   deliverable?: string;
   deadlineHint?: string;
   inheritedContext?: string;
+  creationId?: string;
   mode: WorkMode;
   now: number;
 }): PublishResult {
@@ -372,6 +376,7 @@ export function admitSubordinateTask(log: EventLog, input: {
   if (deliverable) Object.assign(payload, { deliverable });
   if (deadlineHint) Object.assign(payload, { deadline_hint: deadlineHint });
   if (inheritedContext) Object.assign(payload, { inherited_context: inheritedContext });
+  if (input.creationId !== undefined) Object.assign(payload, { creation_id: requiredText(input.creationId, 'creationId') });
   return log.publish({
     descriptor: {
       ingress: 'subordinate',
@@ -512,38 +517,15 @@ export function admitSubordinateReport(log: EventLog, input: {
 }
 
 export interface SubordinateRuntime {
-  spawn(input: {
-    name: string;
-    /** The title to seed, empty when nothing the caller said can name this
-     *  agent yet — a provisional blank the title policy is free to claim. */
-    displayName: string;
-    /** Whose title `displayName` is. `auto` includes the blank: it is a title
-     *  nobody chose, so the first-interaction policy may replace it once.
-     *  `user` is final. */
-    nameOrigin: 'user' | 'auto';
-    /** The child's initial role id, written to the CHILD's config store. */
-    role: RoleId;
-    tier?: TierId;
-    mission: string;
-    /**
-     * How long this child is MEANT to live, seeded onto its own identity.
-     *
-     * The CHILD needs it, not just the roster, and that is the whole reason it
-     * rides the seed: only the child sees its own turn end, and a `task` child
-     * owes its caller exactly one report for EVERY way that turn can end
-     * (`terminalTaskReport`). A child that did not know its lifetime applied the
-     * durable relay policy, which withholds an empty or failed turn — and the
-     * caller of a temporary ask is blocked on that report, so withholding it was
-     * an ask that never returned.
-     */
-    lifetime: SubordinateLifetime;
-  }): Promise<void>;
+  spawn(input: SubordinateSeed & { creationId: string }): Promise<ActorReference>;
+  cancelBirth(input: SubordinateSeed & { creationId: string }): Promise<ActorReference>;
   assign(name: string, input: {
     body: string;
     mode: WorkMode;
     deliverable?: string;
     deadlineHint?: string;
     inheritedContext?: string;
+    creationId?: string;
   }): Promise<SubordinateHandoff>;
   status(name: string): Promise<SubordinateLiveStatus>;
   message(name: string, content: string, mode: WorkMode): Promise<SubordinateHandoff>;
@@ -551,7 +533,7 @@ export interface SubordinateRuntime {
    *  rename, which is what makes the refusal in `planWorkspaceTitle` durable
    *  on the side that runs the title policy. */
   rename(name: string, displayName: string, nameOrigin: 'user' | 'auto'): Promise<void>;
-  dismiss(name: string, keepHistory: boolean): Promise<void>;
+  dismiss(name: string, keepHistory: boolean, reference: ActorReference): Promise<void>;
 }
 
 export interface SubordinatesChangedEvent {
@@ -584,36 +566,6 @@ function rollback<T>(error: T, action: () => void, operation: string): never {
   throw error;
 }
 
-async function rollbackSpawn<T>(
-  error: T,
-  runtime: SubordinateRuntime,
-  roster: SubordinateRosterStore,
-  name: string,
-  rosterCreated: boolean,
-): Promise<never> {
-  try {
-    await runtime.dismiss(name, false);
-  } catch (cleanupError) {
-    throw new AggregateError(
-      [error, cleanupError],
-      'subordinate spawn failed and its facet cleanup also failed',
-      { cause: error },
-    );
-  }
-
-  if (rosterCreated) {
-    try {
-      roster.remove(name);
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        'subordinate spawn failed and its roster cleanup also failed',
-        { cause: error },
-      );
-    }
-  }
-  throw error;
-}
 
 
 async function statusView(
@@ -719,9 +671,7 @@ export function createTeamToolDeps(deps: {
       ? requiredText(optionalText(input.mission) ?? deps.ownMission(), 'mission')
       : requiredText(input.mission ?? '', 'mission');
     const name = input.name?.trim() || deps.createName(roleLabel);
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(name)) {
-      throw new Error('subordinate name must be a lowercase URL-safe slug (letters, digits, hyphens)');
-    }
+    requireSubordinateActorName(name);
     if (deps.roster.get(name)) throw new Error(`subordinate "${name}" already exists`);
 
     // Whose title this is, decided by what the caller actually supplied. A
@@ -735,7 +685,7 @@ export function createTeamToolDeps(deps: {
     const provisional = ownerCreated && input.role === undefined;
     const displayName = chosen ?? (provisional ? '' : displayNameForRole(roleLabel));
     const nameOrigin: 'user' | 'auto' = chosen ? 'user' : 'auto';
-    const seed: Parameters<SubordinateRuntime['spawn']>[0] = {
+    const seed: SubordinateSeed = {
       name,
       displayName,
       nameOrigin,
@@ -747,42 +697,22 @@ export function createTeamToolDeps(deps: {
       lifetime: 'durable',
     };
     if (input.tier !== undefined) seed.tier = input.tier;
-    await deps.runtime.spawn(seed);
-    let rosterCreated = false;
     const createdAt = deps.now();
-    try {
-      const subordinate: SubordinateRosterEntry = {
-        name,
-        createdBy: ownerCreated ? 'user' : 'orchestrator',
-        status: ownerCreated ? 'idle' : 'working',
-        currentTask: ownerCreated ? null : mission,
-        createdAt,
-        dismissedAt: null,
-        // Every helper this path creates is DURABLE. The task lifetime has one
-        // producer — `createTemporaryAgentPort` — so no caller of `hire` or
-        // `create` can mint a row that retires itself.
-        lifetime: 'durable',
-        taskEventId: null,
-      };
-      deps.roster.create(subordinate);
-      rosterCreated = true;
-      if (!ownerCreated) {
-        if (mode === null) throw new Error('subordinate task mode is required');
-        const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
-        const assignment: Parameters<SubordinateRuntime['assign']>[1] = {
-          body: mission,
-          mode,
-        };
-        if (inheritedContext) Object.assign(assignment, { inheritedContext });
-        // The mission IS this row's first assignment, so the row names its event
-        // like any other. Without this a hire's opening turn was the one
-        // assignment whose report had nothing on the roster to cite.
-        const handoff = await deps.runtime.assign(name, assignment);
-        deps.roster.recordAssignmentEvent(name, handoff.eventId);
-      }
-    } catch (error) {
-      await rollbackSpawn(error, deps.runtime, deps.roster, name, rosterCreated);
+    let assignment: SubordinateBirth['assignment'] = null;
+    if (!ownerCreated) {
+      if (mode === null) throw new KinuError('bad_input', 'A subordinate task requires a work mode.');
+      assignment = { body: mission, mode };
+      const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
+      if (inheritedContext) assignment.inheritedContext = inheritedContext;
     }
+    const creationId = crypto.randomUUID();
+    deps.roster.create({
+      name, actorReference: null, birth: { creationId, seed, assignment }, deleteRequested: false,
+      createdBy: ownerCreated ? 'user' : 'orchestrator',
+      status: ownerCreated ? 'idle' : 'working', currentTask: ownerCreated ? null : mission,
+      createdAt, dismissedAt: null, lifetime: 'durable', taskEventId: null,
+    });
+    await finishSubordinateBirth(deps.roster, deps.runtime, name);
     return {
       name,
       displayName,
@@ -802,7 +732,7 @@ export function createTeamToolDeps(deps: {
       return { name, displayName, subordinate };
     },
 
-    // The child's own agent_config is the only naming authority: a rename
+    // The child's own actor_config is the only naming authority: a rename
     // delegates to it and refreshes the roster listeners once it settles.
     rename: async (input) => {
       const displayName = requiredText(input.displayName, 'displayName');
@@ -889,11 +819,17 @@ export function createTeamToolDeps(deps: {
       // longer addressed), so a dismissal is never silent data loss. Wiping
       // the subordinate's storage requires an explicit keepHistory=false.
       const keepHistory = input.keepHistory ?? true;
-      deps.roster.dismiss(input.name, deps.now());
-      try {
-        await deps.runtime.dismiss(input.name, keepHistory);
-      } catch (error) {
-        rollback(error, () => deps.roster.restore(before), 'subordinate dismissal');
+      const reference = before.actorReference;
+      if (!reference) throw new KinuError('missing', 'The subordinate birth has not confirmed an actor reference.');
+      if (keepHistory && before.deleteRequested) throw new KinuError('denied', 'Physical retirement is already requested.');
+      if (keepHistory) deps.roster.dismiss(input.name, deps.now());
+      else deps.roster.requestDeletion(input.name, reference, deps.now());
+      if (keepHistory) {
+        try { await deps.runtime.dismiss(input.name, true, reference); }
+        catch (cause) { rollback(cause, () => deps.roster.restore(before), 'retained subordinate dismissal'); }
+      } else {
+        await deps.runtime.dismiss(input.name, false, reference);
+        deps.roster.removeActor(input.name, reference);
       }
       changed();
       return { ok: true, name: input.name, historyKept: keepHistory };
