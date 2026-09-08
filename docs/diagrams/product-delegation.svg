@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1396" viewBox="0 0 640 1396" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="delegation-title delegation-desc">
+<title id="delegation-title">CURRENT: Delegation and context forks</title>
+<desc id="delegation-desc">Current delegation distinguishes persistent hires, temporary assigned actors, existing-actor messages and tree searches. Searches choose answer agents or toolless thought calls. Context fork shares the parent conversation prefix with a child work seed; fresh supplies the task and parent conclusion. This does not create private copied workspace files. Verification, judgment and unranked results have different meanings. A workspace storage fork is a separate operation with a new ownership root.</desc>
+<!-- Sources: packages/core/src/strategy/swarm-expansion.ts:branchSeed; packages/core/src/strategy/node-agent.ts; packages/core/src/subordinates/temporary.ts; docs/EXPLORATION.md#the-six-axes. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
+<defs>
+<marker id="delegation-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M1 1 L9 5 L1 9 Z" fill="#8A7B66"/>
+</marker>
+</defs>
+<rect width="640" height="1396" rx="14" fill="#F7F3E9"/>
+<text x="32" y="35" font-size="18" font-weight="700" fill="#35633A" text-anchor="start">
+<tspan x="32" dy="0">CURRENT</tspan>
+</text>
+<text x="32" y="78" font-size="28" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="32" dy="0">Delegation and context forks</tspan>
+</text>
+<text x="32" y="111" font-size="21" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Actor lifetime, search shape and context are distinct.</tspan>
+</text>
+<g>
+<rect x="48" y="160" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="195" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Choose the work relationship</tspan>
+</text>
+<text x="68" y="229" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">hire: a durable teammate</tspan>
+<tspan x="68" dy="30">ask(role): temporary assigned work</tspan>
+<tspan x="68" dy="30">ask/send/reply: message an existing actor</tspan>
+</text>
+</g>
+<g>
+<rect x="48" y="366" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="401" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">For exploration, choose a search</tspan>
+</text>
+<text x="68" y="435" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">answer: agent turns and tools</tspan>
+<tspan x="68" dy="30">thought: one toolless model call</tspan>
+<tspan x="68" dy="30">Preset or explicit search configuration</tspan>
+</text>
+</g>
+<path d="M320 534 V570" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#delegation-arrow)" />
+<g>
+<rect x="48" y="572" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="607" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Choose the context axis</tspan>
+</text>
+<text x="68" y="641" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">fork: unchanged parent conversation</tspan>
+<tspan x="68" dy="30">prefix plus the child work seed</tspan>
+<tspan x="68" dy="30">fresh: task and parent conclusion</tspan>
+</text>
+</g>
+<path d="M320 740 V776" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#delegation-arrow)" />
+<g>
+<rect x="48" y="778" width="544" height="138" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="813" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Work against the shared file plane</tspan>
+</text>
+<text x="68" y="847" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Context fork does not clone files.</tspan>
+<tspan x="68" dy="30">Shell, scaffold and actor state stay scoped.</tspan>
+</text>
+</g>
+<path d="M320 916 V952" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#delegation-arrow)" />
+<g>
+<rect x="48" y="954" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="989" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Return evidence, not assumed success</tspan>
+</text>
+<text x="68" y="1023" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">verify: registered instrument</tspan>
+<tspan x="68" dy="30">judge: model judgment; not measurement</tspan>
+<tspan x="68" dy="30">none: an unranked set of candidates</tspan>
+</text>
+</g>
+<g>
+<rect x="48" y="1160" width="544" height="138" rx="10" fill="#E5EDF0" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="1195" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Keep workspace forks separate</tspan>
+</text>
+<text x="68" y="1229" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">A storage fork creates a new workspace.</tspan>
+<tspan x="68" dy="30">It is not the search context axis.</tspan>
+</text>
+</g>
+<path d="M32 1338 H608" stroke="#CBBFA9"/>
+<text x="32" y="1368" font-size="18" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Arrows show the labeled flow, not unrestricted access.</tspan>
+</text>
+</svg>

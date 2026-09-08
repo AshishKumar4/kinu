@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1426" viewBox="0 0 640 1426" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="evolution-title evolution-desc">
+<title id="evolution-title">CURRENT: Evolution follows evidence</title>
+<desc id="evolution-desc">Current evolution has a step-level channel for crafted-tool fitness and execution-recovery findings, turn-level outcome review, and longer session-window and lifetime processes. A tool that returns is not proof of task correctness. Negative outcomes can produce lessons; corroboration gates curated memory. Proposed scaffold changes pass validation and evaluation rather than becoming policy automatically. Records distinguish promotion, rejection and rollback.</desc>
+<!-- Sources: docs/EVOLUTION.md; packages/core/src/evolution/engine.ts; packages/core/src/orchestrator/craft-cycle.ts; packages/core/src/evolution/recovery.ts. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
+<defs>
+<marker id="evolution-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M1 1 L9 5 L1 9 Z" fill="#8A7B66"/>
+</marker>
+</defs>
+<rect width="640" height="1426" rx="14" fill="#F7F3E9"/>
+<text x="32" y="35" font-size="18" font-weight="700" fill="#35633A" text-anchor="start">
+<tspan x="32" dy="0">CURRENT</tspan>
+</text>
+<text x="32" y="78" font-size="28" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="32" dy="0">Evolution follows evidence</tspan>
+</text>
+<text x="32" y="111" font-size="21" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Different evidence supports different kinds of change.</tspan>
+</text>
+<g>
+<rect x="48" y="160" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="195" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Observe real outcomes</tspan>
+</text>
+<text x="68" y="229" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Tool returns or raises</tspan>
+<tspan x="68" dy="30">User feedback and execution verdicts</tspan>
+<tspan x="68" dy="30">Record which kind of evidence arrived.</tspan>
+</text>
+</g>
+<path d="M320 328 V364" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#evolution-arrow)" />
+<g>
+<rect x="48" y="366" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="401" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Step-level adaptation</tspan>
+</text>
+<text x="68" y="435" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Update crafted-tool fitness.</tspan>
+<tspan x="68" dy="30">Record changed-approach recoveries.</tspan>
+<tspan x="68" dy="30">Execution success is not task correctness.</tspan>
+</text>
+</g>
+<path d="M320 534 V570" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#evolution-arrow)" />
+<g>
+<rect x="48" y="572" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="607" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Turn-level learning</tspan>
+</text>
+<text x="68" y="641" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Review the turn against its outcome.</tspan>
+<tspan x="68" dy="30">Store lessons and reusable patterns.</tspan>
+<tspan x="68" dy="30">Corroboration controls curated memory.</tspan>
+</text>
+</g>
+<path d="M320 740 V776" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#evolution-arrow)" />
+<g>
+<rect x="48" y="778" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="813" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Window and lifetime review</tspan>
+</text>
+<text x="68" y="847" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Reflect across completed work.</tspan>
+<tspan x="68" dy="30">Evaluate proposed scaffold revisions.</tspan>
+<tspan x="68" dy="30">Consolidate and retire crafted tools.</tspan>
+</text>
+</g>
+<path d="M320 946 V982" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#evolution-arrow)" />
+<g>
+<rect x="48" y="984" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="1019" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Validate before wider changes</tspan>
+</text>
+<text x="68" y="1053" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Apply the existing validation gates.</tspan>
+<tspan x="68" dy="30">A proposed scaffold can be rejected.</tspan>
+<tspan x="68" dy="30">Record promotion or rollback.</tspan>
+</text>
+</g>
+<path d="M320 1152 V1188" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#evolution-arrow)" />
+<g>
+<rect x="48" y="1190" width="544" height="138" rx="10" fill="#E6EEDD" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="1225" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Durable effect</tspan>
+</text>
+<text x="68" y="1259" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Notes, tools and scaffold revisions</tspan>
+<tspan x="68" dy="30">inform later work through their stores.</tspan>
+</text>
+</g>
+<path d="M32 1368 H608" stroke="#CBBFA9"/>
+<text x="32" y="1398" font-size="18" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Arrows show the labeled flow, not unrestricted access.</tspan>
+</text>
+</svg>

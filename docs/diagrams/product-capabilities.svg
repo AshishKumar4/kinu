@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1307" viewBox="0 0 640 1307" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="capabilities-title capabilities-desc">
+<title id="capabilities-title">CURRENT + TARGET: Tools and codemode capabilities</title>
+<desc id="capabilities-desc">Current native tools and execute_tools codemode reach introduced host capabilities under actor identity, role, mode and provider gates. MCP and executor availability narrow that reach. The existing state capability is actor-scoped codemode_state; raw env.db or db is not introduced. The target database capability is a design proposal scoped to permitted data and operations, not unrestricted internal SQLite access.</desc>
+<!-- Sources: packages/cf-backend/src/execute-tools.ts; packages/cf-backend/src/codemode-sandbox.ts; packages/core/src/tools/state-codemode.ts; docs/TOOLS.md; user-messages.jsonl:975 / 7e1ad485. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
+<defs>
+<marker id="capabilities-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M1 1 L9 5 L1 9 Z" fill="#8A7B66"/>
+</marker>
+</defs>
+<rect width="640" height="1307" rx="14" fill="#F7F3E9"/>
+<text x="32" y="35" font-size="18" font-weight="700" fill="#35633A" text-anchor="start">
+<tspan x="32" dy="0">CURRENT + TARGET</tspan>
+</text>
+<text x="32" y="78" font-size="28" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="32" dy="0">Tools and codemode capabilities</tspan>
+</text>
+<text x="32" y="111" font-size="21" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Bindings expose scoped operations, not host internals.</tspan>
+</text>
+<g>
+<rect x="48" y="160" width="544" height="138" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="195" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Actor capability surface</tspan>
+</text>
+<text x="68" y="229" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Identity + role + mode + wired providers</tspan>
+<tspan x="68" dy="30">A namespace name is not a permission.</tspan>
+</text>
+</g>
+<path d="M320 298 V334" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#capabilities-arrow)" />
+<g>
+<rect x="48" y="336" width="544" height="138" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="371" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Two calling forms</tspan>
+</text>
+<text x="68" y="405" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Native tool calls</tspan>
+<tspan x="68" dy="30">execute_tools: JavaScript codemode</tspan>
+</text>
+</g>
+<path d="M320 474 V510" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#capabilities-arrow)" />
+<g>
+<rect x="48" y="512" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="547" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Introduced capabilities</tspan>
+</text>
+<text x="68" y="581" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">workspace / tools / agents / memory</tspan>
+<tspan x="68" dy="30">tasks / report / release / web</tspan>
+<tspan x="68" dy="30">MCP and executor providers, if admitted</tspan>
+</text>
+</g>
+<path d="M320 680 V716" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#capabilities-arrow)" />
+<g>
+<rect x="48" y="718" width="544" height="138" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="753" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Dispatch through existing gates</tspan>
+</text>
+<text x="68" y="787" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Same host-backed capabilities</tspan>
+<tspan x="68" dy="30">Unavailable or denied calls refuse.</tspan>
+</text>
+</g>
+<g>
+<rect x="48" y="894" width="544" height="138" rx="10" fill="#E5EDF0" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="929" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Current persistent scratch state</tspan>
+</text>
+<text x="68" y="963" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">state: actor-scoped codemode_state</tspan>
+<tspan x="68" dy="30">No raw env.db or db binding</tspan>
+</text>
+</g>
+<text x="48" y="1070" font-size="20" font-weight="700" fill="#7A5514" text-anchor="start">
+<tspan x="48" dy="0">TARGET / design proposal</tspan>
+</text>
+<g>
+<rect x="48" y="1084" width="544" height="130" rx="10" fill="#EEE0C2" stroke="#8A7B66" stroke-width="1.5" stroke-dasharray="7 5"/>
+<text x="68" y="1119" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Scoped database capability</tspan>
+</text>
+<text x="68" y="1153" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Explicit data and operation boundaries</tspan>
+<tspan x="68" dy="30">Protected audit, policy and secrets excluded</tspan>
+</text>
+</g>
+<path d="M32 1249 H608" stroke="#CBBFA9"/>
+<text x="32" y="1279" font-size="18" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Arrows show the labeled flow, not unrestricted access.</tspan>
+</text>
+</svg>

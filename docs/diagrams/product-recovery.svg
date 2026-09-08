@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1280" viewBox="0 0 640 1280" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="recovery-title recovery-desc">
+<title id="recovery-title">CURRENT: Recovery starts from durable state</title>
+<desc id="recovery-desc">Current recovery reads durable records rather than trusting process memory. Actor-local terminal effects and background jobs, event leases, workspace files, compaction state, SDK schedules and facet fiber metadata have distinct owners. Inspection reports saved state without invoking normal startup. Normal activation recovers pending work and replays only owed, keyed effects. This is not an exactly-once claim for arbitrary external I/O. Derived runtime and slate preview state can be rebuilt from durable source.</desc>
+<!-- Sources: packages/core/src/subordinates/inspection.ts; packages/cf-backend/src/actor-agent.ts:inspectSubordinateStorage; packages/cf-backend/src/fiber-recovery.ts; packages/core/src/orchestrator/terminal-effects.ts; packages/core/src/orchestrator/terminal-transition.ts; packages/core/src/jobs/runner.ts; packages/compaction/src/stores.ts; docs/LIVE-UI.md. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
+<defs>
+<marker id="recovery-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M1 1 L9 5 L1 9 Z" fill="#8A7B66"/>
+</marker>
+</defs>
+<rect width="640" height="1280" rx="14" fill="#F7F3E9"/>
+<text x="32" y="35" font-size="18" font-weight="700" fill="#35633A" text-anchor="start">
+<tspan x="32" dy="0">CURRENT</tspan>
+</text>
+<text x="32" y="78" font-size="28" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="32" dy="0">Recovery starts from durable state</tspan>
+</text>
+<text x="32" y="111" font-size="21" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Inspection and normal activation take different paths.</tspan>
+</text>
+<g>
+<rect x="48" y="160" width="544" height="138" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="195" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Interruption or hibernation</tspan>
+</text>
+<text x="68" y="229" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Process memory is not a durable record.</tspan>
+<tspan x="68" dy="30">Disconnect does not prove completion.</tspan>
+</text>
+</g>
+<path d="M320 298 V336" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#recovery-arrow)" />
+<g>
+<path d="M48 356 C48 334,592 334,592 356 L592 504 C592 526,48 526,48 504 Z" fill="#EEE0C2" stroke="#7A5514" stroke-width="1.5" />
+<path d="M48 356 C48 378,592 378,592 356" fill="none" stroke="#7A5514" stroke-width="1.2"/>
+<text x="68" y="402" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Read durable state</tspan>
+</text>
+<text x="68" y="438" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Actor SQL, jobs and event records</tspan>
+<tspan x="68" dy="30">Workspace files and compaction state</tspan>
+<tspan x="68" dy="30">SDK schedules and facet fiber index</tspan>
+</text>
+</g>
+<path d="M320 520 V551 H174 V584" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#recovery-arrow)" />
+<path d="M320 551 H466 V584" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#recovery-arrow)" />
+<g>
+<rect x="40" y="586" width="268" height="188" rx="10" fill="#E5EDF0" stroke="#8A7B66" stroke-width="1.5" />
+<text x="60" y="621" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="60" dy="0">Inspection</tspan>
+</text>
+<text x="60" y="655" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="60" dy="0">Read and report.</tspan>
+<tspan x="60" dy="30">Do not invoke</tspan>
+<tspan x="60" dy="30">startup recovery.</tspan>
+</text>
+</g>
+<g>
+<rect x="332" y="586" width="268" height="188" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="352" y="621" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="352" dy="0">Normal activation</tspan>
+</text>
+<text x="352" y="655" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="352" dy="0">Recover through</tspan>
+<tspan x="352" dy="30">existing owners.</tspan>
+<tspan x="352" dy="30">Resume owed work.</tspan>
+</text>
+</g>
+<path d="M466 774 V809 H320 V843" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#recovery-arrow)" />
+<g>
+<rect x="48" y="846" width="544" height="164" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="881" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Replay only owed effects</tspan>
+</text>
+<text x="68" y="915" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Dedupe through durable identity.</tspan>
+<tspan x="68" dy="30">Preserve completed effect records.</tspan>
+<tspan x="68" dy="30">No arbitrary exactly-once I/O claim.</tspan>
+</text>
+</g>
+<path d="M320 1010 V1048" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#recovery-arrow)" />
+<g>
+<rect x="48" y="1050" width="544" height="138" rx="10" fill="#E6EEDD" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="1085" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Rebuild derived runtime</tspan>
+</text>
+<text x="68" y="1119" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Reload working projections.</tspan>
+<tspan x="68" dy="30">Rebuild previews from durable source.</tspan>
+</text>
+</g>
+<path d="M32 1222 H608" stroke="#CBBFA9"/>
+<text x="32" y="1252" font-size="18" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Arrows show the labeled flow, not unrestricted access.</tspan>
+</text>
+</svg>

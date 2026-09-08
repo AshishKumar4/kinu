@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1456" viewBox="0 0 640 1456" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="slate-title slate-desc">
+<title id="slate-title">CURRENT: A slate from source to preview</title>
+<desc id="slate-desc">A slate is source under the canonical workspace file plane. Its strict package manifest introduces only declared, admitted bindings. Preview compiles and starts a caller-scoped resident; the browser opens a separate preview origin and talks to authored HTTP. The caller does not acquire a callee author’s authority. Source and committed versions are durable; resident processes and preview URLs are derived. Hosted Worker previews and sandbox Node applications retain distinct execution boundaries.</desc>
+<!-- Sources: docs/LIVE-UI.md; packages/core/src/slates/project.ts; packages/core/src/slates/bindings.ts; packages/cf-backend/src/slates/host.ts. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
+<defs>
+<marker id="slate-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M1 1 L9 5 L1 9 Z" fill="#8A7B66"/>
+</marker>
+</defs>
+<rect width="640" height="1456" rx="14" fill="#F7F3E9"/>
+<text x="32" y="35" font-size="18" font-weight="700" fill="#35633A" text-anchor="start">
+<tspan x="32" dy="0">CURRENT</tspan>
+</text>
+<text x="32" y="78" font-size="28" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="32" dy="0">A slate from source to preview</tspan>
+</text>
+<text x="32" y="111" font-size="21" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Authored application source, not a second UI protocol.</tspan>
+</text>
+<g>
+<rect x="48" y="160" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="195" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Author a slate project</tspan>
+</text>
+<text x="68" y="229" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Workspace files under</tspan>
+<tspan x="68" dy="30">/home/user/slates/&lt;id&gt;/</tspan>
+<tspan x="68" dy="30">TypeScript entry + package.json</tspan>
+</text>
+</g>
+<path d="M320 328 V364" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#slate-arrow)" />
+<g>
+<rect x="48" y="366" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="401" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Declare narrow bindings</tspan>
+</text>
+<text x="68" y="435" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">namespace / read-model RPC / MCP / app</tspan>
+<tspan x="68" dy="30">Declarations do not grant permission.</tspan>
+<tspan x="68" dy="30">Use the originating caller’s authority.</tspan>
+</text>
+</g>
+<path d="M320 534 V570" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#slate-arrow)" />
+<g>
+<rect x="48" y="572" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="607" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Request a preview</tspan>
+</text>
+<text x="68" y="641" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">workspace.slate({ op: &quot;preview&quot;, id })</tspan>
+<tspan x="68" dy="30">Compile source; boot the matching</tspan>
+<tspan x="68" dy="30">caller-scoped resident process.</tspan>
+</text>
+</g>
+<path d="M320 740 V776" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#slate-arrow)" />
+<g>
+<rect x="48" y="778" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="813" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Open the separate preview origin</tspan>
+</text>
+<text x="68" y="847" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">The browser talks to authored HTTP.</tspan>
+<tspan x="68" dy="30">It receives no host database or session</tspan>
+<tspan x="68" dy="30">handle through an injected bridge.</tspan>
+</text>
+</g>
+<g>
+<rect x="48" y="984" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="1019" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Keep source as the authority</tspan>
+</text>
+<text x="68" y="1053" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">commit / history / fork / restore</tspan>
+<tspan x="68" dy="30">Source and versions are durable.</tspan>
+<tspan x="68" dy="30">Processes and URLs are derived state.</tspan>
+</text>
+</g>
+<g>
+<rect x="48" y="1190" width="544" height="168" rx="10" fill="#E5EDF0" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="1225" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Preserve execution boundaries</tspan>
+</text>
+<text x="68" y="1259" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Hosted Worker preview: supported</tspan>
+<tspan x="68" dy="30">Node server: sandbox executor</tspan>
+<tspan x="68" dy="30">Unavailable preview: explicit refusal</tspan>
+</text>
+</g>
+<path d="M32 1398 H608" stroke="#CBBFA9"/>
+<text x="32" y="1428" font-size="18" font-weight="400" fill="#625544" text-anchor="start">
+<tspan x="32" dy="0">Arrows show the labeled flow, not unrestricted access.</tspan>
+</text>
+</svg>
