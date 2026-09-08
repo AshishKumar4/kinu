@@ -10,16 +10,19 @@ import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { jsonSchema, tool } from 'ai';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
+import * as v from 'valibot';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
   resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
-  decodeModelMessages, applyStagedContext,
+  decodeModelMessages, contextMount, withMountTable, createFileDispatcher, TurnContextBudget,
 } from '@kinu.run/core';
 import type {
-  ActorHandle, AgentRuntime, AgentStores, ChatEvent, ProfileAuthorityInputs, StoredActorClaim, WorkMode,
+  ActorHandle, AgentRuntime, AgentStores, ChatEvent, FileToolInput, ProfileAuthorityInputs,
+  StoredActorClaim, WorkMode,
 } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
+import { TurnFileLedger } from '../../core/src/tools/file-ledger';
 import { initEventsHubTables, EventLog } from '../../core/src/events/hub/index';
 import { createTestRuntime, makeSqlExec } from '../../core/tests/helpers';
 import { createSandboxedExecutor } from '../src/executor';
@@ -266,7 +269,7 @@ test('a stale execution epoch cannot write to the claim a newer one owns', async
   const stale = claims.admit({
     runId: 'run-old', turnId: 'turn-fence', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
-    context: [{ role: 'user', content: 'first activation' }],
+    context: [{ role: 'user', content: 'first activation' }], workingRevision: 0,
   });
   expect(stale.epoch).toBe(1);
   // The activation that replaces it re-admits the SAME turn and takes the next
@@ -274,18 +277,18 @@ test('a stale execution epoch cannot write to the claim a newer one owns', async
   const live = claims.admit({
     runId: 'run-new', turnId: 'turn-fence', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
-    context: [{ role: 'user', content: 'second activation' }],
+    context: [{ role: 'user', content: 'second activation' }], workingRevision: 0,
   });
   expect(live.epoch).toBe(2);
-  expect(() => claims.consume(stale, { index: 0, messages: [{ role: 'user', content: 'stale step' }] }))
+  expect(() => claims.consume(stale, { index: 0, messages: [{ role: 'user', content: 'stale step' }], workingRevision: 0 }))
     .toThrow(KinuError);
   expect(() => claims.settle(stale, 'completed')).toThrow(KinuError);
   // The live claim is untouched by the refusals.
-  claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'live step' }] });
+  claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'live step' }], workingRevision: 0 });
   expect(claims.read('turn-fence')).toMatchObject({ epoch: 2, runId: 'run-new', consumedRevision: 1 });
   // A settled claim takes no further work either.
   claims.settle(live, 'completed');
-  expect(() => claims.consume(live, { index: 1, messages: [{ role: 'user', content: 'after settle' }] }))
+  expect(() => claims.consume(live, { index: 1, messages: [{ role: 'user', content: 'after settle' }], workingRevision: 0 }))
     .toThrow(KinuError);
 });
 
@@ -296,18 +299,18 @@ test('one actor cannot write another actor\'s claim, and their revisions never m
   const leftClaim = left.stores.claims.admit({
     runId: 'run-l', turnId: 'shared-turn-id', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
-    context: [{ role: 'user', content: 'left context' }],
+    context: [{ role: 'user', content: 'left context' }], workingRevision: 0,
   });
   const rightClaim = right.stores.claims.admit({
     runId: 'run-r', turnId: 'shared-turn-id', workMode: 'plan',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
-    context: [{ role: 'user', content: 'right context' }],
+    context: [{ role: 'user', content: 'right context' }], workingRevision: 0,
   });
   // The same turn id on two issued actors is two claims, each at epoch 1.
   expect(leftClaim.epoch).toBe(1);
   expect(rightClaim.epoch).toBe(1);
   expect(() => right.stores.claims.consume(leftClaim, {
-    index: 0, messages: [{ role: 'user', content: 'cross-actor step' }],
+    index: 0, messages: [{ role: 'user', content: 'cross-actor step' }], workingRevision: 0,
   })).toThrow(KinuError);
   expect(left.stores.claims.admittedContext('shared-turn-id')?.messages)
     .toEqual([{ role: 'user', content: 'left context' }]);
@@ -316,52 +319,102 @@ test('one actor cannot write another actor\'s claim, and their revisions never m
   expect(right.stores.claims.read('shared-turn-id')?.workMode).toBe('plan');
 });
 
-test('a staged context edit is compare-and-set and lands only at a safe step boundary', async () => {
+test('a context edit written through the native file tool reaches the NEXT model request', async () => {
   const { bind } = await workspace();
   const left = bind('left');
-  const claims = left.stores.claims;
-  const base: ModelMessage[] = [{ role: 'user', content: 'original question' }];
-  const claim = claims.admit({
-    runId: 'run-stage', turnId: 'turn-stage', workMode: 'build',
-    program: { kind: 'builtin', version: 0, digest: null, build: null },
-    context: base,
+  // The actor's own file plane, with /context composed exactly as a backend
+  // composes it: the edit below goes through the same dispatcher, ledger and
+  // store a model's `file` call goes through.
+  const vfs = withMountTable(left.runtime.storage.vfs, [contextMount({
+    stores: () => ({ actorId: left.handle.actorId, claims: left.stores.claims, events: null }),
+  })]);
+  const file = createFileDispatcher({
+    vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
   });
-  claims.consume(claim, { index: 0, messages: base });
-  const edited: ModelMessage[] = [{ role: 'user', content: 'edited question' }];
-  expect(claims.stage(claim, { base: 1, messages: edited })).toBe(2);
-  // A second edit written against the revision the first one superseded is
-  // refused rather than silently replacing it.
-  expect(() => claims.stage(claim, { base: 1, messages: edited })).toThrow(KinuError);
-  const staged = claims.stagedContext(claim);
-  expect(staged).toMatchObject({ revision: 2, baseRevision: 1, stepIndex: null });
-  // MID-EXCHANGE: the live tail holds a tool call whose result has not arrived,
-  // so this is not a boundary and the edit stays staged.
-  const midExchange: ModelMessage[] = [...base, {
-    role: 'assistant',
-    content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'probe', input: {} }],
-  }];
-  expect(applyStagedContext(midExchange, { messages: edited, baseMessageCount: 1 })).toBeNull();
-  // SETTLED: the pair is complete, so the edit replaces the history and the
-  // protected tail — the issued call, its result, and the steer that landed —
-  // rides after it untouched.
-  const settledTail: ModelMessage[] = [...midExchange, {
-    role: 'tool',
-    content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'probe', output: { type: 'json', value: { ok: true } } }],
-  }, { role: 'user', content: 'steer that landed mid-turn' }];
-  const landed = applyStagedContext(settledTail, { messages: edited, baseMessageCount: 1 });
-  expect(landed?.map((message) => message.role)).toEqual(['user', 'assistant', 'tool', 'user']);
-  expect(landed?.[0]).toEqual({ role: 'user', content: 'edited question' });
-  expect(landed?.at(-1)).toEqual({ role: 'user', content: 'steer that landed mid-turn' });
-  expect(landed).not.toBeNull();
-  // Consuming the staged revision records the REQUEST, not the proposal.
-  if (landed === null) throw new Error('a settled tail must be a safe boundary for a staged edit');
-  const consumed = claims.consumeStaged(claim, 2, { index: 1, messages: landed });
-  expect(consumed.revision).toBe(2);
-  expect(claims.consumedContext('turn-stage', 2)?.messageCount).toBe(4);
-  expect(claims.stagedContext(claim)).toBeNull();
+  // The provider's OWN prompt, as JSON: this is the wire-facing message list,
+  // not our `ModelMessage` shape, and reading it back through a schema keeps
+  // that distinction honest instead of asserting one is the other.
+  const requests: string[] = [];
+  let step = 0;
+  // THREE steps, because that is what the product actually requires of a model
+  // editing a file: read it, then edit against what the read returned, then
+  // answer. The read-before-write gate is real on this plane.
+  const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: (options) => {
+    requests.push(JSON.stringify(options.prompt));
+    const at = step++;
+    const call = at === 0
+      ? { action: 'read', path: '/context/working.jsonl' }
+      : { action: 'edit', path: '/context/working.jsonl',
+          edits: [{ old_text: 'the WRONG premise', new_text: 'the RIGHT premise' }] };
+    return { content: at < 2
+      ? [{ type: 'tool-call', toolCallId: `file-${String(at)}`, toolName: 'file', input: JSON.stringify(call) }]
+      : [{ type: 'text', text: 'done' }],
+    finishReason: { unified: at < 2 ? 'tool-calls' : 'stop', raw: undefined }, usage, warnings: [] };
+  } });
+  const tools = { file: tool({
+    inputSchema: jsonSchema<FileToolInput>({
+      type: 'object',
+      properties: {
+        action: { type: 'string' },
+        path: { type: 'string' },
+        edits: { type: 'array', items: { type: 'object' } },
+      },
+      required: ['action', 'path'],
+    }),
+    execute: async (args: FileToolInput) => file(args),
+  }) };
+
+  await runTurn(left, {
+    turnId: 'turn-edit', loopVersion: 0, model, tools,
+    input: { role: 'user', content: 'reason from the WRONG premise' },
+  });
+
+  // The first two requests ran on the original premise: an in-flight request
+  // keeps the versions it started with, and the edit was not even authored
+  // until the second one's tool call executed.
+  expect(requests[0]).toContain('the WRONG premise');
+  expect(requests[1]).toContain('the WRONG premise');
+  // THE THIRD request — what the provider actually received after the edit —
+  // is built from the edited history, and still carries both tool exchanges
+  // that happened in between.
+  const third = v.parse(v.array(v.object({ role: v.string() })), JSON.parse(requests[2] ?? '[]'));
+  expect(third.map((row) => row.role)).toEqual(['system', 'user', 'assistant', 'tool', 'assistant', 'tool']);
+  // The premise the model is now reasoning from. Asserted on the USER message
+  // rather than the whole prompt, because the tool result of the read
+  // legitimately quotes the pre-edit bytes — that is what the model read.
+  const PromptText = v.array(v.object({
+    role: v.string(),
+    content: v.union([v.string(), v.array(v.object({ text: v.optional(v.string()) }))]),
+  }));
+  const parsed = v.parse(PromptText, JSON.parse(requests[2] ?? '[]'));
+  const userMessage = parsed.find((row) => row.role === 'user');
+  const flat = v.safeParse(v.string(), userMessage?.content);
+  const premise = flat.success
+    ? flat.output
+    : v.parse(v.array(v.object({ text: v.optional(v.string()) })), userMessage?.content ?? [])
+      .map((part) => part.text ?? '').join('');
+  expect(premise).toBe('reason from the RIGHT premise');
+
+  // The durable record agrees. The edit is its own revision, authored through
+  // the file surface by this actor and activated at the step that took it; the
+  // rendered request of that step points at it; and the working history the
+  // finished turn left behind carries the edited message.
+  const edit = left.stores.claims.working.history().find((row) => row.source === 'edit');
+  expect(edit).toMatchObject({
+    via: 'file', author: left.handle.actorId, activatedStep: 2, activatedTurnId: 'turn-edit',
+  });
+  expect(left.stores.claims.consumedContext('turn-edit')?.workingRevision).toBe(edit?.revision);
+  const settled = left.stores.claims.working.active();
+  expect(settled?.messages[0]).toEqual({ role: 'user', content: 'reason from the RIGHT premise' });
+  // And the FIRST step's evidence is untouched — an edit does not rewrite what
+  // a past request was.
+  expect(JSON.stringify(left.stores.claims.consumedContext('turn-edit', 1)?.messages))
+    .toContain('the WRONG premise');
+  // The next turn starts from the edited history, not from the pre-edit array.
+  expect(left.actor.history[0]).toEqual({ role: 'user', content: 'reason from the RIGHT premise' });
 });
 
-test('a mid-turn hydration stages a revision instead of rewriting a running turn', async () => {
+test('a mid-turn host edit stages a revision instead of rewriting a running turn', async () => {
   const { bind } = await workspace();
   const left = bind('left');
   let stagedRevision: number | null = null;
@@ -379,6 +432,24 @@ test('a mid-turn hydration stages a revision instead of rewriting a running turn
   // The step that was already issued kept the context it was issued with.
   const first = left.stores.claims.consumedContext('turn-hydrate', 1);
   expect(first?.messages).toEqual([{ role: 'user', content: 'original' }]);
+  // The turn boundary IS a safe boundary, so the edit landed there rather than
+  // waiting: the tail (the assistant's answer) was complete, and the working
+  // history the next turn builds on is the edited one.
+  expect(left.stores.claims.working.staged()).toBeNull();
+  expect(left.stores.claims.working.revision(stagedRevision ?? 0))
+    .toMatchObject({ via: 'session', activatedStep: null, activatedTurnId: 'turn-hydrate' });
+
+  // The NEXT turn is the next safe boundary: it admits the edited history with
+  // the newly delivered input preserved after it exactly once.
+  await runTurn(left, {
+    turnId: 'turn-after', loopVersion: 0, model: answerOnce('second answer'),
+    input: { role: 'user', content: 'follow-up' },
+  });
+  const admitted = left.stores.claims.admittedContext('turn-after')?.messages ?? [];
+  expect(admitted[0]).toEqual({ role: 'user', content: 'replaced by the host' });
+  expect(admitted.filter((message) => message.content === 'follow-up')).toHaveLength(1);
+  expect(left.stores.claims.working.active()).toMatchObject({ source: 'turn' });
+
   // Outside a turn the same call hydrates rather than staging.
   expect(left.actor.restoreHistory([{ role: 'user', content: 'cold hydration' }])).toBeNull();
   expect(left.actor.history).toEqual([{ role: 'user', content: 'cold hydration' }]);
@@ -395,7 +466,7 @@ test('the stored revision decodes through the codec the recorder validates with'
       { type: 'text', text: 'binary and a url' },
       { type: 'file', data: new Uint8Array([0, 1, 254, 255]), mediaType: 'application/octet-stream' },
       { type: 'file', data: new URL('https://example.invalid/a.pdf'), mediaType: 'application/pdf' },
-    ] }],
+    ] }], workingRevision: 0,
   });
   const row = left.runtime.storage.sql<{ messages: string; digest: string }>`
     SELECT messages, digest FROM actor_context_revisions
