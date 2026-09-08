@@ -50,7 +50,6 @@
   "movable packages/cf-backend/src/components/alternate-takes-logic.ts",
   "movable packages/cf-backend/src/components/background-event.ts",
   "movable packages/cf-backend/src/components/head-chat.ts",
-  "movable packages/cf-backend/src/components/landing/bugfix-demo-timeline.ts",
   "movable packages/cf-backend/src/components/message-live-tail.ts",
   "movable packages/cf-backend/src/components/surfaces/activity-breakdown.ts",
   "movable packages/cf-backend/src/components/surfaces/files-plane.ts",

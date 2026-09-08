@@ -1,12 +1,12 @@
 import { Button, Tabs, type TabsItem } from '@cloudflare/kumo';
 import { CHANGE_KIND_GLYPH, TUI_ADVERTISED_HINTS, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS } from '@kinu.run/core';
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import { useRef, useState, type ReactElement, type ReactNode } from 'react';
 import type { UIMessage } from 'ai';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
 import { MessageView } from '@/components/MessageView';
 
-import { BugFixDemo } from './BugFixDemo';
+import { useCopy } from '@/hooks/use-copy';
 
 export function RuleLabel({ children }: { children: ReactNode }): ReactElement {
   return <div className="mb-4 flex items-center gap-3 text-[13px] font-semibold p-accent"><span className="h-px w-[22px] shrink-0 bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />{children}</div>;
@@ -36,17 +36,17 @@ const WORKSPACE_DEMO_MESSAGES: UIMessage[] = [
   },
 ];
 
-function WorkspacePreview(): ReactElement {
+export function WorkspacePreview(): ReactElement {
   const [altitude, setAltitude] = useState('run');
   const [decision, setDecision] = useState<'pending' | 'retried' | 'dismissed'>('pending');
   return (
-    <div data-workspace-mode={altitude} aria-label="Kinu workspace interface preview" className="relative overflow-hidden rounded-2xl border p-border bg-[var(--c-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
+    <div data-showcase="workspace" data-workspace-mode={altitude} aria-label="Kinu workspace interface preview" className="relative overflow-hidden rounded-2xl border p-border bg-[var(--c-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
       <div className="flex min-h-[46px] flex-wrap items-center justify-between gap-3 border-b p-border p-recessed px-4 py-2">
         <div className="flex min-w-0 items-center gap-3">
           <KinuLogo compact />
           <span className="h-4 w-px p-fill" />
           <span className="text-[13px] font-semibold p-text">Jarvis</span>
-          <span className="inline-flex items-center gap-1.5 text-[11.5px] p-text-4"><span className="size-[5px] rounded-full p-dot-accent" />Live</span>
+          <span className="inline-flex items-center gap-1.5 text-[11.5px] p-text-4"><span className="size-[5px] rounded-full p-dot-accent" />Demo</span>
           <span className="hidden text-[11.5px] p-text-4 sm:inline">deepseek-v4-pro</span>
         </div>
         <Tabs
@@ -321,94 +321,47 @@ function TuiPreview(): ReactElement {
   );
 }
 function CliPreview(): ReactElement {
-  const [stage, setStage] = useState(0);
-  const [sequence, setSequence] = useState(0);
-  useEffect(() => {
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      setStage(4);
-      return;
-    }
-    const timers = [650, 1_250, 1_900, 2_600].map((delay, index) => (
-      window.setTimeout(() => setStage(index + 1), delay)
-    ));
-    return () => timers.forEach((timer) => window.clearTimeout(timer));
-  }, [sequence]);
-
-  const lineClass = (visible: boolean): string => (
-    `grid grid-cols-[16px_minmax(0,1fr)_auto] gap-3 py-2 transition-all duration-300 ${visible ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`
-  );
+  const { status, copy } = useCopy();
+  const [mode, setMode] = useState('run');
+  const command = mode === 'run'
+    ? 'kinu run workshop "Review this diff. Check the changed paths and report evidence." --mode json'
+    : 'kinu exec --workspace workshop --json "Review this diff. Check the changed paths and report evidence."';
   return (
-    <div data-cli-stage={stage} aria-label="Kinu command line preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] font-mono text-xs shadow-[0_30px_90px_-50px_rgba(0,0,0,.8)]">
-      <div className="flex h-11 items-center gap-2 border-b border-[var(--c-border-strong)] p-recessed px-4">
-        <span className="size-2 rounded-full bg-[var(--c-danger)] opacity-70" />
-        <span className="size-2 rounded-full bg-[var(--c-warning)] opacity-70" />
-        <span className="size-2 rounded-full bg-[var(--c-success)] opacity-70" />
-        <span className="ml-3 flex-1 text-center text-[10px] uppercase tracking-[.14em] p-text-4">kinu run · checkout</span>
-        <div className="flex items-center gap-2">
-          <span className={`text-[10px] uppercase tracking-[.12em] ${stage < 4 ? 'p-accent' : 'p-success'}`}>{stage < 4 ? 'running' : 'exit 0'}</span>
-          <Button type="button" size="sm" variant="ghost" aria-label="Replay CLI run" onClick={() => { setStage(0); setSequence((value) => value + 1); }} className="!h-7 !rounded-full !px-2.5 !text-[10px]">Replay</Button>
+    <div data-cli-mode={mode} aria-label="Kinu command line preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-border p-recessed px-5 py-3">
+        <span className="font-mono text-[11px] p-text-4">Example invocation · not a recorded run</span>
+        <Tabs tabs={[{ value: 'run', label: 'Terminal' }, { value: 'ci', label: 'CI runner' }]} value={mode} onValueChange={setMode} variant="segmented" activateOnFocus />
+      </div>
+      <div className="grid gap-8 p-6 sm:p-8 lg:grid-cols-[1.15fr_1fr]">
+        <div className="min-w-0">
+          <div className="mb-4 flex items-center justify-between gap-3"><span className="font-mono text-[11px] uppercase tracking-[.1em] p-accent">{mode === 'run' ? 'One task' : 'Non-interactive runner'}</span><Button type="button" variant="ghost" size="sm" aria-label="Copy task command" onClick={() => copy(command)}>{status === 'copied' ? 'Copied' : status === 'failed' ? 'Retry copy' : 'Copy'}</Button></div>
+          <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.9] p-text"><code>{command}</code></pre>
+          <p className="mt-5 text-xs leading-[1.7] p-text-4">Use a configured workspace with the checkout available to its executor and provider credentials already set.</p>
+        </div>
+        <div className="border-t p-border pt-6 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
+          <h3 className="text-base font-semibold">{mode === 'run' ? 'A task, not a test runner' : 'No interactive consent prompts'}</h3>
+          <p className="mt-3 text-sm leading-[1.7] p-text-3">{mode === 'run' ? 'kinu run streams one task and exits. Omit the prompt to open chat. Use --mode json for event output; text is the default.' : 'kinu exec uses the same one-shot machinery but fails closed on unapproved device access. Pre-authorize what the job needs; --json emits line-delimited events.'}</p>
+          <p className="mt-4 text-sm leading-[1.7] p-text-3">Exit 0 means the agent turn completed without recorded errors or denied consent. It is not proof that your tests passed. Keep your actual test and deploy checks in CI.</p>
         </div>
       </div>
-      <div className="min-h-[360px] p-5 sm:p-7">
-        <div className="mb-6 p-text"><span className="mr-2 p-accent">$</span>kinu run checkout “Audit the coupon flow and fix it.”<span className={`ml-1 inline-block h-[1em] w-[7px] bg-[var(--c-accent)] ${stage === 0 ? 'motion-safe:animate-pulse' : 'opacity-0'}`} /></div>
-        <div className="border-y border-[var(--c-border-strong)] px-1">
-          <div className={lineClass(stage >= 1)}><span className="p-accent">›</span><span className="p-text-3">run · workspace &nbsp; reproduce coupon failure</span><span className="p-danger">exit 1</span></div>
-          <div className={`${lineClass(stage >= 2)} border-t border-dashed border-[var(--c-dash)]`}><span className="p-accent">›</span><span className="p-text-3">file &nbsp; edit migration and handler</span><span className="p-success">saved</span></div>
-          <div className={`${lineClass(stage >= 3)} border-t border-dashed border-[var(--c-dash)]`}><span className="p-accent">›</span><span className="p-text-3">run · workspace &nbsp; bun test coupon</span><span className="p-success">7 pass</span></div>
-        </div>
-        <div className={`mt-6 grid grid-cols-[52px_minmax(0,1fr)] gap-3 transition-all duration-300 ${stage >= 4 ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`}>
-          <span className="text-[10px] uppercase tracking-[.12em] p-accent">result</span>
-          <p className="font-sans text-sm leading-[1.65] p-text">The percentage-coupon path is fixed. The migration now fills both coupon kinds, and all seven focused tests pass.</p>
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--c-border-strong)] p-recessed px-5 py-3 text-[10px] p-text-4"><span>one-shot run · final answer on stdout</span><span>also: kinu chat · kinu acp</span></div>
     </div>
   );
 }
 
-export function LandingShowcases({
-  storageGb,
-  sandboxVcpu,
-  sandboxMemoryGb,
-  sandboxDiskGb,
-}: {
-  readonly storageGb: number;
-  readonly sandboxVcpu: number;
-  readonly sandboxMemoryGb: number;
-  readonly sandboxDiskGb: number;
-}): ReactElement {
+export function LandingShowcases(): ReactElement {
   return (
     <div className="landing-shell">
-      <section data-showcase="workspace" className="pt-24">
-        <div className="mx-auto mb-11 max-w-[760px] text-center">
-          <h2 className="mb-3 text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Have your agents <span className="p-accent">live in the cloud.</span></h2>
-          <p className="mx-auto max-w-[700px] text-base leading-[1.65] p-text-3">Each workspace keeps files, memory, and one conversation per agent. Attach Linux or your own machine.</p>
-          <div className="mt-5 flex flex-wrap justify-center gap-2 font-mono text-[10.5px] p-text-3">
-            <span className="rounded-full border p-border p-recessed px-3 py-1.5">{String(storageGb)} GB durable workspace</span>
-            <span className="rounded-full border p-border p-recessed px-3 py-1.5">{String(sandboxVcpu)} vCPU · {String(sandboxMemoryGb)} GB RAM · {String(sandboxDiskGb)} GB disk sandbox</span>
-            <span className="rounded-full border p-border p-recessed px-3 py-1.5">Secure device connection</span>
-          </div>
-        </div>
-        <WorkspacePreview />
-      </section>
-      <section data-showcase="bugfix" className="pt-24">
-        <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
-          <div><RuleLabel>One bug, end to end</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">From bug report <span className="p-accent">to green tests.</span></h2></div>
-          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Watch Kinu reproduce a failure, revise its plan, compare three patches, and run the focused suite.</p>
-        </div>
-        <BugFixDemo />
-      </section>
-      <section data-showcase="tui" className="pt-24">
-        <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
-          <div><RuleLabel>The terminal</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Let your agents live <span className="p-accent">locally.</span></h2></div>
-          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Create local workspaces or open cloud workspaces from your terminal.</p>
+      <section data-showcase="tui" className="pb-20">
+        <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
+          <h2 className="text-[clamp(26px,3vw,36px)] font-semibold leading-[1.1] tracking-[-.03em]">Or have them <span className="p-accent">run locally.</span></h2>
+          <p className="text-sm p-text-3">Interactive TUI demo · select an agent to inspect its work.</p>
         </div>
         <TuiPreview />
       </section>
-      <section data-showcase="cli" className="py-24">
-        <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
-          <div><RuleLabel>The CLI</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Automate focused work <span className="p-accent">from any shell.</span></h2></div>
-          <p className="max-w-[580px] text-base leading-[1.65] p-text-3"><code className="font-mono text-[.9em] p-text-2">kinu run</code> streams one task for scripts or CI, returns the answer, then exits with its status.</p>
+      <section id="local" data-showcase="cli" className="border-t p-border py-20 lg:py-24">
+        <div className="mb-9 grid items-end gap-6 md:grid-cols-2 md:gap-[52px]">
+          <div><RuleLabel>02 · Smart CI</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Give CI an agent.<br /><span className="p-accent">Keep the checks.</span></h2></div>
+          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Ask for a diff review, investigate a failed build, or prepare a change. Stream the task into your workflow; let independent checks decide what ships.</p>
         </div>
         <CliPreview />
       </section>

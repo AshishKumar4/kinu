@@ -1,183 +1,86 @@
 import { Button } from '@cloudflare/kumo';
 import { ArrowUpRightIcon, MoonIcon, SunIcon } from '@phosphor-icons/react';
-import { platformFact } from '@kinu.run/core';
 import { useState, type ReactElement, type ReactNode } from 'react';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
 import { toggleMode, useTheme } from '@/hooks/use-theme';
+import { useCopy } from '@/hooks/use-copy';
 
 import { LandingActionLink } from './LandingActionLink';
 import { LandingHero } from './LandingHero';
-import { LandingShowcases, RuleLabel } from './LandingShowcases';
+import { LandingLiveApps } from './LandingLiveApps';
+import { LandingShowcases, RuleLabel, WorkspacePreview } from './LandingShowcases';
 
 const REPOSITORY = 'https://github.com/AshishKumar4/kinu';
-const storageLimit = platformFact('do.storage.bytes').limit;
-const sandboxCpu = platformFact('container.instance.vcpu').limit;
-const sandboxMemory = platformFact('container.instance.memory').limit;
-const sandboxDisk = platformFact('container.instance.disk').limit;
-if (storageLimit?.unit !== 'bytes') throw new Error('do.storage.bytes has no byte limit');
-if (sandboxCpu?.unit !== 'count') throw new Error('container.instance.vcpu has no count');
-if (sandboxMemory?.unit !== 'bytes') throw new Error('container.instance.memory has no byte limit');
-if (sandboxDisk?.unit !== 'bytes') throw new Error('container.instance.disk has no byte limit');
-const STORAGE_GB = storageLimit.value / 1_000_000_000;
-const SANDBOX_VCPU = sandboxCpu.value;
-const SANDBOX_MEMORY_GB = sandboxMemory.value / (1024 ** 3);
-const SANDBOX_DISK_GB = sandboxDisk.value / 1_000_000_000;
 const SHELL = 'landing-shell';
 const SECTION = 'border-t p-border py-20 lg:py-[104px] lg:pb-24';
 const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
-
-const FEATURES = [
-  ['Learns from feedback', 'Your corrections become corroborated lessons.'],
-  ['Crafts its own tools', 'Recurring patterns become tools it builds and scores.'],
-  ['Builds subagent DAGs', 'Specialists work in parallel and pass evidence onward.'],
-  ['Your cloud, or ours', 'Use kinu.run or deploy to your Cloudflare account.'],
-] as const;
 
 function SectionTitle({ children, className = '' }: { children: ReactNode; className?: string }): ReactElement {
   return <h2 className={`text-[clamp(30px,3.4vw,44px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty ${className}`}>{children}</h2>;
 }
 
-function FeatureStrip(): ReactElement {
-  return (
-    <div className={SHELL}>
-      <div data-feature-strip className="grid grid-cols-1 border-y p-border py-2 sm:grid-cols-2 lg:grid-cols-4 lg:py-8">
-        {FEATURES.map(([title, body], index) => (
-          <div key={title} className={`py-5 sm:px-6 lg:py-0 lg:first:pl-0 lg:last:pr-0 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)] sm:border-l sm:border-t-0' : ''}`}>
-            <h3 className="mb-2 text-[13px] font-semibold p-accent">{title}</h3>
-            <p className="text-[13.5px] leading-[1.6] p-text-3">{body}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function PlatformSection(): ReactElement {
-  const examples = [
-    ['Research, overnight', 'Hand it a question in the evening. The sourced brief is ready in the morning.'],
-    ['Investigate repository events', 'A signed webhook wakes the workspace and stores the result with the run.'],
-    ['Prepare changes while away', 'The agent can branch, build, and test while the durable workspace remains online.'],
-  ] as const;
+function PlatformSection({ install }: { install: string }): ReactElement {
+  const { status, copy } = useCopy();
+  const localStart = 'kinu create workshop --mode local\nkinu chat workshop';
   return (
     <section id="platform" className={SECTION}>
-      <RuleLabel>01 · The platform</RuleLabel>
-      <SectionTitle>Close the laptop. <span className="p-accent">The agent keeps working.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[660px] text-[17px] leading-[1.6] p-text-3">Run durable workspaces in the cloud or keep agents on your terminal.</p>
-      <div className="mb-10 overflow-hidden rounded-2xl border p-border p-surface">
-        <div className="grid md:grid-cols-2">
-          <article className="min-w-0 p-7 sm:p-8">
-            <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-accent">Cloud</span><span className="font-mono text-[10px] p-text-4">Durable · cloud hosted</span></div>
-            <h3 className="mb-3 text-[24px] font-semibold tracking-[-.025em]">Hosted workspaces and sandboxes</h3>
-            <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Start a task and close the browser. Schedules and webhooks keep it running.</p>
-          </article>
-          <article className="min-w-0 border-t p-border p-7 sm:p-8 md:border-l md:border-t-0">
-            <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-accent">Local</span><span className="font-mono text-[10px] p-text-4">Files stay on your machine</span></div>
-            <h3 className="mb-3 text-[24px] font-semibold tracking-[-.025em]">TUI, CLI, or your editor</h3>
-            <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Create a local workspace, or open a cloud workspace from the TUI.</p>
-          </article>
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t p-border p-recessed px-7 py-4 font-mono text-[11px] p-text-4"><span>ONE CORE · CLOUD AND LOCAL</span><span>web · TUI · CLI · ACP</span></div>
-      </div>
-      <div className="grid border-y p-border md:grid-cols-3">
-        {examples.map(([title, body], index) => <div key={title} className={`py-6 md:px-7 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)] md:border-l md:border-t-0' : 'md:pl-0'} ${index === examples.length - 1 ? 'md:pr-0' : ''}`}><h3 className="mb-2.5 text-[13px] font-semibold p-accent">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}
-      </div>
-    </section>
-  );
-}
-
-function QuickstartSection(): ReactElement {
-  const clients = [
-    ['In the browser', 'Web', 'Sign in and create a cloud workspace. Open it from any client.', <a key="web" href="/login" className="text-[13px] font-semibold p-accent">Sign in →</a>],
-    ['In the terminal', 'TUI', 'kinu chat opens the full-screen app for cloud or local workspaces.', <code key="tui" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs p-text-2"><span className="p-accent">$</span> kinu chat triage</code>],
-    ['In the terminal', 'CLI', 'Install Kinu on Linux, create a workspace, and run a task.', <code key="cli" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs leading-[1.9] p-text-2"><span className="p-accent">$</span> kinu create triage</code>],
-  ] as const;
-  return (
-    <section id="quickstart" className={SECTION}>
-      <RuleLabel>02 · Quickstart</RuleLabel>
-      <SectionTitle>Start in the cloud, <span className="p-accent">or entirely on your own machines.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[620px] text-[17px] leading-[1.6] p-text-3">Use cloud workspaces from any client. Use local workspaces from the terminal.</p>
-      <div className="grid gap-5 md:grid-cols-3">
-        {clients.map(([eyebrow, title, body, action]) => <div key={title} className={`${CARD} flex flex-col gap-3 p-7`}><div className="text-xs p-text-4">{eyebrow}</div><h3 className="text-xl font-semibold tracking-[-.02em]">{title}</h3><p className="flex-1 text-sm leading-[1.65] p-text-3">{body}</p>{action}</div>)}
-      </div>
-      <p className="mt-7 text-[13px] p-text-4">Cloud workspaces keep their files, agents, conversations, and search history.</p>
-    </section>
-  );
-}
-
-function ClientsSection(): ReactElement {
-  const clients = [
-    ['The browser', 'kinu.run shows your workspaces, agents, files, conversations, and searches.'],
-    ['The terminal', 'kinu chat opens a conversation. kinu run executes one task and exits for scripts and CI.'],
-    ['Your editor', 'kinu acp speaks the Agent Client Protocol, so editors such as Zed can drive a workspace.'],
-    ['Webhooks', 'A signed webhook starts a turn from CI, an issue tracker, or another service.'],
-  ] as const;
-  return (
-    <section id="clients" className={SECTION}>
-      <RuleLabel>03 · One workspace, every client</RuleLabel>
-      <SectionTitle>Work from the browser, the terminal, <span className="p-accent">or your editor.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[660px] text-[17px] leading-[1.6] p-text-3">Open the same files and history from a browser, terminal, editor, or SSH session.</p>
-      <div className="mb-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        {clients.map(([title, body]) => <div key={title} className={`${CARD} p-6`}><h3 className="mb-2.5 text-[12.5px] font-semibold p-accent">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}
-      </div>
-      <div className={`${CARD} p-6`}>
-        <div className="mb-3.5 flex flex-wrap justify-between gap-2 text-xs p-text-4"><span>Recorded · <code>kinu run</code></span><span>workspace “film” · local backend</span></div>
-        <div className="space-y-1 font-mono text-xs leading-[2] p-text-3"><div className="p-text-2"><span className="p-accent">$</span> kinu run film “Find the slowest test in this repo.”</div><div>▸ run · laptop &nbsp; 7 pass · 912 ms</div><div>▸ bench &nbsp; n=6000 43.8ms · n=12000 188.3ms · n=24000 827.3ms</div><p className="pt-2 font-sans text-[13.5px] leading-[1.65] p-text">The slowest test spends most of its time in an O(n²) dedupe pass. A Map keyed by id reduces it to one pass.</p></div>
-      </div>
-      <p className="mt-7 text-[13px] p-text-4">Schedules, webhooks, and finished background jobs start turns through the same path.</p>
-    </section>
-  );
-}
-
-
-function SwarmDag(): ReactElement {
-  const nodes = [
-    { label: 'Agent', detail: 'delegates', x: 50, y: 8, tone: 'agent' },
-    { label: 'Research', detail: 'sources', x: 10, y: 35, tone: 'node' },
-    { label: 'Ideation', detail: 'options', x: 38, y: 35, tone: 'node' },
-    { label: 'Audit', detail: 'risks', x: 68, y: 35, tone: 'node' },
-    { label: 'Optimization', detail: 'benchmarks', x: 22, y: 64, tone: 'node' },
-    { label: 'Planning', detail: 'sequence', x: 52, y: 64, tone: 'node' },
-    { label: 'Implementation', detail: 'builds', x: 82, y: 64, tone: 'node' },
-    { label: 'Integrated result', detail: 'evidence + answer', x: 50, y: 90, tone: 'result' },
-  ] as const;
-  return (
-    <div className="overflow-hidden rounded-2xl border p-border p-surface">
-      <div className="relative hidden h-[460px] md:block">
-        <svg aria-hidden="true" viewBox="0 0 1000 460" preserveAspectRatio="none" className="absolute inset-0 size-full">
-          <g fill="none" stroke="var(--c-border-strong)" strokeWidth="1.2">
-            <path d="M500 65 C500 110 100 105 100 155" />
-            <path d="M500 65 C500 110 380 105 380 155" />
-            <path d="M500 65 C500 110 680 105 680 155" />
-            <path d="M100 195 C100 245 220 245 220 275" />
-            <path d="M380 195 C380 245 220 245 220 275" />
-            <path d="M380 195 C380 245 520 245 520 275" />
-            <path d="M680 195 C680 245 520 245 520 275" />
-            <path d="M680 195 C680 245 820 245 820 275" />
-            <path d="M220 320 C220 380 500 370 500 398" />
-            <path d="M520 320 C520 360 500 370 500 398" />
-            <path d="M820 320 C820 380 500 370 500 398" />
-          </g>
-          <g fill="var(--c-accent)">
-            {[[500, 65], [100, 155], [380, 155], [680, 155], [220, 275], [520, 275], [820, 275], [500, 398]].map(([x, y]) => <circle key={`${String(x)}-${String(y)}`} cx={x} cy={y} r="3" />)}
-          </g>
-        </svg>
-        {nodes.map((node) => (
-          <div
-            key={node.label}
-            className={`absolute min-w-[150px] -translate-x-1/2 -translate-y-1/2 rounded-xl border px-4 py-3 text-center ${node.tone === 'agent' ? 'border-[var(--c-accent)] p-accent-subtle' : node.tone === 'result' ? 'border-[var(--c-success)] bg-[var(--c-success-tint)]' : 'p-border p-recessed'}`}
-            style={{ left: `${String(node.x)}%`, top: `${String(node.y)}%` }}
-          >
-            <div className={`text-[12.5px] font-semibold ${node.tone === 'agent' ? 'p-accent' : node.tone === 'result' ? 'p-success' : 'p-text'}`}>{node.label}</div>
-            <div className="mt-1 font-mono text-[9.5px] p-text-4">{node.detail}</div>
+      <RuleLabel>01 · Where agents work</RuleLabel>
+      <SectionTitle>A computer for your agents. <span className="p-accent">Choose where it lives.</span></SectionTitle>
+      <p className="mb-10 mt-4 max-w-[700px] text-[17px] leading-[1.65] p-text-3">Give a workspace its files, tools, and a job. Keep it online in the cloud, or work with the code on your own machine.</p>
+      <div className="grid overflow-hidden rounded-2xl border p-border p-surface md:grid-cols-2">
+        <article className="flex min-w-0 flex-col p-6 sm:p-8">
+          <span className="mb-6 font-mono text-[11px] uppercase tracking-[.14em] p-accent">Cloud Agents</span>
+          <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Close the laptop.<br />The agent keeps working.</h3>
+          <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Cloud workspaces keep their files, agent conversations, and memory. Schedules, signed webhooks, and background jobs can start work without an open browser.</p>
+          <ul className="mb-8 space-y-3 text-sm leading-[1.65] p-text-2">
+            <li>Investigate repository events as they arrive.</li>
+            <li>Schedule research and check back on the sources.</li>
+            <li>Run builds in an attached Linux sandbox.</li>
+          </ul>
+          <div className="mt-auto flex flex-wrap gap-3"><LandingActionLink href="/login" primary>Sign in to kinu.run →</LandingActionLink></div>
+          <div id="deploy" className="mt-6 border-t p-border pt-5 text-sm leading-[1.7] p-text-3">
+            Prefer your own Cloudflare account? <a className="p-accent underline underline-offset-4" href="https://deploy.workers.cloudflare.com/?url=https://github.com/AshishKumar4/kinu" target="_blank" rel="noreferrer">Deploy Kinu</a> using the <a className="p-accent underline underline-offset-4" href={REPOSITORY + '/blob/main/docs/SELF-HOSTING.md'} target="_blank" rel="noreferrer">self-hosting guide</a>. Bring a Workers Paid plan and your model credentials.
           </div>
-        ))}
+        </article>
+        <article className="flex min-w-0 flex-col border-t p-border p-6 sm:p-8 md:border-l md:border-t-0">
+          <span className="mb-6 font-mono text-[11px] uppercase tracking-[.14em] p-accent">Local</span>
+          <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Your checkout.<br />Your terminal or editor.</h3>
+          <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Local workspaces run on your machine, not in the web app. Use the full-screen TUI, a one-shot CLI task, or an ACP-compatible editor. Model requests still go to your configured provider.</p>
+          <div className="rounded-xl border p-border p-recessed p-4">
+            <div className="mb-3 flex items-center justify-between gap-3"><span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Install · Linux</span><Button type="button" variant="ghost" size="sm" aria-label="Copy local setup commands" onClick={() => copy(install + '\n' + localStart)}>{status === 'copied' ? 'Copied' : status === 'failed' ? 'Retry copy' : 'Copy'}</Button></div>
+            <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-[1.9] p-text-2"><code>{install + '\n' + localStart}</code></pre>
+          </div>
+          <dl className="mt-6 space-y-3 text-sm p-text-3">
+            <div><dt className="inline font-mono text-xs p-text-2">kinu run workshop "task"</dt><dd className="mt-1">One task, streamed to your terminal.</dd></div>
+            <div><dt className="inline font-mono text-xs p-text-2">kinu acp workshop</dt><dd className="mt-1">Connect from editors such as Zed over ACP.</dd></div>
+          </dl>
+          <a href={REPOSITORY + '/blob/main/QUICKSTART.md'} target="_blank" rel="noreferrer" className="mt-6 text-sm font-semibold p-accent">Setup and provider configuration →</a>
+        </article>
       </div>
-      <div className="grid gap-px bg-[var(--c-border)] md:hidden">
-        {nodes.map((node) => <div key={node.label} className="flex items-center justify-between gap-3 p-recessed px-4 py-3"><span className="text-[12.5px] p-text">{node.label}</span><span className="font-mono text-[10px] p-text-4">{node.detail}</span></div>)}
+      <div className="mt-12"><WorkspacePreview /></div>
+    </section>
+  );
+}
+
+function SwarmSearch(): ReactElement {
+  return (
+    <figure className="overflow-hidden rounded-2xl border p-border p-surface">
+      <figcaption className="flex flex-wrap items-center justify-between gap-3 border-b p-border p-recessed px-6 py-4 font-mono text-[11px] p-text-4"><span>Example search · not benchmark results</span><span>Objective: reduce runtime · preserve correctness</span></figcaption>
+      <div className="p-6 sm:p-8">
+        <div className="mx-auto max-w-[580px] rounded-xl border border-[var(--c-accent)] p-accent-subtle p-5 text-center"><h3 className="font-semibold p-accent">Define what better means</h3><p className="mt-2 text-sm leading-[1.65] p-text-3">The task, a starting context, and a registered verifier that reports a number in its own unit.</p></div>
+        <div aria-hidden="true" className="mx-auto h-8 w-px bg-[var(--c-border-strong)]" />
+        <div className="grid gap-4 md:grid-cols-3">
+          {[
+            ['Candidate A', 'Change the algorithm'],
+            ['Candidate B', 'Change the data structure'],
+            ['Candidate C', 'Change the work partition'],
+          ].map(([title, body]) => <div key={title} className="rounded-xl border p-border p-recessed p-5"><h4 className="text-sm font-semibold p-text">{title}</h4><p className="mt-2 text-sm p-text-3">{body}</p><div className="mt-5 border-t border-dashed border-[var(--c-dash)] pt-3 font-mono text-[11px] p-accent">run → verify → compare</div></div>)}
+        </div>
+        <div aria-hidden="true" className="mx-auto h-8 w-px bg-[var(--c-border-strong)]" />
+        <div className="mx-auto max-w-[580px] border-t p-border pt-5 text-center"><h3 className="font-semibold">Spend the next step on the evidence</h3><p className="mt-2 text-sm leading-[1.65] p-text-3">Expand promising branches, retain measured results for the same objective, and settle a result under the configured checks. A search can fail to improve the starting point.</p></div>
       </div>
-      <div className="flex flex-wrap justify-between gap-3 border-t p-border p-recessed px-5 py-3 font-mono text-[10px] uppercase tracking-[.1em] p-text-4"><span>parallel branches</span><span>measured evidence</span><span>fan-in</span></div>
-    </div>
+    </figure>
   );
 }
 
@@ -189,7 +92,7 @@ function EvolutionSection(): ReactElement {
       evidence: 'Finished tool runs and later turn outcomes',
       change: 'Update the crafted tool fitness score',
       persists: 'Evidence for future crafted tool selection',
-      detail: 'Each finished run the scorer records updates the tool\u2019s fitness. Later turn evidence can revise the same score.',
+      detail: 'Agents can craft reusable tools. Execution updates their fitness and affects which remain available. A tool returning successfully does not prove it did the right thing.',
     },
     {
       time: 'After corrective feedback',
@@ -211,9 +114,9 @@ function EvolutionSection(): ReactElement {
       time: 'Across many turn windows',
       title: 'Scaffold evolution',
       evidence: 'A repeated pattern with recorded outcomes',
-      change: 'Evaluate a change to the agent loop',
+      change: 'Propose and validate a new agent loop',
       persists: 'A reversible scaffold version',
-      detail: 'Promotion requires the configured checks. Every accepted scaffold keeps a rollback path.',
+      detail: 'A proposal must pass validation and shadow evaluation before promotion. Rejected proposals do not replace the live scaffold; promoted versions retain a rollback path. More experience is not a guarantee of improvement.',
     },
   ] as const;
   const [activeIndex, setActiveIndex] = useState(0);
@@ -221,8 +124,8 @@ function EvolutionSection(): ReactElement {
   return (
     <section id="evolution" data-evolution-stage={activeIndex} className={SECTION}>
       <RuleLabel>04 · Self-evolution</RuleLabel>
-      <SectionTitle>The agent learns at <span className="p-accent">four different speeds.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[720px] text-[17px] leading-[1.6] p-text-3">A tool result can change the next choice. Repeated evidence can change the agent loop itself. Select a timescale to see the full path.</p>
+      <SectionTitle>Experience can change <span className="p-accent">how the agent works.</span></SectionTitle>
+      <p className="mb-10 mt-3.5 max-w-[720px] text-[17px] leading-[1.6] p-text-3">Corrections become provisional lessons. Tool runs inform future tool selection. Repeated problems can lead to a proposed change to the scaffold: the code that drives the agent loop.</p>
       <div className="grid overflow-hidden rounded-2xl border p-border p-surface lg:grid-cols-[280px_minmax(0,1fr)]">
         <div className="grid gap-px bg-[var(--c-border)] sm:grid-cols-2 lg:grid-cols-1">
           {stages.map((stage, index) => (
@@ -252,6 +155,7 @@ function EvolutionSection(): ReactElement {
           <p className="mt-7 border-t border-dashed border-[var(--c-dash)] pt-5 text-sm leading-[1.65] p-text-3">{active.detail}</p>
         </div>
       </div>
+      <a className="mt-6 inline-block text-sm font-semibold p-accent" href={REPOSITORY + '/blob/main/docs/EVOLUTION.md'} target="_blank" rel="noreferrer">Read the evolution mechanics and limits →</a>
     </section>
   );
 }
@@ -259,35 +163,11 @@ function EvolutionSection(): ReactElement {
 function SwarmSection(): ReactElement {
   return (
     <section id="swarm" className={SECTION}>
-      <RuleLabel>05 · Subagent DAGs</RuleLabel>
-      <SectionTitle>Your agent can assemble <span className="p-accent">the specialists a task needs.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[780px] text-[17px] leading-[1.6] p-text-3">Your agent can build a DAG for research, optimisation, planning, review, and implementation. Nodes work in parallel and pass evidence onward.</p>
-      <SwarmDag />
-    </section>
-  );
-}
-
-function DeploySection(): ReactElement {
-  const steps = [
-    ['Step one', 'Bring the account.', 'Workers Paid plan, a zone, and a Wrangler login.', 'bun run infra:provision'],
-    ['Step two', 'Deploy.', 'The deploy ships the Worker, Durable Objects, and container.', 'bun run deploy'],
-    ['Step three', 'Finish provisioning.', 'The second pass installs secrets after the Worker exists.', 'bun run infra:provision'],
-    ['Step four', 'Prove the account.', 'The infra gate checks every declared resource and binding.', 'bun run gate:infra'],
-  ] as const;
-  const values = [
-    ['Isolated workspaces', 'Each workspace owns its files and agents. Idle workspaces use no compute.'],
-    [`${String(STORAGE_GB)} GB file plane, each`, `Each paid-plan workspace stores up to ${String(STORAGE_GB)} GB of durable files and shell state.`],
-    ['Linux on demand', 'Attach a Linux sandbox through Cloudflare Containers.'],
-    ['Your own devices', 'Connect a PC once per workspace. Kinu remembers your choice.'],
-  ] as const;
-  return (
-    <section id="deploy" className={SECTION}>
-      <RuleLabel>06 · Self-host</RuleLabel>
-      <div className="mb-5 grid items-start gap-10 lg:grid-cols-[1fr_1.12fr] lg:gap-14">
-        <div><SectionTitle>Host Kinu agents <span className="p-accent">yourself.</span></SectionTitle><p className="mb-7 mt-3.5 text-[17px] leading-[1.6] p-text-3">Deploy Kinu to your Cloudflare account. Your agents, files, and model spend stay there.</p><div className="flex flex-wrap gap-3"><LandingActionLink external primary href="https://deploy.workers.cloudflare.com/?url=https://github.com/AshishKumar4/kinu">Deploy to Cloudflare →</LandingActionLink><LandingActionLink external href={`${REPOSITORY}/blob/main/docs/SELF-HOSTING.md`}>Self-hosting guide</LandingActionLink></div></div>
-        <div className={`${CARD} overflow-hidden`}>{steps.map(([step, title, body, command], index) => <div key={step} className={`grid gap-2 px-5 py-5 sm:grid-cols-[96px_1fr] sm:gap-[18px] sm:px-[26px] ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-4">{step}</span><div><p className="text-sm leading-[1.6] p-text-3"><strong className="p-text">{title}</strong> {body}</p><code className="mt-2 block text-xs p-accent">{command}</code></div></div>)}</div>
-      </div>
-      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">{values.map(([title, body]) => <div key={title} className={`${CARD} p-6`}><h3 className="mb-2.5 text-[12.5px] font-semibold p-accent">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}</div>
+      <RuleLabel>05 · Measured swarms</RuleLabel>
+      <SectionTitle>Try competing approaches. <span className="p-accent">Let the verifier decide.</span></SectionTitle>
+      <p className="mb-10 mt-3.5 max-w-[780px] text-[17px] leading-[1.6] p-text-3">A swarm is a tree search whose nodes are agents, not just a group of specialists. Parallel candidates tackle the same objective. Forked context preserves the parent conversation; fresh context starts from the task and parent report.</p>
+      <SwarmSearch />
+      <p className="mt-6 max-w-[780px] text-sm leading-[1.7] p-text-3">With an objective and executable verifier, raw measurements guide the search. Without an objective, the standard presets use a judged sweep instead: useful comparisons, not measured gains. <a className="p-accent underline underline-offset-4" href={REPOSITORY + '/blob/main/docs/EXPLORATION.md'} target="_blank" rel="noreferrer">How exploration works</a></p>
     </section>
   );
 }
@@ -296,7 +176,7 @@ function OpenSourceSection(): ReactElement {
   return (
     <section id="cta" className="border-t p-border bg-[linear-gradient(180deg,var(--c-surface)_0%,var(--c-bg)_100%)]">
       <div className={`${SHELL} grid items-center gap-10 py-20 lg:grid-cols-[1.2fr_1fr] lg:gap-14 lg:py-[100px]`}>
-        <div><RuleLabel>07 · Open source</RuleLabel><SectionTitle>Open source, <span className="p-accent">end to end.</span></SectionTitle><p className="mb-9 mt-4 text-[17px] leading-[1.6] p-text-3">MIT-licensed: the agent, both backends, and the CLI.</p><div className="flex flex-wrap gap-3"><LandingActionLink external primary href={REPOSITORY}>Read the source →</LandingActionLink><LandingActionLink href="/login">Try cloud agents</LandingActionLink></div></div>
+        <div><RuleLabel>06 · Open source</RuleLabel><SectionTitle>Open source, <span className="p-accent">end to end.</span></SectionTitle><p className="mb-9 mt-4 text-[17px] leading-[1.6] p-text-3">MIT-licensed: the agent, both backends, and the CLI.</p><div className="flex flex-wrap gap-3"><LandingActionLink external primary href={REPOSITORY}>Read the source →</LandingActionLink><LandingActionLink href="/login">Try cloud agents</LandingActionLink></div></div>
         <div className={`${CARD} px-[26px] py-1.5`}>
           {[['Licence', <span key="mit">MIT</span>], ['Source', <a key="source" href={REPOSITORY} target="_blank" rel="noreferrer" className="p-accent">github.com/AshishKumar4/kinu</a>], ['Backends', <span key="backends">Cloudflare Workers · POSIX</span>], ['Docs', <span key="docs" className="flex flex-wrap gap-3.5">{['ARCHITECTURE', 'EXPLORATION', 'EVOLUTION', 'DEPLOYMENT'].map((doc) => <a key={doc} href={`${REPOSITORY}/blob/main/docs/${doc}.md`} target="_blank" rel="noreferrer" className="p-accent">{doc.toLowerCase()}</a>)}</span>]].map(([label, value], index) => <div key={String(label)} className={`grid gap-2 py-[15px] sm:grid-cols-[96px_1fr] sm:gap-4 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-4">{label}</span><div className="min-w-0 [overflow-wrap:anywhere] font-mono text-[12.5px] p-text-2">{value}</div></div>)}
         </div>
@@ -312,7 +192,7 @@ function Header(): ReactElement {
       <div className={`${SHELL} flex h-[60px] items-center justify-between gap-5`}>
         <a href="#top" aria-label="Kinu home"><KinuLogo /></a>
         <nav className="flex items-center gap-1" aria-label="Landing sections">
-          {['Platform', 'Quickstart', 'Clients', 'Evolution', 'Swarms', 'Self-host'].map((label) => <a key={label} href={`#${label === 'Swarms' ? 'swarm' : label === 'Self-host' ? 'deploy' : label.toLowerCase()}`} className="hidden rounded-full px-3 py-2 text-[13px] p-text-3 transition-colors hover:p-text lg:block">{label}</a>)}
+          {[['platform', 'Cloud & local'], ['local', 'Smart CI'], ['devices', 'Live apps'], ['evolution', 'Evolution'], ['swarm', 'Swarms']].map(([id, label]) => <a key={id} href={`#${id}`} className="hidden rounded-full px-3 py-2 text-[13px] p-text-3 transition-colors hover:p-text lg:block">{label}</a>)}
           <a href={REPOSITORY} target="_blank" rel="noreferrer" className="hidden items-center gap-1 rounded-full px-3 py-2 text-[13px] p-text-3 hover:p-text xl:flex">GitHub <ArrowUpRightIcon aria-hidden="true" size={13} /></a>
           <Button type="button" variant="ghost" size="sm" onClick={toggleMode} aria-label={`Switch to ${theme.mode === 'dark' ? 'light' : 'dark'} mode`} icon={theme.mode === 'dark' ? <SunIcon size={15} /> : <MoonIcon size={15} />} />
           <LandingActionLink href="/login" primary size="base">Try cloud agents</LandingActionLink>
@@ -336,20 +216,12 @@ export function LandingPage({ install }: { install: string }): ReactElement {
       <Header />
       <main>
         <LandingHero install={install} />
-        <FeatureStrip />
-        <LandingShowcases
-          storageGb={STORAGE_GB}
-          sandboxVcpu={SANDBOX_VCPU}
-          sandboxMemoryGb={SANDBOX_MEMORY_GB}
-          sandboxDiskGb={SANDBOX_DISK_GB}
-        />
+        <div className={SHELL}><PlatformSection install={install} /></div>
+        <LandingShowcases />
+        <LandingLiveApps />
         <div className={SHELL}>
-          <PlatformSection />
-          <QuickstartSection />
-          <ClientsSection />
           <EvolutionSection />
           <SwarmSection />
-          <DeploySection />
         </div>
         <OpenSourceSection />
       </main>
