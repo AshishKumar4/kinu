@@ -1444,6 +1444,7 @@ export {
   AgentOrchestrator, type AgentOrchestratorDeps,
   type TurnContinuity,
 } from './orchestrator/agent-orchestrator';
+export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 export { prepareActorTurn, type ActorTurnInput, type PreparedActorTurn } from './orchestrator/actor-turn';
 export { prepareActorProgram, type ActorTurnProgram } from './orchestrator/actor-program';
 export { SignalDelivery } from './orchestrator/signals';
