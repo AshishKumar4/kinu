@@ -20,6 +20,9 @@ import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { SlateProcessProbeDO, SlateDepthProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
+interface RetainedFacetRpc extends Rpc.DurableObjectBranded {
+  exercise(operation: string): Promise<object>;
+}
 interface SlateFacetRootRpc extends Rpc.DurableObjectBranded {
   exercise(family: 'subordinate' | 'exploration'): Promise<{ answeredBy: string; method: string; browserCallable: boolean }>;
   code(mode: 'plan' | 'build', code: string): Promise<{ answer: string; file: string }>;
@@ -50,6 +53,8 @@ declare global {
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeDO>;
       SLATE_FACET_ROOT: DurableObjectNamespace<SlateFacetRootRpc>;
+      RETAINED_FACET_SDK: DurableObjectNamespace<RetainedFacetRpc>;
+      RETAINED_FACET_ACTOR: DurableObjectNamespace<RetainedFacetRpc>;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }
