@@ -130,6 +130,13 @@ add public Plan slate execution: preview and app calls still require Build.
 Nimbus only transports an optional outbound capability; its default remains
 unchanged for unrelated consumers. Kinu always chooses explicitly.
 
+The private loader key distinguishes mediated boots from the former inherited-
+network image. WorkerLoader only evaluates boot options on a cache miss, so an
+unchanged caller/source identity alone is insufficient when the outbound contract
+changes. The mediated identity remains stable across ordinary reads, preserving
+same-Build reuse and the existing Plan separation. It adds no persisted state or
+configuration and does not claim that an outer deployment upgrades a live runtime.
+
 Local workerd proof uses the actual resident and shared policy with only the final
 transport mocked, unmatched network disabled. It proves literal destination and
 redirect enforcement and mode/cache separation, not DNS rebinding or the platform's
