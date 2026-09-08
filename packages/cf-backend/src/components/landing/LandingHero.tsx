@@ -1,5 +1,5 @@
 import { Button } from '@cloudflare/kumo';
-import { useEffect, useRef, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 
 import { useCopy } from '@/hooks/use-copy';
 import { LandingActionLink } from './LandingActionLink';
@@ -223,7 +223,8 @@ function SearchCanvas(): ReactElement {
     if (canvas === null) return;
     const context = canvas.getContext('2d');
     if (context === null) return;
-    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let visible = false;
     let timer = 0;
     let started = performance.now();
     let dimensions = { width: 520, height: 620, ratio: 1 };
@@ -254,16 +255,28 @@ function SearchCanvas(): ReactElement {
     };
     const draw = (now: number): void => {
       const settledAt = tree.lastAppear + 2_000;
-      const elapsed = reduced ? settledAt : now - started;
+      const elapsed = reduced.matches ? settledAt : now - started;
       paint(elapsed);
-      if (!reduced) timer = window.setTimeout(() => draw(performance.now()), 34);
+      if (!reduced.matches && visible && !document.hidden) timer = window.setTimeout(() => draw(performance.now()), 34);
     };
 
     resize();
-    const initialElapsed = reduced ? tree.lastAppear + 2_000 : 180;
+    const initialElapsed = reduced.matches ? tree.lastAppear + 2_000 : 180;
     started = performance.now() - initialElapsed;
     paint(initialElapsed);
-    if (!reduced) timer = window.setTimeout(() => draw(performance.now()), 34);
+    const syncPlayback = (): void => {
+      window.clearTimeout(timer);
+      started = performance.now() - lastElapsed;
+      if (reduced.matches) paint(tree.lastAppear + 2_000);
+      else if (visible && !document.hidden) draw(performance.now());
+    };
+    const visibilityObserver = new IntersectionObserver(([entry]) => {
+      visible = entry?.isIntersecting === true;
+      syncPlayback();
+    });
+    visibilityObserver.observe(canvas);
+    reduced.addEventListener('change', syncPlayback);
+    document.addEventListener('visibilitychange', syncPlayback);
 
     const observer = new ResizeObserver(() => {
       if (!resize()) return;
@@ -276,6 +289,9 @@ function SearchCanvas(): ReactElement {
       window.clearTimeout(timer);
       observer.disconnect();
       modeObserver.disconnect();
+      visibilityObserver.disconnect();
+      reduced.removeEventListener('change', syncPlayback);
+      document.removeEventListener('visibilitychange', syncPlayback);
     };
   }, []);
 
@@ -287,6 +303,69 @@ function SearchCanvas(): ReactElement {
         className="absolute inset-0 size-full opacity-80"
       />
     </div>
+  );
+}
+
+const PHRASES = ['learn from feedback.', 'build their own tools.', 'run close to your code.', 'compare approaches.'] as const;
+
+function Typewriter(): ReactElement {
+  const elementRef = useRef<HTMLSpanElement>(null);
+  const [phrase, setPhrase] = useState<string>(PHRASES[0]);
+  useEffect(() => {
+    const element = elementRef.current;
+    if (element === null) return;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let index = 0;
+    let length = PHRASES[0].length;
+    let deleting = true;
+    let visible = false;
+    let timer = 0;
+    const step = (): void => {
+      const current = PHRASES[index]!;
+      length += deleting ? -1 : 1;
+      setPhrase(current.slice(0, length));
+      let delay = deleting ? 24 : 65;
+      if (length === 0) {
+        index = (index + 1) % PHRASES.length;
+        deleting = false;
+        delay = 400;
+      } else if (length === current.length) {
+        deleting = true;
+        delay = 2_600;
+      }
+      timer = window.setTimeout(step, delay);
+    };
+    const sync = (): void => {
+      window.clearTimeout(timer);
+      if (reduced.matches) {
+        index = 0;
+        length = PHRASES[0].length;
+        deleting = true;
+        setPhrase(PHRASES[0]);
+      } else if (visible && !document.hidden) {
+        timer = window.setTimeout(step, 2_600);
+      }
+    };
+    const observer = new IntersectionObserver(([entry]) => {
+      visible = entry?.isIntersecting === true;
+      sync();
+    });
+    observer.observe(element);
+    reduced.addEventListener('change', sync);
+    document.addEventListener('visibilitychange', sync);
+    return () => {
+      window.clearTimeout(timer);
+      observer.disconnect();
+      reduced.removeEventListener('change', sync);
+      document.removeEventListener('visibilitychange', sync);
+    };
+  }, []);
+  return (
+    <span ref={elementRef} aria-hidden="true" className="grid p-accent">
+      {/* Shared grid cells reserve the tallest phrase at every font and width. */}
+      {PHRASES.map((sizer) => <span key={sizer} className="invisible col-start-1 row-start-1">{sizer}<span className="inline-block w-[.12em]" /></span>)}
+      <span data-typewriter className="col-start-1 row-start-1">{phrase}<span className="ml-[.04em] inline-block h-[.8em] w-[.075em] translate-y-[.08em] bg-[var(--c-accent)] motion-reduce:hidden" /></span>
+    </span>
   );
 }
 
@@ -303,12 +382,12 @@ export function LandingHero({ install }: { install: string }): ReactElement {
             <span className="size-[5px] rounded-full p-dot-accent" />
             The self-evolving agent platform
           </div>
-          <h1 className="mb-6 text-[clamp(40px,5.2vw,68px)] font-semibold leading-[.99] tracking-[-.04em] text-pretty p-text">
+          <h1 aria-label="Agents that learn from feedback, build their own tools, run close to your code, and compare approaches." className="mb-6 text-[clamp(40px,5.2vw,68px)] font-semibold leading-[.99] tracking-[-.04em] text-pretty p-text">
             Agents that{' '}
-            <span className="block p-accent">learn from feedback.</span>
+            <Typewriter />
           </h1>
           <p className="mb-8 max-w-[520px] text-[17.5px] leading-[1.65] text-pretty p-text-3">
-            Give each agent a durable computer. Run it locally or in the cloud. Executable checks choose among competing approaches.
+            Put agents to work with files, tools, and memory. They can build useful tools, learn from corrections, and test competing approaches against an objective.
           </p>
           <div className="flex max-w-[540px] items-center justify-between gap-4 rounded-xl border p-border p-recessed px-4 py-3.5">
             <code className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-[12.5px] leading-relaxed p-text-2"><span aria-hidden="true" className="p-accent">$</span> <span data-install-command>{install}</span></code>
@@ -318,7 +397,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
           </div>
           <div className="mt-[22px] flex flex-wrap items-center gap-3">
             <LandingActionLink href="/login" primary>Try cloud agents →</LandingActionLink>
-            <LandingActionLink href="#deploy">Deploy your own</LandingActionLink>
+            <LandingActionLink href="#platform">Choose where to run</LandingActionLink>
             <span className="text-[12.5px] p-text-4">MIT · open source</span>
           </div>
         </div>

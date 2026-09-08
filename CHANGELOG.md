@@ -14,6 +14,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
+- **Landing access and workflow examples.** Cloud sign-in and self-deployment now sit beside local setup in one section. Smart CI distinguishes one-shot agent completion from passing tests; the old bug-fix movie is replaced by interactive device/live-app examples. Self-evolution and swarms explain their evidence and verification limits. The rotating hero text is restored with stable accessible text, responsive layout reservation, reduced-motion support, and offscreen cleanup.
 - **Resident slate egress follows the shared network policy.** Authored server
   fetch calls use the existing destination classifier and redirect enforcement,
   while permitted public access remains available. Captured caller mode separates
