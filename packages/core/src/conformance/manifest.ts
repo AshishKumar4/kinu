@@ -198,15 +198,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // ── the shared actor substrate (core initAllTables) ──
     workspace_identity: EVERYWHERE,
     // The workspace's actor DIRECTORY — one row per actor the workspace issued,
-    // and the authority `openWorkspaceMainActor` reads to bind a handle. It sits
-    // where a workspace is ROOTED, so a subordinate has none: its own database
-    // holds a single `actor_identity` row that `FacetIdentity` writes and its
-    // handle is bound from that, never from a directory it could enumerate.
-    workspace_actors: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: 'a subordinate is not a workspace root: it binds its one actor from the single `actor_identity` row its facet identity writes, and a directory it could enumerate would let it name actors outside its own subtree' },
-      cli: WIRED,
-    },
+    // and the authority `openWorkspaceMainActor` reads to bind a handle. It is
+    // the ONE workspace database's own table, so every root observes it: a
+    // subordinate is not a workspace root, but it has no database of its own to
+    // hold an identity in, and the roster it reads is the root's.
+    workspace_actors: EVERYWHERE,
     messages: EVERYWHERE,
     crafted_tools: EVERYWHERE,
     search_nodes: EVERYWHERE,
@@ -476,6 +472,18 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // something between two of them.
     actor_program_state: EVERYWHERE,
 
+    // ── agent data (the `db` capability) ──
+    // The CATALOGUE, not the tables it catalogues: a table an agent declares
+    // exists only once one declares it, while the catalogue every `db` read
+    // resolves against is created with the workspace schema — so
+    // `db.listTables()` on a workspace that has never declared anything is an
+    // empty list rather than a missing table. Physical agent tables are named
+    // `app_<name>` and are DELIBERATELY not declared here, individually or as a
+    // family: an undeclared-but-observed table is the signal this manifest
+    // exists to raise, and a prefix wildcard would switch that signal off for
+    // exactly the family whose contents nothing else vouches for.
+    agent_data_tables: EVERYWHERE,
+
     // ── release change ──
     // The board's home differs by backend and nothing recorded that until this
     // manifest: on cf it lives in the owner's UserDO (user-do.ts calls
@@ -597,9 +605,22 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     crafted_tools_fts: EVERYWHERE,
 
     // ── core evolution stores created at engine/session construction ──
-    completed_turns: EVERYWHERE,
+    // Both of these are created by their own consumer's constructor and by no
+    // shared entry point, so a booted root that has not yet built one does not
+    // have the table: `initCompletedTurnTable` runs in the EvolutionEngine
+    // (evolution/engine.ts) and the mission ledger's DDL in
+    // `new MissionBudgetLedger` (mission-budget.ts).
+    completed_turns: {
+      'cf-orchestrator': LAZY_ON_FIRST_USE('the EvolutionEngine'),
+      'cf-subordinate': LAZY_ON_FIRST_USE('the EvolutionEngine'),
+      cli: LAZY_ON_FIRST_USE('the EvolutionEngine'),
+    },
     replay_evals: EVERYWHERE,
-    mission_budget: EVERYWHERE,
+    mission_budget: {
+      'cf-orchestrator': LAZY_ON_FIRST_USE('MissionBudgetLedger'),
+      'cf-subordinate': LAZY_ON_FIRST_USE('MissionBudgetLedger'),
+      cli: LAZY_ON_FIRST_USE('MissionBudgetLedger'),
+    },
 
     // ── workspace capability token (cf identity plane) ──
     workspace_capability: {
@@ -627,11 +648,21 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // rather than the newest one, so the revisions travel with the claims.
     actor_turn_claims: EVERYWHERE,
     actor_context_revisions: EVERYWHERE,
+    // The raw working history a `/context` edit rewrites, numbered per ACTOR
+    // rather than per turn: an edit authored between turns, or before the
+    // actor's first turn, belongs to no turn at all. Created unconditionally by
+    // `initActorClaimTables` beside the two tables above, because the working
+    // snapshot is written at hydration and turn admission — not on first edit —
+    // so an actor that never edits anything still has it.
+    actor_working_revisions: EVERYWHERE,
     // The terminal ledger is EVERYWHERE now. It was cf-only while the CLI
     // released its claims at transcript persist and had no recovery at all —
     // KINU-021 hoisted the lifecycle into core and the CLI drives the same
     // class, so an interrupted laptop turn replays its suffix exactly as an
-    // evicted isolate does.
+    // evicted isolate does. Created per root rather than by a shared
+    // initializer — `cf-backend/src/actor-agent.ts` in the shared `ActorAgent`
+    // body (so both Durable Object roots) and `cli-backend/src/local-session.ts`
+    // in the session constructor — which is still before any read on all three.
     terminal_effects: EVERYWHERE,
     // The CLI's alone, and the asymmetry is the platform's. A Durable Object is
     // told about its own answer by the runtime that persisted it, so a claim

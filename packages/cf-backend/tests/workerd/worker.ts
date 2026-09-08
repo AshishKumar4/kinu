@@ -35,6 +35,11 @@ export { DeviceLedgerProbeDO } from './device-inflight-probe';
 // The terminal-effect ledger — the same charter exception, for what one settled
 // turn still owes after the isolate running its effects dies.
 export { TerminalEffectProbeDO } from './terminal-effect-probe';
+// The `db` capability — the same charter exception, for two mechanisms only the
+// platform provides: `ctx.storage.transactionSync` (which is the whole of the
+// all-or-nothing batch and of evidence rolling back with its mutation) and
+// `… RETURNING` (which is how a row count crosses the SqlExecutor seam).
+export { DbCapabilityProbeDO } from './db-capability-probe';
 // The Files-tab EIO probe — the same charter exception: the real workspace
 // file plane under the runtime whose CSP is the defect.
 export { FilesEioProbeDO } from './files-eio-probe';

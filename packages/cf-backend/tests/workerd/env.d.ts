@@ -12,6 +12,7 @@ import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { CappedTurnProbeDO, UnboundedTurnProbeDO } from './step-cap-probe';
 import type { SpendProbeDO } from './spend-probe';
 import type { TerminalEffectProbeDO } from './terminal-effect-probe';
+import type { DbCapabilityProbeDO } from './db-capability-probe';
 import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { SendAdmissionProbeDO } from './send-admission-probe';
@@ -57,6 +58,7 @@ declare global {
       UNBOUNDED_TURN_PROBE: DurableObjectNamespace<UnboundedTurnProbeDO>;
       SPEND_PROBE: DurableObjectNamespace<SpendProbeDO>;
       TERMINAL_EFFECT_PROBE: DurableObjectNamespace<TerminalEffectProbeDO>;
+      DB_CAPABILITY_PROBE: DurableObjectNamespace<DbCapabilityProbeDO>;
       FIBER_RECOVERY_PROBE: DurableObjectNamespace<FiberRecoveryProbeAgent>;
       FORK_SOURCE: DurableObjectNamespace<ForkSourceProbeDO>;
       FORK_TARGET: DurableObjectNamespace<ForkTargetProbeDO>;
