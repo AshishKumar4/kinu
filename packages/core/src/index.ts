@@ -253,7 +253,7 @@ export { SqliteSlateInvocations, type SlateInvocationAuthority } from './slates/
 export { SlateFiles, slateDirectory } from './slates/files';
 export { WorkspaceSlates, type WorkspaceSlatesDeps } from './slates/runtime';
 export { parseSlateProject, type SlateProject, type SlateBinding } from './slates/project';
-export { SlateBindingRequestSchema, routeSlateBindingCall, type SlateBindingRequest, type SlateBindingRoute } from './slates/bindings';
+export { SlateBindingRequestSchema, routeSlateBindingCall, resolveSlateChain, type SlateBindingRequest, type SlateBindingRoute, type SlateInvocation } from './slates/bindings';
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 export {

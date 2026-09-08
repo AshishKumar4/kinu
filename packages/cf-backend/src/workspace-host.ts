@@ -357,7 +357,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       if (refreshed === undefined) return new Response(RECYCLED_PREVIEW.body, { status: RECYCLED_PREVIEW.status, headers: { 'cache-control': 'no-store', 'content-type': 'application/json' } });
       if (refreshed.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) return new Response('Not found', { status: 404 });
       const publicRequest = new Request(request);
-      publicRequest.headers.delete('x-slate-chain');
+      publicRequest.headers.delete('x-slate-call');
       const self = await host();
       // An upgrade cannot cross a Durable Object RPC boundary as a 101, which is
       // why Nimbus keeps a fetch route for exactly this case. This method is

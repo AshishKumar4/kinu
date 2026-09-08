@@ -9,21 +9,56 @@ export const SlateBindingRequestSchema = v.strictObject({
   member: v.pipe(v.string(), v.minLength(1)),
   args: v.array(JsonValueSchema),
   /**
-   * The slate ids already running above this call, outermost first.
+   * Which app invocation this call is made from, as the host named it.
    *
-   * The host WROTE this chain and handed it to the callee; the callee hands it
-   * back. Only the caller's own id is host-set at this boundary (the router
-   * appends it from the binding stub's props), so the PREFIX is as trustworthy
-   * as the slate echoing it. A slate that returns a shorter chain starts a
-   * shorter lineage — the same reach the old `depth` number gave it, since
-   * `Number(header)` of anything was equally forgeable. What the repeat check
-   * buys over that number is that an HONEST chain refuses at the repeat instead
-   * of after eight hops, and that a dishonest one still cannot re-enter
-   * anything on the chain it does present.
+   * The guest carries this and nothing else about its lineage. A chain used to
+   * ride here directly, which meant a slate could hand back a shorter one and
+   * start a shorter lineage; an id names an invocation the host is running, so
+   * the chain comes out of {@link resolveSlateChain} instead of off the wire.
+   *
+   * `null` is a request the host issued no invocation for — a browser hitting
+   * the preview. Its lineage is the root, which is what an empty chain means.
    */
-  chain: v.array(v.pipe(v.string(), v.minLength(1))),
+  invocation: v.nullable(v.pipe(v.string(), v.minLength(1))),
 });
 export type SlateBindingRequest = v.InferOutput<typeof SlateBindingRequestSchema>;
+
+/** One app invocation the host is running: which slate it entered, and the
+ *  chain of slates already running above it. */
+export interface SlateInvocation {
+  readonly id: string;
+  readonly chain: readonly string[];
+}
+
+/**
+ * The chain a binding call runs under, taken from the host's own record of the
+ * invocation the guest named.
+ *
+ * Three answers, and only one of them is a chain the guest influenced at all:
+ * an unnamed invocation is the root; a named one the host is running lends its
+ * chain; anything else is refused by reason. That covers a guest that retains
+ * an older request's bindings and replays them — the id it holds has been
+ * retired — and a guest that presents an id issued to a different slate.
+ */
+export function resolveSlateChain(input: {
+  readonly invocations: ReadonlyMap<string, SlateInvocation>;
+  readonly id: string;
+  readonly invocation: string | null;
+}): readonly string[] {
+  const { invocations, id, invocation } = input;
+  if (invocation === null) return [];
+  const issued = invocations.get(invocation);
+  if (issued === undefined) {
+    throw new KinuError('denied',
+      `Slate ${id} named app invocation ${invocation}, which this host is not running; a finished invocation cannot lend its call chain`);
+  }
+  if (issued.id !== id) {
+    throw new KinuError('denied',
+      `Slate ${id} named app invocation ${invocation}, which was issued to slate ${issued.id}`);
+  }
+  return issued.chain;
+}
+
 export type SlateBindingRoute =
   | { readonly kind: 'namespace'; readonly namespace: string; readonly member: string; readonly args: readonly JsonValue[] }
   | { readonly kind: 'rpc'; readonly method: SlateReadModel }
@@ -42,6 +77,8 @@ export function routeSlateBindingCall(input: {
   readonly project: SlateProject;
   readonly name: string;
   readonly request: SlateBindingRequest;
+  /** The caller's lineage, resolved by {@link resolveSlateChain}. Never off the wire. */
+  readonly chain: readonly string[];
 }): SlateBindingRoute {
   const { id, name, request } = input;
   const bindings = input.project.slate.bindings;
@@ -76,7 +113,7 @@ export function routeSlateBindingCall(input: {
       // running above it. A workspace holds finitely many slates, so a chain of
       // distinct ones is finite and no hop count has to bound it. A repeat is a
       // cycle: the callee is waiting on its own caller and cannot answer.
-      const chain = [...request.chain, id];
+      const chain = [...input.chain, id];
       if (chain.includes(binding.id)) {
         throw new KinuError('denied',
           `${name}.${member} re-enters slate ${binding.id}, which is already running in this call chain: ${[...chain, binding.id].join(' -> ')}`);
