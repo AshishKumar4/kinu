@@ -174,14 +174,14 @@ function systemCapturingModel(answer: string, sink: (system: string) => void): T
  *  file is built on, and the only place the bun:sqlite handle is widened to the
  *  runtime factory's parameter. */
 function workspaceRuntime() {
-  const db = new Database(':memory:');
+  const db = new Database(scratchPath('local-session', 'agent.db'));
   // The agent DB carries a messages table in production (created on `kinu
   // create`); the runtime factory doesn't, so provision it for the test.
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-  const rt = createCLIRuntime(db, { dbPath: scratchPath('local-session', 'agent.db'), llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
   return { db, rt };
 }
 
@@ -2040,12 +2040,12 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     classifierJson: string,
     opts: { oneShot?: boolean; gate?: Promise<void>; model?: LanguageModel } = {},
   ) {
-    const db = new Database(':memory:');
+    const db = new Database(scratchPath('local-session-review', 'agent.db'));
     db.exec(`CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
       role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-    const rt = createCLIRuntime(db, { dbPath: scratchPath('local-session-review', 'agent.db'), llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
     // The classifier + reflection ride rt.llm.complete — stub it so the review
     const completions: string[] = [];
     const reviewLlm = {
@@ -2293,10 +2293,8 @@ describe('LocalAgentSession — mission-derived auto-titling', () => {
   });
 
   test('a title the owner chose is never overwritten', async () => {
-    const { db, session } = setup('done');
-    db.query<unknown, [string]>(
-      `INSERT OR REPLACE INTO actor_config (key, value) VALUES ('display_name', ?), ('name_origin', 'user')`,
-    ).run('Keys Rotation');
+    const { db, rt, session } = setup('done');
+    rt.actor.config.setDisplayNameOrigin('Keys Rotation', 'user');
 
     await session.send('Audit the OAuth callback flow');
     await session.end();
@@ -2314,7 +2312,7 @@ describe('LocalAgentSession — the advisor lane joins the exit', () => {
    *  an owner switches it on: the durable `actor_config` row both backends read. */
   function setupWithAdvisor(reply: () => Promise<string>) {
     const { db, rt, session, events } = setup('rotated the staging keys');
-    db.query(`INSERT OR REPLACE INTO actor_config (key, value) VALUES ('advisor_enabled', 'true')`).run();
+    rt.actor.config.setAdvisorEnabled(true);
     rt.advisorLlm = { stream: async function* () { yield ''; }, complete: reply };
     return { db, rt, session, events };
   }
@@ -2390,7 +2388,7 @@ describe('LocalAgentSession — the advisor lane joins the exit', () => {
       doStream: async () => { throw new Error('upstream is on fire'); },
     });
     const { db, rt, session } = setup('unused', exploding);
-    db.query(`INSERT OR REPLACE INTO actor_config (key, value) VALUES ('advisor_enabled', 'true')`).run();
+    rt.actor.config.setAdvisorEnabled(true);
     rt.advisorLlm = {
       stream: async function* () { yield ''; },
       complete: async () => JSON.stringify({ note: NOTE, severity: 'nit', class: 'wrong-work' }),
