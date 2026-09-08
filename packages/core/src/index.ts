@@ -1200,6 +1200,7 @@ export {
   MAX_PLAN_ANNOTATIONS_BYTES,
   MAX_PLAN_CONTENT_BYTES,
   PlanReviewStore,
+  PlanReviewSchema,
   admitPlanReviewAnnotations,
   applyPlanEdits,
   formatPlanWithLineNumbers,
@@ -1429,6 +1430,7 @@ export {
   type AgentTask, type AgentTaskTree, type TaskStatus,
   type TaskAddResult, type TaskAddRejection,
 } from './tasks/store';
+export { withTaskPlan, bindTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext } from './tasks/plan-scope';
 
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.
 export {

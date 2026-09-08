@@ -233,7 +233,7 @@ import {
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ToolOutcome, renderToolResult,
-  toolsForInvocation, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, McpProtocolFailureSchema, McpToolError,
+  toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle,
 } from "@kinu.run/core";
@@ -411,6 +411,11 @@ function recordedUiMessage(value: JsonValue): Omit<UIMessage, 'id'> {
   if (row.metadata !== undefined) recorded.metadata = row.metadata;
   return recorded;
 }
+
+const PlanApprovalMetadataSchema = v.pipe(v.string(), v.parseJson(), v.object({
+  kinuEvent: v.literal('plan_approved'), planId: v.string(),
+  revision: v.pipe(v.number(), v.integer(), v.minValue(1)), decision: v.literal('approve'),
+}));
 
 /** Extract plain text from the last user message in a ModelMessage[]. Used
  *  by skills resolution to look for `/skill-name` invocations and keyword
@@ -824,6 +829,29 @@ export abstract class ActorAgent extends Think<Env> {
   // Every full-loop actor owns its own review stream. The concrete profile
   // decides whether THIS turn may submit into it: an owner-driven additional
   // agent does; a task delegated by its parent keeps the report lane instead.
+
+  private _turnTaskPlan: TaskPlanContext | undefined;
+  private approvedTaskPlan(messageId: string | null): TaskPlan | null {
+    const sql = this.boundSql;
+    if (messageId === null || !tableExists(sql, 'cf_think_submissions')) return null;
+    const rows = sql<{ metadata_json: string | null; idempotency_key: string | null }>
+      `SELECT metadata_json,idempotency_key FROM cf_think_submissions
+       WHERE status='running' AND EXISTS
+         (SELECT 1 FROM json_each(messages_json) WHERE json_extract(value,'$.id')=${messageId})`;
+    for (const row of rows) {
+      if (row.idempotency_key === null) continue;
+      const parsed = v.safeParse(PlanApprovalMetadataSchema, row.metadata_json);
+      if (!parsed.success) continue;
+      const input = parsed.output;
+      const prefix = `plan:${input.planId}:${input.revision}:approve:`;
+      if (!row.idempotency_key.startsWith(prefix) || !/^\d+$/.test(row.idempotency_key.slice(prefix.length))) continue;
+      const plan = this.planReviews.get(input.planId, input.revision);
+      if (plan?.status === 'approved' && plan.sessionId === 'default') {
+        return Object.freeze({ id: plan.id, revision: plan.revision, sessionId: plan.sessionId });
+      }
+    }
+    return null;
+  }
 
   private _planReviews: PlanReviewStore | null = null;
 
@@ -3294,7 +3322,7 @@ export abstract class ActorAgent extends Think<Env> {
     const selected = this._turnProgram;
     if (selected === null) throw new KinuError('missing', 'the actor turn program was not prepared');
 
-    return scaffoldInferenceTransform({
+    return runTaskPlan(this._turnTaskPlan ?? null, () => scaffoldInferenceTransform({
       program: selected.program,
       result,
       run: {
@@ -3308,7 +3336,7 @@ export abstract class ActorAgent extends Think<Env> {
         callTool: this.makeScaffoldCallTool(undefined, selected.signal),
         history: this.makeScaffoldHistory(),
       },
-    });
+    }));
   }
 
   // The BackendHost the core orchestrator runs against. broadcast → DO fan-out;
@@ -3488,7 +3516,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  so a store added there exists for this actor too. Lazy inside: the bundle
    *  never touches `boundSql` until a store is first read, which is what lets
    *  it be built here rather than in the constructor body. */
-  private readonly stores = createAgentStores(() => this.boundSql);
+  private readonly stores = createAgentStores(() => this.boundSql, write => this.ctx.storage.transactionSync(write));
 
   private _liveHeadJournal: LiveHeadJournal | null = null;
 
@@ -5976,7 +6004,9 @@ export abstract class ActorAgent extends Think<Env> {
     };
     cfg.messages = await assembleTurnMessages(assembly);
 
-    cfg.tools = toolsForInvocation(workMode, { ...modeTools, ...effectiveTools });
+    const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(this.durableTurnId()) });
+    this._turnTaskPlan = taskPlan;
+    cfg.tools = withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }), taskPlan);
     cfg.activeTools = effectiveActiveTools;
 
     // Prompt-cache plan for this turn — the same core derivation `runChat`

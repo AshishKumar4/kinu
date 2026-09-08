@@ -111,6 +111,7 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
       vfs: workspace.vfs,
       sql: testSql.sql,
       execRaw: testSql.execRaw,
+      transactionSync: write => testSql.db.transaction(write)(),
     },
     memory: opts.memory ?? emptyMemory(),
     executor: opts.executor ?? emptyExecutor(),

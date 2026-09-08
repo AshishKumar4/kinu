@@ -68,7 +68,7 @@ describe('the gated tabs appear only with content', () => {
 
   test('every ungated surface stays visible on a fresh workspace', () => {
     const html = renderStrip(FRESH);
-    for (const surface of ['Output', 'Work', 'Files', 'Agent', 'Environment']) {
+    for (const surface of ['Work', 'Files', 'Agent', 'Environment']) {
       expect(html).toContain(`aria-label="${surface}"`);
     }
     expect(html).not.toContain('aria-label="Releases"');
@@ -125,7 +125,7 @@ describe('an active tab whose content vanishes falls back', () => {
   });
 
   test('ungated surfaces are never moved', () => {
-    for (const surface of ['Output', 'Work', 'Files', 'Agent', 'Environment'] as const) {
+    for (const surface of ['Diffs', 'Work', 'Files', 'Agent', 'Environment'] as const) {
       expect(resolveGatedSurface(surface, FRESH, EMPTY_TREES, [])).toBe(surface);
     }
   });

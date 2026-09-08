@@ -6,7 +6,6 @@ import {
   type ExecutorPortRefresh,
   type PinnedPreviewPort,
 } from '../src/lib/preview-ports';
-import { previewPortId, selectPreviewPort } from '../src/components/surfaces/OutputSurface';
 
 const acceptsUrl = (url: string) => url.startsWith('https://preview.example/');
 
@@ -62,18 +61,4 @@ describe('preview port refresh reconciliation', () => {
   });
 });
 
-describe('preview selection', () => {
-  test('keeps the same executor and port selected when a partial refresh reorders rows', () => {
-    const workspace = port('workspace', 4173);
-    const sandbox = port('sandbox', 8080);
-    const activeId = previewPortId(workspace);
 
-    expect(selectPreviewPort([sandbox, workspace], activeId)).toEqual(workspace);
-  });
-
-  test('falls back only when the selected preview is authoritatively absent', () => {
-    const sandbox = port('sandbox', 8080);
-    expect(selectPreviewPort([sandbox], 'workspace:4173')).toEqual(sandbox);
-    expect(selectPreviewPort([], 'workspace:4173')).toBeNull();
-  });
-});

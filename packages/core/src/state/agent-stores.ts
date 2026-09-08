@@ -50,7 +50,7 @@ export interface AgentStores {
  * not yet resolvable at construction time can still build the bundle up front;
  * the provider is called at most once per store, on first access.
  */
-export function createAgentStores(sql: () => SqlExecutor): AgentStores {
+export function createAgentStores(sql: () => SqlExecutor, transactionSync: <T>(write: () => T) => T): AgentStores {
   // One memo per store: the provider is only invoked when a store is first
   // reached, and each store is constructed exactly once thereafter.
   let config: AgentConfigStore | undefined;
@@ -69,7 +69,7 @@ export function createAgentStores(sql: () => SqlExecutor): AgentStores {
       return (facts ??= createFactsStore(sql()));
     },
     get taskList(): TaskListStore {
-      return (taskList ??= new TaskListStore(sql()));
+      return (taskList ??= new TaskListStore(sql(), transactionSync));
     },
     get headJournal(): HeadJournal {
       return (headJournal ??= new HeadJournal(sql()));

@@ -168,7 +168,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const { rt, model, llm } = deps;
   const sql = rt.storage.sql;
   const facts = createFactsStore(sql);
-  const taskList = new TaskListStore(sql);
+  const taskList = new TaskListStore(sql, rt.storage.transactionSync);
   const config = createAgentConfigStore(sql);
   const webSearch = createDefaultWebSearchProvider({ fetch: globalThis.fetch });
   const fork: AgentsForkDeps = { rt, model };

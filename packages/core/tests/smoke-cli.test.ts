@@ -56,7 +56,7 @@ function createFullCLIRuntime() {
   };
 
   const rt: AgentRuntime = {
-    storage: { vfs, sql, execRaw },
+    storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory,
     executor,
     llm,

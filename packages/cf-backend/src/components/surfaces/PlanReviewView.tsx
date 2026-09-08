@@ -107,9 +107,10 @@ const STATUS_TONE = {
 export interface PlanReviewViewProps {
   plan: PlanReview | null;
   rpc: Rpc;
+  readOnly?: boolean;
 }
 
-export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
+export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanReviewViewProps) {
   const [annotations, setAnnotations] = useState<Annotation[]>(() => parsePlanAnnotations(plan?.annotations ?? []));
   const [selected, setSelected] = useState<string | null>(null);
   const [mode, setMode] = useState<EditorMode>("comment");
@@ -179,12 +180,12 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
     () => titleBlock === null ? blocks : blocks.slice(1),
     [blocks, titleBlock],
   );
-  const editable = plan?.status === "pending";
-  const handoffPending = plan != null && !plan.handoffAccepted
+  const editable = !readOnly && plan?.status === "pending";
+  const handoffPending = !readOnly && plan != null && !plan.handoffAccepted
     && (plan.status === "approved" || plan.status === "changes_requested");
 
   const save = useCallback(async (next: Annotation[]): Promise<boolean> => {
-    if (planKey === null) return false;
+    if (readOnly || planKey === null) return false;
     setAnnotations(next);
     setSaving(true);
     const saved = await annotationSaves.enqueue(next);
@@ -192,7 +193,7 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
       setSaving(false);
     }
     return saved;
-  }, [annotationSaves, planKey]);
+  }, [annotationSaves, planKey, readOnly]);
 
   const changeAnnotations = useCallback(async (next: Annotation[]) => {
     if (decisionInFlight.current) return;
@@ -424,7 +425,7 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
             <p role="alert" className="p-notice-danger p-meta px-3 py-2 sm:mr-auto">{error}</p>
           ) : (
             <p className="p-meta p-text-3 sm:mr-auto">
-              {editable
+              {readOnly ? "Read-only plan history." : editable
                 ? "Approve this revision, or annotate the text that needs work."
                 : handoffPending
                   ? plan.status === "approved" ? "Kinu saved your approval. Implementation has not started." : "Kinu saved your review. The revision has not started."
