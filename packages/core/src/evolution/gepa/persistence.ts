@@ -39,7 +39,7 @@ import {
 } from './pareto';
 import { DEFAULT_GEPA_BUDGET } from './types';
 import type {
-  GepaBudget, GepaCandidate, GepaResult, GepaIterationState,
+  GepaBudget, GepaCandidate, GepaResult, GepaProgressHooks,
 } from './types';
 
 const GepaRunStatusSchema = v.picklist(['running', 'completed', 'aborted']);
@@ -251,34 +251,20 @@ export function loadGepaCandidates(
   });
 }
 
-/** Build an onIteration hook that persists every accepted candidate and the
- *  run counters. The Pareto front is NOT persisted: it is derived at read time
- *  from the stored per-instance scores (`loadGepaParetoFront`), so there is no
- *  membership state to keep in step with the candidate pool. */
-export function makePersistingHook(args: {
+/** Retain fully measured candidates at measurement, and counters at real
+ * iteration completion. Pareto membership remains derived from stored scores. */
+export function makePersistingHooks(args: {
   sql: SqlExecutor;
   runId: string;
-  /** Candidate ids this hook has already written, so an iteration that
-   *  reports the whole pool inserts each row once. Starts empty: the seed
-   *  arrives in the first iteration's pool like every other candidate. */
-  persisted: Set<string>;
-}): (state: GepaIterationState) => Promise<void> {
-  return async (state) => {
-    for (const cand of state.pool) {
-      if (args.persisted.has(cand.id)) continue;
-      persistGepaCandidate(args.sql, {
-        runId: args.runId,
-        candidate: cand,
-        iteration: state.iteration,
-        accepted: true,
-      });
-      args.persisted.add(cand.id);
-    }
-    updateGepaRunCounters(args.sql, {
-      runId: args.runId,
-      metricCalls: state.metricCallsUsed,
-      iterations: state.iteration + 1,
-    });
+}): Required<GepaProgressHooks> {
+  return {
+    onCandidate: ({ candidate, iteration }) => {
+      persistGepaCandidate(args.sql, { runId: args.runId, candidate, iteration, accepted: true });
+    },
+    onIteration: state => {
+      updateGepaRunCounters(args.sql, { runId: args.runId,
+        metricCalls: state.metricCallsUsed, iterations: state.iteration + 1 });
+    },
   };
 }
 

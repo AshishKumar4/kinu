@@ -7,7 +7,7 @@ import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from '../../../tests/helpers';
 import {
   initGepaTables, startGepaRun, persistGepaCandidate, finishGepaRun,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHook,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks,
   runGepa,
   type GepaCandidate, type EvalInstance, type MetricOutcome,
 } from './index';
@@ -141,7 +141,7 @@ describe('loadGepaParetoFront — the derived front', () => {
   });
 });
 
-describe('runGepa with makePersistingHook end-to-end', () => {
+describe('runGepa with makePersistingHooks end-to-end', () => {
   test('every accepted candidate ends up in gepa_candidates + run counters update', async () => {
     const { sql } = setup();
     const evalSet: EvalInstance<string>[] = [
@@ -152,9 +152,7 @@ describe('runGepa with makePersistingHook end-to-end', () => {
       budget: { maxIterations: 2, maxMetricCalls: 50, minibatchSize: 1 },
     });
 
-    // Seed: persist before the loop.
-    const persisted = new Set<string>();
-    const hook = makePersistingHook({ sql, runId, persisted });
+    const hooks = makePersistingHooks({ sql, runId });
 
     let lmCall = 0;
     const reflectionLm = async () => { lmCall++; return `improved-${lmCall}`; };
@@ -169,7 +167,7 @@ describe('runGepa with makePersistingHook end-to-end', () => {
       metric,
       reflectionLm,
       budget: { maxIterations: 2, maxMetricCalls: 50, minibatchSize: 1 },
-      onIteration: hook,
+      ...hooks,
     });
 
     finishGepaRun(sql, {
@@ -189,4 +187,27 @@ describe('runGepa with makePersistingHook end-to-end', () => {
     expect(runs[0].winnerId).toBe(result.winner.id);
     expect(runs[0].status).toBe('completed');
   });
+});
+
+test('a fully measured seed is retained before the first reflection measurement can fail', async () => {
+  const { sql } = setup();
+  const runId = startGepaRun(sql, { target: 'scaffold' });
+  const hooks = makePersistingHooks({ sql, runId });
+  const iterations: number[] = [];
+  const failure = new Error('first reflection measurement failed');
+  let calls = 0;
+  await expect(runGepa({ seed: 'seed', evalSet: [{ id: 'one', input: 'task' }],
+    metric: async () => {
+      if (++calls === 2) throw failure;
+      return { score: 0.7, feedback: 'fully measured seed' };
+    },
+    reflectionLm: async () => 'candidate',
+    ...hooks,
+    onIteration: state => { iterations.push(state.iteration); return hooks.onIteration(state); },
+    budget: { maxIterations: 1, maxMetricCalls: 10, minibatchSize: 1, useMerge: false },
+  })).rejects.toBe(failure);
+  expect(iterations).toEqual([]);
+  const candidates = loadGepaCandidates(sql, runId);
+  expect(candidates.map(candidate => ({ source: candidate.source, score: candidate.aggregateScore,
+    measured: Object.fromEntries(candidate.scores) }))).toEqual([{ source: 'seed', score: 0.7, measured: { one: 0.7 } }]);
 });

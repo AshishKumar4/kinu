@@ -22,6 +22,11 @@
  *     `budget.maxMetricCalls` — both stop conditions, whichever hits first.
  */
 
+import * as v from 'valibot';
+
+export const MetricScoreSchema = v.pipe(v.number(), v.finite(), v.minValue(0), v.maxValue(1));
+export const MetricOutcomeSchema = v.object({ score: MetricScoreSchema, feedback: v.string() });
+
 /** A single evaluation instance — what the metric is scored against. */
 export interface EvalInstance<I = unknown, E = unknown> {
   /** Stable identifier — Pareto bookkeeping keys on this. */
@@ -34,7 +39,8 @@ export interface EvalInstance<I = unknown, E = unknown> {
   expected?: E;
 }
 
-/** Per-instance evaluation outcome — what the metric returns. */
+/** A measured per-instance outcome. Unavailable/failed measurement rejects the
+ * metric promise; it must never be represented by a neutral numeric score. */
 export interface MetricOutcome {
   /** 0..1 numeric score; higher is better. */
   score: number;
@@ -115,8 +121,17 @@ export const DEFAULT_GEPA_BUDGET: GepaBudget = {
   maxMergeInvocations: 5,
 };
 
+export interface GepaProgressHooks {
+  /** A candidate has a complete validated score vector, including the seed.
+   * iteration is 0 for the seed, otherwise the one-based originating iteration.
+   * Awaited before later work; a retention failure propagates to the run owner. */
+  onCandidate?: (state: { candidate: GepaCandidate; iteration: number }) => void | Promise<void>;
+  /** A real optimization iteration completed, including a rejected proposal. */
+  onIteration?: (state: GepaIterationState) => void | Promise<void>;
+}
+
 /** Configuration handed to `runGepa`. */
-export interface GepaConfig<I = unknown, E = unknown> {
+export interface GepaConfig<I = unknown, E = unknown> extends GepaProgressHooks {
   /** Initial candidate to evolve from. Required. */
   seed: string;
   /** Held-out eval set. Required. Empty array is rejected. */
@@ -145,9 +160,6 @@ export interface GepaConfig<I = unknown, E = unknown> {
   parentSelection?: 'pareto' | 'best-aggregate';
   /** Deterministic RNG for tests. Default Math.random. */
   random?: () => number;
-  /** Optional callback fired after each iteration. Used by the orchestrator
-   *  to stream progress / persist intermediate state. */
-  onIteration?: (state: GepaIterationState) => void | Promise<void>;
 }
 
 /** State snapshot fired to onIteration. */

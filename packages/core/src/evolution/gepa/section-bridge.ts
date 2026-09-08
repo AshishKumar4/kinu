@@ -43,7 +43,7 @@ import {
 import { formatScoreInterval, scoreInterval, type ScoreInterval } from '../../utils/stats';
 import { runGepa } from './engine';
 import type {
-  EvalInstance, GepaConfig, GepaMetric, GepaResult, ReflectionLM,
+  EvalInstance, GepaConfig, GepaMetric, GepaResult, ReflectionLM, GepaProgressHooks,
 } from './types';
 
 /**
@@ -66,7 +66,7 @@ export function findPromptSectionTarget(sectionId: string): PromptSection<string
   return PROMPT_SECTION_TARGETS.find((section) => section.id === sectionId);
 }
 
-export interface RunSectionGepaOpts<I = unknown, E = unknown> {
+export interface RunSectionGepaOpts<I = unknown, E = unknown> extends GepaProgressHooks {
   sql: SqlExecutor;
   /** Which registered section to evolve. */
   sectionId: string;
@@ -79,7 +79,6 @@ export interface RunSectionGepaOpts<I = unknown, E = unknown> {
   metric: GepaMetric<I, E>;
   reflectionLm: ReflectionLM;
   budget?: GepaConfig<I, E>['budget'];
-  onIteration?: GepaConfig<I, E>['onIteration'];
 }
 
 export interface RunSectionGepaResult {
@@ -137,6 +136,7 @@ export async function runSectionGepa<I = unknown, E = unknown>(
     reflectionLm: opts.reflectionLm,
     budget: opts.budget,
     onIteration: opts.onIteration,
+    onCandidate: opts.onCandidate,
     constraints: {
       maxSizeBytes: PROMPT_SECTION_MAX_BYTES,
       customCheck: (source) => {

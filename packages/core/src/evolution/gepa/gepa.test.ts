@@ -11,6 +11,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import {
   runGepa, computeParetoFront, sampleParentByWeight, bestAggregate,
   parentSelectionWeights, rolloutMinibatch, renderReflectionPrompt,
@@ -497,7 +498,7 @@ describe('runGepa — metric-call accounting', () => {
     expect(state.calls).toBe(8);
   });
 
-  test('iterationsRun counts accepted candidates, not loop turns', async () => {
+  test('iterationsRun counts completed loop iterations separately from accepted candidates', async () => {
     let call = 0;
     const result = await runGepa({
       seed: 'seed',
@@ -510,7 +511,7 @@ describe('runGepa — metric-call accounting', () => {
       random: seededRng(1),
     });
     expect(result.history.length).toBe(3);   // seed + 2 accepted
-    expect(result.iterationsRun).toBe(2);
+    expect(result.iterationsRun).toBe(3);
   });
 });
 
@@ -806,4 +807,49 @@ describe('runGepa — the Merge operator', () => {
     expect(result.history.length).toBe(5);
     expect(result.stopReason).toBe('iterations_exhausted');
   });
+});
+
+test.each([NaN, Infinity, -0.1, 2])('the public metric boundary refuses score %s instead of ranking it', async score => {
+  await expect(runGepa({ seed: 'seed', evalSet: [mkInstance('one', 'task')],
+    metric: async () => ({ score, feedback: 'invalid measurement' }),
+    reflectionLm: async () => 'candidate', budget: { maxIterations: 1 },
+  })).rejects.toBeInstanceOf(v.ValiError);
+});
+
+test('an out-of-range candidate score cannot displace a valid seed', async () => {
+  const measured: string[] = [];
+  await expect(runGepa({ seed: 'seed', evalSet: [mkInstance('one', 'task')],
+    metric: async source => ({ score: source === 'seed' ? 0.2 : 2, feedback: 'value' }),
+    reflectionLm: async () => 'candidate',
+    onCandidate: state => { measured.push(state.candidate.source); },
+    budget: { maxIterations: 1, maxMetricCalls: 10, minibatchSize: 1, useMerge: false },
+  })).rejects.toBeInstanceOf(v.ValiError);
+  expect(measured).toEqual(['seed']);
+});
+
+test('invalid reflection measurements abort before a proposal can read them', async () => {
+  let metrics = 0;
+  let reflections = 0;
+  await expect(runGepa({ seed: 'seed', evalSet: [mkInstance('one', 'task')],
+    metric: async () => ({ score: ++metrics === 1 ? 0.2 : Infinity, feedback: 'value' }),
+    reflectionLm: async () => { reflections++; return 'candidate'; },
+    budget: { maxIterations: 1, maxMetricCalls: 10, minibatchSize: 1, useMerge: false },
+  })).rejects.toBeInstanceOf(v.ValiError);
+  expect(reflections).toBe(0);
+});
+
+test('rejection-only runs report each actual iteration and its measured work', async () => {
+  const iterations: number[] = [];
+  let metrics = 0;
+  const result = await runGepa({ seed: 'seed', evalSet: [mkInstance('one', 'task')],
+    metric: async () => { metrics++; return { score: 0.2, feedback: 'value' }; },
+    reflectionLm: async () => { throw new Error('proposal unavailable'); },
+    onIteration: state => { iterations.push(state.iteration); },
+    budget: { maxIterations: 2, maxMetricCalls: 10, minibatchSize: 1, useMerge: false },
+  });
+  expect(iterations).toEqual([0, 1]);
+  expect(result.iterationsRun).toBe(2);
+  expect(result.metricCallsUsed).toBe(3);
+  expect(metrics).toBe(3);
+  expect(result.history.map(candidate => candidate.source)).toEqual(['seed']);
 });
