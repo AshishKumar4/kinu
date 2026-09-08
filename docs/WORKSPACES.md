@@ -1,5 +1,8 @@
 # The workspace and agent object model
 
+This is the current object model. The requested shared-SQLite target and its
+implementation gaps are defined in [PRODUCT-SPEC.md](PRODUCT-SPEC.md#4-workspace-architecture).
+
 In Kinu you create workspaces. A workspace holds the state, and agents are the
 actors that work inside it.
 
