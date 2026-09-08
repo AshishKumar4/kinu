@@ -152,7 +152,7 @@ export class SlateHost {
   async bindingCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
     try {
       const parsed = v.safeParse(SlateBindingRequestSchema, request);
-      if (!parsed.success) throw new KinuError('bad_input', 'A binding call is { member, args: JSON[], depth }', { cause: new v.ValiError(parsed.issues) });
+      if (!parsed.success) throw new KinuError('bad_input', 'A binding call is { member, args: JSON[], chain: string[] }', { cause: new v.ValiError(parsed.issues) });
       const project = await this.project(caller.cred, id);
       return await this.run(caller, routeSlateBindingCall({ id, project, name, request: parsed.output }));
     } catch (cause) {
@@ -173,12 +173,12 @@ export class SlateHost {
       case 'mcp':
       case 'rpc': return { ok: true, value: await this.deps.dispatch(caller, route) };
       // The hop keeps the CALLER's authority: the callee runs for whoever asked, never as its author.
-      case 'app': return this.call(caller, route.id, route.method, [...route.args], route.depth + 1);
+      case 'app': return this.call(caller, route.id, route.method, [...route.args], route.chain);
     }
   }
 
   /** App members are POST routes on the same authored fetch handler that serves the preview. */
-  async call(caller: SlateCaller, id: string, method: string, args: JsonValue[], depth = 0): Promise<SlateCallResult> {
+  async call(caller: SlateCaller, id: string, method: string, args: JsonValue[], chain: readonly string[] = []): Promise<SlateCallResult> {
     try {
       requireWorkModePermission(caller.workMode, false, 'Calling authored slate code');
       if (!isSlateMethodName(method)) throw new KinuError('bad_input', `"${method}" is not an app method name`);
@@ -186,7 +186,9 @@ export class SlateHost {
       if (!parsed.success) throw new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
       const process = await this.ensure(caller, id);
       const response = await process.request(new Request(`https://slate.invalid/${method}`, {
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-slate-depth': String(depth) }, body: JSON.stringify(parsed.output),
+        // Percent-encoded so a slate id outside ASCII still rides an HTTP header.
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-slate-chain': encodeURIComponent(JSON.stringify(chain)) },
+        body: JSON.stringify(parsed.output),
       }));
       if (!response.ok) {
         const body = await response.text();

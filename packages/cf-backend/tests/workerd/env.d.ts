@@ -18,7 +18,7 @@ import type { SendAdmissionProbeDO } from './send-admission-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
-import type { SlateProcessProbeDO, SlateDepthProbe } from './slate-process-probe';
+import type { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { SlateBinding } from '../../src/slates/bindings';
 interface ActorIdentityRpc extends Rpc.DurableObjectBranded { legacy(): Promise<object>; fresh(): Promise<object>; lifecycle(): Promise<object>; }
@@ -73,7 +73,7 @@ declare global {
       mainModule: {
         SlateBinding: typeof SlateBinding;
         CodemodeEgress: typeof CodemodeEgress;
-        SlateDepthProbe: typeof SlateDepthProbe;
+        SlateChainProbe: typeof SlateChainProbe;
       };
     }
   }
