@@ -49,6 +49,34 @@ it('each resident request retains its own app call chain across the loopback bin
   }
 });
 
+it('authored code that keeps an old request\'s bindings cannot replay its call chain', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('binding-replay'));
+  // The escape this closes: stash `env` on one request and use it on the next.
+  // The stashed bindings carry the FIRST request's invocation id, and the host
+  // retired that id when the first request settled.
+  await subject.start([
+    'let kept = null;',
+    'export default { async fetch(request, env) {',
+    '  const path = new URL(request.url).pathname;',
+    '  if (path === "/keep") { kept = env; return Response.json(await env.PEER.echo("kept")); }',
+    '  try { return Response.json(await kept.PEER.echo("replayed")); }',
+    '  catch (cause) { return Response.json({ replayRefused: String(cause.message) }); }',
+    '} };',
+  ].join('\n'), true);
+  try {
+    // A shallow root call, whose bindings the slate keeps.
+    expect(JSON.parse((await subject.request('/keep', [])).body)).toEqual({ chain: ['probe'], args: ['kept'] });
+    // A DEEP call that replays them. Before the invocation record this answered
+    // `chain: ['probe']` — the shallow lineage — which is how a slate re-entered
+    // an ancestor the honest chain would have refused.
+    const replayed = JSON.parse((await subject.request('/replay', ['peer', 'mid'])).body);
+    expect(replayed.replayRefused).toContain('which this host is not running');
+    expect(replayed.chain).toBeUndefined();
+  } finally {
+    await subject.stop();
+  }
+});
+
 it('authored fetch failures preserve their cause chain and leave the process callable', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('authored-cause'));
   await subject.start([

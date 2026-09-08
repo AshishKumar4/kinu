@@ -49,8 +49,8 @@ interface SlateBindingEnv {
 
 /** All four capability planes return through the owner's one route decision, as the caller. */
 export class SlateBinding extends WorkerEntrypoint<SlateBindingEnv, SlateBindingProps> {
-  call(member: string, args: JsonValue[], chain: string[]): Promise<SlateCallResult> {
+  call(member: string, args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
     const { workspace, id, name, caller } = this.ctx.props;
-    return workspaceOwner(this.env, workspace).slateBindingCallAs(caller, id, name, { member, args, chain });
+    return workspaceOwner(this.env, workspace).slateBindingCallAs(caller, id, name, { member, args, invocation });
   }
 }

@@ -74,7 +74,7 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     const bind = (server: string, tools?: string[]) => vfs.writeFile('/home/user/slates/issues/package.json', JSON.stringify({
       main: 'server.ts', slate: { title: 'Issues', bindings: { GITHUB: { kind: 'mcp', server, tools } } },
     }));
-    const call = (tool: string) => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'issues', 'GITHUB', { member: tool, args: [{}], chain: [] });
+    const call = (tool: string) => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'issues', 'GITHUB', { member: tool, args: [{}], invocation: null });
 
     await bind('github');
     expect(await call('read_issue')).toMatchObject({ ok: false, reason: 'missing' });
@@ -94,9 +94,9 @@ test('an MCP binding follows connection identity, binding scope and the owner al
 
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: ['read_issue', 'create_issue'] });
     const planCaller: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
-    expect(await actor.agent.slateBindingCallAs(planCaller, 'issues', 'GITHUB', { member: 'read_issue', args: [{}], chain: [] }))
+    expect(await actor.agent.slateBindingCallAs(planCaller, 'issues', 'GITHUB', { member: 'read_issue', args: [{}], invocation: null }))
       .toEqual({ ok: true, value: { content: [] } });
-    expect(await actor.agent.slateBindingCallAs(planCaller, 'issues', 'GITHUB', { member: 'create_issue', args: [{}], chain: [] }))
+    expect(await actor.agent.slateBindingCallAs(planCaller, 'issues', 'GITHUB', { member: 'create_issue', args: [{}], invocation: null }))
       .toMatchObject({ ok: false, reason: 'denied' });
     await bind('connection-id', ['read_issue']);
     expect(await call('create_issue')).toMatchObject({ ok: false, reason: 'denied' });
@@ -116,7 +116,7 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     // The push a hire makes: the child reaches the owner's MCP plane with the workspace's capability.
     await child.agent.installWorkspaceCapability(capability);
     const asChild = child.agent.observeSlateCaller();
-    const childCall = (tool: string) => actor.agent.slateBindingCallAs(asChild, 'issues', 'GITHUB', { member: tool, args: [{}], chain: [] });
+    const childCall = (tool: string) => actor.agent.slateBindingCallAs(asChild, 'issues', 'GITHUB', { member: tool, args: [{}], invocation: null });
     expect(await childCall('read_issue')).toEqual({ ok: true, value: { content: [] } });
     child.agent.harnessInstallCatalog({
       roles: { scribe: { description: 'Writes prose only.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
@@ -226,7 +226,7 @@ test('a binding held by a facet reaches the facet\'s own files and role, never t
   const childHome = agentHome(subordinateAgentName('reader-1'));
   const asChild = child.agent.observeSlateCaller();
   const call = (caller: SlateCaller, member: string, args: JsonValue[]) =>
-    parent.agent.slateBindingCallAs(caller, 'reader', 'FILES', { member, args, chain: [] });
+    parent.agent.slateBindingCallAs(caller, 'reader', 'FILES', { member, args, invocation: null });
 
   // The facet's own home: readable and writable through its binding.
   expect(await call(asChild, 'writeFile', [`${childHome}/note.md`, 'mine'])).toMatchObject({ ok: true });
@@ -290,7 +290,7 @@ test('workspace read models are the root\'s own reads; a facet holds none of the
   const child = await hiredSubordinateHarness(parent, {
     name: 'peeker', displayName: 'Peeker', nameOrigin: 'user', role: 'general', mission: 'Peek',
   });
-  const call = (caller: SlateCaller) => parent.agent.slateBindingCallAs(caller, 'status', 'DATA', { member: 'getExecutors', args: [], chain: [] });
+  const call = (caller: SlateCaller) => parent.agent.slateBindingCallAs(caller, 'status', 'DATA', { member: 'getExecutors', args: [], invocation: null });
   expect(await call(ROOT_SLATE_CALLER)).toMatchObject({ ok: true, value: expect.any(Array) });
   expect(await call(child.agent.observeSlateCaller())).toMatchObject({ ok: false, reason: 'denied' });
 });
@@ -321,7 +321,7 @@ test('a command the approval ladder stops answers every surface with its class, 
   }));
   const marker = '/home/user/never-written.txt';
   const gated = 'npm publish --dry-run && printf ran > ' + marker;
-  const binding = (command = gated) => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'shell', 'FILES', { member: 'exec', args: [command], chain: [] });
+  const binding = (command = gated) => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'shell', 'FILES', { member: 'exec', args: [command], invocation: null });
   const codemode = () => {
     const workspace = (actor.agent.observeRuntime().executionRouter?.getProviders() ?? []).find((provider) => provider.name === 'workspace');
     if (workspace === undefined) throw new Error('No workspace provider');
