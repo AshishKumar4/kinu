@@ -5,35 +5,43 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ModelCallSpend } from '../events/model-call';
 import { scaffoldChatTransform } from '../scaffold/chat-transform';
 import { assertScaffoldActive, type ScaffoldRunControl } from '../scaffold/executor';
-import { prepareActorProgram, type ActorTurnProgram } from './actor-program';
+import type { ActorTurnProgram } from './actor-program';
 import { createScaffoldCallTool, createScaffoldHistory, createScaffoldLLMStream, type ScaffoldBridgeOpts } from './scaffold-host';
 
-/** Inputs selected by the bound host. Durable program admission is a separate boundary. */
+/** Inputs selected by the bound host. Durable program admission is a separate
+ *  boundary, and `program` is what crossed it. */
 export interface ActorTurnInput {
   readonly runtime: AgentRuntime;
   readonly mode: WorkMode;
   readonly task: string;
   readonly loopVersion: number;
+  /** The program this turn runs, already selected and — for a claimed turn —
+   *  already persisted with its source identity. Preparing it is phase one
+   *  (`prepareActorProgram`); this is phase two. */
+  readonly program: ActorTurnProgram;
   readonly chat: ChatOptions;
   readonly scaffoldSpend?: ModelCallSpend;
   readonly scaffoldStreamOptions?: ScaffoldBridgeOpts['streamOptions'];
   readonly assertActive?: () => void;
 }
 
-/** The claim owner must persist the program identity and retain its source
- * before consuming events. Preparing or returning this value is not durable admission. */
-export interface PreparedActorTurn {
-  readonly program: ActorTurnProgram;
-  readonly events: AsyncIterable<ChatEvent>;
-}
-
-/** Capture the selected version's bytes before any code executes. The builtin
- * turn stays lazy, so a promoted loop that never delegates makes no default
- * model call. Queueing, durable admission and terminal settlement belong to the host. */
-export async function prepareActorTurn(input: ActorTurnInput): Promise<PreparedActorTurn> {
+/**
+ * Start the turn on an already-selected program.
+ *
+ * PHASE TWO of a two-phase lifecycle, and the split is the point: phase one
+ * (`prepareActorProgram`) pins the selected version's immutable bytes and their
+ * digest, the claim owner persists that identity, and only then does anything
+ * run. Returning a prepared program and its event stream together — which this
+ * module used to do — gave the claim owner no seam to write at, and an
+ * in-memory program record is not durable provenance.
+ *
+ * Nothing here executes yet either: `runChat` and the transform below are async
+ * generators, so the turn's first effect happens on the caller's first `next()`.
+ * Queueing, durable admission and terminal settlement belong to the host.
+ */
+export function startActorTurn(input: ActorTurnInput): AsyncIterable<ChatEvent> {
   const control = { signal: input.chat.signal, assertActive: input.assertActive };
-  const program = await prepareActorProgram({ ...control, runtime: input.runtime, mode: input.mode, version: input.loopVersion });
-  const { chat } = input;
+  const { chat, program } = input;
   const defaultTurn = runChat(chat);
   const events = runWorkModeInvocation(input.mode, () => program.kind === 'builtin' ? defaultTurn : scaffoldChatTransform({
     program,
@@ -52,7 +60,7 @@ export async function prepareActorTurn(input: ActorTurnInput): Promise<PreparedA
       history: createScaffoldHistory(() => chat.history),
     },
   }));
-  return { program, events: inActorMode(events, input.mode, control) };
+  return inActorMode(events, input.mode, control);
 }
 
 /** Enter the actor's immutable mode for each generator continuation, including

@@ -15,25 +15,35 @@ export function initScaffoldTables(execRaw: RawSqlExec): void {
   // pathology: the failure cell this version was written to fix
   // (evolution/pathology.ts, `<complaint>/<shape>`; NULL when the proposal
   // named none). Gives the archive a second axis to be read and branched on.
+  // ACTOR-SCOPED, in the primary key: a shared host holds several issued actors
+  // in one database, each evolves its own loop, and `status = 'current'` is a
+  // per-actor pointer. Without the actor in the key one actor's promotion moves
+  // every actor's current program — and a turn's durable claim names the
+  // version its source digest was taken from, so the pointer it read has to be
+  // the one its own actor owns.
   execRaw(`
     CREATE TABLE IF NOT EXISTS scaffold_versions (
-      version        INTEGER PRIMARY KEY,
+      actor_id       TEXT NOT NULL,
+      version        INTEGER NOT NULL,
       written_at     INTEGER NOT NULL,
       rationale      TEXT NOT NULL,
       canary_score   REAL,
       baseline_score REAL,
       status         TEXT NOT NULL DEFAULT 'current',
       parent_version INTEGER,
-      pathology      TEXT
+      pathology      TEXT,
+      PRIMARY KEY (actor_id, version)
     )
   `);
 
   execRaw(`
     CREATE TABLE IF NOT EXISTS scaffold_regression_fixtures (
-      id                TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
+      actor_id          TEXT NOT NULL,
+      id                TEXT NOT NULL DEFAULT (lower(hex(randomblob(9)))),
       task              TEXT NOT NULL,
       expected_keywords TEXT NOT NULL,
-      created_at        INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      created_at        INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      PRIMARY KEY (actor_id, id)
     )
   `);
 
@@ -42,13 +52,15 @@ export function initScaffoldTables(execRaw: RawSqlExec): void {
   // the same schema regardless of init order.
   execRaw(`
     CREATE TABLE IF NOT EXISTS task_history (
-      id               TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
+      actor_id         TEXT NOT NULL,
+      id               TEXT NOT NULL DEFAULT (lower(hex(randomblob(9)))),
       task             TEXT NOT NULL,
       scaffold_version INTEGER NOT NULL DEFAULT 0,
       outcome          TEXT NOT NULL DEFAULT 'success'
                        CHECK(outcome IN ('success','error','timeout')),
       score            REAL,
-      created_at       INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      created_at       INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      PRIMARY KEY (actor_id, id)
     )
   `);
 }

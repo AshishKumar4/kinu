@@ -356,10 +356,13 @@ export {
 export {
   composePrepareStep,
   type StepCachePlan,
+  type StepContextPlane,
   type StepDynamicContext,
   type StepPipeline,
   type StepPrepareResult, type StepPrepareContext,
 } from './prompting/prepare-step';
+export { applyStagedContext, type StagedContextEdit } from './prompting/staged-context';
+export { encodeModelMessages, decodeModelMessages, modelMessagesDigest } from './prompting/message-codec';
 export {
   pruneStepToolOutputs,
   stepContextLimit,
@@ -895,6 +898,7 @@ export {
   getPendingScaffold,
   getCurrentScaffoldVersion,
   readScaffoldVersion,
+  readVersionedScaffoldSource,
   readShadowVerdict,
   recordShadowEvaluation, scoredShadowTrial, trimTrialContext,
   decidePromotion,
@@ -1447,7 +1451,13 @@ export {
   type TurnContinuity,
 } from './orchestrator/agent-orchestrator';
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
-export { prepareActorTurn, type ActorTurnInput, type PreparedActorTurn } from './orchestrator/actor-turn';
+export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
+export {
+  ActorClaimStore, initActorClaimTables, programIdentityOf, verifyClaimedProgram,
+  CLAIM_OUTCOMES,
+  type ActorProgramIdentity, type ActorTurnClaim, type StoredActorClaim,
+  type ContextRevision, type ConsumedContext, type ClaimOutcome, type ClaimRecovery,
+} from './orchestrator/actor-claims';
 export { prepareActorProgram, type ActorTurnProgram } from './orchestrator/actor-program';
 export { SignalDelivery } from './orchestrator/signals';
 export {
