@@ -14,7 +14,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
-- Added the local actor-directory transition for scoped configuration and program state. New actor incarnations use immutable physical storage keys. Retained aliases remain reserved. Destructive retirement releases an alias only after physical cleanup and removes only the matching roster row. Native bootstrap refuses stale references without inline fallback. Existing unimported roots remain inspection-only. This transition is not deployed and does not complete shared physical storage or preservation/import.
+- Added root-issued actor identities for scoped configuration and program state. New actor incarnations use immutable physical storage keys. Retained aliases remain reserved. Destructive retirement releases an alias after physical cleanup and removes only the matching roster row. Native bootstrap refuses stale references without inline fallback. Native inspection reads retained current actors without starting work.
 - **Resident slate egress follows the shared network policy.** Authored server
   fetch calls use the existing destination classifier and redirect enforcement,
   while permitted public access remains available. Captured caller mode separates

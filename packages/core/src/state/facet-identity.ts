@@ -16,9 +16,9 @@ export interface FacetIdentityRow {
 
 const EMPTY: FacetIdentityRow = Object.freeze({ ownerUserId: null, capabilityToken: null, parentWorkspace: null, actor: null, name: null, storageKey: null });
 const StoredFacetIdentitySchema = v.object({
-  user_id: v.nullable(v.string()), capability_token: v.nullable(v.string()),
-  parent_workspace: v.nullable(v.string()), actor_reference: v.nullable(v.string()),
-  logical_name: v.nullable(v.string()), storage_key: v.nullable(v.string()),
+  user_id: v.string(), capability_token: v.nullable(v.string()),
+  parent_workspace: v.string(), actor_reference: v.string(),
+  logical_name: v.string(), storage_key: v.string(),
 });
 
 export class FacetIdentity {
@@ -47,7 +47,7 @@ export class FacetIdentity {
     const row = parsed.output;
     this.cached = Object.freeze({
       ownerUserId: row.user_id, capabilityToken: row.capability_token, parentWorkspace: row.parent_workspace,
-      actor: row.actor_reference === null ? null : Object.freeze(v.parse(ActorReferenceSchema, parseJsonValue(row.actor_reference))),
+      actor: Object.freeze(v.parse(ActorReferenceSchema, parseJsonValue(row.actor_reference))),
       name: row.logical_name, storageKey: row.storage_key,
     });
     return this.cached;
@@ -63,7 +63,6 @@ export class FacetIdentity {
       }
       return;
     }
-    if (current.ownerUserId !== null || current.parentWorkspace !== null) throw new KinuError('missing', 'The existing facet identity requires explicit import.');
     const reference = { actorId: actor.actorId, workspaceId: actor.workspaceId, parentActorId: actor.parentActorId };
     this.sql.exec(`INSERT INTO actor_identity (id, user_id, capability_token, parent_workspace, actor_reference, logical_name, storage_key)
       VALUES (1, ?, ?, ?, ?, ?, ?)`, input.ownerUserId, input.capabilityToken, input.parentWorkspace, JSON.stringify(reference), actor.name, actor.storageKey);

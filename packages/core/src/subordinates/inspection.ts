@@ -9,8 +9,7 @@ import { UsageSchema } from '../usage';
 import { JsonObjectSchema } from '../utils/json';
 import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
-import { SubordinateRosterEntrySchema } from './roster';
-import { subordinateInspectionRoster } from './historical-roster';
+import { SubordinateRosterEntrySchema, SubordinateRosterStore } from './roster';
 import { DELEGATION_MAX_DEPTH } from './depth';
 
 const PathSchema = v.pipe(v.array(v.pipe(v.string(), v.nonEmpty(), v.regex(/^[^/\0]+$/))), v.maxLength(DELEGATION_MAX_DEPTH));
@@ -66,8 +65,8 @@ export function readSubordinateInspection(
   const path = request.path;
   switch (request.view) {
     case 'children': {
-      const roster = subordinateInspectionRoster(sql, raw);
-      if (!roster) return missingSubordinateHistory(path);
+      if (!tableExists(sql, 'actor_subordinates')) return missingSubordinateHistory(path);
+      const roster = new SubordinateRosterStore(raw);
       return { view: 'children', path, page: roster.listPage(request.page) };
     }
     case 'history':
