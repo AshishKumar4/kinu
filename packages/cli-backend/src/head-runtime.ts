@@ -222,6 +222,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
     const mission = localMissionScope(deps.governor(), input.missionLabels ?? []);
     const journal = deps.journal();
     const inferenceOptions: Parameters<typeof runHeadInference>[1] = {
+      runtime: rt,
       model: headModel(input, deps), tools, capture,
       workspaceLayout: 'private-scratch',
       isAborted: () => flag.aborted,

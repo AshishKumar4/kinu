@@ -1439,6 +1439,7 @@ export {
   AgentOrchestrator, type AgentOrchestratorDeps,
   type TurnContinuity,
 } from './orchestrator/agent-orchestrator';
+export { prepareActorTurn, type ActorTurnInput, type ActorTurnProgram, type PreparedActorTurn } from './orchestrator/actor-turn';
 export { SignalDelivery } from './orchestrator/signals';
 export {
   TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,

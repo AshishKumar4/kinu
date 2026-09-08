@@ -47,20 +47,21 @@ export interface ScaffoldBridgeOpts {
   model: LanguageModel;
   /** The live tool surface, resolved per call so mid-turn rebuilds land. */
   tools: () => ToolSet;
-  /** Provider options for the scaffold's calls (cf spreads
-   *  effortFor('scaffold_mutation')). `{}` when the backend adds none — safe
-   *  to spread unconditionally. */
-  streamOptions?: Pick<Parameters<typeof streamText>[0], 'providerOptions'>;
+  /** SDK options shared with the selected loop's model calls. */
+  streamOptions?: Pick<Parameters<typeof streamText>[0], 'providerOptions' | 'onStepFinish' | 'prepareStep' | 'stopWhen'>;
   /** Where this loop reports what it cost, and as whose spend — `scaffold` for a
    *  live or candidate scaffold driving its own inference. One field, both
    *  halves, like every other seam that hands its result to more than one kind of
    *  caller, so a scaffold's spend is attributed to something. Absent means it is
    *  attributed to nothing. */
   spend?: ModelCallSpend;
+  /** The admitted actor turn's cancellation signal, shared with its tools. */
+  signal?: AbortSignal;
 }
 
 export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOptions['llmStream'] {
   return async function* (call) {
+    opts.signal?.throwIfAborted();
     const all = opts.tools();
     const toolSet: ToolSet = (call.tools && call.tools.length > 0)
       ? Object.fromEntries(call.tools.filter((n) => all[n]).map((n) => [n, all[n]]))
@@ -77,6 +78,7 @@ export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOp
         system: call.system,
         messages: call.messages,
         tools: toolSet,
+        abortSignal: opts.signal,
         // NO STEP CAP here either: a scaffold's loop runs until its model stops
         // calling tools, exactly like the live turn it may replace (owner ruling,
         // 2026-08-21). Spend is governed by the mission ledger at the spend seam,
@@ -222,6 +224,7 @@ export function createScaffoldCallTool(
    * mis-dedupe.
    */
   callScope?: string,
+  signal?: AbortSignal,
 ): NonNullable<ScaffoldRunOptions['callTool']> {
   let seq = 0;
   // Scope-less rollouts have no durable identity to re-drive them, so their
@@ -232,6 +235,7 @@ export function createScaffoldCallTool(
   // apart. Scoped ids stay `<scope>#<seq>` so a re-drive still dedupes.
   const nonce = nanoid();
   return async (name, args) => {
+    signal?.throwIfAborted();
     const t = tools()[name];
     if (!t?.execute) return { error: `tool not found: ${name}` };
     try {
@@ -239,11 +243,13 @@ export function createScaffoldCallTool(
         messages: [],
         toolCallId: callScope === undefined ? `scaffold-${nonce}#${seq++}` : `${callScope}#${seq++}`,
       };
+      if (signal !== undefined) options.abortSignal = signal;
       const input = await safeValidateTypes({ value: args, schema: t.inputSchema });
       if (!input.success) return { error: input.error.message };
       const result = await t.execute(input.value, options);
       return result === undefined ? undefined : decodeJsonValue({ value: result });
     } catch (err) {
+      if (signal?.aborted) throw err;
       return { error: renderThrownChain({ cause: err }) };
     }
   };
