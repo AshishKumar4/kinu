@@ -9,9 +9,17 @@ export const SlateBindingRequestSchema = v.strictObject({
   member: v.pipe(v.string(), v.minLength(1)),
   args: v.array(JsonValueSchema),
   /**
-   * The slate ids already running above this call, outermost first. The caller's
-   * own id is not in it: the router appends that from the binding stub's
-   * host-set props, so a slate cannot rename itself out of its own chain.
+   * The slate ids already running above this call, outermost first.
+   *
+   * The host WROTE this chain and handed it to the callee; the callee hands it
+   * back. Only the caller's own id is host-set at this boundary (the router
+   * appends it from the binding stub's props), so the PREFIX is as trustworthy
+   * as the slate echoing it. A slate that returns a shorter chain starts a
+   * shorter lineage — the same reach the old `depth` number gave it, since
+   * `Number(header)` of anything was equally forgeable. What the repeat check
+   * buys over that number is that an HONEST chain refuses at the repeat instead
+   * of after eight hops, and that a dishonest one still cannot re-enter
+   * anything on the chain it does present.
    */
   chain: v.array(v.pipe(v.string(), v.minLength(1))),
 });

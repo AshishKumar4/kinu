@@ -1531,6 +1531,14 @@ export class LocalAgentSession implements BackendHost {
     this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey);
   }
 
+  /**
+   * The session's own lifetime, aborted by {@link end}. MCP startup awaits a
+   * third-party child that may never answer, so the owner ending the session is
+   * what ends that wait: without this, `end()` would be reached only after a
+   * connect that never returns.
+   */
+  private readonly lifetime = new AbortController();
+
   /** Connect configured stdio MCP servers + merge their tools into the surface.
    *  Call once at startup (no-op for empty config). Idempotent-safe to skip. */
   async connectMcp(servers: Record<string, McpServerConfig>): Promise<void> {
@@ -1538,7 +1546,7 @@ export class LocalAgentSession implements BackendHost {
     const log = (message: string): void => {
       this.emit({ type: 'background', event: 'mcp', message });
     };
-    const conn = await connectMcpServers(servers, log);
+    const conn = await connectMcpServers(servers, log, this.lifetime.signal);
     // ONE admission, through the same policy the cloud backend's turn applies:
     // the session's resolved figures, less the native surface this session
     // already carries. The install is session-scoped — merged once, ridden by
@@ -1670,6 +1678,7 @@ export class LocalAgentSession implements BackendHost {
    *  than being force-closed here. */
   async end(): Promise<void> {
     this.ended = true;
+    this.lifetime.abort();
     this.clearLocalAlarm();
     // The live wake dies with the process either way; clearing it here is what
     // stops a timer firing a replay into a session that has closed its stores.

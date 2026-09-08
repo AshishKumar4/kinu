@@ -87,12 +87,9 @@ export type FileContent =
   | { readonly kind: 'sparse'; readonly size: number; readonly runs: readonly SparseRun[] }
   | SealedContent;
 
-/**
- * A sealed range never rehashes a whole file, so it is bounded by the grid the
- * file was chunked on. Not a second spelling of that grid: it IS
- * {@link CHUNK_SIZE}, which `cas/hash.ts` takes from @cloudflare/dofs so chunk
- * boundaries agree with the store's.
- */
+/** A sealed range never rehashes a whole file, so it is bounded by the grid the
+ *  file was chunked on — not a second spelling of it, but {@link CHUNK_SIZE}
+ *  itself, the fixed chunk grid `cas/hash.ts` declares. */
 export const MAX_SEALED_EXTENT_BYTES = CHUNK_SIZE;
 
 /** Logical bytes: sparse holes read back as zeros, like a real read(2). */

@@ -56,16 +56,19 @@ import {
  *  LLM-facing tool strings. */
 export interface ReleaseExec {
   /**
-   * No wall clock. A release command ends when its process ends, and the exit
-   * code it ended with is what the ledger records. The four deadlines this
-   * option set used to carry (apply 120s, clone 300s, check 900s, deploy 600s)
-   * killed a running command and recorded `failed` with no exit code, which a
-   * reader cannot tell apart from a check that ran and found a real defect. The
-   * check bound was the one measured against anything, and its own note said
-   * the measurement was pending. `SandboxHandle.exec` reads an absent deadline
-   * as the process lane, so an adapter has one to choose.
+   * No wall clock, and a signal instead. A release command ends when its
+   * process ends, when the transport fails, or when the engine's owner cancels
+   * it — {@link ReleaseEngineOptions.signal} reaches the container through
+   * `SandboxHandle.exec`, which kills the process it started and waits for it
+   * to be gone.
+   *
+   * The four deadlines this option set used to carry (apply 120s, clone 300s,
+   * check 900s, deploy 600s) killed a running command and recorded `failed`
+   * with no exit code, which a reader cannot tell apart from a check that ran
+   * and found a real defect. The check bound was the one measured against
+   * anything, and its own note said the measurement was pending.
    */
-  exec(command: string, opts?: { cwd?: string }): Promise<{
+  exec(command: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<{
     stdout: string;
     stderr: string;
     exitCode: number;
@@ -113,6 +116,14 @@ export interface ReleaseEngineOptions {
   /** Root for per-change working copies. Lives under /workspace so the
    *  existing R2 workspace backup covers it. */
   workRoot?: string;
+  /**
+   * The cancellation the engine's owner holds, read PER COMMAND rather than
+   * captured, because an engine is built once and a turn is not. Every command
+   * this engine runs carries whatever this answers at the moment it starts, so
+   * cancelling the turn kills the container process instead of leaving a hung
+   * check pinning the change.
+   */
+  signal?: () => AbortSignal | undefined;
 }
 
 // ── Results (discriminated so the agent tool can relay them verbatim) ──────
@@ -198,7 +209,15 @@ export class ReleaseEngine {
   private readonly workRoot: string;
 
   constructor(opts: ReleaseEngineOptions) {
-    this.exec = opts.exec;
+    const source = opts.exec;
+    const signal = opts.signal;
+    // Wrapped once so the cancellation cannot be forgotten at one of the twenty
+    // call sites below, and read per command so a cached engine still sees the
+    // turn that is running now.
+    this.exec = source === null || signal === undefined ? source : {
+      ...source,
+      exec: (command, execOpts) => source.exec(command, { ...execOpts, signal: signal() }),
+    };
     this.ledger = opts.ledger;
     this.gitHubAuth = opts.gitHubAuth;
     this.workRoot = opts.workRoot ?? DEFAULT_WORK_ROOT;

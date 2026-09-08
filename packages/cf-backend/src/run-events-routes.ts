@@ -44,14 +44,9 @@ function reportRouteFailure(input: { surface: string; cause: unknown }): Respons
 }
 
 const SSE_POLL_MS = 500;
-/**
- * How long one browser SSE subscription to the run-event log stays open before
- * the client is asked to reconnect. A separate decision from core's
- * `DEVICE_CONSENT_TIMEOUT_MS`, which happens to be the same five minutes: that
- * one is how long an unanswered consent prompt waits for a person, this one is
- * how long a Worker holds a streaming response open. Neither constrains the
- * other, so they are separate declarations on purpose.
- */
+/** How long one browser SSE subscription stays open before the client
+ *  reconnects. Unrelated to core's `DEVICE_CONSENT_TIMEOUT_MS`, the same five
+ *  minutes for a person answering a prompt. */
 const SSE_TIMEOUT_MS = 5 * 60 * 1000;
 const SSE_HEARTBEAT_MS = 15_000;
 const ALLOWED_TYPES = [

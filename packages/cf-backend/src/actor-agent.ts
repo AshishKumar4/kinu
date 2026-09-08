@@ -4362,6 +4362,13 @@ export abstract class ActorAgent extends Think<Env> {
   // after a DO restart the shadow falls back to the task-only reconstruction.
   protected _lastTurnOpts: Parameters<typeof streamText>[0] | null = null;
   private _turnProgram: { readonly program: ActorTurnProgram; readonly signal: AbortSignal | undefined } | null = null;
+  /** The signal of the turn running right now, or undefined between turns.
+   *  Read per call, never captured: a long-lived collaborator built once (the
+   *  release engine) has to see the CURRENT turn's cancellation, not the one
+   *  that happened to be running when it was constructed. */
+  protected currentTurnSignal(): AbortSignal | undefined {
+    return this._turnProgram?.signal;
+  }
 
   getCliCwdForDevice(): string | null {
     return this._cliCwd;
