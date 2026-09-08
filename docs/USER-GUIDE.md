@@ -3,6 +3,8 @@
 My path: install Kinu, make one workspace, then use it.
 [QUICKSTART.md](../QUICKSTART.md) is the short version. [docs/CLI.md](CLI.md)
 is the generated reference for every command and flag.
+The complete requested contract and source/evidence comparison is in
+[PRODUCT-SPEC.md](PRODUCT-SPEC.md). It separates current behavior from the shared-state target.
 
 ---
 
@@ -24,7 +26,7 @@ The day-one decision is where it runs.
 | Needs an account | yes | no; account-backed Workers AI is billed to that Cloudflare account |
 
 You can have both. You can move a cloud workspace onto your machine later
-(§7). Everything else here works the same for either.
+(§7). Shared commands use the same core, but hosting and capability availability differ.
 
 ## 2. Day one
 
@@ -166,42 +168,36 @@ reports what it could NOT account for: calls the provider reported nothing
 for, and calls no catalog could price. "Everything reported" and "92%, with
 the embedder silent" are different facts, and you can tell them apart.
 
-[kinu.run](https://kinu.run) serves the same information across six surfaces:
-Output (what it produced), Work (its plan, running jobs, settled
-results, anything awaiting you at the top), Releases (what it ships and
-what you approve), Exploration (every search), Agent (identity,
-memory, crafted tools, adaptation evidence), Environment (each executor,
-its files, its terminal). The right-hand gauge carries context, cost, and
-cache-hit rate. Anything awaiting your decision is counted on Work, and
-each row opens where the decision happens: a release, a scaffold rewrite under
-trial, a failed job, unread self-changes.
+[kinu.run](https://kinu.run) presents Output (produced results), Work (plans,
+jobs and waiting decisions), Files (workspace files), Releases (deliverables
+and approvals), Exploration (searches), Agent (identity, memory, tools and
+adaptation evidence), and Environment (executors, files and terminals).
+The right-hand gauge shows context, cost and cache information. Work counts
+items awaiting a decision and opens each one where that decision happens.
 
 Exploration is where I go when the agent tried more than one thing. The
-`agents` tool's `swarm` action grows a configured tree of nodes, every node a
-whole tool-calling agent. The agent picks a preset from the task. Preset plus
-task is a complete call. Name an objective and a registered verifier measures
-the search. Without one, the search falls back to a judged sweep instead of
-refusing. Ideation returns unranked candidates. Local nodes get private homes.
-Hosted nodes use the canonical workspace for shared project files. Their
-`/home/node-<id>` is owner-writable and sibling-readable at `0o755`; their
-`/tmp/node-<id>` is private at `0o700` (`core/src/vfs/agent-home.ts`). A node
-takes as many steps as its budget allows because no turn here carries a step cap.
+`agents` tool's `swarm` action grows a configured tree. Tool-using nodes run
+the full agent loop; a declared thought unit is toolless. The preset, context
+and scoring choice determine what runs. A registered verifier supplies measured
+scores; judged searches and unranked ideation remain separate. Hosted actors
+share canonical project files with credentialed homes and private temporary
+paths. See [EXPLORATION.md](EXPLORATION.md) for the actual combinations.
 
 Every search is a row, newest first, and the canvas draws its tree: score in a
 node's fill, rollouts in its radius, a ring on the settled answer. Measured
 records carry into later searches. [docs/EXPLORATION.md](EXPLORATION.md)
 defines the six axes and presets.
 
-Kinu can add surfaces of its own. Ask for a dashboard and it publishes a
-view: a tab after the six, marked with a sparkle, labelled *Written by
-Kinu*. A view reads state you can already see and draws it with the same
-components everything else uses, so it shows numbers and takes no input. Its
-surface names are reserved, retired ones included. "View source" shows exactly
-what it wrote. The Work tab's journal reverts it.
+Kinu can author a **slate**: a project with browser JS/JSX/TS/TSX, HTML/CSS and
+Worker-style server routes. The UI can take input and use admitted workspace,
+MCP and execution bindings. Source and versions stay in the workspace; the
+preview process is derived. This is not a host-rendered JSON widget language.
+[LIVE-UI.md](LIVE-UI.md) explains the hosted runtime and its limits;
+[PRODUCT-SPEC.md](PRODUCT-SPEC.md#12-slates-and-authored-applications) records the acceptance boundary.
 
 ## 7. Backup, and moving a workspace
 
-A cloud workspace's only copy is the Durable Object it lives in. Take your own:
+Hosted state lives in the workspace root and its actor stores. Export before deleting, and check the archive's coverage:
 
 ```bash
 kinu export jarvis                       # → jarvis.kinu.jsonl
@@ -209,11 +205,11 @@ kinu export jarvis -o ~/backups/jarvis.kinu.jsonl
 kinu import ~/backups/jarvis.kinu.jsonl --name jarvis-restored
 ```
 
-Cloud and local exports write the same archive: transcripts, memory, files,
-crafted tools, evolution history. `import` restores it as a local
-workspace, which makes this the way to pull a cloud workspace onto your
-machine. The web app has the same button under workspace settings → Backup →
-*Download archive*.
+Cloud and local exports use the same archive format, but their coverage must
+be distinguished. The current cloud root export does not traverse separate
+facet databases, so it does not establish a complete backup of retained child
+histories. `import` restores an archive as a local workspace. The web backup
+action uses the same declared export boundary; inspect it before deleting data.
 
 Exporting a cloud workspace needs an interactive session (`kinu auth`). A
 scoped CI token can run tasks but cannot take the database. Export is a live,

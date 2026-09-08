@@ -1,5 +1,8 @@
 # Applications
 
+This is an application overview. [PRODUCT-SPEC.md](PRODUCT-SPEC.md) records the
+complete requested contract and the current source/evidence boundaries.
+
 ## 1. What Kinu is
 
 Kinu is an agent platform with durable adaptation mechanisms. It:
@@ -68,16 +71,15 @@ workspaces, then compare their records. Reasoning effort is a separate dial:
 
 ### Hosted development environment
 
-Hosted workspaces use one authoritative Nimbus session for files and shell
-state. It provides a real POSIX shell, on-demand language runtimes, git and package
-tooling, long-running processes, and capability-hosted HTTP/WebSocket previews.
-Sandbox containers and connected devices stay separate, explicit environments.
-There is no second Nimbus executor and no file copy between two workspace stores.
+Hosted workspaces use one authoritative Nimbus session for shared files and shell
+state. Available runtimes are stated by the actual host: catalogue/version output
+does not prove arbitrary Node programs run in workerd. Containers and connected
+devices remain separate, explicit environments. There is no second Nimbus file copy.
 
 ## 3. CLI version
 
-The CLI version runs locally on POSIX with bun:sqlite and provides the same
-core capabilities.
+The local CLI uses bun:sqlite and shared core code. Hosting and execution
+capabilities still differ from the Cloudflare backend.
 
 ### Local development agent
 
@@ -88,10 +90,10 @@ kinu chat dev-helper
 # Evolution happens locally; crafted tools persist in ~/.kinu/dev-helper/agent.db
 ```
 
-It executes code in a sandboxed subprocess with a sanitized environment. It
-reads and writes files in its virtual filesystem, searches memory with FTS5,
-and keeps tool patterns across sessions. A caller may pass a timeout, but
-nothing imposes one. Long work runs to completion.
+The local code-mode factory evaluates normalized programs in process with its
+registered bindings and local require path. This is not the hosted dynamic
+Worker isolation boundary. File access, execution authority and unsupported
+operations must be stated for the actual selected environment.
 
 ### CI/CD integration
 
@@ -106,10 +108,9 @@ kinu export dev-helper -o dev-helper-v2.kinu.jsonl
 kinu import dev-helper-v2.kinu.jsonl --name dev-helper
 ```
 
-A local workspace keeps its whole state in one SQLite file. `kinu export`
-writes it as a `.kinu.jsonl` archive. Cloud and local workspaces produce the
-same archive. `import` restores either as a local workspace. You can back one
-up, version it, or share it.
+Local agent state uses SQLite. Cloud and local exports use a common archive
+format; that does not prove identical coverage of actor histories or native
+project files. Check the declared scope before using an archive as a backup.
 
 ### Research experimentation
 

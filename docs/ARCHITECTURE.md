@@ -1,5 +1,8 @@
 # Architecture
 
+This describes the implementation. [PRODUCT-SPEC.md](PRODUCT-SPEC.md) defines the
+requested product contract and compares it with the current source and evidence.
+
 Kinu is an agent platform whose adaptation mechanisms are durable. A workspace
 has its own filesystem, execution environments, and sessions. Its agent answers
 chat, runs tools, can choose a tree search, builds reusable tools, and evaluates

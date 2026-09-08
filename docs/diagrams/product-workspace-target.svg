@@ -29,8 +29,8 @@
 </text>
 <text x="68" y="268" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
 <tspan x="68" dy="0">Main agent</tspan>
-<tspan x="68" dy="30">N subordinate agents</tspan>
-<tspan x="68" dy="30">N exploration agents</tspan>
+<tspan x="68" dy="30">N additional agents</tspan>
+<tspan x="68" dy="30">Subordinate / exploration roles</tspan>
 </text>
 </g>
 <path d="M320 359 V392" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#workspace-target-arrow)" />
