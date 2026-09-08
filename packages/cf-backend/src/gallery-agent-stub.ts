@@ -9,6 +9,15 @@
 
 import { useEffect, useMemo, useRef } from "react";
 
+/** The gate-to-server channel, declared so its payload has a contract at the
+ *  point it is dispatched rather than a shape the receiver has to interrogate.
+ *  `detail` is one raw socket frame, exactly as a server would have sent it. */
+declare global {
+	interface WindowEventMap {
+		"gallery-broadcast": CustomEvent<string>;
+	}
+}
+
 interface GalleryConnectionError {
 	readonly code: number;
 	readonly reason: string;
@@ -36,6 +45,12 @@ export interface GalleryAgent {
 	removeEventListener(type: string, listener: EventListener): void;
 	close(): void;
 	reopen(): void;
+	/** A frame the SERVER started. Every other message on this connection
+	 *  answers a call the client made, so a broadcast — the only shape a push
+	 *  notification has — has no other way in. A fixture that handed `useKinu`
+	 *  the parsed value instead would be testing itself: the hook's own schema
+	 *  parse, its root-only gate and its de-duplication all live on this edge. */
+	deliver(raw: string): void;
 }
 
 interface AgentHandlers {
@@ -88,6 +103,11 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 				handlers.current.onOpen?.(new Event("open"));
 				for (const listener of listeners.get("open") ?? []) listener(new Event("open"));
 			},
+			deliver: (raw) => {
+				const message = new MessageEvent("message", { data: raw });
+				handlers.current.onMessage?.(message);
+				for (const listener of listeners.get("message") ?? []) listener(message);
+			},
 		};
 	}, []);
 	useEffect(() => {
@@ -101,7 +121,16 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 		handlers.current.onOpen?.(new Event("open"));
 		const reconnect = () => { agent.reopen(); };
 		window.addEventListener("gallery-reconnect", reconnect);
-		return () => window.removeEventListener("gallery-reconnect", reconnect);
+		// `gallery-broadcast` is the gate's only way to make the SERVER say
+		// something, which is what a push notification is. Its payload is a raw
+		// frame by declaration, so this edge hands the hook exactly what a socket
+		// would and never inspects a representation to find out what it holds.
+		const broadcast = (event: WindowEventMap["gallery-broadcast"]) => { agent.deliver(event.detail); };
+		window.addEventListener("gallery-broadcast", broadcast);
+		return () => {
+			window.removeEventListener("gallery-reconnect", reconnect);
+			window.removeEventListener("gallery-broadcast", broadcast);
+		};
 	}, [agent]);
 	return agent;
 }

@@ -763,6 +763,23 @@ export class HarnessSubordinateAgent extends SubordinateAgent {
   }
   /** The identity row its parent seeded, which is what its prompt reads. */
   observeIdentitySoul(): Promise<string> { return this.loadSoulText(); }
+
+  /**
+   * The lineage the SDK records at facet creation, in the place it records it.
+   *
+   * `_cf_initAsFacet` puts `cf_agents_parent_path` into the facet's OWN
+   * key-value storage (`agents/dist/index.js`, beside `cf_agents_is_facet`), and
+   * the owner's existing-only inspection reads exactly that row back to confirm
+   * the hop it is about to traverse. Facets are workerd-only, so the harness
+   * stands in for that one write — with the SAME value it declares as
+   * `parentPath`, because production records one thing and a fixture that
+   * recorded a second would be checking itself against its own second copy.
+   */
+  async harnessRecordSdkLineage(
+    path: ReadonlyArray<{ readonly className: string; readonly name: string }>,
+  ): Promise<void> {
+    await this.ctx.storage.put('cf_agents_parent_path', path.map(hop => ({ ...hop })));
+  }
 }
 
 export interface ActorHarness<T> {
@@ -779,6 +796,15 @@ function makeCtx(db: Database): AgentContext {
     const rows = canonicalSql.exec(query, ...bindings).toArray();
     return { toArray: () => rows, [Symbol.iterator]: () => rows[Symbol.iterator]() };
   };
+  // The KEY-VALUE half of Durable Object storage, beside the SQL half. Real for
+  // the same reason `transactionSync` is: the SDK records a facet's own lineage
+  // here — `_cf_initAsFacet` puts `cf_agents_parent_path` — and the owner's
+  // existing-only inspection reads that row back before it will traverse the hop
+  // it names. An inert `get` answered `undefined` for every key, so that read
+  // could only ever fail, and a lineage check that always refuses is
+  // indistinguishable from one that always admits. A key nobody wrote still
+  // resolves `undefined`, which is the platform's answer too.
+  const kv = new Map<string, JsonValue>();
   const context = {
     storage: {
       sql: { exec: sqlExec },
@@ -786,12 +812,13 @@ function makeCtx(db: Database): AgentContext {
       // rests on this, and a fake turns every atomic write into a torn one
       // that still reports success. Nimbus refuses to boot without it.
       transactionSync: <T>(closure: () => T): T => db.transaction(closure)(),
-      get: async () => undefined,
-      put: async () => {},
+      get: async (key: string): Promise<JsonValue | undefined> => kv.get(key),
+      put: async (key: string, value: JsonValue): Promise<void> => { kv.set(key, value); },
       // The durable per-actor shell state Nimbus's programmatic surface keeps,
-      // and the delete it performs when a port capability is revoked.
-      delete: async () => true,
-      deleteAll: async () => {},
+      // and the delete it performs when a port capability is revoked — which
+      // answers whether a row was there, as the platform's does.
+      delete: async (key: string) => kv.delete(key),
+      deleteAll: async () => { kv.clear(); },
       setAlarm: async () => {},
       getAlarm: async () => null,
       deleteAlarm: async () => {},
@@ -1210,12 +1237,21 @@ export async function hiredSubordinateHarness(
 ): Promise<ActorHarness<HarnessSubordinateAgent>> {
   const harness = instantiate(HarnessSubordinateAgent, new Database(':memory:'), parent.agent, undefined, world);
   Object.defineProperty(harness.agent, 'name', { value: identity.name, configurable: true });
-  Object.defineProperty(harness.agent, 'parentPath', {
-    value: [{ className: 'OrchestratorAgent', name: 'harness-parent' }],
-    configurable: true,
-  });
+  // The lineage the SDK would have recorded, naming the parent's ACTUAL DO name.
+  // That name is what the parent's `workspaceName()` answers and therefore what
+  // its `getSubordinateBootstrapIdentity` seeds into this child's identity row,
+  // so a hardcoded one here disagreed with the seed the fixture itself had just
+  // written — and every production check that compares the recorded root against
+  // the seeded workspace (the plan-lineage guard, the owner's existing-only
+  // inspection) refused a child its parent really had hired. The CLASS is still
+  // declared, so the production class check runs rather than being bypassed.
+  const lineage = [{ className: 'OrchestratorAgent', name: parent.agent.name }];
+  Object.defineProperty(harness.agent, 'parentPath', { value: lineage, configurable: true });
   Object.defineProperty(harness.agent, 'messages', { value: [], configurable: true });
   ensureActorSchema(harness.agent);
+  // The same value, in the second place the SDK also records it. One value, so
+  // the two can never disagree the way two literals can.
+  await harness.agent.harnessRecordSdkLineage(lineage);
   harness.agent.declareScaffoldPresent();
   const { roleId, ...seed } = identity;
   await harness.agent.setSubordinateIdentity({
@@ -1238,6 +1274,18 @@ export async function hiredSubordinateHarness(
       const stub = await parentSubAgent(cls, name);
       return name === identity.name ? resolveFacet : stub;
     },
+    configurable: true,
+  });
+  // The owner's authoritative READS go through `getExistingSubAgent`, which by
+  // contract never creates. The one hired name resolves to the real child for
+  // the same reason `subAgent` does; every other name falls through to the
+  // registry's honest answer, which is what keeps an inspection of a rostered
+  // but never-hired child a `missing` instead of a freshly minted empty facet.
+  type ExistingArgs = Parameters<HarnessOrchestratorAgent['getExistingSubAgent']>;
+  const parentExisting = parent.agent.getExistingSubAgent.bind(parent.agent);
+  Object.defineProperty(parent.agent, 'getExistingSubAgent', {
+    value: async (cls: ExistingArgs[0], name: ExistingArgs[1]): Promise<object | null> =>
+      name === identity.name ? resolveFacet : await parentExisting(cls, name),
     configurable: true,
   });
   return harness;
