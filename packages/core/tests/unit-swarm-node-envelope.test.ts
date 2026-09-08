@@ -19,20 +19,18 @@
  * is not in the data and is never estimated here. What IS in the data is the cost of a
  * STEP, and a step is the unit the bound is built out of.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test, spyOn } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
-import * as config from '../src/config';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { runNodeAgent } from '../src/strategy/node-agent';
 import type { NodeRun } from '../src/strategy/node-agent';
 
-describe('a node has NO default elapsed clock', () => {
-  test('the shared loop exports no LLM deadline or timeout retry', () => {
-    expect('LLM_CALL_TIMEOUT_MS' in config).toBe(false);
-    expect('LLM_CALL_MAX_RETRIES' in config).toBe(false);
-  });
+test('a node with no caller clock can finish after a long elapsed step', async () => {
+  const { run, steps } = await nodeUnderDeadline();
+  expect(run.report.status).toBe('completed');
+  expect(steps).toBe(1);
 });
 
 /**
@@ -52,49 +50,50 @@ describe('a node has NO default elapsed clock', () => {
  * number — a second copy of a scripted loop is a second thing to keep in step.
  */
 async function nodeUnderDeadline(
-  maxWallClockMs: number,
+  maxWallClockMs?: number,
 ): Promise<{ readonly run: NodeRun; readonly steps: number }> {
   const { rt } = createTestRuntime();
   const journal = new HeadJournal(rt.storage.sql);
   let steps = 0;
-  const run = await runNodeAgent({
-    nodeId: 'n-deadline', rootId: 'r-deadline', parentId: null, depth: 0,
-    task: 'answer the task', rationale: 'the run asked for it',
-    base: 'You are a node under test.',
-    messages: [{ role: 'user', content: 'Answer the task.' }],
-    inherited: [], context: 'fresh', mode: 'build', settle: 'best', arbitrate: null,
-  }, {
-    rt,
-    model: scriptedTurnModel({
-      provider: 'fake',
-      modelId: 'fake-never-stops',
-      doGenerate: async () => {
-        steps += 1;
-        return {
-          content: [{
-            type: 'tool-call' as const,
-            toolCallId: `read-${String(steps)}`,
-            toolName: 'file',
-            input: JSON.stringify({ action: 'read', path: 'nothing/here.txt' }),
-          }],
-          finishReason: { unified: 'tool-calls' as const, raw: undefined },
-          usage: {
-            inputTokens: { total: 4, noCache: 4, cacheRead: undefined, cacheWrite: undefined },
-            outputTokens: { total: 3, text: 3, reasoning: undefined },
-          },
-          warnings: [],
-        };
-      },
-    }),
-    journal,
-    maxWallClockMs,
-    logger: createRecordingLogger(),
-  });
-  return { run, steps };
+  let now = Date.now();
+  const clock = spyOn(Date, 'now').mockImplementation(() => now);
+  try {
+    const run = await runNodeAgent({
+      nodeId: 'n-deadline', rootId: 'r-deadline', parentId: null, depth: 0,
+      task: 'answer the task', rationale: 'the run asked for it',
+      base: 'You are a node under test.',
+      messages: [{ role: 'user', content: 'Answer the task.' }],
+      inherited: [], context: 'fresh', mode: 'build', settle: 'best', arbitrate: null,
+    }, {
+      rt,
+      model: scriptedTurnModel({
+        provider: 'fake', modelId: 'fake-never-stops',
+        doGenerate: async () => {
+          steps++;
+          now += maxWallClockMs === undefined ? 26 * 60_000 : maxWallClockMs + 1;
+          return {
+            content: maxWallClockMs === undefined
+              ? [{ type: 'text', text: 'finished the long step' }]
+              : [{ type: 'tool-call', toolCallId: 'read-' + steps, toolName: 'file',
+                  input: JSON.stringify({ action: 'read', path: 'nothing/here.txt' }) }],
+            finishReason: { unified: maxWallClockMs === undefined ? 'stop' : 'tool-calls', raw: undefined },
+            usage: {
+              inputTokens: { total: 4, noCache: 4, cacheRead: undefined, cacheWrite: undefined },
+              outputTokens: { total: 3, text: 3, reasoning: undefined },
+            }, warnings: [],
+          };
+        },
+      }),
+      journal, maxWallClockMs, logger: createRecordingLogger(),
+    });
+    return { run, steps };
+  } finally {
+    clock.mockRestore();
+  }
 }
 
 describe('what the node deadline reaches, and what it does not', () => {
-  test('an already-passed deadline stops the node at its NEXT step boundary, not inside one', async () => {
+  test('a deadline expiring during a step stops the next request, not completed work', async () => {
     // Room for 40 steps, and a deadline that has already passed by the time the first
     // one finishes. The step cap is therefore NOT what stops this node.
     const { run, steps } = await nodeUnderDeadline(1);
@@ -126,9 +125,8 @@ describe('what the node deadline reaches, and what it does not', () => {
 
     expect(run.report.status).toBe('budget_exceeded');
     expect(run.report.errorMessage).toContain('wall-clock');
-    // The same residue, and it is why this is not simply "no steps at all": a
-    // cooperative deadline cannot pre-empt the step that was already running.
-    expect(steps).toBe(1);
-    expect(run.report.stepCount).toBe(1);
+    // A zero budget is exhausted before entry: no first step may begin.
+    expect(steps).toBe(0);
+    expect(run.report.stepCount).toBe(0);
   });
 });

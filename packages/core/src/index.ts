@@ -339,7 +339,7 @@ export {
 // Chat engine (shared between server and CLI)
 export {
   runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
-  type ChatEvent, type ChatOptions,
+  type ChatEvent, type ChatOptions, type ChatToolOutput,
 } from './chat';
 
 // Extension seam (public plugin API — observe + extend a turn)
@@ -876,7 +876,7 @@ export {
   type ScaffoldRunOptions,
   type ScaffoldRunResult,
   type ScaffoldDefaultInferenceChunk,
-  type ScaffoldEvent,
+  type ScaffoldEvent, type ScaffoldModelEvent, type ScaffoldToolOutput,
   type ScaffoldEmitFn,
 } from './scaffold/executor';
 export { pumpScaffoldEvents } from './scaffold/event-pump';
@@ -1439,6 +1439,8 @@ export {
   AgentOrchestrator, type AgentOrchestratorDeps,
   type TurnContinuity,
 } from './orchestrator/agent-orchestrator';
+export { prepareActorTurn, type ActorTurnInput, type PreparedActorTurn } from './orchestrator/actor-turn';
+export { prepareActorProgram, type ActorTurnProgram } from './orchestrator/actor-program';
 export { SignalDelivery } from './orchestrator/signals';
 export {
   TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,

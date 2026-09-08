@@ -1,3 +1,4 @@
+import type { ChatEvent } from '../src/chat';
 // host.history — the scaffold's read-only view of the conversation it is the
 // inference loop for.
 //
@@ -191,7 +192,7 @@ describe('the sandbox bridge', () => {
     };
     rt.executor = executor;
     await runScaffold({
-      rt, task: 'anything', emit: () => undefined, llmStream: async function* () { yield ''; },
+      rt, task: 'anything', emit: () => undefined, llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
       scaffoldCodeOverride: 'async function run() {}',
       ...opts,
     });

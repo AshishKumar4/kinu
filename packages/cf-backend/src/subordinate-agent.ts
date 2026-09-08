@@ -1518,9 +1518,11 @@ export class SubordinateAgent extends ActorAgent {
       const home = await invocation.span('head.home', () => parent.provisionFacetHome('head', input.id));
       const headOptions = invocation.span('head.deps', (): Parameters<typeof runHeadInference>[1] => {
         const mission = this.missionScope(input);
+        const rt = this.headFacetRuntime(input.id, capture, home);
         const options: Parameters<typeof runHeadInference>[1] = {
+          runtime: rt,
           model: this.facetModelServices.resolveModel(modelSpec),
-          tools: this.buildHeadTools(input, capture, home),
+          tools: this.buildHeadTools(input, capture, rt),
           capture,
           workspaceLayout: 'private-scratch',
           isAborted: () => this.headAborted,
@@ -1699,8 +1701,7 @@ export class SubordinateAgent extends ActorAgent {
 
   // ── Head-mode tool builders ─────────────────────────────────────
 
-  private buildHeadTools(input: HeadInput, capture: HeadCapture, home: HostedNodeHome) {
-    const rt = this.headFacetRuntime(input.id, capture, home);
+  private buildHeadTools(input: HeadInput, capture: HeadCapture, rt: CFRuntime) {
     const webSearch = this.facetModelServices.getWebSearchProvider();
     return buildHeadToolSet({
       input,

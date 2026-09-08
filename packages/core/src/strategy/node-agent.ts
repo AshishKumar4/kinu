@@ -697,6 +697,7 @@ export async function runNodeLoop(
   });
 
   const inference: HeadInferenceDeps = {
+    runtime: deps.rt,
     model: deps.model,
     tools,
     // The layout the node is TOLD matches the boundary it actually got, and the

@@ -36,6 +36,7 @@ import {
 import { projectJsonValue } from '../utils/json';
 import { scaffoldEventsToUIStream } from './ui-stream';
 import { currentWorkMode } from '../execution/work-mode';
+import type { ActorTurnProgram } from '../orchestrator/actor-program';
 
 /** Structural mirror of Think's StreamableResult — core cannot import the
  *  backend SDK (layering), and the seam only needs this shape. */
@@ -50,33 +51,35 @@ export interface InferenceStreamResult {
  * `defaultInference`, which this seam owns.
  */
 export function scaffoldInferenceTransform(opts: {
-  /** The agent's current scaffold version; <= 0 means un-evolved (bootstrap). */
-  currentVersion: number;
+  /** Prepared by the shared selected-source policy before Think starts inference. */
+  program: ActorTurnProgram;
   /** The default inference result Think prepared (streamText already fired). */
   result: InferenceStreamResult;
-  run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference'>;
+  run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference' | 'scaffoldCodeOverride'>;
 }): InferenceStreamResult {
-  const { currentVersion, result, run } = opts;
-  if (currentVersion <= 0 || run.workMode === 'plan' || currentWorkMode() === 'plan') return result;
+  const { program, result, run } = opts;
+  if (program.kind === 'builtin' || (run.workMode ?? currentWorkMode()) === 'plan') return result;
 
   let delegated = false;
   return {
-    toUIMessageStream: () =>
+    toUIMessageStream: (options) =>
       scaffoldEventsToUIStream((emit) =>
         runScaffold({
           ...run,
           emit,
+          scaffoldCodeOverride: program.source,
           defaultInference: () => {
             delegated = true;
-            return wrapDefaultStream(result.toUIMessageStream());
+            return wrapDefaultStream(result.toUIMessageStream(options));
           },
         }).finally(async () => {
           // Returning the iterator cancels the orphaned default stream.
           // Awaited and unguarded: a cancellation that fails means the model
           // request is still running and still being billed, which is the one
           // outcome this seam exists to prevent.
-          if (!delegated) await result.toUIMessageStream()[Symbol.asyncIterator]().return?.();
+          if (!delegated) await result.toUIMessageStream(options)[Symbol.asyncIterator]().return?.();
         }),
+        { sendReasoning: options?.sendReasoning },
       ),
     // Structured output (workflow turns) resolves only if the scaffold
     // delegated (the promise belongs to the default stream).
