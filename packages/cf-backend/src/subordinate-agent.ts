@@ -519,9 +519,13 @@ export class SubordinateAgent extends ActorAgent {
       path: [...this.parentPath.slice(1).map(parent => parent.name), this.name],
       id: result.plan.id, revision: result.plan.revision,
     });
-    // This is only a hint. The recipient must read the exact reference through
-    // the root's existing-only lineage inspection before displaying or focusing it.
-    await workspace.broadcast(JSON.stringify({ type: 'workspace_plan_updated', reference }));
+    // Only a hint, and only over the narrow name the root's RPC allowlist
+    // carries. The inherited `broadcast` is sealed to an own property on the
+    // root, so it is in-process callable and NOT resolvable over this stub —
+    // calling it here threw on the wire while every in-process fixture passed.
+    // The recipient still reads the exact reference back through the root's
+    // existing-only lineage inspection before displaying or focusing it.
+    await workspace.announceSubordinatePlan(reference);
     return result;
   }
 

@@ -218,6 +218,10 @@ describe('Plan mode tool lifecycle', () => {
     // parent nobody seeded cannot reach this test's subject at all.
     const parent = orchestratorHarness();
     const ownerHarness = await hiredPlanner(parent, 'plan-owner-1');
+    // Production rosters a hire before it can run a turn, and the root's
+    // announcement endpoint answers from that roster, so the order matters here
+    // for the same reason it matters there.
+    roster(parent.agent, 'plan-owner-1');
     const owner = ownerHarness.agent;
     const { broadcasts, queued } = planHost(owner);
     setSubordinateTurn(owner, 'plan', false);
@@ -491,6 +495,7 @@ describe('the workspace plan reference event', () => {
     const parent = orchestratorHarness();
     const workspaceMessages = recordWorkspaceMessages(parent.agent);
     const child = await hiredPlanner(parent, 'plan-owner-1');
+    roster(parent.agent, 'plan-owner-1');
     planHost(child.agent);
     setSubordinateTurn(child.agent, 'plan', false);
 
@@ -641,16 +646,24 @@ describe('the workspace plan reference event', () => {
     const child = await hiredPlanner(parent, 'plan-owner-1');
     planHost(child.agent);
     setSubordinateTurn(child.agent, 'plan', false);
+    // Rostered at HIRE time, the way production hires: the root's own record of
+    // the child exists before that child does any work, so nothing below
+    // depends on a roster row that only appears after the fact.
+    roster(parent.agent, 'plan-owner-1');
     await executeTool(rawTools(child.agent), 'submit_plan', { edits: [{ start: 1, content: PLAN }] });
     const plan = await child.agent.getActivePlanReview();
     if (!plan) throw new Error('the additional agent plan was not persisted');
-    roster(parent.agent, 'plan-owner-1');
     // A rostered name the root never actually hired. The traversal gets as far
     // as the existing-only lookup, which is the assertion below: it must answer
     // nothing rather than mint the child it was asked about.
     roster(parent.agent, 'never-hired');
 
     const facet = parent.agent.facetClass();
+    // The hire REGISTERED its facet and the rostered name the root never hired
+    // did not, so the baseline below is a real registry rather than an empty
+    // one compared with itself — which is the only way the length assertion at
+    // the end can catch a read that minted something.
+    expect(parent.agent.listSubAgents(facet).map((entry) => entry.name)).toEqual(['plan-owner-1']);
     const registered = parent.agent.listSubAgents(facet).length;
 
     expect(await parent.agent.inspectSubordinate({
@@ -681,5 +694,44 @@ describe('the workspace plan reference event', () => {
     // through `subAgent` instead would have registered a facet per miss —
     // which is how an owner reading its own retained history grows a subtree.
     expect(parent.agent.listSubAgents(facet)).toHaveLength(registered);
+  });
+
+  test('a roster row whose facet the SDK no longer holds resolves missing, and the read does not re-register it', async () => {
+    const parent = orchestratorHarness();
+    const child = await hiredPlanner(parent, 'plan-owner-1');
+    planHost(child.agent);
+    setSubordinateTurn(child.agent, 'plan', false);
+    roster(parent.agent, 'plan-owner-1');
+    await executeTool(rawTools(child.agent), 'submit_plan', { edits: [{ start: 1, content: PLAN }] });
+    const plan = await child.agent.getActivePlanReview();
+    if (!plan) throw new Error('the additional agent plan was not persisted');
+    const facet = parent.agent.facetClass();
+    const reference = { path: ['plan-owner-1'], id: plan.id, revision: 1 };
+
+    // POSITIVE CONTROL: the very same reference resolves while the hire's SDK
+    // identity is live. Without it the refusal below would prove nothing — a
+    // reference that never resolved is `missing` for reasons of its own.
+    expect(await parent.agent.inspectSubordinate({ ...reference, view: 'plan' })).toMatchObject({
+      view: 'plan', path: ['plan-owner-1'], plan: { id: plan.id, revision: 1, content: PLAN },
+    });
+
+    // REVOKE the facet the SDK holds and leave the owner's roster row exactly
+    // where it was. That is what a reclaimed or evicted child leaves behind: a
+    // roster still listing a child the SDK no longer has, over a plan table
+    // that is still on disk and would still answer if anything reached it.
+    await parent.agent.deleteSubAgent(facet, 'plan-owner-1');
+    expect(parent.agent.listSubAgents(facet)).toEqual([]);
+    expect(parent.agent.harnessRoster().get('plan-owner-1')).toMatchObject({ name: 'plan-owner-1' });
+
+    expect(await parent.agent.inspectSubordinate({ ...reference, view: 'plan' }))
+      .toMatchObject({ view: 'missing', reason: 'missing', path: ['plan-owner-1'] });
+    expect(await parent.agent.inspectSubordinate({ path: ['plan-owner-1'], view: 'plans', page: {} }))
+      .toMatchObject({ view: 'missing', reason: 'missing', path: ['plan-owner-1'] });
+
+    // And neither read resurrected what it asked about. A lookup that
+    // re-registered the revoked name would make a revocation undoable by
+    // reading it, which is how a reclaimed facet comes back to life holding a
+    // plan its owner already let go of.
+    expect(parent.agent.listSubAgents(facet)).toEqual([]);
   });
 });
