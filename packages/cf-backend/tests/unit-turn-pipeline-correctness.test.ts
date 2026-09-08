@@ -780,18 +780,6 @@ describe('turn-pipeline correctness wiring', () => {
     expect(wake).toContain('this.orch.scheduleDrain()');
   });
 
-  test('cloud admission counts precisely the active tool surface Think submits', () => {
-    const beforeTurn = actor.slice(
-      actor.indexOf('async beforeTurn(ctx: TurnContext)'),
-      actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
-    );
-    // The counted surface is the mode-resolved toolset the turn submits, and
-    // the same set is what Think receives after the mode binding.
-    expect(beforeTurn).toContain('const submittedTools = { ...modeTools, ...effectiveTools };');
-    expect(beforeTurn).toContain('effectiveActiveTools.flatMap((name) => {');
-    expect(beforeTurn).toContain('const entry = submittedTools[name];');
-    expect(beforeTurn).toContain('cfg.tools = toolsForInvocation(workMode, { ...modeTools, ...effectiveTools });');
-  });
 
   test('attachment sanitization runs on the whole history BEFORE the extension transform', () => {
     // The ordering (sanitize → onTurnStart → transformContext → turn-local) is

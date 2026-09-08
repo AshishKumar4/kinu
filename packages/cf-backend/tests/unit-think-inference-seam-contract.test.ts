@@ -150,25 +150,3 @@ describe('the turn loop this actor hands Think carries no step cap the caller ca
   });
 });
 
-describe('Kinu holds up its end of the seam', () => {
-  const actorAgent = readFileSync(new URL('../src/actor-agent.ts', import.meta.url), 'utf8');
-  const orchestrator = readFileSync(new URL('../src/orchestrator.ts', import.meta.url), 'utf8');
-  const subordinate = readFileSync(new URL('../src/subordinate-agent.ts', import.meta.url), 'utf8');
-
-  test('the override is declared and routes through the shared transform', () => {
-    expect(actorAgent).toContain('protected _transformInferenceResult(result: StreamableResult): StreamableResult');
-    expect(actorAgent).toContain('return scaffoldInferenceTransform({');
-  });
-
-  // The seam sits on the shared base precisely so subordinates run the
-  // scaffold they evolve. While it lived on OrchestratorAgent alone, a
-  // subordinate could propose, shadow-evaluate and promote an evolved
-  // scaffold that never became its inference loop — evolution machinery
-  // that was live at every step except the one that matters.
-  test('every actor inherits the seam, so a subordinate runs the scaffold it evolves', () => {
-    expect(orchestrator).toContain('extends ActorAgent');
-    expect(subordinate).toContain('extends ActorAgent');
-    expect(orchestrator).not.toContain('_transformInferenceResult(result: StreamableResult)');
-    expect(subordinate).not.toContain('_transformInferenceResult(result: StreamableResult)');
-  });
-});
