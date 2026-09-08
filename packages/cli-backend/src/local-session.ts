@@ -821,7 +821,7 @@ export class LocalAgentSession implements BackendHost {
     // The stores every agent has, from core — one list both backends inherit.
     // Background-job lifecycle rides the durable local fiber (createLinuxFiber)
     // with this session as the BackendHost (enqueueTurn wakes the agent).
-    this.stores = createAgentStores(() => this.rt.storage.sql);
+    this.stores = createAgentStores(() => this.rt.storage.sql, this.rt.storage.transactionSync);
     const stores = this.stores;
     this.jobs = stores.jobs;
     this.taskList = stores.taskList;

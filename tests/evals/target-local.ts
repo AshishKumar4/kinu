@@ -147,7 +147,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
     readonly runtime: CLIRuntime,
     private readonly opts: LocalTargetOptions,
   ) {
-    this.stores = createAgentStores(() => this.runtime.storage.sql);
+    this.stores = createAgentStores(() => this.runtime.storage.sql, this.runtime.storage.transactionSync);
   }
 
   get describe(): string {

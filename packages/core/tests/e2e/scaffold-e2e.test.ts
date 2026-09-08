@@ -27,7 +27,7 @@ function createScaffoldTestRuntime(llm: LLM) {
   const vfs = createMemoryVFS(db);
 
   const rt: AgentRuntime = {
-    storage: { vfs, sql, execRaw },
+    storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory: createMemoryMemory(db, vfs),
     executor: createMockExecutor(),
     llm, schedule: createMemorySchedule(db),

@@ -142,7 +142,7 @@ import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
   BUILTIN_PROFILE_CATALOG, BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   CHARS_PER_TOKEN, DEVICE_TIERS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript,
-  parseDeviceTier, profileCatalogDigest, seekPage, sortDirEntries,
+  parseDeviceTier, profileCatalogDigest, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
   type ProfileCatalogEnvelope,
 } from "@kinu.run/core";
@@ -572,8 +572,6 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     activePlan: null,
     slates: [],
   },
-  listPlanReviews: { status: "end", items: [] },
-  listPlanTasks: [],
   getStoredModelSpec: "anthropic/claude-opus-4",
   getShellApprovalMode: "strict",
   getMctsConfig: { explorationConstant: 1.41, maxIterations: 12, branchBudget: 3 },
@@ -776,7 +774,15 @@ const MESSAGES: UIMessage[] = [
 ];
 
 
-const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
+function galleryPlanInspection<Input>(input: Input, plans: readonly PlanReview[]) {
+  const request = v.parse(SubordinateInspectionRequestSchema, input);
+  if (request.view === 'plans') return { view: 'plans', path: request.path, page: { status: 'end', items: plans } };
+  if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
+  if (request.view === 'planTasks') return { view: 'planTasks', path: request.path, tasks: [] };
+  throw new Error('Unexpected gallery plan inspection');
+}
+const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === 'inspectSubordinate') return rpcResult(galleryPlanInspection(args?.[0], [])).json<T>();
   // A read whose answer is a RECORD, where the blanket `[]` below is not a
   // smaller version of the right answer but a shape the caller dereferences.
   // `getExposedPorts` is read as `result.ports` inside a `setState` updater, so
@@ -907,6 +913,7 @@ let galleryAgentPlan: PlanReview = {
 };
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "inspectSubordinate") return rpcResult(galleryPlanInspection(args?.[0], [galleryAgentPlan])).json<T>();
   if (new URLSearchParams(location.search).has("workspaceFault")) {
     const state = document.documentElement.dataset;
     const reads = ["getExecutorFiles", "getWorkspaceSnapshot", "getMemoryContent"];
@@ -973,8 +980,6 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     } satisfies SubordinateSnapshot).json<T>();
   }
   if (method === "getActivePlanReview") return rpcResult(galleryAgentPlan).json<T>();
-  if (method === "listPlanReviews") return rpcResult({ status: "end", items: [galleryAgentPlan] }).json<T>();
-  if (method === "listPlanTasks") return rpcResult([]).json<T>();
   if (method === "savePlanReviewAnnotations") {
     return rpcResult({ ok: true, plan: galleryAgentPlan }).json<T>();
   }

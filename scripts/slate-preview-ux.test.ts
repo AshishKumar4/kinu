@@ -20,6 +20,12 @@ async function serveSlate(page: Page): Promise<void> {
   });
 }
 
+async function selectPlan(page: Page, label: string): Promise<void> {
+  const value = await page.$eval('[aria-label="Plan history"]', (element, text) => [...element.querySelectorAll('option')].find(option => option.textContent?.includes(text))?.value, label);
+  if (!value) throw new Error('Missing plan: ' + label);
+  await page.select('[aria-label="Plan history"]', value);
+}
+
 describe('the Slate preview frame', () => {
   test('a Slate calls its own preview origin without reaching the host document', async () => {
     await withGallery(async ({ browser, origin }) => {
@@ -98,7 +104,16 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
           button.click();
         });
         await page.waitForFunction(() => document.querySelector('[data-plan-status]')?.textContent === 'Approved');
-        await page.select('[aria-label="Plan history"]', 'plan-dashboard:1');
+        await page.click('[data-break-plans]');
+        await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Plan history temporarily unavailable'));
+        expect(await page.$('[aria-label="Plan history"]')).not.toBeNull();
+        expect(await page.$eval('[data-plan-status]', el => el.textContent)).toBe('Approved');
+        expect(await page.$eval('[data-work-plans]', el => el.textContent)).toContain('Implement refresh action');
+        await page.click('[data-break-plans]');
+        await page.waitForFunction(() => !document.querySelector('[data-work-plans]')?.textContent?.includes('Plan history temporarily unavailable'));
+        const earlier = await page.$eval('[aria-label="Plan history"]', el => [...el.querySelectorAll('option')].find(option => option.textContent?.includes('Earlier'))?.value);
+        if (!earlier) throw new Error('Earlier plan revision missing');
+        await page.select('[aria-label="Plan history"]', earlier);
         await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Earlier'));
         await page.click('[data-new-preview]');
         await page.waitForSelector('[aria-label="Report"][aria-current="true"]');
@@ -107,6 +122,33 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-current'))).toBe('true');
         await page.click('[data-add-diff]');
         await page.waitForSelector('[aria-label="Diffs"]');
+        await page.click('[aria-label="Sandbox app"]');
+        await page.click('[data-show-actors]');
+        await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="Plan history"] option')].some(el => el.textContent?.includes('Worker plan')));
+        expect(await page.$eval('[aria-label="Sandbox app"]', el => el.getAttribute('aria-current'))).toBe('true');
+        await page.click('[aria-label="Work"]');
+        await page.evaluate(() => [...document.querySelectorAll('button')].find(el => el.textContent?.includes('Older plans / more actors'))?.click());
+        await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="Plan history"] option')].some(el => el.textContent?.includes('Nested delivery')));
+        await selectPlan(page, 'Archived delivery');
+        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Archived'));
+        expect(await page.$('[data-plan-decisions]')).toBeNull();
+        expect(await page.$eval('[data-work-plans]', el => el.textContent)).toContain('Retained actor history');
+        expect(await page.$eval('[data-work-plans]', el => el.textContent)).toContain('Deliver archive');
+        await selectPlan(page, 'Nested delivery');
+        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Nested'));
+        expect(await page.$('[data-plan-decisions]')).toBeNull();
+        await page.click('[aria-label="Sandbox app"]');
+        await page.click('[data-worker-plan]');
+        await page.waitForSelector('[aria-label="Work"][aria-current="true"]');
+        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Worker revision two'));
+        expect(await page.$eval('[data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
+        expect(await page.$('[data-plan-decisions]')).toBeNull();
+        await page.evaluate(() => [...document.querySelectorAll('button')].find(el => el.textContent?.includes('Review in worker conversation'))?.click());
+        await page.waitForSelector('[data-plan-owner="worker"]');
+        await page.waitForSelector('[data-plan-decisions]');
+        await page.evaluate(() => [...document.querySelectorAll('button')].find(el => el.textContent?.includes('Approve & implement'))?.click());
+        await page.waitForFunction(() => document.querySelector('[data-plan-status]')?.textContent === 'Approved');
+        expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Worker revision two');
       }
     } finally { await page.close(); }
   });

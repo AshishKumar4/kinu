@@ -14,7 +14,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
-- Preview applications have one titled, full-height tab each, without a duplicate Output surface. Plans and revision history live in Work; new approval-driven tasks retain their plan revision and progress. Existing unassociated tasks are not retroactively assigned.
+- Preview applications have one titled, full-height tab each, without a duplicate Output surface. Workspace-wide plan history lives in Work, including retained agents; explicit navigation preserves each actor’s review authority. Refresh failures retain usable history. New approval-driven tasks and inherited subtasks atomically retain their plan revision and progress across native and promoted-program execution. Existing unassociated tasks are not retroactively assigned.
 
 - **Resident slate egress follows the shared network policy.** Authored server
   fetch calls use the existing destination classifier and redirect enforcement,

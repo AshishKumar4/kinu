@@ -745,7 +745,7 @@ export function createCFRuntime(
   }));
 
   const runtime: CFRuntime = {
-    storage: { vfs: agentFileVfs, sql, execRaw },
+    storage: { vfs: agentFileVfs, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
     agentStateVfs: originVfs,
     startupWork,
     memory, executor, llm, schedule, identity, craftStore,

@@ -1293,6 +1293,7 @@ export default function WorkspacePage() {
             previewFocus={state.previewFocus}
             planFocus={subName === undefined ? state.planFocus : subordinateReview?.focus}
             planOwner={subName ?? "main"}
+            onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${encodeURIComponent(name)}`); }}
             onSurface={setSurface}
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}

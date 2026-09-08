@@ -487,8 +487,6 @@ const SUBORDINATE_METHODS = [
   'decidePlanReview',
   'enqueueSubordinateTask',
   'getActivePlanReview',
-  'listPlanReviews',
-  'listPlanTasks',
   'getSubordinateSnapshot',
   'getSubordinateStatus',
   'setSubordinateIdentity',

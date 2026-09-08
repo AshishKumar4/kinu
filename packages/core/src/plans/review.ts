@@ -50,6 +50,22 @@ export interface PlanReviewAnnotation {
   readonly mathTargets?: readonly PlanAnnotationMathTarget[];
 }
 
+const PlanReviewStatusSchema = v.picklist([
+  'pending', 'changes_requested', 'approved', 'superseded',
+]);
+
+export const PlanReviewSchema = v.object({
+  id: v.string(), sessionId: v.string(), revision: v.pipe(v.number(), v.integer(), v.minValue(1)),
+  content: v.string(), status: PlanReviewStatusSchema,
+  annotations: v.pipe(JsonArraySchema, v.rawTransform(({ dataset, addIssue, NEVER }): readonly PlanReviewAnnotation[] => {
+    const admitted = admitPlanReviewAnnotations(dataset.value);
+    if (!admitted.ok) { addIssue({ message: admitted.error }); return NEVER; }
+    return admitted.annotations;
+  })),
+  feedback: v.nullable(v.string()), handoffAccepted: v.boolean(),
+  createdAt: v.number(), updatedAt: v.number(), decidedAt: v.nullable(v.number()),
+});
+
 export interface PlanReview {
   readonly id: string;
   readonly sessionId: string;
@@ -91,9 +107,6 @@ interface PlanReviewRow {
   decided_at: number | null;
 }
 
-const PlanReviewStatusSchema = v.picklist([
-  'pending', 'changes_requested', 'approved', 'superseded',
-]);
 const PLAN_ANNOTATION_FIELDS = new Set([
   'id', 'blockId', 'startOffset', 'endOffset', 'type', 'text', 'originalText',
   'createdA', 'author', 'startMeta', 'endMeta', 'mathTargets',

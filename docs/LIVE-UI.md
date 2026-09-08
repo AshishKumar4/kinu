@@ -13,13 +13,26 @@ available height and use the same URL/copy/open frame and security policy as
 compact chat cards. New preview identities take focus once; refreshing a source
 or reconnecting does not replay that focus. Diffs have their own conditional tab.
 
-Work contains the selected actor’s complete paginated plan-review history and
-approval controls. Tasks created by a verified approval submission retain that
+Work browses plan revisions across the workspace: root, active agents and retained
+nested or dismissed actors. It pages the existing read-only actor-inspection
+protocol, with an explicit “Older plans / more actors” frontier rather than an
+eager recursive scan. Actor-qualified selection keeps identical plan IDs separate.
+Root/current-actor decisions stay inline; reviewing another active direct agent
+explicitly opens its conversation. Nested and dismissed history is read-only.
+A new plan in an already observed actor opens Work without switching the chat;
+loading older history does not steal focus. Failed refreshes retain the last
+usable history and progress beside the failure. Inspection never starts an actor.
+
+Tasks created by a verified approval submission retain that
 plan ID, revision and session in `plan_task_links`; revisions never relabel older
 tasks. Subtasks inherit their parent’s association. Ordinary and pre-existing
 tasks remain unassociated. The new table uses the existing idempotent schema
 initializer, with no ALTER, historical backfill or reset. Task status updates
-change progress, not provenance.
+change progress, not provenance. The store commits task and link writes in one
+synchronous storage transaction, including inherited subtasks outside a turn.
+Approved authority is captured once for native tools and promoted-program host
+bridges; an unrelated turn or metadata without the real admitted approval cannot
+attribute new work.
 
 ## Authoring
 

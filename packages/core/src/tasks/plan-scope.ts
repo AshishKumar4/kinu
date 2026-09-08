@@ -7,21 +7,25 @@ export interface TaskPlan {
   readonly revision: number;
   readonly sessionId: string;
 }
-interface Scope { readonly sql: readonly SqlExecutor[]; readonly plan: TaskPlan | null; readonly transaction: <T>(write: () => T) => T }
-// Work-mode context carries no actor store or approval identity. This scope is
-// captured once by the trusted turn owner and retained by nested codemode calls.
-const scope = new AsyncLocalStorage<Scope | undefined>();
-export function taskPlanScope(sql: SqlExecutor): Scope | undefined {
+export interface TaskPlanContext {
+  readonly sql: readonly SqlExecutor[];
+  readonly plan: TaskPlan | null;
+}
+// Work-mode context contains no actor store or approval identity. The trusted
+// turn owner captures this scope; the store, not ALS, owns atomic writes.
+const scope = new AsyncLocalStorage<TaskPlanContext | undefined>();
+export function taskPlanScope(sql: SqlExecutor): TaskPlanContext | undefined {
   const current = scope.getStore();
   return current?.sql.includes(sql) ? current : undefined;
 }
-export function bindTaskPlan<Args extends unknown[], Result>(invoke: (...args: Args) => Result): (...args: Args) => Result {
-  const captured = scope.getStore();
-  return (...args) => scope.run(captured, () => invoke(...args));
+export function runTaskPlan<Result>(context: TaskPlanContext | null, invoke: () => Result): Result {
+  return scope.run(context ?? undefined, invoke);
 }
-export function withTaskPlan(tools: ToolSet, sql: readonly SqlExecutor[],  plan: TaskPlan | null, transaction: Scope['transaction']): ToolSet {
+export function bindTaskPlan<Value, Result>(invoke: (...args: Value[]) => Result, context: TaskPlanContext | null = scope.getStore() ?? null): (...args: Value[]) => Result {
+  return (...args) => scope.run(context ?? undefined, () => invoke(...args));
+}
+export function withTaskPlan(tools: ToolSet, context: TaskPlanContext): ToolSet {
   const bound: ToolSet = {};
-  const context: Scope = { sql, plan, transaction };
   for (const [name, entry] of Object.entries(tools)) {
     const execute = entry.execute;
     bound[name] = execute === undefined ? entry : { ...entry,

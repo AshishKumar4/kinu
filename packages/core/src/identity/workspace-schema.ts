@@ -170,7 +170,7 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // prompt window.
   initDeferredApprovalsTable(execRaw);
   // Plan revisions and reviewer state outlive both the submitting turn and DO
-  // eviction; the Outputs surface always reads this one authoritative stream.
+  // eviction; the Work surface reads this one authoritative stream.
   initPlanReviewTable(execRaw);
   // Owner decisions about which workspace instruction bytes may hold system
   // placement (KINU-N028). Created on every root because the prompt builder
