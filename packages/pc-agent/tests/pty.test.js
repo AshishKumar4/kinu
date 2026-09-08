@@ -253,6 +253,14 @@ describe('the session registry answers for what it holds', () => {
     expect(open('80', 24)).toThrow('width must be a whole number');
   });
 
+  test('the daemon and the hub bound the window at the same number', () => {
+    // Two ends of one wire protocol, and the daemon cannot import the hub: it
+    // ships standalone. So the agreement is asserted here rather than assumed,
+    // and a change to either side that forgets the other fails this.
+    const { DEVICE_PTY_MAX_AXIS } = require('@kinu.run/core');
+    expect(MAX_AXIS).toBe(DEVICE_PTY_MAX_AXIS);
+  });
+
   test('a session name is bounded, and never a path', () => {
     expect(parseSessionName('pane-1')).toBe('pane-1');
     expect(() => parseSessionName('../escape')).toThrow('terminal session names are up to 64');

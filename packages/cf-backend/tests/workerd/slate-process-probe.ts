@@ -9,13 +9,13 @@ import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses } from '../../src/slates/resident';
 import { codemodeEgress } from '../../src/codemode-egress';
 
-export class SlateDepthProbe extends WorkerEntrypoint {
-  async call(member: string, args: JsonValue[], depth: number): Promise<SlateCallResult> {
+export class SlateChainProbe extends WorkerEntrypoint {
+  async call(member: string, args: JsonValue[], chain: string[]): Promise<SlateCallResult> {
     const project = parseSlateProject({ main: 'server.ts', slate: { bindings: { PEER: { kind: 'app', id: 'peer' } } } });
     try {
-      const route = routeSlateBindingCall({ id: 'probe', project, name: 'PEER', request: { member, args, depth } });
+      const route = routeSlateBindingCall({ id: 'probe', project, name: 'PEER', request: { member, args, chain } });
       if (route.kind !== 'app') throw new Error('Expected app route');
-      return { ok: true, value: { depth: route.depth, args: [...route.args] } };
+      return { ok: true, value: { chain: [...route.chain], args: [...route.args] } };
     } catch (cause) {
       if (!(cause instanceof KinuError)) throw cause;
       return { ok: false, reason: cause.code, error: cause.message };
@@ -44,14 +44,14 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     '  calls += 1;',
     '  return Response.json({ calls, path: new URL(request.url).pathname });',
     '} };',
-  ].join('\n'), bindDepth = false, cred: VfsCred = CRED_SESSION_USER): Promise<void> {
+  ].join('\n'), bindChain = false, cred: VfsCred = CRED_SESSION_USER): Promise<void> {
     const root = '/home/user/slates/notes';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
     files.writeFile(`${root}/server.ts`, source);
     this.process = await this.resident.start({
       key: crypto.randomUUID(), owner: JSON.stringify([this.ctx.id.toString(), root, cred]), root, port: 8789, cred,
-      bindings: bindDepth ? { PEER: exports.SlateDepthProbe({}) } : {},
+      bindings: bindChain ? { PEER: exports.SlateChainProbe({}) } : {},
       globalOutbound: codemodeEgress(),
       project: parseSlateProject({ main: 'server.ts' }),
     });
@@ -86,9 +86,10 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     return response;
   }
 
-  async request(path: string, depth = 0): Promise<{ status: number; body: string }> {
+  async request(path: string, chain?: string[]): Promise<{ status: number; body: string }> {
     const response = await this.ports.routeRequest(8789, new Request(
-      'https://slate.invalid' + path, { headers: { 'x-slate-depth': String(depth) } },
+      'https://slate.invalid' + path,
+      chain === undefined ? undefined : { headers: { 'x-slate-chain': encodeURIComponent(JSON.stringify(chain)) } },
     ), path);
     if (response === null) return { status: 404, body: 'No listener' };
     return { status: response.status, body: await response.text() };

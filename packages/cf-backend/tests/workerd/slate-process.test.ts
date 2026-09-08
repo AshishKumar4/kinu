@@ -28,22 +28,22 @@ it('Slate compilation requires Nimbus credentialed EsbuildService reads', async 
   expect(result).toMatchObject({ code: 'bad_input' });
 });
 
-it('each resident request retains its own app depth across the loopback binding', async () => {
-  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('binding-depth'));
+it('each resident request retains its own app call chain across the loopback binding', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('binding-chain'));
   await subject.start([
     'export default { async fetch(request, env) {',
     '  return Response.json(await env.PEER.echo(new URL(request.url).pathname));',
     '} };',
   ].join('\n'), true);
   try {
-    const answers = await Promise.all([subject.request('/seven', 7), subject.request('/two', 2)]);
+    const answers = await Promise.all([subject.request('/deep', ['a', 'b', 'c']), subject.request('/one', ['z'])]);
     expect(answers.map((answer) => JSON.parse(answer.body))).toEqual([
-      { depth: 7, args: ['/seven'] }, { depth: 2, args: ['/two'] },
+      { chain: ['a', 'b', 'c', 'probe'], args: ['/deep'] }, { chain: ['z', 'probe'], args: ['/one'] },
     ]);
-    const refused = await subject.request('/cycle', 8);
+    const refused = await subject.request('/cycle', ['peer', 'other']);
     expect(refused.status).toBe(500);
-    expect(JSON.parse(refused.body)).toMatchObject({ reason: 'denied', error: expect.stringContaining('app hop 9') });
-    expect(JSON.parse((await subject.request('/fresh')).body)).toEqual({ depth: 0, args: ['/fresh'] });
+    expect(JSON.parse(refused.body)).toMatchObject({ reason: 'denied', error: expect.stringContaining('re-enters slate peer') });
+    expect(JSON.parse((await subject.request('/fresh')).body)).toEqual({ chain: ['probe'], args: ['/fresh'] });
   } finally {
     await subject.stop();
   }

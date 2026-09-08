@@ -94,15 +94,32 @@ describe('connectMcpServers', () => {
   // on a finite run, stated with its measurement, not a detector.
   }, 15_000);
 
-  test('a tool call gets the full call budget, not the startup budget', async () => {
-    // The 5s startup timeout used to apply to tool calls too, so any MCP tool
-    // doing real work (a fetch, a query, a build) failed. The fixture sleeps
-    // past that budget; cfg.timeoutMs still bounds it.
+  test('a tool call outlives every bound this module used to impose', async () => {
+    // The 5s startup timeout used to apply to tool calls too, and then a 60s
+    // SDK default replaced it. Neither is here now: the fixture sleeps past the
+    // first, and only a server's own `timeoutMs` config would bound it.
     const conn = await connectMcpServers({
       echo: { command: 'node', args: [fixtureServer] },
     });
     try {
       await expect(conn.call('echo', 'slow', { ms: 6_000 })).resolves.toBe('slept 6000ms');
+    } finally {
+      await conn.close();
+    }
+  }, 20_000);
+
+  test('the caller cancels a running tool call; nothing else ends it early', async () => {
+    const conn = await connectMcpServers({
+      echo: { command: 'node', args: [fixtureServer] },
+    });
+    try {
+      const stop = new AbortController();
+      const running = conn.call('echo', 'slow', { ms: 30_000 }, stop.signal);
+      const started = Date.now();
+      stop.abort();
+      await expect(running).rejects.toBeInstanceOf(Error);
+      // The rejection is the abort, not a wait for the fixture's own sleep.
+      expect(Date.now() - started).toBeLessThan(5_000);
     } finally {
       await conn.close();
     }
