@@ -1,82 +1,30 @@
 /**
- * Layer 3: CLI smoke test — instantiate a full runtime with temp SQLite,
- * verify 6 primitives, run minimal MCTS, verify DB tables and rows.
+ * Layer 3: CLI smoke test — one full runtime over the PRODUCTION workspace
+ * schema, six primitives exercised through it, then a minimal MCTS run and the
+ * rows it leaves behind.
+ *
+ * The runtime comes from `createTestRuntime`, not from a fixture of its own.
+ * The fixture this file used to carry declared `workspace_identity (id TEXT,
+ * name TEXT)` by hand and inserted a row into it, which is a workspace no
+ * composition root can produce: the real column list carries `owner_user_id`,
+ * and the actor DIRECTORY the identity binds through was never created at all.
+ * A seeded identity row is also the signal `createTestActor` reads to take the
+ * OPEN path — `openWorkspaceMainActor` — so every test here died in the fixture
+ * on `no such column: owner_user_id` before reaching an assertion. Hand-written
+ * DDL beside a real schema is how a harness ends up testing a shape production
+ * never has.
  */
 
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import * as v from 'valibot';
-import {
-  makeSql, createTestActor,
-  makeExecRaw,
-  createMemoryVFS,
-  createMemoryMemory,
-  createMemoryCraftStore,
-  createMockLLM,
-  createMockExecutor,
-  createMemorySchedule,
-  createMockSession,
-} from './helpers';
-import type { AgentRuntime } from '../src/types/agent-runtime';
-import type { Identity } from '../src/types/primitives';
-import { initSearchTables } from '../src/mcts/schemas';
-import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
+import { createTestRuntime, createMockSession } from './helpers';
 import { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from '../src/scaffold/bootstrap';
 import { runMCTS } from '../src/mcts/engine';
 
-function createFullCLIRuntime() {
-  const db = new Database(':memory:');
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
-  const vfs = createMemoryVFS(db);
-  const memory = createMemoryMemory(db, vfs);
-  const craftStore = createMemoryCraftStore(db);
-  const llm = createMockLLM({
-    'Summarize': '- approach A worked\n- clean separation',
-  });
-  const executor = createMockExecutor();
-  const schedule = createMemorySchedule(db);
-
-  // Stable identity
-  execRaw('CREATE TABLE IF NOT EXISTS workspace_identity (id TEXT, name TEXT)');
-  const agentId = crypto.randomUUID();
-  db.run('INSERT INTO workspace_identity (id, name) VALUES (?, ?)', [agentId, 'cli-agent']);
-  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'cli-agent');
-
-  const identity: Identity = {
-    id: agentId,
-    name: 'cli-agent',
-    scaffold: {
-      path: 'scaffold/agent.js',
-      exists: () => vfs.exists('scaffold/agent.js'),
-      read: async () => v.parse(v.string(), await vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })),
-      write: (code) => vfs.writeFile('scaffold/agent.js', code),
-      version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v
-        FROM scaffold_versions WHERE actor_id = ${actor.actorId}`)[0]?.v ?? 0,
-    },
-  };
-
-  const rt: AgentRuntime = {
-    actor,
-    storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
-    memory,
-    executor,
-    llm,
-    schedule,
-    identity,
-    craftStore,
-    judgeModel: llm,
-    spawnBranch: async () => ({ explore: async () => ({ text: 'cli branch explored' }), generateReflection: async () => ({ text: 'cli branch reflection' }), release: async () => {} }),
-    abortBranch: async () => {},
-  };
-
-  return { rt, db };
-}
+const LLM_RESPONSES = { Summarize: '- approach A worked\n- clean separation' };
 
 describe('CLI smoke test', () => {
   test('6 primitives are available and functional', async () => {
-    const { rt } = createFullCLIRuntime();
+    const { rt } = createTestRuntime({ llmResponses: LLM_RESPONSES });
 
     // 1. Storage: VFS write + read
     await rt.storage.vfs.writeFile('test/hello.txt', 'world');
@@ -104,14 +52,15 @@ describe('CLI smoke test', () => {
     });
     expect(fiberResult).toBe('fiber-done');
 
-    // 6. Identity: scaffold
-    expect(rt.identity.id).toBeTruthy();
-    expect(rt.identity.name).toBe('cli-agent');
+    // 6. Identity: the scaffold surface answers over the real per-actor ledger —
+    // a version read on a workspace that has published none is 0, not a throw,
+    // which is the answer only the production schema can give.
+    expect(await rt.identity.scaffold.exists()).toBe(true);
+    expect(await rt.identity.scaffold.version()).toBe(0);
   });
 
   test('bootstrap creates scaffold on cold start', async () => {
-    const { rt } = createFullCLIRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    const { rt } = createTestRuntime({ llmResponses: LLM_RESPONSES });
 
     // Ensure no scaffold exists (simulate cold start)
     if (await rt.storage.vfs.exists('scaffold/agent.js')) {
@@ -128,10 +77,7 @@ describe('CLI smoke test', () => {
   });
 
   test('full MCTS cycle creates correct DB tables and rows', async () => {
-    const { rt, db } = createFullCLIRuntime();
-    initSearchTables(rt.storage.execRaw);
-    initScaffoldTables(rt.storage.execRaw);
-    initCraftedToolsTables(rt.storage.sql);
+    const { rt, db } = createTestRuntime({ llmResponses: LLM_RESPONSES });
 
     const session = createMockSession();
     const result = await runMCTS(rt, session, 'Improve error handling', {
